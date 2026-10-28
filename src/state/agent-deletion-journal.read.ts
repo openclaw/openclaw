@@ -1,5 +1,6 @@
 import path from "node:path";
 import { isStringArray } from "@openclaw/normalization-core/record-coerce";
+import { expressionBuilder } from "kysely";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { resolveStateDir } from "../config/state-dir.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -30,6 +31,7 @@ import type {
   RetainedAgentDeletion,
 } from "./agent-deletion-journal.types.js";
 import {
+  isAgentDatabaseRegistryChangedError,
   isOpenClawAgentDatabaseRegistryChange,
   prepareOpenClawAgentDatabaseRegistrySnapshotRead,
 } from "./openclaw-agent-db-registry-listing.js";
@@ -39,10 +41,25 @@ import {
   executeExistingOpenClawStateRead,
   withExistingOpenClawStateDatabaseReadOnly,
 } from "./openclaw-state-db-readonly.js";
-import { tableExists } from "./openclaw-state-db-schema-helpers.js";
+import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import type { DB } from "./openclaw-state-db.generated.js";
 import { resolveDatabasePath, resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import { prepareOpenClawStateReadSource } from "./openclaw-state-worker-context.js";
+
+class AgentDatabaseDeletionSnapshotChangedError extends Error {
+  constructor() {
+    super("Agent database deletion snapshot changed during consumption.");
+    this.name = "AgentDatabaseDeletionSnapshotChangedError";
+  }
+}
+
+/** These owners require a fresh read, never replay of an already-entered consumer. */
+export function isAgentDatabaseDeletionSnapshotChangedError(error: unknown): boolean {
+  return (
+    error instanceof AgentDatabaseDeletionSnapshotChangedError ||
+    isAgentDatabaseRegistryChangedError(error)
+  );
+}
 
 export async function readAgentDeletionRecoveryHoldsInWorker(
   options: OpenClawStateDatabaseOptions = {},
@@ -119,6 +136,7 @@ export function readRetainedAgentDeletionsFromDatabase(
   database: EngineConnection,
   statePath: string,
   purpose: AgentDeletionJournalPurpose = "maintenance",
+  deletedAgents?: AgentDatabaseDeletionWorkerSnapshot["deletedAgents"],
 ): AgentDeletionJournalDisposition {
   let entries: RetainedAgentDeletion[] = [];
   let missing = false;
@@ -126,20 +144,43 @@ export function readRetainedAgentDeletionsFromDatabase(
   try {
     missing = !tableExists(database, "agent_deletion_journal");
     if (!missing) {
+      const eb = expressionBuilder<Pick<DB, "agent_deletion_journal">, "agent_deletion_journal">();
+      const retained = eb.and([eb("cleanup_completed", "=", 1), eb("delete_files", "=", 0)]);
+      // Pending stores leave runtime discovery as soon as deletion commits.
+      const included =
+        purpose !== "runtime" ? eb.or([retained, eb("cleanup_completed", "=", 0)]) : retained;
       entries = executeSqliteQuerySync(
         database,
         getNodeSqliteKysely<Pick<DB, "agent_deletion_journal">>(database)
           .selectFrom("agent_deletion_journal")
-          .selectAll()
-          .where((eb) => {
-            const retained = eb.and([eb("cleanup_completed", "=", 1), eb("delete_files", "=", 0)]);
-            // Pending stores leave runtime discovery as soon as deletion commits.
-            return purpose !== "runtime"
-              ? eb.or([retained, eb("cleanup_completed", "=", 0)])
-              : retained;
-          })
+          .select(["agent_id", "cleanup_completed"])
+          // Read-only upgrade inspection can precede the additive phase migration.
+          .select(
+            tableHasColumn(database, "agent_deletion_journal", "phase")
+              ? "phase"
+              : eb.lit(null).as("phase"),
+          )
+          // Status-only tombstones must not transfer their retained path payloads.
+          .select([
+            eb.case().when(included).then(eb.ref("agent_dir")).else(null).end().as("agent_dir"),
+            eb
+              .case()
+              .when(included)
+              .then(eb.ref("database_paths_json"))
+              .else("[]")
+              .end()
+              .as("database_paths_json"),
+          ])
+          .$if(!deletedAgents, (query) => query.where(included))
           .orderBy("agent_id", "asc"),
-      ).rows.map((row) => {
+      ).rows.flatMap((row) => {
+        deletedAgents?.push({
+          agentId: row.agent_id,
+          status: row.cleanup_completed === 1 ? "complete" : "pending",
+        });
+        if (row.agent_dir === null) {
+          return [];
+        }
         let databasePaths: string[] = [];
         try {
           databasePaths = parseAgentDeletionDatabasePaths(row.database_paths_json);
@@ -299,7 +340,7 @@ export function prepareAgentDatabaseDeletionSnapshotRead(
           return await consume(snapshot, () => {
             assertCurrent();
             if (changed) {
-              throw new Error("Agent database deletion snapshot changed during consumption.");
+              throw new AgentDatabaseDeletionSnapshotChangedError();
             }
             assertRegistryCurrent?.();
           });

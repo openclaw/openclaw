@@ -292,6 +292,14 @@ supplied; the broker never adds the fetched value to the audit log.
 
 ## 1Password CLI behavior
 
+The SecretRef resolver runs `op read`. On a nonzero exit, its protocol error
+includes up to 512 characters from the end of stderr after secret redaction.
+It removes the service-account token and any captured secret stdout from that
+detail. Both output streams are capped at 64 KiB; exceeding either cap stops
+the read and returns an output-limit error without child output. Gateway
+degradation warnings still use generic provider failure reasons. After fixing
+the underlying problem, run `openclaw secrets reload` to retry cold owners.
+
 Each cache miss runs `op item get` with the configured item, vault, and exact
 field selector, JSON output, a bounded timeout, and `--cache=false`. The child
 receives only that field rather than the full item. Only

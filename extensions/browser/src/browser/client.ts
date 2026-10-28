@@ -143,13 +143,12 @@ export async function browserProfiles(
 
 export async function browserSystemProfiles(
   baseUrl?: BrowserClientTarget,
-  opts?: { browser?: string; timeoutMs?: number; signal?: AbortSignal },
+  opts?: BrowserClientTimeoutOptions,
 ): Promise<SystemProfileInfo[]> {
   const res = await requestBrowserJson<{ systemProfiles: SystemProfileInfo[] }>(
     baseUrl,
     "/system-profiles",
     {
-      query: opts?.browser ? { browser: opts.browser } : undefined,
       timeoutMs: browserClientTimeout(baseUrl, opts?.timeoutMs, 3000),
       signal: opts?.signal,
     },

@@ -1,6 +1,9 @@
 import { Show } from "solid-js";
+import { registerBoardEnglish } from "../../i18n/locales/en-board.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+
+registerEnglishCatalog(registerBoardEnglish);
 
 export function BoardWidgetError(props: {
   error: unknown;

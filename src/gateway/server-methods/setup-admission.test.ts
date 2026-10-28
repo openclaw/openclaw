@@ -72,23 +72,16 @@ describe("setup admission", () => {
 
   it("retains root work for post-start session continuations", async () => {
     const continueAfterStart = createDeferred();
-    let runner: Promise<void> | undefined;
-
-    const session = await runWithGatewayIndependentRootWorkAdmission(async () =>
-      createAdmittedWizardSession(() => {
-        runner = (async () => {
-          await continueAfterStart.promise;
-          await enqueueCommandInLane("setup-post-start-proof", async () => undefined);
-        })();
-        return new WizardSession(() => runner!);
-      }),
-    );
+    const session = await admit(async () => {
+      await continueAfterStart.promise;
+      await enqueueCommandInLane("setup-post-start-proof", async () => undefined);
+    }, true);
 
     const activeAfterStart = getActiveGatewayRootWorkCount();
     continueAfterStart.resolve();
-    await expect(runner).resolves.toBeUndefined();
     expect(activeAfterStart).toBe(1);
-    await whenAdmittedWizardSessionSettled(session!);
+    await whenAdmittedWizardSessionSettled(session);
+    expect(session.getStatus()).toBe("done");
     expect(getActiveGatewayRootWorkCount()).toBe(0);
   });
 

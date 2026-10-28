@@ -6,6 +6,7 @@ import {
   parseSqliteSessionFileMarker,
   type SqliteSessionFileMarker,
 } from "../config/sessions/legacy-sqlite-marker.js";
+import { projectTranscriptNavigationFields } from "../config/sessions/transcript-navigation-fields.js";
 import {
   isCanonicalSessionTranscriptEntry,
   isSessionTranscriptLeafControl,
@@ -147,7 +148,8 @@ type RollupScanInput = {
     marker: SqliteSessionFileMarker,
     afterSeq: number,
     throughSeq: number,
-  ) => Promise<Array<{ seq: number; event: unknown }>>;
+    consume: (seq: number, event: unknown) => void,
+  ) => Promise<number>;
   checkProgress?: () => void;
 };
 
@@ -282,36 +284,24 @@ async function scanSqliteUsageRollup(params: RollupScanInput): Promise<UsageCost
     const records: UsageRecord[] = [];
     while (after < endSeq) {
       params.checkProgress?.();
-      const page = await params.readRows(scope, after, endSeq);
-      params.checkProgress?.();
-      if (page.length === 0) {
-        throw new Error(`SQLite transcript changed while scanning: ${params.file.filePath}`);
-      }
-      for (const { seq, event } of page) {
+      const lastSeq = await params.readRows(scope, after, endSeq, (seq, event) => {
         const record: UsageRecord = {
           seq,
           usageEntry: isRecord(event) ? parseUsageCostTranscriptRecord(event) : null,
         };
         if (isRecord(event)) {
-          for (const key of [
-            "type",
-            "id",
-            "parentId",
-            "targetId",
-            "appendParentId",
-            "appendMode",
-          ]) {
-            if (Object.hasOwn(event, key)) {
-              record[key] = event[key];
-            }
-          }
+          projectTranscriptNavigationFields(event, record);
         }
         if (seq === maxSeq) {
           anchorHash = sqliteCheckpointAnchorHash(event);
         }
         records.push(record);
+      });
+      params.checkProgress?.();
+      if (lastSeq <= after) {
+        throw new Error(`SQLite transcript changed while scanning: ${params.file.filePath}`);
       }
-      after = page.at(-1)!.seq;
+      after = lastSeq;
     }
     return records;
   };

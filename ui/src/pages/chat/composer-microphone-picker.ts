@@ -11,6 +11,25 @@ import {
 
 export type ComposerTalkCapabilityStatus = "checking" | "ready" | "unavailable" | "unknown";
 
+export type MicrophonePickerProps = {
+  devices: RealtimeTalkInputDevice[];
+  loading: boolean;
+  open: boolean;
+  selectedDeviceId: string;
+  voiceActive: boolean;
+  issue: RealtimeTalkDeviceIssue | null;
+  holdToDictate?: boolean;
+  showRealtimeCapability?: boolean;
+  realtimeStatus: ComposerTalkCapabilityStatus;
+  dictationStatus: ComposerTalkCapabilityStatus;
+  onOpen: () => void;
+  onClose: () => void;
+  onSelect: (deviceId: string) => void;
+  onHoldToDictateChange?: (enabled: boolean) => void;
+  onOpenTalkSettings?: () => void;
+  onOpenDictationSettings?: () => void;
+};
+
 // Each composer owns discovery and the devicechange subscription; delayed results
 // cannot overwrite newer discovery, and only an open picker watches devices.
 export class ComposerMicrophoneOwner extends EventTarget {

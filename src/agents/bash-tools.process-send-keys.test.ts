@@ -1,8 +1,12 @@
 import { Writable } from "node:stream";
-import { expect, test } from "vitest";
+import { afterEach, expect, test } from "vitest";
 import { createManagedChildStdin } from "../process/supervisor/adapters/child-stdin.js";
+import { addSession } from "./bash-process-registry.js";
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
-import { handleProcessSendKeys } from "./bash-tools.process-send-keys.js";
+import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
+import { createProcessTool } from "./bash-tools.process.js";
+
+afterEach(() => resetProcessRegistryForTests());
 
 test.each([
   { name: "raw hex", input: { hex: ["80", "ff", "00", "0x0a"] }, expected: "80ff000a" },
@@ -22,14 +26,17 @@ test.each([
   });
   const stdin = createManagedChildStdin(stream)!;
   try {
-    const result = await handleProcessSendKeys({
-      sessionId: "input-bytes",
-      session: createProcessSessionFixture({
-        id: "input-bytes",
-        command: "cat",
-        cursorKeyMode: "unknown",
-      }),
-      stdin,
+    const session = createProcessSessionFixture({
+      id: "input-bytes",
+      command: "cat",
+      cursorKeyMode: "unknown",
+      backgrounded: true,
+    });
+    session.stdin = stdin;
+    addSession(session);
+    const result = await createProcessTool().execute("input-bytes", {
+      action: "send-keys",
+      sessionId: session.id,
       ...input,
     });
     expect(Buffer.concat(received).toString("hex")).toBe(expected);

@@ -1,5 +1,5 @@
 import { setImmediate } from "node:timers/promises";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type {
@@ -66,9 +66,9 @@ function createStores(namespace: string, entries = 10, chunks = 100, rejectNew =
   };
 }
 
-function twoIds() {
+function twoIds(ids = [FIRST_ID, SECOND_ID]) {
   let count = 0;
-  return () => (++count === 1 ? FIRST_ID : SECOND_ID);
+  return () => ids[count++] ?? "ffffffffffffffffffffffff";
 }
 
 function imageMedia(bytes = "image-bytes") {
@@ -113,6 +113,27 @@ function clockedStores(namespace: string) {
   };
 }
 
+function createStoreFixture(
+  namespace = "hosted-media",
+  options: Partial<MediaOptions> = {},
+  backing: [number, number, boolean] = [
+    options.maxEntries ?? 10,
+    options.maxChunkRows ?? 100,
+    options.overflowPolicy === "reject-new",
+  ],
+) {
+  const { metadataStore, chunkStore } = createStores(namespace, ...backing);
+  return {
+    metadataStore,
+    chunkStore,
+    store: createMediaStore({
+      metadataStore,
+      chunkStore,
+      ...options,
+    }),
+  };
+}
+
 beforeAll(async () => {
   const webMedia = await import("./web-media.js");
   vi.spyOn(webMedia, "loadWebMedia").mockImplementation(loadWebMediaMock);
@@ -127,18 +148,6 @@ beforeEach(() => {
 });
 
 describe("createHostedOutboundMediaStore", () => {
-  function createStoreFixture(namespace = "hosted-media", bulkReads = true) {
-    const { metadataStore, chunkStore } = createStores(namespace);
-    return {
-      metadataStore,
-      chunkStore,
-      store: createMediaStore({
-        metadataStore,
-        chunkStore: bulkReads ? chunkStore : { ...chunkStore, lookupMany: undefined },
-      }),
-    };
-  }
-
   it("releases a failed read acquisition so deletion can reclaim its rows", async () => {
     const { metadataStore, chunkStore, store } = createStoreFixture("failed-reader-media");
     await prepare(store);
@@ -156,7 +165,11 @@ describe("createHostedOutboundMediaStore", () => {
     loadWebMediaMock
       .mockReset()
       .mockResolvedValueOnce({ ...imageMedia(), fileName: "floor-plan.png" });
-    const { store } = createStoreFixture("hosted-media", false);
+    const { metadataStore, chunkStore } = createStores("point-read-media");
+    const store = createMediaStore({
+      metadataStore,
+      chunkStore: { ...chunkStore, lookupMany: undefined },
+    });
 
     const url = await prepare(store);
     const entry = await store.read(MEDIA_ID);
@@ -226,8 +239,13 @@ describe("createHostedOutboundMediaStore", () => {
   );
 
   it("reads hosted metadata without hydrating chunk rows", async () => {
+    loadWebMediaMock
+      .mockReset()
+      .mockResolvedValueOnce({ ...imageMedia(), fileName: "floor-plan.png" });
     const { chunkStore, store } = createStoreFixture("metadata-only-media");
-    await prepare(store);
+    expect(await prepare(store)).toBe(
+      "https://gateway.example.com/hook/media/abc123abc123abc123abc123?token=token123",
+    );
     const chunkLookup = vi.spyOn(chunkStore, "lookup");
     const chunkBulkLookup = vi.spyOn(chunkStore, "lookupMany");
 
@@ -235,21 +253,23 @@ describe("createHostedOutboundMediaStore", () => {
       routePath: "/hook/media/",
       token: "token123",
       contentType: "image/png",
+      fileName: "floor-plan.png",
       byteLength: Buffer.byteLength("image-bytes"),
     });
     expect(chunkLookup).not.toHaveBeenCalled();
     expect(chunkBulkLookup).not.toHaveBeenCalled();
   });
 
-  it("keeps metadata long enough to clean up expired chunk rows", async () => {
+  it.each([0, 100])("cleans expired rows after %s ms serving grace", async (grace) => {
     vi.useFakeTimers();
     vi.setSystemTime(1000);
     const { metadataStore, chunkStore } = clockedStores("ttl-media");
     const store = createMediaStore({
       metadataStore,
       chunkStore,
-      ttlMs: 100,
-      resolveExpiresAtMs: (ttlMs) => Date.now() + ttlMs,
+      ttlMs: grace ? 120_000 : 100,
+      ...(grace ? { postExpiryRetentionMs: grace } : {}),
+      resolveExpiresAtMs: () => Date.now() + 100,
     });
 
     await prepare(store);
@@ -264,18 +284,26 @@ describe("createHostedOutboundMediaStore", () => {
       .orderBy("namespace")
       .orderBy("entry_key");
     expect(executeSqliteQuerySync(db, persistedRows).rows).toEqual([
-      { namespace: "ttl-media", ttlMs: 200 },
-      { namespace: "ttl-media-chunks", ttlMs: 100 },
-      { namespace: "ttl-media-chunks", ttlMs: 100 },
-      { namespace: "ttl-media-chunks", ttlMs: 100 },
+      { namespace: "ttl-media", ttlMs: grace ? 180_000 : 200 },
+      ...Array.from({ length: 3 }, () => ({
+        namespace: "ttl-media-chunks",
+        ttlMs: grace ? 120_100 : 100,
+      })),
     ]);
     expect(await metadataStore.entries()).toHaveLength(1);
     expect(await chunkStore.entries()).toHaveLength(3);
 
     vi.setSystemTime(1101);
     expect(await metadataStore.entries()).toHaveLength(1);
-    expect(await chunkStore.entries()).toEqual([]);
-    await store.cleanupExpired(1101);
+    expect(await chunkStore.entries()).toHaveLength(grace ? 3 : 0);
+    if (grace) {
+      await expect(store.readMetadata(MEDIA_ID)).resolves.toBeNull();
+      await store.cleanupExpired();
+      expect(await metadataStore.entries()).toHaveLength(1);
+      expect(await chunkStore.entries()).toHaveLength(3);
+      vi.setSystemTime(1201);
+    }
+    await store.cleanupExpired();
     expect(await metadataStore.entries()).toEqual([]);
     expect(await chunkStore.entries()).toEqual([]);
     // Expired chunks must be deleted, not merely hidden by the backing store.
@@ -306,10 +334,7 @@ describe("createHostedOutboundMediaStore", () => {
 
   it("serializes explicit deletion with reject-new capacity checks", async () => {
     loadWebMediaMock.mockResolvedValue(imageMedia());
-    const { metadataStore, chunkStore } = createStores("serialized-delete-media", 1, 1, true);
-    const store = createMediaStore({
-      metadataStore,
-      chunkStore,
+    const { chunkStore, store } = createStoreFixture("serialized-delete-media", {
       createId: twoIds(),
       rawChunkBytes: 64,
       maxEntries: 1,
@@ -344,12 +369,11 @@ describe("createHostedOutboundMediaStore", () => {
 
   it("prunes oldest complete entries before chunk rows evict independently", async () => {
     loadWebMediaMock.mockResolvedValue(imageMedia());
-    const store = createMediaStore({
-      ...createStores("capacity-media", 4, 4, true),
-      createId: twoIds(),
-      maxEntries: 2,
-      maxChunkRows: 4,
-    });
+    const { store } = createStoreFixture(
+      "capacity-media",
+      { createId: twoIds(), maxEntries: 2, maxChunkRows: 4 },
+      [4, 4, true],
+    );
 
     await prepare(store, "https://example.com/first.png");
     await prepare(store, "https://example.com/second.png");
@@ -361,15 +385,11 @@ describe("createHostedOutboundMediaStore", () => {
   it("deletes corrupt metadata by its stored key without revoking a live URL", async () => {
     const liveId = FIRST_ID;
     const corruptId = SECOND_ID;
-    const { metadataStore, chunkStore } = createStores("corrupt-capacity-media", 2, 1, true);
-    const store = createMediaStore({
-      metadataStore,
-      chunkStore,
-      createId: () => liveId,
-      maxEntries: 1,
-      maxChunkRows: 1,
-      overflowPolicy: "reject-new",
-    });
+    const { metadataStore, store } = createStoreFixture(
+      "corrupt-capacity-media",
+      { createId: () => liveId, maxEntries: 1, maxChunkRows: 1, overflowPolicy: "reject-new" },
+      [2, 1, true],
+    );
     loadWebMediaMock.mockReset().mockResolvedValue(imageMedia("x"));
     await prepare(store, "https://example.com/live.png");
     await metadataStore.register(`media:${corruptId}:meta`, {
@@ -390,11 +410,9 @@ describe("createHostedOutboundMediaStore", () => {
   });
 
   it("serializes concurrent reject-new preparations without evicting live URLs", async () => {
-    let idCounter = 0;
     const ids = [FIRST_ID, SECOND_ID, "333333333333333333333333"];
-    const store = createMediaStore({
-      ...createStores("concurrent-reject-capacity-media", 2, 2, true),
-      createId: () => ids[idCounter++] ?? "ffffffffffffffffffffffff",
+    const { store } = createStoreFixture("concurrent-reject-capacity-media", {
+      createId: twoIds(ids),
       maxEntries: 2,
       maxChunkRows: 2,
       overflowPolicy: "reject-new",
@@ -414,17 +432,11 @@ describe("createHostedOutboundMediaStore", () => {
   });
 
   it("rolls back only new chunks when reject-new backing capacity races", async () => {
-    let idCounter = 0;
-    const ids = [FIRST_ID, SECOND_ID];
-    const chunkStore = stateStore<MediaChunk>("backing-race-media-chunks", 2, true);
-    const store = createMediaStore({
-      metadataStore: stateStore("backing-race-media", 2, true),
-      chunkStore,
-      createId: () => ids[idCounter++] ?? "ffffffffffffffffffffffff",
-      maxEntries: 2,
-      maxChunkRows: 3,
-      overflowPolicy: "reject-new",
-    });
+    const { chunkStore, store } = createStoreFixture(
+      "backing-race-media",
+      { createId: twoIds(), maxEntries: 2, maxChunkRows: 3, overflowPolicy: "reject-new" },
+      [2, 2, true],
+    );
     loadWebMediaMock
       .mockReset()
       .mockResolvedValueOnce(imageMedia("x"))
@@ -435,8 +447,8 @@ describe("createHostedOutboundMediaStore", () => {
       "reached its 2-row limit",
     );
 
-    expect(await store.read(ids[0] ?? "")).not.toBeNull();
-    expect(await store.read(ids[1] ?? "")).toBeNull();
+    expect(await store.read(FIRST_ID)).not.toBeNull();
+    expect(await store.read(SECOND_ID)).toBeNull();
     expect(await chunkStore.entries()).toHaveLength(1);
   });
 });
@@ -493,47 +505,10 @@ describe("hosted media bulk read error order", () => {
 });
 
 describe("hosted outbound media retention and aggregate capacity", () => {
-  const LOGICAL_TTL_MS = 100;
-
-  beforeEach(() => {
-    vi.useFakeTimers();
-    vi.setSystemTime(1_000);
-    loadWebMediaMock.mockResolvedValue(imageMedia());
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  it("denies new reads at logical expiry and deletes rows after serving grace", async () => {
-    const { metadataStore, chunkStore } = clockedStores("retained-ttl-media");
-    const store = createMediaStore({
-      metadataStore,
-      chunkStore,
-      postExpiryRetentionMs: 100,
-      resolveExpiresAtMs: () => Date.now() + LOGICAL_TTL_MS,
-      createId: () => MEDIA_ID,
-    });
-
-    await prepare(store);
-    vi.setSystemTime(1_101);
-    await expect(store.readMetadata(MEDIA_ID)).resolves.toBeNull();
-    await store.cleanupExpired();
-    expect(await metadataStore.entries()).toHaveLength(1);
-    expect(await chunkStore.entries()).toHaveLength(3);
-
-    vi.setSystemTime(1_201);
-    await store.cleanupExpired();
-    expect(await metadataStore.entries()).toEqual([]);
-    expect(await chunkStore.entries()).toEqual([]);
-  });
-
   it("rejects an individually oversized entry before evicting live capabilities", async () => {
-    let id = 0;
     const ids = ["333333333333333333333333", "444444444444444444444444"];
-    const store = createMediaStore({
-      ...createStores("evicting-byte-media", 2, 4),
-      createId: () => ids[id++] ?? "ffffffffffffffffffffffff",
+    const { store } = createStoreFixture("evicting-byte-media", {
+      createId: twoIds(ids),
       maxEntries: 2,
       maxChunkRows: 4,
       maxTotalBytes: 5,

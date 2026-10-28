@@ -282,7 +282,7 @@ it("persists new refusal identity and keeps duplicate terminal notification iden
   expect(store.compare).toHaveBeenCalledOnce();
   expect(workStartError(target.sessionKey, entry)).toContain("paused as a precaution");
 });
-it.each(["run", "source"])("keeps incognito findings private until %s revocation", (revoked) => {
+it.each(["run", "source", "capture"])("guards incognito facts against %s revocation", (revoked) => {
   const incognito = {
     ...target,
     sessionKey: "agent:main:dashboard:incognito-test",
@@ -306,13 +306,22 @@ it.each(["run", "source"])("keeps incognito findings private until %s revocation
       nativeTurnId: undefined,
     },
   });
-  captureAgentRunProviderReview({
-    runId: "incognito-run",
-    target: incognito,
-    review,
-    expectedWriterRunId: "incognito-run",
-    assertCurrent,
-  });
+  const capture = () =>
+    captureAgentRunProviderReview({
+      runId: "incognito-run",
+      target: incognito,
+      review,
+      expectedWriterRunId: "incognito-run",
+      assertCurrent,
+    });
+  if (revoked === "capture") {
+    sourceCurrent = false;
+    expect(capture).toThrow("source revoked");
+    sourceCurrent = true;
+    expect(readAgentRunProviderReview("incognito-run")).toBeUndefined();
+    return;
+  }
+  capture();
   const fact = readAgentRunProviderReview("incognito-run");
   expect(fact?.review).toEqual(review);
   const context = runs.getAgentRunContext("incognito-run")!;

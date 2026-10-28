@@ -29,8 +29,12 @@ import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js"
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createBackupArchive } from "../backup-create.js";
+import { bindFreshClientCredentialStore } from "../client-credential-migration.js";
+import { runClientCredentialOperation } from "../client-credential-store.js";
+import { generateStoredDeviceIdentity } from "../device-identity-material.js";
 import { acquireGatewayLock } from "../gateway-lock.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
+import { runSqliteImmediateTransactionSync } from "../sqlite-transaction.js";
 import { resolveDatabaseEngineSelection } from "./config.js";
 import { installDatabaseEngineSelection } from "./context.js";
 import { resetDatabaseEngineSelectionForTest } from "./context.test-support.js";
@@ -42,6 +46,10 @@ const connection = typeof configured === "string" ? configured : undefined;
 
 describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
   it.each([
+    {
+      scenario: "credentials",
+      name: "binds archived local credentials to the final restored PostgreSQL anchor",
+    },
     {
       scenario: "all",
       name: "rehydrates every family and retained Matrix root before Gateway startup",
@@ -58,6 +66,8 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
     "$name",
     async ({ scenario }) => {
       const sqliteAgent = scenario === "mixed";
+      const clientIdentity =
+        scenario === "credentials" ? generateStoredDeviceIdentity(23) : undefined;
       assert(connection);
       await withEnvAsync(
         { OPENCLAW_ARCHIVE_TEST_PG: connection, OPENCLAW_INCLUDE_ROOTS: undefined },
@@ -192,7 +202,7 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
                   scenario === "all" ||
                   (scenario === "mixed"
                     ? family === "state" || family === "agent"
-                    : family === "state" || family === "workboard"),
+                    : family === "state" || (scenario !== "credentials" && family === "workboard")),
               );
               const descriptors = new Map(
                 await Promise.all(
@@ -288,6 +298,26 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
                   anchor
                     .prepare("INSERT INTO openclaw_engine_anchor VALUES (?, 'postgres', ?)")
                     .run(storeId, namespace);
+                }
+                if (clientIdentity) {
+                  using shared = openNodeSqliteDatabase(stores[0]!.file);
+                  runSqliteImmediateTransactionSync(shared, () =>
+                    bindFreshClientCredentialStore(shared, {
+                      path: stores[0]!.file,
+                      env: state.env,
+                    }),
+                  );
+                  runClientCredentialOperation(state.env, {
+                    kind: "identity.create",
+                    identity: {
+                      identity_key: "primary",
+                      device_id: clientIdentity.deviceId,
+                      public_key_pem: clientIdentity.publicKeyPem,
+                      private_key_pem: clientIdentity.privateKeyPem,
+                      created_at_ms: 23,
+                      updated_at_ms: 23,
+                    },
+                  });
                 }
                 resetDatabaseEngineSelectionForTest();
                 clearRuntimeConfigSnapshot();
@@ -462,6 +492,28 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
                   ).toEqual([]);
 
                   expect(await fs.readFile(restoredConfig)).toEqual(configBytes);
+                  if (clientIdentity) {
+                    const restoredEnv = {
+                      ...state.env,
+                      OPENCLAW_STATE_DIR: path.join(
+                        targetPath,
+                        buildBackupArchivePath(restored.archiveRoot, state.stateDir),
+                      ),
+                    };
+                    expect(
+                      runClientCredentialOperation(restoredEnv, {
+                        kind: "identity.read",
+                        identity_key: "primary",
+                      }),
+                    ).toMatchObject({
+                      kind: "identity",
+                      identity: {
+                        device_id: clientIdentity.deviceId,
+                        private_key_pem: clientIdentity.privateKeyPem,
+                      },
+                    });
+                    return;
+                  }
 
                   // Activate the entire restored state asset, including any retained capsule directories.
                   await fs.cp(

@@ -15,28 +15,23 @@ export type PluginMarketplaceListOptions = {
   json?: boolean;
 };
 
-export type PluginMarketplaceEntriesOptions = {
+export type PluginMarketplaceEntriesOptions = PluginMarketplaceListOptions & {
   feedProfile?: string;
   feedUrl?: string;
-  json?: boolean;
   offline?: boolean;
 };
 
-export type PluginMarketplaceRefreshOptions = {
+export type PluginMarketplaceRefreshOptions = PluginMarketplaceListOptions & {
   expectedSha256?: string;
   feedProfile?: string;
   feedUrl?: string;
-  json?: boolean;
 };
 
-export type PluginRegistryOptions = {
-  json?: boolean;
+export type PluginRegistryOptions = PluginMarketplaceListOptions & {
   refresh?: boolean;
 };
 
-export type PluginDoctorOptions = {
-  json?: boolean;
-};
+export type PluginDoctorOptions = PluginMarketplaceListOptions;
 
 const pluginAction = createLazyRuntimeMethodBinder(() => import("./plugins-cli.runtime.js"));
 const authoringAction = createLazyRuntimeMethodBinder(
@@ -224,6 +219,16 @@ export function registerPluginsCli(program: Command) {
     .option("--entry <path>", "Plugin entry module relative to --root")
     .option("--json", "Print JSON")
     .action(authoringAction((runtime) => runtime.runPluginsValidateCommand));
+
+  plugins
+    .command("lint")
+    .description("Inspect runtime compatibility without executing plugin code")
+    .option("--root <path>", "Plugin package root")
+    .option("--json", "Print JSON")
+    .action(async (opts: import("./plugins-runtime-lint-command.js").PluginsRuntimeLintOptions) => {
+      const { runPluginsRuntimeLintCommand } = await import("./plugins-runtime-lint-command.js");
+      await runPluginsRuntimeLintCommand(opts);
+    });
 
   plugins
     .command("pack")

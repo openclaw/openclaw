@@ -14,6 +14,7 @@ import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import { replaceSessionEntry, waitForSessionTranscriptProjection } from "./session-accessor.js";
+import { clearHistoryNavigation } from "./session-accessor.sqlite-history.test-support.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 
 it.each([false, true])(
@@ -33,40 +34,28 @@ it.each([false, true])(
         sourceTool: "sessions_send",
         sourceRole: "subagent",
       };
+      const user = (content: string, fields: Record<string, unknown>) => ({
+        role: "user",
+        content,
+        ...fields,
+      });
+      const answer = (runId: string) => ({
+        role: "assistant",
+        content: "reply",
+        __openclaw: { runId },
+      });
+      const steering = { __openclaw: { steerTargetRunId: "steered-run" } };
       const messages = [
-        {
-          role: "user",
-          content: "Child report with no later human steering",
-          idempotencyKey: "quiet-run:user",
-          provenance,
-        },
-        { role: "assistant", content: "Quiet acknowledgement", __openclaw: { runId: "quiet-run" } },
-        {
-          role: "user",
-          content: "Child report followed by steering",
-          idempotencyKey: "steered-run:user",
-          provenance,
-        },
-        {
-          role: "assistant",
-          content: "Initial acknowledgement",
-          __openclaw: { runId: "steered-run" },
-        },
-        {
-          role: "user",
-          content: "Counted hidden steering input",
-          provenance,
-          __openclaw: { steerTargetRunId: "steered-run" },
-        },
-        { role: "assistant", content: "Internal checkpoint", __openclaw: { runId: "steered-run" } },
-        {
-          role: "user",
-          content: "Now answer my question",
-          __openclaw: { steerTargetRunId: "steered-run" },
-        },
-        { role: "assistant", content: "Visible answer", __openclaw: { runId: "steered-run" } },
-        { role: "user", content: "Ordinary question", idempotencyKey: "visible-run:user" },
-        { role: "assistant", content: "Ordinary answer", __openclaw: { runId: "visible-run" } },
+        user("report", { idempotencyKey: "quiet-run:user", provenance }),
+        answer("quiet-run"),
+        user("report", { idempotencyKey: "steered-run:user", provenance }),
+        answer("steered-run"),
+        user("Counted hidden steering input", { ...steering, provenance }),
+        answer("steered-run"),
+        user("human steering", steering),
+        answer("steered-run"),
+        user("ordinary input", { idempotencyKey: "visible-run:user" }),
+        answer("visible-run"),
         ...Array.from({ length: 2_000 }, (_, index) => ({
           role: "user",
           content: `Unrelated later input ${index}`,
@@ -76,24 +65,22 @@ it.each([false, true])(
       await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 1 });
       const events: Parameters<typeof replaceTranscriptEvents>[1] = [
         { type: "session", version: 3, id: scope.sessionId },
-      ];
-      for (const [index, message] of messages.entries()) {
-        events.push({
+        ...messages.map((message, index) => ({
           type: "message",
           id: `message-${index}`,
           parentId:
             index === 0 ? null : compacted && index === 1 ? "compaction" : `message-${index - 1}`,
           message,
+        })),
+      ];
+      if (compacted) {
+        events.splice(2, 0, {
+          type: "compaction",
+          id: "compaction",
+          parentId: "message-0",
+          firstKeptEntryId: "message-0",
+          summary: "Retained worker report",
         });
-        if (compacted && index === 0) {
-          events.push({
-            type: "compaction",
-            id: "compaction",
-            parentId: "message-0",
-            firstKeptEntryId: "message-0",
-            summary: "Retained worker report",
-          });
-        }
       }
       for (let index = 0; index < 16; index++) {
         events.push({
@@ -109,15 +96,7 @@ it.each([false, true])(
       await waitForSessionTranscriptProjection(scope);
       if (compacted) {
         runOpenClawAgentWriteTransaction(
-          (writeDatabase) => {
-            writeDatabase.db
-              .prepare(`UPDATE transcript_events
-            SET navigation_type = NULL, navigation_custom_type = NULL,
-                navigation_display = 0, message_role = NULL, navigation_last_type = NULL,
-                navigation_last_custom_type = NULL, navigation_valid = 1
-            WHERE session_id = ?`)
-              .run(scope.sessionId);
-          },
+          (writeDatabase) => clearHistoryNavigation(writeDatabase, scope.sessionId),
           { agentId: database.agentId, path: database.path },
         );
       }
@@ -147,26 +126,24 @@ it.each([false, true])(
             transcript: { ...scope, sessionFile: scope.sessionKey },
             database: target,
           }).subagentCoordination;
-          const boundaryOffset = Number(compacted);
-          expect(resolver.isSubagentRunMessage("quiet-run", 2 + boundaryOffset)).toBe(true);
+          const classify = (seq: number, runId = "steered-run") =>
+            resolver.isSubagentRunMessage(runId, seq + Number(compacted));
+          expect(classify(2, "quiet-run")).toBe(true);
           expect(laterInputInspections).toBe(0);
           expect(hiddenSteerInspections).toBe(0);
-          expect(resolver.isSubagentRunMessage("steered-run", 4 + boundaryOffset)).toBe(true);
+          expect(classify(4)).toBe(true);
           expect(hiddenSteerInspections).toBe(0);
-          expect(resolver.isSubagentRunMessage("steered-run", 6 + boundaryOffset)).toBe(true);
+          expect(classify(6)).toBe(true);
           const inspectedHiddenSteer = hiddenSteerInspections;
           expect(inspectedHiddenSteer).toBeGreaterThan(0);
-          expect(resolver.isSubagentRunMessage("steered-run", 4 + boundaryOffset)).toBe(true);
-          expect(hiddenSteerInspections).toBe(inspectedHiddenSteer);
-          expect(resolver.isSubagentRunMessage("steered-run", 8 + boundaryOffset)).toBe(false);
-          expect(resolver.isSubagentRunMessage("steered-run", 4 + boundaryOffset)).toBe(true);
+          expect([classify(4), classify(8), classify(4)]).toEqual([true, false, true]);
           expect(hiddenSteerInspections).toBe(inspectedHiddenSteer);
           expect(laterInputInspections).toBe(0);
           const reads = trackSqliteStatementExecutions(nativeDb, ["selected"], (sql) =>
             /^select\b/i.test(sql.trimStart()) ? "selected" : null,
           );
           try {
-            expect(resolver.isSubagentRunMessage("visible-run", 10 + boundaryOffset)).toBe(false);
+            expect(classify(10, "visible-run")).toBe(false);
             // An ordinary input needs only its own facts, regardless of later display markers.
             expect(reads.rowCounts.selected).toBeLessThanOrEqual(8);
           } finally {

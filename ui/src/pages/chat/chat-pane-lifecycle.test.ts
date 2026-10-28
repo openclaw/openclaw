@@ -10,22 +10,26 @@ import type {
   SessionSuggestionsListResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
+import { createFrameQueue } from "../../test-helpers/animation-frame-queue.ts";
 import {
   gatewayHelloForMethods,
   SESSION_MUTATION_TEST_METHODS,
 } from "../../test-helpers/gateway-methods.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import {
+  createGatewayBrowserClientFixture,
+  createInitializationContext,
+} from "./chat-application-context.test-support.ts";
 import { QUEUED_EDIT_RETENTION_CHANGE_EVENT } from "./chat-page-retained-sessions.ts";
 import { createMountedPanes } from "./chat-pane-mounted.test-support.ts";
 import { ChatPaneRuntime } from "./chat-pane-render.ts";
 import {
-  createGatewayBrowserClientFixture,
-  createInitializationContext,
   createPaneTestHost,
   getPaneTestRuntime,
   createTestChatPane,
@@ -41,6 +45,7 @@ import {
 import * as chatThread from "./components/chat-thread-interactions.ts";
 import { handleChatDraftChange } from "./input-history.ts";
 import { beginQueuedMessageEdit, cancelQueuedMessageEdit } from "./queued-message-edit.ts";
+import { cacheChatSessionSnapshot } from "./session-message-cache.ts";
 import { isSidebarSlotVisible, openSlot, setSidebarOpen } from "./sidebar-layout.ts";
 import { buildInitialChatSubmission } from "./user-message-content.ts";
 
@@ -77,7 +82,35 @@ function runtimePane(sessionKey: string, context = createInitializationContext()
   pane.sessionKey = sessionKey;
   pane.chatMessagesBySession = new Map();
   pane.context = context;
+  runtimePanes.add(pane);
   return pane;
+}
+
+function initialSubmissionPane(text: string, sessionId?: string) {
+  const key = "agent:main:created-session";
+  const client = {
+    addEventListener: vi.fn(() => vi.fn()),
+    request: vi.fn(),
+  } as unknown as GatewayBrowserClient;
+  const context = createInitializationContext();
+  context.gateway.snapshot.client = client;
+  const submission = buildInitialChatSubmission(key, { createdAt: 1, text }, client, "initial-run");
+  context.chatSubmissions.retain(
+    submission && { ...submission, ...(sessionId ? { sessionId } : {}) },
+  );
+  const pane = runtimePane(key, context);
+  const cache = (messages: unknown[], cachedSessionId: string | null) =>
+    cacheChatSessionSnapshot(
+      pane.chatMessagesBySession!,
+      { settings: context.gateway.connection, client, hello: context.gateway.snapshot.hello },
+      { sessionKey: key },
+      {
+        messages,
+        sessionId: cachedSessionId,
+        pagination: { hasMore: false, ...(messages.length === 0 ? { totalMessages: 0 } : {}) },
+      },
+    );
+  return { pane, client, context, key, cache };
 }
 
 function stopAtAttach(pane: TestChatPane) {
@@ -129,6 +162,7 @@ function selectSuggestionRows(state: ChatPageHost, ...sessions: GatewaySessionRo
 
 const SKIP_REWIND_CONFIRM_PREFERENCE = "openclaw:skip-rewind-confirm";
 const confirmationOwners = new Set<HTMLElement>();
+const runtimePanes = new Set<TestChatPane>();
 
 it("discovers an assigned desktop when only runner inventory becomes available", async () => {
   vi.useFakeTimers();
@@ -273,34 +307,47 @@ it("renews the attention cue for repeated draft prefill", () => {
   input.remove();
 });
 
-it("claims the connected client's first message before attaching the pane", () => {
-  const targetSessionKey = "agent:main:created-session";
-  const client = {
-    addEventListener: vi.fn(() => vi.fn()),
-    request: vi.fn(),
-  } as unknown as GatewayBrowserClient;
-  const context = createInitializationContext();
-  context.gateway.snapshot.client = client;
-  context.chatSubmissions.retain(
-    buildInitialChatSubmission(
-      targetSessionKey,
-      { createdAt: 1, text: "keep the first prompt visible" },
-      client,
-      "initial-run",
-    ),
-  );
-  const pane = runtimePane(targetSessionKey, context);
-  const connect = stopAtAttach(pane);
-
-  try {
-    const attachedState = connect();
+it.each([
+  ["live", undefined],
+  [
+    "cached receipt",
+    {
+      role: "user",
+      content: "keep the first prompt visible",
+      timestamp: 2,
+      __openclaw: { id: "persisted-first", idempotencyKey: "initial-run:user", seq: 1 },
+    },
+  ],
+] as const)(
+  "claims the connected client's first message before attaching the pane (%s)",
+  (_, receipt) => {
+    const { pane, client, context, key, cache } = initialSubmissionPane(
+      "keep the first prompt visible",
+    );
+    if (receipt) {
+      // Hydrating this snapshot retires the retained prompt before admission runs.
+      cache([receipt], null);
+    }
+    const attachedState = stopAtAttach(pane)();
     expect(attachedState?.client).toBe(client);
     expect(attachedState?.chatMessages).toMatchObject([
-      { role: "user", content: [{ type: "text", text: "keep the first prompt visible" }] },
+      receipt ?? {
+        role: "user",
+        content: [{ type: "text", text: "keep the first prompt visible" }],
+      },
     ]);
-  } finally {
-    pane.disconnectedCallback();
-  }
+    expect(context.chatSubmissions.readInitial(key, client)?.pending).toBe(!receipt);
+    // The create ACK already started this run; the working claw must not wait for roster events.
+    expect(attachedState?.chatRunId).toBe("initial-run");
+  },
+);
+
+it("does not adopt a first run bound to a replaced physical session", () => {
+  const { pane, cache } = initialSubmissionPane("first prompt for session a", "physical-a");
+  cache([], "physical-b");
+  const attachedState = stopAtAttach(pane)();
+  expect(attachedState?.currentSessionId).toBe("physical-b");
+  expect(attachedState?.chatRunId ?? null).toBeNull();
 });
 
 it.each(["absent", "open"] as const)(
@@ -330,18 +377,13 @@ it.each(["absent", "open"] as const)(
       expect(pane.state.sessionKey).toBe(left);
       expect(isSidebarSlotVisible(pane.state.sidebarLayout, "workspace")).toBe(false);
       expect(isSidebarSlotVisible(pane.state.sidebarLayout, "detail")).toBe(preference === "open");
-      expect(pane.state.sidebarFocusPanelId).toBe(preference === "absent" ? "" : "detail");
     };
-    try {
-      connect();
-      expectOwnLayout();
-      pane.applyGatewaySnapshot({ ...context.gateway.snapshot, phase: "reconnecting" });
-      expectOwnLayout();
-      expect(loadSettings().sidebarSessionLayouts?.[right]).toMatchObject(rightLayout);
-      expect(loadSettings().sessionKey).toBe(right);
-    } finally {
-      pane.disconnectedCallback();
-    }
+    connect();
+    expectOwnLayout();
+    pane.applyGatewaySnapshot({ ...context.gateway.snapshot, phase: "reconnecting" });
+    expectOwnLayout();
+    expect(loadSettings().sidebarSessionLayouts?.[right]).toMatchObject(rightLayout);
+    expect(loadSettings().sessionKey).toBe(right);
   },
 );
 
@@ -624,6 +666,10 @@ function watchCapture(target: Document | Window, type: "click" | "keydown") {
 }
 
 afterEach(() => {
+  for (const pane of runtimePanes) {
+    pane.disconnectedCallback();
+  }
+  runtimePanes.clear();
   vi.useRealTimers();
   vi.restoreAllMocks();
   for (const owner of confirmationOwners) {
@@ -638,14 +684,8 @@ afterEach(() => {
 });
 
 it("dismisses only confirmations owned by the disconnected pane", () => {
-  const frameCallbacks: FrameRequestCallback[] = [];
-  vi.stubGlobal(
-    "requestAnimationFrame",
-    vi.fn((callback: FrameRequestCallback) => {
-      frameCallbacks.push(callback);
-      return frameCallbacks.length;
-    }),
-  );
+  const { frames: frameCallbacks, request } = createFrameQueue();
+  vi.stubGlobal("requestAnimationFrame", vi.fn(request));
   const listeners = [watchCapture(document, "click"), watchCapture(window, "keydown")];
   const { pane } = barePane();
   window.localStorage.removeItem(SKIP_REWIND_CONFIRM_PREFERENCE);

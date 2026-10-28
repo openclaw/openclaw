@@ -1,7 +1,6 @@
-// Covers runtime snapshot writes produced by config IO.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   registerConfigWriteListener,
   resetConfigRuntimeState,
@@ -11,7 +10,8 @@ import {
 } from "./io.js";
 import { hashConfigRaw } from "./io.read-helpers.js";
 import { replaceConfigFile, type ConfigMutationIO } from "./mutate.js";
-import { serializeConfigResolutionFacts } from "./resolution-facts.js";
+import { createSnapshot } from "./mutate.test-support.js";
+import { getResolvedConfigEnvSecretRef } from "./resolution-facts.js";
 import {
   registerManagedRuntimeConfigWriteOwner,
   registerRuntimeConfigWriteListener,
@@ -19,263 +19,164 @@ import {
   type RuntimeConfigWritePreparedCandidate,
 } from "./runtime-snapshot.js";
 import { withTempHomeConfig } from "./test-helpers.js";
-import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
+import type { OpenClawConfig } from "./types.js";
 
 function resetRuntimeConfigState(): void {
   setRuntimeConfigSnapshotRefreshHandler(null);
   resetConfigRuntimeState();
 }
+beforeEach(resetRuntimeConfigState);
+afterEach(resetRuntimeConfigState);
 
-describe("runtime config snapshot writes", () => {
-  beforeEach(() => {
-    resetRuntimeConfigState();
-  });
-
-  afterEach(() => {
-    resetRuntimeConfigState();
-  });
-
-  it("publishes canonical include snapshots with managed auth-store refresh scope", async () => {
-    const initialConfig = {
-      env: { vars: { CONFIG_PUBLICATION_BIN: "jq" } },
-      gateway: { mode: "local" as const },
-      logging: { level: "info" as const },
-      tools: { exec: { safeBins: ["jq"] } },
-    } satisfies OpenClawConfig;
-    const authoredRoot = { ...initialConfig, tools: { $include: "./tools.json5" } };
-    await withTempHomeConfig(authoredRoot, async ({ configPath }) => {
-      const toolsPath = path.join(path.dirname(configPath), "tools.json5");
-      const authoredTools = { exec: { safeBins: ["${CONFIG_PUBLICATION_BIN}"] } };
-      await fs.writeFile(toolsPath, JSON.stringify(authoredTools), "utf-8");
-      const overlayCalls: Array<{
-        kind: string;
-        receiver: RuntimeConfigWritePreparedCandidate;
-        config: OpenClawConfig;
-      }> = [];
-      let prepared: RuntimeConfigWritePreparedCandidate | undefined;
-      const preflight = vi.fn(
-        async (
-          sourceConfig: OpenClawConfig,
-          refreshOptions?: { includeAuthStoreRefs?: boolean },
-        ) => {
-          prepared = {
-            runtimeConfig: sourceConfig,
-            compareConfig: sourceConfig,
-            reapplyRuntimeOverlays(config) {
-              overlayCalls.push({ kind: "runtime", receiver: this, config });
-              return { ...config, logging: { level: "warn" } };
-            },
-            reapplyCompareOverlays(config) {
-              overlayCalls.push({ kind: "compare", receiver: this, config });
-              return { ...config, logging: { level: "error" } };
-            },
-          };
-          return Object.assign(prepared, { refreshOptions });
-        },
-      );
-      const notifications: Array<
-        Omit<RuntimeConfigWriteNotification, "preparedCandidatesByOwner">
-      > = [];
-      const unsubscribe = registerConfigWriteListener((event) => notifications.push(event), {
-        ownsRuntimeActivationFor: configPath,
-        preCommitRuntimePreflight: preflight,
-      });
-      try {
-        setRuntimeConfigSnapshot(initialConfig, initialConfig);
-        await writeConfigFile(
-          { ...initialConfig, logging: { level: "debug" } },
-          { runtimeRefresh: { includeAuthStoreRefs: false } },
-        );
-      } finally {
-        unsubscribe();
-      }
-      expect(preflight).toHaveBeenCalledWith(expect.any(Object), {
-        includeAuthStoreRefs: false,
-      });
-      expect(notifications).toHaveLength(1);
-      const [notification] = notifications;
-      expect(notification?.runtimeRefresh).toEqual({ includeAuthStoreRefs: false });
-      expect(notification?.snapshot).toMatchObject({
-        path: configPath,
-        exists: true,
-        valid: true,
-        parsed: { tools: { $include: "./tools.json5" } },
-        authoredConfig: { tools: authoredTools },
-        sourceConfig: { logging: { level: "debug" }, tools: initialConfig.tools },
-        includedPaths: expect.arrayContaining([toolsPath]),
-        includeProvenance: expect.arrayContaining([
-          expect.objectContaining({ path: ["tools"], kind: "single", targetPath: toolsPath }),
-        ]),
-        hash: notification?.persistedHash,
-      });
-      expect(notification?.snapshot.raw).toBe(await fs.readFile(configPath, "utf-8"));
-      expect(serializeConfigResolutionFacts(notification?.snapshot.sourceConfig)).toEqual({
-        unresolvedPaths: [],
-        envSecretRefs: [
-          [
-            "tools.exec.safeBins[0]",
-            {
-              ref: { source: "env", provider: "default", id: "CONFIG_PUBLICATION_BIN" },
-              state: "resolved",
-            },
-          ],
-        ],
-      });
-      expect(overlayCalls.map(({ kind }) => kind)).toEqual(["runtime", "compare"]);
-      expect(overlayCalls.map(({ config }) => config)).toEqual([
-        notification?.runtimeConfig,
-        notification?.sourceConfig,
-      ]);
-      for (const { receiver } of overlayCalls) {
-        expect(receiver).toBe(prepared);
-      }
-      expect(notification?.preparedCandidate).not.toBe(prepared);
-      expect(notification?.preparedCandidate?.runtimeConfig.logging?.level).toBe("warn");
-      expect(notification?.preparedCandidate?.compareConfig.logging?.level).toBe("error");
-      expect(prepared?.runtimeConfig.logging?.level).toBe("debug");
-      expect(prepared?.compareConfig.logging?.level).toBe("debug");
-    });
-  });
-
-  it("preserves auth-store refresh scope for managed top-level include writes", async () => {
-    const authoredRoot = { plugins: { $include: "./config/plugins.json5" } };
-    await withTempHomeConfig(authoredRoot, async ({ configPath }) => {
-      const pluginsPath = path.join(path.dirname(configPath), "config", "plugins.json5");
-      await fs.mkdir(path.dirname(pluginsPath), { recursive: true });
-      await fs.writeFile(pluginsPath, `${JSON.stringify({ entries: {} }, null, 2)}\n`, "utf-8");
-      const raw = await fs.readFile(configPath, "utf-8");
-      const initialConfig = { plugins: { entries: {} } };
-      const snapshot: ConfigFileSnapshot = {
-        path: configPath,
-        exists: true,
-        raw,
-        parsed: authoredRoot,
-        sourceConfig: initialConfig,
-        resolved: initialConfig,
-        valid: true,
-        runtimeConfig: initialConfig,
-        config: initialConfig,
-        hash: hashConfigRaw(raw),
-        issues: [],
-        warnings: [],
-        legacyIssues: [],
+it.each(["root", "include"])("publishes managed %s writes with auth-store scope", async (mode) => {
+  const include = mode === "include";
+  const initial: OpenClawConfig = include
+    ? { plugins: { entries: {} } }
+    : {
+        env: { vars: { CONFIG_PUBLICATION_BIN: "jq" } },
+        gateway: { mode: "local" },
+        logging: { level: "info" },
+        tools: { exec: { safeBins: ["jq"] } },
       };
-      const nextConfig = {
-        plugins: { entries: { demo: { enabled: true } } },
-      } satisfies OpenClawConfig;
-      const nextRuntimeConfig = { ...nextConfig, logging: { level: "debug" as const } };
-      // Control only the canonical reread; the include file is contained, hashed and written normally.
-      const io = {
-        readConfigFileSnapshotForWrite: vi.fn(async () => ({
-          snapshot: {
-            ...snapshot,
-            sourceConfig: nextConfig,
-            runtimeConfig: nextRuntimeConfig,
-            config: nextRuntimeConfig,
-          },
-          writeOptions: { expectedConfigPath: configPath },
-        })),
-        writeConfigFile: vi.fn<ConfigMutationIO["writeConfigFile"]>(),
-      } satisfies ConfigMutationIO;
-      const overlayCalls: Array<[string, RuntimeConfigWritePreparedCandidate, OpenClawConfig]> = [];
-      const metadata = Symbol("prepared metadata");
-      const prepared = {
-        runtimeConfig: snapshot.runtimeConfig,
-        compareConfig: snapshot.sourceConfig,
+  const authoredTools = { exec: { safeBins: ["${CONFIG_PUBLICATION_BIN}"] } };
+  const authored = include
+    ? { plugins: { $include: "./config/plugins.json5" } }
+    : { ...initial, tools: { $include: "./tools.json5" } };
+  await withTempHomeConfig(authored, async ({ configPath: file }) => {
+    const includeFile = path.join(
+      path.dirname(file),
+      include ? "config/plugins.json5" : "tools.json5",
+    );
+    await fs.mkdir(path.dirname(includeFile), { recursive: true });
+    await fs.writeFile(
+      includeFile,
+      JSON.stringify(include ? { entries: {} } : authoredTools),
+      "utf-8",
+    );
+    const raw = await fs.readFile(file, "utf-8");
+    const snapshot = createSnapshot({
+      path: file,
+      hash: hashConfigRaw(raw),
+      parsed: authored,
+      sourceConfig: initial,
+      raw,
+    });
+    const next: OpenClawConfig = include
+      ? { plugins: { entries: { demo: { enabled: true } } } }
+      : { ...initial, logging: { level: "debug" } };
+    const runtime: OpenClawConfig = include ? { ...next, logging: { level: "debug" } } : next;
+    const metadata = Symbol("prepared metadata");
+    let prepared: (RuntimeConfigWritePreparedCandidate & { [metadata]: string }) | undefined;
+    const preflight = async (
+      source: OpenClawConfig,
+      options?: { includeAuthStoreRefs?: boolean },
+    ) => {
+      if (options?.includeAuthStoreRefs !== false) {
+        throw new Error("unavailable auth-profile SecretRef");
+      }
+      return (prepared = {
+        runtimeConfig: include ? snapshot.runtimeConfig : source,
+        compareConfig: include ? snapshot.sourceConfig : source,
         [metadata]: "preserved",
-        reapplyRuntimeOverlays(config: OpenClawConfig): OpenClawConfig {
-          overlayCalls.push(["runtime", this, config]);
+        reapplyRuntimeOverlays(config) {
+          expect(this).toBe(prepared);
           return { ...config, logging: { level: "warn" } };
         },
-        reapplyCompareOverlays(config: OpenClawConfig): OpenClawConfig {
-          overlayCalls.push(["compare", this, config]);
+        reapplyCompareOverlays(config) {
+          expect(this).toBe(prepared);
           return { ...config, logging: { level: "error" } };
         },
-      };
-      const fallback = {
-        runtimeConfig: snapshot.runtimeConfig,
-        compareConfig: snapshot.sourceConfig,
-      };
-      const preflight = vi.fn(
-        async (
-          _sourceConfig: OpenClawConfig,
-          refreshOptions?: { includeAuthStoreRefs?: boolean },
-        ) => {
-          if (refreshOptions?.includeAuthStoreRefs !== false) {
-            throw new Error("unavailable auth-profile SecretRef");
-          }
-          return prepared;
-        },
-      );
-      const releaseOwner = registerManagedRuntimeConfigWriteOwner(configPath, preflight);
-      const releaseFallback = registerManagedRuntimeConfigWriteOwner(
-        configPath,
-        async () => fallback,
-      );
-      const notifications: RuntimeConfigWriteNotification[] = [];
-      const releaseListener = registerRuntimeConfigWriteListener((event) => {
-        if (event.configPath === configPath) {
-          notifications.push(event);
-        }
       });
-      try {
+    };
+    const fallback = {
+      runtimeConfig: snapshot.runtimeConfig,
+      compareConfig: snapshot.sourceConfig,
+    };
+    const owner = include ? registerManagedRuntimeConfigWriteOwner(file, preflight) : undefined;
+    const backup = include
+      ? registerManagedRuntimeConfigWriteOwner(file, async () => fallback)
+      : undefined;
+    const events: RuntimeConfigWriteNotification[] = [];
+    const record = (event: RuntimeConfigWriteNotification) => {
+      if (event.configPath === file) {
+        events.push(event);
+      }
+    };
+    const stop = include
+      ? registerRuntimeConfigWriteListener(record)
+      : registerConfigWriteListener(record, {
+          ownsRuntimeActivationFor: file,
+          preCommitRuntimePreflight: preflight,
+        });
+    try {
+      if (include) {
+        // Only the reread is controlled; include containment, hashing and writes are real.
+        const io = {
+          readConfigFileSnapshotForWrite: async () => ({
+            snapshot: { ...snapshot, sourceConfig: next, runtimeConfig: runtime, config: runtime },
+            writeOptions: { expectedConfigPath: file },
+          }),
+          writeConfigFile: vi.fn<ConfigMutationIO["writeConfigFile"]>(),
+        } satisfies ConfigMutationIO;
         await replaceConfigFile({
           baseHash: snapshot.hash ?? undefined,
           snapshot,
           writeOptions: {
-            expectedConfigPath: configPath,
+            expectedConfigPath: file,
             assertConfigPathForWrite: () => {},
-            includeFileTargetsForWrite: { [pluginsPath]: await fs.realpath(pluginsPath) },
+            includeFileTargetsForWrite: { [includeFile]: await fs.realpath(includeFile) },
             runtimeRefresh: { includeAuthStoreRefs: false },
           },
-          nextConfig,
+          nextConfig: next,
           io,
         });
-      } finally {
-        releaseListener();
-        releaseFallback();
-        releaseOwner();
+        expect(io.writeConfigFile).not.toHaveBeenCalled();
+      } else {
+        setRuntimeConfigSnapshot(initial, initial);
+        await writeConfigFile(next, { runtimeRefresh: { includeAuthStoreRefs: false } });
       }
-      expect(io.writeConfigFile).not.toHaveBeenCalled();
-      expect(preflight).toHaveBeenCalledWith(expect.any(Object), { includeAuthStoreRefs: false });
-      expect(notifications).toHaveLength(1);
-      const [notification] = notifications;
-      expect(notification?.runtimeRefresh).toEqual({ includeAuthStoreRefs: false });
-      expect(notification?.snapshot).toMatchObject({
-        path: configPath,
-        raw,
-        parsed: authoredRoot,
-        sourceConfig: nextConfig,
-        runtimeConfig: nextRuntimeConfig,
-      });
-      const candidates = notification?.preparedCandidatesByOwner;
-      expect([...(candidates?.keys() ?? [])]).toEqual([
-        releaseOwner.ownerId,
-        releaseFallback.ownerId,
-      ]);
-      expect(overlayCalls).toEqual([
-        ["runtime", prepared, nextRuntimeConfig],
-        ["compare", prepared, nextConfig],
-      ]);
-      for (const [, receiver] of overlayCalls) {
-        expect(receiver).toBe(prepared);
-      }
-      const projected = candidates?.get(releaseOwner.ownerId);
-      expect(projected).not.toBe(prepared);
+    } finally {
+      stop();
+      backup?.();
+      owner?.();
+    }
+    expect(events).toHaveLength(1);
+    const [event] = events;
+    const candidates = event?.preparedCandidatesByOwner;
+    expect(event?.runtimeRefresh).toEqual({ includeAuthStoreRefs: false });
+    expect(event?.snapshot).toMatchObject({ path: file, sourceConfig: next });
+    const projected = owner ? candidates?.get(owner.ownerId) : event?.preparedCandidate;
+    expect(projected).toMatchObject({
+      runtimeConfig: { ...runtime, logging: { level: "warn" } },
+      compareConfig: { ...next, logging: { level: "error" } },
+    });
+    if (include) {
+      expect(event?.snapshot).toMatchObject({ raw, parsed: authored, runtimeConfig: runtime });
       expect(projected).toMatchObject({ [metadata]: "preserved" });
-      expect(projected?.runtimeConfig.logging?.level).toBe("warn");
-      expect(projected?.compareConfig.logging?.level).toBe("error");
-      expect(prepared.runtimeConfig).toBe(snapshot.runtimeConfig);
-      expect(prepared.compareConfig).toBe(snapshot.sourceConfig);
-      const unchanged = candidates?.get(releaseFallback.ownerId);
-      expect(unchanged).not.toBe(fallback);
+      expect(prepared?.runtimeConfig).toBe(snapshot.runtimeConfig);
+      expect(prepared?.compareConfig).toBe(snapshot.sourceConfig);
+      const unchanged = backup && candidates?.get(backup.ownerId);
       expect(unchanged?.runtimeConfig).toBe(fallback.runtimeConfig);
       expect(unchanged?.compareConfig).toBe(fallback.compareConfig);
-      const persisted = JSON.parse(
-        await fs.readFile(pluginsPath, "utf-8"),
-      ) as OpenClawConfig["plugins"];
-      expect(persisted?.entries?.demo?.enabled).toBe(true);
-      await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(raw);
-    });
+      expect(JSON.parse(await fs.readFile(includeFile, "utf-8"))).toMatchObject({
+        entries: { demo: { enabled: true } },
+      });
+      await expect(fs.readFile(file, "utf-8")).resolves.toBe(raw);
+    } else {
+      expect(event?.snapshot).toMatchObject({
+        parsed: { tools: { $include: "./tools.json5" } },
+        authoredConfig: { tools: authoredTools },
+        includeProvenance: expect.arrayContaining([
+          expect.objectContaining({ path: ["tools"], kind: "single", targetPath: includeFile }),
+        ]),
+        hash: event?.persistedHash,
+      });
+      expect(event?.snapshot.raw).toBe(await fs.readFile(file, "utf-8"));
+      expect(
+        getResolvedConfigEnvSecretRef(event?.snapshot.sourceConfig, "tools.exec.safeBins[0]"),
+      ).toEqual({ source: "env", provider: "default", id: "CONFIG_PUBLICATION_BIN" });
+      expect(prepared?.runtimeConfig.logging?.level).toBe("debug");
+      expect(prepared?.compareConfig.logging?.level).toBe("debug");
+    }
   });
 });

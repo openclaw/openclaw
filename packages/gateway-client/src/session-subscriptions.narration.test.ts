@@ -5,7 +5,7 @@ import {
   GatewaySessionMessageSubscriptionCoordinator,
   type GatewaySessionMessageSubscriptionOptions,
 } from "./session-subscriptions.js";
-import { createClient } from "./session-subscriptions.test-support.js";
+import { createClient, expectWire, expectWireCalls } from "./session-subscriptions.test-support.js";
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "./timeouts.js";
 
 describe("session narration subscription ownership", () => {
@@ -17,14 +17,13 @@ describe("session narration subscription ownership", () => {
     "retains independent wire ownership for $key ($firstAgent → $secondAgent)",
     async ({ key, firstAgent, secondAgent, owners }) => {
       const acknowledged = createDeferred();
-      const { client, request } = createClient(async (method) => {
+      const { coordinator, request } = createClient(async (method) => {
         if (method === "sessions.messages.subscribe") {
           await acknowledged.promise;
           return { key, agentId: "main" };
         }
         return {};
       });
-      const coordinator = new GatewaySessionMessageSubscriptionCoordinator(client);
       const first = coordinator.acquire(key, { agentId: firstAgent });
       const second = coordinator.acquire(key, { agentId: secondAgent, mode: "narration" });
       expect(request).toHaveBeenCalledTimes(owners);
@@ -48,58 +47,37 @@ describe("session narration subscription ownership", () => {
   );
 
   it("keeps an implicit global owner separate from another agent's acknowledged global alias", async () => {
-    const { client, request } = createClient(async (_method, params) => ({
+    const { coordinator, request } = createClient(async (_method, params) => ({
       key: "global",
       agentId: params.key === "agent:research:main" ? "research" : "main",
     }));
-    const coordinator = new GatewaySessionMessageSubscriptionCoordinator(client);
     const research = await coordinator.acquire("agent:research:main");
     const main = await coordinator.acquire("global", { mode: "narration" });
-    expect(
-      request.mock.calls.filter(([method]) => method === "sessions.messages.subscribe"),
-    ).toEqual([
-      [
-        "sessions.messages.subscribe",
-        { subscriptionId: expect.any(String), key: "agent:research:main" },
-      ],
-      [
-        "sessions.messages.subscribe",
-        { subscriptionId: expect.any(String), key: "global", mode: "narration" },
-      ],
+    expectWireCalls(request, "subscribe", [
+      { key: "agent:research:main" },
+      { key: "global", mode: "narration" },
     ]);
     await coordinator.release(main);
     await coordinator.release(research);
-    expect(
-      request.mock.calls.filter(([method]) => method === "sessions.messages.unsubscribe"),
-    ).toEqual([
-      [
-        "sessions.messages.unsubscribe",
-        { subscriptionId: expect.any(String), key: "global", agentId: "main" },
-      ],
-      [
-        "sessions.messages.unsubscribe",
-        { subscriptionId: expect.any(String), key: "global", agentId: "research" },
-      ],
+    expectWireCalls(request, "unsubscribe", [
+      { key: "global", agentId: "main" },
+      { key: "global", agentId: "research" },
     ]);
   });
 
   it("does not reuse a qualified observer for a conflicting explicit agent", async () => {
-    const { client, request } = createClient(async (_method, params) => {
+    const { coordinator, request } = createClient(async (_method, params) => {
       if (params.agentId === "other") {
         throw new Error("agent does not match session key agent");
       }
       return { key: "agent:main:foo", agentId: "main" };
     });
-    const coordinator = new GatewaySessionMessageSubscriptionCoordinator(client);
     const foreground = await coordinator.acquire("agent:main:foo");
     await expect(
       coordinator.acquire("agent:main:foo", { agentId: "other", mode: "narration" }),
     ).rejects.toThrow("does not match");
     await coordinator.release(foreground);
-    expect(request).toHaveBeenLastCalledWith("sessions.messages.unsubscribe", {
-      subscriptionId: expect.any(String),
-      key: "agent:main:foo",
-    });
+    expectWire(request, "unsubscribe", { key: "agent:main:foo" });
   });
 
   it("uses distinct stable IDs for raw and literal global sessions across coordinators", async () => {
@@ -126,9 +104,8 @@ describe("session narration subscription ownership", () => {
 
   it("retains acquisition intent when the caller mutates options before acknowledgment", async () => {
     const acknowledged = createDeferred<unknown>();
-    const { client, request } = createClient();
+    const { coordinator, request } = createClient();
     request.mockImplementationOnce(async () => acknowledged.promise);
-    const coordinator = new GatewaySessionMessageSubscriptionCoordinator(client);
     const options: GatewaySessionMessageSubscriptionOptions = {};
     const pending = coordinator.acquire("main", options);
     options.mode = "narration";
@@ -136,63 +113,37 @@ describe("session narration subscription ownership", () => {
     acknowledged.resolve({ key: "main" });
     const foreground = await pending;
     expect(foreground).toEqual({ key: "main", agentId: null });
-    expect(request).toHaveBeenCalledExactlyOnceWith("sessions.messages.subscribe", {
-      subscriptionId: expect.any(String),
-      key: "main",
-    });
+    expect(request).toHaveBeenCalledOnce();
+    expectWire(request, "subscribe");
 
     const narration = await coordinator.acquire("main", { mode: "narration" });
     await coordinator.release(foreground);
-    expect(request).toHaveBeenLastCalledWith("sessions.messages.subscribe", {
-      subscriptionId: expect.any(String),
-      key: "main",
-      mode: "narration",
-    });
+    expectWire(request, "subscribe", { mode: "narration" });
     await coordinator.release(narration);
-    expect(request).toHaveBeenLastCalledWith("sessions.messages.unsubscribe", {
-      subscriptionId: expect.any(String),
-      key: "main",
-    });
+    expectWire(request, "unsubscribe");
   });
 
   it.each([false, true])(
     "keeps full streams until the last foreground owner releases (narration first: %s)",
     async (narrationFirst) => {
-      const { client, request } = createClient();
-      const coordinator = new GatewaySessionMessageSubscriptionCoordinator(client);
+      const { coordinator, request } = createClient();
       const narration = narrationFirst
         ? await coordinator.acquire("main", { mode: "narration" })
         : null;
       if (narrationFirst) {
-        expect(request).toHaveBeenLastCalledWith("sessions.messages.subscribe", {
-          subscriptionId: expect.any(String),
-          key: "main",
-          mode: "narration",
-        });
+        expectWire(request, "subscribe", { mode: "narration" });
       }
       const foreground = await coordinator.acquire("main", { includeApprovals: true });
       const background = narration ?? (await coordinator.acquire("main", { mode: "narration" }));
       const secondForeground = await coordinator.acquire("main");
-      expect(request).toHaveBeenLastCalledWith("sessions.messages.subscribe", {
-        subscriptionId: expect.any(String),
-        key: "main",
-        includeApprovals: true,
-      });
+      expectWire(request, "subscribe", { includeApprovals: true });
       const fullRequests = request.mock.calls.length;
       await coordinator.release(foreground);
       expect(request).toHaveBeenCalledTimes(fullRequests);
       await coordinator.release(secondForeground);
-      expect(request).toHaveBeenLastCalledWith("sessions.messages.subscribe", {
-        subscriptionId: expect.any(String),
-        key: "main",
-        mode: "narration",
-        includeApprovals: true,
-      });
+      expectWire(request, "subscribe", { mode: "narration", includeApprovals: true });
       await coordinator.release(background);
-      expect(request).toHaveBeenLastCalledWith("sessions.messages.unsubscribe", {
-        subscriptionId: expect.any(String),
-        key: "main",
-      });
+      expectWire(request, "unsubscribe");
     },
   );
 
@@ -201,14 +152,13 @@ describe("session narration subscription ownership", () => {
     async (reject) => {
       const approval = createDeferred<unknown>();
       const requested = createDeferred();
-      const { client, request } = createClient(async (_method, params) => {
+      const { coordinator, request } = createClient(async (_method, params) => {
         if (params.includeApprovals) {
           requested.resolve();
           return approval.promise;
         }
         return { key: params.key };
       });
-      const coordinator = new GatewaySessionMessageSubscriptionCoordinator(client);
       const foreground = await coordinator.acquire("main");
       const narration = await coordinator.acquire("main", { mode: "narration" });
       const nextForeground = coordinator.acquire("main", { includeApprovals: true });
@@ -232,10 +182,7 @@ describe("session narration subscription ownership", () => {
       }
       expect(request.mock.lastCall?.[1].mode).toBe("narration");
       await coordinator.release(narration);
-      expect(request).toHaveBeenLastCalledWith("sessions.messages.unsubscribe", {
-        subscriptionId: expect.any(String),
-        key: "main",
-      });
+      expectWire(request, "unsubscribe");
     },
   );
 
@@ -245,7 +192,7 @@ describe("session narration subscription ownership", () => {
     let holdReplay = true;
     let wireMode: unknown;
     let wireApprovals = false;
-    const { client } = createClient(async (_method, params) => {
+    const { coordinator } = createClient(async (_method, params) => {
       if (params.includeApprovals && holdReplay) {
         holdReplay = false;
         requested.resolve();
@@ -255,7 +202,6 @@ describe("session narration subscription ownership", () => {
       wireApprovals = params.includeApprovals === true;
       return { key: params.key, approvalReplay: { approvals: [] } };
     });
-    const coordinator = new GatewaySessionMessageSubscriptionCoordinator(client);
     const narration = await coordinator.acquire("main", { mode: "narration" });
     const approvalNarration = coordinator.acquire("main", {
       mode: "narration",
@@ -277,14 +223,13 @@ describe("session narration subscription ownership", () => {
   it("retries a timed-out downgrade and drains overlapping releases without orphaning narration", async () => {
     const downgrade = createDeferred<unknown>();
     let holdDowngrade = false;
-    const { client, request } = createClient(async (_method, params) => {
+    const { coordinator, request } = createClient(async (_method, params) => {
       if (params.mode === "narration" && holdDowngrade) {
         holdDowngrade = false;
         return downgrade.promise;
       }
       return { key: params.key };
     });
-    const coordinator = new GatewaySessionMessageSubscriptionCoordinator(client);
     const foreground = await coordinator.acquire("main");
     const narration = await coordinator.acquire("main", { mode: "narration" });
     holdDowngrade = true;
@@ -300,16 +245,9 @@ describe("session narration subscription ownership", () => {
       }),
     );
     await failedRelease;
-    expect(request).toHaveBeenLastCalledWith("sessions.messages.subscribe", {
-      subscriptionId: expect.any(String),
-      key: "main",
-      mode: "narration",
-    });
+    expectWire(request, "subscribe", { mode: "narration" });
     await Promise.all([coordinator.release(foreground), coordinator.release(narration)]);
-    expect(request).toHaveBeenLastCalledWith("sessions.messages.unsubscribe", {
-      subscriptionId: expect.any(String),
-      key: "main",
-    });
+    expectWire(request, "unsubscribe");
     const count = request.mock.calls.length;
     await coordinator.release(foreground);
     await coordinator.release(narration);

@@ -14,12 +14,12 @@ import { sqliteOnlyMigrationNotice } from "../plugins/doctor-migration-applicabi
 import { preparePluginDoctorMigrationResources } from "../plugins/doctor-migration-resources.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { withAgentDatabaseMaintenanceLease } from "../state/openclaw-agent-db-maintenance-lease.js";
-import { prepareOpenClawStateDatabaseSchema } from "../state/openclaw-state-db.js";
 import { formatErrorMessage } from "./errors.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
 import { formatStartupMigrationFailure } from "./state-migrations.messages.js";
 import { createPluginDoctorStateMigrationContext } from "./state-migrations.plugin-doctor-context.js";
 import { autoMigrateLegacyStateDir } from "./state-migrations.state-dir.js";
+import { createStateSchemaMigrationStep } from "./state-migrations.state-schema.js";
 import type {
   DetectedPluginDoctorStateMigrationPlan,
   LegacyStateDetection,
@@ -153,6 +153,7 @@ export async function collectPluginDoctorStateMigrationPlans(
   const otherPhasePluginIds = new Set<string>();
   const requiredPluginIds = new Set<string>();
   const statelessPluginIds = new Set<string>();
+  const unavailablePluginIds = new Set<string>();
   const collected: PluginDoctorPlanCollection = {
     plans,
     inspectedPluginIds,
@@ -172,6 +173,11 @@ export async function collectPluginDoctorStateMigrationPlans(
       validateDeclarations: params.validateDeclarations,
       onInspectedPlugin: (pluginId) => inspectedPluginIds.add(pluginId),
       onInspectedStatelessPlugin: (pluginId) => statelessPluginIds.add(pluginId),
+      onUnavailablePlugin: (pluginId, error) => {
+        unavailablePluginIds.add(pluginId);
+        requiredPluginIds.add(pluginId);
+        params.warnings?.push(`Plugin ${pluginId} is not prepared: ${error.message}`);
+      },
     });
   } catch (error) {
     if (!(error instanceof PluginDoctorStateMigrationDeclarationError)) {
@@ -204,7 +210,9 @@ export async function collectPluginDoctorStateMigrationPlans(
   if (params.plannedActions) {
     const refusal = validatePluginDoctorPlanOrder({
       actions: entries.map(({ pluginId, migration }) => ({ pluginId, id: migration.id })),
-      plannedActions: params.plannedActions,
+      plannedActions: params.plannedActions.filter(
+        (action) => !unavailablePluginIds.has(action.pluginId),
+      ),
     });
     if (refusal) {
       params.warnings?.push(refusal);
@@ -609,10 +617,13 @@ export async function autoMigrateLegacyPluginDoctorState(params: {
   });
   const stateDir = resolveStateDir(env, params.homedir ?? os.homedir);
   const oauthDir = resolveOAuthDir(env, stateDir);
-  const stateSchema = await prepareOpenClawStateDatabaseSchema(
-    { env: { ...env, OPENCLAW_STATE_DIR: stateDir }, integrityCheck: params.integrityCheck },
-    params.doctorOnlyStateMigrations === true ? "doctor" : "automatic",
-  );
+  const stateSchema = await createStateSchemaMigrationStep({
+    stateDir,
+    env,
+    integrityCheck: params.integrityCheck,
+    mode: params.doctorOnlyStateMigrations === true ? "doctor" : "automatic",
+    requiredness: "required",
+  }).run();
   const changes = [...stateDirResult.changes, ...stateSchema.changes];
   const warnings = [...stateDirResult.warnings, ...stateSchema.warnings];
   const notices = [...(stateDirResult.notices ?? [])];

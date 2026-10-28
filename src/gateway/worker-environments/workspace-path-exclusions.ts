@@ -14,6 +14,10 @@ const DERIVED_WORKSPACE_DIRECTORY_NAMES = [
 ] as const;
 
 // These producers own exact checkout-relative roots, not every .cache or .artifacts path.
+const BUILD_CACHE_ROOT_PATHS = [
+  ".artifacts/build-all-cache",
+  ".artifacts/build-cache-inputs",
+] as const;
 const DERIVED_WORKSPACE_ROOT_PATHS = [
   ".cache/vitest",
   ".cache/bun-transpiler",
@@ -24,7 +28,7 @@ const DERIVED_WORKSPACE_ROOT_PATHS = [
   ".artifacts/vitest-worker-cache",
   ".artifacts/vitest-shard-timings.json",
 ] as const;
-const RUNTIME_WORKSPACE_ROOT_PATHS = [".artifacts/dist-artifacts.lock"] as const;
+const RUNTIME_WORKSPACE_ROOT_PATHS = [".artifacts/dist-artifacts.lock", ".openclaw/tmp"] as const;
 
 const DERIVED_WORKSPACE_FILE_NAMES = [".DS_Store"] as const;
 const DERIVED_WORKSPACE_FILE_SUFFIXES = [".pyc", ".pyo"] as const;
@@ -42,45 +46,59 @@ export const WORKER_ATTACHMENT_DIRECTORY_PATTERN =
     UUID_HEX.repeat(12),
   ].join("-");
 
+// Match a whole segment without splitting each inventory path. The negative
+// class ends at a slash or the actual end, unlike "$" before a final newline.
+const DERIVED_WORKSPACE_SEGMENT_PATTERN = `(?:^|/)(?:${[
+  ...DERIVED_WORKSPACE_DIRECTORY_NAMES.map((name) => name.replaceAll(".", "\\.")),
+  ...DERIVED_WORKSPACE_FILE_NAMES.map((name) => name.replaceAll(".", "\\.")),
+  ...DERIVED_WORKSPACE_FILE_SUFFIXES.map((suffix) => `[^/]*${suffix.replaceAll(".", "\\.")}`),
+  WORKER_ATTACHMENT_DIRECTORY_PATTERN,
+].join("|")})(?![^/])`;
+
 // Derived caches and runtime attachment copies are not workspace edits. Keep
 // sync, manifest, divergence, apply, and recovery on this single predicate.
 export const WORKSPACE_PATH_EXCLUSIONS_JS = `
 ${STAGED_INPUT_PATHS_JS}
 ${MANAGED_SANDBOX_SKILLS_PATH_JS}
-const DERIVED_WORKSPACE_DIRECTORY_NAMES = ${JSON.stringify(DERIVED_WORKSPACE_DIRECTORY_NAMES)};
 const DERIVED_WORKSPACE_ROOT_PATHS = ${JSON.stringify(DERIVED_WORKSPACE_ROOT_PATHS)};
+const BUILD_CACHE_ROOT_PATHS = ${JSON.stringify(BUILD_CACHE_ROOT_PATHS)};
+function isBuildCacheWorkspacePath(relativePath) {
+  return BUILD_CACHE_ROOT_PATHS.some((root) => relativePath === root || relativePath.startsWith(root + "/"));
+}
+function buildCacheInputPaths(paths = []) {
+  const retained = new Set();
+  for (const entryPath of paths) {
+    if (!isBuildCacheWorkspacePath(entryPath)) continue;
+    const segments = entryPath.split("/");
+    for (let index = 1; index <= segments.length; index++) retained.add(segments.slice(0, index).join("/"));
+  }
+  return retained;
+}
 const RUNTIME_WORKSPACE_ROOT_PATHS = ${JSON.stringify(RUNTIME_WORKSPACE_ROOT_PATHS)};
-const DERIVED_WORKSPACE_FILE_NAMES = ${JSON.stringify(DERIVED_WORKSPACE_FILE_NAMES)};
-const DERIVED_WORKSPACE_FILE_SUFFIXES = ${JSON.stringify(DERIVED_WORKSPACE_FILE_SUFFIXES)};
-const WORKER_ATTACHMENT_DIRECTORY_RE = new RegExp(${JSON.stringify(`^${WORKER_ATTACHMENT_DIRECTORY_PATTERN}$`)});
+const DERIVED_WORKSPACE_SEGMENT_RE = new RegExp(${JSON.stringify(DERIVED_WORKSPACE_SEGMENT_PATTERN)});
 function isRuntimeOwnedWorkspacePath(relativePath) {
-  return isManagedSandboxSkillsPath(relativePath) || RUNTIME_WORKSPACE_ROOT_PATHS.some(
+  return relativePath === ".git" || relativePath.startsWith(".git/") ||
+    relativePath.endsWith("/.git") || relativePath.includes("/.git/") ||
+    isManagedSandboxSkillsPath(relativePath) || RUNTIME_WORKSPACE_ROOT_PATHS.some(
     (root) => relativePath === root || relativePath.startsWith(root + "/"),
   );
 }
-function isDerivedWorkspacePath(relativePath, retainedInput = false) {
+function isDerivedWorkspacePath(relativePath, retainedInput = false, excludeBuildCaches = false) {
   if (isRuntimeOwnedWorkspacePath(relativePath)) {
     return true;
   }
   if (retainedInput) {
     return false;
   }
+  if (excludeBuildCaches && isBuildCacheWorkspacePath(relativePath)) return true;
   if (DERIVED_WORKSPACE_ROOT_PATHS.some(
     (root) => relativePath === root || relativePath.startsWith(root + "/"),
   )) {
     return true;
   }
-  const segments = relativePath.split("/");
-  // "$" can match before a final newline; require the entire path segment.
-  return segments.some(
-    (segment) =>
-      WORKER_ATTACHMENT_DIRECTORY_RE.exec(segment)?.[0] === segment ||
-      DERIVED_WORKSPACE_DIRECTORY_NAMES.includes(segment) ||
-      DERIVED_WORKSPACE_FILE_NAMES.includes(segment) ||
-      DERIVED_WORKSPACE_FILE_SUFFIXES.some((suffix) => segment.endsWith(suffix)),
-  );
+  return DERIVED_WORKSPACE_SEGMENT_RE.test(relativePath);
 }
-function projectWorkspaceEntries(entries, isRetainedInput) {
+function projectWorkspaceEntries(entries, isRetainedInput, excludeBuildCaches = false) {
   const nonemptyDirectories = new Set();
   const retainedParents = new Set();
   const parent = (entryPath) => entryPath.slice(0, Math.max(0, entryPath.lastIndexOf("/")));
@@ -91,7 +109,7 @@ function projectWorkspaceEntries(entries, isRetainedInput) {
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const entry = entries[index];
     if (
-      isDerivedWorkspacePath(entry.path, isRetainedInput(entry.path)) ||
+      isDerivedWorkspacePath(entry.path, isRetainedInput(entry.path), excludeBuildCaches) ||
       (entry.type === "directory" && nonemptyDirectories.has(entry.path) && !retainedParents.has(entry.path))
     ) continue;
     eligible.push(entry);
@@ -104,15 +122,22 @@ export const {
   isDerivedWorkspacePath,
   isRuntimeOwnedWorkspacePath,
   projectWorkspaceEntries,
+  buildCacheInputPaths,
 }: {
-  isDerivedWorkspacePath: (relativePath: string, retainedInput?: boolean) => boolean;
+  isDerivedWorkspacePath: (
+    relativePath: string,
+    retainedInput?: boolean,
+    excludeBuildCaches?: boolean,
+  ) => boolean;
   isRuntimeOwnedWorkspacePath: (relativePath: string) => boolean;
+  buildCacheInputPaths: (paths?: Iterable<string>) => Set<string>;
   projectWorkspaceEntries: <T extends { path: string; type: string }>(
     entries: readonly T[],
     isRetainedInput: (relativePath: string) => boolean,
+    excludeBuildCaches?: boolean,
   ) => T[];
 } = compileFunction(
-  `${WORKSPACE_PATH_EXCLUSIONS_JS}\nreturn { isDerivedWorkspacePath, isRuntimeOwnedWorkspacePath, projectWorkspaceEntries };`,
+  `${WORKSPACE_PATH_EXCLUSIONS_JS}\nreturn { isDerivedWorkspacePath, isRuntimeOwnedWorkspacePath, projectWorkspaceEntries, buildCacheInputPaths };`,
 )();
 
 export const DERIVED_WORKSPACE_RSYNC_EXCLUDES = [

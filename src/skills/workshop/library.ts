@@ -3,7 +3,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { formatErrorMessage, hasErrnoCode } from "../../infra/errors.js";
+import { listDirectoryTreeStrict } from "../../infra/directory-walk.js";
+import { ignoreMissingPath } from "../../infra/errno.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { removePathWithinRoot } from "../../infra/fs-safe-remove.js";
 import { pathExists, root } from "../../infra/fs-safe.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -65,7 +67,7 @@ export class WorkshopWriteError extends Error {
   override name = "WorkshopWriteError";
 }
 
-const SKILL_FILE = "SKILL.md";
+export const SKILL_FILE = "SKILL.md";
 const ARCHIVE_DIR = ".archive";
 // The Agent Skills limit. Authoring guidance asks for ~160 bytes, but a hard 160 cap forced
 // lossy description rewrites whenever a review patched an older skill, and blocked restores.
@@ -73,17 +75,10 @@ const MAX_DESCRIPTION_BYTES = 1024;
 // New names follow the Agent Skills limit. Earlier releases named learned skills with
 // normalizeSkillIndexName and no length cap, so existing skills are matched by charset and
 // the filesystem's 255-byte name limit only; otherwise they stay loaded but unmanageable.
-const NEW_SKILL_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
-const EXISTING_SKILL_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,254}$/;
+export const NEW_SKILL_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
+export const EXISTING_SKILL_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,254}$/;
 const skillLocks = new KeyedAsyncQueue();
 const log = createSubsystemLogger("skills/workshop");
-
-function emptyForMissingDirectory(error: unknown): never[] {
-  if (hasErrnoCode(error, "ENOENT")) {
-    return [];
-  }
-  throw error;
-}
 
 function resolveSkillPaths(config: OpenClawConfig, agentId: string, name: string): SkillPaths {
   if (!EXISTING_SKILL_NAME_PATTERN.test(name)) {
@@ -99,7 +94,7 @@ function resolveSkillPaths(config: OpenClawConfig, agentId: string, name: string
   };
 }
 
-function normalizeSkillFilePath(filePath: string | undefined): string {
+export function normalizeSkillFilePath(filePath: string | undefined): string {
   const trimmed = filePath?.trim();
   if (!trimmed || trimmed === SKILL_FILE) {
     return SKILL_FILE;
@@ -113,25 +108,27 @@ function normalizeSkillFilePath(filePath: string | undefined): string {
   }
 }
 
-async function readSkillFile(skillDir: string, filePath: string): Promise<string | null> {
+export async function readSkillFile(skillDir: string, filePath: string): Promise<string | null> {
   return filePath === SKILL_FILE
     ? await readWorkspaceSkillFile(path.join(skillDir, SKILL_FILE))
     : await readWorkspaceSupportFile({ skillDir, relativePath: filePath });
 }
 
 /** Regular files below one skill directory, SKILL.md first; links and dot entries are skipped. */
-async function listSkillFiles(
+export async function listSkillFiles(
   skillDir: string,
 ): Promise<{ files: string[]; sizeBytes: number; updatedAtMs: number }> {
-  const entries = await fs.readdir(skillDir, { recursive: true, withFileTypes: true });
+  const entries = await listDirectoryTreeStrict(skillDir, {
+    // Dependencies and hidden metadata are not support files; never spend the inventory budget on them.
+    skipDirectory: ({ dirent }) => dirent.name.startsWith(".") || dirent.name === "node_modules",
+  });
   const files: string[] = [];
   let sizeBytes = 0;
   let updatedAtMs = 0;
-  for (const entry of entries) {
+  for (const { relativePath: relative, dirent: entry } of entries) {
     if (!entry.isFile()) {
       continue;
     }
-    const relative = path.relative(skillDir, path.join(entry.parentPath, entry.name));
     const segments = relative.split(path.sep);
     if (segments.some((segment) => segment.startsWith("."))) {
       continue;
@@ -191,12 +188,17 @@ function assertSafeContent(name: string, filePath: string, content: string): voi
 }
 
 /** Validates one file's next content: path, SKILL.md shape or support size, then the security scan. */
-function validateSkillFile(
+export function validateSkillFile(
   config: OpenClawConfig,
   name: string,
   filePath: string,
   content: string,
 ): string | undefined {
+  if (filePath.split("/").includes("node_modules")) {
+    throw new WorkshopWriteError(
+      "node_modules is not a skill support directory. Put authored files in scripts/ or references/ instead.",
+    );
+  }
   if (filePath !== SKILL_FILE && scanSupportFilePath(filePath).length > 0) {
     throw new WorkshopWriteError(
       `Refused: a file path in "${name}" looks like it contains a credential. Name the file after its topic (e.g. "references/api.md"); never store real secrets in skills.`,
@@ -234,11 +236,8 @@ async function readRestorableVersion(
   }
   const versionRoot = await root(versionDir);
   const files: Array<[string, Buffer]> = [];
-  for (const entry of await fs.readdir(versionDir, { recursive: true, withFileTypes: true })) {
-    const filePath = path
-      .relative(versionDir, path.join(entry.parentPath, entry.name))
-      .split(path.sep)
-      .join("/");
+  for (const { relativePath, dirent: entry } of await listDirectoryTreeStrict(versionDir)) {
+    const filePath = relativePath.split(path.sep).join("/");
     // Dot entries (e.g. .DS_Store) are not part of a skill and are never restored.
     if (entry.isDirectory() || filePath.split("/").some((segment) => segment.startsWith("."))) {
       continue;
@@ -320,7 +319,7 @@ async function withSkillLocks<T>(keys: readonly string[], run: () => Promise<T>)
 }
 
 /** Serializes one skill's mutation, then refreshes discovery and records the change. */
-async function mutateSkill(
+export async function mutateSkill(
   ctx: WorkshopMutationContext,
   name: string,
   action: WorkshopChangeAction,
@@ -385,7 +384,7 @@ export async function listWorkshopSkills(
   const skillsRoot = resolveWorkshopSkillsDir(config, agentId);
   const entries = await fs
     .readdir(skillsRoot, { withFileTypes: true })
-    .catch(emptyForMissingDirectory);
+    .catch((error: unknown) => ignoreMissingPath(error) ?? []);
   const skills: WorkshopSkillSummary[] = [];
   for (const entry of entries) {
     if (!entry.isDirectory() || !EXISTING_SKILL_NAME_PATTERN.test(entry.name)) {
@@ -414,7 +413,7 @@ export async function listWorkshopArchive(
   const skillsRoot = resolveWorkshopSkillsDir(config, agentId);
   const names: string[] = await fs
     .readdir(path.join(skillsRoot, ARCHIVE_DIR))
-    .catch(emptyForMissingDirectory);
+    .catch((error: unknown) => ignoreMissingPath(error) ?? []);
   const archived: WorkshopArchivedSkill[] = [];
   for (const name of names.toSorted()) {
     if (!EXISTING_SKILL_NAME_PATTERN.test(name)) {
@@ -645,42 +644,62 @@ export async function restoreWorkshopSkill(
       target.id,
       path.join(paths.versionsDir, target.id),
     );
-    const staging = path.join(paths.root, ARCHIVE_DIR, `.restore-${randomUUID()}`);
-    const previous = path.join(paths.root, ARCHIVE_DIR, `.restore-previous-${randomUUID()}`);
-    try {
+    const versionId = await publishSkillBundle(paths, "restore", async (staging) => {
       for (const [filePath, content] of files) {
-        const destination = path.join(staging, ...filePath.split("/"));
-        await fs.mkdir(path.dirname(destination), { recursive: true });
-        await fs.writeFile(destination, content, { flag: "wx" });
+        await writeStagedFile(staging, filePath, content);
       }
-      const versionId = await snapshotSkill(paths, "restore");
-      // Swap by rename so a refused or failed publish puts the previous live skill back.
-      const hadLive = await pathExists(paths.skillDir);
-      if (hadLive) {
-        paths.assertLive();
-        await fs.rename(paths.skillDir, previous);
-      }
-      try {
-        paths.assertLive();
-        await fs.rename(staging, paths.skillDir);
-      } catch (error) {
-        if (hadLive) {
-          await fs.rename(previous, paths.skillDir);
-        }
-        throw error;
-      }
-      // Only successful publication may discard the original live copy.
-      await fs.rm(previous, { recursive: true, force: true });
-      const summary =
-        params.summary ??
-        (target.action === "archive"
-          ? "restored from archive"
-          : params.versionId
-            ? `restored version ${target.id}`
-            : `undid ${target.action.replace("_", " ")}`);
-      return { summary, versionId };
-    } finally {
-      await fs.rm(staging, { recursive: true, force: true });
-    }
+    });
+    const summary =
+      params.summary ??
+      (target.action === "archive"
+        ? "restored from archive"
+        : params.versionId
+          ? `restored version ${target.id}`
+          : `undid ${target.action.replace("_", " ")}`);
+    return { summary, versionId };
   });
+}
+
+export async function writeStagedFile(staging: string, filePath: string, content: string | Buffer) {
+  const destination = path.join(staging, ...filePath.split("/"));
+  await fs.mkdir(path.dirname(destination), { recursive: true });
+  await fs.writeFile(destination, content);
+}
+
+/**
+ * Publishes a whole skill at once: `fill` builds the complete next copy in a staging directory,
+ * the live skill is snapshotted, and the copies swap by rename. A failed fill, refused authority,
+ * or failed rename leaves the previous live skill in place. Returns the snapshot's version id.
+ */
+export async function publishSkillBundle(
+  paths: MutationPaths,
+  action: WorkshopChangeAction,
+  fill: (staging: string) => Promise<void>,
+): Promise<string | undefined> {
+  const staging = path.join(paths.root, ARCHIVE_DIR, `.${action}-${randomUUID()}`);
+  const previous = path.join(paths.root, ARCHIVE_DIR, `.${action}-previous-${randomUUID()}`);
+  try {
+    await fs.mkdir(staging, { recursive: true });
+    await fill(staging);
+    const versionId = await snapshotSkill(paths, action);
+    const hadLive = await pathExists(paths.skillDir);
+    if (hadLive) {
+      paths.assertLive();
+      await fs.rename(paths.skillDir, previous);
+    }
+    try {
+      paths.assertLive();
+      await fs.rename(staging, paths.skillDir);
+    } catch (error) {
+      if (hadLive) {
+        await fs.rename(previous, paths.skillDir);
+      }
+      throw error;
+    }
+    // Only successful publication may discard the original live copy.
+    await fs.rm(previous, { recursive: true, force: true });
+    return versionId;
+  } finally {
+    await fs.rm(staging, { recursive: true, force: true });
+  }
 }

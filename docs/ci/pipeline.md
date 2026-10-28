@@ -119,11 +119,7 @@ the job's uploaded artifacts.
 | `openclaw-performance`           | Separate workflow: daily/on-demand Kova runtime performance reports with mock-provider, deep-profile, and GPT 5.6 live lanes                                                                                                                                                                             | Scheduled and manual dispatch                        |
 | `docs-external-links`            | Separate workflow: Docs External Link Audit checks external documentation links with lychee and uploads a report; it reports findings without failing, so it never blocks a pull request                                                                                                                 | Scheduled and manual dispatch                        |
 
-Partial workflow reruns reuse successful screenshot shards from earlier attempts
-of the same run. The reducer still requires matching source and workflow SHAs,
-run ID, pinned tooling, artifact digests, and successful captures. It preserves
-each family's producer attempt and records the reducer attempt separately;
-future-attempt artifacts remain invalid.
+A reducer-only rerun can reuse the successful combined screenshot capture from an earlier attempt of the same run. The reducer still requires matching source and workflow SHAs, run ID, pinned tooling, artifact digests, and successful captures. All three families must come from one capture attempt. The final manifest preserves that producer attempt and records the reducer attempt separately; future-attempt artifacts remain invalid.
 
 Android screenshot capture runs phone and Wear serially on `ubuntu-24.04`, using
 the shared Android toolchain action's API 36 phone and API 34 Wear images and KVM
@@ -331,11 +327,32 @@ functions remain valid after the original cache buffer is garbage-collected.
 It also keeps allocator ownership during zero-time event-loop polls, while
 retaining the idle handoff for polls that can block.
 
-The pinned build pairs Bun `7bd4fdff3d4035bcea50718673c663f5474bae89` with WebKit
-`f8521bb45429b3e1df6bc6d9b98b8df4376a89c5` in prerelease
-`openclaw-v1.4.4-20261017-7bd4fdff3d-webkit-f8521bb454`.
-It includes the Bun 1.4.4 upstream sync, honors disabled source maps in the
-transpiler cache, and shares identical `node:vm` source buffers and source-map URIs.
+The pinned build pairs Bun `191755ec115ece3dd642eba3cb0143cecb5e5d7a` with WebKit
+`b82bc917e99110b61c3a21202d6def7457aa194c` in prerelease
+`openclaw-v1.4.4-20261026-191755ec11-webkit-b82bc917e9`.
+
+It includes the eMudhra compromised-key blocklist and checks current trust before
+accepting saved TLS sessions. QUIC clients recheck saved-session authorization,
+and QUIC servers defer early application data until current client-certificate
+authorization succeeds ([fork change #213](https://github.com/openclaw/bun/pull/213)).
+These checks retain rejection when an affected certificate is added as an extra
+or explicit CA. Stock Bun 1.4.4's full-handshake blocklist alone does not provide
+these session and early-data repairs. Native incident/session/product proof is
+macOS ARM64; the other release targets have build and smoke qualification, with
+the shared Windows compatibility selection on x64 and ARM64.
+
+It restores SNI set with `tlsSocket.setServername()` before connecting, including
+with `autoSelectFamily` ([fork change #197](https://github.com/openclaw/bun/pull/197)).
+Large single-recipient Worker Buffer messages avoid redundant serialized copies
+while preserving ordinary cloning and multi-recipient behavior
+([fork change #211](https://github.com/openclaw/bun/pull/211)).
+
+It includes the upstream Bun sync through `a8fcd319`, including native
+lint/format performance improvements and `--no-script` to bypass package scripts.
+It uses the separately published WebKit pairing above; this pin does not rebase
+WebKit or complete the independent WebKit remediation qualification.
+It retains disabled source-map handling in the transpiler cache and shares
+identical `node:vm` source buffers and source-map URIs.
 This build preserves `DONT_CONTEXTIFY` global receiver identity for jsdom, keeps
 `availableParallelism()` independent of `navigator`, and fixes `SourceMap.findOrigin()`
 coordinates. It registers `fs.watch` callbacks on the returned watcher, treats
@@ -441,14 +458,14 @@ newest patch. Compare exact versions when measuring a toolchain change, and
 measure setup separately from the test body.
 
 Preflight's manifest bootstrap uses the exact `NODE_VERSION` pin in `ci.yml`
-(24.21.0). Unlike the repository helper, `actions/setup-node` can satisfy a
+(24.22.1). Unlike the repository helper, `actions/setup-node` can satisfy a
 `24.x` request from an older cached patch below OpenClaw's support floor.
 
 CI's execution version does not define the supported user runtime matrix.
-`package.json` accepts Node 24.16+ and Node 26.1+. The full manual CI graph checks
-the Node 24.16.0 floor; `node-runtime-compat.yml` checks Node 26.1.0 weekly and on
+`package.json` accepts Node 24.22.1+ and Node 26.12.1+. The full manual CI graph checks
+the Node 24.22.1 floor; `node-runtime-compat.yml` checks Node 26.12.1 weekly and on
 dispatch. Current packaged fresh-install and upgrade checks run on both
-Node 24.21.0 and Node 26.1.0, with Windows Node 24 fresh-install proof on 24.16.0.
+Node 24.22.1 and Node 26.12.1, with Windows Node 24 fresh-install proof on 24.22.1.
 Both runtime variants use the same candidate package. These support cells stay
 independent of changes to the ordinary execution pin; source/build smoke alone
 does not prove an installed upgrade. See the
@@ -481,6 +498,13 @@ separate package graphs previously ran before the app build in one job; a hosted
 baseline spent 7m57s on them in a 21m48s job. Separating them gives app compilation
 and tests their own 30-minute budget without removing coverage or increasing
 test-process parallelism.
+
+Package tests start after preflight and do not consume the Linux runtime artifact.
+App tests wait for `build-artifacts` before allocating their macOS runner, so Linux
+runner queueing cannot consume the native test job's 30-minute budget. They download
+the producer's artifact by its output ID and verify the selected checkout SHA before
+execution. Failed-job reruns retain the successful producer's artifact output.
+The aggregate CI gate still requires the Linux checks and both native phases.
 
 Full nonpublishing manual validation also stages the exact candidate runtime and runs
 ordinary bundled recovery and relaunch through two fresh `.app` test-host processes.
@@ -612,9 +636,9 @@ The job is part of `openclaw/ci-gate`. It uses at most one runner registration p
 selected run; widening survivor selection does not increase the full-inventory
 registration cap, job count, or matrix fanout.
 
-Standalone Periphery workflows enforce zero dead-code findings for the iOS and macOS apps. The shared OpenClawKit workflow scans both consumers in parallel and reports a declaration only when Periphery emits the same Swift USR from both builds. Its generated `GenerateGatewayProtocol/GatewayModels.swift` build-plugin output is retained as generator-owned code rather than treated as app-local dead code. The shared scan and native CI jobs install the filtered gateway-protocol generator dependencies alongside their existing native asset dependencies; CodeQL installs the same generator dependencies before its Swift build.
+The combined macOS Periphery workflow owns automatic iOS and macOS dead-code checks. Each selected platform builds one Swift index for separate app and shared OpenClawKit scans, with independent reports and enforcement. App scans enforce zero findings; a shared declaration is reported only when Periphery emits the same Swift USR from both consumers. The iOS and shared OpenClawKit workflows remain manual entrypoints for their respective scans. The generated `GenerateGatewayProtocol/GatewayModels.swift` build-plugin output is retained as generator-owned code rather than treated as app-local dead code. The shared scan and native CI jobs install the filtered gateway-protocol generator dependencies alongside their existing native asset dependencies; CodeQL installs the same generator dependencies before its Swift build.
 
-All four scans use `scripts/install-periphery.sh` to install the checksum-pinned Periphery 3.8.0 OSS release, including its adjacent `libIndexStore.dylib`, in a dedicated runner-temporary directory. The installer rejects download, checksum, and version failures without falling back to Homebrew. Installer changes select all three native workflows.
+All four scans use `scripts/install-periphery.sh` to install the checksum-pinned Periphery 3.8.0 OSS release, including its adjacent `libIndexStore.dylib`, in a dedicated runner-temporary directory. The installer rejects download, checksum, and version failures without falling back to Homebrew. Installer changes automatically select the iOS and combined macOS workflows, including both shared consumers.
 
 [Upstream archived the OSS project](https://github.com/peripheryapp/periphery/commit/56a0eb6fb97b785c8fbc1044ccbc7b5d9f06ebec). The pin remains a maintainer-owned bridge, not a claim of ongoing upstream support. All four scans target Xcode 27 on GitHub-hosted `xcode-27`. Toolchain, pinned-release, or analyzer changes require native compatibility proof for both app scans and both shared consumers, preserving the zero-findings policy and exact-USR intersection without a baseline or weaker fallback. Four declaration-specific annotations retain confirmed SwiftUI false positives; they do not exclude their files or runtime tests from validation.
 
@@ -639,7 +663,9 @@ existing CI job retains its check with the same name.
 GitHub requires both the check and the commit status when both share a required
 context. Missing approval, failed CI, or evaluation errors fail the review status.
 Missing or running CI leaves it pending and keeps merging blocked. CI completion
-automatically evaluates it again. Approval comments do not rerun the test suite.
+automatically evaluates it again. An unfinished run-list entry is refreshed by
+exact run ID before waiting, so delayed list updates do not hide a completed
+attempt. Approval comments do not rerun the test suite.
 
 Every ten minutes, the resolver reconciles CI completions
 from five minutes before the previous successful scheduled pass started until
@@ -919,7 +945,7 @@ automation account, and SecOps-owned-path cases before declaring enforcement act
 2. `security-fast`, `check-*`, `check-additional-*`, `check-docs`, and `skills-python` fail quickly without waiting on the heavier artifact and platform matrix jobs. Additional checks start directly after preflight. Narrow PRs with additional checks also place the existing `check-guards` and `check-dependencies` rows there: their complete guard, dependency, unused-file, and export scans do not consume the installed compiler/lint plan. Guards use the same commands and fetch the exact comparison base during checkout. Full selections and runs without that family retain the central rows, and the aggregate requires each selected owner. Extension-only compiler inputs can be planned from the four noncore graphs when an already selected additional boundary row owns the full core graph check. This requires existing regular source files without symlink aliases; mixed source changes retain complete discovery, and missing or uncertain inputs retain full checking. Known full selections skip discovery and retain boundary proof in an already selected additional boundary row or the required planner. No extra boundary row is admitted for that optimization. Ordinary pull-request, push, and scheduled CI skip the production dependency audit. Only `workflow_dispatch` IDs beginning with `full-release-validation-` or `release-native-android-` run it. The audit sends one complete graph with up to four attempts and a four-minute total request budget, including retries and response reading. Every non-zero audit exit produces a warning and exits 0, including findings, unavailable advisories, and invalid data. An unavailable audit is incomplete coverage, not a clean result. The optional pre-commit audit hook uses the same warn-only wrapper. The separate daily [Dependency Audit](/ci/scheduled-workflows#dependency-audit) remains strict for triage, is not a required PR check, and points to a dependency-bump follow-up. Release dependency evidence retains its separate known-malware gate; vulnerability advisories remain warnings.
 3. `build-artifacts` and the locale checks overlap with the fast Linux lanes. Control UI and native app source PRs exclude generated locale snapshots/resources; their serialized refresh workflows repair and auto-merge isolated generated PRs in the background. Source CI still blocks stale source inventories and unsafe localization calls. Generated PRs, manual CI, and release prep enforce full translated/platform-generated parity. Upstream `release/YYYY.M.PATCH` branches may include release-prep locale repairs with the other generated release output.
 4. Baseline ratchets and selected Node test shards start independently after preflight. Node rows consume the manifest, not ratchet outputs. `ci-gate` still requires every selected ratchet to pass; a failed ratchet leaves sibling jobs running. Frozen targets retain their existing ratchet selection.
-5. Current plans with guards run `check:coercion-helpers` there once; fast-only plans retain its standalone row. Other platform and runtime lanes fan out independently: `checks-fast-core` (including startup corpus), `checks-fast-contracts-plugins`, `checks-fast-contracts-channels`, `checks-windows`, `macos-node`, `macos-swift`, `ios-build`, the screenshot shards, and `android`.
+5. Current plans with guards run `check:coercion-helpers` there once; fast-only plans retain its standalone row. Other platform and runtime lanes fan out independently: `checks-fast-core` (including startup corpus), `checks-fast-contracts-plugins`, `checks-fast-contracts-channels`, `checks-windows`, `macos-node`, `macos-swift`, `ios-build`, `ios-screenshot-capture`, and `android`.
 6. PR jobs and independent check steps keep running after failures, including forks and reruns. `check-plan` materializes its outputs before running required global guards; consumers need those outputs rather than a green guard result. Prepared SDK and candidate-package consumers likewise need the uploaded artifact, rather than every check in the producer job passing. Independent shell checks collect every exit and then fail together. Node projects, static compiler groups, lint, documentation checks, and Docker seed lanes finish their selected inventory. Setup/build/plan failures still prevent consumers of missing data, and contract envelopes stop after failure to avoid admitting another envelope before safe cleanup. Cancellation, watchdogs, and timeouts remain deliberate stops. Failing runs take longer and consume more runner time; selection, names, runner counts, and concurrency stay unchanged. `pr-failure-report` waits for the planned jobs, then uses `ci-known-main-red.mjs` to compare every failed or timed-out job with the same name/shard in the newest completed scheduled `ci.yml` run on main. A matching failed job is **pre-existing**, with matching signatures required wherever the existing Node or static evidence helpers support comparison. Other jobs identify their job-name-only match in the reason; check the failing tests against main before attributing those failures. A main pass or different failure signature is **new**. A missing, canceled, unplanned, or otherwise incomparable main job is **unknown**; unavailable supported evidence never implies a match. Detected build-verifier or lint-mode scope differences are **unknown**; the reason notes when selected scope was not compared. The compact summary links the main run and job and is copied into `openclaw/ci-gate`'s summary and log. JSON output exposes `job`, `conclusion`, `class`, `mainRunId`, `mainJobId`, and `reason` for scripts and agents. Reporting keeps the existing runner routes and fanout budget; it never cancels work.
 7. `openclaw/ci-gate` waits for every selected lane and the failure report. Preflight and security must succeed; downstream jobs may skip only when unselected by the manifest and existing event, runner, and compatibility conditions. Unexpected selected skips, failures, and cancellations retain their existing gate semantics, including the known-main-red allowance below. Classification alone does not make a failed gate pass. Superseded runs keep their existing concurrency behavior.
 
@@ -1019,6 +1045,15 @@ provenance metadata. Private QA shards select their private runtime entries. The
 `build-artifacts` job owns Control UI and SDK declaration validation; release
 package builds still generate the full declarations.
 
+Successful scheduled-main artifact builds publish their existing build-all cache
+after compilation, including the SDK-only declaration record. Publication requires
+trusted current-main source and cache-write authority; PRs, manual runs, frozen or
+compatibility targets, release gates, and exact-dist-cache hits do not publish.
+The full warmer retains its release declaration profile. Both profiles share the
+archive while their existing compiler-input and output checks decide reuse; no
+extra compiler pass runs to populate it. Archive upload cost and consumer hit
+rates still need CI measurement.
+
 Source-only Linux Node 24 shards can restore compiled Vitest workers from the
 protected cache warmer. The warmer prepares one generation before SDK or runtime
 builds change package resolution, joins the preparation owner, and publishes only
@@ -1111,6 +1146,11 @@ installed Node, Vite, and dependencies. The temporary base's CSS sidecars are
 normalized through the candidate's pinned compressor before comparison. The
 report identifies both revisions and the toolchain. There is no manually updated
 CSS baseline, and the cumulative ceilings still bound a series of small changes.
+If a base already exceeds a size ceiling, the head may hold or reduce that
+surface, but growth beyond 64 bytes of gzip build variance fails the check.
+Request counts have no variance allowance. Locale comparisons track each locale
+separately, so shrinking one catalog cannot hide growth in another. Absolute
+checks and newly introduced violations fail locally and in GitHub Actions.
 
 Run the same comparison locally after installing dependencies:
 

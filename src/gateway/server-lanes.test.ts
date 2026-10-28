@@ -1,13 +1,11 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  createBackgroundWorkOwner,
-  getBackgroundWorkSnapshot,
-} from "../process/background-work.js";
+import { getBackgroundWorkSnapshot } from "../process/background-work.js";
 import {
   enqueueCommandInLane,
   getCommandLaneSnapshot,
+  publishLaneConfiguration,
   setCommandLaneConcurrency,
 } from "../process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../process/command-queue.test-support.js";
@@ -18,16 +16,41 @@ const applyConfig = (config: OpenClawConfig, gatewayStart = false) =>
   applyGatewayLaneConcurrency(resolveGatewayLaneConcurrency(config), { gatewayStart });
 
 afterEach(async () => {
-  if (vi.isFakeTimers()) {
-    await vi.runOnlyPendingTimersAsync();
-    vi.clearAllTimers();
-  }
-  vi.useRealTimers();
   // Startup drains this process-global state; isolate subsequent lane assertions.
   const { resetSessionSuspensionStateForTest } =
     await import("../agents/session-suspension.test-support.js");
   resetSessionSuspensionStateForTest();
   resetCommandQueueStateForTest();
+});
+
+it("restores interrupted work at the configured agent concurrency without consuming interactive slots", async () => {
+  applyConfig({ agents: { defaults: { maxConcurrent: 6 } } }, true);
+  const release = createDeferred();
+  const started: number[] = [];
+  const runs = Array.from({ length: 7 }, (_, index) =>
+    enqueueCommandInLane(CommandLane.RestartRecovery, async () => {
+      started.push(index);
+      await release.promise;
+    }),
+  );
+  try {
+    await vi.waitFor(() => expect(started).toEqual([0, 1, 2, 3, 4, 5]));
+    expect(getCommandLaneSnapshot(CommandLane.RestartRecovery)).toMatchObject({
+      activeCount: 6,
+      queuedCount: 1,
+      maxConcurrent: 6,
+    });
+    await expect(enqueueCommandInLane(CommandLane.Main, async () => "interactive")).resolves.toBe(
+      "interactive",
+    );
+    applyConfig({ agents: { defaults: { maxConcurrent: 2 } } });
+    expect(getCommandLaneSnapshot(CommandLane.RestartRecovery).maxConcurrent).toBe(2);
+    expect(started).toHaveLength(6);
+  } finally {
+    release.resolve();
+    await Promise.all(runs);
+  }
+  expect(started).toEqual([0, 1, 2, 3, 4, 5, 6]);
 });
 
 it("restores the suspended shared nested lane to its default concurrency on startup", async () => {
@@ -146,11 +169,19 @@ it("applies recall cap changes without releasing occupied capacity or reordering
 });
 
 it("preserves shared background capacity across gateway lane publication", async () => {
-  const owner = createBackgroundWorkOwner({ owner: "plugin:reload-test", maxConcurrent: 3 });
+  const lane = "background:plugin:reload-test";
+  publishLaneConfiguration({
+    lanes: { [lane]: 3 },
+    groups: { "background-work": { budget: 3, members: [lane] } },
+  });
   const gates = Array.from({ length: 3 }, () => createDeferred());
-  const active = gates.map((gate) => owner.enqueue(async () => await gate.promise));
+  const active = gates.map((gate) =>
+    enqueueCommandInLane(lane, async () => await gate.promise, {
+      priority: "background",
+    }),
+  );
   const nextRun = vi.fn(async () => {});
-  const next = owner.enqueue(nextRun);
+  const next = enqueueCommandInLane(lane, nextRun, { priority: "background" });
   try {
     applyConfig({ hooks: { enabled: true } });
     applyConfig({ hooks: { enabled: false } });

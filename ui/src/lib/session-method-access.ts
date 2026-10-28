@@ -9,6 +9,7 @@ import type { GatewaySessionRow } from "../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
 import { t } from "../i18n/index.ts";
 import { isGatewayMethodAdvertised } from "./gateway-methods.ts";
+import { isSessionDeferredPatch } from "./sessions/patch.ts";
 
 type SessionAccessRow = Pick<GatewaySessionRow, "sharingRole">;
 
@@ -27,6 +28,8 @@ export type SessionMethodAccessRequest = {
   requiredScope?: OperatorScope;
   /** Only callers exposing a scoped action opt into the Gateway's narrow alternative. */
   sessionScope?: boolean;
+  /** Opt into the explicit desired-state mutation allowlist. */
+  allowDeferred?: boolean;
   session?: SessionAccessRow;
 };
 
@@ -106,13 +109,29 @@ export function readSessionMethodScopeAccess(
   return { allowed: true, requiredScope };
 }
 
-/** Combines scoped action access with the live connection and advertised method catalog. */
+/** Combines action access with live dispatch or explicit same-identity deferred admission. */
 export function readSessionMethodAccess(
   snapshot: Pick<ApplicationGatewaySnapshot, "client" | "hello" | "phase"> | null | undefined,
   request: SessionMethodAccessRequest,
 ): SessionMethodAccess {
   const access = readSessionMethodScopeAccess(snapshot?.hello?.auth, request);
-  if (snapshot?.phase !== "connected" || !snapshot.client) {
+  const deferredMutation =
+    request.allowDeferred &&
+    isRecord(request.params) &&
+    ((request.method === "sessions.patch" &&
+      isSessionDeferredPatch(
+        Object.fromEntries(
+          Object.entries(request.params).filter(
+            ([key]) => key !== "key" && key !== "agentId" && key !== "expectedSessionId",
+          ),
+        ),
+      )) ||
+      request.method === "sessions.delete") &&
+    snapshot?.hello &&
+    snapshot.client &&
+    snapshot.phase !== "stopped" &&
+    !snapshot.client.offlineRecoveryRetired;
+  if ((!deferredMutation && snapshot?.phase !== "connected") || !snapshot?.client) {
     return deniedAccess(access.requiredScope, "disconnected");
   }
   if (isGatewayMethodAdvertised(snapshot, request.method) !== true) {

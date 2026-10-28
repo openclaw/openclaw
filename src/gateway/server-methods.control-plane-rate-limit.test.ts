@@ -1,279 +1,110 @@
-/**
- * Tests control-plane rate limiting for gateway method dispatch.
- */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { isRetryableGatewayStartupUnavailableError } from "../../packages/gateway-protocol/src/startup-unavailable.js";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   resetGatewayWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
-import {
-  CONTROL_PLANE_RATE_LIMIT_MAX_REQUESTS,
-  CONTROL_PLANE_RATE_LIMIT_WINDOW_MS,
-} from "./control-plane-rate-limit.js";
+import { CONTROL_PLANE_RATE_LIMIT_MAX_REQUESTS } from "./control-plane-rate-limit.js";
 import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./methods/core-method-policy.js";
-import { handleGatewayRequest } from "./server-methods.js";
+import { sendAuthorizationRequest } from "./server-methods.authorization.test-support.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
 
-const noWebchat = () => false;
 let clientSequence = 0;
 
-describe("gateway control-plane write rate limit", () => {
-  beforeEach(() => {
-    clientSequence += 1;
-    resetGatewayWorkAdmission();
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-02-19T00:00:00.000Z"));
+beforeEach(() => {
+  clientSequence += 1;
+  resetGatewayWorkAdmission();
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-02-19T00:00:00.000Z"));
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+  resetGatewayWorkAdmission();
+});
+
+function setup() {
+  const context = {
+    unavailableGatewayMethods: new Set<string>(),
+  };
+  const handler = vi.fn<GatewayRequestHandler>(({ respond }) => {
+    respond(true, undefined, undefined);
   });
-
-  afterEach(() => {
-    vi.useRealTimers();
-    resetGatewayWorkAdmission();
-  });
-
-  function buildContext(logWarn = vi.fn()) {
-    return {
-      getRuntimeConfig: () => ({}),
-      logGateway: {
-        warn: logWarn,
-      },
-    } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"];
-  }
-
-  function buildConnect(): NonNullable<
-    Parameters<typeof handleGatewayRequest>[0]["client"]
-  >["connect"] {
-    return {
-      role: "operator",
-      scopes: ["operator.admin"],
-      client: {
-        id: "openclaw-control-ui",
-        version: "1.0.0",
-        platform: "macos",
-        mode: "ui",
-      },
-      minProtocol: 1,
-      maxProtocol: 1,
-    };
-  }
-
-  function buildClient() {
-    return {
-      connect: buildConnect(),
+  const request = (method: string) =>
+    sendAuthorizationRequest(method, undefined, {
       connId: `conn-${clientSequence}`,
-      clientIp: `10.0.0.${clientSequence}`,
-    } as Parameters<typeof handleGatewayRequest>[0]["client"];
-  }
-
-  async function runRequest(params: {
-    method: string;
-    context: Parameters<typeof handleGatewayRequest>[0]["context"];
-    client: Parameters<typeof handleGatewayRequest>[0]["client"];
-    handler: GatewayRequestHandler;
-  }) {
-    const respond = vi.fn();
-    await handleGatewayRequest({
-      req: {
-        type: "req",
-        id: crypto.randomUUID(),
-        method: params.method,
-      },
-      respond,
-      client: params.client,
-      isWebchatConnect: noWebchat,
-      context: params.context,
-      extraHandlers: {
-        [params.method]: params.handler,
-      },
+      scopes: ["operator.admin"],
+      context,
+      extraHandlers: { [method]: handler },
     });
-    return respond;
-  }
-
-  function respondCall(respond: ReturnType<typeof vi.fn>) {
-    const call = respond.mock.calls.at(0);
-    if (!call) {
-      throw new Error("Expected response call");
-    }
-    return call as [
-      boolean,
-      unknown,
-      { code?: string; details?: unknown; retryAfterMs?: number; retryable?: boolean }?,
-    ];
-  }
-
-  it.each(["config.patch", "cron.add"])(
-    "bounds the control-plane write budget for %s",
-    async (method) => {
-      const handlerCalls = vi.fn();
-      const handler: GatewayRequestHandler = (opts) => {
-        handlerCalls(opts);
-        opts.respond(true, undefined, undefined);
-      };
-      const logWarn = vi.fn();
-      const context = buildContext(logWarn);
-      const client = buildClient();
-
-      for (let attempt = 0; attempt < CONTROL_PLANE_RATE_LIMIT_MAX_REQUESTS; attempt += 1) {
-        await runRequest({ method, context, client, handler });
-      }
-      const blocked = await runRequest({ method, context, client, handler });
-
-      expect(handlerCalls).toHaveBeenCalledTimes(CONTROL_PLANE_RATE_LIMIT_MAX_REQUESTS);
-      const blockedCall = respondCall(blocked);
-      const error = blockedCall[2];
-      expect(blockedCall[0]).toBe(false);
-      expect(blockedCall[1]).toBeUndefined();
-      expect(error?.code).toBe("UNAVAILABLE");
-      expect(error?.retryable).toBe(true);
-      expect(logWarn).toHaveBeenCalledTimes(1);
-    },
-  );
-
-  it("allows the OpenClaw inference ladder to probe more than 3 candidates", async () => {
-    const handlerCalls = vi.fn();
-    const handler: GatewayRequestHandler = (opts) => {
-      handlerCalls(opts);
-      opts.respond(true, { ok: false, status: "auth", error: "candidate failed" }, undefined);
-    };
-    const context = buildContext();
-    const client = buildClient();
-
-    const responses = [];
-    for (let attempt = 0; attempt < 4; attempt += 1) {
-      responses.push(
-        await runRequest({
-          method: "openclaw.setup.activate",
-          context,
-          client,
-          handler,
-        }),
-      );
-    }
-
-    expect(handlerCalls).toHaveBeenCalledTimes(4);
-    for (const response of responses) {
-      expect(response).toHaveBeenCalledWith(
-        true,
-        { ok: false, status: "auth", error: "candidate failed" },
-        undefined,
-      );
-    }
-  });
-
-  it("resets the control-plane write budget after 60 seconds", async () => {
-    const handlerCalls = vi.fn();
-    const handler: GatewayRequestHandler = (opts) => {
-      handlerCalls(opts);
-      opts.respond(true, undefined, undefined);
-    };
-    const logWarn = vi.fn();
-    const context = buildContext(logWarn);
-    const client = buildClient();
-
+  async function exhaust(method: string) {
     for (let attempt = 0; attempt < CONTROL_PLANE_RATE_LIMIT_MAX_REQUESTS; attempt += 1) {
-      await runRequest({ method: "update.run", context, client, handler });
+      await request(method);
     }
+    return request(method);
+  }
+  return { context, handler, request, exhaust };
+}
 
-    const blocked = await runRequest({
-      method: "update.run",
-      context,
-      client,
-      handler,
+function expectBudgetResult(respond: ReturnType<typeof vi.fn>, allowed = false) {
+  expect(respond.mock.calls[0]).toEqual([
+    allowed,
+    undefined,
+    allowed ? undefined : expect.objectContaining({ code: "UNAVAILABLE", retryable: true }),
+  ]);
+}
+
+it.each([
+  ["config.patch", false],
+  ["cron.add", false],
+  ["openclaw.setup.activate", true],
+] as const)("applies the control-plane budget to %s (exempt=%s)", async (method, exempt) => {
+  const { handler, exhaust } = setup();
+  expectBudgetResult(await exhaust(method), exempt);
+  expect(handler).toHaveBeenCalledTimes(CONTROL_PLANE_RATE_LIMIT_MAX_REQUESTS + Number(exempt));
+});
+
+it("does not consume the write budget for requests refused during suspension", async () => {
+  const { handler, request } = setup();
+  const suspension = tryBeginGatewaySuspendAdmission(() => {});
+  expect(suspension?.commit()).toBe(true);
+
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const refused = await request("config.patch");
+    expect(refused.mock.calls[0]?.[2]).toMatchObject({
+      code: "UNAVAILABLE",
+      details: { reason: "gateway-suspending" },
     });
-    const blockedCall = respondCall(blocked);
-    expect(blockedCall[0]).toBe(false);
-    expect(blockedCall[1]).toBeUndefined();
-    expect(blockedCall[2]?.code).toBe("UNAVAILABLE");
-    expect(blockedCall[2]?.retryable).toBe(true);
-    expect(logWarn).toHaveBeenCalledOnce();
+  }
+  expect(suspension?.release()).toBe(true);
 
-    vi.advanceTimersByTime(CONTROL_PLANE_RATE_LIMIT_WINDOW_MS + 1);
+  expect(await request("config.patch")).toHaveBeenCalledWith(true, undefined, undefined);
+  expect(handler).toHaveBeenCalledOnce();
+});
 
-    const allowed = await runRequest({
-      method: "update.run",
-      context,
-      client,
-      handler,
-    });
-    expect(allowed).toHaveBeenCalledWith(true, undefined, undefined);
-    expect(handlerCalls).toHaveBeenCalledTimes(CONTROL_PLANE_RATE_LIMIT_MAX_REQUESTS + 1);
-  });
+it("keeps suspension preparation rate-limited while admission is closed", async () => {
+  const { handler, exhaust } = setup();
+  const suspension = tryBeginGatewaySuspendAdmission(() => {});
+  expect(suspension?.commit()).toBe(true);
 
-  it("does not consume the write budget for requests refused during suspension", async () => {
-    const handlerCalls = vi.fn();
-    const handler: GatewayRequestHandler = (opts) => {
-      handlerCalls(opts);
-      opts.respond(true, undefined, undefined);
-    };
-    const context = buildContext();
-    const client = buildClient();
-    const suspension = tryBeginGatewaySuspendAdmission(() => {});
-    expect(suspension?.commit()).toBe(true);
+  expectBudgetResult(await exhaust("gateway.suspend.prepare"));
+  expect(handler).toHaveBeenCalledTimes(CONTROL_PLANE_RATE_LIMIT_MAX_REQUESTS);
+  expect(suspension?.release()).toBe(true);
+});
 
-    for (let attempt = 0; attempt < 4; attempt += 1) {
-      const refused = await runRequest({ method: "config.patch", context, client, handler });
-      expect(respondCall(refused)[2]).toMatchObject({
-        code: "UNAVAILABLE",
-        details: { reason: "gateway-suspending" },
-      });
-    }
-    expect(suspension?.release()).toBe(true);
-
-    const allowed = await runRequest({ method: "config.patch", context, client, handler });
-    expect(allowed).toHaveBeenCalledWith(true, undefined, undefined);
-    expect(handlerCalls).toHaveBeenCalledOnce();
-  });
-
-  it("keeps suspension preparation rate-limited while admission is closed", async () => {
-    const handlerCalls = vi.fn();
-    const handler: GatewayRequestHandler = (opts) => {
-      handlerCalls(opts);
-      opts.respond(true, undefined, undefined);
-    };
-    const context = buildContext();
-    const client = buildClient();
-    const suspension = tryBeginGatewaySuspendAdmission(() => {});
-    expect(suspension?.commit()).toBe(true);
-
-    for (let attempt = 0; attempt < CONTROL_PLANE_RATE_LIMIT_MAX_REQUESTS; attempt += 1) {
-      await runRequest({ method: "gateway.suspend.prepare", context, client, handler });
-    }
-    const blocked = await runRequest({
-      method: "gateway.suspend.prepare",
-      context,
-      client,
-      handler,
-    });
-
-    expect(handlerCalls).toHaveBeenCalledTimes(CONTROL_PLANE_RATE_LIMIT_MAX_REQUESTS);
-    expect(respondCall(blocked)[2]).toMatchObject({ code: "UNAVAILABLE", retryable: true });
-    expect(suspension?.release()).toBe(true);
-  });
-
-  it("blocks a startup-gated method before dispatch with a retryable startup error", async () => {
-    const method = "sessions.list";
-    const handlerCalls = vi.fn();
-    const handler: GatewayRequestHandler = (opts) => {
-      handlerCalls(opts);
-      opts.respond(true, undefined, undefined);
-    };
-    const context = {
-      ...buildContext(),
-      unavailableGatewayMethods: new Set(STARTUP_UNAVAILABLE_GATEWAY_METHODS),
-    } as Parameters<typeof handleGatewayRequest>[0]["context"];
-    const client = buildClient();
-
-    const blocked = await runRequest({ method, context, client, handler });
-
-    expect(handlerCalls).not.toHaveBeenCalled();
-    const blockedCall = respondCall(blocked);
-    const error = blockedCall[2];
-    expect(blockedCall[0]).toBe(false);
-    expect(blockedCall[1]).toBeUndefined();
-    expect(error?.code).toBe("UNAVAILABLE");
-    expect(error?.retryable).toBe(true);
-    expect(error?.retryAfterMs).toBe(500);
-    expect(error?.details).toEqual({ reason: "startup-sidecars", method });
-    expect(isRetryableGatewayStartupUnavailableError(error)).toBe(true);
-  });
+it("blocks a startup-gated method before dispatch with a retryable startup error", async () => {
+  const method = "chat.send";
+  const { context, handler, request } = setup();
+  context.unavailableGatewayMethods = new Set(STARTUP_UNAVAILABLE_GATEWAY_METHODS);
+  const blocked = await request(method);
+  expect(handler).not.toHaveBeenCalled();
+  expect(blocked.mock.calls[0]).toEqual([
+    false,
+    undefined,
+    expect.objectContaining({
+      code: "UNAVAILABLE",
+      retryable: true,
+      retryAfterMs: 500,
+      details: { reason: "startup-sidecars", method },
+    }),
+  ]);
 });

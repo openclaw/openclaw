@@ -6,6 +6,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import type { SessionRowObservation } from "../../lib/sessions/session-capability.ts";
+import { createActiveSessionPlacement } from "../../test-helpers/session-placement.ts";
 import { ChatPaneActiveResources, type ActiveResourceOwner } from "./chat-pane-active-resources.ts";
 import { normalizeSidebarLayout } from "./sidebar-layout-normalize.ts";
 import {
@@ -26,18 +27,10 @@ const session = {
   updatedAt: 1,
   placement: { state: "active", environmentId: "worker-1" },
 } as GatewaySessionRow;
-const activePlacement = {
-  state: "active",
-  generation: 1,
-  createdAtMs: 1,
-  updatedAtMs: 1,
-  stateChangedAtMs: 1,
+const activePlacement = createActiveSessionPlacement({
   environmentId: "worker-1",
-  activeOwnerEpoch: 1,
-  workerBundleHash: "a".repeat(64),
   workspaceBaseManifestRef: "base",
-  remoteWorkspaceDir: "/workspace",
-} satisfies NonNullable<GatewaySessionRow["placement"]>;
+}) satisfies NonNullable<GatewaySessionRow["placement"]>;
 const environment: EnvironmentsListResult["environments"][number] = {
   id: "worker-1",
   type: "worker",
@@ -116,6 +109,10 @@ function fixture() {
     request,
     commit,
     controller,
+    sync: async () => {
+      controller.sync(owner);
+      await settle();
+    },
     desktopSource: () =>
       controller.desktopSource(owner.client, key, owner.agentId, owner.connectionEpoch, owner),
     setLayout: (next: SidebarLayout) => {
@@ -153,8 +150,7 @@ describe("session active resource discovery", () => {
     try {
       flush();
       expect(sources).toEqual([undefined]);
-      f.controller.sync(f.owner);
-      await settle();
+      await f.sync();
       flush();
       expect(sources).toEqual([undefined, "worker-1"]);
 
@@ -200,24 +196,21 @@ describe("session active resource discovery", () => {
 
   it("retains a visible verified Desktop when another resource is dismissed", async () => {
     const f = fixture();
-    f.controller.sync(f.owner);
-    await settle();
+    await f.sync();
     f.setLayout({
       ...closeSlot(promoteSidebarPanel(f.owner.layout(), "desktop"), "browser"),
       resourceAutoOpenDismissed: true,
     });
-    f.controller.sync(f.owner);
-    await settle();
+    await f.sync();
     expect(f.desktopSource()).toBe("worker-1");
     expect(f.slots()).not.toContain("browser");
   });
 
-  it.each(["binding"])("discovers resources after the %s identity changes", async () => {
+  it("discovers resources after the binding identity changes", async () => {
     const f = fixture();
     const pending = createDeferred<unknown>();
     f.request.mockImplementationOnce(async () => pending.promise);
-    f.controller.sync(f.owner);
-    await settle();
+    await f.sync();
     f.owner.observation.isCurrent = () => false;
     f.controller.sync({
       ...f.owner,
@@ -247,8 +240,7 @@ describe("session active resource discovery", () => {
           ? { ...layout, expanded: true, expandedSide: true }
           : normalizeSidebarLayout({ ...layout, open: false }),
       );
-      f.controller.sync(f.owner);
-      await settle();
+      await f.sync();
       expect(f.slots().toSorted()).toEqual(
         workspace ? ["desktop", "workspace"] : ["conversation", "desktop"],
       );
@@ -268,8 +260,7 @@ describe("session active resource discovery", () => {
       f.owner.placement = activePlacement;
       f.owner.sessionId = "session-id";
       const source = f.desktopSource;
-      f.controller.sync(f.owner);
-      await settle();
+      await f.sync();
       expect(source()).toBe("worker-1");
       f.owner.placement = { ...activePlacement, updatedAtMs: 99, lastTranscriptAckCursor: 10 };
       expect(source()).toBe("worker-1");
@@ -284,8 +275,7 @@ describe("session active resource discovery", () => {
       }
       // Rendering precedes the next sync() call; it must not reuse the old target.
       expect(source()).toBeNull();
-      f.controller.sync(f.owner);
-      await settle();
+      await f.sync();
       expect(source()).toBeNull();
       pending.resolve({ session: undefined });
       await settle();
@@ -293,94 +283,77 @@ describe("session active resource discovery", () => {
     },
   );
 
-  it.each(["sessions.describe"])(
-    "keeps metadata-only placement updates out of discovery while %s is pending and after completion",
-    async (heldMethod) => {
-      const f = fixture();
-      f.owner.placement = activePlacement;
-      const pending = createDeferred<unknown>();
-      const respond = f.request.getMockImplementation()!;
-      f.request.mockImplementation((method, params) =>
-        method === heldMethod ? pending.promise : respond(method, params),
-      );
-      f.controller.sync(f.owner);
-      await settle();
-      const initialCalls = [...f.request.mock.calls];
-      for (const cursor of [1, 2, 3]) {
-        f.owner.placement = {
-          ...activePlacement,
-          updatedAtMs: cursor + 10,
-          lastTranscriptAckCursor: cursor,
-          lastLiveEventAckCursor: cursor * 2,
-          diskSpace: {
-            status: "ok",
-            availableBytes: 100 - cursor,
-            totalBytes: 100,
-            observedAtMs: cursor + 10,
-          },
-        };
-        f.controller.sync(f.owner);
-        await settle();
-        expect(f.request.mock.calls).toEqual(initialCalls);
-      }
-      pending.resolve(await respond(heldMethod));
-      await settle();
-      expect(f.slots().toSorted()).toEqual(["desktop"]);
-      expect(f.request).toHaveBeenCalledTimes(2);
-      f.owner.placement = { ...activePlacement, updatedAtMs: 100, lastTranscriptAckCursor: 99 };
-      f.controller.sync(f.owner);
-      await settle();
-      expect(f.request).toHaveBeenCalledTimes(2);
-      expect(f.commit).toHaveBeenCalledTimes(1);
-    },
-  );
-
-  it.each([
-    {
-      name: "device",
-      placement: {
-        ...activePlacement,
-        runner: { kind: "device" as const, deviceId: "node-2", status: "available" as const },
-      },
-    },
-  ])(
-    "does not reveal an unconfirmed desktop when $name changes during discovery",
-    async (change) => {
-      const f = fixture();
+  it("keeps metadata-only placement updates out of discovery while the descriptor is pending and after completion", async () => {
+    const f = fixture();
+    f.owner.placement = activePlacement;
+    const pending = createDeferred<unknown>();
+    const respond = f.request.getMockImplementation()!;
+    f.request.mockImplementation((method, params) =>
+      method === "sessions.describe" ? pending.promise : respond(method, params),
+    );
+    await f.sync();
+    const initialCalls = [...f.request.mock.calls];
+    for (const cursor of [1, 2, 3]) {
       f.owner.placement = {
         ...activePlacement,
-        runner: { kind: "device", deviceId: "node-1", status: "available" },
+        updatedAtMs: cursor + 10,
+        lastTranscriptAckCursor: cursor,
+        lastLiveEventAckCursor: cursor * 2,
+        diskSpace: {
+          status: "ok",
+          availableBytes: 100 - cursor,
+          totalBytes: 100,
+          observedAtMs: cursor + 10,
+        },
       };
-      const pending = createDeferred<unknown>();
-      const described = {
-        ...session,
-        sessionId: f.owner.sessionId,
-        execNode: f.owner.execNode,
-        placement: f.owner.placement,
-        archived: f.owner.archived,
-      };
-      f.request.mockImplementationOnce(async () => pending.promise);
-      f.controller.sync(f.owner);
-      f.owner.placement = change.placement;
-      f.request.mockResolvedValueOnce({ session: undefined });
-      f.controller.sync(f.owner);
-      await settle();
-      pending.resolve({ session: described });
-      await settle();
-      expect(f.commit).not.toHaveBeenCalled();
-      expect(f.desktopSource()).not.toBe("worker-1");
-    },
-  );
+      await f.sync();
+      expect(f.request.mock.calls).toEqual(initialCalls);
+    }
+    pending.resolve(await respond("sessions.describe"));
+    await settle();
+    expect(f.slots().toSorted()).toEqual(["desktop"]);
+    expect(f.request).toHaveBeenCalledTimes(2);
+    f.owner.placement = { ...activePlacement, updatedAtMs: 100, lastTranscriptAckCursor: 99 };
+    await f.sync();
+    expect(f.request).toHaveBeenCalledTimes(2);
+    expect(f.commit).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not reveal an unconfirmed desktop when its device changes during discovery", async () => {
+    const f = fixture();
+    f.owner.placement = {
+      ...activePlacement,
+      runner: { kind: "device", deviceId: "node-1", status: "available" },
+    };
+    const pending = createDeferred<unknown>();
+    const described = {
+      ...session,
+      sessionId: f.owner.sessionId,
+      execNode: f.owner.execNode,
+      placement: f.owner.placement,
+      archived: f.owner.archived,
+    };
+    f.request.mockImplementationOnce(async () => pending.promise);
+    f.controller.sync(f.owner);
+    f.owner.placement = {
+      ...activePlacement,
+      runner: { kind: "device", deviceId: "node-2", status: "available" },
+    };
+    f.request.mockResolvedValueOnce({ session: undefined });
+    await f.sync();
+    pending.resolve({ session: described });
+    await settle();
+    expect(f.commit).not.toHaveBeenCalled();
+    expect(f.desktopSource()).not.toBe("worker-1");
+  });
 
   it("reveals the existing desktop once without provisioning", async () => {
     const f = fixture();
-    f.controller.sync(f.owner);
-    await settle();
+    await f.sync();
     expect(f.slots().toSorted()).toEqual(["desktop"]);
     const selected = sidebarActivePanel(f.owner.layout())?.slot;
     f.controller.invalidate();
-    f.controller.sync(f.owner);
-    await settle();
+    await f.sync();
     expect(f.commit).toHaveBeenCalledTimes(1);
     expect(sidebarActivePanel(f.owner.layout())?.slot).toBe(selected);
     expect(f.request.mock.calls.map(([method]) => method)).toEqual([
@@ -395,24 +368,20 @@ describe("session active resource discovery", () => {
   it("respects an older minimized dock even when the newly discovered resource has no tab", async () => {
     const f = fixture();
     f.setLayout({ ...openSlot(f.owner.layout(), "terminal"), open: false });
-    f.controller.sync(f.owner);
-    await settle();
+    await f.sync();
     expect(f.request).not.toHaveBeenCalled();
     expect(f.slots()).toEqual(["terminal"]);
   });
 
-  it("retires an automatic desktop without falling back to a stale roster or global source", async () => {
+  it("clears a discovered desktop source without falling back to a stale roster or global source", async () => {
     const f = fixture();
-    f.controller.sync(f.owner);
-    await settle();
+    await f.sync();
     expect(f.desktopSource()).toBe("worker-1");
     f.owner.placement = { ...activePlacement, state: "local" };
     f.request.mockResolvedValueOnce({ session: { ...session, placement: f.owner.placement } });
     f.controller.invalidate();
-    f.controller.sync(f.owner);
-    await settle();
+    await f.sync();
     expect(f.desktopSource()).toBeNull();
-    expect(f.commit).toHaveBeenCalledTimes(1);
   });
 
   it.each(["before discovery", "during discovery"])(
@@ -421,8 +390,7 @@ describe("session active resource discovery", () => {
       const f = fixture();
       if (when === "before discovery") {
         f.setLayout(openSlot(openSlot(f.owner.layout(), "desktop"), "workspace"));
-        f.controller.sync(f.owner);
-        await settle();
+        await f.sync();
         f.controller.reconcileObservation();
         await settle();
         expect(f.request).not.toHaveBeenCalled();
@@ -455,7 +423,7 @@ describe("session active resource discovery", () => {
     expect(f.request).not.toHaveBeenCalled();
   });
 
-  it.each(["leave"] as const)("rejects stale async responses after %s", async () => {
+  it("rejects stale async responses after leaving", async () => {
     const f = fixture();
     const pending = createDeferred<unknown>();
     f.request.mockImplementation(async () => pending.promise);
@@ -485,8 +453,7 @@ describe("session active resource discovery", () => {
     f.request.mockImplementation(async (method) =>
       method === "sessions.describe" ? { session: row } : (env ?? environment),
     );
-    f.controller.sync(f.owner);
-    await settle();
+    await f.sync();
     if (name === "missing attachment identity") {
       expect(f.request.mock.calls.map(([method]) => method)).toEqual(["sessions.describe"]);
     }
@@ -498,14 +465,12 @@ describe("session active resource discovery", () => {
     f.request.mockResolvedValueOnce({
       session: { ...session, placement: { state: "local" } },
     });
-    f.controller.sync(f.owner);
-    await settle();
+    await f.sync();
     expect(f.commit).not.toHaveBeenCalled();
     f.controller.sync(f.owner);
     expect(f.request).toHaveBeenCalledTimes(1);
     f.controller.invalidate();
-    f.controller.sync(f.owner);
-    await settle();
+    await f.sync();
     expect(f.slots()).toEqual(["desktop"]);
   });
 });

@@ -159,6 +159,8 @@ export function createAcpAgentHarness(params: {
           agentCommand: inspection.launch.argv,
           cwd: input.workspaceDir ?? config.cwd,
           signal: generation.signal,
+          agentProcessEnvAllow: config.agentProcessEnvAllow,
+          agentProcessEnvBlock: config.agentProcessEnvBlock,
           timeoutMs:
             config.timeoutSeconds === undefined
               ? undefined

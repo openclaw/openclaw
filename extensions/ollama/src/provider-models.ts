@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
+import { createStaleWhileRevalidateCache } from "openclaw/plugin-sdk/collection-runtime";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import { LiveModelCatalogHttpError } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
@@ -63,7 +63,12 @@ const OLLAMA_SHOW_TIMEOUT_MS = 3000;
 const OLLAMA_TAGS_TIMEOUT_MS = 5000;
 const MAX_OLLAMA_DISCOVERY_PROBES = OLLAMA_CONTEXT_ENRICH_LIMIT * 4;
 const MAX_OLLAMA_SHOW_CACHE_ENTRIES = 256;
-const ollamaModelShowInfoCache = new Map<string, Promise<OllamaModelShowInfo>>();
+const ollamaModelShowInfoCache = createStaleWhileRevalidateCache<OllamaModelShowInfo>({
+  maxEntries: MAX_OLLAMA_SHOW_CACHE_ENTRIES,
+  maxPending: Infinity,
+  ttlMs: Infinity,
+  cacheable: hasOllamaModelShowInfo,
+});
 const OLLAMA_ALWAYS_BLOCKED_HOSTNAMES = new Set(["metadata.google.internal"]);
 
 export function buildOllamaBaseUrlSsrFPolicy(baseUrl: string) {
@@ -165,11 +170,6 @@ function buildOllamaModelShowCacheKey(
   }
   const authScope = apiKey ? createHash("sha256").update(apiKey).digest("hex") : "anonymous";
   return `${resolveOllamaApiBase(apiBase)}|${model.name}|${version}|${authScope}`;
-}
-
-function setOllamaModelShowCacheEntry(key: string, value: Promise<OllamaModelShowInfo>): void {
-  pruneMapToMaxSize(ollamaModelShowInfoCache, MAX_OLLAMA_SHOW_CACHE_ENTRIES - 1);
-  ollamaModelShowInfoCache.set(key, value);
 }
 
 export function hasOllamaModelShowInfo(info: OllamaModelShowInfo): boolean {
@@ -328,19 +328,12 @@ async function queryOllamaModelShowInfoCached(
     return await queryOllamaModelShowInfo(normalizedApiBase, model.name, opts);
   }
 
-  const cached = ollamaModelShowInfoCache.get(cacheKey);
-  if (cached) {
-    return await cached;
-  }
-
-  const pending = queryOllamaModelShowInfo(normalizedApiBase, model.name, opts).then((result) => {
-    if (!hasOllamaModelShowInfo(result)) {
-      ollamaModelShowInfoCache.delete(cacheKey);
-    }
-    return result;
-  });
-  setOllamaModelShowCacheEntry(cacheKey, pending);
-  return await pending;
+  const { value } = await ollamaModelShowInfoCache.read(
+    cacheKey,
+    () => queryOllamaModelShowInfo(normalizedApiBase, model.name, opts),
+    { allowStale: false },
+  );
+  return value;
 }
 
 /** @deprecated Use queryOllamaModelShowInfo instead. */
@@ -492,7 +485,7 @@ export function toDynamicOllamaModel(params: {
   providerConfig: ModelProviderConfig;
   model: ModelDefinitionConfig;
 }): ProviderRuntimeModel {
-  const input = (params.model.input ?? ["text"]).filter(
+  const input = params.model.input.filter(
     (value): value is "text" | "image" => value === "text" || value === "image",
   );
   const api = params.providerConfig.api ?? "ollama";
@@ -500,24 +493,18 @@ export function toDynamicOllamaModel(params: {
   const contextWindow = params.model.contextWindow ?? cloudModel?.contextWindow ?? 8192;
   return {
     id: params.model.id,
-    name: params.model.name ?? params.model.id,
+    name: params.model.name,
     provider: params.provider,
     api,
     baseUrl: readProviderBaseUrl(params.providerConfig) ?? "",
-    reasoning: params.model.reasoning ?? false,
+    reasoning: params.model.reasoning,
     input: input.length > 0 ? input : ["text"],
-    cost: params.model.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    cost: params.model.cost,
     contextWindow,
     ...(params.model.contextTokens !== undefined
       ? { contextTokens: params.model.contextTokens }
       : {}),
-    maxTokens:
-      params.model.maxTokens ??
-      resolveOllamaOutputBudget({
-        modelId: params.model.id,
-        contextWindow,
-        remote: isHostedOllamaCloud(params.providerConfig.baseUrl),
-      }),
+    maxTokens: params.model.maxTokens,
     ...(params.model.parameterCount !== undefined
       ? { parameterCount: params.model.parameterCount }
       : {}),

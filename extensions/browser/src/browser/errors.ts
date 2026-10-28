@@ -85,45 +85,44 @@ export class BrowserCdpEndpointBlockedError extends BrowserError {
 }
 
 export class BrowserValidationError extends BrowserError {
-  constructor(message: string, options?: ErrorOptions) {
-    super(message, 400, options);
+  constructor(message: string) {
+    super(message, 400);
   }
 }
 
 export class BrowserTargetAmbiguousError extends BrowserError {
-  constructor(message = "ambiguous browser tab reference", options?: ErrorOptions) {
-    super(message, 409, options);
+  constructor() {
+    super("ambiguous browser tab reference", 409);
   }
 }
 
 export class BrowserTabNotFoundError extends BrowserError {
-  constructor(inputOrMessage?: string | { input?: string }, options?: ErrorOptions) {
-    const input =
-      typeof inputOrMessage === "object" ? inputOrMessage.input?.trim() : inputOrMessage?.trim();
+  constructor(options?: { input?: string }) {
+    const input = options?.input?.trim();
     const message = input
       ? /^\d+$/.test(input)
         ? `tab not found: browser tab "${input}" not found. Numeric values are not tab targets; use a stable tab id like "t1", a label, or a raw targetId. For positional selection, use "openclaw browser tab select ${input}".`
         : `tab not found: browser tab "${input}" not found. Use action=tabs and pass suggestedTargetId, tabId, label, or raw targetId.`
       : "tab not found";
-    super(message, 404, options);
+    super(message, 404);
   }
 }
 
 export class BrowserProfileNotFoundError extends BrowserError {
-  constructor(message: string, options?: ErrorOptions) {
-    super(message, 404, options);
+  constructor(message: string) {
+    super(message, 404);
   }
 }
 
 export class BrowserConflictError extends BrowserError {
-  constructor(message: string, options?: ErrorOptions) {
-    super(message, 409, options);
+  constructor(message: string) {
+    super(message, 409);
   }
 }
 
 export class BrowserResetUnsupportedError extends BrowserError {
-  constructor(message: string, options?: ErrorOptions) {
-    super(message, 400, options);
+  constructor(message: string) {
+    super(message, 400);
   }
 }
 
@@ -140,8 +139,8 @@ export class BrowserProfileUnavailableError extends BrowserError {
 }
 
 export class BrowserResourceExhaustedError extends BrowserError {
-  constructor(message: string, options?: ErrorOptions) {
-    super(message, 507, options);
+  constructor(message: string) {
+    super(message, 507);
   }
 }
 

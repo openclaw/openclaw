@@ -27,6 +27,7 @@ import {
   sqliteStringSetEntriesFragments,
   sqliteStringSetFragments,
 } from "./sql-query-compiler.js";
+import { stageSqliteTransactionState } from "./sqlite-post-commit.js";
 import { captureSqliteReaderOwner, retainSqliteReader } from "./sqlite-reader-lifecycle.js";
 
 // Node 24.20 and 26.6 fixed all() column counts after statement reprepare (nodejs/node#64219).
@@ -275,6 +276,52 @@ export function prepareSqliteQuerySync<Params, Row = unknown>(
 ): (params: Params) => QueryResult<Row> {
   const { compiled, bind } = compileSqliteQueryBindings(build);
   return (params) => executeCompiledSqliteQuerySync(db, compiled, false, bind(params));
+}
+
+/** A non-returning write whose only effect-time work is the prepared native run. */
+export function prepareSqliteTerminalWrite<Params>(
+  db: DatabaseSync,
+  build: SqliteQueryBindingBuilder<Params, unknown>,
+): (params: Params) => void {
+  const { compiled, bind } = compileSqliteQueryBindings(build);
+  return (params) => {
+    const parameters = bind(params);
+    installStatementInvalidation(db);
+    try {
+      executeWithCachedStatement(
+        db,
+        compiled.sql,
+        parameters,
+        (statement) => {
+          // Retain bigint mode for this write-only SQL shape. Resetting it or
+          // constructing QueryResult after run could fail after the commit.
+          statement.setReadBigInts(true);
+          statement.run(...parameters);
+        },
+        (release) => {
+          let released = false;
+          const finish = () => {
+            if (!released) {
+              released = true;
+              release();
+            }
+          };
+          if (
+            !stageSqliteTransactionState(db, {
+              commit: finish,
+              rollback: finish,
+              invalidate: finish,
+            })
+          ) {
+            throw new Error("Terminal SQLite writes require an owning publication scope");
+          }
+        },
+      );
+    } catch (error) {
+      reportNodeSqliteKyselyQueryError(db, error);
+      throw error;
+    }
+  };
 }
 
 /** Compile a fixed first-row read once and bind fresh values on every execution. */

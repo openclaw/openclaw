@@ -28,16 +28,18 @@ import type {
   AuthProfileStore,
   OAuthCredential,
 } from "../auth-profiles/types.js";
+import { prepareModelCatalogWorkerContext } from "../prepared-model-catalog-fingerprints.js";
 import { createPreparedModelCatalogWorkerInput } from "../prepared-model-catalog-worker.js";
 import {
+  catalogInput,
   createCatalogFixture,
+  makeCatalogAgentFacts,
   PROVIDER_ID,
 } from "../prepared-model-catalog-worker.test-support.js";
 import type {
   PreparedModelCatalogWorkerTask,
   PreparedModelWorkerResult,
 } from "../prepared-model-catalog-worker.types.js";
-import { AuthStorage } from "../sessions/auth-storage.js";
 
 type HeldCatalogOAuthRefresh = {
   pending: Promise<PreparedModelWorkerResult>;
@@ -68,10 +70,15 @@ export async function withHeldCatalogOAuthRefresh(
 ): Promise<void> {
   const { makeTempDir, signal } = params;
   const fixture = await createCatalogFixture(makeTempDir, 0);
-  prepareSharedAuthStoreOwnershipForNative(fixture.env);
+  const { root, env, agentDir, config, workspaceDir } = fixture;
+  prepareSharedAuthStoreOwnershipForNative(env);
   const profileId = `${PROVIDER_ID}:oauth`;
-  const discoveryMarker = path.join(fixture.root, "oauth-discovery-started");
-  const refreshFailure = path.join(fixture.root, "oauth-refresh-failure");
+  const discoveryMarker = path.join(root, "oauth-discovery-started");
+  const refreshFailure = path.join(root, "oauth-refresh-failure");
+  const store = (entry?: OAuthCredential): AuthProfileStore => ({
+    version: 1,
+    profiles: entry ? { [profileId]: entry } : {},
+  });
   const credential: OAuthCredential = {
     type: "oauth",
     provider: PROVIDER_ID,
@@ -86,14 +93,10 @@ export async function withHeldCatalogOAuthRefresh(
     refresh: "rotated-refresh-not-real",
     expires: Date.now() + 600_000,
   };
-  const peerDir = path.join(fixture.env.OPENCLAW_STATE_DIR!, "agents", "a-historical", "agent");
-  const emptyDir = path.join(fixture.env.OPENCLAW_STATE_DIR!, "agents", "b-empty", "agent");
-  const conflictingDir = path.join(
-    fixture.env.OPENCLAW_STATE_DIR!,
-    "agents",
-    "z-conflicting",
-    "agent",
-  );
+  const peerPath = (name: string) => path.join(env.OPENCLAW_STATE_DIR!, "agents", name, "agent");
+  const peerDir = peerPath("a-historical");
+  const emptyDir = peerPath("b-empty");
+  const conflictingDir = peerPath("z-conflicting");
   const conflictingFence =
     params.sharedStatePeers === "conflicting"
       ? createOAuthRefreshFence({ profileId, credential })
@@ -117,7 +120,7 @@ export async function withHeldCatalogOAuthRefresh(
     server.listen(portClaim.port, "127.0.0.1");
     await once(server, "listening", { signal });
     fs.writeFileSync(
-      path.join(fixture.root, "plugin", "index.cjs"),
+      path.join(root, "plugin", "index.cjs"),
       `module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
 api.registerProvider({
   id: ${JSON.stringify(PROVIDER_ID)}, label: "OAuth retirement fixture", auth: [],
@@ -148,61 +151,32 @@ api.registerProvider({
     );
     await withEnvAsync(
       {
-        OPENCLAW_STATE_DIR: fixture.env.OPENCLAW_STATE_DIR,
-        OPENCLAW_AGENT_DIR: fixture.agentDir,
+        OPENCLAW_STATE_DIR: env.OPENCLAW_STATE_DIR,
+        OPENCLAW_AGENT_DIR: agentDir,
       },
       async () => {
-        const authStore = { version: 1, profiles: { [profileId]: credential } };
+        const authStore = store(credential);
         if (params.sharedStatePeers) {
-          writeConfigMachineState(
-            "auth.sharedStore",
-            { location: "state-db" },
-            { env: fixture.env },
-          );
-          noteCommittedSharedAuthStoreOwnership({ location: "state-db" }, fixture.env);
+          writeConfigMachineState("auth.sharedStore", { location: "state-db" }, { env });
+          noteCommittedSharedAuthStoreOwnership({ location: "state-db" }, env);
           writePersistedAuthProfileStoreRaw(authStore);
           // Existing empty DBs and unconfigured historical peers must participate in discovery
           // without forcing a new store or preventing the shared owner from refreshing.
-          writePersistedAuthProfileStoreRaw({ version: 1, profiles: {} }, fixture.agentDir);
+          writePersistedAuthProfileStoreRaw(store(), agentDir);
           if (params.sharedStatePeers !== "empty") {
             writePersistedAuthProfileStoreRaw(authStore, peerDir);
           }
-          writePersistedAuthProfileStoreRaw({ version: 1, profiles: {} }, emptyDir);
+          writePersistedAuthProfileStoreRaw(store(), emptyDir);
           deletePersistedAuthProfileStoreRaw(emptyDir);
           if (conflictingFence) {
-            writePersistedAuthProfileStoreRaw(
-              { version: 1, profiles: { [profileId]: conflictingFence } },
-              conflictingDir,
-            );
+            writePersistedAuthProfileStoreRaw(store(conflictingFence), conflictingDir);
           }
         } else {
-          saveAuthProfileStore(authStore, fixture.agentDir);
+          saveAuthProfileStore(authStore, agentDir);
         }
-        const metadata = loadPluginMetadataSnapshot({
-          config: fixture.config,
-          env: fixture.env,
-          workspaceDir: fixture.workspaceDir,
-        });
+        const metadata = loadPluginMetadataSnapshot({ config, env, workspaceDir });
         const input = createPreparedModelCatalogWorkerInput({
-          agentFacts: {
-            input: {
-              agentId: "main",
-              agentDir: fixture.agentDir,
-              inheritedAuthDir: fixture.agentDir,
-              workspaceDir: fixture.workspaceDir,
-              config: fixture.config,
-              env: fixture.env,
-            },
-            env: fixture.env,
-            authStore,
-            credentials: {},
-            templateAuthStorage: AuthStorage.inMemory({}),
-            providerIds: [PROVIDER_ID],
-            configuredModelRefs: [],
-            configuredRuntimeModels: [],
-            runtimeCapabilityModels: [],
-            configuredGeneratedCatalogPluginIds: [],
-          },
+          agentFacts: makeCatalogAgentFacts(catalogInput(fixture), { authStore }),
           pluginMetadataSnapshot: metadata,
         });
         pool = new WorkerTaskPool({
@@ -216,19 +190,18 @@ api.registerProvider({
               kind: "gateway",
               sourceCaptureDirectory: makeTempDir("openclaw-catalog-oauth-captures-"),
             },
-            env: fixture.env,
+            env,
           },
         });
         const controller = new AbortController();
         const pending = pool.run(
           {
+            context: prepareModelCatalogWorkerContext(input),
             value: input,
             request: {
               kind: "catalog",
               syntheticAuth: [],
-              clawInstallSchemaVersions: captureClawInstallSchemaVersionFacts({
-                env: fixture.env,
-              }),
+              clawInstallSchemaVersions: captureClawInstallSchemaVersionFacts({ env }),
             },
           },
           { signal: controller.signal, timeoutMs: 30_000 },
@@ -255,8 +228,8 @@ api.registerProvider({
             closeWorker: () => pool!.close(),
             readCredential: () =>
               (params.sharedStatePeers
-                ? loadPersistedSharedAuthProfileStore(fixture.env)
-                : loadPersistedAuthProfileStore(fixture.agentDir)
+                ? loadPersistedSharedAuthProfileStore(env)
+                : loadPersistedAuthProfileStore(agentDir)
               )?.profiles[profileId],
             readPeerStore: () => loadPersistedAuthProfileStore(peerDir),
             readEmptyStore: () => loadPersistedAuthProfileStore(emptyDir),

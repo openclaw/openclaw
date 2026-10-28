@@ -87,21 +87,16 @@ it.each([
   { content: [] },
   { content: [{ type: "reasoning_text", text: "not part of replay" }] },
 ])("canonicalizes Responses reasoning and retains empty containers: %j", ({ content }) => {
-  const result = sanitizeAssistant([
-    {
-      type: "thinking",
-      thinking: "",
-      thinkingSignature: JSON.stringify({
-        type: "reasoning",
-        id: "rs_1",
-        summary: [{ type: "summary_text", text: "not part of replay" }],
-        content,
-        encrypted_content: ciphertext,
-        status: "completed",
-        extra: "not part of replay",
-      }),
-    },
-  ]);
+  const thinkingSignature = JSON.stringify({
+    type: "reasoning",
+    id: "rs_1",
+    summary: [{ type: "summary_text", text: "not part of replay" }],
+    content,
+    encrypted_content: ciphertext,
+    status: "completed",
+    extra: "not part of replay",
+  });
+  const result = sanitizeAssistant([{ type: "thinking", thinking: "", thinkingSignature }]);
   const emptyContent = content?.length === 0 ? ',"content":[]' : "";
   expect(result).toHaveProperty(
     "content.0.thinkingSignature",
@@ -112,15 +107,11 @@ it.each([
 
 it("canonicalizes OpenAI-compatible tool reasoning without changing arguments", () => {
   const signature = { type: "reasoning.encrypted", data: ciphertext, format: null };
-  const result = sanitizeAssistant(
-    [
-      {
-        ...toolCall(),
-        thoughtSignature: JSON.stringify({ ...signature, extra: "discarded" }),
-      },
-    ],
-    { api: "openai-completions" },
-  );
+  const call = {
+    ...toolCall(),
+    thoughtSignature: JSON.stringify({ ...signature, extra: "discarded" }),
+  };
+  const result = sanitizeAssistant([call], { api: "openai-completions" });
   expect(result).toHaveProperty("content.0", {
     ...toolCall(),
     thoughtSignature: JSON.stringify(signature),

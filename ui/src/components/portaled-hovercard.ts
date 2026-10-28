@@ -1,7 +1,8 @@
 import { onSettled } from "solid-js";
-import { composedParent } from "../lib/navigation-click.ts";
+import { composedAncestors, composedParent } from "../lib/navigation-click.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { promoteToPopoverTopLayer } from "./menu-surface.ts";
+import { controlsForHovercard } from "./portaled-hovercard-focus.ts";
 import type { TooltipElement } from "./tooltip.ts";
 import { resolveTransientContainer } from "./transient-container.ts";
 
@@ -23,11 +24,7 @@ export function createPortaledHovercardOwner(
   let positionCard: (() => void) | null = null;
   let triggerElement: HTMLElement | null = null;
   let triggerAncestors: Node[] = [];
-  const presentationObserver = new MutationObserver(() => {
-    if (checkPresentation()) {
-      observePresentation();
-    }
-  });
+  let presentationObserver: MutationObserver | undefined;
   let unmountCardContents: (() => void) | null = null;
   const handleCardPointerEnter = (event: PointerEvent) => {
     if (event.currentTarget === portal.card) {
@@ -54,26 +51,11 @@ export function createPortaledHovercardOwner(
     portal.scheduleClose();
   };
 
-  function presentationAncestors(): Node[] {
-    const ancestors: Node[] = [];
-    let node: Node | null = triggerElement;
-    while (node) {
-      ancestors.push(node);
-      node =
-        node instanceof Element && node.assignedSlot
-          ? node.assignedSlot
-          : node instanceof ShadowRoot
-            ? node.host
-            : node.parentNode;
-    }
-    return ancestors;
-  }
-
   function checkPresentation(): boolean {
     if (
       triggerElement &&
       (!triggerElement.isConnected ||
-        presentationAncestors().some(
+        composedAncestors(triggerElement).some(
           (node) =>
             node instanceof Element &&
             (node.hasAttribute("inert") ||
@@ -88,13 +70,18 @@ export function createPortaledHovercardOwner(
   }
 
   function observePresentation(): void {
-    const ancestors = presentationAncestors();
+    const ancestors = composedAncestors(triggerElement);
     if (
       ancestors.length === triggerAncestors.length &&
       ancestors.every((node, index) => node === triggerAncestors[index])
     ) {
       return;
     }
+    presentationObserver ??= new MutationObserver(() => {
+      if (checkPresentation()) {
+        observePresentation();
+      }
+    });
     presentationObserver.disconnect();
     triggerAncestors = ancestors;
     // Only the active trigger's ancestry: retained panes can retire without removal,
@@ -231,24 +218,15 @@ export function createPortaledHovercardOwner(
       );
     },
 
-    schedulePointerExit(bridgeMs = 220): void {
+    schedulePointerExit(): void {
       portal.pointerInside = false;
       // Portaled cards can be viewport-clamped diagonally from their trigger, so
       // exit coordinates cannot reliably tell whether the pointer is crossing the gap.
-      portal.scheduleClose(bridgeMs);
+      portal.scheduleClose(220);
     },
 
     focusables(): HTMLElement[] {
-      // Decorative avatar twins opt out; cards share the same keyboard traversal contract.
-      return [
-        ...(portal.card?.querySelectorAll<HTMLElement>(
-          'a[href]:not([tabindex="-1"]), button:not([disabled]), summary, [tabindex]:not([tabindex="-1"])',
-        ) ?? []),
-      ].filter((element) => {
-        // Slotted inspection controls join native Tab traversal only while their tooltip is open.
-        const content = element.closest('[slot="content"]');
-        return !content?.parentElement?.matches("openclaw-tooltip:not([open])");
-      });
+      return portal.card ? controlsForHovercard(portal.card).read() : [];
     },
 
     scheduleOpen(delay: number, open: () => void, trigger = triggerElement): void {
@@ -420,7 +398,7 @@ export function createPortaledHovercardOwner(
     },
 
     reset(exitDurationMs = 0): void {
-      presentationObserver.disconnect();
+      presentationObserver?.disconnect();
       triggerAncestors = [];
       if (openTimer !== null) {
         window.clearTimeout(openTimer);

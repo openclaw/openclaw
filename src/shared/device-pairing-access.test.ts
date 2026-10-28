@@ -1,61 +1,28 @@
-// Device pairing access tests cover role and scope checks for pairing requests.
 import { describe, expect, it } from "vitest";
 import { resolvePendingDeviceApprovalState } from "./device-pairing-access.js";
 
+const operator = { role: "operator", scopes: ["operator.read"] };
+const access = (roles: string[]) => ({ roles, scopes: ["operator.read"] });
+
 describe("resolvePendingDeviceApprovalState", () => {
   it("treats legacy singular approved role fields as approved access", () => {
-    expect(
-      resolvePendingDeviceApprovalState(
-        {
-          role: "operator",
-          scopes: ["operator.read"],
-        },
-        {
-          role: "operator",
-          scopes: ["operator.read"],
-        },
-      ),
-    ).toEqual({
+    expect(resolvePendingDeviceApprovalState(operator, operator)).toEqual({
       kind: "re-approval",
-      requested: {
-        roles: ["operator"],
-        scopes: ["operator.read"],
-      },
-      approved: {
-        roles: ["operator"],
-        scopes: ["operator.read"],
-      },
+      requested: access(["operator"]),
+      approved: access(["operator"]),
     });
   });
 
   it("treats revoked approved-role tokens as a role upgrade", () => {
     expect(
-      resolvePendingDeviceApprovalState(
-        {
-          role: "operator",
-          scopes: ["operator.read"],
-        },
-        {
-          role: "operator",
-          scopes: ["operator.read"],
-          tokens: {
-            operator: {
-              role: "operator",
-              revokedAtMs: Date.now(),
-            },
-          },
-        },
-      ),
+      resolvePendingDeviceApprovalState(operator, {
+        ...operator,
+        tokens: { operator: { role: "operator", revokedAtMs: Date.now() } },
+      }),
     ).toEqual({
       kind: "role-upgrade",
-      requested: {
-        roles: ["operator"],
-        scopes: ["operator.read"],
-      },
-      approved: {
-        roles: [],
-        scopes: ["operator.read"],
-      },
+      requested: access(["operator"]),
+      approved: access([]),
     });
   });
 
@@ -79,35 +46,23 @@ describe("resolvePendingDeviceApprovalState", () => {
       ),
     ).toEqual({
       kind: "role-upgrade",
-      requested: {
-        roles: ["admin", "operator"],
-        scopes: ["operator.read"],
-      },
-      approved: {
-        roles: ["operator"],
-        scopes: ["operator.read"],
-      },
+      requested: access(["admin", "operator"]),
+      approved: access(["operator"]),
     });
   });
 
   it("drops a non-string token role without crashing", () => {
     type PairedArg = NonNullable<Parameters<typeof resolvePendingDeviceApprovalState>[1]>;
     expect(
-      resolvePendingDeviceApprovalState({ role: "operator", scopes: ["operator.read"] }, {
+      resolvePendingDeviceApprovalState(operator, {
         roles: ["operator"],
         scopes: ["operator.read"],
         tokens: { t1: { role: 7, revokedAtMs: null } },
       } as unknown as PairedArg),
     ).toEqual({
       kind: "role-upgrade",
-      requested: {
-        roles: ["operator"],
-        scopes: ["operator.read"],
-      },
-      approved: {
-        roles: [],
-        scopes: ["operator.read"],
-      },
+      requested: access(["operator"]),
+      approved: access([]),
     });
   });
 });

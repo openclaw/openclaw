@@ -4,11 +4,15 @@ import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import type { AgentDatabaseRegistryChange } from "../../state/openclaw-agent-db-contract.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { toAgentExecutionConstraints } from "../../state/openclaw-agent-execution-scope.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import { captureMemoryExactSessionReader } from "./session-accessor.memory-exact-read.js";
 import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope-helpers.js";
-import type { SessionAccessScope, SessionEntryTargetPatchScope } from "./session-accessor.types.js";
+import type {
+  SessionEntryReadScope,
+  SessionEntryTargetPatchScope,
+} from "./session-accessor.types.js";
 import {
   readRetainedSessionEntryFacts,
   retainSessionEntryReadFacts,
@@ -23,7 +27,7 @@ import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 /** Preserve logical lookup and writable open semantics on the canonical file-backed actor. */
 export async function readSessionEntryInWorker(
-  input: SessionAccessScope,
+  input: SessionEntryReadScope,
   assertCallerCurrent: () => void = () => {},
   onRegistryChange?: (change: AgentDatabaseRegistryChange) => void,
   onReadTarget?: (target: SessionEntryTargetPatchScope) => void,
@@ -41,7 +45,7 @@ export async function readSessionEntryInWorker(
   const memory = captureMemoryExactSessionReader(input, assertCallerCurrent);
   if (memory) {
     const sessionKey = resolveSqliteSessionKey(scope.sessionKey, memory.agentId);
-    const entry = memory.read(sessionKey);
+    const entry = memory.read(sessionKey, scope.projection);
     onReadTarget?.({
       agentId: memory.agentId,
       env,
@@ -66,16 +70,7 @@ export async function readSessionEntryInWorker(
       const targetIdentity = readDatabasePathIdentitySync(options.path);
       const execution = captureOpenClawAgentDatabaseExecution(
         options,
-        targetIdentity.key.startsWith("file:")
-          ? {
-              expectedIdentity: {
-                kind: "file",
-                physicalIdentity: targetIdentity.key.slice("file:".length),
-                nativeLocation: targetIdentity.canonicalPath,
-                birthtime: targetIdentity.birthtime,
-              },
-            }
-          : { expectedCreationIdentity: targetIdentity },
+        toAgentExecutionConstraints(targetIdentity),
       );
       const assertCurrent = () => {
         execution.assertCurrent();
@@ -97,7 +92,15 @@ export async function readSessionEntryInWorker(
           await execution.prepare(source);
           assertCurrent();
           const nativeOwner = execution.captureGenerationClaim();
-          const request = { sessionKeys: [sessionKey] };
+          const request = {
+            sessionKeys: [sessionKey],
+            snapshotFields:
+              scope.projection === "list"
+                ? []
+                : scope.projection === "full"
+                  ? undefined
+                  : scope.projection,
+          };
           const before = readSqliteDatabaseWriteTokenForPath(options.path);
           const cached = readRetainedSessionEntryFacts(options, request, nativeOwner);
           const selected =

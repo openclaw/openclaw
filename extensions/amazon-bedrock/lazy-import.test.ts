@@ -1,5 +1,8 @@
 // Amazon Bedrock tests cover lazy import plugin behavior.
-import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  createCapturedPluginRegistration,
+  registerSingleProviderPlugin,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 function mockBedrockSdkImportTripwire(): () => number {
@@ -33,20 +36,8 @@ describe("amazon-bedrock lazy imports", () => {
   it("registers the setup entry without loading the Bedrock SDK", async () => {
     const getImportCount = mockBedrockSdkImportTripwire();
     const { default: setupPlugin } = await import("./setup-api.js");
-    const providers: Array<{
-      id: string;
-      resolveConfigApiKey?: (params: never) => string | undefined;
-    }> = [];
-
-    setupPlugin.register({
-      registerProvider(provider: {
-        id: string;
-        resolveConfigApiKey?: (params: never) => string | undefined;
-      }) {
-        providers.push(provider);
-      },
-      registerConfigMigration() {},
-    } as never);
+    const { api, providers } = createCapturedPluginRegistration({ registrationMode: "setup-only" });
+    setupPlugin.register(api);
 
     expect(providers.map((provider) => provider.id)).toEqual(["amazon-bedrock"]);
     expect(providers[0]?.resolveConfigApiKey?.({ env: { AWS_PROFILE: "default" } } as never)).toBe(

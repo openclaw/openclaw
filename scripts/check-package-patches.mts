@@ -10,9 +10,20 @@ import { pnpmLockfileDocuments } from "./lib/pnpm-lockfile-documents.mjs";
 import { runAsScript } from "./lib/ts-guard-utils.mts";
 
 const ALLOWED_PATCHED_DEPENDENCIES = new Map([
-  ["chrome-devtools-mcp@1.10.1", "patches/chrome-devtools-mcp@1.10.1.patch"],
+  ["@homebridge/ciao@1.3.12", "patches/@homebridge__ciao@1.3.12.patch"],
+  ["proper-lockfile@4.1.2", "patches/proper-lockfile@4.1.2.patch"],
+  ["@clawdbot/lobster@2026.9.16", "patches/@clawdbot__lobster@2026.9.16.patch"],
+  ["apache-arrow@21.2.0", "patches/apache-arrow@21.2.0.patch"],
+  ["@shinyoshiaki/binary-data@0.6.1", "patches/@shinyoshiaki__binary-data@0.6.1.patch"],
+  ["@openclaw/crabline@0.1.30", "patches/@openclaw__crabline@0.1.30.patch"],
+  ["playwright-core@1.64.1", "patches/playwright-core@1.64.1.patch"],
+  ["minizlib@3.1.0", "patches/minizlib@3.1.0.patch"],
+  ["tar@7.5.22", "patches/tar@7.5.22.patch"],
+  ["chrome-devtools-mcp@1.11.0", "patches/chrome-devtools-mcp@1.11.0.patch"],
   ["@novnc/novnc@1.7.0", "patches/@novnc__novnc@1.7.0.patch"],
-  ["vitest@5.0.3", "patches/vitest@5.0.3.patch"],
+  ["@solidjs/web@2.0.0-rc.18", "patches/@solidjs__web@2.0.0-rc.18.patch"],
+  ["@solidjs/signals@2.0.0-rc.18", "patches/@solidjs__signals@2.0.0-rc.18.patch"],
+  ["vitest@5.0.5", "patches/vitest@5.0.5.patch"],
   ["baileys@7.0.0-rc12", "patches/baileys@7.0.0-rc12.patch"],
   ["baileys@7.0.0-rc13", "patches/baileys@7.0.0-rc13.patch"],
   ["baileys@7.0.0-rc14", "patches/baileys@7.0.0-rc14.patch"],

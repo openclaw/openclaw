@@ -749,7 +749,7 @@ struct ChatSessionSidebarTreeTests {
                     selection: selected,
                     parents: parents,
                     inlineParents: Set(parents.map(ChatSessionSidebarChildren.key)),
-                    homeParents: [])
+                    homeParentsByAgent: [:])
             }
             let store = ChatSessionSidebarChildren()
             let parent = try #require(owner.rows.first)

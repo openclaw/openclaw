@@ -92,13 +92,11 @@ export class PageNode {
         if (ignoreCase) {
           actual = actual.toLowerCase();
         }
-        if (operator === "=" && actual !== wanted) {
-          return false;
-        }
-        if (operator === "^=" && !actual.startsWith(wanted)) {
-          return false;
-        }
-        if (operator === "*=" && !actual.includes(wanted)) {
+        if (
+          (operator === "=" && actual !== wanted) ||
+          (operator === "^=" && !actual.startsWith(wanted)) ||
+          (operator === "*=" && !actual.includes(wanted))
+        ) {
           return false;
         }
       }
@@ -128,8 +126,7 @@ export class PageNode {
   }
 
   querySelectorAll(selector: string): PageNode[] {
-    const candidates = this.descendants();
-    return candidates.filter((candidate) =>
+    return this.descendants().filter((candidate) =>
       selector.split(",").some((part) => {
         const descendant = part.trim().match(/^(.*?)\s+(?=[a-z.#])([^ ]+)$/);
         if (!descendant?.[1] || !descendant[2] || part.includes(":has(")) {
@@ -163,6 +160,10 @@ export class PageNode {
 
 export function qaNode(qa: string, text = "", tag = "button"): PageNode {
   return new PageNode(tag, { "data-qa": qa }, text);
+}
+
+export function clicks(...nodes: PageNode[]) {
+  return nodes.map((node) => node.clicks);
 }
 
 export function microphone(on: boolean, inPreview = false): PageNode {
@@ -227,16 +228,14 @@ export function fixture(params: {
       throw new Error("audio capture passed ownership");
     },
     navigator: {
-      ...(params.onPermissionQuery
+      permissions: params.onPermissionQuery
         ? {
-            permissions: {
-              query: async () => {
-                params.onPermissionQuery?.();
-                return { state: "granted" };
-              },
+            query: async () => {
+              params.onPermissionQuery?.();
+              return { state: "granted" };
             },
           }
-        : {}),
+        : undefined,
       mediaDevices: {
         enumerateDevices: async () => {
           params.onEnumerateDevices?.();
@@ -267,16 +266,20 @@ export function fixture(params: {
       timers.delete(id);
     },
   };
+  const browser = SLACK_HUDDLES_PLATFORM_ADAPTER.browser;
+  const run = (source: string | undefined) => {
+    if (!source) {
+      throw new Error("Missing session-owned script");
+    }
+    return runInNewContext(`(${source})()`, sandbox);
+  };
+  const parse = (result: string) => JSON.parse(result) as Record<string, unknown>;
   return {
     window,
     location,
     mutate: () => mutation?.(),
-    async status(
-      overrides: Partial<
-        Parameters<typeof SLACK_HUDDLES_PLATFORM_ADAPTER.browser.buildStatusJoinScript>[0]
-      > = {},
-    ) {
-      const source = SLACK_HUDDLES_PLATFORM_ADAPTER.browser.buildStatusJoinScript({
+    async status(overrides: Partial<Parameters<typeof browser.buildStatusJoinScript>[0]> = {}) {
+      const source = browser.buildStatusJoinScript({
         allowSessionAdoption: true,
         autoJoin: true,
         captureCaptions: false,
@@ -287,39 +290,32 @@ export function fixture(params: {
         waitForInCallMs: 60_000,
         ...overrides,
       });
-      const result = await runInNewContext(`(${source})()`, sandbox);
-      return JSON.parse(result) as Record<string, unknown>;
+      return parse(await run(source));
     },
     leave(leaveInitiated = false, meetingUrl = HUDDLE_URL) {
-      const source = SLACK_HUDDLES_PLATFORM_ADAPTER.browser.buildSessionLeaveScript?.({
+      const source = browser.buildSessionLeaveScript?.({
         leaveInitiated,
         meetingSessionId: "session-1",
         meetingUrl,
       });
-      if (!source) {
-        throw new Error("Missing session-owned leave script");
-      }
-      return JSON.parse(runInNewContext(`(${source})()`, sandbox)) as Record<string, unknown>;
+      return parse(run(source));
     },
     startAudioCapture() {
-      const source = SLACK_HUDDLES_PLATFORM_ADAPTER.browser.buildAudioCaptureScript?.({
+      const source = browser.buildAudioCaptureScript?.({
         action: "start",
         captureId: "capture-1",
         meetingSessionId: "session-1",
         meetingUrl: HUDDLE_URL,
       });
-      if (!source) {
-        throw new Error("Missing audio capture script");
-      }
-      return runInNewContext(`(${source})()`, sandbox) as Promise<string>;
+      return run(source) as Promise<string>;
     },
     transcript(finalize = false) {
-      const source = SLACK_HUDDLES_PLATFORM_ADAPTER.browser.captions.buildTranscriptScript({
+      const source = browser.captions.buildTranscriptScript({
         finalize,
         meetingSessionId: "session-1",
         meetingUrl: HUDDLE_URL,
       });
-      return JSON.parse(runInNewContext(`(${source})()`, sandbox)) as Record<string, unknown>;
+      return parse(run(source));
     },
   };
 }

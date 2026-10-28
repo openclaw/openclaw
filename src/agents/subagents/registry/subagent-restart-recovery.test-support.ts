@@ -12,8 +12,10 @@ import {
   listSessionEntriesCore,
 } from "../../../config/sessions/session-accessor.js";
 import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
+import { createMockGatewayRecoveryRuntime } from "../../../gateway/server-recovery-runtime.test-support.js";
 import { onAgentEvent } from "../../../infra/agent-events.js";
 import { hasErrnoCode } from "../../../infra/errno.js";
+import { throwCollectedErrors } from "../../../infra/error-graph-internal.js";
 import { bindGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
 import {
@@ -69,22 +71,19 @@ export function useSubagentRestartRecoveryFixture(
   options: { reuseDatabaseWorkers?: boolean } = {},
 ) {
   const dispatchAgent = vi.fn();
-  const gatewayRuntime: GatewayRecoveryRuntime = {
-    prepareRestartRecovery: () => undefined,
-    dispatchSessionMethod: vi.fn(),
+  const gatewayRuntime = createMockGatewayRecoveryRuntime({
     dispatchAgent: dispatchAgent as GatewayRecoveryRuntime["dispatchAgent"],
     waitForAgent: vi.fn(async () => ({
       status: "pending",
     })) as GatewayRecoveryRuntime["waitForAgent"],
-    sendRecoveryNotice: vi.fn(),
-  };
+  });
   const activateGatewayRuntime = async () => {
     const gatewayContext = {
       recoveryRuntime: gatewayRuntime,
       resolveGatewayContext: () => gatewayContext as never,
     };
     bindGatewayContextResolver(gatewayRuntime, gatewayContext.resolveGatewayContext);
-    await activateSubagentRegistry(gatewayContext.resolveGatewayContext);
+    await activateSubagentRegistry(gatewayContext.resolveGatewayContext).settled;
   };
 
   const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
@@ -189,11 +188,7 @@ export function useSubagentRestartRecoveryFixture(
         tempStateDir = null;
       });
     }
-    if (failures.length) {
-      throw failures.length === 1
-        ? failures[0]
-        : new AggregateError(failures, "Subagent restart recovery cleanup failed");
-    }
+    throwCollectedErrors(failures, "Subagent restart recovery cleanup failed");
   });
 
   return {

@@ -256,19 +256,21 @@ export function useTelegramHttpFixture() {
       textLimit?: number;
     } = {},
   ) {
+    const textMode = options.textMode ?? (rich ? undefined : "html");
+    const replyButtons = mediaUrl || rich ? { buttons } : {};
+    const authorization = { onPlatformSendDispatch: dispatch, assertPlatformSendAuthorized };
     if (entry === "public") {
       return sendMessageTelegram("123", text, {
         cfg: config({ richMessages: rich, linkPreview: options.linkPreview }),
         api: state.bot.api,
-        textMode: options.textMode ?? (rich ? undefined : "html"),
+        textMode,
         replyToMessageId: 7,
         quoteText: "quote",
         ...(options.firstReply ? { replyToIdSource: "implicit", replyToMode: "first" } : {}),
         messageThreadId: options.threadId,
-        onPlatformSendDispatch: dispatch,
-        assertPlatformSendAuthorized,
-        ...(mediaUrl ? { mediaUrl, mediaLocalRoots: [state.mediaDir], buttons } : {}),
-        ...(rich ? { buttons } : {}),
+        ...authorization,
+        ...(mediaUrl ? { mediaUrl, mediaLocalRoots: [state.mediaDir] } : {}),
+        ...replyButtons,
       });
     }
     return deliverReplies({
@@ -282,7 +284,7 @@ export function useTelegramHttpFixture() {
           text,
           replyToId: "7",
           ...(mediaUrl ? { mediaUrl } : {}),
-          ...(mediaUrl || rich ? { channelData: { telegram: { buttons } } } : {}),
+          ...(mediaUrl || rich ? { channelData: { telegram: replyButtons } } : {}),
         },
       ],
       mediaLocalRoots: [state.mediaDir],
@@ -292,13 +294,9 @@ export function useTelegramHttpFixture() {
       linkPreview: options.linkPreview,
       replyQuoteMessageId: 7,
       replyQuoteText: "quote",
-      textMode:
-        options.textMode === "markdown"
-          ? undefined
-          : (options.textMode ?? (rich ? undefined : "html")),
+      textMode: textMode === "markdown" ? undefined : textMode,
       richMessages: rich,
-      onPlatformSendDispatch: dispatch,
-      assertPlatformSendAuthorized,
+      ...authorization,
     });
   }
 

@@ -8,7 +8,7 @@ import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import { vi } from "vitest";
 import { resolveXAccount, type ResolvedXAccount } from "../accounts.js";
-import type { XApiClient, XPage, XPost } from "../api.js";
+import type { XApiClient, XPage, XPost, XUser } from "../api.js";
 import { getXApi } from "../client.js";
 import { startXAccount } from "../monitor.js";
 import { setXRuntime } from "../runtime.js";
@@ -19,6 +19,10 @@ export const client = { getXApi: vi.mocked(getXApi) };
 
 export type Payload = { version: number; rawEvent: string };
 type Plan = Parameters<PluginRuntime["channel"]["inbound"]["dispatch"]>[0];
+type Context = ChannelGatewayContext<ResolvedXAccount>;
+const unexpected = (message: string) => async () => {
+  throw new Error(`Unexpected ${message}`);
+};
 
 export function post(id: string, authorId: string, text = "@roboclawbot please help"): XPost {
   return {
@@ -29,18 +33,14 @@ export function post(id: string, authorId: string, text = "@roboclawbot please h
     created_at: "2026-09-08T12:00:00Z",
   };
 }
-export function page(data: XPost[]): XPage {
-  return {
-    data,
-    includes: {
-      tweets: [],
-      users: [
-        { id: "10", username: "config_maintainer" },
-        { id: "30", username: "stored_maintainer" },
-      ],
-    },
-    meta: {},
-  };
+export function page(
+  data: XPost[],
+  users: XUser[] = [
+    { id: "10", username: "config_maintainer" },
+    { id: "30", username: "stored_maintainer" },
+  ],
+): XPage {
+  return { data, includes: { tweets: [], users }, meta: {} };
 }
 export const config: OpenClawConfig = {
   agents: { entries: { maintainer: {} } },
@@ -85,24 +85,18 @@ export function fixture(options: {
     getPosts: vi.fn(async (ids: string[]) =>
       page(options.posts.filter((value) => ids.includes(value.id))),
     ),
-    getPublicPosts: vi.fn(async (ids: string[]): Promise<XPage> => ({
-      ...page(
+    getPublicPosts: vi.fn(async (ids: string[]) =>
+      page(
         [post("500", "10", "Original thread"), ...options.posts].filter((value) =>
           ids.includes(value.id),
         ),
+        [{ id: "10", username: "author", protected: false }],
       ),
-      includes: { tweets: [], users: [{ id: "10", username: "author", protected: false }] },
-    })),
+    ),
     searchConversation: vi.fn(async () => page([post("500", "10", "Original thread")])),
-    getUserByUsername: vi.fn(async () => {
-      throw new Error("Unexpected user lookup");
-    }),
-    getUsersByUsernames: vi.fn<XApiClient["getUsersByUsernames"]>(async () => {
-      throw new Error("Unexpected batch user lookup");
-    }),
-    uploadMedia: vi.fn<XApiClient["uploadMedia"]>(async () => {
-      throw new Error("Unexpected media upload");
-    }),
+    getUserByUsername: vi.fn(unexpected("user lookup")),
+    getUsersByUsernames: vi.fn<XApiClient["getUsersByUsernames"]>(unexpected("batch user lookup")),
+    uploadMedia: vi.fn<XApiClient["uploadMedia"]>(unexpected("media upload")),
     reply: vi.fn(async (params: Parameters<XApiClient["reply"]>[0]) => {
       const assertCurrent = await params.assertActive?.();
       assertCurrent?.();
@@ -110,37 +104,33 @@ export function fixture(options: {
       return String(900 + replies.length);
     }),
     ensureActivitySubscriptions: vi.fn(async () => {}),
-    openActivityStream: vi.fn(async (): Promise<Response> => {
-      throw new Error("Unexpected stream");
-    }),
+    openActivityStream: vi.fn<() => Promise<Response>>(unexpected("stream")),
   } satisfies XApiClient;
   client.getXApi.mockResolvedValue(api);
   const resolveStable = vi.fn(resolveStableChannelMessageIngress);
   const dispatch = vi.fn(async (plan: Plan) => {
+    const sessionKey = options.visibleSessionKey ?? "agent:maintainer:work:example";
+    const session = {
+      sessionKey,
+      url: options.visibleSessionUrl ?? "https://example.test/work/42",
+      label: "Work session",
+    };
     await plan.replyOptions?.onVisibleWorkSessions?.(
-      options.visibleSessionUrl === null
-        ? []
-        : [
-            {
-              sessionKey: options.visibleSessionKey ?? "agent:maintainer:work:example",
-              url: options.visibleSessionUrl ?? "https://example.test/work/42",
-              label: "Work session",
-            },
-          ],
-      { createdSessionKey: options.visibleSessionKey ?? "agent:maintainer:work:example" },
+      options.visibleSessionUrl === null ? [] : [session],
+      { createdSessionKey: sessionKey },
     );
-    if (!plan.delivery.deliver) {
+    const { delivery } = plan;
+    if (!delivery.deliver) {
       throw new Error("Missing X text delivery adapter");
     }
     // Core turn delivery contract: a null prepared payload is suppressed, never delivered.
-    for (const payload of options.finals ?? [
-      { text: options.replyText ?? "[[x_success]] I am on it." },
-    ]) {
-      const prepared = plan.delivery.preparePayload
-        ? await plan.delivery.preparePayload(payload, { kind: "final" })
+    const finals = options.finals ?? [{ text: options.replyText ?? "[[x_success]] I am on it." }];
+    for (const payload of finals) {
+      const prepared = delivery.preparePayload
+        ? await delivery.preparePayload(payload, { kind: "final" })
         : payload;
       if (prepared) {
-        await plan.delivery.deliver(prepared, { kind: "final" });
+        await delivery.deliver(prepared, { kind: "final" });
       }
     }
     await plan.turnAdoptionLifecycle?.onAdopted();
@@ -173,7 +163,6 @@ export function fixture(options: {
           sessionEntries.get(sessionKey),
       },
     },
-    version: "2026.9.8",
     state: {
       openKeyedStore,
       resolveStateDir: () => stateDir,
@@ -189,13 +178,11 @@ export function fixture(options: {
     },
   } as unknown as PluginRuntime;
   setXRuntime(runtime);
-  const running: Array<{ abort: AbortController; run: Promise<unknown> }> = [];
+  const running = new Map<AbortController, Promise<unknown>>();
   const start = () => {
     const abort = new AbortController();
-    let status: ReturnType<ChannelGatewayContext<ResolvedXAccount>["getStatus"]> = {
-      accountId: "default",
-    };
-    const context: ChannelGatewayContext<ResolvedXAccount> = {
+    let status: ReturnType<Context["getStatus"]> = { accountId: "default" };
+    const run = startXAccount({
       cfg,
       accountId: "default",
       account: resolveXAccount(cfg, "default"),
@@ -211,9 +198,8 @@ export function fixture(options: {
       setStatus: (next) => {
         status = next;
       },
-    };
-    const run = startXAccount(context);
-    running.push({ abort, run });
+    });
+    running.set(abort, run);
     return { abort, run, status: () => status };
   };
   return {
@@ -227,10 +213,10 @@ export function fixture(options: {
     openKeyedStore,
     start,
     async stop() {
-      for (const item of running) {
-        item.abort.abort();
+      for (const abort of running.keys()) {
+        abort.abort();
       }
-      await Promise.all(running.map((item) => item.run));
+      await Promise.all(running.values());
     },
   };
 }

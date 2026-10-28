@@ -1,9 +1,8 @@
-import { onCleanup } from "solid-js";
+import { onSettled } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
-import { projectSource } from "../../lib/reactive/projection.ts";
+import { projectMutableSource } from "../../lib/reactive/projection.ts";
 import type {
-  LogbookDaysPayload,
   LogbookStatusPayload,
   LogbookTimelinePayload,
   LogbookUiState,
@@ -24,12 +23,11 @@ export function shiftDay(day: string, deltaDays: number): string {
   return localDayKey(base);
 }
 
-export function createLogbook() {
+export function createLogbook(initialClient: GatewayBrowserClient | null) {
   // Request admission and selected-day custody must change before the next Solid flush.
   const state: LogbookUiState = {
     day: localDayKey(),
     status: null,
-    days: [],
     timeline: null,
     loading: false,
     error: null,
@@ -41,30 +39,18 @@ export function createLogbook() {
     askLoading: false,
     actionPending: false,
   };
-  let client: GatewayBrowserClient | null = null;
+  let client = initialClient;
   let dayPinned = false;
   let backgroundRefresh: Promise<void> | null = null;
   let backgroundRefreshQueued = false;
-  let pollTimer: ReturnType<typeof setInterval> | undefined;
-  let frameLoads = new Set<number>();
+  let dayLifetime = Promise.withResolvers<void>();
+  const frameLoads = new Map<number, Promise<string | undefined>>();
   let notify = () => {};
-  const projection = projectSource(state, {
-    read: (source) => source,
-    subscribe: (_source, listener) => {
-      notify = listener;
-      return () => {
-        notify = () => {};
-      };
-    },
-    equality: "revision",
-  });
-  onCleanup(() => {
-    clearInterval(pollTimer);
-    client = null;
-    backgroundRefreshQueued = false;
-  });
-
+  const projection = projectMutableSource(state, (source) => source);
+  notify = projection.publish;
   function resetDay(day: string) {
+    dayLifetime.resolve();
+    dayLifetime = Promise.withResolvers<void>();
     state.day = day;
     state.timeline = null;
     state.standup = null;
@@ -91,16 +77,14 @@ export function createLogbook() {
       notify();
     }
     try {
-      const [status, days, timeline] = await Promise.all([
+      const [status, timeline] = await Promise.all([
         current.request<LogbookStatusPayload>("logbook.status", {}),
-        current.request<LogbookDaysPayload>("logbook.days", {}),
         current.request<LogbookTimelinePayload>("logbook.timeline", { day: requestedDay }),
       ]);
       if (client !== current || state.day !== requestedDay) {
         return;
       }
       state.status = status;
-      state.days = days.days;
       // Follow the capture host's day until the user explicitly selects one.
       if (!dayPinned && status.today !== state.day) {
         resetDay(status.today);
@@ -147,100 +131,113 @@ export function createLogbook() {
     const refresh = load({ silent: true });
     backgroundRefresh = refresh;
     void refresh.finally(() => {
-      if (backgroundRefresh === refresh) {
-        backgroundRefresh = null;
-      }
+      backgroundRefresh = null;
       drainRefresh();
     });
     return refresh;
   }
 
-  async function runAction(
+  function runAction(
     pending: "actionPending" | "standupLoading" | "askLoading",
     run: (current: GatewayBrowserClient, isCurrent: () => boolean) => Promise<void>,
     settled?: () => void,
   ) {
     const current = client;
     if (!current || state[pending]) {
-      return;
+      return undefined;
     }
     const isCurrent = () => client === current;
     state[pending] = true;
     notify();
-    try {
-      await run(current, isCurrent);
-    } catch (error) {
-      if (isCurrent()) {
-        state.error = formatUiError(error);
+    return (async () => {
+      try {
+        await run(current, isCurrent);
+      } catch (error) {
+        if (isCurrent()) {
+          state.error = formatUiError(error);
+        }
+      } finally {
+        if (isCurrent()) {
+          state[pending] = false;
+          notify();
+          settled?.();
+        }
       }
-    } finally {
-      if (isCurrent()) {
-        state[pending] = false;
-        notify();
-        settled?.();
-      }
-    }
+    })();
   }
 
+  // PluginPage remounts this model for each connection; polling shares the analysis refresh owner.
+  onSettled(() => {
+    const pollTimer = client
+      ? setInterval(() => void refreshSilently(), POLL_INTERVAL_MS)
+      : undefined;
+    return () => {
+      dayLifetime.resolve();
+      clearInterval(pollTimer);
+      client = null;
+      backgroundRefreshQueued = false;
+    };
+  });
   return {
+    get dayRetired() {
+      return dayLifetime.promise;
+    },
+    reportError(error: unknown) {
+      state.error = formatUiError(error);
+      notify();
+    },
     get state() {
       return projection.read();
     },
     load,
-    // Returns whether the connected source needs its initial load.
-    connect(next: GatewayBrowserClient | null): boolean {
-      if (client !== next) {
-        clearInterval(pollTimer);
-        client = next;
-        state.loading = false;
-        backgroundRefresh = null;
-        backgroundRefreshQueued = false;
-        state.actionPending = false;
-        state.standupLoading = false;
-        state.askLoading = false;
-        frameLoads = new Set();
-        // Polls and analysis completion share one background request owner.
-        pollTimer = next ? setInterval(() => void refreshSilently(), POLL_INTERVAL_MS) : undefined;
-        notify();
-      }
-      return next !== null && !state.timeline && !state.loading && !state.error;
-    },
-    async loadFrame(frameId: number) {
+    loadFrame(frameId: number): Promise<string | undefined> {
       const current = client;
-      if (
-        !current ||
-        state.framePreviews.has(frameId) ||
-        frameLoads.has(frameId) ||
-        state.framePreviewFailed.has(frameId)
-      ) {
-        return;
+      if (!current || state.framePreviewFailed.has(frameId)) {
+        return Promise.resolve(undefined);
       }
-      frameLoads.add(frameId);
-      try {
-        const payload = await current.request<{ base64: string; format: string }>("logbook.frame", {
-          frameId,
-        });
-        if (client !== current) {
-          return;
-        }
-        if (state.framePreviews.size >= FRAME_PREVIEW_CACHE_LIMIT) {
-          const oldest = state.framePreviews.keys().next().value;
-          if (oldest !== undefined) {
-            state.framePreviews.delete(oldest);
+      const preview = state.framePreviews.get(frameId);
+      if (preview !== undefined) {
+        return Promise.resolve(preview);
+      }
+      const pending = frameLoads.get(frameId);
+      if (pending) {
+        return pending;
+      }
+      const result = (async () => {
+        try {
+          const payload = await current.request<{ base64: string; format: string }>(
+            "logbook.frame",
+            {
+              frameId,
+            },
+          );
+          if (client !== current) {
+            return undefined;
+          }
+          if (state.framePreviews.size >= FRAME_PREVIEW_CACHE_LIMIT) {
+            const oldest = state.framePreviews.keys().next().value;
+            if (oldest !== undefined) {
+              state.framePreviews.delete(oldest);
+            }
+          }
+          const src = `data:image/${payload.format};base64,${payload.base64}`;
+          state.framePreviews.set(frameId, src);
+          return src;
+        } catch {
+          // Missing or pruned frames must not re-fetch on every render.
+          if (client === current) {
+            state.framePreviewFailed.add(frameId);
+          }
+          return undefined;
+        } finally {
+          if (client === current) {
+            frameLoads.delete(frameId);
+            notify();
           }
         }
-        state.framePreviews.set(frameId, `data:image/${payload.format};base64,${payload.base64}`);
-      } catch {
-        // Missing or pruned frames must not re-fetch on every render.
-        if (client === current) {
-          state.framePreviewFailed.add(frameId);
-        }
-      } finally {
-        if (client === current) {
-          frameLoads.delete(frameId);
-          notify();
-        }
-      }
+      })();
+      frameLoads.set(frameId, result);
+      return result;
     },
     setCapturePaused(paused: boolean) {
       return runAction("actionPending", async (current, isCurrent) => {
@@ -279,10 +276,10 @@ export function createLogbook() {
         }
       });
     },
-    async ask(input: string) {
+    ask(input: string) {
       const question = input.trim();
       if (!question) {
-        return;
+        return undefined;
       }
       return runAction("askLoading", async (current, isCurrent) => {
         state.askAnswer = null;

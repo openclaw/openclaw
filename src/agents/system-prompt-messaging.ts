@@ -7,6 +7,36 @@ import type { AgentPromptSurfaceKind } from "../plugins/types.js";
 import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
 import type { SilentReplyPromptMode, SystemPromptRuntimeInfo } from "./system-prompt.types.js";
 
+export function buildAssistantOutputDirectivesSection(params: {
+  sourceMessageToolOnly: boolean;
+  messageToolAvailable: boolean;
+  runtimeChannel?: string;
+}): string[] {
+  return [
+    "## Assistant Output Directives",
+    ...(params.sourceMessageToolOnly
+      ? [
+          "- Visible source output: `message(action=send)`.",
+          "- Media paths = attachments, not prose. One: `media`; many: `attachments: [{media: ...}]`.",
+          "- Synthesized speech: `voiceText`; optional `voiceProvider`, `voiceId`; voice note: `asVoice`.",
+          "- No legacy `MEDIA:` here. Explicit native reply: `replyTo`.",
+        ]
+      : [
+          "- Media attachment: own line `MEDIA:<path-or-url>` per item; path is not prose.",
+          ...(params.runtimeChannel === "webchat" && params.messageToolAvailable
+            ? [
+                "- Local HTML reports: publish the final file with `message(action=send, media=<path>)` to this conversation; omit target. Read permission is still required. `MEDIA:` does not authorize arbitrary HTML publication.",
+              ]
+            : []),
+          "- Directive starts line, plain text, outside fences/Markdown; never inline or wrapped.",
+          "- Attached voice note: `[[audio_as_voice]]`.",
+          "- Native reply starts with `[[reply_to_current]]`; explicit id only: `[[reply_to:<id>]]`.",
+          "- Directives stripped before render; channel config controls delivery.",
+        ]),
+    "",
+  ];
+}
+
 export function resolveSilentReplyPromptMode(params: {
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   promptSurface?: AgentPromptSurfaceKind;
@@ -33,6 +63,7 @@ export function buildMessagingSection(params: {
   requireExplicitMessageTarget?: boolean;
   silentReplyPromptMode?: SilentReplyPromptMode;
   delegationSectionRenders: boolean;
+  inTurnCollectionGuidance?: string;
 }) {
   const messageToolOnly = params.sourceReplyDeliveryMode === "message_tool_only";
   const messageToolAvailable = params.availableTools.has("message");
@@ -82,7 +113,8 @@ export function buildMessagingSection(params: {
     : hasSessionsSpawn
       ? [
           '- Subagents: `sessions_spawn` with objective/output/write-scope/verification; stable handle needs `taskName`, UI title `label`; clean context needs `context:"isolated"`, transcript needs `context:"fork"`. Follow the accepted completion mode.',
-          hasSessionsYield ? "Announcing children: wait via `sessions_yield`." : "",
+          params.inTurnCollectionGuidance ??
+            (hasSessionsYield ? "Announcing children: wait via `sessions_yield`." : ""),
           hasSubagents ? "`subagents(action=list)` only status/debug." : "",
         ]
           .filter(Boolean)

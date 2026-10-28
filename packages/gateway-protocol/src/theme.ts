@@ -336,8 +336,7 @@ function normalizePalette(value: unknown, mode: ThemeColorMode): ThemePalette {
     requireColor(palette[key], `theme.${mode}.${key}`),
   ]);
   // SAFETY: every required color key is emitted exactly once, after validating its value.
-  const colors = Object.fromEntries(entries) as Record<(typeof THEME_COLOR_KEYS)[number], string>;
-  const result: ThemePalette = { ...colors };
+  const result = Object.fromEntries(entries) as ThemePalette;
   for (const key of THEME_FONT_KEYS) {
     if (palette[key] === undefined) {
       continue;

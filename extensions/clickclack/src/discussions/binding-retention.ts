@@ -7,19 +7,15 @@ import type {
 import { markClickClackDiscussionChannelRevoked } from "./revoked-channel-store.js";
 import { prepareDiscussionSessionEntry } from "./session-authority.js";
 
+const MAX_RETAINED_DETACHED_DISCUSSION_BINDINGS = 1_000;
+
 export class DetachedDiscussionBindingRetention {
   readonly #runtime: PluginRuntime;
   readonly #store: ClickClackDiscussionBindingStore;
-  readonly #maxRetained: number;
 
-  constructor(options: {
-    runtime: PluginRuntime;
-    store: ClickClackDiscussionBindingStore;
-    maxRetained: number;
-  }) {
+  constructor(options: { runtime: PluginRuntime; store: ClickClackDiscussionBindingStore }) {
     this.#runtime = options.runtime;
     this.#store = options.store;
-    this.#maxRetained = options.maxRetained;
   }
 
   async mark(sessionKey: string, binding: ClickClackDiscussionBinding): Promise<void> {
@@ -30,7 +26,7 @@ export class DetachedDiscussionBindingRetention {
     if (current.detachedAt === undefined) {
       await this.#store.setIfCurrent(sessionKey, current, { ...current, detachedAt: Date.now() });
     }
-    while (this.#store.detachedCount() > this.#maxRetained) {
+    while (this.#store.detachedCount() > MAX_RETAINED_DETACHED_DISCUSSION_BINDINGS) {
       if (!(await this.#pruneOldest())) {
         throw new Error("ClickClack detached discussion binding retention could not be reduced");
       }

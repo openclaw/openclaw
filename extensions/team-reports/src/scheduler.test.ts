@@ -4,21 +4,24 @@ import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parseTeamReportsConfig, type TeamReportsConfig } from "./config.js";
+import { bindReportFetch, type ReportFixtureFetch } from "./report-network.test-support.js";
+import {
+  createNativeDiscordSource as createDiscordSource,
+  createNativeGithubSource as createGithubSource,
+  withReportSourceFixtures,
+} from "./report-source-fixtures.test-support.js";
 import { discordMessage, githubItem, measureReads } from "./reports-data.test-support.js";
 import { completion, type Complete } from "./reports.fixtures.js";
-import {
-  generateReportPeriods,
-  type ReportSourceFactory,
-  type ResolvedTeamReportsConfig,
-} from "./run.js";
+import type { ReportRunRequest } from "./run-worker-contract.js";
+import { TeamReportsRunner } from "./run-worker.js";
+import { generateReportPeriods, type ResolvedTeamReportsConfig } from "./run.js";
 import { TeamReportsScheduler } from "./scheduler.js";
-import { createDiscordSource } from "./sources/discord/index.js";
-import { createGithubSource } from "./sources/github/index.js";
 import { teamReportsSqliteBackendEntrypoint } from "./sqlite-backend-entrypoint.test-support.js";
 import { createTeamReportsStore, type TeamReportsStore } from "./store.js";
-import type { DiscordSource, GithubSource, SourceRuntime, SourceStatus } from "./types.js";
+import type { DiscordSource, GithubSource, SourceStatus } from "./types.js";
 
 const workerReads = vi.hoisted(() => ({ enabled: false, calls: 0, bytes: 0 }));
 vi.mock("openclaw/plugin-sdk/database-engine-runtime", async (importOriginal) => {
@@ -71,6 +74,7 @@ async function setup(
     summaries?: boolean;
     discord?: boolean;
     start?: boolean;
+    nativeWorker?: boolean;
   } = {},
 ) {
   const config = parseTeamReportsConfig({
@@ -146,11 +150,8 @@ async function setup(
       return healthy;
     }),
   };
-  const runtimes: SourceRuntime[] = [];
-  const sources: ReportSourceFactory = (runtime) => {
-    runtimes.push(runtime);
-    return { github, discord };
-  };
+  const runtimes: ReportRunRequest["runtime"][] = [];
+  const sources = { github, discord };
   const complete = vi.fn<Complete>().mockRejectedValue(new Error("Unexpected model request"));
   const completions: Array<ReturnType<typeof createDeferred<void>>> = [];
   let published = 0;
@@ -163,14 +164,23 @@ async function setup(
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     serviceHealth: { reportFailure: vi.fn(runSettled), clearFailure: vi.fn(runSettled) },
   };
+  const runner = options.nativeWorker
+    ? new TeamReportsRunner(new URL("./run-worker.collection.test-support.ts", import.meta.url))
+    : undefined;
+  const runReports = vi.fn(async (params: ReportRunRequest) => {
+    runtimes.push(params.runtime);
+    return runner
+      ? runner.run(params)
+      : withReportSourceFixtures(sources, () => generateReportPeriods(params));
+  });
   const scheduler = new TeamReportsScheduler({
     config,
     resolved,
     store,
     llm: { complete },
     context,
-    runReports: (params) => generateReportPeriods({ ...params, sources }),
-    closeRunner: async () => {},
+    runReports,
+    closeRunner: () => runner?.close() ?? Promise.resolve(),
   });
   resources.push({ directory, store, scheduler });
   if (options.start !== false) {
@@ -185,6 +195,7 @@ async function setup(
     complete,
     context,
     runtimes,
+    runReports,
     nextRun,
     generate: async (params: Parameters<TeamReportsScheduler["generate"]>[0] = {}) => {
       const id = await scheduler.generate(params);
@@ -356,14 +367,20 @@ describe("Team Reports scheduler lifecycle", () => {
   });
 
   it("drains an admitted report write after cancellation before closing storage or starting summaries", async () => {
-    const { scheduler, store, directory, complete } = await setup({ summaries: true });
+    const { scheduler, store, directory, complete } = await setup({
+      summaries: true,
+      nativeWorker: true,
+    });
     const write = createDeferred<void>();
     const entered = createDeferred<void>();
-    const upsertPeriod = store.upsertPeriod.bind(store);
-    vi.spyOn(store, "upsertPeriod").mockImplementationOnce(async (period) => {
-      entered.resolve();
-      await write.promise;
-      await upsertPeriod(period);
+    const execute = store.execute.bind(store);
+    vi.spyOn(store, "execute").mockImplementation(async (...args) => {
+      const result = await execute(...args);
+      if (args[0] === "upsertPeriod") {
+        entered.resolve();
+        await write.promise;
+      }
+      return result;
     });
     const close = vi.spyOn(store, "close");
     const id = await scheduler.generate();
@@ -562,9 +579,14 @@ describe("Team Reports scheduler lifecycle", () => {
   it.each([
     { reason: "30 seconds", timeout: 30_000, stop: true },
     { reason: "45-minute", timeout: 45 * 60_000, stop: false },
-  ])("aborts at $reason and fences late collector writes", async ({ reason, timeout, stop }) => {
-    const { scheduler, github, runtimes, store, directory, context, nextRun } = await setup();
-    const blocked = blockCollection(github);
+  ])("aborts at $reason and rejects late run results", async ({ reason, timeout, stop }) => {
+    const { scheduler, runReports, runtimes, store, directory, context, nextRun } = await setup();
+    const blocked = createDeferred<Record<string, SourceStatus>>();
+    // Model the native runner's cancellation boundary, not an inline collector's private signal.
+    runReports.mockImplementationOnce(({ runtime }) => {
+      runtimes.push(runtime);
+      return racePromiseWithAbortSignal(blocked.promise, runtime.signal, (signal) => signal.reason);
+    });
     const id = await scheduler.generate();
     await vi.advanceTimersByTimeAsync(0);
     const stopped = stop ? scheduler.stop() : undefined;
@@ -574,7 +596,7 @@ describe("Team Reports scheduler lifecycle", () => {
     expect(runtimes[0]?.signal?.aborted).toBe(true);
     await (stopped ?? nextRun());
     expect(context.serviceHealth.reportFailure).toHaveBeenCalledOnce();
-    blocked.resolve(healthy);
+    blocked.resolve({});
     await vi.advanceTimersByTimeAsync(0);
     const check = async (reader: TeamReportsStore) => {
       expect(await runById(reader, id)).toMatchObject({
@@ -691,7 +713,7 @@ describe("Team Reports scheduler lifecycle", () => {
   it.each(["github", "discord"] as const)(
     "preserves accepted activity after a %s subrequest fails and accepts healthy zero activity",
     async (source) => {
-      const { generate, store, github, discord, context, runtimes } = await setup({
+      const { generate, store, github, discord, context } = await setup({
         discord: true,
         schedule: { weekly: true, monthly: true },
       });
@@ -705,7 +727,7 @@ describe("Team Reports scheduler lifecycle", () => {
       expect(previousWeek?.report.totals.github.total).toBe(1);
       expect(previousMonth?.report.totals.discord.messages).toBe(1);
 
-      const fetchImpl: NonNullable<SourceRuntime["fetchImpl"]> = async (input) => {
+      const fetchImpl: ReportFixtureFetch = async (input) => {
         const url = new URL(input);
         if (url.pathname.endsWith("/commits") || url.pathname.endsWith("/messages")) {
           return new Response("{}", { status: 403 });
@@ -721,14 +743,14 @@ describe("Team Reports scheduler lifecycle", () => {
                 : [];
         return new Response(JSON.stringify(body));
       };
-      const runtime = () => ({ ...runtimes.at(-1), logger: context.logger, fetchImpl });
+      const runtime = { logger: context.logger };
       if (source === "github") {
         github.collect.mockImplementationOnce((...args) =>
-          createGithubSource(runtime()).collect(...args),
+          bindReportFetch(createGithubSource(runtime), fetchImpl).collect(...args),
         );
       } else {
         discord.collect.mockImplementationOnce((...args) =>
-          createDiscordSource(runtime()).collect(...args),
+          bindReportFetch(createDiscordSource(runtime), fetchImpl).collect(...args),
         );
       }
       vi.setSystemTime(Date.now() + 1_000);
@@ -764,27 +786,23 @@ describe("Team Reports scheduler lifecycle", () => {
   );
 
   it("publishes healthy empty-repository activity alongside the other source", async () => {
-    const { generate, store, github, context, runtimes } = await setup({
+    const { generate, store, github, context } = await setup({
       discord: true,
     });
     github.collect.mockImplementationOnce((...args) =>
-      createGithubSource({
-        ...runtimes.at(-1),
-        logger: context.logger,
-        fetchImpl: async (input) => {
-          const url = new URL(input);
-          if (url.pathname.endsWith("/commits")) {
-            return new Response(JSON.stringify({ message: "Git Repository is empty." }), {
-              status: 409,
-            });
-          }
-          const body = url.pathname.endsWith("/repos")
-            ? [{ full_name: "sample/widgets", archived: false }]
-            : url.pathname === "/search/issues"
-              ? { total_count: 0, items: [] }
-              : [];
-          return new Response(JSON.stringify(body));
-        },
+      bindReportFetch(createGithubSource({ logger: context.logger }), async (input) => {
+        const url = new URL(input);
+        if (url.pathname.endsWith("/commits")) {
+          return new Response(JSON.stringify({ message: "Git Repository is empty." }), {
+            status: 409,
+          });
+        }
+        const body = url.pathname.endsWith("/repos")
+          ? [{ full_name: "sample/widgets", archived: false }]
+          : url.pathname === "/search/issues"
+            ? { total_count: 0, items: [] }
+            : [];
+        return new Response(JSON.stringify(body));
       }).collect(...args),
     );
     const id = await generate();

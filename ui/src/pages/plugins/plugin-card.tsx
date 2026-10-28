@@ -43,16 +43,13 @@ export function renderPluginOfficialBadge(): JSX.Element {
   );
 }
 
-export function renderPluginAuthor(
-  author: string | undefined,
-  options: { linked?: boolean } = {},
-): JSX.Element | undefined {
+export function renderPluginAuthor(author: string | undefined): JSX.Element | undefined {
   if (!author) {
     return undefined;
   }
   const handle = author.replace(/^@+/, "");
   const label = `@${handle}`;
-  return options.linked ? (
+  return (
     <a
       class="plugin-card-author plugin-card-author--linked"
       href={`https://clawhub.ai/${encodeURIComponent(handle)}`}
@@ -61,8 +58,6 @@ export function renderPluginAuthor(
     >
       {label}
     </a>
-  ) : (
-    <span class="plugin-card-author">{label}</span>
   );
 }
 

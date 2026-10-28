@@ -46,7 +46,7 @@ import {
   resolveApprovalDecisionParams,
 } from "./approval-shared.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
-import { assertValidParams } from "./validation.js";
+import { defineValidatedGatewayHandler } from "./validation.js";
 
 type PluginApprovalIosPushDelivery = NonNullable<
   GatewayRequestContext["pluginApprovalIosPushDelivery"]
@@ -72,191 +72,185 @@ export function createPluginApprovalHandlers(
       authority.assertCurrent();
       respond(true, approvals, undefined);
     },
-    "plugin.approval.request": async ({ params, client, respond, context }) => {
-      if (
-        !assertValidParams(
-          params,
-          validatePluginApprovalRequestParams,
-          "plugin.approval.request",
-          respond,
-        )
-      ) {
-        return;
-      }
-      const reject = (message: string) =>
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, message));
-      const p = params;
-      const hostApprovalOwnerId = normalizeOptionalString(
-        client?.internal?.pluginApprovalRequestOwnerId,
-      );
-      const claimedPluginId = normalizeOptionalString(p.pluginId);
-      if (hostApprovalOwnerId && claimedPluginId && claimedPluginId !== hostApprovalOwnerId) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "plugin approval owner does not match host"),
+    "plugin.approval.request": defineValidatedGatewayHandler(
+      "plugin.approval.request",
+      validatePluginApprovalRequestParams,
+      async ({ params, client, respond, context }) => {
+        const reject = (message: string) =>
+          respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, message));
+        const p = params;
+        const hostApprovalOwnerId = normalizeOptionalString(
+          client?.internal?.pluginApprovalRequestOwnerId,
         );
-        return;
-      }
-      const twoPhase = p.twoPhase === true;
-      const timeoutMs = resolvePluginApprovalTimeoutMs(p.timeoutMs);
-      const trustedAgentRuntime = client?.internal?.agentRuntimeIdentity;
+        const claimedPluginId = normalizeOptionalString(p.pluginId);
+        if (hostApprovalOwnerId && claimedPluginId && claimedPluginId !== hostApprovalOwnerId) {
+          respond(
+            false,
+            undefined,
+            errorShape(ErrorCodes.INVALID_REQUEST, "plugin approval owner does not match host"),
+          );
+          return;
+        }
+        const twoPhase = p.twoPhase === true;
+        const timeoutMs = resolvePluginApprovalTimeoutMs(p.timeoutMs);
+        const trustedAgentRuntime = client?.internal?.agentRuntimeIdentity;
 
-      if (
-        trustedAgentRuntime &&
-        context.validateAgentRuntimeApprovalAuthority?.(trustedAgentRuntime) !== true
-      ) {
-        reject("agent runtime approval authority is no longer active");
-        return;
-      }
+        if (
+          trustedAgentRuntime &&
+          context.validateAgentRuntimeApprovalAuthority?.(trustedAgentRuntime) !== true
+        ) {
+          reject("agent runtime approval authority is no longer active");
+          return;
+        }
 
-      const workerOwner = captureApprovalWorkerOwner(trustedAgentRuntime);
-      if (trustedAgentRuntime && !trustedAgentRuntime.approvalOwnerPluginId) {
-        reject("signed plugin approval owner is unavailable");
-        return;
-      }
+        const workerOwner = captureApprovalWorkerOwner(trustedAgentRuntime);
+        if (trustedAgentRuntime && !trustedAgentRuntime.approvalOwnerPluginId) {
+          reject("signed plugin approval owner is unavailable");
+          return;
+        }
 
-      if (p.policySubject && !trustedAgentRuntime) {
-        reject("plugin approval policy subject requires agent runtime authority");
-        return;
-      }
+        if (p.policySubject && !trustedAgentRuntime) {
+          reject("plugin approval policy subject requires agent runtime authority");
+          return;
+        }
 
-      const rawSessionKey = normalizeOptionalString(
-        trustedAgentRuntime?.sessionKey ?? p.sessionKey,
-      );
-      const sessionOwner = rawSessionKey
-        ? resolveRequestedSessionAgentId(
-            context.getRuntimeConfig(),
-            rawSessionKey,
-            normalizeOptionalString(trustedAgentRuntime?.agentId ?? p.agentId),
-          )
-        : undefined;
-      if (sessionOwner && !sessionOwner.ok) {
-        respond(false, undefined, sessionOwner.error);
-        return;
-      }
-      const sessionKey =
-        rawSessionKey && sessionOwner?.ok
-          ? resolveStoredSessionKeyForAgentStore({
-              cfg: context.getRuntimeConfig(),
-              agentId: sessionOwner.agentId,
-              sessionKey: rawSessionKey,
-            })
-          : null;
+        const rawSessionKey = normalizeOptionalString(
+          trustedAgentRuntime?.sessionKey ?? p.sessionKey,
+        );
+        const sessionOwner = rawSessionKey
+          ? resolveRequestedSessionAgentId(
+              context.getRuntimeConfig(),
+              rawSessionKey,
+              normalizeOptionalString(trustedAgentRuntime?.agentId ?? p.agentId),
+            )
+          : undefined;
+        if (sessionOwner && !sessionOwner.ok) {
+          respond(false, undefined, sessionOwner.error);
+          return;
+        }
+        const sessionKey =
+          rawSessionKey && sessionOwner?.ok
+            ? resolveStoredSessionKeyForAgentStore({
+                cfg: context.getRuntimeConfig(),
+                agentId: sessionOwner.agentId,
+                sessionKey: rawSessionKey,
+              })
+            : null;
 
-      // Sanitize once at the creation boundary, like exec command text: the
-      // raw record otherwise reaches channel messages, iOS push, and the web
-      // modal unescaped (bidi/invisible spoofing). Escaping expands invisible
-      // chars to \u{...}, so re-check the protocol caps: a spoof-heavy title
-      // must fail loud here, not as a misleading registration throw later.
-      const sanitizedTitle = sanitizeExecApprovalDisplayText(p.title);
-      const sanitizedDescription = sanitizeExecApprovalWarningText(p.description);
-      if (
-        exceedsApprovalTextLimit(sanitizedTitle, PLUGIN_APPROVAL_TITLE_MAX_LENGTH) ||
-        exceedsApprovalTextLimit(sanitizedDescription, PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH)
-      ) {
-        reject("approval title or description exceeds the display limit after sanitization");
-        return;
-      }
-      const rawDetail = normalizeNullableString(p.detail);
-      // Untrusted display metadata gets the same escape as title/description:
-      // pluginId/toolName/agentId are interpolated into channel approval text.
-      // Host-minted runtime identity values stay authoritative and unescaped.
-      const sanitizeMeta = (value?: string | null): string | null => {
-        const normalized = normalizeNullableString(value);
-        return normalized === null ? null : sanitizeExecApprovalDisplayText(normalized);
-      };
-      const turnSource = trustedAgentRuntime ?? p;
-      const request: PluginApprovalRequestPayload = {
-        pluginId:
-          trustedAgentRuntime?.approvalOwnerPluginId ??
-          hostApprovalOwnerId ??
-          sanitizeMeta(p.pluginId),
-        title: sanitizedTitle,
-        description: sanitizedDescription,
-        scope: p.scope ? sanitizeApprovalScope(p.scope) : null,
-        detail:
-          rawDetail === null
-            ? null
-            : truncatePluginApprovalDetail(sanitizeExecApprovalWarningText(rawDetail)),
-        severity: (p.severity as PluginApprovalRequestPayload["severity"]) ?? null,
-        toolName: sanitizeMeta(p.toolName),
-        toolCallId: p.toolCallId ?? null,
-        ...(trustedAgentRuntime && p.policySubject
-          ? { policySubject: { ...p.policySubject } }
-          : {}),
-        ...(trustedAgentRuntime && p.mcpTool ? { mcpTool: { ...p.mcpTool } } : {}),
-        ...(p.allowedDecisions
-          ? {
-              allowedDecisions: resolveCanonicalPluginApprovalRequestAllowedDecisions({
-                allowedDecisions: p.allowedDecisions,
-              }),
-            }
-          : {}),
-        agentId:
-          trustedAgentRuntime?.agentId ??
-          (sessionOwner?.ok ? sessionOwner.agentId : sanitizeMeta(p.agentId)),
-        sessionKey,
-        runId: trustedAgentRuntime?.operationalRunInstance.runId ?? null,
-        turnSourceChannel: normalizeNullableString(turnSource.turnSourceChannel),
-        turnSourceTo: normalizeNullableString(turnSource.turnSourceTo),
-        turnSourceAccountId: normalizeNullableString(turnSource.turnSourceAccountId),
-        turnSourceThreadId: turnSource.turnSourceThreadId ?? null,
-      };
+        // Sanitize once at the creation boundary, like exec command text: the
+        // raw record otherwise reaches channel messages, iOS push, and the web
+        // modal unescaped (bidi/invisible spoofing). Escaping expands invisible
+        // chars to \u{...}, so re-check the protocol caps: a spoof-heavy title
+        // must fail loud here, not as a misleading registration throw later.
+        const sanitizedTitle = sanitizeExecApprovalDisplayText(p.title);
+        const sanitizedDescription = sanitizeExecApprovalWarningText(p.description);
+        if (
+          exceedsApprovalTextLimit(sanitizedTitle, PLUGIN_APPROVAL_TITLE_MAX_LENGTH) ||
+          exceedsApprovalTextLimit(sanitizedDescription, PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH)
+        ) {
+          reject("approval title or description exceeds the display limit after sanitization");
+          return;
+        }
+        const rawDetail = normalizeNullableString(p.detail);
+        // Untrusted display metadata gets the same escape as title/description:
+        // pluginId/toolName/agentId are interpolated into channel approval text.
+        // Host-minted runtime identity values stay authoritative and unescaped.
+        const sanitizeMeta = (value?: string | null): string | null => {
+          const normalized = normalizeNullableString(value);
+          return normalized === null ? null : sanitizeExecApprovalDisplayText(normalized);
+        };
+        const turnSource = trustedAgentRuntime ?? p;
+        const request: PluginApprovalRequestPayload = {
+          pluginId:
+            trustedAgentRuntime?.approvalOwnerPluginId ??
+            hostApprovalOwnerId ??
+            sanitizeMeta(p.pluginId),
+          title: sanitizedTitle,
+          description: sanitizedDescription,
+          scope: p.scope ? sanitizeApprovalScope(p.scope) : null,
+          detail:
+            rawDetail === null
+              ? null
+              : truncatePluginApprovalDetail(sanitizeExecApprovalWarningText(rawDetail)),
+          severity: (p.severity as PluginApprovalRequestPayload["severity"]) ?? null,
+          toolName: sanitizeMeta(p.toolName),
+          toolCallId: p.toolCallId ?? null,
+          ...(trustedAgentRuntime && p.policySubject
+            ? { policySubject: { ...p.policySubject } }
+            : {}),
+          ...(trustedAgentRuntime && p.mcpTool ? { mcpTool: { ...p.mcpTool } } : {}),
+          ...(p.allowedDecisions
+            ? {
+                allowedDecisions: resolveCanonicalPluginApprovalRequestAllowedDecisions({
+                  allowedDecisions: p.allowedDecisions,
+                }),
+              }
+            : {}),
+          agentId:
+            trustedAgentRuntime?.agentId ??
+            (sessionOwner?.ok ? sessionOwner.agentId : sanitizeMeta(p.agentId)),
+          sessionKey,
+          runId: trustedAgentRuntime?.operationalRunInstance.runId ?? null,
+          turnSourceChannel: normalizeNullableString(turnSource.turnSourceChannel),
+          turnSourceTo: normalizeNullableString(turnSource.turnSourceTo),
+          turnSourceAccountId: normalizeNullableString(turnSource.turnSourceAccountId),
+          turnSourceThreadId: turnSource.turnSourceThreadId ?? null,
+        };
 
-      // Always server-generate the ID — never accept plugin-provided IDs.
-      // Kind-prefix so /approve routing can distinguish plugin vs exec IDs deterministically.
-      const record = manager.create(request, timeoutMs, `plugin:${randomUUID()}`);
-      if (trustedAgentRuntime) {
-        record.agentRuntimeDelegatedAuthority = trustedAgentRuntime.delegatedAuthority;
-        if (request.mcpTool && request.toolCallId) {
-          record.mcpToolApprovalActive = takeMcpToolApprovalBinding({
-            authority: trustedAgentRuntime.delegatedAuthority,
-            agentId: trustedAgentRuntime.agentId,
-            toolCallId: request.toolCallId,
-            ...request.mcpTool,
+        // Always server-generate the ID — never accept plugin-provided IDs.
+        // Kind-prefix so /approve routing can distinguish plugin vs exec IDs deterministically.
+        const record = manager.create(request, timeoutMs, `plugin:${randomUUID()}`);
+        if (trustedAgentRuntime) {
+          record.agentRuntimeDelegatedAuthority = trustedAgentRuntime.delegatedAuthority;
+          if (request.mcpTool && request.toolCallId) {
+            record.mcpToolApprovalActive = takeMcpToolApprovalBinding({
+              authority: trustedAgentRuntime.delegatedAuthority,
+              agentId: trustedAgentRuntime.agentId,
+              toolCallId: request.toolCallId,
+              ...request.mcpTool,
+            });
+          }
+        }
+        if (
+          trustedAgentRuntime?.executionIdentity &&
+          request.runId === trustedAgentRuntime.executionIdentity.runId
+        ) {
+          record.executionIdentityToken = trustedAgentRuntime.executionIdentity;
+        }
+        bindApprovalRequesterMetadata({ record, client });
+        if (client?.internal?.approvalRuntime === true || hostApprovalOwnerId) {
+          bindApprovalReviewerDeviceIds({
+            record,
+            deviceIds: p.approvalReviewerDeviceIds,
           });
         }
-      }
-      if (
-        trustedAgentRuntime?.executionIdentity &&
-        request.runId === trustedAgentRuntime.executionIdentity.runId
-      ) {
-        record.executionIdentityToken = trustedAgentRuntime.executionIdentity;
-      }
-      bindApprovalRequesterMetadata({ record, client });
-      if (client?.internal?.approvalRuntime === true || hostApprovalOwnerId) {
-        bindApprovalReviewerDeviceIds({
+
+        const registration = await registerPendingApprovalRecord({
+          manager,
           record,
-          deviceIds: p.approvalReviewerDeviceIds,
+          timeoutMs,
+          respond,
+          context,
+          workerOwner,
         });
-      }
+        if (!registration) {
+          return;
+        }
 
-      const registration = await registerPendingApprovalRecord({
-        manager,
-        record,
-        timeoutMs,
-        respond,
-        context,
-        workerOwner,
-      });
-      if (!registration) {
-        return;
-      }
-
-      await handlePendingApprovalRequestWithDelivery({
-        approvalKind: "plugin",
-        manager,
-        record,
-        respond,
-        context,
-        clientConnId: client?.connId,
-        twoPhase,
-        forwardRequest: opts?.forwarder?.handlePluginApprovalRequested?.bind(opts.forwarder),
-        getIosPushDelivery: () => opts?.iosPushDelivery,
-        source: "rpc",
-      });
-    },
+        await handlePendingApprovalRequestWithDelivery({
+          approvalKind: "plugin",
+          manager,
+          record,
+          respond,
+          context,
+          clientConnId: client?.connId,
+          twoPhase,
+          forwardRequest: opts?.forwarder?.handlePluginApprovalRequested?.bind(opts.forwarder),
+          getIosPushDelivery: () => opts?.iosPushDelivery,
+          source: "rpc",
+        });
+      },
+    ),
 
     "plugin.approval.waitDecision": async (options) => {
       using authority = createApprovalRequestAuthority(options);

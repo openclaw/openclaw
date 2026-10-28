@@ -1,9 +1,7 @@
-// Model scan tests cover provider scan behavior and discovered model output.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelScanResult } from "../../agents/model-scan.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { RuntimeEnv } from "../../runtime.js";
-import { withEnvAsync } from "../../test-utils/env.js";
+import { createCapturingTestRuntime } from "../test-runtime-config-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   loadModelsConfig: vi.fn(),
@@ -12,17 +10,15 @@ const mocks = vi.hoisted(() => ({
   updateConfig: vi.fn(),
 }));
 
-vi.mock("./load-config.js", () => ({
-  loadModelsConfig: mocks.loadModelsConfig,
-}));
+// mock-isolation: Scan tests use synthetic catalog, credentials, and results without provider discovery or config reads.
+vi.mock("./load-config.js", () => ({ loadModelsConfig: mocks.loadModelsConfig }));
 
 vi.mock("../../agents/model-auth.js", () => ({
   resolveApiKeyForProviderCore: mocks.resolveApiKeyForProviderCore,
 }));
 
-vi.mock("../../agents/model-scan.js", () => ({
-  scanOpenRouterModels: mocks.scanOpenRouterModels,
-}));
+// mock-isolation: Scan tests use synthetic catalog, credentials, and results without provider discovery or config reads.
+vi.mock("../../agents/model-scan.js", () => ({ scanOpenRouterModels: mocks.scanOpenRouterModels }));
 
 vi.mock("./shared.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./shared.js")>()),
@@ -30,92 +26,66 @@ vi.mock("./shared.js", async (importOriginal) => ({
 }));
 
 const { modelsScanCommand } = await import("./scan.js");
+const modelRef = (name = "acme") => `openrouter/${name}/free:free`;
+const metadataError = "Cannot apply metadata-only OpenRouter scan results";
 
-function createRuntime(): RuntimeEnv & { lines: string[] } {
-  const lines: string[] = [];
+function scanResult(overrides: Partial<ModelScanResult> = {}) {
   return {
-    lines,
-    log: (...args: unknown[]) => lines.push(args.join(" ")),
-    error: (...args: unknown[]) => lines.push(args.join(" ")),
-    exit: (code?: number) => {
-      throw new Error(`exit ${code ?? 0}`);
-    },
-  } as RuntimeEnv & { lines: string[] };
-}
-
-function scanResult(overrides: Partial<ModelScanResult> = {}): ModelScanResult {
-  return {
-    id: "acme/free:free",
-    name: "ACME Free",
-    provider: "openrouter",
-    modelRef: "openrouter/acme/free:free",
+    modelRef: modelRef(),
     contextLength: 128_000,
-    maxCompletionTokens: 8192,
-    supportedParametersCount: 2,
-    supportsToolsMeta: true,
     modality: "text",
     inferredParamB: 70,
-    createdAtMs: 1_700_000_000_000,
-    pricing: { prompt: 0, completion: 0, request: 0, image: 0, webSearch: 0, internalReasoning: 0 },
-    isFree: true,
     tool: { ok: false, latencyMs: null, skipped: true },
     image: { ok: false, latencyMs: null, skipped: true },
     ...overrides,
   };
 }
 
-function firstScanRequest(): { apiKey?: string; probe?: boolean } {
-  const call = mocks.scanOpenRouterModels.mock.calls[0];
-  if (!call) {
-    throw new Error("expected OpenRouter scan call");
-  }
-  return call[0] as { apiKey?: string; probe?: boolean };
-}
-
-function withOpenRouterApiKey<T>(apiKey: string | undefined, fn: () => Promise<T>): Promise<T> {
-  return withEnvAsync({ OPENROUTER_API_KEY: apiKey }, fn);
-}
-
 describe("models scan command", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it("prints metadata-only JSON in the same deterministic ranking as the table", async () => {
-    const runtime = createRuntime();
-    mocks.scanOpenRouterModels.mockResolvedValue([
-      scanResult({
-        id: "zeta/free:free",
-        modelRef: "openrouter/zeta/free:free",
-        contextLength: 128_000,
-      }),
-      scanResult({
-        id: "alpha/free:free",
-        modelRef: "openrouter/alpha/free:free",
-        contextLength: 128_000,
-      }),
-      scanResult({
-        id: "larger/free:free",
-        modelRef: "openrouter/larger/free:free",
-        contextLength: 256_000,
-      }),
-    ]);
-
-    await modelsScanCommand({ probe: false, json: true }, runtime);
-
-    expect(runtime.lines).toHaveLength(1);
-    const results = JSON.parse(runtime.lines[0] ?? "") as ModelScanResult[];
-    expect(results.map((result) => result.modelRef)).toEqual([
-      "openrouter/larger/free:free",
-      "openrouter/alpha/free:free",
-      "openrouter/zeta/free:free",
-    ]);
+  let capture: ReturnType<typeof createCapturingTestRuntime>;
+  const output = () => capture.logs;
+  const scan = (opts: Parameters<typeof modelsScanCommand>[0]) =>
+    modelsScanCommand(opts, capture.runtime);
+  function expectNoAuthLookup() {
     expect(mocks.loadModelsConfig).not.toHaveBeenCalled();
     expect(mocks.resolveApiKeyForProviderCore).not.toHaveBeenCalled();
+  }
+  function withoutStoredKey() {
+    mocks.loadModelsConfig.mockResolvedValue({});
+    mocks.resolveApiKeyForProviderCore.mockResolvedValue({ apiKey: "" });
+  }
+  beforeEach(() => {
+    vi.clearAllMocks();
+    capture = createCapturingTestRuntime();
+    capture.runtime.exit = (code) => {
+      throw new Error(`exit ${code ?? 0}`);
+    };
+    mocks.scanOpenRouterModels.mockResolvedValue([scanResult()]);
+    vi.stubEnv("OPENROUTER_API_KEY", undefined);
+  });
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("prints metadata-only JSON in the same deterministic ranking as the table", async () => {
+    mocks.scanOpenRouterModels.mockResolvedValue(
+      ["zeta", "alpha", "larger"].map((name) =>
+        scanResult({
+          modelRef: modelRef(name),
+          contextLength: name === "larger" ? 256_000 : 128_000,
+        }),
+      ),
+    );
+
+    await scan({ probe: false, json: true });
+
+    expect(output()).toHaveLength(1);
+    const results = JSON.parse(output()[0] ?? "") as ModelScanResult[];
+    expect(results.map((result) => result.modelRef)).toEqual(
+      ["larger", "alpha", "zeta"].map(modelRef),
+    );
+    expectNoAuthLookup();
   });
 
   it("sanitizes provider-controlled model refs and modality in scan tables", async () => {
-    const runtime = createRuntime();
     mocks.scanOpenRouterModels.mockResolvedValue([
       scanResult({
         modelRef: "openrouter/evil\u001b[31m\nmodel:free",
@@ -123,131 +93,115 @@ describe("models scan command", () => {
       }),
     ]);
 
-    await modelsScanCommand({ probe: false }, runtime);
+    await scan({ probe: false });
 
-    const row = runtime.lines.find((line) => line.includes("openrouter/evil"));
+    const row = output().find((line) => line.includes("openrouter/evil"));
     expect(row).toContain("openrouter/evil\\nmodel:free");
     expect(row).toContain("modality:text\\nnext\\tvalue");
-    expect(
-      Array.from(row ?? "").every((character) => {
-        const code = character.charCodeAt(0);
-        return code > 0x1f && (code < 0x7f || code > 0x9f);
-      }),
-    ).toBe(true);
+    expect(row).not.toMatch(/\p{Cc}/u);
   });
 
   it("downgrades to metadata-only scan when no OpenRouter key is configured", async () => {
-    await withOpenRouterApiKey(undefined, async () => {
-      const runtime = createRuntime();
-      mocks.loadModelsConfig.mockResolvedValue({});
-      mocks.resolveApiKeyForProviderCore.mockResolvedValue({ apiKey: "" });
-      mocks.scanOpenRouterModels.mockResolvedValue([scanResult()]);
-
-      await modelsScanCommand({}, runtime);
-
-      expect(mocks.loadModelsConfig).toHaveBeenCalledTimes(1);
-      expect(mocks.resolveApiKeyForProviderCore).toHaveBeenCalledWith({
-        provider: "openrouter",
-        cfg: {},
-      });
-      expect(mocks.scanOpenRouterModels).toHaveBeenCalledTimes(1);
-      expect(firstScanRequest().probe).toBe(false);
-      expect(runtime.lines.join("\n")).toContain("still require OPENROUTER_API_KEY");
+    withoutStoredKey();
+    await scan({});
+    expect(mocks.resolveApiKeyForProviderCore).toHaveBeenCalledWith({
+      provider: "openrouter",
+      cfg: {},
     });
+    expect(mocks.scanOpenRouterModels.mock.calls[0]?.[0].probe).toBe(false);
+    expect(output().join("\n")).toContain("still require OPENROUTER_API_KEY");
   });
 
   it("uses OPENROUTER_API_KEY directly without loading model config", async () => {
-    await withOpenRouterApiKey("sk-or-test", async () => {
-      const runtime = createRuntime();
-      mocks.scanOpenRouterModels.mockResolvedValue([
-        scanResult({ tool: { ok: false, latencyMs: null, skipped: false } }),
-      ]);
+    vi.stubEnv("OPENROUTER_API_KEY", "sk-or-test");
+    mocks.scanOpenRouterModels.mockResolvedValue([
+      scanResult({ tool: { ok: false, latencyMs: null, skipped: false } }),
+    ]);
 
-      await expect(modelsScanCommand({ json: true }, runtime)).rejects.toThrow(
-        /No tool-capable OpenRouter free models found/,
-      );
+    await expect(scan({ json: true })).rejects.toThrow(
+      /No tool-capable OpenRouter free models found/,
+    );
 
-      expect(mocks.loadModelsConfig).not.toHaveBeenCalled();
-      expect(mocks.resolveApiKeyForProviderCore).not.toHaveBeenCalled();
-      expect(mocks.scanOpenRouterModels).toHaveBeenCalledTimes(1);
-      const scanRequest = firstScanRequest();
-      expect(scanRequest?.apiKey).toBe("sk-or-test");
-      expect(scanRequest?.probe).toBe(true);
-    });
-  });
-
-  it("rejects applying metadata-only scan results", async () => {
-    await withOpenRouterApiKey(undefined, async () => {
-      const runtime = createRuntime();
-
-      await expect(modelsScanCommand({ probe: false, setDefault: true }, runtime)).rejects.toThrow(
-        /Cannot apply metadata-only OpenRouter scan results/,
-      );
-
-      expect(mocks.scanOpenRouterModels).not.toHaveBeenCalled();
-    });
-  });
-
-  describe.each([
-    ["maxAgeDays", "--max-age-days", "30d"],
-    ["timeout", "--timeout", "1000ms"],
-    ["concurrency", "--concurrency", "2x"],
-  ] as const)("%s numeric value", (key, label, partial) => {
-    it.each([partial])("rejects %j before scanning", async (raw) => {
-      const runtime = createRuntime();
-
-      await expect(
-        modelsScanCommand({ [key]: raw, probe: false, setDefault: true }, runtime),
-      ).rejects.toThrow(label);
-
-      expect(mocks.loadModelsConfig).not.toHaveBeenCalled();
-      expect(mocks.resolveApiKeyForProviderCore).not.toHaveBeenCalled();
-      expect(mocks.scanOpenRouterModels).not.toHaveBeenCalled();
-    });
-  });
-
-  it("rejects applying auto-downgraded metadata-only scan results before scanning", async () => {
-    await withOpenRouterApiKey(undefined, async () => {
-      const runtime = createRuntime();
-      mocks.loadModelsConfig.mockResolvedValue({});
-      mocks.resolveApiKeyForProviderCore.mockResolvedValue({ apiKey: "" });
-
-      await expect(modelsScanCommand({ setDefault: true }, runtime)).rejects.toThrow(
-        /Cannot apply metadata-only OpenRouter scan results/,
-      );
-
-      expect(mocks.scanOpenRouterModels).not.toHaveBeenCalled();
+    expectNoAuthLookup();
+    expect(mocks.scanOpenRouterModels.mock.calls[0]?.[0]).toMatchObject({
+      apiKey: "sk-or-test",
+      probe: true,
     });
   });
 
   it.each([
-    [{}, "anthropic/primary"],
-    [{ setDefault: true }, "openrouter/acme/free:free"],
-  ])(
-    "replaces fallbacks and sets the primary only with --set-default (%j)",
-    async (opts, primary) => {
-      await withOpenRouterApiKey("sk-or-test", async () => {
-        mocks.scanOpenRouterModels.mockResolvedValue([
-          scanResult({ tool: { ok: true, latencyMs: 5, skipped: false } }),
-        ]);
-        const before: OpenClawConfig = {
-          agents: {
-            defaults: { model: { primary: "anthropic/primary", fallbacks: ["anthropic/backup"] } },
-          },
-        };
-        let after: OpenClawConfig | undefined;
-        mocks.updateConfig.mockImplementation(
-          async (mutate: (cfg: OpenClawConfig) => OpenClawConfig) => (after = mutate(before)),
-        );
-
-        await modelsScanCommand({ ...opts, yes: true, json: true }, createRuntime());
-
-        expect(after?.agents?.defaults?.model).toEqual({
-          primary,
-          fallbacks: ["openrouter/acme/free:free"],
-        });
-        expect(after?.agents?.defaults?.models).toHaveProperty(["openrouter/acme/free:free"]);
-      });
+    [{ probe: false, setDefault: true }, metadataError, false],
+    [{ setDefault: true }, metadataError, true],
+    [{ maxAgeDays: "30d", probe: false, setDefault: true }, "--max-age-days", false],
+    [{ timeout: "1000ms", probe: false, setDefault: true }, "--timeout", false],
+    [{ concurrency: "2x", probe: false, setDefault: true }, "--concurrency", false],
+  ] as const)(
+    "rejects invalid scan options %j before scanning",
+    async (opts, message, resolveAuth) => {
+      if (resolveAuth) {
+        withoutStoredKey();
+      }
+      await expect(scan(opts)).rejects.toThrow(message);
+      if (!resolveAuth) {
+        expectNoAuthLookup();
+      }
+      expect(mocks.scanOpenRouterModels).not.toHaveBeenCalled();
     },
   );
+
+  it.each([
+    [{}, "anthropic/primary"],
+    [{ setDefault: true }, modelRef()],
+  ])("updates fallbacks (options: %j)", async (opts, primary) => {
+    vi.stubEnv("OPENROUTER_API_KEY", "sk-or-test");
+    mocks.scanOpenRouterModels.mockResolvedValue([
+      scanResult({ tool: { ok: true, latencyMs: 5, skipped: false } }),
+    ]);
+    const before: OpenClawConfig = {
+      agents: {
+        defaults: { model: { primary: "anthropic/primary", fallbacks: ["anthropic/backup"] } },
+      },
+    };
+    let after: OpenClawConfig | undefined;
+    mocks.updateConfig.mockImplementation(
+      async (mutate: (cfg: OpenClawConfig) => OpenClawConfig) => (after = mutate(before)),
+    );
+
+    await scan({ ...opts, yes: true, json: true });
+
+    expect(after?.agents?.defaults?.model).toEqual({
+      primary,
+      fallbacks: [modelRef()],
+    });
+    expect(after?.agents?.defaults?.models).toHaveProperty([modelRef()]);
+  });
+
+  it("summarizes mixed tool and image capability results", async () => {
+    vi.stubEnv("OPENROUTER_API_KEY", "sk-or-test");
+    const capabilities: Array<[string, boolean, boolean]> = [
+      ["both-a", true, true],
+      ["both-b", true, true],
+      ["tools", true, false],
+      ["images", false, true],
+      ["neither", false, false],
+    ];
+    mocks.scanOpenRouterModels.mockResolvedValue(
+      capabilities.map(([name, tool, image]) =>
+        scanResult({
+          modelRef: modelRef(name),
+          tool: { ok: tool, latencyMs: 5, skipped: false },
+          image: { ok: image, latencyMs: 5, skipped: false },
+        }),
+      ),
+    );
+    mocks.updateConfig.mockImplementation(async (mutate: (cfg: OpenClawConfig) => OpenClawConfig) =>
+      mutate({}),
+    );
+
+    await scan({ yes: true });
+
+    expect(output()).toContain(
+      "Scan results: tested 5, tool ok 3, image ok 3, tool+image ok 2, image only 1",
+    );
+  });
 });

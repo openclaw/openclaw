@@ -5,7 +5,7 @@ import { readExternalCliBootstrapCredential } from "./external-cli-sync.js";
 import { isSafeToAdoptBootstrapOAuthIdentity } from "./oauth-shared.js";
 import type { OAuthCredential } from "./types.js";
 
-export type OAuthBootstrapCredentialReader = (params: {
+type OAuthBootstrapCredentialReader = (params: {
   profileId: string;
   credential: OAuthCredential;
 }) => OAuthCredential | null;

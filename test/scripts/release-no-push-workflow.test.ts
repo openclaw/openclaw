@@ -339,7 +339,6 @@ function executeReleaseGroupCapture(
       RELEASE_RUN_MATURITY_SCORECARD_INPUT: "false",
       RELEASE_RUN_RELEASE_SOAK_INPUT: String(runReleaseSoak),
       RELEASE_SKIP_PACKAGE_TELEGRAM_E2E_INPUT: "false",
-      TELEGRAM_WAIVER: "",
     },
   });
   const outputText = readFileSync(output, "utf8").trim();
@@ -697,6 +696,7 @@ describe("release validation no-push transport", () => {
       "plugin-prerelease",
       "install-smoke",
       "cross-os",
+      "windows-node",
       "live-e2e",
       "package",
       "qa-parity",
@@ -727,7 +727,7 @@ describe("release validation no-push transport", () => {
     expect(candidateRequest.run).toContain(
       '[[ "$RERUN_GROUP" =~ ^(all|plugin-prerelease)$ ]] && plugin_required=true',
     );
-    expect(candidateRequest.run).toContain('[[ "$RERUN_GROUP" =~ ^(all|cross-os)$ &&');
+    expect(candidateRequest.run).toContain('[[ "$RERUN_GROUP" =~ ^(all|cross-os|windows-node)$ &&');
     expect(candidateRequest.run).toContain('elif [[ "$RERUN_GROUP" =~ ^(all|package)$ &&');
     expect(candidateRequest.run).toContain('elif [[ "$RERUN_GROUP" == "live-e2e" &&');
     const candidateAcquisition = job(full, "candidate_acquisition");
@@ -797,6 +797,12 @@ describe("release validation no-push transport", () => {
       dockerRequired: "false",
     },
     {
+      group: "windows-node",
+      groups: ["windows-node"],
+      packageRequired: "true",
+      dockerRequired: "false",
+    },
+    {
       group: "live-e2e",
       groups: ["live-e2e"],
       packageRequired: "true",
@@ -827,6 +833,7 @@ describe("release validation no-push transport", () => {
       expect(JSON.parse(outputs.release_check_groups_json ?? "null")).toEqual([
         "install-smoke",
         "cross-os",
+        "windows-node",
         "package",
         "qa-parity",
         ...(effectiveSoak ? ["live-e2e", "qa-live"] : []),
@@ -834,7 +841,6 @@ describe("release validation no-push transport", () => {
       expect(outputs.run_release_soak).toBe(String(effectiveSoak));
       expect(outputs.docker_required).toBe(String(effectiveSoak));
       expect(outputs.skip_package_telegram_e2e).toBe(String(!effectiveSoak));
-      expect(outputs.telegram_waiver).toBe("");
     },
   );
 
@@ -908,6 +914,7 @@ describe("release validation no-push transport", () => {
   });
 
   it.each([
+    ["windows-node", "", ""],
     ["qa-live", "qa-live-matrix", ""],
     ["live-e2e", " Repo-E2E,\trepo-smoke ", ""],
     ["cross-os", "", " Windows/Packaged-Upgrade "],
@@ -1257,7 +1264,20 @@ describe("release validation no-push transport", () => {
     const verify = step(job(full, "summary"), "Verify exact release state artifacts");
     const dispatch = step(job(full, "summary"), "Request release evidence update");
 
-    expect(verify.run).toBe("node scripts/full-release-validation-state.mjs verify");
+    expect(verify.run).toBe('node "$RELEASE_STATE_SCRIPT" verify');
+    const stateScript = job(full, "release_decision").env?.RELEASE_STATE_SCRIPT;
+    expect(stateScript).toContain("qualificationAdmission != null");
+    expect(stateScript).toContain(
+      "qualification-verifier/scripts/full-release-validation-state.mjs",
+    );
+    for (const name of ["release_decision", "diagnostic_drain", "summary"]) {
+      const stateJob = job(full, name);
+      expect(stateJob.env?.RELEASE_STATE_SCRIPT).toBe(stateScript);
+      expect(step(stateJob, "Checkout admitted qualification verifier").with).toMatchObject({
+        ref: "${{ fromJSON(needs.resolve_target.outputs.source_admission_json).qualificationAdmission.workflowSha }}",
+        path: "qualification-verifier",
+      });
+    }
     expect(dispatch.run).not.toContain('GITHUB_RUN_ID_VALUE="$EVIDENCE_ROOT_RUN_ID"');
     expect(dispatch.run).toContain("reused green product evidence from chain-root run");
     expect(dispatch.run).toContain("--connect-timeout 10");
@@ -1879,7 +1899,7 @@ describe("release validation no-push transport", () => {
     expect(fullText).toContain("Report publication: disabled (artifacts only)");
     expect(
       step(job(readWorkflow(FULL_RELEASE), "summary"), "Write release validation manifest").run,
-    ).toBe("node scripts/full-release-validation-state.mjs write-manifest");
+    ).toBe('node "$RELEASE_STATE_SCRIPT" write-manifest');
     expect(publisher.if).toContain("inputs.publish_reports == true");
     const guard = job(performance, "artifact_only_guard");
     expect(guard.if).toContain("inputs.publish_reports != true");

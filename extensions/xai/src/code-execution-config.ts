@@ -1,4 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
+import { asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isXaiToolEnabled, type XaiToolAuthContext } from "./tool-auth-shared.js";
 
 type CodeExecutionConfig = {
@@ -11,9 +13,7 @@ type CodeExecutionConfig = {
 export function readPluginCodeExecutionConfig(
   cfg?: OpenClawConfig,
 ): CodeExecutionConfig | undefined {
-  const config = cfg?.plugins?.entries?.xai?.config;
-  const value = config && typeof config === "object" ? config.codeExecution : undefined;
-  return value && typeof value === "object" ? (value as CodeExecutionConfig) : undefined;
+  return asOptionalObjectRecord(resolvePluginConfigObject(cfg, "xai")?.codeExecution);
 }
 
 export function resolveCodeExecutionEnabled(params: {

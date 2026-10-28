@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import pMap, { pMapSkip } from "p-map";
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
 import { listRepoFilesSync } from "./check-file-utils.js";
 import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 

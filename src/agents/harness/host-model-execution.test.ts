@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
@@ -7,6 +8,7 @@ import {
 } from "../../plugins/runtime.js";
 import {
   createAdmittedRunOperatorAuthority,
+  bindOperatorModelExecution,
   prepareSystemAgentRunAdmission,
 } from "../admitted-run-context.js";
 import type { PreparedNativeSessionRuntime } from "../embedded-agent-runner/run/model-setup.js";
@@ -19,20 +21,35 @@ import { createHarnessAttemptParams } from "./selection.test-support.js";
 import type { AgentHarness } from "./types.js";
 type ModelPolicy = ReturnType<typeof prepareOperatorModelPolicy>;
 type HarnessMode = "fresh" | "host" | "native";
+type AccessGrants = Array<"daybreak_blue" | "daybreak_red">;
 
 const cfg = { agents: { defaults: { model: "fixture/a" } } };
 const permittedModel = { provider: "fixture", model: "a" };
+const deniedModel = "operator role cannot use this model";
+const inactive = "no longer active";
 const policy = prepareOperatorModelPolicy({ cfg, policy: {}, manifestPlugins: [] });
 const result = makeEmbeddedRunnerAttempt({
   sessionIdUsed: "session-1",
   assistantTexts: ["done"],
 });
 
-function createAuthority(modelPolicy: ModelPolicy | undefined, signal?: AbortSignal) {
+function createAuthority(
+  modelPolicy: ModelPolicy | undefined,
+  signal?: AbortSignal,
+  grants?: AccessGrants,
+) {
   const state = { modelPolicy, holds: 0, listeners: new Set<() => void>() };
   const source = createAdmittedRunOperatorAuthority({
     profileId: "model-policy-fixture",
     scopes: ["operator.write"],
+    rolePolicy: grants
+      ? {
+          sessionAccessCap: "none",
+          sandboxRequired: false,
+          agents: "*",
+          accessPrograms: { cyber: grants },
+        }
+      : undefined,
     signal,
     assertCurrent() {},
     get modelPolicy() {
@@ -63,8 +80,13 @@ function createAuthority(modelPolicy: ModelPolicy | undefined, signal?: AbortSig
   };
 }
 
-async function createHarness(mode: HarnessMode, restricted: boolean, exact: boolean) {
-  const authority = createAuthority(restricted ? policy : undefined);
+async function createHarness(
+  mode: HarnessMode,
+  restricted: boolean,
+  exact: boolean,
+  grants?: AccessGrants,
+) {
+  const authority = createAuthority(restricted ? policy : undefined, undefined, grants);
   const { source, state } = authority;
   const admission = prepareSystemAgentRunAdmission(
     cfg,
@@ -96,10 +118,7 @@ async function createHarness(mode: HarnessMode, restricted: boolean, exact: bool
     },
     { ownerPluginId: "fixture" },
   );
-  const registration = getRegisteredAgentHarness("fixture");
-  if (!registration) {
-    throw new Error("missing registered fixture harness");
-  }
+  const registration = expectDefined(getRegisteredAgentHarness("fixture"), "fixture harness");
   const attempt = {
     ...createHarnessAttemptParams(await admission.admit("plugin-harness", "fixture"), cfg),
     provider: permittedModel.provider,
@@ -120,6 +139,8 @@ async function createHarness(mode: HarnessMode, restricted: boolean, exact: bool
         };
   return {
     execute: () => runAgentHarnessAttempt(attempt, native),
+    attempt,
+    native,
     finalize: () => runAgentHarnessSettledTurnFinalization(attempt, result, registration.harness),
     finalizeSettledTurn,
     runAttempt,
@@ -128,10 +149,134 @@ async function createHarness(mode: HarnessMode, restricted: boolean, exact: bool
   };
 }
 
+it("rejects saved forbidden Access before invoking a native harness", async () => {
+  const { execute, attempt, runAttempt } = await createHarness("native", false, true, []);
+  attempt.cyberAccessProgram = "daybreak_blue";
+  await expect(execute()).rejects.toThrow("operator role cannot use this Access level");
+  expect(runAttempt).not.toHaveBeenCalled();
+});
+
+it.each([false, true])(
+  "requires native enforcement for Access-only roles (exact=%s)",
+  async (exact) => {
+    const { execute, finalize, runAttempt, finalizeSettledTurn } = await createHarness(
+      "native",
+      false,
+      exact,
+      [],
+    );
+    if (exact) {
+      expect((await execute()).assistantTexts).toEqual(["done"]);
+      expect(runAttempt).toHaveBeenCalledOnce();
+    } else {
+      await expect(execute()).rejects.toThrow("cannot enforce");
+      await expect(finalize()).rejects.toThrow("cannot enforce");
+      expect(runAttempt).not.toHaveBeenCalled();
+      expect(finalizeSettledTurn).not.toHaveBeenCalled();
+    }
+  },
+);
+
+it.each<{ grants: AccessGrants; required: boolean }>([
+  { grants: [], required: true },
+  { grants: ["daybreak_blue"], required: true },
+  { grants: ["daybreak_red"], required: true },
+  { grants: ["daybreak_blue", "daybreak_red"], required: false },
+])("retains Access-only dispatch enforcement for $grants", async ({ grants, required }) => {
+  const { source, update, state } = createAuthority(undefined, undefined, grants);
+  const admission = prepareSystemAgentRunAdmission(
+    cfg,
+    "access-only",
+    "main",
+    "test",
+    undefined,
+    source,
+  );
+  const host = createAgentHarnessHostCapabilities({
+    attempt: {
+      admittedRunContext: await admission.admit("plugin-harness", "fixture"),
+      runId: "access-only",
+      agentId: "main",
+    },
+    pluginId: "fixture",
+    nativeModelPolicySupport: "exact",
+  });
+  const retained = expectDefined(host.capabilities.retainSourceAuthority?.(), "retained source");
+  onTestFinished(() => {
+    retained.release();
+    host.close();
+    admission.close();
+    expect([state.holds, state.listeners.size]).toEqual([0, 0]);
+  });
+  host.close();
+  admission.close();
+  expect(retained.modelPolicyRequired).toBe(required);
+  update(policy);
+  expect(retained.modelPolicyRequired).toBe(true);
+  update(undefined);
+  expect(retained.modelPolicyRequired).toBe(required);
+  const bind = expectDefined(retained.bindModelExecution, "native dispatch binder");
+  for (const cyberAccessProgram of ["standard", "daybreak_blue", "daybreak_red"] as const) {
+    const execute = () => bind({ ...permittedModel, cyberAccessProgram });
+    if (cyberAccessProgram === "standard" || grants.includes(cyberAccessProgram)) {
+      const binding = expectDefined(execute(), "allowed execution");
+      expect(binding.assertCurrent).not.toThrow();
+      binding.release();
+    } else {
+      expect(execute).toThrow("operator role cannot use this Access level");
+    }
+  }
+});
+
+it("keeps explicit Access independent of alias changes and revokes it with the source", () => {
+  const initial = prepareOperatorModelPolicy({
+    cfg,
+    policy: { allow: ["fixture/a", "openai/gpt-daybreak-blue-latest"] },
+  });
+  const controller = new AbortController();
+  const authority = createAuthority(initial, controller.signal, ["daybreak_blue"]);
+  const blue = bindOperatorModelExecution(authority.source, {
+    ...permittedModel,
+    cyberAccessProgram: "daybreak_blue",
+  })!;
+  const standard = bindOperatorModelExecution(authority.source, {
+    ...permittedModel,
+    cyberAccessProgram: "standard",
+  })!;
+  try {
+    authority.update(policy);
+    expect(blue.signal.aborted).toBe(false);
+    expect(blue.assertCurrent).not.toThrow();
+    expect(standard.signal.aborted).toBe(false);
+    expect(standard.assertCurrent).not.toThrow();
+    controller.abort(new Error("Access role changed"));
+    expect(blue.signal.aborted).toBe(true);
+    expect(blue.assertCurrent).toThrow("Access role changed");
+  } finally {
+    blue.release();
+    standard.release();
+  }
+});
+
 type HarnessOperation = "execution" | "finalization";
+it.each([true, false])("prepares web search for a known native model (%s)", async (known) => {
+  const { execute, runAttempt, attempt, native } = await createHarness("native", false, true);
+  if (!native || native.auth !== "native") {
+    throw new Error("Expected native model ownership");
+  }
+  const modelRef = { provider: "native", model: "bound" };
+  native.modelRef = known ? modelRef : undefined;
+  attempt.config = { tools: { byProvider: { native: { deny: ["web_search"] } } } };
+  await execute();
+  expect(runAttempt.mock.calls[0]?.[0].preparedWebSearchPolicy).toEqual({
+    allowed: false,
+    persistentAllowed: false,
+    ...(known ? { modelRef, requesterFacts: [] } : {}),
+  });
+});
+
 const admissionCases: Array<[HarnessOperation, HarnessMode, boolean, boolean]> = [
   ["execution", "fresh", true, false],
-  ["execution", "native", true, false],
   ["execution", "fresh", false, false],
   ["execution", "native", false, false],
   ["execution", "fresh", true, true],
@@ -257,29 +402,22 @@ it.each([
       host.close();
       admission.close();
     });
-    const bindFromHost = host.capabilities.bindModelExecution;
-    const bind = owner === "retained" ? retained?.bindModelExecution : bindFromHost;
-    if (!bind || !bindFromHost) {
-      throw new Error("missing host model execution capability");
-    }
+    const bindFromHost = expectDefined(host.capabilities.bindModelExecution, "host model binding");
+    const bind = expectDefined(
+      owner === "retained" ? retained?.bindModelExecution : bindFromHost,
+      "model binding",
+    );
     if (owner === "retained") {
-      if (!siblingSource?.bindModelExecution) {
-        throw new Error("missing independently retained model execution capability");
-      }
+      expectDefined(siblingSource?.bindModelExecution, "independently retained model binding");
       expect(retained?.modelPolicyRequired).toBe(initialPolicy);
       host.close();
       admission.close();
     }
     if (initialPolicy) {
-      expect(() => bind({ provider: "fixture", model: "denied" })).toThrow(
-        "operator role cannot use this model",
-      );
+      expect(() => bind({ provider: "fixture", model: "denied" })).toThrow(deniedModel);
     }
     const acquire = (model: string, bindModel = bind) => {
-      const binding = bindModel({ provider: "fixture", model });
-      if (!binding) {
-        throw new Error("missing operator model execution binding");
-      }
+      const binding = expectDefined(bindModel({ provider: "fixture", model }), "model execution");
       bindings.push(binding);
       return binding;
     };
@@ -298,12 +436,12 @@ it.each([
       expect(binding.signal.aborted).toBe(false);
       expect(binding.assertCurrent).not.toThrow();
     }
-    expect(() => bindFromHost({ provider: "fixture", model: "b" })).toThrow("no longer active");
+    expect(() => bindFromHost({ provider: "fixture", model: "b" })).toThrow(inactive);
 
     update(makePolicy());
     if (outsideDefaults) {
       expect(outsideDefaults.signal.aborted).toBe(true);
-      expect(outsideDefaults.assertCurrent).toThrow("operator role cannot use this model");
+      expect(outsideDefaults.assertCurrent).toThrow(deniedModel);
     }
     if (retained) {
       expect(retained.modelPolicyRequired).toBe(true);
@@ -313,34 +451,32 @@ it.each([
 
     update(makePolicy(["fixture/a"]));
     expect(a.signal.aborted).toBe(true);
-    expect(a.assertCurrent).toThrow("operator role cannot use this model");
+    expect(a.assertCurrent).toThrow(deniedModel);
     expect(b.signal.aborted).toBe(false);
     expect(b.assertCurrent).not.toThrow();
     expect(sourceAbort.signal.aborted).toBe(false);
     expect(source.assertCurrent).not.toThrow();
     if (retained) {
-      expect(() => bind({ provider: "fixture", model: "a" })).toThrow(
-        "operator role cannot use this model",
-      );
+      expect(() => bind({ provider: "fixture", model: "a" })).toThrow(deniedModel);
     }
 
     update(undefined);
-    expect(a.assertCurrent).toThrow("operator role cannot use this model");
+    expect(a.assertCurrent).toThrow(deniedModel);
     expect(b.assertCurrent).not.toThrow();
     a.release();
     b.release();
     outsideDefaults?.release();
     expect(b.signal.aborted).toBe(false);
-    expect(b.assertCurrent).toThrow("no longer active");
+    expect(b.assertCurrent).toThrow(inactive);
     expect(current.assertCurrent).not.toThrow();
 
     if (retained && sibling) {
       expect(retained.modelPolicyRequired).toBe(false);
       retained.release();
       expect(current.signal.aborted).toBe(true);
-      expect(current.assertCurrent).toThrow("no longer active");
-      expect(() => retained.modelPolicyRequired).toThrow("no longer active");
-      expect(() => bind({ provider: "fixture", model: "b" })).toThrow("no longer active");
+      expect(current.assertCurrent).toThrow(inactive);
+      expect(() => retained.modelPolicyRequired).toThrow(inactive);
+      expect(() => bind({ provider: "fixture", model: "b" })).toThrow(inactive);
       expect(sibling.signal.aborted).toBe(false);
       expect(sibling.assertCurrent).not.toThrow();
       expect(sourceAbort.signal.aborted).toBe(false);
@@ -351,10 +487,9 @@ it.each([
     expect(active.signal.aborted).toBe(true);
     expect(active.assertCurrent).toThrow("operator source revoked");
     active.release();
-    expect(active.assertCurrent).toThrow("no longer active");
+    expect(active.assertCurrent).toThrow(inactive);
     retained?.release();
     siblingSource?.release();
-    expect(state.listeners.size).toBe(0);
-    expect(state.holds).toBe(0);
+    expect([state.listeners.size, state.holds]).toEqual([0, 0]);
   },
 );

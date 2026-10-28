@@ -290,6 +290,11 @@
       "class": "core-runtime",
       "risk": ["browser-automation", "cdp"]
     },
+    "proxy-from-env": {
+      "owner": "provider:openai",
+      "class": "default-runtime-initially",
+      "risk": ["network", "proxy"]
+    },
     "quickjs-wasi": {
       "owner": "plugin:code-mode-quickjs",
       "class": "plugin-runtime",

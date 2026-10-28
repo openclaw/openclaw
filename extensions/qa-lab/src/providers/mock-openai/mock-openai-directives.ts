@@ -66,7 +66,7 @@ export function extractSlackProgressCommentaryDirectives(text: string) {
   ) {
     return null;
   }
-  return { commentaryMarker, execCommand, finalMarker, toolMarker };
+  return { commentaryMarker, execCommand, finalMarker };
 }
 
 function extractWhatsAppMarkerDirective(text: string, kind: "location" | "contact" | "sticker") {

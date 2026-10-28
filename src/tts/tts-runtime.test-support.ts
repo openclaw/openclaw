@@ -15,7 +15,6 @@ import type {
 } from "openclaw/plugin-sdk/speech-core";
 import { expect, vi } from "vitest";
 import { createRequireRecord } from "../../test/helpers/record.js";
-import { CODE_HEAVY_SPOKEN_FALLBACK as CODE_HEAVY_SPOKEN_FALLBACK_CORE } from "./speech-text.js";
 import type { TtsAudioPersistence } from "./tts-synthesis.js";
 
 type MockSpeechSynthesisResult = Awaited<ReturnType<SpeechProviderPlugin["synthesize"]>>;
@@ -118,7 +117,6 @@ export const {
   listSpeechVoices,
   prepareTtsRequest,
   resolveTtsConfig,
-  resolveTtsPrefsPath,
   setTtsMachinePrefsPathResolver,
   setSummarizationEnabled,
   setTtsMaxLength,
@@ -129,7 +127,6 @@ export const {
 export const { maybeApplyTtsToPayloadCore } = await import("./tts-payload.js");
 export const { textToSpeechCore } = await import("./tts-synthesis.js");
 
-export const CODE_HEAVY_SPOKEN_FALLBACK = CODE_HEAVY_SPOKEN_FALLBACK_CORE;
 export const MAX_TIMER_TIMEOUT_MS = MAX_TIMER_TIMEOUT_MS_CORE;
 export {
   clearRuntimeConfigSnapshot,

@@ -930,7 +930,13 @@
             "type": "object",
             "additionalProperties": {
               "type": "object",
-              "additionalProperties": true
+              "additionalProperties": true,
+              "properties": {
+                "inputTranscriptionModel": {
+                  "type": "string",
+                  "description": "Input transcription model or deployment name. Omit to keep the provider default."
+                }
+              }
             }
           }
         }
@@ -1243,7 +1249,8 @@
         { "path": "twilio.authToken", "expected": "string" },
         { "path": "realtime.providers.*.apiKey", "expected": "string" },
         { "path": "streaming.providers.*.apiKey", "expected": "string" },
-        { "path": "tts.providers.*.apiKey", "expected": "string" }
+        { "path": "tts.providers.*.apiKey", "expected": "string" },
+        { "path": "numbers.*.tts.providers.*.apiKey", "expected": "string" }
       ]
     }
   }

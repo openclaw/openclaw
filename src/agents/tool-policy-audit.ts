@@ -1,4 +1,4 @@
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
 /**
  * Tool policy audit logging helpers.
  * Emits bounded, sanitized logs when allow/deny policy filters remove tools or
@@ -117,29 +117,11 @@ export function escapeControlCharsVisible(value: string): string {
 
 function sanitizeAuditField(value: string): string {
   const sanitized = escapeControlCharsVisible(value.trim());
-  if (!sanitized) {
-    return "(unknown)";
-  }
-  if (sanitized.length <= MAX_AUDIT_FIELD_LENGTH) {
-    return sanitized;
-  }
-  return `${truncateUtf16Safe(sanitized, MAX_AUDIT_FIELD_LENGTH)}...`;
-}
-
-function matchedPolicyRules(params: {
-  policy: ToolPolicyLike;
-  ruleKind: ToolPolicyRuleKind;
-  tools: readonly string[];
-}): string[] {
-  const rules = new Set<string>();
-  const matchRule = createMatchedPolicyRuleForTool(params.policy, params.ruleKind);
-  for (const toolName of params.tools) {
-    const rule = matchRule(toolName);
-    if (rule) {
-      rules.add(sanitizeAuditField(rule));
-    }
-  }
-  return [...rules].toSorted();
+  return truncateWithMarker(sanitized || "(unknown)", MAX_AUDIT_FIELD_LENGTH, {
+    marker: "...",
+    reserve: 0,
+    trimEnd: false,
+  });
 }
 
 /** Log tools removed by an allow/deny policy filter step. */
@@ -154,11 +136,16 @@ export function auditToolPolicyFilter(params: {
     const rule = sanitizeAuditField(labelForRuleKind(params.stepLabel, ruleKind));
     const { toolNames, truncated } = boundedToolNames(removed);
     const matchedRuleSourceTools = removed.slice(0, MAX_AUDIT_TOOL_NAMES);
-    const matchedRules = matchedPolicyRules({
-      policy: params.policy,
-      ruleKind,
-      tools: matchedRuleSourceTools,
-    });
+    const policy = params.policy;
+    const rules = new Set<string>();
+    const matchRule = createMatchedPolicyRuleForTool(policy, ruleKind);
+    for (const toolName of matchedRuleSourceTools) {
+      const matchedRule = matchRule(toolName);
+      if (matchedRule) {
+        rules.add(sanitizeAuditField(matchedRule));
+      }
+    }
+    const matchedRules = [...rules].toSorted();
     const matchedRuleSuffix = matchedRules.length > 0 ? `; matched ${matchedRules.join(", ")}` : "";
     const message = `tool policy removed ${removed.length} tool(s) via ${rule}: ${toolNames.join(", ")}${matchedRuleSuffix}`;
     const metadata = {

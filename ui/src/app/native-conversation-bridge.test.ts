@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { isSessionRunStateActive } from "../lib/session-run-state.ts";
 import { showToast } from "../lib/toast.ts";
+import { makeBootRoster } from "./bootstrap.test-support.ts";
 import type { ApplicationContext } from "./context.ts";
 import { createNativeConversationBridge } from "./native-conversation-bridge.ts";
 
@@ -45,8 +46,24 @@ function fixture(features: string[] = []) {
   };
   const row = { key: data.sessionKey, label: "Native conversation", hasActiveRun: false };
   const navigateAndWait = vi.fn(async () => {});
+  const elements: HTMLElement[] = [];
+  const mountPane = () => {
+    const page = document.createElement("openclaw-chat-page");
+    const pane = document.createElement("openclaw-chat-pane");
+    pane.active = true;
+    page.append(pane);
+    document.body.append(page);
+    elements.push(page, pane);
+    return pane;
+  };
   const context = {
     basePath: "",
+    routeOutlet: {
+      renderedElement: (tag: string) =>
+        elements.find((element) => element.localName === tag && element.isConnected),
+      renderedElements: (tag: string) =>
+        elements.filter((element) => element.localName === tag && element.isConnected),
+    },
     gateway: { snapshot, subscribe },
     router: {
       getState: () => ({ matches: [match], pendingMatches: [] }),
@@ -97,6 +114,8 @@ function fixture(features: string[] = []) {
   };
   return {
     messages,
+    elements,
+    mountPane,
     messagesOf: (type: string) => messages.filter((message) => message.type === type),
     expectMessage: (message: Record<string, unknown>) =>
       expect(messages).toContainEqual(expect.objectContaining(message)),
@@ -163,12 +182,7 @@ describe("native conversation contract", () => {
       capabilities: ["navigate", "presentation", "focus-composer", "session-facts-v1"],
     });
     expect(f.messagesOf("session-facts")).toEqual([
-      {
-        ...f.binding,
-        type: "session-facts",
-        revision: 1,
-        sessions: [row],
-      },
+      { ...f.binding, type: "session-facts", revision: 1, sessions: [row] },
     ]);
     f.bridge.publishSessionFacts([]);
     await flush();
@@ -211,12 +225,9 @@ describe("native conversation contract", () => {
     "waits for rendered session actions without opening a stale menu (%s)",
     async (owner) => {
       const f = fixture(["session-actions-v1"]);
-      const page = document.createElement("openclaw-chat-page");
-      const pane = document.createElement("openclaw-chat-pane");
+      const pane = f.mountPane();
       pane.sessionKey = f.data.sessionKey;
       pane.classList.add("chat-pane-cache__pane--active");
-      page.append(pane);
-      document.body.append(page);
       await f.send("open-session-actions", target(f.data.sessionKey));
       await vi.dynamicImportSettled();
       await flush();
@@ -225,6 +236,7 @@ describe("native conversation contract", () => {
       if (owner === "superseded") {
         f.select("agent:main:other");
         pane.classList.remove("chat-pane-cache__pane--active");
+        pane.active = false;
       } else if (owner === "detached") {
         pane.remove();
       } else if (owner === "retired") {
@@ -240,6 +252,7 @@ describe("native conversation contract", () => {
       Object.defineProperty(menu, "updateComplete", { value: rendered.promise });
       menu.openMenu = openMenu;
       pane.append(menu);
+      f.elements.push(menu);
       await flush();
       expect(openMenu).not.toHaveBeenCalled();
       f.expectResults(...early);
@@ -347,9 +360,7 @@ describe("native conversation contract", () => {
         expect(f.navigateAndWait).toHaveBeenCalledTimes(1);
         expect(f.navigateAndWait).toHaveBeenCalledWith(
           "chat",
-          expect.objectContaining({
-            pathname: expect.stringContaining("/chat/"),
-          }),
+          expect.objectContaining({ pathname: expect.stringContaining("/chat/") }),
         );
       }
       f.expectLast({ type: "state", context: { sessionKey: destination.sessionKey } });
@@ -424,12 +435,10 @@ describe("native conversation contract", () => {
     const f = fixture();
     f.data.sessionKey = "global";
     f.data.agentId = "research";
-    f.context.agents.state.agentsList = {
-      defaultId: "main",
-      mainKey: "main",
+    f.context.agents.state.agentsList = makeBootRoster({
       scope: "global",
       agents: [{ id: "main" }, { id: "research" }],
-    };
+    });
     Object.assign(f.row, {
       key: "global",
       agentId: "main",
@@ -465,6 +474,21 @@ describe("native conversation contract", () => {
     f.expectMessage(result(false, "request-1", "navigate-timeout"));
     await vi.advanceTimersByTimeAsync(5_000);
     f.expectMessage(result(false, "second", "navigate-timeout"));
+  });
+
+  it("does not prematurely expire a queued command when the wall clock moves forward", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+    const f = fixture();
+    const gate = createDeferred();
+    f.navigateAndWait.mockReturnValueOnce(gate.promise);
+    f.followNavigation();
+    await f.go("agent:main:first");
+    await vi.advanceTimersByTimeAsync(5_000);
+    f.navigate("agent:main:next", "second");
+    vi.setSystemTime(Date.now() + 60_000);
+    gate.resolve();
+    await flush();
+    f.expectMessage(result(true, "second"));
   });
 
   it("settles navigation when the host never acknowledges ready", async () => {
@@ -627,8 +651,13 @@ describe("native conversation contract", () => {
 
   it("applies presentation and focuses the existing composer", async () => {
     const f = fixture();
-    document.body.innerHTML =
-      '<openclaw-chat-pane class="chat-pane-cache__pane--active"><div class="agent-chat__composer-combobox"><textarea></textarea></div></openclaw-chat-pane>';
+    const pane = f.mountPane();
+    const composer = document.createElement("textarea");
+    pane.focusComposerInput = () => {
+      composer.focus({ preventScroll: true });
+      return true;
+    };
+    pane.append(composer);
     const listener = vi.fn();
     f.bridge.subscribe(listener);
     await f.send("presentation", { visible: false, active: false });
@@ -637,7 +666,7 @@ describe("native conversation contract", () => {
     f.command("presentation", { visible: true, active: true }, { requestId: "show" });
     f.command("focus-composer", {}, { requestId: "focus" });
     await flush();
-    expect(document.activeElement).toBe(document.querySelector("textarea"));
+    expect(document.activeElement).toBe(composer);
     f.expectLast(result(true, "focus"));
   });
 });

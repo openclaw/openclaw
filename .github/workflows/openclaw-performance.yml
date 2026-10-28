@@ -136,7 +136,7 @@ jobs:
       - name: Setup supported Node runtime
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24.21.0"
+          node-version: "24.22.1"
           package-manager-cache: false
 
       - name: Resolve OpenClaw target ref
@@ -979,9 +979,15 @@ jobs:
           if rg -q 'catalogRefresh:' src/config/zod-schema.core.ts; then
             catalog_refresh_config='    "models": { "catalogRefresh": { "enabled": false } },'
           fi
+          # Candidates before heartbeat moved to Automations still schedule one
+          # unless the retired agents.defaults.heartbeat key disables it.
+          heartbeat_config=""
+          if rg -q 'heartbeat:' src/config/zod-schema.agent-defaults.ts; then
+            heartbeat_config='    "agents": { "defaults": { "heartbeat": { "every": "0m" } } },'
+          fi
           cat > "$gateway_config" <<EOF
           {
-            "agents": { "defaults": { "heartbeat": { "every": "0m" } } },
+          ${heartbeat_config}
             "browser": { "enabled": false },
           ${catalog_refresh_config}
             "update": { "checkOnStart": false },
@@ -1263,7 +1269,7 @@ jobs:
         if: steps.download.outcome == 'success'
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24.21.0"
+          node-version: "24.22.1"
           package-manager-cache: false
 
       - name: Prepare clawgrit report commit
@@ -1821,7 +1827,7 @@ jobs:
       - name: Set up benchmark Node
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 24.21.0
+          node-version: 24.22.1
           check-latest: false
 
       - name: Install benchmark pnpm
@@ -1830,9 +1836,9 @@ jobs:
           set -euo pipefail
           pnpm_prefix="$RUNNER_TEMP/vitest-pair-pnpm"
           npm_config_cache="$RUNNER_TEMP/vitest-pair-npm-cache" \
-            npm install --global --prefix "$pnpm_prefix" pnpm@12.11.1
+            npm install --global --prefix "$pnpm_prefix" pnpm@12.15.0
           pnpm_bin="$pnpm_prefix/bin/pnpm"
-          [[ "$("$pnpm_bin" --version)" == "12.11.1" ]]
+          [[ "$("$pnpm_bin" --version)" == "12.15.0" ]]
           echo "VITEST_PAIR_PNPM_BIN=$pnpm_bin" >> "$GITHUB_ENV"
 
       - name: Run Vitest pair benchmark

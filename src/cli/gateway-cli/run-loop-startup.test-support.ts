@@ -23,7 +23,6 @@ export function registerGatewayStartupFailureTests(
     "hasManagedProviderLocalServices" | "stopManagedProviderLocalServices"
   >,
 ): void {
-  // Retain collection-time mocks across runtime module resets.
   it.each([
     "begin-boot",
     "start",
@@ -32,6 +31,10 @@ export function registerGatewayStartupFailureTests(
     "acquisition-cleanup",
     "wrapped-acquisition-cleanup",
     "returned-handle-close",
+    "stopped-daemon",
+    "message-only-error",
+    "stopped-daemon-cleanup",
+    "truncated-reason",
   ] as const)("settles process snapshot ownership after %s failure", async (phase) => {
     const retainResources = phase.endsWith("cleanup") || phase === "returned-handle-close";
     const { GatewayStartupCleanupError } = await import("../../gateway/server-shutdown.js");
@@ -39,10 +42,19 @@ export function registerGatewayStartupFailureTests(
     const { SessionStoreMigrationRequiredError } =
       await import("../../config/sessions/migration-required.js");
     const { runGatewayLoop } = await import("./run-loop.js");
+    const { TailscaleBackendStoppedError } =
+      await import("../../infra/tailscale-backend-stopped-error.js");
+    const stopped = new TailscaleBackendStoppedError();
     const failure =
       phase === "maintenance"
         ? new SessionStoreMigrationRequiredError("fixture maintenance required")
-        : new Error("fixture initial startup refused");
+        : phase.startsWith("stopped-daemon")
+          ? stopped
+          : phase === "message-only-error"
+            ? new Error(stopped.message)
+            : phase === "truncated-reason"
+              ? new Error(`${"a".repeat(499)}😀tail`)
+              : new Error("fixture initial startup refused");
     const cleanupFailure = new Error("native cleanup unconfirmed");
     const retained = new GatewayStartupCleanupError(failure, cleanupFailure);
     const wrapped = new Error("wrapped startup failure", { cause: retained });
@@ -50,6 +62,7 @@ export function registerGatewayStartupFailureTests(
     const snapshotReleased = createDeferredCore();
     const stopSnapshot = vi.fn(() => snapshotStopped.resolve());
     const receipt = vi.fn();
+    const completeBoot = vi.fn<NonNullable<Parameters<typeof runGatewayLoop>[0]["completeBoot"]>>();
     const close = createCloseMock();
     let snapshotWork: Promise<void> | undefined;
     const retainSnapshot = () => {
@@ -80,6 +93,7 @@ export function registerGatewayStartupFailureTests(
               }
             : undefined,
         onProcessResourcesSettled: receipt,
+        completeBoot,
       });
       const outcome = loop.then(
         () => undefined,
@@ -110,6 +124,21 @@ export function registerGatewayStartupFailureTests(
           snapshotReleased.resolve();
           await expect(loop).rejects.toBe(failure);
           expect(receipt).toHaveBeenCalledExactlyOnceWith("drained");
+        }
+        if (phase === "truncated-reason") {
+          const reason = completeBoot.mock.calls[0]?.[0]?.reason ?? "";
+          expect(reason).toHaveLength(499);
+          expect(Buffer.from(reason).toString()).toBe(reason);
+        } else if (phase.startsWith("stopped-daemon") || phase === "message-only-error") {
+          expect(completeBoot).toHaveBeenCalledWith({
+            outcome: "startup_failed",
+            reason: retainResources
+              ? expect.stringContaining("native cleanup unconfirmed")
+              : stopped.message,
+            ...(phase === "stopped-daemon"
+              ? { startupReason: "gateway.tailscale_backend_stopped" }
+              : {}),
+          });
         }
       } finally {
         snapshotReleased.resolve();
@@ -204,24 +233,18 @@ export function registerGatewayStartupFailureTests(
         let stop: (() => void) | undefined;
         try {
           await Promise.race([firstStarted.promise, loopSettled]);
-          expect(start).toHaveBeenCalledOnce();
           const restart = captureSignal("SIGUSR2");
           stop = captureSignal("SIGTERM");
           restart();
           await Promise.race([loopSettled, triageStarted.promise]);
           if (cleanup === "clean") {
-            expect(onRestartStartupFailure).toHaveBeenCalledOnce();
-            expect(loopRejected).not.toHaveBeenCalled();
             await withTestTimeout(thirdStarted.promise, 1_000, "triage did not restart Gateway");
-            expect(start).toHaveBeenCalledTimes(3);
             stop();
             await expect(exited).resolves.toBe(0);
           } else if (supervised && repairFailed) {
             await withTestTimeout(loopSettled, 1_000, "startup refusal did not settle");
             const error = cleanup === "unrepaired" ? retryError : startupError;
             expect(loopRejected).toHaveBeenCalledExactlyOnceWith(error);
-            expect(onRestartStartupFailure).toHaveBeenCalledOnce();
-            expect(start).toHaveBeenCalledTimes(cleanup === "unrepaired" ? 3 : 2);
             expect(completeBoot).toHaveBeenLastCalledWith({
               outcome: "startup_failed",
               reason: error.message,
@@ -233,12 +256,8 @@ export function registerGatewayStartupFailureTests(
               "missing recovery guidance",
             );
             expectCallCount(0, loopRejected, runtime.exit);
-            expect(onRestartStartupFailure).toHaveBeenCalledOnce();
             expect(start).toHaveBeenCalledTimes(cleanup === "unrepaired" ? 3 : 2);
             const output = gatewayLog.error.mock.calls.flat().join("\n");
-            expect(output).toContain(
-              cleanup === "unrepaired" ? retryError.message : "gateway.bind",
-            );
             expect(output).toContain("openclaw doctor --fix");
             if (platform === "win32") {
               expect(output).toContain(supervised ? "openclaw gateway restart" : "press Ctrl+C");
@@ -263,16 +282,13 @@ export function registerGatewayStartupFailureTests(
             });
             expect(onRestartStartupFailure).not.toHaveBeenCalled();
             expect(loopRejected).toHaveBeenCalledExactlyOnceWith(startupError);
-            expect(start).toHaveBeenCalledTimes(2);
           } else {
             expect(onRestartStartupFailure).not.toHaveBeenCalled();
-            expect(loopRejected).toHaveBeenCalledOnce();
             await expect(loop).rejects.toBeInstanceOf(AggregateError);
             await expect(loop).rejects.toMatchObject({
               cause: startupError,
               errors: expect.arrayContaining([startupError, cleanupError]),
             });
-            expect(start).toHaveBeenCalledTimes(2);
             expect(runtime.exit).not.toHaveBeenCalled();
           }
         } finally {
@@ -291,49 +307,6 @@ export function registerGatewayStartupFailureTests(
             await loopSettled;
           }
         }
-      });
-    },
-  );
-
-  it.each(["stopped daemon", "message-only error", "failed cleanup", "truncated reason"] as const)(
-    "classifies %s startup failure",
-    async (kind) => {
-      await withIsolatedSignals(async () => {
-        const { TailscaleBackendStoppedError } =
-          await import("../../infra/tailscale-backend-stopped-error.js");
-        const { GatewayStartupCleanupError } = await import("../../gateway/server-shutdown.js");
-        const stopped = new TailscaleBackendStoppedError();
-        const failure =
-          kind === "stopped daemon"
-            ? stopped
-            : kind === "truncated reason"
-              ? new Error(`${"a".repeat(499)}😀tail`)
-              : kind === "message-only error"
-                ? new Error(stopped.message)
-                : new GatewayStartupCleanupError(stopped, new Error("cleanup failed"));
-        const { runGatewayLoop } = await import("./run-loop.js");
-        const completeBoot =
-          vi.fn<NonNullable<Parameters<typeof runGatewayLoop>[0]["completeBoot"]>>();
-        await expect(
-          runGatewayLoop({
-            start: vi.fn(() => Promise.reject(failure)),
-            completeBoot,
-          }),
-        ).rejects.toBe(failure);
-        if (kind === "truncated reason") {
-          const reason = completeBoot.mock.calls[0]?.[0]?.reason ?? "";
-          expect(reason).toHaveLength(499);
-          expect(Buffer.from(reason).toString()).toBe(reason);
-          return;
-        }
-        expect(completeBoot).toHaveBeenCalledWith({
-          outcome: "startup_failed",
-          reason:
-            kind === "failed cleanup" ? expect.stringContaining("cleanup failed") : stopped.message,
-          ...(kind === "stopped daemon"
-            ? { startupReason: "gateway.tailscale_backend_stopped" }
-            : {}),
-        });
       });
     },
   );

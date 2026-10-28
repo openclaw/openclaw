@@ -5,8 +5,8 @@ import { createAgentCapability } from "../../lib/agents/index.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context-fixtures.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import { createTestDraft } from "./draft-controller.test-support.ts";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
-import { NewSessionDraft } from "./draft.ts";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -16,23 +16,18 @@ afterEach(() => {
 it.each([false, true])(
   "reconciles workspace defaults without replacing the agent or draft (retry: %s)",
   async (retry) => {
-    const original: AgentsListResult = {
+    const roster = (workspace: string): AgentsListResult => ({
       defaultId: "main",
       mainKey: "main",
       scope: "per-sender",
       sessionPlacement: {},
       agents: [
         { id: "main", workspace: "/main", workspaceGit: false },
-        { id: "research", workspace: "/research", workspaceGit: false },
+        { id: "research", workspace, workspaceGit: false },
       ],
-    };
-    const current: AgentsListResult = {
-      ...original,
-      agents: [
-        original.agents[0]!,
-        { id: "research", workspace: "/research-next", workspaceGit: false },
-      ],
-    };
+    });
+    const original = roster("/research");
+    const current = roster("/research-next");
     const refreshed = createDeferred<AgentsListResult>();
     let reads = 0;
     const source = createApplicationGateway();
@@ -53,14 +48,11 @@ it.each([false, true])(
     const agents = createAgentCapability(source.gateway);
     const fixture = createDraftFixture({ gateway: source.gateway });
     const context = { ...fixture.context, agents };
-    const draft = new NewSessionDraft(() => ({ context, data: undefined, isConnected: true }), {
-      changed: vi.fn(),
-      updateComplete: () => Promise.resolve(),
-      closeTransientUi: vi.fn(),
-      activeElement: () => null,
-      onInvalidate: vi.fn(),
-      onRecoveryReady: vi.fn(),
-    });
+    const draft = createTestDraft(context);
+    const expectDraft = (folder: string) => {
+      expect(draft.place.folder).toBe(folder);
+      expect(draft.submission.message).toBe("Keep my selected agent");
+    };
     try {
       await agents.ensureList();
       draft.gateway.synchronize(source.gateway);
@@ -74,16 +66,14 @@ it.each([false, true])(
       source.publish({ ...source.gateway.snapshot, phase: "connected", hello });
       draft.gateway.synchronize(source.gateway);
       draft.synchronizeSelections();
-      expect(draft.place.folder).toBe("/research");
-      expect(draft.submission.message).toBe("Keep my selected agent");
+      expectDraft("/research");
 
       const pending = agents.ensureList();
       if (retry) {
         refreshed.reject(new Error("Roster refresh unavailable"));
         await pending;
         draft.synchronizeSelections();
-        expect(draft.place.folder).toBe("/research");
-        expect(draft.submission.message).toBe("Keep my selected agent");
+        expectDraft("/research");
       } else {
         refreshed.resolve(current);
         await pending;
@@ -91,8 +81,7 @@ it.each([false, true])(
       await agents.ensureList();
       draft.synchronizeSelections();
       expect(draft.place.agentId).toBe("research");
-      expect(draft.place.folder).toBe("/research-next");
-      expect(draft.submission.message).toBe("Keep my selected agent");
+      expectDraft("/research-next");
     } finally {
       draft.disconnect();
       fixture.flow.disconnect();

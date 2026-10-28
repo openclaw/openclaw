@@ -5,155 +5,117 @@ import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const read = (file: string) => readFileSync(file, "utf8");
 
 const installers = [
-  {
-    script: "scripts/install-xcodegen.sh",
-    url: "https://github.com/yonaskolb/XcodeGen/releases/download/2.46.0/xcodegen.zip",
-  },
-  {
-    script: "scripts/install-swift-tools.sh",
-    url: "https://github.com/nicklockwood/SwiftFormat/releases/download/0.63.1/swiftformat.zip",
-  },
-  {
-    script: "scripts/install-periphery.sh",
-    url: "https://github.com/peripheryapp/periphery/releases/download/3.8.0/periphery-3.8.0.zip",
-  },
-] as const;
+  ["xcodegen", "yonaskolb/XcodeGen/releases/download/2.46.0/xcodegen.zip"],
+  ["swift-tools", "nicklockwood/SwiftFormat/releases/download/0.63.1/swiftformat.zip"],
+  ["periphery", "peripheryapp/periphery/releases/download/3.8.0/periphery-3.8.0.zip"],
+].map(([name, release]) => ({
+  script: `scripts/install-${name}.sh`,
+  url: `https://github.com/${release}`,
+}));
 
-function writeExecutable(filePath: string, lines: string[]): void {
+const writeExecutable = (filePath: string, lines: string[]): void =>
   writeFileSync(filePath, ["#!/usr/bin/env bash", "set -euo pipefail", ...lines, ""].join("\n"), {
     mode: 0o755,
   });
+
+function exec(command: string, args: string[], cwd = process.cwd(), env = process.env, code = 0) {
+  const result = spawnSync(command, args, { cwd, env, encoding: "utf8" });
+  expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(code);
+  return result;
 }
 
-function makePeripheryFixture(version = "3.8.0") {
-  const root = tempDirs.make("openclaw-periphery-installer-");
-  const binDir = path.join(root, "bin");
-  const bundleDir = path.join(root, "bundle");
-  const installDir = path.join(root, "install directory");
-  const archive = path.join(root, "periphery.zip");
-  const callsPath = path.join(root, "periphery-calls.txt");
+function makeFixture(version?: string) {
+  const root = tempDirs.make("openclaw-native-tool-installer-");
+  const file = (name: string) => path.join(root, name);
+  const binDir = file("bin");
+  const bundleDir = file("bundle");
+  const installDir = file("install directory");
+  const archive = file("periphery.zip");
+  const stub = (name: string, lines: string[]) => writeExecutable(path.join(binDir, name), lines);
+  const env = {
+    ...process.env,
+    TMPDIR: root,
+    PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+  };
   mkdirSync(binDir);
-  mkdirSync(bundleDir);
-  writeExecutable(path.join(bundleDir, "periphery"), [
-    'printf "%s\\n" "$0" "$@" >>"$OPENCLAW_TEST_PERIPHERY_CALLS"',
-    '[[ "$#" -eq 1 && "$1" == "version" ]]',
-    '[[ -f "$(dirname "$0")/libIndexStore.dylib" ]]',
-    'printf "%s\\n" "$OPENCLAW_TEST_PERIPHERY_VERSION"',
-  ]);
-  writeFileSync(path.join(bundleDir, "libIndexStore.dylib"), "fixture index store\n");
-  writeFileSync(path.join(bundleDir, "LICENSE.md"), "fixture license\n");
-  const zip = spawnSync("zip", ["-q", archive, "periphery", "libIndexStore.dylib", "LICENSE.md"], {
-    cwd: bundleDir,
-    encoding: "utf8",
-  });
-  expect(zip.status, zip.stderr).toBe(0);
-  writeExecutable(path.join(binDir, "curl"), [
-    'while [[ "$#" -gt 0 ]]; do',
-    '  case "$1" in',
-    '    --output|-o) cp "$OPENCLAW_TEST_PERIPHERY_ARCHIVE" "$2"; exit 0 ;;',
-    "  esac",
-    "  shift",
-    "done",
-    "exit 64",
-  ]);
+  if (version !== undefined) {
+    mkdirSync(bundleDir);
+    writeExecutable(path.join(bundleDir, "periphery"), [
+      'printf "%s\\n" "$0" "$@" >>"$TMPDIR/periphery-calls.txt"',
+      '[[ "$#" -eq 1 && "$1" == "version" ]]',
+      '[[ -f "$(dirname "$0")/libIndexStore.dylib" ]]',
+      `printf "%s\\n" "${version}"`,
+    ]);
+    writeFileSync(path.join(bundleDir, "libIndexStore.dylib"), "fixture index store\n");
+    writeFileSync(path.join(bundleDir, "LICENSE.md"), "fixture license\n");
+    exec("zip", ["-q", archive, "periphery", "libIndexStore.dylib", "LICENSE.md"], bundleDir);
+    stub("curl", [
+      'while [[ "$#" -gt 0 ]]; do',
+      '  case "$1" in',
+      '    --output|-o) cp "$TMPDIR/periphery.zip" "$2"; exit 0 ;;',
+      "  esac",
+      "  shift",
+      "done",
+      "exit 64",
+    ]);
+  }
   return {
-    binDir,
-    installDir,
-    callsPath,
-    run: () =>
-      spawnSync("bash", ["scripts/install-periphery.sh", installDir], {
-        cwd: process.cwd(),
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          OPENCLAW_TEST_PERIPHERY_ARCHIVE: archive,
-          OPENCLAW_TEST_PERIPHERY_CALLS: callsPath,
-          OPENCLAW_TEST_PERIPHERY_VERSION: version,
-          PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
-          TMPDIR: root,
-        },
-      }),
+    file,
+    stub,
+    installed: (name: string) => path.join(installDir, name),
+    run: (script: string, exitCode: number) =>
+      exec("bash", [script, installDir], process.cwd(), env, exitCode),
   };
 }
 
-function expectOption(args: string[], option: string, value: string): void {
-  const index = args.indexOf(option);
-  expect(index, `missing curl option ${option}`).toBeGreaterThanOrEqual(0);
-  expect(args[index + 1]).toBe(value);
-}
-
 describe.runIf(process.platform !== "win32")("native tool installers", () => {
-  it.each(installers)("bounds stalled downloads in $script", ({ script, url }) => {
-    const root = tempDirs.make("openclaw-native-tool-installer-");
-    const binDir = path.join(root, "bin");
-    const argsPath = path.join(root, "curl-args.txt");
-    const curlPath = path.join(binDir, "curl");
-    mkdirSync(binDir);
-    writeExecutable(curlPath, ['printf "%s\\n" "$@" >"$OPENCLAW_TEST_CURL_ARGS_PATH"', "exit 28"]);
+  it.each(installers)("bounds downloads in $script", ({ script, url }) => {
+    const { file, stub, run } = makeFixture();
+    stub("curl", ['printf "%s\\n" "$@" >"$TMPDIR/curl-args.txt"', "exit 28"]);
 
-    const result = spawnSync("bash", [script, path.join(root, "install")], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        OPENCLAW_TEST_CURL_ARGS_PATH: argsPath,
-        PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
-      },
+    run(script, 28);
+    const args = read(file("curl-args.txt")).trimEnd().split("\n");
+    const options = Object.fromEntries(args.map((arg, i) => [arg, args[i + 1]]).toReversed());
+    expect(options).toMatchObject({
+      "--connect-timeout": "10",
+      "--max-time": "120",
+      "--retry": "3",
+      "--retry-max-time": "120",
     });
-
-    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(28);
-    const args = readFileSync(argsPath, "utf8").trimEnd().split("\n");
-    expectOption(args, "--connect-timeout", "10");
-    expectOption(args, "--max-time", "120");
-    expectOption(args, "--retry", "3");
-    expectOption(args, "--retry-max-time", "120");
-    expect(args).toContain(url);
+    expect(args).toEqual(expect.arrayContaining(["--retry-all-errors", url]));
   });
 
-  it("rejects a Periphery archive with the wrong digest before extraction or execution", () => {
-    const fixture = makePeripheryFixture();
-    const unzipCalls = path.join(fixture.binDir, "unzip-calls.txt");
-    writeExecutable(path.join(fixture.binDir, "unzip"), [
-      'printf "%s\\n" "$@" >"$(dirname "$0")/unzip-calls.txt"',
-      "exit 99",
-    ]);
+  it.each(installers)("rejects wrong digests in $script", ({ script }) => {
+    const { file, stub, run, installed } = makeFixture("3.8.0");
+    const unzipCalls = file("bin/unzip-calls.txt");
+    stub("unzip", ['printf "%s\\n" "$@" >"$(dirname "$0")/unzip-calls.txt"', "exit 99"]);
 
-    // This ZIP is extractable, but its real SHA-256 is not the pinned release digest.
-    const result = fixture.run();
-    expect(result.status, `${result.stdout}\n${result.stderr}`).toBeGreaterThan(0);
+    const result = run(script, 1);
     expect(result.stderr).toContain("checksum mismatch");
-    expect(existsSync(unzipCalls)).toBe(false);
-    expect(existsSync(fixture.callsPath)).toBe(false);
-    expect(existsSync(path.join(fixture.installDir, "periphery"))).toBe(false);
+    const untouched = [unzipCalls, file("periphery-calls.txt"), installed("periphery")];
+    expect(untouched.map(existsSync)).toEqual([false, false, false]);
   });
 
   it.each([
-    { version: "3.8.0", exitCode: 0 },
-    { version: "3.8.1", exitCode: 1 },
-  ])(
-    "installs the complete Periphery bundle and verifies version $version",
-    ({ version, exitCode }) => {
-      const fixture = makePeripheryFixture(version);
-      // Substitute only the digest boundary; extraction, installation, and execution stay real.
-      writeExecutable(path.join(fixture.binDir, "shasum"), [
-        '[[ "$#" -eq 3 && "$1" == "-a" && "$2" == "256" ]]',
-        'cmp "$3" "$OPENCLAW_TEST_PERIPHERY_ARCHIVE"',
-        'printf "%s  %s\\n" "07d4e286e31dd79164df39097e0b59f533c94badbe18158464a455ea88a166d7" "$3"',
-      ]);
+    ["3.8.0", 0],
+    ["3.8.1", 1],
+  ] as const)("installs the complete bundle and verifies version %s", (version, exitCode) => {
+    const { file, stub, run, installed } = makeFixture(version);
+    // Substitute only the digest boundary; extraction, installation, and execution stay real.
+    stub("shasum", [
+      '[[ "$#" -eq 3 && "$1" == "-a" && "$2" == "256" ]]',
+      'cmp "$3" "$TMPDIR/periphery.zip"',
+      'printf "%s  %s\\n" "07d4e286e31dd79164df39097e0b59f533c94badbe18158464a455ea88a166d7" "$3"',
+    ]);
 
-      const result = fixture.run();
-      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(exitCode);
-      expect(readFileSync(path.join(fixture.installDir, "libIndexStore.dylib"), "utf8")).toBe(
-        "fixture index store\n",
-      );
-      expect(readFileSync(path.join(fixture.installDir, "LICENSE.md"), "utf8")).toBe(
-        "fixture license\n",
-      );
-      expect(readFileSync(fixture.callsPath, "utf8")).toBe(
-        `${path.join(fixture.installDir, "periphery")}\nversion\n`,
-      );
-    },
-  );
+    run("scripts/install-periphery.sh", exitCode);
+    expect(["libIndexStore.dylib", "LICENSE.md"].map((name) => read(installed(name)))).toEqual([
+      "fixture index store\n",
+      "fixture license\n",
+    ]);
+    expect(read(file("periphery-calls.txt"))).toBe(`${installed("periphery")}\nversion\n`);
+  });
 });

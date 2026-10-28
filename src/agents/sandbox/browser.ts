@@ -19,6 +19,7 @@ import {
 } from "../../plugin-sdk/browser-profiles.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { defaultRuntime } from "../../runtime.js";
+import { monotonicNow } from "../../shared/monotonic-time.js";
 import { sleep } from "../../utils/sleep.js";
 import {
   BROWSER_BRIDGES,
@@ -45,7 +46,7 @@ import {
   readDockerPort,
   resolveDockerEnvPolicyEpoch,
 } from "./docker.js";
-import { prepareSandboxMountPlan, sandboxMountPlanMatchesContainer } from "./mount-plan.js";
+import { compareSandboxMountPlan, prepareSandboxMountPlan } from "./mount-plan.js";
 import {
   buildNoVncObserverTokenUrl,
   consumeNoVncObserverToken,
@@ -84,12 +85,12 @@ async function waitForSandboxCdp(params: {
   authToken: string;
   timeoutMs: number;
 }): Promise<boolean> {
-  const deadline = Date.now() + Math.max(0, params.timeoutMs);
+  const deadline = monotonicNow() + Math.max(0, params.timeoutMs);
   const url = `http://127.0.0.1:${params.cdpPort}/json/version`;
-  while (Date.now() < deadline) {
+  while (monotonicNow() < deadline) {
     try {
       // Keep a stalled request inside the outer browser startup deadline.
-      const requestTimeoutMs = Math.max(1, Math.min(1000, deadline - Date.now()));
+      const requestTimeoutMs = Math.max(1, Math.min(1000, deadline - monotonicNow()));
       const ctrl = new AbortController();
       const t = setTimeout(ctrl.abort.bind(ctrl), requestTimeoutMs);
       try {
@@ -107,63 +108,13 @@ async function waitForSandboxCdp(params: {
     } catch {
       // ignore
     }
-    const remainingMs = deadline - Date.now();
+    const remainingMs = deadline - monotonicNow();
     if (remainingMs <= 0) {
       break;
     }
     await sleep(Math.min(150, remainingMs));
   }
   return false;
-}
-
-function buildSandboxBrowserResolvedConfig(params: {
-  cdpPort: number;
-  cdpAuthToken: string;
-  headless: boolean;
-  evaluateEnabled: boolean;
-  ssrfPolicy?: SsrFPolicy;
-}): ResolvedBrowserConfig {
-  const cdpHost = "127.0.0.1";
-  const cdpPortRange = deriveDefaultBrowserCdpPortRange(0);
-  return {
-    enabled: true,
-    evaluateEnabled: params.evaluateEnabled,
-    controlPort: 0,
-    cdpProtocol: "http",
-    cdpHost,
-    cdpIsLoopback: true,
-    cdpPortRangeStart: cdpPortRange.start,
-    cdpPortRangeEnd: cdpPortRange.end,
-    remoteCdpTimeoutMs: 1500,
-    remoteCdpHandshakeTimeoutMs: 3000,
-    localLaunchTimeoutMs: 15_000,
-    localCdpReadyTimeoutMs: 8_000,
-    actionTimeoutMs: DEFAULT_BROWSER_ACTION_TIMEOUT_MS,
-    color: DEFAULT_OPENCLAW_BROWSER_COLOR,
-    executablePath: undefined,
-    headless: params.headless,
-    noSandbox: false,
-    attachOnly: true,
-    defaultProfile: DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
-    extraArgs: [],
-    tabCleanup: {
-      enabled: true,
-      idleMinutes: 120,
-      maxTabsPerSession: 8,
-      sweepMinutes: 5,
-    },
-    profiles: {
-      [DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME]: {
-        cdpPort: params.cdpPort,
-        cdpUrl: buildSandboxCdpUrl({
-          cdpPort: params.cdpPort,
-          authToken: params.cdpAuthToken,
-        }),
-        color: DEFAULT_OPENCLAW_BROWSER_COLOR,
-      },
-    },
-    ssrfPolicy: params.ssrfPolicy,
-  };
 }
 
 async function ensureSandboxBrowserImage(image: string) {
@@ -372,7 +323,7 @@ async function ensureSandboxBrowserContainer(
       const isHot =
         running && (typeof lastUsedAtMs !== "number" || now - lastUsedAtMs < HOT_BROWSER_WINDOW_MS);
       if (isHot) {
-        const mountsMatch = await sandboxMountPlanMatchesContainer({
+        const mounts = await compareSandboxMountPlan({
           engine: DOCKER_SANDBOX_ENGINE,
           containerName,
           plan: mountPlan,
@@ -383,7 +334,7 @@ async function ensureSandboxBrowserContainer(
           scope: params.cfg.scope,
           sessionKey: params.scopeKey,
           browser: true,
-          mountsChanged: !mountsMatch,
+          mountsChanged: mounts !== "match",
         });
       } else {
         await removeExistingContainer();
@@ -462,12 +413,12 @@ async function ensureSandboxBrowserContainer(
     await withContainerEnvFile(env, async (envFile) => {
       args.push("--env-file", envFile, browserImage);
       params.assertCurrent?.();
-      await execDocker(args);
+      await execDocker(args, { assertCurrent: params.assertCurrent });
     });
   }
   if (!hasContainer || !running) {
     params.assertCurrent?.();
-    await execDocker(["start", containerName]);
+    await execDocker(["start", containerName], { assertCurrent: params.assertCurrent });
   }
 
   const mappedCdp = await readDockerPort(containerName, params.cfg.browser.cdpPort);
@@ -530,7 +481,7 @@ async function ensureSandboxBrowserContainer(
         params.assertCurrent?.();
         if (currentState.exists && !currentState.running) {
           params.assertCurrent?.();
-          await execDocker(["start", containerName]);
+          await execDocker(["start", containerName], { assertCurrent: params.assertCurrent });
         }
         const ok = await waitForSandboxCdp({
           cdpPort: mappedCdp,
@@ -550,14 +501,51 @@ async function ensureSandboxBrowserContainer(
         : undefined;
 
       params.assertCurrent?.();
+      const { headless } = params.cfg.browser;
+      const { evaluateEnabled, ssrfPolicy } = params;
+      const cdpHost = "127.0.0.1";
+      const cdpPortRange = deriveDefaultBrowserCdpPortRange(0);
+      const resolved: ResolvedBrowserConfig = {
+        enabled: true,
+        evaluateEnabled,
+        controlPort: 0,
+        cdpProtocol: "http",
+        cdpHost,
+        cdpIsLoopback: true,
+        cdpPortRangeStart: cdpPortRange.start,
+        cdpPortRangeEnd: cdpPortRange.end,
+        remoteCdpTimeoutMs: 1500,
+        remoteCdpHandshakeTimeoutMs: 3000,
+        localLaunchTimeoutMs: 15_000,
+        localCdpReadyTimeoutMs: 8_000,
+        actionTimeoutMs: DEFAULT_BROWSER_ACTION_TIMEOUT_MS,
+        color: DEFAULT_OPENCLAW_BROWSER_COLOR,
+        executablePath: undefined,
+        headless,
+        noSandbox: false,
+        attachOnly: true,
+        defaultProfile: DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
+        extraArgs: [],
+        tabCleanup: {
+          enabled: true,
+          idleMinutes: 120,
+          maxTabsPerSession: 8,
+          sweepMinutes: 5,
+        },
+        profiles: {
+          [DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME]: {
+            cdpPort: mappedCdp,
+            cdpUrl: buildSandboxCdpUrl({
+              cdpPort: mappedCdp,
+              authToken: cdpAuthToken,
+            }),
+            color: DEFAULT_OPENCLAW_BROWSER_COLOR,
+          },
+        },
+        ssrfPolicy,
+      };
       bridge = await startBrowserBridgeServer({
-        resolved: buildSandboxBrowserResolvedConfig({
-          cdpPort: mappedCdp,
-          cdpAuthToken,
-          headless: params.cfg.browser.headless,
-          evaluateEnabled: params.evaluateEnabled,
-          ssrfPolicy: params.ssrfPolicy,
-        }),
+        resolved,
         authToken: desiredAuthToken,
         authPassword: desiredAuthPassword,
         onEnsureAttachTarget,

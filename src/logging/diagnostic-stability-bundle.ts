@@ -14,7 +14,7 @@ import {
   formatErrorMessage,
   isMissingPathError,
 } from "../infra/errors.js";
-import { registerFatalErrorHook } from "../infra/fatal-error-hooks.js";
+import { setFatalErrorHook } from "../infra/fatal-error-hooks.js";
 import { resolveRuntimeServiceBuildId, resolveRuntimeServiceCommit, VERSION } from "../version.js";
 import { readMemoryUsage } from "./diagnostic-memory-bundle.js";
 import {
@@ -135,21 +135,12 @@ type DiagnosticStabilityBundleLocationOptions = {
   stateDir?: string;
 };
 
-type DiagnosticStabilityBundleFile = {
-  path: string;
-  mtimeMs: number;
-};
-
 export type ReadDiagnosticStabilityBundleResult =
   | { status: "found"; path: string; mtimeMs: number; bundle: DiagnosticStabilityBundle }
   | { status: "missing"; dir: string }
   | { status: "failed"; path?: string; error: unknown };
 
-type DiagnosticStabilityBundleFailureWriteOutcome =
-  | { status: "written"; message: string; path: string }
-  | { status: "failed"; message: string; error: unknown };
-
-let fatalHookUnsubscribe: (() => void) | null = null;
+let fatalHookInstalled = false;
 
 function normalizeReason(reason: string): string {
   return SAFE_REASON_CODE.test(reason) ? reason : "unknown";
@@ -753,7 +744,10 @@ function isMemoryPressureReason(
 function listDiagnosticStabilityBundleFilesSync(
   dir: string,
   statFailure: "throw" | "use-zero",
-): DiagnosticStabilityBundleFile[] {
+): {
+  path: string;
+  mtimeMs: number;
+}[] {
   try {
     return fs
       .readdirSync(dir, { withFileTypes: true })
@@ -844,7 +838,7 @@ export function writeDiagnosticStabilityBundleForFailureSync(
   reason: string,
   error?: unknown,
   options: WriteDiagnosticStabilityBundleForFailureOptions = {},
-): DiagnosticStabilityBundleFailureWriteOutcome {
+): { status: "written"; message: string; path: string } | { status: "failed"; message: string } {
   try {
     const now = options.now ?? new Date();
     const snapshot = getDiagnosticStabilitySnapshot({
@@ -904,7 +898,6 @@ export function writeDiagnosticStabilityBundleForFailureSync(
   } catch (writeError) {
     return {
       status: "failed",
-      error: writeError,
       message: `failed to write stability bundle: ${String(writeError)}`,
     };
   }
@@ -913,18 +906,18 @@ export function writeDiagnosticStabilityBundleForFailureSync(
 export function installDiagnosticStabilityFatalHook(
   options: WriteDiagnosticStabilityBundleForFailureOptions = {},
 ): void {
-  if (fatalHookUnsubscribe) {
+  if (fatalHookInstalled) {
     return;
   }
-  fatalHookUnsubscribe = registerFatalErrorHook(({ reason, error }) => {
-    const result = writeDiagnosticStabilityBundleForFailureSync(reason, error, options);
-    return result.message;
+  fatalHookInstalled = true;
+  setFatalErrorHook(({ reason, error }) => {
+    return writeDiagnosticStabilityBundleForFailureSync(reason, error, options).message;
   });
 }
 
 export function uninstallDiagnosticStabilityFatalHook(): void {
-  fatalHookUnsubscribe?.();
-  fatalHookUnsubscribe = null;
+  setFatalErrorHook(undefined);
+  fatalHookInstalled = false;
 }
 
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

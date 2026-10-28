@@ -1,6 +1,12 @@
 // Configured OpenClaw assistant tests cover route-owned, tool-free planning.
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import * as authStore from "../agents/auth-profiles/store-runtime.js";
+import { resolveBootstrapContextForRun } from "../agents/bootstrap-files.js";
 import type { RunCliAgentParams } from "../agents/cli-runner/types.js";
 import type { RunEmbeddedAgentParams } from "../agents/embedded-agent-runner/run/params.js";
 import { resolveRequestStreamTransportOverrides } from "../agents/embedded-agent-runner/run/runtime-resolution.js";
@@ -11,10 +17,12 @@ import {
   PreparedModelRuntimePublicationSupersededError,
 } from "../agents/prepared-model-runtime.errors.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as pluginMetadata from "../plugins/plugin-metadata-snapshot.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { CommandLane } from "../process/lanes.js";
 import { planSystemAgentCommand } from "./assistant.test-support.js";
 import { resolveSystemAgentConfiguredRouteFromConfig } from "./inference-route.js";
-import type { SystemAgentOverview } from "./overview.js";
+import { createSystemAgentOverviewFixture } from "./overview.fixture.test-support.js";
 import {
   createSystemAgentVerifiedInferenceTestFixture,
   installSystemAgentClaudeCliBackendTestFixture,
@@ -32,6 +40,7 @@ import {
 const inferenceMocks = vi.hoisted(() => ({
   fastBindings: new WeakSet<object>(),
 }));
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 vi.mock("../plugins/providers.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/providers.js")>()),
@@ -80,30 +89,12 @@ afterAll(() => {
   restoreCliBackendFixture?.();
 });
 
-function overview(defaultModel?: string): SystemAgentOverview {
-  return {
-    config: {
-      path: "/tmp/openclaw.json",
-      exists: true,
-      valid: true,
-      issues: [],
-      hash: "hash",
-    },
-    agents: [],
-    defaultAgentId: "main",
+function overview(defaultModel?: string) {
+  return createSystemAgentOverviewFixture({
+    config: { path: "/tmp/openclaw.json", exists: true, valid: true, issues: [], hash: "hash" },
     ...(defaultModel ? { defaultModel } : {}),
-    tools: {
-      codex: { command: "codex", found: false },
-      claude: { command: "claude", found: false },
-      gemini: { command: "gemini", found: false },
-      apiKeys: { openai: false, anthropic: false },
-    },
     gateway: { url: "ws://127.0.0.1:18789", source: "local loopback", reachable: false },
-    references: {
-      docsUrl: "https://docs.openclaw.ai",
-      sourceUrl: "https://github.com/openclaw/openclaw",
-    },
-  };
+  });
 }
 
 const defaultConfig = (): OpenClawConfig => ({ agents: { defaults: { model: "openai/gpt-5.5" } } });
@@ -122,6 +113,55 @@ function snapshot(config: OpenClawConfig) {
 }
 
 describe("OpenClaw configured-model planner", () => {
+  it.each([
+    { provider: "ollama", model: "qwen3.5:4b", external: false, timeoutMs: 120_000 },
+    { provider: "ollama-cloud", model: "glm-5.2:cloud", external: true, timeoutMs: 30_000 },
+  ])(
+    "uses the manifest-owned $provider timeout at dispatch",
+    async ({ provider, model, external, timeoutMs }) => {
+      const workspaceDir = path.resolve("timeout-workspace");
+      const config: OpenClawConfig = {
+        agents: {
+          defaults: {
+            models: { [`${provider}/${model}`]: { agentRuntime: { id: "openclaw" } } },
+          },
+          entries: { main: { workspace: workspaceDir, model: `${provider}/${model}` } },
+        },
+      };
+      const { binding } = await createSystemAgentVerifiedInferenceTestFixture(config);
+      useFastVerifiedInference(binding);
+      const resolveMetadata = vi
+        .spyOn(pluginMetadata, "resolvePluginMetadataSnapshot")
+        .mockReturnValue(
+          createPluginMetadataSnapshotFixture({
+            plugins: [
+              { id: "timeout-fixture", modelPricing: { providers: { [provider]: { external } } } },
+            ],
+          }),
+        );
+      const runEmbeddedAgent = vi.fn(async (_params: RunEmbeddedAgentParams) => ({
+        payloads: [{ text: '{"reply":"Ready."}' }],
+        meta: { durationMs: 0 },
+      }));
+      try {
+        const result = await planSystemAgentCommand({
+          input: "check the gateway",
+          overview: overview(),
+          verifiedInference: binding,
+          deps: { runEmbeddedAgent },
+        });
+        expect(result).toEqual({ reply: "Ready.", modelLabel: `${provider}/${model}` });
+        expect(runEmbeddedAgent).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs }));
+        expect(resolveMetadata.mock.calls[0]?.[0]).toMatchObject({
+          config: binding.execution.runConfig,
+          workspaceDir,
+          allowWorkspaceScopedCurrent: true,
+        });
+      } finally {
+        resolveMetadata.mockRestore();
+      }
+    },
+  );
   it.each(["embedded", "cli"] as const)(
     "rejects a failed %s completion before interpreting retained command text",
     async (runner) => {
@@ -411,11 +451,18 @@ describe("OpenClaw configured-model planner", () => {
     expect(removeTempDir).toHaveBeenCalledWith("/tmp/openclaw-planner");
   });
 
-  it("plans through the configured default agent embedded runtime without tools", async () => {
+  it("plans through the configured runtime without tools or owner persona context", async () => {
+    const workspaceDir = tempDirs.make("openclaw-planner-persona-");
+    await Promise.all(
+      ["SOUL.md", "IDENTITY.md"].map((name) =>
+        fs.writeFile(path.join(workspaceDir, name), `Owner persona: ${name}`),
+      ),
+    );
     const config: OpenClawConfig = {
       agents: {
         entries: {
           ops: {
+            workspace: workspaceDir,
             agentDir: "/tmp/ops-agent",
             model: "openai/gpt-5.4@openai:ops",
             models: { "openai/gpt-5.4": { agentRuntime: { id: "codex" } } },
@@ -423,15 +470,37 @@ describe("OpenClaw configured-model planner", () => {
         },
       },
     };
-    const runEmbeddedAgent = vi.fn(async (_params: RunEmbeddedAgentParams) => ({
-      payloads: [
-        { text: "Considering the gateway", isReasoning: true },
-        { text: "Checking the gateway", isCommentary: true },
-        { text: '{"reply":"Ready.","command":"gateway status"}' },
-      ],
-    }));
+    let bootstrap: Awaited<ReturnType<typeof resolveBootstrapContextForRun>> | undefined;
+    const runEmbeddedAgent = vi.fn(async (params: RunEmbeddedAgentParams) => {
+      const runConfig = expectDefined(params.config, "planner run config");
+      const agentId = expectDefined(params.agentId, "planner owner agent");
+      bootstrap = await resolveBootstrapContextForRun({
+        config: runConfig,
+        agentId,
+        workspaceDir: resolveAgentWorkspaceDir(runConfig, agentId),
+        executionWorkspaceDir: params.workspaceDir,
+        contextMode: params.bootstrapContextMode,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+      });
+      return {
+        payloads: [
+          { text: "Considering the gateway", isReasoning: true },
+          { text: "Checking the gateway", isCommentary: true },
+          { text: '{"reply":"Ready.","command":"gateway status"}' },
+        ],
+      };
+    });
     const { binding } = await createSystemAgentVerifiedInferenceTestFixture(config);
     useFastVerifiedInference(binding);
+
+    vi.spyOn(pluginMetadata, "resolvePluginMetadataSnapshot").mockReturnValue(
+      createPluginMetadataSnapshotFixture({
+        plugins: [
+          { id: "timeout-fixture", modelPricing: { providers: { openai: { external: false } } } },
+        ],
+      }),
+    );
 
     const result = await planSystemAgentCommand({
       input: "is the gateway healthy",
@@ -443,7 +512,6 @@ describe("OpenClaw configured-model planner", () => {
         runEmbeddedAgent: runEmbeddedAgent as never,
         createTempDir: async () => "/tmp/openclaw-planner",
         removeTempDir: async () => {},
-        resolveAssistantTimeoutMs: () => 120_000,
       },
     });
 
@@ -452,8 +520,13 @@ describe("OpenClaw configured-model planner", () => {
       command: "gateway status",
       modelLabel: "openai/gpt-5.4",
     });
+    expect(bootstrap?.contextFiles).toEqual([]);
+    expect(
+      resolveRequestStreamTransportOverrides(runEmbeddedAgent.mock.calls[0]?.[0]?.streamParams),
+    ).toBeUndefined();
     expect(runEmbeddedAgent).toHaveBeenCalledWith(
       expect.objectContaining({
+        agentId: "ops",
         provider: "openai",
         model: "gpt-5.4",
         agentDir: "/tmp/ops-agent",
@@ -478,45 +551,5 @@ describe("OpenClaw configured-model planner", () => {
     expect(runEmbeddedAgent).toHaveBeenCalledWith(
       expect.not.objectContaining({ sessionKey: expect.anything() }),
     );
-  });
-
-  it("keeps the verified child runtime while parsing a JSON plan", async () => {
-    const config = {
-      agents: {
-        entries: {
-          ops: {
-            agentDir: "/tmp/ops-agent",
-            model: "openai/gpt-5.5",
-            models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } },
-          },
-        },
-      },
-    } satisfies OpenClawConfig;
-    const { binding } = await createSystemAgentVerifiedInferenceTestFixture(config);
-    useFastVerifiedInference(binding);
-    const runEmbeddedAgent = vi.fn(async (_params: RunEmbeddedAgentParams) => ({
-      payloads: [{ text: '{"reply":"Ready.","command":"gateway status"}' }],
-    }));
-
-    const result = await planSystemAgentCommand({
-      input: "is the gateway healthy",
-      overview: overview("openai/gpt-5.5"),
-      verifiedInference: binding,
-      deps: {
-        readConfigFileSnapshot: vi.fn(async () => snapshot(config)) as never,
-        runEmbeddedAgent: runEmbeddedAgent as never,
-        createTempDir: async () => "/tmp/openclaw-planner",
-        removeTempDir: async () => {},
-      },
-    });
-
-    expect(result).toEqual({
-      reply: "Ready.",
-      command: "gateway status",
-      modelLabel: "openai/gpt-5.5",
-    });
-    expect(
-      resolveRequestStreamTransportOverrides(runEmbeddedAgent.mock.calls[0]?.[0]?.streamParams),
-    ).toBeUndefined();
   });
 });

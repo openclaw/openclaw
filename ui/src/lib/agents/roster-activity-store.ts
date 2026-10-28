@@ -48,7 +48,6 @@ const emptySnapshot: RosterActivitySnapshot = {
 const stores = new WeakMap<SessionCapability, RosterActivityStore>();
 const ROSTER_SESSION_LIMIT = 300;
 
-/** Visible roster consumers share a capability-owned all-agent window and identity projection. */
 export function rosterActivityStore(context: RosterContext): RosterActivityStore {
   let store = stores.get(context.sessions);
   if (!store) {
@@ -76,8 +75,11 @@ class RosterActivityStore {
       onSnapshot: () => this.synchronize(),
       onAttach: () => {
         cleanups = [
+          // Visible consumers share this capability-owned all-agent window and metadata projection.
           context.agents.subscribe(() => this.project()),
+          // Identity receipts update names and avatars in the shared roster snapshot.
           context.agentIdentity.subscribe(() => this.project()),
+          // Session observer failures propagate through the shared roster snapshot.
           context.sessions.subscribe(() => {
             if (this.current.subscriptionError !== context.sessions.eventSubscriptionError) {
               this.project();

@@ -24,11 +24,13 @@ import {
   prepareSystemAgentRunAdmission,
   resolveAdmittedRunActiveAssertion,
 } from "../../admitted-run-context.js";
-import { isSubagentRegistryWriteCommand } from "../../subagent-test-fixtures.test-helpers.js";
 import { killSessionSubagentRuns } from "../registry/subagent-control-kill.js";
 import { PROVISIONAL_KILL_RECONCILIATION_MS } from "../registry/subagent-registry-helpers.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
-import { mutateSubagentRuns } from "../registry/subagent-registry-persistence.js";
+import {
+  mutateSubagentRuns,
+  restoreSubagentRunsFromDisk,
+} from "../registry/subagent-registry-persistence.js";
 import { subscribeSubagentRunChanges } from "../registry/subagent-registry-publication.js";
 import { markSubagentRunPausedAfterYield } from "../registry/subagent-registry-run-pause.js";
 import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry-state.fixture.test-support.js";
@@ -41,7 +43,6 @@ import {
   settleRequesterAfterSessionSpawns,
 } from "../registry/subagent-registry.js";
 import { writeSubagentSessionEntry } from "../registry/subagent-registry.persistence.test-support.js";
-import { rowToSubagentRunRecord } from "../registry/subagent-registry.store.codec.js";
 import { testing as registryTesting } from "../registry/subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import { resolveSubagentSessionStatus } from "../registry/subagent-session-metrics.js";
@@ -52,35 +53,93 @@ import {
 import { dispatchGatewayMethodInProcess } from "./subagent-announce.runtime.js";
 
 const fixture = useSubagentControlFixture();
-function rejectRegistryWrites(reject: (row: SubagentRunRecord) => boolean, message: string) {
-  fixture.worker.mockImplementation((context, operation, options) =>
-    runSubagentStateWorkerOperation(
-      context,
-      (scope) =>
-        operation({
-          execute: async (command, executeOptions) => {
-            if (
-              isSubagentRegistryWriteCommand(command) &&
-              command.input.values.some((value) => {
-                const row = rowToSubagentRunRecord(value);
-                return row !== null && reject(row);
-              })
-            ) {
-              throw new Error(message);
-            }
-            return scope.execute(command, executeOptions);
-          },
-        }),
-      options,
-    ),
-  );
-}
-
 afterEach(() => {
   setSubagentAnnounceDeliveryDepsForTest();
   resetSessionControllerStateForTest();
   resetSystemEventsForTest();
 });
+
+it.each(["delivered", "failed"] as const)(
+  "settles a restored late-killed child's completion once (%s)",
+  async (outcome) => {
+    const requesterKey = "agent:main:late-kill-requester";
+    const childKey = "agent:main:subagent:late-killed-child";
+    for (const sessionKey of [requesterKey, childKey]) {
+      await writeSubagentSessionEntry({
+        stateDir: fixture.stateDir,
+        agentId: "main",
+        sessionKey,
+        defaultSessionId: `${sessionKey}-session`,
+      });
+    }
+    const runId = "late-killed-child";
+    await registerSubagentRun({
+      runId,
+      childSessionKey: childKey,
+      childAgentId: "main",
+      sessionEntry: loadSessionEntry({ agentId: "main", sessionKey: childKey }),
+      requesterSessionKey: requesterKey,
+      requesterAgentId: "main",
+      requesterDisplayKey: requesterKey,
+      task: "Return the child result",
+      cleanup: "keep",
+      expectsCompletionMessage: true,
+    });
+    const killedAt = Date.now();
+    const endedAt = killedAt - 9 * 24 * 60 * 60_000;
+    await mutateSubagentRuns([runId], (rows) => {
+      const entry = structuredClone(rows.get(runId)!);
+      Object.assign(entry, {
+        createdAt: endedAt - 1_000,
+        execution: {
+          status: "terminal",
+          startedAt: endedAt - 1_000,
+          endedAt,
+          outcome: { status: "error", error: "killed" },
+        },
+        endedReason: "subagent-killed",
+        suppressAnnounceReason: "killed",
+        completion: { required: true },
+        delivery: { status: "pending" },
+        cleanupHandled: true,
+        cleanupCompletedAt: killedAt,
+        killReconciliation: { killedAt, taskCancellationAccepted: true },
+        requesterSettleWake: {
+          status: "dispatching",
+          attemptCount: 3,
+          batchRunIds: [runId],
+          requesterYieldBatch: true,
+          rearmGeneration: 1,
+        },
+      });
+      return { value: undefined, postimages: new Map([[runId, entry]]) };
+    });
+    await restoreSubagentRunsFromDisk({ runs: subagentRuns });
+    const completion = { dispatch: dispatchGatewayMethodInProcess };
+    const dispatch = vi.spyOn(completion, "dispatch").mockResolvedValue({
+      status: "ok",
+      inputProcessingCompleted: true,
+      result: { payloads: [{ text: "The child was cancelled." }], meta: {} },
+    });
+    if (outcome === "failed") {
+      dispatch.mockRejectedValue(new Error("requester unavailable"));
+    }
+    setSubagentAnnounceDeliveryDepsForTest({ dispatchGatewayMethodInProcess: completion.dispatch });
+    resumeSubagentRun(runId, "restore");
+    await fixture.settle();
+    expect(dispatch).toHaveBeenCalledOnce();
+    const settled = loadSubagentRegistryFromSqlite().get(runId)!;
+    expect(settled.killReconciliation).toBeUndefined();
+    expect(settled.requesterSettleWake).toBeUndefined();
+    expect(settled.delivery?.status).toBe(outcome);
+
+    await restoreSubagentRunsFromDisk({ runs: subagentRuns });
+    resumeSubagentRun(runId, "restore");
+    await registryTesting.sweepOnceForTests();
+    await fixture.settle();
+    expect(dispatch).toHaveBeenCalledOnce();
+  },
+);
 
 it.each([
   "pending",
@@ -277,7 +336,7 @@ it.each([
       await admitted.promise;
     }
     if (phase === "failed persistence") {
-      rejectRegistryWrites(
+      fixture.rejectRegistryWrites(
         (row) => row.runId === entry.runId && row.suppressCompletionDelivery === true,
         "completion cancellation write rejected",
       );
@@ -529,7 +588,7 @@ it.each([
       expect(requesterExecutionRunId).not.toBe(originalRequester.runId);
     }
     if (phase === "failed kill") {
-      rejectRegistryWrites(
+      fixture.rejectRegistryWrites(
         (row) => row.runId === "requester" && Boolean(row.killIntent),
         "requester kill intent rejected",
       );

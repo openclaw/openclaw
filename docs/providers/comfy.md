@@ -281,6 +281,11 @@ These keys apply inside the `image`, `video`, or `music` sections:
 | `pollIntervalMs`             | No       | `1500`   | Polling interval in milliseconds for job completion.                                                                                            |
 | `timeoutMs`                  | No       | `300000` | Timeout in milliseconds for the workflow run.                                                                                                   |
 
+An explicit request timeout takes precedence over this configured default. One
+timeout budget covers reference uploads, submission, polling, history, and all
+output downloads, including response bodies. Timing out stops waiting locally;
+it does not cancel a job already submitted to ComfyUI.
+
 The `image` and `video` sections also support a reference-image input node:
 
 | Key                   | Required                             | Default   | Description                                         |

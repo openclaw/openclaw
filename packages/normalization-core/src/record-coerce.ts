@@ -61,6 +61,16 @@ export function isStringRecord(value: unknown): value is Record<string, string> 
   return isRecord(value) && Object.values(value).every((entry) => typeof entry === "string");
 }
 
+/** Removes undefined fields from a fresh projection in place, retaining its identity. */
+export function omitUndefinedFields<T extends object>(fields: T): T {
+  for (const key in fields) {
+    if (fields[key] === undefined) {
+      delete fields[key];
+    }
+  }
+  return fields;
+}
+
 /** Retains string-valued own enumerable entries from a non-array record. */
 export function filterStringRecord(value: unknown): Record<string, string> | undefined {
   if (!isRecord(value)) {

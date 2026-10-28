@@ -1,10 +1,7 @@
-/**
- * Creates and configures stdio-backed Codex app-server transports, including
- * Windows spawn normalization and environment filtering.
- */
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import path from "node:path";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-registration";
+import { resolveLaunchableNodePath } from "openclaw/plugin-sdk/process-runtime";
 import {
   materializeWindowsSpawnProgram,
   resolveWindowsSpawnProgram,
@@ -53,7 +50,7 @@ export function resolveCodexAppServerSpawnInvocation(
     // never let its env shebang choose another Node architecture from PATH.
     return {
       ...resolved,
-      command: process.execPath,
+      command: resolveLaunchableNodePath(),
       argv: [resolved.command, ...resolved.argv],
       resolution: "node-entrypoint",
     };
@@ -63,7 +60,7 @@ export function resolveCodexAppServerSpawnInvocation(
 
 /** Merges app-server environment overrides while honoring clearEnv and unsafe key filtering. */
 export function resolveCodexAppServerSpawnEnv(
-  options: Pick<CodexAppServerStartOptions, "env" | "clearEnv">,
+  options: Pick<CodexAppServerStartOptions, "env" | "clearEnv" | "managedGitConfigParameters">,
   baseEnv: NodeJS.ProcessEnv = process.env,
   platform: NodeJS.Platform = process.platform,
 ): NodeJS.ProcessEnv {
@@ -89,6 +86,9 @@ export function resolveCodexAppServerSpawnEnv(
       delete env[key];
     }
   }
+  if (options.managedGitConfigParameters !== undefined) {
+    env.GIT_CONFIG_PARAMETERS = options.managedGitConfigParameters;
+  }
   return env;
 }
 
@@ -108,19 +108,7 @@ export function withCodexAppServerGitConfig(
   const inherited = key === undefined ? undefined : env[key];
   return {
     ...options,
-    env: {
-      ...options.env,
-      GIT_CONFIG_PARAMETERS: appendCodexGitConfigParameters(inherited, parameters),
-    },
-    ...(options.clearEnv
-      ? {
-          clearEnv: options.clearEnv.filter(
-            (name) =>
-              (process.platform === "win32" ? name.trim().toUpperCase() : name.trim()) !==
-              "GIT_CONFIG_PARAMETERS",
-          ),
-        }
-      : {}),
+    managedGitConfigParameters: appendCodexGitConfigParameters(inherited, parameters),
   };
 }
 

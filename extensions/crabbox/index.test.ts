@@ -2,10 +2,7 @@ import { fileURLToPath } from "node:url";
 import { Command } from "commander";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenClawPluginApi, WorkerProvider } from "openclaw/plugin-sdk/plugin-entry";
-import {
-  createPluginStateSyncKeyedStoreForTests,
-  resetPluginStateStoreForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
   createTestPluginApi,
   createTestPluginServiceScheduler,
@@ -14,381 +11,237 @@ import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import plugin from "./index.js";
 import * as managedBinary from "./src/crabbox-managed-binary.js";
-import { crabboxState } from "./src/crabbox-state.test-support.js";
-import { createNodeBootstrapFixture } from "./src/crabbox-worker-node-enrollment.test-support.js";
-import type { WarmProfileRecord } from "./src/crabbox-worker-warm-image-store.js";
+import { crabboxState, openWarmImageStore } from "./src/crabbox-state.test-support.js";
+import { warmImage, warmRecord } from "./src/crabbox-warm-scenarios.test-support.js";
+import {
+  commandResult,
+  nodeEnrollmentFixture,
+  active,
+} from "./src/crabbox-worker-provider.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const CLASSLESS = { binary: "/mock/crabbox", idleTimeout: "12s", provider: "aws", ttl: "24h" };
+const PROFILE = { ...CLASSLESS, class: "standard" };
+const jsonResult = (value: unknown) => commandResult({ stdout: JSON.stringify(value) });
 
-const PROFILE = {
-  binary: "/mock/crabbox",
-  class: "standard",
-  idleTimeout: "12s",
-  provider: "aws",
-  ttl: "24h",
-};
-
-function commandResult(overrides: Partial<SpawnResult> = {}): SpawnResult {
-  return {
-    stdout: "",
-    stderr: "",
-    code: 0,
-    signal: null,
-    killed: false,
-    termination: "exit",
-    ...overrides,
-  };
-}
-
-function inspectResult(leaseId: string): SpawnResult {
-  return commandResult({
-    stdout: JSON.stringify({
-      host: "worker.example.test",
-      id: leaseId,
-      ready: true,
-      providerMetadata: { instanceProfileAttached: false },
-      sshHost: "worker.example.test",
-      sshKey: "/mock/worker-key",
-      sshPort: 2222,
-      sshUser: "openclaw",
-      state: "running",
-    }),
+const inspectResult = (id: string): SpawnResult =>
+  jsonResult({
+    id,
+    ready: true,
+    providerMetadata: { instanceProfileAttached: false },
+    sshUser: "openclaw",
+    state: "running",
   });
-}
 
 function registerCrabboxGeneration() {
   const providers: WorkerProvider[] = [];
   const services: Parameters<OpenClawPluginApi["registerService"]>[0][] = [];
-  plugin.register(
-    createTestPluginApi({
-      runtime: { state: crabboxState } as OpenClawPluginApi["runtime"],
-      id: "crabbox",
-      rootDir: fileURLToPath(new URL(".", import.meta.url)),
-      registerService: (service) => services.push(service),
-      registerWorkerProvider: (provider) => providers.push(provider),
-    }),
+  const registrars: Parameters<OpenClawPluginApi["registerCli"]>[0][] = [];
+  const api = createTestPluginApi({
+    runtime: { state: crabboxState } as OpenClawPluginApi["runtime"],
+    id: "crabbox",
+    rootDir: fileURLToPath(new URL(".", import.meta.url)),
+    registerCli: (registrar) => registrars.push(registrar),
+    registerService: (service) => services.push(service),
+    registerWorkerProvider: (provider) => providers.push(provider),
+  });
+  plugin.register(api);
+  const generation = {
+    provider: providers[0]!,
+    registrars,
+    inspect: (id: string) => providers[0]!.inspect({ leaseId: id, profile: PROFILE }),
+    stopped: false,
+    async stop(this: void) {
+      const scheduler = createTestPluginServiceScheduler();
+      scheduler.beginClose();
+      try {
+        await services[0]?.stop?.({ config: {}, stateDir: ".", logger: console, scheduler });
+      } finally {
+        await scheduler.stop();
+      }
+      generation.stopped = true;
+    },
+  };
+  return generation;
+}
+
+const commandMock = () => vi.spyOn(processRuntime, "runCommandWithTimeout");
+const leaseId = (argv: string[]) => argv[argv.indexOf("--id") + 1]!;
+const commands = (mock: ReturnType<typeof commandMock>, name: string) =>
+  mock.mock.calls.filter(([argv]) => argv[1] === name);
+
+beforeEach(() => {
+  vi.spyOn(managedBinary, "ensureManagedCrabboxBinary").mockImplementation(async (params) => ({
+    binary: params?.binary ?? "crabbox",
+    version: "999.0.0",
+  }));
+});
+afterEach(async () => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+  await closeOpenClawStateDatabaseAsync();
+  resetPluginStateStoreForTests();
+});
+
+it("lazily registers warm-image commands through the plugin CLI", async () => {
+  const { registrars } = registerCrabboxGeneration();
+  const program = new Command().exitOverride();
+  await registrars[0]!({ program, parentPath: [], config: {}, logger: console });
+  const crabbox = program.commands.find((command) => command.name() === "crabbox");
+  const warmImages = crabbox?.commands.find((command) => command.name() === "warm-images");
+  expect(warmImages?.options.map((option) => option.flags)).toEqual(
+    expect.arrayContaining(["--json", "--recover <selector>", "--acknowledge-provider-cleanup"]),
   );
-  return { provider: providers[0]!, services };
-}
+});
 
-async function stopGeneration(services: Parameters<OpenClawPluginApi["registerService"]>[0][]) {
-  const scheduler = createTestPluginServiceScheduler();
-  scheduler.beginClose();
+it.each([
+  { backend: "aws", executionMode: "worker-turn" },
+  { backend: "hetzner", executionMode: "remote-exec" },
+] as const)("classless $backend/$executionMode lifecycle", async ({ backend, executionMode }) => {
+  vi.spyOn(performance, "now").mockReturnValue(0);
+  const runCommand = commandMock().mockImplementation(async (argv) => {
+    if (argv[1] === "config") {
+      return jsonResult({ aws: { instanceProfile: "" } });
+    }
+    return argv[1] === "inspect" ? inspectResult(leaseId(argv)) : commandResult();
+  });
+  const { provider, stop } = registerCrabboxGeneration();
+  const profile = { ...CLASSLESS, provider: backend };
   try {
-    await services[0]?.stop?.({ config: {}, stateDir: ".", logger: console, scheduler });
-  } finally {
-    await scheduler.stop();
-  }
-}
-
-describe("Crabbox plugin generation lifecycle", () => {
-  beforeEach(() => {
-    vi.spyOn(managedBinary, "ensureManagedCrabboxBinary").mockImplementation(async (params) => ({
-      binary: params?.binary ?? "crabbox",
-      version: "999.0.0",
-    }));
-  });
-  afterEach(async () => {
-    vi.useRealTimers();
-    vi.restoreAllMocks();
-    vi.unstubAllEnvs();
-    await closeOpenClawStateDatabaseAsync();
-    resetPluginStateStoreForTests();
-  });
-
-  it("lazily exposes warm-image inspection and acknowledged recovery through the plugin CLI", async () => {
-    const registrars: Parameters<OpenClawPluginApi["registerCli"]>[0][] = [];
-    const api = createTestPluginApi({
-      runtime: { state: crabboxState } as OpenClawPluginApi["runtime"],
-      id: "crabbox",
-      rootDir: fileURLToPath(new URL(".", import.meta.url)),
-      registerCli: (registrar) => registrars.push(registrar),
-    });
-    plugin.register(api);
-    const program = new Command().exitOverride();
-    let help = "";
-    program.configureOutput({
-      writeOut: (text) => {
-        help += text;
+    expect(provider.resolveProvisionTimeoutMs?.(profile)).toBe(248 * 60_000 + 25_000);
+    expect(provider.resolveDestroyTimeoutMs?.(profile)).toBe(105 * 60_000 + 15_000);
+    const wait = vi.fn(async () => "device-classless");
+    const lease = await provider.provision(profile, "classless-operation", {
+      assertCurrent: () => {},
+      executionMode,
+      beginNodeEnrollment: async () => {
+        const fixture = nodeEnrollmentFixture("fixture-setup-code", "Classless worker", wait);
+        if (executionMode === "worker-turn") {
+          return fixture;
+        }
+        const { mode: _mode, setupCode: _code, setupId: _id, ...common } = fixture;
+        return { ...common, mode: "resume" as const, deviceId: "device-classless" };
       },
     });
-    expect(registrars).toHaveLength(1);
-    await registrars[0]!({ program, parentPath: [], config: {}, logger: api.logger });
+    const id = lease.leaseId;
+    expect(lease.node).toEqual({ deviceId: "device-classless" });
+    await expect(provider.inspect({ leaseId: id, profile })).resolves.toEqual(active);
+    await expect(provider.destroy({ leaseId: id, profile })).resolves.toBeUndefined();
+    expect(runCommand.mock.calls.flatMap(([argv]) => argv)).not.toContain("--class");
+    expect(runCommand.mock.lastCall?.[1]).toHaveProperty("killProcessTree", true);
+  } finally {
+    await stop();
+  }
+});
 
-    await expect(
-      program.parseAsync(["crabbox", "warm-images", "--help"], { from: "user" }),
-    ).rejects.toMatchObject({ code: "commander.helpDisplayed" });
-
-    expect(help).toContain("--json");
-    expect(help).toContain("--recover <selector>");
-    expect(help).toContain("--acknowledge-provider-cleanup");
-  });
-
-  it.each([
-    { backend: "aws", executionMode: "worker-turn" },
-    { backend: "hetzner", executionMode: "remote-exec" },
-  ] as const)(
-    "supports a classless $backend profile through $executionMode lifecycle",
-    async ({ backend, executionMode }) => {
-      const runCommand = vi
-        .spyOn(processRuntime, "runCommandWithTimeout")
-        .mockImplementation(async (argv) => {
-          if (argv[1] === "config") {
-            return commandResult({ stdout: JSON.stringify({ aws: { instanceProfile: "" } }) });
-          }
-          if (argv[1] === "providers") {
-            return commandResult({
-              stdout: JSON.stringify([
-                { provider: backend, classCatalog: { disposition: "unmapped" } },
-              ]),
-            });
-          }
-          return argv[1] === "inspect"
-            ? inspectResult(argv[argv.indexOf("--id") + 1]!)
-            : commandResult();
-        });
-      const generation = registerCrabboxGeneration();
-      const profile = {
-        binary: PROFILE.binary,
-        idleTimeout: PROFILE.idleTimeout,
-        ttl: PROFILE.ttl,
-        provider: backend,
-      };
-      try {
-        // Classless profiles reserve placement-enabled preparation/capture and the
-        // complete diagnostics, Stop and child-settlement cleanup envelope. Native
-        // capture includes eight 2m lifetime calls and 15m of runtime preparation.
-        expect(generation.provider.resolveProvisionTimeoutMs?.(profile)).toBe(
-          248 * 60_000 + 25_000,
-        );
-        expect(generation.provider.resolveDestroyTimeoutMs?.(profile)).toBe(105 * 60_000 + 15_000);
-        expect(await generation.provider.listMachineOptions?.(profile)).toEqual([]);
-        const waitForDeviceId = vi.fn(async () => "device-classless");
-        const lease = await generation.provider.provision(profile, "classless-operation", {
-          assertCurrent: () => {},
-          executionMode,
-          beginNodeEnrollment: async () => ({
-            ...(executionMode === "worker-turn"
-              ? {
-                  mode: "connect" as const,
-                  setupCode: "fixture-setup-code",
-                  setupId: "fixture-setup-id",
-                }
-              : { mode: "resume" as const, deviceId: "device-classless" }),
-            openclawVersion: "2026.8.1",
-            nodeBootstrap: createNodeBootstrapFixture(),
-            displayName: "Classless worker",
-            waitForDeviceId,
-          }),
-        });
-        expect(lease.node).toEqual({ deviceId: "device-classless" });
-        expect(waitForDeviceId).toHaveBeenCalledOnce();
-        await expect(
-          generation.provider.inspect({ leaseId: lease.leaseId, profile }),
-        ).resolves.toEqual({ status: "active", sharedHost: false });
-        await expect(
-          generation.provider.destroy({ leaseId: lease.leaseId, profile }),
-        ).resolves.toBeUndefined();
-        const calls = runCommand.mock.calls.map(([argv]) => argv);
-        expect(calls.filter((argv) => argv[1] !== "heartbeat").map((argv) => argv[1])).toEqual([
-          "providers",
-          ...(backend === "aws" ? ["config"] : []),
-          "warmup",
-          "inspect",
-          "run",
-          "inspect",
-          "stop",
-        ]);
-        expect(calls.flat()).not.toContain("--class");
-        expect(calls.at(-1)).toEqual([
-          PROFILE.binary,
-          "stop",
-          "--provider",
-          backend,
-          "--id",
-          lease.leaseId,
-        ]);
-        expect(runCommand.mock.lastCall?.[1]).toMatchObject({
-          timeoutMs: 1_005_000,
-          killProcessTree: true,
-        });
-      } finally {
-        await stopGeneration(generation.services);
-      }
-    },
-  );
-
-  it("registers cleanup that fences pending heartbeats and late starts", async () => {
-    vi.useFakeTimers();
-    const runCommand = vi
-      .spyOn(processRuntime, "runCommandWithTimeout")
-      .mockImplementation(async (argv) => inspectResult(argv[argv.indexOf("--id") + 1]!));
-    const generation = registerCrabboxGeneration();
-    const lease = { leaseId: "cbx_pending", profile: PROFILE };
-
-    expect(generation.services).toHaveLength(1);
-    await generation.provider.inspect(lease);
-    await stopGeneration(generation.services);
-    await generation.provider.inspect(lease);
-    await vi.advanceTimersByTimeAsync(15_000);
-
-    expect(runCommand.mock.calls.filter(([argv]) => argv[1] === "heartbeat")).toEqual([]);
-  });
-
-  it("aborts all in-flight heartbeats and fences late completions", async () => {
-    vi.useFakeTimers();
-    const signals: AbortSignal[] = [];
-    const finishHeartbeats: Array<() => void> = [];
-    const runCommand = vi
-      .spyOn(processRuntime, "runCommandWithTimeout")
-      .mockImplementation(async (argv, options) => {
-        const leaseId = argv[argv.indexOf("--id") + 1]!;
-        if (argv[1] !== "heartbeat") {
-          return inspectResult(leaseId);
-        }
-        if (typeof options === "number" || !options.signal) {
-          throw new Error("heartbeat is missing its abort signal");
-        }
-        signals.push(options.signal);
-        return await new Promise<SpawnResult>((resolve) => {
-          finishHeartbeats.push(() => resolve(commandResult()));
-        });
-      });
-    const generation = registerCrabboxGeneration();
-    let stopping: Promise<void> | undefined;
-    let stopped = false;
-    try {
-      for (const leaseId of ["cbx_first", "cbx_second"]) {
-        await generation.provider.inspect({ leaseId, profile: PROFILE });
-      }
-      await vi.advanceTimersByTimeAsync(0);
-      expect(signals).toHaveLength(2);
-
-      stopping = Promise.resolve(stopGeneration(generation.services)).then(() => {
-        stopped = true;
-      });
-      expect(signals.every((signal) => signal.aborted)).toBe(true);
-      await vi.advanceTimersByTimeAsync(0);
-      expect(stopped).toBe(false);
-      finishHeartbeats[0]!();
-      await vi.advanceTimersByTimeAsync(0);
-      expect(stopped).toBe(false);
-      finishHeartbeats[1]!();
-      await stopping;
-      expect(stopped).toBe(true);
-
-      await generation.provider.inspect({ leaseId: "cbx_late", profile: PROFILE });
-      await vi.advanceTimersByTimeAsync(15_000);
-      expect(runCommand.mock.calls.filter(([argv]) => argv[1] === "heartbeat")).toHaveLength(2);
-    } finally {
-      for (const finish of finishHeartbeats) {
-        finish();
-      }
-      await stopping;
-      await stopGeneration(generation.services);
+it("fences shutdown until both in-flight heartbeats settle", async () => {
+  vi.useFakeTimers();
+  const signals: AbortSignal[] = [];
+  const finishHeartbeats: Array<() => void> = [];
+  const runCommand = commandMock().mockImplementation(async (argv, options) => {
+    if (argv[1] !== "heartbeat") {
+      return inspectResult(leaseId(argv));
     }
+    if (typeof options === "number" || !options.signal) {
+      throw new Error("heartbeat is missing its abort signal");
+    }
+    signals.push(options.signal);
+    return await new Promise<SpawnResult>((resolve) => {
+      finishHeartbeats.push(() => resolve(commandResult()));
+    });
   });
+  const generation = registerCrabboxGeneration();
+  let stopping: Promise<void> | undefined;
+  try {
+    for (const id of ["cbx_first", "cbx_second"]) {
+      await generation.inspect(id);
+    }
+    await vi.advanceTimersByTimeAsync(0);
+    expect(signals).toHaveLength(2);
+    stopping = generation.stop();
+    expect(signals.every((signal) => signal.aborted)).toBe(true);
+    for (const finish of finishHeartbeats) {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(generation.stopped).toBe(false);
+      finish();
+    }
+    await stopping;
+    expect(generation.stopped).toBe(true);
+    await generation.inspect("cbx_late");
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(commands(runCommand, "heartbeat")).toHaveLength(2);
+  } finally {
+    finishHeartbeats.forEach((finish) => finish());
+    await stopping;
+    await generation.stop();
+  }
+});
 
-  it("keeps a replacement provider generation independently usable", async () => {
-    vi.useFakeTimers();
-    const runCommand = vi
-      .spyOn(processRuntime, "runCommandWithTimeout")
-      .mockImplementation(async (argv) =>
-        argv[1] === "inspect" ? inspectResult(argv[argv.indexOf("--id") + 1]!) : commandResult(),
-      );
-    const retiring = registerCrabboxGeneration();
-    const replacement = registerCrabboxGeneration();
-
-    await retiring.provider.inspect({ leaseId: "cbx_retiring", profile: PROFILE });
-    await replacement.provider.inspect({ leaseId: "cbx_replacement", profile: PROFILE });
-    await stopGeneration(retiring.services);
-    await vi.advanceTimersByTimeAsync(5_000);
-
-    const heartbeatLeaseIds = runCommand.mock.calls
-      .filter(([argv]) => argv[1] === "heartbeat")
-      .map(([argv]) => argv[argv.indexOf("--id") + 1]);
-    expect(heartbeatLeaseIds).toEqual(["cbx_replacement", "cbx_replacement"]);
-
-    await stopGeneration(replacement.services);
-  });
-
-  it.each(["binary acquisition", "image deletion"])(
-    "holds plugin service stop until aborted %s settles",
-    async (stage) => {
-      vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-crabbox-maintenance-generation-"));
-      const store = createPluginStateSyncKeyedStoreForTests<WarmProfileRecord>("crabbox", {
-        namespace: "warm-images",
-        maxEntries: 128,
-        overflowPolicy: "reject-new",
-      });
-      const old = Date.now() - 14 * 24 * 60 * 60 * 1_000;
-      store.register("expired", {
-        version: 3,
-        allocations: {},
-        image: {
-          checkpointId: "chk_expired",
-          kind: "aws-ebs-snapshot",
-          state: "available",
-          createdAtMs: old,
-          preparationKey: null,
-          cacheKey: null,
-          purpose: null,
-          lastDemandAtMs: old,
-        },
-      });
-      const started = createDeferred<AbortSignal>();
-      const finish = createDeferred<void>();
-      vi.spyOn(processRuntime, "runCommandWithTimeout").mockImplementation(
-        async (_argv, options) => {
-          if (typeof options === "number" || !options.signal) {
-            throw new Error("maintenance command needs a signal");
-          }
-          started.resolve(options.signal);
-          await finish.promise;
-          return commandResult();
-        },
-      );
-      if (stage === "binary acquisition") {
-        vi.spyOn(managedBinary, "ensureManagedCrabboxBinary").mockImplementation(async (params) => {
-          if (!params?.signal) {
-            throw new Error("managed acquisition needs the lifecycle signal");
-          }
-          started.resolve(params.signal);
-          await finish.promise;
-          params.signal.throwIfAborted();
-          return { binary: params.binary ?? "crabbox", version: "999.0.0" };
-        });
-      }
-      const generation = registerCrabboxGeneration();
-      const maintenance = generation.provider.maintain!({
-        profiles: [PROFILE],
-        signal: new AbortController().signal,
-        assertCurrent() {},
-      });
-      const rejected = expect(maintenance).rejects.toThrow();
-      let stopping: Promise<void> | undefined;
-      let stopped = false;
-      try {
-        const signal = await started.promise;
-        stopping = Promise.resolve(stopGeneration(generation.services)).then(() => {
-          stopped = true;
-        });
-        expect(signal.aborted).toBe(true);
-        await Promise.resolve();
-        expect(stopped).toBe(false);
-      } finally {
-        finish.resolve();
-        await rejected;
-        await stopping;
-      }
-      expect(stopped).toBe(true);
-      expect(store.lookup("expired")?.operation).toEqual(
-        stage === "image deletion" ? { type: "retire", checkpointId: "chk_expired" } : undefined,
-      );
-      expect(store.lookup("expired")?.image?.checkpointId).toBe("chk_expired");
-    },
+it("keeps a replacement provider generation independently usable", async () => {
+  vi.useFakeTimers();
+  const runCommand = commandMock().mockImplementation(async (argv) =>
+    argv[1] === "inspect" ? inspectResult(leaseId(argv)) : commandResult(),
   );
+  const retiring = registerCrabboxGeneration();
+  const replacement = registerCrabboxGeneration();
+
+  await retiring.inspect("cbx_retiring");
+  await replacement.inspect("cbx_replacement");
+  await retiring.stop();
+  await retiring.inspect("cbx_retiring");
+  await vi.advanceTimersByTimeAsync(5_000);
+  const heartbeatLeaseIds = commands(runCommand, "heartbeat").map(([argv]) => leaseId(argv));
+  expect(heartbeatLeaseIds).toEqual(["cbx_replacement", "cbx_replacement"]);
+  await replacement.stop();
+});
+
+it.each(["binary acquisition", "image deletion"])("joins aborted %s on stop", async (stage) => {
+  vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-crabbox-maintenance-generation-"));
+  const store = openWarmImageStore();
+  store.register("expired", warmRecord({ image: warmImage("chk_expired") }));
+  const started = createDeferred<AbortSignal | undefined>();
+  const finish = createDeferred<void>();
+  async function pause(signal?: AbortSignal) {
+    started.resolve(signal);
+    await finish.promise;
+    return signal;
+  }
+  commandMock().mockImplementation(async (_argv, options) => {
+    await pause(typeof options === "number" ? undefined : options.signal);
+    return commandResult();
+  });
+  if (stage === "binary acquisition") {
+    vi.spyOn(managedBinary, "ensureManagedCrabboxBinary").mockImplementation(async (params) => {
+      (await pause(params?.signal))?.throwIfAborted();
+      return { binary: params?.binary ?? "crabbox", version: "999.0.0" };
+    });
+  }
+  const generation = registerCrabboxGeneration();
+  const maintenance = generation.provider.maintain!({
+    profiles: [PROFILE],
+    signal: new AbortController().signal,
+    assertCurrent() {},
+  });
+  const rejected = expect(maintenance).rejects.toThrow();
+  let stopping: Promise<void> | undefined;
+  try {
+    const signal = await started.promise;
+    stopping = generation.stop();
+    expect(signal?.aborted).toBe(true);
+    await Promise.resolve();
+    expect(generation.stopped).toBe(false);
+  } finally {
+    finish.resolve();
+    await rejected;
+    await stopping;
+  }
+  expect(generation.stopped).toBe(true);
+  expect(store.lookup("expired")?.operation).toEqual(
+    stage === "image deletion" ? { type: "retire", checkpointId: "chk_expired" } : undefined,
+  );
+  expect(store.lookup("expired")?.image?.checkpointId).toBe("chk_expired");
 });

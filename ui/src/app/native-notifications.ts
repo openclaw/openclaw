@@ -1,8 +1,7 @@
-import { registerListener } from "../../../src/shared/listeners.js";
 import { listen } from "../lib/reactive/listener.ts";
 import { webKitHostWindow } from "./native-webkit-bridge.ts";
 
-export type NativeNotificationsPermission = "granted" | "denied" | "notDetermined";
+type NativeNotificationsPermission = "granted" | "denied" | "notDetermined";
 
 type NativeNotificationTestOutcome =
   | { state: "pending" }
@@ -70,18 +69,26 @@ export function createNativeNotificationsCapability() {
     permission: "unknown" as const,
     test: null,
   };
-  const listeners = new Set<(snapshot: NativeNotificationsSnapshot) => void>();
+  let render: ((snapshot: NativeNotificationsSnapshot) => void) | undefined;
+  let testCompletion: PromiseWithResolvers<NativeNotificationTestOutcome | undefined> | undefined;
+  let testAcknowledged = false;
 
   const publish = (next: NativeNotificationsSnapshot) => {
     snapshot = next;
-    for (const listener of listeners) {
-      listener(snapshot);
-    }
+    render?.(snapshot);
   };
   const handleStatus = (event: Event) => {
     const next = snapshotFrom((event as CustomEvent<unknown>).detail);
     if (next) {
       publish(next);
+      if (next.test?.state === "pending") {
+        testAcknowledged = true;
+      } else if (next.test && testAcknowledged) {
+        const completion = testCompletion;
+        testCompletion = undefined;
+        testAcknowledged = false;
+        completion?.resolve(next.test);
+      }
     }
   };
   // Permission may change in System Settings while the app is backgrounded.
@@ -97,24 +104,37 @@ export function createNativeNotificationsCapability() {
     get snapshot() {
       return snapshot;
     },
-    subscribe: (listener: (snapshot: NativeNotificationsSnapshot) => void) =>
-      registerListener(listeners, listener),
+    subscribe(listener: (snapshot: NativeNotificationsSnapshot) => void) {
+      render = listener;
+      return () => {
+        render = undefined;
+      };
+    },
     requestPermission(this: void) {
       postMessage({ type: "request-permission" });
     },
     sendTest(this: void) {
-      if (snapshot.test?.state === "pending") {
-        return;
+      if (testCompletion) {
+        return testCompletion.promise;
       }
+      if (snapshot.test?.state === "pending") {
+        return undefined;
+      }
+      testCompletion = Promise.withResolvers();
+      // A focus/status reply may still carry the previous test's terminal outcome.
+      testAcknowledged = false;
       publish({ ...snapshot, test: { state: "pending" } });
       postMessage({ type: "send-test" });
+      return testCompletion.promise;
     },
     backgroundSessionCompleted(this: void, completion: NativeBackgroundSessionCompletion) {
       postMessage({ type: "background-session-completed", ...completion });
     },
     dispose(this: void) {
       stops.forEach((stop) => stop());
-      listeners.clear();
+      render = undefined;
+      testCompletion?.resolve(undefined);
+      testCompletion = undefined;
     },
   };
 }

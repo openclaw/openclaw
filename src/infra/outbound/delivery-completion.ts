@@ -41,7 +41,7 @@ import {
   type DeliveryQueueStateContext,
 } from "../delivery-queue-sqlite.js";
 import { isGatewayExternallySupervised } from "../gateway-supervision.js";
-import { SqliteWorkerError } from "../sqlite-worker-contract.js";
+import { wrapSqliteWorkerError } from "../sqlite-worker-contract.js";
 import {
   countPhysicalOutboundSends,
   type OutboundDeliveryBatch as DeliveryEvidenceBatch,
@@ -260,9 +260,10 @@ export async function settlePendingFinalDelivery(
       if (outcome.kind === "rolled-back" && (refused || outcome.reason === "stale-state")) {
         return;
       }
-      throw new SqliteWorkerError(
+      throw wrapSqliteWorkerError(
         outcome.error.message,
         outcome.kind === "unknown" ? "outcome-unknown" : "unavailable",
+        outcome.error,
       );
     }
     if (!("state" in outcome.value)) {

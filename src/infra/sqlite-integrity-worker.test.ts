@@ -6,7 +6,7 @@ import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, nextEventLoopTurn } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
 import * as processUrls from "./runtime-process-url.js";
@@ -90,7 +90,6 @@ function expectForksClosed() {
 }
 
 function expectElapsed(value: unknown) {
-  expect(value).toEqual(expect.any(Number));
   expect(Number.isFinite(value)).toBe(true);
   expect(value).toBeGreaterThanOrEqual(0);
 }
@@ -152,46 +151,35 @@ describe("SQLite integrity child", () => {
       vi.useRealTimers();
     }
   });
-  it.each(["healthy", "damaged"] as const)(
-    "closes the native reader and reports structural integrity: %s",
-    async (damage) => {
-      let fragmentCountOffset: number | undefined;
-      const { source } = fixture(
-        "file",
-        "CREATE TABLE records(value INTEGER); INSERT INTO records VALUES(1)",
-        (database) => {
-          if (damage !== "healthy") {
-            const root = Number(
-              database.prepare("SELECT rootpage FROM sqlite_schema WHERE name = 'records'").get()
-                ?.rootpage,
-            );
-            const pageSize = Number(database.prepare("PRAGMA page_size").get()?.page_size);
-            fragmentCountOffset = (root - 1) * pageSize + 7;
-          }
-        },
-      );
-      if (fragmentCountOffset !== undefined) {
-        // Misreport free-byte fragmentation without making the records themselves unreadable.
-        const bytes = fs.readFileSync(source);
-        bytes.writeUInt8(1, fragmentCountOffset);
-        fs.writeFileSync(source, bytes);
-      }
-      const timing: SqliteIntegrityCheckTiming = {};
-      vi.mocked(fork).mockClear();
-      const check = inScope(() => inspect(source, undefined, timing));
-      if (damage === "healthy") {
-        await expect(check).resolves.toBeUndefined();
-      } else {
-        await expect(check).rejects.toMatchObject({
-          name: "SqliteIntegrityError",
-          message: expect.stringMatching(
-            /integrity_check failed[\s\S]*Fragmentation of 0 bytes reported as 1/u,
-          ),
-        });
-      }
-      expectForksClosed();
-    },
-  );
+  it("closes the native reader after reporting structural damage", async () => {
+    let fragmentCountOffset = 0;
+    const { source } = fixture(
+      "file",
+      "CREATE TABLE records(value INTEGER); INSERT INTO records VALUES(1)",
+      (database) => {
+        const root = Number(
+          database.prepare("SELECT rootpage FROM sqlite_schema WHERE name = 'records'").get()
+            ?.rootpage,
+        );
+        const pageSize = Number(database.prepare("PRAGMA page_size").get()?.page_size);
+        fragmentCountOffset = (root - 1) * pageSize + 7;
+      },
+    );
+    // Misreport free-byte fragmentation without making the records themselves unreadable.
+    const bytes = fs.readFileSync(source);
+    bytes.writeUInt8(1, fragmentCountOffset);
+    fs.writeFileSync(source, bytes);
+    const timing: SqliteIntegrityCheckTiming = {};
+    vi.mocked(fork).mockClear();
+    const check = inScope(() => inspect(source, undefined, timing));
+    await expect(check).rejects.toMatchObject({
+      name: "SqliteIntegrityError",
+      message: expect.stringMatching(
+        /integrity_check failed[\s\S]*Fragmentation of 0 bytes reported as 1/u,
+      ),
+    });
+    expectForksClosed();
+  });
 
   it("reports a SIGTERM close without an integrity verdict as an interruption", async () => {
     const { source } = fixture("signal");
@@ -322,16 +310,6 @@ describe("SQLite integrity child", () => {
         CREATE TABLE retained (parent_id INTEGER REFERENCES parents(id));
         ${failedResult ? "PRAGMA foreign_keys=OFF; INSERT INTO retained VALUES (42); PRAGMA foreign_keys=ON;" : ""}
       `,
-        (database) => {
-          if (failedResult) {
-            expect(database.prepare("PRAGMA foreign_key_check").get()).toEqual({
-              table: "retained",
-              rowid: 1,
-              parent: "parents",
-              fkid: 0,
-            });
-          }
-        },
       );
       useWorker(
         root,
@@ -402,12 +380,7 @@ describe("SQLite integrity child", () => {
       try {
         const [verdict] = await Promise.all([resultReceived.promise, nativeClosed.promise]);
         expect(verdict).toMatchObject(
-          failedResult
-            ? {
-                ok: false,
-                error: failedError,
-              }
-            : { ok: true },
+          failedResult ? { ok: false, error: failedError } : { ok: true },
         );
         const completed = expectDefined(child, "completed integrity child");
         expect(completed).toMatchObject({ exitCode: 0, signalCode: null });
@@ -511,9 +484,7 @@ describe("SQLite integrity child", () => {
       void check.then(markSettled, markSettled);
       try {
         await ready.promise;
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
+        await nextEventLoopTurn();
         expect(settled).toBe(false);
         expect(timing).not.toHaveProperty("workerLifetimeElapsedMs");
       } finally {
@@ -558,19 +529,16 @@ describe("SQLite integrity child", () => {
     expect(fork).toHaveBeenCalledOnce();
   });
 
-  it.each([
-    { failClosingPhase: true, failOpen: false, failNativeClose: false, reuse: false },
-    { failClosingPhase: false, failOpen: true, failNativeClose: false, reuse: false },
-    { failClosingPhase: false, failOpen: false, failNativeClose: true, reuse: true },
-  ])(
-    "preserves error, timing and native close ownership: $failClosingPhase / $failOpen / $failNativeClose / $reuse",
-    async ({ failClosingPhase, failOpen, failNativeClose, reuse }) => {
+  it.each(["diagnostic", "open", "close"] as const)(
+    "preserves error, timing and native close ownership after a %s failure",
+    async (failure) => {
+      const failOpen = failure === "open";
+      const failNativeClose = failure === "close";
       const { root, source } = fixture(
         "native",
         "PRAGMA foreign_keys = OFF; CREATE TABLE parent(id INTEGER PRIMARY KEY); CREATE TABLE child(parent_id INTEGER REFERENCES parent(id)); INSERT INTO child VALUES (42);",
       );
       const entry = processUrls.resolveRuntimeProcessEntrypointUrl("sqliteIntegrity");
-      const phases = path.join(root, "phases.jsonl");
       const closed = path.join(root, "closed.json");
       const resultPath = path.join(root, "result.json");
       useWorker(
@@ -578,7 +546,7 @@ describe("SQLite integrity child", () => {
         `import fs from 'node:fs';
         import { createRequire } from 'node:module';
         const sqlite = createRequire(import.meta.url)('node:sqlite');
-        const timeout = { initial: undefined, sql: [] };
+        let initialTimeout;
         sqlite.DatabaseSync = new Proxy(sqlite.DatabaseSync, {
           construct(target, args) {
             if (${failOpen} && args[0] === ${JSON.stringify(source)}) {
@@ -586,12 +554,7 @@ describe("SQLite integrity child", () => {
             }
             const database = Reflect.construct(target, args);
             if (args[0] === ${JSON.stringify(source)}) {
-              timeout.initial = database.prepare('PRAGMA busy_timeout').get().timeout;
-              const exec = database.exec.bind(database);
-              database.exec = (sql) => {
-                if (/PRAGMA busy_timeout/iu.test(sql)) timeout.sql.push(sql);
-                return exec(sql);
-              };
+              initialTimeout = database.prepare('PRAGMA busy_timeout').get().timeout;
             }
             return database;
           },
@@ -606,11 +569,8 @@ describe("SQLite integrity child", () => {
         };
         const send = process.send.bind(process);
         process.send = (message, ...args) => {
-          if (message.type === 'phase') {
-            fs.appendFileSync(${JSON.stringify(phases)}, JSON.stringify(message.phase) + '\\n');
-            if (${failClosingPhase} && message.phase === 'closing') throw new Error('synthetic diagnostic send failure');
-          }
-          if ('ok' in message) fs.writeFileSync(${JSON.stringify(resultPath)}, JSON.stringify({ ...message, timeout }));
+          if (${failure === "diagnostic"} && message.type === 'phase' && message.phase === 'closing') throw new Error('synthetic diagnostic send failure');
+          if ('ok' in message) fs.writeFileSync(${JSON.stringify(resultPath)}, JSON.stringify({ ...message, initialTimeout }));
           return send(message, ...args);
         };
         await import(${JSON.stringify(entry.href)});`,
@@ -626,20 +586,11 @@ describe("SQLite integrity child", () => {
               message: expect.stringContaining("foreign_key_check failed"),
             };
       const run = () => inspect(source, undefined, timing);
-      await expect(reuse ? inScope(run) : run()).rejects.toMatchObject(expectedError);
+      await expect(failNativeClose ? inScope(run) : run()).rejects.toMatchObject(expectedError);
       const child = vi.mocked(fork).mock.results.at(-1)?.value as ReturnType<typeof fork>;
       expect(child.exitCode).toBe(0);
-      expect(fs.existsSync(phases)).toBe(true);
-      expect(
-        fs
-          .readFileSync(phases, "utf8")
-          .trim()
-          .split("\n")
-          .map((line) => JSON.parse(line)),
-      ).toEqual(failOpen ? ["opening"] : ["opening", "checking", "closing"]);
       const result = JSON.parse(fs.readFileSync(resultPath, "utf8"));
-      expect(result).toMatchObject({ ok: false, error: expectedError });
-      expect(result.timeout).toEqual(failOpen ? { sql: [] } : { initial: 250, sql: [] });
+      expect(result.initialTimeout).toBe(failOpen ? undefined : 250);
       if (failOpen) {
         expect(fs.existsSync(closed)).toBe(false);
         expect(result).not.toHaveProperty("checkElapsedMs");

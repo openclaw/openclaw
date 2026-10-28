@@ -36,14 +36,6 @@ function createFetchMockHandle(): FetchMockHandle {
   }) as FetchMockHandle;
 }
 
-export async function createBotHandler(): Promise<{
-  handler: (ctx: Record<string, unknown>) => Promise<void>;
-  replySpy: ReturnType<typeof vi.fn>;
-  runtimeError: ReturnType<typeof vi.fn>;
-}> {
-  return createBotHandlerWithOptions({});
-}
-
 export async function createBotHandlerWithOptions(options: {
   proxyFetch?: typeof fetch;
   runtimeLog?: ReturnType<typeof vi.fn>;

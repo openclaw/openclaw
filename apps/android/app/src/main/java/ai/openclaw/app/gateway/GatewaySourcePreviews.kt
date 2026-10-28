@@ -7,12 +7,15 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import okhttp3.Call
 import okhttp3.Callback
+import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 import okio.Buffer
 import java.io.IOException
+import java.net.URLDecoder
+import java.util.Locale
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
 
@@ -53,8 +56,8 @@ internal fun resolveGatewaySourcePreviewConfig(
   )
 }
 
-/** The Gateway owns remote favicon fetching; this client only reads its authenticated image route. */
-internal class GatewaySourceFaviconLoader(
+/** Reads Gateway-owned image routes with the current connection's HTTP policy and credentials. */
+internal class GatewayImageLoader(
   client: OkHttpClient,
 ) {
   private val client =
@@ -63,13 +66,13 @@ internal class GatewaySourceFaviconLoader(
       .followRedirects(false)
       .followSslRedirects(false)
       .build()
-  private val cache =
+  private val faviconCache =
     object : LinkedHashMap<String, GatewayLoadedImage?>(32, 0.75f, true) {
       override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, GatewayLoadedImage?>?): Boolean = size > 32
     }
   private val mutex = kotlinx.coroutines.sync.Mutex()
 
-  suspend fun load(
+  suspend fun loadFavicon(
     gatewayUrl: String,
     basePath: String,
     hostname: String,
@@ -79,15 +82,58 @@ internal class GatewaySourceFaviconLoader(
   ): GatewayLoadedImage? {
     val origin = gatewayUrl.toHttpUrlOrNull() ?: return null
     val host = "https://$hostname/".toHttpUrlOrNull()?.takeIf { it.host == hostname && it.username.isEmpty() && it.password.isEmpty() && it.encodedPath == "/" }?.host ?: return null
-    val path = "$basePath/__openclaw__/link-favicon/$host"
     val url =
       origin
         .newBuilder()
-        .encodedPath(path)
+        .encodedPath("$basePath/__openclaw__/link-favicon/$host")
         .query(null)
         .fragment(null)
         .build()
     val key = url.toString()
+    return mutex.withLock {
+      if (faviconCache.containsKey(key)) return@withLock faviconCache[key]
+      load(url, headers, credentials, 65_536, 8, withEnqueue) { mime ->
+        mime in setOf("image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml", "image/x-icon", "image/vnd.microsoft.icon")
+      }.also { faviconCache[key] = it }
+    }
+  }
+
+  suspend fun loadInboundImage(
+    gatewayUrl: String,
+    basePath: String,
+    source: String,
+    sessionKey: String,
+    agentId: String?,
+    headers: Map<String, String>,
+    credentials: List<String>,
+    withEnqueue: (() -> Unit) -> Unit,
+  ): GatewayLoadedImage? {
+    if (!isInboundMediaSource(source)) return null
+    val url =
+      gatewayUrl
+        .toHttpUrlOrNull()
+        ?.newBuilder()
+        ?.encodedPath("${basePath.trimEnd('/')}/__openclaw__/assistant-media")
+        ?.query(null)
+        ?.fragment(null)
+        ?.addQueryParameter("source", source.trim())
+        ?.addQueryParameter("sessionKey", sessionKey)
+        ?.apply { agentId?.trim()?.takeIf(String::isNotEmpty)?.let { addQueryParameter("agentId", it) } }
+        ?.build() ?: return null
+    return load(url, headers, credentials, GatewayMediaKind.Image.maximumBufferedBytes, 20, withEnqueue) { mime ->
+      mime.startsWith("image/") && mime != "image/svg+xml"
+    }
+  }
+
+  private suspend fun load(
+    url: HttpUrl,
+    headers: Map<String, String>,
+    credentials: List<String>,
+    maximumBytes: Long,
+    timeoutSeconds: Long,
+    withEnqueue: (() -> Unit) -> Unit,
+    acceptsMimeType: (String) -> Boolean,
+  ): GatewayLoadedImage? {
     val baseRequest =
       Request
         .Builder()
@@ -98,33 +144,29 @@ internal class GatewaySourceFaviconLoader(
         }.build()
     val authorizations =
       buildList<String?> {
-        // A trusted proxy can authorize HTTP itself, even when hello also issued a device token.
         baseRequest.header("Authorization")?.let(::add)
         credentials.forEach { add("Bearer $it") }
         if (isEmpty()) add(null)
       }.distinct()
-    mutex.withLock {
-      if (cache.containsKey(key)) return cache[key]
-      for (authorization in authorizations) {
-        val request = baseRequest.newBuilder()
-        authorization?.let { request.header("Authorization", it) }
-        val response = fetch(request.build(), withEnqueue)
-        if (response.first == 401 || response.first == 403) continue
-        cache[key] = response.second
-        return response.second
-      }
-      cache[key] = null
-      return null
+    for (authorization in authorizations) {
+      val request = baseRequest.newBuilder()
+      authorization?.let { request.header("Authorization", it) }
+      val (code, image) = fetch(request.build(), maximumBytes, timeoutSeconds, acceptsMimeType, withEnqueue)
+      if (code != 401 && code != 403) return image
     }
+    return null
   }
 
   private suspend fun fetch(
     request: Request,
+    maximumBytes: Long,
+    timeoutSeconds: Long,
+    acceptsMimeType: (String) -> Boolean,
     withEnqueue: (() -> Unit) -> Unit,
   ): Pair<Int, GatewayLoadedImage?> =
     suspendCancellableCoroutine { continuation ->
       val call = client.newCall(request)
-      call.timeout().timeout(8, TimeUnit.SECONDS)
+      call.timeout().timeout(timeoutSeconds, TimeUnit.SECONDS)
       continuation.invokeOnCancellation { call.cancel() }
       withEnqueue {
         if (!continuation.isActive) return@withEnqueue
@@ -147,15 +189,14 @@ internal class GatewaySourceFaviconLoader(
                     runCatching {
                       if (!response.isSuccessful) return@runCatching null
                       val body = response.body
-                      val mime = body.contentType()?.let { "${it.type}/${it.subtype}" } ?: return@runCatching null
-                      if (mime !in setOf("image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml", "image/x-icon", "image/vnd.microsoft.icon")) return@runCatching null
-                      if (body.contentLength() > 65_536) return@runCatching null
+                      val mime = body.contentType()?.let { "${it.type}/${it.subtype}".lowercase(Locale.ROOT) } ?: return@runCatching null
+                      if (!acceptsMimeType(mime) || body.contentLength() > maximumBytes) return@runCatching null
                       val buffer = Buffer()
                       val source = body.source()
-                      while (continuation.isActive && buffer.size <= 65_536) {
-                        if (source.read(buffer, minOf(8_192, 65_537 - buffer.size)) == -1L) break
+                      while (continuation.isActive && buffer.size <= maximumBytes) {
+                        if (source.read(buffer, minOf(8_192, maximumBytes + 1 - buffer.size)) == -1L) break
                       }
-                      if (!continuation.isActive || buffer.size > 65_536) null else GatewayLoadedImage(buffer.readByteArray(), mime)
+                      if (!continuation.isActive || buffer.size > maximumBytes) null else GatewayLoadedImage(buffer.readByteArray(), mime)
                     }.getOrNull()
                   response.code to image
                 }
@@ -165,4 +206,18 @@ internal class GatewaySourceFaviconLoader(
         )
       }
     }
+}
+
+private val INBOUND_MEDIA_SOURCE_REGEX = Regex("^media://inbound/([^/?#]+)$", RegexOption.IGNORE_CASE)
+
+/** Only Gateway-projected, single-segment inbound references may reach assistant-media. */
+internal fun isInboundMediaSource(source: String?): Boolean {
+  val encoded =
+    source
+      ?.trim()
+      ?.let(INBOUND_MEDIA_SOURCE_REGEX::matchEntire)
+      ?.groupValues
+      ?.get(1) ?: return false
+  val id = runCatching { URLDecoder.decode(encoded, Charsets.UTF_8.name()) }.getOrNull() ?: return false
+  return id != "." && id != ".." && '/' !in id && '\\' !in id && '\u0000' !in id
 }

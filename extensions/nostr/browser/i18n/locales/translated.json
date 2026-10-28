@@ -1459,5 +1459,77 @@
       }
     }
   },
-  "sv": {}
+  "sv": {
+    "common": {
+      "cancel": "Avbryt",
+      "configured": "Konfigurerad",
+      "hideAdvanced": "Dölj avancerade inställningar",
+      "importFromRelays": "Importera från reläer",
+      "importing": "Importerar…",
+      "lastStart": "Senaste start",
+      "na": "Ej tillämpligt",
+      "no": "Nej",
+      "publicKey": "Offentlig nyckel",
+      "refresh": "Uppdatera",
+      "running": "Körs",
+      "saveAndPublish": "Spara och publicera",
+      "saving": "Sparar…",
+      "showAdvanced": "Visa avancerade inställningar",
+      "unsavedChanges": "Du har osparade ändringar",
+      "yes": "Ja"
+    },
+    "channels": {
+      "lastError": "Senaste fel",
+      "nostr": {
+        "title": "Nostr",
+        "subtitle": "Decentraliserade direktmeddelanden via Nostr-reläer (NIP-04).",
+        "profile": "Profil",
+        "editProfile": "Redigera profil",
+        "profilePicture": "Profilbild",
+        "noProfile": "Ingen profil har skapats.",
+        "noProfileHint": "Klicka på \"Redigera profil\" för att lägga till ditt namn, en presentation och en profilbild.",
+        "name": "Namn",
+        "displayName": "Visningsnamn",
+        "about": "Om",
+        "advanced": "Avancerat",
+        "profilePicturePreview": "Förhandsvisning av profilbild",
+        "account": "Konto",
+        "username": "Användarnamn",
+        "usernameHelp": "Kort användarnamn (t.ex. satoshi)",
+        "bio": "Presentation",
+        "bioPlaceholder": "Berätta om dig själv...",
+        "bioHelp": "En kort presentation eller beskrivning",
+        "displayNameHelp": "Ditt fullständiga visningsnamn",
+        "avatarUrl": "URL till profilbild",
+        "avatarHelp": "HTTPS-URL till din profilbild",
+        "bannerUrl": "URL till banner",
+        "bannerHelp": "HTTPS-URL till en bannerbild",
+        "website": "Webbplats",
+        "websiteHelp": "Din personliga webbplats",
+        "nip05Identifier": "NIP-05-identifierare",
+        "nip05Help": "Verifierbar identifierare (t.ex. you@domain.com)",
+        "lightningAddress": "Lightning-adress",
+        "lightningHelp": "Lightning-adress för dricks (LUD-16)",
+        "placeholders": {
+          "username": "satoshi",
+          "displayName": "Satoshi Nakamoto",
+          "avatarUrl": "https://example.com/avatar.jpg",
+          "bannerUrl": "https://example.com/banner.jpg",
+          "website": "https://example.com",
+          "nip05": "you@example.com",
+          "lightningAddress": "you@getalby.com"
+        },
+        "notices": {
+          "timeout": "Begäran nådde tidsgränsen efter 30 sekunder; servern kan ändå ha tillämpat ändringen — kontrollera profilen innan du försöker igen.",
+          "operationFailed": "{prefix}: {error}",
+          "updateFailed": "Profiluppdateringen misslyckades",
+          "publishFailed": "Publiceringen av profilen misslyckades på alla reläer.",
+          "published": "Profilen har publicerats på reläerna.",
+          "importFailed": "Profilimporten misslyckades",
+          "importedFromRelays": "Profilen har importerats från reläerna. Granska och publicera.",
+          "imported": "Profilen har importerats. Granska och publicera."
+        }
+      }
+    }
+  }
 }

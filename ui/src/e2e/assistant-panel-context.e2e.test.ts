@@ -65,11 +65,11 @@ suite.define(() => {
           },
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, workKey));
-        await gateway.waitForRequest("chat.startup");
+        await gateway.waitForRequest("sessions.messages.subscribe", { match: { key: workKey } });
         await page.locator(".sidebar-footer-bar__home").click();
         const panel = page.locator("openclaw-assistant-panel");
         await panel.locator("openclaw-chat-pane").waitFor();
-        await gateway.waitForRequest("chat.startup", { after: 1 });
+        await gateway.waitForRequest("sessions.messages.subscribe", { match: { key: homeKey } });
         const composer = panel.locator(".agent-chat__composer-combobox textarea");
         await expect.poll(() => composer.isVisible()).toBe(true);
         await composer.fill("Help with the current work");

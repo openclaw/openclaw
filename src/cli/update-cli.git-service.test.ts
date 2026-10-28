@@ -167,7 +167,7 @@ it.each(["owned", "unresolved"] as const)(
     }
 
     if (ownership === "unresolved") {
-      expect(checks.getLogOutput()).toContain("Restart the Gateway you launched manually");
+      expect(checks.getLogOutput()).toContain("Stop the Gateway through its owner");
       expect(cli.updateGitCheckout).toHaveBeenCalledOnce();
       checks.expectNoSideEffects(
         mocks.serviceStop,

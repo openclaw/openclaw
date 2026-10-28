@@ -2,8 +2,8 @@ import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import type { Page } from "playwright";
 import { inject } from "vitest";
-import { extractControlUiStartupAssetPaths } from "../../../scripts/check-control-ui-performance.mts";
 import { selectControlUiRoutePreloads } from "../../../src/gateway/control-ui-route-preloads.ts";
+import { extractControlUiStartupAssetPaths } from "../../config/control-ui-startup-assets.ts";
 
 export async function failControlUiModuleForDocuments(
   page: Page,
@@ -36,15 +36,19 @@ function builtAssetRequest(files: string[]): RegExp {
   return new RegExp(`/assets/(?:${names.join("|")})(?:\\?.*)?$`, "u");
 }
 
+function buildPaths(buildRoot: string | undefined) {
+  if (!buildRoot) {
+    throw new Error("Built Control UI requests require the bundled Control UI E2E server");
+  }
+  return { assetsDir: path.join(buildRoot, "assets"), html: path.join(buildRoot, "index.html") };
+}
+
 /** Resolve the emitted implementation, including when optimization removes its facade. */
 export function controlUiE2eBuiltModuleRequest(
   modulePath: string,
   buildRoot = inject("controlUiE2eBuildRoot"),
 ): RegExp {
-  if (!buildRoot) {
-    throw new Error("Built module requests require the bundled Control UI E2E server");
-  }
-  const assetsDir = path.join(buildRoot, "assets");
+  const { assetsDir } = buildPaths(buildRoot);
   const sourceSuffix = `/${modulePath.replaceAll("\\", "/")}`;
   const chunks = readdirSync(assetsDir).filter((file) => {
     if (!file.endsWith(".js.map")) {
@@ -66,11 +70,8 @@ export function controlUiE2eBuiltAssetRequest(
   sourcePath: string,
   buildRoot = inject("controlUiE2eBuildRoot"),
 ): RegExp {
-  if (!buildRoot) {
-    throw new Error("Built asset requests require the bundled Control UI E2E server");
-  }
+  const { assetsDir } = buildPaths(buildRoot);
   const source = readFileSync(sourcePath);
-  const assetsDir = path.join(buildRoot, "assets");
   const assets = readdirSync(assetsDir).filter(
     (file) =>
       path.extname(file) === path.extname(sourcePath) &&
@@ -87,11 +88,7 @@ export function controlUiE2eRouteStylesheetRequest(
   route: "chat" | "new",
   loadedRoute: "chat" | "new",
 ): RegExp {
-  const buildRoot = inject("controlUiE2eBuildRoot");
-  if (!buildRoot) {
-    throw new Error("Route stylesheet requests require the bundled Control UI E2E server");
-  }
-  const html = readFileSync(path.join(buildRoot, "index.html"), "utf8");
+  const html = readFileSync(buildPaths(inject("controlUiE2eBuildRoot")).html, "utf8");
   const loaded = new Set(
     extractControlUiStartupAssetPaths(selectControlUiRoutePreloads(html, loadedRoute)),
   );

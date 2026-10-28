@@ -1,4 +1,5 @@
 import type { WorkerProtocolCloseReason } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import type { GatewayContextResolver } from "../server-methods/types.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
 import type { createWorkerInferenceManager } from "./inference.js";
 import type { WorkerLiveEventReceiver, WorkerLiveEventApplicationResult } from "./live-events.js";
@@ -47,6 +48,7 @@ export type WorkerInferenceServiceResult<K extends "start" | "cancel"> =
   | { ok: false; closeReason: WorkerProtocolCloseReason };
 
 export type WorkerTurnRpcOptions = {
+  resolveGatewayContext?: GatewayContextResolver;
   store: WorkerEnvironmentStore;
   prepareInstallation: (
     install: WorkerInstallationArtifact["install"],

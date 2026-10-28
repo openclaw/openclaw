@@ -2,9 +2,9 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
 import { buildQaTarget } from "openclaw/plugin-sdk/qa-channel-protocol";
 import type { QaRunnerCliRegistration } from "openclaw/plugin-sdk/qa-runner-runtime";
+import { createQaPollingErrorState } from "../../qa-transport.js";
 import { readQaScenarioExecutionConfig } from "../../scenario-catalog.js";
 import {
   createMatrixQaScenarioEnvironment,
@@ -27,7 +27,6 @@ import {
 } from "./substrate/topology.js";
 
 type AdapterFactory = NonNullable<QaRunnerCliRegistration["adapterFactory"]>;
-type FactoryContext = Parameters<AdapterFactory["create"]>[0];
 type AdapterDefinition = Awaited<ReturnType<AdapterFactory["create"]>>;
 
 const MATRIX_SHARED_FLOW_TOPOLOGY = {
@@ -69,24 +68,21 @@ export async function waitForMatrixQaObserverEvent(params: {
   observer: MatrixQaRoomObserver;
   predicate: (event: MatrixQaObservedEvent) => boolean;
   roomId: string;
-  sleepImpl?: (ms: number) => Promise<unknown>;
-  timeoutMs: number;
 }): Promise<MatrixQaRoomEventWaitResult> {
-  const sleepImpl = params.sleepImpl ?? sleep;
   for (;;) {
     const expectedInterruptionAtStart = params.isExpectedInterruption();
     try {
       return await params.observer.waitForOptionalRoomEvent({
         predicate: params.predicate,
         roomId: params.roomId,
-        timeoutMs: params.timeoutMs,
+        timeoutMs: 1_000,
       });
     } catch (error) {
       // A poll spanning the entire restart may fail visibly; rerun that scenario.
       if (!expectedInterruptionAtStart && !params.isExpectedInterruption()) {
         throw error;
       }
-      await sleepImpl(MATRIX_EXPECTED_INTERRUPTION_RETRY_MS);
+      await sleep(MATRIX_EXPECTED_INTERRUPTION_RETRY_MS);
     }
   }
 }
@@ -136,7 +132,7 @@ function resolveMatrixQaAdapterRoom(
 }
 
 export async function createMatrixQaTransportAdapter(
-  context: FactoryContext,
+  context: Parameters<AdapterFactory["create"]>[0],
 ): Promise<AdapterDefinition> {
   const options = context.adapterOptions ?? {};
   const repoRoot = options.repoRoot?.trim() || process.cwd();
@@ -191,7 +187,7 @@ export async function createMatrixQaTransportAdapter(
   });
   let stopped = false;
   let gatewayClient: Parameters<AdapterDefinition["waitReady"]>[0]["gateway"] | undefined;
-  let pollingError: Error | undefined;
+  const pollingError = createQaPollingErrorState(() => stopped);
   const logicalConversationByRoomId = new Map<
     string,
     { id: string; kind: "channel" | "direct" | "group" }
@@ -224,7 +220,6 @@ export async function createMatrixQaTransportAdapter(
           observer,
           predicate: (event) => event.sender === provisioning.sut.userId && Boolean(event.body),
           roomId,
-          timeoutMs: 1_000,
         });
         if (!observed.matched) {
           continue;
@@ -274,11 +269,7 @@ export async function createMatrixQaTransportAdapter(
         busMessageIds.set(event.eventId, outbound.id);
       }
     }),
-  ).catch((error: unknown) => {
-    if (!stopped) {
-      pollingError = toStringifiedError(error);
-    }
-  });
+  ).catch(pollingError.capture);
 
   return {
     id: "matrix",
@@ -287,9 +278,7 @@ export async function createMatrixQaTransportAdapter(
     requiredPluginIds: ["matrix"],
     supportedActions: ["delete", "edit", "react"],
     assertTransportHealthy() {
-      if (pollingError) {
-        throw pollingError;
-      }
+      pollingError.assertHealthy();
     },
     async sendInbound(input) {
       const room = resolveMatrixQaAdapterRoom(provisioning.topology, input.conversation);

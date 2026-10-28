@@ -3,13 +3,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, expect, it, vi } from "vitest";
-import type { CodexAppServerClient } from "./client.js";
+import type { CodexAppServerRuntimeIdentity } from "./client.js";
 import type { CodexAppServerStartOptions as StartOptions } from "./config.js";
 import {
-  bindCodexAppServerRuntimeArtifact,
   captureCodexAppServerRuntimeArtifactBeforeStart as captureArtifact,
   finalizeCodexAppServerRuntimeArtifact as finalizeArtifact,
-  readCodexAppServerClientRuntimeArtifact,
   validateCodexAppServerRuntimeArtifact as validateArtifact,
 } from "./runtime-artifact.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
@@ -49,17 +47,27 @@ async function expectMutationInvalidates(
   await expect(validateArtifact(binding)).resolves.toBe(false);
 }
 
-async function captureBinding(options: StartOptions, nativeCommand?: string) {
-  const client = {} as CodexAppServerClient;
+const runtimeIdentity: CodexAppServerRuntimeIdentity = {
+  serverVersion: CODEX_APP_SERVER_VERSION,
+  userAgent: "codex-test",
+  codexHome: "/remote/codex-home",
+  platformFamily: "unix",
+  platformOs: "linux",
+};
+
+async function captureBinding(
+  options: StartOptions,
+  nativeCommand?: string,
+  identity = runtimeIdentity,
+) {
   const selection = { startOptions: options, spawnIdentity: spawnIdentity(options, nativeCommand) };
   const before = await captureArtifact(selection);
   const binding = await finalizeArtifact({
     before,
     ...selection,
-    runtimeIdentity: { serverVersion: CODEX_APP_SERVER_VERSION, userAgent: "codex-test" },
+    runtimeIdentity: identity,
   });
-  bindCodexAppServerRuntimeArtifact(client, binding);
-  return { binding, client };
+  return { binding };
 }
 
 async function writeFixtureFiles(files: Record<string, string>, executable = false) {
@@ -274,19 +282,113 @@ it("keeps raw argv out of the server-minted artifact id", async () => {
   expect(JSON.stringify(binding)).not.toContain("super-secret-value");
 });
 
-it.each(["websocket", "unix"] as const)(
-  "verifies a configured %s service without a local executable",
-  async (transport) => {
-    const options = startOptions("codex", {
-      transport,
-      url: transport === "websocket" ? "ws://127.0.0.1:1234" : "unix:///tmp/codex.sock",
-    });
-    const { binding, client } = await captureBinding(options);
-    expect(readCodexAppServerClientRuntimeArtifact(client)).toEqual(binding);
-    await expect(validateArtifact(binding, undefined, options)).resolves.toBe(true);
+const remoteStart = startOptions("codex", {
+  transport: "websocket",
+  url: "wss://codex.example.test/socket?token=endpoint-secret",
+  authToken: "connection-secret",
+  headers: { "x-service-token": "header-secret" },
+});
+
+it.each([
+  [{ url: "wss://other.example.test/socket" }, false],
+  [{ authToken: "rotated-token" }, false],
+  [{ headers: { "x-service-token": "rotated-header" } }, false],
+  [{ transport: "unix", url: "unix:///tmp/codex.sock" }, false],
+  [
+    {
+      command: "/another/codex",
+      args: ["app-server", "--local"],
+      env: { PATH: "/local/path", CODEX_HOME: "/local/home" },
+      codexHome: "/local/home",
+    },
+    true,
+  ],
+] satisfies [Partial<StartOptions>, boolean][])(
+  "validates remote selection changes %j as %s",
+  async (change, valid) => {
+    const { binding } = await captureBinding(remoteStart);
+    await expect(validateArtifact(binding, undefined, remoteStart)).resolves.toBe(true);
+    await expect(validateArtifact(binding, undefined, { ...remoteStart, ...change })).resolves.toBe(
+      valid,
+    );
     await expect(validateArtifact(binding)).resolves.toBe(false);
   },
 );
+
+it("binds the home-resolved canonical Unix socket", async () => {
+  const start = {
+    ...remoteStart,
+    transport: "unix" as const,
+    url: "unix://",
+    env: { CODEX_HOME: "/remote/first-home" },
+  };
+  const { binding } = await captureBinding(start);
+  for (const [url, home, valid] of [
+    ["unix://", "/remote/second-home", false],
+    ["unix:///remote/first-home/app-server-control/app-server-control.sock", "/ignored", true],
+  ] as const) {
+    await expect(
+      validateArtifact(binding, undefined, { ...start, url, env: { CODEX_HOME: home } }),
+    ).resolves.toBe(valid);
+  }
+});
+
+it.each([
+  { serverVersion: "9.0.0" },
+  { userAgent: "different codex" },
+  { codexHome: "/remote/other-home" },
+  { platformFamily: "windows" },
+  { platformOs: "darwin" },
+])("binds initialized remote identity changes %j", async (change) => {
+  expect(
+    (await captureBinding(remoteStart, undefined, { ...runtimeIdentity, ...change })).binding,
+  ).not.toEqual((await captureBinding(remoteStart)).binding);
+});
+
+it.each([
+  [{ authToken: "rotated-token" }, runtimeIdentity, "changed during startup"],
+  [{}, undefined, "did not report an initialized runtime identity"],
+] as const)("rejects incomplete remote startup %j", async (change, identity, error) => {
+  const before = await captureBefore(remoteStart);
+  const options = { ...remoteStart, ...change };
+  await expect(
+    finalizeArtifact({
+      before,
+      startOptions: options,
+      spawnIdentity: spawnIdentity(options),
+      runtimeIdentity: identity,
+    }),
+  ).rejects.toThrow(error);
+});
+
+it("requires an explicit remote endpoint", async () => {
+  await expect(captureBefore({ ...remoteStart, url: undefined })).rejects.toThrow(
+    "configured socket endpoint",
+  );
+});
+
+it("keeps endpoint and credential material out of the serialized binding", async () => {
+  const { binding } = await captureBinding(remoteStart);
+  const descriptor = Buffer.from(binding.id.split(":").at(-1)!, "base64url").toString("utf8");
+  expect(JSON.parse(descriptor)).toEqual({
+    kind: "configured-connection",
+    transport: "websocket",
+    selectionFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/u),
+    runtimeIdentityFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/u),
+  });
+});
+
+it("rejects corrupt and noncanonical configured bindings", async () => {
+  const { binding } = await captureBinding(remoteStart);
+  for (const invalid of [
+    { ...binding, fingerprint: "0".repeat(64) },
+    { ...binding, id: `${binding.id}=` },
+    { ...binding, id: "codex-app-server:connection:v1:bad" },
+    { ...binding, id: `codex-app-server:connection:v1:${"a".repeat(2048)}` },
+  ]) {
+    await expect(validateArtifact(invalid, undefined, remoteStart)).resolves.toBe(false);
+  }
+});
 
 it("rejects an app-server proxy with a subcommand-shaped socket before local artifact capture", async () => {
   const options = startOptions("codex", {

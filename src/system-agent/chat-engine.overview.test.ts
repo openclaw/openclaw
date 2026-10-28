@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { readConfigFileSnapshot } from "../config/config.js";
+import * as configModule from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -52,11 +53,10 @@ it("uses the verified inference owner for a delegated fleet overview", async () 
           const engine = new SystemAgentChatEngine({
             requesterAgentId: "work",
             verifiedInference: inference.binding,
-            deps: {
-              // Keep verified inference fixed while the real overview reads the explicit fleet.
-              readConfigFileSnapshot: async () => verifiedSnapshot,
-            },
           });
+          const reader = vi
+            .spyOn(configModule, "readConfigFileSnapshot")
+            .mockResolvedValueOnce(verifiedSnapshot);
           try {
             const overview = await engine.loadOverview();
             expect(overview.config).toMatchObject({
@@ -71,7 +71,11 @@ it("uses the verified inference owner for a delegated fleet overview", async () 
               { id: "work", isDefault: false },
             ]);
           } finally {
-            await engine.dispose();
+            try {
+              await engine.dispose();
+            } finally {
+              reader.mockRestore();
+            }
           }
         });
       },

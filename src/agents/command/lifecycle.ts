@@ -113,8 +113,15 @@ export function createAgentCommandLifecycle(params: {
     error = terminal.outcome.status === "timeout" ? terminal.outcome.error : undefined,
     includeLifecycleErrorObservation = true,
   ) => {
-    const { aborted, yielded, replayInvalid, terminalReply, terminalDelivery, terminalReceipt } =
-      terminal.metadata;
+    const {
+      aborted,
+      yielded,
+      replayInvalid,
+      suppressErrorNotice,
+      terminalReply,
+      terminalDelivery,
+      terminalReceipt,
+    } = terminal.metadata;
     const { stopReason, livenessState, timeoutPhase, providerStarted } = terminal.outcome;
     const abortFields = resolveAgentRunAbortLifecycleFields(params.abortSignal);
     emitAgentEvent({
@@ -129,6 +136,7 @@ export function createAgentCommandLifecycle(params: {
         stopReason,
         ...(yielded === true ? { yielded } : {}),
         ...(replayInvalid === true ? { replayInvalid } : {}),
+        ...(typeof suppressErrorNotice === "boolean" ? { suppressErrorNotice } : {}),
         ...(livenessState ? { livenessState } : {}),
         ...(timeoutPhase ? { timeoutPhase } : {}),
         ...(providerStarted !== undefined ? { providerStarted } : {}),

@@ -404,21 +404,9 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
   },
 }));
 
-vi.mock("./bot-handlers.agent.runtime.js", () => ({
+vi.mock("openclaw/plugin-sdk/agent-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/agent-runtime")>()),
   resolveAgentDir: vi.fn(() => "/tmp/agent"),
-  resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
-  resolveDefaultModelForAgent: vi.fn(() => ({
-    provider: "openai",
-    model: "gpt-test",
-  })),
-}));
-
-vi.mock("./bot-message-dispatch.agent.runtime.js", () => ({
-  findModelInCatalog: vi.fn(() => undefined),
-  loadPreparedModelCatalog: vi.fn(async () => []),
-  modelSupportsVision: vi.fn(() => false),
-  resolveAgentDir: vi.fn(() => "/tmp/agent"),
-  resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
   resolveDefaultModelForAgent: vi.fn(() => ({
     provider: "openai",
     model: "gpt-test",

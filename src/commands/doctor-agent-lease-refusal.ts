@@ -1,3 +1,4 @@
+import { withEngineStoreAdmission } from "../infra/database-engine/admission-scope.js";
 import { DoctorUnreadableStateDatabaseError } from "../infra/state-repair-message.js";
 import { DoctorMaintenanceRefusalError } from "../infra/update-doctor-result.js";
 import { createUpdateFailureFact } from "../infra/update-failure-facts.js";
@@ -12,12 +13,23 @@ import {
 
 function createDoctorAgentLeaseRefusal(
   env: NodeJS.ProcessEnv,
-  cause?: unknown,
-  detail = "An agent database is in use.",
+  {
+    cause,
+    detail = "An agent database is in use.",
+    ownerPids = [],
+  }: {
+    cause?: unknown;
+    detail?: string;
+    ownerPids?: readonly number[];
+  } = {},
 ): DoctorMaintenanceRefusalError {
-  const message = `Doctor could not enter maintenance. ${detail} Stop other OpenClaw processes using this state, then retry the update.`;
+  const message = `Doctor could not enter maintenance. ${detail} Stop the Gateway and other OpenClaw processes or reboot, then rerun openclaw doctor --fix.`;
+  // Local PIDs aid inspection; persisted/public failure facts keep their existing redaction contract.
+  const holders = ownerPids.length
+    ? ` Observed lease holder PID${ownerPids.length === 1 ? "" : "s"} ${ownerPids.slice(0, 3).join(", ")}${ownerPids.length > 3 ? ", ..." : "."}`
+    : "";
   return new DoctorMaintenanceRefusalError(
-    message,
+    `${message}${holders}`,
     { kind: "deferred", reason: "agent-database-in-use" },
     {
       cause,
@@ -41,11 +53,16 @@ export async function preflightExternalDoctorAgentLease(
   // coordinators and the held-owner lease assertion remain mandatory.
   const { readActiveOpenClawAgentDatabaseLeasesReadOnly } =
     await import("../state/openclaw-agent-db-lease.js");
-  let activeAgentLease = false;
+  let ownerPids: number[] = [];
   try {
-    activeAgentLease =
-      readActiveOpenClawAgentDatabaseLeasesReadOnly({ env }, openDoctorStateSchemaReadAdmission)
-        .length > 0;
+    ownerPids = withEngineStoreAdmission(() => [
+      ...new Set(
+        readActiveOpenClawAgentDatabaseLeasesReadOnly(
+          { env },
+          openDoctorStateSchemaReadAdmission,
+        ).map((lease) => lease.owner_pid),
+      ),
+    ]);
   } catch (error) {
     if (hasCommandProcessCleanupError(error)) {
       throw error;
@@ -53,7 +70,7 @@ export async function preflightExternalDoctorAgentLease(
     // Diagnostic failure is not admission. The mandatory held-owner
     // check below still classifies unreadable state and unknown errors.
   }
-  if (!activeAgentLease) {
+  if (ownerPids.length === 0) {
     return;
   }
   if (updateRepair) {
@@ -73,7 +90,7 @@ export async function preflightExternalDoctorAgentLease(
       return;
     }
   }
-  throw createDoctorAgentLeaseRefusal(env);
+  throw createDoctorAgentLeaseRefusal(env, { ownerPids });
 }
 
 /** The caller holds both lifecycle coordinators; this check never opens a state writer. */
@@ -81,10 +98,12 @@ export async function assertDoctorAgentLeaseAdmission(env: NodeJS.ProcessEnv): P
   const { assertNoOpenClawAgentDatabaseLeasesReadOnly, OpenClawAgentDatabaseLeaseActiveError } =
     await import("../state/openclaw-agent-db-lease.js");
   try {
-    assertNoOpenClawAgentDatabaseLeasesReadOnly({ env }, openDoctorStateSchemaReadAdmission);
+    withEngineStoreAdmission(() =>
+      assertNoOpenClawAgentDatabaseLeasesReadOnly({ env }, openDoctorStateSchemaReadAdmission),
+    );
   } catch (error) {
     if (error instanceof OpenClawAgentDatabaseLeaseActiveError) {
-      throw createDoctorAgentLeaseRefusal(env, error);
+      throw createDoctorAgentLeaseRefusal(env, { cause: error, ownerPids: error.ownerPids });
     }
     // Classify unreadable state under the held owners without opening a writer.
     const { preflightOpenClawDatabaseSchemas } =
@@ -160,11 +179,10 @@ export async function admitDoctorAgentLeases(params: {
       if (performance.now() >= deadlineMs) {
         // Keep the lease cause, not the inner refusal, so one failure fact is reported.
         throw waited
-          ? createDoctorAgentLeaseRefusal(
-              params.state.env,
+          ? createDoctorAgentLeaseRefusal(params.state.env, {
               cause,
-              `Waited ${formatDoctorWaitSeconds(performance.now() - startedAt)}; ${describeHolders(holders)} still ${holders.length === 1 ? "has" : "have"} an agent database open.`,
-            )
+              detail: `Waited ${formatDoctorWaitSeconds(performance.now() - startedAt)}; database held by PID ${holders.slice(0, 3).join(", ")}${holders.length > 3 ? ", ..." : ""}.`,
+            })
           : error;
       }
       waited = true;
@@ -194,14 +212,14 @@ export async function admitDoctorAgentLeases(params: {
       pollMs = Math.min(pollMs * 2, 2_000);
       let live: readonly number[];
       try {
-        live = [
+        live = withEngineStoreAdmission(() => [
           ...new Set(
             readActiveOpenClawAgentDatabaseLeasesReadOnly(
               { env: params.state.env },
               openDoctorStateSchemaReadAdmission,
             ).map((row) => row.owner_pid),
           ),
-        ];
+        ]);
       } catch (error) {
         if (hasCommandProcessCleanupError(error)) {
           throw error;

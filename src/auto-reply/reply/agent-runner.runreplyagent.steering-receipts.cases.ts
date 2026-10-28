@@ -94,16 +94,14 @@ export function registerSteeringReceiptCases({
         },
         runOverrides: {
           messageProvider: "telegram",
-          config:
-            allowCollaborativeSteering === undefined
-              ? {}
-              : { messages: { queue: { allowCollaborativeSteering } } },
+          config: { messages: { queue: { allowCollaborativeSteering } } },
         },
         opts: {
           [REPLY_OPERATION_RUN_STATE]: runState,
           turnAdoptionLifecycle: { onAdopted, onAbandoned, onSettled },
         },
       });
+      candidate.followupRun.run.config.messages!.queue!.collaborativeSteeringFallback = "reject";
       await active.bindToolAuthoritySnapshotAsync(
         prepareReplyToolAuthority({
           ...candidate.followupRun,
@@ -398,7 +396,8 @@ export function registerSteeringReceiptCases({
         signal,
       );
       const backend = expectDefined(
-        getSessionControllerEntryForOperation(active).attachment?.backend?.messageInjectionV2,
+        getSessionControllerEntryForOperation(active).attachment?.backend?.handle
+          .messageInjectionV2,
         "The first steer installed its guarded backend",
       );
       using _ =
@@ -663,7 +662,6 @@ export function registerSteeringReceiptCases({
       restartRecoveryDeliveryRunId: "recovery-run-1",
       restartRecoveryDeliverySourceRunId: "source-turn-1",
     });
-    const sessionStore = { main: sessionEntry };
     const active = createReplyOperation({
       sessionKey: "main",
       sessionId: "session",
@@ -671,17 +669,15 @@ export function registerSteeringReceiptCases({
     });
     bindSessionControllerSourceTurnId(active, "source-turn-2");
     active.setPhase("running");
-    state.backendQueueMessageMock.mockReturnValueOnce(true);
     const runState: ReplyOperationRunState = {};
-    const { run } = createMinimalRun({
+    const { followupRun, run } = createMinimalRun({
       opts: { [REPLY_OPERATION_RUN_STATE]: runState },
       isActive: true,
       shouldSteer: true,
       shouldFollowup: true,
       resolvedQueueMode: "steer",
       sessionEntry,
-      sessionStore,
-      sessionKey: "main",
+      sessionStore: { main: sessionEntry },
       sessionCtx: {
         Provider: "telegram",
         OriginatingChannel: "telegram",
@@ -691,17 +687,20 @@ export function registerSteeringReceiptCases({
       runOverrides: { agentId: "main", messageProvider: "telegram" },
     });
 
-    await expect(run()).resolves.toBeUndefined();
+    try {
+      await expect(run()).resolves.toBeUndefined();
 
-    expect(state.backendQueueMessageMock).not.toHaveBeenCalled();
-    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
-    expect(runState.admission).toEqual({
-      status: "accepted",
-      mode: "followup",
-      reason: "steering-unavailable",
-    });
-    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledOnce();
-    active.complete();
+      expect(state.backendQueueMessageMock).not.toHaveBeenCalled();
+      expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
+      expect(runState.admission).toEqual({
+        status: "accepted",
+        mode: "followup",
+        reason: "steering-unavailable",
+      });
+      expect(getExistingFollowupQueue("main")?.items).toEqual([followupRun]);
+    } finally {
+      active.complete();
+    }
   });
 
   it("does not replay an accepted steer after terminal delivery", async () => {

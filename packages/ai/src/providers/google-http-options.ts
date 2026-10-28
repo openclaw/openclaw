@@ -1,4 +1,5 @@
 import { type HttpOptions, ResourceScope } from "@google/genai";
+import { omitNullRequestHeaders, type ModelRequestHeaders } from "@openclaw/llm-core";
 import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.js";
 import { buildManagedModelFetch } from "../transports/host-policy.js";
 import { mergeTransportHeaders } from "../transports/transport-stream-shared.js";
@@ -6,7 +7,7 @@ import type { Model } from "../types.js";
 
 export function buildGoogleHttpOptions(
   model: Model<"google-generative-ai" | "google-vertex">,
-  optionsHeaders: Record<string, string> | undefined,
+  optionsHeaders: ModelRequestHeaders | undefined,
   profile: "generative-ai" | "vertex",
 ): HttpOptions | undefined {
   const httpOptions: HttpOptions = {};
@@ -34,9 +35,7 @@ export function buildGoogleHttpOptions(
   }
   const headers =
     profile === "vertex"
-      ? model.headers || optionsHeaders
-        ? { ...model.headers, ...optionsHeaders }
-        : undefined
+      ? mergeTransportHeaders(model.headers, optionsHeaders)
       : getAiTransportHost().resolveProviderRequestHeaders({
           provider: model.provider,
           api: model.api,
@@ -46,7 +45,7 @@ export function buildGoogleHttpOptions(
           model,
         });
   if (headers) {
-    httpOptions.headers = resolveAiTransportHeaderSentinels(headers);
+    httpOptions.headers = omitNullRequestHeaders(resolveAiTransportHeaderSentinels(headers));
   }
   return Object.keys(httpOptions).length > 0 ? httpOptions : undefined;
 }

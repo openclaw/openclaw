@@ -10,6 +10,7 @@ import { withUpdateFailureTriage } from "../cli/update-cli/update-command-triage
 import type { HealthFinding } from "../flows/health-checks.js";
 import { resolveInstallationTarget } from "../infra/installation-target-context.js";
 import type { UpdateRunResult } from "../infra/update-runner-types.js";
+import * as logTailModule from "../logging/log-tail.js";
 import { defaultRuntime } from "../runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { triageCommand } from "./triage.js";
@@ -343,21 +344,17 @@ describe("triageCommand", () => {
     await fs.writeFile(configPath, JSON.stringify({ gateway: { auth: { token: secret } } }));
     mocks.callGatewayFromCliWithTransport.mockRejectedValue(new Error(`Offline token=${secret}`));
     mocks.gatherDaemonStatus.mockRejectedValue(new Error("Status unavailable"));
-    mocks.writeDiagnosticSupportExport.mockImplementation((options) =>
-      writeDiagnosticSupportExport({
-        ...options,
-        stateDir,
-        env: { HOME: stateDir, OPENCLAW_CONFIG_PATH: configPath },
-        readLogTail: async () => ({
-          file: path.join(stateDir, "gateway.log"),
-          cursor: 0,
-          size: 0,
-          lines: [],
-          truncated: false,
-          reset: false,
-        }),
-      }),
-    );
+    vi.stubEnv("HOME", stateDir);
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+    vi.spyOn(logTailModule, "readConfiguredLogTail").mockResolvedValue({
+      file: path.join(stateDir, "gateway.log"),
+      cursor: 0,
+      size: 0,
+      lines: [],
+      truncated: false,
+      reset: false,
+    });
+    mocks.writeDiagnosticSupportExport.mockImplementation(writeDiagnosticSupportExport);
     const runtime = createTriageRuntime();
 
     await triageCommand(runtime, { json: true });

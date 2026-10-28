@@ -291,7 +291,7 @@ const unavailableGuidance: Record<
   transport:
     "The selected provider could not be reached. Check its service or endpoint before trying again.",
   "unsupported-input":
-    "Shorten the state or rubric, reduce question counts, and check the selected model's declared limits. Host bounds are 256 questions, 1 MiB of JSON, 20000 JSON nodes, and depth 32. No evidence was truncated or sent on a host-bound rejection.",
+    "Shorten the state or rubric, reduce question counts, and check the selected model's declared limits. Host bounds are 256 questions for legacy input or 400 with contractVersion 2, 1 MiB of JSON, 20000 JSON nodes, and depth 32. No evidence was truncated or sent on a host-bound rejection.",
   "invalid-response":
     "The selected provider returned an invalid result. No answers were accepted; ask the operator to check its adapter or service.",
   retiring:

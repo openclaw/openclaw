@@ -2,11 +2,13 @@
 
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { ConfigSnapshot } from "../../api/types.ts";
 import { loadConfig } from "./config-gateway-operations.ts";
+import { configSnapshot } from "./config-snapshot.test-support.ts";
 import { nextRequestVersion } from "./config-state-model.ts";
-import { configSnapshot } from "./config-suite.test-support.ts";
+// Retain this suite's existing cleanup registration without adding it to new fixture consumers.
+import "./config-suite.test-support.ts";
 import {
   CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS,
   createConfigCapabilityHarness,
@@ -198,7 +200,7 @@ describe("external mutation config refresh", () => {
         await readStarted.promise;
         if (retirement === "write acknowledgement") {
           // Config write acknowledgements invalidate older reads without issuing a replacement.
-          nextRequestVersion(runtimeConfig.state, "config");
+          nextRequestVersion(runtimeConfig.state);
         } else if (retirement === "disconnect" || retirement === "same-client reconnect") {
           publish(false);
           if (retirement === "same-client reconnect") {

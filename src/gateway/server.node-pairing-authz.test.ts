@@ -31,6 +31,7 @@ import {
 import { connectGatewayClient } from "./test-helpers.e2e.js";
 import {
   connectOk,
+  connectReq,
   installGatewayTestHooks,
   rpcReq,
   startServerWithClient,
@@ -229,7 +230,7 @@ async function expectRpcNodePairingApprovalRejected(params: {
     await connectOk(ws, {
       token: "secret",
       scopes: [`operator.${params.scope}`],
-      deviceIdentityPath: `${await makeNodePairingStateDir()}/operator-${params.scope}.sqlite`,
+      deviceIdentityPath: `${await makeNodePairingStateDir()}/operator-${params.scope}/client/credentials.sqlite`,
     });
     await seedNodeDevice(nodeId);
     const request = await requestMacNode({ nodeId, commands: ["system.run"] });
@@ -632,6 +633,58 @@ describe("gateway node pairing authorization", () => {
       }
     });
 
+    test("keeps shared macOS app and CLI reconnects on the approved identity", async () => {
+      const scopes = ["operator.read", "operator.write"];
+      const platform = "macOS 26.5.2";
+      const paired = await pairDeviceIdentity({
+        name: "macos-shared-cli",
+        role: "operator",
+        scopes,
+        clientId: GATEWAY_CLIENT_NAMES.MACOS_APP,
+        clientMode: GATEWAY_CLIENT_MODES.UI,
+        platform,
+        deviceFamily: "Mac",
+      });
+      const before = await getPairedDevice(paired.identity.deviceId);
+      const token = before?.tokens?.operator?.token;
+      expect(token).toBeTruthy();
+
+      for (const [id, mode, claimedPlatform] of [
+        [GATEWAY_CLIENT_NAMES.MACOS_APP, GATEWAY_CLIENT_MODES.UI, platform],
+        [GATEWAY_CLIENT_NAMES.CLI, GATEWAY_CLIENT_MODES.CLI, "macos"],
+        [GATEWAY_CLIENT_NAMES.CLI, GATEWAY_CLIENT_MODES.PROBE, "darwin"],
+        [GATEWAY_CLIENT_NAMES.MACOS_APP, GATEWAY_CLIENT_MODES.UI, platform],
+        [GATEWAY_CLIENT_NAMES.CLI, GATEWAY_CLIENT_MODES.CLI, "darwin"],
+        [GATEWAY_CLIENT_NAMES.CLI, GATEWAY_CLIENT_MODES.PROBE, "macos"],
+      ] as const) {
+        const ws = await openTrackedWs(getStarted().port);
+        try {
+          const response = await connectReq(ws, {
+            client: { id, mode, platform: claimedPlatform, deviceFamily: "Mac", version: "1.0.0" },
+            deviceIdentityPath: paired.identityPath,
+            deviceToken: token,
+            skipDefaultAuth: true,
+            prePairDevice: false,
+            scopes: ["operator.read"],
+          });
+          expect(response.ok, `${id}/${mode}: ${JSON.stringify(response.error)}`).toBe(true);
+          expect(response.payload?.type).toBe("hello-ok");
+          expect((await rpcReq(ws, "health")).ok).toBe(true);
+          expect(await pendingDevice(paired.identity.deviceId)).toBeUndefined();
+          const after = await getPairedDevice(paired.identity.deviceId);
+          expect(after).toMatchObject({
+            publicKey: paired.publicKey,
+            platform,
+            deviceFamily: "Mac",
+            approvedScopes: scopes,
+            tokens: { operator: { token, scopes } },
+          });
+        } finally {
+          ws.close();
+        }
+      }
+    });
+
     test.each([true, false])(
       "requests re-pairing for upgraded commands (initial surface: %s)",
       async (hadCommands) => {
@@ -712,7 +765,7 @@ describe("gateway node pairing authorization", () => {
         await connectOk(ws, {
           token: "secret",
           scopes: ["operator.read"],
-          deviceIdentityPath: `${await makeNodePairingStateDir()}/read-only.sqlite`,
+          deviceIdentityPath: `${await makeNodePairingStateDir()}/read-only/client/credentials.sqlite`,
         });
 
         const listed = await listNodes(ws);

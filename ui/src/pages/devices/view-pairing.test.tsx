@@ -1,27 +1,105 @@
 /* @vitest-environment jsdom */
-import { createComponent } from "solid-js";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import type { DevicePairSetupLifecycle } from "../../lib/device-pair-setup.ts";
+import { createSignal, flush } from "solid-js";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
+import {
+  closeDevicePairSetup,
+  createDevicePairSetupState,
+  readDevicePairSetupSnapshot,
+  refreshDevicePairSetup,
+  type DevicePairSetupLifecycle,
+} from "../../lib/device-pair-setup.ts";
+import { createWaitingNodePairSetup } from "../../test-helpers/devices-fixtures.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { DevicePairSetup, type DevicePairSetupProps } from "./view-pairing.tsx";
 
-function renderPairing(props: DevicePairSetupProps, container: HTMLElement) {
-  mountSolid(() => createComponent(DevicePairSetup, props), { container });
+function Pairing(props: Partial<DevicePairSetupProps> & Pick<DevicePairSetupProps, "lifecycle">) {
+  return (
+    <DevicePairSetup
+      open={true}
+      nowMs={0}
+      pendingCount={0}
+      onRefresh={vi.fn(async () => {})}
+      onAccessChange={vi.fn()}
+      onClose={vi.fn()}
+      onManageDevices={vi.fn()}
+      onGetApps={vi.fn()}
+      {...props}
+    />
+  );
 }
 
-const containers: HTMLElement[] = [];
-function createContainer() {
-  const container = document.body.appendChild(document.createElement("div"));
-  containers.push(container);
-  return container;
-}
-afterEach(() => {
-  for (const container of containers.splice(0)) {
-    container.remove();
-  }
-});
+type PairingView = ReturnType<typeof mountSolid>;
+const expectEnabled = (view: PairingView) =>
+  expect(view.getByRole("button", { name: "Create setup code" }).hasAttribute("disabled")).toBe(
+    false,
+  );
 
 describe("device pairing dialog", () => {
+  it("shows status Retry pending and retires it on close before a late completion", async () => {
+    const status = createDeferred<{
+      completion: { setupId: string; access: "full"; deviceName: string };
+    }>();
+    const state = createDevicePairSetupState({
+      client: createTestGatewayClient(() => status.promise),
+      connected: true,
+    });
+    state.devicePairSetupOpen = true;
+    state.devicePairSetupLifecycle = {
+      phase: "error",
+      source: "status",
+      access: "full",
+      setupId: "old-setup",
+      message: "Offline",
+    };
+    let publish = () => {};
+    let operation: Promise<void> | undefined;
+    const onRefresh = async () => {
+      operation = refreshDevicePairSetup(state);
+      publish();
+      await operation;
+      publish();
+    };
+    const view = mountSolid(() => {
+      const [snapshot, setSnapshot] = createSignal(readDevicePairSetupSnapshot(state));
+      publish = () => setSnapshot(readDevicePairSetupSnapshot(state));
+      state.onDevicePairSetupChange = publish;
+      return (
+        <Pairing
+          open={snapshot().devicePairSetupOpen}
+          lifecycle={snapshot().devicePairSetupLifecycle}
+          onRefresh={onRefresh}
+          onClose={() => {
+            closeDevicePairSetup(state);
+            publish();
+          }}
+        />
+      );
+    });
+    onTestFinished(() => closeDevicePairSetup(state));
+    view.getByRole("button", { name: "Reload" }).click();
+    await waitForSolid(() => {
+      expect(view.container.querySelector(".device-pair-setup__loading")).not.toBeNull();
+      expect(view.queryByRole("alert")).toBeNull();
+    });
+
+    view.getByRole("button", { name: "Dismiss" }).click();
+    await waitForSolid(() => expect(view.container.querySelector(".device-pair-setup")).toBeNull());
+    state.devicePairSetupOpen = true;
+    publish();
+    await waitForSolid(() => expectEnabled(view));
+    status.resolve({
+      completion: { setupId: "old-setup", access: "full", deviceName: "Retired phone" },
+    });
+    await operation;
+    await waitForSolid(() => {
+      expectEnabled(view);
+      expect(view.queryByText("Retired phone")).toBeNull();
+    });
+  });
+
   it.each([
     { lifecycle: { phase: "selection", access: "full" }, choices: true, selectable: true },
     {
@@ -50,21 +128,7 @@ describe("device pairing dialog", () => {
   ] satisfies { lifecycle: DevicePairSetupLifecycle; choices: boolean; selectable: boolean }[])(
     "keeps access choices within the $lifecycle.phase lifecycle",
     ({ lifecycle, choices, selectable }) => {
-      const container = createContainer();
-      renderPairing(
-        {
-          open: true,
-          lifecycle,
-          nowMs: 0,
-          pendingCount: 0,
-          onRefresh: vi.fn(),
-          onAccessChange: vi.fn(),
-          onClose: vi.fn(),
-          onManageDevices: vi.fn(),
-          onGetApps: vi.fn(),
-        },
-        container,
-      );
+      const { container } = mountSolid(() => <Pairing lifecycle={lifecycle} />);
       const fieldset = container.querySelector("fieldset");
       expect(Boolean(fieldset)).toBe(choices);
       if (fieldset) {
@@ -83,22 +147,7 @@ describe("device pairing dialog", () => {
       href: "https://docs.openclaw.ai/gateway/pairing#one-paste-node-pairing",
     },
   ])("links $access setup help to the matching workflow", ({ access, href }) => {
-    const container = createContainer();
-
-    renderPairing(
-      {
-        open: true,
-        lifecycle: { phase: "selection", access },
-        nowMs: 0,
-        pendingCount: 0,
-        onRefresh: vi.fn(),
-        onAccessChange: vi.fn(),
-        onClose: vi.fn(),
-        onManageDevices: vi.fn(),
-        onGetApps: vi.fn(),
-      },
-      container,
-    );
+    const { container } = mountSolid(() => <Pairing lifecycle={{ phase: "selection", access }} />);
 
     expect(container.textContent).toContain(
       "Device capabilities plus complete Gateway controls, including settings and upgrades.",
@@ -109,36 +158,21 @@ describe("device pairing dialog", () => {
     );
   });
 
-  it("renders the node one-paste command and quiet expiry countdown", () => {
-    const container = createContainer();
+  it("renders node setup instructions and announces arriving device requests", () => {
+    let setPendingCount!: (count: number) => void;
+    const view = mountSolid(() => {
+      const [pendingCount, setCount] = createSignal(0);
+      setPendingCount = setCount;
+      return (
+        <Pairing
+          lifecycle={createWaitingNodePairSetup()}
+          nowMs={10_000}
+          pendingCount={pendingCount()}
+        />
+      );
+    });
 
-    renderPairing(
-      {
-        open: true,
-        lifecycle: {
-          phase: "waiting",
-          access: "node",
-          setup: {
-            setupId: "setup-node",
-            setupCode: "AbC_123",
-            gatewayUrl: "wss://gateway.example",
-            auth: "token",
-            urlSource: "test",
-            access: "node",
-            expiresAtMs: 70_000,
-          },
-        },
-        nowMs: 10_000,
-        pendingCount: 0,
-        onRefresh: vi.fn(),
-        onAccessChange: vi.fn(),
-        onClose: vi.fn(),
-        onManageDevices: vi.fn(),
-        onGetApps: vi.fn(),
-      },
-      container,
-    );
-
+    const { container } = view;
     expect(container.querySelectorAll('input[name="device-pair-access"]')).toHaveLength(3);
     expect(container.querySelector(".device-pair-setup__command code")?.textContent).toBe(
       'openclaw node run --pair "oc-pair://AbC_123"',
@@ -146,5 +180,26 @@ describe("device pairing dialog", () => {
     expect(container.querySelector('[role="timer"]')?.textContent?.trim()).toBe(
       "This setup link expires in 1:00.",
     );
+    expect(container.querySelector<HTMLAnchorElement>(".device-pair-setup__footer a")?.href).toBe(
+      "https://docs.openclaw.ai/gateway/pairing#one-paste-node-pairing",
+    );
+    const waiting = "Run the command on the device, then review its pairing request here.";
+    const status = view.getByRole("status");
+    expect(status.textContent).toBe("");
+    view.getByText(waiting);
+    setPendingCount(1);
+    flush();
+    expect(view.getByRole("status")).toBe(status);
+    expect(view.queryByText(waiting)).toBeNull();
+    expect(status.textContent).toBe("Device requests waiting for review: 1");
+    setPendingCount(2);
+    flush();
+    expect(view.getByRole("status")).toBe(status);
+    expect(status.textContent).toBe("Device requests waiting for review: 2");
+    setPendingCount(0);
+    flush();
+    expect(view.getByRole("status")).toBe(status);
+    expect(status.textContent).toBe("");
+    view.getByText(waiting);
   });
 });

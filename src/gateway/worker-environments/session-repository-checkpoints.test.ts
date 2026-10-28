@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import type { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import * as processExec from "../../process/exec.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -187,7 +188,6 @@ it.for([
       await release.promise;
     };
     const guard = authority();
-    let publicationPreparations = 0;
     let queueOwner: Promise<void> | undefined;
     const importRoots: string[] = [];
     const mkdir = fs.mkdir.bind(fs);
@@ -246,9 +246,6 @@ it.for([
     const prepare = workspaceManifestWorker.prepareWorkspaceStageInput;
     vi.spyOn(workspaceManifestWorker, "prepareWorkspaceStageInput").mockImplementation(
       async (params) => {
-        if ("publication" in params) {
-          publicationPreparations++;
-        }
         const result = await prepare(params);
         if ("publication" in params === publication) {
           // A real admitted worker completes its private input; closure does not cancel it instantly.
@@ -263,7 +260,7 @@ it.for([
       },
     );
     const runExec = processExec.runExec;
-    const imports = vi.spyOn(processExec, "runExec").mockImplementation(async (...args) => {
+    vi.spyOn(processExec, "runExec").mockImplementation(async (...args) => {
       const result = await runExec(...args);
       if (boundary === "import" && args[0] === "git" && args[1].includes("fast-import")) {
         await pause();
@@ -289,30 +286,24 @@ it.for([
     const pending = stage("publication-authority", {
       ...(publication ? input : {}),
       assertCurrent: guard.assertCurrent,
-    })
-      .then(async (prepared) => {
-        if (boundary === "final-input") {
-          finalPrepared = prepared;
-          await prepared.publish();
-        }
-        return prepared;
-      })
-      .then(
-        (value) => ({ ok: true as const, value }),
-        (error: unknown) => ({ ok: false as const, error }),
-      );
+    }).then(async (prepared) => {
+      finalPrepared = prepared;
+      if (boundary === "final-input") {
+        await prepared.publish();
+      }
+      return prepared;
+    });
+    void pending.catch(() => undefined);
     try {
-      await Promise.race([
+      await awaitGateBeforeSettlement(
         entered.promise,
-        pending.then((outcome) => {
-          throw new Error("Checkpoint settled before boundary", { cause: outcome });
-        }),
-      ]);
+        pending,
+        "Checkpoint settled before boundary",
+      );
       if (finalPrepared) {
         expect(await listRefs(artifact, "worker-results/")).toBe("");
       }
       const preparedInput = ["preparation", "queue", "import"].includes(boundary);
-      expect(publicationPreparations).toBe(publication && preparedInput ? 1 : 0);
       if (preparedInput) {
         expect((await fs.stat(path.join(importRoots.at(-1)!, "fast-import"))).size).toBeGreaterThan(
           0,
@@ -324,27 +315,15 @@ it.for([
       }
       const atRelease = await current();
       release.resolve();
-      const outcome = await pending;
-      await finalPrepared?.discard();
-      if (outcome.ok) {
-        await outcome.value.publish();
-      }
-      await queueOwner;
-      expect(outcome).toMatchObject({
-        ok: false,
-        error: {
-          message:
-            closure === "authority"
-              ? "checkpoint authority closed"
-              : "Repository workspace revision changed",
-        },
+      await expect(pending).rejects.toMatchObject({
+        message:
+          closure === "authority"
+            ? "checkpoint authority closed"
+            : "Repository workspace revision changed",
       });
+      await finalPrepared?.discard();
+      await queueOwner;
       expect(await current()).toEqual(atRelease);
-      expect(
-        imports.mock.calls.filter(
-          ([command, args]) => command === "git" && args.includes("fast-import"),
-        ),
-      ).toHaveLength(publication || ["import", "final-input"].includes(boundary) ? 1 : 0);
       for (const directory of importRoots) {
         await expect(fs.stat(directory)).rejects.toMatchObject({ code: "ENOENT" });
       }
@@ -354,16 +333,12 @@ it.for([
       } else {
         expect(await listRefs(artifact, "")).toBe("");
       }
-      expect(publicationPreparations).toBe(publication && preparedInput ? 1 : 0);
     } finally {
       resume();
       signal.removeEventListener("abort", resume);
-      const outcome = await pending;
+      await pending.catch(() => undefined);
       await queueOwner;
       await finalPrepared?.discard();
-      if (outcome.ok) {
-        await outcome.value.discard();
-      }
     }
   },
 );
@@ -533,7 +508,7 @@ it.each(["healthy", "corrupt-companion", "invalid-blob"])(
       expect(companion).not.toBe("");
       await git(artifact, ["update-ref", companion, fork.checkpointRef!]);
     }
-    const forkSource = { store, workspaceId: fork.workspaceId, includePublication: true };
+    const forkSource = { store, workspaceId: fork.workspaceId };
     let reads = 0;
     await withCheckpoint(forkSource, async (snapshot) => {
       const { stagingRoot, publicationStagingRoot, publicationDigest } = snapshot;

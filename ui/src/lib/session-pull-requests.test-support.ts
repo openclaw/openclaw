@@ -1,7 +1,8 @@
 import { vi } from "vitest";
+import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient, GatewayEventListener, GatewayHelloOk } from "../api/gateway.ts";
 import type { ApplicationGateway, ApplicationGatewaySnapshot } from "../app/gateway.ts";
-import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "./session-pull-requests.ts";
+import { createApplicationGatewaySnapshot } from "../test-helpers/application-context-fixtures.ts";
 
 export function createHello(scopes: string[] = ["operator.read"]): GatewayHelloOk {
   return {
@@ -15,17 +16,13 @@ export function createHello(scopes: string[] = ["operator.read"]): GatewayHelloO
 export function createGatewayHarness() {
   const request = vi.fn<GatewayBrowserClient["request"]>().mockResolvedValue({ subscribed: true });
   const client = { request } as unknown as GatewayBrowserClient;
-  let snapshot: ApplicationGatewaySnapshot = {
+  let snapshot: ApplicationGatewaySnapshot = createApplicationGatewaySnapshot({
     client,
     phase: "connected",
-    offlineStable: false,
     hello: createHello(),
-    canvasPluginSurfaceUrl: null,
     assistantAgentId: "main",
     sessionKey: "agent:main:main",
-    lastError: null,
-    lastErrorCode: null,
-  };
+  });
   const snapshotListeners = new Set<(value: ApplicationGatewaySnapshot) => void>();
   const eventListeners = new Set<GatewayEventListener>();
   const unsubscribeSnapshots = vi.fn();
@@ -57,6 +54,7 @@ export function createGatewayHarness() {
     subscribeEvents,
     subscribeEventLog: () => () => {},
     connect: vi.fn(),
+    defer: () => false,
     setSessionKey: vi.fn(),
     start: vi.fn(),
     stop: vi.fn(),

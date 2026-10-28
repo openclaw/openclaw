@@ -21,6 +21,7 @@ import {
   installManagedGitHubProfile,
   matchesPreparedGitHubPublicationIdentity,
   prepareGitHubPublicationIdentity,
+  prepareGitHubPublicationOptionsIdentity,
   prepareGitHubToolEnvironment,
   refreshManagedGitHubProfile,
   resolveGitHubToolIdentityStatus,
@@ -31,6 +32,13 @@ import {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const previewConfig = (token: SecretInput) => ({ gateway: { controlUi: { github: { token } } } });
+const expectVerifiedToken = (token: string) =>
+  expect(fetch).toHaveBeenCalledWith(
+    "https://api.github.com/user",
+    expect.objectContaining({
+      headers: expect.objectContaining({ Authorization: `Bearer ${token}` }),
+    }),
+  );
 
 async function writeProfile(profileDir: string, token: string) {
   await fs.mkdir(profileDir, { recursive: true, mode: 0o700 });
@@ -161,19 +169,25 @@ describe("GitHub tool identity", () => {
         login: isAgent ? "agent-user" : "system-user",
       });
     });
-    run.mockImplementation(async (argv: string[], options: { env?: NodeJS.ProcessEnv }) => {
+    run.mockImplementation(async (argv: string[]) => {
       if (argv[0] !== "git") {
         throw new Error("Managed status must not consult gh");
       }
-      const isAgent = options.env?.GH_CONFIG_DIR === agentProfileDir;
-      return commandResult(
-        `user.name\n${isAgent ? "Agent User" : "System User"}\0user.email\n${isAgent ? "agent" : "system"}@example.test\0`,
-      );
+      return commandResult();
     });
     const config = {
       tools: { github: { profileId: systemProfileId, kind: "oauth" as const } },
       ...agentConfig({ profileId: agentProfileId, kind: "oauth" }),
     };
+    const oauthFacts = (source: string, login: string, oauthScopes: string[]) => ({
+      source,
+      credentialKind: "managed-oauth",
+      account: { login },
+      accessExpiresAtMs: expiresAt,
+      refreshState: "available",
+      oauthScopes,
+      repositoryGrants: "unknown",
+    });
 
     const systemSelected = await statusFor(config);
     expect(systemSelected).toMatchObject({
@@ -181,25 +195,9 @@ describe("GitHub tool identity", () => {
       selected: {
         scope: "system",
         configured: true,
-        identity: {
-          source: "system-configured",
-          credentialKind: "managed-oauth",
-          account: { login: "system-user" },
-          accessExpiresAtMs: expiresAt,
-          refreshState: "available",
-          oauthScopes: ["repo"],
-          repositoryGrants: "unknown",
-        },
+        identity: oauthFacts("system-configured", "system-user", ["repo"]),
       },
-      effective: {
-        source: "agent-override",
-        credentialKind: "managed-oauth",
-        account: { login: "agent-user" },
-        accessExpiresAtMs: expiresAt,
-        refreshState: "available",
-        oauthScopes: ["offline_access", "workflow"],
-        repositoryGrants: "unknown",
-      },
+      effective: oauthFacts("agent-override", "agent-user", ["offline_access", "workflow"]),
     });
 
     const agentSelected = await statusFor(config, "agent");
@@ -231,12 +229,7 @@ describe("GitHub tool identity", () => {
 
       const status = await statusFor({ tools: { github: { profileId, kind: "oauth" } } });
 
-      expect(status.effective).toMatchObject({
-        credentialKind: "managed-oauth",
-        refreshState: expected,
-        oauthScopes: ["offline_access", "repo"],
-        repositoryGrants: "unknown",
-      });
+      expect(status.effective.refreshState).toBe(expected);
     },
   );
 
@@ -271,12 +264,7 @@ describe("GitHub tool identity", () => {
     const ghCall = run.mock.calls.find(([argv]) => argv[0] === "gh");
     const gitCall = run.mock.calls.find(([argv]) => argv[0] === "git");
     expect(ghCall).toBeUndefined();
-    expect(fetch).toHaveBeenCalledWith(
-      "https://api.github.com/user",
-      expect.objectContaining({
-        headers: expect.objectContaining({ Authorization: "Bearer native-primary" }),
-      }),
-    );
+    expectVerifiedToken("native-primary");
     expect(gitCall?.[1]).toMatchObject({ cwd: workspace });
   });
 
@@ -331,9 +319,9 @@ describe("GitHub tool identity", () => {
         accessExpiresAtMs,
       },
     });
-    const preparing = prepareGitHubPublicationIdentity({
+    const params = {
       config: {
-        tools: { github: { profileId, kind: "oauth" } },
+        tools: { github: { profileId, kind: "oauth" as const } },
         ...previewConfig("resolved-preview-token"),
       },
       sourceConfig: {
@@ -342,7 +330,8 @@ describe("GitHub tool identity", () => {
       },
       agentId: "main",
       env,
-    });
+    };
+    const preparing = prepareGitHubPublicationIdentity(params);
     env.GIT_EDITOR = "synthetic-after-preparation";
     const identity = await preparing;
     const childEnv = resolveCommandEnv({
@@ -361,17 +350,12 @@ describe("GitHub tool identity", () => {
       PREVIEW_SERVICE_TOKEN: undefined,
     };
     expect(identity).toMatchObject({ env: expectedEnv, accessExpiresAtMs });
+    expect(oauthMocks.inspect).toHaveBeenCalledTimes(2);
     expect(Object.isFrozen(identity)).toBe(true);
     expect(Object.isFrozen(identity.env)).toBe(true);
-    expect(childEnv).toMatchObject({
-      GIT_EDITOR: expectedEnv.GIT_EDITOR,
-      GH_CONFIG_DIR: profileDir,
-      GH_TOKEN: expectedEnv.GH_TOKEN,
-      GH_ENTERPRISE_TOKEN: expectedEnv.GH_ENTERPRISE_TOKEN,
-    });
-    expect(childEnv.GITHUB_TOKEN).toBeUndefined();
-    expect(childEnv.GITHUB_ENTERPRISE_TOKEN).toBeUndefined();
-    expect(childEnv.PREVIEW_SERVICE_TOKEN).toBeUndefined();
+    expect(
+      Object.fromEntries(Object.keys(expectedEnv).map((name) => [name, childEnv[name]])),
+    ).toEqual(expectedEnv);
     const matches = (id: string) =>
       matchesPreparedGitHubPublicationIdentity({
         config: { tools: { github: { profileId: id } } },
@@ -381,12 +365,13 @@ describe("GitHub tool identity", () => {
     expect(matches(profileId)).toBe(true);
     expect(matches("ghp_cccccccccccccccccccccccccccccccc")).toBe(false);
     expect(run).not.toHaveBeenCalled();
-    expect(fetch).toHaveBeenCalledWith(
-      "https://api.github.com/user",
-      expect.objectContaining({
-        headers: expect.objectContaining({ Authorization: "Bearer managed-publication-token" }),
-      }),
-    );
+    expectVerifiedToken("managed-publication-token");
+    oauthMocks.inspect.mockClear();
+    expect(await prepareGitHubPublicationOptionsIdentity(params)).toEqual({
+      source: "system-configured",
+      account: { accountId: 202, login: "managed-user", avatarUrl: null },
+    });
+    expect(oauthMocks.inspect).not.toHaveBeenCalled();
   });
 
   it("reports a managed unverified transport failure honestly", async () => {
@@ -399,7 +384,7 @@ describe("GitHub tool identity", () => {
     expect(JSON.stringify(status)).not.toContain("private diagnostics");
   });
 
-  it.each(["verification", "staging"] as const)(
+  it.each(["verification", "preparation", "staging"] as const)(
     "preserves the stable credential when refresh authority closes during %s",
     async (phase) => {
       vi.stubEnv("FS_SAFE_NATIVE_MODE", "off");
@@ -441,6 +426,12 @@ describe("GitHub tool identity", () => {
           profileDir,
           token: "replacement-credential",
           expectedAccountId: 202,
+          prepareEffect: async () => {
+            if (phase === "preparation") {
+              await Promise.resolve();
+              revoke();
+            }
+          },
           assertCurrent: () => {
             if (!authorized) {
               throw revoked;

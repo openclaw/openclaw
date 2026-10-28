@@ -1,6 +1,6 @@
 import { createSignal } from "solid-js";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import "../../../styles.css";
 import "../../../styles/chat.ts";
@@ -8,39 +8,25 @@ import { ChatToolCard } from "./chat-tool-cards.solid.tsx";
 import { settleToolBridges } from "./chat-tool-render.test-support.ts";
 import { ToolPreview } from "./widget-card-view.tsx";
 
-let container: HTMLDivElement | undefined;
-afterEach(() => {
-  cleanupSolid();
-  if (container) {
-    container.remove();
-    container = undefined;
-  }
-});
+function containerFor(cssText: string) {
+  const container = document.body.appendChild(document.createElement("div"));
+  container.style.cssText = cssText;
+  onTestFinished(() => container.remove());
+  return container;
+}
 
-describe.runIf("__vitest_browser__" in globalThis)("narrow tool activity rows", () => {
+describe.runIf("__vitest_browser__" in globalThis)("tool activity layout", () => {
   it("truncates long progress receipts while keeping tool identity visible", async () => {
-    container = document.body.appendChild(document.createElement("div"));
-    container.style.width = "220px";
+    const container = containerFor("width: 220px");
     const step = "Verify the implementation and report the result. ".repeat(12).slice(0, 512);
     const options = { messageKey: "narrow", expanded: false, onToggleExpanded: vi.fn() };
+    const cards = [
+      { id: "receipt", name: "progress_card", args: { plan: [{ step, status: "completed" }] } },
+      { id: "yield", name: "yield", args: { message: step } },
+    ];
     mountSolid(
-      () => (
-        <>
-          <ChatToolCard
-            card={{
-              id: "receipt",
-              name: "progress_card",
-              args: { plan: [{ step, status: "completed" }] },
-              completed: true,
-            }}
-            options={options}
-          />
-          <ChatToolCard
-            card={{ id: "yield", name: "yield", args: { message: step }, completed: true }}
-            options={options}
-          />
-        </>
-      ),
+      () =>
+        cards.map((card) => <ChatToolCard card={{ ...card, completed: true }} options={options} />),
       { container },
     );
     flush();
@@ -56,18 +42,13 @@ describe.runIf("__vitest_browser__" in globalThis)("narrow tool activity rows", 
     expect(getComputedStyle(text).textOverflow).toBe("ellipsis");
 
     const icon = container.querySelector<HTMLElement>('[role="img"][aria-label="yield"]')!;
-    expect(icon).not.toBeNull();
-    expect(icon.title).toBe("yield");
+    expect(icon).toMatchObject({ title: "yield", scrollWidth: icon.clientWidth });
     expect(icon.clientWidth).toBeGreaterThan(0);
-    expect(icon.scrollWidth).toBe(icon.clientWidth);
   });
-});
 
-describe.runIf("__vitest_browser__" in globalThis)("widget action placement", () => {
   it("mounts and rerenders during resize delivery without observer loop errors", async () => {
-    container = document.body.appendChild(document.createElement("div"));
+    const container = containerFor("width: 420px; height: 300px");
     container.className = "chat-thread";
-    container.style.cssText = "width: 420px; height: 300px";
     const errors: string[] = [];
     const recordError = (event: ErrorEvent) => {
       if (event.message.includes("ResizeObserver loop")) {
@@ -75,67 +56,58 @@ describe.runIf("__vitest_browser__" in globalThis)("widget action placement", ()
       }
     };
     window.addEventListener("error", recordError);
-    let redraw!: () => void;
+    onTestFinished(() => window.removeEventListener("error", recordError));
+    const [options, setOptions] = createSignal({ rawText: "Widget details" });
     mountSolid(
-      () => {
-        const [revision, setRevision] = createSignal(0);
-        redraw = () => setRevision((value) => value + 1);
-        return (
-          <ToolPreview
-            preview={{
-              kind: "canvas",
-              surface: "assistant_message",
-              render: "url",
-              url: "about:blank",
-              sandbox: "strict",
-            }}
-            surface="chat_message"
-            options={(() => {
-              revision();
-              return { rawText: "Widget details" };
-            })()}
-          />
-        );
-      },
+      () => (
+        <ToolPreview
+          preview={{
+            kind: "canvas",
+            surface: "assistant_message",
+            render: "url",
+            url: "about:blank",
+            sandbox: "strict",
+          }}
+          surface="chat_message"
+          options={options()}
+        />
+      ),
       { container },
     );
     const draw = () => {
-      redraw();
+      setOptions({ rawText: "Widget details" });
       flush();
     };
-    let rerenderObserver: ResizeObserver | undefined;
-    try {
-      draw();
-      const preview = container.querySelector<HTMLElement>(".chat-tool-card__preview")!;
-      preview.style.width = "400px";
-      const actions = preview.querySelector<HTMLElement>("[data-widget-actions]")!;
-      await vi.waitFor(() =>
-        expect(actions.getBoundingClientRect().bottom).toBe(preview.getBoundingClientRect().top),
-      );
-      expect(errors).toEqual([]);
-
-      let rerendered = false;
-      rerenderObserver = new ResizeObserver(() => {
-        rerenderObserver?.disconnect();
-        container!.style.width = "480px";
-        draw();
-        rerendered = true;
-      });
-      rerenderObserver.observe(preview);
+    draw();
+    const preview = container.querySelector<HTMLElement>(".chat-tool-card__preview")!;
+    preview.style.width = "400px";
+    const actions = preview.querySelector<HTMLElement>("[data-widget-actions]")!;
+    const expectPlacement = async (edge: "top" | "right") => {
       await vi.waitFor(() => {
-        expect(rerendered).toBe(true);
-        expect(actions.getBoundingClientRect().left).toBe(preview.getBoundingClientRect().right);
+        const actual = actions.getBoundingClientRect()[edge === "top" ? "bottom" : "left"];
+        expect(actual).toBe(preview.getBoundingClientRect()[edge]);
       });
-      expect(errors).toEqual([]);
+    };
+    await expectPlacement("top");
 
-      container.style.width = "420px";
-      await vi.waitFor(() =>
-        expect(actions.getBoundingClientRect().bottom).toBe(preview.getBoundingClientRect().top),
-      );
-      expect(errors).toEqual([]);
-    } finally {
-      rerenderObserver?.disconnect();
-      window.removeEventListener("error", recordError);
+    let rerendered = false;
+    const rerenderObserver = new ResizeObserver(() => {
+      rerenderObserver.disconnect();
+      draw();
+      rerendered = true;
+    });
+    onTestFinished(() => rerenderObserver.disconnect());
+    rerenderObserver.observe(preview);
+    await vi.waitFor(() => expect(rerendered).toBe(true));
+
+    // Resize the observed ancestor after delivery; doing it in the callback creates a loop.
+    for (const [width, edge] of [
+      [480, "right"],
+      [420, "top"],
+    ] as const) {
+      container.style.width = `${width}px`;
+      await expectPlacement(edge);
     }
+    expect(errors).toEqual([]);
   });
 });

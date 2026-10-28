@@ -1,9 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
-import {
-  readWorkerPreparation,
-  workerPreparationSourceKey,
-} from "./preparation-identity.schema.js";
+import { workerPreparationSourceKey } from "./preparation-identity.schema.js";
 import type { Generations, PassContext, PoolOptions } from "./prepared-pool-admission.js";
 import * as pool from "./prepared-pool-admission.js";
 import { isSupersededPresenceReserve } from "./prepared-pool-presence.js";
@@ -97,7 +94,7 @@ async function retain(
     const valid =
       !isSupersededPresenceReserve(record, ctx.activeDemand) &&
       !expired &&
-      generation?.preparationKey === record.preparation.key &&
+      generation?.preparation.key === record.preparation.key &&
       (!requireRetention || generation.retention !== undefined || generation.deferred) &&
       ((record.preparation.purpose === "build" && record.state !== "ready") ||
         count < limits.target) &&
@@ -131,8 +128,11 @@ async function planRefill(ctx: PassContext, eligible: Generations): Promise<Gene
       continue;
     }
     try {
-      generation.retention = await options.prepareRetention(generation.source, signal, (reason) =>
-        pool.skipRefill(ctx, generation.source, reason),
+      generation.retention = await options.prepareRetention(
+        generation.source,
+        generation.preparation,
+        signal,
+        (reason) => pool.skipRefill(ctx, generation.source, reason),
       );
       signal.throwIfAborted();
       if (!generation.retention) {
@@ -165,7 +165,7 @@ async function planRefill(ctx: PassContext, eligible: Generations): Promise<Gene
       generation.expiresAtMs <= now() ||
       (!presence.isPresent() &&
         demand &&
-        generation.preparationKey === demand.preparationKey &&
+        generation.preparation.key === demand.preparationKey &&
         !generation.activationEligible)
     ) {
       pool.skipRefill(ctx, source, "demand expired or authenticated presence ended");
@@ -178,7 +178,7 @@ async function planRefill(ctx: PassContext, eligible: Generations): Promise<Gene
       continue;
     }
     try {
-      const preparation = readWorkerPreparation(source.profileSnapshot)!;
+      const preparation = generation.preparation;
       const intent = await options.prepareIntent(source.profileId, {
         ...(project
           ? "source" in project
@@ -192,7 +192,9 @@ async function planRefill(ctx: PassContext, eligible: Generations): Promise<Gene
         signal,
       });
       signal.throwIfAborted();
-      if (intent.providerId !== source.providerId || intent.preparationKey !== preparation.key) {
+      const admittedPreparation =
+        intent.profileSnapshot.runtimePreparation ?? intent.profileSnapshot.project?.preparation;
+      if (intent.providerId !== source.providerId || admittedPreparation?.key !== preparation.key) {
         pool.skipRefill(ctx, source, "refill intent no longer matches the activated preparation");
         eligible.delete(key);
         continue;
@@ -230,9 +232,15 @@ async function launchReserves(
           providerId: intent.providerId,
           profileId: source.profileId,
           profileSnapshot: intent.profileSnapshot,
-          preparation: { purpose: "reserve", key: intent.preparationKey!, demandAtMs, expiresAtMs },
+          preparation: {
+            purpose: "reserve",
+            key: generation.preparation.key,
+            demandAtMs,
+            expiresAtMs,
+          },
         },
-        projectKey: workerPreparationSourceKey(intent.profileSnapshot)!,
+        projectKey:
+          intent.profileSnapshot.runtimePreparation?.source ?? intent.profileSnapshot.project!.key,
         ...limits,
         assertCurrent: () => pool.assertGenerationCurrent(ctx, generation),
       });

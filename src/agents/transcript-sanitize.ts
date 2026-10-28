@@ -1,12 +1,49 @@
-import { OPENAI_RESPONSES_APIS } from "@openclaw/ai/internal/openai-responses-payload-policy";
+import {
+  OPENAI_RESPONSES_APIS,
+  readOpenAIResponsesCompactionWindow,
+} from "@openclaw/ai/internal/openai-responses-payload-policy";
+import {
+  sanitizeInlineImageBase64,
+  sanitizeInlineImageDataUrlForStorage,
+} from "@openclaw/media-core/inline-image-data-url";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import type { AgentMessage } from "./runtime/index.js";
-import {
-  sanitizeTranscriptImageDataUrlField,
-  sanitizeTranscriptImageRecord,
-  shouldPreserveNestedTranscriptImageDataUrlFields,
-} from "./transcript-sanitize-images.js";
-import { sanitizeCompactionReplayState } from "./transcript-sanitize-replay.js";
+
+const isImageMimeType = (value: unknown): value is string =>
+  typeof value === "string" && /^image\//iu.test(value.trim());
+
+function sanitizeTranscriptImageRecord(
+  source: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  const isImageBlock = source.type === "image";
+  const isBase64SourceBlock = source.type === "base64";
+  if ((!isImageBlock && !isBase64SourceBlock) || typeof source.data !== "string") {
+    return undefined;
+  }
+  const mimeTypeFields = ["mimeType", "mediaType", "media_type"].filter((key) =>
+    isImageMimeType(source[key]),
+  );
+  const mimeType = mimeTypeFields.map((key) => source[key]).find(isImageMimeType);
+  if (!mimeType) {
+    return undefined;
+  }
+  const sanitized = sanitizeInlineImageBase64({
+    base64: source.data,
+    mimeType: mimeType.trim().toLowerCase(),
+  });
+  if (!sanitized) {
+    return undefined;
+  }
+  const hasCanonicalMimeTypes = mimeTypeFields.every((key) => source[key] === sanitized.mimeType);
+  if (source.data === sanitized.base64 && hasCanonicalMimeTypes) {
+    return source;
+  }
+  const next: Record<string, unknown> = { ...source, data: sanitized.base64 };
+  for (const field of mimeTypeFields) {
+    next[field] = sanitized.mimeType;
+  }
+  return next;
+}
 
 function isPlainTranscriptObject(value: object): value is Record<string, unknown> {
   const prototype = Object.getPrototypeOf(value);
@@ -19,7 +56,11 @@ type TranscriptValueLocation =
   | "assistant-content-block"
   | "nested";
 
-type TranscriptAssistantRoute = NonNullable<Parameters<typeof sanitizeCompactionReplayState>[1]>;
+type TranscriptAssistantRoute = {
+  api?: string;
+  model?: string;
+  provider?: string;
+};
 
 const GOOGLE_REASONING_APIS = new Set([
   "google-generative-ai",
@@ -82,8 +123,9 @@ function isGitHubCopilotResponsesRoute(route: TranscriptAssistantRoute | undefin
   );
 }
 
-function isStructurallyValidOpaqueReplayToken(value: string): boolean {
+function isStructurallyValidOpaqueReplayToken(value: unknown): value is string {
   return (
+    typeof value === "string" &&
     value.length > 0 &&
     value === value.trim() &&
     OPAQUE_REPLAY_TOKEN_RE.test(value) &&
@@ -120,16 +162,121 @@ function isOpenAIResponseItemId(
   return isSafeReplayIdentifier(value, isGitHubCopilotResponsesRoute(route) ? 64 : 512);
 }
 
-const replaySanitizerHelpers = {
-  isAnthropicReasoningRoute,
-  isOpenAIReplayContextHash,
-  isOpenAIResponseItemId,
-  isOpenAIResponsesApi,
-  isOpenAIResponsesRoute,
-  isPlainTranscriptObject,
-  isStructurallyValidOpaqueReplayToken,
-  sanitizeTranscriptStructuredValue,
-};
+function sanitizeCompactedWindow(replay: { data: string; id?: string; compactedWindow?: unknown }) {
+  const window = replay.compactedWindow;
+  const output = readOpenAIResponsesCompactionWindow(replay);
+  const unchanged = output?.every((item) => {
+    if (item.type !== "compaction") {
+      return sanitizeTranscriptStructuredValue(item) === item;
+    }
+    // Preserve the canonical window only when image normalization leaves it unchanged.
+    const { encrypted_content: _encrypted, ...plaintext } = item;
+    return sanitizeTranscriptStructuredValue(plaintext) === plaintext;
+  });
+  return unchanged &&
+    window &&
+    typeof window === "object" &&
+    isPlainTranscriptObject(window) &&
+    typeof window.output === "string"
+    ? {
+        state: "ready",
+        output: window.output,
+        ...(typeof window.outputTokens === "number" &&
+        Number.isSafeInteger(window.outputTokens) &&
+        window.outputTokens >= 0
+          ? { outputTokens: window.outputTokens }
+          : {}),
+      }
+    : { state: "refresh-required" };
+}
+
+function sanitizeCompactionReplayState(
+  value: unknown,
+  route: TranscriptAssistantRoute | undefined,
+): Record<string, unknown> | undefined {
+  if (!value || typeof value !== "object" || !isPlainTranscriptObject(value)) {
+    return undefined;
+  }
+  const replayType = typeof value.type === "string" ? value.type : "";
+  const openAISuppression = replayType === "openai-responses-compaction-suppression";
+  const anthropicSuppression = replayType === "anthropic-compaction-suppression";
+  const isOpenAI =
+    openAISuppression ||
+    replayType === "openai-responses-compaction" ||
+    replayType === "openai-responses-retained-compaction";
+  const isAnthropic = anthropicSuppression || replayType === "anthropic-compaction";
+  const isSuppression = openAISuppression || anthropicSuppression;
+  if (
+    (!isOpenAI && !isAnthropic) ||
+    !(isOpenAI ? isOpenAIResponsesRoute(route) : isAnthropicReasoningRoute(route)) ||
+    value.v !== 1 ||
+    (value.type === "openai-responses-retained-compaction" && value.replayIndex !== undefined) ||
+    (value.replayIndex !== undefined &&
+      (isSuppression ||
+        typeof value.replayIndex !== "number" ||
+        !Number.isSafeInteger(value.replayIndex) ||
+        value.replayIndex < 0)) ||
+    value.provider !== route?.provider ||
+    !(isOpenAI
+      ? typeof value.api === "string" && isOpenAIResponsesApi(value.api)
+      : value.api === route?.api) ||
+    value.model !== route?.model ||
+    !isOpenAIReplayContextHash(value.baseUrlHash) ||
+    (value.sessionHash !== undefined && !isOpenAIReplayContextHash(value.sessionHash)) ||
+    (value.authProfileHash !== undefined && !isOpenAIReplayContextHash(value.authProfileHash))
+  ) {
+    return undefined;
+  }
+  const data = isSuppression
+    ? value.data === "rejected"
+      ? value.data
+      : undefined
+    : isOpenAI
+      ? isStructurallyValidOpaqueReplayToken(value.data)
+        ? value.data
+        : undefined
+      : typeof value.data === "string" && value.data.length > 0
+        ? value.data
+        : undefined;
+  if (data === undefined) {
+    return undefined;
+  }
+  const encryptedContent = !isSuppression && isAnthropic ? value.encryptedContent : undefined;
+  if (encryptedContent != null && !isStructurallyValidOpaqueReplayToken(encryptedContent)) {
+    return undefined;
+  }
+  const replayId =
+    !isSuppression &&
+    isOpenAI &&
+    typeof value.id === "string" &&
+    isOpenAIResponseItemId(value.id, route)
+      ? value.id
+      : undefined;
+  return {
+    v: 1,
+    type: value.type,
+    ...(replayId !== undefined ? { id: replayId } : {}),
+    data,
+    ...(encryptedContent !== undefined ? { encryptedContent } : {}),
+    ...(value.replayIndex !== undefined ? { replayIndex: value.replayIndex } : {}),
+    provider: value.provider,
+    api: value.api,
+    model: value.model,
+    baseUrlHash: value.baseUrlHash,
+    ...(value.sessionHash !== undefined ? { sessionHash: value.sessionHash } : {}),
+    ...(value.authProfileHash !== undefined ? { authProfileHash: value.authProfileHash } : {}),
+    ...(!isSuppression && isOpenAI && value.compactedWindow !== undefined
+      ? {
+          // Keep the newest barrier when its canonical image payload needs refreshing.
+          compactedWindow: sanitizeCompactedWindow({
+            data,
+            id: replayId,
+            compactedWindow: value.compactedWindow,
+          }),
+        }
+      : {}),
+  };
+}
 
 const OPENAI_REASONING_REPLAY_METADATA_KEYS = new Set([
   "v",
@@ -201,12 +348,7 @@ export function sanitizeOpenAIReasoningSignature(
   }
   const encryptedContent = parsed.encrypted_content;
   const hasEncryptedContent = Object.hasOwn(parsed, "encrypted_content");
-  if (
-    encryptedContent !== undefined &&
-    encryptedContent !== null &&
-    (typeof encryptedContent !== "string" ||
-      !isStructurallyValidOpaqueReplayToken(encryptedContent))
-  ) {
+  if (encryptedContent != null && !isStructurallyValidOpaqueReplayToken(encryptedContent)) {
     return undefined;
   }
   if (
@@ -249,7 +391,6 @@ function sanitizeOpenAICompletionsToolSignature(value: string): string | undefin
   if (
     !parsed ||
     parsed.type !== "reasoning.encrypted" ||
-    typeof parsed.data !== "string" ||
     !isStructurallyValidOpaqueReplayToken(parsed.data) ||
     (parsed.id !== undefined &&
       parsed.id !== null &&
@@ -326,11 +467,7 @@ function sanitizeTranscriptStructuredValue(
   }
   for (const [key, item] of Object.entries(source)) {
     if (location === "root" && source.role === "assistant" && key === "providerReplay") {
-      const sanitizedReplay = sanitizeCompactionReplayState(
-        item,
-        currentAssistantRoute,
-        replaySanitizerHelpers,
-      );
+      const sanitizedReplay = sanitizeCompactionReplayState(item, currentAssistantRoute);
       if (sanitizedReplay !== undefined) {
         if (sanitizedReplay !== item) {
           next ??= { ...source };
@@ -372,13 +509,17 @@ function sanitizeTranscriptStructuredValue(
     ) {
       sanitizedField = sanitizeOpenAICompletionsToolSignature(item);
     }
-    if (sanitizedField === undefined && typeof item === "string") {
-      sanitizedField = sanitizeTranscriptImageDataUrlField({
-        source,
-        key,
-        value: item,
-        preserveImageDataUrlFields,
-      });
+    if (
+      sanitizedField === undefined &&
+      typeof item === "string" &&
+      item.slice(0, "data:".length).toLowerCase() === "data:"
+    ) {
+      const isImageDataUrlField =
+        (preserveImageDataUrlFields && key === "url") ||
+        (source.type === "input_image" && key === "image_url") ||
+        ((source.type === "image" || source.type === "image_url") && key === "url") ||
+        (source.type === "image" && (key === "source" || key === "data"));
+      sanitizedField = isImageDataUrlField ? sanitizeInlineImageDataUrlForStorage(item) : undefined;
     }
     if (sanitizedField !== undefined) {
       if (sanitizedField !== item) {
@@ -393,7 +534,11 @@ function sanitizeTranscriptStructuredValue(
     const sanitized = sanitizeTranscriptStructuredValue(
       item,
       seen,
-      preserveImageDataUrlFields || shouldPreserveNestedTranscriptImageDataUrlFields(source, key),
+      preserveImageDataUrlFields ||
+        (key === "image_url" &&
+          (source.type === "image_url" ||
+            source.type === "input_image" ||
+            source.type === "image")),
       location === "root" && source.role === "assistant" && key === "content" && Array.isArray(item)
         ? "assistant-content-array"
         : "nested",

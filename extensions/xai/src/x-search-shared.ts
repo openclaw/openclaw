@@ -1,15 +1,9 @@
-import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { XAI_DEFAULT_MODEL_ID } from "../model-definitions.js";
 import {
   requestXaiResponsesTool,
   resolveXaiToolDefaultReasoningEffort,
   requireXaiResponseTextCitationsAndInline,
-  resolveXaiResponsesEndpoint,
 } from "./responses-tool-shared.js";
-import {
-  resolveNormalizedXaiToolModel,
-  resolvePositiveIntegerToolConfig,
-} from "./tool-config-shared.js";
 import { buildXaiWebSearchPayload, type XaiWebSearchResponse } from "./web-search-shared.js";
 
 export const XAI_DEFAULT_X_SEARCH_MODEL = XAI_DEFAULT_MODEL_ID;
@@ -24,25 +18,6 @@ export type XaiXSearchOptions = {
   enableImageUnderstanding?: boolean;
   enableVideoUnderstanding?: boolean;
 };
-
-export function resolveXaiXSearchModel(config?: Record<string, unknown>): string {
-  return resolveNormalizedXaiToolModel({
-    config,
-    defaultModel: XAI_DEFAULT_X_SEARCH_MODEL,
-  });
-}
-
-export function resolveXaiXSearchEndpoint(config?: Record<string, unknown>): string {
-  return resolveXaiResponsesEndpoint(asNonArrayRecord(config).baseUrl);
-}
-
-export function resolveXaiXSearchInlineCitations(config?: Record<string, unknown>): boolean {
-  return asNonArrayRecord(config).inlineCitations === true;
-}
-
-export function resolveXaiXSearchMaxTurns(config?: Record<string, unknown>): number | undefined {
-  return resolvePositiveIntegerToolConfig(config, "maxTurns");
-}
 
 function buildXSearchTool(options: XaiXSearchOptions): Record<string, unknown> {
   return {

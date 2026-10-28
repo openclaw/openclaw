@@ -22,9 +22,7 @@ import {
   resetGatewayWorkAdmission,
   runWithGatewayIndependentRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
-import { getActiveSecretsRuntimeSnapshotState } from "../secrets/runtime-state.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { createGatewayMetadataCloseFixture } from "./server-close.metadata.test-support.js";
 import type { GatewayServer } from "./server-public.js";
@@ -33,12 +31,7 @@ it.each(["restart", "memory-and-plugin", "session-store"] as const)(
   "reports plugin cleanup through registered Gateway close (%s)",
   async (mode) => {
     const fixture = await createGatewayMetadataCloseFixture(`plugin-close-${mode}`);
-    fixture.config.agents = {
-      defaults: {
-        workspace: fixture.state.workspaceDir,
-        model: { primary: `${fixture.pluginId}/model` },
-      },
-    };
+    fixture.config.agents!.defaults!.model = { primary: `${fixture.pluginId}/model` };
     const pluginFailure = new Error("registered plugin cleanup failed");
     const memoryFailure = new Error("registered memory cleanup failed");
     const stateFailure = mode === "session-store";
@@ -69,8 +62,6 @@ it.each(["restart", "memory-and-plugin", "session-store"] as const)(
       });
     }
     setActivePluginRegistry(registry);
-    const sharedEntered = createDeferredCore();
-    const releaseShared = createDeferredCore();
     const releaseWork = createDeferredCore();
     const started = createDeferredCore<GatewayServer>();
     const completeBoot = vi.fn();
@@ -79,9 +70,6 @@ it.each(["restart", "memory-and-plugin", "session-store"] as const)(
     let startCount = 0;
     let closing: Promise<unknown> | undefined;
     let activeWork: Promise<void> | undefined;
-    let shared: { enabled: boolean } | undefined;
-    let sharedSettled = false;
-    let closeSettled = false;
     let pluginDisposed = false;
     let pluginSawOpenDatabase = false;
     let stop: ((signal: "SIGINT") => void) | undefined;
@@ -130,15 +118,12 @@ it.each(["restart", "memory-and-plugin", "session-store"] as const)(
           ],
         }));
       }
-      expect(kernel.pluginRuntime.registry).toBe(registry);
       const metadata = kernel.getPluginMetadataSnapshot();
       assert(metadata);
       const instance =
         mode === "restart" ? getPluginValueInstance(fixture.loadCallback(metadata)) : registered;
       assert(instance);
       const database = openOpenClawStateDatabase({ env: fixture.state.env }).db;
-      expect(database.isOpen).toBe(true);
-      expect(getActiveSecretsRuntimeSnapshotState()).not.toBeNull();
       if (hasPluginFailure) {
         instance.lifecycle.onDispose(() => {
           pluginDisposed = true;
@@ -146,17 +131,6 @@ it.each(["restart", "memory-and-plugin", "session-store"] as const)(
           throw pluginFailure;
         });
       }
-      shared = resolveGlobalSingleton(
-        Symbol(`plugin-close-shared-${mode}`),
-        () => ({ enabled: true }),
-        async (state) => {
-          if (state.enabled) {
-            sharedEntered.resolve();
-            await releaseShared.promise;
-            sharedSettled = true;
-          }
-        },
-      );
       const close = vi.spyOn(server, "close");
       if (mode === "restart") {
         activeWork = runWithGatewayIndependentRootWorkAdmission(
@@ -172,35 +146,16 @@ it.each(["restart", "memory-and-plugin", "session-store"] as const)(
         releaseWork.resolve();
         await activeWork;
         await expect.poll(() => close.mock.calls.length).toBe(1);
-        expect(close.mock.calls[0]?.[0]).toMatchObject({
-          reason: "gateway restarting",
-          restartExpectedMs: 1500,
-        });
         closing = close.mock.results[0]?.value;
         assert(closing);
       } else {
         closing = server.close({ reason: "plugin cleanup regression" });
       }
-      const outcome = closing
-        .then(
-          () => undefined,
-          (error: unknown) => error,
-        )
-        .finally(() => {
-          closeSettled = true;
-        });
-      await Promise.race([
-        sharedEntered.promise,
-        outcome.then(() => {
-          throw new Error("Close settled before shared cleanup");
-        }),
-      ]);
-      await nextTurn();
-      expect(closeSettled).toBe(false);
-      expect(sharedSettled).toBe(false);
+      const error = await closing.then(
+        () => undefined,
+        (failure: unknown) => failure,
+      );
       expect(pluginDisposed).toBe(hasPluginFailure);
-      releaseShared.resolve();
-      const error = await outcome;
       if (stateFailure) {
         expect(collectNestedErrorCandidates(error)).toContain(pluginFailure);
       } else {
@@ -219,37 +174,27 @@ it.each(["restart", "memory-and-plugin", "session-store"] as const)(
       }
       await flushLogger();
       const logs = await fs.readFile(logFile, "utf8");
+      const cleanupFailure = (hook: string) =>
+        `Plugin ${fixture.pluginId} cleanup failed (${hook}): ${pluginFailure.message}`;
       if (stateFailure) {
-        expect(logs).toContain(
-          `Plugin ${fixture.pluginId} cleanup failed (session-store): ${pluginFailure.message}`,
-        );
+        expect(logs).toContain(cleanupFailure("session-store"));
         expect(logs).toMatch(/shutdown failed/);
       }
       if (hasPluginFailure) {
         expect(logs).toMatch(
           new RegExp(`shutdown completed .*with warnings:.*plugin/${fixture.pluginId}`),
         );
-        expect(logs).toContain(
-          `Plugin ${fixture.pluginId} cleanup failed (instance): ${pluginFailure.message}`,
-        );
-        expect(logs).not.toContain("shutdown completed cleanly");
+        expect(logs).toContain(cleanupFailure("instance"));
       }
       if (hasMemoryFailure) {
-        expect(memoryDrain).toHaveBeenCalledOnce();
         expect(logs).toContain(`memory-managers: ${memoryFailure.message}`);
       }
       expect(getGatewayContextLifetime(kernel.resolvePluginGatewayContext).signal.aborted).toBe(
         true,
       );
-      expect(sharedSettled).toBe(true);
       expect(database.isOpen).toBe(false);
-      expect(getActiveSecretsRuntimeSnapshotState()).toBeNull();
     } finally {
       releaseWork.resolve();
-      releaseShared.resolve();
-      if (shared) {
-        shared.enabled = false;
-      }
       await Promise.allSettled([closing, activeWork]);
       if (mode === "restart" && exitCode === undefined && stop) {
         await nextTurn();

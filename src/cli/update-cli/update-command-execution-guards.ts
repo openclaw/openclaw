@@ -126,7 +126,7 @@ export function createUpdateCommandExecutionGuards(
       env: capturedEnv,
       context,
       // Driver-only wait; these writes run in the worker, never on the Gateway event loop.
-      busyTimeoutMs: 120_000,
+      busyTimeoutMs: run?.busyTimeoutMs ?? 120_000,
       assertAccepting,
       retainSettlement: (completion: Promise<void>) =>
         retainMutableUpdateSignalWrite(run, completion),

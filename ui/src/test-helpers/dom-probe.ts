@@ -10,3 +10,22 @@ export function domProbe(root: Pick<ParentNode, "querySelector" | "querySelector
     present: (...selectors: string[]) => selectors.map((selector) => query(selector) !== null),
   };
 }
+
+export function allMutationObserverOptions() {
+  return {
+    subtree: true,
+    childList: true,
+    attributes: true,
+    characterData: true,
+  };
+}
+
+export function findButton(label: string): HTMLButtonElement {
+  const button = [...document.body.querySelectorAll("button")].find(
+    (candidate) => candidate.textContent?.trim() === label,
+  );
+  if (!(button instanceof HTMLButtonElement)) {
+    throw new Error(`Expected ${label} button`);
+  }
+  return button;
+}

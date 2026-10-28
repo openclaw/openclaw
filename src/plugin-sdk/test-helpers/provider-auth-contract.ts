@@ -60,6 +60,11 @@ function buildAuthContext() {
   };
 }
 
+async function loadProvider(load: ProviderAuthContractPluginLoader, id: string) {
+  const { default: plugin } = await load();
+  return requireProvider(await registerProviders(plugin), id);
+}
+
 function createJwt(payload: Record<string, unknown>): string {
   const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url");
   const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
@@ -91,7 +96,8 @@ function copilotProfile(token: string, storeSecret = false) {
   };
 }
 
-function installSharedAuthProfileStoreHooks(state: { authStore: AuthProfileStore }) {
+function installSharedAuthProfileStoreHooks() {
+  const state: { authStore: AuthProfileStore } = { authStore: { version: 1, profiles: {} } };
   beforeEach(() => {
     vi.doMock("openclaw/plugin-sdk/provider-auth", async () => {
       const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/provider-auth")>(
@@ -119,17 +125,17 @@ function installSharedAuthProfileStoreHooks(state: { authStore: AuthProfileStore
     listProfilesForProviderMock.mockReset();
     clearRuntimeAuthProfileStoreSnapshots();
   });
+  return state;
 }
 
 export function describeOpenAICodexProviderAuthContract(
   load: ProviderAuthContractPluginLoader,
   options: OpenAICodexProviderAuthContractOptions,
 ) {
-  const state = { authStore: { version: 1, profiles: {} } as AuthProfileStore };
   const { expectedCodexDefaultModel, loginOpenAICodexOAuthMock } = options;
 
   describe("openai provider ChatGPT auth contract", () => {
-    installSharedAuthProfileStoreHooks(state);
+    installSharedAuthProfileStoreHooks();
 
     async function expectOAuthProfile(params: {
       access: string;
@@ -137,7 +143,7 @@ export function describeOpenAICodexProviderAuthContract(
       email?: string;
       loginEmail?: string;
     }) {
-      const provider = await getProvider();
+      const provider = await loadProvider(load, "openai");
       const tokens = {
         refresh: "refresh-token",
         access: params.access,
@@ -163,75 +169,48 @@ export function describeOpenAICodexProviderAuthContract(
       });
     }
 
-    async function getProvider() {
-      const { default: openAIPlugin } = await load();
-      return requireProvider(await registerProviders(openAIPlugin), "openai");
-    }
-
-    it("keeps OAuth auth results provider-owned", async () => {
-      await expectOAuthProfile({
+    const stableProfile = (identity: string) =>
+      `openai:id-${Buffer.from(identity, "utf8").toString("base64url")}`;
+    it.each([
+      {
+        name: "keeps OAuth auth results provider-owned",
         profileId: "openai:user@example.com",
         access: "access-token",
         email: "user@example.com",
         loginEmail: "user@example.com",
-      });
-    });
-
-    it("backfills OAuth email from the JWT profile claim", async () => {
-      await expectOAuthProfile({
+      },
+      {
+        name: "backfills OAuth email from the JWT profile claim",
         access: createJwt({ "https://api.openai.com/profile": { email: "jwt-user@example.com" } }),
         profileId: "openai:jwt-user@example.com",
         email: "jwt-user@example.com",
-      });
-    });
-
-    it("uses a stable fallback id when JWT email is missing", async () => {
-      const access = createJwt({
-        "https://api.openai.com/auth": {
-          chatgpt_account_user_id: "user-123__acct-456",
-        },
-      });
-      const expectedStableId = Buffer.from("user-123__acct-456", "utf8").toString("base64url");
-      await expectOAuthProfile({
-        access,
-        profileId: `openai:id-${expectedStableId}`,
-      });
-    });
-
-    it("uses iss and sub to build a stable fallback id when auth claims are missing", async () => {
-      const access = createJwt({
-        iss: "https://accounts.openai.com",
-        sub: "user-abc",
-      });
-      const expectedStableId = Buffer.from("https://accounts.openai.com|user-abc").toString(
-        "base64url",
-      );
-      await expectOAuthProfile({
-        access,
-        profileId: `openai:id-${expectedStableId}`,
-      });
-    });
-
-    it("uses sub alone to build a stable fallback id when iss is missing", async () => {
-      const access = createJwt({
-        sub: "user-abc",
-      });
-      const expectedStableId = Buffer.from("user-abc").toString("base64url");
-      await expectOAuthProfile({
-        access,
-        profileId: `openai:id-${expectedStableId}`,
-      });
-    });
-
-    it("falls back to the default profile when JWT parsing yields no identity", async () => {
-      await expectOAuthProfile({
+      },
+      {
+        name: "uses a stable fallback id when JWT email is missing",
+        access: createJwt({
+          "https://api.openai.com/auth": { chatgpt_account_user_id: "user-123__acct-456" },
+        }),
+        profileId: stableProfile("user-123__acct-456"),
+      },
+      {
+        name: "uses iss and sub to build a stable fallback id when auth claims are missing",
+        access: createJwt({ iss: "https://accounts.openai.com", sub: "user-abc" }),
+        profileId: stableProfile("https://accounts.openai.com|user-abc"),
+      },
+      {
+        name: "uses sub alone to build a stable fallback id when iss is missing",
+        access: createJwt({ sub: "user-abc" }),
+        profileId: stableProfile("user-abc"),
+      },
+      {
+        name: "falls back to the default profile when JWT parsing yields no identity",
         access: "not-a-jwt-token",
         profileId: "openai:default",
-      });
-    });
+      },
+    ])("$name", expectOAuthProfile);
 
     it("surfaces OAuth failures instead of silently succeeding with no profiles", async () => {
-      const provider = await getProvider();
+      const provider = await loadProvider(load, "openai");
       loginOpenAICodexOAuthMock.mockRejectedValueOnce(new Error("oauth failed"));
 
       await expect(provider.auth[0]?.run(buildAuthContext() as never)).rejects.toThrow(
@@ -245,15 +224,9 @@ export function describeGithubCopilotProviderAuthContract(
   load: ProviderAuthContractPluginLoader,
   defaultModel: string,
 ) {
-  const state = { authStore: { version: 1, profiles: {} } as AuthProfileStore };
-
   describe("github-copilot provider auth contract", () => {
-    installSharedAuthProfileStoreHooks(state);
-
-    async function getProvider() {
-      const { default: githubCopilotPlugin } = await load();
-      return requireProvider(await registerProviders(githubCopilotPlugin), "github-copilot");
-    }
+    const state = installSharedAuthProfileStoreHooks();
+    const getProvider = () => loadProvider(load, "github-copilot");
 
     async function runDeviceAuthWithFakeTimers<T>(
       run: () => T | Promise<T>,
@@ -278,34 +251,6 @@ export function describeGithubCopilotProviderAuthContract(
       }
     }
 
-    function buildCopilotSetupResponse(target: string): Response | undefined {
-      if (target === "https://api.github.com/copilot_internal/user") {
-        return Response.json({ endpoints: { api: "https://api.individual.githubcopilot.com" } });
-      }
-      if (target === "https://api.individual.githubcopilot.com/models") {
-        return Response.json({
-          data: [
-            {
-              id: defaultModel.replace("github-copilot/", ""),
-              name: "Contract starter model",
-              model_picker_enabled: true,
-              model_picker_category: "versatile",
-              policy: { state: "enabled" },
-              capabilities: {
-                type: "chat",
-                limits: {
-                  max_context_window_tokens: 200_000,
-                  max_output_tokens: 64_000,
-                },
-                supports: { streaming: true, tool_calls: true },
-              },
-            },
-          ],
-        });
-      }
-      return undefined;
-    }
-
     function resolveFetchTarget(input: unknown): string {
       return typeof input === "string"
         ? input
@@ -316,22 +261,9 @@ export function describeGithubCopilotProviderAuthContract(
             : String(input);
     }
 
-    function stubGitHubCatalogFetch() {
-      const fetchMock = vi.fn(async (input: unknown) => {
-        const target = resolveFetchTarget(input);
-        const response = buildCopilotSetupResponse(target);
-        if (response) {
-          return response;
-        }
-        throw new Error(`unexpected fetch in github-copilot catalog stub: ${target}`);
-      });
-      vi.stubGlobal("fetch", fetchMock);
-      return fetchMock;
-    }
-
     it("keeps existing device auth results provider-owned", async () => {
       const provider = await getProvider();
-      stubGitHubCatalogFetch();
+      stubGitHubDeviceFlowFetch();
       state.authStore.profiles["github-copilot:github"] = {
         type: "token",
         provider: "github-copilot",
@@ -356,31 +288,52 @@ export function describeGithubCopilotProviderAuthContract(
     });
 
     function stubGitHubDeviceFlowFetch(
-      outcome: { accessToken: string } | { error: "access_denied" | "expired_token" },
+      outcome?: { accessToken: string } | { error: "access_denied" | "expired_token" },
     ) {
+      const api = "https://api.individual.githubcopilot.com";
+      const responses = new Map<string, unknown>([
+        ["https://api.github.com/copilot_internal/user", { endpoints: { api } }],
+        [
+          `${api}/models`,
+          {
+            data: [
+              {
+                id: defaultModel.replace("github-copilot/", ""),
+                name: "Contract starter model",
+                model_picker_enabled: true,
+                model_picker_category: "versatile",
+                policy: { state: "enabled" },
+                capabilities: {
+                  type: "chat",
+                  limits: { max_context_window_tokens: 200_000, max_output_tokens: 64_000 },
+                  supports: { streaming: true, tool_calls: true },
+                },
+              },
+            ],
+          },
+        ],
+      ]);
+      if (outcome) {
+        responses.set("https://github.com/login/device/code", {
+          device_code: "device-code-stub",
+          user_code: "ABCD-1234",
+          verification_uri: "https://github.com/login/device",
+          expires_in: 900,
+          interval: 0,
+        });
+        responses.set(
+          "https://github.com/login/oauth/access_token",
+          "accessToken" in outcome
+            ? { access_token: outcome.accessToken, token_type: "bearer" }
+            : { error: outcome.error },
+        );
+      }
       const fetchMock = vi.fn(async (input: unknown) => {
         const target = resolveFetchTarget(input);
-        if (target === "https://github.com/login/device/code") {
-          return Response.json({
-            device_code: "device-code-stub",
-            user_code: "ABCD-1234",
-            verification_uri: "https://github.com/login/device",
-            expires_in: 900,
-            interval: 0,
-          });
+        if (!responses.has(target)) {
+          throw new Error(`unexpected fetch in github-copilot device flow stub: ${target}`);
         }
-        if (target === "https://github.com/login/oauth/access_token") {
-          const body =
-            "accessToken" in outcome
-              ? { access_token: outcome.accessToken, token_type: "bearer" }
-              : { error: outcome.error };
-          return Response.json(body);
-        }
-        const setupResponse = buildCopilotSetupResponse(target);
-        if (setupResponse) {
-          return setupResponse;
-        }
-        throw new Error(`unexpected fetch in github-copilot device flow stub: ${target}`);
+        return Response.json(responses.get(target));
       });
       vi.stubGlobal("fetch", fetchMock);
       return fetchMock;
@@ -412,17 +365,12 @@ export function describeGithubCopilotProviderAuthContract(
     });
 
     it("keeps device auth results provider-owned", async () => {
-      const { result } = await runDeviceFlow({ accessToken: "github-device-token" });
+      const { result, ctx } = await runDeviceFlow({ accessToken: "github-device-token" });
 
       expect(result).toEqual({
         profiles: [copilotProfile("github-device-token", true)],
         defaultModel,
       });
-    });
-
-    it("uses the wizard prompter and openUrl hooks for the device code (no stdin/stdout)", async () => {
-      const { ctx } = await runDeviceFlow({ accessToken: "github-device-token" });
-
       expect(ctx.openUrl).toHaveBeenCalledWith("https://github.com/login/device");
       const noteCalls = (ctx.prompter.note as ReturnType<typeof vi.fn>).mock.calls;
       const codeNote = noteCalls.find(
@@ -439,23 +387,15 @@ export function describeGithubCopilotProviderAuthContract(
       });
     });
 
-    it("returns no profiles and notes cancellation when the user denies access", async () => {
-      const { result, ctx } = await runDeviceFlow({ error: "access_denied" });
-
+    it.each([
+      ["access_denied", "cancel"],
+      ["expired_token", "expired"],
+    ] as const)("returns no profiles and notes %s", async (error, note) => {
+      const { result, ctx } = await runDeviceFlow({ error });
       expect(result).toEqual({ profiles: [] });
       const noteCalls = (ctx.prompter.note as ReturnType<typeof vi.fn>).mock.calls;
       expect(
-        noteCalls.some(([msg]) => typeof msg === "string" && msg.toLowerCase().includes("cancel")),
-      ).toBe(true);
-    });
-
-    it("returns no profiles and notes expiry when the device code expires", async () => {
-      const { result, ctx } = await runDeviceFlow({ error: "expired_token" });
-
-      expect(result).toEqual({ profiles: [] });
-      const noteCalls = (ctx.prompter.note as ReturnType<typeof vi.fn>).mock.calls;
-      expect(
-        noteCalls.some(([msg]) => typeof msg === "string" && msg.toLowerCase().includes("expired")),
+        noteCalls.some(([msg]) => typeof msg === "string" && msg.toLowerCase().includes(note)),
       ).toBe(true);
     });
   });

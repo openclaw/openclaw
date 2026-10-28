@@ -10,7 +10,6 @@ import { isCliPartialOutputRejected } from "../../agents/failover/error.js";
 import { resolveReplyFailoverFacts } from "../../agents/failover/request-error-facts.js";
 import {
   GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
-  HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
   renderControlUiAgentFailureCopy,
   renderFailoverCodeUserCopy,
 } from "../../agents/failover/user-copy.js";
@@ -67,7 +66,6 @@ export async function handleAgentExecutionError(params: {
 }): Promise<ErrorAction> {
   const turn = params.turn;
   const err = params.error;
-  const useHeartbeatFailureCopy = turn.opts?.useHeartbeatFailureCopy;
   // A failed candidate leaves its backstop pending; settlement takes it before later work.
   // This keeps session-override failures from being mislabeled as model failures.
   const postCompactionModelFailure =
@@ -99,7 +97,10 @@ export async function handleAgentExecutionError(params: {
     takePendingLifecycleTerminal().emit("error", err);
     turn.replyOperation?.fail("run_failed", err);
     await params.modelPatch.fail(err);
-    const replyExpectation = resolveReplyExpectation(turn.followupRun.run);
+    const replyExpectation = resolveReplyExpectation({
+      ...turn.followupRun.run,
+      scheduledAutomation: turn.followupRun.run.scheduledAutomation !== undefined,
+    });
     payload.text = resolveAgentRunFailureText({
       text: payload.text,
       replyExpectation,
@@ -164,7 +165,10 @@ export async function handleAgentExecutionError(params: {
       )
     ) {
       runState.replyCompletion = resolveReplyCompletion(
-        resolveReplyExpectation(turn.followupRun.run),
+        resolveReplyExpectation({
+          ...turn.followupRun.run,
+          scheduledAutomation: turn.followupRun.run.scheduledAutomation !== undefined,
+        }),
         "pending",
       );
       takePendingLifecycleTerminal().emit("end", undefined, {
@@ -223,8 +227,6 @@ export async function handleAgentExecutionError(params: {
       { message, error: err },
       {
         includeDetails: isVerboseFailureDetailEnabled(turn.resolvedVerboseLevel),
-        isHeartbeat: turn.isHeartbeat,
-        useHeartbeatFailureCopy,
       },
     );
     const text =
@@ -267,17 +269,7 @@ export async function handleAgentExecutionError(params: {
       `Auto-compaction failed (${message}). Preserving existing session mapping for ${turn.sessionKey ?? turn.followupRun.run.sessionId}.`,
     );
     turn.replyOperation?.fail("run_failed", err);
-    return finalFailure(
-      buildContextOverflowRecoveryText({
-        cfg: params.runtimeConfig,
-        agentId: turn.followupRun.run.agentId,
-        primaryProvider: turn.followupRun.run.provider,
-        primaryModel: turn.followupRun.run.model,
-        runtimeProvider: params.state.attemptedRuntimeProvider,
-        runtimeModel: params.state.attemptedRuntimeModel,
-        activeSessionEntry: turn.getActiveSessionEntry(),
-      }),
-    );
+    return finalFailure(buildContextOverflowRecoveryText());
   }
   const replayPrevented = findCliTimeoutError(err)?.cliTimeout.observedActivity === true;
   if (providerRequestError) {
@@ -300,8 +292,6 @@ export async function handleAgentExecutionError(params: {
           {
             includeAuthProfileId: !isNonDirectConversationContext(turn.sessionCtx),
             includeDetails: isVerboseFailureDetailEnabled(turn.resolvedVerboseLevel),
-            isHeartbeat: turn.isHeartbeat,
-            useHeartbeatFailureCopy,
             replayPrevented,
             failoverFacts,
           },
@@ -321,9 +311,7 @@ export async function handleAgentExecutionError(params: {
       : (externalRunFailureReply?.text ??
         (params.shouldSurfaceToControlUi
           ? renderControlUiAgentFailureCopy()
-          : (useHeartbeatFailureCopy ?? turn.isHeartbeat)
-            ? HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT
-            : GENERIC_EXTERNAL_RUN_FAILURE_TEXT)));
+          : GENERIC_EXTERNAL_RUN_FAILURE_TEXT)));
   return await settleFailure(
     {
       text: fallbackText,
@@ -333,6 +321,6 @@ export async function handleAgentExecutionError(params: {
     },
     !failureSummary &&
       !isContextOverflow &&
-      (externalRunFailureCandidate?.isGenericRunnerFailure ?? !turn.isHeartbeat),
+      (externalRunFailureCandidate?.isGenericRunnerFailure ?? true),
   );
 }

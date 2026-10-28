@@ -39,10 +39,9 @@ import {
 } from "../run-history.test-support.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
-import type { CronJob } from "../types.js";
+import type { CronEvent, CronJob } from "../types.js";
 import { remove, update } from "./ops-mutations.js";
 import { enqueueRun, run, waitForManualRun } from "./ops-run.js";
-import type { CronEvent } from "./state.js";
 import { ensureLoaded } from "./store.js";
 import { onTimer } from "./timer.test-support.js";
 

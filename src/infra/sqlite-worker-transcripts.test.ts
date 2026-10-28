@@ -14,7 +14,7 @@ import {
   executeOpenClawStateWorker,
   runOpenClawStateWorkerOperation,
 } from "../state/openclaw-state-worker-store.js";
-import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
+import { withoutMainThreadSql as withoutParentSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
 import { persistTranscriptSummary } from "../transcripts/capture-summary.js";
 import { resolveTranscriptsConfig } from "../transcripts/config.js";
@@ -137,17 +137,6 @@ function retireAt(stage: workerAdmission.SqliteWorkerAdmissionRequest["stage"]) 
   };
 }
 
-async function withoutParentSql<T>(operation: () => Promise<T>): Promise<T> {
-  const sql = observeMainThreadSql();
-  try {
-    const result = await operation();
-    sql.expectIdle();
-    return result;
-  } finally {
-    sql.restore();
-  }
-}
-
 async function withoutParentTranscriptSql(operation: () => Promise<void>) {
   const prepared = new WeakSet<StatementSync>();
   const observed: { databasePath: string | null; sql?: unknown }[] = [];
@@ -198,9 +187,7 @@ async function withoutParentTranscriptSql(operation: () => Promise<void>) {
     for (const entry of observed) {
       expect(entry.databasePath, "caller-thread file-backed SQLite activity").toBeNull();
       if (entry.sql !== undefined) {
-        expect(entry.sql).toBe(
-          "SELECT sqlite_version() AS version, sqlite_compileoption_used('OMIT_LOAD_EXTENSION') AS omitted",
-        );
+        expect(entry.sql).toMatch(/^SELECT sqlite_version\(\) AS version, /u);
       }
     }
   } finally {
@@ -521,7 +508,7 @@ it("returns complete stored reads and typed errors after existing-only status an
     expect(await store.readUtterancesForSession(session)).toEqual(
       storedUtterances(session, utterances),
     );
-    expect(await store.readUtterancesForSession(session, { maxUtterances: 3 })).toEqual(
+    expect((await store.readSummarySnapshot(session, 3))?.utterances).toEqual(
       storedUtterances(session, utterances.slice(-3)),
     );
     expect((await store.readSummary(session)).summary).toEqual(summary);

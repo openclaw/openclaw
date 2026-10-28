@@ -15,6 +15,7 @@ import {
   type S3Client,
 } from "@aws-sdk/client-s3";
 import type { StorageBackend } from "openclaw/plugin-sdk/plugin-entry";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import { describeR2Target, type R2Settings } from "./settings.js";
 
 const PART_BYTES = 64 * 1024 * 1024;
@@ -107,20 +108,17 @@ async function* uploadChunks(body: AsyncIterable<Uint8Array>, signal?: AbortSign
   signal?.throwIfAborted();
   const iterator = body[Symbol.asyncIterator]();
   let exhausted = false;
-  let onAbort: (() => void) | undefined;
-  const aborted =
-    signal &&
-    new Promise<never>((_resolve, reject) => {
-      onAbort = () => {
-        const error = new Error("R2 upload aborted; retry when ready.");
-        error.name = "AbortError";
-        reject(error);
-      };
-      signal.addEventListener("abort", onAbort, { once: true });
-    });
   try {
     while (true) {
-      const next = aborted ? await Promise.race([iterator.next(), aborted]) : await iterator.next();
+      const next = await racePromiseWithAbortSignal(
+        () => iterator.next(),
+        signal,
+        () => {
+          const error = new Error("R2 upload aborted; retry when ready.");
+          error.name = "AbortError";
+          return error;
+        },
+      );
       if (next.done) {
         exhausted = true;
         return;
@@ -128,9 +126,6 @@ async function* uploadChunks(body: AsyncIterable<Uint8Array>, signal?: AbortSign
       yield next.value;
     }
   } finally {
-    if (onAbort) {
-      signal?.removeEventListener("abort", onAbort);
-    }
     const closing = iterator.return?.();
     if (!exhausted) {
       // A producer blocked in next() or finally cannot delay multipart cleanup.

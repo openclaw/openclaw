@@ -8,6 +8,7 @@ import {
   resolveAgentOutboundTarget,
 } from "../../infra/outbound/agent-delivery.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import {
   normalizeDeliveryContext,
   type DeliveryContext,
@@ -16,8 +17,68 @@ import {
   INTERNAL_MESSAGE_CHANNEL,
   isDeliverableMessageChannel,
 } from "../../utils/message-channel.js";
+import { runAgentHarnessBeforeMessageWriteHook } from "../harness/hook-helpers.js";
+import type { InternalSessionEffectsTarget } from "../internal-session-effects.js";
 import type { AgentRunSessionTarget } from "../run-session-target.types.js";
+import type { RunEmbeddedAgentAttemptParams } from "./run-embedded-attempt.types.js";
 import type { AgentCommandOpts } from "./types.js";
+
+export function prepareCommandUserTurnTranscript(
+  params: Pick<
+    RunEmbeddedAgentAttemptParams,
+    "prepared" | "opts" | "suppressVisibleSessionEffects"
+  >,
+  internalSessionTarget: InternalSessionEffectsTarget | undefined,
+  sessionEntry: SessionEntry | undefined,
+) {
+  const {
+    cfg,
+    transcriptBody,
+    sessionId,
+    sessionKey,
+    sessionAgentId,
+    sessionStore,
+    storePath,
+    cwd,
+    workspaceDir,
+  } = params.prepared;
+  const transcriptMedia = params.opts.transcriptMedia ?? [];
+  const hasTranscriptMedia = transcriptMedia.length > 0;
+  const suppressUserTurnPersistence =
+    params.opts.suppressPromptPersistence === true ||
+    (params.opts.transcriptMessage === "" && !hasTranscriptMedia);
+  const recorderTranscriptText = transcriptBody || undefined;
+  const userTurnTranscriptRecorder =
+    (internalSessionTarget ? undefined : params.opts.userTurnTranscriptRecorder) ??
+    createUserTurnTranscriptRecorder({
+      ...(!suppressUserTurnPersistence && (recorderTranscriptText || hasTranscriptMedia)
+        ? {
+            input: {
+              text: recorderTranscriptText,
+              ...(hasTranscriptMedia ? { media: transcriptMedia } : {}),
+              senderIsOwner: params.opts.senderIsOwner,
+              ...(params.opts.inputProvenance ? { provenance: params.opts.inputProvenance } : {}),
+            },
+          }
+        : {}),
+      target: {
+        sessionId: internalSessionTarget?.sessionId ?? sessionId,
+        agentId: internalSessionTarget?.agentId ?? sessionAgentId,
+        sessionKey: internalSessionTarget?.sessionKey ?? sessionKey ?? sessionId,
+        sessionEntry: internalSessionTarget?.sessionEntry ?? sessionEntry,
+        sessionStore: params.suppressVisibleSessionEffects ? undefined : sessionStore,
+        storePath: internalSessionTarget?.storePath ?? storePath,
+        cwd: cwd ?? workspaceDir,
+        config: cfg,
+      },
+      beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
+      errorContext: "agent command user turn transcript",
+    });
+  if (suppressUserTurnPersistence) {
+    userTurnTranscriptRecorder.markBlocked();
+  }
+  return { suppressUserTurnPersistence, userTurnTranscriptRecorder };
+}
 
 export function clearPendingFinalDelivery(entry: SessionEntry, updatedAt: number): SessionEntry {
   return {

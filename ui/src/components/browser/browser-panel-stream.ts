@@ -1,29 +1,139 @@
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
-import type { BrowserPanelTab, BrowserRequestClient } from "./browser-client.ts";
+import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import { resolveGatewayWebSocketUrl } from "../../lib/gateway-websocket-url.ts";
+import { listen } from "../../lib/reactive/listener.ts";
+import type { BrowserRequestClient } from "./browser-client.ts";
 import { isBrowserScreencastUnsupportedError, requestBrowserScreencast } from "./browser-client.ts";
 import type {
   BrowserPanelHost,
   BrowserPanelOperations,
 } from "./browser-panel-operation-ownership.ts";
-import { loadBrowserPanelImage, type BrowserPanelView } from "./browser-panel-surface.ts";
-import {
-  BrowserScreencastClient,
-  type BrowserScreencastFrame,
-  type BrowserScreencastMeta,
-} from "./browser-screencast-client.ts";
+import type { BrowserPanelStateWriter } from "./browser-panel-state.ts";
+import { loadBrowserPanelImage } from "./browser-panel-surface.ts";
 import { browserRouteKey } from "./browser-target.ts";
+
+type BrowserScreencastMeta = { url: string; title: string };
+type BrowserScreencastFrame = {
+  blob: Blob;
+  url: string;
+  cssWidth: number;
+  cssHeight: number;
+};
+
+type BrowserScreencastOptions = {
+  gatewayUrl: string;
+  wsPath: string;
+  onReady: (meta: BrowserScreencastMeta & { targetId: string }) => void;
+  onMeta: (meta: BrowserScreencastMeta) => void;
+  onFrame: (frame: BrowserScreencastFrame) => void;
+  onClose: (detail: { code: number; reason: string }) => void;
+};
+
+class BrowserScreencastClient {
+  private readonly socket: WebSocket;
+  private readonly events = new AbortController();
+  private closed = false;
+
+  constructor(private readonly options: BrowserScreencastOptions) {
+    this.socket = new WebSocket(resolveGatewayWebSocketUrl(options.wsPath, options.gatewayUrl));
+    this.socket.binaryType = "arraybuffer";
+    const listenerOptions = { signal: this.events.signal };
+    listen(this.socket, "message", (event) => this.receive(event.data), listenerOptions);
+    listen(this.socket, "close", ({ code, reason }) => this.finish(code, reason), listenerOptions);
+    listen(
+      this.socket,
+      "error",
+      () => {
+        this.finish(1006, "");
+        this.socket.close();
+      },
+      listenerOptions,
+    );
+  }
+
+  close(): void {
+    this.closed = true;
+    this.events.abort();
+    this.socket.close();
+  }
+
+  private finish(code: number, reason: string): void {
+    if (this.closed) {
+      return;
+    }
+    this.closed = true;
+    this.events.abort();
+    this.options.onClose({ code, reason });
+  }
+
+  private receive(data: unknown): void {
+    if (this.closed) {
+      return;
+    }
+    try {
+      if (typeof data === "string") {
+        const message = asRecord(JSON.parse(data));
+        if (message?.type === "error") {
+          this.finish(1011, "");
+          this.socket.close();
+          return;
+        }
+        if (typeof message?.url !== "string" || typeof message.title !== "string") {
+          throw new Error("Invalid screencast metadata");
+        }
+        if (message.type === "ready" && typeof message.targetId === "string") {
+          this.options.onReady({
+            targetId: message.targetId,
+            url: message.url,
+            title: message.title,
+          });
+        } else if (message.type === "meta") {
+          this.options.onMeta({ url: message.url, title: message.title });
+        } else {
+          throw new Error("Invalid screencast message");
+        }
+        return;
+      }
+      if (!(data instanceof ArrayBuffer) || data.byteLength < 5) {
+        throw new Error("Invalid screencast frame");
+      }
+      const headerLength = new DataView(data).getUint32(0);
+      if (headerLength === 0 || headerLength >= data.byteLength - 4) {
+        throw new Error("Invalid screencast header length");
+      }
+      const header = asRecord(
+        JSON.parse(new TextDecoder().decode(new Uint8Array(data, 4, headerLength))),
+      );
+      if (
+        typeof header?.url !== "string" ||
+        typeof header.cssWidth !== "number" ||
+        !Number.isFinite(header.cssWidth) ||
+        header.cssWidth <= 0 ||
+        typeof header.cssHeight !== "number" ||
+        !Number.isFinite(header.cssHeight) ||
+        header.cssHeight <= 0
+      ) {
+        throw new Error("Invalid screencast dimensions");
+      }
+      this.options.onFrame({
+        blob: new Blob([new Uint8Array(data, 4 + headerLength)], { type: "image/jpeg" }),
+        url: header.url,
+        cssWidth: header.cssWidth,
+        cssHeight: header.cssHeight,
+      });
+    } catch {
+      this.finish(1002, "");
+      this.socket.close();
+    }
+  }
+}
 
 const RETRY_DELAY_MS = 10_000;
 const RESIZE_RESTART_DEBOUNCE_MS = 500;
 
-type StreamState = {
-  activeTargetId: string | null;
-  view: BrowserPanelView | null;
-  tabs: BrowserPanelTab[];
-  loading: boolean;
-};
-
-interface BrowserPanelStreamHost extends StreamState {
+interface BrowserPanelStreamHost extends BrowserPanelStateWriter<
+  "activeTargetId" | "view" | "tabs" | "loading"
+> {
   readonly host: BrowserPanelHost;
   readonly mode: "interact" | "annotate" | "inspect";
   readonly input: { elements: { stage?: HTMLElement; viewport?: HTMLElement } };
@@ -32,7 +142,6 @@ interface BrowserPanelStreamHost extends StreamState {
     "epoch" | "route" | "isLive" | "hasPendingCapture" | "capturedTabs" | "forgetNavigation"
   >;
   readonly observedViewportSize: { width: number; height: number } | null;
-  setState<Key extends keyof StreamState>(key: Key, value: StreamState[Key]): void;
   syncUrlDraft(url: string): void;
   clearUnavailableView(): boolean;
   refreshView(targetId: string): Promise<void>;
@@ -153,7 +262,7 @@ export class BrowserPanelStream {
     dimensions: { maxWidth: number; maxHeight: number },
   ): Promise<void> {
     try {
-      const response = await requestBrowserScreencast(
+      const wsPath = await requestBrowserScreencast(
         attempt.client,
         { targetId: attempt.targetId, ...dimensions },
         { signal: attempt.controller.signal },
@@ -163,7 +272,7 @@ export class BrowserPanelStream {
       }
       attempt.connection = new BrowserScreencastClient({
         gatewayUrl: this.host.host.client!.gatewayUrl,
-        wsPath: response.wsPath,
+        wsPath,
         onReady: ({ url, title }) => this.updateMetadata(attempt, { url, title }),
         onMeta: (meta) => this.updateMetadata(attempt, meta),
         onFrame: (frame) => {

@@ -32,16 +32,14 @@ export function spawnProcess(
   return child;
 }
 
-type SpawnAndWaitParams = {
+/** Launch once and surface native spawn failures without changing the process topology. */
+export async function spawnAndWait(params: {
   assertCurrent?: () => void;
   initiateSpawn?: SpawnInitiation;
   argv: string[];
   options: SpawnOptions;
   spawnImpl?: typeof spawnProcess;
-};
-
-/** Launch once and surface native spawn failures without changing the process topology. */
-export async function spawnAndWait(params: SpawnAndWaitParams): Promise<ChildProcess> {
+}): Promise<ChildProcess> {
   // Custom Windows transports can add launcher IPC even when the target inherits stdio.
   assertAppContainerSpawnSupported(params.spawnImpl ? undefined : params.options.stdio);
   const spawnImpl = params.spawnImpl ?? spawnProcess;

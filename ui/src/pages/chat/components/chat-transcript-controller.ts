@@ -1,5 +1,4 @@
 // Session-owned virtualizer lifecycle for chat transcripts.
-import { registerListener } from "../../../../../src/shared/listeners.js";
 import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts";
 import {
   getChatSessionScrollPosition,
@@ -27,16 +26,17 @@ export function createChatTranscript(
   };
 
   return {
-    subscribe: (listener: () => void) => registerListener(listeners, listener),
+    subscribe(listener: () => void) {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
     get renderedSessionKey(): string | null {
       return activeSessionKey;
     },
     renderSession<T>(sessionKey: string, render: (transcript: ChatTranscriptSession) => T): T {
-      if (
-        !sessionVirtualizer ||
-        activeSessionKey === null ||
-        !areUiSessionKeysEquivalent(activeSessionKey, sessionKey)
-      ) {
+      if (!sessionVirtualizer || !areUiSessionKeysEquivalent(activeSessionKey, sessionKey)) {
         sessionVirtualizer?.dispose();
         // Presentation identities include the session; the cache is instead
         // bounded by physical panes, with a separate session LRU inside each pane.
@@ -84,6 +84,9 @@ export function createChatTranscript(
     },
     get scrollElement(): HTMLDivElement | null {
       return sessionVirtualizer?.scrollElement ?? null;
+    },
+    get messageElements() {
+      return sessionVirtualizer?.messageElements;
     },
     syncViewportGeometry(): void {
       sessionVirtualizer?.syncViewportGeometry();

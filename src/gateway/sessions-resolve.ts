@@ -233,15 +233,24 @@ export function resolveSessionKeyFromResolveParams(params: {
   const noSessionFoundResult = (message: string): SessionsResolveResult =>
     p.allowMissing ? { ok: true, missing: true } : invalidSessionRequest(message);
   const { cfg, policyConfig } = projection.state;
+  const sharing = prepareProjectedSessionSharing({
+    cfg: policyConfig,
+    client,
+    isMember: (target, identity) =>
+      projection.hasMembership(target.storePath, target.storeKey, identity),
+  });
   const entryFilter = params.publicOnly
     ? (key: string, entry: SessionEntry) =>
         !isIncognitoSessionKey(key) && Boolean(resolveSessionPublicShare(entry))
-    : prepareProjectedSessionSharing({
-        cfg: policyConfig,
-        client,
-        isMember: (target, identity) =>
-          projection.hasMembership(target.storePath, target.storeKey, identity),
-      }).entryFilter;
+    : sharing.entryFilter &&
+      ((key: string, _entry: SessionEntry, selected?: { agentId: string }) => {
+        const owner = resolveRequestedSessionAgentId(cfg, key, selected?.agentId ?? p.agentId);
+        if (!owner.ok) {
+          return false;
+        }
+        const target = projection.sharingTarget({ key, agentId: owner.agentId });
+        return Boolean(target && sharing.canReadTarget(target));
+      });
   const prepare = (
     agentId = p.agentId,
     configuredAgentsOnly = false,
@@ -466,9 +475,7 @@ export function resolveSessionKeyFromResolveParams(params: {
       }
       if (ownerTaggedMatches.size > 1) {
         return invalidSessionRequest(
-          `Multiple sessions found for sessionId: ${sessionId} (${[...ownerTaggedMatches.values()]
-            .map((match) => `${match.agentId}:${match.key}`)
-            .join(", ")})`,
+          `Multiple sessions found for sessionId: ${sessionId} (${Array.from(ownerTaggedMatches.values(), (match) => `${match.agentId}:${match.key}`).join(", ")})`,
         );
       }
       const ownerTaggedMatch = ownerTaggedMatches.values().next().value;
@@ -524,11 +531,11 @@ export function resolveSessionKeyFromResolveParams(params: {
     const matchingEntries = filterAndSortSessionEntries({
       ...prepared,
       opts: { ...prepared.opts, archived: "all" },
-      entryFilter: (candidateKey, entry) => {
+      entryFilter: (candidateKey, entry, target) => {
         const uuid = parseAgentSessionKey(candidateKey)?.rest.match(SESSION_UUID_SUFFIX_RE)?.[1];
         return Boolean(
           uuid?.toLowerCase().replaceAll("-", "").startsWith(shortId) &&
-          (entryFilter?.(candidateKey, entry) ?? true),
+          (entryFilter?.(candidateKey, entry, target) ?? true),
         );
       },
     });

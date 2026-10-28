@@ -59,8 +59,6 @@ export type MonitorSlackOpts = {
   slashCommand?: SlackSlashCommandConfig;
   /** Callback to update app-level channel account activity (e.g. lastEventAt). */
   setStatus?: (next: Record<string, unknown>) => void;
-  /** Callback to read the current channel account status snapshot. */
-  getStatus?: () => Record<string, unknown>;
 };
 
 type LooseSlackEvent<Event extends { type: string }> = Event extends unknown

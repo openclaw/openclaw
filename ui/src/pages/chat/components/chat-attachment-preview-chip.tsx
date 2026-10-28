@@ -1,28 +1,28 @@
 import type { JSX } from "@solidjs/web";
 import { Show } from "solid-js";
-import { Icon } from "../../../components/solid/icon.tsx";
 import { attachmentAdmissionRef } from "./chat-attachment-admission-ref.ts";
+import { AttachmentRemove } from "./chat-attachment-file.tsx";
 import "../../../styles/chat/selection-annotations.css";
-
-export type AttachmentChipRemoval = {
-  label: string;
-  onRemove: (event: Event) => void;
-  disabled: boolean;
-};
 
 export function AttachmentPreviewChip(props: {
   label: string;
   icon: JSX.Element;
   onClick?: () => void;
   onReveal?: () => void;
-  removal?: AttachmentChipRemoval;
+  removal?: {
+    label: string;
+    onRemove: (event: Event) => void;
+    disabled: boolean;
+  };
   elementRef?: (element: Element | undefined) => void;
-  triggerRef?: (element: HTMLButtonElement) => void;
+  triggerRef?: JSX.Ref<HTMLButtonElement>;
 }) {
   const ref = attachmentAdmissionRef(() => props.elementRef);
   const label = () => (
     <>
-      <span aria-hidden="true">{props.icon}</span>
+      <span class="chat-attachment-preview-icon" aria-hidden="true">
+        {props.icon}
+      </span>
       <span
         class={{
           "chat-selection-annotations__label": Boolean(props.removal),
@@ -55,21 +55,18 @@ export function AttachmentPreviewChip(props: {
           ref={props.triggerRef}
           type="button"
           class="chat-attachment-file chat-selection-annotations__trigger"
+          disabled={props.removal?.disabled}
         >
           {label()}
         </button>
       </Show>
       <Show when={props.removal}>
         {(removal) => (
-          <button
-            type="button"
-            class="chat-selection-annotations__remove"
-            aria-label={removal().label}
+          <AttachmentRemove
+            label={removal().label}
             disabled={removal().disabled}
             onClick={(event) => removal().onRemove(event)}
-          >
-            <Icon name="x" />
-          </button>
+          />
         )}
       </Show>
     </span>

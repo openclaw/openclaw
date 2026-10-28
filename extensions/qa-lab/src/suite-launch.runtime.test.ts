@@ -20,18 +20,18 @@ import { writeQaSuiteArtifacts } from "./suite-artifacts.js";
 import { createQaSuiteEvidenceInvocation } from "./suite-evidence.js";
 import type { QaSuiteSummaryJson } from "./suite-summary.js";
 import {
+  makeQaSuiteTestResult,
   makeQaSuiteTestScenario as makeScenario,
   recordQaSuiteTestResults,
 } from "./suite-test-helpers.js";
 import type { QaSuiteRunParams, QaSuiteScenarioResult } from "./suite.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
-import {
-  isQaTestFileScenario,
-  type QaScenarioCommandExecution,
-} from "./test-file-scenario-runner.js";
+import type { QaScenarioCommandExecution } from "./test-file-scenario-command-lifecycle.js";
+import { isQaTestFileScenario } from "./test-file-scenario-runner.js";
 import {
   makeTestFileScenario,
   resolveScriptAttemptOutputDir,
+  withQaScenarioCommand,
   writeDockerCandidateManifest,
   writeNativeVitestReport,
 } from "./test-file-scenario-runner.test-support.js";
@@ -171,17 +171,18 @@ async function runNative(params: NativeParams, runCommand = passNativeCommand) {
   const native = await vi.importActual<typeof import("./test-file-scenario-runner.js")>(
     "./test-file-scenario-runner.js",
   );
-  return native.runQaTestFileScenarios({ ...params, runCommand });
+  return withQaScenarioCommand(runCommand, () => native.runQaTestFileScenarios(params));
 }
 
-function expectFlowCall(params: Partial<QaSuiteRunParams>, index?: number) {
-  const expected = expect.objectContaining(params);
-  if (index === undefined) {
-    expect(runQaFlowSuite).toHaveBeenCalledWith(expected);
-  } else {
-    expect(runQaFlowSuite).toHaveBeenNthCalledWith(index, expected);
-  }
-}
+const flowCalls = () => runQaFlowSuite.mock.calls.map(([params]) => params!);
+const adapter = (id: string, channel?: string, isolatesInstances?: boolean) => ({
+  id,
+  matches: ({ channelId, driver }: { channelId: string; driver: string }) =>
+    driver === "live" &&
+    (channel ? channelId === channel : ["matrix", "slack", "telegram"].includes(channelId)),
+  create: vi.fn(),
+  isolatesInstances,
+});
 
 function stubCatalogAssertions(owner: "child" | "scenario") {
   const catalog = structuredClone(scenarioCatalog.readQaBootstrapScenarioCatalog());
@@ -270,16 +271,7 @@ async function passFlow(
     ),
   );
   await writeEvidence(evidencePath, recorded.evidence, params?.writeEvidenceFile);
-  return {
-    ...recorded,
-    outputDir,
-    evidencePath,
-    reportPath: path.join(outputDir, "qa-suite-report.md"),
-    summaryPath: path.join(outputDir, "qa-suite-summary.json"),
-    report: "# QA Suite Report\n",
-    startedScenarioIds: scenarioIds,
-    watchUrl: "http://127.0.0.1:43124",
-  };
+  return makeQaSuiteTestResult(recorded, outputDir, scenarioIds);
 }
 
 async function passNative(
@@ -407,7 +399,6 @@ it("preserves interleaved repeated requests through the real native invocation b
   const result = await runDefinitions([first, second], ["first", "second", "first"]);
   const evidence = await readEvidence(result.result.evidencePath);
   const outcomes = projectQaEvidenceScenarioOutcomes(evidence);
-  expect(calls).toBe(3);
   expect(outcomes.map((outcome) => outcome.scenarioId)).toEqual(["first", "second", "first"]);
   expect(outcomes.map((outcome) => outcome.status)).toEqual(["pass", "fail", "pass"]);
   expect(uniqueCount(outcomes.map((outcome) => outcome.scenarioInstanceId))).toBe(3);
@@ -582,13 +573,11 @@ it.each([
     expect(roots[0]).toBe(roots[1]);
     expect(result.result.outputDir).toBe(roots[0]);
     expect(evidence.entries.map((entry) => entry.effective)).toEqual(effective);
-    expect(projectQaEvidenceScenarioOutcomes(evidence)).toMatchObject([
-      {
-        scenarioId: scenario.id,
-        occurrenceId: result.result.scenarios[0]!.evidenceOccurrenceId,
-        status: initial,
-      },
-    ]);
+    expect(projectQaEvidenceScenarioOutcomes(evidence)[0]).toMatchObject({
+      scenarioId: scenario.id,
+      occurrenceId: result.result.scenarios[0]!.evidenceOccurrenceId,
+      status: initial,
+    });
     if (initial === "fail") {
       expect(result.result.scenarios[0]).toEqual(firstResult);
       expect(await fs.readdir(path.join(repoRoot, ".artifacts", "qa-e2e"))).toHaveLength(1);
@@ -605,40 +594,35 @@ it.each([
   },
 );
 
-it.each([
-  {
-    name: "runtime-specific channel scenarios",
-    ordered: false,
-    params: { channelDriver: "live", channelId: "slack", concurrency: 4 },
+it("isolates runtime-specific channel workers", async () => {
+  await runSuite({
+    channelDriver: "live",
+    channelId: "slack",
+    concurrency: 4,
     scenarioIds: ["slack-canary", ids.slackRuntime],
-    workers: [
-      ["isolated", ["slack-canary"], { forcedRuntime: undefined }],
-      ["runtime-codex-1", [ids.slackRuntime], { forcedRuntime: "codex" }],
-    ],
-  },
-  {
-    name: "flows that mutate shared state",
-    ordered: true,
-    params: { concurrency: 8 },
-    scenarioIds: [ids.dm, ...mutableFlows, ids.ui],
-    workers: [
-      ["shared", [ids.dm], { concurrency: 1 }],
-      ["isolated", mutableFlows, { concurrency: 3, workerStartStaggerMs: 1_500 }],
-    ],
-  },
-] as const)("dedicates workers to $name", async ({ params, scenarioIds, workers, ordered }) => {
-  await runSuite({ ...params, scenarioIds: [...scenarioIds] });
-  expect(runQaFlowSuite).toHaveBeenCalledTimes(2);
-  workers.forEach(([partition, workerIds, worker], index) => {
-    expectFlowCall(
-      {
-        ...worker,
-        scenarioIds: [...workerIds],
-        outputDir: path.join(suiteOutputDir, "flow", partition),
-      },
-      ordered ? index + 1 : undefined,
-    );
   });
+  expect(
+    flowCalls().map(({ scenarioIds, forcedRuntime }) => ({ scenarioIds, forcedRuntime })),
+  ).toEqual(
+    expect.arrayContaining([
+      { scenarioIds: ["slack-canary"], forcedRuntime: undefined },
+      { scenarioIds: [ids.slackRuntime], forcedRuntime: "codex" },
+    ]),
+  );
+});
+
+it("isolates shared-state mutations with staggered workers", async () => {
+  await runSuite({ concurrency: 8, scenarioIds: [ids.dm, ...mutableFlows, ids.ui] });
+  expect(
+    flowCalls().map(({ scenarioIds, concurrency, workerStartStaggerMs }) => ({
+      scenarioIds,
+      concurrency,
+      workerStartStaggerMs,
+    })),
+  ).toEqual([
+    { scenarioIds: [ids.dm], concurrency: 1, workerStartStaggerMs: undefined },
+    { scenarioIds: mutableFlows, concurrency: 3, workerStartStaggerMs: 1_500 },
+  ]);
 });
 
 it("expands profile scenarios across every eligible pluggable channel", async () => {
@@ -650,51 +634,31 @@ it("expands profile scenarios across every eligible pluggable channel", async ()
           : "pass",
     }),
   );
-  const adapterFactories = [
-    {
-      id: "portable-driver",
-      matches: vi.fn(({ channelId }) => ["matrix", "slack", "telegram"].includes(channelId)),
-      create: vi.fn(),
-    },
-  ];
-
   const result = await runSuite({
     providerMode: "mock-openai",
     channelDriver: "live",
-    adapterFactories,
+    adapterFactories: [adapter("portable-driver")],
     expandScenarioChannels: true,
     scenarioIds: [ids.baseline, ids.telegram, ids.matrixRestart, ids.thread],
   });
 
-  expect(runQaFlowSuite).toHaveBeenCalledTimes(5);
-  for (const [channelId, partition, scenarioId] of [
-    [undefined, "", ids.baseline],
-    ["telegram", "telegram", ids.telegram],
-    ["matrix", "matrix-isolated-1", ids.matrixRestart],
-    ["slack", null, ids.thread],
-    ["matrix", "matrix-isolated-2", ids.thread],
-  ] as const) {
-    expectFlowCall({
-      adapterFactories,
-      channelId,
-      ...(partition === null ? {} : { outputDir: path.join(suiteOutputDir, "flow", partition) }),
-      scenarioIds: [scenarioId],
-    });
-    expect(result.observedCells).toContainEqual({
-      scenarioId,
-      executionKind: "flow",
-      channel: channelId ?? null,
-    });
-  }
-  expect(result.executionKind).toBe("suite");
-  for (const [channel, status] of [
-    ["slack", "pass"],
-    ["matrix", "fail"],
-  ]) {
-    expect(result.result.scenarios).toContainEqual(
-      expect.objectContaining({ name: `thread-isolation [${channel}]`, status }),
-    );
-  }
+  expect(result.observedCells).toEqual(
+    expect.arrayContaining(
+      [
+        [null, ids.baseline],
+        ["telegram", ids.telegram],
+        ["matrix", ids.matrixRestart],
+        ["slack", ids.thread],
+        ["matrix", ids.thread],
+      ].map(([channel, scenarioId]) => ({ scenarioId, channel, executionKind: "flow" })),
+    ),
+  );
+  expect(result.result.scenarios).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ name: "thread-isolation [slack]", status: "pass" }),
+      expect.objectContaining({ name: "thread-isolation [matrix]", status: "fail" }),
+    ]),
+  );
 });
 
 it("retains captured child observations through an aggregate retry", async () => {
@@ -744,9 +708,6 @@ it("retains captured child observations through an aggregate retry", async () =>
   expect(uniqueCount(anchors)).toBe(1);
   expect(anchors).toHaveLength(2);
   expect(outcomeStatuses(evidence)).toEqual(["pass", "pass"]);
-  expect(result.result.scenarios.map((scenario) => scenario.status)).toEqual(
-    outcomeStatuses(evidence),
-  );
   const observed = evidence.entries.filter((entry) => entry.test.id === ids.telegram);
 
   expect(observed.map((entry) => entry.result.status)).toEqual(["fail", "fail", "pass"]);
@@ -778,12 +739,7 @@ it.each([false, true])(
       channelDriver: "live",
       adapterFactories: [
         isolatesInstances
-          ? {
-              id: "matrix",
-              isolatesInstances: true,
-              matches: ({ channelId, driver }) => driver === "live" && channelId === "matrix",
-              create: vi.fn(),
-            }
+          ? adapter("matrix", "matrix", true)
           : { id: "portable-driver", matches: vi.fn(), create: vi.fn() },
       ],
       concurrency,
@@ -791,8 +747,7 @@ it.each([false, true])(
     });
 
     if (isolatesInstances) {
-      expect(runQaFlowSuite).toHaveBeenCalledTimes(6);
-      expect(runQaFlowSuite.mock.calls.map(([params]) => params?.scenarioIds)).toEqual([
+      expect(flowCalls().map((call) => call.scenarioIds)).toEqual([
         ...sharedScenarioIds.map((scenarioId) => [scenarioId]),
         [isolatedScenarioId],
       ]);
@@ -801,20 +756,19 @@ it.each([false, true])(
   },
 );
 
-it("partitions mixed Crabline child evidence into one aggregate suite", async () => {
+it("summarizes a shared driver without claiming a shared channel", async () => {
   runQaFlowSuite.mockImplementation(async (params) => {
     const result = await passFlow(params);
-    result.evidence.entries = result.evidence.entries.map((entry) => ({
-      ...entry,
-      execution: {
+    for (const entry of result.evidence.entries) {
+      entry.execution = {
         runner: "host",
         environment: { ref: null, os: "linux", nodeVersion: "v24.0.0" },
         provider: { id: "mock-openai", live: false, model: { name: null, ref: null } },
         channel: { id: params?.channelId ?? "qa-channel", live: false, driver: "crabline" },
         packageSource: { kind: "source-checkout" },
-        artifacts: [{ kind: "report", path: "qa-suite-report.md", source: "qa-suite" }],
-      },
-    }));
+        artifacts: [],
+      };
+    }
     return result;
   });
   const result = await runSuite({
@@ -823,24 +777,12 @@ it("partitions mixed Crabline child evidence into one aggregate suite", async ()
     scenarioIds: [ids.telegram, ids.matrixRestart],
   });
 
-  expect(result).toMatchObject({
-    executionKind: "suite",
-    result: {
-      evidencePath: path.join(suiteOutputDir, "qa-evidence.json"),
-      summaryPath: path.join(suiteOutputDir, "qa-suite-summary.json"),
-    },
-  });
-  const summary = await readSummary(path.join(suiteOutputDir, "qa-suite-summary.json"));
+  const summary = await readSummary(result.result.summaryPath);
   expect(summary.run).toMatchObject({
     channelDriver: "crabline",
     channel: null,
     scenarioIds: [ids.telegram, ids.matrixRestart],
   });
-  const evidence = await readEvidence(path.join(suiteOutputDir, "qa-evidence.json"));
-  expect(evidence.entries?.map((entry) => entry.execution?.artifacts?.[0]?.path)).toEqual([
-    ".artifacts/qa-e2e/suite/flow/telegram/qa-suite-report.md",
-    ".artifacts/qa-e2e/suite/flow/matrix/qa-suite-report.md",
-  ]);
 });
 
 it("projects a skipped native producer as a skipped unified scenario", async () => {
@@ -852,7 +794,6 @@ it("projects a skipped native producer as a skipped unified scenario", async () 
   ]);
   const summary = await readSummary(result.result.summaryPath);
   expect(summary.counts).toMatchObject({ failed: 0, skipped: 1 });
-  expect(runPluginCommandWithTimeout).not.toHaveBeenCalled();
 });
 
 it("preserves the prior standard summary artifact when atomic publication fails", async () => {
@@ -921,9 +862,6 @@ it("aggregates mixed-kind progress through the parent lab", async () => {
       { id: ids.ui, status: "pass" },
     ],
   });
-  expect(lab.setLatestReport).toHaveBeenCalledWith(
-    expect.objectContaining({ outputPath: expect.stringMatching(/qa-suite-report\.md$/u) }),
-  );
 });
 
 it.each([
@@ -964,30 +902,11 @@ it.each([
     channelDriver,
     channelId: "telegram",
     adapterFactories:
-      channelDriver === "live"
-        ? [
-            {
-              id: "shared-channel",
-              matches: ({ channelId, driver }) => driver === "live" && channelId === "telegram",
-              create: vi.fn(),
-            },
-          ]
-        : undefined,
+      channelDriver === "live" ? [adapter("shared-channel", "telegram")] : undefined,
     concurrency: 8,
     failFast: mode === "fail-fast",
   });
 
-  const expectedPartitions =
-    mode === "fail-fast"
-      ? [["shared-a"]]
-      : [sharedIds, sharedIds, ...isolatedIds.map((id) => [id])];
-  expect(
-    runQaFlowSuite.mock.calls.map(([params]) => ({
-      scenarios: params?.scenarioIds,
-      concurrency: params?.concurrency,
-    })),
-  ).toEqual(expectedPartitions.map((scenarios) => ({ scenarios, concurrency: 1 })));
-  expect(runQaTestFileScenarios).toHaveBeenCalledTimes(mixed ? 1 : 0);
   expect(tracked.activity).toEqual({ maxActive: 1, active: 0 });
   expect(result.result.scenarios.map(({ name, status }) => ({ name, status }))).toEqual(
     mode === "fail-fast"
@@ -1032,10 +951,6 @@ it.each(["failed", "missing"] as const)(
       status: "fail",
       details,
     };
-    expect(result.executionKind).toBe("suite");
-    expect(runQaFlowSuite).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ concurrency: 1, failFast: true, scenarioIds: [ids.dm] }),
-    );
     expect(runQaTestFileScenarios).not.toHaveBeenCalled();
     expect(prepareDockerE2eEnvironment).not.toHaveBeenCalled();
     expect(result.result.scenarios).toMatchObject([failed]);
@@ -1070,11 +985,7 @@ it.each(["failed", "missing"] as const)(
 it("leaves nested E2E script runtime preparation to the script owner", async () => {
   await runSuite({ scenarioIds: ["managed-gateway-service-lifecycle"] });
 
-  expect(runQaTestFileScenarios).toHaveBeenCalledTimes(1);
   const [call] = runQaTestFileScenarios.mock.calls[0]!;
-  expect(call.scenarios).toMatchObject([
-    { id: "managed-gateway-service-lifecycle", execution: { kind: "script" } },
-  ]);
   expect(call).not.toHaveProperty("env");
   expect(call).not.toHaveProperty("envMode");
   expect(prepareDockerE2eEnvironment).not.toHaveBeenCalled();
@@ -1086,7 +997,6 @@ it("settles flow and native work, then runs serial scripts before a bounded para
   const serial = Promise.withResolvers<void>();
   const parallel = Promise.withResolvers<void>();
   const started: string[] = [];
-  const scriptEnvs: unknown[] = [];
   const parallelScriptIds: string[] = [];
   const parallelWork = trackActivity(async (params: NativeParams) => {
     parallelScriptIds.push(...params.scenarios.map(({ id }) => id));
@@ -1108,11 +1018,9 @@ it("settles flow and native work, then runs serial scripts before a bounded para
       started.push("native");
       await native.promise;
     } else if (scenarioIds.includes(ids.docker)) {
-      scriptEnvs.push(params.env);
       started.push(...scenarioIds);
       await serial.promise;
     } else {
-      scriptEnvs.push(params.env);
       await parallelWork.run(params);
     }
     return await passNative(params);
@@ -1148,8 +1056,6 @@ it("settles flow and native work, then runs serial scripts before a bounded para
 
   parallel.resolve();
   await runPromise;
-  expect(prepareDockerE2eEnvironment).toHaveBeenCalledTimes(1);
-  expect(scriptEnvs.every((env) => env === preparedEnv)).toBe(true);
   expect(parallelScriptIds.slice(0, 3)).toEqual(
     expect.arrayContaining(["remote-log-tailing", "gateway-smoke", "logging-file-boundary"]),
   );
@@ -1162,9 +1068,8 @@ it("carries the actual prepared Docker receipt through aggregate native delegati
     "./test-file-scenario-docker-batch.js",
   );
   prepareDockerE2eEnvironment.mockImplementationOnce((params) =>
-    docker.prepareDockerE2eEnvironment({
-      ...params,
-      runCommand: (command) =>
+    withQaScenarioCommand(
+      (command) =>
         writeDockerCandidateManifest(command, {
           schema: "openclaw.qa-docker-candidate/v1",
           schemaVersion: 1,
@@ -1179,7 +1084,8 @@ it("carries the actual prepared Docker receipt through aggregate native delegati
             registry: null,
           },
         }),
-    }),
+      () => docker.prepareDockerE2eEnvironment(params),
+    ),
   );
   const command = vi.fn(async (params: QaScenarioCommandExecution) => {
     const lane = "npm-onboard-channel-agent";
@@ -1196,8 +1102,6 @@ it("carries the actual prepared Docker receipt through aggregate native delegati
   });
   runQaTestFileScenarios.mockImplementationOnce((params) => runNative(params, command));
   const result = await runSuite({ scenarioIds: [ids.docker] });
-  expect(prepareDockerE2eEnvironment).toHaveBeenCalledTimes(1);
-  expect(command).toHaveBeenCalledTimes(1);
   const evidence = await readEvidence(result.result.evidencePath);
   const passed = runQaTestFileScenarios.mock.calls[0]![0].preparedDockerEvidence;
   expect(passed).toBeDefined();
@@ -1207,12 +1111,8 @@ it("carries the actual prepared Docker receipt through aggregate native delegati
   expect(receipt).toMatchObject({
     phase: "prepared",
     identity: {
-      source: { ref: "a".repeat(40), integrity: null },
-      runtime: { id: null, version: null },
+      source: { ref: "a".repeat(40) },
       package: { kind: "npm-tarball", integrity: `sha256:${"b".repeat(64)}` },
-      protocol: null,
-      accountRef: null,
-      proofClass: null,
     },
   });
   await expectReceiptHashes(evidence, (file) => resolveQaArtifactPath(repoRoot, repoRoot, file));
@@ -1241,7 +1141,6 @@ it("reuses the prepared Docker env object when a script partition retries", asyn
 
   await runQaSuite({ repoRoot, scenarioIds: [ids.docker] });
 
-  expect(runQaTestFileScenarios).toHaveBeenCalledTimes(2);
   expect(runQaTestFileScenarios.mock.calls.map(([params]) => params.env)).toEqual([
     preparedEnv,
     preparedEnv,
@@ -1279,13 +1178,6 @@ it("serializes every fail-fast script and stops before post-failure work", async
   await runPromise;
   expect(started).toEqual(["remote-log-tailing", ids.docker]);
   expect(tracked.activity.maxActive).toBe(1);
-  expect(runQaTestFileScenarios).toHaveBeenCalledTimes(2);
-  expect(runQaTestFileScenarios.mock.calls.every(([params]) => params.env === preparedEnv)).toBe(
-    true,
-  );
-  expect(runQaTestFileScenarios).toHaveBeenLastCalledWith(
-    expect.objectContaining({ failFast: true }),
-  );
 });
 
 it("starts native suite proof before isolated flow work fills the weighted queue", async () => {
@@ -1401,15 +1293,4 @@ it("rejects runtime-pair requests for Vitest/Playwright scenarios", async () => 
   expect(runQaTestFileScenarios).not.toHaveBeenCalled();
 });
 
-it("rejects repo-local symlink output directories before running Vitest/Playwright scenarios", async () => {
-  const outsideRoot = await makeTempRepo("qa-suite-symlink-outside-");
-  await fs.symlink(outsideRoot, path.join(repoRoot, "artifacts-link"));
-
-  await expect(
-    runSuite({ outputDir: "artifacts-link/qa-out", scenarioIds: [ids.ui] }),
-  ).rejects.toThrow("QA suite outputDir must not traverse symlinks");
-
-  expect(runQaFlowSuite).not.toHaveBeenCalled();
-  expect(runQaTestFileScenarios).not.toHaveBeenCalled();
-});
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

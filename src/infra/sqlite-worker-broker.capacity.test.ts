@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { linkSync } from "node:fs";
 import { expect, it, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
+import { createEnteredGate } from "../agents/entered-gate.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { initializeSqliteRuntimeCapabilities } from "./bun-sqlite-library.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
@@ -15,9 +16,24 @@ import * as workerLifecycle from "./sqlite-worker-broker-lifecycle.js";
 import { SqliteWorkerBroker } from "./sqlite-worker-broker.js";
 import { createSqliteWorkerClient } from "./sqlite-worker-client.js";
 import { createSqliteWorkerClientActor } from "./sqlite-worker-client.test-support.js";
-import { useSqliteWorkerStoreFixture } from "./sqlite-worker-fixture.test-support.js";
+import {
+  useSqliteWorkerStoreFixture,
+  readWorkerRows,
+  appendWorkerRow,
+} from "./sqlite-worker-fixture.test-support.js";
 import { SqliteWorkerInputAdmission } from "./sqlite-worker-input-admission.js";
 import type { FixtureOperations } from "./sqlite-worker-store.test-support.js";
+
+function inputAdmission() {
+  return new SqliteWorkerInputAdmission({
+    queuedBytes: () => 0,
+    isClosing: () => false,
+    maxQueuedBytes: 1024,
+    maxQueuedInputBytes: 1024,
+    maxMessageBytes: 1024,
+    maxPendingOpens: 2,
+  });
+}
 
 function capacityFixture() {
   const reservations = new Set<object>();
@@ -101,14 +117,7 @@ it("propagates retirement failure without admitting a replacement", async () => 
 });
 
 it.each(["queued", "reused"] as const)("bounds and drains pending %s opens", async (kind) => {
-  const admission = new SqliteWorkerInputAdmission({
-    queuedBytes: () => 0,
-    isClosing: () => false,
-    maxQueuedBytes: 1024,
-    maxQueuedInputBytes: 1024,
-    maxMessageBytes: 1024,
-    maxPendingOpens: 2,
-  });
+  const admission = inputAdmission();
   const finish = createDeferredCore();
   let finished = false;
   const open = async () => {
@@ -136,42 +145,23 @@ it.each(["queued", "reused"] as const)("bounds and drains pending %s opens", asy
 });
 
 it("admits cold shared state while an agent opens, with one shared input budget", async () => {
-  const admission = new SqliteWorkerInputAdmission({
-    queuedBytes: () => 0,
-    isClosing: () => false,
-    maxQueuedBytes: 1024,
-    maxQueuedInputBytes: 1024,
-    maxMessageBytes: 1024,
-    maxPendingOpens: 2,
-  });
+  const admission = inputAdmission();
   const finishAgent = createDeferredCore();
-  const sharedStarted = createDeferredCore();
-  const finishShared = createDeferredCore();
+  const sharedGate = createEnteredGate();
+  const openShared = <T>(bytes: number, run: () => Promise<T>) =>
+    admission.open(bytes, run, undefined, undefined, true);
   const agent = admission.open(512, () => finishAgent.promise);
-  const shared = admission.open(
-    512,
-    async () => {
-      sharedStarted.resolve();
-      await finishShared.promise;
-    },
-    undefined,
-    undefined,
-    true,
-  );
+  const shared = openShared(512, sharedGate.wait);
   try {
-    await sharedStarted.promise;
+    await sharedGate.entered;
     await expect(admission.open(1, async () => {})).rejects.toMatchObject({ code: "overloaded" });
-    finishShared.resolve();
+    sharedGate.release();
     await shared;
     expect(admission.retainedBytes).toBe(512);
-    await expect(
-      admission.open(513, async () => {}, undefined, undefined, true),
-    ).rejects.toMatchObject({ code: "overloaded" });
-    await expect(
-      admission.open(512, async () => "shared reopened", undefined, undefined, true),
-    ).resolves.toBe("shared reopened");
+    await expect(openShared(513, async () => {})).rejects.toMatchObject({ code: "overloaded" });
+    await expect(openShared(512, async () => "shared reopened")).resolves.toBe("shared reopened");
   } finally {
-    finishShared.resolve();
+    sharedGate.release();
     finishAgent.resolve();
     await Promise.all([agent, shared]);
   }
@@ -228,10 +218,8 @@ it("keeps one physical owner when shared and ordinary opens acquire carriers tog
       reason: { code: "overloaded", message: expect.stringContaining("retry open") },
     });
     const store = opened[0]!;
-    await store.execute({ type: "append", input: { value: "still owned" } });
-    await expect(store.execute({ type: "read", input: undefined })).resolves.toEqual([
-      "still owned",
-    ]);
+    await appendWorkerRow(store, "still owned");
+    await expect(readWorkerRows(store)).resolves.toEqual(["still owned"]);
   } finally {
     acquired.resolve();
     const outcomes = await opening;

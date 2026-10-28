@@ -4,6 +4,7 @@ import { beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { chatSessionListResponse } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { installScriptedRfbServer } from "./desktop-rfb-test-support.ts";
 
@@ -27,21 +28,15 @@ beforeEach(() => {
 });
 
 function sessionsList() {
-  return {
-    count: 1,
-    defaults: { contextTokens: null, model: "gpt-5.5", modelProvider: "openai" },
-    path: "",
-    sessions: [
-      {
-        key: "main",
-        kind: "direct",
-        label: "Main",
-        placement: { state: "active" },
-        updatedAt: Date.now(),
-      },
-    ],
-    ts: Date.now(),
-  };
+  return chatSessionListResponse([
+    {
+      key: "main",
+      kind: "direct",
+      label: "Main",
+      placement: { state: "active" },
+      updatedAt: Date.now(),
+    },
+  ]);
 }
 
 const workerDesktopEnvironment = {

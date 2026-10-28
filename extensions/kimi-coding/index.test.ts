@@ -194,6 +194,30 @@ describe("kimi provider plugin", () => {
     },
   );
 
+  it.each(["k3.1-pro", "k3.1-pro-highspeed"])(
+    "exposes K3 thinking levels without off for %s",
+    async (modelId) => {
+      const provider = await registerSingleProviderPlugin(plugin);
+
+      expect(
+        provider.resolveThinkingProfile?.({ provider: "kimi", modelId, reasoning: true } as never),
+      ).toEqual({
+        levels: ["minimal", "low", "medium", "high", "adaptive", "xhigh", "max"].map((id) => ({
+          id,
+        })),
+        defaultLevel: "high",
+        preserveWhenCatalogReasoningFalse: true,
+      });
+      expect(
+        provider.normalizeResolvedModel?.({
+          provider: "kimi",
+          modelId,
+          model: { id: modelId, provider: "kimi", api: "anthropic-messages" },
+        } as never)?.thinkingLevelMap,
+      ).toMatchObject({ xhigh: "max", max: "max" });
+    },
+  );
+
   it("keeps off available for Kimi models outside the Kimi Code K2 backend", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
 

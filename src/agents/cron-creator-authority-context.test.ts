@@ -30,6 +30,7 @@ import {
   withGatewayToolCallerIdentity,
   withoutGatewayToolCallerIdentity,
 } from "./tools/gateway-caller-context.js";
+import * as gatewayModule from "./tools/gateway.js";
 
 function admittedFixture(
   runId: string,
@@ -217,15 +218,16 @@ it("exposes add but refuses incomplete capture and retired requester authority",
   caller.sessionKey = "agent:main:remote";
   await run(async () => {
     const callGatewayTool = vi.fn();
-    const tool = createCronTool(
-      {
-        runId,
-        agentSessionKey: caller.sessionKey,
-        creatorToolAllowlist: ["read"],
-        creatorToolAllowlistCaptureRef: {},
-      },
-      { callGatewayTool },
-    );
+    const gatewaySpy = vi
+      .spyOn(gatewayModule, "callGatewayTool")
+      .mockImplementation(callGatewayTool);
+    onTestFinished(() => gatewaySpy.mockRestore());
+    const tool = createCronTool({
+      runId,
+      agentSessionKey: caller.sessionKey,
+      creatorToolAllowlist: ["read"],
+      creatorToolAllowlistCaptureRef: {},
+    });
     expect(tool.parameters).toHaveProperty(
       "properties.action.enum",
       expect.arrayContaining(["add", "list", "update"]),

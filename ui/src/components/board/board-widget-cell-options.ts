@@ -20,6 +20,7 @@ export type BoardWidgetPageMenu = {
 };
 
 export type BoardWidgetCellCallbacks = {
+  presentationReady?: () => void;
   appViewGeneration: () => number;
   grant: (name: string, decision: BoardGrantDecision) => Promise<void>;
   movePointerDown: (widget: BoardWidget, event: PointerEvent) => void;

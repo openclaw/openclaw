@@ -2,7 +2,7 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.ts";
 import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
@@ -67,9 +67,11 @@ describe("attachment frame admission", () => {
 
       expect(await handleSendChat(host)).toBeUndefined();
 
-      expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything(), {
-        timeoutMs: 30_000,
-      });
+      expect(host.request).not.toHaveBeenCalledWith(
+        "chat.send",
+        expect.anything(),
+        expect.anything(),
+      );
       expect(host.chatMessage).toBe(message);
       expect(host.chatMentions).toEqual(mentions);
       expect(host.chatReplyTarget).toEqual(replyTarget);
@@ -117,17 +119,21 @@ describe("attachment frame admission", () => {
 
     await resumeStoredChatOutboxes(restored);
 
-    expect(source.request).not.toHaveBeenCalledWith("chat.send", expect.anything(), {
-      timeoutMs: 30_000,
-    });
+    expect(source.request).not.toHaveBeenCalledWith(
+      "chat.send",
+      expect.anything(),
+      expect.anything(),
+    );
     expect(listStoredChatOutboxes(restored)[0]?.queue[0]).toMatchObject(expectedRow);
     expect(restored.chatError).toBe("Too large to send: brief.pdf");
 
     await retryQueuedChatMessage(restored, original.id);
 
-    expect(source.request).not.toHaveBeenCalledWith("chat.send", expect.anything(), {
-      timeoutMs: 30_000,
-    });
+    expect(source.request).not.toHaveBeenCalledWith(
+      "chat.send",
+      expect.anything(),
+      expect.anything(),
+    );
     const failed = queuedAttachmentBatch(restored);
     expect(failed).toMatchObject(expectedRow);
     const hydrated = await prepareOutboxPayload(restored, failed);
@@ -432,6 +438,23 @@ describe("Home work context admission", () => {
 });
 
 describe("handleSendChat immediate local commands", () => {
+  it("shows export read failures without clearing the draft or staged attachments", async () => {
+    const attachment = createStagedAttachment("failed-export-att");
+    const host = makeChatHost({
+      chatMessage: "/export",
+      chatAttachments: [attachment],
+      exportCurrentChat: async () => {
+        throw new Error("History unavailable; retry export.");
+      },
+      requestHandlers: {},
+    });
+    await handleSendChat(host);
+    expect(host.chatError).toContain("History unavailable; retry export.");
+    expect(host.chatMessage).toBe("/export");
+    expect(host.chatAttachments).toEqual([attachment]);
+    expect(host.request).not.toHaveBeenCalled();
+  });
+
   it.each(["draft", "session"])("keeps a newer %s intact when export finishes", async (change) => {
     const exported = createDeferred<"downloaded">();
     const attachment = createStagedAttachment("pending-export-att");
@@ -594,9 +617,11 @@ describe("handleSendChat session ownership", () => {
           expect(host.chatRunError).toBeNull();
         }
         if (pendingHistory) {
-          expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything(), {
-            timeoutMs: 30_000,
-          });
+          expect(host.request).not.toHaveBeenCalledWith(
+            "chat.send",
+            expect.anything(),
+            expect.anything(),
+          );
           refresh.resolve(failed);
           await loading;
         }
@@ -689,66 +714,83 @@ describe("handleSendChat session ownership", () => {
     },
   );
 
-  it("holds an offline queue through cold recovery and an awaited history read", async () => {
-    const history = createDeferred<unknown>();
-    let pending = false;
-    const host = makeChatHost({
-      connected: false,
-      chatMessage: "offline later turn",
-      requestHandlers: {
-        "chat.history": () => history.promise,
-        "chat.send": { status: "started" },
-      },
-      hasPendingInitialTurn: () => pending,
-    });
-    const readiness = vi.spyOn(host.client!, "recoveryScopeReady", "get").mockReturnValue(false);
-    await handleSendChat(host);
-    expect(host.chatMessage).toBe("");
-    expect(host.chatQueue).toMatchObject([{ text: "offline later turn", sendAttempts: 0 }]);
-    const originalId = host.chatQueue[0]!.sendRunId;
-    host.connected = true;
-    readiness.mockReturnValue(true);
-    const drain = resumeStoredChatOutboxes(host);
-    const loading = loadChatHistory(host);
-    await vi.waitFor(() =>
-      expect(host.request).toHaveBeenCalledWith("chat.history", expect.anything(), {
-        timeoutMs: 30_000,
-      }),
-    );
-    readiness.mockReturnValue(false);
-    history.resolve({
-      messages: [],
-      sessionInfo: {
-        key: host.sessionKey,
-        hasActiveRun: false,
-        status: "failed",
-        lastRunId: "previous-run",
-        lastRunError: "Earlier preparation failed",
-      },
-    });
-    await drain;
-    await loading;
-    expect(host.chatRunError?.summary).toContain("Earlier preparation failed");
-    expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything(), {
-      timeoutMs: 30_000,
-    });
-    expect(host.chatQueue).toMatchObject([
-      { text: "offline later turn", sendAttempts: 0, sendRunId: originalId },
-    ]);
-    pending = true;
-    readiness.mockReturnValue(true);
-    await resumeStoredChatOutboxes(host);
-    expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything(), {
-      timeoutMs: 30_000,
-    });
-    pending = false;
-    await resumeStoredChatOutboxes(host);
-    expect(host.chatRunError).toBeNull();
-    expect(findChatSendPayload(host)).toMatchObject({
-      message: "offline later turn",
-      idempotencyKey: originalId,
-    });
-  });
+  it.each(["resolved", "rejected"])(
+    "holds an offline queue through cold recovery and a %s history read",
+    async (readinessResult) => {
+      const history = createDeferred<unknown>();
+      let interruptReadiness = readinessResult === "rejected";
+      let pending = false;
+      const host = makeChatHost({
+        connected: false,
+        chatMessage: "offline later turn",
+        requestHandlers: {
+          "chat.history": (params: { limit?: number }) =>
+            history.promise.then((result) => {
+              if (params.limit === 1 && interruptReadiness) {
+                throw new Error("History interrupted during recovery");
+              }
+              return result;
+            }),
+          "chat.send": { status: "started" },
+        },
+        hasPendingInitialTurn: () => pending,
+      });
+      const readiness = vi.spyOn(host.client!, "recoveryScopeReady", "get").mockReturnValue(false);
+      await handleSendChat(host);
+      expect(host.chatMessage).toBe("");
+      expect(host.chatQueue).toMatchObject([{ text: "offline later turn", sendAttempts: 0 }]);
+      const originalId = host.chatQueue[0]!.sendRunId;
+      host.connected = true;
+      readiness.mockReturnValue(true);
+      const drain = resumeStoredChatOutboxes(host);
+      const loading = loadChatHistory(host);
+      await vi.waitFor(() =>
+        expect(host.request).toHaveBeenCalledWith(
+          "chat.history",
+          { sessionKey: host.sessionKey, limit: 1 },
+          { timeoutMs: 30_000 },
+        ),
+      );
+      readiness.mockReturnValue(false);
+      history.resolve({
+        messages: [],
+        sessionInfo: {
+          key: host.sessionKey,
+          hasActiveRun: false,
+          status: "failed",
+          lastRunId: "previous-run",
+          lastRunError: "Earlier preparation failed",
+        },
+      });
+      await drain;
+      await loading;
+      expect(host.chatRunError?.summary).toContain("Earlier preparation failed");
+      expect(host.request).not.toHaveBeenCalledWith(
+        "chat.send",
+        expect.anything(),
+        expect.anything(),
+      );
+      expect(host.chatQueue).toMatchObject([
+        { text: "offline later turn", sendAttempts: 0, sendRunId: originalId },
+      ]);
+      interruptReadiness = false;
+      pending = true;
+      readiness.mockReturnValue(true);
+      await resumeStoredChatOutboxes(host);
+      expect(host.request).not.toHaveBeenCalledWith(
+        "chat.send",
+        expect.anything(),
+        expect.anything(),
+      );
+      pending = false;
+      await resumeStoredChatOutboxes(host);
+      expect(host.chatRunError).toBeNull();
+      expect(findChatSendPayload(host)).toMatchObject({
+        message: "offline later turn",
+        idempotencyKey: originalId,
+      });
+    },
+  );
 
   it("never drains an offline text submission under a different authenticated account", async () => {
     const host = makeChatHost({

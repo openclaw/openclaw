@@ -1,9 +1,12 @@
 import { createRoot } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { GatewayPendingRequests } from "../../../../packages/gateway-client/src/pending-request.js";
+import type { RequestFrame } from "../../../../packages/gateway-protocol/src/schema/frames.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { MCP_APP_OPEN_EVENT, type McpAppOpenDetail } from "../../components/mcp-app-launch.ts";
-import { MCP_APP_RESOURCE_MENTION_EVENT } from "../../components/mcp-app-resources.tsx";
+import { MCP_APP_RESOURCE_MENTION_EVENT } from "../../components/mcp-app-resource-mention.ts";
 import {
   MCP_APP_CONTEXT_EVENT,
   MCP_APP_FILE_OPEN_EVENT,
@@ -13,14 +16,25 @@ import {
 } from "../../components/mcp-app-security.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { readMcpAppContexts } from "../../lib/mcp-app-context.ts";
-import * as appMessages from "../../lib/mcp-app-message.ts";
+import * as appMessages from "../../lib/mcp-app-new-conversation.ts";
+import {
+  createTestSessionCapability,
+  sessionsResult,
+} from "../../lib/sessions/session-capability.test-support.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { StartedSessionNavigation } from "../new-session/started-session-navigation.ts";
 import {
   getChatAttachmentDataUrl,
   releaseChatAttachmentPayloads,
 } from "./attachment-payload-store.ts";
+import { makeChatHost } from "./chat-host.test-support.ts";
 import { createChatPaneMcpApps, type ChatPaneMcpAppOwner } from "./chat-pane-mcp-app.ts";
+import {
+  openSessionWorkspacePreview,
+  selectSessionWorkspacePreview,
+} from "./components/chat-session-workspace-state.ts";
+import { handleAbortChat } from "./run-lifecycle.ts";
 
 const cleanups: Array<() => void> = [];
 afterEach(() => {
@@ -42,9 +56,15 @@ function fixture() {
     client,
     sessionKey: "agent:main:one",
   });
-  // These events only read gateway state; new-session delivery is observed at its existing owner.
-  const context = { gateway: gateway.gateway } as ApplicationContext;
-  const state: ChatPaneMcpAppOwner["state"] = {
+  const agentSelection = { intentRevision: 0 };
+  const context = { gateway: gateway.gateway, agentSelection } as ApplicationContext;
+  const state: ChatPaneMcpAppOwner["state"] & { settings: undefined } = {
+    settings: undefined,
+    client,
+    connected: true,
+    connectionEpoch: 1,
+    sidebarContent: null,
+    sessions: createTestSessionCapability(gateway.gateway),
     sessionKey: "agent:main:one",
     assistantAgentId: "main",
     chatAttachments: [],
@@ -66,7 +86,7 @@ function fixture() {
   let syncLaunch!: () => void;
   function mount() {
     const dispose = createRoot((stop) => {
-      syncLaunch = createChatPaneMcpApps({ element, current: () => current });
+      syncLaunch = createChatPaneMcpApps({ element, current: () => current && { ...current } });
       return stop;
     });
     cleanups.push(dispose);
@@ -85,20 +105,21 @@ function fixture() {
       entrypoint: { type: "thread" },
     },
   };
-  const dispatch = <T>(name: string, detail: T) => {
+  const dispatch = <T>(name: string, detail: T, target: HTMLElement = element) => {
     const event = new CustomEvent(name, {
       detail,
       bubbles: true,
       composed: true,
-      cancelable: true,
+      cancelable: target === element,
     });
-    element.dispatchEvent(event);
+    target.dispatchEvent(event);
     return event;
   };
   return {
     element,
     client,
     context,
+    agentSelection,
     state,
     owner,
     syncLaunch: () => syncLaunch(),
@@ -106,6 +127,25 @@ function fixture() {
     cleanup,
     launch,
     dispatch,
+    claim: (name: string, detail: unknown) => dispatch(name, detail).defaultPrevented,
+    abortHost: (sessionKey = state.sessionKey, assistantAgentId?: string) => {
+      const host = Object.assign(makeChatHost({ client, sessionKey, assistantAgentId }), {
+        handleSendChat: state.handleSendChat,
+        handleOpenSidebar: state.handleOpenSidebar,
+        sidebarContent: state.sidebarContent,
+      });
+      owner.state = host;
+      return host;
+    },
+    newConversation: (route = "one") => {
+      const create = vi.fn(async () => null);
+      Object.assign(context, {
+        router: { getState: () => ({ location: `/chat/${route}` }) },
+        sessions: { createResult: create },
+        config: {},
+      });
+      return create;
+    },
     setCurrent: (next: ChatPaneMcpAppOwner | null) => {
       current = next;
     },
@@ -132,19 +172,17 @@ describe("MCP app pane actions", () => {
   it("claims only the presented matching owner and retains per-launch synchronization", () => {
     const f = fixture();
     f.owner.presented = false;
-    expect(f.dispatch(MCP_APP_OPEN_EVENT, f.launch).defaultPrevented).toBe(false);
+    expect(f.claim(MCP_APP_OPEN_EVENT, f.launch)).toBe(false);
     f.owner.presented = true;
+    expect(f.claim(MCP_APP_OPEN_EVENT, { ...f.launch, sessionKey: "other" })).toBe(false);
     expect(
-      f.dispatch(MCP_APP_OPEN_EVENT, { ...f.launch, sessionKey: "other" }).defaultPrevented,
-    ).toBe(false);
-    expect(
-      f.dispatch(MCP_APP_OPEN_EVENT, {
+      f.claim(MCP_APP_OPEN_EVENT, {
         ...f.launch,
         owner: createTestGatewayClient(async () => ({})),
-      }).defaultPrevented,
+      }),
     ).toBe(false);
     expect(f.state.handleOpenSidebar).not.toHaveBeenCalled();
-    expect(f.dispatch(MCP_APP_OPEN_EVENT, f.launch).defaultPrevented).toBe(true);
+    expect(f.claim(MCP_APP_OPEN_EVENT, f.launch)).toBe(true);
     expect(f.state.handleOpenSidebar).toHaveBeenLastCalledWith(
       expect.objectContaining({
         launch: f.launch,
@@ -173,16 +211,10 @@ describe("MCP app pane actions", () => {
       options?.onOutboxAdmitted?.();
       return pending.promise;
     });
-    expect(f.dispatch(MCP_APP_MESSAGE_EVENT, sent.detail).defaultPrevented).toBe(true);
+    expect(f.claim(MCP_APP_MESSAGE_EVENT, sent.detail)).toBe(true);
     expect(sent.respond).not.toHaveBeenCalled();
-    expect(f.state.handleSendChat).toHaveBeenCalledWith(
-      "Compare parts",
-      expect.objectContaining({
-        attachmentsOverride: expect.arrayContaining([
-          expect.objectContaining({ fileName: "Part measurements" }),
-        ]),
-      }),
-    );
+    expect(attachments).toEqual([expect.objectContaining({ fileName: "Part measurements" })]);
+    expect(vi.mocked(f.state.handleSendChat).mock.calls[0]?.[0]).toBe("Compare parts");
     f.setCurrent(null);
     f.cleanup();
     pending.resolve();
@@ -213,11 +245,119 @@ describe("MCP app pane actions", () => {
       .spyOn(appMessages, "sendMcpAppNewConversation")
       .mockReturnValue(pending.promise);
     f.dispatch(MCP_APP_MESSAGE_EVENT, sent.detail);
-    expect(create).toHaveBeenCalledWith(f.context, "main", sent.detail);
+    await vi.dynamicImportSettled();
+    expect(create).toHaveBeenCalledWith(f.context, "main", sent.detail, expect.any(AbortSignal));
     expect(f.state.handleSendChat).not.toHaveBeenCalled();
     expect(sent.respond).not.toHaveBeenCalled();
     pending.resolve(false);
     expect(await sent.receipt.promise).toBe(false);
+  });
+
+  it("cancels a new-conversation admission wait when the source pane receives Stop", async () => {
+    const f = fixture();
+    const host = f.abortHost();
+    const sent = message(host.sessionKey, "new");
+    let signal: AbortSignal | undefined;
+    vi.spyOn(appMessages, "sendMcpAppNewConversation").mockImplementation(
+      (_context, _agentId, _detail, requestSignal) => {
+        signal = requestSignal;
+        return new Promise<boolean>((resolve) => {
+          signal?.addEventListener("abort", () => resolve(false), { once: true });
+        });
+      },
+    );
+    f.dispatch(MCP_APP_MESSAGE_EVENT, sent.detail);
+    await vi.dynamicImportSettled();
+    expect(signal?.aborted).toBe(false);
+    await handleAbortChat(host, { preserveDraft: true });
+    expect(signal?.aborted).toBe(true);
+    expect(await sent.receipt.promise).toBe(false);
+  });
+
+  it("acknowledges a dispatched new conversation after Stop without navigating or resending", async () => {
+    vi.useFakeTimers();
+    const f = fixture();
+    const pending = new GatewayPendingRequests({
+      createRequestId: () => "mcp-create",
+      nowMs: Date.now,
+    });
+    cleanups.push(() => {
+      pending.flush(new Error("test disposed"));
+      vi.useRealTimers();
+    });
+    const dispatched = createDeferred<RequestFrame>();
+    const send = vi.fn((raw: string) => dispatched.resolve(JSON.parse(raw) as RequestFrame));
+    let requestSignal: AbortSignal | undefined;
+    const requestClient = createTestGatewayClient((method, params, options) => {
+      if (method !== "sessions.create") {
+        return sessionsResult([]);
+      }
+      requestSignal = options?.signal;
+      return pending.request({ send }, method, params, options);
+    });
+    f.client.request = requestClient.request.bind(requestClient);
+    Object.assign(f.context, {
+      router: { getState: () => ({ location: "/chat/one" }) },
+      sessions: createTestSessionCapability(f.context.gateway),
+      chatSubmissions: createChatSubmissions(),
+      config: {},
+    });
+    const navigate = vi.spyOn(StartedSessionNavigation.prototype, "navigate").mockResolvedValue();
+    const host = f.abortHost();
+    const sent = message(host.sessionKey, "new");
+    sent.detail.content = [{ type: "text", text: "Start a conversation" }];
+    f.dispatch(MCP_APP_MESSAGE_EVENT, sent.detail);
+    const frame = await dispatched.promise;
+
+    await handleAbortChat(host, { preserveDraft: true });
+    expect(requestSignal?.aborted).toBe(true);
+    pending.handleResponse({
+      type: "res",
+      id: frame.id,
+      ok: true,
+      payload: { key: "agent:main:created", runStarted: true, runId: "created-run" },
+    });
+
+    expect(await sent.receipt.promise).toBe(true);
+    expect(sent.respond).toHaveBeenCalledExactlyOnceWith(true);
+    expect(navigate).not.toHaveBeenCalled();
+    expect(send).toHaveBeenCalledOnce();
+    expect(pending.hasPending).toBe(false);
+    expect(f.state.handleSendChat).not.toHaveBeenCalled();
+  });
+
+  it.each(["retirement", "Stop", "agent change", "selection change"] as const)(
+    "does not create a conversation after %s while its handler loads",
+    async (interruption) => {
+      const f = fixture();
+      const host = f.abortHost("global", "main");
+      const create = f.newConversation("global");
+      const sent = message("global", "new");
+      sent.detail.content = [{ type: "text", text: "Start a conversation" }];
+      f.dispatch(MCP_APP_MESSAGE_EVENT, sent.detail);
+      if (interruption === "retirement") {
+        f.cleanup();
+      } else if (interruption === "Stop") {
+        await handleAbortChat(host, { preserveDraft: true });
+      } else if (interruption === "agent change") {
+        host.assistantAgentId = "replacement";
+      } else {
+        f.agentSelection.intentRevision++;
+      }
+      expect(await sent.receipt.promise).toBe(false);
+      expect(create).not.toHaveBeenCalled();
+    },
+  );
+
+  it("continues a claimed new-conversation request when its pane parks during loading", async () => {
+    const f = fixture();
+    const create = f.newConversation();
+    const sent = message(f.state.sessionKey, "new");
+    sent.detail.content = [{ type: "text", text: "Start a conversation" }];
+    f.dispatch(MCP_APP_MESSAGE_EVENT, sent.detail);
+    f.owner.presented = false;
+    await sent.receipt.promise;
+    expect(create).toHaveBeenCalledOnce();
   });
 
   it("retains resource attachment, file viewer, and hidden-pane context contracts", () => {
@@ -229,23 +369,23 @@ describe("MCP app pane actions", () => {
       title: "Hex/bolt",
     };
     expect(
-      f.dispatch(MCP_APP_RESOURCE_MENTION_EVENT, {
+      f.claim(MCP_APP_RESOURCE_MENTION_EVENT, {
         sessionKey: f.state.sessionKey,
         serverName: "parts",
         agentId: "main",
         resource,
-      }).defaultPrevented,
+      }),
     ).toBe(true);
     expect(f.state.chatAttachments[0]).toMatchObject({ fileName: "Hex-bolt.txt", origin: "file" });
     const respond = vi.fn();
     expect(
-      f.dispatch(MCP_APP_FILE_OPEN_EVENT, {
+      f.claim(MCP_APP_FILE_OPEN_EVENT, {
         sessionKey: f.state.sessionKey,
         viewId: "view-one",
         path: "parts/bolt.stl",
         name: "bolt.stl",
         respond,
-      }).defaultPrevented,
+      }),
     ).toBe(true);
     expect(f.owner.openFile).toHaveBeenCalledWith("parts/bolt.stl");
     expect(respond).toHaveBeenCalledWith(true);
@@ -253,16 +393,14 @@ describe("MCP app pane actions", () => {
     const view = document.createElement("mcp-app-view");
     view.title = "Parts tray";
     f.element.append(view);
-    view.dispatchEvent(
-      new CustomEvent(MCP_APP_CONTEXT_EVENT, {
-        bubbles: true,
-        composed: true,
-        detail: {
-          sessionKey: f.state.sessionKey,
-          viewId: "view-one",
-          state: { updateId: "revision", content: [{ type: "text", text: "Selected bolt" }] },
-        },
-      }),
+    f.dispatch(
+      MCP_APP_CONTEXT_EVENT,
+      {
+        sessionKey: f.state.sessionKey,
+        viewId: "view-one",
+        state: { updateId: "revision", content: [{ type: "text", text: "Selected bolt" }] },
+      },
+      view,
     );
     expect(readMcpAppContexts(f.client, f.state.sessionKey, "main")).toMatchObject([
       { title: "Parts tray", viewId: "view-one", state: { updateId: "revision" } },
@@ -272,7 +410,7 @@ describe("MCP app pane actions", () => {
   it("retires pane listeners with their owner and reads the current owner after remount", () => {
     const f = fixture();
     f.cleanup();
-    expect(f.dispatch(MCP_APP_OPEN_EVENT, f.launch).defaultPrevented).toBe(false);
+    expect(f.claim(MCP_APP_OPEN_EVENT, f.launch)).toBe(false);
     f.dispatch(WIDGET_PROMPT_EVENT, { text: "not delivered" });
     expect(f.state.handleSendChat).not.toHaveBeenCalled();
     const next = { ...f.owner, state: { ...f.state, handleSendChat: vi.fn(async () => {}) } };
@@ -282,4 +420,22 @@ describe("MCP app pane actions", () => {
     expect(next.state.handleSendChat).toHaveBeenCalledExactlyOnceWith("delivered once");
     expect(f.state.handleSendChat).not.toHaveBeenCalled();
   });
+});
+
+it("retires panel actions synchronously when their workspace tab changes", () => {
+  const f = fixture();
+  f.dispatch(MCP_APP_OPEN_EVENT, f.launch);
+  const content = vi.mocked(f.state.handleOpenSidebar).mock.calls.at(-1)?.[0];
+  if (content?.kind !== "mcp-app") {
+    throw new Error("Expected app content");
+  }
+  openSessionWorkspacePreview(f.state, "app", "App", content);
+  const retire = vi.fn();
+  const stop = content.observeRetirement(retire);
+  expect(retire).not.toHaveBeenCalled();
+  selectSessionWorkspacePreview(f.state, null);
+  expect(retire).toHaveBeenCalledOnce();
+  stop();
+  f.cleanup();
+  expect(retire).toHaveBeenCalledOnce();
 });

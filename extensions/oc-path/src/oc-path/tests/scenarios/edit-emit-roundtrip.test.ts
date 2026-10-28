@@ -7,7 +7,7 @@ import { parseOcPath } from "../../oc-path.js";
 
 describe("edit-then-emit round-trip", () => {
   it("jsonc nested edit preserves untouched siblings", () => {
-    const ast = parseJsonc('{ "a": 1, "b": { "c": 2, "d": 3 }, "e": 4 }').ast;
+    const ast = parseJsonc('{ "a": 1, "b": { "c": 2, "d": 3 }, "e": 4 }');
     const r = setJsoncOcPath(ast, parseOcPath("oc://config/b.c"), {
       kind: "number",
       value: 99,
@@ -20,7 +20,7 @@ describe("edit-then-emit round-trip", () => {
   });
 
   it("jsonc edit composes: two sequential edits both land", () => {
-    let ast = parseJsonc('{ "a": 1, "b": 2 }').ast;
+    let ast = parseJsonc('{ "a": 1, "b": 2 }');
     let r = setJsoncOcPath(ast, parseOcPath("oc://config/a"), {
       kind: "number",
       value: 10,
@@ -36,7 +36,7 @@ describe("edit-then-emit round-trip", () => {
 
   it("jsonc parser-backed edit preserves comments", () => {
     const raw = '{\n  "k": 1 // comment\n}\n';
-    const ast = parseJsonc(raw).ast;
+    const ast = parseJsonc(raw);
     const r = setJsoncOcPath(ast, parseOcPath("oc://config/k"), {
       kind: "number",
       value: 2,

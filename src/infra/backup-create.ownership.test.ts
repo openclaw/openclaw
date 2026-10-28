@@ -32,6 +32,7 @@ import {
   withDatabase,
 } from "./backup-create-family.test-support.js";
 import { listArchiveEntries } from "./backup-create.test-support.js";
+import { listDirectoryTreeStrict } from "./directory-walk.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import * as sqliteSnapshot from "./sqlite-snapshot.js";
 
@@ -85,9 +86,8 @@ describe("backup SQLite ownership", () => {
       const restoredRoot = state.path("restored");
       await expect(restoreBackup(state, archive, runtime)).resolves.toMatchObject({ ok: true });
       if (alias === "namespace") {
-        const restoredAgents = (
-          await fs.readdir(restoredRoot, { recursive: true, withFileTypes: true })
-        )
+        const restoredAgents = (await listDirectoryTreeStrict(restoredRoot))
+          .map((walkEntry) => walkEntry.dirent)
           .filter((entry) => !entry.isDirectory() && entry.name === "openclaw-agent.sqlite")
           .map((entry) => path.join(entry.parentPath, entry.name));
         const expected = buildBackupArchivePath(archive.archiveRoot, agentPath).replaceAll(

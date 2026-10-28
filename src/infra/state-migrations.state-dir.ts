@@ -20,10 +20,6 @@ import { resolveLegacyProfileMigrationExceptions } from "./state-migrations.prof
 
 let autoMigrateStateDirChecked = false;
 
-export function resetAutoMigrateLegacyStateDirForTest() {
-  autoMigrateStateDirChecked = false;
-}
-
 type StateDirMigrationResult = {
   migrated: boolean;
   skipped: boolean;

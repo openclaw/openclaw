@@ -1,3 +1,4 @@
+import { materializeErrorStack } from "../infra/error-graph-internal.js";
 import { createDeferredCore } from "./deferred.js";
 import { runInDetachedAsyncContext } from "./detached-async-context.js";
 
@@ -133,7 +134,10 @@ export class BoundedSerialQueue {
     try {
       task.resolve(await task.run());
     } catch (error) {
-      this.firstFailure ??= { sequence: task.sequence, error };
+      if (!this.firstFailure) {
+        materializeErrorStack(error);
+        this.firstFailure = { sequence: task.sequence, error };
+      }
       task.reject(error);
     } finally {
       const next = this.pending.shift();

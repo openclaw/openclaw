@@ -294,13 +294,12 @@ export function createWorkerNodeDesktopCarrier(options: WorkerNodeDesktopCarrier
     app: WorkerDesktopApp;
   }): Promise<void> => {
     const binding = snapshotNodeDesktopBinding(request.record);
-    const advertisedApp = binding.desktop.apps?.find((app) => app.id === request.app.id);
-    if (!advertisedApp || !isDeepStrictEqual(advertisedApp, request.app)) {
+    const app = binding.desktop.apps?.find((candidate) => candidate.id === request.app.id);
+    if (!app || !isDeepStrictEqual(app, request.app)) {
       return Promise.reject(
         new Error("Worker environment node desktop app descriptor is not current"),
       );
     }
-    const app = structuredClone(advertisedApp);
     const key = `${binding.environmentId}\0${app.id}`;
     const previous = activeLaunches.get(key);
     if (

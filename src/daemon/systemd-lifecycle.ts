@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import { hasErrnoCode } from "../infra/errno.js";
+import { ignoreMissingPath } from "../infra/errno.js";
 import { LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES } from "./constants.js";
 import { formatLine } from "./output.js";
 import { createGatewayLifecycleMutationReporter } from "./service-mutation.js";
@@ -76,7 +76,7 @@ async function runSystemdServiceAction(
   if (installed?.scope === "system") {
     runSystemctl = (args) => {
       params.assertCurrent?.();
-      return execSystemctl(args, env);
+      return execSystemctl(args, env, undefined, params.beforeEffect);
     };
   } else {
     runSystemctl = (args) =>
@@ -86,12 +86,12 @@ async function runSystemdServiceAction(
         undefined,
         params.assertCurrent,
         action === "stop" ? { warn } : undefined,
+        params.beforeEffect,
       );
   }
   if (action !== "stop") {
     // Clear crash-loop start-limit latches only after scope ownership is proven;
     // otherwise resetting a conflicting manager could mutate the wrong service.
-    params.assertCurrent?.();
     await runSystemctl(["reset-failed", unitName]);
     params.assertCurrent?.();
   }
@@ -127,42 +127,16 @@ export async function restartSystemdService(
 type LegacySystemdUnit = {
   name: string;
   unitPath: string;
-  enabled: boolean;
-  exists: boolean;
 };
-
-async function removeSystemdUnitBackup(unitPath: string): Promise<void> {
-  try {
-    await fs.unlink(`${unitPath}.bak`);
-  } catch (error) {
-    if (!hasErrnoCode(error, "ENOENT")) {
-      throw error;
-    }
-  }
-}
 
 async function findLegacySystemdUnits(env: GatewayServiceEnv): Promise<LegacySystemdUnit[]> {
   const results: LegacySystemdUnit[] = [];
   const systemctlAvailable = await isSystemctlAvailable(env);
   for (const name of LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES) {
     const unitPath = resolveSystemdUnitPathForName(env, name);
-    const exists = await fs.access(unitPath).then(
-      () => true,
-      (error: unknown) => {
-        if (!hasErrnoCode(error, "ENOENT")) {
-          throw error;
-        }
-        return false;
-      },
-    );
-    const backupExists = await fs.access(`${unitPath}.bak`).then(
-      () => true,
-      (error: unknown) => {
-        if (!hasErrnoCode(error, "ENOENT")) {
-          throw error;
-        }
-        return false;
-      },
+    const exists = Boolean(await fs.access(unitPath).then(() => true, ignoreMissingPath));
+    const backupExists = Boolean(
+      await fs.access(`${unitPath}.bak`).then(() => true, ignoreMissingPath),
     );
     let enabled = false;
     if (systemctlAvailable) {
@@ -170,7 +144,7 @@ async function findLegacySystemdUnits(env: GatewayServiceEnv): Promise<LegacySys
       enabled = res.code === 0;
     }
     if (exists || backupExists || enabled) {
-      results.push({ name, unitPath, enabled, exists });
+      results.push({ name, unitPath });
     }
   }
   return results;
@@ -204,7 +178,7 @@ export async function uninstallLegacySystemdUnits({
       }
       stdout.write(`Legacy systemd unit not found at ${unit.unitPath}\n`);
     }
-    await removeSystemdUnitBackup(unit.unitPath);
+    await fs.unlink(`${unit.unitPath}.bak`).catch(ignoreMissingPath);
   }
   if (systemctlAvailable && removedAny) {
     await reloadSystemdUserManager(env);
@@ -280,7 +254,7 @@ export async function uninstallUserSystemdGatewayUnit({
     }
     stdout.write(`User-scope systemd unit not found at ${unitPath}\n`);
   }
-  await removeSystemdUnitBackup(unitPath);
+  await fs.unlink(`${unitPath}.bak`).catch(ignoreMissingPath);
   // The manager keeps a deleted unit's definition loaded until it reloads, so
   // without this the unit stays startable while the detector reports it gone.
   if (removed && disabled) {

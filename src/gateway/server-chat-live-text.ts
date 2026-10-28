@@ -7,6 +7,7 @@ import {
 } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { TOOL_CALL_RAW_TOOL_NAME } from "../agents/tool-search-types.js";
 import type { AgentEventPayload, AgentEventRuntimePayload } from "../infra/agent-events.js";
+import { readAutomationDisplayState } from "../infra/agent-run-registry.automation.js";
 import { ASSISTANT_DISPLAY_CONTENT_FIELD } from "../shared/assistant-display-content.js";
 import { setSafeTimeout } from "../utils/timer-delay.js";
 import { resolveAssistantTextInput } from "./agent-event-assistant-text.js";
@@ -15,6 +16,7 @@ import {
   appendChatCanvasBlocksToMessage,
   type ChatCanvasBlock,
 } from "./chat-display-projection.canvas.js";
+import { projectPluginInlineView } from "./chat-display-projection.inline-view.js";
 import type { GatewayBroadcastOpts } from "./server-broadcast-types.js";
 import type { ChatRunState } from "./server-chat-state.js";
 
@@ -204,6 +206,22 @@ export function prepareAgentWirePayload(
       };
     }
   }
+  if (event.stream === "tool" && event.data.phase === "result") {
+    const result = readRecord(payload.data.result);
+    const inline = !event.data.isError && projectPluginInlineView(result?.details, event.data);
+    if (inline && result) {
+      payload = {
+        ...payload,
+        data: {
+          ...payload.data,
+          result: {
+            ...result,
+            details: { ...readRecord(result.details), pluginView: inline },
+          },
+        },
+      };
+    }
+  }
   if (event.stream === "item" && event.data.kind === "preamble") {
     payload = {
       ...payload,
@@ -228,6 +246,15 @@ export function prepareAgentWirePayload(
         payload = { ...payload, data: { ...event.data, text } };
       }
     }
+  }
+  if (
+    (event.stream === "tool" || event.stream === "item") &&
+    event.data.hideFromChannelProgress === true &&
+    readAutomationDisplayState(event.runId) !== "ordinary"
+  ) {
+    // Hiding an activity headline alone still leaves its raw tool card. Keep the
+    // execution event intact, but omit routine checks from chat and its replay.
+    payload = { ...payload, data: { ...payload.data, display: false } };
   }
   return payload;
 }
@@ -294,7 +321,6 @@ export function scheduleLiveTextFlush(
     }
     cancelPendingLiveTextFlush(run, stream);
     pending.flush();
-  }, delayMs);
-  timer.unref?.();
+  }, delayMs).unref();
   pendingFlushes[stream] = { timer, flush };
 }

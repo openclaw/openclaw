@@ -196,18 +196,15 @@ export async function bindPreparedAcpThread(params: {
       label: params.label,
       binding: params.preparedBinding,
       sessionCwd: resolveAcpSessionCwd(params.initializedRuntime.initialized.meta),
-      sessionDetails: resolveAcpThreadSessionDetailLines({
-        sessionKey: params.sessionKey,
-        meta: params.initializedRuntime.initialized.meta,
-      }),
+      sessionDetails: resolveAcpThreadSessionDetailLines(
+        params.initializedRuntime.initialized.meta,
+      ),
     }),
   );
   params.assertActive?.();
   if (!binding.conversation.conversationId) {
     throw new Error(
-      params.preparedBinding.placement === "child"
-        ? `Failed to create and bind a ${params.preparedBinding.channel} thread for this ACP session.`
-        : `Failed to bind the current ${params.preparedBinding.channel} conversation for this ACP session.`,
+      `Failed to create and bind a ${params.preparedBinding.channel} thread for this ACP session.`,
     );
   }
 

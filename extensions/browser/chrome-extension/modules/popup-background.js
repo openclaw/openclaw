@@ -4,7 +4,6 @@ import { isValidTabId } from "./tab-eligibility.js";
 
 /** Own manual/native pairing transactions and compact popup/options messages. */
 export function createPopupMessageHandler({
-  chromeApi = chrome,
   pairingConfigStore,
   policy,
   accessReady,
@@ -35,6 +34,7 @@ export function createPopupMessageHandler({
   scheduleTabsSync,
   pauseTab,
 }) {
+  const chrome = globalThis.chrome;
   let pairingGeneration = 0;
 
   const assertPairingCurrent = (generation) => {
@@ -183,13 +183,12 @@ export function createPopupMessageHandler({
             const nativeBootstrap = await getNativeBootstrapStatus();
             const { relayUrl, accessMode } = await getConfig();
             await reconcilePairingInvalidation();
-            const accessible = await policy.listAccessibleTabs();
+            await policy.listAccessibleTabs();
             const hint = getRelayStatusHint();
             return sendResponse({
               paired: Boolean(relayUrl),
               state: getRelayState(),
               accessMode,
-              accessibleTabCount: accessible.length,
               relayUrl: relayUrl ?? "",
               nativeBootstrap,
               retiredCopilotCustodyBlocked,
@@ -266,7 +265,7 @@ export function createPopupMessageHandler({
                     await pauseTab(tabId);
                   }
                 } else {
-                  const selected = await isTabSelected(await chromeApi.tabs.get(tabId));
+                  const selected = await isTabSelected(await chrome.tabs.get(tabId));
                   if (msg.grant !== selected) {
                     policy.invalidateTab(tabId);
                     if (!msg.grant) {

@@ -19,11 +19,6 @@ describe("resolveQueueSettingsCore", () => {
       },
       mode: "collect",
     },
-    {
-      name: "removed mode in stale config",
-      params: { cfg: { messages: { queue: { mode: "steer-backlog" as never } } } },
-      mode: "steer",
-    },
   ] as const)("resolves $name with the built-in batching defaults", ({ params, mode }) => {
     expect(resolveQueueSettingsCore(params)).toEqual({
       mode,

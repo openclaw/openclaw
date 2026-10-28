@@ -54,7 +54,6 @@ export function collectPluginConfigAssignments(params: {
   const pluginContracts = resolvePluginConfigContractsById({
     config: params.config,
     env: params.context.env,
-    fallbackToBundledMetadata: true,
     fallbackToBundledMetadataForResolvedBundled: !params.context.manifestRegistry,
     fallbackBundledPluginIds: bundledLoadablePluginIds,
     pluginIds: Object.keys(entries),

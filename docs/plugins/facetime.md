@@ -166,8 +166,8 @@ openclaw gateway restart
 openclaw gateway call facetime.setup --json
 ```
 
-Setup reports required actions and can start the native helper, open the call
-apps, and attach the helper. It does not dial a call.
+Setup reports required actions and can start the native helper, open FaceTime,
+and attach the helper. It does not dial a call.
 
 ### Enable developer-tools access
 
@@ -179,7 +179,7 @@ sudo /usr/sbin/DevToolsSecurity -enable
 
 ### Allow debugger attachment
 
-The native helper needs to attach to FaceTime and Phone. If setup reports that
+The native helper needs to attach to FaceTime. If setup reports that
 SIP debugging restrictions block attachment:
 
 1. Shut down the Mac.
@@ -227,7 +227,7 @@ built driver. If installation fails, follow the reported error or the
 
 ### Select the call audio devices
 
-In FaceTime, and in Phone when it handles FaceTime Audio, select:
+In FaceTime, select:
 
 - **Microphone:** `OpenClaw-Mic`.
 - **Output:** physical speakers or headphones.
@@ -318,15 +318,15 @@ openclaw plugins disable facetime
 ```
 
 Follow [FaceTime recovery and removal](/plugins/facetime-recovery) to restart the
-Apple call apps, check that the audio devices are removed, and restore SIP.
+FaceTime, check that the audio devices are removed, and restore SIP.
 
 ## Limits
 
 - One managed call at a time.
 - FaceTime calls only. Cellular, Wi-Fi Calling/PSTN, emergency, and unrecognized
   call types are rejected, even when the number matches an owner handle.
-- Start with FaceTime Audio. Video and Phone-hosted FaceTime Audio remain
-  experimental and may behave differently across macOS versions.
+- Start with FaceTime Audio in FaceTime.app. Video remains experimental and may
+  behave differently across macOS versions.
 - Requests that use the agent's tools can take longer than ordinary voice replies.
 - There is no FaceTime-specific realtime model fallback; provider behavior and
   defaults come from the selected realtime provider.

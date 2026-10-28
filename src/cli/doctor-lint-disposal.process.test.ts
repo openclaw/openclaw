@@ -3,11 +3,13 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, expect, it } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
+import { createTestModelDefinition } from "../commands/test-runtime-config-helpers.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { buildUpdateRehearsalPathEnv } from "../infra/update-rehearsal-paths.js";
 import { buildUpdateDoctorEnv } from "../infra/update-runner-doctor.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { cliRecoveryEntrypoints } from "./cli-entrypoint.test-support.js";
+import { writeFixtureJsonSync } from "./cli-fixtures.test-support.js";
 import {
   formatCliProcessFailure,
   runCliProcessChild,
@@ -28,22 +30,16 @@ it.each(["release", "timeout"])(
       const naturalExit = path.join(root, "natural-exit");
       fs.mkdirSync(plugin);
       fs.mkdirSync(path.join(root, "workspace"));
-      fs.writeFileSync(
-        path.join(plugin, "package.json"),
-        JSON.stringify({
-          name: "disposal-proof",
-          version: "1.0.0",
-          openclaw: { extensions: ["./index.cjs"] },
-        }),
-      );
-      fs.writeFileSync(
-        path.join(plugin, "openclaw.plugin.json"),
-        JSON.stringify({
-          id: "disposal-proof",
-          contracts: { tools: ["disposal_probe"] },
-          configSchema: { type: "object", properties: {}, additionalProperties: false },
-        }),
-      );
+      writeFixtureJsonSync(path.join(plugin, "package.json"), {
+        name: "disposal-proof",
+        version: "1.0.0",
+        openclaw: { extensions: ["./index.cjs"] },
+      });
+      writeFixtureJsonSync(path.join(plugin, "openclaw.plugin.json"), {
+        id: "disposal-proof",
+        contracts: { tools: ["disposal_probe"] },
+        configSchema: { type: "object", properties: {}, additionalProperties: false },
+      });
       fs.writeFileSync(
         path.join(plugin, "index.cjs"),
         `const fs = require("node:fs");
@@ -73,17 +69,7 @@ module.exports = { id: "disposal-proof", register(api) {
             fixture: {
               api: "openai-completions",
               baseUrl: "http://127.0.0.1:1/v1",
-              models: [
-                {
-                  id: "local",
-                  name: "Synthetic local model",
-                  reasoning: false,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 128000,
-                  maxTokens: 8192,
-                },
-              ],
+              models: [createTestModelDefinition("local")],
             },
           },
         },

@@ -2,7 +2,7 @@ import fs from "node:fs";
 import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
-import { hasErrnoCode } from "./errno.js";
+import { hasErrnoCode, ignoreMissingPath } from "./errno.js";
 import { acquireFileLockSync } from "./file-lock-manager.js";
 import { isLockOwnerDefinitelyStale } from "./stale-lock-file.js";
 
@@ -96,10 +96,8 @@ function rejectUnsupportedLockPath(lockPath: string): void {
   try {
     observed = fs.lstatSync(lockPath);
   } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return;
-    }
-    throw error;
+    ignoreMissingPath(error);
+    return;
   }
   if (observed.isFile() && !observed.isSymbolicLink()) {
     return;

@@ -1,11 +1,19 @@
+import { spread } from "@solidjs/web";
+import { createRoot } from "solid-js";
 import { normalizeSessionColorValue } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import type {
   ControlUiComponentHandle,
   ControlUiComponents,
+  ControlUiDialogProps,
 } from "../../../src/plugin-sdk/control-ui-components.js";
 import type { ApplicationContext } from "../app/context.ts";
 import { readGatewayOperatorAccess } from "../app/operator-access.ts";
 import { listen as listenTo } from "../lib/reactive/listener.ts";
+import { projectSource } from "../lib/reactive/projection.ts";
+import {
+  sharedAgentIdentityProjection,
+  sharedAgentsProjection,
+} from "../lib/reactive/shared-application-projections.ts";
 
 function resolveAppearanceColor(value: string | null | undefined): string {
   const color = normalizeSessionColorValue(value ?? "");
@@ -21,79 +29,96 @@ export function createControlUiComponents(options: {
   signal: AbortSignal;
   onError: (error: unknown) => void;
 }): ControlUiComponents {
-  function mount<P, E extends HTMLElement>(
-    container: HTMLElement,
-    initial: P,
-    load: () => Promise<E>,
-    apply: (element: E, props: P, current: () => ApplicationContext) => void,
-    listen?: (element: E, props: () => P) => () => void,
-    observe?: (context: ApplicationContext, refresh: () => void) => () => void,
-  ): ControlUiComponentHandle<P> {
-    options.current();
-    options.signal.throwIfAborted();
-    let props = initial;
-    let element: E | undefined;
-    let active = true;
-    let unsubscribe: (() => void) | undefined;
-    let unlisten: (() => void) | undefined;
-    const current = () => {
-      if (!active) {
-        throw new Error("This plugin component has been disposed.");
-      }
-      options.signal.throwIfAborted();
-      return options.current();
-    };
-    const refresh = () => {
-      if (element && active) {
-        apply(element, props, current);
-      }
-    };
-    const dispose = () => {
-      if (!active) {
-        return;
-      }
-      active = false;
-      unlistenAbort();
-      unsubscribe?.();
-      unlisten?.();
-      element?.remove();
-    };
-    const unlistenAbort = listenTo(options.signal, "abort", dispose, { once: true });
-    void load()
-      .then((loaded) => {
-        // Imports can finish after navigation or reload. The retired mount must
-        // never reconnect a dialog, provider lease, or event callback.
-        if (!active || options.signal.aborted) {
+  function component<P, K extends keyof HTMLElementTagNameMap>(
+    tag: K,
+    load: () => Promise<unknown>,
+    bindings: (props: P, current: () => ApplicationContext) => Record<string, unknown>,
+    listen?: (element: HTMLElementTagNameMap[K], props: () => P) => () => void,
+    sources: (
+      context: ApplicationContext,
+    ) => { subscribe(notify: () => void): () => void }[] = () => [],
+    apply?: (element: HTMLElementTagNameMap[K], props: P) => void,
+    hydrate?: (props: P, context: ApplicationContext) => void,
+  ): (container: HTMLElement, initial: P) => ControlUiComponentHandle<P> {
+    return (container, initial) => {
+      let props = initial;
+      let element: HTMLElementTagNameMap[K] | undefined;
+      let active = true;
+      let disposeBindings: (() => void) | undefined;
+      let publish = () => {};
+      let unlisten: (() => void) | undefined;
+      const current = () => {
+        if (!active) {
+          throw new Error("This plugin component has been disposed.");
+        }
+        options.signal.throwIfAborted();
+        return options.current();
+      };
+      current();
+      const dispose = () => {
+        if (!active) {
           return;
         }
-        current();
-        element = loaded;
-        unlisten = listen?.(element, () => {
+        active = false;
+        unlistenAbort();
+        disposeBindings?.();
+        unlisten?.();
+        element?.remove();
+      };
+      const unlistenAbort = listenTo(options.signal, "abort", dispose, { once: true });
+      void load()
+        .then(() => {
+          // Late imports must not reconnect retired dialogs, leases, or callbacks.
+          if (!active || options.signal.aborted) {
+            return;
+          }
           current();
-          return props;
+          const loaded = document.createElement(tag);
+          element = loaded;
+          unlisten = listen?.(element, () => {
+            current();
+            return props;
+          });
+          apply?.(element, props);
+          hydrate?.(props, current());
+          disposeBindings = createRoot((disposeRoot) => {
+            const presentation = projectSource(current(), {
+              read: () => bindings(props, current),
+              subscribe: (context, notify) => {
+                publish = () => {
+                  hydrate?.(props, current());
+                  notify();
+                };
+                const stops = sources(context).map((source) => source.subscribe(publish));
+                return () => {
+                  publish = () => {};
+                  stops.forEach((stop) => stop());
+                };
+              },
+              equality: "revision",
+            });
+            spread(loaded, presentation.read, true);
+            return disposeRoot;
+          });
+          container.append(element);
+        })
+        .catch((error: unknown) => {
+          if (active) {
+            dispose();
+            options.onError(error);
+          }
         });
-        refresh();
-        container.append(element);
-        const context = current();
-        const stops = [context.gateway.subscribe(refresh), context.agents.subscribe(refresh)];
-        if (observe) {
-          stops.push(observe(context, refresh));
-        }
-        unsubscribe = () => stops.forEach((stop) => stop());
-      })
-      .catch((error: unknown) => {
-        if (active) {
-          dispose();
-          options.onError(error);
-        }
-      });
-    return {
-      update(next) {
-        current();
-        props = next;
-        refresh();
-      },
-      dispose,
+      return {
+        update(next) {
+          current();
+          props = next;
+          if (element) {
+            apply?.(element, props);
+          }
+          publish();
+        },
+        dispose,
+      };
     };
   }
 
@@ -103,82 +128,85 @@ export function createControlUiComponents(options: {
       options.signal.throwIfAborted();
       return resolveAppearanceColor(value);
     },
-    mountAgentAvatar: (container, props) =>
-      mount(
-        container,
-        props,
-        async () => {
-          await import("../components/solid/agent-avatar.tsx");
-          return document.createElement("openclaw-agent-avatar");
-        },
-        (element, next, current) => {
-          const context = current();
-          const agentsList = context.agents.state.agentsList;
-          const id = next.agentId || agentsList?.defaultId || "";
-          element.option = {
+    mountAgentAvatar: component(
+      "openclaw-agent-avatar",
+      () => import("../components/solid/agent-avatar.tsx"),
+      (next, current) => {
+        const context = current();
+        const agentsList = context.agents.state.agentsList;
+        const id = next.agentId || agentsList?.defaultId || "";
+        return {
+          "prop:option": {
             value: id,
             label: next.label,
             agent: agentsList?.agents.find((agent) => agent.id === id) ?? { id },
-          };
-          element.identity = context.agentIdentity.get(id);
-          void context.agentIdentity.ensure([id]);
+          },
+          "prop:identity": context.agentIdentity.get(id),
+        };
+      },
+      undefined,
+      (context) => [
+        sharedAgentsProjection(context.agents),
+        sharedAgentIdentityProjection(context.agentIdentity),
+      ],
+      undefined,
+      (next, context) => {
+        void context.agentIdentity.ensure([
+          next.agentId || context.agents.state.agentsList?.defaultId || "",
+        ]);
+      },
+    ),
+    mountAppearancePicker: component(
+      "openclaw-appearance-picker",
+      () => import("../components/appearance-picker.tsx"),
+      (next, current) => ({
+        "prop:props": {
+          ...next,
+          onChange: (appearance: Parameters<typeof next.onChange>[0]) => {
+            current();
+            next.onChange(appearance);
+          },
         },
-        undefined,
-        (context, refresh) => context.agentIdentity.subscribe(refresh),
-      ),
-    mountAppearancePicker: (container, props) =>
-      mount(
-        container,
-        props,
-        async () => {
-          await import("../components/appearance-picker.tsx");
-          return document.createElement("openclaw-appearance-picker");
-        },
-        (element, next, current) => {
-          element.props = {
-            ...next,
-            onChange: (appearance) => {
-              current();
-              next.onChange(appearance);
-            },
-          };
-        },
-      ),
-    mountAppearanceGlyph: (container, props) =>
-      mount(
-        container,
-        props,
-        async () => {
-          await import("../components/appearance-picker.tsx");
-          return document.createElement("openclaw-appearance-glyph");
-        },
-        (element, next) => {
-          element.props = next;
-          element.style.setProperty(
-            "--appearance-color",
-            resolveAppearanceColor(next.color) || "var(--muted)",
-          );
-        },
-      ),
+      }),
+    ),
+    mountAppearanceGlyph: component(
+      "openclaw-appearance-glyph",
+      () => import("../components/appearance-picker.tsx"),
+      (next) => ({
+        "prop:props": next,
+        style: { "--appearance-color": resolveAppearanceColor(next.color) || "var(--muted)" },
+      }),
+    ),
     mountDialog: (container, props) => {
       let content: HTMLElement | undefined;
-      return mount(
-        container,
-        props,
-        async () => {
-          await import("../components/modal-dialog.ts");
-          return document.createElement("openclaw-modal-dialog");
+      return component(
+        "openclaw-modal-dialog",
+        () => import("../components/modal-dialog.tsx"),
+        (next: ControlUiDialogProps) => ({
+          "prop:label": next.label,
+          "prop:description": next.description ?? "",
+          class: next.className ?? "",
+          style: next.style ?? "",
+        }),
+        (element, getProps) => {
+          // Plugin content is a foreign DOM island with native autofocus semantics.
+          element.initialFocus = () =>
+            content?.matches("[autofocus]")
+              ? content
+              : (content?.querySelector<HTMLElement>("[autofocus]") ?? null);
+          return listenTo(element, "modal-cancel", (event) => {
+            if (getProps().onCancel() === false) {
+              event.preventDefault();
+            }
+          });
         },
+        undefined,
         (element, next) => {
-          element.label = next.label;
-          element.description = next.description ?? "";
-          element.className = next.className ?? "";
-          element.style.cssText = next.style ?? "";
+          // SDK updates settle content custody and focus targets synchronously.
           if (next.returnFocusTarget !== undefined) {
             element.setReturnFocusTarget(next.returnFocusTarget);
           }
           if (content !== next.content) {
-            // The dialog owns its shell; the plugin owns only this content node.
             if (content) {
               content.replaceWith(next.content);
             } else {
@@ -187,97 +215,81 @@ export function createControlUiComponents(options: {
             content = next.content;
           }
         },
-        (element, getProps) =>
-          listenTo(element, "modal-cancel", (event) => {
-            if (getProps().onCancel() === false) {
-              event.preventDefault();
-            }
-          }),
-      );
+      )(container, props);
     },
-    mountAgentPicker: (container, props) =>
-      mount(
-        container,
-        props,
-        async () => {
-          await import("../components/agent-select-registration.ts");
-          return document.createElement("openclaw-agent-select");
-        },
-        (element, next, current) => {
-          const agents = current().agents.state.agentsList?.agents ?? [];
-          element.options = next.options.map((option) => ({
+    mountAgentPicker: component(
+      "openclaw-agent-select",
+      () => import("../components/agent-select-registration.ts"),
+      (next, current) => {
+        const agents = current().agents.state.agentsList?.agents ?? [];
+        return {
+          "prop:options": next.options.map((option) => ({
             ...option,
             agent: agents.find((agent) => agent.id === option.agent?.id) ?? option.agent,
-          }));
-          element.value = next.value;
-          element.placeholder = next.placeholder ?? "";
-          element.accessibleLabel = next.accessibleLabel;
-          element.menuLabel = next.menuLabel ?? "";
-          element.variant = next.variant ?? "default";
-          element.disabled = next.disabled ?? false;
-          element.onSelect = (value) => {
+          })),
+          "prop:value": next.value,
+          "prop:placeholder": next.placeholder ?? "",
+          "prop:accessibleLabel": next.accessibleLabel,
+          "prop:menuLabel": next.menuLabel ?? "",
+          "prop:variant": next.variant ?? "default",
+          "prop:disabled": next.disabled ?? false,
+          "prop:onSelect": (value: string) => {
             current();
             next.onSelect(value);
-          };
+          },
+        };
+      },
+      undefined,
+      (context) => [sharedAgentsProjection(context.agents)],
+    ),
+    mountSelectPicker: component(
+      "openclaw-select-picker",
+      () => import("../components/select-picker.ts"),
+      (next, current) => ({
+        class: "settings-select picker-select",
+        "prop:params": {
+          options: next.options,
+          value: next.value,
+          label: next.accessibleLabel,
+          searchable: next.searchable,
+          disabled: next.disabled,
+          onChange: (value: string) => {
+            current();
+            next.onSelect(value);
+          },
         },
-      ),
-    mountSelectPicker: (container, props) =>
-      mount(
-        container,
-        props,
-        async () => {
-          await import("../components/select-picker.ts");
-          return document.createElement("openclaw-select-picker");
-        },
-        (element, next, current) => {
-          element.className = "settings-select picker-select";
-          element.params = {
-            options: next.options,
-            value: next.value,
-            label: next.accessibleLabel,
-            searchable: next.searchable,
-            disabled: next.disabled,
-            onChange: (value) => {
-              current();
-              next.onSelect(value);
-            },
-          };
-        },
-      ),
-    mountSessionSummary: (container, props) =>
-      mount(
-        container,
-        props,
-        async () => {
-          await import("./control-ui-session-summary.tsx");
-          return document.createElement("openclaw-plugin-session-summary");
-        },
-        (element, next, current) => {
-          element.session = next.session;
-          element.gateway = current().gateway;
-          element.agents = current().agents.state.agentsList?.agents ?? [];
-          element.agentIdentity = current().agentIdentity;
-          element.presented = next.presented;
-        },
-      ),
-    mountDashboard: (container, props) =>
-      mount(
-        container,
-        props,
-        async () => {
-          await import("./control-ui-dashboard.tsx");
-          return document.createElement("openclaw-plugin-session-dashboard");
-        },
-        (element, next, current) => {
-          const snapshot = current().gateway.snapshot;
-          const access = readGatewayOperatorAccess(snapshot);
-          element.session = next.session;
-          element.client = snapshot.client;
-          element.connected = snapshot.phase === "connected";
-          element.canMutate = next.canMutate && access.canWrite;
-          element.canGrant = next.canGrant && access.canGrantApprovals;
-          element.presented = next.presented ?? true;
-        },
-      ),
+      }),
+    ),
+    mountSessionSummary: component(
+      "openclaw-plugin-session-summary",
+      () => import("./control-ui-session-summary.tsx"),
+      (next, current) => ({
+        "prop:session": next.session,
+        "prop:gateway": current().gateway,
+        "prop:agents": current().agents.state.agentsList?.agents ?? [],
+        "prop:agentIdentity": current().agentIdentity,
+        "prop:presented": next.presented,
+      }),
+      undefined,
+      (context) => [sharedAgentsProjection(context.agents)],
+    ),
+    mountDashboard: component(
+      "openclaw-plugin-session-dashboard",
+      () => import("./control-ui-dashboard.tsx"),
+      (next, current) => {
+        const snapshot = current().gateway.snapshot;
+        const access = readGatewayOperatorAccess(snapshot);
+        return {
+          "prop:session": next.session,
+          "prop:client": snapshot.client,
+          "prop:connected": snapshot.phase === "connected",
+          "prop:canMutate": next.canMutate && access.canWrite,
+          "prop:canGrant": next.canGrant && access.canGrantApprovals,
+          "prop:presented": next.presented ?? true,
+        };
+      },
+      undefined,
+      (context) => [context.gateway],
+    ),
   };
 }

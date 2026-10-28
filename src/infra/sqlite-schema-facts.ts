@@ -234,12 +234,13 @@ function trackSchemaChanges(
     const newSnapshot = snapshot && snapshot !== owner.snapshot && !owner.capturing;
     if (newSnapshot) {
       if (
-        !owner.transactionCatalogBound &&
         database.isTransaction &&
-        owner.transactionRead &&
+        (owner.transactionRead || owner.transactionCatalogBound) &&
         owner.processRevision !== getSqliteDatabaseSchemaRevision(database)
       ) {
-        invalidate(owner);
+        if (!owner.transactionCatalogBound) {
+          invalidate(owner);
+        }
         owner.transactionalFacts = true;
       } else {
         // The pin marker precedes its first native step. Adopt committed facts now;
@@ -334,7 +335,7 @@ function trackSchemaChanges(
           owner.transactionCatalogBound = true;
         }
       },
-      finish: (succeeded, abandoned) => {
+      finish: (succeeded, abandoned, noEffect) => {
         if (iterator && owner.unmanagedSnapshots.delete(iterator) && owner.iteratorFacts) {
           invalidate(owner);
           owner.iteratorFacts = false;
@@ -406,7 +407,7 @@ function trackSchemaChanges(
         );
         // A parked read cursor cannot retain custody of a settled sibling statement's write.
         if (owner.mutationDepth === 0 && !database.isTransaction) {
-          finishSqliteDatabaseWrite(database);
+          finishSqliteDatabaseWrite(database, noEffect);
         }
         // A control batch may open a transaction and read before returning, even on error.
         owner.transactionRead ||= database.isTransaction && Boolean(control && !control.single);
@@ -465,7 +466,9 @@ export function readSqliteNativeMutationRevision(database: EngineConnection): nu
 /** Derived caches may retain reads from a tracked transaction until its first mutation. */
 export function hasUncommittedSqliteWrites(database: EngineConnection): boolean {
   if (isPostgresSqlConnection(database)) {
-    return database.isTransaction;
+    // PostgreSQL read-only snapshots are cacheable; only writable transaction ownership
+    // invalidates derived facts. The scope is installed after the read-only BEGIN.
+    return database.isTransaction && !postgresReadSnapshots.has(database);
   }
   const owner = owners.get(database);
   if (owner) {
@@ -696,10 +699,11 @@ export function getAdmittedSqliteSchemaFacts(
     return undefined;
   }
   const snapshot = getSqlitePinnedReadSnapshot(database);
+  // A bound catalog that predates a sibling's DDL is historical once its facts are
+  // invalidated: recapturing it must neither borrow nor publish shared facts.
   const unknownSnapshot =
     (database.isTransaction &&
-      owner.transactionRead &&
-      !owner.transactionCatalogBound &&
+      (owner.transactionRead || owner.transactionCatalogBound) &&
       owner.processRevision !== getSqliteDatabaseSchemaRevision(database)) ||
     owner.unmanagedSnapshots.size > 0;
   const scopeChanged = observeSchemaLifetime(database, owner, snapshot);

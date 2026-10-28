@@ -7,14 +7,19 @@ export const agentDatabaseMaintenanceAuthority = new AsyncLocalStorage<{
   assertScopeCurrent?: () => void;
 }>();
 
+export class AgentDatabaseMaintenanceRequiredError extends Error {
+  override name = "AgentDatabaseMaintenanceRequiredError";
+}
+
 /** Revalidate the held lease, including immediately before committing a versioned rebuild. */
 export function assertAgentDatabaseMaintenanceAuthority(
   expected?: OpenClawStateLeaseContext,
 ): void {
   const authority = agentDatabaseMaintenanceAuthority.getStore()?.authority;
   if (!authority || (expected && authority !== expected)) {
-    throw new Error(
-      "Agent identity migration requires stopped-writer maintenance; stop active agents and run openclaw doctor --fix.",
+    const ErrorType = authority ? Error : AgentDatabaseMaintenanceRequiredError;
+    throw new ErrorType(
+      "Agent database migration requires stopped-writer maintenance; stop active agents and run openclaw doctor --fix.",
     );
   }
   authority.assertOwned();

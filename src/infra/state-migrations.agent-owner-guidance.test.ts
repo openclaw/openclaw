@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createAgentDatabaseInspectionRefusal } from "../state/agent-database-admission.js";
 import { withAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
@@ -9,94 +9,67 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { assertOpenClawDatabasesReady } from "../state/openclaw-database-preflight.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { withEnvAsync } from "../test-utils/env.js";
 import { migrateLegacyMediaPersistence } from "./state-migrations.media-persistence.js";
 import {
   createLegacyStateMigrationStepReceipt,
   DoctorStateMigrationRefusalError,
 } from "./state-migrations.messages.js";
+import { migrationStepInput } from "./state-migrations.step.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
+  vi.unstubAllEnvs();
 });
 
 it.each([
   { agentId: "worker", profile: undefined },
   { agentId: "a".repeat(64), profile: "p".repeat(64) },
-])(
-  "prints intact recovery commands for corrupt $agentId in Gateway and Doctor",
-  async ({ agentId, profile }) => {
-    await withEnvAsync(
-      { OPENCLAW_PROFILE: profile, OPENCLAW_CONTAINER_HINT: undefined },
-      async () => {
-        const env = { OPENCLAW_STATE_DIR: tempDirs.make("agent-database-recovery-") };
-        const pathname = openOpenClawAgentDatabase({ agentId, env }).path;
-        closeOpenClawAgentDatabasesForTest();
-        closeOpenClawStateDatabaseForTest();
-        const damaged = fs.readFileSync(pathname);
-        damaged.write("XXXXXXXXX", 0);
-        fs.writeFileSync(pathname, damaged);
-        const command = `openclaw${profile ? ` --profile ${profile}` : ""} doctor --session-sqlite recover --session-sqlite-agent ${agentId}`;
-        await withAgentDatabaseStartupAdmission(
-          async () => {
-            await expect
-              .soft(
-                assertOpenClawDatabasesReady({
-                  env,
-                  operation: "gateway-startup",
-                  config: {
-                    agents: { entries: { [agentId]: {} }, defaults: { systemAgent: { agentId } } },
-                  },
-                }),
-              )
-              .rejects.toThrow(command);
-          },
-          { deferInspections: false },
-        );
-        const result = await migrateLegacyMediaPersistence({ env });
-        const receipt = createLegacyStateMigrationStepReceipt(
-          {
-            id: "media-persistence",
-            phase: "shared",
-            source: [],
-            target: [],
-            requiredness: "required",
-            reversibility: "checkpoint-required",
-          },
-          result,
-        );
-        expect(receipt.outcome).toBe("refused");
-        expect.soft(new DoctorStateMigrationRefusalError([receipt]).message).toContain(command);
-        expect(fs.readFileSync(pathname)).toEqual(damaged);
-      },
-    );
-  },
-);
+])("reports corrupt $agentId recovery in Gateway and Doctor", async ({ agentId, profile }) => {
+  vi.stubEnv("OPENCLAW_PROFILE", profile);
+  vi.stubEnv("OPENCLAW_CONTAINER_HINT", undefined);
+  const env = { OPENCLAW_STATE_DIR: tempDirs.make("agent-database-recovery-") };
+  const pathname = openOpenClawAgentDatabase({ agentId, env }).path;
+  closeOpenClawAgentDatabasesForTest();
+  closeOpenClawStateDatabaseForTest();
+  const damaged = fs.readFileSync(pathname);
+  damaged.write("XXXXXXXXX", 0);
+  fs.writeFileSync(pathname, damaged);
+  const command = `openclaw${profile ? ` --profile ${profile}` : ""} doctor --session-sqlite recover --session-sqlite-agent ${agentId}`;
+  const config = { agents: { entries: { [agentId]: {} }, defaults: { systemAgent: { agentId } } } };
+  await withAgentDatabaseStartupAdmission(
+    () =>
+      expect
+        .soft(assertOpenClawDatabasesReady({ env, operation: "gateway-startup", config }))
+        .rejects.toThrow(command),
+    { deferInspections: false },
+  );
+  const receipt = createLegacyStateMigrationStepReceipt(
+    migrationStepInput("media-persistence", "required", "checkpoint-required"),
+    await migrateLegacyMediaPersistence({ env }),
+  );
+  expect(receipt.outcome).toBe("refused");
+  expect.soft(new DoctorStateMigrationRefusalError([receipt]).message).toContain(command);
+  expect(fs.readFileSync(pathname)).toEqual(damaged);
+});
 
+const nativeError = (fields: object) => Object.assign(new Error("native failure"), fields);
 it.each([
-  { cause: Object.assign(new Error("native failure"), { errcode: 11 }), recover: true },
-  { cause: Object.assign(new Error("native failure"), { errcode: 267 }), recover: true },
-  { cause: Object.assign(new Error("native failure"), { code: "SQLITE_NOTADB" }), recover: true },
-  { cause: Object.assign(new Error("bad page"), { name: "SqliteIntegrityError" }), recover: true },
-  { cause: Object.assign(new Error("native failure"), { errcode: 5 }), recover: false },
-  { cause: Object.assign(new Error("native failure"), { errcode: 13 }), recover: false },
-  {
-    cause: Object.assign(new Error("check unavailable"), {
-      name: "SqliteIntegrityError",
-      cause: Object.assign(new Error("database is locked"), { errcode: 5 }),
-    }),
-    recover: false,
-  },
-])("selects recovery=$recover from wrapped $cause", ({ cause, recover }) => {
+  [{ errcode: 11 }, true],
+  [{ errcode: 267 }, true],
+  [{ code: "SQLITE_NOTADB" }, true],
+  [{ name: "SqliteIntegrityError" }, true],
+  [{ errcode: 5 }, false],
+  [{ errcode: 13 }, false],
+  [{ name: "SqliteIntegrityError", cause: nativeError({ errcode: 5 }) }, false],
+] as const)("selects recovery from wrapped %j", (fields, recover) => {
   const refusal = createAgentDatabaseInspectionRefusal({
     agentId: "worker",
     paths: [],
     reason: "inspection failed",
-    cause: new Error("inspection failed", { cause }),
+    cause: new Error("inspection failed", { cause: nativeError(fields) }),
   });
-  expect(
-    refusal.repairHint.includes("--session-sqlite recover --session-sqlite-agent worker"),
-  ).toBe(recover);
+  const recoveryHint = "--session-sqlite recover --session-sqlite-agent worker";
+  expect(refusal.repairHint.includes(recoveryHint)).toBe(recover);
 });

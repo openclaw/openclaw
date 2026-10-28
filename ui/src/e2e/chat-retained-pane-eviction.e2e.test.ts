@@ -4,6 +4,7 @@ import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { getInitialHistoryRequests } from "./chat-initial-history.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Retained chat pane eviction" });
@@ -66,7 +67,7 @@ suite.define(() => {
 
       await select(keys[1]);
       await activePane.getByText(fullReply, { exact: true }).waitFor();
-      expect(await gateway.getRequests("chat.startup", { sessionKey: keys[1] })).toHaveLength(1);
+      expect(await getInitialHistoryRequests(gateway, keys[1])).toHaveLength(1);
       expect(await gateway.getRequests("chat.message.get", { messageId })).toHaveLength(1);
       await select(keys[2]);
       await activePane.getByText("Conversation 3 reply.", { exact: true }).waitFor();
@@ -86,7 +87,7 @@ suite.define(() => {
           await takeControlUiViewportScreenshot(page, page.locator(".shell"), [activePane]),
         );
       }
-      expect(await gateway.getRequests("chat.startup", { sessionKey: keys[1] })).toHaveLength(1);
+      expect(await getInitialHistoryRequests(gateway, keys[1])).toHaveLength(1);
       expect(await gateway.getRequests("chat.message.get", { messageId })).toHaveLength(1);
     });
   });

@@ -44,38 +44,9 @@ export function createPluginMcpLogin(
     return dialog.state().phase !== "idle";
   }
 
-  function select(pluginId: string | null) {
-    if (currentSelection && currentSelection.pluginId !== pluginId) {
-      reset();
-    }
-  }
-
   function reset() {
     currentSelection = null;
     dialog.reset();
-  }
-
-  async function start(serverName: string): Promise<void> {
-    const scope = gateway.capture();
-    const detail = options.getDetail();
-    if (
-      !scope ||
-      !detail ||
-      !options.canSignIn() ||
-      busy() ||
-      !detail.inspection?.mcpAuth?.some(
-        (entry) => entry.serverName === serverName && entry.state !== "authorized",
-      )
-    ) {
-      return;
-    }
-    const selection = { pluginId: detail.pluginId, scope };
-    currentSelection = selection;
-    dialog.runner.prepareSignIn("oauth", options.getName(detail.pluginId) ?? serverName);
-    const completion = await dialog.runner.startMcpLogin(serverName);
-    if (selection === currentSelection) {
-      await complete(completion);
-    }
   }
 
   async function complete(completion: ModelSetupWizardCompletion | null): Promise<void> {
@@ -102,8 +73,33 @@ export function createPluginMcpLogin(
     get busy() {
       return busy();
     },
-    select,
+    select(pluginId: string | null) {
+      if (currentSelection && currentSelection.pluginId !== pluginId) {
+        reset();
+      }
+    },
     reset,
-    start,
+    async start(serverName: string): Promise<void> {
+      const scope = gateway.capture();
+      const detail = options.getDetail();
+      if (
+        !scope ||
+        !detail ||
+        !options.canSignIn() ||
+        busy() ||
+        !detail.inspection?.mcpAuth?.some(
+          (entry) => entry.serverName === serverName && entry.state !== "authorized",
+        )
+      ) {
+        return;
+      }
+      const selection = { pluginId: detail.pluginId, scope };
+      currentSelection = selection;
+      dialog.runner.prepareSignIn("oauth", options.getName(detail.pluginId) ?? serverName);
+      const completion = await dialog.runner.startMcpLogin(serverName);
+      if (selection === currentSelection) {
+        await complete(completion);
+      }
+    },
   };
 }

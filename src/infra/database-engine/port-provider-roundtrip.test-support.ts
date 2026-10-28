@@ -1,43 +1,29 @@
 import assert from "node:assert/strict";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { Client } from "pg";
 import {
-  exportPostgresBackup,
   fingerprintPostgresDatabase,
   restorePostgresBackup,
 } from "../../snapshot/database-backup-core.worker.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
-import { admitDatabasePortDescriptor } from "./port-descriptor.js";
+import { portBackupFixture } from "./port-backup.test-support.js";
 import { fixtureDescriptor } from "./port-provider-fixture.test-support.js";
-import {
-  inspectDatabasePort,
-  materializeDatabasePort,
-  migrateDatabasePortSource,
-} from "./port.worker.js";
+import { inspectDatabasePort, migrateDatabasePortSource } from "./port.worker.js";
 
 export async function runProviderRoundtrip(client: Client, directory: string) {
   const scope = { assertCurrent: () => {} };
   const descriptor = fixtureDescriptor();
   const sourcePath = path.join(directory, "source.sqlite");
   const privatePath = path.join(directory, "private.sqlite");
-  const namespace = `synthetic_${randomUUID().replaceAll("-", "")}`;
-  const namespaces = new Set([namespace]);
-  const storeId = randomUUID();
-  const timings: Record<string, number> = {};
-  const hash = async (file: string) =>
+  const fixture = portBackupFixture(client, directory, descriptor);
+  const { namespace, storeId, postgres, query, file } = fixture;
+  const started = performance.now();
+  const hash = async (source: string) =>
     createHash("sha256")
-      .update(await fs.readFile(file))
+      .update(await fs.readFile(source))
       .digest("hex");
-  async function timed<T>(phase: string, run: () => Promise<T>) {
-    const start = performance.now();
-    try {
-      return await run();
-    } finally {
-      timings[phase] = Math.round(performance.now() - start);
-    }
-  }
 
   // The one source exercises the owner migration on its private copy.
   {
@@ -57,9 +43,7 @@ export async function runProviderRoundtrip(client: Client, directory: string) {
   }
   const original = await hash(sourcePath);
   await fs.copyFile(sourcePath, privatePath);
-  const migrated = await timed("private migration", () =>
-    migrateDatabasePortSource(privatePath, descriptor, 1, scope.assertCurrent),
-  );
+  const migrated = await migrateDatabasePortSource(privatePath, descriptor, 1, scope.assertCurrent);
   assert.equal(await hash(sourcePath), original);
   {
     using db = openNodeSqliteDatabase(privatePath);
@@ -68,83 +52,46 @@ export async function runProviderRoundtrip(client: Client, directory: string) {
   }
 
   try {
-    const staged = await timed("SQLite to PostgreSQL", async () => {
-      using source = openNodeSqliteDatabase(privatePath, { readOnly: true, readBigInts: true });
-      return await materializeDatabasePort({
-        source: { engine: "sqlite", db: source },
-        destination: { engine: "postgres", db: client, namespace },
-        descriptor,
-        storeId,
-        ...scope,
-      });
-    });
+    const staged = await fixture.forward(privatePath);
     assert.deepEqual(staged, migrated);
     assert.equal(staged.tables.port_items?.rows, 1);
     assert.equal(staged.tables.port_notes?.rows, 1);
     assert.equal(staged.tables.port_projection, undefined);
-    assert.deepEqual((await client.query(`SELECT * FROM "${namespace}".port_projection`)).rows, [
+    assert.deepEqual(await query(`SELECT * FROM "${namespace}".port_projection`), [
       { id: "first", value: "RETAINED" },
     ]);
 
-    await timed("PostgreSQL catalog refusals", async () => {
-      for (const [create, drop] of [
-        [
-          `CREATE VIEW "${namespace}".surprise AS SELECT id FROM "${namespace}".port_items`,
-          `DROP VIEW "${namespace}".surprise`,
-        ],
-        [
-          `CREATE TRIGGER surprise BEFORE INSERT ON "${namespace}".port_items FOR EACH ROW EXECUTE FUNCTION "${namespace}".port_item_edits_fn()`,
-          `DROP TRIGGER surprise ON "${namespace}".port_items`,
-        ],
-        [
-          `CREATE TRIGGER port_item_edits BEFORE INSERT ON "${namespace}".port_projection FOR EACH ROW EXECUTE FUNCTION "${namespace}".port_item_edits_fn()`,
-          `DROP TRIGGER port_item_edits ON "${namespace}".port_projection`,
-        ],
-      ] as const) {
-        await client.query(create);
-        try {
-          await assert.rejects(
-            inspectDatabasePort({ engine: "postgres", db: client, namespace }, descriptor, storeId),
-            /Unknown PostgreSQL trigger or view/,
-          );
-        } finally {
-          await client.query(drop);
-        }
+    for (const [create, drop] of [
+      [
+        `CREATE VIEW "${namespace}".surprise AS SELECT id FROM "${namespace}".port_items`,
+        `DROP VIEW "${namespace}".surprise`,
+      ],
+      [
+        `CREATE TRIGGER surprise BEFORE INSERT ON "${namespace}".port_items FOR EACH ROW EXECUTE FUNCTION "${namespace}".port_item_edits_fn()`,
+        `DROP TRIGGER surprise ON "${namespace}".port_items`,
+      ],
+      [
+        `CREATE TRIGGER port_item_edits BEFORE INSERT ON "${namespace}".port_projection FOR EACH ROW EXECUTE FUNCTION "${namespace}".port_item_edits_fn()`,
+        `DROP TRIGGER port_item_edits ON "${namespace}".port_projection`,
+      ],
+    ] as const) {
+      await client.query(create);
+      try {
+        await assert.rejects(
+          inspectDatabasePort(postgres, descriptor, storeId),
+          /Unknown PostgreSQL trigger or view/,
+        );
+      } finally {
+        await client.query(drop);
       }
-    });
-
-    const backupDirectory = path.join(directory, "backup");
-    await fs.mkdir(backupDirectory);
-    {
-      using anchor = openNodeSqliteDatabase(path.join(backupDirectory, "anchor.sqlite"));
-      anchor.exec(
-        "CREATE TABLE openclaw_engine_anchor (store_id TEXT NOT NULL, engine TEXT NOT NULL, schema TEXT NOT NULL)",
-      );
-      anchor
-        .prepare("INSERT INTO openclaw_engine_anchor VALUES (?, 'postgres', ?)")
-        .run(storeId, namespace);
     }
-    const anchor = { engine: "postgres" as const, storeId, namespace };
-    const admitted = await admitDatabasePortDescriptor(
-      { engine: "postgres", db: client, namespace },
-      descriptor,
-    );
-    const manifest = await timed("backup and PostgreSQL to SQLite", () =>
-      exportPostgresBackup({
-        client,
-        descriptor: admitted,
-        anchor,
-        sourcePath: privatePath,
-        directory: backupDirectory,
-        profile: "exact",
-        ...scope,
-      }),
-    );
+
+    const manifest = await fixture.export(privatePath);
     assert.equal(manifest.source.owner, "synthetic");
     assert.deepEqual(manifest.activeFragments, ["labels", "notes"]);
     assert.deepEqual(manifest.verification, staged);
     const imageProbe = path.join(directory, "image-probe.sqlite");
-    await fs.copyFile(path.join(backupDirectory, "database.sqlite"), imageProbe);
+    await fs.copyFile(file("backup/database.sqlite"), imageProbe);
     {
       using db = openNodeSqliteDatabase(imageProbe);
       assert.deepEqual(
@@ -163,20 +110,15 @@ export async function runProviderRoundtrip(client: Client, directory: string) {
 
     const restoredPath = path.join(directory, "restored-anchor.sqlite");
     const restore = {
-      client,
-      descriptor,
+      ...fixture.backup,
       manifest,
-      directory: backupDirectory,
       anchorPath: restoredPath,
-      profile: "exact" as const,
-      ...scope,
     };
     await assert.rejects(
       restorePostgresBackup({ ...restore, manifest: { ...manifest, activeFragments: ["labels"] } }),
       /Port source fragments differ from the recorded backup/,
     );
-    const restored = await timed("restore", () => restorePostgresBackup(restore));
-    namespaces.add(restored.namespace);
+    const restored = await fixture.restore(manifest, restoredPath);
     {
       using db = openNodeSqliteDatabase(restoredPath);
       assert.deepEqual(
@@ -184,42 +126,29 @@ export async function runProviderRoundtrip(client: Client, directory: string) {
         { engine: "postgres", store_id: storeId, schema: restored.namespace },
       );
     }
-    assert.deepEqual(
-      (await client.query(`SELECT * FROM "${restored.namespace}".port_notes`)).rows,
-      [{ id: "note", value: "note value" }],
-    );
-    assert.deepEqual(
-      (await client.query(`SELECT * FROM "${restored.namespace}".port_projection`)).rows,
-      [{ id: "first", value: "RETAINED" }],
-    );
+    assert.deepEqual(await query(`SELECT * FROM "${restored.namespace}".port_notes`), [
+      { id: "note", value: "note value" },
+    ]);
+    assert.deepEqual(await query(`SELECT * FROM "${restored.namespace}".port_projection`), [
+      { id: "first", value: "RETAINED" },
+    ]);
     const fingerprintInput = {
       client,
       descriptor,
-      anchor: { ...anchor, namespace: restored.namespace },
+      anchor: { engine: "postgres" as const, storeId, namespace: restored.namespace },
     };
-    const fingerprint = await timed("fingerprint before write", () =>
-      fingerprintPostgresDatabase(fingerprintInput),
-    );
+    const fingerprint = await fingerprintPostgresDatabase(fingerprintInput);
     await client.query(
       `INSERT INTO "${restored.namespace}".port_items VALUES ('probe', 'probe', 0)`,
     );
     assert.deepEqual(
-      (
-        await client.query(
-          `SELECT edits FROM "${restored.namespace}".port_items WHERE id = 'probe'`,
-        )
-      ).rows,
+      await query(`SELECT edits FROM "${restored.namespace}".port_items WHERE id = 'probe'`),
       [{ edits: "1" }],
     );
-    assert.notEqual(
-      await timed("fingerprint after write", () => fingerprintPostgresDatabase(fingerprintInput)),
-      fingerprint,
-    );
+    assert.notEqual(await fingerprintPostgresDatabase(fingerprintInput), fingerprint);
     assert.equal(await hash(sourcePath), original);
-    return timings;
+    return { total: Math.round(performance.now() - started) };
   } finally {
-    for (const owned of namespaces) {
-      await client.query(`DROP SCHEMA IF EXISTS "${owned}" CASCADE`);
-    }
+    await fixture.cleanup();
   }
 }

@@ -1,11 +1,14 @@
 import { resolveSubagentLabel } from "../../../auto-reply/reply/subagents-utils.js";
 import { prepareSessionGenerationFacts } from "../../../config/sessions/session-delivery-generation.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { getActiveAgentRunDelegatedAuthority } from "../../../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { getRpcSourceForGateway } from "../../../sessions/session-controller.rpc-sources.js";
 import type { SessionControllerStopCapture } from "../../../sessions/session-controller.stop.js";
+import { retireAcceptedSessionSpawnCompletionForRun } from "../../accepted-session-spawn.js";
+import { getGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
 import { captureSubagentCommands } from "./subagent-control-commands.js";
 import { mutateSubagentRunForKill } from "./subagent-control-kill-runtime.js";
@@ -26,7 +29,6 @@ import {
 } from "./subagent-control-session.js";
 import type {
   KillScope,
-  KillPublicationPreparation,
   ResolvedSubagentController,
   SubagentAdminKillParams,
   SubagentAdminKillResult,
@@ -588,7 +590,7 @@ export async function killSubagentRunAdmin(
     prepareRead?: () => Promise<void> | undefined;
     beforeSessionKill?: () => boolean | Promise<boolean>;
     requiredSessionId?: string;
-    preparePublication?: KillPublicationPreparation<SubagentAdminKillResult>;
+    onSnapshot?: (result: SubagentAdminKillResult) => void;
   },
 ): Promise<SubagentAdminKillResult> {
   const publish = (result: SubagentAdminKillResult): SubagentAdminKillResult => {
@@ -712,13 +714,33 @@ export async function killSubagentRunAdmin(
       }
       const targetState = ownsOutcome ? resolveSubagentKillTargetState(tree.entry) : undefined;
       const { errors } = collectKillErrors([tree], tree);
+      const caller = getGatewayToolCallerIdentity();
+      const instance = caller?.operationalRunInstance;
+      if (
+        errors.length === 0 &&
+        targetState?.state === "terminal" &&
+        targetState.task.status === "cancelled" &&
+        caller &&
+        instance &&
+        instance.runId === tree.entry.requesterTurnRunId &&
+        caller.sessionKey === tree.entry.requesterSessionKey &&
+        caller.agentId === authority.requesterAgentId &&
+        getActiveAgentRunDelegatedAuthority(instance)?.operationalRunInstance === instance
+      ) {
+        // Reconcile only the final acknowledged cancellation, after native cleanup
+        // and outcome ownership checks, before its registry witness is released.
+        retireAcceptedSessionSpawnCompletionForRun(instance, {
+          runId: tree.entry.taskRunId ?? tree.entry.runId,
+          childSessionKey: tree.entry.childSessionKey,
+        });
+      }
       return {
         ...result,
         ...(targetState ? { targetState } : {}),
         ...(errors.length > 0 ? { error: errors.join("; ") } : {}),
       };
     },
-    control?.preparePublication,
+    control?.onSnapshot,
     publish,
   );
 }

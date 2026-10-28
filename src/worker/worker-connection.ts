@@ -11,6 +11,11 @@ import type {
   WorkerComputerParams,
   WorkerComputerResponseFrame,
 } from "../../packages/gateway-protocol/src/schema/worker-computer.js";
+import {
+  WORKER_EXEC_APPROVAL_PROTOCOL_FEATURE,
+  type WorkerExecApprovalParams,
+  type WorkerExecApprovalResponseFrame,
+} from "../../packages/gateway-protocol/src/schema/worker-exec-approval.js";
 import type {
   WorkerGatewayToolInvokeParams,
   WorkerGatewayToolCancelParams,
@@ -21,8 +26,10 @@ import type {
 import { WORKER_PROTOCOL_MAX_CONCURRENT_TOOLS } from "../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { computeBackoff, sleepWithAbort, type BackoffPolicy } from "../infra/backoff.js";
+import { DEFAULT_EXEC_APPROVAL_TIMEOUT_MS } from "../infra/exec-approvals-core.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
+import { createPendingPromiseTracker } from "../shared/pending-promises.js";
 import {
   connectWorkerConnectionAttempt,
   isRetryableWorkerCloseReason,
@@ -58,10 +65,7 @@ const DEFAULT_RECONNECT_BACKOFF: BackoffPolicy = {
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 
 export class WorkerConnection {
-  readonly rpc: Pick<
-    WorkerConnectionFrameDispatcher,
-    "request" | "onInferenceEvent" | "onInferenceTerminal"
-  >;
+  readonly rpc: Pick<WorkerConnectionFrameDispatcher, "request" | "onInferenceFrame">;
   private stateValue: WorkerConnectionState = { kind: "idle" };
   private readiness: Deferred<WorkerHelloOk> | undefined;
   private readonly readyListeners = new Set<(hello: WorkerHelloOk) => void>();
@@ -76,6 +80,7 @@ export class WorkerConnection {
   private reconnectPromise: Promise<void> | undefined;
   private heartbeatTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly heartbeatWork = new Set<Promise<void>>();
+  private readonly trackHeartbeat = createPendingPromiseTracker(this.heartbeatWork);
   private readonly admissionTimeoutMs: number;
   private readonly admissionDeadlineMs: number;
   private readonly requestTimeoutMs: number;
@@ -216,6 +221,34 @@ export class WorkerConnection {
     return this.frames.request("computer", params, undefined, params.timeoutMs);
   }
 
+  captureExecApprovalAuthority(): () => void {
+    const generation = this.generation;
+    const assertCurrent = () => {
+      if (
+        this.stateValue.kind !== "ready" ||
+        this.generation !== generation ||
+        !this.stateValue.hello.protocolFeatures.includes(WORKER_EXEC_APPROVAL_PROTOCOL_FEATURE)
+      ) {
+        throw new WorkerConnectionInterruptedError(
+          "Worker exec approval lost Gateway admission. Reconnect to an updated Gateway and retry.",
+        );
+      }
+    };
+    assertCurrent();
+    return assertCurrent;
+  }
+
+  requestExecApproval(params: WorkerExecApprovalParams): Promise<WorkerExecApprovalResponseFrame> {
+    // Decisions never replay across connection replacement; the caller must start a new exec.
+    this.captureExecApprovalAuthority()();
+    return this.frames.request(
+      "exec-approval",
+      params,
+      undefined,
+      Math.max(this.requestTimeoutMs, DEFAULT_EXEC_APPROVAL_TIMEOUT_MS + 10_000),
+    );
+  }
+
   private async requestReplayableOperation<T>(
     request: () => Promise<T>,
     signal?: AbortSignal,
@@ -237,11 +270,11 @@ export class WorkerConnection {
   }
 
   private async connectUntilReady(): Promise<WorkerHelloOk> {
-    const startedAt = Date.now();
+    const startedAt = performance.now();
     let attempt = 0;
     let lastFailure: Error | undefined;
     while (!this.isTerminal()) {
-      let remainingMs = this.admissionDeadlineMs - (Date.now() - startedAt);
+      let remainingMs = this.admissionDeadlineMs - (performance.now() - startedAt);
       if (remainingMs <= 0) {
         throw this.failAdmissionDeadline(attempt, lastFailure);
       }
@@ -258,7 +291,7 @@ export class WorkerConnection {
         } catch (error) {
           throw this.isTerminal() ? this.terminalError() : toStructuredErrorObject(error);
         }
-        remainingMs = this.admissionDeadlineMs - (Date.now() - startedAt);
+        remainingMs = this.admissionDeadlineMs - (performance.now() - startedAt);
         if (remainingMs <= 0) {
           throw this.failAdmissionDeadline(attempt, lastFailure);
         }
@@ -372,12 +405,7 @@ export class WorkerConnection {
     this.heartbeatTimer = setTimeout(() => {
       this.heartbeatTimer = undefined;
       // Reconnect can start a newer heartbeat while an older callback still settles writes.
-      const work = this.sendHeartbeat();
-      this.heartbeatWork.add(work);
-      void work.then(
-        () => this.heartbeatWork.delete(work),
-        () => this.heartbeatWork.delete(work),
-      );
+      void this.trackHeartbeat(this.sendHeartbeat());
     }, intervalMs);
     this.heartbeatTimer.unref?.();
   }

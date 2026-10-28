@@ -6,22 +6,23 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createSqliteAcpEventLedger } from "../acp/event-ledger.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import {
-  readSkillUsageInDatabase,
-  recordSkillUsageInDatabase,
+  readSkillUsageInDatabase as readUsage,
+  recordSkillUsageInDatabase as recordUsage,
 } from "../skills/workshop/skill-usage.kernel.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import {
-  closeOpenClawStateDatabaseAsync,
-  openOpenClawStateDatabase,
-  repairOpenClawStateDatabaseSchema,
-  runOpenClawStateWriteTransaction,
+  closeOpenClawStateDatabaseAsync as closeState,
+  openOpenClawStateDatabase as openState,
+  repairOpenClawStateDatabaseSchema as repairState,
+  runOpenClawStateWriteTransaction as writeState,
 } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import {
-  readOpenClawStateLease,
-  renewOpenClawStateLeaseInTransaction,
+  readOpenClawStateLease as readLease,
+  renewOpenClawStateLeaseInTransaction as renewLease,
 } from "./openclaw-state-lease-store.js";
-import { assertSqliteMigrationScopePreserved } from "./sqlite-migration-scope.test-support.js";
+import { withStateMigrationBackupForTest as withBackup } from "./openclaw-state-schema.test-support.js";
+import { assertSqliteMigrationScopePreserved as assertScope } from "./sqlite-migration-scope.test-support.js";
 
 // v25 changed metadata; v26 changed only this table's physical layout.
 const legacySchema = readFileSync(
@@ -33,7 +34,7 @@ const legacySchema = readFileSync(
 );
 const directories = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(async () => {
-    await closeOpenClawStateDatabaseAsync();
+    await closeState();
     cleanup();
   });
 });
@@ -88,96 +89,86 @@ it.each(["runtime", "doctor"] as const)(
   "migrates v26 indexes through %s within scope and preserves subsequent owner writes",
   async (owner) => {
     const { options, pathname, before } = legacyDatabase();
-    using scope = new DatabaseSync(pathname);
-    const database = await assertSqliteMigrationScopePreserved(
-      scope,
-      [
-        "schema_meta",
-        "config_machine_state",
-        "github_publication_requests",
-        "github_personal_publication_requests",
-        "github_repository_publication_requests",
-        "acp_replay_events",
-        "skill_usage",
-        "state_leases",
-        "sqlite_stat1",
-        "sqlite_stat4",
-      ],
-      () => {
-        if (owner === "doctor") {
-          expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
-        }
-        return openOpenClawStateDatabase(options);
-      },
-    );
-    expect(database.db.prepare("PRAGMA user_version").get()).toEqual({
-      user_version: OPENCLAW_STATE_SCHEMA_VERSION,
-    });
-    expect(retained(database.db)).toEqual(before);
-    expect(indexes(database.db).map((index) => index.name)).toEqual(["idx_state_leases_owner"]);
-    expect(database.db.prepare("PRAGMA index_info(idx_state_leases_owner)").all()).toEqual([
-      { seqno: 0, cid: 2, name: "owner" },
-    ]);
-    expect(
-      database.db.prepare("SELECT name FROM sqlite_schema WHERE name = 'local_skill_name'").get(),
-    ).toEqual({ name: "local_skill_name" });
-
-    runOpenClawStateWriteTransaction((writer) => {
-      for (const ts of [200, 150]) {
-        recordSkillUsageInDatabase(writer, {
-          skillFile: "skill.md",
-          skillKey: "skill",
-          skillName: "Skill",
-          skillSource: "bundled",
-          agentId: "main",
-          ts,
-        });
-      }
-      expect(renewOpenClawStateLeaseInTransaction(writer.db, lease, 10000, undefined, 200)).toBe(
-        10200,
+    await withBackup(options, async () => {
+      using scope = new DatabaseSync(pathname);
+      const database = await assertScope(
+        scope,
+        `schema_meta config_machine_state github_publication_requests
+         github_personal_publication_requests github_repository_publication_requests
+         acp_replay_events skill_usage state_leases device_identities device_auth_tokens
+         gateway_origin_device_tokens exec_approvals_config local_workspace_projections
+         local_workspace_manifest_nodes local_workspace_source_path_sets local_workspace_tree_packs
+         sqlite_stat1 sqlite_stat4`.split(/\s+/),
+        () => {
+          if (owner === "doctor") {
+            expect(repairState(options).warnings).toEqual([]);
+          }
+          return openState(options);
+        },
       );
+      expect(database.db.prepare("PRAGMA user_version").get()).toEqual({
+        user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+      });
+      expect(retained(database.db)).toEqual(before);
+      expect(indexes(database.db).map((index) => index.name)).toEqual(["idx_state_leases_owner"]);
+      expect(database.db.prepare("PRAGMA index_info(idx_state_leases_owner)").all()).toEqual([
+        { seqno: 0, cid: 2, name: "owner" },
+      ]);
       expect(
-        renewOpenClawStateLeaseInTransaction(
-          writer.db,
-          { ...lease, owner: "other" },
-          10000,
-          undefined,
-          300,
-        ),
-      ).toBeUndefined();
-    }, options);
-    expect(readSkillUsageInDatabase(database, ["skill.md"])).toEqual([
-      { skillFile: "skill.md", useCount: 5, lastUsedAtMs: 200 },
-    ]);
-    expect(readOpenClawStateLease(database.db, lease)).toEqual({
-      owner: "owner",
-      createdAt: 100,
-      expiresAt: 10200,
-      heartbeatAt: 200,
-      payloadJson: "{}",
+        database.db.prepare("SELECT name FROM sqlite_schema WHERE name = 'local_skill_name'").get(),
+      ).toEqual({ name: "local_skill_name" });
+
+      writeState((writer) => {
+        for (const ts of [200, 150]) {
+          recordUsage(writer, {
+            skillFile: "skill.md",
+            skillKey: "skill",
+            skillName: "Skill",
+            skillSource: "bundled",
+            agentId: "main",
+            ts,
+          });
+        }
+        expect(renewLease(writer.db, lease, 10000, undefined, 200)).toBe(10200);
+        expect(
+          renewLease(writer.db, { ...lease, owner: "other" }, 10000, undefined, 300),
+        ).toBeUndefined();
+      }, options);
+      expect(readUsage(database, ["skill.md"])).toEqual([
+        { skillFile: "skill.md", useCount: 5, lastUsedAtMs: 200 },
+      ]);
+      expect(readLease(database.db, lease)).toEqual({
+        owner: "owner",
+        createdAt: 100,
+        expiresAt: 10200,
+        heartbeatAt: 200,
+        payloadJson: "{}",
+      });
+      const ledger = createSqliteAcpEventLedger(options);
+      await ledger.recordUpdate({
+        ...session,
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text: "after" },
+        },
+      });
+      const replay = await ledger.readReplay(session);
+      expect(replay.events.map((event) => [event.seq, event.update])).toEqual([
+        [1, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "before" } }],
+        [2, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "after" } }],
+      ]);
+      await closeState();
+      expect(await ledger.readReplay(session)).toEqual(replay);
     });
-    const ledger = createSqliteAcpEventLedger({ ...options, now: () => 200 });
-    await ledger.recordUpdate({
-      ...session,
-      update: {
-        sessionUpdate: "agent_message_chunk",
-        content: { type: "text", text: "after" },
-      },
-    });
-    const replay = await ledger.readReplay(session);
-    expect(replay.events.map((event) => [event.seq, event.update])).toEqual([
-      [1, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "before" } }],
-      [2, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "after" } }],
-    ]);
-    await closeOpenClawStateDatabaseAsync();
-    expect(await ledger.readReplay(session)).toEqual(replay);
   },
 );
 
 it("rolls back the exact indexes, rows and version if publication fails", async () => {
   const fixture = legacyDatabase(true);
-  expect(() => openOpenClawStateDatabase(fixture.options)).toThrow("fixture publication refusal");
-  await closeOpenClawStateDatabaseAsync();
+  await expect(withBackup(fixture.options, () => openState(fixture.options))).rejects.toThrow(
+    "fixture publication refusal",
+  );
+  await closeState();
   using db = new DatabaseSync(fixture.pathname, { readOnly: true });
   expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 26 });
   expect(retained(db)).toEqual(fixture.before);

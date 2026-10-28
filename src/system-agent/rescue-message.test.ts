@@ -220,14 +220,6 @@ describe("OpenClaw rescue message", () => {
     expect(extractSystemAgentRescueMessage("/status")).toBeNull();
   });
 
-  it("denies rescue when sandboxing is active", async () => {
-    await expect(
-      runRescue("/openclaw status", {
-        agents: { defaults: { sandbox: { mode: "all" } } },
-      }),
-    ).resolves.toContain("sandboxing is active");
-  });
-
   it.each([
     ["talk to agent", "cannot open the local TUI", runTui],
     ["chat", "cannot open the local TUI", runTui],

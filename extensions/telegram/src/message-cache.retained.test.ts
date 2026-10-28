@@ -205,9 +205,12 @@ describe("Telegram retained message history", () => {
     ).toEqual(["8", "9", "10", "99", "100", "101", "102"]);
   });
 
-  it("atomically promotes legacy roots once without trusting their embedded observations", async () => {
+  it("atomically promotes legacy roots and preserves embedded-only ancestry across database reopen", async () => {
     const { bounded, retained } = openStores();
-    const root = legacyRow(reply(9, message(8)));
+    const root = {
+      ...legacyRow(reply(9, photoMessage(8, "Original photo"), { message_thread_id: 77 })),
+      threadId: "77",
+    };
     await bounded.register(`${keyPrefix}9`, root);
     await bounded.register(`${keyPrefix}10`, legacyRow(message(10, { text: "Old copy" })));
     await retained.register(`${keyPrefix}0000000010`, {
@@ -228,29 +231,15 @@ describe("Telegram retained message history", () => {
     expect(await historyIds(cache)).toEqual(["10"]);
     expect(await get(cache, 8)).toBeNull();
     resetTelegramMessageCacheForTest();
+    resetPluginStateStoreForTests();
     const reopened = createCache();
     expect(await get(reopened, 9)).toMatchObject({ messageId: "9" });
     expect(await counts()).toEqual([1, 3]);
-    expect(await bounded.lookup(`other-scope:default:${chatId}:12`)).toBeUndefined();
-    expect(await retained.lookup(`other-scope:default:${chatId}:0000000012`)).toMatchObject({
+    const stores = openStores();
+    expect(await stores.bounded.lookup(`other-scope:default:${chatId}:12`)).toBeUndefined();
+    expect(await stores.retained.lookup(`other-scope:default:${chatId}:0000000012`)).toMatchObject({
       sourceMessage: { message_id: 12 },
     });
-    await record(reopened, message(9));
-    await record(reopened, message(20, { text: "/reset" }));
-    expect(await historyIds(reopened, { before: "20" })).toEqual(["9", "10"]);
-  });
-
-  it("preserves embedded-only reply ancestry after legacy promotion and database reopen", async () => {
-    const legacy = {
-      ...legacyRow(reply(9, photoMessage(8, "Original photo"), { message_thread_id: 77 })),
-      threadId: "77",
-    };
-    await openStores().bounded.register(`${keyPrefix}9`, legacy);
-    expect(await get(createCache(), 9)).toMatchObject({ messageId: "9" });
-    resetTelegramMessageCacheForTest();
-    resetPluginStateStoreForTests();
-
-    const reopened = createCache();
     const chain = await buildTelegramReplyChain({
       cache: reopened,
       accountId,
@@ -266,9 +255,10 @@ describe("Telegram retained message history", () => {
     expect(chain.map((node) => node.historyEligible)).toEqual([undefined, undefined]);
     expect(await history(reopened, { threadId: 77 })).toEqual({ messages: [], hasMore: false });
     expect(await get(reopened, 8)).toBeNull();
-    const { retained } = openStores();
-    expect(await counts()).toEqual([0, 1]);
-    expect(await retained.lookup(`${keyPrefix}0000000009`)).toEqual(legacy);
+    expect(await stores.retained.lookup(`${keyPrefix}0000000009`)).toEqual(root);
+    await record(reopened, message(9), { providerObservedThread: { scope: "none" } });
+    await record(reopened, message(20, { text: "/reset" }));
+    expect(await historyIds(reopened, { before: "20" })).toEqual(["9", "10"]);
   });
 
   it("recovers a committed promotion whose completion was interrupted", async () => {

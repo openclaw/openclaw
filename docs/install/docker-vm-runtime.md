@@ -49,6 +49,11 @@ plaintext in SQLite under `OPENCLAW_CONFIG_DIR`, including access, refresh, and
 ID-token values. Treat the config directory and its backups or copies as
 credentials.
 
+Use a persistent local disk for SQLite state, not an NFS, SMB, or CIFS mount.
+A Docker volume name alone does not guarantee local storage; check its backing
+driver. See [SQLite storage requirements](/install/docker/networking-and-storage#storage-and-persistence)
+for Doctor's network-storage warning and relocation guidance.
+
 The auth-profile secret directory contains only the local key used to recover
 legacy encrypted OAuth sidecar credentials. It must persist for that recovery
 path and remain separate from `OPENCLAW_CONFIG_DIR`, but it does not encrypt
@@ -207,6 +212,7 @@ For a source-built image:
 
 ```bash
 git pull --ff-only
+docker compose stop openclaw-gateway
 OPENCLAW_SKIP_ONBOARDING=1 ./scripts/docker/setup.sh
 docker compose run --rm openclaw-cli doctor --json
 ```
@@ -215,6 +221,10 @@ For a pinned or prebuilt image, update `OPENCLAW_IMAGE` to the intended tag or
 digest before rerunning the setup script. Routine image upgrades run startup-safe
 migrations against the mounted state; see [Upgrading container images](/install/docker#upgrading-container-images)
 for recovery when a migration cannot complete automatically.
+
+Keep a single Gateway on this state volume and retain a pre-upgrade backup.
+The old container must be stopped before the replacement's entrypoint runs
+Doctor; the same rule applies to [orchestrated rollouts](/install/docker#upgrading-container-images).
 
 ## Related
 

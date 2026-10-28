@@ -92,9 +92,6 @@ export async function readDoctorGatewayOwnerLease(
   if (!reply) {
     return undefined;
   }
-  if (!reply.ok || reply.type !== "gatewayOwnerLease.read") {
-    throw new Error("Unexpected Doctor Gateway owner lease read result");
-  }
   // The recorded process may have exited while the reader and its private snapshot settled.
   return reply.lease
     ? {
@@ -236,5 +233,6 @@ export function assertDoctorMaintenanceInspection(
   throw new DoctorMaintenanceRefusalError(
     `Doctor could not enter maintenance. Error: ${detail} ${guidance}`,
     { kind: "data-at-risk", reason: "gateway-state-unverified" },
+    { failureFacts: inspection.blockFailureFacts },
   );
 }

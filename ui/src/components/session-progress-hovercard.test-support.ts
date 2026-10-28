@@ -1,8 +1,8 @@
 import type { ProgressCard } from "@openclaw/gateway-protocol";
 import { vi } from "vitest";
+import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../../src/gateway/control-ui-contract.js";
 import type { ApplicationContext } from "../app/context.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
-import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
 import type { SidebarSessionHovercardRow } from "./app-sidebar-session-types.ts";
 import type { SessionProgressHovercardProvider } from "./session-progress-hovercard.runtime.tsx";
@@ -23,7 +23,7 @@ function subscriptions<T>() {
 
 export function createHovercard({
   sessionKey = "global",
-  card: initialCard,
+  card,
   holdProgress = false,
   rowDetails: initialRowDetails = {},
   triggerKind = "sidebar",
@@ -36,9 +36,8 @@ export function createHovercard({
   triggerKind?: "sidebar" | "markdown";
   browser?: boolean;
 } = {}) {
-  let selectedId = "research";
-  let card = initialCard;
   let rowDetails = initialRowDetails;
+  let selectedId = "research";
   let releaseProgress: (() => void) | undefined;
   const selection = subscriptions<ApplicationContext["agentSelection"]["state"]>();
   const sessions = subscriptions<void>();
@@ -62,15 +61,11 @@ export function createHovercard({
       if (card !== undefined) {
         return { card };
       }
+      const key = params.sessionKey?.startsWith("agent:")
+        ? params.sessionKey
+        : `agent:${params.agentId}:${params.sessionKey}`;
       return {
-        card: {
-          sessionKey: params.sessionKey?.startsWith("agent:")
-            ? params.sessionKey
-            : `agent:${params.agentId}:${params.sessionKey}`,
-          revision: 1,
-          updatedAt: 1,
-          markdown: `${owner} progress`,
-        },
+        card: { sessionKey: key, revision: 1, updatedAt: 1, markdown: `${owner} progress` },
       };
     },
   );
@@ -100,25 +95,11 @@ export function createHovercard({
       subscribe: selection.subscribe,
     },
   } as unknown as ApplicationContext;
-  if (browser) {
-    Object.assign(context, {
-      agents: {
-        state: {
-          agentsList: {
-            agents: [{ id: "research" }],
-            defaultId: "research",
-            mainKey: "main",
-          },
-        },
-      },
-    });
-    Object.assign(context.sessions, {
-      state: {
-        result: {
-          sessions: [{ key: sessionKey, displayName: "Synthetic provider session" }],
-        },
-      },
-    });
+  if (browser || triggerKind === "markdown") {
+    const agentsList = { agents: [{ id: "research" }], defaultId: "research", mainKey: "main" };
+    const result = { sessions: [{ key: sessionKey, displayName: "Synthetic provider session" }] };
+    Object.assign(context, { agents: { state: { agentsList } } });
+    Object.assign(context.sessions, { state: { result } });
   }
   const provider = document.createElement(
     "openclaw-session-progress-hovercard-provider",
@@ -131,14 +112,18 @@ export function createHovercard({
       agentId: browser ? "research" : selectedId,
       label: browser ? "Synthetic provider session" : `${selectedId} session`,
       kind: "direct",
+      hasAutomation: false,
+      hasActiveRun: false,
       ...(browser ? { lastMessagePreview: "Synthetic latest turn" } : {}),
       ...rowDetails,
     }),
   });
+  provider.lookupSidebarRow = sidebar.findSidebarHovercardRowByKey;
   sidebar.hidden = browser; // A registered real sidebar must not render in the browser fixture.
-  const row = Object.assign(document.createElement("div"), { className: "sidebar-recent-session" });
-  row.dataset.sessionKey = sessionKey;
-  if (browser) {
+  const row = Object.assign(document.createElement("div"), {
+    className: triggerKind === "markdown" ? "chat-thread" : "sidebar-recent-session",
+  });
+  if (browser && triggerKind !== "markdown") {
     row.style.cssText = "position:fixed;left:20px;top:80px;width:200px;height:32px";
   }
   const trigger = Object.assign(document.createElement("a"), {
@@ -147,28 +132,15 @@ export function createHovercard({
     href: browser ? "#synthetic-provider-session" : "#",
     textContent: browser ? "Synthetic provider session" : "Session",
   });
-  if (triggerKind === "markdown") {
-    trigger.dataset.sessionKey = sessionKey;
-    const thread = Object.assign(document.createElement("div"), { className: "chat-thread" });
-    thread.append(trigger);
-    provider.append(sidebar, thread);
-  } else {
-    row.append(trigger);
-    if (browser) {
-      provider.append(sidebar, row);
-    } else {
-      sidebar.append(row);
-      provider.append(sidebar);
-    }
-  }
-  const emitProgressChange = (revision = 2) =>
-    emit("progressCard.changed", { sessionKey, revision });
+  (triggerKind === "markdown" ? trigger : row).dataset.sessionKey = sessionKey;
+  row.append(trigger);
+  provider.append(sidebar);
+  (browser || triggerKind === "markdown" ? provider : sidebar).append(row);
   const reads = (method: string) =>
     request.mock.calls.filter(([called]) => called === method).length;
   return {
     provider,
     gateway,
-    row,
     trigger,
     request,
     getReads: () => reads("progressCard.get"),
@@ -186,10 +158,6 @@ export function createHovercard({
       selectedId = agentId;
       selection.emit(context.agentSelection.state);
     },
-    change(next: ProgressCard) {
-      card = next;
-      emitProgressChange(next.revision);
-    },
     updateRow(details: Partial<SidebarSessionHovercardRow>) {
       rowDetails = { ...rowDetails, ...details };
       sessions.emit();
@@ -201,7 +169,7 @@ export function createHovercard({
         },
       });
     },
-    emitProgressChange,
+    emitProgressChange: (revision = 2) => emit("progressCard.changed", { sessionKey, revision }),
     async releaseProgress() {
       releaseProgress?.();
       await Promise.all(request.mock.results.map((result) => result.value));

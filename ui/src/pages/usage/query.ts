@@ -2,18 +2,7 @@ import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coer
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { extractQueryTerms } from "../../../../src/shared/usage-query.js";
 import type { SessionsUsageOverview } from "../../../../src/shared/usage-types.js";
-import type { CostDailyEntry, UsageSessionEntry } from "./types.ts";
-
-function csvEscape(value: string, neutralizeFormulas = true): string {
-  const safeValue =
-    neutralizeFormulas && /^[ \t\r\n]*[=+\-@\uFF0B\uFF0D\uFF1D\uFF20]/u.test(value)
-      ? `'${value}`
-      : value;
-  if (/[",\r\n]/.test(safeValue)) {
-    return `"${safeValue.replaceAll('"', '""')}"`;
-  }
-  return safeValue;
-}
+import type { CostDailyEntry, UsageSessionEntry } from "./usage-state-types.ts";
 
 type CsvValue = string | number | undefined | null;
 
@@ -23,7 +12,15 @@ function toCsvRow(values: CsvValue[]): string {
       if (value === undefined || value === null) {
         return "";
       }
-      return csvEscape(String(value), typeof value === "string");
+      const text = String(value);
+      const safeValue =
+        typeof value === "string" && /^[ \t\r\n]*[=+\-@\uFF0B\uFF0D\uFF1D\uFF20]/u.test(text)
+          ? `'${text}`
+          : text;
+      if (/[",\r\n]/.test(safeValue)) {
+        return `"${safeValue.replaceAll('"', '""')}"`;
+      }
+      return safeValue;
     })
     .join(",");
 }
@@ -84,31 +81,24 @@ const buildDailyCsv = (daily: CostDailyEntry[]): string =>
     totalCost: (day) => usageCsvValue(day.totalCost, day.usageReport),
   });
 
-type QuerySuggestion = {
-  label: string;
-  value: string;
-};
-
-export type UsageFilterOptions = SessionsUsageOverview["filterOptions"];
+// The query parser splits on whitespace outside double quotes, so multiword values need quotes.
+const formatQueryToken = (key: string, value: string): string =>
+  /\s/u.test(value) ? `${key}:"${value}"` : `${key}:${value}`;
 
 const buildQuerySuggestions = (
   query: string,
   terms: ReturnType<typeof extractQueryTerms>,
-  options: UsageFilterOptions,
-): QuerySuggestion[] => {
+  options: SessionsUsageOverview["filterOptions"],
+): {
+  label: string;
+  value: string;
+}[] => {
   if (!query.trim()) {
     return [];
   }
-  const lastQueryWord = terms.at(-1)?.raw ?? "";
-  const [rawKey, rawValue] = lastQueryWord.includes(":")
-    ? [
-        lastQueryWord.slice(0, lastQueryWord.indexOf(":")),
-        lastQueryWord.slice(lastQueryWord.indexOf(":") + 1),
-      ]
-    : ["", ""];
-
-  const key = normalizeLowercaseStringOrEmpty(rawKey);
-  const value = normalizeLowercaseStringOrEmpty(rawValue);
+  const lastTerm = terms.at(-1);
+  const key = normalizeLowercaseStringOrEmpty(lastTerm?.key);
+  const value = normalizeLowercaseStringOrEmpty(lastTerm?.value);
 
   if (!key) {
     return [
@@ -141,7 +131,10 @@ const buildQuerySuggestions = (
   }
   return candidates
     .filter((candidate) => !value || normalizeLowercaseStringOrEmpty(candidate).includes(value))
-    .map((candidate) => ({ label: `${key}:${candidate}`, value: `${key}:${candidate}` }));
+    .map((candidate) => ({
+      label: `${key}:${candidate}`,
+      value: formatQueryToken(key, candidate),
+    }));
 };
 
 const applySuggestionToQuery = (query: string, suggestion: string): string => {
@@ -173,7 +166,10 @@ const setQueryTokensForKey = (query: string, key: string, values: string[]): str
       tokens.push(term.raw);
     }
   }
-  const next = [...tokens, ...Array.from(remaining.values(), (value) => `${key}:${value}`)];
+  const next = [
+    ...tokens,
+    ...Array.from(remaining.values(), (value) => formatQueryToken(key, value)),
+  ];
   return next.length ? `${next.join(" ")} ` : "";
 };
 

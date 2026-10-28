@@ -10,7 +10,7 @@ import type {
 } from "../process/command-process-custody.types.js";
 import type { CommandProcessOutcome } from "../process/exec-result.js";
 import { retainCommandProcessCleanup } from "../process/exec-spawn.js";
-import { hasErrnoCode } from "./errno.js";
+import { ignoreMissingPath } from "./errno.js";
 import { formatErrorMessage } from "./errors.js";
 import { UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV } from "./update-doctor-result.js";
 import {
@@ -73,9 +73,7 @@ export async function retainUpdateDoctorProcesses(
   try {
     raw = fs.readFileSync(file, "utf8");
   } catch (error) {
-    if (!hasErrnoCode(error, "ENOENT")) {
-      throw error;
-    }
+    ignoreMissingPath(error);
     // Shipped parents do not join this channel, but the candidate still retains
     // its writer inventory if killed. Only the reserving owner may remove it.
     ownedByDoctor = true;

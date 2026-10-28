@@ -8,7 +8,6 @@ import {
 } from "../agents/run-termination.js";
 import type { ReplyFollowupAdmissionBarrierTimeoutPolicy } from "../auto-reply/reply/reply-dispatcher.types.js";
 import type * as replyRunSettle from "../auto-reply/reply/reply-run-finalization-lease.js";
-import { createAbortError } from "../infra/abort-signal.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { markDiagnosticRunProgress } from "../logging/diagnostic-run-activity.js";
 import { diagnosticLogger as diag } from "../logging/diagnostic-runtime.js";
@@ -287,9 +286,7 @@ export function createReplyOperation(params: CreateReplyOperationParams): ReplyO
   };
 
   const abortInternally = (reason?: unknown) => {
-    if (!controller.signal.aborted) {
-      controller.abort(reason);
-    }
+    controller.abort(reason);
   };
 
   const watchdog = createSessionControllerWatchdog({
@@ -527,7 +524,7 @@ export function createReplyOperation(params: CreateReplyOperationParams): ReplyO
       ) {
         return;
       }
-      const previousOwner = owner;
+      const previousOwner = { owner, sessionKey: currentSessionKey };
       const capturedTarget = mailboxClaim?.mailbox.owner.target ?? owner.target;
       const target = capturedTarget
         ? captureSessionTarget({
@@ -565,32 +562,36 @@ export function createReplyOperation(params: CreateReplyOperationParams): ReplyO
       recordActivity();
       toolAuthority.bindBackendFingerprint(handle.toolAuthorityFingerprint);
       recordOperationBackendRunId(operation, handle.runId);
-      owner.attachment = {
-        operation,
-        backend: handle,
-        projectSessionActive:
-          owner.attachment?.operation === operation
-            ? owner.attachment.projectSessionActive
-            : undefined,
-      };
+      const backend = { handle };
+      if (owner.attachment?.operation === operation) {
+        owner.attachment.backend = backend;
+      } else {
+        owner.attachment = { operation, backend };
+      }
       notifyBackendReady();
       if (controller.signal.aborted) {
         handle.cancel("superseded");
       }
     },
     detachBackend(handle) {
-      if (owner.active === operation && owner.attachment?.backend === handle) {
-        owner.attachment.backend = undefined;
-        if (
-          !("handle" in owner.attachment) &&
-          owner.attachment.projectSessionActive === undefined
-        ) {
+      const attachment = owner.attachment;
+      if (owner.active === operation && attachment?.backend?.handle === handle) {
+        // Recovery keeps this logical owner but replaces its attempt. New input
+        // must wait for that owner's next backend, not reuse the old readiness.
+        backendReady.resolve();
+        if (!ended() && !state.abortFrozen && !state.cleared) {
+          backendReady = createDeferredCore();
+          backendReadyByOperation.set(operation, backendReady.promise);
+        }
+        attachment.backend = undefined;
+        if (!("handle" in attachment) && attachment.projectSessionActive === undefined) {
           owner.attachment = undefined;
         }
       }
     },
     freezeAbort() {
       apply({ type: "freeze" });
+      backendReady.resolve();
       detachUpstreamAbort();
       watchdog.beginFinalization();
     },
@@ -603,6 +604,7 @@ export function createReplyOperation(params: CreateReplyOperationParams): ReplyO
       if (state === before) {
         return false;
       }
+      backendReady.resolve();
       toolAuthority.close();
       phaseWait?.close();
       watchdog.beginTerminal();
@@ -635,11 +637,13 @@ export function createReplyOperation(params: CreateReplyOperationParams): ReplyO
         return false;
       }
       const backend = getAttachedBackend(operation);
-      staleExpiryReason ??= "no_activity";
+      // Read before aborting: the abort closes the retry wait that explains the stop.
+      const stop = watchdog.describeStop();
+      staleExpiryReason ??= stop.staleReason;
       apply({ type: "freeze" });
       setResult({ kind: "failed", code: "run_stalled" });
       detachUpstreamAbort();
-      abortInternally(createAbortError("Reply operation stalled"));
+      abortInternally(stop.error);
       try {
         backend?.cancel("superseded");
       } finally {

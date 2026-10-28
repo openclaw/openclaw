@@ -18,6 +18,7 @@ import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
+import type { SessionControllerInput } from "../../sessions/session-controller.contracts.js";
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import type { SessionOperatorScope } from "../../shared/session-method-scopes-base.js";
 import {
@@ -25,14 +26,21 @@ import {
   listAgentDatabaseAdmissionRefusals,
   readAgentDatabaseAdmissionRefusal,
 } from "../../state/agent-database-admission.js";
+import type { InternalAgentTurnDispatchOptions } from "../agent-turn/internal-facade.types.js";
 import type { ExpectedProfileBinding } from "../expected-profile.js";
 import type { GatewayMethodRegistryView } from "../methods/descriptor.js";
 import {
   prepareGatewaySessionAccessAuthority,
   type GatewaySessionAccessAuthority,
 } from "../session-access-authority.js";
-import { sessionMutationTargetFields } from "../session-method-policy.js";
-import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import {
+  isDirectSessionReadMethod,
+  sessionMutationTargetFields,
+} from "../session-method-policy.js";
+import {
+  resolveRequestedSessionAgentId,
+  resolveSessionCreateAgentId,
+} from "../session-request-agent.js";
 import type { SessionRowReadView } from "../session-row-prepared-read.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { resolveSessionMutationAuthorizationAsync } from "../session-sharing-authorization-async.js";
@@ -42,6 +50,7 @@ import {
   resolveChatSendAuthorizationParams,
   resolveDirectIncognitoTargets,
   resolveDirectSessionTargets,
+  resolveSessionMutationTargets,
 } from "../session-sharing-target-input.js";
 import { isGatewayAdmin, SessionMutationAuthorizationChangedError } from "../session-sharing.js";
 import type { SessionSubscribePhase } from "../slow-request-diagnostics.js";
@@ -49,6 +58,7 @@ import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import { gatewayRouterUploadPolicyError } from "./core-handlers.js";
 import { authorizeAuthenticatedProfileForMethod } from "./gateway-client-identity.js";
 import { authorizeGatewayMethod } from "./method-authorization.js";
+import { isGatewayRecoveryInput } from "./request-recovery-admission.js";
 import type {
   GatewayRequestContext,
   GatewayRequestOptions,
@@ -62,6 +72,54 @@ const startupReadMethods = new Set([
   "sessions.describe",
   "models.list",
 ]);
+
+function startupWriteAgents(
+  params: { method: string; requestParams: unknown; context: GatewayRequestContext },
+  cfg: OpenClawConfig,
+) {
+  const refusals = listAgentDatabaseAdmissionRefusals();
+  const targets = resolveSessionMutationTargets(params) ?? [];
+  const selected = targets.map((target) =>
+    resolveRequestedSessionAgentId(cfg, target.sessionKey, target.agentId),
+  );
+  if (params.method === "sessions.create") {
+    selected.push(
+      resolveSessionCreateAgentId(cfg, {
+        key: readSessionSharingStringParam(params.requestParams, "key"),
+        agentId: readSessionSharingStringParam(params.requestParams, "agentId"),
+        parentSessionKey: readSessionSharingStringParam(params.requestParams, "parentSessionKey"),
+      }),
+    );
+  } else if (params.method === "agent" && targets.length === 0) {
+    selected.push(
+      resolveRequestedSessionAgentId(
+        cfg,
+        undefined,
+        readSessionSharingStringParam(params.requestParams, "agentId"),
+      ),
+    );
+  }
+  return [
+    ...new Set(
+      selected.flatMap((result) =>
+        result.ok
+          ? [result.agentId]
+          : refusals
+              .filter((refusal) => refusal === result.error.details)
+              .map(({ agentId }) => agentId),
+      ),
+    ),
+  ];
+}
+
+function startupWriteRefusal(agents: string[]) {
+  const refusals = agents
+    .map((agentId) => readAgentDatabaseAdmissionRefusal(agentId))
+    .filter((refusal) => refusal !== undefined);
+  return (
+    refusals.find((refusal) => refusal.code !== "agent-database-inspection-pending") ?? refusals[0]
+  );
+}
 
 function startupReadAgents(method: string, requestParams: unknown, cfg: OpenClawConfig) {
   const refusals = listAgentDatabaseAdmissionRefusals();
@@ -98,6 +156,14 @@ async function prepareStartupReadAgents(
   if (method === "models.list" && !readSessionSharingStringParam(requestParams, "sessionKey")) {
     return agents;
   }
+  return prepareStartupAgentTargets(agents, cfg, signal);
+}
+
+async function prepareStartupAgentTargets(
+  agents: string[],
+  cfg: OpenClawConfig,
+  signal: AbortSignal,
+) {
   const targets = await Promise.all(
     agents.map((agentId) =>
       prepareSqliteTargetFromSessionStorePath(
@@ -127,6 +193,8 @@ export async function authorizeGatewayRequestPreDispatch(params: {
   signal?: AbortSignal;
   assertInvocationCurrent?: () => void;
   assertPreparationCurrent?: () => void;
+  recoveryInput?: InternalAgentTurnDispatchOptions["recoveryInput"];
+  controllerInput?: SessionControllerInput;
   markSessionSubscribePhase?: (phase: SessionSubscribePhase) => void;
   consumeSessionTurn?: {
     target: { sessionKey: string; agentId?: string; sessionId: string };
@@ -164,13 +232,19 @@ export async function authorizeGatewayRequestPreDispatch(params: {
         params.context,
       ),
     );
+  const unavailableDuringStartup = () =>
+    errorShape(ErrorCodes.UNAVAILABLE, `${params.method} unavailable during gateway startup`, {
+      retryable: true,
+      retryAfterMs: GATEWAY_STARTUP_RETRY_AFTER_MS,
+      details: { ...gatewayStartupUnavailableDetails(), method: params.method },
+    });
   const startupError = () =>
-    params.context.unavailableGatewayMethods?.has(params.method)
-      ? errorShape(ErrorCodes.UNAVAILABLE, `${params.method} unavailable during gateway startup`, {
-          retryable: true,
-          retryAfterMs: GATEWAY_STARTUP_RETRY_AFTER_MS,
-          details: { ...gatewayStartupUnavailableDetails(), method: params.method },
-        })
+    params.context.unavailableGatewayMethods?.has(params.method) &&
+    !(
+      params.method === "chat.send" &&
+      isGatewayRecoveryInput(params, params.context.getRuntimeConfig())
+    )
+      ? unavailableDuringStartup()
       : null;
   let assertChatRoutingCurrent: (() => void) | undefined;
   while (true) {
@@ -233,6 +307,48 @@ export async function authorizeGatewayRequestPreDispatch(params: {
         return { error };
       }
     }
+    if (
+      params.context.agentDatabaseStartup?.hasPendingAgents &&
+      params.methodRegistry.getScope(params.method) !== "operator.read" &&
+      !params.methodRegistry.isObservation(params.method) &&
+      !isDirectSessionReadMethod(params.method)
+    ) {
+      const waitSignal = AbortSignal.any(
+        [params.signal, params.client?.connectionSignal, getAsyncWorkSignal()].filter(
+          (candidate): candidate is AbortSignal => candidate !== undefined,
+        ),
+      );
+      const cfg = params.context.getRuntimeConfig();
+      let agents = startupWriteAgents(params, cfg);
+      let refusal = startupWriteRefusal(agents);
+      if (!refusal && !isPerAgentSessionStoreConfig(cfg.session?.store)) {
+        agents = await prepareStartupAgentTargets(agents, cfg, waitSignal);
+        if (params.context.getRuntimeConfig() !== cfg) {
+          continue;
+        }
+        refusal = startupWriteRefusal(agents);
+      }
+      if (refusal) {
+        const error = createAgentDatabaseAdmissionErrorShape(refusal);
+        if (error.retryable && !params.consumeSessionTurn) {
+          // Only initial dispatch proves no handler work occurred. A client may safely
+          // resend this refusal, but must never time out a write parked on readiness.
+          error.details = { ...gatewayStartupUnavailableDetails(), method: params.method };
+        }
+        return { error };
+      }
+    }
+    // Database refusals keep precedence, including the pending agent's retry contract.
+    if (
+      (params.method === "chat.send" || params.method === "agent") &&
+      params.context.inputRecovery &&
+      startupWriteAgents(params, params.context.getRuntimeConfig()).some((agentId) =>
+        params.context.inputRecovery!.isPending(agentId),
+      ) &&
+      !isGatewayRecoveryInput(params, params.context.getRuntimeConfig())
+    ) {
+      return { error: unavailableDuringStartup() };
+    }
     const startup =
       startupReadMethods.has(params.method) &&
       (params.method !== "sessions.list" ||
@@ -255,11 +371,11 @@ export async function authorizeGatewayRequestPreDispatch(params: {
         if (remainingMs <= 0) {
           const agents =
             previous?.agents ?? startupReadAgents(params.method, params.requestParams, cfg);
-          const refusal = agents
+          const physicalRefusal = agents
             .map((agentId) => readAgentDatabaseAdmissionRefusal(agentId))
             .find(Boolean);
-          if (refusal) {
-            return { error: createAgentDatabaseAdmissionErrorShape(refusal) };
+          if (physicalRefusal) {
+            return { error: createAgentDatabaseAdmissionErrorShape(physicalRefusal) };
           }
           if (!previous?.agents) {
             return {

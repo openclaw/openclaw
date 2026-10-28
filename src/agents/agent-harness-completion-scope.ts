@@ -4,7 +4,6 @@ import type { GatewayContextResolver } from "../gateway/server-methods/types.js"
 import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 
 // Host-issued scopes prevent plugins from fabricating requester ownership for completions.
@@ -25,7 +24,6 @@ export type AgentHarnessCompletionScope = {
 export function createAgentHarnessCompletionScope(params: {
   requesterSessionKey: string;
   requesterAgentId?: string;
-  requesterOrigin?: DeliveryContext;
   gatewayContextResolver?: GatewayContextResolver;
 }): AgentHarnessCompletionScope {
   const requesterSessionKey = params.requesterSessionKey.trim();
@@ -37,11 +35,9 @@ export function createAgentHarnessCompletionScope(params: {
   if (!requesterAgentId) {
     throw new Error("Harness completion scope requires an exact requester agent");
   }
-  const requesterOrigin = normalizeDeliveryContext(params.requesterOrigin);
   const scope: AgentHarnessCompletionScope = {
     requesterSessionKey,
     requesterAgentId,
-    ...(requesterOrigin ? { requesterOrigin } : {}),
   };
   scopeRegistry.hostIssuedScopes.add(scope);
   bindGatewayContextResolver(scope, params.gatewayContextResolver);

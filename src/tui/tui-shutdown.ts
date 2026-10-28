@@ -1,3 +1,5 @@
+import { throwCollectedErrors } from "../infra/error-graph-internal.js";
+
 type TuiShutdownTask = () => void | Promise<void>;
 
 export async function beginTuiShutdown(params: {
@@ -26,12 +28,7 @@ export async function beginTuiShutdown(params: {
     } catch (error) {
       errors.push(error);
     }
-    if (errors.length === 1) {
-      throw errors[0];
-    }
-    if (errors.length > 1) {
-      throw new AggregateError(errors, "TUI shutdown failed");
-    }
+    throwCollectedErrors(errors, "TUI shutdown failed");
   } catch (error) {
     params.onError(error);
   } finally {

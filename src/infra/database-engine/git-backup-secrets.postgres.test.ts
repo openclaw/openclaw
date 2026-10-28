@@ -98,9 +98,6 @@ describe.skipIf(!connection)("Git backup secret exclusion across engines", () =>
                 );
               `);
               source
-                .prepare("INSERT INTO device_auth_tokens VALUES ('device', 'operator', ?, '[]', 1)")
-                .run(secret);
-              source
                 .prepare(
                   "INSERT INTO secret_store_entries VALUES ('team', '', 'fixture', ?, 'secret', 1, 1, NULL, NULL, NULL)",
                 )
@@ -191,6 +188,13 @@ describe.skipIf(!connection)("Git backup secret exclusion across engines", () =>
             );
             const imagePath = path.join(pgDir, "postgres", "database.sqlite");
             using image = openNodeSqliteDatabase(imagePath);
+            if (family === "state") {
+              expect(
+                image
+                  .prepare("SELECT name FROM sqlite_schema WHERE name = 'device_auth_tokens'")
+                  .all(),
+              ).toEqual([]);
+            }
             for (const table of sqliteManifest.excludedTables) {
               expect(image.prepare(`SELECT COUNT(*) AS n FROM "${table}"`).get()?.n).toBe(0);
               expect(envelope.verification.tables[table]?.rows).toBe(0);
@@ -212,7 +216,7 @@ describe.skipIf(!connection)("Git backup secret exclusion across engines", () =>
             expect(
               source
                 .prepare(
-                  `SELECT COUNT(*) AS n FROM ${family === "state" ? "device_auth_tokens" : "auth_profile_store"}`,
+                  `SELECT COUNT(*) AS n FROM ${family === "state" ? "secret_store_entries" : "auth_profile_store"}`,
                 )
                 .get()?.n,
             ).toBe(1);
@@ -249,7 +253,7 @@ describe.skipIf(!connection)("Git backup secret exclusion across engines", () =>
                     { value_json: family === "state" ? '"keep"' : '{"retained":true}' },
                   ]);
                   const secretTable =
-                    family === "state" ? "device_auth_tokens" : "auth_profile_store";
+                    family === "state" ? "secret_store_entries" : "auth_profile_store";
                   expect(
                     (
                       await client.query(

@@ -1,8 +1,7 @@
-// Whatsapp tests cover text runtime plugin behavior.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   assertWebChannel,
   jidToE164,
@@ -14,46 +13,42 @@ import {
   toWhatsappJidWithLid,
 } from "./targets-runtime.js";
 
-async function withTempDir<T>(
-  prefix: string,
-  run: (dir: string) => T | Promise<T>,
-): Promise<Awaited<T>> {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-  try {
-    return await run(dir);
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+function tempDir(mappings: Record<string, string> = {}) {
+  const dir = tempDirs.make("openclaw-text-");
+  for (const [key, value] of Object.entries(mappings)) {
+    writeMapping(dir, key, value);
   }
+  return dir;
+}
+function writeMapping(dir: string, key: string, value: string) {
+  fs.writeFileSync(path.join(dir, `lid-mapping-${key}.json`), JSON.stringify(value));
 }
 
-describe("markdownToWhatsApp", () => {
+describe("WhatsApp text runtime", () => {
   it.each([
-    ["star italic", "*text*", "_text_"],
-    ["empty input", "", ""],
-    ["two code spans followed by digits", "`x`1 and `y`2", "```x```1 and ```y```2"],
-    ["short leading indentation", "  indented", "  indented"],
+    ["*text*", "_text_"],
+    ["", ""],
+    ["`x`1 and `y`2", "```x```1 and ```y```2"],
+    ["  indented", "  indented"],
     [
-      "literal private-use characters",
-      "\uE0000\uE001 \uE0001\uE001 \uE002 \uE003",
-      "\uE0000\uE001 \uE0001\uE001 \uE002 \uE003",
+      "\\*literal\\* \\_name\\_ \\~gone\\~ \\`code\\`",
+      "\\*literal\\* \\_name\\_ \\~gone\\~ \\`code\\`",
     ],
-  ] as const)("renders %s through the WhatsApp capability profile", (_name, input, expected) => {
+    ["\uE0000\uE001 \uE0001\uE001 \uE002 \uE003", "\uE0000\uE001 \uE0001\uE001 \uE002 \uE003"],
+  ] as const)("renders %j through the WhatsApp capability profile", (input, expected) => {
     expect(markdownToWhatsApp(input)).toBe(expected);
   });
 
-  it("honors each configured table mode", () => {
-    const input = "| Name | Value |\n| --- | --- |\n| A | 1 |";
-    expect({
-      off: markdownToWhatsApp(input, "off"),
-      bullets: markdownToWhatsApp(input, "bullets"),
-      code: markdownToWhatsApp(input, "code"),
-      block: markdownToWhatsApp(input, "block"),
-    }).toEqual({
-      off: input,
-      bullets: "*A*\n• Value: 1",
-      code: "```\n| Name | Value |\n| ---- | ----- |\n| A    | 1     |\n```",
-      block: "```\n| Name | Value |\n| ---- | ----- |\n| A    | 1     |\n```",
-    });
+  const table = "| Name | Value |\n| --- | --- |\n| A | 1 |";
+  const codeTable = "```\n| Name | Value |\n| ---- | ----- |\n| A    | 1     |\n```";
+  it.each([
+    ["off", table],
+    ["bullets", "*A*\n• Value: 1"],
+    ["code", codeTable],
+    ["block", codeTable],
+  ] as const)("honors table mode %s", (mode, expected) => {
+    expect(markdownToWhatsApp(table, mode)).toBe(expected);
   });
 
   it("closes and reopens formatting at chunk boundaries", () => {
@@ -72,146 +67,97 @@ describe("markdownToWhatsApp", () => {
     ).toEqual(["*Alpha*", "*Beta*", "*Gamma*"]);
   });
 
+  it("keeps escaped markers atomic across formatted chunk boundaries", () => {
+    const chunks = markdownToWhatsAppChunks("**aaaa\\*bbbb**", 8);
+    expect(chunks.every((chunk) => chunk.length <= 8)).toBe(true);
+    expect(chunks.join("")).toContain("\\*");
+    expect(chunks.join("")).not.toMatch(/\p{Co}/u);
+  });
+
   it("applies the chunk limit to whitespace-only text", () => {
     expect(markdownToWhatsAppChunks(" ".repeat(12), 5)).toEqual(["    ", "    ", "  "]);
   });
-});
 
-describe("assertWebChannel", () => {
-  it("throws for invalid channel", () => {
-    expect(() => assertWebChannel("bad" as string)).toThrow("Web channel must be 'web'");
+  it("assertWebChannel rejects invalid channels", () => {
+    expect(() => assertWebChannel("bad")).toThrow("Web channel must be 'web'");
   });
-});
-
-describe("toWhatsappJid", () => {
-  it("strips formatting and prefixes", () => {
-    expect(toWhatsappJid("whatsapp:+555 123 4567")).toBe("5551234567@s.whatsapp.net");
+  it.each([
+    ["whatsapp:+555 123 4567", "5551234567@s.whatsapp.net"],
+    ["123456789-987654321@g.us", "123456789-987654321@g.us"],
+    ["whatsapp:123456789-987654321@g.us", "123456789-987654321@g.us"],
+    ["1555123@s.whatsapp.net", "1555123@s.whatsapp.net"],
+  ])("toWhatsappJid normalizes %s", (input, expected) => {
+    expect(toWhatsappJid(input)).toBe(expected);
   });
-
-  it("preserves existing JIDs", () => {
-    expect(toWhatsappJid("123456789-987654321@g.us")).toBe("123456789-987654321@g.us");
-    expect(toWhatsappJid("whatsapp:123456789-987654321@g.us")).toBe("123456789-987654321@g.us");
-    expect(toWhatsappJid("1555123@s.whatsapp.net")).toBe("1555123@s.whatsapp.net");
-  });
-});
-
-describe("jidToE164", () => {
-  it("maps @lid using reverse mapping file", async () => {
-    await withTempDir("openclaw-state-", async (stateDir) => {
-      const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-      const credentialsDir = path.join(stateDir, "credentials");
-      fs.mkdirSync(credentialsDir, { recursive: true });
-      fs.writeFileSync(
-        path.join(credentialsDir, "lid-mapping-123_reverse.json"),
-        JSON.stringify("5551234"),
-      );
-      process.env.OPENCLAW_STATE_DIR = stateDir;
+  it("jidToE164 maps @lid using reverse mapping file", async () => {
+    const stateDir = tempDir();
+    const credentialsDir = path.join(stateDir, "credentials");
+    fs.mkdirSync(credentialsDir, { recursive: true });
+    writeMapping(credentialsDir, "123_reverse", "5551234");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    vi.resetModules();
+    try {
+      const { jidToE164: freshJidToE164 } = await import("./targets-runtime.js");
+      expect(freshJidToE164("123@lid")).toBe("+5551234");
+    } finally {
+      vi.unstubAllEnvs();
       vi.resetModules();
-      try {
-        const { jidToE164: freshJidToE164 } = await import("./targets-runtime.js");
-        expect(freshJidToE164("123@lid")).toBe("+5551234");
-      } finally {
-        if (previousStateDir === undefined) {
-          delete process.env.OPENCLAW_STATE_DIR;
-        } else {
-          process.env.OPENCLAW_STATE_DIR = previousStateDir;
-        }
-        vi.resetModules();
+    }
+  });
+
+  it("jidToE164 falls back through lidMappingDirs in order", () => {
+    const first = tempDir();
+    const second = tempDir({ "321_reverse": "123321" });
+    expect(jidToE164("321@lid", { lidMappingDirs: [first, second] })).toBe("+123321");
+  });
+  it.each([
+    ["+15555550000", "987654@lid"],
+    ["+33123456789", "33123456789@s.whatsapp.net"],
+    ["123456789-987654321@g.us", "123456789-987654321@g.us"],
+    ["1555123@s.whatsapp.net", "1555123@s.whatsapp.net"],
+    ["999@lid", "999@lid"],
+  ])("toWhatsappJidWithLid resolves %s (issue #67378)", (input, expected) => {
+    const authDir = tempDir({ "15555550000": "987654" });
+    expect(toWhatsappJidWithLid(input, { authDir })).toBe(expected);
+  });
+  it.each([
+    ["777@lid", "777:0@s.whatsapp.net", "+777", false, 1],
+    ["888@s.whatsapp.net", "888:0@s.whatsapp.net", "+888", false, 0],
+    ["777@lid", "", null, true, 1],
+  ] as const)("resolveJidToE164(%s) via %s", async (jid, pn, expected, fail, calls) => {
+    const getPNForLID = vi.fn(async () => {
+      if (fail) {
+        throw new Error("lookup failed");
       }
+      return pn;
     });
+    await expect(resolveJidToE164(jid, { lidLookup: { getPNForLID } })).resolves.toBe(expected);
+    expect(getPNForLID).toHaveBeenCalledTimes(calls);
+    if (calls) {
+      expect(getPNForLID).toHaveBeenCalledWith(jid);
+    }
   });
-
-  it("falls back through lidMappingDirs in order", async () => {
-    await withTempDir("openclaw-lid-a-", async (first) => {
-      await withTempDir("openclaw-lid-b-", (second) => {
-        const mappingPath = path.join(second, "lid-mapping-321_reverse.json");
-        fs.writeFileSync(mappingPath, JSON.stringify("123321"));
-        expect(jidToE164("321@lid", { lidMappingDirs: [first, second] })).toBe("+123321");
-      });
-    });
-  });
-});
-
-describe("toWhatsappJidWithLid (issue #67378)", () => {
-  it("resolves PN to LID when forward mapping file exists in authDir", async () => {
-    await withTempDir("openclaw-fwd-", (authDir) => {
-      const mappingPath = path.join(authDir, "lid-mapping-15555550000.json");
-      fs.writeFileSync(mappingPath, JSON.stringify("987654"));
-      expect(toWhatsappJidWithLid("+15555550000", { authDir })).toBe("987654@lid");
-    });
-  });
-
-  it("falls back to PN s.whatsapp.net JID when no forward mapping exists", async () => {
-    await withTempDir("openclaw-fwd-", (authDir) => {
-      expect(toWhatsappJidWithLid("+33123456789", { authDir })).toBe("33123456789@s.whatsapp.net");
-    });
-  });
-
-  it("preserves already-formed JIDs without consulting mapping", async () => {
-    await withTempDir("openclaw-fwd-", (authDir) => {
-      // Existing JIDs (group, s.whatsapp.net, lid) should pass through.
-      expect(toWhatsappJidWithLid("123456789-987654321@g.us", { authDir })).toBe(
-        "123456789-987654321@g.us",
-      );
-      expect(toWhatsappJidWithLid("1555123@s.whatsapp.net", { authDir })).toBe(
-        "1555123@s.whatsapp.net",
-      );
-      expect(toWhatsappJidWithLid("999@lid", { authDir })).toBe("999@lid");
-    });
-  });
-});
-
-describe("resolveJidToE164", () => {
-  it("resolves @lid via lidLookup when mapping file is missing", async () => {
-    const lidLookup = {
-      getPNForLID: vi.fn().mockResolvedValue("777:0@s.whatsapp.net"),
-    };
-    await expect(resolveJidToE164("777@lid", { lidLookup })).resolves.toBe("+777");
-    expect(lidLookup.getPNForLID).toHaveBeenCalledWith("777@lid");
-  });
-
-  it("skips lidLookup for non-lid JIDs", async () => {
-    const lidLookup = {
-      getPNForLID: vi.fn().mockResolvedValue("888:0@s.whatsapp.net"),
-    };
-    await expect(resolveJidToE164("888@s.whatsapp.net", { lidLookup })).resolves.toBe("+888");
-    expect(lidLookup.getPNForLID).not.toHaveBeenCalled();
-  });
-
-  it("returns null when lidLookup throws", async () => {
-    const lidLookup = {
-      getPNForLID: vi.fn().mockRejectedValue(new Error("lookup failed")),
-    };
-    await expect(resolveJidToE164("777@lid", { lidLookup })).resolves.toBeNull();
-    expect(lidLookup.getPNForLID).toHaveBeenCalledWith("777@lid");
-  });
-});
-
-describe("resolveEquivalentWhatsAppDirectChatJids", () => {
   it.each([
     ["15551230000:0@s.whatsapp.net", "15551230000@s.whatsapp.net"],
     ["777:2@hosted.lid", "777@hosted.lid"],
-  ])("includes the bare direct-chat form for %s", async (observedJid, bareJid) => {
-    await expect(resolveEquivalentWhatsAppDirectChatJids(observedJid)).resolves.toEqual([
-      observedJid,
-      bareJid,
-    ]);
-  });
+  ])(
+    "resolveEquivalentWhatsAppDirectChatJids includes the bare form for %s",
+    async (observedJid, bareJid) => {
+      await expect(resolveEquivalentWhatsAppDirectChatJids(observedJid)).resolves.toEqual([
+        observedJid,
+        bareJid,
+      ]);
+    },
+  );
 
   it("preserves hosted direct-chat domains for local PN/LID mappings", async () => {
-    await withTempDir("whatsapp-hosted-lid-map-", async (authDir) => {
-      fs.writeFileSync(path.join(authDir, "lid-mapping-15551230000.json"), JSON.stringify("777"));
-      fs.writeFileSync(
-        path.join(authDir, "lid-mapping-777_reverse.json"),
-        JSON.stringify("15551230000"),
-      );
+    const authDir = tempDir({ "15551230000": "777", "777_reverse": "15551230000" });
 
-      await expect(
-        resolveEquivalentWhatsAppDirectChatJids("15551230000@hosted", { authDir }),
-      ).resolves.toEqual(["15551230000@hosted", "777@hosted.lid"]);
-      await expect(
-        resolveEquivalentWhatsAppDirectChatJids("777@hosted.lid", { authDir }),
-      ).resolves.toEqual(["777@hosted.lid", "15551230000@hosted"]);
-    });
+    await expect(
+      resolveEquivalentWhatsAppDirectChatJids("15551230000@hosted", { authDir }),
+    ).resolves.toEqual(["15551230000@hosted", "777@hosted.lid"]);
+    await expect(
+      resolveEquivalentWhatsAppDirectChatJids("777@hosted.lid", { authDir }),
+    ).resolves.toEqual(["777@hosted.lid", "15551230000@hosted"]);
   });
 });

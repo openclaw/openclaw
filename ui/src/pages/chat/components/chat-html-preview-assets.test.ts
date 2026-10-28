@@ -123,24 +123,18 @@ describe("session file HTML assets", () => {
     ]);
     const result = await prepareHtmlPreviewAssets(source, false, fetch);
     expect(result.omitted).toBe(0);
-    expect(result.html).toContain(
+    for (const fragment of [
       'srcset="data:image/png;base64,YQ== 1x, data:image/png;base64,Yg== 2x, data:image/png;base64,Yg== 3x"',
-    );
-    expect(result.html).toContain(
       '<source src="data:image/png;base64,YQ==" srcset="data:image/png;base64,Yg== 2x">',
-    );
-    expect(result.html).toContain(
       '<video src="data:video/mp4;base64,dg==" poster="data:image/png;base64,YQ==">',
-    );
-    expect(result.html).toContain('<audio src="data:audio/mpeg;base64,cw==">');
-    expect(result.html).toContain('<input type="IMAGE" src="data:image/png;base64,YQ==">');
-    expect(result.html).toContain('style="background:url(&quot;data:image/png;base64,YQ==&quot;)"');
-    expect(result.html).toContain(
+      '<audio src="data:audio/mpeg;base64,cw==">',
+      '<input type="IMAGE" src="data:image/png;base64,YQ==">',
+      'style="background:url(&quot;data:image/png;base64,YQ==&quot;)"',
       '/* url(fake.png) */p::after{content:"url(fake.png)"}p{background:url("data:image/png;base64,YQ==")} @font-face{src:url(font)}',
-    );
-    expect(result.html).toContain(
       '<img src="//example.test/a.png"><img src="https://example.test/a.png"><img src="#image"><img src="/absolute.png">',
-    );
+    ]) {
+      expect(result.html).toContain(fragment);
+    }
     expect(fetch).toHaveBeenCalledExactlyOnceWith(["a.png", "b.png", "clip.mp4", "sound.mp3"]);
   });
 

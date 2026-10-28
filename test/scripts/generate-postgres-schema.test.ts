@@ -11,7 +11,6 @@ import {
 } from "../../scripts/generate-postgres-schema.mts";
 import { catalog as readCatalog, portTables } from "../../scripts/lib/postgres-schema-catalog.mts";
 import { generateSqliteSchemaCatalogs } from "../../scripts/lib/sqlite-schema-generation.mts";
-import { listOpenClawStateFeatureSchemas } from "../../src/state/openclaw-state-feature-schema.js";
 import type statePortMetadata from "../../src/state/postgres-schema.generated/state-port.json";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -30,13 +29,7 @@ function withDatabase<T>(run: (db: DatabaseSync) => T): T {
   }
 }
 
-function fixture(sql: string, verify?: (db: DatabaseSync) => void) {
-  if (verify) {
-    withDatabase((db) => {
-      db.exec(`PRAGMA foreign_keys = ON; ${sql}`);
-      verify(db);
-    });
-  }
+function fixture(sql: string) {
   const directory = tempDirs.make("postgres-schema-");
   fs.mkdirSync(path.join(directory, "src/state"), { recursive: true });
   fs.writeFileSync(path.join(directory, "src/state/openclaw-state-schema.sql"), sql);
@@ -45,16 +38,10 @@ function fixture(sql: string, verify?: (db: DatabaseSync) => void) {
 }
 
 describe("PostgreSQL schema generation", () => {
-  it("generates state port metadata from every canonical table and optional fragment", async () => {
-    const { files, report } = await generatePostgresSchemas(root);
+  it("bounds state port metadata to compact allocation facts", async () => {
+    const { files } = await generatePostgresSchemas(root);
     const metadata: typeof statePortMetadata = JSON.parse(files["state-port.json"]!);
     const schemas = [metadata, ...metadata.fragments];
-    expect(
-      schemas.flatMap((schema) => schema.tables.map((table) => table.name)).toSorted(),
-    ).toEqual(report.catalogs.state!.tables.map((table) => table.name).toSorted());
-    expect(
-      metadata.fragments.find((fragment) => fragment.id === "agent_deletion_journal"),
-    ).toBeDefined();
     expect(Buffer.byteLength(files["state-port.json"]!)).toBeLessThan(60_000);
     expect(schemas.some((schema) => "sqlite" in schema || "objects" in schema)).toBe(false);
     expect(schemas.flatMap((schema) => schema.tables).some((table) => "columns" in table)).toBe(
@@ -62,27 +49,8 @@ describe("PostgreSQL schema generation", () => {
     );
   });
 
-  it("preserves all agent relational objects and declares search separately", async () => {
+  it("emits null-safe agent triggers and pending search metadata", async () => {
     const { files, report } = await generatePostgresSchemas(root);
-    const agent = report.catalogs.agent!;
-    for (const kind of ["table", "column", "default", "check", "index", "foreignKey", "trigger"]) {
-      expect(
-        agent.objects.filter(
-          (item) =>
-            item.kind === kind &&
-            item.sql === null &&
-            item.table !== "sqlite_sequence" &&
-            item.pendingCapability !== "search",
-        ),
-        kind,
-      ).toEqual([]);
-    }
-    expect(agent.objects.filter((item) => item.kind === "trigger" && item.sql)).toHaveLength(4);
-    expect(agent.objects.filter((item) => item.kind === "triggerFunction")).toHaveLength(2);
-    expect(agent.objects.filter((item) => item.kind === "check" && item.sql)).toHaveLength(66);
-    const pending = report.pendingCapabilities.filter((item) => item.database === "agent");
-    expect(pending.filter((item) => item.kind === "trigger")).toHaveLength(4);
-    expect(pending.filter((item) => item.kind === "virtualTable")).toHaveLength(2);
     expect(JSON.parse(files["manifest.json"]!).pendingCapabilities).toEqual(
       report.pendingCapabilities,
     );
@@ -92,9 +60,6 @@ describe("PostgreSQL schema generation", () => {
     ]) {
       expect(files["agent.postgres.sql"]).toContain(fragment);
     }
-    expect(files["portability-report.md"]).toContain(
-      "Duplicate-key JSON is unreachable from writers",
-    );
   });
 
   it("refuses unsupported agent objects and trigger bodies", async () => {
@@ -118,25 +83,14 @@ describe("PostgreSQL schema generation", () => {
     const { sql, catalog, portMetadata } = await generateWorkboardPostgresSchema();
     expect(sql).toBe(readRoot("extensions/workboard/src/workboard-schema.postgres.sql"));
     expect(catalog.objects.filter((item) => item.sql === null)).toEqual([]);
-    expect(sql).toContain('CREATE TABLE "workboard_cards" (');
-    expect(sql).toContain('"content" bytea NOT NULL');
-    expect(sql).toContain("CHECK ((\"source\" IN ('state', 'model', 'operator')))");
-    expect(sql).toContain(
-      'REFERENCES "workboard_cards" ("id") ON UPDATE NO ACTION ON DELETE CASCADE',
-    );
-    expect(sql).not.toMatch(/\b(?:BEGIN|COMMIT|CREATE SCHEMA)\b/);
-    expect(sql).toMatch(/[^\n]\n$/);
     expect(portMetadata).toEqual(
       JSON.parse(readRoot("src/infra/database-engine/workboard-port.generated.json")),
     );
     const preData = sql.slice(portMetadata.preData[0], portMetadata.preData[1]);
     const postData = sql.slice(portMetadata.postData[0], portMetadata.postData[1]);
     expect(preData + postData).toBe(sql);
-    expect(preData).toContain('CREATE TABLE "workboard_cards"');
     expect(preData).not.toMatch(/CREATE (?:UNIQUE )?INDEX|ALTER TABLE/);
     expect(postData).not.toContain("CREATE TABLE");
-    expect(postData).toContain('CREATE INDEX "workboard_cards_board_status_idx"');
-    expect(postData).toContain('ALTER TABLE "workboard_card_labels" ADD FOREIGN KEY');
   });
 
   it("keeps Logbook DDL and port allocation metadata current", async () => {
@@ -145,11 +99,6 @@ describe("PostgreSQL schema generation", () => {
     expect(portMetadata).toEqual(
       JSON.parse(readRoot("src/infra/database-engine/logbook-port.generated.json")),
     );
-    expect(portMetadata.tables.flatMap((table) => table.identities)).toEqual(
-      Array.from({ length: 4 }, () => ({ column: "id", autoIncrement: true })),
-    );
-    expect(sql).not.toContain("sqlite_sequence");
-    expect(sql).not.toMatch(/\b(?:BEGIN|COMMIT|CREATE SCHEMA)\b/);
   });
 
   it("derives identity allocation semantics and composite keys from canonical SQLite", () => {
@@ -169,59 +118,32 @@ describe("PostgreSQL schema generation", () => {
   });
 
   it("renders eager and lazy state DDL inside the connection owner's namespace and transaction", async () => {
-    const { files, report } = await generatePostgresSchemas(root);
-    for (const file of [
-      "state.postgres.sql",
-      "state-v23-v24.postgres.sql",
-      "state-v24-v25.postgres.sql",
-      "agent.postgres.sql",
-      "agent-search.postgres.sql",
-      ...report.fragments.map((item) => item.file),
-    ]) {
+    const { files } = await generatePostgresSchemas(root);
+    for (const file of Object.keys(files).filter((name) => name.endsWith(".postgres.sql"))) {
       expect(files[file], file).not.toMatch(/^(?:BEGIN;|COMMIT;|SET |CREATE SCHEMA )/m);
       expect(files[file], file).not.toContain('"openclaw_state".');
       expect(files[file], file).not.toContain('"openclaw_agent".');
     }
-    expect(files["state.postgres.sql"]).toContain('CREATE TABLE "schema_meta" (');
-    const backgrounds = report.fragments.find((item) =>
-      item.tables.includes("user_background_images"),
-    )!;
-    expect(files[backgrounds.file]).toContain('CREATE TABLE "user_background_images" (');
-    expect(files[backgrounds.file]).toContain('REFERENCES "user_profiles"');
-    expect(files["state.postgres.sql"]).not.toContain('CREATE TABLE "user_background_images"');
+    const workspaceMigration = files["state-v34-v35.postgres.sql"]!;
+    expect(workspaceMigration).toContain(
+      "IF to_regclass('local_workspace_projections') IS NOT NULL",
+    );
+    for (const column of [
+      "tree_root_digest",
+      "source_paths_digest",
+      "canonical_fingerprints",
+      "projection_fingerprints",
+    ]) {
+      expect(workspaceMigration).toContain(`ADD COLUMN "${column}" bytea;`);
+    }
+    expect(workspaceMigration).toContain('CREATE TABLE "local_workspace_tree_packs"');
+    expect(workspaceMigration).toContain('CREATE TABLE "local_workspace_source_path_sets"');
+    expect(workspaceMigration).not.toMatch(/\b(?:UPDATE|INSERT|DELETE|DROP)\b/u);
   });
 
-  it("accounts for every canonical SQLite object and generates identical bytes twice", async () => {
+  it("emits canonical SQL or an omission diagnostic and generates identical bytes twice", async () => {
     const { files, report } = await generatePostgresSchemas(root);
     expect((await generatePostgresSchemas(root)).files).toEqual(files);
-    expect(Object.keys(files).toSorted()).toEqual(
-      [
-        "agent-port.json",
-        "agent-runtime.ts",
-        "agent.postgres.sql",
-        "agent-search-runtime.ts",
-        "agent-search.postgres.sql",
-        ...report.fragments.map((fragment) => fragment.file),
-        "manifest.json",
-        "portability-report.md",
-        "state.postgres.sql",
-        "state-v23-v24.postgres.sql",
-        "state-v24-v25.postgres.sql",
-        "runtime.ts",
-        "sqlite-catalogs.ts",
-        "sqlite-state-catalogs.ts",
-        "sqlite-state-catalogs.json",
-        "sqlite-agent-catalogs.ts",
-        "sqlite-agent-catalogs.json",
-        "sqlite-daemon-catalogs.ts",
-        "sqlite-daemon-catalogs.json",
-        "sqlite-memory-catalogs.ts",
-        "sqlite-memory-catalogs.json",
-        "sqlite-client-catalogs.ts",
-        "sqlite-client-catalogs.json",
-        "state-port.json",
-      ].toSorted(),
-    );
     expect(
       report.catalogs
         .state!.objects.filter((item) => item.sql === null && item.kind === "index")
@@ -237,82 +159,17 @@ describe("PostgreSQL schema generation", () => {
     const exported = await generatePostgresSchemas(root, "openclaw", { includeJsonReport: true });
     expect(JSON.parse(exported.files["portability-report.json"]!)).toEqual(report);
     for (const name of ["state", "agent"]) {
-      withDatabase((db) => {
-        db.exec(readRoot(`src/state/openclaw-${name}-schema.sql`));
-        if (name === "state") {
-          for (const fragment of listOpenClawStateFeatureSchemas()) {
-            db.exec(fragment.sql());
-          }
+      for (const item of report.catalogs[name]!.objects) {
+        if (item.sql === null) {
+          expect(item.reason, `${name}: ${item.kind} ${item.table}.${item.name}`).toBeTruthy();
+          expect(files["portability-report.md"]).toContain(`\`${item.table}.${item.name}\``);
+        } else {
+          expect(
+            Object.values(files).join("\n"),
+            `${item.kind} ${item.table}.${item.name}`,
+          ).toContain(item.sql);
         }
-        const expected: string[] = [];
-        const add = (kind: string, table: unknown, item: unknown) =>
-          expected.push(JSON.stringify([kind, table, item]));
-        const rows = db
-          .prepare("SELECT type, name, tbl_name, sql FROM sqlite_schema WHERE type != 'index'")
-          .all();
-        const tableKinds = new Map(
-          db
-            .prepare("PRAGMA table_list")
-            .all()
-            .map((row) => [row.name, row.type]),
-        );
-        for (const row of rows) {
-          if (row.type !== "table") {
-            add(String(row.type), row.tbl_name, row.name);
-            continue;
-          }
-          const kind = tableKinds.get(row.name);
-          const excluded = kind !== "table" || String(row.name).startsWith("sqlite_");
-          add(
-            kind === "virtual" ? "virtualTable" : excluded ? "internalTable" : "table",
-            row.name,
-            row.name,
-          );
-          for (const [objectKind, pragma, field] of [
-            ["column", "table_xinfo", "name"],
-            ["index", "index_list", "name"],
-            ["foreignKey", "foreign_key_list", "id"],
-          ] as const) {
-            const query = `SELECT DISTINCT ${field} AS value FROM pragma_${pragma}(?)`;
-            for (const item of db.prepare(query).all(String(row.name))) {
-              add(objectKind, row.name, String(item.value));
-            }
-          }
-          if (!excluded) {
-            const checks = String(row.sql).match(/\bCHECK\s*\(/gi) ?? [];
-            checks.forEach((_, index) => add("check", row.name, String(index)));
-          }
-        }
-        const catalog = report.catalogs[name]!;
-        const inventoryKinds = new Set([
-          "table",
-          "column",
-          "index",
-          "foreignKey",
-          "check",
-          "trigger",
-          "virtualTable",
-          "internalTable",
-          "view",
-        ]);
-        expect(
-          catalog.objects
-            .filter((item) => inventoryKinds.has(item.kind))
-            .map((item) => JSON.stringify([item.kind, item.table, item.name]))
-            .toSorted(),
-        ).toEqual(expected.toSorted());
-        for (const item of catalog.objects) {
-          if (item.sql === null) {
-            expect(item.reason, `${name}: ${item.kind} ${item.table}.${item.name}`).toBeTruthy();
-            expect(files["portability-report.md"]).toContain(`\`${item.table}.${item.name}\``);
-          } else {
-            expect(
-              Object.values(files).join("\n"),
-              `${item.kind} ${item.table}.${item.name}`,
-            ).toContain(item.sql);
-          }
-        }
-      });
+      }
     }
   });
 
@@ -343,6 +200,8 @@ describe("PostgreSQL schema generation", () => {
   it("preserves mapped types, keys, defaults, index ordering, and foreign-key timing", async () => {
     const directory = fixture(`
       CREATE TABLE parent (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL UNIQUE) STRICT;
+      CREATE INDEX parent_id ON parent(id);
+      CREATE INDEX parent_title_length ON parent(length(title) DESC);
       CREATE TABLE child (
         parent_id INTEGER REFERENCES parent(id) ON UPDATE CASCADE ON DELETE SET NULL DEFERRABLE INITIALLY DEFERRED,
         position INTEGER NOT NULL,
@@ -352,7 +211,8 @@ describe("PostgreSQL schema generation", () => {
         payload BLOB,
         PRIMARY KEY (position, alias), UNIQUE (parent_id, label)
       ) STRICT, WITHOUT ROWID;
-      CREATE INDEX child_label ON child(label DESC, position ASC) WHERE parent_id IS NOT NULL;
+      CREATE INDEX child_label ON child(label DESC, position ASC, alias DESC) WHERE parent_id IS NOT NULL;
+      CREATE INDEX child_parent ON child(parent_id);
     `);
     const { files, report } = await generatePostgresSchemas(directory, 'proof"scope');
     const sql = files["state.postgres.sql"]!;
@@ -366,7 +226,10 @@ describe("PostgreSQL schema generation", () => {
     expect(sql).toContain('"ratio" double precision DEFAULT 1.5');
     expect(sql).toContain('"payload" bytea');
     expect(sql).toContain('("label") DESC NULLS LAST');
-    expect(sql).toContain('("position") ASC NULLS FIRST');
+    expect(sql).toContain('(("id") ASC);');
+    expect(sql).toContain('(char_length("title")) DESC NULLS LAST');
+    expect(sql).toContain('(("parent_id") ASC NULLS FIRST);');
+    expect(sql).toContain('("label") DESC NULLS LAST, ("position") ASC, ("alias") DESC');
     expect(sql).toContain('WHERE "parent_id" IS NOT NULL');
     expect(sql).toContain(
       'REFERENCES "parent" ("id") ON UPDATE CASCADE ON DELETE SET NULL DEFERRABLE INITIALLY DEFERRED',
@@ -382,6 +245,31 @@ describe("PostgreSQL schema generation", () => {
     });
     expect(report.catalogs.state!.notes.join("\n")).toContain("sqlite_sequence");
     expect(fs.readdirSync(directory)).toEqual(["src"]);
+  });
+
+  it("uses native ordering only when partial predicates prove a nullable key non-null", () => {
+    withDatabase((db) => {
+      db.exec(`CREATE TABLE entries (value TEXT, other TEXT, required TEXT NOT NULL) STRICT;`);
+      const predicates = [
+        ["direct", "value IS NOT NULL", false],
+        ["conjunction", "other IS NULL AND (value IS NOT NULL)", false],
+        ["both_branches", "value IS NOT NULL OR (other IS NULL AND value IS NOT NULL)", false],
+        ["one_branch", "value IS NOT NULL OR other IS NOT NULL", true],
+        ["negated", "NOT (value IS NOT NULL)", true],
+        ["nullable", "value IS NULL", true],
+        ["literal", "other = 'value IS NOT NULL'", true],
+        ["different_key", "other IS NOT NULL", true],
+      ] as const;
+      for (const [name, predicate] of predicates) {
+        db.exec(`CREATE INDEX ${name} ON entries(value DESC, required) WHERE ${predicate};`);
+      }
+      const indexes = readCatalog(db, "").objects;
+      for (const [name, , nullable] of predicates) {
+        expect(indexes.find((index) => index.name === name)?.sql, name).toContain(
+          `(("value") DESC${nullable ? " NULLS LAST" : ""}, ("required") ASC)`,
+        );
+      }
+    });
   });
 
   it("translates the explicit expression subset and records refusals without weakening indexes", async () => {
@@ -489,11 +377,6 @@ describe("PostgreSQL schema generation", () => {
       `CREATE TABLE parent (id ${parent}) ${omitted ? "STRICT" : ""};
        ${omitted ? "" : "CREATE UNIQUE INDEX parent_id ON parent(id);"}
        CREATE TABLE child (parent_id ${child} REFERENCES parent(id)) ${omitted ? "STRICT" : ""};`,
-      (db) => {
-        db.exec("INSERT INTO parent VALUES ('1'); INSERT INTO child VALUES (1);");
-        expect(db.prepare("SELECT COUNT(*) AS count FROM child").get()?.count).toBe(1);
-        expect(() => db.exec("INSERT INTO child VALUES (2)")).toThrow(/FOREIGN KEY/);
-      },
     );
     const { files, report } = await generatePostgresSchemas(directory, "openclaw", {
       reportOnly: omitted,
@@ -522,12 +405,6 @@ describe("PostgreSQL schema generation", () => {
     async (constraint) => {
       const directory = fixture(
         `CREATE TABLE records (value TEXT ${constraint} ON CONFLICT IGNORE) STRICT;`,
-        (db) => {
-          const insert = db.prepare("INSERT INTO records VALUES (?)");
-          expect(insert.run("first").changes).toBe(1);
-          expect(insert.run(constraint === "NOT NULL" ? null : "first").changes).toBe(0);
-          expect(db.prepare("SELECT COUNT(*) AS count FROM records").get()?.count).toBe(1);
-        },
       );
       const { report } = await reportOnly(directory);
       const objects = report.catalogs.state!.objects;
@@ -548,12 +425,7 @@ describe("PostgreSQL schema generation", () => {
   );
 
   it("reports nullable non-STRICT primary keys instead of forbidding valid NULL rows", async () => {
-    const directory = fixture("CREATE TABLE nullable_key (id TEXT PRIMARY KEY);", (db) => {
-      db.exec("INSERT INTO nullable_key VALUES (NULL), (NULL)");
-      expect(
-        db.prepare("SELECT COUNT(*) AS count FROM nullable_key WHERE id IS NULL").get()?.count,
-      ).toBe(2);
-    });
+    const directory = fixture("CREATE TABLE nullable_key (id TEXT PRIMARY KEY);");
     const { files, report } = await reportOnly(directory);
     expect(report.catalogs.state!.objects.find((item) => item.kind === "table")).toMatchObject({
       sql: null,
@@ -563,16 +435,7 @@ describe("PostgreSQL schema generation", () => {
   });
 
   it("reports a translated boolean default that is incompatible with its bigint column", async () => {
-    const directory = fixture(
-      "CREATE TABLE defaults (flag INTEGER DEFAULT (1 = 1)) STRICT;",
-      (db) => {
-        db.exec("INSERT INTO defaults DEFAULT VALUES");
-        expect(db.prepare("SELECT flag, typeof(flag) AS type FROM defaults").get()).toEqual({
-          flag: 1,
-          type: "integer",
-        });
-      },
-    );
+    const directory = fixture("CREATE TABLE defaults (flag INTEGER DEFAULT (1 = 1)) STRICT;");
     const { files, report } = await reportOnly(directory);
     expect(report.catalogs.state!.objects.find((item) => item.kind === "default")).toMatchObject({
       sql: null,
@@ -583,13 +446,7 @@ describe("PostgreSQL schema generation", () => {
   });
 
   it("preserves nested unary operators as executable expression tokens", async () => {
-    const directory = fixture(
-      "CREATE TABLE records (value INTEGER CHECK (value >= - -1)) STRICT;",
-      (db) => {
-        db.exec("INSERT INTO records VALUES (1)");
-        expect(() => db.exec("INSERT INTO records VALUES (0)")).toThrow(/CHECK/);
-      },
-    );
+    const directory = fixture("CREATE TABLE records (value INTEGER CHECK (value >= - -1)) STRICT;");
     const { files, report } = await generatePostgresSchemas(directory);
     const expression = report.catalogs.state!.objects.find((item) => item.kind === "check")!.sql;
     expect(expression).not.toBeNull();

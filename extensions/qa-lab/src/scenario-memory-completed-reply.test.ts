@@ -1,47 +1,33 @@
+import assert from "node:assert/strict";
 import path from "node:path";
-import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
-import {
-  createPluginRuntimeMock,
-  createStartAccountContext,
-} from "openclaw/plugin-sdk/channel-test-helpers";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { createReplyDispatcher, settleReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { injectQaBusInboundMessage, qaChannelPlugin } from "../../qa-channel/api.js";
+import { injectQaBusInboundMessage } from "../../qa-channel/api.js";
 import { startQaBusServer } from "./bus-server.js";
-import { createQaBusState } from "./bus-state.js";
-import { createQaChannelTransport } from "./qa-channel-transport.js";
+import { waitForQaTransportCondition } from "./qa-transport.js";
 import { readQaScenarioById } from "./scenario-catalog.js";
+import { createScenarioChannel, dispatchScenarioFinal } from "./scenario-channel.test-support.js";
 import { runScenarioFlow } from "./scenario-flow-runner.js";
 import { runQaSuiteScenarioSteps } from "./suite-runtime-flow.js";
 import { waitForCompletedQaReply } from "./suite-runtime-transport.js";
 
 const scenario = readQaScenarioById("remember-across-conversations");
-const config = scenario.execution.config ?? {};
 const step = scenario.execution.flow!.steps[0]!;
 const guarded = step.actions.find((action) => isRecord(action) && "try" in action);
-if (!isRecord(guarded) || !isRecord(guarded.try) || !Array.isArray(guarded.try.actions)) {
-  throw new Error("expected memory recall actions");
-}
+assert.ok(isRecord(guarded) && isRecord(guarded.try) && Array.isArray(guarded.try.actions));
 const actions: unknown[] = guarded.try.actions;
 const recallStart = actions.findIndex(
   (action) => isRecord(action) && action.set === "requestCursorBeforeRecall",
 );
 const recallEnd = actions.findIndex((action) => isRecord(action) && "if" in action);
-if (recallStart < 0 || recallEnd <= recallStart) {
-  throw new Error("expected memory recall and evidence boundary");
-}
+assert.ok(recallStart >= 0 && recallEnd > recallStart);
 
 describe("memory scenario completed reply", () => {
-  const state = createQaBusState();
-  const transport = createQaChannelTransport(state);
-  const runtime = createPluginRuntimeMock({
-    channel: { inbound: { buildContext: buildChannelInboundEventContext } },
-  });
-  const controller = new AbortController();
+  const channel = createScenarioChannel();
+  const { state, transport, runtime } = channel;
   let bus: Awaited<ReturnType<typeof startQaBusServer>>;
-  let gateway: Promise<unknown>;
+  let running: ReturnType<typeof channel.start>;
   let observeAcknowledgment = (_cursor: number) => {};
   let observeCompletionRead = (_accountId: string | undefined, _cursor: number) => {};
 
@@ -59,34 +45,13 @@ describe("memory scenario completed reply", () => {
       observeCompletionRead(accountId, cursor);
       return cursor;
     });
-    const cfg = transport.createGatewayConfig({ baseUrl: bus.baseUrl });
-    const ready = createDeferred<void>();
-    const context = createStartAccountContext({
-      account: qaChannelPlugin.config.resolveAccount(cfg, transport.accountId),
-      cfg,
-      abortSignal: controller.signal,
-      statusPatchSink: (snapshot) => {
-        if (snapshot.lifecycle === "ready") {
-          ready.resolve();
-        }
-      },
-    });
-    const startAccount = qaChannelPlugin.gateway?.startAccount;
-    if (!startAccount) {
-      throw new Error("expected QA channel gateway entry point");
-    }
-    gateway = Promise.resolve(startAccount({ ...context, channelRuntime: runtime.channel }));
-    await Promise.race([
-      ready.promise,
-      gateway.then(() => {
-        throw new Error("QA channel stopped before ready");
-      }),
-    ]);
+    running = channel.start(bus.baseUrl);
+    await running.ready;
   });
 
   afterAll(async () => {
-    controller.abort();
-    await gateway;
+    running.abort();
+    await running.gateway;
     await bus.stop();
   });
 
@@ -107,23 +72,16 @@ describe("memory scenario completed reply", () => {
         waitingForCompletion.resolve("waiting");
       }
     };
-    // Model execution is held; the real channel preview, dispatcher, HTTP bus,
-    // and poller's processing acknowledgment establish completion independently.
     vi.mocked(
       runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
     ).mockImplementationOnce(async ({ dispatcherOptions, replyOptions }) => {
       await replyOptions?.onPartialReply?.({ text: "You usually want" });
       previewSent.resolve();
       await releaseFinal.promise;
-      const dispatcher = createReplyDispatcher(dispatcherOptions);
-      try {
-        if (finalText !== undefined) {
-          dispatcher.sendFinalReply({ text: finalText });
-        }
-      } finally {
-        await settleReplyDispatcher({ dispatcher });
-      }
-      return { queuedFinal: finalText !== undefined, counts: dispatcher.getQueuedCounts() };
+      return dispatchScenarioFinal(
+        dispatcherOptions,
+        finalText === undefined ? undefined : { text: finalText },
+      );
     });
     const vars: Record<string, unknown> = {
       transcriptRoot: "/synthetic-memory-transcripts",
@@ -134,13 +92,11 @@ describe("memory scenario completed reply", () => {
     };
     const result = runScenarioFlow({
       scenarioTitle: scenario.title,
-      // Execute the shipped recall selector and all its fact/source assertions.
-      // Independent session seeding and config-toggle scenarios are live-suite proof.
       flow: { steps: [{ name: step.name, actions: actions.slice(recallStart, recallEnd) }] },
       vars,
       api: {
         scenario,
-        config,
+        config: scenario.execution.config ?? {},
         state,
         path,
         env: { providerMode: "live-frontier" },
@@ -160,21 +116,13 @@ describe("memory scenario completed reply", () => {
         fs: {
           readdir: async () => ["recall.jsonl"],
           readFile: async () =>
-            ["memory_search", "private-source-transcript", helperLeak && `${helperLeak}-transcript`]
-              .filter(Boolean)
-              .join("\n"),
+            `memory_search\nprivate-source-transcript\n${helperLeak ? `${helperLeak}-transcript` : ""}`,
         },
         readConfigSnapshot: async () => ({
           config: { tools: { sessions: { visibility: "tree" } } },
         }),
         liveTurnTimeoutMs: (_env: unknown, timeoutMs: number) => timeoutMs,
-        waitForCondition: async <T>(check: () => T | Promise<T | undefined> | undefined) => {
-          const value = await check();
-          if (value === undefined) {
-            throw new Error("expected helper transcript after completed recall");
-          }
-          return value;
-        },
+        waitForCondition: waitForQaTransportCondition,
         runScenario: runQaSuiteScenarioSteps,
       },
     });
@@ -187,36 +135,30 @@ describe("memory scenario completed reply", () => {
       await acknowledged.promise;
       await result;
     }
-    if (finalText === undefined) {
-      expect(vars.targetOutbound).toBeUndefined();
-    } else {
-      expect(vars.targetOutbound).toMatchObject({ text: finalText });
-    }
+    expect(vars.targetOutbound).toEqual(
+      finalText === undefined ? undefined : expect.objectContaining({ text: finalText }),
+    );
     return await result;
   }
 
   const preference = "lemon pepper wings with blue cheese";
-  it.each<
-    [text: string | undefined, leak: "group" | "anchor" | undefined, failure: string | undefined]
-  >([
+  const missedPreference = "private target missed recalled preference";
+  it.each([
     [preference, undefined, undefined],
     [undefined, undefined, "completed without a retained reply"],
-    ...[
-      "lemon pepper wings with ranch",
-      `${preference}; GROUP-ONLY loaded nachos with black olives`,
-      `${preference}; ANCHOR-ONLY pretzel bites test marker`,
-    ].map<[string, undefined, string]>((text) => [
-      text,
-      undefined,
-      "private target missed recalled preference",
-    ]),
+    ["lemon pepper wings with ranch", undefined, missedPreference],
+    [`${preference}; GROUP-ONLY loaded nachos with black olives`, undefined, missedPreference],
+    [`${preference}; ANCHOR-ONLY pretzel bites test marker`, undefined, missedPreference],
     [preference, "group", "group transcript"],
     [preference, "anchor", "anchor transcript"],
-  ])("validates final=%s, helper leakage=%s only after completion", async (text, leak, failure) => {
-    expect(await runRecall(text, leak)).toMatchObject(
-      failure === undefined
-        ? { status: "pass" }
-        : { status: "fail", details: expect.stringContaining(failure) },
-    );
-  });
+  ] as const)(
+    "waits for completion before validating final=%s and leak=%s",
+    async (text, leak, failure) => {
+      expect(await runRecall(text, leak)).toMatchObject(
+        failure === undefined
+          ? { status: "pass" }
+          : { status: "fail", details: expect.stringContaining(failure) },
+      );
+    },
+  );
 });

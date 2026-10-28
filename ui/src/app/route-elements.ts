@@ -1,30 +1,31 @@
 type RouteElementRegistration = {
   element: HTMLElement;
+  key?: string;
   registered: (unregister: () => void) => void;
 };
 
 export type RouteElementEvent = CustomEvent<RouteElementRegistration>;
 
-/** Native bridge hosts register with the nearest outlet on each attachment. */
-export function registerRouteElement(element: HTMLElement): (() => void) | undefined {
+/** Attached elements register with the nearest shell or outlet. */
+export function registerRouteElement(element: HTMLElement, key?: string): (() => void) | undefined {
   let unregister: (() => void) | undefined;
   element.dispatchEvent(
     new CustomEvent<RouteElementRegistration>("openclaw-route-element", {
       bubbles: true,
-      detail: { element, registered: (remove) => (unregister = remove) },
+      detail: { element, key, registered: (remove) => (unregister = remove) },
     }),
   );
   return unregister;
 }
 
-/** The outlet owns references to attached hosts, including retained page hosts. */
+/** Each shell or outlet owns references to its attached elements, including retained pages. */
 export class RouteElements {
   private readonly elements = new Map<string, Set<HTMLElement>>();
 
   readonly register = (event: RouteElementEvent): void => {
     event.stopPropagation();
-    const { element, registered } = event.detail;
-    const tagName = element.localName;
+    const { element, key, registered } = event.detail;
+    const tagName = key ?? element.localName;
     let hosts = this.elements.get(tagName);
     if (!hosts) {
       hosts = new Set();

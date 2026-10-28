@@ -61,46 +61,27 @@ describe.each(["env", "file", "exec", "store"] as const)("%s mixed failures", (s
       });
       const missing = ref("MISSING_KEY");
       const redacted = ref("REDACTED_KEY");
-      const refs = [
-        missing,
-        redacted,
-        ref("HEALTHY_KEY"),
-        ...(source === "exec" ? [ref("ERROR_KEY")] : []),
-      ];
+      const healthy = ref("HEALTHY_KEY");
+      const refs = [missing, redacted, healthy, ...(source === "exec" ? [ref("ERROR_KEY")] : [])];
       const options = { config: { secrets: { providers: { fixture: provider } } }, env: values };
       const result = await resolveSecretRefValuesSettledByProvider(refs, options);
-      expect([...result.resolved]).toEqual([
-        [`${source}:fixture:${ref("HEALTHY_KEY").id}`, "healthy-secret"],
-      ]);
+      expect([...result.resolved]).toEqual([[`${source}:fixture:${healthy.id}`, "healthy-secret"]]);
+      const failure = (refId: string, code: string) =>
+        expect.objectContaining({ code, source, provider: "fixture", refId });
       expect(result.failures.map(({ error }) => error)).toEqual(
         expect.arrayContaining([
-          expect.objectContaining({
-            code: "SECRET_REF_NOT_FOUND",
-            source,
-            provider: "fixture",
-            refId: missing.id,
-          }),
-          expect.objectContaining({
-            code: "SECRET_REF_REDACTED_VALUE",
-            source,
-            provider: "fixture",
-            refId: redacted.id,
-          }),
-          ...(source === "exec"
-            ? [expect.objectContaining({ code: "SECRET_REF_NOT_FOUND", refId: "ERROR_KEY" })]
-            : []),
+          failure(missing.id, "SECRET_REF_NOT_FOUND"),
+          failure(redacted.id, "SECRET_REF_REDACTED_VALUE"),
+          ...(source === "exec" ? [failure("ERROR_KEY", "SECRET_REF_NOT_FOUND")] : []),
         ]),
       );
       expect(result.failures).toHaveLength(source === "exec" ? 3 : 2);
       if (command) {
         expect(await fs.readFile(`${command}.calls`, "utf8")).toBe("run\n");
       }
-      await expect(resolveSecretRefValues(refs, options)).rejects.toMatchObject({
-        code: "SECRET_REF_NOT_FOUND",
-        source,
-        provider: "fixture",
-        refId: missing.id,
-      });
+      await expect(resolveSecretRefValues(refs, options)).rejects.toEqual(
+        failure(missing.id, "SECRET_REF_NOT_FOUND"),
+      );
     },
   );
 });

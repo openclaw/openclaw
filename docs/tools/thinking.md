@@ -33,7 +33,7 @@ title: "Thinking levels"
   - Ollama thinking-capable models expose `/think low|medium|high|max`. Verified full-effort Ollama Cloud families such as GLM 5.2, GLM 5.3, GLM 5.3 Flash, Kimi K3, DeepSeek V4, and DeepSeek V4.1 Flash send native `think: "max"` for `/think max`; other models and local Ollama keep the compatible `high` mapping.
   - OpenAI GPT models map `/think` through the selected model and auth route's effort support. On supported OpenAI Platform/API-key routes, `/think off` sends explicit `reasoning.effort: "none"`, including when using the Codex runtime. Subscription routes that do not support `none` retain the provider or native runtime's default reasoning behavior; `off` does not guarantee zero reasoning there. Supervised native Codex threads keep their own thinking settings.
   - GPT-6 Astra and GPT-5.6 Sol and Terra expose native `/think ultra` through the Codex runtime with either Platform API-key or ChatGPT subscription auth. OpenClaw preserves Ultra for ordinary turns; `/btw` intentionally runs at `off`. Codex owns proactive delegation and the model-specific inference effort (Astra uses `xhigh`). Ultra is not sent as a raw Responses API reasoning effort. Other Codex models with a native reasoning effort can also use Ultra: Codex selects their supported inference effort while retaining its native delegation policy. Models with no native effort choices can use host-bootstrapped Ultra through the OpenClaw runtime.
-  - The OpenClaw and Claude Code runtimes expose logical `/think ultra` for all models. They select the highest supported native effort and add run-scoped planning and verification guidance. Delegation guidance appears only when `sessions_spawn` is available; Ultra does not grant tools or bypass their policy. Nonreasoning models remain nonreasoning, and models without an effort control retain the provider default.
+  - The OpenClaw and Claude Code runtimes expose logical `/think ultra` for all models. They select the highest supported native effort and add run-scoped planning and verification guidance. Delegation guidance appears only when `sessions_spawn` is available; Ultra does not grant tools or bypass their policy. On managed Claude Code turns, Claude's native subagents and workflows are available only when an operator keeps them with `managedNativeTools` (see [CLI backends](/gateway/cli-backends#keeping-claude-code-orchestration-tools-on-managed-turns)); Ultra guidance then names the kept tools as delegation options beside `sessions_spawn`. Without that opt-in, Ultra on Claude Code means maximum effort plus planning and verification guidance, with `sessions_spawn` as the only delegation path. Nonreasoning models remain nonreasoning, and models without an effort control retain the provider default.
   - Changing effort in a cached OpenAI conversation can append a `configuration_update` while keeping the original request-level effort for prompt reuse. The latest update determines effective effort; an unchanged top-level field is not a downgrade.
   - Custom OpenAI-compatible catalog entries can opt into `/think xhigh` by setting `models.providers.<provider>.models[].compat.supportedReasoningEfforts` to include `"xhigh"`. This uses the same compat metadata that maps outbound OpenAI reasoning effort payloads, so menus, session validation, agent CLI, and `llm-task` agree with transport behavior.
   - Since 2026.4.26, stale configured OpenRouter Hunter Alpha refs skip proxy reasoning injection because that retired route could return final answer text through reasoning fields.
@@ -54,13 +54,16 @@ endpoint rejects `reasoning_effort`, the request error points to that opt-out.
 Advanced levels such as `xhigh` and `max` require a model declaration or mapping
 before the CLI accepts them. Use `compat.supportedReasoningEfforts` to declare the
 endpoint's accepted values, and `compat.reasoningEffortMap` or `thinkingLevelMap`
-to map thinking levels to those values. Requested enabled efforts are clamped to
-a declared ladder. Sending a level does not guarantee that the server or model
+to map thinking levels to those values. These explicit reasoning declarations
+take precedence over live catalog guesses, including a catalog that reports no
+scalar effort support. Requested enabled efforts are clamped to a declared
+ladder. Sending a level does not guarantee that the server or model
 distinguishes it from other levels: some models offer only binary thinking, and
 some servers ignore the field.
 
-`/think off` omits `reasoning_effort` by default on custom routes, because many
-servers accept only `low`, `medium`, and `high`. Omission leaves the server's own
+`/think off` omits scalar effort by default on unknown Completions and Responses
+routes, because many servers accept only enabled effort values. This also applies
+to one-shot utility and title requests. Omission leaves the server's own
 default in effect and does not guarantee zero reasoning. If the endpoint accepts
 `none` to disable thinking, declare it explicitly on the model:
 
@@ -76,6 +79,10 @@ default in effect and does not guarantee zero reasoning. If the endpoint accepts
 
 These defaults apply to custom routes. Bundled provider plugins retain their
 provider-specific thinking contracts, including native Ollama's `think` control.
+For Ollama's OpenAI-compatible `/v1` endpoint, `none` disables thinking on models
+that support it, such as Qwen3 8B and Qwen3.5 4B; omitting effort keeps the model's
+default. Always verify the server and model together: a mandatory-thinking model
+cannot be made non-thinking by changing an effort label.
 
 ## Resolution order
 
@@ -137,7 +144,7 @@ check the per-agent setting if the model default still does not take effect.
 
 ## Fast mode (/fast)
 
-- Levels: `auto|on|off|ultrafast|default`.
+- Levels: `auto|on|off|ultrafast|default`. `ultra` is accepted as shorthand for `ultrafast` and stores the same `ultrafast` value.
 - Directive-only message toggles a session fast-mode override and replies `Fast mode set to auto.`, `Fast mode enabled.`, or `Fast mode disabled.`. Use `/fast default` to clear the session override and inherit the configured default; aliases include `inherit`, `clear`, `reset`, and `unpin`.
 - Send `/fast` (or `/fast status`) with no mode to see the current effective fast-mode state.
 - OpenClaw resolves fast mode in this order:
@@ -165,8 +172,9 @@ check the per-agent setting if the model default still does not take effect.
 - Directive-only message toggles session verbose and replies `Verbose logging enabled.` / `Verbose logging disabled.`; invalid levels return a hint without changing state.
 - `/verbose off` stores an explicit session override; clear it via the Sessions UI by choosing `inherit`.
 - Authorized external channel senders may persist the session verbose override. Internal gateway/webchat clients need `operator.admin` to persist it.
-- Inline directive affects only that message; session/global defaults apply otherwise.
+- Inline directive affects only that message; session, per-agent, and global defaults apply otherwise.
 - Send `/verbose` (or `/verbose:`) with no argument to see the current verbose level.
+- Resolution order: inline directive, then session override, then per-agent default (`agents.entries.*.verboseDefault`), then global default (`agents.defaults.verboseDefault`), then fallback (`off`).
 - When verbose is on, agents that emit structured tool results send each tool call back as its own safe metadata-only message. Shell tools show their label without command text. These tool summaries are sent as soon as each tool starts (separate bubbles), not as streaming deltas.
 - Tool failure summaries remain visible in normal mode, but raw error detail suffixes are hidden unless verbose is `full`.
 - When verbose is `full`, tool outputs are also forwarded after completion (separate bubble, truncated to a safe length). If you toggle `/verbose on|full|off` while a run is in-flight, subsequent tool bubbles honor the new setting.

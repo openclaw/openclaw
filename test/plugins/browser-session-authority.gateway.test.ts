@@ -153,7 +153,7 @@ it.runIf(process.env.OPENCLAW_BROWSER_SNAPSHOT_E2E === "1")(
             prePairDevice: true,
             scopes: ["operator.write"],
             client: CONTROL_UI_CLIENT,
-            deviceIdentityPath: path.join(root, `${email}.sqlite`),
+            deviceIdentityPath: path.join(root, email, "client", "credentials.sqlite"),
             browserOrigin,
           });
           expect(connected, JSON.stringify(connected.error)).toMatchObject({

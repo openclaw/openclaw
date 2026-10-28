@@ -1,10 +1,9 @@
-import { vi } from "vitest";
 import { prepareAgentRunTerminalReply } from "../../agents/agent-run-terminal-reply.js";
 import type { ReplyPayload } from "../types.js";
 import type { SettledAgentTurn } from "./agent-runner-execution.types.js";
 import type { resolveFollowupDeliveryDecision } from "./followup-delivery.js";
 import type { AdmittedFollowupTurn } from "./reply-agent-turn-preparation.js";
-import { createMockReplyOperation } from "./test-helpers.js";
+import { createMockReplyOperation, createMockTypingController } from "./test-helpers.js";
 
 export function createTurn(overrides: Partial<AdmittedFollowupTurn> = {}): AdmittedFollowupTurn {
   return {
@@ -29,14 +28,9 @@ export function createTurn(overrides: Partial<AdmittedFollowupTurn> = {}): Admit
         blockReplyBreak: "message_end",
       },
     },
-    operation: createMockReplyOperation().replyOperation,
+    operation: overrides.operation ?? createMockReplyOperation().replyOperation,
     config: {},
-    session: {
-      kind: "session",
-      key: "main",
-      current: () => undefined,
-      publish: () => undefined,
-    },
+    session: { kind: "session", key: "main", current: () => undefined, publish: () => undefined },
     sendPolicy: "allow",
     preflightCompactionApplied: false,
     ...overrides,
@@ -48,59 +42,46 @@ export function createSettledExecution(finalText = ""): {
   outcome: SettledAgentTurn;
 } {
   const prepared = prepareAgentRunTerminalReply({ rawText: finalText });
-  return {
-    runId: "run-1",
-    outcome: {
-      kind: "settled",
-      status: "ok",
-      result: {
-        payloads: prepared.text ? [{ text: prepared.text }] : [],
-        meta: {
-          durationMs: 0,
-          finalAssistantRawText: finalText,
-          finalAssistantVisibleText: prepared.text,
-          terminalReply: prepared.terminalReply,
-        },
+  const outcome: SettledAgentTurn = {
+    kind: "settled",
+    status: "ok",
+    result: {
+      payloads: prepared.text ? [{ text: prepared.text }] : [],
+      meta: {
+        durationMs: 0,
+        finalAssistantRawText: finalText,
+        finalAssistantVisibleText: prepared.text,
+        terminalReply: prepared.terminalReply,
       },
-      resolved: { provider: "anthropic", model: "claude" },
-      fallback: { exhausted: false, attempts: [] },
-      autoCompactionCount: 0,
     },
+    resolved: { provider: "anthropic", model: "claude" },
+    fallback: { exhausted: false, attempts: [] },
+    autoCompactionCount: 0,
   };
+  return { runId: "run-1", outcome };
 }
 
 type FollowupAccounting = NonNullable<
   Parameters<typeof resolveFollowupDeliveryDecision>[0]["accounting"]
 >;
 
-export function createAccounting(
+export const createAccounting = (
   payloadArray: ReplyPayload[] = [],
   overrides: Partial<FollowupAccounting> = {},
-): FollowupAccounting {
-  return {
-    payloadArray,
-    providerUsed: "anthropic",
-    modelUsed: "claude",
-    preserveUserFacingSessionState: false,
-    replyUsageState: {},
-    usage: undefined,
-    terminalFailurePayload: undefined,
-    ...overrides,
-  };
-}
+): FollowupAccounting => ({
+  payloadArray,
+  providerUsed: "anthropic",
+  modelUsed: "claude",
+  preserveUserFacingSessionState: false,
+  replyUsageState: {},
+  usage: undefined,
+  terminalFailurePayload: undefined,
+  ...overrides,
+});
 
 export const createDefaults = (onBlockReply: (payload: ReplyPayload) => Promise<void>) => ({
   defaultModel: "claude",
   typingMode: "never" as const,
-  typing: {
-    onReplyStart: vi.fn(async () => {}),
-    startTypingLoop: vi.fn(async () => {}),
-    startTypingOnText: vi.fn(async () => {}),
-    refreshTypingTtl: vi.fn(),
-    isActive: vi.fn(() => false),
-    markRunComplete: vi.fn(),
-    markDispatchIdle: vi.fn(),
-    cleanup: vi.fn(),
-  },
+  typing: createMockTypingController(),
   opts: { onBlockReply },
 });

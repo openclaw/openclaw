@@ -56,8 +56,8 @@ export const openAiMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapte
           const { OPENAI_BATCH_ENDPOINT, runOpenAiEmbeddingBatches } =
             await import("./embedding-batch.js");
           const byCustomId = await runOpenAiEmbeddingBatches({
+            ...batch,
             openAi: client,
-            agentId: batch.agentId,
             requests: batch.chunks.map((chunk, index) => ({
               custom_id: String(index),
               method: "POST",
@@ -71,11 +71,6 @@ export const openAiMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapte
                 ...(inputType ? { input_type: inputType } : {}),
               },
             })),
-            wait: batch.wait,
-            concurrency: batch.concurrency,
-            pollIntervalMs: batch.pollIntervalMs,
-            timeoutMs: batch.timeoutMs,
-            debug: batch.debug,
           });
           return mapBatchEmbeddingsByIndex(byCustomId, batch.chunks.length);
         },

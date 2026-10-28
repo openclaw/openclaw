@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import { once } from "node:events";
 import fs from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import os from "node:os";
@@ -7,9 +6,11 @@ import path from "node:path";
 import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { chromium, type BrowserContext, type Page } from "playwright-core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { listenOnLoopback } from "../../../test-support/hanging-loopback-server.js";
 import { isLiveTestEnabled } from "../../test-support.js";
 import * as outputFiles from "./output-files.js";
 import { observeOutputWriteSettlement } from "./output-files.test-support.js";
+import { readTargetId } from "./pw-chromium.test-support.js";
 import { closePlaywrightBrowserConnection } from "./pw-session.js";
 import { downloadCurrentDocumentViaPlaywright } from "./pw-tools-core.downloads.js";
 
@@ -69,11 +70,7 @@ describe.skipIf(!isLiveTestEnabled())("current-document downloads (real Chromium
     )[0];
     cdpUrl = `http://127.0.0.1:${port}`;
     page = await context.newPage();
-    const session = await context.newCDPSession(page);
-    ({
-      targetInfo: { targetId },
-    } = await session.send("Target.getTargetInfo"));
-    await session.detach();
+    targetId = await readTargetId(page);
     image = Buffer.concat([
       await fs.readFile(new URL("../../assets/icon.png", import.meta.url)),
       Buffer.alloc(12 * 1024 * 1024),
@@ -106,13 +103,8 @@ describe.skipIf(!isLiveTestEnabled())("current-document downloads (real Chromium
         return [...new Uint8Array(await new Blob(chunks).arrayBuffer())];
       }),
     );
-    server.listen(0, "127.0.0.1");
-    await once(server, "listening");
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("Fixture server did not bind");
-    }
-    baseUrl = `http://127.0.0.1:${address.port}`;
+    const fixturePort = await listenOnLoopback(server);
+    baseUrl = `http://127.0.0.1:${fixturePort}`;
     await context.addCookies([{ name: "download-proof", value: "allowed", url: baseUrl }]);
   }, 30_000);
 

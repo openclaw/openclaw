@@ -23,7 +23,7 @@ describe("Gateway presentation retention", () => {
     stubGatewayStoreTestGlobals();
     store = createGatewayStoreTestStore();
     store.gateway.start();
-    store.current().opts.onHello?.(hello());
+    store.current().testOptions.onHello?.(hello());
   });
 
   afterEach(() => {
@@ -36,7 +36,7 @@ describe("Gateway presentation retention", () => {
     const accepted = store.gateway.snapshot.hello;
     const capabilities = store.gateway.snapshot.pluginCapabilities;
     expect(capabilities).not.toBeNull();
-    store.current().opts.onClose?.({ code: 1006, reason: "network lost", willRetry });
+    store.current().testOptions.onClose?.({ code: 1006, reason: "network lost", willRetry });
     expect(store.gateway.snapshot.phase).toBe(willRetry ? "reconnecting" : "offline");
     expect(store.gateway.snapshot.hello).toBe(accepted);
     expect(store.gateway.snapshot.pluginCapabilities).toBe(capabilities);
@@ -49,7 +49,7 @@ describe("Gateway presentation retention", () => {
     const replacement = hello();
     replacement.features = { methods: ["plugin.notes.read"] };
     replacement.controlUiTabs = [];
-    store.current().opts.onHello?.(replacement);
+    store.current().testOptions.onHello?.(replacement);
     expect(store.gateway.snapshot.phase).toBe("connected");
     expect(store.gateway.snapshot.hello).toBe(replacement);
     expect(store.gateway.snapshot.pluginCapabilities?.methods).toEqual(["plugin.notes.read"]);
@@ -78,7 +78,7 @@ describe("Gateway presentation retention", () => {
       },
     },
   ])("clears display facts on $name", ({ code, details }) => {
-    store.current().opts.onClose?.({
+    store.current().testOptions.onClose?.({
       code: 1008,
       reason: "admission rejected",
       willRetry: false,

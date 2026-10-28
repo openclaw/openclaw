@@ -1,10 +1,23 @@
 /** Browser-only diagnostic, serialized after the mock socket and wire-delay probe. */
-export function warmReloadProbe() {
+export function warmReloadProbe(
+  input: { rowFacts?: boolean; avatars?: boolean } = {},
+  samplePaneChrome?: (at: number) => void,
+) {
   const milestones: Record<string, number> = {};
   const mutations: Array<{ at: number; count: number; region: string }> = [];
   const shifts: Array<{ at: number; value: number }> = [];
   const states: Array<{ at: number; state: string }> = [];
-  const reads: Array<{ at: number; store: string; hit: boolean }> = [];
+  const longTasks: Array<{ at: number; duration: number }> = [];
+  const reads: Array<{ at: number; store: string; hit: boolean; cursor?: boolean }> = [];
+  const historyRequests: Array<{
+    method: string;
+    sentAt: number;
+    cursor: boolean;
+    receivedAt?: number;
+    responseBytes?: number;
+    kind?: string;
+    messages?: number;
+  }> = [];
   const transactions: Array<{
     at: number;
     label: string;
@@ -13,10 +26,87 @@ export function warmReloadProbe() {
     boardFrames: number;
   }> = [];
   const rows = new Set<Element>();
+  const avatars = new WeakSet<Element>();
+  const avatarTransitions: Array<{ at: number; region: string; attribute: string }> = [];
+  const sidebarFrames: Array<{
+    at: number;
+    cached: boolean;
+    rowIds: string[];
+    orderHash: number;
+    headers: string[];
+    avatars: string[];
+    retained: number;
+  }> = [];
+  let cachedSidebarRows: Element[] = [];
+  type ElementPaint = PerformanceEntry & {
+    identifier: string;
+    renderTime: number;
+    intersectionRect: DOMRectReadOnly;
+    element: Element | null;
+  };
+  const transcriptPaints: Array<{ renderTime: number; element: string; rowKey: string | null }> =
+    [];
+  const largestPaints: Array<{
+    renderTime: number;
+    loadTime: number;
+    size: number;
+    element: string | null;
+    transcript: boolean;
+  }> = [];
   let removedRows = 0;
   let stopped = false;
   let cachedRows: Element[] = [];
+  const factSelectors = {
+    reactions: ".chat-message-reactions",
+    notices: ".chat-run-failure",
+    activity: ".chat-activity-group",
+    meta: ".msg-meta",
+  };
+  const factFrames: Array<{
+    at: number;
+    changes: Array<{ rowKey: string | null; parts: string[]; heightDelta: number }>;
+  }> = [];
+  const threadFrames: Array<{ at: number; height: number; rowKeys: Array<string | null> }> = [];
+  const rowWindows: Array<{ at: number; rowKeys: Array<string | null> }> = [];
+  const firstRowFacts: Array<{
+    rowKey: string | null;
+    cached: boolean;
+    counts: Record<string, number>;
+  }> = [];
+  const observed = new WeakSet<Element>();
+  const sizes = new WeakMap<Element, number>();
+  const rowFacts = new WeakMap<
+    Element,
+    {
+      parts: Record<string, string>;
+      heights: Record<string, Array<number | undefined>>;
+      height?: number;
+      cached: boolean;
+    }
+  >();
+  const resize = input.rowFacts
+    ? new ResizeObserver((entries) => {
+        for (const entry of entries) {
+          sizes.set(entry.target, entry.borderBoxSize[0]?.blockSize ?? entry.contentRect.height);
+        }
+      })
+    : undefined;
+  const observeSize = (element: Element) => {
+    if (!observed.has(element)) {
+      observed.add(element);
+      resize?.observe(element);
+    }
+  };
   let retainedAtCatchup: number | null = null;
+  const duplicateRowKeys = new Set<string>();
+  type TranscriptAnchor = {
+    at: number;
+    rowKey: string;
+    offset: number;
+    scrollTop: number;
+  };
+  let cachedAnchor: TranscriptAnchor | null = null;
+  let liveAnchor: TranscriptAnchor | null = null;
   const mark = (name: string) => {
     milestones[name] ??= performance.now();
   };
@@ -29,6 +119,48 @@ export function warmReloadProbe() {
   observe("paint", (entries) => {
     for (const entry of entries) {
       milestones[entry.name] = entry.startTime;
+    }
+  });
+  observe("longtask", (entries) => {
+    for (const entry of entries) {
+      longTasks.push({ at: entry.startTime, duration: entry.duration });
+    }
+  });
+  const elementLabel = (element: Element) =>
+    `${element.localName}${element.classList.length ? `.${[...element.classList].join(".")}` : ""}`;
+  observe("element", (entries) => {
+    for (const entry of entries) {
+      // Element Timing is implemented by Chromium but absent from lib.dom.
+      const paint = entry as ElementPaint;
+      const row = paint.element?.closest(".chat-virtual-row");
+      if (
+        paint.identifier !== "openclaw-transcript" ||
+        !row ||
+        !paint.element ||
+        paint.renderTime <= 0 ||
+        paint.intersectionRect.width <= 0 ||
+        paint.intersectionRect.height <= 0
+      ) {
+        continue;
+      }
+      milestones.firstTranscriptPaint ??= paint.renderTime;
+      transcriptPaints.push({
+        renderTime: paint.renderTime,
+        element: elementLabel(paint.element),
+        rowKey: row.getAttribute("data-virtual-row-key"),
+      });
+    }
+  });
+  observe("largest-contentful-paint", (entries) => {
+    for (const entry of entries) {
+      const paint = entry as LargestContentfulPaint;
+      largestPaints.push({
+        renderTime: paint.renderTime,
+        loadTime: paint.loadTime,
+        size: paint.size,
+        element: paint.element ? elementLabel(paint.element) : null,
+        transcript: Boolean(paint.element?.closest(".chat-virtual-row")),
+      });
     }
   });
   observe("layout-shift", (entries) => {
@@ -73,7 +205,14 @@ export function warmReloadProbe() {
     const request = get.apply(this, args);
     const store = this.name;
     request.addEventListener("success", () => {
-      reads.push({ at: performance.now(), store, hit: request.result !== undefined });
+      reads.push({
+        at: performance.now(),
+        store,
+        hit: request.result !== undefined,
+        ...(store === "snapshots"
+          ? { cursor: Boolean(request.result?.snapshot?.deltaCursor) }
+          : {}),
+      });
       if (store === "snapshots" && request.result !== undefined) {
         mark("cacheRead");
       }
@@ -83,27 +222,68 @@ export function warmReloadProbe() {
   const Original = window.WebSocket;
   window.WebSocket = new Proxy(Original, {
     construct(target, args) {
+      mark("socketCreated");
       const socket: WebSocket = Reflect.construct(target, args);
-      const pending = new Map<string, string>();
+      socket.addEventListener("open", () => mark("socketOpen"), { once: true });
+      const pending = new Map<
+        string,
+        { method: string; history?: (typeof historyRequests)[number] }
+      >();
       const send = socket.send.bind(socket);
       socket.send = (data) => {
         if (typeof data === "string") {
           const frame = JSON.parse(data);
           if (frame.type === "req") {
-            pending.set(frame.id, frame.method);
+            const params = frame.params?.initialHistory ?? frame.params;
+            const history =
+              frame.method === "chat.startup" ||
+              frame.method === "chat.history" ||
+              (frame.method === "sessions.messages.subscribe" && frame.params?.initialHistory)
+                ? {
+                    method: frame.method,
+                    sentAt: performance.now(),
+                    cursor: Boolean(params?.cursor),
+                  }
+                : undefined;
+            if (history) {
+              historyRequests.push(history);
+            }
+            pending.set(frame.id, { method: frame.method, history });
+            if (frame.method === "connect") {
+              mark("connectSent");
+            } else if (milestones.hello !== undefined) {
+              mark("firstPostHelloRpc");
+            }
           }
         }
         send(data);
       };
       socket.addEventListener("message", (event) => {
         const frame = JSON.parse(event.data);
-        const method = pending.get(frame.id);
-        if (method) {
+        if (frame.type === "event" && frame.event === "connect.challenge") {
+          mark("challenge");
+        }
+        const request = pending.get(frame.id);
+        if (request) {
           pending.delete(frame.id);
+          const { method, history } = request;
+          if (history) {
+            const result =
+              method === "sessions.messages.subscribe"
+                ? frame.payload?.initialHistory?.payload
+                : frame.payload;
+            history.receivedAt = performance.now();
+            history.responseBytes = new TextEncoder().encode(event.data).byteLength;
+            history.kind = result?.kind ?? (result?.messages ? "window" : "error");
+            history.messages = result?.messages?.length;
+          }
           if (method === "connect") {
             mark("hello");
           }
-          if (method === "chat.startup") {
+          if (
+            method === "chat.startup" ||
+            (method === "sessions.messages.subscribe" && frame.payload?.initialHistory)
+          ) {
             mark("catchupResponse");
           }
         }
@@ -113,6 +293,7 @@ export function warmReloadProbe() {
   });
   const observer = new MutationObserver((records) => {
     const regions = new Map<string, number>();
+    const textRoots = new Set<Element>();
     for (const record of records) {
       const element =
         record.target instanceof Element ? record.target : record.target.parentElement;
@@ -122,6 +303,32 @@ export function warmReloadProbe() {
         ? "transcript"
         : (element?.closest("openclaw-chat-pane, openclaw-app-sidebar")?.localName ?? "shell");
       regions.set(region, (regions.get(region) ?? 0) + 1);
+      if (
+        input.avatars &&
+        element &&
+        avatars.has(element) &&
+        record.type === "attributes" &&
+        record.attributeName &&
+        ["class", "src", "data-avatar-state"].includes(record.attributeName) &&
+        record.oldValue !== element.getAttribute(record.attributeName)
+      ) {
+        avatarTransitions.push({ at: performance.now(), region, attribute: record.attributeName });
+      }
+      const textRoot = element?.closest(".chat-text");
+      if (textRoot) {
+        textRoots.add(textRoot);
+      }
+      for (const node of record.addedNodes) {
+        if (!(node instanceof Element)) {
+          continue;
+        }
+        if (node.matches(".chat-text")) {
+          textRoots.add(node);
+        }
+        for (const root of node.querySelectorAll(".chat-text")) {
+          textRoots.add(root);
+        }
+      }
       for (const node of record.removedNodes) {
         if (!(node instanceof Element)) {
           continue;
@@ -136,6 +343,21 @@ export function warmReloadProbe() {
         }
       }
     }
+    // Tag direct text owners before paint. A row/container attribute does not
+    // cover descendant block text, and a DOM/rAF timestamp is not presentation.
+    for (const root of textRoots) {
+      if (!root.closest(".chat-virtual-row")) {
+        continue;
+      }
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+      let text: Node | null;
+      while ((text = walker.nextNode())) {
+        const parent = text.parentElement;
+        if (text.textContent?.trim() && parent && !parent.hasAttribute("elementtiming")) {
+          parent.setAttribute("elementtiming", "openclaw-transcript");
+        }
+      }
+    }
     for (const [region, count] of regions) {
       mutations.push({ at: performance.now(), region, count });
     }
@@ -144,28 +366,159 @@ export function warmReloadProbe() {
     subtree: true,
     childList: true,
     attributes: true,
+    attributeOldValue: input.avatars,
     characterData: true,
   });
-  const sample = () => {
+  const sample = (frameAt: number) => {
     if (stopped) {
       return;
+    }
+    const sidebar = document.querySelector("aside.sidebar");
+    if (sidebar || sidebarFrames.length) {
+      const sidebarRows = [
+        ...(sidebar?.querySelectorAll(".sidebar-session-content .sidebar-recent-session") ?? []),
+      ];
+      const cached = sidebar?.getAttribute("data-snapshot-state") === "cached";
+      if (cached && !cachedSidebarRows.length) {
+        cachedSidebarRows = sidebarRows;
+      }
+      const rowIds = sidebarRows.map((row) => row.getAttribute("data-session-key") ?? "");
+      let orderHash = 2166136261;
+      for (const character of rowIds.join("\0")) {
+        orderHash = Math.imul(orderHash ^ character.charCodeAt(0), 16777619) >>> 0;
+      }
+      sidebarFrames.push({
+        at: performance.now(),
+        cached,
+        rowIds,
+        orderHash,
+        headers: [...(sidebar?.querySelectorAll("[data-session-section]") ?? [])].map(
+          (section) =>
+            `${section.getAttribute("data-session-section")}:${section.querySelector(".sidebar-session-group-toggle")?.getAttribute("aria-label") ?? ""}`,
+        ),
+        avatars: sidebarRows.map((row) =>
+          [...row.querySelectorAll("img")].map((img) => img.getAttribute("src") ?? "").join("|"),
+        ),
+        retained: cachedSidebarRows.filter((row) => row.isConnected).length,
+      });
     }
     const pane = document.querySelector(".chat-pane-cache__pane--active");
     const thread = pane?.querySelector(".chat-thread");
     const inner = thread?.querySelector(".chat-thread-inner");
     const currentRows = [...(thread?.querySelectorAll(".chat-virtual-row") ?? [])];
+    if (input.avatars && currentRows.length) {
+      for (const element of document.querySelectorAll(
+        ".chat-thread :is(.chat-avatar-slot, .chat-author-avatar, .identity-avatar--agent, img), aside.sidebar :is(.viewer-avatar, .identity-avatar--agent, img)",
+      )) {
+        avatars.add(element);
+      }
+    }
+    const currentKeys = new Set<string>();
     for (const row of currentRows) {
       rows.add(row);
+      const key = row.getAttribute("data-virtual-row-key");
+      if (key) {
+        if (currentKeys.has(key)) {
+          duplicateRowKeys.add(key);
+        }
+        currentKeys.add(key);
+      }
     }
     const visible = Boolean(
       currentRows.length && inner && getComputedStyle(inner).visibility !== "hidden",
     );
     if (visible) {
       mark("firstTranscript");
+      if (resize && inner) {
+        const at = performance.now();
+        const rowKeys = currentRows.map((row) => row.getAttribute("data-virtual-row-key"));
+        if (JSON.stringify(rowWindows.at(-1)?.rowKeys) !== JSON.stringify(rowKeys)) {
+          rowWindows.push({ at, rowKeys });
+        }
+        observeSize(inner);
+        const threadHeight = sizes.get(inner);
+        if (threadHeight !== undefined && threadFrames.at(-1)?.height !== threadHeight) {
+          threadFrames.push({ at, height: threadHeight, rowKeys });
+        }
+        const changes: (typeof factFrames)[number]["changes"] = [];
+        for (const row of currentRows) {
+          observeSize(row);
+          const parts: Record<string, string> = {};
+          const heights: Record<string, Array<number | undefined>> = {};
+          const counts: Record<string, number> = {};
+          for (const [part, selector] of Object.entries(factSelectors)) {
+            const elements = [...row.querySelectorAll(selector)];
+            elements.forEach(observeSize);
+            parts[part] = JSON.stringify(
+              elements.map((element) => [
+                element.textContent,
+                element.querySelectorAll("*").length,
+              ]),
+            );
+            heights[part] = elements.map((element) => sizes.get(element));
+            counts[part] = elements.length;
+          }
+          const previous = rowFacts.get(row);
+          const height = sizes.get(row);
+          const cached =
+            previous?.cached ?? Boolean(milestones.cacheRead && !milestones.catchupResponse);
+          if (previous?.cached) {
+            const changed = Object.keys(parts).filter(
+              (part) =>
+                previous.parts[part] !== parts[part] ||
+                heights[part]!.some((partHeight, index) => {
+                  const before = previous.heights[part]?.[index];
+                  return (
+                    partHeight !== undefined &&
+                    before !== undefined &&
+                    Math.abs(partHeight - before) > 0.5
+                  );
+                }),
+            );
+            const heightDelta =
+              height !== undefined && previous.height !== undefined ? height - previous.height : 0;
+            if (changed.length || Math.abs(heightDelta) > 0.5) {
+              changes.push({
+                rowKey: row.getAttribute("data-virtual-row-key"),
+                parts: changed,
+                heightDelta,
+              });
+            }
+          } else if (!previous) {
+            // A new row's complete first frame is the baseline, never an addition.
+            firstRowFacts.push({
+              rowKey: row.getAttribute("data-virtual-row-key"),
+              cached,
+              counts,
+            });
+          }
+          rowFacts.set(row, { parts, heights, height, cached });
+        }
+        if (changes.length) {
+          factFrames.push({ at, changes });
+        }
+      }
       if (!milestones.catchupResponse && milestones.cacheRead) {
         mark("firstCachedTranscript");
         if (!cachedRows.length) {
           cachedRows = currentRows;
+        }
+        if (thread) {
+          const bounds = thread.getBoundingClientRect();
+          for (const row of currentRows) {
+            const rowKey = row.getAttribute("data-virtual-row-key");
+            const rect = row.getBoundingClientRect();
+            if (rowKey && rect.bottom > bounds.top && rect.top < bounds.bottom) {
+              // Keep the last cached frame, after initial virtualizer positioning.
+              cachedAnchor = {
+                at: performance.now(),
+                rowKey,
+                offset: rect.top - bounds.top,
+                scrollTop: thread.scrollTop,
+              };
+              break;
+            }
+          }
         }
       }
     }
@@ -173,22 +526,37 @@ export function warmReloadProbe() {
     if (caughtUp && !milestones.catchupApplied) {
       mark("catchupApplied");
       retainedAtCatchup = cachedRows.filter((row) => row.isConnected).length;
+      const row = currentRows.find(
+        (candidate) => candidate.getAttribute("data-virtual-row-key") === cachedAnchor?.rowKey,
+      );
+      if (cachedAnchor && thread && row) {
+        liveAnchor = {
+          at: performance.now(),
+          rowKey: cachedAnchor.rowKey,
+          offset: row.getBoundingClientRect().top - thread.getBoundingClientRect().top,
+          scrollTop: thread.scrollTop,
+        };
+      }
     }
-    const input = pane?.querySelector<HTMLTextAreaElement>("textarea");
-    if (input && !input.disabled && !input.readOnly) {
+    const composer = pane?.querySelector<HTMLTextAreaElement>("textarea");
+    if (composer && !composer.disabled && !composer.readOnly) {
       mark("inputReady");
     }
     const state = JSON.stringify({
       shell: Boolean(document.querySelector(".shell")),
+      bootSkeleton: Boolean(document.querySelector("#openclaw-boot-shell")),
+      viewSkeleton: Boolean(document.querySelector(".lazy-view-state--loading")),
+      pane: Boolean(pane),
       sidebar: Boolean(document.querySelector("aside.sidebar")),
       header: pane?.querySelector(".chat-pane__session-title-text")?.textContent ?? null,
       rows: visible,
-      input: Boolean(input && !input.disabled),
+      input: Boolean(composer && !composer.disabled),
       board: Boolean(document.querySelector(".board-widget__frame")),
     });
     if (states.at(-1)?.state !== state) {
       states.push({ at: performance.now(), state });
     }
+    samplePaneChrome?.(frameAt);
     requestAnimationFrame(sample);
   };
   requestAnimationFrame(sample);
@@ -196,22 +564,102 @@ export function warmReloadProbe() {
     read() {
       stopped = true;
       observer.disconnect();
+      resize?.disconnect();
       const perf = Reflect.get(window, "__perf");
+      const coverage = input.rowFacts
+        ? Object.fromEntries(
+            Object.entries(factSelectors).map(([part, selector]) => [
+              part,
+              document.querySelectorAll(`.chat-pane-cache__pane--active .chat-thread ${selector}`)
+                .length,
+            ]),
+          )
+        : {};
+      if (
+        input.rowFacts &&
+        (!firstRowFacts.some((row) => row.cached) ||
+          Object.values(coverage).some((count) => count === 0))
+      ) {
+        throw new Error(
+          `Unqualified row-facts sample: cached rows or fact coverage missing (${JSON.stringify(coverage)})`,
+        );
+      }
+      const pane = document.querySelector(".chat-pane-cache__pane--active");
+      const thread = pane?.querySelector(".chat-thread");
+      const bounds = thread?.getBoundingClientRect();
+      const textRoots = [
+        ...(thread?.querySelectorAll(".chat-virtual-row .chat-text") ?? []),
+      ].filter((element) => element.textContent?.trim());
+      // Capture-only eligibility explains missing Element Timing without turning
+      // a DOM observation or compositor-only reveal into a measured text paint.
+      const paintable = textRoots.some((element) => {
+        if (!bounds || !element.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) {
+          return false;
+        }
+        const rect = element.getBoundingClientRect();
+        return (
+          Math.min(rect.right, bounds.right, innerWidth) > Math.max(rect.left, bounds.left, 0) &&
+          Math.min(rect.bottom, bounds.bottom, innerHeight) > Math.max(rect.top, bounds.top, 0)
+        );
+      });
       return {
         milestones,
+        transcriptPresentation: {
+          at: performance.now(),
+          status:
+            milestones.firstTranscriptPaint !== undefined
+              ? "measured"
+              : paintable
+                ? "visible-without-element-timing"
+                : textRoots.length
+                  ? "hidden-or-clipped"
+                  : pane
+                    ? "empty"
+                    : "absent",
+          paintable,
+          textRoots: textRoots.length,
+          taggedTextOwners:
+            pane?.querySelectorAll('[elementtiming="openclaw-transcript"]').length ?? 0,
+        },
+        measures: performance.getEntriesByType("measure").map((entry) => entry.toJSON()),
+        transcriptPaints,
+        largestPaints,
         reads,
+        historyRequests,
         transactions,
         shifts,
         cls: shifts.reduce((sum, shift) => sum + shift.value, 0),
         lastLayoutShift: shifts.at(-1)?.at ?? null,
         lastMutationBurst: mutations.findLast((batch) => batch.count >= 10)?.at ?? null,
         mutations,
+        rowFacts: input.rowFacts
+          ? {
+              firstRowFacts,
+              frames: factFrames,
+              threadFrames,
+              rowWindows,
+              coverage,
+            }
+          : undefined,
         states,
+        longTasks,
+        sidebarFrames,
+        avatarTransitions: input.avatars ? avatarTransitions : undefined,
         rows: {
           mounted: rows.size,
           removed: removedRows,
           cached: cachedRows.length,
           retainedAtCatchup,
+          duplicateKeys: [...duplicateRowKeys],
+        },
+        handoff: {
+          cachedAnchor,
+          liveAnchor,
+          anchorShift: cachedAnchor && liveAnchor ? liveAnchor.offset - cachedAnchor.offset : null,
+        },
+        externalRig: {
+          loaf: perf !== undefined,
+          rpcCensus: Reflect.has(window, "__wsLog"),
         },
         loaf: perf?.loaf ?? [],
         rpcCensus: Reflect.get(window, "__wsLog") ?? [],

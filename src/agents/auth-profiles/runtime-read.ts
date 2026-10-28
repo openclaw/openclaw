@@ -16,10 +16,12 @@ import {
   assertAuthProfileMigrationStateAtDatabasePath,
 } from "./legacy-source-diagnostic.js";
 import { resolveLegacyAuthProfileSourceCandidates } from "./legacy-source-files.js";
+import { getRuntimeAuthProfileStoreMutationRevisionAtDatabasePath } from "./mutation-lineage.js";
 import {
   resolveSharedAuthStoreOwnershipAsync,
   resolveSharedAuthStorePath as resolveSharedAuthPath,
 } from "./path-resolve.js";
+import { readAuthProfileRowsReceipt } from "./persisted-rows-receipt.js";
 import { materializePreparedPersonalAuthProfile } from "./personal-profiles.js";
 import { withAuthProfileReaderCleanup } from "./reader-cleanup.js";
 import type {
@@ -28,12 +30,20 @@ import type {
   PreparedAuthProfileStoreReads,
 } from "./runtime-read.types.js";
 import { readAuthProfileStoreInWorker } from "./runtime-read.worker.js";
-import { getWorkerAuthProfileWrites } from "./runtime-scope.js";
+import {
+  authProfileRuntimeMode,
+  captureAuthProfileStoreScope,
+  getScopedAuthProfileEnv,
+  getWorkerAuthProfileWrites,
+  isEnvOnlyAuthProfileRuntime,
+  resolveRuntimeAuthProfileAgentDir,
+} from "./runtime-scope.js";
 import { createEmptyAuthProfileStore } from "./runtime-snapshot-owner.js";
 import { resolveSharedMainAuthAgentDir } from "./shared-main-dir.js";
 import {
   loadPersistedAuthProfileStoreFromRows,
   prepareAgentAuthProfileRowsRead,
+  readAuthProfileSources,
   readSharedAuthProfileRows,
   readUserModelAuthProfileAsync,
 } from "./sqlite-read.js";
@@ -41,6 +51,7 @@ import {
   resolveAuthProfileDatabasePath as resolveAgentAuthPath,
   resolveAuthProfileDatabaseOwnerId,
 } from "./sqlite.js";
+import type { AuthProfileReadSource } from "./store.worker-contract.js";
 import type { AuthProfileStore, AuthProfileRowRead } from "./types.js";
 
 export type {
@@ -48,6 +59,16 @@ export type {
   LoadAuthProfileStoreOptions,
   PreparedAuthProfileStoreReads,
 } from "./runtime-read.types.js";
+
+export function resolveRuntimeAuthProfileLoadOptions(
+  options?: LoadAuthProfileStoreOptions,
+): LoadAuthProfileStoreOptions | undefined {
+  const mode = authProfileRuntimeMode.getStore();
+  if (mode?.kind !== "agent-dir") {
+    return options;
+  }
+  return { ...options, inheritedAuthDir: mode.agentDir };
+}
 
 export function resolveExternalCliOverlayOptions(
   options: LoadAuthProfileStoreOptions | undefined,
@@ -82,12 +103,6 @@ export function resolveExternalCliOverlayOptions(
 }
 
 type RuntimeReadHost = {
-  isEnvOnlyAuthProfileRuntime: () => boolean;
-  getScopedAuthProfileEnv: () => NodeJS.ProcessEnv | undefined;
-  resolveRuntimeAuthProfileAgentDir: (agentDir?: string) => string | undefined;
-  resolveRuntimeAuthProfileLoadOptions: (
-    options?: LoadAuthProfileStoreOptions,
-  ) => LoadAuthProfileStoreOptions | undefined;
   loadAuthProfileStoreForAgent: (
     agentDir?: string,
     options?: LoadAuthProfileStoreOptions,
@@ -101,10 +116,6 @@ type RuntimeReadHost = {
     readPreparedStore?: (databasePath: string) => AuthProfileStore,
   ) => AuthProfileStore;
   withPreparedExternalAuthProfiles: WithPreparedExternalAuthProfiles;
-  captureScope: () => {
-    isolated: boolean;
-    run: <T>(agentDir: string | undefined, env: NodeJS.ProcessEnv, run: () => T) => T;
-  };
 };
 
 type AsyncAuthProfileStoreOptions = Omit<
@@ -143,14 +154,9 @@ function captureReadOptions(
 
 /** Bind to the canonical store scope; this reader owns no mutable runtime or lifecycle state. */
 export function createAuthProfileStoreRuntimeReader({
-  isEnvOnlyAuthProfileRuntime,
-  getScopedAuthProfileEnv,
-  resolveRuntimeAuthProfileAgentDir,
-  resolveRuntimeAuthProfileLoadOptions,
   loadAuthProfileStoreForAgent,
   loadRuntimeAuthProfileStore,
   withPreparedExternalAuthProfiles,
-  captureScope,
 }: RuntimeReadHost) {
   /** Capture sources once; the store owner decides which persisted facts it needs. */
   function withPreparedAuthProfileStoreReads(
@@ -164,14 +170,16 @@ export function createAuthProfileStoreRuntimeReader({
     options: AsyncAuthProfileStoreOptions | undefined,
     consume: (reads: PreparedAuthProfileStoreReads) => Promise<T>,
     suppliedEnv?: NodeJS.ProcessEnv,
+    effect?: boolean,
   ): Promise<T>;
   async function withPreparedAuthProfileStoreReads<T>(
     agentDir: string | undefined,
     options: AsyncAuthProfileStoreOptions | undefined,
     consume?: (reads: PreparedAuthProfileStoreReads) => Promise<T>,
     suppliedEnv?: NodeJS.ProcessEnv,
+    effect = false,
   ): Promise<T | AuthProfileStore> {
-    const scope = captureScope();
+    const scope = captureAuthProfileStoreScope();
     const env = cloneEnvWithPlatformSemantics(
       getScopedAuthProfileEnv() ?? suppliedEnv ?? process.env,
     );
@@ -214,7 +222,7 @@ export function createAuthProfileStoreRuntimeReader({
     let sharedContext: ReturnType<typeof captureOpenClawStateWorkerContext> | undefined;
     let sharedPreparationFailure: { error: unknown } | undefined;
     try {
-      if (needsSharedStore || personalProfileId) {
+      if (needsSharedStore || personalProfileId || effect) {
         sharedContext = captureOpenClawStateWorkerContext({ env });
       }
     } catch (error) {
@@ -244,7 +252,7 @@ export function createAuthProfileStoreRuntimeReader({
     const credentialProfileId =
       profileId && !isUserModelAuthProfileId(profileId) ? profileId : undefined;
     const credentialAuthorities = new Map(
-      credentialProfileId
+      credentialProfileId || effect
         ? [...agentReads].map(([databasePath, reader]) => {
             let authority: Result<ReturnType<typeof reader.captureCredentialAuthority>, unknown>;
             try {
@@ -259,7 +267,7 @@ export function createAuthProfileStoreRuntimeReader({
           })
         : [],
     );
-    if (credentialProfileId && sharedContext) {
+    if ((credentialProfileId || effect) && sharedContext) {
       credentialAuthorities.set(sharedContext.admission.databasePath, {
         ok: true,
         value: captureAuthProfileCredentialAuthority(
@@ -276,6 +284,7 @@ export function createAuthProfileStoreRuntimeReader({
       scope.run(effectiveAgentDir, env, run);
     const rowsByPath = new Map<string, AuthProfileRowRead>();
     const stores = new Map<string, Result<AuthProfileStore, unknown>>();
+    const effectSources = new Map<string, { receipt: object; revision: number }>();
     let active = true;
     let accepting = true;
     const assertAccepting = () => {
@@ -353,6 +362,18 @@ export function createAuthProfileStoreRuntimeReader({
       }
       for (const reader of rowReaders.values()) {
         reader.assertCurrent();
+      }
+      for (const [databasePath, source] of effectSources) {
+        const authority = credentialAuthorities.get(databasePath);
+        if (authority?.ok) {
+          authority.value?.assertCurrent();
+        }
+        if (
+          source.receipt !== readAuthProfileRowsReceipt(databasePath) ||
+          source.revision !== getRuntimeAuthProfileStoreMutationRevisionAtDatabasePath(databasePath)
+        ) {
+          throw new Error("Auth profile store changed before the effect");
+        }
       }
       for (const demand of readOwners) {
         assertAuthProfileMigrationCandidates({
@@ -433,8 +454,16 @@ export function createAuthProfileStoreRuntimeReader({
       assertCurrent();
       return materializePreparedPersonalAuthProfile(store, personalProfileId, personalProfile);
     };
-    const loadPrepared = async () => {
-      if (selectedAgentPath) {
+    const loadPrepared = async (fresh = false) => {
+      assertAccepting();
+      assertCurrent();
+      if (fresh) {
+        rowsByPath.clear();
+        stores.clear();
+        readOwners.length = 0;
+        effectSources.clear();
+      }
+      if (selectedAgentPath && !fresh) {
         await readOwner(
           effectiveAgentDir,
           selectedAgentPath,
@@ -448,13 +477,43 @@ export function createAuthProfileStoreRuntimeReader({
       const sharedOwnership = needsSharedStore
         ? await resolveSharedAuthStoreOwnershipAsync(sharedContext!)
         : undefined;
-      sharedContextUsed = needsSharedStore || personalProfileId !== undefined;
+      sharedContextUsed = needsSharedStore || personalProfileId !== undefined || fresh;
       const selectedSharedPath = sharedOwnership ? resolveSharedAuthPath(env) : undefined;
       const requestedPath = selectedAgentPath ?? selectedSharedPath!;
       const inheritedPath = inheritedAuthDir
         ? resolveAgentAuthPath(inheritedAuthDir)
         : selectedSharedPath!;
       const paths = [...new Set([requestedPath, ...(effectiveAgentDir ? [inheritedPath] : [])])];
+      if (fresh) {
+        if (!sharedContext) {
+          throw new Error("Auth profile disclosure requires a live shared-state owner");
+        }
+        const sources = paths.map((databasePath): AuthProfileReadSource => {
+          effectSources.set(databasePath, {
+            receipt: readAuthProfileRowsReceipt(databasePath),
+            revision: getRuntimeAuthProfileStoreMutationRevisionAtDatabasePath(databasePath),
+          });
+          if (databasePath === selectedSharedPath && sharedOwnership?.location === "state-db") {
+            return { kind: "shared-state", databasePath };
+          }
+          const reader = agentReads.get(databasePath)!;
+          rowReaders.set(databasePath, reader);
+          return reader.source;
+        });
+        const operation = readAuthProfileSources(sharedContext, sources, { assertCurrent });
+        for (const source of sources) {
+          if (source.kind === "agent") {
+            void agentReads.get(source.databasePath)!.track(operation);
+          }
+        }
+        const rows = await operation;
+        if (!rows) {
+          throw new Error("Auth profile disclosure requires a live shared-state owner");
+        }
+        for (const [databasePath, value] of rows) {
+          rowsByPath.set(databasePath, value);
+        }
+      }
       for (const databasePath of paths) {
         if (stores.has(databasePath)) {
           continue;
@@ -523,6 +582,7 @@ export function createAuthProfileStoreRuntimeReader({
                   readStore,
                   assertCurrent,
                   materializePersonalProfile,
+                  readFreshStore: () => loadPrepared(true),
                 })
               : loadPrepared());
           } finally {
@@ -535,7 +595,9 @@ export function createAuthProfileStoreRuntimeReader({
           cleanup: "Auth profile reader cleanup failed",
         },
       );
-      assertCurrent();
+      if (!effect) {
+        assertCurrent();
+      }
       return value;
     } finally {
       active = false;
@@ -552,6 +614,24 @@ export function createAuthProfileStoreRuntimeReader({
       return createEmptyAuthProfileStore();
     }
     return withPreparedAuthProfileStoreReads(agentDir, options, undefined, env);
+  }
+
+  /** Retain admitted sources for fresh worker reads and zero-SQL checks at an external effect. */
+  function withAuthProfileStoreAtEffect<T>(
+    agentDir: string | undefined,
+    options: AsyncAuthProfileStoreOptions,
+    consume: (reader: {
+      read: () => Promise<AuthProfileStore>;
+      assertCurrent: () => void;
+    }) => Promise<T>,
+  ): Promise<T> {
+    return withPreparedAuthProfileStoreReads(
+      agentDir,
+      options,
+      (reads) => consume({ read: reads.readFreshStore, assertCurrent: reads.assertCurrent }),
+      undefined,
+      true,
+    );
   }
 
   /** @deprecated Use loadAuthProfileStoreForRuntimeAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
@@ -571,6 +651,7 @@ export function createAuthProfileStoreRuntimeReader({
   return {
     loadAuthProfileStoreForRuntime,
     loadAuthProfileStoreForRuntimeAsync,
+    withAuthProfileStoreAtEffect,
     withPreparedAuthProfileStoreReads,
   };
 }

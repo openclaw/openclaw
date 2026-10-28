@@ -21,18 +21,41 @@ import {
 import {
   createContextEngine,
   createStartedThreadHarness,
+  writeCodexAppServerBinding,
 } from "./run-attempt.context-engine.test-support.js";
-import { writeCodexAppServerBinding } from "./session-binding.test-helpers.js";
 import { attachSqliteSessionTarget } from "./sqlite-session.test-helpers.js";
 
 setupRunAttemptTestHooks();
 
+async function mediaParams(name: string) {
+  const sessionId = `session-${name}`;
+  const workspaceDir = path.join(tempDir, name);
+  await fs.mkdir(workspaceDir, { recursive: true });
+  const params = createParams(`agent:main:${sessionId}`, workspaceDir);
+  await attachSqliteSessionTarget(params, path.join(tempDir, `${name}.sqlite`), sessionId);
+  const target = {
+    agentId: "main",
+    sessionId,
+    sessionKey: params.sessionKey!,
+    storePath: params.sessionTarget!.storePath!,
+  };
+  return {
+    params,
+    target,
+    async append<T extends { timestamp: number }>(this: void, message: T) {
+      await appendSessionTranscriptMessageByIdentity({
+        ...target,
+        message,
+        now: message.timestamp,
+      });
+      return message;
+    },
+  };
+}
+
 describe("Codex attachment continuity", () => {
   it("rejects real restored-document overage before native effects instead of clipping it", async () => {
-    const sessionId = "session-selected-document";
-    const workspaceDir = path.join(tempDir, "selected-document");
-    await fs.mkdir(workspaceDir, { recursive: true });
-    const params = createParams(`agent:main:${sessionId}`, workspaceDir);
+    const { params, append } = await mediaParams("selected-document");
     params.authoredContextTokenCap = 8_192;
     params.contextTokenBudget = 8_192;
     params.contextWindowInfo = {
@@ -41,17 +64,6 @@ describe("Codex attachment continuity", () => {
       source: "agentContextTokens",
     };
     params.model = { ...params.model, maxTokens: 256 };
-    await attachSqliteSessionTarget(
-      params,
-      path.join(tempDir, "selected-document.sqlite"),
-      sessionId,
-    );
-    const target = {
-      agentId: "main",
-      sessionId,
-      sessionKey: params.sessionKey!,
-      storePath: params.sessionTarget!.storePath!,
-    };
     const saved = await saveMediaBuffer(
       Buffer.from(`SAVED_DOCUMENT_PREFIX\n${"d".repeat(100_000)}\nSAVED_DOCUMENT_TAIL`),
       "text/plain",
@@ -60,7 +72,7 @@ describe("Codex attachment continuity", () => {
       "oversized.txt",
     );
     const timestamp = Date.now();
-    const sourceMessage = {
+    const sourceMessage = await append({
       role: "user" as const,
       content: "",
       timestamp,
@@ -75,11 +87,6 @@ describe("Codex attachment continuity", () => {
           },
         ],
       },
-    };
-    await appendSessionTranscriptMessageByIdentity({
-      ...target,
-      message: sourceMessage,
-      now: timestamp,
     });
     params.contextEngine = createContextEngine({
       assemble: async ({ messages }) => ({
@@ -212,27 +219,16 @@ describe("Codex attachment continuity", () => {
   it.each(["current", "closed"] as const)(
     "restores real image bytes with exact source ownership (%s)",
     async (mode) => {
-      const sessionId = "session-continuity-images";
-      const sessionFile = `agent:main:${sessionId}`;
-      const storePath = path.join(tempDir, "image-continuity.sqlite");
-      const workspaceDir = path.join(tempDir, "image-workspace");
-      await fs.mkdir(workspaceDir, { recursive: true });
-      const params = createParams(sessionFile, workspaceDir);
+      const { params, target, append } = await mediaParams("continuity-images");
       params.model = { ...params.model, input: ["text", "image"] };
-      await attachSqliteSessionTarget(params, storePath, sessionId);
-      const target = { agentId: "main", sessionId, sessionKey: params.sessionKey!, storePath };
       const cutoff = Date.now();
-      await writeCodexAppServerBinding(sessionFile, {
+      await writeCodexAppServerBinding(params.sessionFile, {
         threadId: "thread-existing",
-        cwd: workspaceDir,
+        cwd: params.workspaceDir,
         model: params.modelId,
         modelProvider: "openai",
         historyCoveredThrough: new Date(cutoff).toISOString(),
         dynamicToolsFingerprint: "[]",
-        webSearchThreadConfigFingerprint: JSON.stringify({
-          "features.standalone_web_search": false,
-          web_search: "disabled",
-        }),
       });
       const blue = createSolidPngBuffer(1, 1, { r: 0, g: 0, b: 255 });
       const green = createSolidPngBuffer(1, 1, { r: 0, g: 255, b: 0 });
@@ -242,7 +238,7 @@ describe("Codex attachment continuity", () => {
         data: blue.toString("base64"),
       };
       const saved = await saveMediaBuffer(blue, "image/png", "inbound", undefined, "blue.png");
-      const historical = {
+      const historical = await append({
         role: "user" as const,
         timestamp: cutoff + 1,
         idempotencyKey: "historical-image:user",
@@ -251,30 +247,18 @@ describe("Codex attachment continuity", () => {
           media: [
             { url: `media://inbound/${saved.id}`, contentType: "image/png", fileName: "blue.png" },
           ],
-          mediaImageLayout: {
-            slots: [{ kind: "offloaded", factIndex: 0 }],
-          },
+          mediaImageLayout: { slots: [{ kind: "offloaded", factIndex: 0 }] },
         },
-      };
-      await appendSessionTranscriptMessageByIdentity({
-        ...target,
-        message: historical,
-        now: cutoff + 1,
       });
       params.prompt = mode === "current" ? "Read this image." : "Can you hear me?";
       if (mode === "current") {
         const currentImage = { ...image, data: green.toString("base64") };
         params.images = [currentImage];
-        const current = {
+        const current = await append({
           role: "user" as const,
           timestamp: cutoff + 2,
           idempotencyKey: "current-image:user",
           content: [{ type: "text" as const, text: params.prompt }, currentImage],
-        };
-        await appendSessionTranscriptMessageByIdentity({
-          ...target,
-          message: current,
-          now: cutoff + 2,
         });
         // Model an already committed current source with no read fence, so both
         // rows enter projection and only exact current-source identity removes it.
@@ -342,9 +326,7 @@ describe("Codex attachment continuity", () => {
               ),
               text_elements: [],
             },
-            ...(mode === "current"
-              ? [{ type: "image", url: `data:image/png;base64,${green.toString("base64")}` }]
-              : []),
+            { type: "image", url: `data:image/png;base64,${green.toString("base64")}` },
           ]);
         }
         const rows = (await readSessionTranscriptEvents(target)).flatMap((event) => {

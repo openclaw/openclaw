@@ -17,6 +17,7 @@ import {
   resolveTelegramEffectiveDmPolicy,
   type NormalizedAllowFrom,
 } from "../bot-access.js";
+import type { TelegramGroupConfigResolver } from "../group-config-helpers.js";
 import type { TelegramThreadSpec } from "../thread-spec.js";
 import { buildTelegramConversationId } from "../topic-conversation.js";
 import {
@@ -69,17 +70,13 @@ function cacheTelegramForumFlag(chatId: string | number, isForum: boolean, nowMs
   pruneMapToMaxSize(telegramForumFlagByChatId, TELEGRAM_FORUM_FLAG_CACHE_MAX_CHATS);
 }
 
-export function getCachedTelegramForumFlag(
-  chatId: string | number,
-  nowMs?: number,
-): boolean | undefined {
+export function getCachedTelegramForumFlag(chatId: string | number): boolean | undefined {
   const cacheKey = String(chatId);
   const cached = telegramForumFlagByChatId.get(cacheKey);
   if (!cached) {
     return undefined;
   }
-  const effectiveNow = nowMs ?? Date.now();
-  if (cached.expiresAtMs <= effectiveNow) {
+  if (cached.expiresAtMs <= Date.now()) {
     return undefined;
   }
   return cached.isForum;
@@ -200,14 +197,7 @@ export async function resolveTelegramGroupAllowFromContext(params: {
   // the decision. Lets command auth survive transient store I/O failures.
   skipPairingStoreRead?: boolean;
   readChannelAllowFromStore?: typeof readChannelAllowFromStore;
-  resolveTelegramGroupConfig: (
-    chatId: string | number,
-    messageThreadId: number | undefined,
-    cfg: OpenClawConfig,
-  ) => {
-    groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
-    topicConfig?: TelegramTopicConfig;
-  };
+  resolveTelegramGroupConfig: TelegramGroupConfigResolver;
 }): Promise<{
   threadSpec: TelegramThreadSpec;
   resolvedThreadId?: number;

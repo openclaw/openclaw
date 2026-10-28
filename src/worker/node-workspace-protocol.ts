@@ -91,10 +91,10 @@ const WorkspaceInput = workerProtocolObject({
         Array.isArray(value) &&
         value.length > 0 &&
         value.length <= ARGV_MAX_ITEMS &&
+        value[0] !== "" &&
         value.every(
           (arg) =>
             typeof arg === "string" &&
-            arg.length > 0 &&
             !arg.includes("\0") &&
             Buffer.byteLength(arg, "utf8") <= ARG_MAX_BYTES,
         ),

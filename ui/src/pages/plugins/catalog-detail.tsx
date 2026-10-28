@@ -1,16 +1,19 @@
 import type { JSX } from "@solidjs/web";
+import { createMemo, Errored, Loading, Show } from "solid-js";
 import { handleMarkdownCodeBlockClick } from "../../components/markdown-code-blocks.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import { SanitizedHtml } from "../../components/solid/sanitized-html.tsx";
 import { SettingsPage } from "../../components/solid/settings-ui.tsx";
-import { formatUiExternalText } from "../../lib/format-error.ts";
+import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import type { PluginDiscoveryDetailResult, PluginInstallRequest } from "../../lib/plugins/index.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { PluginArtTile } from "./consent-dialog.tsx";
+import { PluginDetailLoadingHero } from "./detail-loading-hero.tsx";
 import { renderPluginDetailShell as PluginDetailShell } from "./detail-shell.tsx";
 import { PluginInstallAction, type PluginInstallActionProps } from "./install-action.tsx";
 import "../../styles/sidebar-markdown.css";
 import type { PluginInstallProgress } from "./install-progress.ts";
+import { PluginNativeUiDisclosure } from "./native-ui-disclosure.tsx";
 import {
   renderPluginContentCapabilities,
   renderPluginMetadata,
@@ -18,6 +21,7 @@ import {
   renderPluginAskAction,
 } from "./overview.tsx";
 import { renderPluginRowMessage, type PluginRowMessage } from "./plugin-row-message.tsx";
+import type { PluginDetailRead } from "./plugins-detail-reads.ts";
 import { ReasonedDisabledControl } from "./reasoned-disabled-control.tsx";
 
 export type PluginCatalogDetailProps = {
@@ -32,7 +36,7 @@ export type PluginCatalogDetailProps = {
   skillsSection?: JSX.Element;
   connected: boolean;
   result: PluginDiscoveryDetailResult | null;
-  error: string | null;
+  read: PluginDetailRead;
   backHref: string;
   onBack: () => void;
   onRetry: () => void;
@@ -66,6 +70,7 @@ function CatalogDetailContent(props: {
   value: PluginDiscoveryDetailResult;
   state: PluginCatalogDetailProps;
 }) {
+  let installButton: HTMLButtonElement | undefined;
   const plugin = () => props.value.plugin;
   const detail = () => props.value.detail;
   const installing = () =>
@@ -97,12 +102,23 @@ function CatalogDetailContent(props: {
           )}
         />
       }
+      notice={
+        plugin().local.action === "install" || installing() ? (
+          <PluginNativeUiDisclosure
+            variant={plugin().catalog.family === "bundle-plugin" ? "bundle" : "install"}
+          />
+        ) : undefined
+      }
       titleAction={
         <>
           {plugin().local.action === "install" || installing() ? (
-            <ReasonedDisabledControl reason={props.state.installBlockedReason}>
+            <ReasonedDisabledControl
+              reason={props.state.installBlockedReason}
+              descriptionTarget={() => installButton ?? null}
+            >
               <PluginInstallAction
                 registerInstallAction={props.state.registerInstallAction}
+                onButtonRef={(element) => (installButton = element)}
                 buttonClass="btn oc-action plugin-catalog-detail__install"
                 primary
                 disabled={!props.state.canInstall}
@@ -142,45 +158,62 @@ function CatalogDetailContent(props: {
   );
 }
 
+function CatalogDetailLoading() {
+  return (
+    <section
+      class="plugin-catalog-detail plugin-catalog-detail--loading"
+      aria-label={t("pluginsPage.detailLoading")}
+    >
+      <div class="plugin-catalog-detail__back skeleton" />
+      <PluginDetailLoadingHero />
+      <div class="plugin-catalog-detail__content">
+        <div class="plugin-catalog-detail__main" aria-hidden="true">
+          <div class="plugin-catalog-detail__loading-card skeleton" />
+          <div class="plugin-catalog-detail__loading-card skeleton" />
+        </div>
+        <aside class="plugin-catalog-detail__sidebar">
+          {renderPluginMetadata(undefined, undefined, undefined, true)}
+        </aside>
+      </div>
+    </section>
+  );
+}
+
 export function renderPluginCatalogDetail(props: PluginCatalogDetailProps): JSX.Element {
+  const source = createMemo(() => props.read);
+  const receipt = createMemo(() => source().receipt());
+  const resultId = createMemo(() => props.result?.plugin.id);
+  const read = () => source().value();
   return (
     <SettingsPage {...{ wide: true, carapace: true }}>
-      {props.error ? (
-        <div class="callout danger oc-banner oc-banner-error" role="alert">
-          <span>{formatUiExternalText(props.error)}</span>
-          <button type="button" class="btn btn--sm" onClick={props.onRetry}>
-            {t("pluginsPage.tryAgain")}
-          </button>
-        </div>
-      ) : !props.connected ? (
-        <p class="plugin-catalog-detail__empty">{t("pluginsPage.discoveryOffline")}</p>
-      ) : props.result ? (
-        <CatalogDetailContent value={props.result} state={props} />
-      ) : (
-        <section
-          class="plugin-catalog-detail plugin-catalog-detail--loading"
-          aria-label={t("pluginsPage.detailLoading")}
+      <Loading on={resultId() ?? receipt()} fallback={<CatalogDetailLoading />}>
+        <Errored
+          fallback={(error, reset) => (
+            <div class="callout danger oc-banner oc-banner-error" role="alert">
+              <span>{formatUiExternalText(formatUiError(error()))}</span>
+              <button
+                type="button"
+                class="btn btn--sm"
+                onClick={() => {
+                  props.onRetry();
+                  reset();
+                }}
+              >
+                {t("pluginsPage.tryAgain")}
+              </button>
+            </div>
+          )}
         >
-          <div class="plugin-catalog-detail__back skeleton" />
-          <div class="plugin-catalog-detail__hero">
-            <div class="plugin-catalog-detail__icon skeleton" />
-            <div>
-              <div class="plugin-catalog-detail__loading-title skeleton" />
-              <div class="plugin-catalog-detail__loading-publisher skeleton" />
-              <div class="plugin-catalog-detail__loading-summary skeleton" />
-            </div>
-          </div>
-          <div class="plugin-catalog-detail__content">
-            <div class="plugin-catalog-detail__main" aria-hidden="true">
-              <div class="plugin-catalog-detail__loading-card skeleton" />
-              <div class="plugin-catalog-detail__loading-card skeleton" />
-            </div>
-            <aside class="plugin-catalog-detail__sidebar">
-              {renderPluginMetadata(undefined, undefined, undefined, true)}
-            </aside>
-          </div>
-        </section>
-      )}
+          {read()}
+          {!props.connected ? (
+            <p class="plugin-catalog-detail__empty">{t("pluginsPage.discoveryOffline")}</p>
+          ) : (
+            <Show when={props.result} fallback={<CatalogDetailLoading />}>
+              {(result) => <CatalogDetailContent value={result()} state={props} />}
+            </Show>
+          )}
+        </Errored>
+      </Loading>
     </SettingsPage>
   );
 }

@@ -127,7 +127,7 @@ export class DraftPlaceState {
 
   private readonly selection = createDraftPlaceRestoreState();
   readonly modelControl: NewSessionModelControl;
-  private readonly repositoryState: DraftRepositoryStateOwner;
+  readonly repositoryState: DraftRepositoryStateOwner;
   private readonly folderValidation: DraftRestoredFolderValidation;
 
   constructor(

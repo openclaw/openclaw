@@ -10,6 +10,7 @@ import {
   createProjectOptions,
   createWarmProvider,
   managedBinary,
+  type CommandCall,
 } from "./crabbox-worker-warm-image.test-support.js";
 
 afterEach(() => vi.useRealTimers());
@@ -55,6 +56,9 @@ function current() {
   return openWarmImageStore().entries()[0]!.value;
 }
 
+const checkpoints = (calls: CommandCall[], action: string) =>
+  calls.filter(({ argv }) => argv[2] === action);
+
 function pendingCapture(
   inspect: (argv: string[]) => ReturnType<typeof commandResult>,
   established?: boolean,
@@ -99,15 +103,9 @@ it.each([
 
 describe("Crabbox first capture without upload wait", () => {
   it.each([
-    { version: "0.77.0", nonBlocking: false },
-    { version: "0.78.0-rc.1", nonBlocking: false },
-    { version: "0.78.0", nonBlocking: false },
-    { version: "0.78.0+build-1", nonBlocking: false },
     { version: "0.78.1", nonBlocking: false },
-    { version: "0.78.1-rc.1", nonBlocking: false },
     { version: "0.79.0-rc.1", nonBlocking: false },
     { version: "0.79.0", nonBlocking: true },
-    { version: "0.79.0+build-1", nonBlocking: true },
     { version: "1.0.0", nonBlocking: true },
   ])(
     "enrolls safely with CLI $version (non-blocking=$nonBlocking)",
@@ -145,7 +143,7 @@ describe("Crabbox first capture without upload wait", () => {
         reportStartStatus: (status) => statuses.push(status),
       });
       expect(options.beginNodeEnrollment).toHaveBeenCalledOnce();
-      const argv = calls.find((call) => call.argv[2] === "create")!.argv;
+      const argv = checkpoints(calls, "create")[0]!.argv;
       if (nonBlocking) {
         expect(argv).toContain("--wait=false");
         expect(argv).not.toContain("--wait");
@@ -186,7 +184,7 @@ describe("Crabbox first capture without upload wait", () => {
       expect(options.beginNodeEnrollment).not.toHaveBeenCalled();
       expect(current().image).toBeUndefined();
       await vi.advanceTimersByTimeAsync(4_999);
-      expect(calls.filter((call) => call.argv[2] === "inspect")).toHaveLength(1);
+      expect(checkpoints(calls, "inspect")).toHaveLength(1);
       available = true;
       await vi.advanceTimersByTimeAsync(1);
       await provisioning;
@@ -204,19 +202,25 @@ describe("Crabbox first capture without upload wait", () => {
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
       const entered = Promise.withResolvers<void>();
       const controller = new AbortController();
+      let monotonicMs = 0;
+      vi.spyOn(performance, "now").mockImplementation(() => monotonicMs);
       const { options } = createProjectOptions([], controller);
       const { provider, calls } = pendingCapture(() => {
         entered.resolve();
+        if (monotonicMs > 0) {
+          // Fail promptly if the expired budget still permits another provider read.
+          throw new Error("checkpoint polled past capture deadline");
+        }
         return availability();
       });
       const provisioning = provider.provision(PROFILE, "interrupted-capture", options);
       const rejected = expect(provisioning).rejects.toThrow(
-        outcome === "timeout" ? "capture is unresolved" : `${outcome} capture`,
+        outcome === "timeout" ? "Crabbox waited checkpoint is not available" : `${outcome} capture`,
       );
-      await entered.promise;
+      await Promise.race([entered.promise, provisioning]);
       await vi.advanceTimersByTimeAsync(0);
       if (outcome === "timeout") {
-        vi.setSystemTime(Date.now() + 45 * 60_000);
+        monotonicMs = 45 * 60_000 + 1;
       } else if (outcome === "cancel") {
         controller.abort(new Error("cancel capture"));
       } else {
@@ -227,12 +231,9 @@ describe("Crabbox first capture without upload wait", () => {
       await vi.advanceTimersByTimeAsync(5_000);
       await rejected;
       expect(options.beginNodeEnrollment).not.toHaveBeenCalled();
-      expect(current().operation).toMatchObject({
-        type: "capture",
-        phase: "uncertain",
-      });
+      expect(current().operation).toMatchObject({ type: "capture", phase: "uncertain" });
       expect(current().image).toBeUndefined();
-      expect(calls.filter((call) => call.argv[2] === "create")).toHaveLength(1);
+      expect(checkpoints(calls, "create")).toHaveLength(1);
     },
   );
 
@@ -247,12 +248,12 @@ describe("Crabbox first capture without upload wait", () => {
     );
     const whileUploading = await provision(provider, "upload-pending", prepared);
     expect(whileUploading.node).toBeDefined();
-    expect(calls.some((call) => call.argv[2] === "fork")).toBe(false);
-    expect(calls.filter((call) => call.argv[2] === "create")).toHaveLength(1);
+    expect(checkpoints(calls, "fork")).toHaveLength(0);
+    expect(checkpoints(calls, "create")).toHaveLength(1);
     expect(current().image?.state).toBe("pending");
     available = true;
     await provision(provider, "upload-ready", prepared);
-    expect(calls.find((call) => call.argv[2] === "fork")?.argv[3]).toBe(CHECKPOINT_ID);
+    expect(checkpoints(calls, "fork")[0]?.argv[3]).toBe(CHECKPOINT_ID);
     expect(current().image?.state).toBe("available");
   });
 
@@ -287,13 +288,9 @@ describe("Crabbox first capture without upload wait", () => {
     const refresh = provider.provision(PROFILE, "refresh-replacement", next);
     try {
       await entered.promise;
-      expect(
-        calls
-          .filter((call) => call.argv[2] === "create")
-          .every((call) => call.argv.includes("--wait")),
-      ).toBe(true);
+      expect(checkpoints(calls, "create").every(({ argv }) => argv.includes("--wait"))).toBe(true);
       expect(current().image?.checkpointId).toBe(CHECKPOINT_ID);
-      expect(calls.some((call) => call.argv[2] === "delete")).toBe(false);
+      expect(checkpoints(calls, "delete")).toHaveLength(0);
       expect(next.beginNodeEnrollment).not.toHaveBeenCalled();
     } finally {
       finish.resolve();

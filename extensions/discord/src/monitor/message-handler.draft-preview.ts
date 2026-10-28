@@ -4,6 +4,7 @@ import {
   type ChannelProgressDraftLine,
   createChannelProgressDraftCompositor,
   createLivePreviewLifecycle,
+  resolveChannelPreviewStreamMode,
   resolveChannelDraftStreamingChunking,
   resolveChannelStreamingBlockEnabled,
   resolveChannelStreamingPreviewCommandText,
@@ -26,9 +27,7 @@ import {
   captureDiscordRequestAuthority,
   withDiscordRequestAuthority,
 } from "../internal/request-authority.js";
-import { DISCORD_TEXT_CHUNK_LIMIT } from "../outbound-adapter.js";
-import { resolveDiscordPreviewStreamMode } from "../preview-streaming.js";
-import { retainDiscordProgressDraft } from "./message-handler.progress-continuation.js";
+import { DISCORD_TEXT_CHUNK_LIMIT } from "../outbound-payload.js";
 
 type DraftReplyReference = {
   peek: () => string | undefined;
@@ -49,15 +48,13 @@ export function createDiscordDraftPreviewController(params: {
   deliveryRest: RequestClient;
   deliverChannelId: string;
   replyReference: DraftReplyReference;
-  onFinalReplyStart?: () => void;
-  onFinalReplyDelivered?: () => void;
   log: (message: string) => void;
 }) {
   // Capture the channel owner before per-reply delivery binds a requester assertion.
   // Retained work restores this scope, never a settled requester or child tool scope.
   const runInChannelScope = AsyncLocalStorage.snapshot();
   const assertChannelAuthority = captureDiscordRequestAuthority();
-  const discordStreamMode = resolveDiscordPreviewStreamMode(params.discordConfig);
+  const discordStreamMode = resolveChannelPreviewStreamMode(params.discordConfig, "progress");
   // Provider drafts are visible before outbound modifiers run. Keep them off whenever a hook
   // can rewrite or cancel so the original payload cannot flash before durable delivery.
   const hookRunner = getGlobalHookRunner();
@@ -188,13 +185,9 @@ export function createDiscordDraftPreviewController(params: {
       : undefined,
     retainOnError: true,
     cleanupUndelivered: true,
-    onFinalStarted: () => {
-      freezeProgress();
-      params.onFinalReplyStart?.();
-    },
+    onFinalStarted: freezeProgress,
     onFinalDelivered: () => {
       progressDraft.markFinalReplyDelivered();
-      params.onFinalReplyDelivered?.();
     },
     onCleanupFailure: (err) => params.log(`discord: draft cleanup failed: ${String(err)}`),
   });
@@ -307,19 +300,81 @@ export function createDiscordDraftPreviewController(params: {
         return false;
       }
       assertCurrent();
-      if (
-        !adopt(
-          retainDiscordProgressDraft({
-            stream,
-            snapshot,
-            entry: params.discordConfig,
-            seed: progressSeed,
-            log: params.log,
-            runInChannelScope,
-            assertChannelAuthority,
-            isPolicyCurrent: params.isPolicyCurrent,
+      const retainedEntry = params.discordConfig;
+      const retainedLog = params.log;
+      const retainedIsPolicyCurrent = params.isPolicyCurrent;
+      let retired = false;
+      const assertChannelCurrent = () => {
+        // Explicit flushes may run outside the captured async scope. The transport
+        // still revalidates its original channel owner at every admission.
+        assertChannelAuthority?.();
+        if (retainedIsPolicyCurrent?.() === false) {
+          throw new Error("Discord channel policy is no longer current");
+        }
+      };
+      const assertRetainedCurrent = () => {
+        assertChannelCurrent();
+        if (retired) {
+          throw new Error("Discord retained progress authority is no longer current");
+        }
+      };
+      const retainedCompositor = createChannelProgressDraftCompositor({
+        preparedItems: true,
+        entry: retainedEntry,
+        mode: "progress",
+        active: true,
+        seed: progressSeed,
+        reasoningGate: false,
+        toolIcons: true,
+        initialSnapshot: snapshot,
+        update: async (retainedText, options) => {
+          if (retired) {
+            return false;
+          }
+          // The REST scheduler rechecks this exact custody before admission/retries.
+          stream.update(retainedText, { complete: true, assertCurrent: assertRetainedCurrent });
+          if (options.flush) {
+            await stream.flush();
+          }
+          return stream.lastDeliveredText() === retainedText;
+        },
+      });
+      let queue: Promise<unknown> = Promise.resolve();
+      const enqueue = (work: () => Promise<unknown>) => {
+        queue = runInChannelScope(() =>
+          queue.then(work).catch((error: unknown) => {
+            retainedLog("discord: retained progress failed (" + String(error) + ")");
           }),
-        )
+        );
+      };
+      let started = false;
+      if (
+        !adopt({
+          push: (item) =>
+            enqueue(async () => {
+              if (retired) {
+                return;
+              }
+              if (!started) {
+                started = true;
+                await retainedCompositor.start();
+              }
+              await retainedCompositor.pushItemEvent(item);
+            }),
+          retire: () => {
+            if (retired) {
+              return;
+            }
+            retired = true;
+            retainedCompositor.markFinalReplyStarted();
+            enqueue(() =>
+              withDiscordRequestAuthority(assertChannelCurrent, async () => {
+                await stream.clear();
+                await stream.cleanupPendingMessages();
+              }),
+            );
+          },
+        })
       ) {
         return false;
       }

@@ -1,3 +1,6 @@
+import { registerDebugEnglish } from "../../i18n/locales/en-debug.ts";
+
+registerDebugEnglish();
 export const DEBUG_OVERLAY_SECTION_HEADERS = {
   lanes: { id: "lanes", titleKey: "debug.overlay.lanes" },
   status: { id: "status", titleKey: "debug.overlay.status" },

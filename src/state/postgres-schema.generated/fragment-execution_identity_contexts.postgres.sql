@@ -20,4 +20,4 @@ CREATE TABLE "execution_identity_contexts" (
   UNIQUE ("created_at", "context_id")
 );
 
-CREATE INDEX "execution_identity_contexts_run_created_idx" ON "execution_identity_contexts" (("run_id") ASC NULLS FIRST, ("created_at") ASC NULLS FIRST, ("execution_id") ASC NULLS FIRST);
+CREATE INDEX "execution_identity_contexts_run_created_idx" ON "execution_identity_contexts" (("run_id") ASC, ("created_at") ASC, ("execution_id") ASC);

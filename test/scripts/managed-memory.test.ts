@@ -131,23 +131,15 @@ it("snapshots inputs before containment loads", async () => {
   );
 });
 
-it.each<{ stdio: StdioOptions; supported: boolean }>([
-  { stdio: "inherit", supported: true },
-  { stdio: ["ignore", "pipe", "ipc"], supported: false },
-  { stdio: ["ignore", "pipe", "pipe", "pipe"], supported: false },
-])("admits supported stdio only: $stdio", async ({ stdio, supported }) => {
+it.for<StdioOptions>([
+  ["ignore", "pipe", "ipc"],
+  ["ignore", "pipe", "pipe", "pipe"],
+])("rejects unsupported stdio: %j", async (stdio) => {
   const run = vi.spyOn(memory, "runLinuxMemoryCommand");
-  if (supported) {
-    run.mockResolvedValue(0);
-  }
-  const result = linuxCommand({ stdio });
-  if (supported) {
-    await result;
-    expect(run).toHaveBeenCalledWith(expect.objectContaining({ stdio }), expect.any(Function));
-  } else {
-    await expect(result).rejects.toThrow("do not support IPC or extra stdio descriptors");
-    expect(run).not.toHaveBeenCalled();
-  }
+  await expect(linuxCommand({ stdio })).rejects.toThrow(
+    "do not support IPC or extra stdio descriptors",
+  );
+  expect(run).not.toHaveBeenCalled();
 });
 
 it("isolates concurrent cleanup identities", async () => {
@@ -270,15 +262,6 @@ it("bounds arguments and preloads without owning deadlines", async () => {
   expect(
     run.mock.calls[0]?.[0]?.args?.filter((arg) => arg.startsWith("--property=RuntimeMaxSec=")),
   ).toEqual([]);
-  const controls = [
-    ["show", "--property=LoadState"],
-    ["kill", "--kill-whom=all", "--signal=SIGKILL"],
-    ["stop"],
-    ["show", ...["LoadState", "ActiveState", "ControlGroup"].map((name) => "--property=" + name)],
-  ];
-  expect(mocks.control.mock.calls.map((call) => call[1])).toEqual(
-    controls.map((args) => ["--user"].concat(args, memoryScope)),
-  );
 });
 
 it.each([

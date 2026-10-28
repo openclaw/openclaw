@@ -1,6 +1,7 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as registryRead from "../agents/worktrees/registry-read.js";
 import {
   deleteRegistryWorktree,
   insertRegistryWorktree,
@@ -23,6 +24,7 @@ import {
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import {
   hasSupportedGitHubPublicationTarget,
+  prepareGitHubPublicationSession,
   prepareGitHubPublicationWorkspaceOwner,
 } from "./github-publication-availability.js";
 import {
@@ -355,17 +357,30 @@ it.each(["session", "identity", "discovery"])(
         retargetStore();
         return identity;
       });
-    } else {
+    } else if (preparation === "session") {
       mocks.sessionRead.mockImplementationOnce(async () => {
         retargetStore();
         return mocks.session();
       });
     }
-    expect(
-      await (preparation === "discovery"
-        ? hasSupportedGitHubPublicationTarget(session, () => {})
-        : prepareGitHubPublicationAvailability(session)),
-    ).toBe(true);
+    if (preparation === "discovery") {
+      using prepared = await prepareGitHubPublicationSession(session.sessionKey, {
+        agentId: session.agentId,
+      });
+      const readWorktree = registryRead.readLiveRegistryWorktreeByOwner;
+      // Target discovery borrows the session; its registry read still retains the physical store.
+      vi.spyOn(registryRead, "readLiveRegistryWorktreeByOwner").mockImplementationOnce(
+        async (...args) => {
+          retargetStore();
+          return readWorktree(...args);
+        },
+      );
+      expect(
+        await hasSupportedGitHubPublicationTarget(session, () => {}, prepared.readCurrent),
+      ).toBe(true);
+    } else {
+      expect(await prepareGitHubPublicationAvailability(session)).toBe(true);
+    }
   },
 );
 

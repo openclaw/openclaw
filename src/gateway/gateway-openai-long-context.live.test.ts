@@ -467,7 +467,7 @@ describeLive("Gateway OpenAI long-context compaction (live)", () => {
 
       const gatewayEvents: OpenAILongContextAgentEvent[] = [];
       const deviceIdentity = loadOrCreateDeviceIdentity({
-        path: instance.state.path("operator-device.sqlite"),
+        path: instance.state.path("operator-device", "client", "credentials.sqlite"),
       });
       let client = await connectGatewayClient({
         url: instance.url,

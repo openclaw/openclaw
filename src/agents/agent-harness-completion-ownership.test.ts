@@ -1,12 +1,21 @@
 import path from "node:path";
-import { assert, expect, it } from "vitest";
+import { afterEach, assert, expect, it } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { captureRuntimeConfigAsyncReader } from "../config/io.js";
 import {
   appendTranscriptMessage,
+  loadExactSessionEntry,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import { holdForeignWriter } from "../infra/sqlite-worker-shared-state-admission.test-support.js";
+import { preparePluginStateGuard } from "../plugin-sdk/plugin-state-runtime.js";
+import {
+  createPluginStateKeyedStore,
+  resetPluginStateStoreForTests,
+} from "../plugin-state/plugin-state-store.js";
 import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -16,7 +25,11 @@ import {
   prepareAgentRunAdmission,
   resolveAdmittedRunActiveAssertion,
 } from "./admitted-run-context.js";
-import { buildCurrentRunRestartRecoveryClaim } from "./agent-command-restart-recovery.js";
+import {
+  bindCommandHarnessCompletionAssertion,
+  buildCurrentRunRestartRecoveryClaim,
+  prepareCommandHarnessCompletionRecovery,
+} from "./agent-command-restart-recovery.js";
 import {
   captureHarnessCompletionRecovery as captureRecovery,
   createHarnessCompletionSourceAssertion,
@@ -27,10 +40,14 @@ import {
   withAgentHarnessCompletionAdmission as withAdmission,
 } from "./agent-harness-completion-scope.js";
 import { runWithAgentToolSourceExecutionScope } from "./agent-tool-source-execution-guard.js";
+import { persistAgentSession } from "./command/attempt-execution.shared.js";
 
 const requesterSessionKey = "agent:main:main";
 const sourceSessionKey = "native-child:one";
 const sourceRunId = "announce:one";
+
+afterEach(() => resetPluginStateStoreForTests({ closeDatabase: false }));
+
 function input() {
   const entry: SessionEntry = {
     sessionId: "requester-one",
@@ -43,7 +60,7 @@ function input() {
     entry,
     runId: sourceRunId,
     inputProvenance: {
-      kind: "inter_session",
+      kind: "inter_session" as const,
       sourceChannel: "internal",
       sourceTool: "agent_harness_completion",
       sourceSessionKey,
@@ -139,6 +156,155 @@ async function setupNativeRequester(state: OpenClawTestState) {
   await replaceSessionEntry(target, entry);
   return { target, entry };
 }
+it.each([
+  "metadata",
+  "binding replacement",
+  "source revocation",
+  "requester reassignment",
+] as const)(
+  "checks %s before transferring native custody to a durable requester receipt",
+  async (change) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await captureRuntimeConfigAsyncReader()();
+      const { target } = await setupNativeRequester(state);
+      const entry = loadExactSessionEntry({ ...target, readConsistency: "latest" })?.entry;
+      assert(entry);
+      let sourceCurrent = true;
+      const store = createPluginStateKeyedStore<{ owner: string; metadata?: number }>(
+        "completion-admission-test",
+        { namespace: "bindings", maxEntries: 10, overflowPolicy: "reject-new", env: state.env },
+        () => {
+          if (!sourceCurrent) {
+            throw new Error("Native source revoked");
+          }
+        },
+      );
+      await store.register("child", { owner: "original" });
+      const observed = await store.observe("child");
+      const guard = await preparePluginStateGuard(store, "child", (value) => {
+        if (value?.owner !== "original") {
+          throw new Error("Native binding replaced");
+        }
+      });
+      assert(guard);
+      const captured = createDeferred();
+      const resume = createDeferred();
+      const checks: Array<{ current: boolean; mutationPending: boolean }> = [];
+      let foreign: ReturnType<typeof holdForeignWriter> | undefined;
+      let mutation: Promise<unknown> | undefined;
+      let mutationSettled = false;
+      const params = { ...input(), entry };
+      const operation = withAdmission(
+        makeAdmission(params, {
+          isSourceCurrent: () => {
+            guard.assertCurrent();
+            return true;
+          },
+        }),
+        async () => {
+          const recovery = prepareCommandHarnessCompletionRecovery({
+            ...params,
+            sessionId: entry.sessionId,
+            opts: { message: "Completed child result", inputProvenance: params.inputProvenance },
+            hasDeliveryContext: true,
+          });
+          assert(recovery.harnessCompletion);
+          captured.resolve();
+          await resume.promise;
+          const persisted = await persistAgentSession({
+            ...target,
+            sessionStore: { [target.sessionKey]: entry },
+            initialEntry: entry,
+            entry: {
+              ...entry,
+              ...buildCurrentRunRestartRecoveryClaim({
+                entry,
+                runId: sourceRunId,
+                harnessCompletion: recovery.harnessCompletion,
+                ...recovery.sourceOptions,
+              }),
+            },
+            shouldPersist: (current) => {
+              try {
+                const allowed = recovery.isCompletionCurrent(current);
+                checks.push({
+                  current: allowed,
+                  mutationPending: Boolean(mutation) && !mutationSettled,
+                });
+                return allowed;
+              } finally {
+                // Keep the real CAS pending through the checkpoint's source check.
+                foreign?.close();
+              }
+            },
+          });
+          bindCommandHarnessCompletionAssertion({
+            claim: recovery.guardedHarnessCompletion,
+            persisted,
+            sessionKey: target.sessionKey,
+            storePath: target.storePath,
+            opts: { message: "Completed child result" },
+          });
+          return recovery.harnessCompletion;
+        },
+      );
+      void operation.catch(() => {});
+      const replacement = {
+        ...entry,
+        sessionId: "requester-replacement",
+        lifecycleRevision: "revision-two",
+      };
+      try {
+        await Promise.race([captured.promise, operation]);
+        expect(checks).toEqual([]);
+        if (change === "metadata" || change === "binding replacement") {
+          foreign = holdForeignWriter(captureOpenClawStateWorkerContext({ env: state.env }));
+          mutation = store
+            .compareAndApply("child", observed.comparison, {
+              operation: "update",
+              action: "set",
+              value: { owner: change === "metadata" ? "original" : "replacement", metadata: 1 },
+            })
+            .finally(() => {
+              mutationSettled = true;
+            });
+          void mutation.catch(() => {});
+        } else if (change === "source revocation") {
+          sourceCurrent = false;
+        } else {
+          await replaceSessionEntry(target, replacement);
+        }
+        resume.resolve();
+        if (change === "metadata") {
+          const claim = await operation;
+          await mutation;
+          const saved = loadExactSessionEntry({ ...target, readConsistency: "latest" })?.entry;
+          expect(saved?.restartRecoveryHarnessCompletion).toEqual(claim);
+          expect(saved?.restartRecoveryDeliverySourceRunId).toBe(sourceRunId);
+          expect(saved?.restartRecoverySourceIngress).toBe("internal");
+          assert(saved);
+          sourceCurrent = false;
+          expect(owedTask(structuredClone(claim), saved)).toEqual(claim);
+        } else {
+          await expect(operation).rejects.toThrow();
+          await mutation;
+          const saved = loadExactSessionEntry({ ...target, readConsistency: "latest" })?.entry;
+          expect(saved).toEqual(change === "requester reassignment" ? replacement : entry);
+          expect(saved?.restartRecoveryHarnessCompletion).toBeUndefined();
+          expect(saved?.restartRecoveryDeliverySourceRunId).toBeUndefined();
+        }
+        expect(checks).toEqual([
+          { current: change === "metadata", mutationPending: Boolean(mutation) },
+        ]);
+      } finally {
+        resume.resolve();
+        foreign?.close();
+        await Promise.allSettled([operation, ...(mutation ? [mutation] : [])]);
+        guard.release();
+      }
+    });
+  },
+);
 it.each(["current", "prior", "unadmitted-prior", "foreign-source", "human"] as const)(
   "retains exact pre-mirror recovery admission after the real recorder commits %s",
   async (scenario) => {

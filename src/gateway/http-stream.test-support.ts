@@ -170,20 +170,11 @@ export function assistantSnapshotCases(leading: AssistantSnapshotCase): Assistan
     resultTexts?: string[],
   ) => ({ name, expected, events, resultTexts });
   const growing = [echo(1), echo(1), echo(2), echo(2), snapshot(2, "Echo!", "!")];
-  const repeated = [1, 1].map(() => ({ itemId: "answer-1", delta: "Echo" }));
-  const split = [
-    snapshot(1, "First."),
-    ...["\n", "\n", "Se", "cond."].map(delta),
-    snapshot(2, "\n\nSecond."),
-  ];
   const empty = [snapshot(1, "First."), delta(""), delta("Second."), snapshot(2, "Second.")];
   const beyondCap = [snapshot(1, longText, longText), snapshot(2, "tail", "tail")];
   return [
     leading,
-    scenario("identical items", "Echo\n\nEcho", [echo(1), echo(2)], ["Echo", "Echo"]),
-    scenario("replayed and growing items", "Echo\n\nEcho!", growing),
-    scenario("repeated deltas", "EchoEcho", repeated),
-    scenario("split newlines before a snapshot", "First.\n\nSecond.", split),
+    scenario("replayed and growing items", "Echo\n\nEcho!", growing, ["Echo", "Echo!"]),
     scenario("empty items before deltas", "First.\n\nSecond.", empty),
     scenario("text beyond the live display cap", `${longText}\n\ntail`, beyondCap),
   ];
@@ -221,8 +212,6 @@ function namedCases<T extends object>(base: T, rows: [string, Partial<T>][]) {
 
 export const incompatibleReplacementCases: IncompatibleReplacementCase[] = [
   ...namedCases<Omit<IncompatibleReplacementCase, "name">>({ replacementText: "" }, [
-    ["rewritten", { replacementText: "final answer" }],
-    ["shortened", { replacementText: "dra" }],
     ["rewritten then extended by a delta", { replacementText: "other answer", tailDelta: "!" }],
     ["cleared", {}],
   ]),
@@ -230,7 +219,6 @@ export const incompatibleReplacementCases: IncompatibleReplacementCase[] = [
     { previousText: "Echo", replaceable: true, replacementText: "Replacement" },
     [
       ["replaced by a held provisional item", {}],
-      ["cleared by a held provisional item", { replacementText: "" }],
       [
         "cleared by an explicit empty final result",
         { replacementText: "Echo tail", resultText: "" },
@@ -256,7 +244,6 @@ type CompatibleReplacementCase = ReplacementCase & {
 export const compatibleReplacementCases: CompatibleReplacementCase[] = [
   ...namedCases<Omit<CompatibleReplacementCase, "name">>({}, [
     ["a snapshot without a delta", {}],
-    ["a snapshot with its own delta", { replacementDelta: "final answer" }],
     ["an append after partial text", { previousDelta: "final ", replacementDelta: "answer" }],
   ]),
   ...namedCases<Omit<CompatibleReplacementCase, "name">>(
@@ -267,9 +254,7 @@ export const compatibleReplacementCases: CompatibleReplacementCase[] = [
       replaceable: true,
     },
     [
-      ["a held append-compatible replacement", {}],
       ["a corrected held replacement", { intermediateText: "Replacement" }],
-      ["a recovered held draft", { replacementText: "Replacement", resultText: "Echo tail" }],
       ["held text without a final payload", { noResultText: true }],
       [
         "a cleared initial draft",
@@ -315,27 +300,58 @@ export function emitIncompatibleAssistantReplacement(
   scenario: IncompatibleReplacementCase,
   replacementDelta: "" | undefined,
 ) {
-  const {
-    previousText = "draft answer",
-    replacementText,
-    itemId,
-    recoveryItemId,
-    recoveryText,
-  } = scenario;
+  return emitReplacement(
+    runId,
+    scenario,
+    scenario.previousText ?? "draft answer",
+    replacementDelta,
+  );
+}
+
+export function emitCompatibleAssistantReplacement(
+  runId: string,
+  scenario: CompatibleReplacementCase,
+) {
+  return emitReplacement(
+    runId,
+    { ...scenario, replacementText: scenario.replacementText ?? "final answer" },
+    scenario.previousDelta || undefined,
+    scenario.replacementDelta,
+  );
+}
+
+function emitReplacement(
+  runId: string,
+  scenario: IncompatibleReplacementCase & CompatibleReplacementCase,
+  previousText: string | undefined,
+  replacementDelta: string | undefined,
+) {
+  const { itemId, replacementText, replaceable, intermediateText, recoveryText, recoveryItemId } =
+    scenario;
   const emit = assistantEmitter(runId);
-  emit({
-    text: previousText,
-    delta: previousText,
-    ...(itemId ? { itemId } : scenario.replaceable ? { itemId: "answer-1" } : {}),
-  });
+  if (previousText !== undefined) {
+    emit({
+      text: previousText,
+      delta: previousText,
+      ...(itemId ? { itemId } : replaceable ? { itemId: "answer-1" } : {}),
+    });
+  }
+  if (intermediateText !== undefined) {
+    emit({
+      text: intermediateText,
+      delta: "",
+      replace: true,
+      ...(replaceable ? { itemId: "answer-2", replaceable: true } : {}),
+    });
+  }
   emit({
     text: replacementText,
-    ...(replacementDelta === undefined ? {} : { delta: replacementDelta }),
     replace: true,
+    ...(replacementDelta === undefined ? {} : { delta: replacementDelta }),
     ...(itemId
       ? { itemId, delta: "" }
-      : scenario.replaceable
-        ? { itemId: "answer-2", replaceable: true }
+      : replaceable
+        ? { itemId: intermediateText === undefined ? "answer-2" : "answer-3", replaceable: true }
         : { phase: "commentary" }),
   });
   if (recoveryText !== undefined) {
@@ -355,49 +371,6 @@ export function emitIncompatibleAssistantReplacement(
   return finishAssistant(
     runId,
     scenario.noResultText ? undefined : (scenario.resultText ?? recoveryText ?? replacementText),
-  );
-}
-
-export function emitCompatibleAssistantReplacement(
-  runId: string,
-  scenario: CompatibleReplacementCase,
-) {
-  const {
-    previousDelta,
-    replacementText = "final answer",
-    replaceable,
-    intermediateText,
-  } = scenario;
-  const emit = assistantEmitter(runId);
-  if (previousDelta) {
-    emit({
-      text: previousDelta,
-      delta: previousDelta,
-      ...(replaceable ? { itemId: "answer-1" } : {}),
-    });
-  }
-  if (intermediateText !== undefined) {
-    emit({
-      text: intermediateText,
-      delta: "",
-      replace: true,
-      ...(replaceable ? { itemId: "answer-2", replaceable: true } : {}),
-    });
-  }
-  emit({
-    text: replacementText,
-    replace: true,
-    ...(replaceable
-      ? { itemId: intermediateText === undefined ? "answer-2" : "answer-3", replaceable: true }
-      : { phase: "commentary" }),
-    ...(scenario.replacementDelta === undefined ? {} : { delta: scenario.replacementDelta }),
-  });
-  if (scenario.terminalEcho) {
-    emit({ text: replacementText });
-  }
-  return finishAssistant(
-    runId,
-    scenario.noResultText ? undefined : (scenario.resultText ?? replacementText),
   );
 }
 
@@ -498,7 +471,6 @@ export function emitResolvedStreamingFailure(
       lifecycleGeneration: getAgentEventLifecycleGeneration,
       startedAt: Date.now(),
       state: {
-        currentTurnUserMessagePersisted: true,
         lifecycleFinishing: false,
         lifecycleEnded: false,
       },

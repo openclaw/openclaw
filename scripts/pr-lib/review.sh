@@ -517,7 +517,7 @@ review_init() {
   expected_sha=$(pr_view_string_field "$json" headRefOid "$pr") || return 1
   fetch_pr_head "$pr" "$expected_sha" "refs/heads/pr-$pr" "$json" || return 1
   verify_pr_metadata_identity "$pr" "$json" "$PR_HEAD_OBSERVATION" || return 1
-  write_pr_meta_files "$json"
+  write_pr_meta_files "$json" || return 1
   local mb
   mb=$(pr_git merge-base "$PR_MAIN_SHA" "refs/heads/pr-$pr")
 

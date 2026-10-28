@@ -49,8 +49,9 @@ export function registerMatrixAutoJoin(params: {
   }
 
   const resolveAllowedAliasRoomId = async (alias: string): Promise<string | null> => {
-    if (resolvedAliasRoomIds.has(alias)) {
-      return resolvedAliasRoomIds.get(alias) ?? null;
+    const cached = resolvedAliasRoomIds.get(alias);
+    if (cached !== undefined) {
+      return cached;
     }
     const resolved = await params.client.resolveRoom(alias);
     if (resolved) {

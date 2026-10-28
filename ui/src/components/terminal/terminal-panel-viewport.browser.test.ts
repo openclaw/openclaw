@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import "./terminal-panel-registration.ts";
+import "./terminal-panel-registration.tsx";
 
 it.runIf("__vitest_browser__" in globalThis)(
   "shows the terminal canvas inside its active viewport",

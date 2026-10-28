@@ -35,39 +35,6 @@ const HANDOFF_FILE_NAME = "handoff.html";
 // is skipped because the process already exited.
 const HANDOFF_CLEANUP_DELAY_MS = 10 * 60 * 1000;
 
-function escapeHtmlAttribute(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
-}
-
-function escapeScriptString(value: string): string {
-  return JSON.stringify(value).replaceAll("<", "\\u003c");
-}
-
-function renderBrowserHandoffDocument(targetUrl: string): string {
-  const href = escapeHtmlAttribute(targetUrl);
-  return [
-    "<!doctype html>",
-    '<html lang="en">',
-    "<head>",
-    '<meta charset="utf-8">',
-    `<meta http-equiv="refresh" content="0; url=${href}">`,
-    "<title>OpenClaw</title>",
-    "</head>",
-    "<body>",
-    "<p>Opening the OpenClaw Control UI…</p>",
-    `<p>If nothing happens, <a href="${href}">continue to OpenClaw</a>.</p>`,
-    `<script>location.replace(${escapeScriptString(targetUrl)});</script>`,
-    "</body>",
-    "</html>",
-    "",
-  ].join("\n");
-}
-
 /** Create the private handoff directory with platform-appropriate owner-only access. */
 async function createHandoffDirectory(): Promise<string> {
   if (process.platform !== "win32") {
@@ -127,7 +94,31 @@ export async function openUrlPrivately(targetUrl: string): Promise<boolean> {
 
   const filePath = path.join(directory, HANDOFF_FILE_NAME);
   try {
-    await writeHandoffDocument(filePath, renderBrowserHandoffDocument(normalizedTargetUrl));
+    const href = normalizedTargetUrl
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#39;");
+    await writeHandoffDocument(
+      filePath,
+      [
+        "<!doctype html>",
+        '<html lang="en">',
+        "<head>",
+        '<meta charset="utf-8">',
+        `<meta http-equiv="refresh" content="0; url=${href}">`,
+        "<title>OpenClaw</title>",
+        "</head>",
+        "<body>",
+        "<p>Opening the OpenClaw Control UI…</p>",
+        `<p>If nothing happens, <a href="${href}">continue to OpenClaw</a>.</p>`,
+        `<script>location.replace(${JSON.stringify(normalizedTargetUrl).replaceAll("<", "\\u003c")});</script>`,
+        "</body>",
+        "</html>",
+        "",
+      ].join("\n"),
+    );
   } catch {
     await removeHandoffDirectory(directory);
     return false;

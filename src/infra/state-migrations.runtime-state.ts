@@ -1,12 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
 import { asNullableRecord, asRecord } from "@openclaw/normalization-core/record-coerce";
+import { publishConfigHealthChanged } from "../config/io.health-state.kernel.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { safeStatSync } from "./path-guards.js";
 import { archiveLegacyImportSource } from "./state-migrations.storage.js";
 import type { LegacyStateDetection } from "./state-migrations.types.js";
+import { decodeUtf8Input } from "./utf8-input.js";
 
 type LegacyConfigHealthImportDatabase = Pick<OpenClawStateKyselyDatabase, "config_health_entries">;
 
@@ -112,12 +114,13 @@ export function migrateLegacyConfigHealth(params: {
   }
   let entries: LegacyConfigHealthEntry[];
   try {
-    entries = normalizeLegacyConfigHealthFile(JSON.parse(fs.readFileSync(sourcePath, "utf8")));
+    const source = decodeUtf8Input(fs.readFileSync(sourcePath), "Legacy config health state");
+    entries = normalizeLegacyConfigHealthFile(JSON.parse(source));
   } catch (error) {
-    return {
-      changes: [],
-      warnings: [`Failed reading legacy config health state ${sourcePath}: ${String(error)}`],
-    };
+    warnings.push(
+      `Failed reading legacy config health state ${sourcePath}: ${String(error)} Source left unchanged; restore valid UTF-8 JSON from a verified backup and rerun openclaw doctor --fix.`,
+    );
+    return { changes: [], warnings };
   }
   let changes: string[];
   try {
@@ -174,6 +177,9 @@ export function migrateLegacyConfigHealth(params: {
               .insertInto("config_health_entries")
               .values(entriesToInsert.map(configHealthRow)),
           );
+        }
+        if (entriesToInsert.length > 0 || reconciledCount > 0) {
+          publishConfigHealthChanged(db);
         }
         return [
           { action: "Migrated", count: entriesToInsert.length },

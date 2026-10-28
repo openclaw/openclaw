@@ -3,13 +3,9 @@ import {
   collectErrorGraphCandidates,
   toErrorObject,
 } from "@openclaw/normalization-core/error-coercion";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveAgentDir } from "../agents/agent-scope-config.js";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
-import {
-  parseSqliteSessionFileMarker,
-  type SqliteSessionFileMarker,
-} from "../config/sessions/legacy-sqlite-marker.js";
+import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import {
   resolveSqliteReadScope,
   toDatabaseOptions,
@@ -18,7 +14,6 @@ import {
   captureSessionActorStorageOwner,
   type SessionActorStorageBinding,
 } from "../config/sessions/session-actor-storage-binding.js";
-import { restoreSessionColdTranscript } from "../config/sessions/session-cold-storage.js";
 import { listDurableSqliteTargetPathsForSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import { resolveStateDir } from "../config/state-dir.js";
@@ -45,7 +40,6 @@ import { withSessionCostUsageWorkerDatabases } from "./session-cost-usage-worker
 import {
   UsageCostWorkerReplyError,
   type UsageCostWorkerHostEffects,
-  type UsageCostWorkerHostReply,
   type UsageCostWorkerHostRequest,
   type UsageCostWorkerInput,
   type UsageCostWorkerLocation,
@@ -192,8 +186,7 @@ export function resolveUsageCostWorkerDayBucket(dayBucket?: UsageDailyBucket): U
     : { mode: "time-zone", timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone };
 }
 
-function restoreWorkerFailure(error: unknown, hostErrors: Map<number, unknown>): unknown {
-  const restoredOrigins = new Set<number>();
+function restoreWorkerFailure(error: unknown, hostErrors: Set<Error>): unknown {
   let result = error;
   for (const current of collectErrorGraphCandidates(error, (entry) =>
     entry instanceof Error
@@ -206,17 +199,7 @@ function restoreWorkerFailure(error: unknown, hostErrors: Map<number, unknown>):
       if (failure.error) {
         retainOpenClawStateWorkerErrorPayload(remote, failure.error);
       }
-      let restored: unknown = hydrateOpenClawStateWorkerError(remote, { includeOrdinary: true });
-      if (failure.hostOrigin !== undefined && hostErrors.has(failure.hostOrigin)) {
-        restoredOrigins.add(failure.hostOrigin);
-        const original = hostErrors.get(failure.hostOrigin);
-        restored = failure.hostFailureOnly
-          ? original
-          : withSqliteWorkerCleanupFailure(
-              toErrorObject(original, "Usage cache host effect failed"),
-              restored,
-            );
-      }
+      const restored = hydrateOpenClawStateWorkerError(remote, { includeOrdinary: true });
       result =
         current === error
           ? restored
@@ -226,13 +209,17 @@ function restoreWorkerFailure(error: unknown, hostErrors: Map<number, unknown>):
             );
     }
   }
+  const restoredErrors = new Set(
+    collectErrorGraphCandidates(result, (entry) =>
+      entry instanceof Error
+        ? [entry.cause, ...(entry instanceof AggregateError ? entry.errors : [])]
+        : [],
+    ),
+  );
   // Cancellation can retire the worker before an accepted write returns its failure.
-  for (const [origin, failure] of hostErrors) {
-    if (!restoredOrigins.has(origin)) {
-      result = withSqliteWorkerCleanupFailure(
-        toErrorObject(failure, "Usage cache host effect failed"),
-        result,
-      );
+  for (const failure of hostErrors) {
+    if (!restoredErrors.has(failure)) {
+      result = withSqliteWorkerCleanupFailure(failure, result);
     }
   }
   return result;
@@ -245,6 +232,7 @@ type UsageCostWorkerRequest =
 export async function runUsageCostWorker(
   prepared: PreparedUsageCostWorker,
   operation: UsageCostWorkerRequest,
+  waitForRefresh = false,
 ): Promise<UsageCostWorkerResult | { kind: "busy" }> {
   if (prepared.memory) {
     const pricing =
@@ -259,14 +247,16 @@ export async function runUsageCostWorker(
       prepared.memory,
       request,
       createUsageCostResolver(prepared, pricing),
+      waitForRefresh,
     );
   }
-  return runPreparedUsageCostWorker(prepared, operation);
+  return runPreparedUsageCostWorker(prepared, operation, waitForRefresh);
 }
 
 async function runPreparedUsageCostWorker(
   prepared: PreparedUsageCostWorker,
   operation: UsageCostWorkerRequest,
+  waitForRefresh: boolean,
 ): Promise<UsageCostWorkerResult | { kind: "busy" }> {
   const { location, archiveStorePaths, stores } = prepared;
   const capturedOperation = structuredClone(operation);
@@ -275,15 +265,6 @@ async function runPreparedUsageCostWorker(
     const assertCurrent = () => {
       scope.assertCurrent();
       signal?.throwIfAborted();
-    };
-    const resolveBinding = (target: Pick<SqliteSessionFileMarker, "agentId" | "storePath">) => {
-      const binding = stores.find(
-        (entry) => entry.agentId === target.agentId && entry.storePath === target.storePath,
-      )?.database;
-      if (!binding) {
-        throw new Error("Usage worker requested an unowned transcript database");
-      }
-      return binding;
     };
     const pruneRows: SessionCostUsageRollupSnapshot[] = [];
     const lock =
@@ -303,7 +284,7 @@ async function runPreparedUsageCostWorker(
       return lock;
     };
     if (lock) {
-      if (!(await lock.acquire())) {
+      if (!(await lock.acquire(waitForRefresh))) {
         return { kind: "busy" };
       }
     }
@@ -322,8 +303,7 @@ async function runPreparedUsageCostWorker(
     const failureKey = (sessionFile: string) =>
       JSON.stringify([location.databasePath, sessionFile]);
     const uncommittedSessionFiles = new Set<string>();
-    const hostErrors = new Map<number, unknown>();
-    let errorSequence = 0;
+    const hostErrors = new Set<Error>();
     try {
       const failureEntries = lock
         ? await failures.entries().catch((error: unknown) => {
@@ -350,16 +330,12 @@ async function runPreparedUsageCostWorker(
               .length,
           timeoutMs: USAGE_COST_WORKER_TIMEOUT_MS,
           onRequest: async (value, context) => {
-            let reply: UsageCostWorkerHostReply;
             try {
               const assertRequestCurrent = () => {
                 assertCurrent();
                 context.signal.throwIfAborted();
               };
               assertRequestCurrent();
-              if (!isRecord(value) || typeof value.kind !== "string") {
-                throw new Error("Invalid usage worker host request");
-              }
               // SAFETY: The paired worker constructs this union; host effects still check current authority.
               const request = value as UsageCostWorkerHostRequest;
               let output: UsageCostWorkerHostEffects[keyof UsageCostWorkerHostEffects]["output"] =
@@ -372,17 +348,6 @@ async function runPreparedUsageCostWorker(
                 case "pricing":
                   output = request.input.map(resolveCost);
                   break;
-                case "restore": {
-                  const binding = resolveBinding(request.input);
-                  await restoreSessionColdTranscript(
-                    { ...request.input, storePath: binding.path, env: location.env },
-                    assertRequestCurrent,
-                    undefined,
-                    undefined,
-                    context.signal,
-                  );
-                  break;
-                }
                 case "prune-rows":
                   for (const row of request.input) {
                     pruneRows.push({
@@ -427,21 +392,22 @@ async function runPreparedUsageCostWorker(
                       });
                   }
                   break;
+                case "write-quarters":
+                  output = await requireLock("write cache rows").writeQuarters(
+                    request.input,
+                    context.signal,
+                  );
+                  break;
                 default:
                   throw new Error("Unknown usage worker host request");
               }
               assertRequestCurrent();
-              reply = { ok: true, value: output };
+              return { input: output, timeoutMs: USAGE_COST_WORKER_TIMEOUT_MS };
             } catch (error) {
-              const origin = ++errorSequence;
-              hostErrors.set(origin, error);
-              reply = {
-                ok: false,
-                origin,
-                message: toErrorObject(error, "Usage host effect failed").message,
-              };
+              const failure = toErrorObject(error, "Usage host effect failed");
+              hostErrors.add(failure);
+              throw failure;
             }
-            return { input: reply, timeoutMs: USAGE_COST_WORKER_TIMEOUT_MS };
           },
         },
       );

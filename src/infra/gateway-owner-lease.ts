@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
 import path from "node:path";
-import type { RetainedOperation } from "@openclaw/worker-runtime/lifecycle";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
+import { readAgentDatabaseLeaseProvenance } from "../state/openclaw-agent-db-lease-provenance.js";
 import type { OpenClawStateSchemaReadAdmission } from "../state/openclaw-state-db-contract.js";
 import { isStatePostgres } from "../state/openclaw-state-db-engine.js";
 import {
@@ -25,6 +25,7 @@ import {
 import { captureOpenClawStateReadSource } from "../state/openclaw-state-read-worker.js";
 import type { OpenClawStateReadOutcome } from "../state/openclaw-state-read.types.js";
 import { captureOpenClawStateReadWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { readProcessMachineIdentity } from "./current-machine-identity.js";
 import {
   classifyGatewayOwnerProcessNamespace,
   describeGatewayLockHolder,
@@ -70,16 +71,13 @@ function resolveStoppedGatewayOwnerLease(previous: GatewayOwnerLeaseIdentity | u
   }
   const namespace = classifyGatewayOwnerProcessNamespace(previous.processNamespace, {
     ownerHost: previous.host,
-    readHeartbeatAt: () => previous.heartbeatAt,
+    machineIdentity: previous.machineIdentity,
   });
   if (namespace === "dead") {
     return previous;
   }
   if (namespace === "unknown") {
     throw new GatewayLockNamespaceError(previous);
-  }
-  if (previous.expired && previous.state !== "live") {
-    return previous;
   }
   throw new Error(
     `Another Gateway owner lease is still active for this state directory: ${describeGatewayLockHolder(previous, undefined, previous.state === "live" ? "live" : "unknown")}`,
@@ -116,16 +114,13 @@ export async function assertGatewayOwnerLeaseStopped(
   };
   let prepared: PreparedSqliteReadOnlyLocation | undefined;
   let releaseSnapshot: (() => void) | undefined;
-  let read: RetainedOperation<OpenClawStateReadOutcome> | undefined;
-  let retirement: RetainedOperation<void> | undefined;
+  let read: Promise<OpenClawStateReadOutcome> | undefined;
   let closing: Promise<void> | undefined;
   const close = (): Promise<void> =>
     (closing ??= (async () => {
       // Read failure belongs to the caller; cleanup must still retire its native task.
-      await read?.result.catch(() => undefined);
-      retirement = transport.startClose();
-      await retirement.result;
-      retirement = undefined;
+      await read?.catch(() => undefined);
+      await transport.startClose();
       releaseSnapshot?.();
       releaseSnapshot = undefined;
       if (prepared) {
@@ -161,7 +156,7 @@ export async function assertGatewayOwnerLeaseStopped(
       },
       authority,
     );
-    outcome = await read.result;
+    outcome = await read;
     if ("error" in outcome) {
       errors.push(outcome.error);
     }
@@ -236,6 +231,7 @@ export function acquireGatewayOwnerLease(params: {
     pid: process.pid,
     host: hostname(),
     processNamespace: readGatewayLockProcessNamespace(),
+    machineIdentity: process.platform === "darwin" ? readProcessMachineIdentity() : undefined,
     // Retry the native self lookup with its full Windows budget before publication.
     startedAt:
       getFileLockProcessStartTime(process.pid, env) ??
@@ -315,7 +311,7 @@ export function acquireGatewayOwnerLease(params: {
         leaseMs: STARTUP_MIGRATION_LEASE_TTL_MS,
         acquiredAt: expiresAt - STARTUP_MIGRATION_LEASE_TTL_MS,
         expiresAt,
-        // Foreign-namespace recovery expires heartbeat evidence before the lease's TTL.
+        // Keep holder diagnostics fresh even when its process namespace is not visible.
         heartbeatMs: Math.floor(
           Math.min(STARTUP_MIGRATION_LEASE_TTL_MS, GATEWAY_OWNER_HEARTBEAT_STALE_MS) / 3,
         ),
@@ -352,6 +348,8 @@ export function acquireGatewayOwnerLease(params: {
             ...payload,
             owner: { ...processOwner, startedAt },
             listeningAt: Date.now(),
+            // Listening follows startup admission. Peers trust this live owner of the exact file.
+            stateDatabaseProvenance: readAgentDatabaseLeaseProvenance(databasePath),
           }),
         );
         if (!updated) {

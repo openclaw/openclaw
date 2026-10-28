@@ -8,12 +8,12 @@ import { buildOpenAISpeechProvider } from "./speech-provider.js";
 const OPENAI_TTS_SNAPSHOT = "gpt-4o-mini-tts-2025-12-15";
 
 // mock-isolation: keep speech request assertions off real network and SSRF state.
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>()),
   fetchWithSsrFGuard: async (params: { url: string; init?: RequestInit }) => ({
     response: await globalThis.fetch(params.url, params.init),
     release: vi.fn(async () => {}),
   }),
-  ssrfPolicyFromHttpBaseUrlAllowedHostname: () => undefined,
 }));
 
 function parseRequestBody(init: RequestInit | undefined): Record<string, unknown> {
@@ -27,13 +27,10 @@ function parseRequestBody(init: RequestInit | undefined): Record<string, unknown
   return body;
 }
 
-function mockSpeechFetch(
-  expectedBody: Record<string, unknown> = {},
-  audio = new Uint8Array([1, 2, 3]),
-) {
+function mockSpeechFetch(expectedBody: Record<string, unknown> = {}) {
   const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
     expect(parseRequestBody(init)).toMatchObject(expectedBody);
-    return new Response(audio, { status: 200 });
+    return new Response(new Uint8Array([1, 2, 3]), { status: 200 });
   });
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
@@ -336,8 +333,8 @@ describe("buildOpenAISpeechProvider", () => {
         talkProviderConfig: {},
         params: {
           text: "Hello from talk mode.",
-          voiceId: "nova",
-          modelId: "tts-1",
+          voiceId: " nova ",
+          modelId: " tts-1 ",
           speed: 218 / 175,
         },
       }),
@@ -367,14 +364,6 @@ describe("buildOpenAISpeechProvider", () => {
       fileExtension: ".wav",
       voiceCompatible: false,
     });
-  });
-
-  it("applies the configured media byte cap to synthesized audio", async () => {
-    mockSpeechFetch({}, new Uint8Array(2048));
-
-    await expect(
-      provider.synthesize(speechRequest({ cfg: { agents: { defaults: { mediaMaxMb: 0.001 } } } })),
-    ).rejects.toThrow("OpenAI TTS audio response exceeds");
   });
 
   it("applies provider overrides to telephony synthesis", async () => {

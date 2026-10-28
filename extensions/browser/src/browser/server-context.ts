@@ -244,83 +244,73 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
         continue;
       }
       profileState ??= getOrCreateProfileRuntime(current, profile);
-      let statusProfile = profile;
+      let statusProfile = profileState.profile;
       let unavailableReason: string | null = null;
-      let running = false;
-      let tabCount = 0;
+      let running: boolean;
+      let tabCount: number;
 
-      for (let attempt = 0; attempt < 2; attempt += 1) {
-        statusProfile = profileState.profile;
-        const profileCtx = createProfileContext(opts, current, profileState, statusProfile);
-        try {
-          const snapshot = await runProfileContextOperation(
-            profileCtx,
-            undefined,
-            async (signal, runtime) => {
-              const activeProfile = runtime.profile;
-              const capabilities = getBrowserProfileCapabilities(activeProfile);
-              let activeRunning = Boolean(runtime.running);
-              let activeTabCount = 0;
+      const profileCtx = createProfileContext(opts, current, profileState, statusProfile);
+      try {
+        const snapshot = await runProfileContextOperation(
+          profileCtx,
+          undefined,
+          async (signal, runtime) => {
+            const activeProfile = runtime.profile;
+            const capabilities = getBrowserProfileCapabilities(activeProfile);
+            let activeRunning = Boolean(runtime.running);
+            let activeTabCount = 0;
 
-              if (capabilities.usesChromeMcp) {
+            if (capabilities.usesChromeMcp) {
+              try {
+                activeRunning = await profileCtx.isTransportAvailable(300, signal, {
+                  onResult: (observedTabCount) => (activeTabCount = observedTabCount ?? 0),
+                });
+              } catch {
+                activeRunning = false;
+              }
+            } else {
+              if (!activeRunning) {
                 try {
-                  activeRunning = await profileCtx.isTransportAvailable(300, signal, {
-                    onResult: (observedTabCount) => (activeTabCount = observedTabCount ?? 0),
-                  });
+                  const probeTimeoutMs = usesFastLoopbackCdpProbeClass({
+                    profileIsLoopback: activeProfile.cdpIsLoopback,
+                    attachOnly: activeProfile.attachOnly,
+                  })
+                    ? 200
+                    : current.resolved.remoteCdpTimeoutMs;
+                  activeRunning =
+                    capabilities.mode === "local-extension"
+                      ? await profileCtx.isTransportAvailable(probeTimeoutMs, signal)
+                      : await isChromeReachable(
+                          activeProfile.cdpUrl,
+                          probeTimeoutMs,
+                          resolveCdpReachabilityPolicy(activeProfile, current.resolved.ssrfPolicy),
+                          signal,
+                        );
                 } catch {
                   activeRunning = false;
                 }
-              } else {
-                if (!activeRunning) {
-                  try {
-                    const probeTimeoutMs = usesFastLoopbackCdpProbeClass({
-                      profileIsLoopback: activeProfile.cdpIsLoopback,
-                      attachOnly: activeProfile.attachOnly,
-                    })
-                      ? 200
-                      : current.resolved.remoteCdpTimeoutMs;
-                    activeRunning =
-                      capabilities.mode === "local-extension"
-                        ? await profileCtx.isTransportAvailable(probeTimeoutMs, signal)
-                        : await isChromeReachable(
-                            activeProfile.cdpUrl,
-                            probeTimeoutMs,
-                            resolveCdpReachabilityPolicy(
-                              activeProfile,
-                              current.resolved.ssrfPolicy,
-                            ),
-                            signal,
-                          );
-                  } catch {
-                    activeRunning = false;
-                  }
-                }
-                if (activeRunning) {
-                  const tabs = await profileCtx.listTabs({ signal }).catch(() => []);
-                  activeTabCount = tabs.filter((tab) => tab.type === "page").length;
-                }
               }
-              signal.throwIfAborted();
-              return { profile: activeProfile, running: activeRunning, tabCount: activeTabCount };
-            },
-          );
-          statusProfile = snapshot.profile;
-          running = snapshot.running;
-          tabCount = snapshot.tabCount;
-          break;
-        } catch (err) {
-          if (attempt === 0) {
-            continue;
-          }
-          statusProfile = profileState.profile;
-          const actor = getProfileLifecycle(profileState);
-          unavailableReason = actor.blockedReason ?? actor.transitionReason ?? actor.terminal;
-          if (!unavailableReason && !toBrowserErrorResponse(err)) {
-            throw err;
-          }
-          running = Boolean(profileState.running);
-          tabCount = 0;
+              if (activeRunning) {
+                const tabs = await profileCtx.listTabs({ signal }).catch(() => []);
+                activeTabCount = tabs.filter((tab) => tab.type === "page").length;
+              }
+            }
+            signal.throwIfAborted();
+            return { profile: activeProfile, running: activeRunning, tabCount: activeTabCount };
+          },
+        );
+        statusProfile = snapshot.profile;
+        running = snapshot.running;
+        tabCount = snapshot.tabCount;
+      } catch (err) {
+        statusProfile = profileState.profile;
+        const actor = getProfileLifecycle(profileState);
+        unavailableReason = actor.blockedReason ?? actor.transitionReason ?? actor.terminal;
+        if (!unavailableReason && !toBrowserErrorResponse(err)) {
+          throw err;
         }
+        running = Boolean(profileState.running);
+        tabCount = 0;
       }
 
       const capabilities = getBrowserProfileCapabilities(statusProfile);

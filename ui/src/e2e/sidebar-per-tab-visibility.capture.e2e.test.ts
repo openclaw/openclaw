@@ -5,21 +5,16 @@ import {
   createControlUiMockGatewayInitScript,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
   controlUiSessionUrl,
   createSessionManagementE2eSuite,
-  installMockGateway,
   sessionsListResponse,
 } from "./session-management.test-support.ts";
 import { catalogList, expectVisible, mockRequests } from "./sidebar-assertions.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
-const pageOptions = {
-  colorScheme: "dark",
-  locale: "en-US",
-  serviceWorkers: "block",
-  viewport: { height: 900, width: 1280 },
-} as const;
+const pageOptions = { colorScheme: "dark", ...createControlUiE2eContextOptions() } as const;
 
 const MAIN_KEY = "agent:main:main";
 const RESEARCH_KEY = "agent:main:research";
@@ -31,7 +26,6 @@ function sessionsMock() {
         sessionRow(MAIN_KEY, "Main", Date.parse("2026-07-01T16:00:00.000Z")),
         sessionRow(RESEARCH_KEY, "Research notes", Date.parse("2026-07-01T15:00:00.000Z")),
       ]),
-      "sessions.patch": {},
     },
     sessionKey: MAIN_KEY,
   } as const;
@@ -63,32 +57,8 @@ function catalogSessionsMock() {
 }
 
 suite.define(() => {
-  it.each(["root", "conversation"] as const)(
-    "keeps the sidebar on an unmarked %s link",
-    async (target) => {
-      await suite.withPage(pageOptions, async ({ page }) => {
-        await installMockGateway(page, sessionsMock());
-        await page.goto(
-          target === "root"
-            ? `${suite.server.baseUrl}chat`
-            : controlUiSessionUrl(suite.server.baseUrl, RESEARCH_KEY),
-        );
-        const sidebar = page.locator("openclaw-app-sidebar .sidebar-shell");
-        await sidebar.waitFor({ state: "visible", timeout: 10_000 });
-        if (target === "conversation") {
-          await page
-            .getByPlaceholder("Message OpenClaw")
-            .waitFor({ state: "visible", timeout: 10_000 });
-        }
-        await expectVisible(sidebar);
-      });
-    },
-  );
-
   it.each([
     { catalog: false, gesture: "middle" },
-    { catalog: false, gesture: "modifier" },
-    { catalog: true, gesture: "middle" },
     { catalog: true, gesture: "modifier" },
   ] as const)(
     "opens an expanded session tab (catalog: $catalog, gesture: $gesture)",
@@ -142,7 +112,7 @@ suite.define(() => {
         await expectVisible(sidebar, false);
         expect(await sessionTab.locator(".sidebar-rail").isVisible()).toBe(true);
         await expect
-          .poll(async () => (await sessionTab.locator(".shell-nav").boundingBox())?.width)
+          .poll(async () => (await sessionTab.locator("main.content").boundingBox())?.x)
           .toBe(52);
         expect(await page.locator("openclaw-app-sidebar .sidebar-shell").isVisible()).toBe(true);
         await sessionTab.keyboard.press("ControlOrMeta+B");

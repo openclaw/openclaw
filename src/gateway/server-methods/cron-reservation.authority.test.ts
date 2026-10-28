@@ -6,6 +6,7 @@ import {
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import { getAdmittedRunDelegatedAuthority } from "../../agents/admitted-run-context.js";
 import { prepareCronRunAdmission } from "../../cron/run-admission.js";
+import { TEST_SCHEDULED_EXECUTION } from "../../cron/scheduled-occurrence.test-support.js";
 import { CronService } from "../../cron/service.js";
 import { saveCronStore } from "../../cron/store.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
@@ -33,6 +34,7 @@ it("revalidates a scheduled Gateway caller after its child reservation commits w
     });
     await saveCronStore(storePath, { version: 1, jobs: [parent, target] });
     const admission = prepareCronRunAdmission({
+      scheduledExecution: TEST_SCHEDULED_EXECUTION,
       cfg: {},
       runId: "scheduled-cron-caller",
       agentId: "main",

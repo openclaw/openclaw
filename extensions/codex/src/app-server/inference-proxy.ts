@@ -1,6 +1,10 @@
 import { createServer, type IncomingMessage } from "node:http";
 import { Writable, type Duplex } from "node:stream";
-import { createDeferred, createPermitPool } from "openclaw/plugin-sdk/concurrency-runtime";
+import {
+  createDeferred,
+  createPermitPool,
+  runInDetachedAsyncContext,
+} from "openclaw/plugin-sdk/concurrency-runtime";
 import { createNodeProxyAgent } from "openclaw/plugin-sdk/fetch-runtime";
 import { generateSecureToken } from "openclaw/plugin-sdk/secure-random-runtime";
 import {
@@ -59,6 +63,7 @@ type ResidentTicket = {
 /** Private, fixed-destination relay. Upstream credentials are never retained. */
 export async function createCodexInferenceProxy(params: {
   upstream: URL;
+  configurationIdentity?: string;
   assertCurrent: () => void;
   oauth?: CodexResponsesOAuth;
   preserveAzureUrlFeatures?: boolean;
@@ -233,7 +238,8 @@ export async function createCodexInferenceProxy(params: {
     const abort = () => controller.abort();
     req.once("aborted", abort);
     res.once("close", abort);
-    void (async () => {
+    // A fresh request owns its admission, not the listener's closed startup lease.
+    void runInDetachedAsyncContext(async () => {
       try {
         const { target, path } = resolveTarget(req);
         if (req.method !== "POST") {
@@ -346,7 +352,7 @@ export async function createCodexInferenceProxy(params: {
         upload?.releaseModelExecution();
         resident?.finish();
       }
-    })();
+    });
   });
   // Leave HTTP/failure-response headroom beyond the separately bounded WS pool.
   // This last-resort TCP ceiling must not be the normal inference admission limit.
@@ -563,16 +569,12 @@ export async function createCodexInferenceProxy(params: {
               const forward = async (prepared: Awaited<ReturnType<typeof prepare>>) => {
                 let releaseUpload: (() => void) | null = null;
                 try {
-                  const requestSignal = AbortSignal.any([
-                    signal,
-                    ...(prepared.signal ? [prepared.signal] : []),
-                  ]);
                   releaseUpload = await acquireUpload(
-                    requestSignal,
+                    prepared.signal,
                     Date.now() + REQUEST_TIMEOUT_MS,
                     prepared.bytes.length,
                   );
-                  requestSignal.throwIfAborted();
+                  prepared.signal.throwIfAborted();
                   prepared.assertCurrent();
                   if (!releaseUpload) {
                     accepted.send(OVERLOAD_BODY, { binary: false }, close);
@@ -715,6 +717,7 @@ export async function createCodexInferenceProxy(params: {
     return {
       context,
       upstream: upstream.toString(),
+      configurationIdentity: params.configurationIdentity ?? upstream.toString(),
       baseUrl: "http://127.0.0.1:" + address.port + pathPrefix,
       assertCurrent,
       close,

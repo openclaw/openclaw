@@ -81,7 +81,8 @@ export function normalizeFastMode(raw?: unknown): FastMode | undefined {
   if (["on", "true", "yes", "1", "enable", "enabled", "fast"].includes(key)) {
     return true;
   }
-  if (key === "ultrafast") {
+  // "ultra" is input shorthand only; the canonical stored value stays "ultrafast".
+  if (key === "ultrafast" || key === "ultra") {
     return "ultrafast";
   }
   if (["auto", "automatic"].includes(key)) {

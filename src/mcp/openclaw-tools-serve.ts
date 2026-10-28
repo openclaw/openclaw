@@ -12,7 +12,6 @@ import { AUTOMATIONS_TOOL_NAME } from "../agents/tools/automations-tool-name.js"
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { createCronTool } from "../agents/tools/cron-tool.js";
 import { createSystemAgentTool } from "../agents/tools/system-agent-tool.js";
-import type { SystemAgentToolOptions } from "../agents/tools/system-agent-tool.js";
 import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -26,7 +25,6 @@ import {
   resolveOpenClawToolsMcpSystemAgentApproval,
   resolveOpenClawToolsMcpSystemAgentSurface,
   resolveOpenClawToolsMcpToolSelection,
-  type OpenClawToolsMcpToolId,
 } from "./openclaw-tools-serve-config.js";
 import { connectToolsMcpServerToStdio, createToolsMcpServer } from "./tools-stdio-server.js";
 
@@ -39,22 +37,17 @@ export { OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY_ENV } from "./agent-session-env.js
 
 export async function resolveOpenClawToolsForMcp(
   params: {
-    agentSessionKey?: string;
     agentId?: string;
-    tools?: OpenClawToolsMcpToolId[];
-    systemAgentSurface?: SystemAgentToolOptions["surface"];
     config?: OpenClawConfig;
   } = {},
 ): Promise<AnyAgentTool[]> {
-  const selection = params.tools ?? resolveOpenClawToolsMcpToolSelection();
-  const agentSessionKey = (
-    params.agentSessionKey ?? resolveOpenClawToolsMcpAgentSessionKey()
-  )?.trim();
+  const selection = resolveOpenClawToolsMcpToolSelection();
+  const agentSessionKey = resolveOpenClawToolsMcpAgentSessionKey();
   const tools = selection.map((tool) => {
     if (tool === "openclaw") {
       return createSystemAgentTool({
         agentId: params.agentId,
-        surface: params.systemAgentSurface ?? resolveOpenClawToolsMcpSystemAgentSurface(),
+        surface: resolveOpenClawToolsMcpSystemAgentSurface(),
         ...resolveOpenClawToolsMcpSystemAgentApproval(),
       });
     }

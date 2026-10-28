@@ -1,36 +1,20 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { parentPort, workerData } from "node:worker_threads";
 import { Client } from "pg";
 import { deriveMeetingTranscriptSummaryColumns } from "../../transcripts/store-columns.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
-import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../sqlite-schema-facts.js";
 import { readSqliteUserVersion } from "../sqlite-user-version.js";
 import { withEngineStoreAdmission } from "./admission-scope.js";
-import { openEngineStore } from "./open.js";
-import { materializeDatabasePort, type PortDescriptor } from "./port.worker.js";
+import { openPortStore, workboardPortFixture } from "./port-backup.test-support.js";
+import {
+  materializeDatabasePort,
+  type PortDescriptor,
+  type PortVerification,
+} from "./port.worker.js";
 import { expectedPostgresCatalog } from "./postgres-catalog.js";
-import metadata from "./workboard-port.generated.json" with { type: "json" };
-
-const ownerSchema = fs.readFileSync(
-  new URL("../../../extensions/workboard/src/workboard-schema.ts", import.meta.url),
-  "utf8",
-);
-const sqlite = ownerSchema.match(/WORKBOARD_SCHEMA_SQL = `([\s\S]*?)`;/)?.[1];
-assert.ok(sqlite, "The workboard owner must provide its canonical SQLite schema");
-const postgres = fs.readFileSync(
-  new URL("../../../extensions/workboard/src/workboard-schema.postgres.sql", import.meta.url),
-  "utf8",
-);
-const descriptor: PortDescriptor = {
-  ...metadata,
-  sqlite,
-  preData: postgres.slice(metadata.preData[0], metadata.preData[1]),
-  postData: postgres.slice(metadata.postData[0], metadata.postData[1]),
-  expectedCatalog: expectedPostgresCatalog(metadata),
-};
+const { postgres, descriptor } = await workboardPortFixture(true);
 
 const identityMetadata = {
   schema: "",
@@ -92,16 +76,14 @@ function canonical(db: DatabaseSync, schema: PortDescriptor) {
 
 function seedWorkboard(db: DatabaseSync) {
   db.exec(descriptor.sqlite);
-  db.prepare("INSERT INTO workboard_schema_migrations VALUES (?, ?)").run("schema-3", 17);
-  db.prepare(
-    "INSERT INTO workboard_boards (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)",
-  ).run("board-é-🦞", "", -9223372036854775808n, 9223372036854775807n);
-  const board = db.prepare(
-    "INSERT INTO workboard_boards (id, created_at, updated_at) VALUES (?, 1, 1)",
+  db.exec(`
+    INSERT INTO workboard_schema_migrations VALUES ('schema-3', 17);
+    INSERT INTO workboard_boards (id, name, created_at, updated_at)
+    VALUES ('board-é-🦞', '', -9223372036854775808, 9223372036854775807);
+  `);
+  db.exec(
+    "INSERT INTO workboard_boards (id, created_at, updated_at) VALUES ('e', 1, 1), ('é', 1, 1), ('z', 1, 1)",
   );
-  for (const id of ["e", "é", "z"]) {
-    board.run(id);
-  }
   const card = db.prepare(
     "INSERT INTO workboard_cards (id, board_id, title, notes, status, priority, position, created_at, updated_at, automation_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
   );
@@ -121,28 +103,15 @@ function seedWorkboard(db: DatabaseSync) {
     );
   }
   db.exec("COMMIT");
-  db.prepare(
-    "INSERT INTO workboard_card_attachments (id, card_id, ordinal, file_name, byte_size, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-  ).run("attachment", "card-0000", 0, "binary", 4, 1);
-  db.prepare("INSERT INTO workboard_attachment_blobs VALUES (?, ?)").run(
-    "attachment",
-    Buffer.from([0, 255, 128, 1]),
-  );
-  db.prepare("INSERT INTO workboard_attachment_blobs VALUES (?, ?)").run("empty", Buffer.alloc(0));
-  db.prepare(
-    "INSERT INTO workboard_card_notifications (id, card_id, ordinal, kind, message, created_at, sequence) VALUES (?, ?, ?, ?, ?, ?, ?)",
-  ).run("notification", "card-0000", 1, "status", "line one\nline two", 3, 9007199254740995n);
-  db.prepare(
-    "INSERT INTO workboard_notification_subscriptions (id, board_id, last_event_at, last_event_id, last_event_sequence, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-  ).run(
-    "subscription",
-    "board-é-🦞",
-    9223372036854775807n,
-    "notification",
-    9007199254740995n,
-    0,
-    1,
-  );
+  db.exec(`
+    INSERT INTO workboard_card_attachments (id, card_id, ordinal, file_name, byte_size, created_at)
+    VALUES ('attachment', 'card-0000', 0, 'binary', 4, 1);
+    INSERT INTO workboard_attachment_blobs VALUES ('attachment', x'00ff8001'), ('empty', x'');
+    INSERT INTO workboard_card_notifications (id, card_id, ordinal, kind, message, created_at, sequence)
+    VALUES ('notification', 'card-0000', 1, 'status', 'line one\nline two', 3, 9007199254740995);
+    INSERT INTO workboard_notification_subscriptions (id, board_id, last_event_at, last_event_id, last_event_sequence, created_at, updated_at)
+    VALUES ('subscription', 'board-é-🦞', 9223372036854775807, 'notification', 9007199254740995, 0, 1);
+  `);
 }
 
 async function run() {
@@ -154,12 +123,32 @@ async function run() {
     databases.push(db);
     return db;
   };
+  const identitySource = (sql: string) => {
+    const db = open();
+    db.exec(`${identityDescriptor.sqlite}; ${sql}`);
+    return db;
+  };
   const stage = () => {
     const namespace = `port_${randomUUID().replaceAll("-", "")}`;
     namespaces.push(namespace);
     return { engine: "postgres" as const, db: client, namespace };
   };
   const common = { storeId: randomUUID(), assertCurrent() {} };
+  const query = async (sql: string) => (await client.query(sql)).rows;
+  const port = (
+    db: DatabaseSync,
+    schema = descriptor,
+    destination = stage(),
+    sourceAllocations?: PortVerification["allocations"],
+  ) =>
+    materializeDatabasePort({
+      ...common,
+      source: { engine: "sqlite", db },
+      destination,
+      descriptor: schema,
+      sourceAllocations,
+    });
+  const cell = (db: DatabaseSync, sql: string) => db.prepare(sql).get();
   const copyBack = async (namespace: string, db: DatabaseSync, schema: PortDescriptor) => {
     const reader = new Client({ connectionString: workerData.connection as string });
     await reader.connect();
@@ -181,12 +170,7 @@ async function run() {
     seedWorkboard(source);
     const before = canonical(source, descriptor);
     const destination = stage();
-    const forward = await materializeDatabasePort({
-      ...common,
-      source: { engine: "sqlite", db: source },
-      destination,
-      descriptor,
-    });
+    const forward = await port(source, descriptor, destination);
     const collations = await client.query(
       `SELECT DISTINCT c.collname AS name FROM pg_catalog.pg_attribute a
        JOIN pg_catalog.pg_class r ON r.oid = a.attrelid
@@ -198,8 +182,7 @@ async function run() {
     );
     assert.deepEqual(collations.rows, [{ name: "C" }]);
     assert.deepEqual(
-      (await client.query(`SELECT id FROM "${destination.namespace}".workboard_boards ORDER BY id`))
-        .rows,
+      await query(`SELECT id FROM "${destination.namespace}".workboard_boards ORDER BY id`),
       [{ id: "board-é-🦞" }, { id: "e" }, { id: "z" }, { id: "é" }],
     );
     const anchor = openNodeSqliteDatabase(":memory:");
@@ -211,31 +194,16 @@ async function run() {
       .prepare("INSERT INTO openclaw_engine_anchor VALUES (?, 'postgres', ?)")
       .run(common.storeId, destination.namespace);
     const admitted = withEngineStoreAdmission(() =>
-      openEngineStore({
+      openPortStore(
         anchor,
-        schema: {
+        {
           id: descriptor.id,
           version: descriptor.version,
           sqlite: descriptor.sqlite,
           postgres,
         },
-        input: { connection: workerData.connection as string, schemaPrefix: "port" },
-        prepareAnchor() {},
-        openSqlite() {
-          throw new Error("Ported PostgreSQL store must not open SQLite data");
-        },
-        inspectSqlite() {
-          admitSqliteSchema(anchor);
-          const facts = getAdmittedSqliteSchemaFacts(anchor);
-          assert.ok(facts);
-          return {
-            hasExistingData: [...facts.tables].some(
-              (name) => name !== "openclaw_engine_anchor" && !name.startsWith("sqlite_"),
-            ),
-            hasEngineAnchor: facts.tables.has("openclaw_engine_anchor"),
-          };
-        },
-      }),
+        { connection: workerData.connection as string, schemaPrefix: "port" },
+      ),
     );
     try {
       assert.equal(
@@ -256,26 +224,19 @@ async function run() {
     assert.deepEqual(canonical(source, descriptor), before);
     assert.deepEqual(reverse, forward);
     assert.equal(forward.tables.workboard_cards?.rows, 1001);
-    const cursor = restored.prepare(
-      "SELECT last_event_sequence FROM workboard_notification_subscriptions",
+    assert.equal(
+      cell(restored, "SELECT last_event_sequence FROM workboard_notification_subscriptions")
+        ?.last_event_sequence,
+      9007199254740995n,
     );
-    cursor.setReadBigInts(true);
-    assert.equal(cursor.get()?.last_event_sequence, 9007199254740995n);
 
-    const allocated = open();
-    allocated.exec(identityDescriptor.sqlite);
-    const insert = allocated.prepare("INSERT INTO port_facts VALUES (?, ?, ?)");
-    insert.setReadBigInts(true);
-    insert.run(9007199254740993n, '{"overview":"first","overview":"last"}', "stale");
-    insert.run(9223372036854775807n, "{}", null);
-    allocated.exec("DELETE FROM port_facts WHERE id = 9223372036854775807");
+    const allocated = identitySource(`
+      INSERT INTO port_facts VALUES (9007199254740993, '{"overview":"first","overview":"last"}', 'stale'),
+        (9223372036854775807, '{}', NULL);
+      DELETE FROM port_facts WHERE id = 9223372036854775807;
+    `);
     const identityStage = stage();
-    const identityForward = await materializeDatabasePort({
-      ...common,
-      source: { engine: "sqlite", db: allocated },
-      destination: identityStage,
-      descriptor: identityDescriptor,
-    });
+    const identityForward = await port(allocated, identityDescriptor, identityStage);
     const identityRestored = open();
     const identityReverse = await copyBack(
       identityStage.namespace,
@@ -286,11 +247,8 @@ async function run() {
     assert.deepEqual(identityReverse.allocations, {
       "port_facts.id": { value: "9223372036854775807", called: true },
     });
-    assert.equal(
-      identityRestored.prepare("SELECT overview FROM port_facts").get()?.overview,
-      "first",
-    );
-    assert.equal(allocated.prepare("SELECT overview FROM port_facts").get()?.overview, "stale");
+    assert.equal(cell(identityRestored, "SELECT overview FROM port_facts")?.overview, "first");
+    assert.equal(cell(allocated, "SELECT overview FROM port_facts")?.overview, "stale");
     assert.throws(
       () => identityRestored.prepare("INSERT INTO port_facts (summary_json) VALUES ('{}')").run(),
       /database or disk is full/,
@@ -299,13 +257,12 @@ async function run() {
     // Export manifests retain deleted sequence highs even when an image is compacted.
     identityRestored.exec("DELETE FROM sqlite_sequence");
     const matchedStage = stage();
-    const matched = await materializeDatabasePort({
-      ...common,
-      source: { engine: "sqlite", db: identityRestored },
-      destination: matchedStage,
-      descriptor: identityDescriptor,
-      sourceAllocations: identityReverse.allocations,
-    });
+    const matched = await port(
+      identityRestored,
+      identityDescriptor,
+      matchedStage,
+      identityReverse.allocations,
+    );
     assert.deepEqual(matched, identityReverse);
     await assert.rejects(
       client.query(
@@ -314,18 +271,11 @@ async function run() {
       /reached maximum value/,
     );
 
-    const derivedNul = open();
-    derivedNul.exec(identityDescriptor.sqlite);
-    derivedNul
-      .prepare("INSERT INTO port_facts VALUES (?, ?, ?)")
-      .run(1, '{"overview":"\\u0000"}', "stale");
+    const derivedNul = identitySource(
+      `INSERT INTO port_facts VALUES (1, '{"overview":"\\u0000"}', 'stale')`,
+    );
     await assert.rejects(
-      materializeDatabasePort({
-        ...common,
-        source: { engine: "sqlite", db: derivedNul },
-        destination: stage(),
-        descriptor: identityDescriptor,
-      }),
+      port(derivedNul, identityDescriptor),
       /port_facts.overview.*unrepresentable UTF-8/,
     );
 
@@ -336,40 +286,21 @@ async function run() {
         "INSERT INTO workboard_boards (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)",
       )
       .run("private-key", "before\0after", 1, 1);
-    const invalidBefore = invalid
-      .prepare("SELECT hex(CAST(name AS BLOB)) AS bytes FROM workboard_boards")
-      .get();
+    const bytes = () =>
+      cell(invalid, "SELECT hex(CAST(name AS BLOB)) AS bytes FROM workboard_boards");
+    const invalidBefore = bytes();
     await assert.rejects(
-      materializeDatabasePort({
-        ...common,
-        source: { engine: "sqlite", db: invalid },
-        destination: stage(),
-        descriptor,
-      }),
+      port(invalid),
       (error: unknown) =>
         error instanceof Error &&
         /workboard_boards.name.*key SHA-256.*byte offset 6/.test(error.message) &&
         !error.message.includes("private-key"),
     );
-    assert.deepEqual(
-      invalid.prepare("SELECT hex(CAST(name AS BLOB)) AS bytes FROM workboard_boards").get(),
-      invalidBefore,
-    );
+    assert.deepEqual(bytes(), invalidBefore);
     assert.equal(invalidBefore?.bytes, "6265666F7265006166746572");
     invalid.exec("UPDATE workboard_boards SET name = CAST(x'80' AS TEXT)");
-    await assert.rejects(
-      materializeDatabasePort({
-        ...common,
-        source: { engine: "sqlite", db: invalid },
-        destination: stage(),
-        descriptor,
-      }),
-      /Port refused invalid UTF-8: workboard_boards.name/,
-    );
-    assert.equal(
-      invalid.prepare("SELECT hex(CAST(name AS BLOB)) AS bytes FROM workboard_boards").get()?.bytes,
-      "80",
-    );
+    await assert.rejects(port(invalid), /Port refused invalid UTF-8: workboard_boards.name/);
+    assert.equal(bytes()?.bytes, "80");
     return {
       milliseconds: performance.now() - started,
       rows: Object.values(forward.tables).reduce((total, table) => total + table.rows, 0),

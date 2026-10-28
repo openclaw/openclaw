@@ -1,3 +1,4 @@
+import { statSync } from "node:fs";
 import path from "node:path";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { resolveAgentSessionDirsFromAgentsDirSync } from "../../agents/session-dirs.js";
@@ -6,6 +7,10 @@ import {
   assertExistingDatabaseIdentity,
 } from "../../infra/sqlite-worker-identity.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import {
+  listAgentDatabaseAdmissionRefusals,
+  readAgentDatabaseAdmissionRefusal,
+} from "../../state/agent-database-admission.js";
 import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
   type OpenClawRegisteredAgentDatabase,
@@ -196,6 +201,7 @@ export type SessionStoreTargetInventoryRequest = {
   env: NodeJS.ProcessEnv;
   paths: CapturedSessionStorePaths;
   candidates: SessionStoreReadCandidate[];
+  recoveryExclusions?: { agentIds: string[]; storePaths: string[]; databasePaths: string[] };
   registryDiscovery?: {
     agentIds: string[];
     roots: Array<{ path: string; physicalPath: string }>;
@@ -312,9 +318,11 @@ function isCurrentRegistrySourceGeneration(
 }
 
 type InventoryEnvironment = {
+  config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   stateDir: string;
   serialized: NodeJS.ProcessEnv;
+  configuredPaths?: CapturedSessionStorePaths;
 };
 let publishedInventoryEnvironment:
   | {
@@ -328,7 +336,7 @@ let publishedInventoryEnvironment:
 export function captureSessionStoreEnvironment(
   cfg: OpenClawConfig,
   inputEnv?: NodeJS.ProcessEnv,
-): InventoryEnvironment & { config: OpenClawConfig } {
+): InventoryEnvironment {
   const config = captureRuntimeConfig(cfg);
   const publication =
     inputEnv === undefined && cfg === getRuntimeConfigSnapshot()
@@ -346,6 +354,7 @@ export function captureSessionStoreEnvironment(
     env.OPENCLAW_STATE_DIR = stateDir;
     // Windows path resolution needs the proxy; worker requests need a plain snapshot.
     environment = {
+      config,
       env,
       stateDir,
       serialized: Object.freeze({ ...env, OPENCLAW_STATE_DIR: stateDir }),
@@ -355,7 +364,7 @@ export function captureSessionStoreEnvironment(
       publishedInventoryEnvironment = { config, publication, captured: environment };
     }
   }
-  return { config, ...environment };
+  return environment;
 }
 
 /** Capture locators and bounded families without reading SQLite or assigning an owner. */
@@ -365,25 +374,47 @@ export function prepareSessionStoreTargetInventory(
   inputEnv?: NodeJS.ProcessEnv,
   selection?: SessionStoreTargetInventoryRequest["selection"],
 ): Omit<SessionStoreTargetInventoryRequest, "registeredDatabases"> {
-  const { config, env, stateDir, serialized } = captureSessionStoreEnvironment(cfg, inputEnv);
+  const environment = captureSessionStoreEnvironment(cfg, inputEnv);
+  const { config, env, stateDir, serialized } = environment;
+  const capturePaths = (agentId: string) => ({
+    configured: resolveSessionStorePathCore(config.session?.store, { agentId, env }),
+    default: resolveSessionStorePathCore(undefined, { agentId, env }),
+  });
+  // Only logical configured paths follow config/env publication. Physical candidates
+  // and retired-owner discovery below must observe filesystem changes on every read.
+  const configuredPaths = (environment.configuredPaths ??= new Map(
+    listConfiguredSessionStoreAgentIds(config).map((agentId) => [agentId, capturePaths(agentId)]),
+  ));
+  // Recovery skips unavailable stores before discovery can join their native opening.
+  // The preparing owner can still discover its own borrowed admission.
+  const refusals =
+    selection === "recovery"
+      ? listAgentDatabaseAdmissionRefusals({ env }).filter((refusal) =>
+          readAgentDatabaseAdmissionRefusal(refusal.agentId, { env }),
+        )
+      : [];
+  const excludedAgentIds = new Set(refusals.map((refusal) => refusal.agentId));
+  const excludedDatabasePaths = new Set(
+    refusals.flatMap((refusal) => refusal.paths.map((pathname) => path.resolve(pathname))),
+  );
+  const excludedStorePaths: string[] = [];
   const agentIds = [...new Set(inputAgentIds.map(normalizeAgentId))];
-  const configured = listConfiguredSessionStoreAgentIds(config);
+  const configured = [...configuredPaths.keys()];
   const paths = new Map(
     [...new Set([...agentIds, ...configured])].map((agentId) => [
       agentId,
-      {
-        configured: resolveSessionStorePathCore(config.session?.store, { agentId, env }),
-        default: resolveSessionStorePathCore(undefined, { agentId, env }),
-      },
+      configuredPaths.get(agentId) ?? capturePaths(agentId),
     ]),
   );
   const perAgent = isPerAgentSessionStoreConfig(config.session?.store);
   const retired = new Set(agentIds.filter((agentId) => !configured.includes(agentId)));
   const logicalPaths = new Set(
-    agentIds.flatMap((agentId) => {
-      const captured = paths.get(agentId)!;
-      return perAgent ? [captured.configured, captured.default] : [captured.configured];
-    }),
+    agentIds
+      .filter((agentId) => !excludedAgentIds.has(agentId))
+      .flatMap((agentId) => {
+        const captured = paths.get(agentId)!;
+        return perAgent ? [captured.configured, captured.default] : [captured.configured];
+      }),
   );
   if (perAgent && retired.size > 0) {
     for (const agentId of configured) {
@@ -402,7 +433,9 @@ export function prepareSessionStoreTargetInventory(
       try {
         for (const sessionsDir of resolveAgentSessionDirsFromAgentsDirSync(
           root,
-          (name) => selection === "recovery" || retired.has(normalizeAgentId(name)),
+          (name) =>
+            !excludedAgentIds.has(normalizeAgentId(name)) &&
+            (selection === "recovery" || retired.has(normalizeAgentId(name))),
         )) {
           logicalPaths.add(path.join(sessionsDir, "sessions.json"));
         }
@@ -423,7 +456,22 @@ export function prepareSessionStoreTargetInventory(
     ) {
       throw new Error("Incognito session discovery requires its process-held owner");
     }
-    for (const candidate of captureSessionStoreReadCandidates(storePath)) {
+    const storeCandidates = captureSessionStoreReadCandidates(storePath);
+    const availableCandidates = storeCandidates.filter(
+      (candidate) =>
+        !excludedDatabasePaths.has(candidate.path) &&
+        !excludedDatabasePaths.has(candidate.physicalPath),
+    );
+    const hasExcludedCandidate = availableCandidates.length !== storeCandidates.length;
+    if (hasExcludedCandidate && (target.agentId || target.shared)) {
+      excludedStorePaths.push(storePath);
+      continue;
+    }
+    for (const candidate of availableCandidates) {
+      // Family custody would still join the refused sibling's native admission.
+      if (hasExcludedCandidate && candidate.scope === "sibling-family") {
+        continue;
+      }
       candidates.set(JSON.stringify(candidate), candidate);
     }
   }
@@ -434,6 +482,15 @@ export function prepareSessionStoreTargetInventory(
     env: serialized,
     paths,
     candidates: [...candidates.values()],
+    ...(refusals.length > 0
+      ? {
+          recoveryExclusions: {
+            agentIds: [...excludedAgentIds],
+            databasePaths: [...excludedDatabasePaths],
+            storePaths: excludedStorePaths,
+          },
+        }
+      : {}),
     ...(perAgent && retired.size > 0
       ? {
           registryDiscovery: {
@@ -505,7 +562,18 @@ export function readSessionStoreTargetInventory(
         registeredDatabases: request.registeredDatabases,
         readCandidates: request.candidates,
         readPaths: request.paths,
+        excludeTarget: (target: SessionStoreTarget) =>
+          request.recoveryExclusions?.agentIds.includes(target.agentId) === true ||
+          request.recoveryExclusions?.storePaths.includes(target.storePath) === true,
         onResolvedTarget(target: SessionStoreTarget, physical: SessionStoreTarget) {
+          // Partial recovery has no rows to recover from uncreated stores.
+          if (
+            request.selection === "recovery" &&
+            request.recoveryExclusions &&
+            !statSync(physical.storePath, { throwIfNoEntry: false })
+          ) {
+            return;
+          }
           const databasePath = assertSessionStoreReadCandidate(
             physical.storePath,
             request.candidates,

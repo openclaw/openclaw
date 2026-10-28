@@ -5,7 +5,6 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
 import {
   createMockPluginRegistry,
   initializeGlobalHookRunner,
@@ -21,8 +20,8 @@ import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import * as transcriptRuntime from "openclaw/plugin-sdk/session-transcript-runtime";
 import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { awaitGateBeforeSettlement, withinTest } from "openclaw/plugin-sdk/test-fixtures";
-import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterAll, afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeUserMessage } from "../test-support/message-fixtures.test-support.js";
 import { runAgentsApiAttempt, type AgentsApiPromptHistories } from "./agentsapi-attempt.js";
 import { createAttemptParams } from "./agentsapi-attempt.test-helpers.js";
 import type { AgentsApiBinding } from "./agentsapi-bindings.js";
@@ -101,33 +100,9 @@ beforeEach(() => {
   createSession.mockImplementation(completedSession);
 });
 
-function activeSession(
-  options: SessionOptions,
-  run: (text: string) => Promise<typeof completedTurn>,
-  usageTurn?: typeof completedTurn,
-): ReturnType<typeof createSession> {
-  return {
-    ...completedSession(options),
-    isAvailable: () => true,
-    isSettled: () => false,
-    queueMessage: async (_text, persistInput) => {
-      await persistInput?.();
-    },
-    readUsageTurns: async () => (usageTurn ? [usageTurn] : []),
-    run: async (text, persistInput, onSubmitted) => {
-      await persistInput();
-      onSubmitted();
-      const turn = await run(text);
-      options.onSettled?.();
-      return { turn, cancelled: false, terminatedByTool: false };
-    },
-    reconcileAfterClose: async () => usageTurn,
-  };
-}
-
 async function whileRunning(
   fixture: AttemptFixture,
-  { failure, submitted, signal }: { failure?: Error; submitted?: string[]; signal?: AbortSignal },
+  { failure, signal }: { failure?: Error; signal?: AbortSignal },
   run: (
     handle: Parameters<typeof registerRun>[1],
     attempt: ReturnType<AttemptFixture["run"]>,
@@ -135,18 +110,27 @@ async function whileRunning(
 ) {
   const started = createDeferred<void>();
   const finish = createDeferred<void>();
-  const runNative = async (text: string) => {
-    submitted?.push(text);
-    started.resolve();
-    await finish.promise;
-    if (failure) {
-      throw failure;
-    }
-    return completedTurn;
-  };
-  createSession.mockImplementationOnce((options) =>
-    activeSession(options, runNative, failure ? undefined : completedTurn),
-  );
+  createSession.mockImplementationOnce((options) => ({
+    ...completedSession(options),
+    isAvailable: () => true,
+    isSettled: () => false,
+    queueMessage: async (_text, persistInput) => {
+      await persistInput?.();
+    },
+    readUsageTurns: async () => (failure ? [] : [completedTurn]),
+    reconcileAfterClose: async () => (failure ? undefined : completedTurn),
+    run: async (_text, persistInput, onSubmitted) => {
+      await persistInput();
+      onSubmitted();
+      started.resolve();
+      await finish.promise;
+      if (failure) {
+        throw failure;
+      }
+      options.onSettled?.();
+      return { turn: completedTurn, cancelled: false, terminatedByTool: false };
+    },
+  }));
   const attempt = fixture.run();
   try {
     const nativeStart = awaitGateBeforeSettlement(
@@ -376,72 +360,28 @@ describe("Agents API completed reply settlement", () => {
   );
 });
 
-it("leaves PDF steering uncommitted so its next turn transfers the original in the same session", async () => {
-  await withOpenClawTestState({ label: "agentsapi-pdf-steering" }, async () => {
-    const fixture = await createAttempt({ forwarding: { gatewayTools: false, mcpServers: false } });
-    const bytes = Buffer.from("%PDF-1.4\nThe launch window is October.\n%%EOF\n");
-    const saved = await saveMediaBuffer(bytes, "application/pdf", "inbound");
-    const media = [
-      { url: `media://inbound/${saved.id}`, contentType: "application/pdf", fileName: "brief.pdf" },
-    ];
-    const prompt = "Read the attached brief.";
-    const recorder = await fixture.recorder(prompt, "pdf-followup", media);
-    allowFollowup();
-    const upload = vi
-      .spyOn(AgentsApiClient.prototype, "uploadFile")
-      .mockResolvedValue({ status: "uploaded" });
-    const submitted: string[] = [];
-    const followupTurn = createTurn({ id: "turn-pdf-followup" });
-    const followupItem = { ...completedItem, id: "answer-pdf-followup", turn_id: followupTurn.id };
-    const first = await whileRunning(fixture, { submitted }, async (handle) => {
-      await expect(
-        handle.queueMessage(prompt, { media, userTurnTranscriptRecorder: recorder }),
-      ).rejects.toThrow("Agents API attachments require a separate turn");
-      expect(recorder.hasPersisted()).toBe(false);
-    });
-    expect(first.terminal).toEqual({ kind: "ok" });
-
-    readTurn.mockResolvedValue(followupTurn);
-    readItems.mockResolvedValue([followupItem]);
-    createSession.mockImplementationOnce((options) =>
-      activeSession(
-        options,
-        async (text) => {
-          submitted.push(text);
-          return followupTurn;
-        },
-        followupTurn,
-      ),
-    );
-    fixture.params.runId = "pdf-followup-run";
-    fixture.params.prompt = prompt;
-    fixture.params.media = media;
-    fixture.params.userTurnTranscriptRecorder = recorder;
-    expect((await fixture.run()).terminal).toEqual({ kind: "ok" });
-    expect(recorder.hasPersisted()).toBe(true);
-    expect(createSession.mock.calls.map(([options]) => options.sessionId)).toEqual([
-      "session-fixture",
-      "session-fixture",
-    ]);
-    expect(upload).toHaveBeenCalledTimes(1);
-    const file = upload.mock.calls[0]![1];
-    expect(Buffer.from(file.data, "base64")).toEqual(bytes);
-    expect(submitted[1]).toContain(prompt);
-    expect(submitted[1]).toContain(
-      JSON.stringify([{ attachment: 1, name: "brief.pdf", path: file.path }]),
-    );
+it("rejects attachment steering without committing its recorder", async () => {
+  const fixture = await createAttempt({ forwarding: { gatewayTools: false, mcpServers: false } });
+  const media = [{ url: "media://inbound/brief.pdf", contentType: "application/pdf" }];
+  const prompt = "Read the attached brief.";
+  const recorder = await fixture.recorder(prompt, "pdf-followup", media);
+  allowFollowup();
+  const result = await whileRunning(fixture, {}, async (handle) => {
+    await expect(
+      handle.queueMessage(prompt, { media, userTurnTranscriptRecorder: recorder }),
+    ).rejects.toThrow("Agents API attachments require a separate turn");
+    expect(recorder.hasPersisted()).toBe(false);
   });
+  expect(result.terminal).toEqual({ kind: "ok" });
 });
 
 it.for(["same run", "new run", "reset binding", "new budget", "cancelled", "revoked"] as const)(
   "handles %s after steering without widening retry prompt history",
   async (retryScope, { signal }) => {
     const fixture = await createAttempt();
-    await SessionManager.open(fixture.target, fixture.params.workspaceDir).appendMessageAsync({
-      role: "user",
-      content: "Earlier request.",
-      timestamp: 1,
-    });
+    await SessionManager.open(fixture.target, fixture.params.workspaceDir).appendMessageAsync(
+      makeUserMessage("Earlier request.", 1),
+    );
     const foreground = await fixture.recorder(fixture.params.prompt, "foreground-user");
     await foreground.persistApproved();
     fixture.params.userTurnTranscriptRecorder = foreground;

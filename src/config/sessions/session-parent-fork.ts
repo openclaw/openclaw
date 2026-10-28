@@ -6,9 +6,10 @@ import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity
 import { getChildLogger } from "../../logging/logger.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import type { AgentDatabaseRegistryChange } from "../../state/openclaw-agent-db-contract.js";
+import { toAgentExecutionConstraints } from "../../state/openclaw-agent-execution-scope.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { forkCliSessionBindings } from "./cli-session-binding.js";
-import { publishCommittedSessionIdentity } from "./session-accessor.sqlite-identity.js";
+import { createSessionIdentityResultPublisher } from "./session-accessor.sqlite-identity.js";
 import { withSessionEntryWorker } from "./session-accessor.sqlite-replacement-worker.js";
 import {
   formatLegacySqliteSessionMarkerForScope,
@@ -162,16 +163,7 @@ function captureForkWorker(
   const database = { ...toDatabaseOptions(scope), path: scope.path };
   const execution = captureOpenClawAgentDatabaseExecution(
     database,
-    identity.key.startsWith("file:")
-      ? {
-          expectedIdentity: {
-            kind: "file",
-            physicalIdentity: identity.key.slice("file:".length),
-            nativeLocation: identity.canonicalPath,
-            birthtime: identity.birthtime,
-          },
-        }
-      : { expectedCreationIdentity: identity },
+    toAgentExecutionConstraints(identity),
   );
   const assertCurrent = () => {
     execution.assertCurrent();
@@ -245,18 +237,7 @@ function captureForkWorker(
               input,
             }),
           ),
-        onCommitted(candidate, published, committedIdentity) {
-          if (published) {
-            publishCommittedSessionIdentity(
-              scope.agentId,
-              committedIdentity,
-              published.previous,
-              published.current,
-              published.prepared,
-            );
-          }
-          return candidate.result;
-        },
+        onCommitted: createSessionIdentityResultPublisher(scope),
       });
     },
   };

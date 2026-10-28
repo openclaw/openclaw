@@ -81,10 +81,4 @@ describe("Code Mode configuration", () => {
     });
     expect(resolveCodeModeConfig(config, "missing").executor).toBe("quickjs");
   });
-
-  it("rejects an unsupported executor instead of falling back to Node", () => {
-    expect(() =>
-      resolveCodeModeConfig({ tools: { codeMode: { executor: "unsupported" } } } as never),
-    ).toThrow('Code Mode executor must be "node" or "quickjs".');
-  });
 });

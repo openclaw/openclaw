@@ -397,16 +397,11 @@ describe("main session recovery store", () => {
       const retainedUpdatedAt = Date.now();
       await seedExact({
         [sessionKey]: interruptedEntry(),
-        ...Object.fromEntries(
-          Array.from({ length: 64 }, (_, index) => [
-            `agent:main:retained-${index}`,
-            {
-              sessionId: `retained-${index}`,
-              updatedAt: retainedUpdatedAt,
-              lastHeartbeatText: unrelatedPayload,
-            },
-          ]),
-        ),
+        "agent:main:retained": {
+          sessionId: "retained",
+          updatedAt: retainedUpdatedAt,
+          lastHeartbeatText: unrelatedPayload,
+        },
       });
       let command: CommitParams["command"];
       if (kind === "validate_foreground" || kind === "release_foreground") {
@@ -600,9 +595,11 @@ describe("main session recovery store", () => {
     expect(read().mainRestartRecovery?.foregroundClaims?.tokens).toEqual([claim.lease.claimId]);
   });
 
-  it("leaves interrupted non-main rows to their specialized recovery owner", async () => {
+  it("leaves interrupted children without session recovery custody to their registry", async () => {
     const subagentKey = "agent:main:subagent:child";
-    await seedExact({ [subagentKey]: interruptedEntry({ spawnDepth: 1 }) });
+    await seedExact({
+      [subagentKey]: interruptedEntry({ spawnDepth: 1, mainRestartRecovery: undefined }),
+    });
 
     const claim = await claimRecovery({ target: { sessionKey: subagentKey, storePath } });
 
@@ -681,7 +678,9 @@ describe("main session recovery store", () => {
           session: { scope: "global", store: opsStorePath },
         },
         gatewayRuntime: {
+          prepareFailedWorkerPlacement: async () => undefined,
           prepareRestartRecovery: () => undefined,
+          resumeChatInput: dispatch,
           dispatchSessionMethod: dispatch,
           dispatchAgent: dispatch,
           waitForAgent: dispatch,

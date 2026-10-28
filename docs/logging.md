@@ -123,6 +123,11 @@ openclaw doctor
 The Control UI's **Logs** tab tails the same file using `logs.tail`.
 See [Control UI](/web/control-ui) for how to open it.
 
+The tab retains the latest 2,000 lines and renders a window around the current
+scroll position. Filter and Export cover the entire retained history; browser
+Find and native text selection cover the rendered window. Use Filter to find an
+older retained line, or Export to copy all matching lines.
+
 ### Channel-only logs
 
 To filter channel activity (WhatsApp/Telegram/etc), use:
@@ -268,6 +273,14 @@ You can override both via the **`OPENCLAW_LOG_LEVEL`** environment variable (e.g
 `--verbose` only affects console output and WS log verbosity; it does not change
 file log levels.
 
+### Expected shutdown cancellation
+
+During Gateway shutdown, automatic provider catalog discovery can be canceled,
+and cron startup or session recovery can be refused admission. These expected
+lifecycle outcomes do not emit failure warnings or errors. Provider, storage,
+and cleanup failures still use their existing error reporting, including failures
+that wrap a cancellation error.
+
 ### Provider request failures
 
 Model transport failures emit `Model request failed` at warning level with the
@@ -298,6 +311,15 @@ provider HTTP errors, and network interruptions. Worker inference preserves
 bounded, redacted error details for classification, including when a large
 partial response cannot fit in the transcript. Unrecognized errors still use
 generic chat copy; inspect the Gateway logs and stored error for diagnosis.
+
+Ordinary OpenAI Responses failures log one `provider-error` warning with available code, type,
+and provider `requestId` metadata. Correlation with the originating model call
+uses `clientRequestId` when the provider supplies its own request ID. Missing
+fields and provider prose, request bodies, and response bodies are omitted.
+Same-model retry scheduling is logged at `debug`; exhausted retries produce an
+explicit error. Generic secret-egress request audit lines, including refusals,
+stay at `debug`. Structured `secret.egress` events still count every outcome,
+and certificate failures retain their actionable warning.
 
 When reply dispatch consumes a thrown error after a partial reply or an adopted
 turn, its terminal `message.dispatch.completed` and `message.processed`
@@ -347,6 +369,15 @@ the Gateway. Earlier tool actions may already have completed, so check their
 results before repeating them.
 
 ### Targeted model transport diagnostics
+
+OpenAI Responses transport failures retain structured status, code, type, and
+error/cause names. When the active request signal was aborted, `abortReason`
+identifies OpenClaw-owned causes with fixed labels: `idle_timeout`, `no_progress`,
+`first_event_timeout`, `request_deadline`, `session_watchdog`, `restart`,
+`superseded`, or `caller_abort`. Unclassified caller cancellation uses
+`caller_abort`. Provider error messages and arbitrary abort-reason text are never
+logged because they can contain prompt or tool content. Headers and request or
+response bodies are also omitted.
 
 Prompt-cache history warnings identify the first changed message and bounded
 field paths, such as `content[0].thinkingSignature` or `content[0].arguments`.
@@ -403,7 +434,9 @@ but excludes streaming the response body. The targeted debug flags above promote
 start and fast successful response metadata to `info` when troubleshooting.
 
 Embedded model requests attach the raw `sessionKey`, `runId`, numbered
-`requestId`, and `requestNumber` to fetch and transport logs. String identifiers
+`requestId`, and `requestNumber` to fetch and transport logs. When a failure
+also includes a provider `requestId`, the local identifier is labeled
+`clientRequestId`. String identifiers
 use lossless JSON escaping so control characters cannot forge log lines; their
 values are not redacted. The request sequence
 continues across same-run retries. Fetch response logs include the HTTP
@@ -452,6 +485,8 @@ one second. `stage=request` ends at acknowledgement; `stage=startup` ends when
 agent execution starts. `replyInitialization` covers inbound dispatch through
 session preparation. Later prompt, skills, tool catalog, model/auth, and runtime
 preparation belong to `preparation`, before the first model request.
+Fast sends retain numeric phase timings without formatting a log message;
+enabled diagnostic phase subscribers still receive their observations.
 
 `detail.*` fields attribute those intervals using the existing reply and agent
 preparation spans, without enabling timeline file logging. They include session
@@ -462,6 +497,44 @@ their difference indicates the writer wait. Parent and child spans overlap and
 must not be summed. Unfinished spans stop at the startup boundary; later model
 and tool latency does not extend them. Structured `chat.send.detail.*` phase
 events use the same durations when diagnostics are enabled.
+
+Before acknowledgement, `detail.persist.stage.*` separates pending-input resolution,
+storage preparation, reads, authority preparation, message preparation, and durable
+commit. `detail.persist.transcript.*` covers target selection, owner authority,
+append, and transcript publication; `detail.persist.turn.*` further separates the
+append's preparation, authority, message hook, commit, and completion waits.
+`detail.session.actor.command.queue` measures the physical writer FIFO wait;
+`execute` includes the command's `commit` and `publication` intervals. Commit
+timing includes worker delivery, transaction admission, and durable settlement;
+it is not an isolated fsync measurement. `detail.persist.resolveInput` identifies
+input/media resolution, and `detail.session.inputActor.acquire` times actor acquisition.
+These nested spans use the same request-owned diagnostics without logging input
+bytes or enabling timeline files.
+
+`detail.attempt.setup.*` checkpoints separate initialization, workspace preparation,
+and finalization. Within `workspace`, `policy` and `policy_finalize` cover session
+policy admission and revalidation; `baseline_wait` records only the time setup
+blocks on the concurrently captured Git baseline. `mkdir`, `sandbox`, and `roots`
+cover directory creation, sandbox preparation, and permission-root resolution.
+The `sandbox.*` checkpoints further separate session selection, state-owner
+admission, workspace selection, GitHub identity, pruning, workspace/skills layout,
+mounts, registry reads, backend provisioning, browser setup, and finalization.
+`sandbox.layout.*` separates workspace creation, skill imports, remote connections,
+eligibility, and synchronization. These are fixed labels and monotonic elapsed
+times, including failed preparation. Read siblings as consecutive phases and
+parents as inclusive totals; do not add a parent to its children. Prompt-media
+warnings beginning `Native image:` concern image-file access, not container-image
+validation, and occur outside attempt setup.
+
+`detail.worktree.managed.*` and `detail.worktree.sandbox.*` carry the worktree
+owner's recorded phase durations, including `templatePrepare`, `templateApply`,
+`checkout`, `runtimeQuiesce`, `runtimeResume`, and `unattributed`. Runtime quiescence
+and resume include pausing and unpausing sandbox writers around synchronization.
+The top-level `worktree` interval can describe an
+earlier managed checkout; it is not the sandbox work inside `attempt.setup`.
+Use the matching `detail.worktree.sandbox` total when comparing setup with its
+nested worktree preparation. Recorded worktree summaries appear when their owner
+finishes; a preparation spanning acknowledgement is reported at completion.
 
 ### Embedded attempt preparation
 
@@ -511,9 +584,7 @@ settlement and queue release. The Gateway's earlier operator-start queue is sepa
 
 `stepCount` counts admitted callbacks. `admittedStepMs` sums their elapsed time
 through actual settlement, including authority checks, factory work, and I/O
-waits. `continuationWaitMs` measures queue waiting after an incomplete step until
-resumption or cancellation; it excludes initial admission. These fields are not
-an exact disjoint partition and do not measure CPU time.
+waits. These fields are not an exact disjoint partition and do not measure CPU time.
 
 `admitted` and `providerInvoked` distinguish an attempt that never entered the
 queue's active slot from one that called the provider. Unreached intervals are
@@ -521,7 +592,6 @@ omitted. `outcome` reports the attempt's resolution or rejection;
 `signalAborted` reports the signal independently and does not identify an error's
 cause or prove that native work stopped. An active provider call or `next()` step
 keeps its slot until its actual promise settles, including after cancellation.
-An inert continuation queues with other callers between steps.
 
 `providerIdHash` hashes provider IDs of at most 256 UTF-16 units; longer IDs omit
 the field. It supports correlation, not anonymization or authorization. Host
@@ -675,8 +745,12 @@ identity, and `identityCount`. For batches this names one scope, not every affec
 session. `holderSessionScopeHash` identifies that same scope for the current holder.
 No session titles, transcript content, repository names, or raw identities are logged.
 
-`slow session lifecycle operation` records operations taking at least one
-second through their actual owner release. It separates
+`slow session lifecycle operation` records serialized mutations and compactions
+taking at least one second through their actual owner release. Lifecycle effects
+can span an entire agent turn, so their elapsed time alone is not a warning:
+they are reported only after spending at least one second in a queue themselves
+or being observed as the holder by a queue-waiting diagnostic. This observation
+still counts if the warning budget suppresses the queue-waiting record. It separates
 `mutationQueueWaitMs`, `lifecycleQueueWaitMs`, `completionDelayMs` and
 `phaseDurationsMs.prepare`, `.run` and `.finalize`. The holder's current
 `holderPhase` can also identify activation, admission or release work. A
@@ -699,8 +773,11 @@ unknown at capacity or after enablement. `omittedObservations` on a later record
 reports suppressed observations; missing records never prove no wait.
 
 Controller transition records use `session controller phase` on the `diagnostic`
-logger at `info` level, with the same process diagnostics gate. Session, source
-and priority-source identities are salted digests, and reasons are fixed labels.
+logger at `info` level in the structured file log only, with the same process
+diagnostics gate. They omit console output because the message alone does not
+identify the phase or status. Slow lifecycle warnings remain on the console.
+Session, source and priority-source identities are salted digests, and reasons
+are fixed labels.
 These records have a separate 60-record-per-minute budget so transition traffic
 cannot suppress the slow warnings above. Their `omittedObservations` count applies
 to phase records independently.
@@ -748,6 +825,9 @@ structured file log. Records are limited to 60 per minute.
 the absolute checkout path; linked checkouts have different IDs. `checkoutClass`
 is `managed` when the caller supplies managed-index ownership, otherwise
 `unspecified`. Paths, refs, command arguments, and output contents are not logged.
+For `checkout.diff`, `scope` distinguishes `all`, `uncommitted`, and `commit`;
+`summaryOnly` distinguishes summary polling from full patch requests. These
+fields describe the admitted request without inspecting the checkout again.
 
 `workerQueueWaitMs` measures admission wait (null if never dispatched).
 `firstHostRequestMs` includes that wait plus worker startup and work before the
@@ -1101,6 +1181,27 @@ no diagnostic flag. Durations include awaited work: `admission.revalidate` is
 nested inside `admission.work`, so their values must not be added together or
 treated as SQLite execution time.
 
+Admission subphases separate operator retention (`operator`), lifecycle preparation
+through the session writer barrier (`lifecycle_prepare`), ACP metadata
+(`acp_metadata`), placement preparation and refresh
+(`placement_prepare`, `placement_refresh`), and current session/retry validation
+(`current_session`). Lifecycle preparation includes agent admission checks and
+queue waits; it is not a pure SQLite lock timer. These fields use the
+`detail.admission.` prefix. Sends without restart-safe recovery skip the unused
+transcript lifecycle-header read; current session and caller checks still run.
+Restart-safe admission reuses the request's prepared session entry for ACP metadata.
+Final `current_session` validation stays ordered; a changed lifecycle causes ACP metadata to be prepared
+again before that validation repeats. Durable input custody still completes before
+acknowledgement.
+
+After acknowledgement, `runAdmission` also covers steering into an active turn.
+Its `detail.run_admission.steer_*` subphases separate authority, continuation and
+delivery preparation, ordered admission (`steer_admit`), waiting for the backend
+outcome (`steer_settlement`), and finalization (`steer_finalize`). `steer_prepare`
+encloses preparation through ordered admission. A long `stage=steer` interval
+can therefore be an intentional wait behind older input or for its transcript
+commit, rather than slow startup of a new turn. Nested totals overlap.
+
 When a reply spends a long time preparing, inspect the normal Gateway logs:
 
 ```bash
@@ -1141,12 +1242,32 @@ For shorter delays, [profiler flags](/diagnostics/flags#profiler-flags) lower th
 warning thresholds. They are not required to diagnose a multi-second startup
 stall.
 
+`main-thread stall` warnings include `stallStartMs`, `stallEndMs`, and
+`reportedAtMs` as Unix timestamps in milliseconds. Scoped callbacks have measured
+start and end times. Unattributed active-loop stalls use the observed gap between
+20 ms heartbeats; these bounds describe a blocked-loop observation, not an exact
+JavaScript callback lifetime. Idle monitoring uses the missed wake deadline and
+the resumed wake instead, without adding idle heartbeats.
+
+On supported Node runtimes, `main-thread stall profile` selects samples only
+inside the longest reported stall's saved interval. `windowStartMs` and
+`windowEndMs` identify that interval; `reportedAtMs` identifies profile emission.
+The recorder keeps its 25 ms sample interval and bounded profile buffers. Later
+work outside the interval is excluded, even when reporting is delayed. Sample
+counts include idle samples whose frames are omitted from `inclusive`, so a
+single listed stack does not mean that stack occupied the whole interval.
+
 ### Model call size and timing
 
 Model-call diagnostics record bounded request/response measurements without
 capturing raw prompt or response content:
 
-- `requestPayloadBytes`: UTF-8 byte size of the final model request payload
+- `requestPayloadBytes`: UTF-8 byte size of the final model request payload.
+  OpenAI and Anthropic Messages transports reuse the serialized body size, after
+  payload hooks and transport adjustments. Other transports measure the payload
+  exposed by their hook; this may differ from the final wire body. Injected
+  Anthropic SDK clients and SDKs without a host fetch also use the hook
+  measurement because they own encoding and network I/O.
 - `responseStreamBytes`: UTF-8 byte size of streamed model response chunk
   payloads. High-frequency text, thinking, and tool-call delta events count
   only the incremental `delta` bytes instead of full `partial` snapshots.

@@ -89,8 +89,19 @@ export async function acquireDistArtifactOwnership(
           timeoutMs: wait ? (signal ? LOCK_POLL_MS : Number.POSITIVE_INFINITY) : 0,
           retry: { minTimeout: LOCK_POLL_MS, maxTimeout: LOCK_POLL_MS, factor: 1 },
           staleRecovery: "fail-closed",
-          shouldReclaim: ({ payload }) => {
+          shouldReclaim: ({ payload, nowMs, staleMs }) => {
             owner = payload;
+            if (fs.existsSync(path.join(directory, "unjoined"))) {
+              return true;
+            }
+            // Exclusive creation exposes an empty file before the owner is written.
+            // Keep fs-safe's publication grace; abandoned records still fail closed.
+            if (payload === null) {
+              const pending = fs.statSync(ownerPath, { throwIfNoEntry: false });
+              if (pending?.size === 0 && nowMs - pending.mtimeMs < staleMs) {
+                return false;
+              }
+            }
             // fs-safe rechecks the observed owner before failing closed, never reclaiming it.
             const pid =
               payload && typeof payload === "object" && "pid" in payload ? payload.pid : null;
@@ -105,9 +116,6 @@ export async function acquireDistArtifactOwnership(
             try {
               process.kill(pid, 0);
             } catch {
-              return true;
-            }
-            if (fs.existsSync(path.join(directory, "unjoined"))) {
               return true;
             }
             if (!reportedWait) {

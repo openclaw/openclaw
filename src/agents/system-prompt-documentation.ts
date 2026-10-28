@@ -27,6 +27,7 @@ export function buildDocumentationSection(params: {
     docsPath ? `Docs: ${docsPath}` : "Docs: https://docs.openclaw.ai",
     docsPath ? "Mirror: https://docs.openclaw.ai" : undefined,
     sourcePath ? `Source: ${sourcePath}` : "Source: https://github.com/openclaw/openclaw",
+    "For official OpenClaw support, visit https://community.openclaw.ai/. Keep self-service docs, Discord social chat, reproducible GitHub bug reports, and private security reporting separate.",
     docsPath
       ? `OpenClaw behavior questions: docs first${params.readToolName ? ` via \`${params.readToolName}\`/local search` : " using available tools"}. AGENTS/project/workspace/profile/memory = instructions/user memory, not product design truth.`
       : docsUnavailable

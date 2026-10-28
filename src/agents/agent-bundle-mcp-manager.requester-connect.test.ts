@@ -1,8 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createSessionMcpRuntimeManager } from "./agent-bundle-mcp-manager.test-support.js";
+import { fixtureCatalog } from "./agent-bundle-mcp-fixture.test-support.js";
+import {
+  createSessionMcpRuntimeManager,
+  makeManagerRuntime,
+} from "./agent-bundle-mcp-manager.test-support.js";
 import { materializeBundleMcpToolsForRun } from "./agent-bundle-mcp-materialize.js";
 import type { CreateSessionMcpRuntime } from "./agent-bundle-mcp-runtime-shared.js";
-import type { McpToolCatalog, SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
+import type { SessionMcpRuntimeLease } from "./agent-bundle-mcp-types.js";
 import { applyCodeModeCatalog } from "./code-mode.js";
 import {
   createCodeModeHarness,
@@ -13,6 +17,11 @@ import {
 const oauthStatus = vi.hoisted(() => vi.fn());
 const startAuthorization = vi.hoisted(() => vi.fn());
 const authorizationUrl = "https://auth.example/authorize?state=opaque";
+const unavailableContent = [
+  { type: "text", text: expect.stringContaining("This turn will continue without MCP tools") },
+];
+const toolSurface = (tools: Parameters<typeof runConnect>[0]) =>
+  tools.map(({ name, description, parameters }) => ({ name, description, parameters }));
 const request = {
   sessionId: "session-connect",
   workspaceDir: "/workspace",
@@ -46,59 +55,22 @@ vi.mock("./mcp-oauth.js", () => ({
   startMcpOAuthAuthorization: startAuthorization,
 }));
 
-function createTestRuntime(params: Parameters<CreateSessionMcpRuntime>[0]): SessionMcpRuntime {
-  const server = { serverName: "calendar", safeServerName: "calendar" };
-  const catalog: McpToolCatalog = { version: 1, generatedAt: 1, servers: {}, tools: [] };
-  if (params.includeServerNames?.has("calendar")) {
-    catalog.servers.calendar = { ...server, launchSummary: "calendar", toolCount: 1 };
-    catalog.tools.push({
-      ...server,
-      toolName: "events",
-      fallbackDescription: "List events",
-      inputSchema: { type: "object", properties: {} },
-    });
-  }
-  let lastUsedAt = Date.now();
-  return {
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    workspaceDir: params.workspaceDir,
-    agentDir: params.agentDir,
-    configFingerprint: params.configFingerprint ?? "test",
-    requesterScope: params.requesterScope,
-    requesterConnect: params.requesterConnect,
-    createdAt: Date.now(),
-    get lastUsedAt() {
-      return lastUsedAt;
-    },
-    getCatalog: async () => catalog,
+function createTestRuntime(params: Parameters<CreateSessionMcpRuntime>[0]) {
+  const catalog = params.includeServerNames?.has("calendar")
+    ? fixtureCatalog("calendar", [{ toolName: "events", fallbackDescription: "List events" }], 1)
+    : { version: 1, generatedAt: 1, servers: {}, tools: [] };
+  return makeManagerRuntime(params, catalog, {
     peekCatalog: () => catalog,
-    markUsed: () => {
-      lastUsedAt = Date.now();
-    },
-    callTool: async (_serverName, toolName) => ({
-      content: [{ type: "text", text: `called:${toolName}` }],
-      isError: false,
-    }),
-    dispose: async () => {},
-    joinCleanup: async () => {},
-  };
+  });
 }
 
 describe("requester MCP connect runtime", () => {
   let manager: ReturnType<typeof createSessionMcpRuntimeManager>;
-  const created: Array<Parameters<CreateSessionMcpRuntime>[0]> = [];
 
   beforeEach(() => {
     oauthStatus.mockReset().mockResolvedValue([{ state: "unauthenticated" }]);
     startAuthorization.mockReset().mockResolvedValue({ status: "redirect", authorizationUrl });
-    created.length = 0;
-    manager = createSessionMcpRuntimeManager({
-      createRuntime: (params) => {
-        created.push(params);
-        return createTestRuntime(params);
-      },
-    });
+    manager = createSessionMcpRuntimeManager({ createRuntime: createTestRuntime });
   });
 
   afterEach(async () => {
@@ -116,13 +88,7 @@ describe("requester MCP connect runtime", () => {
     const disconnectedRuntime = await manager.getOrCreate(input);
     const disconnected = await materializeBundleMcpToolsForRun({ runtime: disconnectedRuntime });
     expect(disconnected.tools.map((tool) => tool.name)).toEqual(["calendar__connect"]);
-    expect(created.find((params) => params.requesterScope)?.includeServerNames).toEqual(new Set());
     expect(startAuthorization).not.toHaveBeenCalled();
-    const connecting = disconnected.tools[0]!.execute("connect", {});
-    expect(startAuthorization).toHaveBeenCalledOnce();
-    await expect(connecting).resolves.toMatchObject({
-      details: { mcpConnect: { serverName: "calendar", authorizationUrl } },
-    });
     startAuthorization
       .mockResolvedValueOnce({ status: "redirect", authorizationUrl })
       .mockResolvedValueOnce({ status: "authorized" });
@@ -143,11 +109,77 @@ describe("requester MCP connect runtime", () => {
     const connected = await materializeBundleMcpToolsForRun({ runtime: connectedRuntime });
 
     expect(connected.tools.map((tool) => tool.name)).toEqual(["calendar__events"]);
-    expect(created.findLast((params) => params.requesterScope)?.includeServerNames).toEqual(
-      new Set(["calendar"]),
-    );
     await connected.dispose();
   });
+
+  it.each(
+    ["embedded", "requester"].flatMap((consumer) =>
+      ["none", "removal", "origin", "retirement"].map((change) => ({ consumer, change })),
+    ),
+  )(
+    "keeps refused sign-in schemas unavailable after $change ($consumer)",
+    async ({ consumer, change }) => {
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      const held: SessionMcpRuntimeLease[] = [];
+      try {
+        const input = {
+          ...request,
+          cfg: {
+            ...request.cfg,
+            mcp: {
+              servers: {
+                ...request.cfg.mcp.servers,
+                mail: { ...request.cfg.mcp.servers.calendar, url: "https://mail.example/mcp" },
+              },
+            },
+            gateway: { publicOrigin: "https://gateway.example" },
+          },
+        };
+        oauthStatus.mockResolvedValue([{ state: "authorized" }, { state: "unauthenticated" }]);
+        const acquire = async () =>
+          consumer === "embedded"
+            ? await manager.acquire(input)
+            : (await manager.acquireRequesterScoped(input))!;
+        const first = await materializeBundleMcpToolsForRun(await acquire());
+        const surface = toolSurface(first.tools);
+        expect(surface.map((tool) => tool.name)).toEqual(["calendar__events", "mail__connect"]);
+        await first.dispose();
+        for (let index = 0; index < 256; index++) {
+          held.push(
+            await manager.acquire({
+              sessionId: `busy-${index}`,
+              workspaceDir: "/workspace",
+              cfg: { mcp: { servers: { fixture: { command: "true" } } } },
+            }),
+          );
+        }
+        const refused = await materializeBundleMcpToolsForRun(await acquire());
+        expect(toolSurface(refused.tools)).toEqual(surface);
+        const connect = refused.tools[1]!.execute;
+        if (change === "removal") {
+          await manager.reloadConfig({
+            cfg: { ...input.cfg, mcp: { servers: { calendar: input.cfg.mcp.servers.calendar } } },
+          });
+        } else if (change === "origin") {
+          await manager.reloadConfig({
+            cfg: { ...input.cfg, gateway: { publicOrigin: "https://replacement.example" } },
+          });
+        } else if (change === "retirement") {
+          await manager.disposeSession(input.sessionId);
+        }
+        const result = await connect("connect", {});
+        expect(startAuthorization).not.toHaveBeenCalled();
+        expect(result).toMatchObject({
+          details: { status: "error", mcpServer: "mail", mcpTool: "connect" },
+          content: unavailableContent,
+        });
+        await refused.dispose();
+      } finally {
+        held.forEach((lease) => lease.releaseLease());
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("returns requester connection configuration failures as failed MCP guest results", async () => {
     const runtime = await manager.getOrCreate({

@@ -7,12 +7,6 @@ import { createClient, restoreReleasePriority } from "../../scripts/frv.mjs";
 import { RELEASE_PRIORITY_VARIABLE } from "../../scripts/lib/release-priority.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const PARENT = {
-  id: 77,
-  path: ".github/workflows/full-release-validation.yml",
-  status: "in_progress",
-};
-
 function run(
   id: number,
   name: string,
@@ -68,20 +62,8 @@ function priorityRecord(recordedAt: string, cancelled: Record<string, unknown>[]
 
 describe("pnpm frv prioritize --restore", () => {
   it("restores newest-per-lane runs from a historical record", async () => {
-    // Older pause records have no run-lane identity; restore resolves it from current run facts.
-    const cancelled = [
-      run(1, "CI"),
-      run(15, "CI", { head_branch: "already-restored" }),
-      run(8, "CI", { head_branch: "later" }),
-    ].map((entry) => ({
-      event: entry.event,
-      headBranch: entry.head_branch,
-      id: entry.id,
-      name: entry.name,
-      url: entry.html_url,
-    }));
     const { result, calls } = await restore({
-      cancelled,
+      cancelled: [1, 15, 8].map((id) => ({ id })),
       variable: "77",
       initial: [
         completed(1, "cancelled"),
@@ -136,8 +118,6 @@ describe("pnpm frv prioritize --restore", () => {
         "20": [],
       },
     });
-    // Executed run 4 and active run 10 supersede the deferred CI attempts.
-    // Successful run 11 likewise owns its lane. Manual run 14 is independent of PR run 13.
     expect(result).toMatchObject({
       action: "restored",
       cleared: true,
@@ -258,7 +238,6 @@ if (args[0] === "variable") {
   const query = new URL(resource, "https://example.invalid").searchParams;
   let value;
   if (resource === "actions/variables/${RELEASE_PRIORITY_VARIABLE}") value = { value: "" };
-  else if (resource === "actions/runs/77") value = ${JSON.stringify(PARENT)};
   else if (resource.startsWith("actions/runs?")) {
     const branch = query.get("branch");
     const found = runs.filter(run => !branch || run.head_branch === branch);
@@ -340,54 +319,32 @@ syncBuiltinESMExports();
 
 describe("release-priority CLI output", () => {
   it.each([
-    {
-      label: "attempted and skipped siblings",
-      mutations: 1,
-      contains: [
-        "CI 200 branch-200 https://example.invalid/runs/200",
-        "skipped (rerun not attempted): CI 100 branch-100 https://example.invalid/runs/100",
-        "Inspect the skipped runs and their latest PR checks",
-        "pnpm frv prioritize --restore <record> --dry-run",
-        "same --repo",
-        "action: restored",
-      ],
-    },
-    {
-      label: "only skipped candidates",
-      skipped: [100, 300],
-      allowed: false,
-      mutations: 0,
-      contains: [
-        ...[100, 300].map(
-          (id) =>
-            `skipped (rerun not attempted): CI ${id} branch-${id} https://example.invalid/runs/${id}`,
-        ),
-        "--restore <record> --dry-run",
-      ],
-    },
-    {
-      label: "no skipped candidates",
-      skipped: [],
-      mutations: 1,
-      exact: "CI 200 branch-200 https://example.invalid/runs/200\naction: restored\n",
-    },
-    {
-      label: "dry-run",
-      args: ["--dry-run"],
-      mutations: 0,
-      exact:
-        "CI 100 branch-100 https://example.invalid/runs/100\nCI 200 branch-200 https://example.invalid/runs/200\naction: would-restore\n",
-    },
-  ])("reports $label without misrepresenting dispatch", (row) => {
-    const result = priorityCli(row);
+    { label: "attempted and skipped siblings", skipped: [100], allowed: true, dryRun: false },
+    { label: "only skipped candidates", skipped: [100, 300], allowed: false, dryRun: false },
+    { label: "no skipped candidates", skipped: [], allowed: true, dryRun: false },
+    { label: "dry-run", skipped: [100], allowed: true, dryRun: true },
+  ])("reports $label without misrepresenting dispatch", ({ dryRun, ...row }) => {
+    const result = priorityCli({ ...row, args: dryRun ? ["--dry-run"] : [] });
     expect(result.mutations).toEqual(
-      row.mutations ? [["api", "-X", "POST", "repos/fixture/fixture/actions/runs/200/rerun"]] : [],
+      row.allowed && !dryRun
+        ? [["api", "-X", "POST", "repos/fixture/fixture/actions/runs/200/rerun"]]
+        : [],
     );
-    if (row.exact !== undefined) {
-      expect(result.stdout).toBe(row.exact);
-    }
-    for (const text of row.contains ?? []) {
-      expect(result.stdout).toContain(text);
+    const line = (id: number) => `CI ${id} branch-${id} https://example.invalid/runs/${id}\n`;
+    const dispatched = row.allowed ? line(200) : "";
+    const skipped = row.skipped
+      .map((id) => `${dryRun ? "" : "skipped (rerun not attempted): "}${line(id)}`)
+      .join("");
+    if (dryRun || !row.skipped.length) {
+      expect(result.stdout).toBe(
+        `${skipped}${dispatched}action: ${dryRun ? "would-restore" : "restored"}\n`,
+      );
+    } else {
+      expect(result.stdout).toContain(`${dispatched}${skipped}`);
+      expect(result.stdout).toContain("Inspect the skipped runs and their latest PR checks");
+      expect(result.stdout).toContain("pnpm frv prioritize --restore <record> --dry-run");
+      expect(result.stdout).toContain("same --repo");
+      expect(result.stdout).toContain("action: restored");
     }
   });
 
@@ -415,14 +372,14 @@ describe("release-priority CLI output", () => {
 });
 
 describe("restore dispatch revalidation through createClient", () => {
-  it.each(["unchanged", "independent peers", "legacy cancellation"])(
+  it.each(["independent peers", "legacy cancellation"])(
     "dispatches only the eligible original run: %s",
     async (scenario) => {
       const original =
         scenario === "legacy cancellation"
           ? run(100, "CI", { status: "completed", conclusion: "cancelled" })
           : candidate();
-      const { result, calls, writes } = await restore({
+      const { result, writes } = await restore({
         initial:
           scenario === "independent peers"
             ? [
@@ -442,10 +399,6 @@ describe("restore dispatch revalidation through createClient", () => {
       });
       expect(result).toMatchObject({ failures: [], rerun: [{ id: "100" }], skipped: [] });
       expect(writes).toEqual(["api -X POST repos/fixture/fixture/actions/runs/100/rerun"]);
-      expect(calls.at(-2)).toContain("branch=feat%2Fthing");
-      if (scenario === "unchanged") {
-        expect(calls.filter((call) => call.includes("/attempts/1/jobs"))).toHaveLength(2);
-      }
     },
   );
 

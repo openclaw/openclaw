@@ -105,6 +105,7 @@ export function createChatAttachmentHandoff(
       }
     }
   };
+  // Retire private draft leases on connection changes, even while their panes are unmounted.
   const stopGateway = gateway.subscribe(retirePrivateOwners);
   const privateEntry = () => {
     retirePrivateOwners();

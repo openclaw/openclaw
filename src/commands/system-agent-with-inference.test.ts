@@ -17,10 +17,7 @@ vi.mock("./onboard-guided.js", () => ({
   runGuidedOnboarding: inferenceMocks.runGuidedOnboarding,
 }));
 
-const exitMocks = vi.hoisted(() => ({
-  requestExitAfterOneShotOutput: vi.fn(),
-}));
-
+const exitMocks = vi.hoisted(() => ({ requestExitAfterOneShotOutput: vi.fn() }));
 vi.mock("../cli/one-shot-exit.js", () => ({
   requestExitAfterOneShotOutput: exitMocks.requestExitAfterOneShotOutput,
 }));
@@ -29,6 +26,8 @@ const tty = { isTTY: true } as unknown as NodeJS.ReadableStream & NodeJS.Writabl
 const pipe = { isTTY: false } as unknown as NodeJS.ReadableStream & NodeJS.WritableStream;
 const verifiedInference = { execution: { modelLabel: "openai/gpt-5.5" } } as never;
 const expiredAuth = { ok: false, status: "auth", error: "login expired" };
+const { runSystemAgent, verifySetupInference } = inferenceMocks;
+const { requestExitAfterOneShotOutput } = exitMocks;
 
 describe("runSystemAgentWithInference", () => {
   let currentRuntime: RuntimeEnv;
@@ -41,18 +40,14 @@ describe("runSystemAgentWithInference", () => {
       latencyMs: 100,
       binding: verifiedInference,
     });
-    inferenceMocks.runSystemAgent.mockResolvedValue(undefined);
-    inferenceMocks.runGuidedOnboarding.mockResolvedValue(undefined);
-    exitMocks.requestExitAfterOneShotOutput.mockReturnValue(false);
+    requestExitAfterOneShotOutput.mockReturnValue(false);
   });
 
   it("requests a clean process exit after successful noninteractive output", async () => {
-    const { runSystemAgent } = inferenceMocks;
-
     await runSystemAgentWithInference({ interactive: false }, currentRuntime);
 
-    expect(exitMocks.requestExitAfterOneShotOutput).toHaveBeenCalledWith(currentRuntime);
-    expect(inferenceMocks.verifySetupInference).toHaveBeenCalledWith({
+    expect(requestExitAfterOneShotOutput).toHaveBeenCalledWith(currentRuntime);
+    expect(verifySetupInference).toHaveBeenCalledWith({
       runtime: currentRuntime,
       bindSession: true,
     });
@@ -60,11 +55,11 @@ describe("runSystemAgentWithInference", () => {
       expect.objectContaining({ verifiedInference }),
       currentRuntime,
     );
-    expect(inferenceMocks.verifySetupInference.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(verifySetupInference.mock.invocationCallOrder[0]).toBeLessThan(
       runSystemAgent.mock.invocationCallOrder[0]!,
     );
     expect(runSystemAgent.mock.invocationCallOrder[0]).toBeLessThan(
-      exitMocks.requestExitAfterOneShotOutput.mock.invocationCallOrder[0]!,
+      requestExitAfterOneShotOutput.mock.invocationCallOrder[0]!,
     );
   });
 
@@ -77,15 +72,12 @@ describe("runSystemAgentWithInference", () => {
     );
 
     expect(currentRuntime.error).toHaveBeenCalledExactlyOnceWith("Plugin install spec is invalid.");
-    expect(exitMocks.requestExitAfterOneShotOutput).toHaveBeenCalledExactlyOnceWith(
-      currentRuntime,
-      1,
-    );
+    expect(requestExitAfterOneShotOutput).toHaveBeenCalledExactlyOnceWith(currentRuntime, 1);
     expect(currentRuntime.exit).toHaveBeenCalledWith(1);
   });
 
   it("returns one drained JSON error when inference verification throws", async () => {
-    exitMocks.requestExitAfterOneShotOutput.mockReturnValueOnce(true);
+    requestExitAfterOneShotOutput.mockReturnValueOnce(true);
     inferenceMocks.verifySetupInference.mockRejectedValue(new Error("verification exploded"));
 
     await runSystemAgentWithInference({ json: true }, currentRuntime);
@@ -95,10 +87,7 @@ describe("runSystemAgentWithInference", () => {
     );
     expect(currentRuntime.error).not.toHaveBeenCalled();
     expect(inferenceMocks.runSystemAgent).not.toHaveBeenCalled();
-    expect(exitMocks.requestExitAfterOneShotOutput).toHaveBeenCalledExactlyOnceWith(
-      currentRuntime,
-      1,
-    );
+    expect(requestExitAfterOneShotOutput).toHaveBeenCalledExactlyOnceWith(currentRuntime, 1);
     expect(currentRuntime.exit).not.toHaveBeenCalled();
   });
 
@@ -110,7 +99,7 @@ describe("runSystemAgentWithInference", () => {
     ).rejects.toThrow("interactive operation failed");
 
     expect(currentRuntime.error).not.toHaveBeenCalled();
-    expect(exitMocks.requestExitAfterOneShotOutput).not.toHaveBeenCalled();
+    expect(requestExitAfterOneShotOutput).not.toHaveBeenCalled();
   });
 
   it("routes an interactive inference failure into guided setup", async () => {
@@ -146,36 +135,38 @@ describe("runSystemAgentWithInference", () => {
       expect.stringContaining('"error": "OpenClaw --yes requires --message'),
     );
     expect(currentRuntime.error).not.toHaveBeenCalled();
-    expect(exitMocks.requestExitAfterOneShotOutput).toHaveBeenCalledWith(currentRuntime, 1);
+    expect(requestExitAfterOneShotOutput).toHaveBeenCalledWith(currentRuntime, 1);
     expect(currentRuntime.exit).toHaveBeenCalledWith(1);
     expect(inferenceMocks.verifySetupInference).not.toHaveBeenCalled();
   });
 
-  it("fails one-shot mode with onboarding guidance when inference is unavailable", async () => {
-    inferenceMocks.verifySetupInference.mockResolvedValue({
-      ok: false,
-      status: "unavailable",
-      error: "no configured model",
-    });
-
-    await runSystemAgentWithInference({ message: "status" }, currentRuntime);
-
-    expect(currentRuntime.error).toHaveBeenCalledWith(expect.stringContaining("openclaw onboard"));
-    expect(currentRuntime.exit).toHaveBeenCalledWith(1);
-    expect(exitMocks.requestExitAfterOneShotOutput).toHaveBeenCalledWith(currentRuntime, 1);
-    expect(inferenceMocks.runGuidedOnboarding).not.toHaveBeenCalled();
-  });
-
-  it("returns a structured JSON error when inference is unavailable", async () => {
-    inferenceMocks.verifySetupInference.mockResolvedValue(expiredAuth);
-
-    await runSystemAgentWithInference({ json: true }, currentRuntime);
-
-    expect(currentRuntime.log).toHaveBeenCalledWith(expect.stringContaining('"status": "auth"'));
-    expect(currentRuntime.log).toHaveBeenCalledWith(
-      expect.stringContaining('"guidance": "Run `openclaw onboard`'),
+  it.each([false, true])("reports unavailable inference (json=%s)", async (json) => {
+    verifySetupInference.mockResolvedValue(
+      json
+        ? expiredAuth
+        : {
+            ok: false,
+            status: "unavailable",
+            error: "no configured model",
+          },
     );
-    expect(currentRuntime.error).not.toHaveBeenCalled();
+    await runSystemAgentWithInference(
+      json ? { json: true } : { message: "status" },
+      currentRuntime,
+    );
+    if (json) {
+      expect(currentRuntime.log).toHaveBeenCalledWith(expect.stringContaining('"status": "auth"'));
+      expect(currentRuntime.log).toHaveBeenCalledWith(
+        expect.stringContaining('"guidance": "Run `openclaw onboard`'),
+      );
+      expect(currentRuntime.error).not.toHaveBeenCalled();
+    } else {
+      expect(currentRuntime.error).toHaveBeenCalledWith(
+        expect.stringContaining("openclaw onboard"),
+      );
+      expect(requestExitAfterOneShotOutput).toHaveBeenCalledWith(currentRuntime, 1);
+      expect(inferenceMocks.runGuidedOnboarding).not.toHaveBeenCalled();
+    }
     expect(currentRuntime.exit).toHaveBeenCalledWith(1);
   });
 });

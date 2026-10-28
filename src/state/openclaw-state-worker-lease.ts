@@ -23,7 +23,7 @@ export function retainOpenClawStateWorkerLease(
   context: OpenClawStateWorkerContext,
   owner: {
     open(context: OpenClawStateWorkerContext): Promise<Store | undefined>;
-    retainOperation(store: Store): () => void | Promise<void>;
+    retainOperation(store: Store, onNativeLost?: () => void): () => void | Promise<void>;
   },
   finalize?: (scope: DomainScope) => Promise<void>,
 ): OpenClawStateWorkerLease {
@@ -249,7 +249,10 @@ export function retainOpenClawStateWorkerLease(
       if (!store) {
         throw new Error("Canonical shared-state worker did not open its database");
       }
-      releaseOperation = owner.retainOperation(store);
+      releaseOperation = owner.retainOperation(store, () => {
+        // An idle logical lease must release its hold even when it has no command to reject.
+        void retire();
+      });
       // The client scope retains native custody as a resource, never as pending
       // maintenance work that must finish before the resource phase can begin.
       retained = runWithOpenClawStateWorkerStore(

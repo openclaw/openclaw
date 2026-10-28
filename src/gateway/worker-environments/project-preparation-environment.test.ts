@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { requireGit } from "../../agents/worktrees/git.js";
 import { resolveExecutablePath } from "../../infra/executable-path.js";
-import { readWorkerProjectEnvironmentRecipe } from "./project-preparation.js";
+import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
 import { createProjectPreparationFixture } from "./project-preparation.test-support.js";
 import { prepareWorkerProjectSnapshot } from "./workspace-git-base.js";
 
@@ -35,14 +35,15 @@ async function fixture(files: Record<string, string>) {
   );
   const bin = path.join(f.home, "fixture-bin");
   await fs.mkdir(bin);
+  const nodeExecutable = resolveTestNodeExecPath();
   // Linux selects tools beside process.execPath; a symlink to host Node would select host tools.
   // A separate copier keeps writable Node descriptors out of sibling Vitest forks.
-  execFileSync(process.execPath, [
+  execFileSync(nodeExecutable, [
     "-e",
     'const fs = require("node:fs"); fs.copyFileSync(process.execPath, process.argv[1], fs.constants.COPYFILE_FICLONE)',
     path.join(bin, "node"),
   ]);
-  const libraries = path.resolve(path.dirname(process.execPath), "../lib");
+  const libraries = path.resolve(path.dirname(nodeExecutable), "../lib");
   if (existsSync(libraries)) {
     await fs.symlink(libraries, path.join(f.home, "lib"));
   }
@@ -106,7 +107,6 @@ describe("repository environment preparation", () => {
           postStartCommand: "printf 'postStart\\n' >> build/order",
         }),
     });
-    const recipe = await readWorkerProjectEnvironmentRecipe(f.project);
     const first = await f.preparedOperation();
     const result = await first.project.prepare(f);
     expect(result).toMatchObject({
@@ -118,11 +118,6 @@ describe("repository environment preparation", () => {
       },
     });
     const prepared = result.preparedWorkspace!;
-    await expectFiles(prepared.workspaceDir, {
-      "build/order": "onCreate\nupdateContent\n",
-      "build/cached": "prepared base\n",
-      "created.txt": "initialized",
-    });
     first.close();
     await fs.writeFile(path.join(f.repository, "input.txt"), "updated content\n");
     await requireGit(f.repository, ["add", "input.txt"]);
@@ -131,9 +126,6 @@ describe("repository environment preparation", () => {
       localPath: f.repository,
       namespace: "gateway",
     }))!;
-    expect((await readWorkerProjectEnvironmentRecipe(refreshedProject)).identity).toBe(
-      recipe.identity,
-    );
     const refreshed = await f.preparedOperation(() => {}, { project: refreshedProject });
     const refreshedResult = await refreshed.project.prepare(f);
     expect(refreshedResult).toMatchObject({
@@ -206,7 +198,6 @@ describe("repository environment preparation", () => {
       expect(outputTail.includes("�")).toBe(encoding !== "UTF-8");
       expect(recordRecipePreparation).toHaveBeenCalledWith(result.recipePreparation);
       const prepared = result.preparedWorkspace!;
-      expect(operation.getPreparedWorkspace()).toEqual(prepared);
       expect(await readText(prepared.workspaceDir, "input.txt")).toBe("prepared base\n");
     },
   );

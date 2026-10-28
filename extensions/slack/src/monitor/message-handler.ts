@@ -20,7 +20,6 @@ import {
   createSlackMessageDispatchReplayGuard,
   SlackMessageDispatchRetryError,
   type SlackMessageDispatchReplayClaim,
-  type SlackMessageDispatchReplayGuard,
 } from "./message-dispatch-dedupe.js";
 import {
   buildSlackDebounceKey,
@@ -69,18 +68,15 @@ export function createSlackMessageHandler(params: {
   trackEvent?: () => void;
   /** Called after access/routing preparation accepts a human message. */
   onPrepared?: (prepared: PreparedSlackMessage) => void;
-  dispatchReplayGuard?: SlackMessageDispatchReplayGuard;
 }): SlackMessageHandler {
   const { ctx, trackEvent, onPrepared } = params;
   const readConfig = createRuntimeConfigReader(ctx.cfg);
-  const dispatchReplayGuard =
-    params.dispatchReplayGuard ??
-    createSlackMessageDispatchReplayGuard({
-      onDiskError: (error) =>
-        ctx.runtime.error?.(
-          `slack message dispatch dedupe persistence failed: ${formatErrorMessage(error)}`,
-        ),
-    });
+  const dispatchReplayGuard = createSlackMessageDispatchReplayGuard({
+    onDiskError: (error) =>
+      ctx.runtime.error?.(
+        `slack message dispatch dedupe persistence failed: ${formatErrorMessage(error)}`,
+      ),
+  });
   const { debouncer } = createChannelInboundDebouncer<{
     message: SlackMessageEvent;
     opts: QueuedSlackMessageOptions;

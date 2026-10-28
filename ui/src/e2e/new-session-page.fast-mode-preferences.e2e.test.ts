@@ -1,4 +1,3 @@
-import path from "node:path";
 import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Page } from "playwright";
@@ -9,9 +8,10 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
-  captureUiProofEnabled,
+  captureUiProof,
   createNewSessionPageE2eSuite,
   installMockGateway,
+  pollAttribute,
   waitForCommittedChatRoute,
 } from "./new-session-page.test-support.ts";
 
@@ -21,7 +21,7 @@ const preferenceKey = "new-session.v1:main";
 
 suite.define(() => {
   it.each(["browser", "identity"] as const)(
-    "remembers enabled and disabled Fast mode with reasoning across new sessions (%s)",
+    "remembers authenticated Access and enabled or disabled Fast mode with reasoning across new sessions (%s)",
     async (source) => {
       const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
       const storageKey = `openclaw.new-session.preferences.v1:${gatewayOriginScope(controlUiBundledGatewayUrl(suite.server.baseUrl))}`;
@@ -29,6 +29,7 @@ suite.define(() => {
       let page!: Page;
       let gateway!: MockGatewayControls;
       let preferenceWrites = 0;
+      let expectedAccess = "daybreak_blue";
 
       const openPage = async () => {
         preferenceWrites = 0;
@@ -44,6 +45,8 @@ suite.define(() => {
               reasoning: true,
               thinkingLevels,
               thinkingDefault: "medium",
+              cyberAccessProgramDefault: "standard",
+              availableAccessPrograms: { cyber: ["standard", "daybreak_blue", "daybreak_red"] },
             },
           ],
           ...(source === "identity"
@@ -53,13 +56,22 @@ suite.define(() => {
             "chat.metadata",
             "chat.startup",
             "sessions.create",
+            "sessions.patch",
             ...(source === "identity" ? ["users.prefs.get", "users.prefs.set"] : []),
           ],
           sessions: [],
           methodResponses: {
             "users.prefs.get": { status: "ok", entries },
             "users.prefs.set": { status: "ok" },
-            "sessions.create": { key: "agent:main:fast-mode-proof", runStarted: true },
+            "sessions.create": {
+              key: "agent:main:fast-mode-proof",
+              runStarted: true,
+              entry: {
+                model: "gpt-4.1",
+                modelProvider: "openai",
+                cyberAccessProgram: source === "identity" ? expectedAccess : "standard",
+              },
+            },
           },
         });
         await page.goto(`${suite.server.baseUrl}new`);
@@ -70,27 +82,47 @@ suite.define(() => {
         await page.locator('[data-chat-speed-option="on"]').waitFor({ state: "visible" });
         return effort;
       };
+      const speed = (value: "on" | "off") => page.locator(`[data-chat-speed-option="${value}"]`);
+      const expectSpeed = (value: "on" | "off", checked = "true") =>
+        pollAttribute(speed(value), "aria-checked").toBe(checked);
+      const reopen = async (enabled: boolean) => {
+        // A fresh document must restore identity preferences without the browser projection.
+        if (source === "identity") {
+          await page.evaluate((key) => localStorage.removeItem(key), storageKey);
+        }
+        await page.close();
+        await openPage();
+        await pollAttribute(await openEffort(), "data-chat-thinking-value").toBe("high");
+        await expectSpeed("on", String(enabled));
+        if (source === "identity") {
+          await pollAttribute(
+            page.locator(`[data-chat-access-option="${expectedAccess}"]`),
+            "aria-pressed",
+          ).toBe("true");
+        }
+      };
+      const submit = async (message: string, fastMode: boolean) => {
+        await page.keyboard.press("Escape");
+        await page.locator(".new-session-page__message").fill(message);
+        await page.getByRole("button", { name: "Start session" }).click();
+        expect((await gateway.waitForRequest("sessions.create")).params).toMatchObject({
+          fastMode,
+          thinkingLevel: "high",
+          cyberAccessProgram: source === "identity" ? expectedAccess : "standard",
+          message,
+        });
+      };
       const confirmPreferenceWrite = async (selection: Record<string, unknown>) => {
         if (source === "identity") {
-          const request = await gateway.waitForRequest("users.prefs.set", {
-            after: preferenceWrites,
+          const { params } = await gateway.waitForRequest("users.prefs.set", {
+            after: preferenceWrites++,
           });
-          preferenceWrites += 1;
-          const params = request.params;
           if (!isRecord(params) || !isRecord(params.entries)) {
             throw new Error("Expected preference-write entries");
           }
           expect(params).toMatchObject({ entries: { [preferenceKey]: selection } });
           entries = { ...entries, ...params.entries };
           await gateway.setMethodResponse("users.prefs.get", { status: "ok", entries });
-        }
-      };
-      const capture = async (name: string) => {
-        if (captureUiProofEnabled && source === "browser") {
-          await page.screenshot({
-            animations: "disabled",
-            path: path.join(suite.artifactDir, name),
-          });
         }
       };
 
@@ -103,67 +135,59 @@ suite.define(() => {
         );
         expect(highIndex).toBeGreaterThanOrEqual(0);
         await slider.fill(String(highIndex));
-        await expect.poll(() => effort.getAttribute("data-chat-thinking-value")).toBe("high");
+        await pollAttribute(effort, "data-chat-thinking-value").toBe("high");
         await confirmPreferenceWrite({ thinkingLevel: "high" });
 
-        await page.locator('[data-chat-speed-option="on"]').click();
-        await expect
-          .poll(() => page.locator('[data-chat-speed-option="on"]').getAttribute("aria-checked"))
-          .toBe("true");
-        await capture("01-fast-mode-selected.png");
+        await speed("on").click();
+        await expectSpeed("on");
         await confirmPreferenceWrite({ fastMode: true });
-        await page.keyboard.press("Escape");
-        await page.locator(".new-session-page__message").fill("First session");
-        await page.getByRole("button", { name: "Start session" }).click();
-        expect((await gateway.waitForRequest("sessions.create")).params).toMatchObject({
-          fastMode: true,
-          thinkingLevel: "high",
-          message: "First session",
-        });
+        const access = page.locator('[data-chat-access-option="daybreak_blue"]');
+        if (source === "identity") {
+          await page.getByRole("switch", { name: "Daybreak", exact: true }).check();
+          await pollAttribute(access, "aria-pressed").toBe("true");
+          await confirmPreferenceWrite({
+            cyberAccessProgram: "daybreak_blue",
+            daybreakAccessProgram: "daybreak_blue",
+          });
+        }
+        expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
+        await captureUiProof(suite, page, `access-${source}-new.png`);
+        await submit("First session", true);
         await waitForCommittedChatRoute(page);
-
-        // A new document must recover preferences, not retain the old controller's fields.
-        // Identity-backed recovery must also work without its browser projection.
+        await openEffort();
         if (source === "identity") {
-          await page.evaluate((key) => localStorage.removeItem(key), storageKey);
+          await pollAttribute(access, "aria-pressed").toBe("true");
         }
-        await page.close();
-        await openPage();
-        const restoredEffort = await openEffort();
-        await expect
-          .poll(() => restoredEffort.getAttribute("data-chat-thinking-value"))
-          .toBe("high");
-        await capture("02-next-session-restored.png");
-        await expect
-          .poll(() => page.locator('[data-chat-speed-option="on"]').getAttribute("aria-checked"))
-          .toBe("true");
+        expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
+        await captureUiProof(suite, page, `access-${source}-chat.png`);
+        if (source === "identity") {
+          await page.locator('[data-chat-access-option="daybreak_red"]').click();
+          await gateway.waitForRequest("sessions.patch", {
+            match: { cyberAccessProgram: "daybreak_red" },
+          });
+          await confirmPreferenceWrite({
+            cyberAccessProgram: "daybreak_red",
+            daybreakAccessProgram: "daybreak_red",
+          });
+          expectedAccess = "daybreak_red";
+          const savedSession = await gateway.getSessionRow("agent:main:fast-mode-proof");
+          expect(savedSession.cyberAccessProgram).toBe("daybreak_red");
+          await gateway.setSessionsListResponse({ sessions: [savedSession] });
+          await page.reload();
+          await openEffort();
+          await pollAttribute(
+            page.locator('[data-chat-access-option="daybreak_red"]'),
+            "aria-pressed",
+          ).toBe("true");
+        }
 
-        await page.locator('[data-chat-speed-option="off"]').click();
-        await expect
-          .poll(() => page.locator('[data-chat-speed-option="off"]').getAttribute("aria-checked"))
-          .toBe("true");
+        await reopen(true);
+
+        await speed("off").click();
+        await expectSpeed("off");
         await confirmPreferenceWrite({ fastMode: false });
-        if (source === "identity") {
-          await page.evaluate((key) => localStorage.removeItem(key), storageKey);
-        }
-        await page.close();
-        await openPage();
-        const disabledEffort = await openEffort();
-        await expect
-          .poll(() => disabledEffort.getAttribute("data-chat-thinking-value"))
-          .toBe("high");
-        await expect
-          .poll(() => page.locator('[data-chat-speed-option="on"]').getAttribute("aria-checked"))
-          .toBe("false");
-        await capture("03-disabled-mode-restored.png");
-        await page.keyboard.press("Escape");
-        await page.locator(".new-session-page__message").fill("Standard-speed session");
-        await page.getByRole("button", { name: "Start session" }).click();
-        expect((await gateway.waitForRequest("sessions.create")).params).toMatchObject({
-          fastMode: false,
-          thinkingLevel: "high",
-          message: "Standard-speed session",
-        });
+        await reopen(false);
+        await submit("Standard-speed session", false);
       } finally {
         await suite.closeBrowserContext(context);
       }

@@ -12,20 +12,6 @@ export type PluginCompatibilityNotice = {
   apis?: import("./sdk-deprecation-usage.js").PluginSdkDeprecatedApi[];
 };
 
-export type PluginCompatibilitySummary = {
-  noticeCount: number;
-  pluginCount: number;
-};
-
 export function formatPluginCompatibilityNotice(notice: PluginCompatibilityNotice): string {
   return `${notice.pluginId} ${notice.message}`;
-}
-
-export function summarizePluginCompatibility(
-  notices: PluginCompatibilityNotice[],
-): PluginCompatibilitySummary {
-  return {
-    noticeCount: notices.length,
-    pluginCount: new Set(notices.map((notice) => notice.pluginId)).size,
-  };
 }

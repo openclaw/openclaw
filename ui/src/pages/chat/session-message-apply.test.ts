@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { handlePageGatewayEvent } from "./chat-state-events.ts";
+import { handlePageGatewayEvent } from "./chat-state-events.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { createSessionEventState } from "./chat-state.test-support.ts";
 

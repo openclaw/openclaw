@@ -5,6 +5,7 @@ import type { AgentActivityItem } from "../../../../packages/gateway-protocol/sr
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ToolCard } from "../../lib/chat/chat-types.ts";
 import { mountSolid } from "../../test-helpers/solid-render.tsx";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { ownSessionLaunchCalls, resolveSpawnedSubagent } from "./chat-spawned-subagent.ts";
 import { selectActivityHeadline } from "./components/chat-activity-headline-selection.ts";
 import { ActivityGroup } from "./components/chat-message-group-view.tsx";
@@ -101,7 +102,7 @@ describe("a launched subagent", () => {
     ).toBe(coder.key);
   });
 
-  it("counts a launch that opened a session in its own right with the other operations", () => {
+  it("counts a launch that opened a session in its own right with the other operations", async () => {
     const calls = [
       { id: "story", args: { label, task: "Write it." } },
       { id: "opened", args: { label: "Opened", task: "Write it.", visible: true } },
@@ -134,8 +135,10 @@ describe("a launched subagent", () => {
       },
       container,
     );
-    expect(container.querySelector(".chat-activity-group__label")?.textContent).toBe(
-      "1 other operation · 1 subagent",
+    await waitForSolid(() =>
+      expect(container.querySelector(".chat-activity-group__label")?.textContent).toBe(
+        "1 other operation · 1 subagent",
+      ),
     );
   });
 

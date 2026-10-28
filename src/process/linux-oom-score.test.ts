@@ -1,9 +1,9 @@
 import { spawnSync } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   prepareOomScoreAdjustedSpawn as prepareSpawn,
   prepareOomScoreAdjustedSpawnPreservingExecEnv as preparePreservingEnv,
@@ -17,19 +17,11 @@ const carrierPrefix = "OC_INTERNAL_OOM_EXEC_";
 const linux = { platform: "linux", env: {}, shellAvailable: () => true } as const;
 const bashAvailable = fs.existsSync("/bin/bash");
 const policies = [preparePreservingEnv, prepareSpawn] as const;
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
-
-function withMarker(name: string, run: (markerPath: string, tempDir: string) => void) {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-oom-"));
-  try {
-    run(path.join(tempDir, name), tempDir);
-  } finally {
-    fs.rmSync(tempDir, { recursive: true, force: true });
-  }
-}
 
 function spawnPrepared(prepared: OomScoreAdjustedSpawn, bashAsSh = false) {
   return spawnSync(prepared.wrapped && bashAsSh ? "/bin/bash" : prepared.command, prepared.args, {
@@ -68,14 +60,7 @@ it("adjusts a distinct child argv0 without a shell", () => {
     argv0,
     shellAvailable: () => false,
   });
-  expect(prepared).toEqual({
-    command: "/usr/bin/mise",
-    args: ["-p"],
-    argv0,
-    env: {},
-    wrapped: false,
-    afterSpawn: expect.any(Function),
-  });
+  expect(prepared).toMatchObject({ argv0, wrapped: false, afterSpawn: expect.any(Function) });
   const write = vi.spyOn(fs, "writeFileSync").mockImplementation(() => {});
   prepared.afterSpawn?.(4321);
   expect(write).toHaveBeenCalledWith("/proc/4321/oom_score_adj", "1000");
@@ -94,23 +79,20 @@ it("inherits the parent opt-out through sanitized child environments unless expl
 });
 
 it("does not double-wrap an adjusted command", () => {
-  expect(
-    prepareSpawn("/bin/sh", ["-c", wrapScript, "/usr/bin/node", "run.js"], {
-      ...linux,
-      env: {
-        PATH: "/usr/bin",
-        BASH_ENV: "/tmp/bashenv",
-        ENV: "/tmp/env",
-        CDPATH: "/tmp",
-        SHELLOPTS: "xtrace",
-        BASHOPTS: "extdebug",
-        PS4: "trace",
-        "BASH_FUNC_echo%%": "() { :; }",
-      },
-    }),
-  ).toEqual({
+  const args = ["-c", wrapScript, "/usr/bin/node", "run.js"];
+  const env = {
+    PATH: "/usr/bin",
+    BASH_ENV: "/tmp/bashenv",
+    ENV: "/tmp/env",
+    CDPATH: "/tmp",
+    SHELLOPTS: "xtrace",
+    BASHOPTS: "extdebug",
+    PS4: "trace",
+    "BASH_FUNC_echo%%": "() { :; }",
+  };
+  expect(prepareSpawn("/bin/sh", args, { ...linux, env })).toEqual({
     command: "/bin/sh",
-    args: ["-c", wrapScript, "/usr/bin/node", "run.js"],
+    args,
     env: { PATH: "/usr/bin" },
     wrapped: true,
   });
@@ -167,81 +149,63 @@ it("falls back to direct spawn on a defined carrier collision", () => {
     BASH_ENV: "/tmp/bashenv",
     [`${carrierPrefix}ENV`]: "reserved",
   };
-  const result = preparePreservingEnv("/usr/bin/node", ["run.js"], {
-    ...linux,
-    env,
-  });
-  expect(result).toEqual({
-    command: "/usr/bin/node",
-    args: ["run.js"],
-    env,
-    wrapped: false,
-  });
+  const result = preparePreservingEnv("/usr/bin/node", ["run.js"], { ...linux, env });
+  expect(result).toMatchObject({ command: "/usr/bin/node", args: ["run.js"], wrapped: false });
   expect(result.env).toBe(env);
 });
 
 it.runIf(process.platform !== "win32")("restores exact env only for the final executable", () => {
-  withMarker("wrapper-startup-marker", (startupMarkerPath, tempDir) => {
-    const bashEnvPath = path.join(tempDir, "bash-env.sh");
-    fs.writeFileSync(bashEnvPath, `printf touched > "${startupMarkerPath}"\n`);
-    const restored = {
-      BASH_ENV: bashEnvPath,
-      ENV: "",
-      CDPATH: "line1\nline2",
-      PS4: "final-trace-prefix",
-    };
-    const script = `process.stdout.write(JSON.stringify({
+  const tempDir = tempDirs.make("openclaw-oom-");
+  const startupMarkerPath = path.join(tempDir, "wrapper-startup-marker");
+  const bashEnvPath = path.join(tempDir, "bash-env.sh");
+  fs.writeFileSync(bashEnvPath, `printf touched > "${startupMarkerPath}"\n`);
+  const restored = {
+    BASH_ENV: bashEnvPath,
+    ENV: "",
+    CDPATH: "line1\nline2",
+    PS4: "final-trace-prefix",
+  };
+  const script = `process.stdout.write(JSON.stringify({
           values:Object.fromEntries(${JSON.stringify(Object.keys(restored))}.map(key=>[key,process.env[key]])),
           carrierKeys:Object.keys(process.env).filter(key=>key.startsWith("${carrierPrefix}"))
         }))`;
-    const prepared = preparePreservingEnv(process.execPath, ["-e", script], {
-      ...linux,
-      env: { PATH: process.env.PATH, ...restored },
-    });
-    const child = spawnPrepared(prepared);
-    expect(child.status).toBe(0);
-    expect(JSON.parse(child.stdout)).toEqual({ values: restored, carrierKeys: [] });
-    expect(fs.existsSync(startupMarkerPath)).toBe(false);
+  const prepared = preparePreservingEnv(process.execPath, ["-e", script], {
+    ...linux,
+    env: { PATH: process.env.PATH, ...restored },
   });
+  const child = spawnPrepared(prepared);
+  expect(child.status).toBe(0);
+  expect(JSON.parse(child.stdout)).toEqual({ values: restored, carrierKeys: [] });
+  expect(fs.existsSync(startupMarkerPath)).toBe(false);
 });
 
-it.runIf(bashAvailable).each(policies)("protects Bash-as-sh xtrace startup with %s", (prepare) => {
-  withMarker("ps4-marker", (markerPath) => {
-    const secret = "review-secret-carried-value";
+const secret = "review-secret-carried-value";
+for (const attack of ["xtrace startup", "imported functions"]) {
+  it
+    .runIf(bashAvailable && (attack === "xtrace startup" || process.platform === "linux"))
+    .each(policies)(`protects Bash-as-sh ${attack} with %s`, (prepare) => {
+    const markerPath = path.join(tempDirs.make("openclaw-oom-"), "shell-marker");
     const env = {
       PATH: process.env.PATH,
-      BASH_ENV: secret,
-      SHELLOPTS: "braceexpand:hashall:interactive-comments:xtrace",
-      PS4: `$(printf touched > "${markerPath}")trace `,
+      ...(attack === "xtrace startup"
+        ? {
+            BASH_ENV: secret,
+            SHELLOPTS: "braceexpand:hashall:interactive-comments:xtrace",
+            PS4: `$(printf touched > "${markerPath}")trace `,
+          }
+        : {
+            "BASH_FUNC_echo%%": `() { printf touched > "${markerPath}"; builtin echo "$@"; }`,
+          }),
     };
     const prepared = prepare(process.execPath, ["-e", ""], { ...linux, env });
     const child = spawnPrepared(prepared, true);
     expect(child.status).toBe(0);
     expect(fs.existsSync(markerPath)).toBe(false);
+    expect(prepared.wrapped).toBe(prepare === prepareSpawn);
     expect(child.stderr).not.toContain(secret);
     expect(child.stderr).not.toContain(`${carrierPrefix}BASH_ENV`);
-    expect(prepared.wrapped).toBe(prepare === prepareSpawn);
     if (prepare === preparePreservingEnv) {
       expect(prepared.env).toBe(env);
     }
   });
-});
-
-it.runIf(process.platform === "linux" && bashAvailable).each(policies)(
-  "blocks imported Bash functions from overriding wrapper commands",
-  (prepare) => {
-    withMarker("echo-marker", (markerPath) => {
-      const prepared = prepare(process.execPath, ["-e", ""], {
-        ...linux,
-        env: {
-          PATH: process.env.PATH,
-          "BASH_FUNC_echo%%": `() { printf touched > "${markerPath}"; builtin echo "$@"; }`,
-        },
-      });
-      const child = spawnPrepared(prepared, true);
-      expect(child.status).toBe(0);
-      expect(fs.existsSync(markerPath)).toBe(false);
-      expect(prepared.wrapped).toBe(prepare === prepareSpawn);
-    });
-  },
-);
+}

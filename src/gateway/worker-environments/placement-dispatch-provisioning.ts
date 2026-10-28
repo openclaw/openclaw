@@ -1,5 +1,6 @@
 import { supportsCurrentWorkerLaunch } from "../../worker/worker-build-identity.js";
 import { WorkerDispatchTargetChangedError } from "../server-worker-placement-session-target.js";
+import { WorkerEnvironmentReconcileInterruptedError } from "./environment-errors.js";
 import type {
   WorkerDispatchEnvironmentService,
   WorkerDispatchPlacement,
@@ -37,7 +38,8 @@ export function createInterruptedWorkerProvisioningRetainer(options: {
     if (
       error instanceof WorkerPlacementAdmissionTargetError ||
       error instanceof WorkerDispatchTargetChangedError ||
-      !options.isShuttingDown?.()
+      (!options.isShuttingDown?.() &&
+        !(error instanceof WorkerEnvironmentReconcileInterruptedError))
     ) {
       return undefined;
     }

@@ -64,10 +64,6 @@ type MaterializeVisibleStreamOptions = {
   isHiddenStreamText: StreamVisibility;
 };
 
-function streamFallbackMetadata(message: unknown): Record<string, unknown> | null {
-  return asNullableRecord(asNullableRecord(message)?.openclawStreamFallback);
-}
-
 export function appendTerminalAssistantMessage(messages: unknown[], message: unknown): unknown[] {
   const identity = readSessionMessageIdentity(message);
   const terminalRunId =
@@ -79,7 +75,7 @@ export function appendTerminalAssistantMessage(messages: unknown[], message: unk
   let terminalCursor = 0;
   for (let index = interval.start; index < interval.end; index += 1) {
     const existing = messages[index];
-    const fallback = streamFallbackMetadata(existing);
+    const fallback = asNullableRecord(asNullableRecord(existing)?.openclawStreamFallback);
     if (!fallback) {
       continue;
     }
@@ -316,34 +312,6 @@ export function terminalMessageReplacesVisibleStream(
   return true;
 }
 
-function currentToolStreamMessageIndex(
-  messages: unknown[],
-  state: StreamReconciliationState,
-  startIndex: number,
-  endIndex: number,
-  toolCallId: string,
-  runId?: string,
-): number {
-  const liveToolRefs = resolveLiveToolStreamRefs(state);
-  const selectedToolIdentity = resolveMatchingLiveToolIdentity(
-    { id: toolCallId, ...(runId ? { runId } : {}) },
-    liveToolRefs,
-  );
-  if (!selectedToolIdentity) {
-    return -1;
-  }
-  for (let index = startIndex; index < endIndex; index++) {
-    if (
-      extractToolMessageRefs(messages[index]).some(
-        (ref) => resolveMatchingLiveToolIdentity(ref, liveToolRefs) === selectedToolIdentity,
-      )
-    ) {
-      return index;
-    }
-  }
-  return -1;
-}
-
 function messageTimestampMs(message: unknown): number | null {
   if (!message || typeof message !== "object") {
     return null;
@@ -383,17 +351,26 @@ export function materializeVisibleStreamState(
       replacementCandidates === nextMessages && !part.afterUserSendId
         ? replacementInterval
         : streamCausalInterval(nextMessages, part, part.afterUserSendId);
-    const toolIndex =
-      part.source === "segment" && part.toolCallId
-        ? currentToolStreamMessageIndex(
-            nextMessages,
-            state,
-            interval.start,
-            interval.end,
-            part.toolCallId,
-            part.runId,
-          )
-        : -1;
+    let toolIndex = -1;
+    if (part.source === "segment" && part.toolCallId) {
+      const liveToolRefs = resolveLiveToolStreamRefs(state);
+      const selectedToolIdentity = resolveMatchingLiveToolIdentity(
+        { id: part.toolCallId, ...(part.runId ? { runId: part.runId } : {}) },
+        liveToolRefs,
+      );
+      if (selectedToolIdentity) {
+        for (let index = interval.start; index < interval.end; index++) {
+          if (
+            extractToolMessageRefs(nextMessages[index]).some(
+              (ref) => resolveMatchingLiveToolIdentity(ref, liveToolRefs) === selectedToolIdentity,
+            )
+          ) {
+            toolIndex = index;
+            break;
+          }
+        }
+      }
+    }
     if (opts.requirePersistedTool && toolIndex < 0) {
       continue;
     }

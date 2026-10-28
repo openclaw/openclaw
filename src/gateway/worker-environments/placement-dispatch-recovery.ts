@@ -3,6 +3,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import { DEVICE_FOLDER_MANIFEST_REF } from "../../worker/device-folder.js";
 import { supportsCurrentWorkerLaunch } from "../../worker/worker-build-identity.js";
+import { measureGatewayRestartTrace } from "../restart-trace.js";
 import { hasForcedWorkerEnvironmentAbandonment } from "./environment-errors.js";
 import {
   isUnavailableEnvironment,
@@ -13,6 +14,7 @@ import {
 } from "./placement-dispatch-failure.js";
 import {
   cleanupPendingWorkspaceResultOrphans,
+  subscribeWorkspaceResultOrphanChanges,
   type PendingWorkspaceResultOrphanCleanup,
 } from "./placement-dispatch-orphan-cleanup.js";
 import { recoverPendingWorkspaceResults } from "./placement-dispatch-pending-results.js";
@@ -231,21 +233,31 @@ export function createPlacementRecoveryActions(
       return;
     }
     // Once recovery accepts a result, finish this session's durable settlement.
-    const stagedOwners = await recoverPendingWorkspaceResults(deps, facts, environmentId);
-    if (resultsOnly === "results-only") {
+    const stagedOwners =
+      facts.pendingResults.size > 0
+        ? await recoverPendingWorkspaceResults(deps, facts, environmentId)
+        : undefined;
+    if (resultsOnly === "results-only" || deps.isShuttingDown?.()) {
       return;
     }
-    facts = await placements.readProjection([sessionId], { current: true });
+    if (stagedOwners) {
+      facts = await placements.readProjection([sessionId], { current: true });
+    }
+    if (deps.isShuttingDown?.()) {
+      return;
+    }
     const blocked =
-      stagedOwners.has(sessionId) ||
+      stagedOwners?.has(sessionId) ||
       facts.pendingResults.has(sessionId) ||
       facts.workspaceJournalOwnerSessionIds.has(sessionId);
     const moveOwners =
-      (await deps.recoverPlacementMoves?.(facts, environmentId)) ?? new Set<string>();
-    if (blocked || moveOwners.has(sessionId)) {
+      facts.moves.size > 0 ? await deps.recoverPlacementMoves?.(facts, environmentId) : undefined;
+    if (blocked || moveOwners?.has(sessionId) || deps.isShuttingDown?.()) {
       return;
     }
-    facts = await placements.readProjection([sessionId], { current: true });
+    if (moveOwners) {
+      facts = await placements.readProjection([sessionId], { current: true });
+    }
     for (const placement of facts.placements.values()) {
       if (environmentId !== undefined && placement.environmentId !== environmentId) {
         continue;
@@ -421,11 +433,25 @@ export function createPlacementRecoveryActions(
     } else {
       await environments.reconcileOnce();
     }
+    if (deps.isShuttingDown?.()) {
+      return;
+    }
     const candidates = await placements.readRecoveryCandidates();
     if (mode === "startup") {
+      const lookups = initialPlacements.map((placement) => ({
+        placement,
+        target: undefined,
+        dirty: false,
+      }));
       orphanCleanupPending =
-        initialPlacements.length > 0
-          ? { placements: initialPlacements, rootsBySession: new Map(), completedRoots: new Set() }
+        lookups.length > 0
+          ? {
+              placements: lookups,
+              initialDiscoveryPending: true,
+              unresolved: new Set(lookups),
+              rootsBySession: new Map(),
+              completedRoots: new Set(),
+            }
           : undefined;
     }
     for (const { sessionId } of candidates) {
@@ -452,8 +478,24 @@ export function createPlacementRecoveryActions(
     if (deps.isShuttingDown?.()) {
       return;
     }
-    await environments.reconcileOnce(environmentId);
-    for (const candidate of await placements.readRecoveryCandidates()) {
+    await measureGatewayRestartTrace(
+      "worker-placement.reconcile.environments",
+      () => environments.reconcileOnce(environmentId),
+      undefined,
+      true,
+    );
+    // Cancellation can settle the environment pass while the shared store is still busy.
+    // Do not start a fresh discovery read (or its recovery writes) during shutdown.
+    if (deps.isShuttingDown?.()) {
+      return;
+    }
+    const candidates = await measureGatewayRestartTrace(
+      "worker-placement.reconcile.candidates",
+      () => placements.readRecoveryCandidates(),
+      undefined,
+      true,
+    );
+    for (const candidate of candidates) {
       if (deps.isShuttingDown?.()) {
         return;
       }
@@ -464,8 +506,14 @@ export function createPlacementRecoveryActions(
       ) {
         continue;
       }
-      await admit([candidate.sessionId], (mode) =>
-        recoverSession(candidate.sessionId, "runtime", environmentId, mode),
+      await measureGatewayRestartTrace(
+        "worker-placement.reconcile.session",
+        () =>
+          admit([candidate.sessionId], (mode) =>
+            recoverSession(candidate.sessionId, "runtime", environmentId, mode),
+          ),
+        undefined,
+        true,
       );
     }
     if (
@@ -477,5 +525,11 @@ export function createPlacementRecoveryActions(
     }
   };
 
-  return { reconcile, reconcileActive, isInterruptedTurn };
+  return {
+    reconcile,
+    reconcileActive,
+    isInterruptedTurn,
+    subscribeOrphanWorkspaceChanges: () =>
+      subscribeWorkspaceResultOrphanChanges(() => orphanCleanupPending),
+  };
 }

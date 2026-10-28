@@ -4,8 +4,12 @@ import type {
   resolveConfiguredBindingRoute,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
+import { vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import type { FeishuMessageEvent } from "./bot.js";
+import { FeishuConfigSchema } from "./config-schema.js";
+import type { parseMergeForwardContent } from "./message-content.js";
+import type { getMessageFeishu } from "./send.js";
 
 type FeishuConfig = NonNullable<NonNullable<ClawdbotConfig["channels"]>["feishu"]>;
 type FeishuMessage = FeishuMessageEvent["message"];
@@ -57,6 +61,43 @@ export function createFeishuTestConfig(
   base: TestConfigBase = {},
 ): ClawdbotConfig {
   return { ...base, channels: { ...base.channels, feishu } } as ClawdbotConfig;
+}
+
+export function sentMessage(
+  messageId: string,
+  chatId: string,
+): Awaited<ReturnType<typeof import("./send.js").sendMessageFeishu>> {
+  return {
+    messageId,
+    chatId,
+    receipt: {
+      primaryPlatformMessageId: messageId,
+      platformMessageIds: [messageId],
+      parts: [{ platformMessageId: messageId, kind: "text", index: 0 }],
+      sentAt: 1,
+    },
+  };
+}
+
+export function withFeishuRuntimeDefaults(cfg: ClawdbotConfig): ClawdbotConfig {
+  const defaults = FeishuConfigSchema.parse({});
+  return {
+    ...cfg,
+    channels: {
+      ...cfg.channels,
+      feishu: {
+        // Only these defaults survive the generated JSON schema used by the loader.
+        domain: defaults.domain,
+        connectionMode: defaults.connectionMode,
+        webhookPath: defaults.webhookPath,
+        dmPolicy: defaults.dmPolicy,
+        reactionNotifications: defaults.reactionNotifications,
+        typingIndicator: defaults.typingIndicator,
+        resolveSenderNames: defaults.resolveSenderNames,
+        ...cfg.channels?.feishu,
+      },
+    },
+  };
 }
 
 export function createFeishuSecretRefPolicyConfig({
@@ -216,5 +257,46 @@ export function createBoundConversation(): NonNullable<BoundConversation> {
     },
     status: "active",
     boundAt: 0,
+  };
+}
+
+export function replyDispatcher(ensureNoVisibleReplyFallback = vi.fn()) {
+  return {
+    dispatcherOptions: {},
+    delivery: { deliver: vi.fn(async () => undefined) },
+    replyOptions: {},
+    ensureNoVisibleReplyFallback,
+  };
+}
+
+export function senderClient(
+  get = vi.fn().mockResolvedValue({ data: { user: { name: "Sender" } } }),
+) {
+  return { contact: { user: { get } } };
+}
+
+export function historyMessage(senderId: string, content: string, offset = 0, senderType = "user") {
+  return { senderId, senderType, content, createTime: 1710000000000 + offset * 1000 };
+}
+
+export function fetchedMessage(
+  messageId: string,
+  content: string,
+  fields: Partial<NonNullable<Awaited<ReturnType<typeof getMessageFeishu>>>> = {},
+) {
+  return { messageId, chatId: "oc-group", content, contentType: "text", ...fields };
+}
+
+export function mergeForwardItem(
+  text: string,
+  fields: Partial<Parameters<typeof parseMergeForwardContent>[0][number]> & {
+    message_id?: string;
+  } = {},
+) {
+  return {
+    msg_type: "text",
+    upper_message_id: "container",
+    body: { content: JSON.stringify({ text }) },
+    ...fields,
   };
 }

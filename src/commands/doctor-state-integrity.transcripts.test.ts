@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as terminalNote from "../../packages/terminal-core/src/note.js";
 import { INTERNAL_WAKE_TRANSCRIPT_PROMPTS } from "../auto-reply/heartbeat.js";
 import type * as BundledIds from "../channels/plugins/bundled-ids.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -25,7 +26,6 @@ import {
 } from "../state/openclaw-state-db.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { readTuiLastSessionKey, writeTuiLastSessionKey } from "../tui/tui-last-session.js";
-import { repairHeartbeatPoisonedMainSession } from "./doctor-heartbeat-main-session-repair.js";
 import {
   doctorChangesText,
   hasRepairPromptMessage,
@@ -78,7 +78,7 @@ describe("doctor transcript and heartbeat session repairs", () => {
     message.startsWith("Move heartbeat-owned main session"),
   );
   const run = (cfg: OpenClawConfig = {}) =>
-    noteStateIntegrity(cfg, { confirmRuntimeRepair: approveMove, note: noteMock });
+    noteStateIntegrity(cfg, { confirmRuntimeRepair: approveMove });
   const readLegacy = () =>
     JSON.parse(
       fs.readFileSync(resolveSessionStorePathCore(undefined, { agentId: "main" }), "utf8"),
@@ -138,6 +138,7 @@ describe("doctor transcript and heartbeat session repairs", () => {
     fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
     routeStateOwnerState.owners = [];
     noteMock.mockClear();
+    vi.spyOn(terminalNote, "note").mockImplementation(noteMock);
     approveMove.mockClear();
   });
   afterEach(async () => {
@@ -182,7 +183,6 @@ describe("doctor transcript and heartbeat session repairs", () => {
         );
         return true;
       },
-      note: noteMock,
     });
     expect(await listSessionEntryKeysReadOnly(scope)).toEqual([key]);
     expect(loadSessionEntryReadOnly({ ...scope, sessionKey: key })?.lastInteractionAt).toBe(2);
@@ -219,7 +219,6 @@ describe("doctor transcript and heartbeat session repairs", () => {
       confirmRuntimeRepair: async ({ message }) =>
         message.startsWith("Clear stale Codex") ||
         message.startsWith("Move heartbeat-owned main session"),
-      note: noteMock,
     });
     const keys = await listSessionEntryKeysReadOnly(scope);
     expect(keys).not.toContain(key);
@@ -297,29 +296,17 @@ describe("doctor transcript and heartbeat session repairs", () => {
   ] satisfies Array<[string, Partial<SessionEntry>, boolean]>)(
     "requires consent and ownership without human activity (%s)",
     async (_name, entry, prompts) => {
-      const warnings: string[] = [],
-        changes: string[] = [];
-      const storePath = path.join(tempHome, "unwritten-repair-store.json");
+      const store = { [mainKey]: { sessionId: "session", updatedAt: 1, ...entry } };
+      writeSessionStore({}, store);
       const confirmRuntimeRepair = vi.fn(async () => false);
-      await expect(
-        repairHeartbeatPoisonedMainSession({
-          mainKey,
-          mainEntry: { sessionId: "session", updatedAt: 1, ...entry },
-          isSessionKeyOccupied: () => false,
-          store: { kind: "legacy", path: storePath },
-          stateDir,
-          sessionPathOpts: { agentId: "main", sessionsDir: tempHome },
-          prompter: { confirmRuntimeRepair },
-          warnings,
-          changes,
-        }),
-      ).resolves.toBe(false);
-      expect(confirmRuntimeRepair).toHaveBeenCalledTimes(prompts ? 1 : 0);
+      await noteStateIntegrity({}, { confirmRuntimeRepair });
+      expect(
+        hasRepairPromptMessage(confirmRuntimeRepair, "Move heartbeat-owned main session"),
+      ).toBe(prompts);
       if (prompts) {
-        expect(warnings.join("\n")).toContain("(heartbeat metadata)");
+        expect(stateIntegrityText()).toContain("(heartbeat metadata)");
       }
-      expect(changes).toEqual([]);
-      expect(fs.existsSync(storePath)).toBe(false);
+      expect(readLegacy()).toEqual(store);
     },
   );
 });

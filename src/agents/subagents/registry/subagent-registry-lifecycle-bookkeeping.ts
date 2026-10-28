@@ -161,7 +161,10 @@ export async function completeCleanupBookkeeping(
               draft.delivery.discardReason === "expired"))) ||
           (draft.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
             draft.suppressAnnounceReason !== "killed"));
-      retireImmediately = retireAfterSettle && cleanupParams.skipRequesterSettleWake === true;
+      retireImmediately =
+        retireAfterSettle &&
+        cleanupParams.skipRequesterSettleWake === true &&
+        cleanupParams.retainForCleanup !== true;
       if (!retireImmediately) {
         draft.cleanupCompletedAt = cleanupParams.completedAt;
         if (suppressSessionEffects) {
@@ -192,7 +195,6 @@ export async function completeCleanupBookkeeping(
   scheduleCleanupTails({ allowRetiredRow: retireAfterSettle, isDeleteCleanup });
   assertPublishedOwner();
   if (!entry.collect && !cleanupParams.skipRequesterSettleWake) {
-    assertPublishedOwner();
     scheduleRequesterSettleWake(context, entry.runId, entry, stateContext);
   }
   context.resumeAncestorCleanup(entry);

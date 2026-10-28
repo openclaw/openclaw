@@ -147,7 +147,7 @@ function makeRecoveryInput(
         promptTokenBudget: tokenBudget,
         degradedReason,
       }),
-    onCompactionHookMessages: vi.fn(async () => {}),
+    onCompactionHookMessages: vi.fn(),
     runOwnsCompactionBeforeHook: vi.fn(async () => {}),
     runOwnsCompactionAfterHook: vi.fn(async () => {}),
     adoptCompactionTranscript: vi.fn(async () => undefined),
@@ -512,7 +512,7 @@ describe("createEmbeddedRunCompactionRuntime", () => {
   it("forwards non-empty compaction hook messages as agent events", async () => {
     const fixture = await createRuntime();
 
-    await fixture.runtime.onCompactionHookMessages({
+    fixture.runtime.onCompactionHookMessages({
       phase: "after",
       messages: ["", "Compaction complete"],
     });
@@ -520,8 +520,7 @@ describe("createEmbeddedRunCompactionRuntime", () => {
     expect(fixture.onAgentEvent).toHaveBeenCalledWith({
       stream: "compaction",
       data: {
-        phase: "end",
-        completed: true,
+        phase: "notice",
         messages: ["Compaction complete"],
       },
       sessionKey: "agent:main:session-1",

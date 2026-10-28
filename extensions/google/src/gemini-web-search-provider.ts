@@ -1,11 +1,10 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   createWebSearchProviderContractFields,
   mergeScopedSearchConfig,
   resolveProviderWebSearchPluginConfig,
+  WEB_SEARCH_QUERY_COUNT_PROPERTIES,
   type WebSearchProviderPlugin,
-  type WebSearchProviderToolDefinition,
 } from "openclaw/plugin-sdk/provider-web-search-config-contract";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
@@ -19,13 +18,7 @@ const loadGeminiWebSearchRuntime = createLazyRuntimeModule(
 const GEMINI_TOOL_PARAMETERS = {
   type: "object",
   properties: {
-    query: { type: "string", description: "Search query string." },
-    count: {
-      type: "integer",
-      description: "Number of results to return (1-10).",
-      minimum: 1,
-      maximum: 10,
-    },
+    ...WEB_SEARCH_QUERY_COUNT_PROPERTIES,
     country: { type: "string", description: "Not supported by Gemini." },
     language: { type: "string", description: "Not supported by Gemini." },
     freshness: {
@@ -44,61 +37,6 @@ const GEMINI_TOOL_PARAMETERS = {
   },
   required: ["query"],
 } satisfies Record<string, unknown>;
-
-function createGeminiToolDefinition(
-  searchConfig?: Record<string, unknown>,
-): WebSearchProviderToolDefinition {
-  return {
-    description:
-      "Search the web using Gemini with Google Search grounding. Returns AI-synthesized answers with citations from Google Search.",
-    parameters: GEMINI_TOOL_PARAMETERS,
-    execute: async (args, context) => {
-      const { executeGeminiSearch } = await loadGeminiWebSearchRuntime();
-      return await executeGeminiSearch(args, searchConfig, context);
-    },
-  };
-}
-
-function getGoogleModelProviderCredentialFallback(
-  config?: OpenClawConfig,
-): { path: string; value: unknown } | undefined {
-  const provider = config?.models?.providers?.google;
-  return provider && provider.apiKey !== undefined
-    ? { path: GOOGLE_PROVIDER_CREDENTIAL_PATH, value: provider.apiKey }
-    : undefined;
-}
-
-function withGoogleModelProviderFallbacks(
-  searchConfig: Record<string, unknown> | undefined,
-  config?: OpenClawConfig,
-): Record<string, unknown> | undefined {
-  const provider = config?.models?.providers?.google;
-  if (!provider || (provider.apiKey === undefined && provider.baseUrl === undefined)) {
-    return searchConfig;
-  }
-  const gemini = isRecord(searchConfig?.gemini) ? { ...searchConfig.gemini } : {};
-  const mergedSearchConfig: Record<string, unknown> = searchConfig
-    ? Object.defineProperties({}, Object.getOwnPropertyDescriptors(searchConfig))
-    : {};
-  const geminiDescriptor = searchConfig
-    ? Object.getOwnPropertyDescriptor(searchConfig, "gemini")
-    : undefined;
-  if (provider.apiKey !== undefined) {
-    gemini.providerApiKey = provider.apiKey;
-  }
-  if (provider.baseUrl !== undefined) {
-    gemini.providerBaseUrl = provider.baseUrl;
-  }
-  // Provider headers stay scoped to the provider base URL. Web-search headers
-  // are configured explicitly under the Google plugin for its own endpoint.
-  Object.defineProperty(mergedSearchConfig, "gemini", {
-    value: gemini,
-    enumerable: geminiDescriptor?.enumerable ?? false,
-    configurable: true,
-    writable: true,
-  });
-  return mergedSearchConfig;
-}
 
 export function createGeminiWebSearchProvider(): WebSearchProviderPlugin {
   const contractFields = createWebSearchProviderContractFields({
@@ -120,17 +58,52 @@ export function createGeminiWebSearchProvider(): WebSearchProviderPlugin {
     autoDetectOrder: 20,
     credentialPath: GEMINI_CREDENTIAL_PATH,
     ...contractFields,
-    getConfiguredCredentialFallback: getGoogleModelProviderCredentialFallback,
-    createTool: (ctx) =>
-      createGeminiToolDefinition(
-        withGoogleModelProviderFallbacks(
-          mergeScopedSearchConfig(
-            ctx.searchConfig,
-            "gemini",
-            resolveProviderWebSearchPluginConfig(ctx.config, "google"),
-          ),
-          ctx.config,
-        ),
-      ),
+    getConfiguredCredentialFallback: (config) => {
+      const provider = config?.models?.providers?.google;
+      return provider && provider.apiKey !== undefined
+        ? { path: GOOGLE_PROVIDER_CREDENTIAL_PATH, value: provider.apiKey }
+        : undefined;
+    },
+    createTool: (ctx) => {
+      let searchConfig = mergeScopedSearchConfig(
+        ctx.searchConfig,
+        "gemini",
+        resolveProviderWebSearchPluginConfig(ctx.config, "google"),
+      );
+      const provider = ctx.config?.models?.providers?.google;
+      if (provider && (provider.apiKey !== undefined || provider.baseUrl !== undefined)) {
+        const gemini = isRecord(searchConfig?.gemini) ? { ...searchConfig.gemini } : {};
+        const mergedSearchConfig: Record<string, unknown> = searchConfig
+          ? Object.defineProperties({}, Object.getOwnPropertyDescriptors(searchConfig))
+          : {};
+        const geminiDescriptor = searchConfig
+          ? Object.getOwnPropertyDescriptor(searchConfig, "gemini")
+          : undefined;
+        if (provider.apiKey !== undefined) {
+          gemini.providerApiKey = provider.apiKey;
+        }
+        if (provider.baseUrl !== undefined) {
+          gemini.providerBaseUrl = provider.baseUrl;
+        }
+        // Provider headers stay scoped to the provider base URL. Web-search headers
+        // are configured explicitly under the Google plugin for its own endpoint.
+        Object.defineProperty(mergedSearchConfig, "gemini", {
+          value: gemini,
+          enumerable: geminiDescriptor?.enumerable ?? false,
+          configurable: true,
+          writable: true,
+        });
+        searchConfig = mergedSearchConfig;
+      }
+      return {
+        description:
+          "Search the web using Gemini with Google Search grounding. Returns AI-synthesized answers with citations from Google Search.",
+        parameters: GEMINI_TOOL_PARAMETERS,
+        execute: async (args, context) => {
+          const { executeGeminiSearch } = await loadGeminiWebSearchRuntime();
+          return await executeGeminiSearch(args, searchConfig, context);
+        },
+      };
+    },
   };
 }

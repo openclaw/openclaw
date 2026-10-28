@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import {
   codexCatalogRowRecency,
   type CodexCatalogOrderKey,
@@ -24,16 +24,13 @@ export function readCodexCatalogCursor(
   homeId: string,
   params: CodexSessionCatalogPageParams,
 ): CodexResidentCatalogCursor | CodexNativeCatalogCursor {
-  const queryId = createHash("sha256")
-    .update(
-      JSON.stringify([
-        homeId,
-        params.cwd?.trim() ?? "",
-        params.searchTerm?.trim().toLocaleLowerCase() ?? "",
-      ]),
-    )
-    .digest("hex")
-    .slice(0, 16);
+  const queryId = sha256Hex(
+    JSON.stringify([
+      homeId,
+      params.cwd?.trim() ?? "",
+      params.searchTerm?.trim().toLocaleLowerCase() ?? "",
+    ]),
+  ).slice(0, 16);
   const encoded = readControlCursor(params.cursor, "request");
   if (!encoded) {
     return { kind: "resident", queryId };

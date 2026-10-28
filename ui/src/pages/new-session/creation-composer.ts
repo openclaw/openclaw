@@ -1,27 +1,26 @@
-import { registerListener } from "../../../../src/shared/listeners.js";
+import { createChangeListeners, registerListener } from "../../../../src/shared/listeners.js";
 import type { ApplicationConfigCapability } from "../../app/config.ts";
 import { registerControlUiReloadGuard } from "../../app/document-reload-guard.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import type { ApplicationGateway } from "../../app/gateway.ts";
 import type { UiPreferences } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
-import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
+import { registerNewSessionRuntimeEnglish } from "../../i18n/locales/en-new-session-runtime.ts";
 import type { ChatAttachment, HumanMention } from "../../lib/chat/chat-types.ts";
 import type { ComposerDraftSource } from "../../lib/chat/composer-draft-changes.ts";
 import { trimHumanMentions, updateHumanMentions } from "../../lib/chat/human-mentions.ts";
 import { MAX_STORED_QUEUE_ITEMS } from "../../lib/chat/outbox-store-codec.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import type { SessionCreateOutcome } from "../../lib/sessions/create.ts";
-import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
 import { uploadsEnabled, uploadsDisabledMessage } from "../../lib/uploads.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { releaseChatAttachmentPayloads } from "../chat/attachment-payload-store.ts";
 import { NewSessionAttachmentDraft } from "./attachment-draft.ts";
 
-registerNewSessionSetupEnglish();
+registerNewSessionRuntimeEnglish();
 
-type CreationComposerContext = {
+export type CreationComposerContext = {
   readonly gateway: ApplicationGateway;
   readonly config: ApplicationConfigCapability;
   readonly lifecycleAbortSignal?: AbortSignal;
@@ -64,6 +63,7 @@ export class CreationComposer {
       attachments: this.attachmentDraft.attachments,
       pendingAttachmentReads: this.attachmentDraft.reads.pendingReads,
     }),
+    // The shared composer projection consumes this synchronous draft-owner contract.
     subscribe: (listener) => this.subscribe(listener),
   };
   message = "";
@@ -72,7 +72,7 @@ export class CreationComposer {
   error: string | null = null;
   flushInput: (() => void) | undefined;
   releasePresentation: (() => void) | undefined;
-  private readonly listeners = new Set<() => void>();
+  private readonly listeners = createChangeListeners();
   private readonly invalidations = new Set<() => void>();
   private readonly gatewayUrl;
   private readonly recoveryScope;
@@ -153,14 +153,10 @@ export class CreationComposer {
 
   readonly notify = () => {
     this.notifyDraft();
-    for (const listener of this.listeners) {
-      listener();
-    }
+    this.listeners.publish();
   };
 
-  subscribe(listener: () => void): () => void {
-    return registerListener(this.listeners, listener);
-  }
+  readonly subscribe = this.listeners.subscribe;
 
   setMessage(message: string, mentions?: readonly HumanMention[]): void {
     if (!this.canDisplay()) {
@@ -308,89 +304,4 @@ export class CreationComposer {
     this.mentions = [];
     this.listeners.clear();
   }
-}
-
-// Accepted input stays app-scoped, but only the lazy creation/chat surfaces load its owner.
-const acceptedComposers = new WeakMap<
-  CreationComposerContext,
-  { entries: Map<string, CreationComposer>; release: () => void }
->();
-
-export function retainCreatedComposer(
-  context: CreationComposerContext,
-  key: string,
-  composer: CreationComposer,
-): void {
-  let registry = acceptedComposers.get(context);
-  if (!registry) {
-    const entries = new Map<string, CreationComposer>();
-    const dispose = () => {
-      for (const value of entries.values()) {
-        value.dispose();
-      }
-      entries.clear();
-      registry?.release();
-    };
-    const unsubscribe = context.gateway.subscribe(() => {
-      for (const [entryKey, value] of entries) {
-        if (!value.canRecover()) {
-          value.dispose();
-          entries.delete(entryKey);
-        }
-      }
-      if (!entries.size) {
-        registry?.release();
-      }
-    });
-    const stopLifetime = context.lifecycleAbortSignal
-      ? listen(context.lifecycleAbortSignal, "abort", dispose, { once: true })
-      : undefined;
-    registry = {
-      entries,
-      release: () => {
-        unsubscribe();
-        stopLifetime?.();
-        if (acceptedComposers.get(context) === registry) {
-          acceptedComposers.delete(context);
-        }
-      },
-    };
-    acceptedComposers.set(context, registry);
-  }
-  const previous = registry.entries.get(key);
-  if (previous && previous !== composer) {
-    previous.dispose();
-  }
-  registry.entries.set(key, composer);
-}
-
-export function takeCreatedComposer(
-  context: CreationComposerContext,
-  sessionKey: string,
-  client: object | null,
-): CreationComposerTransfer | undefined {
-  const registry = acceptedComposers.get(context);
-  const key =
-    registry &&
-    [...registry.entries.keys()].find((candidate) =>
-      areUiSessionKeysEquivalent(candidate, sessionKey),
-    );
-  const composer = key ? registry?.entries.get(key) : undefined;
-  if (
-    !registry ||
-    !key ||
-    !composer ||
-    client !== context.gateway.snapshot.client ||
-    !composer.canRecover()
-  ) {
-    return undefined;
-  }
-  return composer.take(() => {
-    if (registry.entries.get(key) === composer) {
-      registry.entries.delete(key);
-    }
-    if (!registry.entries.size) {
-      registry.release();
-    }
-  });
 }

@@ -16,7 +16,7 @@ the Xcode requirements below.
 
 - **Xcode 26.4+** (Swift 6.3 toolchain), on the latest macOS available in
   Software Update.
-- **Node.js 24.16+ or 26.1+ & pnpm** for the gateway, CLI, and packaging scripts.
+- **Node.js 24.22.1+ or 26.12.1+ & pnpm** for the gateway, CLI, and packaging scripts.
   SwiftPM and Xcode generate the Gateway protocol models with the first
   supported Node on `PATH`, then `/opt/homebrew/bin/node` or
   `/usr/local/bin/node`. Version-manager shims such as mise, asdf, or Volta
@@ -93,8 +93,11 @@ Packaging verifies the Bun revision, CLI version, Gateway help, SQLite and
 `sqlite-vec` loading, native capabilities, and worker readiness in temporary
 state before and after signing, then replaces the previous app. It also rejects
 any Node executable in the app. `scripts/restart-mac.sh` uses the same path;
-`SKIP_TSC=1` does not bypass the runtime build. Existing content-checked build
-caches still avoid unnecessary declaration work.
+`SKIP_TSC=1` does not bypass the runtime build. App packaging skips SDK declaration
+compilation by default. Its private installation artifacts omit type-only package
+metadata; public npm packages retain their typed SDK contract. Set
+`OPENCLAW_RUN_NODE_SKIP_DTS_BUILD=0` to also build declarations during app
+packaging. Existing content-checked caches still apply to the selected build.
 
 The private worker preserves the app's saved desktop-sharing preference and
 profile selection. Packaging checks startup with sharing enabled, disabled,
@@ -278,6 +281,21 @@ after its first commit can hit this race and abort the process with
 
 The `macos-swift` GitHub CI job builds the tests with the runner's normal
 SwiftPM caches, then runs the built suite through `scripts/test-macos-native.mts`.
+Native exec-policy fixtures reuse the Linux job's runtime artifact from the same
+workflow run, verified against the selected checkout SHA. The macOS job installs
+only the root and native-asset dependency closures, keeping platform-specific
+dependencies local. The artifact omits UI, plugin, and sealed remote-worker outputs.
+Package tests start after preflight and need no runtime artifact. App tests start
+after the Linux build and checks finish, then download the producer's runtime by
+artifact ID and verify the selected checkout SHA. Failed-job reruns reuse the
+successful producer's retained artifact output. This keeps Linux runner queueing
+outside the native test job's time budget without rebuilding the runtime and
+plugins on macOS. The prepared CLI remains the normal
+production launcher, including request validation, state ownership, and cleanup.
+The default suite keeps real CLI coverage in the native cwd, socket half-close,
+and skill-policy commit cases. The larger socket cancellation and Gateway trust
+matrices exercise the in-process execution boundary with prepared authorization;
+they do not launch a CLI for each setup, policy read, and repeated commit.
 Each invocation selects private `HOME` and `CFFIXED_USER_HOME`,
 `OPENCLAW_CONFIG_PATH`, `OPENCLAW_STATE_DIR`, and short `TMPDIR` before any test
 bundle loads. Tools honoring `TMPDIR` use that launcher-owned directory;

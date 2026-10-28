@@ -3,12 +3,12 @@ import path from "node:path";
 import { assertDirectoryIdentitySync, readDirectoryIdentity } from "@openclaw/fs-safe/advanced";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
+import { ignoreMissingPath as ignoreMissingUpdateCandidateFile } from "./errno.js";
 import { root as openRoot } from "./fs-safe.js";
 import { tryReadJson } from "./json-files.js";
 import { parseRegistryNpmSpec } from "./npm-registry-spec.js";
 import { isPackageUpdateRecoveryArtifactName } from "./package-update-backup-paths.js";
 import { hasNodeErrorCode, isPathInside, isPathStrictlyInside } from "./path-guards.js";
-import { ignoreMissingUpdateCandidateFile } from "./update-candidate-files.js";
 import type { UpdateCandidatePluginCodeLink } from "./update-candidate-plugin-code-links.js";
 import { copyUpdateCandidatePluginFiles } from "./update-candidate-plugin-file.js";
 import {
@@ -83,7 +83,7 @@ async function dependencyOwner(
   }
 }
 
-export function assertUpdateCandidatePluginCopySource(source: string, privateRoot: string): void {
+function assertUpdateCandidatePluginCopySource(source: string, privateRoot: string): void {
   if (isPathInside(source, privateRoot) || isPathInside(privateRoot, source)) {
     throw new Error("Plugin copy source overlaps update state");
   }

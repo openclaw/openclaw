@@ -2,8 +2,10 @@ import fs from "node:fs";
 import fsAsync from "node:fs/promises";
 import path from "node:path";
 import { expect, vi } from "vitest";
+import { immutableDescriptor } from "./package-update-activation-fixtures.test-support.js";
 import { packageActivationRuntimeIdentity } from "./package-update-activation-paths.js";
 import type { ImmutableInstallDescriptor } from "./update-immutable-install-schema.js";
+export { fileIdentity as identity } from "./package-update-activation-fixtures.test-support.js";
 
 /** Keep real files/inodes; project only the privileges unavailable to CI workers. */
 export function immutableLayout(
@@ -69,34 +71,16 @@ export function immutableLayout(
     vi.spyOn(process, "geteuid").mockReturnValue(0);
   }
   return {
-    version: 1,
-    kind: "immutable",
-    root,
-    rootIdentity: identity(root),
-    releasesIdentity: identity(path.join(root, "releases")),
-    current: {
-      sha: options.sha,
-      path: currentPath,
-      identity: identity(currentPath),
-      pointerIdentity: identity(path.join(root, "current")),
-      buildDigest: options.buildDigest,
-    },
-    service: {
+    ...immutableDescriptor(root, options.sha, options.buildDigest, {
       unit: options.unit,
       scope: "system",
       account: options.account,
       stateDir: path.join(parent, "state"),
       configPath: path.join(parent, "state", "openclaw.json"),
       profile: null,
-    },
+    }),
     runtime: { path: runtime, identity: packageActivationRuntimeIdentity(runtime) },
-    source: "https://github.com/openclaw/openclaw.git",
   };
-}
-
-export function identity(file: string) {
-  const stat = fs.lstatSync(file, { bigint: true });
-  return `${stat.dev}:${stat.ino}`;
 }
 
 export function expectUncalled(...mocks: { mock: { calls: readonly unknown[] } }[]) {

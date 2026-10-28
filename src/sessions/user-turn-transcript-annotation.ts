@@ -10,10 +10,11 @@ import { captureSessionEntryCurrentCheckAsyncInternal } from "../config/sessions
 import { rewritePreparedTranscriptMessageAtAnchor } from "../config/sessions/session-message-rewrite.js";
 import { waitForSessionTranscriptProjection } from "../config/sessions/session-transcript-reconcile.js";
 import { sessionMatchesExpectedTranscriptTurn } from "../config/sessions/session-transcript-turn-state.js";
+import { snapshotTranscriptTurnAdmission } from "../config/sessions/transcript-entry-anchor.js";
 import { getOwnedSessionTranscriptWriterFence } from "../config/sessions/transcript-write-context.js";
-import { sha256HexPrefixCore } from "../infra/crypto-digest.js";
 import { isSameOpenClawAgentDatabasePath } from "../state/openclaw-agent-db.paths.js";
 import { getUserTurnTranscriptAdmissionOwner } from "./user-turn-transcript-admission.js";
+import { prepareUserTurnTranscriptAnnotation } from "./user-turn-transcript-annotation-message.js";
 import type {
   UserTurnTranscriptAnnotation,
   UserTurnTranscriptRecorder,
@@ -37,7 +38,7 @@ export function bindUserTurnTranscriptAnnotation(params: {
   if (!owner || !receipt || !message || owner.blocked() || message.excludeFromContext === true) {
     return undefined;
   }
-  let admission = structuredClone(receipt);
+  let admission = snapshotTranscriptTurnAdmission(receipt);
   let admittedMessage = structuredClone(message);
   const target = { ...params.target };
   const fence = getOwnedSessionTranscriptWriterFence({ sessionTarget: target });
@@ -65,37 +66,19 @@ export function bindUserTurnTranscriptAnnotation(params: {
     }
   };
   return async (annotation) => {
-    // Copy only the closed provenance tuple before any await. The host fixes the diagnostic run ID.
-    const fields = {
+    // Copy only the closed provenance tuple before any await; the host fixes the run ID.
+    const capturedAnnotation = {
       mirrorIdentity: annotation.mirrorIdentity,
       upstreamUserText: annotation.upstreamUserText,
       mirrorOrigin: annotation.mirrorOrigin,
       mirrorSourceFingerprint: annotation.mirrorSourceFingerprint,
-      runId: params.runId,
     };
-    if (
-      Object.values(fields).some((value) => typeof value !== "string") ||
-      !fields.mirrorIdentity ||
-      !fields.mirrorOrigin ||
-      !fields.mirrorSourceFingerprint
-    ) {
-      throw new Error("native prompt annotation requires complete provenance");
-    }
     assertLive();
-    // This is the existing user-source fingerprint contract, including upstream prompt bytes.
-    const fingerprint = sha256HexPrefixCore(
-      JSON.stringify({
-        role: "user",
-        content: admittedMessage.content,
-        upstreamUserText: fields.upstreamUserText || undefined,
-      }),
-      32,
-    );
-    if (fingerprint !== fields.mirrorSourceFingerprint) {
-      throw new Error("native prompt annotation does not match admitted content");
-    }
+    // The admission owns an exact key; cron base and run rows can share a session ID.
     const entryAuthority = await captureSessionEntryCurrentCheckAsyncInternal({
-      ...target,
+      agentId: target.agentId,
+      sessionKey: target.sessionKey,
+      storePath: target.storePath,
       fields: ["sessionId", "lifecycleRevision", "activeWriterRunId"],
       errorMessage: "current user admission is no longer available for native annotation",
     });
@@ -147,18 +130,15 @@ export function bindUserTurnTranscriptAnnotation(params: {
           if (!isDeepStrictEqual(current, admittedMessage)) {
             throw new Error("native prompt annotation cannot replace an edited admission");
           }
-          const metadata = admittedMessage["__openclaw"] ?? {};
-          if (
-            metadata.runTerminal !== undefined ||
-            Object.entries(fields).some(
-              ([key, value]) => metadata[key] !== undefined && metadata[key] !== value,
-            )
-          ) {
-            throw new Error("native prompt annotation conflicts with recorded provenance");
-          }
-          const next = { ...admittedMessage, __openclaw: { ...metadata, ...fields } };
+          const annotatedMessage = prepareUserTurnTranscriptAnnotation(
+            admittedMessage,
+            capturedAnnotation,
+            params.runId,
+          );
           verified = true;
-          return isDeepStrictEqual(next, admittedMessage) ? undefined : next;
+          return isDeepStrictEqual(annotatedMessage, admittedMessage)
+            ? undefined
+            : annotatedMessage;
         },
         {
           active: "exact",

@@ -6,16 +6,19 @@ import {
   validateSessionsCompanionResetParams,
   validateSessionsCompanionStateParams,
 } from "../../packages/gateway-protocol/src/index.js";
+import { assertOperatorModelAllowed } from "../agents/admitted-run-context.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   releaseSessionSourceAuthorities,
   type SessionSourceAssertion,
   type PreparedSessionSourceAuthority,
 } from "../config/sessions/session-source-authority.js";
+import { resolveGatewayOperatorRoleActor } from "./operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import type { GatewayRequestHandlers } from "./server-methods/types.js";
 import { defineValidatedGatewayHandler } from "./server-methods/validation.js";
 import { SessionCompanionAskError } from "./session-companion-errors.js";
+import { resolveSessionCompanionAskSelection } from "./session-companion-policy.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 import { captureSessionSharingMemoryFacts } from "./session-sharing-incognito.js";
 import {
@@ -56,6 +59,21 @@ function resolveCompanionTarget(
   };
 }
 
+/**
+ * Side chat history is private to the authenticated person asking. Connections
+ * without a personal identity (for example, a shared Gateway token) are one
+ * principal, so they keep sharing a single thread per session.
+ */
+function resolveSessionCompanionOwnerId(
+  client: Parameters<GatewayRequestHandlers[string]>[0]["client"],
+): string {
+  const actor = resolveGatewayOperatorRoleActor(client);
+  const profileId =
+    client?.authenticatedUserProfile?.profileId ??
+    (actor?.kind === "operator" ? actor.profileId : undefined);
+  return profileId ? `profile:${profileId}` : "shared";
+}
+
 function companionTargetIsVisible(
   client: Parameters<GatewayRequestHandlers[string]>[0]["client"],
   context: Parameters<GatewayRequestHandlers[string]>[0]["context"],
@@ -87,7 +105,7 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
     "sessions.companion.ask",
     validateSessionsCompanionAskParams,
     async ({ params, respond, client, context, signal, hasCurrentClientAuthority }) => {
-      const { sessionKey, agentId, question, selectionContext, attachments } = params;
+      const { sessionKey, agentId, question, selectionContext, attachments, model } = params;
       if (!question.trim()) {
         respond(
           false,
@@ -110,6 +128,19 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
         return;
       }
       const sourceCfg = context.getRuntimeConfig();
+      const resolvedSelection = await resolveSessionCompanionAskSelection({
+        cfg: sourceCfg,
+        agentId: target.agentId,
+        model,
+        thinkingLevel: params.thinkingLevel,
+        fastMode: params.fastMode,
+        loadModelCatalog: () => context.loadGatewayModelCatalog({ agentId: target.agentId }),
+      });
+      if (!resolvedSelection.ok) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, resolvedSelection.error));
+        return;
+      }
+      const selection = resolvedSelection.selection;
       const sourceTargetScope = {
         agentId: target.agentId,
         sessionKey: target.sessionKey,
@@ -251,13 +282,34 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
         });
         assertSourceCurrent();
         assertInputCurrent?.();
+        if (selection?.model && capturedOperator) {
+          // A chosen model is refused, never swapped for the role's permitted default.
+          try {
+            assertOperatorModelAllowed(capturedOperator.authority, selection.model);
+          } catch (error) {
+            if (error instanceof SessionMutationAuthorizationChangedError) {
+              throw error;
+            }
+            respond(
+              false,
+              undefined,
+              errorShape(
+                ErrorCodes.FORBIDDEN,
+                error instanceof Error ? error.message : "Side chat cannot use this model.",
+              ),
+            );
+            return;
+          }
+        }
         const result = await companion.ask({
           sessionKey: target.sessionKey,
           agentId: target.agentId,
           question,
           ...(selectionContext ? { selectionContext } : {}),
           ...(originalAttachments ? { attachments: originalAttachments } : {}),
+          ...(selection ? { selection } : {}),
           connId,
+          ownerId: resolveSessionCompanionOwnerId(client),
           assertSourceCurrent,
           ...(assertInputCurrent ? { assertInputCurrent } : {}),
           ...(capturedOperator ? { operatorAuthority: capturedOperator.authority } : {}),
@@ -294,7 +346,9 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
               : {
                   details: { reason: error.reason },
                   retryable:
-                    error.reason === "rate-limited" || error.reason === "context-unavailable",
+                    error.reason === "rate-limited" ||
+                    error.reason === "context-unavailable" ||
+                    error.reason === "timeout",
                   ...(error.retryAfterMs ? { retryAfterMs: error.retryAfterMs } : {}),
                 },
           ),
@@ -338,7 +392,11 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
         }
         respond(
           true,
-          target.companion.state({ agentId: target.agentId, sessionKey: target.sessionKey }),
+          target.companion.state({
+            agentId: target.agentId,
+            sessionKey: target.sessionKey,
+            ownerId: resolveSessionCompanionOwnerId(client),
+          }),
         );
       } finally {
         facts.release();
@@ -348,16 +406,18 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
   "sessions.companion.reset": defineValidatedGatewayHandler(
     "sessions.companion.reset",
     validateSessionsCompanionResetParams,
-    ({ params, respond, context }) => {
+    ({ params, respond, client, context }) => {
       const { sessionKey, agentId } = params;
       const target = resolveCompanionTarget({ sessionKey, agentId }, context);
       if (!target.ok) {
         respond(false, undefined, target.error);
         return;
       }
+      // Clearing affects only the caller's own thread.
       target.companion.reset({
         agentId: target.agentId,
         sessionKey: target.sessionKey,
+        ownerId: resolveSessionCompanionOwnerId(client),
       });
       respond(true, { ok: true });
     },

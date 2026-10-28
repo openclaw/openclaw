@@ -1,16 +1,17 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
+  callMeetingBrowserProxyOnNode,
   leaveMeetingWithBrowser,
   readMeetingTranscriptWithBrowser,
   recoverMeetingBrowserTab,
   resolveLocalMeetingBrowserRequest,
+  resolveMeetingBrowserNode,
   MeetingPlatformAdapter,
   type MeetingBrowserRequestCaller,
 } from "openclaw/plugin-sdk/meeting-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { resolveTranscriptsConfig } from "openclaw/plugin-sdk/transcripts";
 import type { GoogleMeetConfig, GoogleMeetMode } from "../config.js";
-import { callBrowserProxyOnNode, resolveChromeNode } from "./chrome-browser-proxy.js";
 import { GOOGLE_MEET_PLATFORM_ADAPTER } from "./google-meet-platform-adapter.js";
 import {
   GOOGLE_MEET_BROWSER_NODE_ADAPTER,
@@ -19,7 +20,6 @@ import {
 import type {
   GoogleMeetBrowserTab,
   GoogleMeetChromeHealth,
-  GoogleMeetSession,
   GoogleMeetTranscriptSnapshot,
 } from "./types.js";
 
@@ -75,15 +75,21 @@ async function resolveChromeBrowserRoute(
   }
   const nodeId =
     params.nodeId ??
-    (await resolveChromeNode({
+    (await resolveMeetingBrowserNode({
       runtime: params.runtime,
       requestedNode: params.config.chromeNode.node,
+      adapter: GOOGLE_MEET_BROWSER_NODE_ADAPTER,
     }));
   return {
     transport: "chrome-node",
     nodeId,
     callBrowser: (request) =>
-      callBrowserProxyOnNode({ ...request, runtime: params.runtime, nodeId }),
+      callMeetingBrowserProxyOnNode({
+        ...request,
+        runtime: params.runtime,
+        nodeId,
+        adapter: GOOGLE_MEET_BROWSER_NODE_ADAPTER,
+      }),
   };
 }
 
@@ -135,19 +141,7 @@ export async function recoverCurrentMeetTab(
     trackedTargetId?: string;
     url?: string;
   },
-): Promise<
-  Awaited<
-    ReturnType<
-      typeof recoverMeetingBrowserTab<
-        GoogleMeetSession,
-        GoogleMeetMode,
-        GoogleMeetChromeHealth,
-        GoogleMeetTranscriptSnapshot
-      >
-    >
-  > &
-    ({ transport: "chrome"; nodeId?: undefined } | { transport: "chrome-node"; nodeId: string })
-> {
+) {
   // Recovery deliberately re-resolves the configured node, not the session pin.
   const { callBrowser, ...route } = await resolveChromeBrowserRoute({
     ...params,

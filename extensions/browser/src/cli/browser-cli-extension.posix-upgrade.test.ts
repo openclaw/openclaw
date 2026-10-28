@@ -49,6 +49,17 @@ vi.mock("../browser/extension-relay/owner-client.js", () => ({
 const fixture = useExtensionInstallFixture();
 const { defaultRuntime: capture, resetRuntimeCapture } = createCliRuntimeCapture();
 const readFiles = (files: string[]) => Promise.all(files.map((file) => fs.readFile(file)));
+function makeConfig(workPort = 19444) {
+  return {
+    browser: {
+      defaultProfile: "other",
+      profiles: {
+        work: { driver: "extension" as const, cdpPort: workPort },
+        other: { driver: "extension" as const, cdpPort: 19555 },
+      },
+    },
+  };
+}
 async function preserveFiles(...files: string[]) {
   const before = await readFiles(files);
   return async () => expect(await readFiles(files)).toEqual(before);
@@ -107,22 +118,13 @@ async function setup(
     entries: { [installedId]: { location: 4, path: seeded.installedCopy.path, state: 1 } },
   });
   const configPath = registeredConfigPath ?? path.join(f.stateDir, "openclaw.json");
-  const cfg = {
-    browser: {
-      defaultProfile: "other",
-      profiles: {
-        work: { driver: "extension" as const, cdpPort: 19444 },
-        other: { driver: "extension" as const, cdpPort: 19555 },
-      },
-    },
-  };
+  const cfg = makeConfig();
   await fs.writeFile(configPath, JSON.stringify(cfg), { mode: 0o600 });
   const keyPath = path.join(f.stateDir, "credentials", "browser-extension-relay.secret");
   await fs.mkdir(path.dirname(keyPath), { recursive: true, mode: 0o700 });
   const key = Buffer.from(Array.from({ length: 32 }, (_, i) => (i * 19 + 5) & 255)).toString("hex");
   await fs.writeFile(keyPath, key + "\n", { mode: 0o600 });
-  const preservedPaths = [keyPath, configPath, preferences];
-  const assertFilesPreserved = await preserveFiles(...preservedPaths);
+  const assertFilesPreserved = await preserveFiles(keyPath, configPath, preferences);
   const keyInode = (await fs.stat(keyPath)).ino;
   // Real package relocation changes the bundle ID and removes the old entrypoint.
   const nextPackage = path.join(f.root, options.relocate === false ? "package" : "package-v2");
@@ -184,7 +186,6 @@ async function setup(
     deps: boundary.deps,
     root,
     bundledDir,
-    pluginRoot,
     nativeHostPath,
     manifest,
     manifestPath: registration.manifestPath,

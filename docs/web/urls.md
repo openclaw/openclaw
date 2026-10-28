@@ -198,13 +198,52 @@ social card. It opens a small public landing page; **Open dashboard** or
 For example, `/share/dashboard/main/deploy-monitor-6db92d48` previews
 `/dashboard/main/deploy-monitor-6db92d48`. A configured Control UI base path
 prefixes both paths. The preview serves Open Graph metadata and a 1200 × 630 PNG
-at `/share/card.png`, without requiring JavaScript or a Gateway connection.
+at `/share/card.png`, plus a generic, silent five-second H.264 video at
+`/share/preview-v1.mp4`, without requiring JavaScript or a Gateway connection.
+The landing page starts with the still image. Expand **Play animation** for
+native video controls. It does not autoplay, including for people who request
+reduced motion. Playback is optional; the still image and destination link work
+without JavaScript or video support.
 
 The card shows generic OpenClaw branding, not the session's title, messages,
 dashboard widgets, or screenshots. Preview requests never look up session state,
 so the page does not reveal whether the target exists. The link itself still
 contains the session route and, for catalog sessions, the catalog routing fields.
 Treat those URLs as information you are choosing to share.
+
+### Animated cards and platform support
+
+The preview advertises the MP4 with [Open Graph video metadata](https://ogp.me/#structured)
+and retains the PNG as both `og:image` and `twitter:image`. X still receives a
+`summary_large_image` card. Some clients may use the video; others show only the
+still. Open Graph metadata does **not** guarantee inline playback, animation,
+looping, or autoplay on X. Client settings, data-saving behavior, and platform
+policy remain outside OpenClaw's control.
+
+X Player Cards are a separate integration, not a synonym for `og:video`. The
+[official Player Card sample](https://github.com/twitterdev/cards) uses HTTPS
+player/container and stream URLs plus `twitter:player` metadata. OpenClaw does
+not add an embeddable player or change its frame restrictions for a decorative
+brand animation. Test an actual posted preview on the intended X clients before
+claiming animated-card support; metadata validation alone is not playback proof.
+
+Chat platforms cache previews independently of the Gateway's HTTP cache headers.
+After deployment, use a fresh preview URL when testing, and allow for platform
+recrawling. Existing posts may continue showing old artwork. Published video
+artwork has a versioned path; replacing it requires a new asset name and matching
+Gateway route/metadata changes. The PNG remains a usable fallback.
+
+The artwork is fixed branding, not a recording of a conversation. Public
+transcripts retain their session-specific static cards; this animation applies
+to the generic `/share/chat/*` and `/share/dashboard/*` preview pages. The
+`openclaw.ai` marketing site is a separate deployment and is not changed by the
+Gateway's Control UI build.
+
+To revise the artwork, edit `ui/config/control-ui-social-preview.ts` and run
+`node scripts/generate-social-preview.mts` with system ffmpeg/libx264 available.
+The generator uses bundled fonts and the existing mascot to author the shipped
+MP4; ordinary UI builds do not need ffmpeg. `pnpm ui:build` creates the matching
+poster and copies the MP4 from `ui/public`.
 
 ### Behind a login proxy
 
@@ -224,8 +263,8 @@ terminates at the proxy, so the image and standard URLs use the public HTTPS
 address. Without it, previews use the request's Host and direct connection
 protocol; forwarded headers are not trusted for public preview URLs.
 
-Verify both the preview URL and its `/share/card.png` return `200` without
-cookies, then check that opening the dashboard still requires login. If a chat
+Verify the preview URL, `/share/card.png`, and `/share/preview-v1.mp4` return
+`200` without cookies (the MP4 must use `Content-Type: video/mp4`), then check that opening the dashboard still requires login. If a chat
 app shows the login page or no image, check for proxy redirects on both preview
 requests. Ordinary dashboard URLs remain protected and do not gain crawler
 access from this feature.
@@ -254,6 +293,9 @@ The browser uses its session token or paired-device credential; passwords remain
 in memory only. This also works on loopback HTTP, which permits public readers. Chat links remain
 reloadable during Gateway updates; the temporary recovery marker is removed when
 the app starts.
+With Tailscale Serve identity authentication enabled, the same-origin handoff
+verifies the viewer through Tailscale and checks access to the requested conversation.
+No saved browser token or extra **Log in** click is needed.
 In trusted-proxy deployments, browsers controlled by the installed Control UI service worker request the
 protected session-entry app document directly when reopening a chat deep link,
 without first loading the public reader or probing access. Registration is only
@@ -277,7 +319,7 @@ and you are its creator or a Gateway admin. See
 
 Public access is separate from teammate visibility and editing permissions.
 The public reader does not open a Gateway WebSocket, subscribe to the session
-roster, send messages, invoke tools, or open private dashboards. It shows every user and assistant text message, including progress updates, with Markdown formatting and code-copy controls. Adjacent tool calls appear in collapsed steps with tool names and short command, path, or query summaries; tool result text stays private. User, assistant, and tool-result images open at full size through a public media route bound to the same publication and transcript entry. Only size-capped PNG, JPEG, GIF, and WebP images are served after checking their bytes. Other attachments appear as filename chips without download links. Reasoning, executable widgets, internal metadata, and hidden messages are omitted. Included text is not secret-masked. Review the conversation for credentials and other sensitive content before publishing; future messages become public too.
+roster, send messages, invoke tools, or open private dashboards. It shows every user and assistant text message, including progress updates, with Markdown formatting and code-copy controls. Adjacent tool calls appear in collapsed steps with tool names and short command, path, or query summaries; tool result text stays private. User, assistant, and tool-result images open at full size through a public media route bound to the same publication and transcript entry. Only size-capped PNG, JPEG, GIF, and WebP images are served after checking their bytes. Other attachments appear as filename chips without download links. Saved inline widgets shown in the conversation render in sandboxed frames with scripts allowed, restricted network access, and no Gateway access. Each frame uses a link scoped to that widget document; the link cannot read the conversation. A widget is served only when its inline widget result is itself publicly visible in the shared conversation. Other `[embed ...]` content, including YouTube videos and external pages, appears as a plain link to its HTTPS or HTTP address; the reader does not load the page, player, or thumbnail. Embeds of other Gateway pages are omitted. Shortcodes inside code stay literal. Pinned dashboard widgets are not part of the public reader. Reasoning, internal metadata, and hidden messages stay omitted. Included text is not secret-masked. Review the conversation for credentials and other sensitive content before publishing; future messages become public too.
 
 The latest public view checks for updates approximately every 15 seconds while
 visible and catches up when the tab returns or the connection comes back online.
@@ -287,6 +329,15 @@ let you jump without reloading; **Refresh now** checks in place and shows retry
 status if the connection fails. **Older messages** opens earlier pages without
 automatic refresh; **Back to latest** returns to the live view. Pages contain approximately 50 visible messages and tool-step groups, newest pages first and chronological within each page. Read and message size limits still apply, with visible omission notices. The initial conversation and social metadata
 work without JavaScript.
+
+The reader uses the saved Control UI language preference on the same origin, or
+your browser language when no supported preference is saved. Navigation, status,
+copy controls, and reader notices are localized, with right-to-left layout for
+Arabic and Persian. Conversation titles, messages, code, tool names, and filenames
+are never translated. Missing translations fall back to English; without
+JavaScript the initial document remains in English. Reader translations are
+packaged at build time from the same generated catalog as the Control UI, without
+loading the operator app or fetching a translation service.
 
 Public session links include a 1200 × 630 preview card with the session title and
 opening public request. When recorded worktree changes are already available,
@@ -342,6 +393,8 @@ OpenClaw does not change Cloudflare Access or other proxy policies automatically
 Public pages share bounded rendered representations and in-flight work.
 Committed session and transcript changes invalidate affected pages; every
 response, including `304 Not Modified`, still checks live publication authority.
+If a change overtakes an in-flight read, the public reader prepares the current
+representation before responding, without requiring a browser retry.
 Representations are retained only on the server, not in a shared browser/CDN
 cache. Eight distinct builds may run at once, two for one publication, with
 32 additional builds queued. Overload returns `503` and `Retry-After`.
@@ -524,7 +577,8 @@ no route-specific URL parameters.
 | Person activity     | `/activity/<name>-<profile-id>`                | -                         | Optional name slug and 8-32 lowercase hexadecimal id characters                   |
 | Apps                | `/apps`                                        | -                         | -                                                                                 |
 | Portals             | `/portals`                                     | -                         | -                                                                                 |
-| Agents              | `/settings/agents`                             | `/agents`                 | `/settings/agents/<agentId>[/<panel>]`                                            |
+| Agents              | `/settings/agents`                             | -                         | `/settings/agents/<agentId>[/<panel>]`                                            |
+| Claws               | `/claws`                                       | -                         | `/claws/<official-package-slug>`; requires the Claws Labs toggle                  |
 | Channels            | `/settings/channels`                           | `/channels`               | Shared settings parameters below                                                  |
 | Connection          | `/settings/connection`                         | -                         | Shared settings parameters below                                                  |
 | Legacy General      | `/settings/general`                            | `/config`                 | Redirects to Appearance → Language                                                |

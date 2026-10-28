@@ -6,13 +6,13 @@ import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { root as fsSafeRoot } from "@openclaw/fs-safe/root";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { requireDirectorySync, syncDirectory } from "./directory-durability.js";
+import { ignoreMissingPath } from "./errno.js";
 import { formatErrorMessage, formatErrorMessageWithCode, hasErrnoCode, isErrno } from "./errors.js";
 import { isRemovalIoError, removePathWithinRoot } from "./fs-safe-remove.js";
 import { retainMutationAuthority } from "./mutation-authority.js";
-import {
-  type createPackageIntegrityReader,
-  type PackageLauncherFingerprint,
-  packageLauncherDifferences,
+import type {
+  createPackageIntegrityReader,
+  PackageLauncherFingerprint,
 } from "./package-update-integrity.js";
 import type { StagedPackageSwapParams } from "./package-update-swap-contract.js";
 import { pathEntryExists as packagePathEntryExists } from "./path-existence.js";
@@ -62,35 +62,11 @@ export function createPackagePathAssertion(
 
 export { packagePathEntryExists };
 
-export async function packagePathEntriesMatch(left: string, right: string): Promise<boolean> {
-  const [leftStat, rightStat] = await Promise.all([
-    fs.lstat(left).catch(() => null),
-    fs.lstat(right).catch(() => null),
-  ]);
-  if (!leftStat || !rightStat) {
-    return false;
-  }
-  if (leftStat.isSymbolicLink() || rightStat.isSymbolicLink()) {
-    return (
-      leftStat.isSymbolicLink() &&
-      rightStat.isSymbolicLink() &&
-      (await fs.readlink(left)) === (await fs.readlink(right))
-    );
-  }
-  if (!leftStat.isFile() || !rightStat.isFile()) {
-    return false;
-  }
-  if ((leftStat.mode & 0o777) !== (rightStat.mode & 0o777) || leftStat.size !== rightStat.size) {
-    return false;
-  }
-  const [leftContents, rightContents] = await Promise.all([fs.readFile(left), fs.readFile(right)]);
-  return leftContents.equals(rightContents);
-}
-
 export async function activateStagedNpmPackageRoot(
   source: string,
   destination: string,
   assertCurrent?: () => void,
+  unjournaled?: { assertCaller?: () => void; warnings: string[]; platform?: NodeJS.Platform },
 ): Promise<void> {
   if (assertCurrent) {
     // A durable descriptor binds the staged inode. A copied replacement would
@@ -102,6 +78,18 @@ export async function activateStagedNpmPackageRoot(
   }
   const stat = await fs.lstat(source);
   if (!stat.isSymbolicLink()) {
+    if (unjournaled && (unjournaled.platform ?? process.platform) === "win32") {
+      // The stage is a sibling of the live root, so this rename cannot cross
+      // devices. fs-safe's Windows EPERM copy fallback would instead copy the
+      // tree and then fail deleting the still-held stage after publication.
+      await renamePackageRootWithWindowsRetries(
+        source,
+        destination,
+        retainMutationAuthority(unjournaled.assertCaller ?? (() => {})),
+        { operation: "activation", warn: (message) => unjournaled.warnings.push(message) },
+      );
+      return;
+    }
     await movePathWithCopyFallback({
       from: source,
       sourceHardlinks: PACKAGE_MANAGER_SWAP_SOURCE_HARDLINKS,
@@ -131,10 +119,35 @@ export async function backupNpmPackageRoot(
     await fs.rename(source, destination);
     return;
   }
-  const assertCurrent = retainMutationAuthority(assertCaller ?? (() => {}));
+  await renamePackageRootWithWindowsRetries(
+    source,
+    destination,
+    retainMutationAuthority(assertCaller ?? (() => {})),
+    {
+      operation: "backup",
+      warn: (message) => warnings.push(message),
+    },
+  );
+}
+
+/**
+ * Shared bounded Windows retries for guarded package-root renames: transient
+ * AV/indexer denials are retried with authority and path-identity checks while
+ * permanent failures stay failures. Package backup, unjournaled activation, and
+ * rollback publication/compensation renames share this one implementation;
+ * callers keep their own operation-specific diagnostics through `operation` and `warn`.
+ */
+async function renamePackageRootWithWindowsRetries(
+  source: string,
+  destination: string,
+  assertCurrent: () => void,
+  options: { operation: string; warn?: (message: string) => void },
+): Promise<void> {
   const sourceIdentity = fsSync.lstatSync(source, { bigint: true });
-  const parent = path.dirname(source);
-  const parentIdentity = fsSync.lstatSync(parent, { bigint: true });
+  // Activation crosses parents; pin both so a retry cannot follow a swapped junction.
+  const parents = [...new Set([path.dirname(source), path.dirname(destination)])].map(
+    (directory) => ({ directory, identity: fsSync.lstatSync(directory, { bigint: true }) }),
+  );
   let renameFailure: unknown;
   let attempts = 0;
   try {
@@ -142,7 +155,9 @@ export async function backupNpmPackageRoot(
       async () => {
         renameFailure = undefined;
         assertCurrent();
-        assertPackagePathIdentity(parent, parentIdentity);
+        for (const { directory, identity } of parents) {
+          assertPackagePathIdentity(directory, identity);
+        }
         assertPackagePathIdentity(source, sourceIdentity);
         assertPackagePathIdentity(destination, undefined);
         attempts++;
@@ -163,9 +178,11 @@ export async function backupNpmPackageRoot(
           error === renameFailure &&
           ["EPERM", "EBUSY", "EACCES"].some((code) => hasErrnoCode(error, code)),
         onRetry: ({ err, attempt, maxAttempts, delayMs }) => {
-          warnings.push(
-            `Windows package backup rename ${source} -> ${destination} failed: ${formatErrorMessage(err)}; retry ${attempt + 1}/${maxAttempts} in ${delayMs}ms.`,
-          );
+          if (options.warn) {
+            options.warn(
+              `Windows package ${options.operation} rename ${source} -> ${destination} failed: ${formatErrorMessage(err)}; retry ${attempt + 1}/${maxAttempts} in ${delayMs}ms.`,
+            );
+          }
         },
       },
     );
@@ -175,7 +192,7 @@ export async function backupNpmPackageRoot(
     }
     throw Object.assign(
       new Error(
-        `Windows package backup rename failed after ${attempts} attempts: ${source} -> ${destination}: ${formatErrorMessage(error)}. Close processes holding this installation and check its permissions before retrying.`,
+        `Windows package ${options.operation} rename failed after ${attempts} attempts: ${source} -> ${destination}: ${formatErrorMessage(error)}. Close processes holding this installation and check its permissions before retrying.`,
         { cause: error },
       ),
       { code: isErrno(error) ? error.code : undefined },
@@ -437,7 +454,6 @@ export async function copyPackagePathEntry(
 
 export type PackageLauncherBackup = {
   backupDir?: string;
-  failedCopy?: string;
   entries: Array<{
     source: string;
     destination: string;
@@ -474,12 +490,7 @@ export async function capturePackageLaunchers(
             native
               ? fs.readdir(params.stage.layout.binDir)
               : reader.entries(params.stage.layout.binDir)
-          ).catch((error: unknown) => {
-            if (hasErrnoCode(error, "ENOENT")) {
-              return [];
-            }
-            throw error;
-          }),
+          ).catch((error: unknown) => ignoreMissingPath(error) ?? []),
         );
   if (shimEntries.length > 0) {
     snapshot.backupDir = await fs.mkdtemp(
@@ -498,18 +509,6 @@ export async function capturePackageLaunchers(
       const fingerprint = backup && !native ? await reader.launcher(destination) : undefined;
       if (backup) {
         await copyPackagePathEntry(destination, backup);
-        if (fingerprint) {
-          // Keep failed verification evidence even when activation never starts.
-          snapshot.failedCopy = backup;
-          const actual = await reader.launcher(backup);
-          const differences = packageLauncherDifferences(fingerprint, actual);
-          if (differences.length > 0) {
-            throw new Error(
-              `Package rollback launcher backup changed: ${destination}; differing fields: ${differences.join(", ")}`,
-            );
-          }
-          snapshot.failedCopy = undefined;
-        }
       }
       snapshot.entries.push({
         source: path.join(params.stage.layout.binDir, entry),
@@ -528,21 +527,44 @@ export async function restoreNpmPackageRoot(params: {
   displacedRoot: string;
   candidatePresent: boolean;
   assertCurrent?: () => void;
+  platform?: NodeJS.Platform;
 }): Promise<void> {
   const assertCurrent = retainMutationAuthority(params.assertCurrent ?? (() => {}));
+  const restoreRename =
+    (params.platform ?? process.platform) === "win32"
+      ? (from: string, to: string) =>
+          renamePackageRootWithWindowsRetries(from, to, assertCurrent, { operation: "restore" })
+      : (from: string, to: string) => fs.rename(from, to);
   if (params.candidatePresent) {
     assertCurrent();
-    await fs.rename(params.liveRoot, params.displacedRoot);
+    await restoreRename(params.liveRoot, params.displacedRoot);
   }
   try {
     assertCurrent();
-    await fs.rename(params.backupRoot, params.liveRoot);
+    await restoreRename(params.backupRoot, params.liveRoot);
   } catch (error) {
     // A denied rename must leave the candidate available. Never substitute a
     // copied old tree for the exact object whose identity was verified.
     assertCurrent();
     if (params.candidatePresent) {
-      await fs.rename(params.displacedRoot, params.liveRoot);
+      try {
+        await restoreRename(params.displacedRoot, params.liveRoot);
+      } catch (compensationError) {
+        assertCurrent();
+        if (await packagePathEntryExists(params.liveRoot)) {
+          throw compensationError;
+        }
+        throw new Error(
+          `${formatErrorMessage(compensationError)}; ${params.liveRoot} is missing. Restore a bootable installation by moving ${params.backupRoot} (the previous package) or ${params.displacedRoot} (the rejected update) to ${params.liveRoot} after closing processes that hold them.`,
+          { cause: compensationError },
+        );
+      }
+    } else if (!(await packagePathEntryExists(params.liveRoot))) {
+      assertCurrent();
+      throw new Error(
+        `${formatErrorMessage(error)}; ${params.liveRoot} is missing. Restore the previous package by moving ${params.backupRoot} to ${params.liveRoot} after closing processes that hold it.`,
+        { cause: error },
+      );
     }
     throw error;
   }
@@ -643,9 +665,6 @@ export async function discardPackageLauncherBackup(
   assertCurrent?: () => void,
   cleanupDeadlineAtMs?: number,
 ): Promise<string | null> {
-  if (snapshot.failedCopy) {
-    return `failed copy retained at ${snapshot.failedCopy}; inspect it before retrying`;
-  }
   return snapshot.backupDir
     ? await discardPackageUpdateBackup(
         snapshot.backupDir,

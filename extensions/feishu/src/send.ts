@@ -277,7 +277,7 @@ export async function getMessageFeishu(params: {
         ...parsedItem,
         content: await parseMergeForwardContent(
           responseItems,
-          (account.config.resolveSenderNames ?? true)
+          account.config.resolveSenderNames
             ? async (senderId) =>
                 (
                   await resolveFeishuSenderName({

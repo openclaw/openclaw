@@ -14,6 +14,14 @@ openclaw-systems-page {
   overflow: hidden;
   background: var(--bg);
 }
+/* Systems renders in the full-bleed chat content column: supply the page top inset
+   other pages get from content padding, and inset the title to the toolbar heading.
+   The selector outranks the shared hub-header insets. */
+.systems-workspace > .content-header.hub-page-header.systems-page-header {
+  flex: 0 0 auto;
+  margin-top: var(--space-4);
+  padding-inline: 18px;
+}
 .systems-toolbar {
   display: flex;
   align-items: center;
@@ -26,7 +34,7 @@ openclaw-systems-page {
   flex: 1;
   min-width: 0;
 }
-.systems-heading h1 {
+.systems-heading h2 {
   margin: 0;
   font-size: 15px;
   font-weight: 600;
@@ -641,6 +649,9 @@ openclaw-systems-page {
     flex: 1;
     max-width: none;
   }
+  .systems-workspace > .content-header.hub-page-header.systems-page-header {
+    padding-inline: 10px;
+  }
   .systems-toolbar {
     padding: 10px;
     gap: 7px;
@@ -678,5 +689,10 @@ openclaw-systems-page {
   .systems-vital .sparkline-tile__value {
     font-size: 14px;
     white-space: nowrap;
+  }
+}
+@media (max-width: 640px) {
+  .systems-workspace > .content-header.hub-page-header.systems-page-header {
+    margin-top: 0;
   }
 }

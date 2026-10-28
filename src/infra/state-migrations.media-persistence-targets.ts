@@ -44,7 +44,6 @@ export function prepareAgentDatabaseMigrationDiscovery(params: {
   env: NodeJS.ProcessEnv;
   configuredAgentDatabaseTargets: readonly { agentId: string; path: string }[];
   registeredAgentDatabases?: readonly { agentId: string; path: string }[];
-  deletionJournal?: AgentDeletionJournalDisposition;
   preparedDiscovery?: PreparedAgentDatabaseMigrationDiscovery;
 }): PreparedAgentDatabaseMigrationDiscovery {
   const stateDir = resolveStateDir(params.env);
@@ -52,7 +51,7 @@ export function prepareAgentDatabaseMigrationDiscovery(params: {
     params.preparedDiscovery?.stateDir === stateDir &&
     params.preparedDiscovery.discovery.deletionJournal.status === "unavailable"
       ? params.preparedDiscovery.discovery.deletionJournal
-      : params.deletionJournal;
+      : undefined;
   const snapshot =
     params.registeredAgentDatabases && preparedJournal
       ? undefined

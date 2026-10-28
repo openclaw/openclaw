@@ -47,8 +47,8 @@ it.each([false, true])(
       ok: false,
       issues: [
         {
-          code: "gateway-node-version-manager",
-          message: "version-managed Node",
+          code: approved ? "gateway-runtime-node" : "gateway-runtime-node-version-manager",
+          message: approved ? "unsupported Node capability" : "version-managed Node",
           level: "recommended",
         },
       ],
@@ -81,6 +81,7 @@ it.each([false, true])(
       expect(message).not.toContain("recommended defaults");
       return approved;
     });
+    const onFinding = vi.fn();
     await withEnvAsync(
       {
         OPENCLAW_GATEWAY_TOKEN: undefined,
@@ -90,20 +91,33 @@ it.each([false, true])(
       async () => {
         await maybeRepairGatewayServiceConfig({ gateway: {} }, "local", makeDoctorIo(), prompter, {
           writeConfig: mocks.writeConfig,
+          onFinding,
         });
       },
     );
     expect(prompter.confirmRuntimeRepair).toHaveBeenCalledOnce();
     expect(mocks.install).toHaveBeenCalledTimes(Number(approved));
     if (approved) {
-      expect(mocks.note).toHaveBeenCalledWith(
-        expect.stringContaining("Install system Node"),
-        "Gateway service findings still unresolved",
+      expect(onFinding).toHaveBeenCalledWith(
+        expect.objectContaining({
+          severity: "error",
+          category: "fix-now",
+          message: expect.stringContaining("No supported system Node"),
+          fixHint: expect.stringContaining("Install system Node"),
+        }),
+      );
+      expect(onFinding).toHaveBeenCalledWith(
+        expect.objectContaining({
+          category: "recommended",
+          message: "This repair retains a source-checkout entrypoint.",
+          fixHint: expect.stringContaining("gateway install --force"),
+        }),
       );
       expect(mocks.install).toHaveBeenCalledWith(
         expect.objectContaining({ programArguments: command.programArguments }),
       );
     } else {
+      expect(onFinding).not.toHaveBeenCalled();
       expect(
         mocks.note.mock.calls.some(
           ([, title]) => title === "Gateway service findings still unresolved",

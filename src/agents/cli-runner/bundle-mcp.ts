@@ -16,6 +16,7 @@ import { extractMcpServerMap } from "../../plugins/bundle-mcp.js";
 import type { BundleMcpConfig, BundleMcpServerConfig } from "../../plugins/bundle-mcp.types.js";
 import type { CliBackendConfig, CliBackendPlugin } from "../../plugins/cli-backend.types.js";
 import type { CliBundleMcpMode } from "../../plugins/types.js";
+import { mapNestedStrings } from "../../shared/map-nested-strings.js";
 import { acquireSessionMcpRuntime } from "../agent-bundle-mcp-manager-api.js";
 import { releaseSessionMcpRuntime } from "../agent-bundle-mcp-manager-cleanup.js";
 import { isRecord } from "../bundle-mcp-adapter.js";
@@ -210,20 +211,11 @@ function resolveOpenClawMcpEnvTemplates(value: unknown, env?: Record<string, str
   if (!env) {
     return value;
   }
-  if (typeof value === "string") {
-    return value.replace(OPENCLAW_MCP_ENV_TEMPLATE_PATTERN, (match, name: string) => {
+  return mapNestedStrings(value, (text) =>
+    text.replace(OPENCLAW_MCP_ENV_TEMPLATE_PATTERN, (match, name: string) => {
       const replacement = env[name];
       return Object.hasOwn(env, name) && replacement !== undefined ? replacement : match;
-    });
-  }
-  if (Array.isArray(value)) {
-    return value.map((entry) => resolveOpenClawMcpEnvTemplates(entry, env));
-  }
-  if (!isRecord(value)) {
-    return value;
-  }
-  return Object.fromEntries(
-    Object.entries(value).map(([key, entry]) => [key, resolveOpenClawMcpEnvTemplates(entry, env)]),
+    }),
   );
 }
 

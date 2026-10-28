@@ -1,7 +1,7 @@
 import type { GatewayStatus } from "../lib/gateway-status.ts";
 
 export function canRetryGatewayStatus(kind: GatewayStatus | "connected" | null): boolean {
-  return kind === "reconnecting" || kind === "offline";
+  return kind === "offline";
 }
 
 export type GatewayStatusProps = {

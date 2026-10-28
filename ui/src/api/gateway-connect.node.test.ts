@@ -4,19 +4,14 @@ import {
   GATEWAY_CLIENT_CAPS,
   MIN_CLIENT_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
-  type ConnectParams,
 } from "@openclaw/gateway-client/browser";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import * as nodes from "../lib/nodes/index.ts";
-import { createStorageMock } from "../test-helpers/storage.ts";
-import {
-  getLatestWebSocket,
-  MockWebSocket,
-  stubWindowGlobals,
-  useNodeFakeTimers,
-  wsInstances,
-} from "./gateway-socket.test-support.ts";
-import { GatewayBrowserClient } from "./gateway.ts";
+import { startConnect, useHandshakeHarness } from "./gateway-handshake.test-support.ts";
+import { getLatestWebSocket, wsInstances } from "./gateway-socket.test-support.ts";
+import type { GatewayBrowserClient } from "./gateway.ts";
+
+const createClient = useHandshakeHarness();
 
 const CONTROL_UI_OPERATOR_SCOPES = [
   "operator.admin",
@@ -27,76 +22,88 @@ const CONTROL_UI_OPERATOR_SCOPES = [
   "operator.pairing",
 ] as const;
 
-async function startConnect(client: GatewayBrowserClient) {
-  client.start();
-  const ws = getLatestWebSocket();
-  ws.emitOpen();
+async function acceptConnect(
+  { ws, connectFrame }: Awaited<ReturnType<typeof startConnect>>,
+  auth: { role: string; scopes: string[] },
+) {
   ws.emitMessage({
-    type: "event",
-    event: "connect.challenge",
-    payload: { nonce: "handshake-challenge", ts: 1_800_000_000_000 },
+    type: "res",
+    id: connectFrame.id,
+    ok: true,
+    payload: { type: "hello-ok", protocol: PROTOCOL_VERSION, auth },
   });
   await vi.advanceTimersByTimeAsync(0);
-  const connectFrame = JSON.parse(ws.sent.at(-1) ?? "{}") as {
-    id: string;
-    method: string;
-    params: ConnectParams;
-  };
-  return { ws, connectFrame };
 }
 
 describe("GatewayBrowserClient shared-auth handshake", () => {
-  let client: GatewayBrowserClient | undefined;
+  let client: GatewayBrowserClient;
 
-  beforeEach(() => {
-    useNodeFakeTimers();
-    const storage = createStorageMock();
-    vi.stubGlobal("localStorage", storage);
-    stubWindowGlobals(storage);
-    vi.stubGlobal("WebSocket", MockWebSocket);
-    // Insecure browsers retain random IDs but have no device-proof crypto.
-    vi.stubGlobal("crypto", { randomUUID: () => "handshake-request" });
-    wsInstances.length = 0;
+  it.each([
+    { code: "PROTOCOL_MISMATCH" },
+    { minProtocol: PROTOCOL_VERSION + 1, maxProtocol: PROTOCOL_VERSION + 2 },
+    { minProtocol: 1, maxProtocol: MIN_CLIENT_PROTOCOL_VERSION - 1 },
+    { expectedProtocol: PROTOCOL_VERSION + 1 },
+  ])("does not auto-reconnect on an incompatible protocol: %j", async (details) => {
+    const { ws: ws1, connectFrame: connect } = await startConnect(
+      createClient({ token: "shared-auth-token" }),
+    );
+
+    ws1.emitMessage({
+      type: "res",
+      id: connect.id,
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: "Versions differ",
+        details,
+      },
+    });
+    await vi.waitFor(() => expect(ws1.readyState).toBe(3), { interval: 1, timeout: 50 });
+    ws1.emitClose(4008, "connect failed");
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(wsInstances).toHaveLength(1);
   });
-  afterEach(() => {
-    client?.stop();
-    client = undefined;
-    vi.restoreAllMocks();
-    vi.useRealTimers();
-    vi.unstubAllGlobals();
+
+  it("releases cached view work after connect is sent, before hello", async () => {
+    client = createClient({ url: "ws://scopes.example.test" });
+    client.start();
+    const ws = getLatestWebSocket();
+    const dispatch = vi.fn(() => {
+      expect(JSON.parse(ws.sent.at(-1) ?? "{}").method).toBe("connect");
+      expect(client?.hello).toBeNull();
+    });
+    const dispatched = client.initialConnectSent.then(dispatch);
+    ws.emitOpen();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(dispatch).not.toHaveBeenCalled();
+    ws.emitConnectChallenge({ nonce: "handshake-challenge", ts: 1_800_000_000_000 });
+    await dispatched;
+    expect(dispatch).toHaveBeenCalledOnce();
+  });
+
+  it("does not strand cached view work when the connection stops before dispatch", async () => {
+    client = createClient({ url: "ws://scopes.example.test" });
+    client.start();
+    const dispatch = vi.fn();
+    void client.initialConnectSent.then(dispatch);
+    client.stop();
+    await client.initialConnectSent;
+    expect(dispatch).toHaveBeenCalledOnce();
+    expect(getLatestWebSocket().sent).toEqual([]);
   });
 
   it("publishes negotiated scopes without a device token and retires them on disconnect", async () => {
-    client = new GatewayBrowserClient({ url: "ws://scopes.example.test" });
+    client = createClient({ url: "ws://scopes.example.test" });
     const { ws, connectFrame } = await startConnect(client);
     const auth = { role: "operator", scopes: ["operator.sessions.read"] };
-    ws.emitMessage({
-      type: "res",
-      id: connectFrame.id,
-      ok: true,
-      payload: {
-        type: "hello-ok",
-        protocol: PROTOCOL_VERSION,
-        auth,
-      },
-    });
-    await vi.advanceTimersByTimeAsync(0);
+    await acceptConnect({ ws, connectFrame }, auth);
     expect(client.auth).toEqual(auth);
     ws.emitClose(1006, "disconnected");
     expect(client.auth).toBeNull();
     await vi.advanceTimersByTimeAsync(1_000);
     const next = await startConnect(client);
-    next.ws.emitMessage({
-      type: "res",
-      id: next.connectFrame.id,
-      ok: true,
-      payload: {
-        type: "hello-ok",
-        protocol: PROTOCOL_VERSION,
-        auth: { role: "operator", scopes: ["operator.admin"] },
-      },
-    });
-    await vi.advanceTimersByTimeAsync(0);
+    await acceptConnect(next, { role: "operator", scopes: ["operator.admin"] });
     expect(client.auth?.scopes).toEqual(["operator.admin"]);
     client.stop();
     expect(client.auth).toBeNull();
@@ -114,7 +121,7 @@ describe("GatewayBrowserClient shared-auth handshake", () => {
       });
       vi.spyOn(nodes, "signDevicePayload").mockResolvedValue("signature");
       const onClose = vi.fn();
-      client = new GatewayBrowserClient({ url: "ws://pairing.example.test", onClose });
+      client = createClient({ url: "ws://pairing.example.test", onClose });
       const { ws, connectFrame } = await startConnect(client);
       const deviceId = connectFrame.params.device?.id;
       expect(deviceId).toBe("waiting-browser");
@@ -154,6 +161,7 @@ describe("GatewayBrowserClient shared-auth handshake", () => {
       await vi.advanceTimersByTimeAsync(60_000);
       expect(wsInstances).toHaveLength(1);
       expect(client.needsWakeReconnect).toBe(false);
+      expect(client.needsReachabilityReconnect).toBe(false);
       expect(onClose).toHaveBeenLastCalledWith(
         expect.objectContaining({
           willRetry: false,
@@ -172,7 +180,7 @@ describe("GatewayBrowserClient shared-auth handshake", () => {
   );
 
   it("requests full control ui operator scopes with explicit shared auth", async () => {
-    client = new GatewayBrowserClient({
+    client = createClient({
       url: "ws://127.0.0.1:18789",
       token: "shared-auth-token",
       clientBuildId: "build-a",
@@ -195,10 +203,14 @@ describe("GatewayBrowserClient shared-auth handshake", () => {
       GATEWAY_CLIENT_CAPS.TERMINAL_UPLOAD_PATH_STYLE,
       GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
       GATEWAY_CLIENT_CAPS.CHAT_ONLY_ASSISTANT_TEXT,
+      GATEWAY_CLIENT_CAPS.CHAT_QUEUE_STATUS,
       GATEWAY_CLIENT_CAPS.HELLO_HEALTH_ON_DEMAND,
+      GATEWAY_CLIENT_CAPS.HEALTH_SUMMARY,
+      GATEWAY_CLIENT_CAPS.HELLO_PRESENCE_SELF,
       GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS,
       GATEWAY_CLIENT_CAPS.PRESENCE_DELTAS,
       GATEWAY_CLIENT_CAPS.SESSION_ROW_DELTAS,
+      GATEWAY_CLIENT_CAPS.SESSION_EVENT_FIELD_REFS,
       GATEWAY_CLIENT_CAPS.ROSTER_MESSAGE_BODIES_OPTIONAL,
       GATEWAY_CLIENT_CAPS.INLINE_WIDGETS,
       GATEWAY_CLIENT_CAPS.MODEL_SELECTION_POLICY,
@@ -211,7 +223,7 @@ describe("GatewayBrowserClient shared-auth handshake", () => {
   });
 
   it("leaves the native-auth capability list unchanged", async () => {
-    client = new GatewayBrowserClient({
+    client = createClient({
       url: "ws://127.0.0.1:18789",
       includeSessionMessageBodies: true,
       nativeConnectAuth: async ({ nonce, signedAt }) => ({
@@ -223,6 +235,7 @@ describe("GatewayBrowserClient shared-auth handshake", () => {
     });
     const { connectFrame } = await startConnect(client);
     expect(connectFrame.params.caps).not.toContain(GATEWAY_CLIENT_CAPS.SESSION_ROW_DELTAS);
+    expect(connectFrame.params.caps).not.toContain(GATEWAY_CLIENT_CAPS.SESSION_EVENT_FIELD_REFS);
     expect(connectFrame.params.caps).not.toContain(
       GATEWAY_CLIENT_CAPS.ROSTER_MESSAGE_BODIES_OPTIONAL,
     );
@@ -239,7 +252,7 @@ describe("GatewayBrowserClient shared-auth handshake", () => {
     vi.spyOn(Math, "random").mockReturnValue(draw);
     const onClose = vi.fn();
     const onReconnectScheduled = vi.fn();
-    client = new GatewayBrowserClient({
+    client = createClient({
       url: "ws://127.0.0.1:18789",
       token: "shared-auth-token",
       onClose,
@@ -265,6 +278,8 @@ describe("GatewayBrowserClient shared-auth handshake", () => {
     });
     expect(onReconnectScheduled).toHaveBeenCalledExactlyOnceWith(delayMs);
     expect(wsInstances).toHaveLength(1);
+    expect(client.needsWakeReconnect).toBe(false);
+    expect(client.needsReachabilityReconnect).toBe(false);
     await vi.advanceTimersByTimeAsync(delayMs - 1);
     expect(wsInstances).toHaveLength(1);
     await vi.advanceTimersByTimeAsync(1);

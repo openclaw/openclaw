@@ -1,4 +1,5 @@
 import type { ExpectedWorkerBuild } from "../../worker/worker-build-identity.js";
+import type { TransferArtifact } from "./artifact-transfer-service.js";
 
 export type WorkerBundleArtifact = ExpectedWorkerBuild & {
   install: "bundle";
@@ -21,6 +22,7 @@ export type NodeBootstrapArtifact = Readonly<{
   openclawVersion: string;
   buildId: string;
   enabledPluginIds: readonly string[];
+  installLock?: TransferArtifact;
 }>;
 
 export type NodeBootstrapArtifactOptions = {

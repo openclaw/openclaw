@@ -31,6 +31,7 @@ import { retireDeviceTokenClients } from "../../device-token-client-lifecycle.js
 import { normalizeNodeHostCompatibilityMetadata } from "../../node-legacy-protocol-filter.js";
 import { isScopelessNodePairingRequest } from "../../node-pairing-auto-approve.js";
 import { normalizeChromeExtensionOrigin } from "../../origin-check.js";
+import { broadcastRejectedDevicePairing } from "../../pairing-events.js";
 import { formatForLog } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
 import {
@@ -188,7 +189,7 @@ export async function authorizeGatewayConnectDevice(
         scopes,
         hasRequestedScopes,
         connectionScopeCap: (capped: string[]) =>
-          applyConnectionScopeCap({ scopes: capped, upgradeReq: context.handler.upgradeReq }),
+          applyConnectionScopeCap({ role, scopes: capped, upgradeReq: context.handler.upgradeReq }),
       };
       const plan = await resolvePairingApprovalPlan(pairingPlanParams);
       // Same-key reconnects reuse paired grants without pairing or false upgrade audits.
@@ -264,16 +265,7 @@ export async function authorizeGatewayConnectDevice(
       // UIs so they drop the stale prompts instead of stacking alerts forever.
       const supersededResolvedAt = Date.now();
       for (const superseded of pairing.superseded ?? []) {
-        requestContext.broadcast(
-          "device.pair.resolved",
-          {
-            requestId: superseded.requestId,
-            deviceId: superseded.deviceId,
-            decision: "rejected",
-            ts: supersededResolvedAt,
-          },
-          { dropIfSlow: true },
-        );
+        broadcastRejectedDevicePairing(requestContext.broadcast, superseded, supersededResolvedAt);
       }
       let approved: Awaited<ReturnType<typeof approveDevicePairing>> | undefined;
       const inlineApprovalAttempted =

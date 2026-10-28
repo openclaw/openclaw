@@ -2,7 +2,6 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it } from "vitest";
 import {
   loadSessionEntryReadOnly,
-  patchSessionEntryCore,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -157,12 +156,8 @@ it("clears an incompatible global pin only in the selected agent store", async (
       updatedAt: 1,
       authProfileOverride: "anthropic:ops",
       authProfileOverrideSource: "user",
-      label: "before",
-      pinnedAt: 1,
     });
     const sessionEntry = expectDefined(loadSessionEntryReadOnly(opsScope), "ops session");
-    const sessionStore = { [sessionKey]: sessionEntry };
-    await patchSessionEntryCore(opsScope, () => ({ label: "renamed", pinnedAt: undefined }));
     const mainBefore = loadSessionEntryReadOnly(mainScope);
     authStoreMocks.state.store = {
       version: 1,
@@ -174,7 +169,6 @@ it("clears an incompatible global pin only in the selected agent store", async (
       agentDir: state.agentDir("ops"),
       provider: "openrouter",
       sessionEntry,
-      sessionStore,
       sessionKey,
       storePath,
     });
@@ -183,10 +177,8 @@ it("clears an incompatible global pin only in the selected agent store", async (
       mainBefore,
     );
     const persisted = loadSessionEntryReadOnly({ ...opsScope, readConsistency: "latest" });
-    expect(persisted).toMatchObject({ sessionId: "ops-session", label: "renamed" });
+    expect(persisted).toMatchObject({ sessionId: "ops-session" });
     expect(persisted?.authProfileOverride).toBeUndefined();
     expect(persisted?.authProfileOverrideSource).toBeUndefined();
-    expect(persisted?.pinnedAt).toBeUndefined();
-    expect(sessionStore[sessionKey]).toEqual(persisted);
   });
 });

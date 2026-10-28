@@ -813,7 +813,7 @@ it.each([
   [[...AGENT_ADD, "--command", "echo ok"], "Choose exactly one payload"],
   [
     [...ADD, "--session", "main", "--system-event", "tick", "--thread-id", "42"],
-    "require a non-main agentTurn, command, or script job with delivery",
+    "require an agentTurn job or a non-main command or script job with delivery",
   ],
   [[...AGENT_ADD, "--thread-id", "topic-42"], "--thread-id must be a positive integer"],
   [["cron", "list", "--agent", "   "], "--agent must not be blank"],

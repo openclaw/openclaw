@@ -147,8 +147,16 @@ type WorkerNodeBootstrapAccess = {
     tlsFingerprint?: string;
     /** Core-owned POSIX prerequisite script, applied only to Linux before invoking Node. */
     linuxToolchainSetup?: string;
+    /** Optional npm project lock for this exact archive; failure must retain unlocked installation. */
+    installLock?: {
+      url: string;
+      token: string;
+      sha256: string;
+      bytes: number;
+      tlsFingerprint?: string;
+    };
   };
-  /** Runtime/enrollment closure, including shutdown; provision's separate signal identifies explicit Stop. */
+  /** Runtime/enrollment closure, including shutdown; stop this work while preserving its allocation. */
   signal?: AbortSignal;
 };
 
@@ -356,7 +364,10 @@ export type WorkerProvider = {
       profileId?: string;
       /** Attempt-scoped display facts; the host rejects reports after provisioning closes. */
       reportStartStatus?: (status: WorkerEnvironmentStartStatus) => void;
-      /** Cancel this attempt; settle its active commands before rejecting. Cleanup proves release separately. */
+      /**
+       * Stop this attempt, including on Gateway shutdown; settle active commands before rejecting.
+       * Preserve allocations on abort. Explicit cancellation/destroy requests record destruction intent separately.
+       */
       signal?: AbortSignal;
       /** Modern hosts supply authority; legacy optionality is source compatibility only. */
       assertCurrent?: () => void;
@@ -469,8 +480,23 @@ export type WorkerProvider = {
     signal: AbortSignal;
     assertCurrent: () => void;
   }) => Promise<void>;
+  /** Opt in to the cleanup-acceptance notification during session reclaim. */
+  supportsCleanupAcceptance?: true;
   /** Idempotent; resolves only after the provider can prove teardown. */
-  destroy: (lease: { leaseId: string; profile: WorkerProfile }) => Promise<void>;
+  destroy: (lease: {
+    leaseId: string;
+    profile: WorkerProfile;
+    /** Cancel commands, await their settlement, and reject while teardown remains unconfirmed. */
+    signal?: AbortSignal;
+    /**
+     * Optional notification that cleanup is accepted and no longer needs the session.
+     * The host may reclaim the session, but retains this operation until its promise settles.
+     * Call only after durable provider acceptance (or a claimed, provider-owned capture).
+     * Fulfillment must still prove physical teardown; rejection remains retryable.
+     * Providers without this capability ignore the callback and keep blocking reclaim.
+     */
+    onCleanupAccepted?: () => void;
+  }) => Promise<void>;
   /** Maximum core wait for teardown, including provider-owned checkpointing and cleanup. */
   resolveDestroyTimeoutMs?: (profile: WorkerProfile) => number;
 };

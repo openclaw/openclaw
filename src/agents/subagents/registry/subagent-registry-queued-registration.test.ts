@@ -4,6 +4,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { resolveStateDir } from "../../../config/paths.js";
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import * as agentEvents from "../../../infra/agent-events.js";
 import {
   rotateAgentEventLifecycleGeneration,
   type AgentEventPayload,
@@ -22,7 +23,7 @@ import { AsyncWorkScope } from "../../../shared/async-work-scope.js";
 import * as databaseLifecycle from "../../../state/openclaw-state-db-cache.js";
 import { AGENT_RUN_TERMINAL_RETRY_GRACE_MS } from "../../agent-run-terminal-outcome.js";
 import { runSpawnPipeline } from "../../spawn-pipeline.js";
-import { createSubagentRegistryListener } from "./subagent-registry-listener.js";
+import { subagentRegistryLog } from "./subagent-registry-lifecycle-log.js";
 import { createPendingLifecycleScheduler } from "./subagent-registry-pending-lifecycle.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
@@ -39,6 +40,7 @@ import type { SubagentCompletionRequest } from "./subagent-registry.types.js";
 
 afterEach(() => {
   resetGatewayWorkAdmission();
+  vi.restoreAllMocks();
 });
 
 const mocks = vi.hoisted(() => ({
@@ -291,23 +293,12 @@ it.each(["open", "restart", "suspend"] as const)(
         .mockImplementation((params) => f.track(release.promise.then(() => preserve(params))));
       let emit: ((event: AgentEventPayload) => void) | undefined;
       const complete = vi.fn(async () => {});
-      const warn = vi.fn();
-      const listener = createSubagentRegistryListener({
-        runs: f.runs,
-        pendingLifecycle: createPendingLifecycleScheduler({
-          runs: f.runs,
-          completeInBackground: vi.fn(),
-        }),
-        onAgentEvent: (handler) => {
-          emit = handler;
-          return () => {};
-        },
-        resumeRequesterSettleWake: vi.fn(),
-        adoptPausedSubagentRunIntoSuccessor: async () => false,
-        refreshFrozenResultFromSession: async () => {},
-        completeSubagentRunWithRecovery: complete,
-        warn,
+      const warn = vi.spyOn(subagentRegistryLog, "warn").mockImplementation(() => {});
+      vi.spyOn(agentEvents, "onAgentEvent").mockImplementation((handler) => {
+        emit = handler;
+        return () => {};
       });
+      const listener = f.createListener({ completeSubagentRunWithRecovery: complete });
       const dispatch = async () => {
         const settleRootWork = observeRootWork();
         if (fence === "restart") {
@@ -365,22 +356,12 @@ it.each([false, true])(
     await withQueuedRegistrationFixture(async (f) => {
       await f.register();
       let emit: ((event: AgentEventPayload) => void) | undefined;
-      const listener = createSubagentRegistryListener({
-        runs: f.runs,
-        pendingLifecycle: createPendingLifecycleScheduler({
-          runs: f.runs,
-          completeInBackground: vi.fn(),
-        }),
-        onAgentEvent: (handler) => {
-          emit = handler;
-          return () => {};
-        },
-        resumeRequesterSettleWake: vi.fn(),
-        adoptPausedSubagentRunIntoSuccessor: async () => false,
-        refreshFrozenResultFromSession: async () => {},
-        completeSubagentRunWithRecovery: async () => {},
-        warn: vi.fn(),
+      vi.spyOn(subagentRegistryLog, "warn").mockImplementation(() => {});
+      vi.spyOn(agentEvents, "onAgentEvent").mockImplementation((handler) => {
+        emit = handler;
+        return () => {};
       });
+      const listener = f.createListener();
       listener.ensure();
       try {
         if (started) {
@@ -439,20 +420,12 @@ it.each(["pending", "already dispatched", "next attempt"] as const)(
         runs: f.runs,
         completeInBackground,
       });
-      const warn = vi.fn();
-      const listener = createSubagentRegistryListener({
-        runs: f.runs,
-        pendingLifecycle,
-        onAgentEvent: (handler) => {
-          emit = handler;
-          return () => {};
-        },
-        resumeRequesterSettleWake: vi.fn(),
-        adoptPausedSubagentRunIntoSuccessor: async () => false,
-        refreshFrozenResultFromSession: async () => {},
-        completeSubagentRunWithRecovery: async () => {},
-        warn,
+      const warn = vi.spyOn(subagentRegistryLog, "warn").mockImplementation(() => {});
+      vi.spyOn(agentEvents, "onAgentEvent").mockImplementation((handler) => {
+        emit = handler;
+        return () => {};
       });
+      const listener = f.createListener({ pendingLifecycle });
       const restarted = createDeferred();
       const stop = subscribeSubagentRunChanges("persistence", () => {
         if (f.current().execution.startedAt === 20) {

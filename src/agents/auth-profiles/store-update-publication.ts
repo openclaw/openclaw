@@ -4,6 +4,7 @@ import {
   observeSqliteWorkerCommittedFacts,
   type SqliteWorkerAdmissionFactory,
 } from "../../infra/sqlite-worker-operation-admission.js";
+import { observeSqliteWorkerAdmissionFinish } from "../../infra/sqlite-worker-operation-settlement.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { authProfileCredentialPublication } from "../../state/user-model-account-authority.js";
 import { fenceAuthProfileAuthorizationWrite } from "./authorization-observation.js";
@@ -89,18 +90,13 @@ export function createAuthProfileStoreUpdatePublication(params: {
         authorizationCommitted && params.committedIsCurrent() ? authorizationPostimage : undefined,
       );
     };
-    const finish = admission.finish.bind(admission);
-    admission.finish = () => {
-      try {
-        finish();
-      } finally {
-        if (admission.settlement) {
-          const confirmed = admission.settlement.kind === "completed";
-          publication?.finish(confirmed, confirmed && !admission.committed);
-          finishAuthorization(confirmed);
-        }
+    observeSqliteWorkerAdmissionFinish(admission, () => {
+      if (admission.settlement) {
+        const confirmed = admission.settlement.kind === "completed";
+        publication?.finish(confirmed, confirmed && !admission.committed);
+        finishAuthorization(confirmed);
       }
-    };
+    });
     void operation.settled.then((outcome) => {
       const known = outcome.kind !== "unknown";
       publication?.finish(known, known && !admission.committed);
@@ -191,7 +187,7 @@ export async function publishAuthProfileStoreUpdate(
   ];
   // A credential-only publication must not advance a derived snapshot while
   // retaining state that this committed update has not reconciled yet.
-  if (mutation.stateChanged) {
+  if (mutation.stateChanged && !mutation.availabilityOnly) {
     for (const entry of entries) {
       if (entry.databasePath !== owner.databasePath) {
         clearRuntimeAuthProfileStoreSnapshotAtDatabasePath(entry.databasePath, entry.agentDir);

@@ -14,6 +14,7 @@ import {
   resolveWindowsConsoleEncoding,
 } from "../infra/windows-encoding.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { copyOwnedBuffer } from "../shared/owned-buffer.js";
 import {
   EXIT_STDIO_GRACE_MS,
   hasChildProcessExited,
@@ -470,7 +471,7 @@ async function runCommandWithOutputEncoding(
         if (removedBytes === entry.buffer.byteLength) {
           combinedTailChunks.splice(index, 1);
         } else {
-          entry.buffer = Buffer.from(entry.buffer.subarray(removedBytes));
+          entry.buffer = copyOwnedBuffer(entry.buffer.subarray(removedBytes));
         }
         combinedCapturedBytes -= removedBytes;
         combinedCapturedBytesByStream[entry.stream] -= removedBytes;

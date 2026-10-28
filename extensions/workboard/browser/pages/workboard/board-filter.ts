@@ -5,7 +5,7 @@ import {
   WORKBOARD_ALL_BOARDS_FILTER,
 } from "../../lib/workboard/board-filter.ts";
 import { workboardBoardLabel } from "../../lib/workboard/board-presentation.ts";
-import type { WorkboardBoardSummary, WorkboardCard } from "../../lib/workboard/index.ts";
+import type { WorkboardBoardSummary, WorkboardCard } from "../../lib/workboard/types.ts";
 import type { WorkboardSelectOption } from "./workboard-select.ts";
 
 export { matchesBoardFilter, WORKBOARD_ALL_BOARDS_FILTER };

@@ -181,7 +181,9 @@ it("reads off thread and fences a placement created before mutation", async () =
   expect(await store.getManyAsync([" first ", "first", "missing"])).toEqual(
     new Map([[first.sessionId, first]]),
   );
-  expect(await store.getAsync(second.sessionId)).toEqual(second);
+  expect(await store.getAsync(` ${second.sessionId} `)).toEqual(second);
+  expect(await store.getAsync("late-placement")).toBeUndefined();
+  await expect(store.getAsync(" ")).rejects.toThrow("session id");
   expect(await store.getPlacementMoveAsync(second.sessionId)).toBeUndefined();
   expect(await store.listAsync()).toEqual([first, second]);
   expect(await store.listForReconcileAsync(second.sessionKey)).toEqual([second]);
@@ -191,8 +193,9 @@ it("reads off thread and fences a placement created before mutation", async () =
   });
   sql.expectIdle();
   assertCurrent();
-  await store.startDispatch(sessionIdentity("late-placement"));
+  const late = await store.startDispatch(sessionIdentity("late-placement"));
   expect(assertCurrent).toThrow("placement late-placement changed before mutation");
+  expect(await store.getAsync(" late-placement ")).toEqual(late);
 });
 
 it("publishes retention without host SQL and fences drained dispatch", async () => {
@@ -259,18 +262,51 @@ it("publishes retention without host SQL and fences drained dispatch", async () 
   }
 });
 
-it.each(["local", "worker-turn", "remote-exec"] as const)(
+it("keeps local owner claims current in worker-backed reader snapshots", async () => {
+  const store = createWorkerSessionPlacementStore({ database });
+  const session = sessionIdentity("local-reader-placement");
+  const claim = await store.claimTurn({
+    ...session,
+    owner: { kind: "local" },
+    claimId: "local-reader-claim",
+    runId: "local-reader-run",
+  });
+  const readPlacements = async () => [
+    (await store.readProjection([session.sessionId, "absent"], { current: true })).placements.get(
+      session.sessionId,
+    ),
+    (await store.listAsync()).find((placement) => placement.sessionId === session.sessionId),
+    (await store.getWithMoveAsync(session.sessionId)).placement,
+  ];
+  const sessionRead = await store.prepareRuntimeRefresh(session.sessionId);
+  try {
+    sessionRead.placement!.agentId = "caller-agent";
+    sessionRead.placement!.turnClaim!.claimId = "caller-claim";
+    for (const placement of await readPlacements()) {
+      expect(placement).toMatchObject({
+        ...session,
+        turnClaim: { claimId: "local-reader-claim" },
+      });
+    }
+    await store.releaseTurn(claim);
+    expect(() => sessionRead.assertCurrent()).toThrow("placement authority changed");
+    for (const placement of await readPlacements()) {
+      expect(placement).toMatchObject({ ...session, turnClaim: null });
+    }
+  } finally {
+    sessionRead.release();
+  }
+});
+
+it.each(["worker-turn", "remote-exec"] as const)(
   "fences observations during %s publication settlement",
   async (kind) => {
     const store = createWorkerSessionPlacementStore({ database });
     const session = sessionIdentity("settling-placement");
-    if (kind !== "local") {
-      await activePlacement(session.sessionId, kind);
-    }
-    const current = await store.getAsync(session.sessionId);
+    const { placement: current } = await activePlacement(session.sessionId, kind);
     await store.claimTurn({
       ...session,
-      owner: current?.state === "active" ? placementTurnOwner(current) : { kind: "local" },
+      owner: placementTurnOwner(current),
       claimId: "settling-claim",
       runId: "settling-run",
     });
@@ -285,6 +321,11 @@ it.each(["local", "worker-turn", "remote-exec"] as const)(
         placement.state,
       );
       try {
+        sessionRead.placement!.agentId = "caller-agent";
+        sessionRead.placement!.turnClaim!.claimId = "caller-claim";
+        expect(
+          (await store.readProjection([session.sessionId])).placements.get(session.sessionId),
+        ).toMatchObject({ agentId: session.agentId, turnClaim: { claimId: "settling-claim" } });
         expect(() => sessionRead.assertCurrent()).toThrow("placement authority changed");
         publication[settlement]();
         if (settlement === "rollback") {
@@ -356,6 +397,7 @@ it("discovers disk probes off thread before sampling", async () => {
   let discoverySql: string[] | undefined;
   const requestedEnvironments: string[] = [];
   const warn = vi.fn();
+  using _ = vi.spyOn(Date, "now").mockReturnValue(2000);
   const monitor = createWorkerPlacementDiskSpaceMonitor({
     placements: store,
     runnerAvailability: { read: () => undefined, version: () => 0 },
@@ -375,7 +417,6 @@ it("discovers disk probes off thread before sampling", async () => {
       },
     },
     warn,
-    now: () => 2000,
   });
   await monitor.sweep();
 
@@ -446,6 +487,11 @@ it("reads all projection facts off the host SQLite thread", async () => {
     nodeDeviceId: null,
     attachedSessionIds: ["pending"],
   });
+  const cancelled = new AbortController();
+  cancelled.abort(new Error("Worker environment reconciliation stopped"));
+  await expect(
+    store.readEnvironmentOwner(placement.environmentId, cancelled.signal),
+  ).rejects.toThrow("Worker environment reconciliation stopped");
   expect(await store.readEnvironmentOwner(placement.environmentId)).toMatchObject({
     sessionId: "pending",
     state: "draining",

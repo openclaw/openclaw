@@ -7,7 +7,7 @@ import { createDeferred as deferred } from "../../../../test/helpers/promise.js"
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { CATALOG_SESSION_CONTINUED_EVENT } from "../../lib/sessions/catalog-key.ts";
-import "../../lib/toast-host.ts";
+import "../../lib/toast-host.tsx";
 import { catalogPage, createGatewayHarness, createSessions, mountSidebar } from "../app-sidebar.ts";
 import { settleLitElement } from "../lit-settle.ts";
 import {

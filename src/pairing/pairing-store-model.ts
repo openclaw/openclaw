@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-coercion";
+import { groupPluginRecords as groupRecords } from "../plugins/record-groups.js";
 import { resolvePairingRequestAccountId } from "./pairing-store-keys.js";
 import type { PairingChannel, PairingRequestRecord } from "./pairing-store.types.js";
 
@@ -48,13 +49,9 @@ export function requestMatchesAccountId(
 }
 
 export function pruneExcessRequestsByAccount(reqs: PairingRequest[]) {
-  const grouped = new Map<string, Array<[number, PairingRequest]>>();
-  for (const [index, entry] of reqs.entries()) {
-    const accountId = resolvePairingRequestAccountId(entry);
-    const entries = grouped.get(accountId) ?? [];
-    entries.push([index, entry]);
-    grouped.set(accountId, entries);
-  }
+  const grouped = groupRecords(reqs.entries(), ([, entry]) =>
+    resolvePairingRequestAccountId(entry),
+  );
 
   const droppedIndexes = new Set<number>();
   for (const entries of grouped.values()) {

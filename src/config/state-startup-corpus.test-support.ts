@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import type stateManifest from "../../test/fixtures/state-corpus/2026.9.2/manifest.json";
 import { createFixtureDiagnostics } from "../../test/helpers/fixture-diagnostics.js";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { stateStartupCorpusTestFiles } from "../../test/vitest/vitest.startup-corpus-paths.mjs";
@@ -25,6 +26,7 @@ import {
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { withStateMigrationBackupForTest } from "../state/openclaw-state-schema.test-support.js";
 import { getUserPreferences } from "../state/user-preferences.test-support.js";
 import {
   listConfigCorpusFixtureNames,
@@ -45,27 +47,7 @@ if (!bundledPluginsDir) {
   throw new Error("Missing bundled plugin fixtures for startup corpus");
 }
 
-type StateFixture = {
-  release: string;
-  sessions: Array<{
-    agentId: string;
-    sessionKey: string;
-    sessionId: string;
-    transcriptText: string;
-  }>;
-  profiles: Record<string, Record<string, unknown>>;
-  cronJob: {
-    id: string;
-    name: string;
-    enabled: false;
-    schedule: { kind: "every"; everyMs: number };
-    sessionTarget: "main";
-    wakeMode: "next-heartbeat";
-    payload: { kind: "systemEvent"; text: string };
-  };
-  cronStorePath: string;
-  controlUi: { userId: string; settings: Record<string, unknown> };
-};
+type StateFixture = typeof stateManifest;
 
 const corpusDir = fileURLToPath(new URL("../../test/fixtures/state-corpus/", import.meta.url));
 const releases = fs
@@ -108,7 +90,6 @@ function prepareState(home: string, release: string, configName: string) {
   );
   fs.writeFileSync(configPath, JSON.stringify(config));
   return {
-    home,
     stateDir,
     configPath,
     fixture,
@@ -122,6 +103,12 @@ function prepareState(home: string, release: string, configName: string) {
       OPENCLAW_DISABLE_BUNDLED_PLUGINS: "0",
     },
   };
+}
+
+function throwFailures(errors: unknown[], message: string) {
+  if (errors.length) {
+    throw errors.length === 1 ? errors[0] : new AggregateError(errors, message);
+  }
 }
 
 function assertDatabaseIntegrity(stateDir: string, fixture: StateFixture) {
@@ -215,12 +202,14 @@ export function createStateStartupCorpusFixture() {
             for (let pass = 0; pass < 2; pass += 1) {
               setRuntimeConfigSnapshot(config);
               phase("doctor-repair");
-              await runDoctorConfigPreflight({
-                observe: false,
-                repairPrefixedConfig: true,
-                doctorOnlyStateMigrations: true,
-                preparePluginMetadataSnapshot: true,
-              });
+              await withStateMigrationBackupForTest({ env }, () =>
+                runDoctorConfigPreflight({
+                  observe: false,
+                  repairPrefixedConfig: true,
+                  doctorOnlyStateMigrations: true,
+                  preparePluginMetadataSnapshot: true,
+                }),
+              );
               phase("startup-config-read");
               const initialSnapshotRead = await io.readConfigFileSnapshotWithPluginMetadata();
               phase("startup-config");
@@ -301,12 +290,7 @@ export function createStateStartupCorpusFixture() {
                 } catch (error) {
                   leaseErrors.push(error);
                 }
-                if (leaseErrors.length === 1) {
-                  throw leaseErrors[0];
-                }
-                if (leaseErrors.length > 1) {
-                  throw new AggregateError(leaseErrors, "Model inspection and cleanup failed");
-                }
+                throwFailures(leaseErrors, "Model inspection and cleanup failed");
               }
               phase("database-close");
               await lifetime.verifyCleanup(() => closeOpenClawAgentDatabasesAsync(stateDir));
@@ -333,12 +317,7 @@ export function createStateStartupCorpusFixture() {
           }
         }
         signal.removeEventListener("abort", onAbort);
-        if (errors.length === 1) {
-          throw errors[0];
-        }
-        if (errors.length > 1) {
-          throw new AggregateError(errors, "Startup corpus fixture and cleanup failed");
-        }
+        throwFailures(errors, "Startup corpus fixture and cleanup failed");
       });
     },
     cleanup(): Promise<void> {

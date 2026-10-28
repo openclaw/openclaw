@@ -5,8 +5,10 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import * as githubReadIdentity from "../../agents/github-read-identity.js";
 import * as runtimeOwnership from "../../agents/harness/session-runtime-ownership.js";
+import * as worktreeGit from "../../agents/worktrees/git.js";
 import { insertRegistryWorktree } from "../../agents/worktrees/registry.js";
 import { managedWorktrees } from "../../agents/worktrees/service.js";
+import { makeWorktreeRecord } from "../../agents/worktrees/service.test-support.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -34,7 +36,12 @@ import {
   type SessionRowProjection,
 } from "../session-row-projection.js";
 import * as rowInputs from "../session-utils-row.js";
-import { clonedProject } from "./projects-shard.test-support.js";
+import {
+  clonedProject,
+  expectCheckoutInUse,
+  expectProjectAccessChanged,
+  projectConfig,
+} from "./projects-shard.test-support.js";
 import { projectsHandlers as registeredProjectsHandlers } from "./projects.js";
 import {
   execFileAsync,
@@ -45,6 +52,8 @@ import {
   resolveRepositoryIdentity,
   withProjectState,
 } from "./projects.test-support.js";
+
+const discoverRepository = resolveRepositoryIdentity.getMockImplementation()!;
 
 function mockGitHubFetch() {
   const fetchImpl = vi.fn<typeof fetch>().mockImplementation(
@@ -286,6 +295,7 @@ test("checkout options preserve permitted Current access without exposing paths"
     const workspace = await initializeRepository(state.root, "workspace");
     const outside = await initializeRepository(state.root, "outside");
     const project = await registerProjectRegistry({ path: outside });
+    using gitReads = vi.spyOn(worktreeGit, "runGit");
     const cfg: OpenClawConfig = {
       agents: { entries: { main: { workspace, sandbox: { mode: "off" } } } },
     };
@@ -301,6 +311,8 @@ test("checkout options preserve permitted Current access without exposing paths"
           scopes,
         ),
       ).toEqual({ ok: true, payload: { current: true, worktree: true }, error: undefined });
+      expect(gitReads).toHaveBeenCalledTimes(2);
+      gitReads.mockClear();
     }
     const params = { projectId: project.id, agentId: "main" };
     expect(await invoke("projects.checkoutOptions", params, cfg, ["operator.read"])).toMatchObject({
@@ -373,17 +385,14 @@ test("projects.list refuses a default repository from a replaced config during r
       current = { gateway: { github: { host: "github.com" } } };
       return [];
     });
-  expect(await listProjects(original, { getConfig: () => current })).toMatchObject({
-    ok: false,
-    error: { code: "UNAVAILABLE", message: expect.stringContaining("Project access changed") },
-  });
+  expectProjectAccessChanged(await listProjects(original, { getConfig: () => current }));
 });
 
 test("projects.list replies before cold or stale observed Git discovery settles", async () => {
   await withProjectState(async (state) => {
     const repo = await initializeRepository(state.root);
     seedProjectSession("observed", repo);
-    const cfg = { agents: { entries: { main: { workspace: state.workspaceDir } } } };
+    const cfg = projectConfig(state.workspaceDir);
     const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
     using _ = { [Symbol.dispose]: () => projection.dispose() };
     const list = () =>
@@ -459,11 +468,7 @@ test("projects.list exposes checkout details only at write scope", async () => {
   return withProjectState(async (state) => {
     const repo = await initializeRepository(state.root);
     await registerProjectRegistry({ path: repo, name: "Registered" });
-    const cfg = {
-      agents: {
-        entries: { main: { workspace: "/workspace/alpha" } },
-      },
-    };
+    const cfg = projectConfig("/workspace/alpha");
 
     const readResult = await listProjects(cfg, { scopes: ["operator.read"] });
     if (!readResult) {
@@ -551,9 +556,7 @@ test("registered projects.list serves current session metadata without broad rea
   try {
     const repo = await initializeRepository(state.root);
     const profile = ensureProfileForEmail("projects-worker@example.test");
-    const cfg = {
-      agents: { entries: { main: { workspace: state.workspaceDir } } },
-    };
+    const cfg = projectConfig(state.workspaceDir);
     const session = {
       spawnedCwd: repo,
       createdActor: { type: "human", source: "profile", id: profile.id },
@@ -621,12 +624,12 @@ test.each(["unrelated creation", "activity", "visibility", "replacement"])(
   async (change) => {
     await withProjectState(async (state) => {
       const profile = ensureProfileForEmail("projects-churn@example.test");
-      const cfg = { agents: { entries: { main: { workspace: state.workspaceDir } } } };
+      const cfg = projectConfig(state.workspaceDir);
       setRuntimeConfigSnapshot(cfg);
       seedProjectSession("listed-project", "/projects/listed", {
         createdActor: { type: "human", source: "profile", id: profile.id },
       });
-      const stop = onSessionIdentityMutation(bumpGatewayAccessRevision);
+      using _ = { [Symbol.dispose]: onSessionIdentityMutation(bumpGatewayAccessRevision) };
       resolveRepositoryIdentity.mockImplementationOnce(async (checkoutPath) => {
         if (change === "unrelated creation") {
           seedProjectSession("unrelated", "/projects/unrelated", { updatedAt: 2 });
@@ -641,38 +644,22 @@ test.each(["unrelated creation", "activity", "visibility", "replacement"])(
                   : { updatedAt: 2, title: "Active session" },
           );
         }
-        return {
-          checkoutRoot: checkoutPath,
-          repoRoot: checkoutPath,
-          originUrl: "",
-          fingerprint: checkoutPath,
-        };
+        return discoverRepository(checkoutPath);
       });
-      try {
-        const result = await listProjects(cfg, { observed: true, profileId: profile.id });
-        if (change !== "unrelated creation" && change !== "activity") {
-          expect(result).toMatchObject({
-            ok: false,
-            error: {
-              code: "UNAVAILABLE",
-              message: expect.stringContaining("Project access changed"),
-            },
-          });
-          expect(result?.payload).toBeUndefined();
-          return;
-        }
-        expect(result).toMatchObject({
-          ok: true,
-          payload: {
-            recents: [{ kind: "folder", folder: "/projects/listed" }],
-            observedProjects: [
-              { name: "listed", checkouts: [{ runnerId: "gateway", path: "/projects/listed" }] },
-            ],
-          },
-        });
-      } finally {
-        stop();
+      const result = await listProjects(cfg, { observed: true, profileId: profile.id });
+      if (change !== "unrelated creation" && change !== "activity") {
+        expectProjectAccessChanged(result);
+        return;
       }
+      expect(result).toMatchObject({
+        ok: true,
+        payload: {
+          recents: [{ kind: "folder", folder: "/projects/listed" }],
+          observedProjects: [
+            { name: "listed", checkouts: [{ runnerId: "gateway", path: "/projects/listed" }] },
+          ],
+        },
+      });
     });
   },
 );
@@ -682,9 +669,7 @@ test.each(["write scope", "session access", "registry access", "probe access"])(
   async (change) => {
     await withProjectState(async (state) => {
       const profile = ensureProfileForEmail("projects-scope@example.test");
-      const cfg = {
-        agents: { entries: { main: { workspace: state.workspaceDir } } },
-      };
+      const cfg = projectConfig(state.workspaceDir);
       seedProjectSession("scope", "/private/project", {
         spawnedCwd: "/private/project",
         createdActor: { type: "human", source: "profile", id: profile.id },
@@ -707,12 +692,7 @@ test.each(["write scope", "session access", "registry access", "probe access"])(
       if (change === "probe access") {
         resolveRepositoryIdentity.mockImplementationOnce(async (checkoutPath) => {
           bumpGatewayAccessRevision();
-          return {
-            checkoutRoot: checkoutPath,
-            repoRoot: checkoutPath,
-            originUrl: "",
-            fingerprint: checkoutPath,
-          };
+          return discoverRepository(checkoutPath);
         });
       }
       if (change === "registry access") {
@@ -799,6 +779,8 @@ test("projects.add returns a typed invalid-url failure", async () => {
 test.each([
   ["managed", "Managed", "live-worktree"],
   ["workspace-project", "Workspace project", "agent workspace"],
+  ["session-root", "Session root", "session"],
+  ["session-child", "Session child", "session"],
 ])(
   "projects.remove preserves a checkout referenced by %s",
   async (name, displayName, reference) => {
@@ -807,33 +789,28 @@ test.each([
       if (reference === "live-worktree") {
         await insertRegistryWorktree(
           process.env,
-          {
-            id: reference,
-            name: reference,
+          makeWorktreeRecord(repo, reference, {
             repoFingerprint: fingerprint,
-            repoRoot: repo,
             path: path.join(state.stateDir, "worktrees", fingerprint, reference),
             branch: `openclaw/${reference}`,
             baseRef: "main",
-            ownerKind: "session",
             ownerId: "agent:main:session",
-            createdAt: 1,
-            lastActiveAt: 1,
-          },
+          }),
           { provisionedPaths: [] },
         );
       }
-      const cfg =
-        reference === "agent workspace"
-          ? { agents: { entries: { main: { workspace: repo } } } }
-          : {};
-      expect(
-        await invoke("projects.remove", { id: project.id, deleteCheckout: true }, cfg),
-      ).toMatchObject({
-        ok: false,
-        error: { code: "INVALID_REQUEST", message: expect.stringContaining(reference) },
-      });
-      await expect(fs.stat(repo)).resolves.toBeDefined();
+      if (reference === "session") {
+        replaceSessionEntrySync(
+          { agentId: "main", sessionKey: "agent:main:checkout" },
+          {
+            sessionId: "checkout",
+            updatedAt: 1,
+            spawnedCwd: name === "session-child" ? path.join(repo, "src") : repo,
+          },
+        );
+      }
+      const cfg = reference === "agent workspace" ? projectConfig(repo) : {};
+      await expectCheckoutInUse(repo, project.id, cfg, reference);
     });
   },
 );

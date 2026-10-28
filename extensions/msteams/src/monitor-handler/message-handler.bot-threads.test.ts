@@ -1,5 +1,3 @@
-import { createInboundDebouncer } from "openclaw/plugin-sdk/channel-inbound-debounce";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -20,7 +18,9 @@ import { createMSTeamsMessageHandler } from "./message-handler.js";
 import {
   buildChannelActivity,
   channelConversationId,
+  createDebounceControl,
   createMessageHandlerDeps,
+  createTurnContext,
 } from "./message-handler.test-support.js";
 
 const dispatch = getRuntimeApiMockState().dispatchReplyWithBufferedBlockDispatcher;
@@ -46,17 +46,10 @@ async function sendChannelMessage(params: {
 }) {
   const create = vi.fn(async () => ({ id: params.messageId }));
   const activities = vi.fn((_conversationId: string) => ({ create }));
-  const serviceUrl = "https://smba.trafficmanager.net/amer/";
+  const serviceUrl = "https://smba.trafficmanager.net/amer";
+  const app = { api: { serviceUrl, conversations: { activities } } };
   await sendMSTeamsActivityWithReference(
-    {
-      api: {
-        serviceUrl,
-        fromServiceUrl() {
-          return this;
-        },
-        conversations: { activities },
-      },
-    } as unknown as MSTeamsApp,
+    app as unknown as MSTeamsApp,
     {
       serviceUrl,
       agent: { id: params.botId ?? "bot-id" },
@@ -72,17 +65,27 @@ async function sendChannelMessage(params: {
   return activities.mock.calls[0]?.[0];
 }
 
-function incoming(overrides: Partial<MSTeamsTurnContext["activity"]>): MSTeamsTurnContext {
-  return {
-    activity: buildChannelActivity({ id: `reply-${sequence}`, entities: [], ...overrides }),
-    sendActivity: vi.fn(async () => undefined),
-    sendActivities: vi.fn(async () => []),
-    updateActivity: vi.fn(async () => undefined),
-    deleteActivity: vi.fn(async () => undefined),
-  };
-}
 function conversation(root: string) {
   return { id: `${channelConversationId};messageid=${root}`, conversationType: "channel" };
+}
+function setup(
+  config: MSTeamsConfig = {},
+  options: Parameters<typeof createMessageHandlerDeps>[1] = {},
+) {
+  const msteams: MSTeamsConfig = {
+    groupPolicy: "open",
+    requireMention: true,
+    requireMentionInBotThreads: false,
+    ...config,
+  };
+  const cfg: OpenClawConfig = { channels: { msteams } };
+  const { deps } = createMessageHandlerDeps(cfg, options);
+  const handler = createMSTeamsMessageHandler(deps);
+  const handle = (input: Partial<MSTeamsTurnContext["activity"]>) =>
+    handler(
+      createTurnContext(buildChannelActivity({ id: `reply-${sequence}`, entities: [], ...input })),
+    );
+  return { cfg, deps, handle };
 }
 
 describe("Teams mention policy in bot-created channel threads", () => {
@@ -102,20 +105,16 @@ describe("Teams mention policy in bot-created channel threads", () => {
   ] as const)("%s", async (_name, threaded, botId, conversationId) => {
     const rootId = `bot-thread-root-${++sequence}`;
     const config: MSTeamsConfig = {
-      groupPolicy: "open",
-      requireMention: true,
       requireMentionInBotThreads: true,
       teams: {
         "team-1": {
           requireMentionInBotThreads: false,
-          channels: {
-            [channelConversationId]: {},
-          },
+          channels: { [channelConversationId]: {} },
         },
       },
     };
-    MSTeamsConfigSchema.parse(config);
-    const { deps } = createMessageHandlerDeps({ channels: { msteams: config } });
+    const { cfg, handle } = setup(config);
+    MSTeamsConfigSchema.parse(cfg.channels?.msteams);
     const destination = await sendChannelMessage({
       messageId: rootId,
       botId,
@@ -125,34 +124,20 @@ describe("Teams mention policy in bot-created channel threads", () => {
     expect(destination).toBe(
       threaded ? `${conversationId};messageid=human-thread-root` : conversationId,
     );
-    const handler = createMSTeamsMessageHandler(deps);
-    await handler(
-      incoming({ conversation: conversation(rootId), replyToId: "human-nested-reply" }),
-    );
+    await handle({ conversation: conversation(rootId), replyToId: "human-nested-reply" });
     expect(dispatch).not.toHaveBeenCalled();
   });
 
   it("live thread replies retain reply-to-bot activation", async () => {
     const botReplyId = `bot-reply-in-human-thread-${++sequence}`;
-    const { deps } = createMessageHandlerDeps({
-      channels: {
-        msteams: {
-          groupPolicy: "open",
-          requireMention: true,
-          requireMentionInBotThreads: false,
-        },
-      },
-    });
+    const { deps, handle } = setup();
     const sendActivity = vi.fn(async () => ({ id: botReplyId }));
     const sentIds = await sendMSTeamsMessages({
       replyStyle: "thread",
       app: deps.app,
       conversationRef: {
         agent: { id: "bot-id" },
-        conversation: {
-          id: `${channelConversationId};messageid=human-thread-root`,
-          conversationType: "channel",
-        },
+        conversation: conversation("human-thread-root"),
         threadId: "human-thread-root",
       },
       context: { sendActivity },
@@ -161,10 +146,7 @@ describe("Teams mention policy in bot-created channel threads", () => {
     });
     expect(sentIds).toEqual([botReplyId]);
     expect(sendActivity).toHaveBeenCalledTimes(1);
-
-    const handler = createMSTeamsMessageHandler(deps);
-    await handler(incoming({ replyToId: botReplyId }));
-
+    await handle({ replyToId: botReplyId });
     expect(dispatch).toHaveBeenCalledTimes(1);
   });
 
@@ -198,68 +180,38 @@ describe("Teams mention policy in bot-created channel threads", () => {
         return owned;
       },
     );
-
-    await handler(incoming({ conversation: conversation(rootId) }));
-
+    await handler(
+      createTurnContext(
+        buildChannelActivity({
+          id: `reply-${sequence}`,
+          entities: [],
+          conversation: conversation(rootId),
+        }),
+      ),
+    );
     expect(dispatch).not.toHaveBeenCalled();
   });
 
   it("does not combine another thread's text into an unmentioned bot-thread turn", async () => {
-    const queued = createDeferred<void>();
-    const queuedKeys = new Set<string>();
-    let queuedCount = 0;
-    let flushAndDrain = async () => {};
-    const createDebouncer: typeof createInboundDebouncer = (options) => {
-      const debouncer = createInboundDebouncer(options);
-      flushAndDrain = async () => {
-        await Promise.all([...queuedKeys].map((key) => debouncer.flushKey(key)));
-        await debouncer.drain();
-      };
-      return {
-        ...debouncer,
-        enqueue: async (entry) => {
-          await debouncer.enqueue(entry);
-          const key = options.buildKey(entry);
-          if (key) {
-            queuedKeys.add(key);
-          }
-          if (++queuedCount === 2) {
-            queued.resolve();
-          }
-        },
-      };
-    };
-    const { deps } = createMessageHandlerDeps(
-      {
-        channels: {
-          msteams: {
-            groupPolicy: "open",
-            requireMention: true,
-            requireMentionInBotThreads: false,
-          },
-        },
-      },
-      { createInboundDebouncer: createDebouncer, resolveInboundDebounceMs: () => 100 },
+    const clock = createDebounceControl();
+    const { handle } = setup(
+      {},
+      { createInboundDebouncer: clock.createDebouncer, resolveInboundDebounceMs: () => 100 },
     );
     const ownedRootId = `bot-thread-batch-${++sequence}`;
     await sendChannelMessage({ messageId: ownedRootId });
-    const handler = createMSTeamsMessageHandler(deps);
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const messages: Array<[string, string]> = [
       ["human-thread-root", "Unaddressed message in another thread"],
       [ownedRootId, "Follow-up in the bot's thread"],
     ];
-    const handlers = messages.map(([rootId, text]) =>
-      handler(incoming({ id: `batch-${rootId}`, text, conversation: conversation(rootId) })),
+    await Promise.all(
+      messages.map(([rootId, text]) =>
+        handle({ id: `batch-${rootId}`, text, conversation: conversation(rootId) }),
+      ),
     );
-    await queued.promise;
-    await flushAndDrain();
-    await Promise.all(handlers);
+    await clock.flush(100);
     expect(dispatch).toHaveBeenCalledTimes(1);
-    expect(dispatch).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ctx: expect.objectContaining({ BodyForAgent: "Follow-up in the bot's thread" }),
-      }),
-    );
+    expect(dispatch.mock.calls[0]?.[0].ctx.BodyForAgent).toBe("Follow-up in the bot's thread");
   });
 });

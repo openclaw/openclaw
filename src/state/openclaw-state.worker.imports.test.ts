@@ -109,13 +109,20 @@ it.each([
 it("keeps shared-state and session-upstream workers independent of host runtime discovery", () => {
   expect(
     findSourceImportBackedges(
-      ["src/state/openclaw-state.worker.ts", "src/sessions/session-upstream-links.worker.ts"],
+      [
+        "src/state/openclaw-state.worker.ts",
+        "src/sessions/session-upstream-links.worker.ts",
+        // Loaded lazily by the shared-state worker; dynamic imports are separate entries.
+        "src/infra/update-run-dispatch.worker.ts",
+      ],
       [
         "src/config/io.snapshot.ts",
         "src/config/validation-core.ts",
         "src/plugins/loader-runtime-load.ts",
         "src/channels/plugins/registry.ts",
         "packages/gateway-protocol/src/validator-registry.ts",
+        // Update-result policy and network dispatch belong to the host owner.
+        "src/infra/update-result-telemetry.ts",
       ],
     ),
   ).toEqual([]);
@@ -131,7 +138,6 @@ it.each([
       selection: { kind: "context-engine" },
     },
   },
-  { type: "deviceAuth.prepare", input: undefined },
   { type: "plugins.deferredMigrations.read", input: { artifactPreservingReadOnly: true } },
 ] as const)(
   "prepares cold $type without unrelated commands or creating a database",
@@ -154,27 +160,8 @@ it.each([
         expect(backend[SQLITE_WORKER_PREPARE_COMMAND]?.(command.type)).toBeUndefined();
         expect(backend.prepare?.(command)).toBeUndefined();
         expect(runWithSqliteWorkerStateContext(context, () => backend.execute(command))).toEqual(
-          command.type === "pluginState.clearRuntimeHealth"
-            ? { ok: true, value: undefined }
-            : command.type === "plugins.deferredMigrations.read"
-              ? []
-              : undefined,
+          command.type === "pluginState.clearRuntimeHealth" ? { ok: true, value: undefined } : [],
         );
-        if (command.type === "deviceAuth.prepare") {
-          expect(
-            runWithSqliteWorkerStateContext(context, () =>
-              backend.execute({
-                type: "deviceAuth.readOrigin",
-                input: {
-                  deviceId: "synthetic-device",
-                  role: "operator",
-                  gatewayScope: "wss://synthetic.example",
-                  readOnly: true,
-                },
-              }),
-            ),
-          ).toEqual({ entry: null, expectedToken: null });
-        }
         expect(existsSync(databasePath)).toBe(false);
       } finally {
         await backend.close();

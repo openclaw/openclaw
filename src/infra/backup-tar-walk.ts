@@ -3,7 +3,7 @@ import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import type { HeaderData } from "tar";
-import { hasErrnoCode } from "./errno.js";
+import { ignoreMissingPath } from "./errno.js";
 
 /** Open sources before emitting headers so a vanished name cannot leave a partial entry. */
 export async function* walkBackupTar(params: {
@@ -64,12 +64,7 @@ export async function* walkBackupTar(params: {
           // The kernel binds a no-follow open; later renames cannot invalidate its bytes.
           // Without that support, bind the descriptor to a regular-file observation.
           if (!noFollow) {
-            const current = await fs.lstat(sourcePath, { bigint: true }).catch((error: unknown) => {
-              if (hasErrnoCode(error, "ENOENT")) {
-                return undefined;
-              }
-              throw error;
-            });
+            const current = await fs.lstat(sourcePath, { bigint: true }).catch(ignoreMissingPath);
             if (current?.isSymbolicLink()) {
               throw new Error(`Backup source became a symbolic link while opening: ${sourcePath}`);
             }
@@ -89,9 +84,7 @@ export async function* walkBackupTar(params: {
           await assertDirectory(parent);
         }
       } catch (error) {
-        if (!hasErrnoCode(error, "ENOENT")) {
-          throw error;
-        }
+        ignoreMissingPath(error);
         params.onVanished(sourcePath);
         return;
       }

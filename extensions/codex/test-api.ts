@@ -50,9 +50,6 @@ export async function createCodexSessionInitializationFixtureForTest(params: {
 export const loadCodexSettledFinalizerTestFixture = () =>
   import("./src/app-server/settled-turn-finalizer.test-support.js");
 
-export const loadCodexNativeSubagentMonitorTestFixture = () =>
-  import("./src/app-server/native-subagent-monitor.test-support.js");
-
 export const loadCodexAbortTranscriptTestFixture = () =>
   import("./src/app-server/transcript-abort.test-support.js");
 
@@ -158,3 +155,13 @@ export {
   CODEX_TOOL_POLICY_SAFE_DENY_NAMES,
 } from "./native-tool-policy.js";
 export { buildCodexRuntimeThreadConfigForRun } from "./src/app-server/thread-requests.js";
+
+export const loadCodexDynamicToolBuildTestFixture = () =>
+  import("./src/app-server/dynamic-tool-build.test-support.js");
+
+export const loadCodexNativeWebSearchTestFixture = () => import("./native-web-search.test-api.js");
+
+export const loadCodexAccountUsageTestFixture = () => import("./src/account-usage.test-support.js");
+
+export const loadCodexSubscriptionRoutingTestFixture = () =>
+  import("./src/app-server/subscription-routing.test-support.js");

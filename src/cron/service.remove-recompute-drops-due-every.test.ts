@@ -1,18 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import { describe, expect, it } from "vitest";
+import { cronTestDeps } from "./service.fixture-builders.test-support.js";
 import { CronService } from "./service.js";
-import {
-  createCronStoreHarness,
-  createNoopLogger,
-  installCronTestHooks,
-  writeCronStoreSnapshot,
-} from "./service.test-harness.js";
+import { setupCronServiceSuite, writeCronStoreSnapshot } from "./service.test-harness.js";
 import { loadCronJobsStore } from "./store.js";
 import type { CronJob } from "./types.js";
 
-const noopLogger = createNoopLogger();
-const { makeStorePath } = createCronStoreHarness();
-installCronTestHooks({ logger: noopLogger });
+const { logger: noopLogger, makeStorePath } = setupCronServiceSuite();
 
 const base = Date.parse("2025-12-13T00:00:00.000Z");
 
@@ -44,16 +37,12 @@ describe("remove() must not drop a due every-job's pending run", () => {
       ],
     });
 
-    const cron = new CronService({
-      scheduler: createTestGatewayScheduler(),
-      nowMs: () => Date.now(),
-      storePath: store.storePath,
-      cronEnabled: true,
-      log: noopLogger,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-    });
+    const cron = new CronService(
+      cronTestDeps({
+        storePath: store.storePath,
+        log: noopLogger,
+      }),
+    );
 
     const result = await cron.remove("to-remove");
     expect(result).toEqual({ ok: true, removed: true });

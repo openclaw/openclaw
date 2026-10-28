@@ -3,6 +3,10 @@
  * Verifies configured display names/emails are used without fabricating labels.
  */
 import { describe, expect, it } from "vitest";
+import {
+  createAuthProfileStoreFixture,
+  createOAuthRefreshCredential,
+} from "./credential-fixtures.test-support.js";
 import { resolveAuthProfileDisplayLabel } from "./display.js";
 
 describe("resolveAuthProfileDisplayLabel", () => {
@@ -20,7 +24,7 @@ describe("resolveAuthProfileDisplayLabel", () => {
           },
         },
       },
-      store: { version: 1, profiles: {} },
+      store: createAuthProfileStoreFixture({}),
       profileId: "openai:id-abc",
     });
 
@@ -29,18 +33,9 @@ describe("resolveAuthProfileDisplayLabel", () => {
 
   it("does not synthesize bogus labels when no human metadata exists", () => {
     const label = resolveAuthProfileDisplayLabel({
-      store: {
-        version: 1,
-        profiles: {
-          "openai:id-abc": {
-            type: "oauth",
-            provider: "openai",
-            access: "token",
-            refresh: "refresh-token",
-            expires: Date.now() + 60_000,
-          },
-        },
-      },
+      store: createAuthProfileStoreFixture({
+        "openai:id-abc": createOAuthRefreshCredential({ access: "token" }),
+      }),
       profileId: "openai:id-abc",
     });
 

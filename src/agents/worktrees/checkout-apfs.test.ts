@@ -1,81 +1,67 @@
-import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { setImmediate } from "node:timers";
 import timers from "node:timers/promises";
-import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { nativeWorktreeFilesystem } from "./filesystem-native.js";
+import { nativeWorktreeFilesystem as filesystem } from "./filesystem-native.js";
+import { git, gitIdentity } from "./git-fixture.test-support.js";
 
-const exec = promisify(execFile);
 const originalTime = 1_600_000_000;
-async function git(cwd: string, ...args: string[]) {
-  return (await exec("git", ["-C", cwd, ...args])).stdout.trim();
+async function writeStamped(directory: string, name: string, contents = "modified\n") {
+  const file = path.join(directory, name);
+  await fs.writeFile(file, contents);
+  await fs.utimes(file, originalTime, originalTime);
 }
+const status = (cwd: string) => git(cwd, "status", "--porcelain");
+const debug = (cwd: string) => git(cwd, "ls-files", "--debug", "clean");
 
 describe.skipIf(process.platform !== "darwin")("APFS checkout index", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-  afterEach(() => vi.unstubAllEnvs());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    syncBuiltinESMExports();
+  });
 
-  async function fixture(algorithm = "sha1", version = 2) {
+  async function fixture(algorithm = "sha1", version = 2, extraFiles = 0) {
     vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
     vi.stubEnv("GIT_CONFIG_GLOBAL", "/dev/null");
     const root = tempDirs.make("openclaw-apfs-index-");
     const source = path.join(root, "source");
     const destination = path.join(root, "destination");
-    await fs.mkdir(source);
-    await git(source, "init", "-q", `--object-format=${algorithm}`);
+    await git(root, "init", "-q", `--object-format=${algorithm}`, source);
     await git(source, "config", "index.version", String(version));
     for (const name of ["clean", "dirty-destination", "dirty-source", "é space\nname"]) {
-      await fs.writeFile(path.join(source, name), "original\n");
-      await fs.utimes(path.join(source, name), originalTime, originalTime);
+      await writeStamped(source, name, "original\n");
+    }
+    for (let index = 0; index < extraFiles; index++) {
+      await writeStamped(source, `file-${index}`, "original\n");
     }
     await fs.symlink("clean", path.join(source, "link"));
     await git(source, "add", ".");
-    await git(
-      source,
-      "-c",
-      "user.name=Fixture",
-      "-c",
-      "user.email=fixture@example.invalid",
-      "commit",
-      "-qm",
-      "fixture",
-    );
-    await git(
-      source,
-      "worktree",
-      "add",
-      "--quiet",
-      "--detach",
-      "--no-checkout",
-      destination,
-      "HEAD",
-    );
+    await git(source, ...gitIdentity, "commit", "-qm", "fixture");
+    await git(source, "worktree", "add", "--detach", "--no-checkout", destination, "HEAD");
     const marker = await fs.readFile(path.join(destination, ".git"));
-    const destinationIndex = path.resolve(
-      destination,
-      await git(destination, "rev-parse", "--git-path", "index"),
-    );
+    const indexPath = await git(destination, "rev-parse", "--git-path", "index");
+    const destinationIndex = path.resolve(destination, indexPath);
     await fs.rm(destination, { recursive: true });
-    await nativeWorktreeFilesystem.copy(source, destination, { commitGuard: () => {} });
+    await filesystem.copy(source, destination, { commitGuard: () => {} });
     const cloneCompletedAtMs = Date.now();
     // This fixture's source owns .git; the managed service clones a linked template.
     await fs.rm(path.join(destination, ".git"), { recursive: true });
     await fs.writeFile(path.join(destination, ".git"), marker);
     const sourceIndex = path.join(source, ".git", "index");
-    const { copyApfsCloneIndex } = await import("./checkout-apfs.js");
-    const copy = (commitGuard = () => {}) =>
-      copyApfsCloneIndex(source, destination, sourceIndex, destinationIndex, {
-        commitGuard,
-        cloneCompletedAtMs,
-      });
+    const { copyApfsCloneIndex: copyIndex } = await import("./checkout-apfs.js");
+    const copy = (commitGuard = () => {}) => {
+      const options = { commitGuard, cloneCompletedAtMs };
+      return copyIndex(source, destination, sourceIndex, destinationIndex, options);
+    };
     return { source, destination, sourceIndex, destinationIndex, cloneCompletedAtMs, copy };
   }
 
-  it("does not wait again when Git preparation outlasts the clone timestamp boundary", async () => {
+  it("does not wait past the clone timestamp boundary", async () => {
     const f = await fixture();
     const deadline = (Math.floor(f.cloneCompletedAtMs / 1_000) + 1) * 1_000;
     await timers.setTimeout(Math.max(0, deadline - Date.now()));
@@ -84,17 +70,23 @@ describe.skipIf(process.platform !== "darwin")("APFS checkout index", () => {
       .spyOn(timers, "setTimeout")
       .mockRejectedValue(new Error("clone timestamp boundary already passed"));
     syncBuiltinESMExports();
-    try {
-      expect(await f.copy()).toBe(true);
-      expect(schedule).not.toHaveBeenCalled();
-    } finally {
-      schedule.mockRestore();
-      syncBuiltinESMExports();
-    }
-    expect(await git(f.destination, "status", "--porcelain")).toBe("");
-    await fs.writeFile(path.join(f.destination, "clean"), "modified\n");
-    await fs.utimes(path.join(f.destination, "clean"), originalTime, originalTime);
-    expect(await git(f.destination, "status", "--porcelain")).toBe("M clean");
+    expect(await f.copy()).toBe(true);
+    expect(schedule).not.toHaveBeenCalled();
+    schedule.mockRestore();
+    syncBuiltinESMExports();
+    expect(await status(f.destination)).toBe("");
+    await writeStamped(f.destination, "clean");
+    expect(await status(f.destination)).toBe("M clean");
+  });
+
+  it("prepares a 3,000-file clone in one metadata request without hiding later edits", async () => {
+    const f = await fixture("sha1", 2, 2_996);
+    const metadata = vi.spyOn(filesystem, "readMetadata");
+    expect(await f.copy()).toBe(true);
+    expect(metadata).toHaveBeenCalledTimes(1);
+    expect(await status(f.destination)).toBe("");
+    await writeStamped(f.destination, "file-2995");
+    expect(await status(f.destination)).toBe("M file-2995");
   });
 
   it.each(["sha1", "sha256"])(
@@ -102,40 +94,23 @@ describe.skipIf(process.platform !== "darwin")("APFS checkout index", () => {
     async (algorithm) => {
       const f = await fixture(algorithm);
       const sourceIndex = await fs.readFile(f.sourceIndex);
-      await fs.writeFile(path.join(f.destination, "dirty-destination"), "modified\n");
-      await fs.utimes(path.join(f.destination, "dirty-destination"), originalTime, originalTime);
-      await fs.writeFile(path.join(f.source, "dirty-source"), "modified\n");
-      await fs.utimes(path.join(f.source, "dirty-source"), originalTime, originalTime);
+      await writeStamped(f.destination, "dirty-destination");
+      await writeStamped(f.source, "dirty-source");
       expect(await f.copy()).toBe(true);
-      const debugBefore = await git(f.destination, "ls-files", "--debug", "clean");
+      const debugBefore = await debug(f.destination);
       const stat = await fs.lstat(path.join(f.destination, "clean"), { bigint: true });
       expect(debugBefore).toContain(`ino: ${Number(stat.ino & 0xffffffffn)}`);
-      expect(await git(f.destination, "status", "--porcelain")).toBe("M dirty-destination");
-      expect(await git(f.destination, "ls-files", "--debug", "clean")).toBe(debugBefore);
+      expect(await status(f.destination)).toBe("M dirty-destination");
+      expect(await debug(f.destination)).toBe(debugBefore);
       expect(await fs.readFile(f.sourceIndex)).toEqual(sourceIndex);
       expect(await git(f.destination, "diff", "--cached", "--name-only")).toBe("");
 
-      await fs.writeFile(path.join(f.destination, "clean"), "modified\n");
-      await fs.utimes(path.join(f.destination, "clean"), originalTime, originalTime);
-      expect((await fs.stat(path.join(f.destination, "clean"), { bigint: true })).mtimeNs).toBe(
-        BigInt(originalTime) * 1_000_000_000n,
-      );
-      expect(await git(f.destination, "status", "--porcelain")).toBe(
-        "M clean\n M dirty-destination",
-      );
+      await writeStamped(f.destination, "clean");
+      const { mtimeNs } = await fs.stat(path.join(f.destination, "clean"), { bigint: true });
+      expect(mtimeNs).toBe(BigInt(originalTime) * 1_000_000_000n);
+      expect(await status(f.destination)).toBe("M clean\n M dirty-destination");
     },
   );
-
-  it("leaves racy source entries for Git to verify", async () => {
-    const f = await fixture();
-    await fs.utimes(f.sourceIndex, originalTime, originalTime);
-    expect(await f.copy()).toBe(true);
-    expect(await git(f.destination, "ls-files", "--debug", "clean")).toBe(
-      await git(f.source, "ls-files", "--debug", "clean"),
-    );
-    await git(f.destination, "update-index", "--refresh");
-    expect(await git(f.destination, "status", "--porcelain")).toBe("");
-  });
 
   it("leaves unsupported and damaged indexes to the existing Git fallback", async () => {
     const f = await fixture("sha1", 4);
@@ -148,55 +123,42 @@ describe.skipIf(process.platform !== "darwin")("APFS checkout index", () => {
     await expect(fs.access(f.destinationIndex)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("does not publish an index after allocation authority is lost", async () => {
+  it.each(["immediate", "skipped-entry"])("fences %s authority loss", async (phase) => {
     const f = await fixture();
-    await expect(
-      f.copy(() => {
-        throw new Error("allocation lease lost");
-      }),
-    ).rejects.toThrow("allocation lease lost");
-    await expect(fs.access(f.destinationIndex)).rejects.toMatchObject({ code: "ENOENT" });
-  });
-
-  it("observes allocation authority loss while skipping ineligible entries", async () => {
-    const f = await fixture();
+    let authorized = phase !== "immediate";
     await fs.utimes(f.sourceIndex, originalTime, originalTime);
-    let authorized = true;
-    await expect(
-      f.copy(() => {
-        if (!authorized) {
-          throw new Error("allocation lease lost");
-        }
-        setImmediate(() => {
-          authorized = false;
-        });
-      }),
-    ).rejects.toThrow("allocation lease lost");
+    const guard = () => {
+      if (!authorized) {
+        throw new Error("allocation lease lost");
+      }
+      setImmediate(() => {
+        authorized = false;
+      });
+    };
+    await expect(f.copy(guard)).rejects.toThrow("allocation lease lost");
     await expect(fs.access(f.destinationIndex)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("leaves files changed during a metadata batch for Git to validate", async () => {
+  it.each(["source index", "metadata batch"])("validates %s races", async (race) => {
     const f = await fixture();
-    const before = await git(f.source, "ls-files", "--debug", "clean");
-    const readMetadata = nativeWorktreeFilesystem.readMetadata;
-    const now = vi.spyOn(Date, "now");
-    const metadata = vi
-      .spyOn(nativeWorktreeFilesystem, "readMetadata")
-      .mockImplementation(async (files, options) => {
+    const before = await debug(f.source);
+    if (race === "source index") {
+      await fs.utimes(f.sourceIndex, originalTime, originalTime);
+    } else {
+      const readMetadata = filesystem.readMetadata;
+      const now = vi.spyOn(Date, "now");
+      vi.spyOn(filesystem, "readMetadata").mockImplementation(async (files, options) => {
         const file = path.join(f.destination, "clean");
         await fs.chmod(file, (await fs.stat(file)).mode & 0o777);
         const values = await readMetadata(files, options);
         now.mockReturnValue(Date.now() + 2_000);
         return values;
       });
-    try {
-      expect(await f.copy()).toBe(true);
-    } finally {
-      metadata.mockRestore();
-      now.mockRestore();
     }
-    expect(await git(f.destination, "ls-files", "--debug", "clean")).toBe(before);
+    expect(await f.copy()).toBe(true);
+    vi.restoreAllMocks();
+    expect(await debug(f.destination)).toBe(before);
     await git(f.destination, "update-index", "--refresh");
-    expect(await git(f.destination, "status", "--porcelain")).toBe("");
+    expect(await status(f.destination)).toBe("");
   });
 });

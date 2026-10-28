@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
 import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { loadRatchetSources } from "./lib/shrink-ratchet.mts";
 import {
@@ -19,10 +19,10 @@ type DialectSite = DialectMatch & { line: number; column: number };
 export type DialectInventoryRow = { file: string; matches: DialectSite[] };
 export type DialectInventoryCache = Map<string, { text: string; matches: DialectSite[] }>;
 const roots = ["src", "extensions", "packages"];
-const SQL_STATEMENT =
+export const SQL_STATEMENT =
   /^[\s(]*(?:SELECT|INSERT|UPDATE|DELETE|REPLACE|WITH|CREATE|DROP|ALTER|PRAGMA|BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE|VACUUM|ATTACH|DETACH|ANALYZE|REINDEX|EXPLAIN)\b/u;
 
-function productionFile(file: string) {
+export function productionFile(file: string) {
   return (
     /^(?:src|extensions|packages)\/.*\.(?:ts|mts|sql)$/u.test(file) &&
     !excluded.test(file) &&
@@ -92,7 +92,12 @@ function findSites(file: string, source: ts.SourceFile): DialectSite[] {
   const physicalLayoutOwner = SQLITE_PHYSICAL_LAYOUT_OWNERS.includes(file);
   const add = (match: DialectMatch, position: number, postgres = false, text = "") => {
     // Only these shared names have proven PostgreSQL callers; SQLite-only JSON stays debt.
-    if (postgres && /^(?:json_each|jsonb_set)\s*\(/iu.test(text.slice(match.index))) {
+    if (
+      postgres &&
+      /^(?:(?:json_each|jsonb_(?:set|typeof|each|array_elements))\s*\(|->>?)/iu.test(
+        text.slice(match.index),
+      )
+    ) {
       return;
     }
     // These engine owners define/call PostgreSQL functions, not SQLite connection UDFs.
@@ -110,10 +115,29 @@ function findSites(file: string, source: ts.SourceFile): DialectSite[] {
     ) {
       return;
     }
+    // Native migration locks and private archive row order have no PostgreSQL SQL equivalent.
+    // Keep other constructs at these owners, and these constructs at callers, in the ratchet.
+    const nativeMaintenance =
+      (file === "src/infra/update-doctor-migration-attribution.ts" &&
+        (match.construct === "transaction-mode" ||
+          match.construct === "pragma" ||
+          match.construct === "schema-version")) ||
+      ((file === "src/infra/sqlite-migration-scoped-snapshot.ts" ||
+        // The SQLite v31 schema transaction rebuilds this table without changing row identities.
+        // PostgreSQL relaxes its constraint directly in openclaw-state-db-engine.ts.
+        file === "src/state/openclaw-state-db-schema-v31-workspace-manifests.ts") &&
+        match.construct === "rowid") ||
+      // Knowledge's keyword index is a rebuildable cache in its own per-store state.sqlite,
+      // never the selected Gateway engine: its FTS5 corpus, temp subset and rowid are engine-private.
+      (file === "extensions/knowledge/src/retrieval.ts" &&
+        (match.construct === "fts5" ||
+          match.construct === "temp-schema" ||
+          match.construct === "rowid"));
     const { line, character } = source.getLineAndCharacterOfPosition(position);
     sites.push({
       ...match,
-      owner: match.owner || SQLITE_PRIMITIVE_OWNERS.includes(file),
+      group: nativeMaintenance ? "engine-maintenance" : match.group,
+      owner: nativeMaintenance || match.owner || SQLITE_PRIMITIVE_OWNERS.includes(file),
       line: line + 1,
       column: character + 1,
     });
@@ -162,7 +186,13 @@ function findSites(file: string, source: ts.SourceFile): DialectSite[] {
     let owner = inheritedOwner;
     let postgres = inheritedPostgres;
     if (ts.isFunctionLikeDeclaration(node)) {
-      postgres = false;
+      // These helpers only serve the PostgreSQL branches of the context reader.
+      postgres =
+        file === "src/config/sessions/session-model-context-projection.ts" &&
+        ts.isFunctionDeclaration(node) &&
+        /^(?:projectPostgresModelContextRowsSql|postgresModelEventSql|postgresNavigationObjectSql|postgresModelNavigationSql)$/u.test(
+          node.name?.text ?? "",
+        );
       owner =
         file === "src/infra/kysely-sync.ts" &&
         ts.isFunctionDeclaration(node) &&

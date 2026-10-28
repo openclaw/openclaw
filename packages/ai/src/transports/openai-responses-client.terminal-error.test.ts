@@ -1,27 +1,24 @@
 import type { AssistantMessageEventStreamLike, SimpleStreamOptions } from "@openclaw/llm-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { recoverAfterTransportDrop } from "../../../../src/agents/embedded-agent-runner/run/attempt-recovery.test-support.js";
+import { streamWithIdleTimeout } from "../../../../src/agents/embedded-agent-runner/run/llm-idle-timeout.js";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import { isResponsesOutputLimitToolCallError } from "../providers/openai-responses-terminal-usage.js";
+import type { SdkResponse } from "./openai-responses-sdk.test-support.js";
 
-type SdkResponse = { data: AsyncIterable<unknown>; response: Response };
+const sseState = vi.hoisted(() => ({
+  outcomes: [] as Array<Error | SdkResponse>,
+  signal: undefined as AbortSignal | undefined,
+}));
 
-const sseState = vi.hoisted(() => ({ outcomes: [] as SdkResponse[] }));
-
-vi.mock("openai", () => {
-  class MockOpenAI {
-    responses = {
-      create: () => ({
-        withResponse: async () => {
-          const outcome = sseState.outcomes.shift();
-          if (!outcome) {
-            throw new Error("Unexpected SSE request");
-          }
-          return outcome;
-        },
-      }),
-    };
-  }
-  return { default: MockOpenAI, AzureOpenAI: MockOpenAI };
+vi.mock("openai", async () => {
+  const { createResponsesSdkMock } = await import("./openai-responses-sdk.test-support.js");
+  return createResponsesSdkMock(sseState, {
+    dequeueOnResponse: true,
+    onCreate: (_provider, signal) => {
+      sseState.signal = signal;
+    },
+  });
 });
 
 vi.mock("openai/resources/responses/ws.js", () => ({
@@ -32,9 +29,11 @@ vi.mock("openai/resources/responses/ws.js", () => ({
 
 import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
 import type { OpenAIResponsesOptions } from "./openai-responses-contracts.js";
+import * as responsesDiagnostics from "./openai-responses-debug.js";
 import { createModel } from "./openai-responses-prompt-observer.test-support.js";
 import {
   argumentDelta,
+  completedResponse,
   collectEventTypes,
   outputItem,
   wireCall,
@@ -90,6 +89,15 @@ function terminalEvent(
 function probe(id: string, args = "", status = "in_progress") {
   return { ...wireCall(id, "probe", args), status };
 }
+
+function expectWarning(detail: string) {
+  expect(logWarn).toHaveBeenCalledWith(
+    "openai-transport",
+    expect.stringContaining(detail),
+    undefined,
+  );
+}
+
 beforeEach(() => {
   for (const log of [logWarn, logDebug, logInfo]) {
     log.mockClear();
@@ -101,13 +109,86 @@ beforeEach(() => {
 });
 afterEach(() => {
   vi.unstubAllEnvs();
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+  sseState.signal = undefined;
   configureAiTransportHost(initialHost);
+});
+
+it("aborts whitespace argument churn and recovers through the same-model retry owner", async () => {
+  let emittedDeltas = 0;
+  let closed = false;
+  const call = wireCall("churn", "exec", "");
+  queueStream(async function* () {
+    try {
+      yield outputItem("added", call);
+      yield argumentDelta(call.id, '{"code":"return 1;');
+      for (let index = 0; index < 40; index++) {
+        emittedDeltas += 1;
+        yield argumentDelta(call.id, " \r\r\n".repeat(256));
+      }
+      yield completedResponse("resp_churn", [{ ...call, arguments: '{"code":"return 1;"}' }]);
+    } finally {
+      closed = true;
+    }
+  });
+
+  const { events, result } = await collect(await run());
+  expect(result).toMatchObject({ stopReason: "error", errorCode: "degenerate_output" });
+  expect(emittedDeltas).toBe(4);
+  expect(closed).toBe(true);
+  expect(sseState.signal).toMatchObject({
+    aborted: true,
+    reason: { code: "degenerate_output" },
+  });
+  expect(events).not.toContain("toolcall_end");
+  expect(logWarn).toHaveBeenCalledWith(
+    "provider-error",
+    "Model request failed",
+    expect.objectContaining({ abortReason: "degenerate_output" }),
+  );
+  expect(JSON.stringify(logWarn.mock.calls)).not.toContain("return 1;");
+
+  vi.useFakeTimers();
+  const recovering = recoverAfterTransportDrop({
+    assistant: result,
+    noTools: true,
+    replaySafe: true,
+  });
+  await vi.advanceTimersByTimeAsync(10_000);
+  const recovered = await recovering;
+  expect(recovered.recovery).toMatchObject({
+    action: "retry",
+    lastRetryFailoverReason: "server_error",
+  });
+});
+
+it("accepts 200 KiB of arguments with whitespace runs interrupted by code", async () => {
+  const call = wireCall("large", "exec", "");
+  const codeChunk = `${" ".repeat(1023)};`;
+  const code = codeChunk.repeat(200);
+  const args = JSON.stringify({ code });
+  queueStream(async function* () {
+    yield outputItem("added", call);
+    yield argumentDelta(call.id, '{"code":"');
+    for (let index = 0; index < 200; index++) {
+      yield argumentDelta(call.id, codeChunk);
+    }
+    yield argumentDelta(call.id, '"}');
+    yield completedResponse("resp_large", [{ ...call, arguments: args }]);
+  });
+  const { result } = await collect(await run());
+  expect(result).toMatchObject({
+    stopReason: "toolUse",
+    content: [{ type: "toolCall", arguments: { code } }],
+  });
+  expect(sseState.signal?.aborted).toBe(false);
 });
 
 it("logs the actual output budget, served tier, and usage after a long incomplete stream", async () => {
   vi.stubEnv("OPENCLAW_DEBUG_SSE", "peek");
   let now = 1_000;
-  const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+  vi.spyOn(Date, "now").mockImplementation(() => now);
   queueStream(async function* () {
     yield { type: "response.created", response: { id: "resp_long", service_tier: "default" } };
     yield {
@@ -130,24 +211,20 @@ it("logs the actual output budget, served tier, and usage after a long incomplet
       },
     });
   });
-  try {
-    const stream = await run({ maxTokens: 4096, serviceTier: "priority" });
-    expect((await stream.result()).stopReason).toBe("length");
-    const messages = [
-      ...logDebug.mock.calls.map(([, build]) => build()?.message),
-      ...logInfo.mock.calls.map(([, message]) => message),
-    ];
-    const done = messages.find((message) => message?.startsWith("[responses] stream_done "));
-    expect(done).toContain("requestedTier=priority max_output_tokens=4096");
-    expect(done).toContain("responseId=resp_long servedTier=default");
-    expect(done).toContain("outputTokens=4096 reasoningTokens=4000");
-    expect(done).toContain("streamDurationMs=1095000 elapsedMs=1095000");
-    expect(done).toContain("terminal=response.incomplete incompleteReason=max_output_tokens");
-    expect(done).not.toContain("test-key");
-    expect(messages.join(" ")).not.toContain("private-response-content");
-  } finally {
-    clock.mockRestore();
-  }
+  const stream = await run({ maxTokens: 4096, serviceTier: "priority" });
+  expect((await stream.result()).stopReason).toBe("length");
+  const messages = [
+    ...logDebug.mock.calls.map(([, build]) => build()?.message),
+    ...logInfo.mock.calls.map(([, message]) => message),
+  ];
+  const done = messages.find((message) => message?.startsWith("[responses] stream_done "));
+  expect(done).toContain("requestedTier=priority max_output_tokens=4096");
+  expect(done).toContain("responseId=resp_long servedTier=default");
+  expect(done).toContain("outputTokens=4096 reasoningTokens=4000");
+  expect(done).toContain("streamDurationMs=1095000 elapsedMs=1095000");
+  expect(done).toContain("terminal=response.incomplete incompleteReason=max_output_tokens");
+  expect(done).not.toContain("test-key");
+  expect(messages.join(" ")).not.toContain("private-response-content");
 });
 
 it.each(["filtered", "failed", "eof", "aborted"])(
@@ -158,12 +235,10 @@ it.each(["filtered", "failed", "eof", "aborted"])(
       Object.assign(probe(`parallel_${index}`, args, "completed"), { async: true }),
     );
     queueStream(async function* () {
-      for (const [output_index, item] of calls.entries()) {
-        yield outputItem("added", { ...item, arguments: "", status: "in_progress" }, output_index);
-      }
-      for (const [output_index, item] of calls.entries()) {
-        yield outputItem("done", item, output_index);
-      }
+      yield* calls.map((item, index) =>
+        outputItem("added", { ...item, arguments: "", status: "in_progress" }, index),
+      );
+      yield* calls.map((item, index) => outputItem("done", item, index));
       if (ending === "aborted") {
         controller.abort(
           Object.assign(new Error("superseded"), {
@@ -234,19 +309,145 @@ it.each(["filtered", "failed", "eof", "aborted"])(
   },
 );
 
-it("keeps a caller deadline at warning level when the stream throws a generic abort", async () => {
-  const controller = new AbortController();
+it("skips payload summaries when explicit transport debugging is promoted to disabled info", async () => {
+  vi.stubEnv("OPENCLAW_DEBUG_MODEL_TRANSPORT", "1");
+  const summarize = vi.spyOn(responsesDiagnostics, "summarizeResponsesPayload");
+  configureAiTransportHost({ logWarn, logDebug, logInfo, isLogEnabled: () => false });
+  sseState.outcomes.push(
+    Object.assign(new Error("private response"), { code: "rate_limit_exceeded" }),
+  );
+  expect((await (await run()).result()).stopReason).toBe("error");
+  expect(summarize).not.toHaveBeenCalled();
+  expect(logInfo).not.toHaveBeenCalled();
+  expect(logWarn).not.toHaveBeenCalled();
+});
+
+it("logs exactly one bounded warning per rate-limited provider attempt", async () => {
+  const summarize = vi.spyOn(responsesDiagnostics, "summarizeResponsesPayload");
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    sseState.outcomes.push(
+      Object.assign(new Error("private provider response body"), {
+        status: 429,
+        code: "rate_limit_exceeded",
+        type: "tokens",
+        request_id: `req_${attempt}`,
+      }),
+    );
+    expect((await (await run()).result()).stopReason).toBe("error");
+  }
+  expect(summarize).not.toHaveBeenCalled();
+  expect(logWarn.mock.calls).toEqual(
+    [1, 2, 3].map((attempt) => [
+      "provider-error",
+      "Model request failed",
+      {
+        provider: model.provider,
+        model: model.id,
+        name: "Error",
+        status: 429,
+        code: "rate_limit_exceeded",
+        type: "tokens",
+        requestId: `req_${attempt}`,
+      },
+    ]),
+  );
+});
+
+it("logs the idle-timeout reason at warning level when the stream throws a generic abort", async () => {
+  vi.useFakeTimers();
   queueStream(async function* () {
     yield { type: "response.created", response: { id: "resp_timeout", status: "in_progress" } };
-    controller.abort(new DOMException("run deadline", "TimeoutError"));
+    await new Promise<void>((resolve) => {
+      sseState.signal?.addEventListener("abort", () => resolve());
+    });
     throw new Error("Request was aborted");
   });
-  expect((await (await run({ signal: controller.signal })).result()).stopReason).toBe("aborted");
-  expect(logWarn).toHaveBeenCalledWith(
-    "openai-transport",
-    expect.stringContaining("[responses] error "),
-    undefined,
+  const stream = await streamWithIdleTimeout(createOpenAIResponsesTransportStreamFn(), 50)(
+    model,
+    { messages: [], tools: [] },
+    { apiKey: "test-key", transport: "sse", headers: { Authorization: "Bearer private-key" } },
   );
+  const result = stream.result();
+  await vi.advanceTimersByTimeAsync(50);
+  expect((await result).stopReason).toBe("aborted");
+  expectWarning("abortReason=idle_timeout");
+  const line = logWarn.mock.calls.find(([, message]) =>
+    message.startsWith("[responses] error "),
+  )?.[1];
+  expect(line).toContain("abortReason=idle_timeout");
+  expect(line).not.toContain("message=");
+  expect(line).not.toContain("LLM idle timeout");
+  expect(JSON.stringify(logWarn.mock.calls)).not.toContain("private-key");
+});
+
+it.each([
+  {
+    name: "rejected before streaming",
+    queue: () =>
+      sseState.outcomes.push(
+        Object.assign(new Error("401 Incorrect API key provided"), {
+          status: 401,
+          code: "invalid_api_key",
+          error: { code: "invalid_api_key", message: "Incorrect API key provided" },
+        }),
+      ),
+    billed: false,
+  },
+  {
+    name: "rate limited after acceptance",
+    queue: () =>
+      queueEvents(
+        { type: "response.created", response: { id: "resp_limited", status: "in_progress" } },
+        { type: "error", error: { code: "rate_limit_exceeded", message: "Rate limit reached" } },
+      ),
+    billed: false,
+  },
+  {
+    name: "dropped after acceptance",
+    queue: () =>
+      queueStream(async function* () {
+        yield { type: "response.created", response: { id: "resp_dropped", status: "in_progress" } };
+        throw Object.assign(new Error("terminated"), { code: "ECONNRESET" });
+      }),
+    billed: true,
+  },
+])("records usage for a failure without output when $name", async ({ queue, billed }) => {
+  queue();
+  const result = await (await run()).result();
+  expect(result.stopReason).toBe("error");
+  expect(result.content).toEqual([]);
+  // Unbilled failures are complete zeros; an accepted request may have billed hidden work.
+  expect(result.usage).toMatchObject(
+    billed
+      ? { usageReport: { state: "unavailable" } }
+      : { input: 0, output: 0, totalTokens: 0, usageReport: { state: "available" } },
+  );
+});
+
+it("omits provider error messages, headers, and bodies from transport logs", async () => {
+  const privateText = "synthetic private prompt and tool result";
+  queueStream(async function* () {
+    yield { type: "response.created", response: { id: "resp_error", status: "in_progress" } };
+    throw Object.assign(new SyntaxError(`${privateText}\n${"x".repeat(400)}`), {
+      status: 503,
+      code: "service_unavailable",
+      headers: { Authorization: "Bearer private-key" },
+      request: { body: "private-request" },
+      response: { body: "private-response", headers: { "set-cookie": "private-cookie" } },
+    });
+  });
+  expect((await (await run()).result()).stopReason).toBe("error");
+  expect(logWarn).toHaveBeenCalledExactlyOnceWith("provider-error", "Model request failed", {
+    provider: model.provider,
+    model: model.id,
+    name: "SyntaxError",
+    status: 503,
+    code: "service_unavailable",
+    responseId: "resp_error",
+  });
+  const logs = JSON.stringify(logWarn.mock.calls);
+  expect(logs).not.toContain(privateText);
+  expect(logs).not.toMatch(/private-(?:key|request|response|cookie)/u);
 });
 
 it.each([
@@ -326,9 +527,9 @@ it.each([
     expect(JSON.stringify(result.diagnostics)).not.toContain("provider-private-reason");
     if (result.stopReason === "error") {
       expect(logWarn).toHaveBeenCalledWith(
-        "openai-transport",
-        expect.stringContaining(`incompleteReason=${incompleteReason}`),
-        undefined,
+        "provider-error",
+        "Model request failed",
+        expect.objectContaining({ incompleteReason }),
       );
       expect(JSON.stringify(logWarn.mock.calls)).not.toContain("provider-private-reason");
     }

@@ -1,6 +1,7 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { scrubDoctorErrorMessage } from "./doctor-error-message.js";
+import { withDoctorProgress } from "./doctor-health-startup.js";
 import { listHealthChecks } from "./health-check-registry.js";
 import type { DoctorHealthCheck } from "./health-check-runner-types.js";
 import type {
@@ -15,6 +16,7 @@ interface DoctorRepairRunOptions {
   readonly checks?: readonly DoctorHealthCheck[];
   readonly dryRun?: boolean;
   readonly diff?: boolean;
+  readonly progress?: boolean;
 }
 
 interface DoctorRepairRunResult {
@@ -25,9 +27,6 @@ interface DoctorRepairRunResult {
   readonly warnings: readonly string[];
   readonly diffs: readonly HealthRepairDiff[];
   readonly effects: readonly HealthRepairEffect[];
-  readonly checksRun: number;
-  readonly checksRepaired: number;
-  readonly checksValidated: number;
 }
 
 export async function runDoctorHealthRepairs(
@@ -49,18 +48,29 @@ export async function runDoctorHealthRepairs(
     warnings,
     diffs,
     effects,
-    checksRun: checks.length,
-    checksRepaired: 0,
-    checksValidated: 0,
   };
 
   for (const check of checks) {
+    const phase = <T>(name: string, run: () => T | Promise<T>) =>
+      withDoctorProgress(`${check.id}: ${name}`, run, opts.progress === true);
     const checkContext = { ...ctx, cfg: outcome.config };
     let checkFindings: readonly HealthFinding[];
     try {
-      checkFindings = await check.detect(checkContext);
+      checkFindings = await phase("check", () => check.detect(checkContext));
     } catch (err) {
-      outcome.warnings.push(`${check.id} detect failed: ${scrubDoctorErrorMessage(err)}`);
+      const cause = scrubDoctorErrorMessage(err);
+      outcome.warnings.push(`${check.id} detect failed: ${cause}`);
+      const inspectionFailure: HealthFinding = {
+        checkId: check.id,
+        severity: "warning",
+        category: "fix-now",
+        message: `Doctor could not complete ${check.description}: ${cause}`,
+        fixHint:
+          "Inspect the reported cause and correct the failed prerequisite, then rerun openclaw doctor. This check has not established its health.",
+        docsUrl: "https://docs.openclaw.ai/cli/doctor/running#understanding-findings",
+      };
+      outcome.findings.push(inspectionFailure);
+      outcome.remainingFindings.push(inspectionFailure);
       continue;
     }
     outcome.findings.push(...checkFindings);
@@ -72,9 +82,12 @@ export async function runDoctorHealthRepairs(
     let remainingFindings = checkFindings;
     // Split checks expose detect/repair separately, so repair output must be validated by detect().
     try {
-      const result = await check.repair(
-        { ...checkContext, dryRun: opts.dryRun === true, diff: opts.diff === true },
-        checkFindings,
+      const repair = check.repair.bind(check);
+      const result = await phase("repair", () =>
+        repair(
+          { ...checkContext, dryRun: opts.dryRun === true, diff: opts.diff === true },
+          checkFindings,
+        ),
       );
       outcome.warnings.push(...(result.warnings ?? []));
       outcome.diffs.push(...(result.diffs ?? []));
@@ -90,22 +103,22 @@ export async function runDoctorHealthRepairs(
       if (result.config !== undefined && opts.dryRun !== true) {
         outcome.config = result.config;
       }
-      outcome.checksRepaired++;
       if (opts.dryRun === true) {
         continue;
       }
       try {
         // Re-run only failing paths/ocPaths to avoid unrelated expensive checks.
-        const validationFindings = await check.detect(
-          { ...checkContext, cfg: outcome.config },
-          {
-            findings: remainingFindings,
-            paths: uniqueDefined(remainingFindings.map((finding) => finding.path)),
-            ocPaths: uniqueDefined(remainingFindings.map((finding) => finding.ocPath)),
-          },
+        const validationFindings = await phase("validation", () =>
+          check.detect(
+            { ...checkContext, cfg: outcome.config },
+            {
+              findings: remainingFindings,
+              paths: uniqueDefined(remainingFindings.map((finding) => finding.path)),
+              ocPaths: uniqueDefined(remainingFindings.map((finding) => finding.ocPath)),
+            },
+          ),
         );
         remainingFindings = validationFindings;
-        outcome.checksValidated++;
         if (validationFindings.length > 0) {
           outcome.warnings.push(`${check.id} repair left ${validationFindings.length} finding(s)`);
         }

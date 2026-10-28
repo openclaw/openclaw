@@ -143,6 +143,21 @@ it("refuses corrupt current-version state on restart without a clean integrity r
   expect(observation.queries.some((sql) => /^PRAGMA foreign_key_check\b/iu.test(sql))).toBe(true);
 });
 
+it("checks fresh-state integrity without repeating its admitted catalog presence probe", () => {
+  const env = { OPENCLAW_STATE_DIR: directories.make("state-checkonce-fresh-") };
+  const observation = observeSqliteReadSql(StatementSync.prototype);
+  const opened = openState({ env });
+  expect(readVersion(opened.db)).toBe(SCHEMA_VERSION);
+  expect(observation.queries.filter((sql) => /^PRAGMA integrity_check\b/iu.test(sql))).toHaveLength(
+    1,
+  );
+  expect(
+    observation.queries.filter((sql) =>
+      /^SELECT 1 FROM sqlite_(?:master|schema)\b.*LIMIT 1$/iu.test(sql),
+    ),
+  ).toEqual([]);
+});
+
 it("repairs canonical indexes and shares admission until the final handle closes", () => {
   const { env, pathname } = replacedState("DROP INDEX idx_task_runs_runtime_run");
   const observation = observeSqliteReadSql(StatementSync.prototype);

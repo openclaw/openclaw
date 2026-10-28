@@ -1,36 +1,42 @@
 import { expect, it, vi } from "vitest";
 import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
-import {
-  AgentDatabaseAdmissionError,
-  createAgentDatabaseInspectionRefusal,
-} from "../../../state/agent-database-admission.js";
-import {
-  createRunEntry,
-  readLifecycleRun,
-  type LifecycleControllerFixtureOptions,
-} from "./subagent-registry-lifecycle-controller.test-support.js";
-import type {
-  SubagentLifecycleController,
-  SubagentLifecycleOptions,
-} from "./subagent-registry-lifecycle.js";
+import * as admission from "../../../state/agent-database-admission.js";
+import * as lifecycle from "./subagent-registry-lifecycle-controller.test-support.js";
+import type { SubagentLifecycleOptions } from "./subagent-registry-lifecycle.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import type { RequesterSettleWakeState } from "./subagent-registry.types.js";
 
-type RequesterSettleWakeParams = Parameters<
-  SubagentLifecycleOptions["maybeWakeRequesterAfterAllChildrenSettled"]
->[0];
+const database = { agentId: "main", paths: ["/synthetic/db"], reason: "inspection" };
+const inspectionError = (pending = false) =>
+  new admission.AgentDatabaseAdmissionError(
+    admission.createAgentDatabaseInspectionRefusal({ ...database, pending }),
+  );
 
 export function registerRequesterDatabaseAdmissionTests({
   createLifecycleController,
   waitForLifecycleState,
-}: {
-  createLifecycleController: (
-    options: LifecycleControllerFixtureOptions,
-  ) => SubagentLifecycleController;
-  waitForLifecycleState: (assertion: () => void) => Promise<void>;
-}) {
+}: Pick<lifecycle.LifecycleTestDrivers, "createLifecycleController" | "waitForLifecycleState">) {
+  function fixture(requesterSettleWake?: RequesterSettleWakeState) {
+    const entry = lifecycle.createRunEntry({ endedAt: 4_000, requesterSettleWake });
+    const warn = vi.fn();
+    const settleWake =
+      vi.fn<SubagentLifecycleOptions["maybeWakeRequesterAfterAllChildrenSettled"]>();
+    const controller = createLifecycleController({
+      entry,
+      warn,
+      maybeWakeRequesterAfterAllChildrenSettled: settleWake,
+    });
+    const read = () => lifecycle.readLifecycleRun(entry);
+    const resume = async () => {
+      const join = observeRootWork();
+      controller.resumeRequesterSettleWake(entry.runId, read());
+      await join();
+    };
+    return { entry, controller, warn, settleWake, read, resume };
+  }
+
   it.each(["ready", "cancelled"])(
-    "retains a requester wake through pending database inspection until %s",
+    "retains a wake through pending database inspection until %s",
     async (outcome) => {
       const wake: RequesterSettleWakeState = {
         status: "dispatching",
@@ -40,49 +46,30 @@ export function registerRequesterDatabaseAdmissionTests({
         requesterYieldBatch: true,
         rearmGeneration: 1,
       };
-      const entry = createRunEntry({ endedAt: 4_000, requesterSettleWake: wake });
-      const pending = new AgentDatabaseAdmissionError(
-        createAgentDatabaseInspectionRefusal({
-          agentId: "main",
-          paths: ["/synthetic/main.sqlite"],
-          pending: true,
-          reason: "Startup inspection is still running",
-        }),
-      );
+      const { controller, settleWake, read, resume } = fixture(wake);
+      const pending = inspectionError(true);
       let ready = false;
-      const settleWake = vi.fn(async (params: RequesterSettleWakeParams) => {
+      settleWake.mockImplementation(async ({ completeBatch, settledEntry }) => {
         if (!ready) {
           throw pending;
         }
-        await params.completeBatch([params.settledEntry], wake.rearmGeneration, {
+        await completeBatch([settledEntry], wake.rearmGeneration, {
           delivered: true,
           path: "direct",
         });
         return true;
       });
-      const controller = createLifecycleController({
-        entry,
-        maybeWakeRequesterAfterAllChildrenSettled: settleWake,
-      });
-      const pendingWork = observeRootWork();
-      controller.resumeRequesterSettleWake(entry.runId, entry);
-      await pendingWork();
-      expect(readLifecycleRun(entry).requesterSettleWake).toEqual(wake);
+      await resume();
+      expect(read().requesterSettleWake).toEqual(wake);
       expect(getActiveGatewayRootWorkCount()).toBe(0);
       expect(settleWake).toHaveBeenCalledOnce();
-
-      if (outcome === "cancelled") {
-        await controller.retireSubagentObligations(readLifecycleRun(entry), () => {}, {
-          requesterNotified: true,
-        });
-      } else {
-        ready = true;
+      ready = outcome === "ready";
+      if (!ready) {
+        await controller.retireSubagentObligations(read(), () => {}, { requesterNotified: true });
       }
-      const resumedWork = observeRootWork();
-      controller.resumeRequesterSettleWake(entry.runId, readLifecycleRun(entry));
-      await resumedWork();
+      await resume();
       expect(settleWake).toHaveBeenCalledTimes(outcome === "cancelled" ? 1 : 2);
-      expect(readLifecycleRun(entry).requesterSettleWake).toBeUndefined();
+      expect(read().requesterSettleWake).toBeUndefined();
       expect(getActiveGatewayRootWorkCount()).toBe(0);
     },
   );
@@ -90,25 +77,10 @@ export function registerRequesterDatabaseAdmissionTests({
   it.each(["ordinary", "inspection-failed"])(
     "settles bookkeeping after a %s wake rejection before attempt admission",
     async (kind) => {
-      const entry = createRunEntry({ endedAt: 4_000 });
-      const warn = vi.fn();
-      const settleWake = vi.fn(async () => {
-        throw kind === "inspection-failed"
-          ? new AgentDatabaseAdmissionError(
-              createAgentDatabaseInspectionRefusal({
-                agentId: "main",
-                paths: ["/synthetic/main.sqlite"],
-                reason: "Integrity check failed",
-              }),
-            )
-          : new Error("wake exploded");
+      const { entry, controller, warn, settleWake, read } = fixture();
+      settleWake.mockImplementation(async () => {
+        throw kind === "inspection-failed" ? inspectionError() : new Error("wake exploded");
       });
-      const controller = createLifecycleController({
-        entry,
-        warn,
-        maybeWakeRequesterAfterAllChildrenSettled: settleWake,
-      });
-
       await expect(
         controller.completeCleanupBookkeeping({
           runId: entry.runId,
@@ -117,10 +89,9 @@ export function registerRequesterDatabaseAdmissionTests({
           completedAt: 5_000,
         }),
       ).resolves.toBeUndefined();
-
       await waitForLifecycleState(() => {
         expect(warn).toHaveBeenCalledWith("requester settle wake failed", expect.anything());
-        expect(readLifecycleRun(entry).requesterSettleWake).toBeUndefined();
+        expect(read().requesterSettleWake).toBeUndefined();
       });
     },
   );

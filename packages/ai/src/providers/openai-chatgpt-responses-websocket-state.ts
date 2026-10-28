@@ -104,19 +104,6 @@ export function deleteOwnedWebSocketSession(
   }
 }
 
-export function setOwnedWebSocketSession(
-  state: OpenAICodexWebSocketRuntimeState,
-  sessionId: string,
-  entry: CachedWebSocketConnection,
-  expected: CachedWebSocketConnection | undefined,
-): boolean {
-  if (state.sessionCache.get(sessionId) !== expected) {
-    return false;
-  }
-  state.sessionCache.set(sessionId, entry);
-  return true;
-}
-
 export function scheduleSessionWebSocketExpiry(
   state: OpenAICodexWebSocketRuntimeState,
   sessionId: string,

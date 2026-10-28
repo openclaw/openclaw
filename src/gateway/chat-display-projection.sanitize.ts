@@ -6,7 +6,8 @@ import {
 } from "@openclaw/normalization-core/record-coerce";
 import { prepareAgentRunReplyText } from "../agents/agent-run-terminal-reply.js";
 import { normalizeContextUsage } from "../agents/usage.js";
-import { parseInboundMediaUri, buildInboundMediaUriFromPath } from "../media/media-reference.js";
+import { buildInboundMediaUriFromPath } from "../media/inbound-media-path.js";
+import { parseInboundMediaUri } from "../media/inbound-media-uri.js";
 import { STATE_CONTENTION_DIAGNOSTIC } from "../sessions/session-run-error-presentation.js";
 import {
   isSilentAssistantTranscriptMessage,
@@ -15,6 +16,7 @@ import {
   readTerminalSourceReplyDeliveryMirror,
   resolveAssistantMessagePhase,
 } from "../shared/chat-message-content.js";
+import { findNativeToolMarkerTextBlocks } from "../shared/text/native-tool-marker.js";
 import {
   isToolHistoryBlockType,
   isToolResultHistoryBlockType,
@@ -33,10 +35,7 @@ import {
   takeAssistantManagedMediaUrlsForDisplay,
   truncateChatHistoryText,
 } from "./chat-display-projection.helpers.js";
-import {
-  projectWorkspaceResultConflict,
-  WORKSPACE_CONFLICT_TRANSCRIPT_TYPE,
-} from "./worker-environments/workspace-conflicts.js";
+import { projectWorkspaceConflictDetails } from "./worker-environments/workspace-conflicts.js";
 
 const MEDIA_PRIVATE_FIELDS = ["data", "blob", "path", "file", "filePath", "localPath"] as const;
 const MEDIA_REFERENCE_FIELDS = ["url", "openUrl", "image_url", "audio_url", "video_url"] as const;
@@ -138,10 +137,7 @@ function projectChatHistoryMediaBlock(entry: Record<string, unknown>, fact = fal
 }
 
 function projectChatHistoryAttachmentBlock(entry: Record<string, unknown>): boolean {
-  if (entry.type !== "attachment") {
-    return false;
-  }
-  const attachment = readRecord(entry.attachment);
+  const attachment = entry.type === "attachment" ? readRecord(entry.attachment) : undefined;
   if (!attachment) {
     return false;
   }
@@ -149,11 +145,9 @@ function projectChatHistoryAttachmentBlock(entry: Record<string, unknown>): bool
   for (const field of MEDIA_PRIVATE_FIELDS) {
     delete projected[field];
   }
-  const url = projectChatHistoryMediaReference(projected.url);
-  if (!url) {
+  projected.url = projectChatHistoryMediaReference(projected.url);
+  if (!projected.url) {
     delete projected.url;
-  } else {
-    projected.url = url;
   }
   entry.attachment = projected;
   return true;
@@ -177,6 +171,10 @@ export function sanitizeChatHistoryContentBlock(
     return { block, changed: false, truncated: false };
   }
   const entry = { ...(block as Record<string, unknown>) };
+  // Native inline blocks are host projections of admitted tool details, never transcript-authored UI.
+  if (entry.type === "plugin_view") {
+    return { block: { type: "text", text: "" }, changed: true, truncated: false };
+  }
   let changed = stripPrivateToolCallContextForDisplay(entry);
   // Display-cap truncation is a fact consumers need (to fetch the full row), so
   // it is tracked apart from `changed`, which also covers metadata stripping.
@@ -189,7 +187,7 @@ export function sanitizeChatHistoryContentBlock(
       ? opts?.toolResultMaxChars
       : undefined;
   if (isToolResultHistoryBlockType(entry.type) && "details" in entry) {
-    const projectedDetails = projectToolResultDetails(entry.details, maxChars);
+    const projectedDetails = projectToolResultDetails(entry.details, maxChars, entry);
     if (projectedDetails.details) {
       entry.details = projectedDetails.details;
     } else {
@@ -201,15 +199,17 @@ export function sanitizeChatHistoryContentBlock(
   if (preserveExactToolPayload && Array.isArray(entry.content)) {
     // Some transcripts carry both nested output blocks and their joined text.
     // Keep one representation, and apply the same media privacy rules recursively.
-    const text = entry.content
-      .flatMap((item) => {
-        const value = readRecord(item)?.text;
-        return typeof value === "string" ? [value] : [];
-      })
-      .join("\n");
-    if (entry.text === text) {
-      delete entry.text;
-      changed = true;
+    if (typeof entry.text === "string") {
+      const text = entry.content
+        .flatMap((item) => {
+          const value = readRecord(item)?.text;
+          return typeof value === "string" ? [value] : [];
+        })
+        .join("\n");
+      if (entry.text === text) {
+        delete entry.text;
+        changed = true;
+      }
     }
     const content = entry.content.map((item) =>
       sanitizeChatHistoryContentBlock(item, {
@@ -364,39 +364,6 @@ function sanitizeNumericMetadata(
   return Object.keys(projected).length > 0 ? projected : undefined;
 }
 
-function projectWorkspaceConflictDetails(
-  entry: Record<string, unknown>,
-): Record<string, unknown> | undefined {
-  if (entry.role !== "custom" || entry.customType !== WORKSPACE_CONFLICT_TRANSCRIPT_TYPE) {
-    return undefined;
-  }
-  const details = readRecord(entry.details);
-  if (
-    !details ||
-    !Array.isArray(details.paths) ||
-    details.paths.length === 0 ||
-    !details.paths.every(
-      (entryPath): entryPath is string => typeof entryPath === "string" && entryPath.length > 0,
-    ) ||
-    typeof details.stagedResultRef !== "string" ||
-    !/^refs\/openclaw\/worker-results\/[A-Za-z0-9-]+$/u.test(details.stagedResultRef) ||
-    (details.totalCount !== undefined &&
-      (!Number.isSafeInteger(details.totalCount) ||
-        (details.totalCount as number) < details.paths.length))
-  ) {
-    return undefined;
-  }
-  try {
-    return projectWorkspaceResultConflict(
-      details.paths,
-      details.stagedResultRef,
-      details.totalCount as number | undefined,
-    );
-  } catch {
-    return undefined;
-  }
-}
-
 /** Prepares raw stored text before display transforms, retaining its visible disposition. */
 export function prepareAssistantHistoryMessage(message: unknown): unknown {
   const entry = readObjectRecord(message);
@@ -459,9 +426,17 @@ export function sanitizeChatHistoryMessage(
   const prepared = prepareAssistantHistoryMessage(message);
   const entry = { ...(prepared as Record<string, unknown>) };
   let changed = prepared !== message;
+  const nativeToolMarkerBlocks = findNativeToolMarkerTextBlocks(message);
+  if (nativeToolMarkerBlocks.size && Array.isArray(entry.content)) {
+    entry.content = entry.content.map((block, index) =>
+      nativeToolMarkerBlocks.has(index) ? { ...readRecord(block), text: "" } : block,
+    );
+    changed = true;
+  }
   let truncated = false;
-  if ("providerReplay" in entry) {
+  if ("providerReplay" in entry || "openclawResponsesInputReplay" in entry) {
     delete entry.providerReplay;
+    delete entry.openclawResponsesInputReplay;
     changed = true;
   }
   const openClawMeta = readRecord(entry["__openclaw"]);
@@ -471,6 +446,7 @@ export function sanitizeChatHistoryMessage(
       "modelPromptProjection" in openClawMeta ||
       "sessionSendDelivery" in openClawMeta ||
       "requesterOrigin" in openClawMeta ||
+      "chatInputRecovery" in openClawMeta ||
       "media" in openClawMeta)
   ) {
     // Codex retains the decorated upstream prompt for transcript reconstruction.
@@ -483,6 +459,7 @@ export function sanitizeChatHistoryMessage(
     delete projectedMeta.sessionSendDelivery;
     // Operational requester custody is independent of redacted display identity.
     delete projectedMeta.requesterOrigin;
+    delete projectedMeta.chatInputRecovery;
     if ("media" in projectedMeta) {
       projectedMeta.media = projectChatHistoryMediaFacts(projectedMeta.media);
       if (projectedMeta.media === undefined) {
@@ -515,7 +492,7 @@ export function sanitizeChatHistoryMessage(
     const conflictDetails = projectWorkspaceConflictDetails(entry);
     const toolResultDetails =
       !conflictDetails && messageHasToolResultShape(entry)
-        ? projectToolResultDetails(entry.details, maxChars)
+        ? projectToolResultDetails(entry.details, maxChars, entry)
         : undefined;
     // Only the terminal owner's presentation category crosses this report boundary.
     // Correlation is projected separately; raw diagnostics and report fields stay private.
@@ -525,7 +502,16 @@ export function sanitizeChatHistoryMessage(
       readRecord(entry.details)?.errorKind === "state_contention"
         ? { errorKind: "state_contention", diagnostic: STATE_CONTENTION_DIAGNOSTIC }
         : undefined;
-    const projectedDetails = conflictDetails ?? toolResultDetails?.details ?? runFailureDetails;
+    const modelChange =
+      entry.role === "custom" && entry.customType === "session-model-change"
+        ? readRecord(entry.details)
+        : undefined;
+    const modelChangeDetails =
+      typeof modelChange?.from === "string" && typeof modelChange.to === "string"
+        ? { from: modelChange.from, to: modelChange.to }
+        : undefined;
+    const projectedDetails =
+      conflictDetails ?? toolResultDetails?.details ?? runFailureDetails ?? modelChangeDetails;
     if (projectedDetails) {
       entry.details = projectedDetails;
     } else {
@@ -669,9 +655,7 @@ function hasAssistantMixedToolVisibleText(message: unknown): boolean {
     if (!entry) {
       continue;
     }
-    if (isToolHistoryBlockType(entry.type)) {
-      hasToolHistoryBlock = true;
-    }
+    hasToolHistoryBlock ||= isToolHistoryBlockType(entry.type);
     if (
       isAssistantTextContentType(entry.type) &&
       typeof entry.text === "string" &&
@@ -697,20 +681,26 @@ export function shouldDropAssistantHistoryMessage(message: unknown): boolean {
   if (isProjectedForwardedMessage(entry)) {
     return false;
   }
-  if (resolveAssistantMessagePhase(message) === "commentary") {
-    return !hasAssistantMixedToolVisibleText(message);
-  }
-  return isSilentAssistantTranscriptMessage(message);
+  return resolveAssistantMessagePhase(message) === "commentary"
+    ? !hasAssistantMixedToolVisibleText(message)
+    : isSilentAssistantTranscriptMessage(message);
 }
 
+export function sanitizeChatHistoryMessages(
+  messages: Array<Record<string, unknown>>,
+  maxChars?: number,
+  opts?: { includeCommentaryFallbacks?: boolean; toolResultMaxChars?: number },
+): Array<Record<string, unknown>>;
+export function sanitizeChatHistoryMessages(
+  messages: unknown[],
+  maxChars?: number,
+  opts?: { includeCommentaryFallbacks?: boolean; toolResultMaxChars?: number },
+): unknown[];
 export function sanitizeChatHistoryMessages(
   messages: unknown[],
   maxChars: number = DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
   opts?: { includeCommentaryFallbacks?: boolean; toolResultMaxChars?: number },
 ): unknown[] {
-  if (messages.length === 0) {
-    return messages;
-  }
   let changed = false;
   const next: unknown[] = [];
   for (const original of messages) {

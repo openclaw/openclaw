@@ -4,7 +4,6 @@ import {
   type PersistedSidebarRoute,
   type SidebarZoneEntry,
 } from "../app-navigation.ts";
-import type { SessionOwnerOption } from "../lib/session-owner.ts";
 import {
   readSessionDragData,
   readSidebarSectionDragData,
@@ -14,32 +13,24 @@ import {
   sidebarRouteDragActive,
   writeSidebarRouteDragData,
 } from "../lib/sessions/drag.ts";
-import {
-  categoryClearReturnsToGroups,
-  type SidebarSessionsGrouping,
-} from "../lib/sessions/grouping.ts";
+import { categoryClearReturnsToGroups } from "../lib/sessions/grouping.ts";
+import { isSessionDeferredPatch } from "../lib/sessions/patch.ts";
 import {
   loadStoredCollapsedSessionSections,
-  storeSidebarSessionStatusFilter,
   storeCollapsedSessionSections,
-  storeSidebarSessionsGrouping,
-  storeSidebarSessionsShowCron,
-  storeSidebarSessionsShowPreview,
-  storeSidebarSessionsShowSystem,
   type SidebarRecentSession,
   type SidebarSectionDropTarget,
   type SidebarSessionMutationResult,
   type SidebarSessionMutationScope,
   type SidebarSessionPatch,
-  type SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
 import { sidebarSessionHasArchiveDescendants } from "./session-menu-descendants.ts";
-import type { SessionMenuAction } from "./session-menu-solid.tsx";
 import type { SessionOrganizerDependencies } from "./session-organizer-types.ts";
 
 export type { SessionOrganizerDependencies } from "./session-organizer-types.ts";
 
 type SessionOrganizerOperations = typeof import("./session-organizer-operations.runtime.ts");
+
 export class SessionOrganizer {
   readonly sectionHeaders = new Map<string, HTMLElement>();
   collapsedSessionSections = loadStoredCollapsedSessionSections();
@@ -56,8 +47,8 @@ export class SessionOrganizer {
   sessionListRemovalDrop = false;
 
   constructor(
-    private readonly deps: SessionOrganizerDependencies,
-    private readonly notify: () => void,
+    readonly deps: SessionOrganizerDependencies,
+    readonly notify: () => void,
   ) {}
 
   private async loadOperations(
@@ -71,17 +62,22 @@ export class SessionOrganizer {
     }
   }
 
-  private async runOperation(
+  async runOperation(
     run: (
       operations: SessionOrganizerOperations,
       scope: SidebarSessionMutationScope,
     ) => Promise<unknown>,
+    allowDeferred = false,
   ): Promise<void> {
-    const scope = this.deps.sessionData.beginSessionMutation();
+    const scope = this.deps.sessionData.beginSessionMutation(allowDeferred);
     if (scope) {
-      const operations = await this.loadOperations(scope);
-      if (operations) {
-        await run(operations, scope);
+      try {
+        const operations = await this.loadOperations(scope);
+        if (operations) {
+          await run(operations, scope);
+        }
+      } catch (error) {
+        this.deps.sessionData.publishSessionMutationError(scope, error);
       }
     }
   }
@@ -91,7 +87,7 @@ export class SessionOrganizer {
     patch: SidebarSessionPatch,
     options: { sessionScope?: boolean } = {},
   ): Promise<SidebarSessionMutationResult> => {
-    const scope = this.deps.sessionData.beginSessionMutation();
+    const scope = this.deps.sessionData.beginSessionMutation(isSessionDeferredPatch(patch));
     if (!scope) {
       return "stale";
     }
@@ -102,78 +98,21 @@ export class SessionOrganizer {
     return operations.patchSession(this.deps, session, patch, scope, options);
   };
 
-  snoozeSessionWithUndo(
-    session: SidebarRecentSession,
-    snoozedUntil: number,
-    rememberCustom = false,
-  ): Promise<void> {
-    return this.runOperation((operations, scope) =>
-      operations.snoozeSessionWithUndo(this.deps, session, { snoozedUntil, rememberCustom }, scope),
-    );
-  }
-
   archiveSessionWithUndo(session: SidebarRecentSession): Promise<void> {
-    return this.runOperation((operations, scope) =>
-      operations.archiveSessionWithUndo(
-        this.deps,
-        { ...session, hasArchiveDescendants: sidebarSessionHasArchiveDescendants(session) },
-        scope,
-      ),
+    return this.runOperation(
+      (operations, scope) =>
+        operations.archiveSessionWithUndo(
+          this.deps,
+          { ...session, hasArchiveDescendants: sidebarSessionHasArchiveDescendants(session) },
+          scope,
+        ),
+      true,
     );
   }
 
   promoteSession(session: SidebarRecentSession): Promise<void> {
     return this.runOperation((operations, scope) =>
       operations.promoteSession(this.deps, session, scope),
-    );
-  }
-
-  async runBatchSessionAction(
-    action: SessionMenuAction,
-    rows: SidebarRecentSession[],
-    allUnread: boolean,
-  ): Promise<void> {
-    if (action.kind === "new-group") {
-      await this.createSessionGroup(rows);
-      return;
-    }
-    await this.runOperation((operations, scope) =>
-      operations.runBatchSessionAction(this.deps, action, rows, allUnread, scope),
-    );
-  }
-
-  forkSession(session: SidebarRecentSession): Promise<void> {
-    return this.runOperation((operations, scope) =>
-      operations.forkSession(this.deps, session, scope),
-    );
-  }
-
-  stopCloudWorker(session: SidebarRecentSession): Promise<void> {
-    return this.runOperation((operations, scope) =>
-      operations.stopCloudWorker(this.deps, session, scope),
-    );
-  }
-
-  setSessionInvolvement(session: SidebarRecentSession, hidden: boolean): Promise<void> {
-    return this.runOperation((operations, scope) =>
-      operations.setSessionInvolvement(this.deps, session, hidden, scope),
-    );
-  }
-
-  assignSessionOwner(
-    session: SidebarRecentSession,
-    owner: Pick<SessionOwnerOption, "type" | "id">,
-  ): Promise<void> {
-    return this.runOperation((operations, scope) =>
-      operations.assignSessionOwner(this.deps, session, owner, scope),
-    );
-  }
-
-  deleteSession(session: SidebarRecentSession): Promise<void> {
-    // Sidebar is the surface the delete-confirm setting names, so it is the one
-    // caller allowed to offer the opt-out.
-    return this.runOperation((operations, scope) =>
-      operations.deleteSession(this.deps, session, scope, { offerSkip: true }),
     );
   }
 
@@ -242,9 +181,8 @@ export class SessionOrganizer {
 
   startSessionDrag(session: SidebarRecentSession): void {
     this.draggingSessionKey = session.key;
-    this.draggingSidebarEntry = this.isPersonalSessionPin(session.key)
-      ? `session:${session.key}`
-      : null;
+    const shortcut = serializeSidebarEntry({ type: "session", key: session.key, rail: true });
+    this.draggingSidebarEntry = this.deps.sidebarEntries.includes(shortcut) ? shortcut : null;
     this.sidebarZoneDragActive = session.pinnable;
     this.notify();
   }
@@ -277,10 +215,14 @@ export class SessionOrganizer {
   private draggedSidebarEntry(dataTransfer: DataTransfer | null): string | null {
     const navigation = this.draggedSidebarNavigation(dataTransfer);
     if (navigation) {
-      return serializeSidebarEntry(navigation);
+      return serializeSidebarEntry(
+        navigation.type === "session" ? { ...navigation, rail: true } : navigation,
+      );
     }
     const sessionKey = readSessionDragData(dataTransfer);
-    return sessionKey ? serializeSidebarEntry({ type: "session", key: sessionKey }) : null;
+    return sessionKey
+      ? serializeSidebarEntry({ type: "session", key: sessionKey, rail: true })
+      : null;
   }
 
   private isSidebarZoneDragCompatible(dataTransfer: DataTransfer | null): boolean {
@@ -387,7 +329,7 @@ export class SessionOrganizer {
     const routeDrag = sidebarRouteDragActive(event.dataTransfer);
     const sessionKey = this.draggingSessionKey ?? readSessionDragData(event.dataTransfer);
     const session = sessionKey ? this.deps.findSidebarMenuSessionByKey(sessionKey) : undefined;
-    if (!routeDrag && !session?.isChild && !(session && this.isPersonalSessionPin(session.key))) {
+    if (!routeDrag && !session?.isChild) {
       return;
     }
     event.preventDefault();
@@ -421,79 +363,8 @@ export class SessionOrganizer {
       event.preventDefault();
       event.stopPropagation();
       void this.promoteSession(session);
-    } else if (session && this.isPersonalSessionPin(session.key)) {
-      event.preventDefault();
-      this.setPersonalSessionPin(session.key, false);
     }
     this.finishSidebarEntryDrag();
-  }
-
-  /** A dialog that never opens still owes the operator a visible outcome. */
-  private async loadDialog<T>(load: Promise<T>): Promise<T | null> {
-    try {
-      return await load;
-    } catch (error) {
-      const scope = this.deps.sessionData.beginSessionMutation();
-      if (scope) {
-        this.deps.sessionData.publishSessionMutationError(scope, error);
-      }
-      return null;
-    }
-  }
-
-  renameSession(session: SidebarRecentSession): Promise<void> {
-    return this.runOperation((operations, scope) =>
-      operations.renameSession(this.deps, session, scope),
-    );
-  }
-
-  async createSessionGroup(sessions: readonly SidebarRecentSession[] = []): Promise<void> {
-    const scope = this.deps.sessionData.beginSessionMutation();
-    if (!scope) {
-      return;
-    }
-    const signal = this.deps.sessionData.sessionDraftSignal;
-    const dialogs = await this.loadDialog(import("./session-organizer-group-dialogs.runtime.ts"));
-    await dialogs?.createSessionGroupDialog(this.deps, scope, signal, sessions, this.notify);
-  }
-
-  async renameSessionGroupFromMenu(group: string): Promise<void> {
-    const scope = this.deps.sessionData.beginSessionMutation();
-    if (!scope) {
-      return;
-    }
-    const signal = this.deps.sessionData.sessionDraftSignal;
-    const dialogs = await this.loadDialog(import("./session-organizer-group-dialogs.runtime.ts"));
-    await dialogs?.renameSessionGroupDialog(this.deps, scope, signal, group, (next) => {
-      const from = `category:${group}`;
-      if (this.collapsedSessionSections.has(from)) {
-        const collapsed = new Set(this.collapsedSessionSections);
-        collapsed.delete(from);
-        collapsed.add(`category:${next}`);
-        this.saveCollapsedSessionSections(collapsed);
-      }
-      this.notify();
-    });
-  }
-
-  deleteSessionGroupFromMenu(group: string): Promise<void> {
-    return this.runOperation(async (operations, scope) => {
-      if (!(await operations.deleteSessionGroup(this.deps, group, scope))) {
-        return;
-      }
-      const collapsed = new Set(this.collapsedSessionSections);
-      collapsed.delete(`category:${group}`);
-      this.saveCollapsedSessionSections(collapsed);
-    });
-  }
-
-  async editSessionGroupDefaults(group: string): Promise<void> {
-    const scope = this.deps.sessionData.beginSessionMutation();
-    if (!scope) {
-      return;
-    }
-    const dialogs = await this.loadDialog(import("./session-organizer-group-dialogs.runtime.ts"));
-    await dialogs?.editSessionGroupDefaultsDialog(this.deps, scope, group);
   }
 
   saveCollapsedSessionSections(sections: ReadonlySet<string>) {
@@ -527,13 +398,10 @@ export class SessionOrganizer {
     );
   }
 
-  assignSessionCategory(
-    session: SidebarRecentSession,
-    category: string | null,
-    patch: { pinned?: boolean } = {},
-  ): Promise<void> {
-    return this.runOperation((operations, scope) =>
-      operations.assignSessionCategory(this.deps, session, category, scope, patch),
+  assignSessionCategory(session: SidebarRecentSession, category: string | null): Promise<void> {
+    return this.runOperation(
+      (operations, scope) => operations.assignSessionCategory(this.deps, session, category, scope),
+      true,
     );
   }
 
@@ -545,21 +413,28 @@ export class SessionOrganizer {
     if (sectionId === "pinned") {
       return true;
     }
-    if (
-      this.deps.sessionsGrouping === "category" &&
-      (sectionId === "ungrouped" || Boolean(category))
-    ) {
+    // Match the rendered sections, including the saved Person preference fallback.
+    const grouping = this.deps.effectiveSessionsGrouping();
+    if (grouping === "category" && (sectionId === "ungrouped" || Boolean(category))) {
       return true;
     }
     return (
-      sectionId === "groups" &&
-      Boolean(session && categoryClearReturnsToGroups(session, this.deps.sessionsGrouping))
+      sectionId === "groups" && Boolean(session && categoryClearReturnsToGroups(session, grouping))
     );
   }
 
-  sectionDragOver(event: DragEvent, sectionId: string, category?: string) {
+  sectionDragOver(
+    event: DragEvent,
+    sectionId: string,
+    category?: string,
+    targetSessionKey?: string,
+  ) {
     const dataTransfer = event.dataTransfer;
-    if (sidebarSectionDragActive(dataTransfer) && this.draggingSidebarSection !== sectionId) {
+    if (
+      sidebarSectionDragActive(dataTransfer) &&
+      this.draggingSidebarSection !== sectionId &&
+      sectionId !== "pinned"
+    ) {
       event.preventDefault();
       if (dataTransfer) {
         dataTransfer.dropEffect = "move";
@@ -584,10 +459,20 @@ export class SessionOrganizer {
       event.stopPropagation();
       return;
     }
+    if (sectionId === "pinned" && targetSessionKey) {
+      this.sessionDropTarget = null;
+      this.sidebarSectionDropTarget = null;
+      this.handleSidebarZoneDragOver(
+        event,
+        serializeSidebarEntry({ type: "session", key: targetSessionKey }),
+      );
+      return;
+    }
     event.preventDefault();
     if (dataTransfer) {
       dataTransfer.dropEffect = "move";
     }
+    this.sidebarZoneDropTarget = null;
     this.sessionDropTarget = sectionId;
     this.sidebarSectionDropTarget = null;
     this.notify();
@@ -608,14 +493,19 @@ export class SessionOrganizer {
     }
   }
 
-  sectionDrop(event: DragEvent, sectionId: string, category?: string) {
+  sectionDrop(event: DragEvent, sectionId: string, category?: string, targetSessionKey?: string) {
     const sourceSectionId = readSidebarSectionDragData(event.dataTransfer);
     const sessionKey = readSessionDragData(event.dataTransfer);
-    if (!sourceSectionId && !sessionKey) {
+    if ((!sourceSectionId && !sessionKey) || (sourceSectionId && sectionId === "pinned")) {
       return;
     }
-    // Rows can be dragged from a browsed agent section, so search all caches.
-    const session = sessionKey ? this.deps.findSidebarMenuSessionByKey(sessionKey) : undefined;
+    // Shared moves use loaded rows; personal pins can also resolve outside the roster.
+    const session = sessionKey
+      ? (this.deps.findSidebarMenuSessionByKey(sessionKey) ??
+        (sectionId === "pinned"
+          ? this.deps.reconciledSidebarZone().sessionRows.get(sessionKey)
+          : undefined))
+      : undefined;
     if (!sourceSectionId && !this.sectionAcceptsSession(sectionId, category, session)) {
       event.stopPropagation();
       return;
@@ -630,7 +520,20 @@ export class SessionOrganizer {
       void this.reorderSidebarSection(sourceSectionId, sectionId, position);
     } else if (session && sectionId === "pinned") {
       if (session.pinnable) {
-        this.setPersonalSessionPin(session.key, true);
+        if (targetSessionKey && targetSessionKey !== session.key) {
+          const targetEntry = serializeSidebarEntry({ type: "session", key: targetSessionKey });
+          const position =
+            this.sidebarZoneDropTarget?.entry === targetEntry
+              ? this.sidebarZoneDropTarget.position
+              : "before";
+          this.writeSidebarEntryAt(
+            serializeSidebarEntry({ type: "session", key: session.key }),
+            targetEntry,
+            position,
+          );
+        } else {
+          this.setPersonalSessionPin(session.key, true);
+        }
       }
     } else if (session) {
       const nextCategory = category ?? null;
@@ -642,41 +545,5 @@ export class SessionOrganizer {
     this.sessionDropTarget = null;
     this.sidebarSectionDropTarget = null;
     this.finishSidebarEntryDrag();
-  }
-
-  setSessionsGrouping(grouping: SidebarSessionsGrouping) {
-    this.deps.sessionsGrouping = grouping;
-    storeSidebarSessionsGrouping(grouping);
-    this.notify();
-  }
-
-  setSessionsShowCron(show: boolean) {
-    this.deps.sessionsShowCron = show;
-    storeSidebarSessionsShowCron(show);
-    this.notify();
-  }
-
-  setSessionsShowPreview(show: boolean) {
-    this.deps.sessionsShowPreview = show;
-    storeSidebarSessionsShowPreview(show);
-    this.notify();
-  }
-
-  setSessionsShowSystem(show: boolean) {
-    this.deps.sessionsShowSystem = show;
-    storeSidebarSessionsShowSystem(show);
-    this.notify();
-  }
-
-  setSessionsStatusFilter(statusFilter: SidebarSessionStatusFilter) {
-    if (statusFilter === this.deps.sessionsStatusFilter) {
-      return;
-    }
-    this.deps.sessionsStatusFilter = statusFilter;
-    this.deps.clearSessionSelection();
-    this.deps.sessionData.resetSessionList();
-    storeSidebarSessionStatusFilter(statusFilter);
-    void this.deps.sessionData.refreshSidebarSessions();
-    this.notify();
   }
 }

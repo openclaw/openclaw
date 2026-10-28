@@ -2,10 +2,7 @@ import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { captureRuntimeWorkerSource } from "../infra/runtime-worker-generation.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
-import {
-  assertExistingDatabaseIdentity,
-  type DatabasePathIdentity,
-} from "../infra/sqlite-worker-identity.js";
+import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 import type { SqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import {
   openSharedStateSqliteWorkerStore,
@@ -19,6 +16,7 @@ import {
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { notifyListeners } from "../shared/listeners.js";
 import {
   publishOpenClawStateDatabaseWorkerAdmission,
   assertPublishedOpenClawStateDatabaseLifecycle,
@@ -142,7 +140,7 @@ function createSharedStateWorkerOwner() {
     }
     throw error;
   };
-  const retainOperation = (store: Store) => {
+  const retainOperation = (store: Store, onNativeLost?: () => void) => {
     const entry = [...stores].find((candidate) => candidate.store === store);
     if (!entry) {
       throw new Error("Shared-state worker operation lost its actor owner");
@@ -150,12 +148,21 @@ function createSharedStateWorkerOwner() {
     clearIdleRetirement(entry);
     entry.activeOperations += 1;
     activeEntries.add(entry);
+    if (onNativeLost) {
+      entry.nativeLostListeners.add(onNativeLost);
+      if (!isSqliteWorkerStoreAvailable(store)) {
+        onNativeLost();
+      }
+    }
     let released = false;
     return () => {
       if (released) {
         return undefined;
       }
       released = true;
+      if (onNativeLost) {
+        entry.nativeLostListeners.delete(onNativeLost);
+      }
       entry.activeOperations -= 1;
       if (entry.activeOperations === 0) {
         activeEntries.delete(entry);
@@ -258,11 +265,6 @@ function createSharedStateWorkerOwner() {
       }
       const assertCurrent = () => {
         assertOwned();
-        assertExistingDatabaseIdentity(
-          databasePath,
-          expectedIdentity.key,
-          expectedIdentity.birthtime,
-        );
         for (const entry of activeEntries) {
           if (
             matches(entry, expectedIdentity) &&
@@ -291,7 +293,16 @@ function createSharedStateWorkerOwner() {
         }
       }
       return openSharedStateSqliteWorkerStore<OpenClawStateWorkerCleanupOperations>(
-        { ...captureRuntimeWorkerSource(moduleUrl), databasePath, existingOnly: true },
+        {
+          ...captureRuntimeWorkerSource(moduleUrl),
+          databasePath,
+          existingOnly: true,
+          admission: {
+            identity: expectedIdentity.key,
+            birthtime: expectedIdentity.birthtime,
+            assertCurrent,
+          },
+        },
         context,
         assertCurrent,
         {
@@ -305,7 +316,7 @@ function createSharedStateWorkerOwner() {
       context: OpenClawStateWorkerContext,
       options: Omit<OperationOptions, "createAdmission"> = {},
     ): Promise<Store | undefined> {
-      const { existingOnly = false, assertCurrent, preparation, signal } = options;
+      const { existingOnly = false, assertCurrent, signal } = options;
       const { admission } = context;
       const wait = <T>(pending: Promise<T>) => racePromiseWithAbortSignal(pending, signal);
       const source = captureRuntimeWorkerSource(moduleUrl);
@@ -365,6 +376,7 @@ function createSharedStateWorkerOwner() {
       const ownsOpening = !entry;
       if (!entry) {
         const openingGuard = captureOpenClawStateWorkerOpeningGuard(context);
+        const nativeLostListeners = new Set<() => void>();
         const open = () =>
           openingGuard.run(() =>
             openSharedStateSqliteWorkerStore<OpenClawStateWorkerOperations>(
@@ -377,11 +389,21 @@ function createSharedStateWorkerOwner() {
               openingGuard.assertCurrent,
               {
                 maintenanceScope: context.maintenanceScope,
-                preparation,
+                // Opening binds the captured file; later commands retain their own authority.
+                ...(existingOnly && admission.identity.key.startsWith("file:")
+                  ? { createAdmission: openingGuard.createAdmission }
+                  : {}),
                 retireIdle: retireIdle.bind(undefined, admitted),
                 retainCleanup: (cleanup) => {
                   admitted.cleanup = cleanup;
                 },
+                // Bind only the listener set so the broker does not retain the opening caller.
+                onNativeLost: notifyListeners.bind(
+                  undefined,
+                  nativeLostListeners,
+                  undefined,
+                  undefined,
+                ),
               },
             ),
           );
@@ -389,6 +411,7 @@ function createSharedStateWorkerOwner() {
           source,
           context,
           existingOnly,
+          nativeLostListeners,
           activeOperations: 0,
           opening: Promise.resolve(undefined),
         };
@@ -442,7 +465,10 @@ function createSharedStateWorkerOwner() {
       }
       try {
         if (!entry.bound) {
-          publishOpenClawStateDatabaseWorkerAdmission(entry.context.admission);
+          publishOpenClawStateDatabaseWorkerAdmission(
+            entry.context.admission,
+            getSqliteWorkerActorIdentity(store).identity,
+          );
           entry.bound = true;
         }
       } catch (error) {

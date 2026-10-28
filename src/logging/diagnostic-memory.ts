@@ -7,6 +7,8 @@ import {
   type DiagnosticMemoryPressureEvent,
   type DiagnosticMemoryUsage,
 } from "../infra/diagnostic-events.js";
+import { getSessionRowSelectionMetrics } from "../infra/gateway-work-metrics.js";
+import { getOldGenerationAfterGcBytes } from "../infra/gc-observer.js";
 import { sampleTrackedWorkerMemory } from "../infra/worker-cpu.js";
 import { getWorkerMessageMetrics } from "../infra/worker-message-metrics.js";
 import { createSubsystemLogger } from "./subsystem.js";
@@ -15,6 +17,8 @@ const WARNING_RATIO = 0.8;
 const CRITICAL_RATIO = 0.9;
 const DEFAULT_PRESSURE_REPEAT_MS = 5 * 60 * 1000;
 const BYTE_UNITS = ["B", "KiB", "MiB", "GiB", "TiB"] as const;
+// Retain the named channel between samples, including periods without subscribers.
+const memoryPressure = channel("openclaw.memory.critical");
 
 // Bun's compatibility probe walks the heap and does not describe a V8 allocation limit.
 let defaultHeapSizeLimitBytes: number | undefined;
@@ -71,6 +75,7 @@ export function createDiagnosticMemorySampler(isCurrent: () => boolean) {
       return;
     }
     const linuxSample = emitSample && process.platform === "linux";
+    const sampledAt = performance.now();
     const memory = emitDiagnosticMemorySample({ emitSample: emitSample && !linuxSample });
     if (!linuxSample || pending) {
       return;
@@ -80,7 +85,23 @@ export function createDiagnosticMemorySampler(isCurrent: () => boolean) {
     void readProcessFootprint().then((processFootprint) => {
       pending = false;
       if (isCurrent()) {
-        publishMemorySample({ ...memory, ...processFootprint }, uptimeMs);
+        const publicationDelayMs = Math.round(performance.now() - sampledAt);
+        // The event timestamp is publication time; age the acquired samples without
+        // mutating rows already shared with pressure events. Coverage stays acquisition-scoped.
+        publishMemorySample(
+          {
+            ...memory,
+            ...processFootprint,
+            workerHeaps: memory.workerHeaps?.map((worker) =>
+              worker.sampleAgeMs === undefined
+                ? worker
+                : Object.assign({}, worker, {
+                    sampleAgeMs: worker.sampleAgeMs + publicationDelayMs,
+                  }),
+            ),
+          },
+          uptimeMs,
+        );
       }
     });
   };
@@ -112,7 +133,11 @@ function normalizeMemoryUsage(
     externalBytes: memory.external,
     arrayBuffersBytes: memory.arrayBuffers,
     ...(collectDiagnostics
-      ? { ...sampleTrackedWorkerMemory(), workerMessages: getWorkerMessageMetrics() }
+      ? {
+          ...sampleTrackedWorkerMemory(),
+          workerMessages: getWorkerMessageMetrics(),
+          sessionRowSelections: getSessionRowSelectionMetrics(),
+        }
       : {}),
   };
 }
@@ -250,6 +275,11 @@ function logMemoryPressure(pressure: MemoryPressure): void {
       pressure.memory.workerArrayBuffersBytes,
     ) +
     formatOptionalPressureMetric("workerCount", pressure.memory.workerCount) +
+    formatOptionalPressureMetric("postgresBridgeCount", pressure.memory.postgresBridgeCount) +
+    formatOptionalPressureMetric(
+      "postgresPoolSelfRootCount",
+      pressure.memory.postgresPoolSelfRootCount,
+    ) +
     formatOptionalPressureMetric("workerHeapSampledCount", pressure.memory.workerHeapSampledCount) +
     formatOptionalPressureMetric(
       "workerArrayBuffersSampledCount",
@@ -273,7 +303,7 @@ function logMemoryPressure(pressure: MemoryPressure): void {
     formatOptionalPressureMetric("usedBytes", pressure.usedBytes) +
     formatOptionalPressureMetric("workerThreadId", pressure.workerThreadId) +
     (pressure.memory.workerCount
-      ? " workerLimitScope=js-heap-only; external/ArrayBuffers are not capped; nested workers are not included."
+      ? " workerLimitScope=js-heap-only; external/ArrayBuffers are not capped; nested worker heaps are not included."
       : "") +
     ` ${nextStep}`;
   log.warn(message);
@@ -309,6 +339,8 @@ export function emitDiagnosticMemorySample(
   ].filter(isPositiveMemoryLimit);
   const rssLimitBytes = memoryLimits.length ? Math.min(...memoryLimits) : undefined;
   const shouldEmitSample = collectDiagnostics && options?.emitSample !== false;
+  memory.heapSizeLimitBytes = heapLimitBytes;
+  memory.oldGenerationAfterGcBytes = isBun ? undefined : getOldGenerationAfterGcBytes();
 
   if (shouldEmitSample) {
     publishMemorySample(memory, options?.uptimeMs ?? Math.round(process.uptime() * 1000));
@@ -316,7 +348,7 @@ export function emitDiagnosticMemorySample(
 
   const pressure = pickPressure(memory, heapLimitBytes, rssLimitBytes, options?.thresholds);
   if (pressure?.level === "critical") {
-    channel("openclaw.memory.critical").publish(undefined);
+    memoryPressure.publish(undefined);
   }
   if (
     collectDiagnostics &&

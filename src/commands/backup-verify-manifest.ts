@@ -240,6 +240,8 @@ export type BackupManifest = {
     stateDir?: string;
     configPath?: string;
     configSourcePath?: string;
+    /** Capture-time canonical identity; payloads retain their archive source spelling. */
+    sharedDatabaseSourcePath?: string;
     oauthDir?: string;
     workspaceDirs?: string[];
     agentRoots?: Array<{ agentId: string; sourcePath: string }>;
@@ -503,6 +505,14 @@ export function parseBackupManifest(raw: string): BackupManifest {
                 configSourcePath: parseBackupManifestSourcePath(
                   parsed.paths.configSourcePath,
                   "configuration source",
+                ),
+              }),
+          ...(parsed.paths.sharedDatabaseSourcePath === undefined
+            ? {}
+            : {
+                sharedDatabaseSourcePath: parseBackupManifestSourcePath(
+                  parsed.paths.sharedDatabaseSourcePath,
+                  "shared database source",
                 ),
               }),
           agentRoots: parseBackupManifestAgentRoots(parsed.paths.agentRoots),

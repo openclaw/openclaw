@@ -11,7 +11,7 @@ import type { OpenClawConfig } from "./types.js";
 export function maybeLoadDotEnvForConfig(env: NodeJS.ProcessEnv): void {
   // Injected env objects are test/diagnostic sandboxes and must stay isolated.
   if (env === process.env) {
-    loadDotEnv({ quiet: true });
+    loadDotEnv();
   }
 }
 

@@ -24,7 +24,7 @@ export function bindCommandOwnerAuthority(context: object, authority: CommandOwn
   const capability = {
     recoveryReference,
     operatorAuthority,
-    isCurrent: () => checkCurrent(),
+    isCurrent: checkCurrent,
   };
   Object.setPrototypeOf(capability, null);
   Object.freeze(capability);

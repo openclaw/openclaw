@@ -1,7 +1,6 @@
 import { createMemo, Show } from "solid-js";
 import { isReservedSystemAgentId } from "../../../../src/system-agent/agent-id.js";
 import type { AgentsListResult } from "../../api/types.ts";
-import { currentThemeBranding, subscribeThemeBranding } from "../../app/theme-branding.ts";
 import {
   resolveLocalUserAvatarText,
   resolveLocalUserAvatarUrl,
@@ -34,11 +33,13 @@ import { formatSenderLabel, type SenderIdentity } from "../../lib/chat/sender-la
 import { resolveAvatarImageUrl } from "../../lib/identity-avatar-loader.ts";
 import type { IdentityAvatarView } from "../../lib/identity-avatar-view.ts";
 import { resolveAvatarInitials } from "../../lib/identity-avatar.ts";
-import { projectSource } from "../../lib/reactive/projection.ts";
+import { themeBrandingProjection } from "../../lib/reactive/theme-branding.ts";
 import { DEFAULT_AGENT_ID } from "../../lib/sessions/session-key.ts";
 import { ChatAuthorAvatar, UserAvatarSlot } from "./components/chat-author-avatar-view.tsx";
 
 export type ChatAvatarProps = {
+  elementRef?: (element: HTMLElement) => void;
+  mediaReadAllowed?: boolean;
   role: string;
   assistant?: Pick<AssistantIdentity, "agentId" | "name" | "avatar"> & {
     textAvatar?: string | null;
@@ -49,61 +50,81 @@ export type ChatAvatarProps = {
 };
 
 export function ChatAvatar(props: ChatAvatarProps) {
-  const role = createMemo(() => normalizeRoleForGrouping(props.role));
+  const role = () => normalizeRoleForGrouping(props.role);
   return (
     <Show
-      when={role() === "user" && props.sender ? props.sender : undefined}
+      when={props.mediaReadAllowed !== false}
       fallback={
-        <Show
-          when={role() === "assistant"}
-          fallback={<LocalAvatar role={role()} user={props.user} />}
-        >
-          <AgentAvatar
-            id={props.assistant?.agentId ?? DEFAULT_AGENT_ID}
-            name={props.assistant?.name?.trim() || "Assistant"}
-            avatar={props.assistant?.avatar}
-            textAvatar={
-              props.assistant?.textAvatar ?? resolveAssistantTextAvatar(props.assistant?.avatar)
-            }
-          />
-        </Show>
+        <div class={["chat-avatar", role()]} ref={(element) => props.elementRef?.(element)}>
+          <RoleAvatarIcon role={role()} />
+        </div>
       }
     >
-      {(sender) => (
-        <Show
-          when={sender().identity?.type === "agent"}
-          fallback={
-            <IdentityAvatar identity={sender()}>
-              {(view) => (
-                <ProfileChatAvatar
-                  sender={sender()}
-                  view={view()}
-                  channelAvatar={props.channelAvatar}
-                />
-              )}
-            </IdentityAvatar>
-          }
-        >
-          <ChatAuthorAvatar sender={sender()} class="chat-avatar assistant" />
-        </Show>
-      )}
+      <Show
+        when={role() === "user" && props.sender ? props.sender : undefined}
+        fallback={
+          <Show
+            when={role() === "assistant"}
+            fallback={<LocalAvatar role={role()} user={props.user} elementRef={props.elementRef} />}
+          >
+            <AgentAvatar
+              elementRef={props.elementRef}
+              id={props.assistant?.agentId ?? DEFAULT_AGENT_ID}
+              name={props.assistant?.name?.trim() || "Assistant"}
+              avatar={props.assistant?.avatar}
+              textAvatar={
+                props.assistant?.textAvatar ?? resolveAssistantTextAvatar(props.assistant?.avatar)
+              }
+            />
+          </Show>
+        }
+      >
+        {(sender) => (
+          <Show
+            when={sender().identity?.type === "agent"}
+            fallback={
+              <IdentityAvatar identity={sender()}>
+                {(view) => (
+                  <ProfileChatAvatar
+                    elementRef={props.elementRef}
+                    sender={sender()}
+                    view={view()}
+                    channelAvatar={props.channelAvatar}
+                  />
+                )}
+              </IdentityAvatar>
+            }
+          >
+            <ChatAuthorAvatar
+              sender={sender()}
+              class="chat-avatar assistant"
+              elementRef={props.elementRef}
+            />
+          </Show>
+        )}
+      </Show>
     </Show>
   );
 }
 
 function ProfileChatAvatar(props: {
+  elementRef?: (element: HTMLElement) => void;
   sender: SenderIdentity;
   view: IdentityAvatarView;
   channelAvatar?: ChannelSenderAvatarSource;
 }) {
   const gateway = useAvatarGatewayContext();
-  const label = createMemo(() => formatSenderLabel(props.sender) ?? "");
+  const label = () => formatSenderLabel(props.sender) ?? "";
   const photo = createMemo(() =>
     resolveChannelSenderAvatarUrl(props.sender, props.channelAvatar, gateway().resourceBasePath),
   );
   return (
-    <Show when={photo()} fallback={<UserAvatarSlot view={props.view} label={label()} />}>
+    <Show
+      when={photo()}
+      fallback={<UserAvatarSlot view={props.view} label={label()} elementRef={props.elementRef} />}
+    >
       <div
+        ref={(element) => props.elementRef?.(element)}
         class="chat-avatar user chat-avatar--sender-initials"
         role="img"
         aria-label={label()}
@@ -121,7 +142,7 @@ function ProfileChatAvatar(props: {
   );
 }
 
-function LocalAvatar(props: Pick<ChatAvatarProps, "role" | "user">) {
+function LocalAvatar(props: Pick<ChatAvatarProps, "role" | "user" | "elementRef">) {
   const gateway = useAvatarGatewayContext();
   const name = createMemo(() => resolveLocalUserName(props.user));
   const url = createMemo(() => resolveLocalUserAvatarUrl(props.user));
@@ -141,6 +162,7 @@ function LocalAvatar(props: Pick<ChatAvatarProps, "role" | "user">) {
       when={props.role === "user" && url()}
       fallback={
         <div
+          ref={(element) => props.elementRef?.(element)}
           class={[
             "chat-avatar",
             props.role === "user" ? "user" : props.role === "tool" ? "tool" : "other",
@@ -157,7 +179,7 @@ function LocalAvatar(props: Pick<ChatAvatarProps, "role" | "user">) {
         </div>
       }
     >
-      <UserAvatarSlot view={view()} label={name()} />
+      <UserAvatarSlot view={view()} label={name()} elementRef={props.elementRef} />
     </Show>
   );
 }
@@ -198,17 +220,14 @@ function RoleAvatarIcon(props: { role: string }) {
 }
 
 function AgentAvatar(props: {
+  elementRef?: (element: HTMLElement) => void;
   id: string;
   name: string;
   avatar?: string | null;
   textAvatar?: string | null;
 }) {
   const gateway = useAvatarGatewayContext();
-  const branding = projectSource(null, {
-    read: currentThemeBranding,
-    subscribe: (_source, notify) => subscribeThemeBranding(notify),
-    equality: Object.is,
-  });
+  const branding = themeBrandingProjection;
   const url = createMemo(() => props.avatar?.trim() || "");
   const view = createMemo(() => {
     gateway();
@@ -224,14 +243,18 @@ function AgentAvatar(props: {
       }
       fallback={
         <AgentIdentityAvatar
+          elementRef={props.elementRef}
           agent={{ id: props.id, name: props.name, textAvatar: props.textAvatar }}
           class="chat-avatar assistant"
         />
       }
     >
       <span
+        ref={(element) => props.elementRef?.(element)}
         data-avatar-state={presentation.state()}
         class={["chat-avatar-slot", presentation.classes()]}
+        role="img"
+        aria-label={props.name}
       >
         <Show when={Boolean(view().imageUrl)}>
           <IdentityAvatarImage
@@ -239,10 +262,11 @@ function AgentAvatar(props: {
             onStateChange={presentation.onStateChange}
             class="chat-avatar assistant"
             alt={props.name}
+            ariaHidden
           />
         </Show>
         <AgentIdentityAvatar
-          agent={{ id: props.id, name: props.name, textAvatar: props.textAvatar }}
+          agent={{ id: props.id, textAvatar: props.textAvatar }}
           class="chat-avatar assistant"
         />
         <AgentAvatarHat agentId={props.id} branding={branding.read()} />
@@ -252,6 +276,7 @@ function AgentAvatar(props: {
 }
 
 export type ForwardedAvatarOptions = {
+  mediaReadAllowed?: boolean;
   agentId?: string;
   agents?: AgentsListResult["agents"];
   senderAgentAvatars?: ReadonlyMap<string, string | null>;
@@ -260,7 +285,11 @@ export type ForwardedAvatarOptions = {
   assistantTextAvatar?: string | null;
 };
 
-export function ForwardedAvatar(props: { agentId?: string; options: ForwardedAvatarOptions }) {
+export function ForwardedAvatar(props: {
+  agentId?: string;
+  options: ForwardedAvatarOptions;
+  elementRef?: (element: HTMLElement) => void;
+}) {
   const agent = createMemo(() =>
     props.agentId
       ? props.options.agents?.find((candidate) => candidate.id === props.agentId)
@@ -274,29 +303,38 @@ export function ForwardedAvatar(props: { agentId?: string; options: ForwardedAva
   });
   return (
     <Show
-      when={props.agentId && props.agentId === props.options.agentId}
+      when={props.options.mediaReadAllowed !== false}
       fallback={
-        <Show when={agent()}>
-          {(value) => (
-            <AgentAvatar
-              id={value().id}
-              name={value().identity?.name?.trim() || value().id}
-              avatar={avatar()}
-              textAvatar={resolveAssistantTextAvatar(avatar()) ?? resolveAgentTextAvatar(value())}
-            />
-          )}
-        </Show>
+        <ChatAvatar role="assistant" mediaReadAllowed={false} elementRef={props.elementRef} />
       }
     >
-      <ChatAvatar
-        role="assistant"
-        assistant={{
-          agentId: props.agentId,
-          name: props.options.assistantName ?? "Assistant",
-          avatar: props.options.assistantAvatar ?? null,
-          textAvatar: props.options.assistantTextAvatar,
-        }}
-      />
+      <Show
+        when={props.agentId && props.agentId === props.options.agentId}
+        fallback={
+          <Show when={agent()}>
+            {(value) => (
+              <AgentAvatar
+                elementRef={props.elementRef}
+                id={value().id}
+                name={value().identity?.name?.trim() || value().id}
+                avatar={avatar()}
+                textAvatar={resolveAssistantTextAvatar(avatar()) ?? resolveAgentTextAvatar(value())}
+              />
+            )}
+          </Show>
+        }
+      >
+        <ChatAvatar
+          elementRef={props.elementRef}
+          role="assistant"
+          assistant={{
+            agentId: props.agentId,
+            name: props.options.assistantName ?? "Assistant",
+            avatar: props.options.assistantAvatar ?? null,
+            textAvatar: props.options.assistantTextAvatar,
+          }}
+        />
+      </Show>
     </Show>
   );
 }

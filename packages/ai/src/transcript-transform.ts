@@ -37,7 +37,11 @@ function replaceImagesWithPlaceholder(
     }
   }
 
-  return result;
+  return Object.isFrozen(content) &&
+    result.length === content.length &&
+    result.every((block, index) => block === content[index])
+    ? content
+    : result;
 }
 
 function transformAssistant<TApi extends Api>(
@@ -100,7 +104,13 @@ function transformAssistant<TApi extends Api>(
     }
     return id === block.id ? unsigned : Object.assign({}, unsigned, { id });
   });
-  return { ...message, content };
+  return Array.isArray(message.content) &&
+    Object.isFrozen(message) &&
+    Object.isFrozen(message.content) &&
+    content.length === message.content.length &&
+    content.every((block, index) => block === message.content[index])
+    ? message
+    : { ...message, content };
 }
 
 export function transformMessages<TApi extends Api>(
@@ -155,11 +165,12 @@ export function transformMessages<TApi extends Api>(
     ? "aborted"
     : DEFAULT_MISSING_TOOL_RESULT_TEXT;
   const result: Message[] = [];
-  const pendingAsyncCalls = new Map<string, ToolCall>();
-  let pendingToolCalls: ToolCall[] = [];
+  type PendingToolCall = { call: ToolCall; timestamp: number };
+  const pendingAsyncCalls = new Map<string, PendingToolCall>();
+  let pendingToolCalls: PendingToolCall[] = [];
   let existingToolResultIds = new Set<string>();
   const flushToolCalls = () => {
-    for (const call of pendingToolCalls) {
+    for (const { call, timestamp } of pendingToolCalls) {
       if (!existingToolResultIds.has(call.id)) {
         result.push({
           role: "toolResult",
@@ -168,7 +179,7 @@ export function transformMessages<TApi extends Api>(
           content: [{ type: "text", text: missingResultText }],
           details: { openclawSyntheticMissingToolResult: true },
           isError: true,
-          timestamp: Date.now(),
+          timestamp,
         });
       }
     }
@@ -194,27 +205,29 @@ export function transformMessages<TApi extends Api>(
         });
         continue;
       }
-      pendingToolCalls = message.content.filter((block): block is ToolCall => {
+      pendingToolCalls = message.content.flatMap((block): PendingToolCall[] => {
         if (block.type !== "toolCall") {
-          return false;
+          return [];
         }
+        // Rebuilt replay results retain their owner's time, including delayed async calls.
+        const pending = { call: block, timestamp: message.timestamp ?? 0 };
         if (block.async) {
-          pendingAsyncCalls.set(block.id, block);
-          return false;
+          pendingAsyncCalls.set(block.id, pending);
+          return [];
         }
-        return true;
+        return [pending];
       });
     } else {
       if (!supportsImages && typeof message.content !== "string") {
-        message = {
-          ...message,
-          content: replaceImagesWithPlaceholder(
-            message.content,
-            message.role === "user"
-              ? NON_VISION_USER_IMAGE_PLACEHOLDER
-              : NON_VISION_TOOL_IMAGE_PLACEHOLDER,
-          ),
-        };
+        const content = replaceImagesWithPlaceholder(
+          message.content,
+          message.role === "user"
+            ? NON_VISION_USER_IMAGE_PLACEHOLDER
+            : NON_VISION_TOOL_IMAGE_PLACEHOLDER,
+        );
+        if (!Object.isFrozen(message) || content !== message.content) {
+          message = { ...message, content };
+        }
       }
       if (message.role === "toolResult") {
         const trimmedId = message.toolCallId.trim();

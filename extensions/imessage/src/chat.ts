@@ -1,21 +1,17 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
-import { resolveIMessageAccount, type ResolvedIMessageAccount } from "./accounts.js";
+import { resolveIMessageAccount } from "./accounts.js";
 import { createIMessageRpcClient, type IMessageRpcClient } from "./client.js";
 import { resolveIMessageRemoteHost } from "./remote-host.js";
-import { formatIMessageChatTarget, type IMessageService, parseIMessageTarget } from "./targets.js";
+import { iMessageTargetRpcParams, parseIMessageTarget } from "./targets.js";
 
 type ChatActionOpts = {
   cfg: OpenClawConfig;
   accountId?: string;
-  account?: ResolvedIMessageAccount;
   client?: IMessageRpcClient;
   cliPath?: string;
   dbPath?: string;
   remoteHost?: string;
-  service?: IMessageService;
-  timeoutMs?: number;
-  chatId?: number;
 };
 
 async function runChatAction(
@@ -25,24 +21,13 @@ async function runChatAction(
   isTyping?: boolean,
 ): Promise<void> {
   const cfg = requireRuntimeConfig(opts.cfg, "iMessage chat action");
-  const account = opts.account ?? resolveIMessageAccount({ cfg, accountId: opts.accountId });
-  const target = parseIMessageTarget(opts.chatId ? formatIMessageChatTarget(opts.chatId) : to);
-  const params: Record<string, unknown> = {};
-  if (target.kind === "chat_id") {
-    params.chat_id = target.chatId;
-  } else if (target.kind === "chat_guid") {
-    params.chat_guid = target.chatGuid;
-  } else if (target.kind === "chat_identifier") {
-    params.chat_identifier = target.chatIdentifier;
-  } else {
-    params.to = target.to;
-  }
+  const account = resolveIMessageAccount({ cfg, accountId: opts.accountId });
+  const target = parseIMessageTarget(to);
+  const params = iMessageTargetRpcParams(target);
   if (method === "typing") {
     params.typing = isTyping;
     const service =
-      opts.service ??
-      (target.kind === "handle" ? target.service : undefined) ??
-      account.config.service;
+      (target.kind === "handle" ? target.service : undefined) ?? account.config.service;
     if (service) {
       params.service = service;
     }
@@ -56,7 +41,7 @@ async function runChatAction(
   const client = opts.client ?? (await createIMessageRpcClient({ cliPath, dbPath, remoteHost }));
   const shouldClose = !opts.client;
   try {
-    await client.request(method, params, { timeoutMs: opts.timeoutMs });
+    await client.request(method, params);
   } finally {
     if (shouldClose) {
       await client.stop();

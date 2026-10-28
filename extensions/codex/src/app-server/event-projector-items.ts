@@ -1,6 +1,11 @@
 import { readStringField as readItemString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexThreadItem } from "./protocol.js";
 
+export type AssistantCompletion = Pick<CodexThreadItem, "type" | "id" | "text"> & {
+  phase?: unknown;
+  delivery?: unknown;
+};
+
 export type CodexNativeToolAuditStatus = ReturnType<typeof itemStatus> | "cancelled" | "unknown";
 export type CodexNativeToolUnfinishedStatus = Extract<
   CodexNativeToolAuditStatus,
@@ -161,4 +166,19 @@ export function shouldAdvancePersistableAssistantBarrier(item: CodexThreadItem):
     item.type === "dynamicToolCall" ||
     item.type === "sleep"
   );
+}
+
+// A terminal snapshot can replay an earlier input's suppressed coda after a
+// steer reopens projection. Suppression follows item identity, never its text.
+export function createAssistantItemSuppression(hasDeliveredFinal: () => boolean | undefined) {
+  const suppressedIds = new Set<string>();
+  return (itemId: string | undefined): boolean => {
+    if (hasDeliveredFinal()) {
+      if (itemId) {
+        suppressedIds.add(itemId);
+      }
+      return true;
+    }
+    return itemId !== undefined && suppressedIds.has(itemId);
+  };
 }

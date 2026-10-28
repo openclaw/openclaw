@@ -117,61 +117,54 @@ async function postJson<T>(
   body: unknown,
   options: QaBusPostOptions = {},
 ): Promise<T> {
-  return captureEffectAuthority().initiate(() =>
-    initiateQaBusPost<T>(baseUrl, path, body, options),
-  );
-}
+  return captureEffectAuthority().initiate(async () => {
+    const url = buildQaBusUrl(baseUrl, path);
+    const payload = JSON.stringify(body);
+    const client = url.protocol === "https:" ? https : http;
+    const timeoutMs = resolvePositiveTimerTimeoutMs(options.timeoutMs, QA_BUS_REQUEST_TIMEOUT_MS);
+    const timeoutSignal = AbortSignal.timeout(timeoutMs);
+    const signal = options.signal
+      ? AbortSignal.any([options.signal, timeoutSignal])
+      : timeoutSignal;
 
-async function initiateQaBusPost<T>(
-  baseUrl: string,
-  path: string,
-  body: unknown,
-  options: QaBusPostOptions,
-): Promise<T> {
-  const url = buildQaBusUrl(baseUrl, path);
-  const payload = JSON.stringify(body);
-  const client = url.protocol === "https:" ? https : http;
-  const timeoutMs = resolvePositiveTimerTimeoutMs(options.timeoutMs, QA_BUS_REQUEST_TIMEOUT_MS);
-  const timeoutSignal = AbortSignal.timeout(timeoutMs);
-  const signal = options.signal ? AbortSignal.any([options.signal, timeoutSignal]) : timeoutSignal;
-
-  return await new Promise<T>((resolve, reject) => {
-    options.beforeRequest?.();
-    const request = client.request(
-      url,
-      {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "content-length": Buffer.byteLength(payload),
-          connection: "close",
+    return await new Promise<T>((resolve, reject) => {
+      options.beforeRequest?.();
+      const request = client.request(
+        url,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "content-length": Buffer.byteLength(payload),
+            connection: "close",
+          },
+          signal,
         },
-        signal,
-      },
-      (response) => {
-        const label = `qa-bus ${path}`;
-        void readQaBusNodeJsonResponse<T | { error?: string }>(response, label).then(
-          (parsed) => {
-            if ((response.statusCode ?? 500) < 200 || (response.statusCode ?? 500) >= 300) {
-              const error =
-                typeof parsed === "object" && parsed && "error" in parsed
-                  ? parsed.error
-                  : undefined;
-              reject(new Error(error || `qa-bus request failed: ${response.statusCode ?? 500}`));
-              return;
-            }
-            resolve(parsed as T);
-          },
-          (error: unknown) => {
-            reject(toErrorObject(error, "Non-Error rejection"));
-          },
-        );
-        response.on("error", reject);
-      },
-    );
+        (response) => {
+          const label = `qa-bus ${path}`;
+          void readQaBusNodeJsonResponse<T | { error?: string }>(response, label).then(
+            (parsed) => {
+              if ((response.statusCode ?? 500) < 200 || (response.statusCode ?? 500) >= 300) {
+                const error =
+                  typeof parsed === "object" && parsed && "error" in parsed
+                    ? parsed.error
+                    : undefined;
+                reject(new Error(error || `qa-bus request failed: ${response.statusCode ?? 500}`));
+                return;
+              }
+              resolve(parsed as T);
+            },
+            (error: unknown) => {
+              reject(toErrorObject(error, "Non-Error rejection"));
+            },
+          );
+          response.on("error", reject);
+        },
+      );
 
-    request.on("error", reject);
-    request.end(payload);
+      request.on("error", reject);
+      request.end(payload);
+    });
   });
 }
 

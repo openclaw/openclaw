@@ -25,8 +25,12 @@ import { createCommandResult as commandResult } from "../../test-utils/npm-spec-
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import * as runtimeUtils from "../../utils.js";
 import { VERSION } from "../../version.js";
-import type { UpdateCommandOptions } from "./shared.js";
+import { writeFixtureJson } from "../cli-fixtures.test-support.js";
 import { completeUpdateCommandRun } from "./update-command-run.js";
+import {
+  maintenanceDefaults,
+  type InstallRootTransitionFixture,
+} from "./update-command-service-fixtures.test-support.js";
 import {
   maybeRestartService,
   maybeStopManagedServiceBeforeMutableUpdate,
@@ -71,6 +75,7 @@ function createServingOwnerFixture() {
           databasePath: resolveOpenClawStateSqlitePath(env),
           payload: {
             pid: process.pid,
+            processNamespace: gatewayNamespace.readGatewayLockProcessNamespace(),
             createdAt: new Date().toISOString(),
             configPath: resolveConfigPath(env),
             role: "gateway",
@@ -156,10 +161,11 @@ export async function createServiceActivationFixture() {
   const configPath = path.join(root, ".openclaw", "openclaw.json");
   await fs.mkdir(path.dirname(configPath), { mode: 0o700 });
   await fs.mkdir(path.join(root, "dist"));
-  await fs.writeFile(
-    path.join(root, "package.json"),
-    JSON.stringify({ name: "openclaw", version: VERSION, type: "module" }),
-  );
+  await writeFixtureJson(path.join(root, "package.json"), {
+    name: "openclaw",
+    version: VERSION,
+    type: "module",
+  });
   await fs.writeFile(path.join(root, "dist", "index.js"), "export {};\n");
   const worker = "dist/infra/update-candidate-state.worker.js";
   await fs.mkdir(path.dirname(path.join(root, worker)), { recursive: true });
@@ -203,42 +209,37 @@ export function serviceUpdateResult(
 }
 
 export async function writeRecoveryConfig(configPath: string, version: string) {
-  await fs.writeFile(
+  await writeFixtureJson(
     configPath,
-    JSON.stringify(stampConfigWriteMetadata({ gateway: { port: 19001 } }, version)),
+    // Native service transport uses a shared token; paired-device auth has socket-level proof.
+    stampConfigWriteMetadata(
+      { gateway: { port: 19001, auth: { mode: "token", token: "fixture-service-token" } } },
+      version,
+    ),
   );
   clearConfigCache();
   clearRuntimeConfigSnapshot();
 }
 
-export function registerRecoveryTests(params: {
-  root: () => string;
-  configPath: () => string;
-  run: () => NonNullable<UpdateCommandOptions["run"]>;
-  mocks: {
-    health: Mock<typeof import("../daemon-cli/restart-health.js").waitForGatewayHealthyRestart>;
-    capability: Mock<
-      typeof import("../../daemon/systemd-definition-mutation.js").readSystemdDefinitionMutationCapability
-    >;
-    command: Mock<typeof import("../../daemon/systemd.js").readSystemdServiceExecStart>;
-    child: Mock<typeof import("../../process/exec.js").runCommandWithTimeout>;
-    error: Mock;
-    restart: Mock;
-    ports: Mock<typeof import("../../infra/ports-inspect.js").inspectPortUsage>;
-    call: Mock<(opts: CallGatewayOptions) => Promise<unknown>>;
-    configSnapshot: Mock<() => Promise<void>>;
-    running: boolean;
-    events: string[];
-  };
-}): void {
+export function registerRecoveryTests(
+  getFixture: () => InstallRootTransitionFixture & {
+    configPath: string;
+    mocks: {
+      error: Mock;
+      restart: Mock;
+      configSnapshot: Mock<() => Promise<void>>;
+      ports: Mock<typeof import("../../infra/ports-inspect.js").inspectPortUsage>;
+      call: Mock<(opts: CallGatewayOptions) => Promise<unknown>>;
+    };
+  },
+): void {
   it.each([
     { startup: "unready", readyAfterMs: Infinity, needsRecovery: false },
     { startup: "wrong version", readyAfterMs: 0, needsRecovery: true },
   ])(
     "verifies the $startup refresh before deciding on recovery",
     async ({ startup, readyAfterMs, needsRecovery }) => {
-      const root = params.root();
-      const mocks = params.mocks;
+      const { root, run, mocks } = getFixture();
       let nowMs = 0;
       let recovering = false;
       vi.spyOn(performance, "now").mockImplementation(() => nowMs);
@@ -247,10 +248,8 @@ export function registerRecoveryTests(params: {
       });
       mocks.capability.mockResolvedValue({ kind: "writable" });
       const before = await maybeStopManagedServiceBeforeMutableUpdate({
-        updateInstallKind: "package",
+        ...maintenanceDefaults,
         root,
-        shouldRestart: true,
-        jsonMode: true,
       });
       expect(before.serviceUpdateVerdict).toMatchObject({ kind: "owned", refreshDefinition: true });
 
@@ -302,7 +301,7 @@ export function registerRecoveryTests(params: {
       const activated = await maybeRestartService({
         shouldRestart: true,
         result,
-        opts: { json: true, run: params.run() },
+        opts: { json: true, run },
         refreshServiceEnv: true,
         serviceInstallEnv: process.env,
         serviceUpdateVerdict: before.serviceUpdateVerdict,
@@ -316,7 +315,6 @@ export function registerRecoveryTests(params: {
       const pending = startup === "unready";
       expect(activated).toBe(pending ? "readiness-pending" : "ok");
       if (pending) {
-        const run = params.run();
         expect(completeUpdateCommandRun(result, run)).toMatchObject({
           status: "skipped",
           reason: "still-starting",
@@ -338,12 +336,7 @@ export function registerRecoveryTests(params: {
       expect(mocks.events).toEqual([
         "native stop",
         "refresh activation",
-        ...(needsRecovery
-          ? [
-              `health: ${startup === "wrong version" ? "version-mismatch" : "timeout"}`,
-              "recovery restart",
-            ]
-          : []),
+        ...(needsRecovery ? ["health: version-mismatch", "recovery restart"] : []),
         pending ? "health: still-starting" : "health: healthy",
       ]);
       expect(mocks.restart).not.toHaveBeenCalled();
@@ -356,13 +349,12 @@ export function registerRecoveryTests(params: {
   it.each(["healthy", "unready", "exited", "cleanup"] as const)(
     "failed-update recovery requires canonical readiness after start acceptance (%s)",
     async (outcome) => {
+      const { root, mocks } = getFixture();
       const before = await maybeStopManagedServiceBeforeMutableUpdate({
-        updateInstallKind: "package",
-        root: params.root(),
-        shouldRestart: true,
-        jsonMode: true,
+        ...maintenanceDefaults,
+        root,
       });
-      params.mocks.health.mockImplementation(async ({ port, expectedVersion }) => ({
+      mocks.health.mockImplementation(async ({ port, expectedVersion }) => ({
         outcome: outcome === "healthy" ? "ready" : outcome === "exited" ? "failed" : "starting",
         healthy: outcome === "healthy",
         staleGatewayPids: [],
@@ -377,7 +369,7 @@ export function registerRecoveryTests(params: {
       }));
       const cleanup = new CommandProcessCleanupError();
       if (outcome === "cleanup") {
-        params.mocks.health.mockRejectedValueOnce(cleanup);
+        mocks.health.mockRejectedValueOnce(cleanup);
       }
       const pending = maybeRestartServiceAfterFailedMutableUpdate({
         preManagedServiceStop: before,
@@ -389,7 +381,7 @@ export function registerRecoveryTests(params: {
       } else {
         await expect(pending).resolves.toBe(outcome === "healthy" ? "healthy" : "failed");
       }
-      expect(params.mocks.health).toHaveBeenCalledWith(
+      expect(mocks.health).toHaveBeenCalledWith(
         expect.objectContaining({
           expectedBuildId: "restored-git-build",
           requireRunningService: true,
@@ -400,15 +392,11 @@ export function registerRecoveryTests(params: {
   it.each(["foreign", "profile", "before activation", "after readiness"])(
     "revalidates stale-parent failed-update recovery after %s changes",
     async (change) => {
-      const root = params.root();
-      const configPath = params.configPath();
-      const mocks = params.mocks;
+      const { root, configPath, mocks } = getFixture();
       mocks.capability.mockResolvedValue({ kind: "writable" });
       const before = await maybeStopManagedServiceBeforeMutableUpdate({
-        updateInstallKind: "package",
+        ...maintenanceDefaults,
         root,
-        shouldRestart: true,
-        jsonMode: true,
       });
       expect(before.stopped).toBe(true);
       await writeRecoveryConfig(configPath, "9999.1.1");
@@ -417,52 +405,47 @@ export function registerRecoveryTests(params: {
       if (!command) {
         throw new Error("missing fixture command");
       }
-      if (change === "unavailable") {
-        mocks.command.mockRejectedValue(new Error("manager unavailable"));
-      } else {
-        const foreign = path.join(root, "foreign");
-        await fs.mkdir(path.join(foreign, "dist"), { recursive: true });
-        await fs.writeFile(
-          path.join(foreign, "package.json"),
-          JSON.stringify({ name: "openclaw", version: VERSION }),
-        );
-        await fs.writeFile(path.join(foreign, "dist", "index.js"), "export {};\n");
-        const replacement = {
-          ...command,
-          programArguments: [
-            process.execPath,
-            path.join(change === "foreign" ? foreign : root, "dist", "index.js"),
-            "gateway",
-            "--port",
-            "19002",
-          ],
-          environment: {
-            HOME: root,
-            OPENCLAW_PROFILE: "default",
-            OPENCLAW_STATE_DIR: path.dirname(configPath),
-            OPENCLAW_CONFIG_PATH: configPath,
-            OPENCLAW_SYSTEMD_UNIT:
-              change === "unit" ? "openclaw-other.service" : "openclaw-gateway.service",
-            ...(change === "profile"
-              ? {
-                  OPENCLAW_PROFILE: "second",
-                  OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-second.service",
-                  OPENCLAW_STATE_DIR: path.join(root, ".openclaw-second"),
-                  OPENCLAW_CONFIG_PATH: path.join(root, ".openclaw-second", "openclaw.json"),
-                }
-              : {}),
-          },
-        };
-        if (change === "after readiness") {
-          mocks.health.mockImplementationOnce(async ({ port }) => {
-            mocks.command.mockResolvedValue(replacement);
-            return readyRecoveryHealth(port, true);
-          });
-        } else {
+      const foreign = path.join(root, "foreign");
+      await fs.mkdir(path.join(foreign, "dist"), { recursive: true });
+      await writeFixtureJson(path.join(foreign, "package.json"), {
+        name: "openclaw",
+        version: VERSION,
+      });
+      await fs.writeFile(path.join(foreign, "dist", "index.js"), "export {};\n");
+      const replacement = {
+        ...command,
+        programArguments: [
+          process.execPath,
+          path.join(change === "foreign" ? foreign : root, "dist", "index.js"),
+          "gateway",
+          "--port",
+          "19002",
+        ],
+        environment: {
+          HOME: root,
+          OPENCLAW_PROFILE: "default",
+          OPENCLAW_STATE_DIR: path.dirname(configPath),
+          OPENCLAW_CONFIG_PATH: configPath,
+          OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway.service",
+          ...(change === "profile"
+            ? {
+                OPENCLAW_PROFILE: "second",
+                OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-second.service",
+                OPENCLAW_STATE_DIR: path.join(root, ".openclaw-second"),
+                OPENCLAW_CONFIG_PATH: path.join(root, ".openclaw-second", "openclaw.json"),
+              }
+            : {}),
+        },
+      };
+      if (change === "after readiness") {
+        mocks.health.mockImplementationOnce(async ({ port }) => {
           mocks.command.mockResolvedValue(replacement);
-          if (change === "before activation") {
-            mocks.command.mockResolvedValueOnce(command);
-          }
+          return readyRecoveryHealth(port, true);
+        });
+      } else {
+        mocks.command.mockResolvedValue(replacement);
+        if (change === "before activation") {
+          mocks.command.mockResolvedValueOnce(command);
         }
       }
       mocks.events.push("update failed after definition changed");
@@ -471,13 +454,7 @@ export function registerRecoveryTests(params: {
         preManagedServiceStop: before,
         jsonMode: true,
       });
-      if (change === "metadata") {
-        expect(mocks.child).toHaveBeenCalledOnce();
-        expect(mocks.child.mock.calls[0]?.[0]).toContain("--preserve-definition");
-        expect(mocks.restart).not.toHaveBeenCalled();
-        expect(mocks.child.mock.calls[0]?.[1]).toMatchObject({ baseEnv: {} });
-        expect(mocks.child.mock.calls[0]?.[1]).not.toHaveProperty("env.OPENCLAW_GATEWAY_PORT");
-      } else if (change === "after readiness") {
+      if (change === "after readiness") {
         expect(recovered).toBe("failed");
         expect(mocks.child).toHaveBeenCalledOnce();
         expect(mocks.restart).not.toHaveBeenCalled();

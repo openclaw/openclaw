@@ -2,8 +2,10 @@ import type { SpawnSyncOptions } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { readGatewayLockProcessNamespace } from "../infra/gateway-lock-payload.js";
 import type { GatewayOwnerLeaseIdentity } from "../infra/gateway-owner-lease.types.js";
 import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
+import * as bootReader from "../infra/update-managed-service-handoff-boot.js";
 import * as pidAlive from "../shared/pid-alive.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveTaskScriptPath } from "./schtasks-layout.js";
@@ -95,6 +97,10 @@ beforeEach(() => {
   spawnSync.mockReset();
   timeState.now = 0;
   vi.spyOn(Date, "now").mockImplementation(() => timeState.now);
+  vi.spyOn(bootReader, "createManagedHandoffBootIdentityReader").mockReturnValue(() => ({
+    platform: "win32",
+    identity: "2026-10-19T00:00:00.0000000Z",
+  }));
 });
 afterEach(() => {
   vi.restoreAllMocks();
@@ -164,6 +170,7 @@ it.each(["snapshot", "per-pid", "overdue"])(
           ? {
               pid: 4242,
               startTime: 100,
+              processNamespace: readGatewayLockProcessNamespace(),
               ownerId: "stuck-startup",
               role: "gateway",
               createdAt: new Date(-300_001).toISOString(),

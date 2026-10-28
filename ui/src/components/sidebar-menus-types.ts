@@ -42,7 +42,6 @@ export interface SidebarMenusOwner extends SidebarRouteView {
   readonly gatewayVersion: string | null;
   readonly onPairMobile?: () => void;
   readonly onRetryConnect?: () => void;
-  readonly onPreloadRoute?: (routeId: NavigationRouteId) => Promise<void>;
   sidebarAgentsMode: "chip" | "roster";
   navigationView: "pages" | "sessions" | "online";
   readonly pinnedAgentIds: readonly string[];
@@ -74,6 +73,7 @@ export interface SidebarMenusOwner extends SidebarRouteView {
   readonly themeMode: ThemeMode;
   activeChipAgent(): {
     activeId: string;
+    pending?: boolean;
     agent: GatewayAgentRow | undefined;
     agents: readonly GatewayAgentRow[];
     identity: AgentIdentityResult | null;
@@ -81,7 +81,6 @@ export interface SidebarMenusOwner extends SidebarRouteView {
   };
   agentUnreadCount(agentId: string): number;
   ensureAgentIdentities(agentIds: readonly string[]): void;
-  askAgentCapabilities(agentId: string): void;
   findSidebarMenuSessionByKey(sessionKey: string): SidebarRecentSession | undefined;
   getSessionNavigationState(): { selectedAgentId: string };
   selectedVisibleSessions(): SidebarRecentSession[];

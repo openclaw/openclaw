@@ -62,16 +62,6 @@ function directArgs(expected: Record<string, unknown> = {}) {
   });
   return params;
 }
-function expectHandoff(params: Record<string, unknown>, sourceSessionKey = sessionKey) {
-  expect(params.message).toEqual(expect.stringContaining("<<<BEGIN_UNTRUSTED_EXEC_OUTPUT>>>"));
-  expect(params.inputProvenance).toEqual({
-    kind: "inter_session",
-    sourceSessionKey,
-    sourceTool: "exec_approval_followup",
-  });
-  expect(params.internalRuntimeHandoffId).toEqual(expect.any(String));
-  expect(params.idempotencyKey).toMatch(/^exec-approval-followup:req-1:nonce:[0-9a-f-]{36}$/);
-}
 function acceptRun() {
   vi.mocked(callGatewayTool).mockResolvedValueOnce({ runId, status: "accepted" });
   return vi.mocked(callGatewayTool);
@@ -80,6 +70,13 @@ function diagnostics(internal = false) {
   const events: DiagnosticEventPayload[] = [];
   (internal ? onInternalDiagnosticEvent : onDiagnosticEvent)((event) => events.push(event));
   return events;
+}
+function terminalFailure(error: string) {
+  return { runId, status: "error", endedAt: Date.now(), error };
+}
+function expectCalls(gateway: number, deliveries: number) {
+  expect(callGatewayTool).toHaveBeenCalledTimes(gateway);
+  expect(sendMessage).toHaveBeenCalledTimes(deliveries);
 }
 afterEach(() => {
   vi.restoreAllMocks();
@@ -101,28 +98,31 @@ describe("exec approval followup", () => {
     expect(params.message).not.toContain("already approved has completed");
   });
 
-  it("warns the agent not to rerun an outcome-unknown command", async () => {
-    await send({
-      resultText:
-        "Exec outcome unknown (node=node-1 id=req-1, outcome-unknown)\nThe command may have executed.\nCommand:\nprintf 'one\\ntwo'",
-    });
+  it.each([
+    [
+      "Exec outcome unknown (node=node-1 id=req-1, outcome-unknown)\nThe command may have executed.\nCommand:\nprintf 'one\\ntwo'",
+      [
+        "The command may have executed.",
+        "Do not run the command again automatically.",
+        "Do not claim it was denied, not dispatched, or safe to retry.",
+        "Command:\nprintf 'one\\ntwo'",
+      ],
+      [],
+    ],
+    [
+      "Exec not dispatched (node=node-1 id=req-1, not-dispatched)\nNode command was not dispatched to node-1.",
+      ["was not dispatched and did not run", "Retry only after resolving the connection failure"],
+      ["already approved has completed", "Do not run the command again."],
+    ],
+  ] as const)("preserves retry guidance for %s", async (resultText, contains, excludes) => {
+    await send({ resultText });
     const prompt = agentArgs({ sessionKey }).message;
-    expect(prompt).toContain("The command may have executed.");
-    expect(prompt).toContain("Do not run the command again automatically.");
-    expect(prompt).toContain("Do not claim it was denied, not dispatched, or safe to retry.");
-    expect(prompt).toContain("Command:\nprintf 'one\\ntwo'");
-  });
-
-  it("tells the agent a proven not-dispatched command did not run", async () => {
-    await send({
-      resultText:
-        "Exec not dispatched (node=node-1 id=req-1, not-dispatched)\nNode command was not dispatched to node-1.",
-    });
-    const prompt = agentArgs({ sessionKey }).message;
-    expect(prompt).toContain("was not dispatched and did not run");
-    expect(prompt).toContain("Retry only after resolving the connection failure");
-    expect(prompt).not.toContain("already approved has completed");
-    expect(prompt).not.toContain("Do not run the command again.");
+    for (const text of contains) {
+      expect(prompt).toContain(text);
+    }
+    for (const text of excludes) {
+      expect(prompt).not.toContain(text);
+    }
   });
 
   it("preserves outcome-unknown details in direct delivery", async () => {
@@ -134,12 +134,12 @@ describe("exec approval followup", () => {
   });
 
   it.each([
-    { label: "denied rebound", resultText: denied, currentSession: "replacement", stale: true },
-    { label: "finished rebound", resultText: finished, currentSession: "replacement", stale: true },
-    { label: "denied original", resultText: denied, currentSession: "original", stale: false },
-  ])(
-    "validates the approval-time session before direct delivery: $label",
-    async ({ resultText, currentSession, stale }) => {
+    [denied, "replacement", true],
+    [finished, "replacement", true],
+    [denied, "original", false],
+  ] as const)(
+    "validates approval-time session for %s / %s (stale=%s)",
+    async (resultText, currentSession, stale) => {
       const sessionStore = path.join(sessionDirs.make(), "sessions.json");
       await replaceSessionEntry(
         { storePath: sessionStore, sessionKey },
@@ -167,9 +167,9 @@ describe("exec approval followup", () => {
     },
   );
 
-  it("keeps observing past the old ambiguity cap until terminal fallback", async () => {
+  it.each([4, 0])("delivers terminal fallback after %i ambiguous waits", async (waits) => {
     const gateway = acceptRun();
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < waits; i++) {
       gateway.mockResolvedValueOnce({
         runId,
         status: "timeout",
@@ -177,15 +177,27 @@ describe("exec approval followup", () => {
         providerStarted: false,
       });
     }
-    gateway.mockResolvedValueOnce({
-      runId,
-      status: "error",
-      endedAt: Date.now(),
-      error: "provider failed after prolonged execution",
-    });
-    await expect(send(pending)).resolves.toBe(true);
-    expect(callGatewayTool).toHaveBeenCalledTimes(6);
-    expect(sendMessage).toHaveBeenCalledTimes(1);
+    gateway.mockResolvedValueOnce(
+      terminalFailure(waits ? "provider failed after prolonged execution" : "provider failed"),
+    );
+    const clippedOutput = `Exec finished (gateway id=req-1, code 1)\nHEAD_SENTINEL_${"x".repeat(5_000)}TAIL_SENTINEL_🚀`;
+    await expect(
+      send({ ...pending, ...(waits ? {} : { resultText: clippedOutput }) }),
+    ).resolves.toBe(true);
+    expectCalls(waits + 2, 1);
+    if (!waits) {
+      const content = directArgs({ channel: "telegram", to: "123" }).content;
+      if (typeof content !== "string") {
+        throw new Error("expected fallback content");
+      }
+      expect(content).toHaveLength(4_000);
+      expect(content).toMatch(
+        /^Automatic session resume failed, so sending the status directly\.\n\n\[\.\.\. earlier command output omitted \.\.\.\]\n/,
+      );
+      expect(content).not.toContain("HEAD_SENTINEL");
+      expect(content).toContain("TAIL_SENTINEL_🚀");
+      expect(Buffer.from(content, "utf8").toString("utf8")).toBe(content);
+    }
   });
 
   it("retries observation after a transport error without competing direct delivery", async () => {
@@ -193,8 +205,7 @@ describe("exec approval followup", () => {
       .mockRejectedValueOnce(new Error("gateway reconnecting"))
       .mockResolvedValueOnce({ runId, status: "ok" });
     await send(pending);
-    expect(callGatewayTool).toHaveBeenCalledTimes(3);
-    expect(sendMessage).not.toHaveBeenCalled();
+    expectCalls(3, 0);
   });
 
   it("ends observation at its deadline without competing direct delivery", async () => {
@@ -208,8 +219,7 @@ describe("exec approval followup", () => {
     await expect(send(pending)).resolves.toBe(true);
     clock.mockRestore();
     await waitForDiagnosticEventsDrained();
-    expect(callGatewayTool).toHaveBeenCalledTimes(2);
-    expect(sendMessage).not.toHaveBeenCalled();
+    expectCalls(2, 0);
     expect(events).toContainEqual(
       expect.objectContaining({
         type: "log.record",
@@ -225,30 +235,6 @@ describe("exec approval followup", () => {
         },
       }),
     );
-  });
-
-  it("caps terminal-failure fallback to a UTF-16-safe tail", async () => {
-    acceptRun().mockResolvedValueOnce({
-      runId,
-      status: "error",
-      endedAt: Date.now(),
-      error: "provider failed",
-    });
-    await send({
-      ...pending,
-      resultText: `Exec finished (gateway id=req-1, code 1)\nHEAD_SENTINEL_${"x".repeat(5_000)}TAIL_SENTINEL_🚀`,
-    });
-    const content = directArgs({ channel: "telegram", to: "123" }).content;
-    if (typeof content !== "string") {
-      throw new Error("expected fallback content");
-    }
-    expect(content).toHaveLength(4_000);
-    expect(content).toMatch(
-      /^Automatic session resume failed, so sending the status directly\.\n\n\[\.\.\. earlier command output omitted \.\.\.\]\n/,
-    );
-    expect(content).not.toContain("HEAD_SENTINEL");
-    expect(content).toContain("TAIL_SENTINEL_🚀");
-    expect(Buffer.from(content, "utf8").toString("utf8")).toBe(content);
   });
 
   it.each([
@@ -274,16 +260,12 @@ describe("exec approval followup", () => {
     directArgs({ content: "Background command finished." });
   });
 
-  it.each(["agent:main:subagent:test"])(
-    "suppresses denied delivery for session %s",
-    async (targetSessionKey) => {
-      await expect(
-        send({ ...route, sessionKey: targetSessionKey, resultText: denied.toLowerCase() }),
-      ).resolves.toBe(false);
-      expect(callGatewayTool).not.toHaveBeenCalled();
-      expect(sendMessage).not.toHaveBeenCalled();
-    },
-  );
+  it("suppresses denied delivery for a subagent session", async () => {
+    await expect(
+      send({ ...route, sessionKey: "agent:main:subagent:test", resultText: denied.toLowerCase() }),
+    ).resolves.toBe(false);
+    expectCalls(0, 0);
+  });
 
   it("registers the authenticated runtime handoff before dispatch without exposing elevation", async () => {
     const target = {
@@ -308,7 +290,16 @@ describe("exec approval followup", () => {
     });
     await sendExecApprovalFollowupResult(target, finished);
     const params = agentArgs({ sessionKey, channel: "telegram" });
-    expectHandoff(params);
+    expect(params).toMatchObject({
+      message: expect.stringContaining("<<<BEGIN_UNTRUSTED_EXEC_OUTPUT>>>"),
+      internalRuntimeHandoffId: expect.any(String),
+      idempotencyKey: expect.stringMatching(/^exec-approval-followup:req-1:nonce:[0-9a-f-]{36}$/),
+    });
+    expect(params.inputProvenance).toEqual({
+      kind: "inter_session",
+      sourceSessionKey: sessionKey,
+      sourceTool: "exec_approval_followup",
+    });
     expect(handoff).toEqual({
       kind: "exec-approval-followup",
       approvalId,

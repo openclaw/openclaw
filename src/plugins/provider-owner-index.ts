@@ -101,8 +101,9 @@ export function getProviderOwnerIndex(registry: PluginManifestRegistry): Provide
     const appendAlias = (alias: string, target: string) => {
       const receiver = normalizeProviderId(target);
       if (receiver && declared.has(receiver)) {
-        append(providers, normalizeProviderId(alias), plugin.id);
-        appendScope(normalizeProviderId(alias), receiver);
+        const normalizedAlias = normalizeProviderId(alias);
+        append(providers, normalizedAlias, plugin.id);
+        appendScope(normalizedAlias, receiver);
       }
     };
     for (const [alias, target] of Object.entries(plugin.providerAuthAliases ?? {})) {

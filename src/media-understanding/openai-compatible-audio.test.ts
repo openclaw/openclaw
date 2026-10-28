@@ -1,5 +1,3 @@
-// OpenAI-compatible audio tests cover attribution headers,
-// filename normalization, and stable malformed-response errors.
 import { describe, expect, it, vi } from "vitest";
 import { VERSION } from "../version.js";
 import {
@@ -10,61 +8,45 @@ import { transcribeOpenAiCompatibleAudio } from "./openai-compatible-audio.js";
 
 installPinnedHostnameTestHooks();
 
+type AudioParams = Parameters<typeof transcribeOpenAiCompatibleAudio>[0];
+function transcribe(fetchFn: typeof fetch, overrides: Partial<AudioParams> = {}) {
+  return transcribeOpenAiCompatibleAudio({
+    buffer: Buffer.from("audio"),
+    fileName: "note.mp3",
+    apiKey: "test-key",
+    timeoutMs: 1000,
+    fetchFn,
+    provider: "openai",
+    defaultBaseUrl: "https://api.openai.com/v1",
+    defaultModel: "gpt-4o-transcribe",
+    ...overrides,
+  });
+}
+
 describe("transcribeOpenAiCompatibleAudio", () => {
-  it("adds hidden attribution headers on the native OpenAI audio host", async () => {
-    const { fetchFn, getRequest } = createRequestCaptureJsonFetch({ text: "ok" });
+  it.each([
+    { baseUrl: undefined, attribution: ["openclaw", VERSION, `openclaw/${VERSION}`] },
+    { baseUrl: "https://proxy.example.com/v1", attribution: [null, null, null] },
+  ])(
+    "limits hidden attribution headers to the native host (baseUrl=$baseUrl)",
+    async ({ baseUrl, attribution }) => {
+      const { fetchFn, getRequest } = createRequestCaptureJsonFetch({ text: "ok" });
 
-    await transcribeOpenAiCompatibleAudio({
-      buffer: Buffer.from("audio"),
-      fileName: "note.mp3",
-      apiKey: "test-key",
-      timeoutMs: 1000,
-      fetchFn,
-      provider: "openai",
-      defaultBaseUrl: "https://api.openai.com/v1",
-      defaultModel: "gpt-4o-transcribe",
-    });
+      await transcribe(fetchFn, { baseUrl });
 
-    const headers = new Headers(getRequest().init?.headers);
-    expect(headers.get("originator")).toBe("openclaw");
-    expect(headers.get("version")).toBe(VERSION);
-    expect(headers.get("user-agent")).toBe(`openclaw/${VERSION}`);
-  });
-
-  it("does not add hidden attribution headers on custom OpenAI-compatible hosts", async () => {
-    const { fetchFn, getRequest } = createRequestCaptureJsonFetch({ text: "ok" });
-
-    await transcribeOpenAiCompatibleAudio({
-      buffer: Buffer.from("audio"),
-      fileName: "note.mp3",
-      apiKey: "test-key",
-      timeoutMs: 1000,
-      fetchFn,
-      provider: "openai",
-      baseUrl: "https://proxy.example.com/v1",
-      defaultBaseUrl: "https://api.openai.com/v1",
-      defaultModel: "gpt-4o-transcribe",
-    });
-
-    const headers = new Headers(getRequest().init?.headers);
-    expect(headers.get("originator")).toBeNull();
-    expect(headers.get("version")).toBeNull();
-    expect(headers.get("user-agent")).toBeNull();
-  });
+      const headers = new Headers(getRequest().init?.headers);
+      expect(["originator", "version", "user-agent"].map((name) => headers.get(name))).toEqual(
+        attribution,
+      );
+    },
+  );
 
   it("remaps AAC uploads to an M4A filename before submitting the form", async () => {
     const { fetchFn, getRequest } = createRequestCaptureJsonFetch({ text: "ok" });
 
-    await transcribeOpenAiCompatibleAudio({
-      buffer: Buffer.from("audio"),
+    await transcribe(fetchFn, {
       fileName: "voice-note.aac",
       mime: "audio/aac",
-      apiKey: "test-key",
-      timeoutMs: 1000,
-      fetchFn,
-      provider: "openai",
-      defaultBaseUrl: "https://api.openai.com/v1",
-      defaultModel: "gpt-4o-transcribe",
     });
 
     const form = getRequest().init?.body;
@@ -74,46 +56,30 @@ describe("transcribeOpenAiCompatibleAudio", () => {
     expect((file as File).name).toBe("voice-note.m4a");
   });
 
-  it.each([undefined, "ru"])(
-    "omits the optional prompt field with language %j",
-    async (language) => {
-      const { fetchFn, getRequest } = createRequestCaptureJsonFetch({ text: "ok" });
+  it.each([undefined, "ru"])("omits prompt with language %j", async (language) => {
+    const { fetchFn, getRequest } = createRequestCaptureJsonFetch({ text: "ok" });
 
-      await transcribeOpenAiCompatibleAudio({
-        buffer: Buffer.from("audio"),
-        fileName: "note.ogg",
-        mime: "audio/ogg",
-        apiKey: "test-key",
-        timeoutMs: 1000,
-        fetchFn,
-        provider: "groq",
-        baseUrl: "https://api.groq.com/openai/v1",
-        defaultBaseUrl: "https://api.groq.com/openai/v1",
-        defaultModel: "whisper-large-v3-turbo",
-        language,
-      });
+    await transcribe(fetchFn, {
+      fileName: "note.ogg",
+      mime: "audio/ogg",
+      provider: "groq",
+      baseUrl: "https://api.groq.com/openai/v1",
+      defaultBaseUrl: "https://api.groq.com/openai/v1",
+      defaultModel: "whisper-large-v3-turbo",
+      language,
+    });
 
-      const form = getRequest().init?.body;
-      expect(form).toBeInstanceOf(FormData);
-      expect((form as FormData).get("language")).toBe(language ?? null);
-      expect((form as FormData).get("prompt")).toBeNull();
-    },
-  );
+    const form = getRequest().init?.body;
+    expect(form).toBeInstanceOf(FormData);
+    expect((form as FormData).get("language")).toBe(language ?? null);
+    expect((form as FormData).get("prompt")).toBeNull();
+  });
 
   it("rejects non-object successful transcription JSON with a stable provider error", async () => {
     const fetchFn = vi.fn<typeof fetch>().mockResolvedValueOnce(new Response(JSON.stringify([])));
 
-    await expect(
-      transcribeOpenAiCompatibleAudio({
-        buffer: Buffer.from("audio"),
-        fileName: "note.mp3",
-        apiKey: "test-key",
-        timeoutMs: 1000,
-        fetchFn,
-        provider: "openai",
-        defaultBaseUrl: "https://api.openai.com/v1",
-        defaultModel: "gpt-4o-transcribe",
-      }),
-    ).rejects.toThrow("Audio transcription failed: malformed JSON response");
+    await expect(transcribe(fetchFn)).rejects.toThrow(
+      "Audio transcription failed: malformed JSON response",
+    );
   });
 });

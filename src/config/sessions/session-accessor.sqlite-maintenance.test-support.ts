@@ -11,7 +11,6 @@ import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-work
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import * as workerStore from "../../infra/sqlite-worker-store.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
-import { createDeferredCore } from "../../shared/deferred.js";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
@@ -31,11 +30,6 @@ import {
   type ResolvedSessionMaintenanceConfig,
 } from "./store-maintenance.js";
 
-type SessionMaintenancePlanningWorkerResponse = {
-  kind: "committed" | "not-committed";
-  workerThreadId: number;
-};
-
 export function observeSessionMaintenancePlanningWorker(hooks: {
   beforeExecute?: () => void;
   beforeAdmission?: (request: admission.SqliteWorkerAdmissionRequest) => void;
@@ -43,7 +37,7 @@ export function observeSessionMaintenancePlanningWorker(hooks: {
     store: Pick<SqliteWorkerStore<SqliteWorkerOperations>, "close">;
   }) => void | Promise<void>;
   afterExecute?: (
-    result: SessionMaintenancePlanningWorkerResponse,
+    result: { kind: "committed" | "not-committed"; workerThreadId: number },
     native: {
       admission?: admission.SqliteWorkerOperationAdmission;
       retained?: RetainedWorkerTransactionAdmission;
@@ -51,109 +45,128 @@ export function observeSessionMaintenancePlanningWorker(hooks: {
   ) => void | Promise<void>;
 }) {
   const original = workerStore.runSqliteWorkerStoreOperation;
-  return vi
-    .spyOn(workerStore, "runSqliteWorkerStoreOperation")
-    .mockImplementation(
-      <Operations extends SqliteWorkerOperations, T>(
-        target: SqliteWorkerStore<Operations>,
-        operation: (scope: Pick<SqliteWorkerStore<Operations>, "execute">) => T | Promise<T>,
-        stateContext?: Parameters<typeof original>[2],
-        assertCurrent?: Parameters<typeof original>[3],
-        createAdmission?: Parameters<typeof original>[4],
-      ) => {
-        let planning = false;
-        let nativeAdmission: admission.SqliteWorkerOperationAdmission | undefined;
-        let nativeRetention: RetainedWorkerTransactionAdmission | undefined;
-        return original(
-          target,
-          (worker) =>
-            operation({
-              execute: async (command, options) => {
-                planning =
-                  command.type === "session.maintenance.metadata" &&
-                  isRecord(command.input) &&
-                  command.input.kind === "maintenance-plan";
-                if (planning) {
-                  hooks.beforeExecute?.();
-                }
-                const result = await worker.execute(command, options);
-                if (command.type === "session.maintenance.prepare") {
-                  await hooks.afterPrepare?.({ store: target });
-                }
-                if (planning) {
-                  if (!isRecord(result) || typeof result.workerThreadId !== "number") {
-                    throw new Error("Real maintenance omitted its native worker identity");
-                  }
-                  if (result.kind !== "committed" && result.kind !== "not-committed") {
-                    throw new Error("Real maintenance omitted its native outcome");
-                  }
-                  await hooks.afterExecute?.(
-                    { kind: result.kind, workerThreadId: result.workerThreadId },
-                    { admission: nativeAdmission, retained: nativeRetention },
-                  );
-                }
-                return result;
-              },
-            }),
-          stateContext,
-          assertCurrent,
-          createAdmission &&
-            ((retained) => {
-              if (!planning) {
-                return createAdmission(retained);
+  const observe: typeof original = (target, operation, ...context) => {
+    const [stateContext, assertCurrent, createAdmission] = context;
+    let planning = false;
+    let nativeAdmission: admission.SqliteWorkerOperationAdmission | undefined;
+    let nativeRetention: RetainedWorkerTransactionAdmission | undefined;
+    return original(
+      target,
+      (worker) =>
+        operation({
+          execute: async (command, options) => {
+            planning =
+              command.type === "session.maintenance.metadata" &&
+              isRecord(command.input) &&
+              command.input.kind === "maintenance-plan";
+            if (planning) {
+              hooks.beforeExecute?.();
+            }
+            const result = await worker.execute(command, options);
+            if (command.type === "session.maintenance.prepare") {
+              await hooks.afterPrepare?.({ store: target });
+            }
+            if (
+              planning ||
+              (command.type === "session.maintenance.prepare" && result !== undefined)
+            ) {
+              if (
+                !isRecord(result) ||
+                typeof result.workerThreadId !== "number" ||
+                (result.kind !== "committed" && result.kind !== "not-committed")
+              ) {
+                throw new Error("Real maintenance omitted its native identity or outcome");
               }
-              const observer = hooks.beforeAdmission
-                ? probe.admission(admission, (request, grant, callback) => {
-                    hooks.beforeAdmission?.(request);
-                    return callback(request, grant);
-                  })
-                : undefined;
-              try {
-                const owned = createAdmission(retained);
-                nativeRetention = retained;
-                nativeAdmission = owned.admission;
-                return owned;
-              } finally {
-                observer?.mockRestore();
-              }
-            }),
-        );
-      },
+              await hooks.afterExecute?.(
+                { kind: result.kind, workerThreadId: result.workerThreadId },
+                { admission: nativeAdmission, retained: nativeRetention },
+              );
+            }
+            return result;
+          },
+        }),
+      stateContext,
+      assertCurrent,
+      createAdmission &&
+        ((retained) => {
+          if (!planning) {
+            return createAdmission(retained);
+          }
+          const observer = hooks.beforeAdmission
+            ? probe.admission(admission, (request, grant, callback) => {
+                hooks.beforeAdmission?.(request);
+                return callback(request, grant);
+              })
+            : undefined;
+          try {
+            const owned = createAdmission(retained);
+            nativeRetention = retained;
+            nativeAdmission = owned.admission;
+            return owned;
+          } finally {
+            observer?.mockRestore();
+          }
+        }),
     );
+  };
+  return vi.spyOn(workerStore, "runSqliteWorkerStoreOperation").mockImplementation(observe);
+}
+
+export function maintenancePolicy(
+  pruneAfter = "1s",
+  overrides: Parameters<typeof resolveMaintenanceConfigFromInput>[0] = {},
+) {
+  return resolveMaintenanceConfigFromInput({
+    mode: "enforce",
+    maxEntries: 100,
+    pruneAfter,
+    ...overrides,
+  });
+}
+
+export function maintenanceFixture(state: OpenClawTestState) {
+  const storePath = path.join(state.sessionsDir(), "sessions.json");
+  const scope = (sessionKey: string) => ({ sessionKey, storePath });
+  const seed = (
+    sessionKey: string,
+    sessionId: string,
+    updatedAt = Date.now(),
+    fields: Partial<Parameters<typeof replaceSessionEntrySync>[1]> = {},
+  ) => {
+    const target = scope(sessionKey);
+    replaceSessionEntrySync(target, { sessionId, updatedAt, ...fields });
+    return target;
+  };
+  const databaseOptions = { agentId: "main", env: state.env };
+  const plan = (activeSessionKey: string, maintenance = maintenancePolicy("1d")) =>
+    ({
+      kind: "maintenance-plan",
+      databaseOptions: resolveSessionReclamationDatabaseOptions(databaseOptions),
+      materializedPlans: [],
+      input: {
+        activeSessionKey,
+        archiveDirectory: state.sessionsDir(),
+        maintenance,
+        preservation: { providerKeys: [], workIdentities: [], lifecycleIdentities: [] },
+        storePath,
+      },
+    }) satisfies SqliteSessionReclamationPlan;
+  return { state, storePath, scope, seed, databaseOptions, plan };
 }
 
 export function maintenancePreparationFixture(state: OpenClawTestState) {
-  const storePath = path.join(state.sessionsDir(), "sessions.json");
-  const active = { sessionKey: "agent:main:preparation-active", storePath };
-  const stale = { sessionKey: "agent:main:preparation-stale", storePath };
-  replaceSessionEntrySync(active, { sessionId: "active", updatedAt: Date.now() });
-  replaceSessionEntrySync(stale, { sessionId: "stale", updatedAt: 1 });
-  const databaseOptions = { agentId: "main", env: state.env };
-  const database = openOpenClawAgentDatabase(databaseOptions);
-  const plan = {
-    kind: "maintenance-plan",
-    databaseOptions: resolveSessionReclamationDatabaseOptions(databaseOptions),
-    materializedPlans: [],
-    input: {
-      activeSessionKey: active.sessionKey,
-      archiveDirectory: state.sessionsDir(),
-      maintenance: resolveMaintenanceConfigFromInput({
-        mode: "enforce",
-        maxEntries: 100,
-        pruneAfter: "1d",
-      }),
-      preservation: { providerKeys: [], workIdentities: [], lifecycleIdentities: [] },
-      storePath,
-    },
-  } satisfies SqliteSessionReclamationPlan;
+  const fixture = maintenanceFixture(state);
+  const active = fixture.seed("agent:main:preparation-active", "active");
+  const stale = fixture.seed("agent:main:preparation-stale", "stale", 1);
+  const database = openOpenClawAgentDatabase(fixture.databaseOptions);
   const archivedEntries = [{ sessionKey: stale.sessionKey, sessionId: "stale" }];
-  return { active, stale, database, plan, archivedEntries };
+  return { active, stale, database, plan: fixture.plan(active.sessionKey), archivedEntries };
 }
 
 /** Observe committed maintenance rows without imposing a worker-startup deadline. */
 export function observeSessionMaintenanceChanges(databasePath: string, ...sessionKeys: string[]) {
   const pending = new Set(sessionKeys);
-  const completed = createDeferredCore();
+  const completed = createDeferred();
   const unsubscribe = sessionChanges.subscribe((change) => {
     if (!("sessionKey" in change) || change.storePath !== databasePath) {
       return;
@@ -188,12 +201,10 @@ export function observeNextPeriodicMaintenance(
 }
 
 export function countPlanningPasses() {
-  return new Set(
-    vi
-      .mocked(reclamationRun.runSqliteSessionReclamation)
-      .mock.calls.map(([{ plan }]) => plan)
-      .filter((plan) => plan.kind === "maintenance-plan"),
-  ).size;
+  const plans = vi
+    .mocked(reclamationRun.runSqliteSessionReclamation)
+    .mock.calls.map(([{ plan }]) => plan);
+  return new Set(plans.filter((plan) => plan.kind === "maintenance-plan")).size;
 }
 
 export function createSessionMaintenanceKickStore(fixture: {
@@ -262,16 +273,15 @@ export function createSessionMaintenanceKickStore(fixture: {
     preserveRecentMs: null,
     pruneAfterMs,
   };
-  const request = {
-    activeSessionKey: key,
-    archiveDirectory: path.join(path.dirname(storePath), "archives"),
-    maintenanceConfig,
-    scope,
-    storePath,
-  };
   return {
     database,
-    request,
+    request: {
+      activeSessionKey: key,
+      archiveDirectory: path.join(path.dirname(storePath), "archives"),
+      maintenanceConfig,
+      scope,
+      storePath,
+    },
     scope,
     storePath,
     updatedAt,

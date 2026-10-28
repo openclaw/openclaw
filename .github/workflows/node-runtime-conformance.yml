@@ -10,6 +10,7 @@ on:
       - ".github/workflows/node-runtime-conformance.yml"
       - "crates/**"
       - "packages/gateway-protocol/src/index.ts"
+      - "packages/gateway-protocol/src/version.ts"
       - "packages/gateway-protocol/src/schema/nodes.ts"
       - "packages/gateway-protocol/src/validator-registry.ts"
       - "src/gateway/node-command-policy.ts"
@@ -145,7 +146,7 @@ jobs:
           submodules: false
 
       - name: Install Rust
-        run: rustup toolchain install 1.93.0 --profile minimal --component clippy,rustfmt
+        run: rustup toolchain install 1.99.0 --profile minimal --component clippy,rustfmt
 
       - name: Cache Cargo
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
@@ -155,17 +156,17 @@ jobs:
           workspaces: crates -> target
           cache-bin: "false"
           cache-workspace-crates: "false"
-          cmd-format: rustup run 1.93.0 {0}
+          cmd-format: rustup run 1.99.0 {0}
 
       - name: Check formatting
-        run: cargo +1.93.0 fmt --manifest-path crates/Cargo.toml --all -- --check
+        run: cargo +1.99.0 fmt --manifest-path crates/Cargo.toml --all -- --check
 
       - name: Run tests
-        run: cargo +1.93.0 test --manifest-path crates/Cargo.toml --workspace --locked --all-targets
+        run: cargo +1.99.0 test --manifest-path crates/Cargo.toml --workspace --locked --all-targets
 
       - name: Run Clippy
         run: >-
-          cargo +1.93.0 clippy
+          cargo +1.99.0 clippy
           --manifest-path crates/Cargo.toml
           --workspace
           --locked
@@ -177,7 +178,7 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
         run: >-
-          cargo +1.93.0 doc
+          cargo +1.99.0 doc
           --manifest-path crates/Cargo.toml
           --workspace
           --locked

@@ -1,0 +1,154 @@
+.chat-mobile-people {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 0 0 8px;
+  color: var(--text);
+  font-family: var(--font-body);
+}
+
+.chat-mobile-people__section h3 {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0 12px 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 18px;
+}
+
+.chat-mobile-people__list,
+.chat-mobile-people__viewers {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-radius: 14px;
+  background: var(--mobile-list-surface, color-mix(in srgb, var(--popover) 95%, var(--text) 5%));
+}
+
+.chat-mobile-people__row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 48px;
+  box-sizing: border-box;
+  padding: 8px 12px;
+}
+
+.chat-mobile-people__row + .chat-mobile-people__row::before {
+  position: absolute;
+  top: 0;
+  right: 12px;
+  left: 52px;
+  height: 1px;
+  background: var(--mobile-list-separator, var(--border-strong));
+  content: "";
+}
+
+.chat-mobile-people .chat-author-avatar {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 50%;
+  outline: 0;
+  box-shadow: none;
+}
+
+.chat-mobile-people .chat-author-avatar__initials {
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.chat-mobile-people__name {
+  display: block;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: clip;
+  white-space: nowrap;
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.chat-mobile-people__mention {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  min-height: 32px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font: 400 13px/20px var(--font-body);
+  cursor: default;
+}
+
+.chat-mobile-people__mention svg {
+  width: 13px;
+  height: 13px;
+  margin-left: 8px;
+  color: inherit;
+}
+
+.chat-mobile-people__mention:hover {
+  color: var(--accent-hover);
+  background: transparent;
+}
+
+.chat-mobile-people__viewers {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 16px 14px 10px;
+}
+
+.chat-mobile-people__viewer {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+  min-width: 44px;
+  max-width: 80px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  text-align: center;
+  cursor: default;
+}
+
+.chat-mobile-people__viewer .chat-author-avatar {
+  width: 42px;
+  height: 42px;
+}
+
+.chat-mobile-people__viewer .chat-author-avatar__initials {
+  font-size: 14px;
+}
+
+.chat-mobile-people__viewer .chat-mobile-people__name {
+  width: 100%;
+  max-width: 80px;
+  font-size: 11px;
+  line-height: 17px;
+}
+
+.chat-mobile-people__unlisted {
+  margin: 0 12px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.chat-mobile-people__mention:focus-visible,
+.chat-mobile-people__viewer:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}

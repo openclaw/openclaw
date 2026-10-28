@@ -1,9 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-  WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
-  WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
-  type WorkerAdmissionHandshake,
-} from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import type { WorkerAdmissionHandshake } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { NODE_WORKER_ENVIRONMENT_STOP_COMMAND } from "../../infra/node-commands.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
@@ -16,6 +12,7 @@ import {
 } from "./node-worker-tunnel.test-support.js";
 import { REQUEST, seedActivePlacement } from "./placement-dispatch-test-fixtures.js";
 import { createHarness, createRecoveryService } from "./placement-dispatch-test-harness.js";
+import { WORKER_PROTOCOL_FEATURES } from "./placement-lifecycle.test-support.js";
 import { projectWorkerSessionTurnClaim } from "./placement-record.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
@@ -30,10 +27,7 @@ describe("worker environment runtime upgrades", () => {
     ...support.BOOTSTRAP_RECEIPT,
     bundleHash: "b".repeat(64),
     openclawVersion: "2026.9.27",
-    protocolFeatures: [
-      WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
-      WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
-    ],
+    protocolFeatures: WORKER_PROTOCOL_FEATURES.toSorted(),
   };
   const installedReceipt = { ...currentReceipt, installKind: "bundle" as const };
   type InstallNodeBundle = NonNullable<

@@ -24,12 +24,20 @@ const replies = [
 type ProviderRequest = {
   model: string;
 };
+type HistoryPayload = { deltaCursor?: string; messages?: unknown[] };
 type HistoryFrame = {
   type: string;
   id?: string;
   method?: string;
-  params?: { sessionKey?: string; cursor?: string };
-  payload?: { deltaCursor?: string; messages?: unknown[] };
+  params?: {
+    key?: string;
+    sessionKey?: string;
+    cursor?: string;
+    initialHistory?: { cursor?: string };
+  };
+  payload?: HistoryPayload & {
+    initialHistory?: { ok?: boolean; payload?: HistoryPayload };
+  };
 };
 
 function speechWav() {
@@ -258,24 +266,32 @@ suite.define(() => {
               let historyConnection = 0;
               const history: Array<{
                 connection: number;
-                frame: HistoryFrame;
+                payload: HistoryPayload;
                 consumedAfterResponse: boolean;
               }> = [];
               page.on("websocket", (socket) => {
                 const connection = ++historyConnection;
-                const historyRequests = new Set<string>();
+                const historyRequests = new Map<string, boolean>();
                 socket.on("framesent", ({ payload }) => {
                   const frame: HistoryFrame = JSON.parse(payload.toString());
+                  const initialHistory =
+                    frame.method === "sessions.messages.subscribe" &&
+                    frame.params?.key === sessionKey &&
+                    frame.params.initialHistory !== undefined;
                   if (
                     frame.id &&
-                    ["chat.history", "chat.startup"].includes(frame.method ?? "") &&
-                    frame.params?.sessionKey === sessionKey
+                    (initialHistory ||
+                      (["chat.history", "chat.startup"].includes(frame.method ?? "") &&
+                        frame.params?.sessionKey === sessionKey))
                   ) {
-                    historyRequests.add(frame.id);
+                    historyRequests.set(frame.id, initialHistory);
+                    const cursor = initialHistory
+                      ? frame.params?.initialHistory?.cursor
+                      : frame.params?.cursor;
                     for (const response of history) {
                       if (
                         response.connection === connection &&
-                        response.frame.payload?.deltaCursor === frame.params.cursor
+                        response.payload.deltaCursor === cursor
                       ) {
                         response.consumedAfterResponse = true;
                       }
@@ -284,8 +300,20 @@ suite.define(() => {
                 });
                 socket.on("framereceived", ({ payload }) => {
                   const frame: HistoryFrame = JSON.parse(payload.toString());
-                  if (frame.id && historyRequests.has(frame.id) && frame.payload?.deltaCursor) {
-                    history.push({ connection, frame, consumedAfterResponse: false });
+                  if (!frame.id || !historyRequests.has(frame.id)) {
+                    return;
+                  }
+                  const historyPayload = historyRequests.get(frame.id)
+                    ? frame.payload?.initialHistory?.ok === true
+                      ? frame.payload.initialHistory.payload
+                      : undefined
+                    : frame.payload;
+                  if (historyPayload?.deltaCursor) {
+                    history.push({
+                      connection,
+                      payload: historyPayload,
+                      consumedAfterResponse: false,
+                    });
                   }
                 });
               });
@@ -378,8 +406,8 @@ suite.define(() => {
                         if (hydrationResponses.length === 0) {
                           return false;
                         }
-                        const cursors = hydrationResponses.flatMap(({ frame }) =>
-                          frame.payload?.deltaCursor ? [frame.payload.deltaCursor] : [],
+                        const cursors = hydrationResponses.flatMap(({ payload }) =>
+                          payload.deltaCursor ? [payload.deltaCursor] : [],
                         );
                         const snapshotHost = await page.evaluate(() => {
                           const state = document.querySelector<

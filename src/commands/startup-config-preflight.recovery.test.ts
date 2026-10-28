@@ -1,16 +1,16 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi, type MockInstance } from "vitest";
-import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   prepareGatewayRunBootstrap,
   recheckGatewayRunBootstrap,
 } from "../cli/gateway-cli/pre-bootstrap.js";
 import { beginGatewayBootLifecycle } from "../infra/gateway-boot-lifecycle.js";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import * as checkpoint from "../infra/startup-migration-checkpoint.js";
-import * as metadataWorker from "../plugins/plugin-metadata-state-worker.js";
+import { readStartupMigrationWarning } from "../infra/state-migrations.messages.js";
 import { ExitError } from "../runtime.js";
+import { deleteConfigMachineState } from "../state/config-machine-state-write.js";
+import { readConfigMachineState } from "../state/config-machine-state.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -24,9 +24,9 @@ import {
 } from "./startup-config-preflight.js";
 
 const inPreflightHome = useDoctorConfigPreflightHome();
+const localConfig = { gateway: { mode: "local" }, plugins: { enabled: false } };
 const backupConfig = {
-  gateway: { mode: "local" },
-  plugins: { enabled: false },
+  ...localConfig,
   meta: { migrations: { webhookListeners: true } },
 };
 const incompleteConfig = '{"update":{"channel":"stable"}}\n';
@@ -52,6 +52,16 @@ function initializeDatabase(stateDir: string) {
   openOpenClawStateDatabase({ path: path.join(stateDir, "state", "openclaw.sqlite") });
   closeOpenClawStateDatabaseForTest();
 }
+
+const withRecoveryHome = (
+  run: (home: string, stateDir: string, configPath: string) => Promise<void>,
+) =>
+  withPreflightHome(async (home, stateDir, configPath) => {
+    await fs.writeFile(configPath, incompleteConfig);
+    await fs.writeFile(`${configPath}.bak`, JSON.stringify(backupConfig));
+    initializeDatabase(stateDir);
+    await run(home, stateDir, configPath);
+  });
 
 async function expectLeaseReleased(
   heartbeat: MockInstance<checkpoint.StartupMigrationLease["heartbeat"]> | undefined,
@@ -104,52 +114,29 @@ it.each(["current", "webhook-repair"] as const)(
         beforeStatePreparation: (snapshot) =>
           recheckGatewayRunBootstrap({ opts: {}, runtime, snapshot }),
       };
+      const registry = await import("../plugins/doctor-contract-registry.js");
       if (source === "webhook-repair") {
-        const registry = await import("../plugins/doctor-contract-registry.js");
-        const applyMigrations = registry.applyPluginDoctorCompatibilityMigrations;
-        const migrationReads: string[] = [];
-        vi.spyOn(registry, "applyPluginDoctorCompatibilityMigrations").mockImplementation(
-          (...args) => {
-            const sql = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
-            try {
-              return applyMigrations(...args);
-            } finally {
-              migrationReads.push(...sql.queries);
-              sql.restore();
-            }
-          },
-        );
         await expect(runStartupConfigPreflight(options)).rejects.toMatchObject({
           code: 78,
           message: expect.stringMatching(
             /openclaw doctor --fix[\s\S]*Pinned channels\.nextcloud-talk\.accounts\.default\.legacyWebhook/,
           ),
         });
-        // Only the webhook receipt needs a read; plugin metadata is already prepared.
-        expect(
-          migrationReads.filter((sql) => /\bfrom\s+"?config_machine_state"?/i.test(sql)),
-        ).toHaveLength(1);
         expect(await fs.readFile(configPath, "utf8")).toBe(original);
         await expect(fs.stat(`${configPath}.bak`)).rejects.toMatchObject({ code: "ENOENT" });
       } else {
-        const reads = vi.spyOn(metadataWorker, "readPluginMetadataStateRow");
-        const verificationReads: number[] = [];
-        options.measure = async (name, run) => {
-          if (name !== "doctor.config-preflight.plugin-plan") {
-            return await run();
-          }
-          const before = reads.mock.calls.length;
-          const value = await run();
-          verificationReads.push(reads.mock.calls.length - before);
-          return value;
-        };
+        const migrations = vi.spyOn(registry, "applyPluginDoctorCompatibilityMigrations");
         const ready = await runStartupConfigPreflight(options);
         expect(ready.snapshot.valid).toBe(true);
-        expect(verificationReads).toEqual([0]);
+        expect(readConfigMachineState(`webhookListeners:${configPath}`)).toBe(true);
         expect(await fs.readFile(configPath, "utf8")).toBe(original);
         await expect(fs.stat(`${configPath}.bak`)).rejects.toMatchObject({ code: "ENOENT" });
         expect((await runStartupConfigPreflight(options)).snapshot.valid).toBe(true);
-        expect(verificationReads).toEqual([0, 0]);
+        expect(migrations).toHaveBeenCalledTimes(1);
+        expect(await fs.readFile(configPath, "utf8")).toBe(original);
+        expect(deleteConfigMachineState(`webhookListeners:${configPath}`)).toBe(true);
+        expect((await runStartupConfigPreflight(options)).snapshot.valid).toBe(true);
+        expect(readConfigMachineState(`webhookListeners:${configPath}`)).toBe(true);
         expect(await fs.readFile(configPath, "utf8")).toBe(original);
         await fs.writeFile(configPath, replacement);
         await expect(runStartupConfigPreflight(options)).rejects.toMatchObject({ code: 1 });
@@ -159,6 +146,41 @@ it.each(["current", "webhook-repair"] as const)(
     });
   },
 );
+
+it("records no-pin completion with a read-only included config and skips it on restart", async () => {
+  await withPreflightHome(async (_home, _stateDir, configPath) => {
+    const includedPath = path.join(path.dirname(configPath), "included.json");
+    const original = JSON.stringify({ $include: "included.json" });
+    const included = JSON.stringify(localConfig);
+    await fs.writeFile(configPath, original);
+    await fs.writeFile(includedPath, included);
+    const registry = await import("../plugins/doctor-contract-registry.js");
+    const migrations = vi.spyOn(registry, "applyPluginDoctorCompatibilityMigrations");
+    await withEnvAsync({ OPENCLAW_CONFIG_READONLY: "1" }, async () => {
+      expect((await runStartupConfigPreflight({ gateway: true })).snapshot.valid).toBe(true);
+      expect(readConfigMachineState(`webhookListeners:${configPath}`)).toBe(true);
+      expect(migrations).toHaveBeenCalledTimes(1);
+      expect((await runStartupConfigPreflight({ gateway: true })).snapshot.valid).toBe(true);
+      expect(migrations).toHaveBeenCalledTimes(1);
+    });
+    expect(await fs.readFile(configPath, "utf8")).toBe(original);
+    expect(await fs.readFile(includedPath, "utf8")).toBe(included);
+  });
+});
+
+it("keeps startup available when saving no-pin completion fails", async () => {
+  await withPreflightHome(async (_home, _stateDir, configPath) => {
+    const original = JSON.stringify(localConfig);
+    await fs.writeFile(configPath, original);
+    const machineState = await import("../state/config-machine-state-async.js");
+    vi.spyOn(machineState, "writeConfigMachineStateAsync").mockRejectedValue(
+      new Error("completion store is read-only"),
+    );
+    expect((await runStartupConfigPreflight({ gateway: true })).snapshot.valid).toBe(true);
+    expect(readStartupMigrationWarning()).toContain("Could not record webhook listener completion");
+    expect(await fs.readFile(configPath, "utf8")).toBe(original);
+  });
+});
 
 it.each([
   ["localhost", "loopback"],
@@ -201,11 +223,7 @@ it.each([
 );
 
 it("restores the admitted backup after database readiness exceeds the lease TTL", async () => {
-  await withPreflightHome(async (home, stateDir, configPath) => {
-    const backup = backupConfig;
-    await fs.writeFile(configPath, incompleteConfig);
-    await fs.writeFile(`${configPath}.bak`, JSON.stringify(backup));
-    initializeDatabase(stateDir);
+  await withRecoveryHome(async (_home, _stateDir, configPath) => {
     vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
     let acquired: checkpoint.StartupMigrationLease | undefined;
     let heartbeats = 0;
@@ -242,7 +260,7 @@ it("restores the admitted backup after database readiness exceeds the lease TTL"
 
     expect(delayed).toBe(true);
     expect(result.snapshot.valid).toBe(true);
-    expect(JSON.parse(await fs.readFile(configPath, "utf8"))).toEqual(backup);
+    expect(JSON.parse(await fs.readFile(configPath, "utf8"))).toEqual(backupConfig);
     expect(checkpoint.hasActiveStartupMigrationLease()).toBe(false);
     const completedHeartbeats = heartbeats;
     await vi.advanceTimersByTimeAsync(60_000);
@@ -253,24 +271,20 @@ it("restores the admitted backup after database readiness exceeds the lease TTL"
 it.each(["backup", "active config"] as const)(
   "refuses changed %s under the lease before any repair",
   async (kind) => {
-    await withPreflightHome(async (home, stateDir, configPath) => {
-      const backup = backupConfig;
+    await withRecoveryHome(async (home, stateDir, configPath) => {
       const original = incompleteConfig;
       const replacement = JSON.stringify(
         kind === "backup"
           ? {
-              ...backup,
+              ...backupConfig,
               meta: { lastTouchedVersion: "9999.1.1" },
               env: { vars: { OPENCLAW_SERVICE_MARKER: "openclaw" } },
             }
           : {
-              ...backup,
+              ...backupConfig,
               agents: { defaults: { workspace: path.join(home, "changed-workspace") } },
             },
       );
-      initializeDatabase(stateDir);
-      await fs.writeFile(configPath, original);
-      await fs.writeFile(`${configPath}.bak`, JSON.stringify(backup));
 
       await withEnvAsync(
         { OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS: undefined },
@@ -313,11 +327,8 @@ it.each([
   ["reacquires a reassigned migration lease during admission", "reassigned"],
   ["fails after three attempts when the lease is lost on every attempt", "always expired"],
 ] as const)("%s", async (_title, loss) => {
-  await withPreflightHome(async (home, stateDir, configPath) => {
+  await withRecoveryHome(async (_home, stateDir, configPath) => {
     const original = incompleteConfig;
-    await fs.writeFile(configPath, original);
-    await fs.writeFile(`${configPath}.bak`, JSON.stringify(backupConfig));
-    initializeDatabase(stateDir);
     const acquire = checkpoint.acquireStartupMigrationLeaseWithWait;
     let attempts = 0;
     let heartbeat: MockInstance<checkpoint.StartupMigrationLease["heartbeat"]> | undefined;

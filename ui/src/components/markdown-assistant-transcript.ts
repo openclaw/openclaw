@@ -6,6 +6,9 @@ import {
 } from "../../../packages/markdown-core/src/assistant-transcript.js";
 import { escapeHtml } from "../../../src/shared/html-escape.js";
 import { t } from "../i18n/index.ts";
+import { registerChatMediaEnglish } from "../i18n/locales/en-chat-media.ts";
+
+registerChatMediaEnglish();
 
 function renderAssistantTranscriptRoleMarker(text: string): string {
   return `<code class="assistant-transcript-role">${escapeHtml(text)}</code>`;

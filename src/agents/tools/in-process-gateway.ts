@@ -24,6 +24,7 @@ import type {
   TrustedAgentToolCaller,
 } from "../../gateway/server-methods/types.js";
 import {
+  captureOperatorToolGatewayContinuationContext,
   dispatchGatewayMethodInProcess,
   getInProcessGatewayRequestContext,
   runWithOperatorToolGatewayCleanupContext,
@@ -38,6 +39,7 @@ import {
 } from "../../plugins/runtime/gateway-request-scope.js";
 import { readQuestionDispatchCapability } from "../harness/host-private-capabilities.js";
 import type { ReplyExpectation } from "../reply-completion.js";
+import { requesterCreatorProfileId } from "../requester-origin.js";
 import {
   captureGatewayToolCallerAssertion,
   getGatewayToolCallerIdentity,
@@ -71,6 +73,7 @@ type AgentToolGatewayRequest = Pick<
   | "onAccepted"
   | "onSignalAbort"
   | "params"
+  | "sharedStateMode"
   | "signal"
   | "scopes"
   | "timeoutMs"
@@ -128,8 +131,24 @@ export function runWithGatewayToolCleanupContext<T>(
 }
 
 /** Transfers accepted reply work to a bounded source-authority hold, not the tool lifetime. */
-export function runWithGatewayToolContinuationContext<T>(run: () => Promise<T>): Promise<T> {
+export async function runWithGatewayToolContinuationContext<T>(
+  run: () => Promise<T>,
+  options?: { retainRequester?: true },
+): Promise<T> {
   const resolveGatewayContext = callerGatewayContextResolver();
+  if (options?.retainRequester) {
+    const preparation = captureOperatorToolGatewayContinuationContext(undefined, {
+      retainRequester: true,
+    });
+    if (preparation) {
+      const captured = await preparation;
+      try {
+        return await captured.runWithRequester(run);
+      } finally {
+        captured.release();
+      }
+    }
+  }
   return runWithOperatorToolGatewayContinuationContext(() =>
     withoutGatewayToolCallerIdentity(() =>
       resolveGatewayContext
@@ -523,7 +542,11 @@ export async function callInProcessGatewayToolWithCreation<T = Record<string, un
   creation: TrustedSessionCreation,
   options: Omit<InProcessGatewayCallOptions, "onExecution"> = {},
 ): Promise<T> {
-  const requesterProfileId = resolveGatewayToolOperatorSelection().operatorAuthority?.profileId;
+  // Selected operators retain responsibility; linked nonadmins contribute identity, not authority.
+  const requesterProfileId =
+    resolveGatewayToolOperatorSelection().operatorAuthority?.profileId ??
+    creation.requesterProfileId ??
+    requesterCreatorProfileId(getGatewayToolCallerIdentity()?.requesterOrigin);
   const trustedCreation =
     creation.via === "spawn" && requesterProfileId ? { ...creation, requesterProfileId } : creation;
   return await callInProcessGatewayToolBound(method, params, {

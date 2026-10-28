@@ -117,16 +117,10 @@ const prependScript = (command: Command, script: string): Command => ({
 });
 const directoryLink = process.platform === "win32" ? "junction" : "dir";
 function placementClaim(error = new Error("placement retired")) {
-  let current = true;
+  const controller = new AbortController();
   return {
-    retire: () => {
-      current = false;
-    },
-    assertCurrent: () => {
-      if (!current) {
-        throw error;
-      }
-    },
+    retire: () => controller.abort(error),
+    assertCurrent: () => controller.signal.throwIfAborted(),
   };
 }
 
@@ -153,6 +147,25 @@ async function withResources(
   } finally {
     await resources?.cleanup();
   }
+}
+
+function resourceCatalog(
+  resources: NonNullable<Awaited<ReturnType<typeof transferSkillResources>>>,
+  containerWorkdir: string,
+) {
+  const sandbox = {
+    ...createAgentToolsSandboxContext({ workspaceDir: "/unreadable/gateway", containerWorkdir }),
+    backendId: "node" as const,
+    readOnlyResourceMounts: resources.mounts,
+  };
+  const catalogOptions = {
+    snapshot: resources.snapshot,
+    workspaceDir: sandbox.workspaceDir,
+    sandbox,
+    readable: true,
+    assertCurrent: () => {},
+  };
+  return { sandbox, catalogOptions, getCatalog: bindHostSkillCatalog(catalogOptions) };
 }
 
 async function createSource(binarySize = 150000) {
@@ -237,7 +250,12 @@ it.each(["prompt", "discovery"])(
       filePath,
       "---\ndescription: Transfer\n---\n# Resources\nRead data.bin and run scripts/check.sh.\n",
     );
-    snapshot.resolvedSkills![0]!.readContent = "Stale host cache must not be read";
+    const stale = Object.freeze({
+      ...snapshot.resolvedSkills![0]!,
+      readContent: "Stale host cache must not be read",
+    });
+    snapshot.resolvedSkills = [stale];
+    snapshot.discoverySkills = [stale];
     if (mode === "discovery") {
       snapshot.prompt = "";
       snapshot.resolvedSkills = [];
@@ -256,32 +274,20 @@ it.each(["prompt", "discovery"])(
       tunnel: carrier,
     });
     expect(resources).toBeDefined();
+    expect(stale.filePath).toBe(filePath);
+    expect(stale.readContent).toBe("Stale host cache must not be read");
     await fs.writeFile(filePath, "Changed host instructions after transfer");
     try {
       await withSessionSkillResources(resources!, async () => {
         // Paired-node placement deliberately has no host filesystem bridge.
-        const sandbox = {
-          ...createAgentToolsSandboxContext({
-            workspaceDir: "/unreadable/gateway",
-            containerWorkdir: carrier.workspace,
-          }),
-          backendId: "node" as const,
-          readOnlyResourceMounts: resources!.mounts,
-        };
-        const getCatalog = bindHostSkillCatalog({
-          snapshot: resources!.snapshot,
-          workspaceDir: sandbox.workspaceDir,
-          sandbox,
-          readable: true,
-          assertCurrent: () => {},
-        });
+        const { sandbox, catalogOptions, getCatalog } = resourceCatalog(
+          resources!,
+          carrier.workspace,
+        );
         expect(
           bindHostSkillCatalog({
-            snapshot: resources!.snapshot,
-            workspaceDir: sandbox.workspaceDir,
+            ...catalogOptions,
             sandbox: { ...sandbox, readOnlyResourceMounts: [...resources!.mounts] },
-            readable: true,
-            assertCurrent: () => {},
           })(),
         ).toEqual([]);
         const inputs = resolveSandboxSkillRuntimeInputs({
@@ -346,21 +352,7 @@ it("keeps node-hosted discovery instructions when they are omitted from the prom
   const carrier = await createCarrier("node");
   await withResources(await transfer(carrier, snapshot), async (resources) => {
     await withSessionSkillResources(resources, async () => {
-      const sandbox = {
-        ...createAgentToolsSandboxContext({
-          workspaceDir: "/unreadable/gateway",
-          containerWorkdir: carrier.workspace,
-        }),
-        backendId: "node" as const,
-        readOnlyResourceMounts: resources.mounts,
-      };
-      const catalog = bindHostSkillCatalog({
-        snapshot: resources.snapshot,
-        workspaceDir: sandbox.workspaceDir,
-        sandbox,
-        readable: true,
-        assertCurrent: () => {},
-      })();
+      const catalog = resourceCatalog(resources, carrier.workspace).getCatalog();
       const tools = createInstalledSkillTools(catalog);
       finalizeAgentToolAvailability(tools);
       expect(
@@ -728,10 +720,10 @@ it.each(["cancelled", "retired"])(
     const [codeModeSkill] = resolveCodeModeSkills({
       skillsPrompt: resources!.snapshot.prompt,
       candidates: [selected],
-      reader: async () => {
-        throw new Error("Paired nodes have no Gateway filesystem bridge");
-      },
     });
+    codeModeSkill!.reader = async () => {
+      throw new Error("Paired nodes have no Gateway filesystem bridge");
+    };
     expect(await readCodeModeSkill(codeModeSkill!)).toBe(instructions);
     expect(await fs.readFile(selected.filePath, "utf8")).toBe(instructions);
     if (outcome === "cancelled") {

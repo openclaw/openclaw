@@ -1,8 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import fs, { type FileHandle } from "node:fs/promises";
+import fs from "node:fs/promises";
 import path from "node:path";
-import { parentPort, workerData } from "node:worker_threads";
-import { withTempWorkspace } from "@openclaw/fs-safe/temp";
 import {
   createConfigReadError,
   createInvalidConfigError,
@@ -21,38 +19,16 @@ import {
   type BackupEngine,
 } from "../infra/database-engine/physical-store.js";
 import type { DatabasePortPluginOwners } from "../infra/database-engine/port-descriptor.js";
-import {
-  withDatabasePortPostgres,
-  withDatabasePortConnection,
-} from "../infra/database-engine/port-provider.js";
-import { admitDatabasePortDescriptor } from "../infra/database-engine/port.worker.js";
-import {
-  assertPostgresCatalog,
-  postgresCatalogQuery,
-  readPostgresCatalog,
-} from "../infra/database-engine/postgres-catalog.js";
 import type { DatabaseEngineSelection } from "../infra/database-engine/types.js";
-import { requireDirectorySync, syncDirectory } from "../infra/directory-durability.js";
-import { copyFileHandle } from "../infra/file-descriptor.js";
 import { hasActiveGatewayStateOwner } from "../infra/gateway-state-owner.js";
+import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { captureRuntimeWorkerSource } from "../infra/runtime-worker-generation.js";
-import { quoteSqliteIdentifier as quote } from "../infra/sqlite-schema-sql.js";
-import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
-import {
-  captureDatabaseArtifact,
-  exportPostgresBackup,
-  restorePostgresBackup,
-  fingerprintPostgresDatabase,
-  discardPostgresNamespace,
-} from "./database-backup-core.worker.js";
-import {
-  readSnapshotExportEnvelope,
-  verifyPostgresExportEnvelope,
-  type PostgresExportEnvelope,
-} from "./export-envelope.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import type { BackupTask, Capture, Restore } from "./database-backup.operations.js";
+import type { PostgresExportEnvelope } from "./export-envelope.js";
 import type { GitBackupIdentity, GitBackupManifest } from "./git-backup-codec.js";
 export { captureDatabaseArtifact, assertDatabaseArtifact } from "./database-backup-core.worker.js";
-
+export { verifyMatchedPostgresBackup } from "./database-backup.operations.js";
 export { readBackupEngine, readBackupEngineImage };
 export type { BackupEngine };
 
@@ -128,204 +104,13 @@ export async function runOfflineDatabaseBackup<T>(
   });
 }
 
-export async function verifyMatchedPostgresBackup(
-  directory: string,
-  profile: PostgresExportEnvelope["profile"],
-  expectedSource?: { storeId: string; namespace: string },
-) {
-  if ((await fs.readdir(directory)).includes(".pending")) {
-    throw new Error("PostgreSQL backup is incomplete.");
-  }
-  const envelope = await readSnapshotExportEnvelope(directory);
-  if (envelope.engine !== "postgres") {
-    throw new Error("Expected a matched PostgreSQL export.");
-  }
-  await verifyPostgresExportEnvelope(directory, envelope.manifest, inspectHeldAnchor, profile);
-  if (
-    expectedSource &&
-    (envelope.manifest.source.storeId !== expectedSource.storeId ||
-      envelope.manifest.source.namespace !== expectedSource.namespace)
-  ) {
-    throw new Error("PostgreSQL backup belongs to a different store.");
-  }
-  return envelope.manifest;
-}
-
-async function inspectHeldAnchor(handle: FileHandle) {
-  const workspace = { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "openclaw-anchor-" };
-  return await withTempWorkspace(workspace, async ({ dir }) => {
-    const file = path.join(dir, "anchor.sqlite");
-    {
-      await using output = await fs.open(file, "wx", 0o600);
-      await copyFileHandle(handle, output);
-    }
-    const anchor = readBackupEngineImage(file, file);
-    if (anchor.engine !== "postgres") {
-      throw new Error("Export artifact is not a PostgreSQL anchor.");
-    }
-    return anchor;
-  });
-}
-
-/** Caller retains stopped installation custody until all client/native handles settle. */
-async function capturePostgresBackupInWorker(params: {
-  sourcePath: string;
-  directory: string;
-  profile: PostgresExportEnvelope["profile"];
-  config: OpenClawConfig;
-  pluginOwners?: DatabasePortPluginOwners;
-  assertCurrent: () => void;
-  gitIdentity?: GitBackupIdentity;
-}): Promise<PostgresExportEnvelope> {
-  const { createVerifiedSqliteSnapshot } = await import("../infra/sqlite-snapshot.js");
-  params.assertCurrent();
-  await fs.mkdir(params.directory, { mode: 0o700 });
-  await fs.writeFile(path.join(params.directory, ".pending"), "", { flag: "wx", mode: 0o600 });
-  const anchorPath = path.join(params.directory, "anchor.sqlite");
-  await createVerifiedSqliteSnapshot({
-    sourcePath: params.sourcePath,
-    targetPath: anchorPath,
-    preserveRowIds: true,
-  });
-  // Identify the captured bytes; reacquiring the live anchor adds another isolated copy.
-  const anchor = readBackupEngineImage(anchorPath, params.sourcePath);
-  if (anchor.engine !== "postgres") {
-    throw new Error("A PostgreSQL backup requires its original anchor.");
-  }
-  return await withDatabasePortPostgres(
-    params.config,
-    anchor,
-    async (client, baseDescriptor) => {
-      const descriptor = await admitDatabasePortDescriptor(
-        { engine: "postgres", db: client, namespace: anchor.namespace },
-        baseDescriptor,
-      );
-      params.assertCurrent();
-      const manifest = await exportPostgresBackup({ ...params, client, descriptor, anchor });
-      await verifyPostgresExportEnvelope(
-        params.directory,
-        manifest,
-        inspectHeldAnchor,
-        params.profile,
-      );
-      await fs.unlink(path.join(params.directory, ".pending"));
-      requireDirectorySync(await syncDirectory(params.directory), "PostgreSQL backup");
-      requireDirectorySync(
-        await syncDirectory(path.dirname(params.directory)),
-        "PostgreSQL backup parent",
-      );
-      return manifest;
-    },
-    params.pluginOwners,
-  );
-}
-
-/** Build a new namespace and anchor; the caller alone publishes the anchor. Never drop the old namespace. */
-async function preparePostgresRestoreInWorker(params: {
-  directory: string;
-  anchorPath: string;
-  config: OpenClawConfig;
-  profile: PostgresExportEnvelope["profile"];
-  expectedSource?: { storeId: string; namespace: string };
-  pluginOwners?: DatabasePortPluginOwners;
-  preserveUpdateHistory?: boolean;
-  assertCurrent: () => void;
-}) {
-  const manifest = await verifyMatchedPostgresBackup(
-    params.directory,
-    params.profile,
-    params.expectedSource,
-  );
-  return await withDatabasePortConnection(params.config, async (client) => {
-    const { loadDatabasePortDescriptor } =
-      await import("../infra/database-engine/port-provider-descriptor.js");
-    const descriptor = await loadDatabasePortDescriptor(manifest.source.owner, params.config, {
-      version: manifest.source.schemaVersion,
-      pluginOwners: params.pluginOwners,
-    });
-    const { namespace } = await restorePostgresBackup({ ...params, client, descriptor, manifest });
-    try {
-      const input = getScopedDatabaseEngineSelection()?.postgres;
-      params.assertCurrent();
-      await descriptor.admit?.(params.anchorPath, input);
-      if (params.preserveUpdateHistory) {
-        if (!params.expectedSource) {
-          throw new Error("PostgreSQL update rollback requires its captured source identity.");
-        }
-        const source = params.expectedSource.namespace;
-        const historySchema = [descriptor, ...(descriptor.fragments ?? [])].find((schema) =>
-          schema.tables.some((entry) => entry.name === "update_runs"),
-        );
-        const table = historySchema?.tables.find((entry) => entry.name === "update_runs");
-        if (!historySchema || !table) {
-          throw new Error(
-            "PostgreSQL rollback cannot preserve the current update history contract.",
-          );
-        }
-        const expected = historySchema.expectedCatalog.filter((fact) => fact.table === table.name);
-        const catalog = readPostgresCatalog(
-          (await client.query(postgresCatalogQuery(source))).rows[0].catalog,
-        );
-        assertPostgresCatalog(
-          catalog.filter((fact) => fact.table === table.name),
-          expected,
-        );
-        const columns = table.columns.map(({ name }) => quote(name)).join(", ");
-        await client.query("BEGIN; SET LOCAL synchronous_commit = on");
-        try {
-          await client.query(`DELETE FROM ${quote(namespace)}.update_runs`);
-          await client.query(
-            `INSERT INTO ${quote(namespace)}.update_runs (${columns}) SELECT ${columns} FROM ${quote(source)}.update_runs`,
-          );
-          await client.query("COMMIT");
-        } catch (error) {
-          await client.query("ROLLBACK");
-          throw error;
-        }
-      }
-      // Owner admission can change anchor journal mode; bind the final bytes for publication.
-      const { sha256, size: sizeBytes } = await captureDatabaseArtifact(params.anchorPath);
-      return { namespace, sha256, sizeBytes };
-    } catch (error) {
-      await discardPostgresNamespace(client, namespace);
-      throw error;
-    }
-  });
-}
-
-type Capture = Parameters<typeof capturePostgresBackupInWorker>[0];
-type Restore = Parameters<typeof preparePostgresRestoreInWorker>[0];
-type BackupTask =
-  | { operation: "discard"; params: { config: OpenClawConfig; namespaces: string[] } }
-  | { operation: "capture"; params: Omit<Capture, "assertCurrent"> }
-  | { operation: "restore"; params: Omit<Restore, "assertCurrent"> }
-  | {
-      operation: "family";
-      params: {
-        sourcePath: string;
-        config: OpenClawConfig;
-        pluginOwners?: DatabasePortPluginOwners;
-      };
-    }
-  | {
-      operation: "fingerprint";
-      params: {
-        sourcePath: string;
-        config: OpenClawConfig;
-        pluginOwners?: DatabasePortPluginOwners;
-      };
-    };
-type BackupReply =
-  | void
-  | PostgresExportEnvelope
-  | string
-  | Awaited<ReturnType<typeof preparePostgresRestoreInWorker>>;
-
 async function runBackupTask<T>(task: BackupTask, assertCurrent: () => void): Promise<T> {
   assertCurrent();
   // This one-shot worker is joined before publication; it never survives a runtime swap.
   const { WorkerTaskPool } = await import("../infra/worker-task-pool.js");
-  const source = captureRuntimeWorkerSource(new URL(import.meta.url));
+  const source = captureRuntimeWorkerSource(
+    resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.databaseBackup),
+  );
   const selection =
     getScopedDatabaseEngineSelection() ??
     (await resolveDatabaseEngineSelection(task.params.config));
@@ -334,7 +119,6 @@ async function runBackupTask<T>(task: BackupTask, assertCurrent: () => void): Pr
     const pool = new WorkerTaskPool<BackupTask, T>({
       workerUrl: source.moduleUrl,
       maxWorkers: 1,
-      workerOptions: { workerData: { openclawDatabaseBackup: true } },
     });
     try {
       const result = await pool.run(task, {});
@@ -412,10 +196,11 @@ export function discardPostgresRestores(config: OpenClawConfig, namespaces: stri
 }
 
 export function preparePostgresRestore({ assertCurrent, ...params }: Restore) {
-  return runBackupTask<Awaited<ReturnType<typeof preparePostgresRestoreInWorker>>>(
-    { operation: "restore", params },
-    assertCurrent,
-  );
+  return runBackupTask<
+    Awaited<
+      ReturnType<typeof import("./database-backup.operations.js").preparePostgresRestoreInWorker>
+    >
+  >({ operation: "restore", params }, assertCurrent);
 }
 
 /** Resolve physical family identity through the same provider admission as capture. */
@@ -432,47 +217,4 @@ export function fingerprintPostgresBackup(
     { operation: "fingerprint", params: { sourcePath, config, pluginOwners } },
     () => {},
   );
-}
-
-if (parentPort && workerData?.openclawDatabaseBackup === true) {
-  const { serveWorkerTasks } = await import("../infra/worker-task-server.js");
-  serveWorkerTasks<BackupReply>((value, _channel, control) => {
-    // SAFETY: The private one-shot host is the sole producer of this structured-clone payload.
-    const task = value as BackupTask;
-    if (task.operation === "discard") {
-      return control.runNativeSection(() =>
-        withDatabasePortConnection(task.params.config, async (client) => {
-          for (const namespace of task.params.namespaces) {
-            control.throwIfCancelled();
-            await discardPostgresNamespace(client, namespace);
-          }
-        }),
-      );
-    }
-    if (task.operation === "fingerprint" || task.operation === "family") {
-      const anchor = readBackupEngine(task.params.sourcePath);
-      if (anchor.engine !== "postgres") {
-        throw new Error("PostgreSQL anchor disappeared.");
-      }
-      if (task.operation === "fingerprint") {
-        return withDatabasePortConnection(task.params.config, (client) =>
-          fingerprintPostgresDatabase({ client, anchor }),
-        );
-      }
-      return withDatabasePortPostgres(
-        task.params.config,
-        anchor,
-        (_client, descriptor) => Promise.resolve(descriptor.id),
-        task.params.pluginOwners,
-      );
-    }
-    return control.runNativeSection<BackupReply>(() =>
-      task.operation === "capture"
-        ? capturePostgresBackupInWorker({ ...task.params, assertCurrent: control.throwIfCancelled })
-        : preparePostgresRestoreInWorker({
-            ...task.params,
-            assertCurrent: control.throwIfCancelled,
-          }),
-    );
-  });
 }

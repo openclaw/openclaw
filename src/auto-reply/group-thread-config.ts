@@ -4,13 +4,6 @@ import { isAcpSessionKey, normalizeAgentId } from "../routing/session-key.js";
 import type { GroupThreadMentionFacts, ResolvedGroupThreadConfig } from "./group-thread.types.js";
 import { buildMentionRegexes, normalizeMentionText } from "./reply/mentions.js";
 
-function boundedCount(value: number | undefined, fallback: number, maximum: number): number {
-  return Math.max(
-    1,
-    Math.min(maximum, Math.floor(value !== undefined && Number.isFinite(value) ? value : fallback)),
-  );
-}
-
 export function resolveGroupThreadConfig(params: {
   cfg: OpenClawConfig;
   channel: string;
@@ -43,8 +36,8 @@ export function resolveGroupThreadConfig(params: {
     qualified,
     configuredAgentCount: participants.length,
     mentionGating: qualified && (settings.mentionGating ?? true),
-    maxRounds: qualified ? boundedCount(settings.maxRounds, 1, 4) : 1,
-    maxTurns: !qualified ? agents.length : boundedCount(settings.maxTurns, participants.length, 32),
+    maxRounds: qualified ? (settings.maxRounds ?? 1) : 1,
+    maxTurns: qualified ? (settings.maxTurns ?? participants.length) : agents.length,
     strategy: cfg.broadcast?.strategy ?? "parallel",
   };
 }

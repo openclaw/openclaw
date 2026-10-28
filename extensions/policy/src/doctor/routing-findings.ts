@@ -1,23 +1,17 @@
 import type { HealthFinding } from "openclaw/plugin-sdk/health";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
-import { policyRoutingRules } from "../policy-routing.js";
+import type { PolicyRoutingRules } from "../policy-routing.js";
 import type { PolicyEvidence } from "../policy-state.js";
 import { CHECK_IDS } from "./check-ids.js";
-import { routingPolicyShapeFinding } from "./routing-shapes.js";
 import { ocPathSegment } from "./utils.js";
 
 export function routingFindings(
-  policy: unknown,
+  rules: PolicyRoutingRules | undefined,
   policyPath: string,
   policyDocName: string,
   evidence: PolicyEvidence,
 ): readonly HealthFinding[] {
-  const rules = policyRoutingRules(policy);
-  if (
-    rules === undefined ||
-    evidence.routing === undefined ||
-    routingPolicyShapeFinding(rules, { policyPath, policyDocName }) !== undefined
-  ) {
+  if (rules === undefined || evidence.routing === undefined) {
     return [];
   }
   const findings: HealthFinding[] = [];

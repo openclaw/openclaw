@@ -93,6 +93,8 @@ Every section heading from the previous single-page version keeps its anchor her
 Feishu/Lark does not support native slash-command menus, so send these as plain text messages.
 </Note>
 
+Control commands bypass Feishu's message batching and ordinary chat queue, so you can check status or interrupt a running reply. Ordinary chat messages are handled in order.
+
 ## Related
 
 - [Channels Overview](/channels) - all supported channels

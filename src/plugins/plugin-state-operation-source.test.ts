@@ -6,7 +6,10 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createPluginCache, retirePluginCache, withPluginCache } from "./plugin-cache.js";
 import { bindPluginInstanceModuleLoader } from "./plugin-instance-module-loader.js";
 import { PluginInstance } from "./plugin-instance.js";
-import { capturePluginStateOperationModuleSource } from "./plugin-state-operation-source.js";
+import {
+  bindPluginStateOperationModuleSource,
+  capturePluginStateOperationModuleSource,
+} from "./plugin-state-operation-source.js";
 import { loadValidatedPublicSurfaceModule } from "./public-surface-loader.js";
 
 const temp = useAutoCleanupTempDirTracker(afterEach);
@@ -57,6 +60,30 @@ function load(source: ReturnType<typeof capture>, moduleName = operation) {
     surfaceLabel: "fixture state operation",
   });
 }
+
+it("binds an image artifact that only exposes operation lookup", () => {
+  const rootDir = temp.make("plugin-state-operation-image-");
+  const modulePath = path.join(rootDir, operation);
+  fs.writeFileSync(path.join(rootDir, "package.json"), '{"type":"module"}');
+  fs.writeFileSync(modulePath, "export const version = 'image operation';");
+  const instance = new PluginInstance("operation-fixture");
+  instances.push(instance);
+  bindPluginStateOperationModuleSource({
+    instance,
+    rootDir,
+    source: path.join(rootDir, "index.js"),
+    origin: "bundled",
+    artifact: {
+      rootDir,
+      hasSource: (filename) => filename === modulePath,
+      resolve: (filename) => filename,
+      prepareModule: () => [],
+    },
+  });
+
+  expect(load(capture(instance))).toMatchObject({ version: "image operation" });
+  expect(() => capture(instance).resolve("missing-operation-api.js")).toThrow(missing);
+});
 
 it("retains TypeScript and relative dependencies after source edits", () => {
   const { root, source } = fixture({

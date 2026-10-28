@@ -4,18 +4,17 @@ import type { ShellRouteState } from "./app-host-route-state.ts";
 import { readNativeHistoryState } from "./native-web-chrome.ts";
 
 /** Synchronous shell state publishes revisions; Solid commits settle its DOM waiters. */
-export class ShellPresentation {
+export abstract class ShellPresentation {
   mobileGatewayStatus: GatewayStatusProps | null = null;
-  private readonly readRevision: () => number;
-  private readonly writeRevision: (next: (revision: number) => number) => number;
-  readonly shellRevision = () => this.readRevision();
-
-  constructor() {
-    const [read, write] = createSignal(0, { ownedWrite: true });
-    this.readRevision = read;
-    this.writeRevision = write;
-  }
+  connectionRecovery = false;
+  protected connectionFlagVisible = false;
+  private connectionKind: GatewayStatusProps["kind"] | undefined;
+  private connectionRecoveryTimer: ReturnType<typeof setTimeout> | undefined;
+  private connectionFlagTimer: ReturnType<typeof setTimeout> | undefined;
+  private readonly revision = createSignal(0, { ownedWrite: true });
+  readonly shellRevision = this.revision[0];
   private disposed = false;
+  private presentationMounted = false;
   private commitPromise: Promise<boolean> = Promise.resolve(true);
   private resolveCommit: ((committed: boolean) => void) | undefined;
   private currentNavDrawerOpen = false;
@@ -77,8 +76,77 @@ export class ShellPresentation {
   readonly nativeHistoryState = this.nativeHistory[0];
   readonly setNativeHistoryState = this.nativeHistory[1];
 
+  protected syncConnectionFeedback(kind: GatewayStatusProps["kind"]): void {
+    // Only a kind transition replaces the brief recovery row and avatar flag timers.
+    if (kind !== this.connectionKind) {
+      const previous = this.connectionKind;
+      const wasRecovery = this.connectionRecovery;
+      const wasFlagVisible = this.connectionFlagVisible;
+      this.clearConnectionFeedbackTimers();
+      this.connectionKind = kind;
+      this.connectionRecovery =
+        kind === "connected" && previous != null && previous !== "connected";
+      this.connectionFlagVisible = Boolean(
+        kind && (kind !== "connected" || this.connectionRecovery),
+      );
+      if (this.connectionRecovery) {
+        this.connectionRecoveryTimer = setTimeout(() => {
+          this.connectionRecoveryTimer = undefined;
+          this.connectionRecovery = false;
+          this.invalidate();
+        }, 2_000);
+      }
+      if (this.connectionFlagVisible) {
+        this.connectionFlagTimer = setTimeout(() => {
+          this.connectionFlagTimer = undefined;
+          this.connectionFlagVisible = false;
+          this.invalidate();
+        }, 4_000);
+      }
+      if (
+        wasRecovery !== this.connectionRecovery ||
+        wasFlagVisible !== this.connectionFlagVisible
+      ) {
+        this.invalidate();
+      }
+    }
+  }
+
+  protected resetConnectionFeedback(): void {
+    this.clearConnectionFeedbackTimers();
+    this.connectionKind = undefined;
+    this.connectionRecovery = false;
+    this.connectionFlagVisible = false;
+    this.mobileGatewayStatus = null;
+  }
+
+  private clearConnectionFeedbackTimers(): void {
+    clearTimeout(this.connectionRecoveryTimer);
+    clearTimeout(this.connectionFlagTimer);
+    this.connectionRecoveryTimer = undefined;
+    this.connectionFlagTimer = undefined;
+  }
+
   get updateComplete(): Promise<boolean> {
     return this.commitPromise;
+  }
+
+  mountPresentation(): () => void {
+    this.presentationMounted = true;
+    this.invalidate();
+    return () => {
+      this.presentationMounted = false;
+      this.suspendPresentation();
+    };
+  }
+
+  protected abstract afterCommit(): void;
+
+  commitRenderedPresentation(): void {
+    if (this.disposed || !this.presentationMounted || !this.resolveCommit) {
+      return;
+    }
+    this.afterCommit();
   }
 
   invalidate(): void {
@@ -90,11 +158,12 @@ export class ShellPresentation {
         this.resolveCommit = resolve;
       });
     }
-    this.writeRevision((revision) => revision + 1);
+    this.revision[1]((revision) => revision + 1);
   }
 
   protected resumePresentation(): void {
     this.disposed = false;
+    this.invalidate();
   }
 
   protected suspendPresentation(): void {

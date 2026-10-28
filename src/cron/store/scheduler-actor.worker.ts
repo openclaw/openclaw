@@ -6,8 +6,8 @@ import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contra
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { tryResolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
-import { isHeartbeatTaskCronJob } from "../heartbeat-task.js";
 import {
+  computeJobPreviousRunAtOrBeforeMs,
   DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
   hasActiveCronRun,
   hasScheduledNextRunAtMs,
@@ -25,7 +25,7 @@ import {
   DEFAULT_STARTUP_DEFERRED_MISSED_AGENT_JOB_DELAY_MS,
   MAX_CRON_TIMER_DELAY_MS,
   MIN_REFIRE_GAP_MS,
-} from "../service/timer-execution-timeout.js";
+} from "../service/timer-constants.js";
 import { hasMissedCronSlotSinceLastRun, isRunnableJob } from "../service/timer-runnable.js";
 import type { CronJob } from "../types.js";
 import { hasCanonicalCronDeliveryMode } from "./delivery-codec.js";
@@ -79,6 +79,7 @@ function emptyResult(): CronSchedulerResult {
     accepted: [],
     rejected: [],
     launches: [],
+    preparing: [],
     skipped: [],
     notifications: [],
     logs: [],
@@ -251,12 +252,7 @@ function armActor(
 }
 
 function isAgentWork(job: CronJob): boolean {
-  return (
-    job.payload.kind === "agentTurn" ||
-    job.payload.kind === "heartbeat" ||
-    isHeartbeatTaskCronJob(job) ||
-    (job.sessionTarget === "main" && job.payload.kind === "systemEvent" && job.wakeMode === "now")
-  );
+  return job.payload.kind === "agentTurn" || job.payload.kind === "systemEvent";
 }
 
 function boundedCatchup(
@@ -482,10 +478,11 @@ export function runCronSchedulerInWorker(
       candidates = catchup.immediate;
       overflow = catchup.overflow;
     } else if (command.type !== "cron.schedulerRefresh") {
+      const allowCronMissedRunByLastRun = snapshot.config.cronConfig?.skipMissedJobs !== true;
       candidates = currentJobs().filter(
         (job) =>
           !waitsForStartupBatch(actor, job) &&
-          isRunnableJob({ job, nowMs, activeInProcess: false }),
+          isRunnableJob({ job, nowMs, allowCronMissedRunByLastRun, activeInProcess: false }),
       );
     }
     const ownerless = candidates.filter(
@@ -530,6 +527,12 @@ export function runCronSchedulerInWorker(
         currentJobs().some((job) => job.state.queuedAtMs !== undefined))
     ) {
       currentJobs();
+      for (const job of owned) {
+        if (job.state.nextRunAtMs !== undefined && job.state.nextRunAtMs > nowMs) {
+          // Recovery must not consume the future occurrence's receipt identity.
+          job.state.nextRunAtMs = computeJobPreviousRunAtOrBeforeMs(job, nowMs);
+        }
+      }
       const requested = requestAndDrainCronRunsInWorker(
         database,
         {
@@ -548,12 +551,16 @@ export function runCronSchedulerInWorker(
           requests: input.requests ?? [],
           maxConcurrentRuns: DEFAULT_CRON_MAX_CONCURRENT_RUNS,
           schedulingPaused: input.paused,
+          preparingAgentIds: snapshot.config.preparingAgentIds,
+          hostProcessId: snapshot.config.hostProcessId,
+          pluginCommandHosts: snapshot.config.pluginCommandHosts,
         },
         jobs,
       );
       result.accepted.push(...requested.accepted);
       result.rejected.push(...requested.rejected);
       result.launches.push(...requested.launches);
+      result.preparing.push(...requested.preparing);
       result.skipped.push(...requested.skipped);
       result.jobs.push(...requested.accepted.map((entry) => entry.job));
       result.jobs.push(...requested.launches.map((entry) => entry.job));

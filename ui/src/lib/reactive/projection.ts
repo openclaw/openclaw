@@ -17,7 +17,6 @@ type SourceContract<S, T> = {
 };
 
 export type SourceProjection<S, T> = {
-  readonly equality: SourceContract<S, T>["equality"];
   readonly read: () => T;
   readonly revision: () => number;
   subscribe(this: void, listener: () => void): Dispose;
@@ -38,12 +37,31 @@ export function projectOwner<S extends { subscribe(notify: () => void): Dispose 
   });
 }
 
+/** Local owners publish through the same lazy projection subscription. */
+export function projectMutableSource<S, T>(source: S, read: (source: S) => T) {
+  let notify = () => {};
+  return {
+    ...projectSource(source, {
+      read,
+      subscribe: (_source, listener) => {
+        notify = listener;
+        return () => {
+          notify = () => {};
+        };
+      },
+      equality: "revision",
+    }),
+    publish: () => notify(),
+  };
+}
+
 /** Read-through owner view; only revision tracks, never the sampled owner reads or subscriptions. */
 export function projectSource<S, T>(
   initialSource: S,
   contract: SourceContract<S, T>,
 ): SourceProjection<S, T> {
   let source = initialSource;
+  // Reactive primitive: untrack keeps sampled owner reads outside revision tracking.
   const readSnapshot = () => untrack(() => contract.read(source));
   let value = readSnapshot();
   let lastRead = value;
@@ -124,7 +142,6 @@ export function projectSource<S, T>(
     onCleanup(dispose);
   }
   return {
-    equality: contract.equality,
     read() {
       observe();
       if (!disposed) {

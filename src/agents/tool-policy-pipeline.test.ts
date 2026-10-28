@@ -293,6 +293,7 @@ describe("tool-policy-pipeline", () => {
       warn(i);
     }
     warnings.length = 0;
+    warn(0);
     warn(256);
     warn(0);
     expect(warnings).toEqual([

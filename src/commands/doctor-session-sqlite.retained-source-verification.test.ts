@@ -27,20 +27,21 @@ import {
 } from "../infra/session-sqlite-migration-manifest.js";
 import { ExitError } from "../runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
-import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-} from "../state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { readSessionSqliteMigrationWarnings } from "./doctor-session-sqlite-warnings.js";
-import { seedDeferredPluginSessionSource } from "./doctor-session-sqlite.deferred-plugin.test-support.js";
+import {
+  addDeferredPluginSessions,
+  seedDeferredPluginSessionSource,
+} from "./doctor-session-sqlite.deferred-plugin.test-support.js";
+import { jsonl, messageEvent, writeJson } from "./doctor-session-sqlite.fixtures.test-support.js";
 import { runDoctorSessionSqlite, type DoctorSessionSqliteReport } from "./doctor-session-sqlite.js";
 import {
   containsObjects,
   expectFiles,
   expectMissing,
 } from "./doctor-session-sqlite.publication-spies.test-support.js";
+import { stateRows, writeState } from "./doctor-session-sqlite.test-support.js";
 import { noteSessionTranscriptHealth } from "./doctor-session-transcripts.js";
 import { doctorCommand } from "./doctor.js";
 
@@ -73,15 +74,10 @@ it("rebuilds a missing receipt index while protecting a changed source", async (
     containsObjects(issues, { code: "retained_plugin_source_index_rebuilt" });
     const conflicts = issues.filter((issue) => issue.code === "historical_transcript_deferred");
     expect(conflicts).toHaveLength(1);
-    const receipt = withExistingOpenClawStateDatabaseReadOnly(
-      ({ db }) =>
-        db
-          .prepare(
-            "SELECT report_json FROM migration_sources WHERE migration_kind = 'deferred-plugin-session-import'",
-          )
-          .get(),
-      { env: state.env },
-    );
+    const receipt = stateRows(
+      state.env,
+      "SELECT report_json FROM migration_sources WHERE migration_kind = 'deferred-plugin-session-import'",
+    )?.[0];
     const sources = JSON.parse(String(receipt?.report_json)).sources;
     expect(sources.map((source: { path: string }) => source.path)).not.toContain(storePath);
     expect(sources.map((source: { path: string }) => source.path)).toContain(transcript);
@@ -359,13 +355,10 @@ it.each(["none", "archived", "conflicting-archives", "live", "missing-index"] as
         await expect(editConfig()).rejects.toThrow("Cannot edit retained config");
         await noteSessionTranscriptHealth({ cfg, env: state.env, shouldRepair: true });
         expect(readDeferredPluginMigrations({ env: state.env })).toEqual([]);
-        const row = withExistingOpenClawStateDatabaseReadOnly(
-          ({ db }) =>
-            db
-              .prepare("SELECT status, finished_at FROM migration_runs WHERE id = ?")
-              .get(`deferred-plugin-migration:${pluginId}`),
-          { env: state.env },
-        );
+        const row = stateRows(
+          state.env,
+          `SELECT status, finished_at FROM migration_runs WHERE id = 'deferred-plugin-migration:${pluginId}'`,
+        )?.[0];
         expect(row?.status).toBe("completed");
         expect(row?.finished_at).not.toBeNull();
         if (history === "conflicting-archives") {
@@ -429,17 +422,7 @@ it.each(["none", "archived", "conflicting-archives", "live", "missing-index"] as
 it("reads each archive manifest once when verifying 32 retained transcripts", async () => {
   await withOpenClawTestState({ label: "deferred-plugin-manifest-reads" }, async (state) => {
     const { cfg, storePath, scope } = await seedDeferredPluginSessionSource(state);
-    const entries = JSON.parse(fs.readFileSync(storePath, "utf8"));
-    for (let index = 2; index < 32; index++) {
-      const sessionId = `legacy-volume-${index}`;
-      const sessionFile = `${sessionId}.jsonl`;
-      entries[`agent:main:volume-${index}`] = { sessionId, sessionFile, updatedAt: 20 };
-      fs.writeFileSync(
-        path.join(path.dirname(storePath), sessionFile),
-        `${JSON.stringify({ type: "session", version: 3, id: sessionId })}\n`,
-      );
-    }
-    writeJson(storePath, entries);
+    addDeferredPluginSessions(storePath, 32);
     const run = sessionDoctor(cfg, state.env, storePath);
     expect((await run()).totals.importedEntries).toBe(32);
     await recordDeferredPluginMigrations({
@@ -452,14 +435,9 @@ it("reads each archive manifest once when verifying 32 retained transcripts", as
     expect(archived.totals.archivedTranscriptFiles).toBe(32);
     expectMissing(storePath);
     // Older releases left this receipt active even after its originals were archived.
-    runOpenClawStateWriteTransaction(
-      ({ db }) => {
-        db.prepare(
-          "UPDATE migration_sources SET removed_source = 0 WHERE migration_kind = 'deferred-plugin-session-import'",
-        ).run();
-      },
-      { env: state.env },
-    );
+    writeState(state.env, [
+      "UPDATE migration_sources SET removed_source = 0 WHERE migration_kind = 'deferred-plugin-session-import'",
+    ]);
     const manifestPaths = listManifests(state.env);
     const manifestPath = archived.migrationRun!.manifestPath;
     const manifestBytes = fs.readFileSync(manifestPath);
@@ -562,16 +540,11 @@ function expectIssueCodes(report: DoctorSessionSqliteReport, ...codes: string[])
   expect(allIssues(report).map((issue) => issue.code)).toEqual(codes);
 }
 
-function writeJson(file: string, value: unknown) {
-  fs.writeFileSync(file, JSON.stringify(value));
-}
-
 function writeTranscript(file: string, sessionId: string, messageId: string, content: string) {
-  const rows = [
-    { type: "session", version: 3, id: sessionId },
-    { type: "message", id: messageId, parentId: null, message: { role: "user", content } },
-  ];
-  fs.writeFileSync(file, rows.map((row) => JSON.stringify(row)).join("\n") + "\n");
+  fs.writeFileSync(
+    file,
+    jsonl({ type: "session", version: 3, id: sessionId }, messageEvent(messageId, "user", content)),
+  );
 }
 
 function sessionDoctor(cfg: OpenClawConfig, env: NodeJS.ProcessEnv, store?: string) {

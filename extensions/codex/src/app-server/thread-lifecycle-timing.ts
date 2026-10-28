@@ -1,28 +1,12 @@
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createStageTimingTracker, formatStageTimings } from "openclaw/plugin-sdk/time-runtime";
 
-type CodexThreadLifecycleTimingLogger = {
-  isEnabled?: (level: "trace") => boolean;
-  trace: (message: string, meta?: Record<string, unknown>) => void;
-  warn: (message: string, meta?: Record<string, unknown>) => void;
-};
-
-export type CodexThreadLifecycleTimingOptions = {
-  enabled?: boolean;
-  now?: () => number;
-  log?: CodexThreadLifecycleTimingLogger;
-};
-
 export type CodexThreadLifecycleTimingTracker = ReturnType<
   typeof createCodexThreadLifecycleTimingTracker
 >;
 
-export function createCodexThreadLifecycleTimingTracker(
-  options: CodexThreadLifecycleTimingOptions = {},
-) {
-  const log = options.log ?? embeddedAgentLog;
-
-  const timing = createStageTimingTracker(options.now ?? Date.now);
+export function createCodexThreadLifecycleTimingTracker(enabled: boolean) {
+  const timing = createStageTimingTracker();
   let didLog = false;
   return {
     measure: timing.measure,
@@ -42,12 +26,12 @@ export function createCodexThreadLifecycleTimingTracker(
         return;
       }
       const { totalMs, stages: spans } = timing.snapshot();
-      const detailed = options.enabled || log.isEnabled?.("trace");
+      const detailed = enabled || embeddedAgentLog.isEnabled("trace");
       const totalThresholdMs = detailed ? 1_000 : 10_000;
       const stageThresholdMs = detailed ? 500 : 5_000;
       const shouldWarn =
         totalMs >= totalThresholdMs || spans.some((span) => span.durationMs >= stageThresholdMs);
-      if (!shouldWarn && !log.isEnabled?.("trace")) {
+      if (!shouldWarn && !embeddedAgentLog.isEnabled("trace")) {
         return;
       }
       didLog = true;
@@ -65,9 +49,9 @@ export function createCodexThreadLifecycleTimingTracker(
         spans,
       };
       if (shouldWarn) {
-        log.warn(message, meta);
+        embeddedAgentLog.warn(message, meta);
       } else {
-        log.trace(message, meta);
+        embeddedAgentLog.trace(message, meta);
       }
     },
   };

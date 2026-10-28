@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel-contract";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import type { ClickClackMessage, ResolvedClickClackAccount } from "./types.js";
 
 type GatewayContext = ChannelGatewayContext<ResolvedClickClackAccount>;
@@ -21,46 +22,32 @@ vi.mock("./access.js", () => ({
 const { startClickClackGatewayAccount } = await import("./gateway.js");
 
 const CREATED_AT = "2026-01-01T00:00:00.000Z";
-const THREAD_ROOT: ClickClackMessage = {
-  id: "msg_root",
+const messageBase = {
   workspace_id: "wsp_1",
-  channel_id: "chn_1",
   author_id: "usr_human",
-  thread_root_id: "msg_root",
-  channel_seq: 1,
-  body: "root",
-  body_format: "markdown",
+  body_format: "markdown" as const,
   created_at: CREATED_AT,
 };
-function threadReply(index: number): ClickClackMessage {
-  return {
-    ...THREAD_ROOT,
-    channel_seq: undefined,
-    id: `msg-${index}`,
+const RESOLVABLE_MESSAGES: ClickClackMessage[] = [
+  {
+    ...messageBase,
+    id: "msg-101",
+    channel_id: "chn_1",
+    thread_root_id: "msg_root",
     parent_message_id: "msg_root",
-    thread_seq: index,
-    body: `reply ${index}`,
-  };
-}
-const ALL_REPLIES = Array.from({ length: 101 }, (_, index) => threadReply(index + 1));
-const DM_ROOT: ClickClackMessage = {
-  ...THREAD_ROOT,
-  id: "msg_dm_root",
-  channel_id: undefined,
-  direct_conversation_id: "dmc_1",
-  thread_root_id: "msg_dm_root",
-  body: "dm root",
-};
-const DM_THREAD_REPLY: ClickClackMessage = {
-  ...DM_ROOT,
-  id: "msg_dm_reply",
-  channel_seq: undefined,
-  parent_message_id: "msg_dm_root",
-  thread_seq: 1,
-  body: "dm thread reply",
-};
-
-const RESOLVABLE_MESSAGES = [...ALL_REPLIES, DM_THREAD_REPLY];
+    thread_seq: 101,
+    body: "reply 101",
+  },
+  {
+    ...messageBase,
+    id: "msg_dm_reply",
+    direct_conversation_id: "dmc_1",
+    thread_root_id: "msg_dm_root",
+    parent_message_id: "msg_dm_root",
+    thread_seq: 1,
+    body: "dm thread reply",
+  },
+];
 
 async function startClickClackTestServer() {
   const requestPaths: string[] = [];
@@ -83,16 +70,6 @@ async function startClickClackTestServer() {
     if (url.pathname === "/api/realtime/events") {
       return json(200, { events: [], tail_cursor: "cursor-0" });
     }
-    if (/^\/api\/messages\/[^/]+\/thread$/u.test(url.pathname)) {
-      return json(200, {
-        root: THREAD_ROOT,
-        replies: ALL_REPLIES.slice(0, 100),
-        thread_state: { root_message_id: "msg_root", reply_count: ALL_REPLIES.length },
-      });
-    }
-    if (/^\/api\/dms\/[^/]+\/messages$/u.test(url.pathname)) {
-      return json(200, { messages: [DM_ROOT], oldest_seq: 1, has_older: false });
-    }
     const messageMatch = url.pathname.match(/^\/api\/messages\/([^/]+)$/u);
     if (messageMatch) {
       const messageId = decodeURIComponent(messageMatch[1] ?? "");
@@ -106,18 +83,7 @@ async function startClickClackTestServer() {
     }
     json(404, { error: `unhandled ${url.pathname}` });
   });
-  const port = await new Promise<number>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        reject(new Error("expected loopback TCP address"));
-        return;
-      }
-      resolve(address.port);
-    });
-  });
+  const port = await listenOnLoopback(server);
   const wss = new WebSocketServer({ server, path: "/api/realtime/ws" });
   const sockets = new Set<import("ws").WebSocket>();
   wss.on("connection", (socket) => {

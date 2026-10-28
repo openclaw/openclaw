@@ -10,6 +10,7 @@ import * as decisionRuntime from "../decisions/runtime.js";
 import { prepareDecisionProviderReload } from "../decisions/runtime.js";
 import type {
   DecisionBatchV2,
+  DecisionEvaluateOptionsV2,
   DecisionProviderV2,
   ProviderDecisionOutcomeV2,
 } from "../decisions/types-v2.js";
@@ -62,6 +63,21 @@ const batch: DecisionBatchV2 = {
 const config: OpenClawConfig = {
   agents: { defaults: { decisionModel: "fixture/native@synthetic-profile" } },
 };
+const operationOptions = {
+  purpose: "accounting-fixture",
+  rubricVersion: "v2",
+  timeoutMs: 5000,
+};
+function usageEvent(costUsd: number, agentId?: string) {
+  return expect.objectContaining({
+    type: "model.usage",
+    provider: "fixture",
+    model: "native",
+    usage: { input: 100 },
+    costUsd,
+    ...(agentId ? { agentId } : {}),
+  });
+}
 function accepted(costUsd?: number): Extract<ProviderDecisionOutcomeV2, { status: "ok" }> {
   return {
     status: "ok",
@@ -140,12 +156,21 @@ function registered(evaluate: DecisionProviderV2["evaluate"], selectedConfig = c
   });
   const run = (signal = new AbortController().signal) =>
     consumerApi.runtime.decisions.evaluateV2(batch, {
-      purpose: "accounting-fixture",
-      rubricVersion: "v2",
-      timeoutMs: 5000,
+      ...operationOptions,
       signal,
     });
   return { ...builder, record, consumer, api: consumerApi, run, events, config: selectedConfig };
+}
+
+function pendingDecision(costUsd?: number) {
+  const started = createDeferredCore();
+  const release = createDeferredCore();
+  const evaluate = vi.fn<DecisionProviderV2["evaluate"]>(async () => {
+    started.resolve();
+    await release.promise;
+    return accepted(costUsd);
+  });
+  return { ...registered(evaluate), evaluate, started, release };
 }
 
 afterEach(() => {
@@ -166,13 +191,7 @@ it.each([
     {
       trusted: true,
       hostPluginId: host.consumer.id,
-      event: expect.objectContaining({
-        type: "model.usage",
-        provider: "fixture",
-        model: "native",
-        usage: { input: 100 },
-        costUsd: expected,
-      }),
+      event: usageEvent(expected),
     },
   ]);
 });
@@ -198,13 +217,8 @@ it("does not record usage for a rejected prepared outcome", async () => {
 it.each(["provider retirement", "consumer retirement", "cancellation"] as const)(
   "discards late successful usage after %s",
   async (interruption) => {
-    const started = createDeferredCore();
-    const release = createDeferredCore();
-    const host = registered(async () => {
-      started.resolve();
-      await release.promise;
-      return accepted(1);
-    });
+    const host = pendingDecision(1);
+    const { started, release } = host;
     const controller = new AbortController();
     const pending = host.run(controller.signal);
     await started.promise;
@@ -248,16 +262,17 @@ type Entry = (typeof entries)[number];
 function invoke(
   entry: Entry,
   host: ReturnType<typeof registered>,
-  signal: AbortSignal,
+  signal: AbortSignal | DecisionEvaluateOptionsV2,
   assertActive = () => {},
 ) {
-  const options = {
-    purpose: "accounting-fixture",
-    rubricVersion: "v2",
-    timeoutMs: 5000,
-    signal,
-    agentId: "operation-owner",
-  };
+  const options =
+    signal instanceof AbortSignal
+      ? {
+          ...operationOptions,
+          signal,
+          agentId: "operation-owner",
+        }
+      : signal;
   switch (entry) {
     case "core-v1":
       return decisionRuntime.evaluateDecision(v1Batch, options);
@@ -275,7 +290,7 @@ function invoke(
       return createDecisionTool("operation-owner", { config })!.execute(
         "accounting",
         v1Batch,
-        signal,
+        options.signal,
       );
     case "prefilter":
       break;
@@ -286,7 +301,7 @@ function invoke(
     supportsTurnScopedToolRestrictions: true,
     assertActive,
     userMessage: "Hello",
-    signal,
+    signal: options.signal,
   });
 }
 function ready(entry: Entry) {
@@ -335,6 +350,120 @@ it.each(entries)("records exactly one accepted observation at %s", async (entry)
   expect(host.events[0]!.event).not.toHaveProperty("sessionKey");
   expect(host.registry.decisionProviders[0]!.host.inspect(config).activeRequests).toBe(0);
 });
+
+const directEntries = ["core-v1", "core-v2", "registry-v1", "registry-v2"] as const;
+
+it.each(directEntries)(
+  "keeps admitted cancellation and exactly-once accounting after %s replaces its signal",
+  async (entry) => {
+    const host = pendingDecision();
+    const { started, release, evaluate } = host;
+    const admitted = new AbortController();
+    const replacement = new AbortController();
+    const options = {
+      ...operationOptions,
+      purpose: "signal-replacement",
+      signal: admitted.signal,
+      agentId: "operation-owner",
+    };
+    const pending = invoke(entry, host, options);
+    try {
+      await started.promise;
+      options.signal = replacement.signal;
+      replacement.abort(new Error("replacement cancelled"));
+      expect(host.events).toEqual([]);
+      release.resolve();
+      await expect(pending).resolves.toMatchObject({ status: "ok", result: accepted().result });
+      expect(host.events).toEqual([
+        {
+          trusted: true,
+          hostPluginId: undefined,
+          event: usageEvent(0.0002, "operation-owner"),
+        },
+      ]);
+      expect(evaluate).toHaveBeenCalledOnce();
+      expect(host.registry.decisionProviders[0]!.host.inspect(config).activeRequests).toBe(0);
+    } finally {
+      release.resolve();
+      await Promise.allSettled([pending]);
+    }
+  },
+);
+
+it.each(directEntries)(
+  "still cancels %s under its admitted signal after replacement with a live signal",
+  async (entry) => {
+    const host = pendingDecision();
+    const { started, release, evaluate } = host;
+    const admitted = new AbortController();
+    const options = {
+      ...operationOptions,
+      purpose: "signal-replacement",
+      signal: admitted.signal,
+    };
+    const pending = invoke(entry, host, options);
+    const rejected = expect(pending).rejects.toThrow("admitted cancelled");
+    try {
+      await started.promise;
+      options.signal = new AbortController().signal;
+      admitted.abort(new Error("admitted cancelled"));
+      release.resolve();
+      await rejected;
+      expect(evaluate).toHaveBeenCalledOnce();
+      expect(host.events).toEqual([]);
+      expect(host.registry.decisionProviders[0]!.host.inspect(config).activeRequests).toBe(0);
+    } finally {
+      release.resolve();
+      await Promise.allSettled([pending]);
+    }
+  },
+);
+
+it.each(directEntries)(
+  "reads %s caller signal accessor once for dispatch and completion",
+  async (entry) => {
+    const host = ready(entry);
+    const admitted = new AbortController();
+    const replacement = new AbortController();
+    replacement.abort(new Error("unadmitted accessor signal"));
+    let reads = 0;
+    await expect(
+      invoke(entry, host, {
+        ...operationOptions,
+        purpose: "signal-accessor",
+        get signal() {
+          return ++reads === 1 ? admitted.signal : replacement.signal;
+        },
+      }),
+    ).resolves.toMatchObject({ status: "ok" });
+    expect(reads).toBe(1);
+    expect(host.evaluate).toHaveBeenCalledOnce();
+    expect(host.events).toHaveLength(1);
+  },
+);
+
+it.each(["registry-v1", "registry-v2"] as const)(
+  "preserves %s contract errors for absent options or signal",
+  async (entry) => {
+    const host = ready(entry);
+    const evaluate =
+      entry === "registry-v1"
+        ? decisionRuntime.evaluateDecisionInRegistry
+        : decisionRuntime.evaluateDecisionV2InRegistry;
+    const input = entry === "registry-v1" ? v1Batch : batch;
+    for (const options of [
+      undefined,
+      null,
+      { purpose: "missing-signal", rubricVersion: "v2", timeoutMs: 5000 },
+    ]) {
+      await expect(
+        Reflect.apply(evaluate, undefined, [input, options, host.registry, config]),
+      ).rejects.toThrow("Invalid decision contract");
+    }
+    expect(host.evaluate).not.toHaveBeenCalled();
+    expect(host.events).toEqual([]);
+  },
+);
 
 function onOperationSettled(callback: () => void) {
   const v1 = decisionRuntime.evaluateDecisionOperation;
@@ -521,9 +650,8 @@ it("keeps interleaved agent, model and consumer attribution invocation-local", a
     },
   });
   const options = {
+    ...operationOptions,
     purpose: "interleaved",
-    rubricVersion: "v2",
-    timeoutMs: 5000,
     signal: new AbortController().signal,
   };
   const pending: Promise<unknown>[] = [];
@@ -560,9 +688,8 @@ it.each([null, undefined])(
   async (registry) => {
     const host = ready("core-v2");
     const options = {
+      ...operationOptions,
       purpose: "missing-registry",
-      rubricVersion: "v2",
-      timeoutMs: 5000,
       signal: new AbortController().signal,
     };
     await expect(

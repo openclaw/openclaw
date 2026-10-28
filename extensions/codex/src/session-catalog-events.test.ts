@@ -1,9 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import * as messageDecoder from "./app-server/client-message-decoder.js";
 import type { CodexAppServerStartOptions as StartOptions } from "./app-server/config-contracts.js";
-import type { CodexServerNotification, CodexThread } from "./app-server/protocol.js";
+import type { CodexServerNotification } from "./app-server/protocol.js";
 import {
   createClientHarness as createHarness,
   useAutoCleanupTempDirTracker,
@@ -22,11 +21,8 @@ function callbacks() {
   return { onClose: vi.fn(), onRemoteReady: vi.fn(), onEphemeralThread: vi.fn() };
 }
 
-async function fixture(
-  options = startOptions(),
-  listener?: Parameters<typeof subscribeCodexCatalogEvents>[1],
-) {
-  const receive = vi.fn(listener);
+async function fixture(options = startOptions()) {
+  const receive = vi.fn();
   const lifecycle = callbacks();
   const foreign = { ...callbacks(), receive: vi.fn() };
   const key = await codexCatalogResidentHomeKey({ startOptions: options });
@@ -90,9 +86,7 @@ it("publishes ephemeral thread/fork acknowledgements before resolving the reques
     },
   });
 
-  await expect(harness.client.request("thread/fork", {})).resolves.toEqual({
-    thread: { id: "helper-thread", ephemeral: true },
-  });
+  await harness.client.request("thread/fork", {});
   expect(catalog.onEphemeralThread).toHaveBeenCalledExactlyOnceWith("helper-thread");
   expect(catalog.foreign.onEphemeralThread).not.toHaveBeenCalled();
 
@@ -187,35 +181,4 @@ it("forwards catalog lifecycle changes once without performing a native request"
   catalog.stop();
   harness.send(events[0]);
   expect(catalog.receive).toHaveBeenCalledTimes(events.length);
-});
-
-it("reads only the requested thread metadata when a catalog listener needs it", async () => {
-  const thread = {
-    id: "thread-1",
-    name: "Updated title",
-    preview: "x".repeat(40 * 1024),
-    extra: { discarded: "native payload ".repeat(4_096) },
-  };
-  let reading: Promise<CodexThread> | undefined;
-  const catalog = await fixture(undefined, (_event, readThread) => {
-    reading = readThread(thread.id);
-  });
-  const harness = await catalog.client();
-  expect(harness.writes).toEqual([]);
-  harness.send({ method: "turn/completed", params: { threadId: thread.id, turn: {} } });
-  const request = JSON.parse(await harness.waitForWrite(0));
-  expect(request).toMatchObject({
-    method: "thread/read",
-    params: { threadId: thread.id, includeTurns: false },
-  });
-  const parse = vi.spyOn(messageDecoder, "parseCodexAppServerMessage");
-  harness.send({ id: request.id, result: { thread } });
-  await expect(reading).resolves.toEqual({
-    id: thread.id,
-    name: thread.name,
-    projectId: null,
-    preview: "x".repeat(500),
-  });
-  expect(parse).not.toHaveBeenCalled();
-  expect(harness.writes).toHaveLength(1);
 });

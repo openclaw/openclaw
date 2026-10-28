@@ -1,5 +1,18 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, createSignal, createStore, For, Show, onCleanup, onSettled } from "solid-js";
+import {
+  action,
+  createMemo,
+  createOptimistic,
+  createSignal,
+  createStore,
+  Errored,
+  For,
+  isPending,
+  latest,
+  Loading,
+  Show,
+  onSettled,
+} from "solid-js";
 import type {
   EnvironmentSummary,
   EnvironmentsListResult,
@@ -13,12 +26,13 @@ import {
   SettingsSection,
   SettingsRow,
 } from "../../components/solid/settings-ui.tsx";
+import { i18n } from "../../i18n/index.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { resolveEditableSnapshotConfig } from "../../lib/config/config-state-model.ts";
-import { formatUiError } from "../../lib/format-error.ts";
+import { formatUiError, UserFacingError } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
-import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
@@ -45,31 +59,43 @@ import "./cloud-worker-environments.css";
 
 registerEnglishCatalog(registerSettingsEnglish);
 
+type MutationKind = "preparing" | "mutating" | "recovering" | "destroying";
+type MutationSlot = "preparing" | "image" | "destroying";
+const preparationErrors = new Map([
+  ["capacity", "capacity"],
+  ["invalid_project", "invalidProject"],
+  ["invalid_profile", "invalidProfile"],
+  ["profile_not_found", "invalidProfile"],
+]);
+
 export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) {
   const context = useApplication();
   const runtime = projectRuntimeConfig(context.runtimeConfig);
   const [selected, setSelected] = createSignal<string | null>(null, { ownedWrite: true });
   const [view, setView] = createStore<{
     result: SnapshotsResult | null;
-    loading: boolean;
-    mutating: string | null;
-    recovering: string | null;
-    error: string | null;
-    notice: string | null;
     inventory: EnvironmentsListResult | null;
-    preparing: boolean;
-    destroying: string | null;
   }>({
     result: null,
-    loading: false,
-    mutating: null,
-    recovering: null,
-    error: null,
-    notice: null,
     inventory: null,
-    preparing: false,
-    destroying: null,
   });
+  const [loadRequest, setLoadRequest] = createSignal<{ promise: Promise<void> }>();
+  const readPending = createMemo<boolean>(() => loadRequest()?.promise.then(() => false) ?? false, {
+    loadingValue: true,
+  });
+  // Keep accepted inventory visible while optional image details are still loading.
+  const loading = () => isPending(readPending) || latest(readPending);
+  const [notice, setNotice] = createSignal<string | null>(null);
+  const operations: Partial<Record<MutationSlot, GatewayConnectionScope>> = {};
+  let presentationLifetime = Promise.withResolvers<void>();
+  const [feedback, setFeedback] = createSignal<Promise<void> | null>(null);
+  const completion = createMemo(() => feedback()?.then(() => null) ?? null);
+
+  function showFeedback(promise: Promise<void>) {
+    void setFeedback(() => promise);
+    // The error boundary may retire before its admitted work settles.
+    void promise.catch(() => {});
+  }
 
   const dismissed = new Set<string>();
 
@@ -91,18 +117,17 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
   }
 
   function invalidateRequests() {
+    presentationLifetime.resolve();
+    presentationLifetime = Promise.withResolvers<void>();
     refreshAgain = false;
     activeLoad = undefined;
+    delete operations.preparing;
+    delete operations.image;
+    delete operations.destroying;
+    setFeedback(null);
     polling.cancel();
-    setView((draft) => {
-      draft.preparing = false;
-      draft.destroying = null;
-      draft.loading = false;
-      draft.recovering = null;
-      draft.mutating = null;
-      draft.error = null;
-      draft.notice = null;
-    });
+    setLoadRequest(undefined);
+    setNotice(null);
     activeConfirmation?.abort();
   }
 
@@ -124,7 +149,30 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
     ensureInitialData: () => queueMicrotask(() => void load()),
     onPageActivation: () => void load(),
   });
-  // Config and permission receipts invalidate the inventory at their synchronous owners.
+  const connectionEpoch = createMemo(() => gateway.epoch);
+  const presentation = createMemo(() => {
+    const epoch = connectionEpoch();
+    const [preparing, setPreparing] = createOptimistic(false);
+    const [image, setImage] = createOptimistic(false);
+    const [destroying, setDestroying] = createOptimistic(false);
+    return {
+      epoch,
+      preparing: { read: preparing, write: setPreparing },
+      image: { read: image, write: setImage },
+      destroying: { read: destroying, write: setDestroying },
+    };
+  });
+  const presentMutation = action(function* (
+    current: ReturnType<typeof presentation>,
+    slot: MutationSlot,
+    settled: Promise<void>,
+    retired: Promise<void>,
+  ) {
+    if (current.epoch === gateway.readEpoch()) {
+      current[slot].write(true);
+    }
+    yield Promise.race([settled, retired]);
+  });
   function syncInventoryInputs() {
     const current = [
       context.runtimeConfig.state.configSnapshot?.appliedConfigHash,
@@ -137,16 +185,20 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
     }
   }
   onSettled(() => {
+    // Config and permission receipts invalidate the inventory at their synchronous owners.
     const stop = runtime.subscribe(syncInventoryInputs);
     syncInventoryInputs();
-    return stop;
+    return () => {
+      stop();
+      activeConfirmation?.abort();
+    };
   });
 
-  onCleanup(() => activeConfirmation?.abort());
+  const canCall = (method: string) =>
+    canCallGatewayMethod(gateway.snapshot, method, "operator.admin");
 
-  function canCall(method: string) {
-    return canCallGatewayMethod(gateway.snapshot, method, "operator.admin");
-  }
+  const canCallNow = (method: string) =>
+    canCallGatewayMethod(context.gateway.snapshot, method, "operator.admin");
 
   async function confirm(options: ConfirmDialogOptions) {
     const confirmation = new AbortController();
@@ -158,209 +210,170 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
     return confirmed;
   }
 
-  async function load() {
+  function load() {
     const scope = gateway.capture();
     if (activeLoad) {
       refreshAgain = true;
-      return;
+      return undefined;
     }
-    if (!scope || !canCall("environments.list") || document.visibilityState === "hidden") {
-      return;
+    if (!scope || !canCallNow("environments.list") || document.visibilityState === "hidden") {
+      return undefined;
     }
     const request = {};
     activeLoad = request;
-    setView((draft) => {
-      draft.loading = true;
-      draft.error = null;
-    });
-    try {
-      const environments = await scope.client.request<EnvironmentsListResult>("environments.list", {
-        includePreparedDetails: true,
-      });
-      if (!gateway.isCurrent(scope)) {
-        return;
-      }
-      setView((draft) => {
-        draft.inventory = {
-          ...environments,
-          environments: environments.environments.filter(
-            (environment) => !dismissed.has(environment.id),
-          ),
-        };
-      });
-      const builds = environments.environments.filter(
-        (environment) =>
-          environment.preparation &&
-          environment.worker &&
-          environment.worker.attachedSessionIds.length === 0,
-      );
-      if (
-        builds.some(
-          (environment) =>
-            environment.worker &&
-            ["failed", "orphaned"].includes(environment.worker.state) &&
-            !dismissed.has(environment.id),
-        )
-      ) {
-        setView((draft) => {
-          draft.notice = null;
+    const promise = (async () => {
+      try {
+        const inventory = await scope.client.request<EnvironmentsListResult>("environments.list", {
+          includePreparedDetails: true,
         });
-      }
-      // Capture settles before worker readiness; read images after that readiness snapshot.
-      const result = canCall("crabbox.images.list")
-        ? await scope.client.request<SnapshotsResult>("crabbox.images.list", {})
-        : null;
-      if (gateway.isCurrent(scope)) {
+        if (!gateway.isCurrent(scope)) {
+          return;
+        }
         setView((draft) => {
-          draft.result = result;
+          draft.inventory = {
+            ...inventory,
+            environments: inventory.environments.filter(
+              (environment) => !dismissed.has(environment.id),
+            ),
+          };
+        });
+        if (
+          inventory.environments.some(
+            (environment) =>
+              isUnassignedPreparation(environment) &&
+              ["failed", "orphaned"].includes(environment.worker?.state ?? "") &&
+              !dismissed.has(environment.id),
+          )
+        ) {
+          setNotice(null);
+        }
+        // Capture settles before worker readiness; read images after that readiness snapshot.
+        const result = canCallNow("crabbox.images.list")
+          ? await scope.client.request<SnapshotsResult>("crabbox.images.list", {})
+          : null;
+        if (gateway.isCurrent(scope)) {
+          setView((draft) => {
+            draft.result = result;
+          });
           if (result?.images.some((image) => image.recipePreparation?.failure)) {
-            draft.notice = null;
+            setNotice(null);
           }
-        });
+        }
+      } catch (error) {
+        if (gateway.isCurrent(scope)) {
+          throw error;
+        }
+      } finally {
+        if (gateway.isCurrent(scope) && activeLoad === request) {
+          activeLoad = undefined;
+          polling.cancel();
+          // This native microtask samples settled state once for polling, without subscribing.
+          queueMicrotask(() => {
+            if (!gateway.isCurrent(scope)) {
+              return;
+            }
+            if (refreshAgain) {
+              refreshAgain = false;
+              void load();
+            } else if (
+              view.inventory?.environments.some(
+                (environment) =>
+                  isUnassignedPreparation(environment) &&
+                  ["requested", "provisioning", "bootstrapping", "ready"].includes(
+                    environment.worker?.state ?? "",
+                  ),
+              ) ||
+              view.result?.images.some(
+                (image) => image.capture && image.capture.phase !== "uncertain",
+              )
+            ) {
+              polling.schedule();
+            }
+          });
+        }
       }
-    } catch (error) {
-      if (gateway.isCurrent(scope)) {
-        setView((draft) => {
-          draft.error = formatUiError(error);
-        });
-      }
-    } finally {
-      if (gateway.isCurrent(scope) && activeLoad === request) {
-        activeLoad = undefined;
-        setView((draft) => {
-          draft.loading = false;
-        });
-        polling.cancel();
-        // This native microtask samples settled state once for polling, without subscribing.
-        queueMicrotask(() => {
-          if (!gateway.isCurrent(scope)) {
-            return;
-          }
-          if (refreshAgain) {
-            refreshAgain = false;
-            void load();
-          } else if (
-            view.inventory?.environments.some(
-              (environment) =>
-                environment.preparation &&
-                environment.worker &&
-                !environment.worker.attachedSessionIds.length &&
-                ["requested", "provisioning", "bootstrapping", "ready"].includes(
-                  environment.worker.state,
-                ),
-            ) ||
-            view.result?.images.some(
-              (image) => image.capture && image.capture.phase !== "uncertain",
-            )
-          ) {
-            polling.schedule();
-          }
-        });
-      }
-    }
+    })();
+    const settled = promise.catch(() => {});
+    setLoadRequest({ promise: settled });
+    showFeedback(promise);
+    return settled;
   }
 
-  async function prepare(profileId: string, projectPath: string) {
+  function prepare(profileId: string, projectPath: string) {
     const scope = gateway.capture();
-    if (!scope || view.preparing || !canCall("environments.prepare")) {
+    if (!scope || operations.preparing || !canCallNow("environments.prepare")) {
       return;
     }
     const eligible = view.result?.profiles.some(
       (profile) => profile.id === profileId && profile.warmImages === "on",
     );
     if (!eligible || !projectPath) {
-      setView((draft) => {
-        draft.error = t("cloudWorkersPage.snapshots.selectBuildInputs");
-      });
+      showFeedback(
+        Promise.reject(new Error(i18n.t("cloudWorkersPage.snapshots.selectBuildInputs"))),
+      );
       return;
     }
-    setView((draft) => {
-      draft.preparing = true;
-      draft.error = null;
-      draft.notice = null;
-    });
-    try {
+    setNotice(null);
+    void runSnapshotMutation(scope, "preparing", async () => {
       const result = await scope.client.request<{ reused: boolean }>("environments.prepare", {
         profileId,
         projectPath,
       });
       if (gateway.isCurrent(scope)) {
-        setView((draft) => {
-          draft.notice = t(
+        setNotice(
+          i18n.t(
             result.reused
               ? "cloudWorkersPage.snapshots.buildReused"
               : "cloudWorkersPage.snapshots.buildStarted",
-          );
-        });
+          ),
+        );
         await load();
       }
-    } catch (error) {
-      if (gateway.isCurrent(scope)) {
-        const code =
-          error instanceof GatewayRequestError ? resolveGatewayErrorDetailCode(error) : null;
-        const message =
-          code === "capacity"
-            ? t("cloudWorkersPage.snapshots.capacity")
-            : code === "invalid_project"
-              ? t("cloudWorkersPage.snapshots.invalidProject")
-              : code === "invalid_profile" || code === "profile_not_found"
-                ? t("cloudWorkersPage.snapshots.invalidProfile")
-                : formatUiError(error);
-        setView((draft) => {
-          draft.error = message;
-        });
-      }
-    } finally {
-      if (gateway.isCurrent(scope)) {
-        setView((draft) => {
-          draft.preparing = false;
-        });
-      }
-    }
+    });
   }
 
   async function destroyBuild(environment: EnvironmentSummary, dismiss: boolean) {
     const scope = gateway.capture();
-    if (!scope || view.destroying || activeConfirmation || !canCall("environments.destroy")) {
+    const environmentId = environment.id;
+    if (
+      !scope ||
+      operations.destroying ||
+      activeConfirmation ||
+      !canCallNow("environments.destroy")
+    ) {
       return;
     }
     const confirmed = await confirm({
-      title: t(`cloudWorkersPage.snapshots.${dismiss ? "dismissBuild" : "cancelBuild"}`),
-      message: t(
+      title: i18n.t(`cloudWorkersPage.snapshots.${dismiss ? "dismissBuild" : "cancelBuild"}`),
+      message: i18n.t(
         `cloudWorkersPage.snapshots.${dismiss ? "dismissBuildMessage" : "cancelBuildMessage"}`,
       ),
-      details: environment.id,
-      confirmLabel: t(`cloudWorkersPage.snapshots.${dismiss ? "dismiss" : "cancelBuild"}`),
+      details: environmentId,
+      confirmLabel: i18n.t(`cloudWorkersPage.snapshots.${dismiss ? "dismiss" : "cancelBuild"}`),
       danger: !dismiss,
     });
-    if (!confirmed || !gateway.isCurrent(scope) || !canCall("environments.destroy")) {
+    if (!confirmed || !gateway.isCurrent(scope) || !canCallNow("environments.destroy")) {
       return;
     }
-    setView((draft) => {
-      draft.destroying = environment.id;
-      draft.error = null;
-      draft.notice = null;
-    });
+    setNotice(null);
     await runSnapshotMutation(scope, "destroying", async () => {
-      await scope.client.request("environments.destroy", { environmentId: environment.id });
+      await scope.client.request("environments.destroy", { environmentId });
       if (gateway.isCurrent(scope)) {
         // The Gateway keeps a terminal build record until its retention window ends, so
         // clearing the row is a local view decision that lasts until this page reloads.
         if (dismiss) {
-          dismissed.add(environment.id);
+          dismissed.add(environmentId);
           setView((draft) => {
             if (draft.inventory) {
               draft.inventory.environments = draft.inventory.environments.filter(
-                (worker) => worker.id !== environment.id,
+                (worker) => worker.id !== environmentId,
               );
             }
           });
         }
-        setView((draft) => {
-          draft.notice = t(
-            `cloudWorkersPage.snapshots.${dismiss ? "buildDismissed" : "buildCancelled"}`,
-          );
-        });
+        setNotice(
+          i18n.t(`cloudWorkersPage.snapshots.${dismiss ? "buildDismissed" : "buildCancelled"}`),
+        );
         await load();
       }
     });
@@ -373,43 +386,34 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
       !scope ||
       !selector ||
       image.capture?.phase !== "uncertain" ||
-      view.recovering ||
-      view.mutating ||
+      operations.image ||
       activeConfirmation ||
-      !canCall("crabbox.images.recover")
+      !canCallNow("crabbox.images.recover")
     ) {
       return;
     }
     const confirmed = await confirm({
-      title: t("cloudWorkersPage.snapshots.recoverTitle"),
-      message: t("cloudWorkersPage.snapshots.recoverMessage"),
+      title: i18n.t("cloudWorkersPage.snapshots.recoverTitle"),
+      message: i18n.t("cloudWorkersPage.snapshots.recoverMessage"),
       details: selector,
-      confirmLabel: t("cloudWorkersPage.snapshots.recover"),
-      requiredAcknowledgement: t("cloudWorkersPage.snapshots.acknowledgement"),
+      confirmLabel: i18n.t("cloudWorkersPage.snapshots.recover"),
+      requiredAcknowledgement: i18n.t("cloudWorkersPage.snapshots.acknowledgement"),
     });
     if (!confirmed) {
       return;
     }
-    if (!gateway.isCurrent(scope) || !canCall("crabbox.images.recover")) {
-      setView((draft) => {
-        draft.error = t("cloudWorkersPage.snapshots.recoveryChanged");
-      });
+    if (!gateway.isCurrent(scope) || !canCallNow("crabbox.images.recover")) {
+      showFeedback(Promise.reject(new Error(i18n.t("cloudWorkersPage.snapshots.recoveryChanged"))));
       return;
     }
-    setView((draft) => {
-      draft.recovering = selector;
-      draft.error = null;
-      draft.notice = null;
-    });
+    setNotice(null);
     await runSnapshotMutation(scope, "recovering", async () => {
       await scope.client.request("crabbox.images.recover", {
         selector,
         acknowledgeProviderCleanup: true,
       });
       if (gateway.isCurrent(scope)) {
-        setView((draft) => {
-          draft.notice = t("cloudWorkersPage.snapshots.recovered");
-        });
+        setNotice(i18n.t("cloudWorkersPage.snapshots.recovered"));
         await load();
       }
     });
@@ -425,69 +429,63 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
           : null;
   }
 
-  async function mutateImage(
+  function mutateImage(
     image: SnapshotImage,
-    action: "pin" | "delete" | "rollback",
+    operation: "pin" | "delete" | "rollback",
     previous = false,
   ) {
     const scope = gateway.capture();
     const checkpoint = previous ? image.previous : image;
     const checkpointId = checkpoint?.checkpointId;
-    const method = `crabbox.images.${action}`;
+    const method = `crabbox.images.${operation}`;
     if (
       !scope ||
       !checkpoint ||
       !checkpointId ||
-      view.mutating ||
-      view.recovering ||
-      view.loading ||
-      !canCall(method)
+      operations.image ||
+      activeLoad ||
+      !canCallNow(method)
     ) {
       return;
     }
     if (
-      (action === "delete" && deleteReason(image)) ||
-      (action !== "delete" && (image.capture || image.retirement))
+      (operation === "delete" && deleteReason(image)) ||
+      (operation !== "delete" && (image.capture || image.retirement))
     ) {
       return;
     }
-    setView((draft) => {
-      draft.mutating = checkpointId;
-    });
-    await runSnapshotMutation(scope, "mutating", async () => {
-      if (action !== "pin") {
+    void runSnapshotMutation(scope, "mutating", async () => {
+      if (operation !== "pin") {
         const confirmed = await confirm({
-          title: t(`cloudWorkersPage.snapshots.${action}Title`),
-          message: t(`cloudWorkersPage.snapshots.${action}Message`),
+          title: i18n.t(`cloudWorkersPage.snapshots.${operation}Title`),
+          message: i18n.t(`cloudWorkersPage.snapshots.${operation}Message`),
           details: checkpointId,
-          confirmLabel: t(`cloudWorkersPage.snapshots.${action}`),
-          danger: action === "delete",
+          confirmLabel: i18n.t(`cloudWorkersPage.snapshots.${operation}`),
+          danger: operation === "delete",
         });
         if (!confirmed) {
           return;
         }
       }
-      if (!gateway.isCurrent(scope) || !canCall(method)) {
+      if (!gateway.isCurrent(scope) || !canCallNow(method)) {
         return;
       }
-      let notice: string | null = null;
-      if (action === "delete") {
+      let resultNotice: string | null = null;
+      if (operation === "delete") {
         const result = await scope.client.request<{ status: "deleted" | "retiring" }>(method, {
           checkpointId,
         });
         if (result.status === "retiring") {
-          notice = t("cloudWorkersPage.snapshots.deletionRetiring");
+          resultNotice = i18n.t("cloudWorkersPage.snapshots.deletionRetiring");
         }
       } else {
         await scope.client.request<SnapshotImage>(method, {
           checkpointId,
-          ...(action === "pin" ? { pinned: !checkpoint.pinned } : {}),
+          ...(operation === "pin" ? { pinned: !checkpoint.pinned } : {}),
         });
       }
       if (gateway.isCurrent(scope)) {
-        setView((draft) => {
-          draft.notice = notice;
-        });
+        setNotice(resultNotice);
         await load();
       }
     });
@@ -495,28 +493,51 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
 
   async function runSnapshotMutation(
     scope: GatewayConnectionScope,
-    busy: "mutating" | "recovering" | "destroying",
+    kind: MutationKind,
     mutate: () => Promise<void>,
   ) {
-    try {
-      await mutate();
-    } catch (error) {
-      if (gateway.isCurrent(scope)) {
-        if (busy === "mutating") {
-          showToast({ message: formatUiError(error) });
-        } else {
-          setView((draft) => {
-            draft.error = formatUiError(error);
-          });
+    const slot = kind === "mutating" || kind === "recovering" ? "image" : kind;
+    if (operations[slot]) {
+      return;
+    }
+    const current = presentation();
+    const retired = presentationLifetime.promise;
+    operations[slot] = scope;
+    const pending = (async () => {
+      try {
+        await mutate();
+      } catch (error) {
+        if (gateway.isCurrent(scope)) {
+          if (kind === "mutating") {
+            showToast({ message: formatUiError(error) });
+          } else {
+            const code =
+              error instanceof GatewayRequestError ? resolveGatewayErrorDetailCode(error) : null;
+            const key = kind === "preparing" && code ? preparationErrors.get(code) : undefined;
+            throw new UserFacingError(
+              key ? i18n.t(`cloudWorkersPage.snapshots.${key}`) : formatUiError(error),
+              { cause: error },
+            );
+          }
+        }
+      } finally {
+        if (operations[slot] === scope) {
+          delete operations[slot];
         }
       }
-    } finally {
-      if (gateway.isCurrent(scope)) {
-        setView((draft) => {
-          draft[busy] = null;
-        });
-      }
+    })();
+    const settled = pending.catch(() => {});
+    if (kind !== "mutating") {
+      showFeedback(pending);
     }
+    // Commit owner receipts before starting a presentation-only action transition.
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    if (operations[slot] === scope && gateway.isCurrent(scope)) {
+      await presentMutation(current, slot, settled, retired);
+    }
+    return settled;
   }
 
   const environments = createMemo(() =>
@@ -544,27 +565,31 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
   const current = createMemo(
     () => environments().find((environment) => environment.key === selected()) ?? environments()[0],
   );
-  const advertised = () =>
-    isGatewayMethodAdvertised(gateway.snapshot ?? {}, "environments.list") === true;
   return (
     <>
       <SettingsPage>
         <Show
-          when={(advertised() && canCall("environments.list")) || view.inventory !== null}
+          when={canCall("environments.list") || view.inventory !== null}
           fallback={
             gateway.connected ? (
               <SettingsEmpty message={t("cloudWorkersPage.environments.adminRequired")} />
             ) : undefined
           }
         >
-          <Show when={view.error}>
-            <div class="callout warning" role="alert">
-              {view.error}
-            </div>
-          </Show>
-          <Show when={view.notice}>
+          <Loading on={feedback()}>
+            <Errored
+              fallback={(err) => (
+                <div class="callout warning" role="alert">
+                  {formatUiError(err())}
+                </div>
+              )}
+            >
+              {completion()}
+            </Errored>
+          </Loading>
+          <Show when={notice()}>
             <div class="callout" role="status">
-              {view.notice}
+              {notice()}
             </div>
           </Show>
           <Show
@@ -572,7 +597,7 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
             fallback={
               <SettingsEmpty
                 message={
-                  view.loading ? (
+                  loading() ? (
                     t("common.loading")
                   ) : (
                     <>
@@ -592,16 +617,16 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
                 aria-label={t("cloudWorkersPage.environments.repositories")}
               >
                 <For each={environments()} keyed={(environment) => environment.key}>
-                  {(environment) => {
-                    const state = () => environmentState(environment());
+                  {(entry) => {
+                    const state = () => environmentState(entry());
                     const age = () => {
-                      const builtAt = environment()
+                      const builtAt = entry()
                         .images.filter((image) => image.state === "available")
                         .toSorted(
                           (a, b) => (b.createdAtMs ?? 0) - (a.createdAtMs ?? 0),
                         )[0]?.createdAtMs;
-                      const worker = environment().workers.find(
-                        (candidate) => candidate.worker?.state === "ready",
+                      const worker = entry().workers.find(
+                        (w) => w.worker?.state === "ready",
                       )?.worker;
                       return builtAt ?? (worker ? Date.now() - worker.ageMs : undefined);
                     };
@@ -611,14 +636,13 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
                         class={[
                           "cloud-environments__row",
                           {
-                            "cloud-environments__row--selected":
-                              current()?.key === environment().key,
+                            "cloud-environments__row--selected": current()?.key === entry().key,
                           },
                         ]}
-                        aria-pressed={current()?.key === environment().key ? "true" : "false"}
-                        onClick={() => setSelected(environment().key)}
+                        aria-pressed={current()?.key === entry().key ? "true" : "false"}
+                        onClick={() => setSelected(entry().key)}
                       >
-                        <span>{environment().label}</span>
+                        <span>{entry().label}</span>
                         <span class="cloud-environments__status">
                           {t(`cloudWorkersPage.environments.${state()}`)}
                           {state() === "ready" && age() !== undefined
@@ -636,20 +660,15 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
                     environment={environment()}
                     profiles={view.result?.profiles ?? []}
                     busy={
-                      view.loading ||
-                      view.mutating !== null ||
-                      view.recovering !== null ||
-                      view.preparing
+                      presentation().image.read() || presentation().preparing.read() || loading()
                     }
                     canCall={canCall}
                     deleteReason={deleteReason}
-                    onRebuild={(profile, root) => void prepare(profile, root)}
-                    onMutate={(snapshot, action, previous) =>
-                      void mutateImage(snapshot, action, previous)
-                    }
+                    onRebuild={prepare}
+                    onMutate={mutateImage}
                     onRecover={(snapshot) => void recoverCapture(snapshot)}
-                    onDestroy={(worker, dismiss) => void destroyBuild(worker, dismiss)}
-                    destroying={view.destroying !== null}
+                    onDestroy={(item, dismiss) => void destroyBuild(item, dismiss)}
+                    destroying={presentation().destroying.read()}
                   />
                 )}
               </Show>
@@ -677,12 +696,10 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
                     image={image()}
                     label={image().profileId ?? image().profileKey}
                     actions
-                    busy={view.loading || view.mutating !== null || view.recovering !== null}
+                    busy={presentation().image.read() || loading()}
                     canCall={canCall}
                     deleteReason={deleteReason}
-                    onMutate={(snapshot, action, previous) =>
-                      void mutateImage(snapshot, action, previous)
-                    }
+                    onMutate={mutateImage}
                     onRecover={(snapshot) => void recoverCapture(snapshot)}
                   />
                 )}
@@ -692,9 +709,9 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
                   <CloudWorkerBuildRow
                     environment={worker()}
                     label={worker().worker?.profileId ?? worker().id}
-                    destroying={view.destroying !== null}
+                    destroying={presentation().destroying.read()}
                     canCall={canCall}
-                    onDestroy={(environment, dismiss) => void destroyBuild(environment, dismiss)}
+                    onDestroy={(item, dismiss) => void destroyBuild(item, dismiss)}
                   />
                 )}
               </For>

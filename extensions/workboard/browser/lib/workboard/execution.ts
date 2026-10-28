@@ -9,6 +9,7 @@ import { runWorkboardCardMutation } from "./mutations.ts";
 import { normalizeCardPayload } from "./normalization.ts";
 import {
   getWorkboardState,
+  notifyWorkboard,
   workboardMutationsReady,
   type WorkboardClientContext,
 } from "./runtime.ts";
@@ -85,7 +86,7 @@ export async function startWorkboardCard(
       : params.card.status === "scheduled")
   ) {
     initialState.error = "Scheduled cards cannot start before their scheduled time.";
-    params.requestUpdate?.();
+    notifyWorkboard(params.host);
     return null;
   }
   const mutationResult = await runWorkboardCardMutation(

@@ -177,16 +177,6 @@ export function parseMattermostModelPickerContext(
   return null;
 }
 
-export function buildMattermostAllowedModelRefs(data: ModelsProviderData): Set<string> {
-  const refs = new Set<string>();
-  for (const provider of data.providers) {
-    for (const model of data.byProvider.get(provider) ?? []) {
-      refs.add(`${provider}/${model}`);
-    }
-  }
-  return refs;
-}
-
 export async function resolveMattermostModelPickerCurrentModel(params: {
   cfg: OpenClawConfig;
   route: { agentId: string; sessionKey: string };

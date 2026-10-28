@@ -2,6 +2,11 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { AgentToolGatewayRequestCaller } from "./in-process-gateway.js";
 
+export type AgentStepSession = {
+  sessionId: string;
+  lifecycleRevision?: string;
+};
+
 export type SessionsSendToolOptions = {
   workerPlacement?: boolean;
   agentId?: string;

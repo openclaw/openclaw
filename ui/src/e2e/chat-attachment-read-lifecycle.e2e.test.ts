@@ -7,6 +7,7 @@ import {
   resolveUiConversationIdentity,
   type UiSessionDefaultsHost,
 } from "../lib/sessions/session-key.ts";
+import { waitForControlUiProofSurface } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionUrl,
   defaultControlUiFeatureMethods,
@@ -26,6 +27,23 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
+
+const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+
+async function captureProof(
+  page: Page,
+  filePath: string,
+  options: { fullPage?: boolean; pane?: Locator } = {},
+): Promise<void> {
+  await waitForControlUiProofSurface(options.pane ?? page.locator("body"), []);
+  if (captureUiProofEnabled) {
+    if (options.pane) {
+      await options.pane.screenshot({ path: filePath });
+    } else {
+      await page.screenshot({ path: filePath, fullPage: options.fullPage });
+    }
+  }
+}
 
 const ONE_PIXEL_PNG_B64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
@@ -125,9 +143,9 @@ suite.define(() => {
       });
       await home.locator('.chat-attachment-thumb[aria-busy="true"]').waitFor();
       const pages = await openSidebarPages(page);
-      await pages.getByRole("link", { name: "Agents", exact: true }).click();
-      await page.waitForURL((url) => url.pathname.endsWith("/agents"));
-      await page.getByRole("region", { name: "Agents", exact: true }).waitFor();
+      await pages.getByRole("link", { name: "Sessions", exact: true }).click();
+      await page.waitForURL((url) => url.pathname.endsWith("/sessions"));
+      await page.locator("openclaw-sessions-page").waitFor();
       await page.locator(".sidebar-footer-bar__home").click();
       const dock = page.locator("openclaw-assistant-panel");
       const dockComposer = dock.locator(".agent-chat__composer-combobox textarea");
@@ -139,7 +157,7 @@ suite.define(() => {
           .getByRole("button", { name: "Send message", exact: true })
           .isDisabled(),
       };
-      await page.screenshot({ path: path.join(proofDir, "dock-pending.png"), fullPage: true });
+      await captureProof(page, path.join(proofDir, "dock-pending.png"), { fullPage: true });
       await page.evaluate(async () => {
         const proof = (globalThis as unknown as { attachmentReadProof: DeferredAttachmentProof })
           .attachmentReadProof;
@@ -162,7 +180,7 @@ suite.define(() => {
         requests: await gateway.getRequests("chat.send"),
       };
       await writeFile(path.join(proofDir, "handoff.json"), JSON.stringify(receipt, null, 2));
-      await page.screenshot({ path: path.join(proofDir, "returned-home.png"), fullPage: true });
+      await captureProof(page, path.join(proofDir, "returned-home.png"), { fullPage: true });
       console.log(JSON.stringify({ artifactDir: proofDir, ...receipt }));
       expect(receipt.pending).toEqual({ files: 1, sendDisabled: true });
       expect(receipt.returnedDraft).toBe(draft);
@@ -280,7 +298,7 @@ suite.define(() => {
         if (scenario !== "rewind-newer-file") {
           await expect.poll(() => composer.inputValue()).toBe(expectedText);
         }
-        await page.screenshot({ path: path.join(proofDir, "restored-before-release.png") });
+        await captureProof(page, path.join(proofDir, "restored-before-release.png"));
       }
       if (scenario !== "same-draft" && scenario !== "rewind-completed") {
         await finishRead();
@@ -299,7 +317,7 @@ suite.define(() => {
         ),
         pageErrors,
       };
-      await page.screenshot({ path: path.join(proofDir, "settled-before-send.png") });
+      await captureProof(page, path.join(proofDir, "settled-before-send.png"));
       await send.click();
       const request = await gateway.waitForRequest("chat.send");
       const sent = request.params as {
@@ -364,7 +382,7 @@ suite.define(() => {
         const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
         const composer = pane.locator(".agent-chat__composer-combobox textarea");
         await pane.getByText("Ready for the held Enter check.", { exact: true }).waitFor();
-        await gateway.waitForRequest("chat.startup");
+        await gateway.waitForRequest("sessions.messages.subscribe");
         const initialText = "Finish the initial synthetic turn.";
         await composer.fill(initialText);
         await composer.press("Enter");
@@ -447,7 +465,7 @@ suite.define(() => {
           })),
         ).toEqual({ focused: true, visibility: "visible" });
         if (capture) {
-          await pane.screenshot({ path: path.join(proofDir, "held-enter-before.png") });
+          await captureProof(page, path.join(proofDir, "held-enter-before.png"), { pane });
         }
 
         const keyProof = await composer.evaluateHandle((element) => {
@@ -540,20 +558,29 @@ suite.define(() => {
             expect(followUp.params).not.toHaveProperty("attachments");
           }
 
-          // Both held-history continuations enqueue synchronously before their
-          // next await. Cross a committed render boundary, not a transient count=1.
+          // Draft retirement can render before the admitted turn. Wait for both
+          // presentation owners before inspecting their final combined count.
           await waitForCommittedState(
             page,
-            () => {
+            ({ messageId, followUpContent, queuedTurns }) => {
               const active = document.querySelector('openclaw-chat-pane[aria-hidden="false"]');
               const input = active?.querySelector(".agent-chat__composer-combobox textarea");
               return (
                 input instanceof HTMLTextAreaElement &&
                 input.value === "" &&
-                active?.querySelectorAll(".chat-attachment-thumb").length === 0
+                active?.querySelectorAll(".chat-attachment-thumb").length === 0 &&
+                active
+                  .querySelector(`.chat-group.user .chat-bubble[data-message-id="${messageId}"]`)
+                  ?.textContent?.includes(followUpContent) === true &&
+                active.querySelectorAll(".agent-chat__composer-shell .chat-queue__item").length ===
+                  queuedTurns
               );
             },
-            {},
+            {
+              messageId: `msg:send:${followUpRunId}:0`,
+              followUpContent: attachment ? fileName : followUpText,
+              queuedTurns: expectedTurns - 1,
+            },
           );
           // The held ACK keeps the first turn in the transcript; later
           // waiting turns remain in the composer queue. Read both together.
@@ -595,7 +622,7 @@ suite.define(() => {
           });
           expect(pageErrors).toEqual([]);
           if (capture) {
-            await pane.screenshot({ path: path.join(proofDir, "held-enter-after.png") });
+            await captureProof(page, path.join(proofDir, "held-enter-after.png"), { pane });
           }
           expect(observed.bubbles.map((row) => row.id)).toEqual([`msg:send:${followUpRunId}:0`]);
           for (const rows of [observed.bubbles, observed.queued]) {
@@ -646,7 +673,7 @@ suite.define(() => {
       const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
       if (artifactDir) {
         await mkdir(artifactDir, { recursive: true });
-        await page.screenshot({ path: path.join(artifactDir, "offline-draft-restored.png") });
+        await captureProof(page, path.join(artifactDir, "offline-draft-restored.png"));
       }
       await composer.press("Enter");
 
@@ -738,9 +765,10 @@ suite.define(() => {
       await activeAttachments(restoredPage).first().waitFor();
       expect(await activeAttachments(restoredPage).count()).toBe(1);
       if (artifactDir) {
-        await restoredPage.screenshot({
-          path: path.join(artifactDir, "existing-session-restart-draft-restored.png"),
-        });
+        await captureProof(
+          restoredPage,
+          path.join(artifactDir, "existing-session-restart-draft-restored.png"),
+        );
       }
 
       await navigateToControlUiSession(restoredPage, secondSession);
@@ -787,9 +815,10 @@ suite.define(() => {
         .toBe("restart draft B with removable file");
       await expect.poll(() => activeAttachments(clearedPage).count()).toBe(0);
       if (artifactDir) {
-        await clearedPage.screenshot({
-          path: path.join(artifactDir, "existing-session-restart-drafts-cleaned.png"),
-        });
+        await captureProof(
+          clearedPage,
+          path.join(artifactDir, "existing-session-restart-drafts-cleaned.png"),
+        );
       }
     } finally {
       await context.close();
@@ -815,19 +844,20 @@ suite.define(() => {
 
       await page
         .locator(".app-toast")
-        .filter({ hasText: "Too large to send: second.txt" })
+        .filter({ hasText: "File too large. Try a smaller file." })
         .waitFor();
       await expect
         .poll(() => page.locator('.chat-attachment-thumb[aria-busy="false"]').count())
-        .toBe(2);
-      expect(await page.locator(".chat-attachment-failures").textContent()).toContain(
-        "Too large to send: second.txt",
-      );
+        .toBe(1);
+      expect(await page.locator(".chat-attachment-failures").count()).toBe(0);
+      expect(
+        await page.getByRole("button", { name: "Remove second.txt", exact: true }).count(),
+      ).toBe(0);
 
       const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
       if (artifactDir) {
         await mkdir(artifactDir, { recursive: true });
-        await page.screenshot({ path: path.join(artifactDir, "attachment-frame-rejected.png") });
+        await captureProof(page, path.join(artifactDir, "attachment-frame-rejected.png"));
       }
 
       await composer.press("Enter");
@@ -975,32 +1005,30 @@ suite.define(() => {
       // 1. Stalled preparing state
       await expect.poll(() => send.isDisabled()).toBe(true);
       await page.locator(".chat-attachment-loading").waitFor();
-      await page.screenshot({
-        path: path.join(proofDir, "screenshot-1-attachment-stalled-preparing.png"),
-      });
+      await captureProof(
+        page,
+        path.join(proofDir, "screenshot-1-attachment-stalled-preparing.png"),
+      );
 
-      // Advance virtual clock past the 15-second read timeout
-      await page.clock.runFor(15_001);
+      // Expire the idle watchdog without replaying unrelated frame callbacks.
+      await page.clock.fastForward(15_001);
 
-      // 2. Settles through failure, error icon visible, send released for draft text
-      await page.locator(".chat-attachment-thumb--error").waitFor();
-      await page.locator(".chat-attachment-error").waitFor();
+      // Failed reads leave the composer and report through the shared toast.
+      await page
+        .locator(".app-toast")
+        .getByText("Could not attach file. Try again.", { exact: true })
+        .waitFor();
       await expect.poll(() => send.isEnabled()).toBe(true);
-      await page.screenshot({
-        path: path.join(proofDir, "screenshot-2-attachment-stalled-settled-error.png"),
-      });
+      await captureProof(
+        page,
+        path.join(proofDir, "screenshot-2-attachment-stalled-settled-error.png"),
+      );
 
-      // 3. Remove failed attachment tile, draft retained, send still ready
-      const removeButton = page.locator(".chat-attachment-remove").first();
-      await removeButton.click();
       await expect.poll(() => page.locator(".chat-attachment-thumb").count()).toBe(0);
       expect(await composer.inputValue()).toBe(draftText);
-      await expect.poll(() => send.isEnabled()).toBe(true);
-      await page.screenshot({
-        path: path.join(proofDir, "screenshot-3-attachment-removed-draft-ready.png"),
-      });
+      expect(await page.locator(".chat-attachment-failures").count()).toBe(0);
 
-      // 4. Send draft message successfully
+      // The preserved draft remains sendable after the failed read retires.
       await send.click();
       const request = await gateway.waitForRequest("chat.send");
       expect(request.params).toMatchObject({
@@ -1008,9 +1036,7 @@ suite.define(() => {
       });
       expect((request.params as { attachments?: unknown }).attachments).toBeUndefined();
       await expect.poll(() => composer.inputValue()).toBe("");
-      await page.screenshot({
-        path: path.join(proofDir, "screenshot-4-attachment-draft-sent.png"),
-      });
+      await captureProof(page, path.join(proofDir, "screenshot-4-attachment-draft-sent.png"));
 
       const aborts = await page.evaluate(
         () =>

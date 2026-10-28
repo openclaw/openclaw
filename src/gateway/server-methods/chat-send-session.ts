@@ -9,11 +9,11 @@ import {
   type ErrorShape,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentEntry } from "../../agents/agent-scope-config.js";
+import { getRegisteredAgentHarness } from "../../agents/harness/registry.js";
 import {
   modelFallbackOverrideFromAvailability,
   resolveModelFallbackAvailability,
-} from "../../agents/agent-scope.js";
-import { getRegisteredAgentHarness } from "../../agents/harness/registry.js";
+} from "../../agents/model-selection-config.js";
 import {
   findNormalizedProviderValue,
   parseModelRef,
@@ -44,6 +44,7 @@ import { resolveMissingAgentHarnessSessionError } from "../../sessions/agent-har
 import { assertPreparedSkillLibrarySelection } from "../../skills/library/selection.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import { isBrowserOperatorUiClient } from "../../utils/message-channel.js";
+import { readChatInputRecoveryAdmission } from "../chat-input-recovery-source.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
 import { hasGatewayAdminScope } from "../operator-scopes.js";
 import { pendingChatSendDedupeKey } from "../server-shared.js";
@@ -91,6 +92,7 @@ function chatSendPreparationConfig(
         cfg,
         agentId,
         sessionKey,
+        selectedModel: selected,
         hasSessionModelOverride: Boolean(entry?.modelOverride),
         modelOverrideSource:
           entry?.modelOverrideSource === "default" ? undefined : entry?.modelOverrideSource,
@@ -383,9 +385,10 @@ export async function prepareChatSendSession(params: {
   const timeoutMs = resolveAgentTimeoutMs({ cfg, overrideMs: p.timeoutMs });
   const now = Date.now();
   const restartSafeRequest = await createRestartSafeChatRequest({
-    goalRequestFingerprint: request.goalOperation?.requestFingerprint,
+    goalOperation: request.goalOperation,
     cfg,
     eligible:
+      !readChatInputRecoveryAdmission(p.idempotencyKey) &&
       (isBrowserOperatorUiClient(request.clientInfo) || params.isDirectExternalUser === true) &&
       turnKind === "main" &&
       normalizedAttachments.length === 0 &&
@@ -462,13 +465,13 @@ function assertCurrentChatSendSession(
   if (session.sessionRoutingChanged(latest.cfg)) {
     throw new Error(SESSION_ROUTING_CHANGED_ERROR_REASON);
   }
-  if (
-    latest.agentId !== session.sessionTarget.agentId ||
-    (latest.legacyKey ?? latest.canonicalKey) !== session.sessionTarget.storeKey ||
-    (session.sessionTarget.readSource &&
-      !isDeepStrictEqual(latest.capturedReadSource, session.sessionTarget.readSource))
-  ) {
-    throw new Error("Session storage changed while starting work. Retry.");
+  const { agentId, storeKey, readSource } = session.sessionTarget;
+  const changed =
+    (latest.agentId !== agentId && "agent") ||
+    ((latest.legacyKey ?? latest.canonicalKey) !== storeKey && "store key") ||
+    (readSource && !isDeepStrictEqual(latest.capturedReadSource, readSource) && "store source");
+  if (changed) {
+    throw new Error(`Session storage changed while starting work (${changed}). Retry.`);
   }
 }
 

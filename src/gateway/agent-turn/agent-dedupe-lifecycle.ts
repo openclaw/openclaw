@@ -6,7 +6,10 @@ import {
   isSubagentCoordinationInputProvenance,
   type InputProvenance,
 } from "../../sessions/input-provenance.js";
-import { hasUnretiredRpcSource } from "../../sessions/session-controller.rpc-sources.js";
+import {
+  getRpcSourceForGateway,
+  hasUnretiredRpcSource,
+} from "../../sessions/session-controller.rpc-sources.js";
 import { resolveAgentRunExpiresAtMs } from "../chat-abort.js";
 import { logAttachmentFailure } from "../chat-attachments.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
@@ -38,6 +41,7 @@ export function createAgentDedupeLifecycle(params: {
   inputProvenance?: InputProvenance;
   reconcileDurableInput?: boolean;
   assertAdmissionCurrent?: () => void;
+  assertCancellationCurrent?: () => void;
   ownerConnId?: string;
   ownerDeviceId?: string;
   context: AgentTurnContext;
@@ -226,9 +230,17 @@ export function createAgentDedupeLifecycle(params: {
     try {
       params.assertAdmissionCurrent?.();
     } catch {
-      // Authority loss rejects preparation; only a current request may leave
-      // a sticky Stop receipt in place of its unaccepted reservation.
-      return false;
+      const source = getRpcSourceForGateway(params.runId, params.context.resolveGatewayContext);
+      // A canceled execution owner may record its own cancellation, but cannot
+      // replace an explicit Stop publisher or ignore independent authority loss.
+      if (!params.assertCancellationCurrent || source?.adapter.projectSessionTerminalPending) {
+        return false;
+      }
+      try {
+        params.assertCancellationCurrent();
+      } catch {
+        return false;
+      }
     }
     const keys = ownedReservationKeys();
     if (keys.length !== params.agentDedupeKeys.length) {

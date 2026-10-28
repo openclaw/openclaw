@@ -14,7 +14,7 @@ export function resolveModelAgentOption(command: Command): string | undefined {
 }
 
 /** `models` subcommands that operate on global state only, never per-agent. */
-export type GlobalOnlyModelCommandName =
+type GlobalOnlyModelCommandName =
   | "set"
   | "set-image"
   | "scan"

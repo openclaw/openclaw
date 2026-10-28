@@ -1,4 +1,4 @@
-import { createMemo, Show } from "solid-js";
+import { Show } from "solid-js";
 import type { CronJob } from "../../api/types.ts";
 import type { IconName } from "../../components/solid/icon.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
@@ -26,7 +26,7 @@ export function describeJobSchedule(job: CronJob): string {
 }
 
 export function JobStateIndicator(props: { job: CronJob }) {
-  const presentation = createMemo((): [string, IconName | null, string] => {
+  const presentation = (): [string, IconName | null, string] => {
     const autoDisabled = props.job.state?.autoDisabled;
     return isCronJobRunning(props.job)
       ? ["running", "loader", t("cron.runs.runStatusRunning")]
@@ -37,7 +37,7 @@ export function JobStateIndicator(props: { job: CronJob }) {
           : !props.job.enabled
             ? ["paused", "pause", t("cron.list.paused")]
             : ["active", null, t("cron.detail.active")];
-  });
+  };
   return (
     <span
       class={["cron-table__state", `cron-table__state--${presentation()[0]}`]}

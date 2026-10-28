@@ -183,7 +183,10 @@ suite.define(() => {
       {
         viewport: { width: 1280, height: 900 },
         locale: "en-US",
-        recordVideo: { dir: suite.artifactDir, size: { width: 1280, height: 900 } },
+        recordVideo:
+          process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
+            ? { dir: suite.artifactDir, size: { width: 1280, height: 900 } }
+            : undefined,
       },
       async ({ page }) => {
         const key = "agent:main:activity-refresh";

@@ -14,7 +14,6 @@ vi.mock(${JSON.stringify(import.meta.resolve("../src/infra/runtime-worker-url.ts
 // Literal resolver calls keep generated imports visible to CI's dependency graph.
 export function sqliteLifecycleFixtureFiles(): Record<string, string> {
   const readPoolFixture = `
-import { startAwaitedReadMock } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-state-read-mock.test-support.ts"))};
 const readPool = vi.hoisted(() => ({ close: vi.fn(async () => {}) }));
 vi.mock(${JSON.stringify(import.meta.resolve("../src/infra/runtime-process-url.ts"))}, () => ({
   resolveRuntimeProcessEntrypointUrl: () => new URL("file:///synthetic/state-read.worker.js"),
@@ -22,9 +21,9 @@ vi.mock(${JSON.stringify(import.meta.resolve("../src/infra/runtime-process-url.t
 vi.mock(${JSON.stringify(import.meta.resolve("../src/infra/worker-task-pool.ts"))}, () => ({
   WorkerTaskError: class extends Error {},
   createOwnedWorkerTaskPool: () => ({
-    startTask: () => ({
-      ...startAwaitedReadMock(async () => ({ ok: true, type: "backup.runs", sourceAdmitted: true, runs: [] })),
-      release: () => startAwaitedReadMock(async () => {}),
+    runTask: () => ({
+      result: Promise.resolve({ ok: true, type: "backup.runs", sourceAdmitted: true, runs: [] }),
+      close: async () => {},
     }),
     close: readPool.close,
     closeResources: async () => {},
@@ -47,9 +46,9 @@ async function useReadPool() {
       },
       location: "/synthetic/state.sqlite",
       checkFreshAdmission: false,
-    }, authority).result).toMatchObject({ value: { ok: true, type: "backup.runs" } });
+    }, authority)).toMatchObject({ value: { ok: true, type: "backup.runs" } });
   } finally {
-    await transport.startClose().result;
+    await transport.startClose();
   }
 }
 `;
@@ -311,7 +310,8 @@ import { afterAll, expect, it, vi } from "vitest";
 ${unavailableSharedStateWorkerFixture}
 import { resolveGlobalSingleton } from ${JSON.stringify(import.meta.resolve("../src/shared/global-singleton.ts"))};
 import { openOpenClawAgentDatabase } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-agent-db.ts"))};
-import { agentDatabaseLifecycle, closeOpenClawAgentDatabasesAsync, retainAgentDatabase } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-agent-db-lifecycle.ts"))};
+import { retainAgentDatabase } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-agent-db-borrower.ts"))};
+import { agentDatabaseLifecycle, closeOpenClawAgentDatabasesAsync } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-agent-db-lifecycle.ts"))};
 import { registerOpenClawAgentDatabaseAsyncResource } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-agent-db-resources.ts"))};
 import { openOpenClawStateWorkerCleanupStore } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-state-worker-store.ts"))};
 import { isSqliteWorkerStoreAvailable } from ${JSON.stringify(import.meta.resolve("../src/infra/sqlite-worker-store.ts"))};
@@ -423,7 +423,6 @@ function stateReadPoolFixtureFiles(): Record<string, string> {
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, expect, it, vi } from "vitest";
-import { startAwaitedReadMock } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-state-read-mock.test-support.ts"))};
 import { executeExistingOpenClawStateRead } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-state-db-readonly.ts"))};
 import { readWorkspaceStateSnapshot } from ${JSON.stringify(import.meta.resolve("../src/agents/workspace-state-store.ts"))};
 import { createWorkspaceStateIdentity } from ${JSON.stringify(import.meta.resolve("../src/agents/workspace-state-identity.ts"))};
@@ -439,14 +438,14 @@ vi.mock(${JSON.stringify(import.meta.resolve("../src/infra/worker-task-pool.ts")
 }));
 edge.close.mockImplementation(async () => { probe.closes.push(generation); });
 edge.create.mockImplementation(() => ({
-  startTask: () => {
+  runTask: () => {
     probe.reads.push(generation);
     return {
-      ...startAwaitedReadMock(async () => generation === "c" ? {
+      result: Promise.resolve(generation === "c" ? {
         ok: true, type: "workspace.snapshot", sourceAdmitted: true,
         snapshot: { identity: createWorkspaceStateIdentity("/fixture/workspace"), setupExists: false, setup: { version: 1 } },
       } : { ok: true, type: "backup.runs", sourceAdmitted: true, runs: [] }),
-      release: () => startAwaitedReadMock(async () => {}),
+      close: async () => {},
     };
   },
   close: edge.close,
@@ -627,7 +626,7 @@ import ${JSON.stringify(import.meta.resolve("../src/agents/auth-profiles/sqlite-
 import ${JSON.stringify(import.meta.resolve("../src/config/sessions/session-history-budget-state.ts"))};
 import { onSqliteWalCheckpoint, publishSqliteWalCheckpointObservation } from ${JSON.stringify(import.meta.resolve("../src/infra/sqlite-wal-checkpoint.ts"))};
 import { createPluginStateSyncKeyedStore } from ${JSON.stringify(import.meta.resolve("../src/plugin-state/plugin-state-store.ts"))};
-import { readPluginStateObservationCache } from ${JSON.stringify(import.meta.resolve("../src/plugin-state/plugin-state-observation-cache.ts"))};
+import { ensurePluginStateNamespace, readCommittedPluginStateNamespace } from ${JSON.stringify(import.meta.resolve("../src/plugin-state/plugin-state-namespace-owner.ts"))};
 import { captureOpenClawStateWorkerContext } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-state-worker-context.ts"))};
 const probeKey = Symbol.for("fixture.publicationRegistrations");
 const probe = Reflect.get(globalThis, probeKey) ?? {
@@ -642,13 +641,23 @@ const options = {
   env: { OPENCLAW_STATE_DIR: path.join(import.meta.dirname, "publication-state") },
 };
 const native = createPluginStateSyncKeyedStore<string>("runner-retirement", options);
+async function warmNamespace(): Promise<void> {
+  const context = captureOpenClawStateWorkerContext({ env: options.env });
+  await ensurePluginStateNamespace(context.admission.identity.key, {
+    pluginId: "runner-retirement", namespace: options.namespace,
+  }, async () => native.entries().map(({ key, value, createdAt, expiresAt }) => ({
+    entry_key: key, value_json: JSON.stringify(value),
+    created_at: createdAt, expires_at: expiresAt ?? null,
+  })));
+}
 function cachedValue(): unknown {
   const context = captureOpenClawStateWorkerContext({ env: options.env });
-  const cached = readPluginStateObservationCache(context.admission.identity.key, {
-    pluginId: "runner-retirement", namespace: options.namespace, key: "session",
+  const view = readCommittedPluginStateNamespace(context.admission.identity.key, {
+    pluginId: "runner-retirement", namespace: options.namespace,
   });
-  expect(cached).toBeDefined();
-  return cached?.row ? JSON.parse(cached.row.value_json) : undefined;
+  expect(view).toBeDefined();
+  const row = view?.get("session");
+  return row ? JSON.parse(row.value_json) : undefined;
 }
 function listenerCounts(): Record<string, number> {
   const readers = Reflect.get(globalThis, Symbol.for("openclaw.agentDatabaseReaders"));
@@ -671,8 +680,9 @@ function publishCheckpoint(): void {
   return {
     "10-g-publication-producer.test.ts": `${shared}
 onSqliteWalCheckpoint(() => probe.wal.push("a"));
-it("keeps production publication subscriptions live until file retirement", () => {
+it("keeps production publication subscriptions live until file retirement", async () => {
   native.register("session", "original");
+  await warmNamespace();
   expect(cachedValue()).toBe("original");
   probe.counts = listenerCounts();
   for (const count of Object.values(probe.counts)) expect(count).toBeGreaterThan(0);
@@ -685,13 +695,14 @@ afterAll(() => {
 `,
     "10-h-publication-observer.test.ts": `${shared}
 onSqliteWalCheckpoint(() => probe.wal.push("b"));
-it("rebinds production publications without accumulating prior-file registrations", () => {
+it("rebinds production publications without accumulating prior-file registrations", async () => {
   try {
     expect(probe.afterAllReached).toBe(true);
     expect(probe.counts).toBeDefined();
     expect(native.lookup("session")).toBe("original");
-    // Real commits must update the observation cache used by async keyed-store reads.
-    // Retiring only the bus leaves its surviving singleton cache unsubscribed.
+    await warmNamespace();
+    // Real commits must update the complete namespace owner used by async reads.
+    // Retiring only the bus leaves its surviving singleton owner unsubscribed.
     native.register("session", "replacement");
     expect(cachedValue()).toBe("replacement");
     expect(native.delete("session")).toBe(true);

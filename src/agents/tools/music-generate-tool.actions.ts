@@ -1,5 +1,6 @@
+import { listMusicGenerationProviders } from "../../media-generation/registry.js";
 import { listSupportedMusicGenerationModes } from "../../music-generation/capabilities.js";
-import { listRuntimeMusicGenerationProviders } from "../../music-generation/runtime.js";
+import type { MusicGenerationProvider } from "../../music-generation/types.js";
 import {
   buildMusicGenerationTaskStatusDetails,
   buildMusicGenerationTaskStatusText,
@@ -11,9 +12,7 @@ import {
   createMediaGenerateTaskActions,
 } from "./media-generate-tool-actions-shared.js";
 
-function summarizeMusicGenerationCapabilities(
-  provider: ReturnType<typeof listRuntimeMusicGenerationProviders>[number],
-): string {
+function summarizeMusicGenerationCapabilities(provider: MusicGenerationProvider): string {
   const supportedModes = listSupportedMusicGenerationModes(provider);
   const generate = provider.capabilities.generate;
   const edit = provider.capabilities.edit;
@@ -53,7 +52,7 @@ function summarizeMusicGenerationCapabilities(
 
 export const createMusicGenerateListActionResult = createMediaGenerateProviderListAction({
   kind: "music_generation",
-  listProviders: (params) => listRuntimeMusicGenerationProviders(params),
+  listProviders: (params) => listMusicGenerationProviders(params?.config),
   emptyText: "No music-generation providers are registered.",
   listModes: listSupportedMusicGenerationModes,
   summarizeCapabilities: summarizeMusicGenerationCapabilities,

@@ -102,13 +102,9 @@ function resolveRuntimeEnvApiKeyLookupOptions(params: {
 function listProviderSyntheticAuthRefs(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
-  modelApi?: string;
 }): string[] {
   const refs = [params.provider];
   const providerConfig = resolveMergedModelProviderConfig(params.cfg, params.provider);
-  if (params.modelApi) {
-    refs.push(params.modelApi);
-  }
   if (providerConfig?.api) {
     refs.push(providerConfig.api);
   }
@@ -118,7 +114,6 @@ function listProviderSyntheticAuthRefs(params: {
 function shouldResolvePluginSyntheticAuth(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
-  modelApi?: string;
   runtimeLookup?: RuntimeProviderAuthLookup;
 }): boolean {
   const syntheticAuthProviderRefs = params.runtimeLookup?.syntheticAuthProviderRefs;

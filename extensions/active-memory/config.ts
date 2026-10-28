@@ -43,8 +43,6 @@ import {
   type ResolvedActiveRecallPluginConfig,
 } from "./types.js";
 
-let minimumTimeoutMs = DEFAULT_MIN_TIMEOUT_MS;
-
 function parseOptionalPositiveInt(value: unknown, fallback: number): number {
   const parsed =
     typeof value === "number"
@@ -190,7 +188,7 @@ export function normalizePluginConfig(
     timeoutMs: resolveIntegerOption(
       parseOptionalPositiveInt(raw.timeoutMs, DEFAULT_TIMEOUT_MS),
       DEFAULT_TIMEOUT_MS,
-      { min: minimumTimeoutMs, max: MAX_TIMEOUT_MS },
+      { min: DEFAULT_MIN_TIMEOUT_MS, max: MAX_TIMEOUT_MS },
     ),
     timeoutMsIsDefault: raw.timeoutMs === undefined || raw.timeoutMs === null,
     setupGraceTimeoutMs: resolveIntegerOption(
@@ -260,14 +258,6 @@ export function readActiveMemoryConfig(api: OpenClawPluginApi): OpenClawConfig {
 
 export function normalizeActiveMemoryFastMode(fastMode: unknown): ActiveMemoryFastMode | undefined {
   return fastMode === true || fastMode === false || fastMode === "auto" ? fastMode : undefined;
-}
-
-export function resetActiveMemoryConfigForTests(): void {
-  minimumTimeoutMs = DEFAULT_MIN_TIMEOUT_MS;
-}
-
-export function setMinimumTimeoutMsForTests(value: number): void {
-  minimumTimeoutMs = value;
 }
 
 // The runner owns CLI eligibility; explicit timeouts and direct API runs retain their budgets.

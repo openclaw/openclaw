@@ -6,6 +6,7 @@ import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coerc
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { stylePromptTitle } from "../../packages/terminal-core/src/prompt-style.js";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { resolveAgentEffectiveModelPrimary, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { WorkspaceStateGuard } from "../agents/workspace-state-store.worker-contract.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../agents/workspace.js";
@@ -21,7 +22,7 @@ import { isInvalidGatewaySecret } from "../gateway/known-weak-gateway-secrets.js
 import { probeGateway, type GatewayProbeResult } from "../gateway/probe.js";
 import { canonicalPathFromExistingAncestor, isPathInside } from "../infra/fs-safe.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { resolveConfigDir, shortenHomeInString, shortenHomePath, sleep } from "../utils.js";
+import { displayPath, resolveConfigDir, shortenHomeInString, sleep } from "../utils.js";
 import { VERSION } from "../version.js";
 import { moveToTrash, removeAgentSessions, removeWorkspaceDirs } from "./cleanup-utils.js";
 import type { OnboardMode, ResetScope } from "./onboard-types.js";
@@ -52,12 +53,12 @@ export function summarizeExistingConfig(config: OpenClawConfig): string {
   const rows: string[] = [];
   const defaults = config.agents?.defaults;
   if (defaults?.workspace) {
-    rows.push(shortenHomeInString(`Workspace: ${defaults.workspace}`));
+    rows.push(terminalText`Workspace: ${shortenHomeInString(defaults.workspace)}`);
   }
   if (defaults?.model) {
     const model = resolveAgentModelPrimaryValue(defaults.model);
     if (model) {
-      rows.push(shortenHomeInString(`Model: ${model}`));
+      rows.push(terminalText`Model: ${shortenHomeInString(model)}`);
     }
   }
   const gatewaySummary = summarizeGatewayConfig(config);
@@ -65,7 +66,9 @@ export function summarizeExistingConfig(config: OpenClawConfig): string {
     rows.push(shortenHomeInString(gatewaySummary));
   }
   if (config.skills?.install?.nodeManager) {
-    rows.push(shortenHomeInString(`Node manager: ${config.skills.install.nodeManager}`));
+    rows.push(
+      terminalText`Node manager: ${shortenHomeInString(config.skills.install.nodeManager)}`,
+    );
   }
   return rows.length ? rows.join("\n") : "No key settings detected.";
 }
@@ -99,12 +102,12 @@ function summarizeGatewayConfig(config: OpenClawConfig): string | null {
   }
   if (mode === "remote" && !remoteUrl) {
     words.push("(missing remote URL)");
-    return `Gateway: ${words.join(" ")}`;
+    return terminalText`Gateway: ${words.join(" ")}`;
   }
   if (endpoint) {
     words.push(`${useRemoteUrl ? "at" : "on"} ${endpoint}`);
   }
-  return `Gateway: ${words.length > 0 ? words.join(" ") : "configured"}`;
+  return terminalText`Gateway: ${words.length > 0 ? words.join(" ") : "configured"}`;
 }
 
 function formatGatewayBind(value: string | undefined): string | undefined {
@@ -174,9 +177,9 @@ export function formatControlUiSshHint(params: {
   const localUrl = `${protocol}://localhost:${params.port}${uiPath}`;
   return [
     "No GUI detected. Open from your computer:",
-    `ssh -N -L ${params.port}:127.0.0.1:${params.port} <user>@<host>`,
+    terminalText`ssh -N -L ${params.port}:127.0.0.1:${params.port} <user>@<host>`,
     "Then open:",
-    localUrl,
+    terminalText`${localUrl}`,
     "BYOH note: lan, tailnet, and custom bind are currently IPv4-only.",
     "If your host is IPv6-only, use an IPv4 sidecar or proxy in front of the Gateway.",
     "Docs:",
@@ -202,11 +205,11 @@ export async function ensureWorkspaceAndSessions(
     skipOptionalBootstrapFiles: options.skipOptionalBootstrapFiles,
     guard: options.guard,
   });
-  runtime.log(`Workspace OK: ${shortenHomePath(ws.dir)}`);
+  runtime.log(`Workspace OK: ${displayPath(ws.dir)}`);
   const sessionsDir = resolveSessionTranscriptsDirForAgent(options.agentId);
   options.guard?.assertHost?.();
   await fs.mkdir(sessionsDir, { recursive: true });
-  runtime.log(`Sessions OK: ${shortenHomePath(sessionsDir)}`);
+  runtime.log(`Sessions OK: ${displayPath(sessionsDir)}`);
   return { bootstrapPending: ws.bootstrapPending === true };
 }
 
@@ -329,10 +332,10 @@ export async function probeGatewayReachable(
 }
 
 export type GatewayConfiguredModelProbeResult =
-  | { kind: "configured" }
-  | { kind: "missing-configured-model"; detail: string }
-  | { kind: "reachable-unverified"; detail?: string }
-  | { kind: "unreachable"; detail?: string };
+  | "configured"
+  | "missing-configured-model"
+  | "reachable-unverified"
+  | "unreachable";
 
 /** Reads only Gateway config and classifies whether its default agent has inference. */
 export async function probeGatewayConfiguredModel(
@@ -341,15 +344,14 @@ export async function probeGatewayConfiguredModel(
   let probe: GatewayProbeResult;
   try {
     probe = await runOnboardingGatewayProbe(params, "config");
-  } catch (err) {
-    return { kind: "unreachable", detail: summarizeError(err) };
+  } catch {
+    return "unreachable";
   }
-  const detail = probe.error ?? undefined;
   if (!probe.gatewayReached) {
-    return { kind: "unreachable", ...(detail ? { detail } : {}) };
+    return "unreachable";
   }
   if (!probe.ok) {
-    return { kind: "reachable-unverified", detail };
+    return "reachable-unverified";
   }
   const snapshot = probe.configSnapshot as {
     valid?: unknown;
@@ -358,24 +360,15 @@ export async function probeGatewayConfiguredModel(
   } | null;
   const configCandidate =
     snapshot?.valid === true ? (snapshot.runtimeConfig ?? snapshot.config) : null;
-  const invalidSnapshot: GatewayConfiguredModelProbeResult = {
-    kind: "reachable-unverified",
-    detail: "Gateway returned an invalid config snapshot",
-  };
   if (!configCandidate || typeof configCandidate !== "object" || Array.isArray(configCandidate)) {
-    return invalidSnapshot;
+    return "reachable-unverified";
   }
   try {
     const config = configCandidate as OpenClawConfig;
     const model = resolveAgentEffectiveModelPrimary(config, resolveDefaultAgentId(config));
-    return model
-      ? { kind: "configured" }
-      : {
-          kind: "missing-configured-model",
-          detail: "Gateway default agent has no configured model",
-        };
+    return model ? "configured" : "missing-configured-model";
   } catch {
-    return invalidSnapshot;
+    return "reachable-unverified";
   }
 }
 

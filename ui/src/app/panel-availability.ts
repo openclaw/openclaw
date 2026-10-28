@@ -9,16 +9,23 @@ import { hasOperatorAdminAccess } from "./operator-access.ts";
 
 type GatewaySnapshot = Pick<ApplicationContext["gateway"]["snapshot"], "phase" | "hello">;
 
-function isPanelAvailable(snapshot: GatewaySnapshot, method: string): boolean {
-  return (
-    snapshot.phase === "connected" &&
-    hasOperatorAdminAccess(snapshot.hello?.auth ?? null) &&
-    isGatewayMethodAdvertised(snapshot, method) === true
-  );
+export type PanelUnavailableReason = "disconnected" | "permission" | "unavailable";
+
+function panelUnavailableReason(
+  snapshot: GatewaySnapshot,
+  method: string,
+): PanelUnavailableReason | null {
+  if (snapshot.phase !== "connected") {
+    return "disconnected";
+  }
+  if (!hasOperatorAdminAccess(snapshot.hello?.auth ?? null)) {
+    return "permission";
+  }
+  return isGatewayMethodAdvertised(snapshot, method) === true ? null : "unavailable";
 }
 
 export function isBrowserPanelAvailable(snapshot: GatewaySnapshot): boolean {
-  return isPanelAvailable(snapshot, "browser.request");
+  return panelUnavailableReason(snapshot, "browser.request") === null;
 }
 
 /** The session owner checks target membership, tool policy, and sandbox requirements. */
@@ -31,12 +38,18 @@ export function isBrowserDashboardAvailable(
   );
 }
 
+export function browserPanelSurfaceUnavailableReason(
+  snapshot: GatewaySnapshot,
+): PanelUnavailableReason | null {
+  return hasNativeBrowserBridge() ? null : panelUnavailableReason(snapshot, "browser.request");
+}
+
 export function isBrowserPanelSurfaceAvailable(snapshot: GatewaySnapshot): boolean {
-  return hasNativeBrowserBridge() || isBrowserPanelAvailable(snapshot);
+  return browserPanelSurfaceUnavailableReason(snapshot) === null;
 }
 
 export function isDesktopPanelAvailable(snapshot: GatewaySnapshot): boolean {
-  return isPanelAvailable(snapshot, "desktop.observe");
+  return panelUnavailableReason(snapshot, "desktop.observe") === null;
 }
 
 /** Admin-only, never advertisement alone; the Custodian session store authorizes each turn. */

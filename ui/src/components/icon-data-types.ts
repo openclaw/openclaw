@@ -23,6 +23,7 @@ export type IconAttributes = Readonly<{
   y1?: string | number;
   y2?: string | number;
   points?: string;
+  transform?: string;
   id?: string;
   offset?: string | number;
 }>;
@@ -58,4 +59,8 @@ export function strokeIconData(children: readonly IconNode[]): IconData {
     },
     children,
   };
+}
+
+export function strokePathData(...paths: string[]): IconData {
+  return strokeIconData(paths.map((d): IconNode => ["path", { d }]));
 }

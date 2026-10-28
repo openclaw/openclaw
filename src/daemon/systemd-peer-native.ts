@@ -13,8 +13,8 @@ import {
   runServiceInspectionGuard,
 } from "./service-inspection-budget.js";
 import {
-  ServiceInspectionError,
   ServiceOwnershipRefusalError,
+  SystemdInspectionTimeout,
 } from "./service-inspection-error.js";
 import { assertGatewayServiceUpdateCurrent } from "./service-update-authority.js";
 import { createSystemdPeerQueue } from "./systemd-peer-queue.js";
@@ -24,11 +24,11 @@ const unavailable = () => new Error("Original systemd manager peer inspection is
 const MAX_VALUES = 16384;
 const MAX_STRING_BYTES = 1024 * 1024;
 
-function remaining(deadline: number, now: () => number): number {
+function remaining(deadline: number, now: () => number, check: string): number {
   assertGatewayServiceUpdateCurrent();
   const timeoutMs = deadline - now();
   if (timeoutMs <= 0) {
-    throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
+    throw new SystemdInspectionTimeout(check);
   }
   return timeoutMs;
 }
@@ -95,7 +95,7 @@ function matchesReply(value: unknown, expected: string): boolean {
   }
 }
 
-function translateFailure(error: unknown): never {
+function translateFailure(error: unknown, check: string): never {
   if (
     error instanceof ProcSafeError &&
     error.code === "access-denied" &&
@@ -104,7 +104,7 @@ function translateFailure(error: unknown): never {
     throw new ServiceOwnershipRefusalError("systemd-manager-changed");
   }
   if (error instanceof ProcSafeError && error.code === "timeout") {
-    throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
+    throw new SystemdInspectionTimeout(check);
   }
   throw error;
 }
@@ -153,7 +153,9 @@ async function openSystemdConnection(
 ) {
   const admissionNow = getServiceInspectionClock();
   let identity = expected;
-  const bus = await connect(remaining(deadline, admissionNow)).catch(translateFailure);
+  const bus = await connect(remaining(deadline, admissionNow, "native manager connection")).catch(
+    (error: unknown) => translateFailure(error, "native manager connection"),
+  );
   const peer = "peer" in bus ? bus.peer : undefined;
   let closed = false;
   const queue = createSystemdPeerQueue();
@@ -196,7 +198,7 @@ async function openSystemdConnection(
     verify();
   };
   try {
-    remaining(deadline, admissionNow);
+    remaining(deadline, admissionNow, "native manager connection verification");
     verifyConnection();
   } catch (error) {
     await close();
@@ -212,13 +214,14 @@ async function openSystemdConnection(
     now: () => number,
     mutationTimeoutMs?: number,
   ): Promise<unknown[] | null> => {
+    const phase = `native ${args[0]} ${args.slice(3, 5).join(" ")}`;
     let mutationDeadline: number | undefined;
     const check = () => {
-      remaining(until, now);
+      remaining(until, now, phase);
       runServiceInspectionGuard(assertCurrent);
       verifyConnection();
       if (mutationDeadline !== undefined && performance.now() >= mutationDeadline) {
-        throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
+        throw new SystemdInspectionTimeout(phase);
       }
     };
     const [operation, destination, path, iface, member] = args;
@@ -244,7 +247,7 @@ async function openSystemdConnection(
       }
     };
     const options = () => ({
-      timeoutMs: remaining(until, now),
+      timeoutMs: remaining(until, now, phase),
       replyBudgetBytes: MAX_STRING_BYTES + MAX_VALUES * 8,
     });
     check();
@@ -262,7 +265,7 @@ async function openSystemdConnection(
         check();
         const value = await bus
           .getProperty({ ...target, member: property }, expectedSignature, options())
-          .catch(translateFailure);
+          .catch((error: unknown) => translateFailure(error, `native property ${property}`));
         check();
         account(value);
         result.push(value);
@@ -311,7 +314,7 @@ async function openSystemdConnection(
       ) {
         return null;
       }
-      translateFailure(error);
+      translateFailure(error, phase);
     }
     check();
     if (

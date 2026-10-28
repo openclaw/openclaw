@@ -136,9 +136,7 @@ export function createWorkerInferenceManager(options: WorkerInferenceManagerOpti
   };
   const abortEntry = (entry: ActiveInference, reason: WorkerInferenceErrorReason): void => {
     entry.abortReason ??= reason;
-    if (!entry.controller.signal.aborted) {
-      entry.controller.abort();
-    }
+    entry.controller.abort();
   };
   const durableFence = (entry: ActiveInference): WorkerInferenceErrorReason | null => {
     const processError = processFence(entry);
@@ -255,7 +253,7 @@ export function createWorkerInferenceManager(options: WorkerInferenceManagerOpti
             // captured registration still owns its cancellation receipt, never a retry
             // of an uncertain write or a provider success under retired authority.
             storedOutcome = await store.complete(
-              { ...entry.storeInput, outcome: terminalError(error.reason, rawOutcome) },
+              { ...entry.storeInput, outcome: terminalError(error.reason, outcome) },
               () => assertEntry(entry),
             );
           }
@@ -389,6 +387,7 @@ export function createWorkerInferenceManager(options: WorkerInferenceManagerOpti
       ),
       entry.storeInput,
     );
+    entry.execution = operation;
     providers.set(operation, entry.request.sessionId);
     void operation.then(
       () => providers.delete(operation),

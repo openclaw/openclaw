@@ -10,7 +10,7 @@ import {
 } from "./runtime-guard.js";
 
 const state = vi.hoisted(() => ({
-  version: "24.16.0",
+  version: "24.22.1",
   error: vi.fn(),
   run: vi.fn(),
   diagnosticLoads: 0,
@@ -74,7 +74,7 @@ function runtimeDetails(
 ) {
   return {
     kind,
-    version: kind === "bun" ? "1.4.3" : "24.16.0",
+    version: kind === "bun" ? "1.4.4" : "24.22.1",
     execPath: `/usr/bin/${kind}`,
     pathEnv: "/usr/bin",
     hasNodeSqlite: true,
@@ -88,9 +88,19 @@ function createRuntime() {
 }
 
 describe("runtime-guard", () => {
+  it.each(["24.22.0", "26.12.0"])(
+    "refuses Node %s with compromised-key trust even when SQLite is healthy",
+    async (version) => {
+      state.version = version;
+      state.lossless = true;
+      const runtime = createExitingRuntime();
+      await expect(assertSupportedRuntime(runtime)).rejects.toThrow("exit");
+      expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("Upgrade Node"));
+    },
+  );
   it("validates ordinary CLI runtimes without initializing SQLite worker policy", async () => {
     state.initializeSqlite.mockClear();
-    state.version = "24.16.0";
+    state.version = "24.22.1";
     state.lossless = true;
     await assertSupportedRuntime(createExitingRuntime());
     expect(state.initializeSqlite).not.toHaveBeenCalled();
@@ -107,9 +117,9 @@ describe("runtime-guard", () => {
   });
 
   it.each([
-    ["24.16.0", true, true],
-    ["24.16.0", false, false],
-    ["24.15.0+vendor.1", true, true],
+    ["24.22.1", true, true],
+    ["24.22.1", false, false],
+    ["24.15.0+vendor.1", true, false],
     ["24.15.0+vendor.1", false, false],
   ] as const)("gates Node %s with lossless SQLite %s", async (version, lossless, admitted) => {
     const runtime = createRuntime();
@@ -121,7 +131,9 @@ describe("runtime-guard", () => {
     await assertSupportedRuntime(runtime, details);
     expect(runtime.exit).toHaveBeenCalledTimes(admitted ? 0 : 1);
     if (!admitted) {
-      expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("nodejs/node#61954"));
+      expect(runtime.error).toHaveBeenCalledWith(
+        expect.stringContaining(lossless ? "openclaw requires Node" : "nodejs/node#61954"),
+      );
     }
   });
 
@@ -142,17 +154,10 @@ describe("runtime-guard", () => {
     ["triage", "--non-interactive"],
     ["--profile", "fixture", "gateway", "status", "--deep"],
   ])("allows unsupported Node diagnostics: %j", async (...args) => {
-    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    const runtime = createRuntime();
     await assertSupportedRuntime(
       runtime,
-      {
-        kind: "node",
-        version: "22.23.2",
-        execPath: "/usr/bin/node",
-        pathEnv: "/usr/bin",
-        hasNodeSqlite: true,
-        sqliteVersion: null,
-      },
+      runtimeDetails("node", { version: "22.23.2", sqliteVersion: null }),
       ["node", "openclaw", ...args],
     );
     expect(runtime.exit).not.toHaveBeenCalled();
@@ -176,17 +181,10 @@ describe("runtime-guard", () => {
     ["--profile", "--help", "gateway", "start"],
     ["agent", "--message", "--help"],
   ])("refuses unsupported Node mutation: %j", async (...args) => {
-    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    const runtime = createRuntime();
     await assertSupportedRuntime(
       runtime,
-      {
-        kind: "node",
-        version: "26.0.0",
-        execPath: "/usr/bin/node",
-        pathEnv: "/usr/bin",
-        hasNodeSqlite: true,
-        sqliteVersion: null,
-      },
+      runtimeDetails("node", { version: "26.0.0", sqliteVersion: null }),
       ["node", "openclaw", ...args],
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
@@ -199,16 +197,10 @@ describe("runtime-guard", () => {
   ])(
     "refuses diagnostic execution without capability: $version SQLite=$hasNodeSqlite",
     async (details) => {
-      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      const runtime = createRuntime();
       await assertSupportedRuntime(
         runtime,
-        {
-          kind: "node",
-          execPath: "/usr/bin/node",
-          pathEnv: "/usr/bin",
-          sqliteVersion: null,
-          ...details,
-        },
+        runtimeDetails("node", { sqliteVersion: null, ...details }),
         ["node", "openclaw", "update", "status"],
       );
       expect(runtime.exit).toHaveBeenCalledWith(1);
@@ -236,17 +228,17 @@ describe("runtime-guard", () => {
   });
 
   it("preserves the target package's numeric engine range", () => {
-    const engine = ">=24.16.0 <25 || >=26.1.0";
+    const engine = ">=24.22.1 <25 || >=26.12.1";
     expect(nodeVersionSatisfiesEngine("22.23.2", engine)).toBe(false);
     expect(nodeVersionSatisfiesEngine("22.22.2", engine)).toBe(false);
     expect(nodeVersionSatisfiesEngine("23.11.0", engine)).toBe(false);
     expect(nodeVersionSatisfiesEngine("24.14.1", engine)).toBe(false);
     expect(nodeVersionSatisfiesEngine("24.15.0+vendor.1", engine)).toBe(false);
-    expect(nodeVersionSatisfiesEngine("24.16.0", engine)).toBe(true);
+    expect(nodeVersionSatisfiesEngine("24.22.1", engine)).toBe(true);
     expect(nodeVersionSatisfiesEngine("25.8.1", engine)).toBe(false);
     expect(nodeVersionSatisfiesEngine("25.9.0", engine)).toBe(false);
     expect(nodeVersionSatisfiesEngine("26.0.0", engine)).toBe(false);
-    expect(nodeVersionSatisfiesEngine("26.1.0", engine)).toBe(true);
+    expect(nodeVersionSatisfiesEngine("26.12.1", engine)).toBe(true);
     expect(nodeVersionSatisfiesEngine(null, engine)).toBe(false);
     expect(nodeVersionSatisfiesEngine("unknown", engine)).toBe(false);
   });
@@ -255,20 +247,20 @@ describe("runtime-guard", () => {
     ["22.23.2", false],
     ["23.11.0", false],
     ["24.15.0", false],
-    ["24.16.0", true],
+    ["24.22.1", true],
     ["25.9.0", false],
     ["26.0.0", false],
-    ["26.1.0", true],
+    ["26.12.1", true],
     ["27.0.0", true],
     ["v27.0.0-head", true],
     ["27.0.0-nightly20261018f88a1d25e9", true],
     ["27.0.0-rc.1+vendor.1", true],
-    ["24.16.0-rc.1", false],
-    ["26.1.0-rc.1", false],
+    ["24.22.1-rc.1", false],
+    ["26.12.1-rc.1", false],
     ["27.0.0-01", false],
     ["27.0.0-nightly..1", false],
     ["27.0.0-", false],
-    ["24.16.0+local.1", true],
+    ["24.22.1+local.1", true],
     ["24.15.0-rc.1", false],
     ["25.9.1-nightly.20260714", false],
     ["24.15", false],
@@ -286,8 +278,9 @@ describe("runtime-guard", () => {
     ["1.4.0", false],
     ["1.4.1", false],
     ["1.4.2", false],
-    ["1.4.3", true],
-    ["1.4.3-canary.1+65d94e715", true],
+    ["1.4.3", false],
+    ["1.4.4", true],
+    ["1.4.4-canary.1+65d94e715", true],
     ["2.0.0", true],
     ["1.3.14", false],
     [null, false],
@@ -295,23 +288,39 @@ describe("runtime-guard", () => {
     expect(isSupportedBunVersion(version)).toBe(expected);
   });
 
-  it("throws via exit when runtime is too old", async () => {
+  it.each([
+    {
+      label: "too old",
+      details: runtimeDetails("node", {
+        version: "20.0.0",
+        hasNodeSqlite: false,
+        sqliteVersion: null,
+      }),
+      detected: "node 20.0.0 (exec: /usr/bin/node)",
+      path: "/usr/bin",
+    },
+    {
+      label: "unknown",
+      details: {
+        kind: "unknown",
+        version: null,
+        execPath: null,
+        pathEnv: "(not set)",
+        hasNodeSqlite: false,
+        sqliteVersion: null,
+      } as const,
+      detected: "unknown runtime (exec: unknown)",
+      path: "(not set)",
+    },
+  ])("throws via exit when runtime is $label", async ({ details, detected, path }) => {
     const runtime = createExitingRuntime();
-    const details = {
-      kind: "node" as const,
-      version: "20.0.0",
-      execPath: "/usr/bin/node",
-      pathEnv: "/usr/bin",
-      hasNodeSqlite: false,
-      sqliteVersion: null,
-    };
     await expect(assertSupportedRuntime(runtime, details)).rejects.toThrow("exit");
     expect(runtime.error).toHaveBeenCalledOnce();
     expect(runtime.error).toHaveBeenCalledWith(
       [
-        "openclaw requires Node >=24.16.0 <25, or >=26.1.0.",
-        "Detected: node 20.0.0 (exec: /usr/bin/node).",
-        "PATH searched: /usr/bin",
+        "openclaw requires Node >=24.22.1 <25, or >=26.12.1.",
+        `Detected: ${detected}.`,
+        `PATH searched: ${path}`,
         "Install Node: https://nodejs.org/en/download",
         "Upgrade Node and re-run openclaw.",
       ].join("\n"),
@@ -319,28 +328,14 @@ describe("runtime-guard", () => {
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
-  it("returns silently when runtime meets requirements", async () => {
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
-    const details = {
-      kind: "node" as const,
-      version: "24.16.0",
-      execPath: "/usr/bin/node",
-      pathEnv: "/usr/bin",
-      hasNodeSqlite: true,
+  it.each([
+    runtimeDetails("node", {
       sqliteVersion: "3.53.3",
       sqliteProbe: { available: true, version: "3.53.3", text: true, blob: true, json: true },
-    };
-    await expect(assertSupportedRuntime(runtime, details)).resolves.toBeUndefined();
-    expect(runtime.exit).not.toHaveBeenCalled();
-  });
-
-  it("accepts Bun when the runtime provides WAL-reset-safe node:sqlite", async () => {
+    }),
+    runtimeDetails("bun"),
+  ])("returns silently when $kind runtime meets requirements", async (details) => {
     const runtime = createRuntime();
-    const details = runtimeDetails("bun");
     await expect(assertSupportedRuntime(runtime, details)).resolves.toBeUndefined();
     expect(runtime.exit).not.toHaveBeenCalled();
     expect(runtime.error).not.toHaveBeenCalled();
@@ -359,7 +354,7 @@ describe("runtime-guard", () => {
       }),
     );
     expect(runtime.error).toHaveBeenCalledExactlyOnceWith(
-      `${sqliteSelectionError}\nDetected: bun 1.4.3 (exec: /usr/bin/bun).`,
+      `${sqliteSelectionError}\nDetected: bun 1.4.4 (exec: /usr/bin/bun).`,
     );
     expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
     expect(runtime.log).not.toHaveBeenCalled();
@@ -375,8 +370,8 @@ describe("runtime-guard", () => {
     await expect(assertSupportedRuntime(runtime, details)).rejects.toThrow("exit");
     expect(runtime.error).toHaveBeenCalledWith(
       [
-        "openclaw requires Bun 1.4.3 or newer with WAL-reset-safe node:sqlite (SQLite 3.51.3+ or a patched 3.50.x/3.44.x release).",
-        "Detected: bun 1.4.3 (exec: /usr/bin/bun).",
+        "openclaw requires Bun 1.4.4 or newer with WAL-reset-safe node:sqlite (SQLite 3.51.3+ or a patched 3.50.x/3.44.x release).",
+        "Detected: bun 1.4.4 (exec: /usr/bin/bun).",
         "Detected SQLite: unavailable.",
         "PATH searched: /usr/bin",
         "Install Bun: https://bun.com/docs/installation",
@@ -389,7 +384,7 @@ describe("runtime-guard", () => {
     { version: "1.4.0", sqliteVersion: "3.53.2" },
     { version: "1.4.1", sqliteVersion: "3.53.2" },
     { version: "1.4.2", sqliteVersion: "3.53.2" },
-    { version: "1.4.3", sqliteVersion: "3.51.2" },
+    { version: "1.4.4", sqliteVersion: "3.51.2" },
   ])("rejects Bun $version with SQLite $sqliteVersion", async (details) => {
     const runtime = createExitingRuntime();
     await expect(assertSupportedRuntime(runtime, runtimeDetails("bun", details))).rejects.toThrow(
@@ -400,31 +395,6 @@ describe("runtime-guard", () => {
         expect.stringContaining("Detected SQLite: 3.51.2."),
       );
     }
-  });
-
-  it("reports unknown runtimes with fallback labels", async () => {
-    const runtime = createExitingRuntime();
-    const details = {
-      kind: "unknown" as const,
-      version: null,
-      execPath: null,
-      pathEnv: "(not set)",
-      hasNodeSqlite: false,
-      sqliteVersion: null,
-    };
-
-    await expect(assertSupportedRuntime(runtime, details)).rejects.toThrow("exit");
-    expect(runtime.error).toHaveBeenCalledOnce();
-    expect(runtime.error).toHaveBeenCalledWith(
-      [
-        "openclaw requires Node >=24.16.0 <25, or >=26.1.0.",
-        "Detected: unknown runtime (exec: unknown).",
-        "PATH searched: (not set)",
-        "Install Node: https://nodejs.org/en/download",
-        "Upgrade Node and re-run openclaw.",
-      ].join("\n"),
-    );
-    expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 });
 
@@ -485,8 +455,8 @@ describe("sealed worker runtime", () => {
   it.each([
     { version: "22.23.2", supported: false },
     { version: "26.0.0", supported: false },
-    { version: "24.16.0", supported: true },
-    { version: "26.1.0", supported: true },
+    { version: "24.22.1", supported: true },
+    { version: "26.12.1", supported: true },
   ])("handles worker runtime $version", async ({ version, supported }) => {
     state.version = version;
     state.lossless = supported;

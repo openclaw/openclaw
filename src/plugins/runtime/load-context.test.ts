@@ -137,7 +137,12 @@ describe("resolvePluginRuntimeLoadContext", () => {
     const privateEnv = { ...env, PRIVATE_CONTEXT_TEST: envSentinel };
     const context = resolvePluginRuntimeLoadContext({ config: privateConfig, env: privateEnv });
     const registry = createEmptyPluginRegistry();
-    setPluginRuntimeLoadContext(registry, context, "original-registration");
+    const selectedContextEngine = { engineId: "synthetic", owner: "plugin:original" };
+    setPluginRuntimeLoadContext(
+      registry,
+      { ...context, selectedContextEngine },
+      "original-registration",
+    );
     const bound = getPluginRuntimeLoadContext(registry);
     expect(bound).toMatchObject(context);
     expect(bound?.config).toBe(privateConfig);
@@ -148,12 +153,14 @@ describe("resolvePluginRuntimeLoadContext", () => {
     const reboundContext = {
       ...context,
       workspaceDir: "/rebound-workspace",
+      selectedContextEngine: { engineId: "synthetic", owner: "plugin:replacement" },
       env: { ...privateEnv, PRIVATE_CONTEXT_TEST: `${envSentinel}-rebound` },
     };
     setPluginRuntimeLoadContext(copy, reboundContext, "replacement-registration");
     expect(getPluginRuntimeLoadContext(copy)).toMatchObject({
       ...reboundContext,
       registrationConfigKey: "original-registration",
+      selectedContextEngine,
     });
     expect(getPluginRuntimeLoadContext(copy)?.env).toBe(reboundContext.env);
     expect(getPluginRuntimeLoadContext(registry)).toBe(bound);

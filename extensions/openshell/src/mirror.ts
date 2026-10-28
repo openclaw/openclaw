@@ -65,11 +65,9 @@ async function reconcileMirrorDirectory(params: {
   const { sourceDir } = params;
   const isExcluded = createExcludeMatcher(params.excludeDirs);
   await runLimitedFs(fs.mkdir, params.targetDir, { recursive: true });
-  const sourceEntries = new Set(
-    sourceDir ? await runLimitedFs(async () => await fs.readdir(sourceDir)) : [],
-  );
+  const sourceEntries = new Set(sourceDir ? await runLimitedFs(() => fs.readdir(sourceDir)) : []);
   const targetEntries = params.replace
-    ? await runLimitedFs(async () => await fs.readdir(params.targetDir))
+    ? await runLimitedFs(() => fs.readdir(params.targetDir))
     : [];
   // Finish every mutation before returning an error and releasing the workspace lease.
   const results = await Promise.allSettled(

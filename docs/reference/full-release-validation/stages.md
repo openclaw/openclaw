@@ -9,6 +9,12 @@ read_when:
 
 ## Top-level stages
 
+Candidate Q=C runs the selected tests. Admitted P supplies
+`full-release-validation-state.mjs` for Release Decision, Diagnostic Drain,
+manifest writing, and final validation. Its
+[checked-in waiver policy](/reference/full-release-validation/evidence#release-tooling-waivers)
+is applied there; publication still requires FRV itself to conclude success.
+
 For `rerun_group=all`, a `Check for reusable validation evidence` job runs
 first. It looks for the newest prior green full validation with the same release
 profile, coverage policy, effective soak setting, and validation inputs. Exact-target reruns use

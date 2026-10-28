@@ -1,77 +1,56 @@
 import type { GatewayEventFrame } from "../api/gateway.ts";
-import * as runtime from "../lib/device-pair-setup.ts";
+import {
+  closeDevicePairSetup,
+  completeDevicePairSetup,
+  createDevicePairSetupState,
+  markDevicePairSetupDeliveryUncertain,
+  openDevicePairSetup,
+  parseDevicePairSetupCompletion,
+  parseDevicePairSetupDeliveryUncertain,
+  readDevicePairSetupSnapshot,
+  refreshDevicePairSetup,
+  setDevicePairSetupAccess,
+  syncDevicePairSetupCountdown,
+} from "../lib/device-pair-setup.ts";
 import type { ApplicationGateway } from "./gateway.ts";
 import { readGatewayOperatorAccess } from "./operator-access.ts";
 
-type DevicePairSetupState = ReturnType<typeof runtime.createDevicePairSetupState>;
+const runtime = {
+  openDevicePairSetup,
+  readDevicePairSetupSnapshot,
+  refreshDevicePairSetup,
+  setDevicePairSetupAccess,
+  syncDevicePairSetupCountdown,
+};
 
 export function createOverlayPairing(params: {
   gateway: ApplicationGateway;
   isDisposed: () => boolean;
   publish: () => void;
 }) {
-  const state = runtime.createDevicePairSetupState({
+  const state = createDevicePairSetupState({
     client: params.gateway.snapshot.client,
     connected: params.gateway.snapshot.phase === "connected",
     onChange: params.publish,
   });
-  const pendingCount = createOverlayPairingPendingCount({ ...params, state });
-  return {
-    runtime,
-    state,
-    pendingCount,
-    close(clear = true) {
-      pendingCount.invalidate({ clear });
-      runtime.closeDevicePairSetup(state);
-    },
-    handleEvent(event: GatewayEventFrame): boolean {
-      if (event.event === "device.pair.setup.completed") {
-        const completion = runtime.parseDevicePairSetupCompletion(event.payload);
-        if (completion) {
-          runtime.completeDevicePairSetup(state, completion);
-        }
-        return true;
-      }
-      if (event.event === "device.pair.setup.deliveryUncertain") {
-        const outcome = runtime.parseDevicePairSetupDeliveryUncertain(event.payload);
-        if (outcome) {
-          runtime.markDevicePairSetupDeliveryUncertain(state, outcome);
-        }
-        return true;
-      }
-      if (event.event === "device.pair.requested" || event.event === "device.pair.resolved") {
-        void pendingCount.refresh();
-        return true;
-      }
-      return false;
-    },
-  };
-}
-
-function createOverlayPairingPendingCount(params: {
-  gateway: ApplicationGateway;
-  state: DevicePairSetupState;
-  isDisposed: () => boolean;
-  publish: () => void;
-}) {
+  const { gateway, isDisposed, publish } = params;
   let generation = 0;
-
-  return {
+  const pendingCount = {
     invalidate(options: { clear?: boolean } = {}) {
       generation += 1;
       if (options.clear) {
-        params.state.pendingCount = 0;
+        state.pendingCount = 0;
       }
     },
 
     async refresh() {
-      const client = params.gateway.snapshot.client;
+      const client = gateway.snapshot.client;
       if (
         !client ||
-        params.gateway.snapshot.phase !== "connected" ||
-        params.isDisposed() ||
-        !params.state.devicePairSetupOpen ||
-        !readGatewayOperatorAccess(params.gateway.snapshot).canAdmin
+        gateway.snapshot.phase !== "connected" ||
+        isDisposed() ||
+        !state.devicePairSetupOpen ||
+        !readGatewayOperatorAccess(gateway.snapshot).canAdmin
       ) {
         return;
       }
@@ -83,17 +62,47 @@ function createOverlayPairingPendingCount(params: {
         return;
       }
       if (
-        params.isDisposed() ||
+        isDisposed() ||
         requestGeneration !== generation ||
-        params.gateway.snapshot.client !== client ||
-        params.gateway.snapshot.phase !== "connected" ||
-        !params.state.devicePairSetupOpen ||
-        !readGatewayOperatorAccess(params.gateway.snapshot).canAdmin
+        gateway.snapshot.client !== client ||
+        gateway.snapshot.phase !== "connected" ||
+        !state.devicePairSetupOpen ||
+        !readGatewayOperatorAccess(gateway.snapshot).canAdmin
       ) {
         return;
       }
-      params.state.pendingCount = Array.isArray(result.pending) ? result.pending.length : 0;
-      params.publish();
+      state.pendingCount = Array.isArray(result.pending) ? result.pending.length : 0;
+      publish();
+    },
+  };
+  return {
+    runtime,
+    state,
+    pendingCount,
+    close(clear = true) {
+      pendingCount.invalidate({ clear });
+      closeDevicePairSetup(state);
+    },
+    handleEvent(event: GatewayEventFrame): boolean {
+      if (event.event === "device.pair.setup.completed") {
+        const completion = parseDevicePairSetupCompletion(event.payload);
+        if (completion) {
+          completeDevicePairSetup(state, completion);
+        }
+        return true;
+      }
+      if (event.event === "device.pair.setup.deliveryUncertain") {
+        const outcome = parseDevicePairSetupDeliveryUncertain(event.payload);
+        if (outcome) {
+          markDevicePairSetupDeliveryUncertain(state, outcome);
+        }
+        return true;
+      }
+      if (event.event === "device.pair.requested" || event.event === "device.pair.resolved") {
+        void pendingCount.refresh();
+        return true;
+      }
+      return false;
     },
   };
 }

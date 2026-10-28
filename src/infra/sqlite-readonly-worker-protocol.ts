@@ -18,7 +18,10 @@ export type SqliteReadOnlyWorkerMode =
   | "private-fork"
   | "content-version"
   | "file-generation"
+  | "update-generation"
   | "async"
+  | "staged-sync"
+  | "staged-async"
   | "metadata"
   | "consolidated"
   | "reclaim"
@@ -76,7 +79,16 @@ export type SqliteReadOnlyWorkerOptions =
       signal?: AbortSignal;
     }
   | {
-      mode: Exclude<SqliteReadOnlyWorkerMode, "auth-profile-rows" | "operation" | "private-fork">;
+      mode: "staged-sync" | "staged-async";
+      stagingRoot: string;
+      signal?: AbortSignal;
+      expectedSourceIdentity?: DatabaseFileIdentity;
+    }
+  | {
+      mode: Exclude<
+        SqliteReadOnlyWorkerMode,
+        "auth-profile-rows" | "operation" | "private-fork" | "staged-sync" | "staged-async"
+      >;
       stagingRoot?: string;
       signal?: AbortSignal;
       expectedSourceIdentity?: DatabaseFileIdentity;
@@ -95,7 +107,7 @@ export function sqliteReadOnlyWorkerRequestArgs(
       ? undefined
       : options.expectedSourceIdentity;
   if (expected !== undefined) {
-    if (options.mode !== "sync" && options.mode !== "metadata") {
+    if (options.mode !== "sync" && options.mode !== "staged-sync" && options.mode !== "metadata") {
       throw new Error("SQLite source identity is supported only for sync or metadata snapshots");
     }
     args.push(stagingRoot ?? "", JSON.stringify(readDatabaseFileIdentity(expected)));
@@ -179,10 +191,13 @@ export function readSqliteReadOnlyWorkerValue(
     | "sync"
     | "private-fork"
     | "async"
+    | "staged-sync"
+    | "staged-async"
     | "metadata"
     | "consolidated"
     | "content-version"
-    | "file-generation",
+    | "file-generation"
+    | "update-generation",
 ): string;
 export function readSqliteReadOnlyWorkerValue(
   params: SqliteReadOnlyWorkerOutput,
@@ -235,6 +250,8 @@ export function readSqliteReadOnlyWorkerValue(
     (mode === "sync" ||
       mode === "private-fork" ||
       mode === "async" ||
+      mode === "staged-sync" ||
+      mode === "staged-async" ||
       mode === "metadata" ||
       mode === "consolidated" ||
       isSqliteSnapshotStagingMode(mode)) &&
@@ -245,7 +262,7 @@ export function readSqliteReadOnlyWorkerValue(
   if (mode === "content-version" && "contentVersion" in result) {
     return result.contentVersion;
   }
-  if (mode === "file-generation" && "generation" in result) {
+  if ((mode === "file-generation" || mode === "update-generation") && "generation" in result) {
     return result.generation;
   }
   if (mode === "reclaim" && "warnings" in result) {

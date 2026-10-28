@@ -136,6 +136,10 @@ memory framing in the Generative Agents research.
 
 Dreaming keeps a narrative **Dream Diary** in `DREAMS.md`. Each sweep with useful material combines its Light, REM, and successfully promoted Deep inputs into one short diary entry, including when nothing qualifies for durable promotion. The tool-free background completion uses the workspace agent's default model unless `dreaming.model` is configured. If the configured model is unavailable, the diary run retries once with that agent's default model. Trust or allowlist failures are not retried.
 
+Diary updates require valid UTF-8 and leave malformed `DREAMS.md` files unchanged.
+Preserve the original and convert a copy to UTF-8 before retrying. A malformed
+diary is omitted from optional context so other dreaming work can continue.
+
 Diary and consolidation completions use fresh contexts without retaining conversation sessions or delivering chat replies. Failed or empty diary generation writes a local fallback entry and reports a degraded outcome, so missing model output leaves a visible trace.
 
 Diary generation uses the existing agent run budget, `agents.defaults.timeoutSeconds`,
@@ -200,6 +204,9 @@ When enabled, `memory-core` auto-manages one cron job for a full dreaming sweep,
 Startup reconciles that job in the background so Gateway connections do not wait
 for the cron store. Failures are logged and retried by runtime reconciliation.
 Stopping or replacing the plugin waits for pending reconciliation to settle.
+Reconciliation preserves a job paused by the operator or auto-disabled by cron,
+including its failure history. Use `openclaw cron enable <job-id>` to resume it;
+schedule and payload repairs still apply while it is stopped.
 
 Plugin reloads preserve the managed schedule. The previous instance stops its
 background callbacks and settles pending diary publication before its replacement
@@ -229,7 +236,7 @@ a repair warning and remain in place.
 
 Dreaming completions use the [subagent queue](/concepts/queue#background-work) at background priority and honor `agents.defaults.subagents.maxConcurrent`. Setting this existing limit to `1` serializes diary and consolidation completions across workspaces and plugins. The sweep coordinator does not consume a completion slot while it waits for phase work. System busyness shows these completions in the `subagent` row.
 
-An explicit multi-agent fleet needs an [ambient system owner](/gateway/config-agents/heartbeat-compaction-and-streaming#agents.defaults.systemagent) for this job. If logs report `Agent-less cron job has no resolvable owner`, choose an existing agent to own the sweep. For example, if that agent is `ops`:
+An explicit multi-agent fleet needs an [ambient system owner](/gateway/config-agents/heartbeat-compaction-and-streaming#agents.defaults.systemagent) to create this job. Without one, reconciliation skips creation and warns once while ownership remains unresolved. Choose an existing agent to own the sweep; reconciliation resumes automatically when the owner is configured. Existing managed jobs keep their current reconciliation behavior. For example, if the owner is `ops`:
 
 ```bash
 openclaw config set agents.defaults.systemAgent.agentId ops

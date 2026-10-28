@@ -6,7 +6,6 @@ describe("irc protocol", () => {
   it("parses PRIVMSG lines with prefix and trailing", () => {
     const parsed = parseIrcLine(":alice!u@host PRIVMSG #room :hello world");
     expect(parsed).toEqual({
-      raw: ":alice!u@host PRIVMSG #room :hello world",
       prefix: "alice!u@host",
       command: "PRIVMSG",
       params: ["#room"],
@@ -18,12 +17,14 @@ describe("irc protocol", () => {
       user: "u",
       host: "host",
     });
+    expect(parseIrcPrefix("irc.example.test").nick).toBeUndefined();
   });
 
   it("validates targets and rejects control characters", () => {
     expect(sanitizeIrcTarget("#openclaw")).toBe("#openclaw");
     expect(sanitizeIrcTarget(String.raw`\tom`)).toBe(String.raw`\tom`);
     expect(() => sanitizeIrcTarget("#bad\nPING")).toThrow(/Invalid IRC target/);
+    expect(() => sanitizeIrcTarget("#bad\u0002PING")).toThrow(/Invalid IRC target/);
     expect(() => sanitizeIrcTarget(" user")).toThrow(/Invalid IRC target/);
   });
 });

@@ -20,7 +20,6 @@ import {
   installSessionTabRegistrySqliteHarness,
 } from "./session-tab-registry.sqlite.test-harness.js";
 import {
-  type DurableRecord,
   type RegistryModule,
   durableOwnership as ownership,
 } from "./session-tab-registry.sqlite.test-helpers.js";
@@ -98,6 +97,7 @@ describe("session tab membership and lifecycle", () => {
       profileAliases: ["requested"],
       now: 1_000,
     });
+    const ownRecord = openStore().entries()[0]?.value;
     for (const profile of ["resolved", "other"]) {
       await track(`opaque-${profile}`, `NATIVE-${profile}`, {
         sessionKey: "agent:main:other",
@@ -133,18 +133,12 @@ describe("session tab membership and lifecycle", () => {
     expect(aliasesBefore.every(Boolean)).toBe(true);
     const volatileBefore = structuredClone(volatileTabsBySession());
     openStore().register("invalid-record", { version: 999 });
-    openStore().register("wrong-storage-key", {
-      version: 1,
-      sessionKey: identity.sessionKey,
-      nativeTargetId: "NATIVE-WRONG-KEY",
-      profile: "resolved",
-      profileAliases: ["requested"],
-      profileFingerprint: "test-profile-fingerprint",
-      browserInstanceFingerprint: "test-browser-instance-fingerprint",
-      interactionTargetKind: "native",
-      trackedAt: 1_000,
-      lastUsedAt: 1_000,
-    } satisfies DurableRecord);
+    openStore().register(
+      "wrong-storage-key",
+      Object.assign({}, ownRecord, {
+        nativeTargetId: "NATIVE-WRONG-KEY",
+      }),
+    );
     const before = openStore().entries();
     const ownedTabs = [
       { targetId: "NATIVE-OWN", tabId: "t1" },
@@ -184,6 +178,42 @@ describe("session tab membership and lifecycle", () => {
     }
     expect(observation.queries).toEqual([]);
     expect(openStore().entries()).toEqual(before);
+  });
+
+  it("preserves both ownership kinds when untracking their shared non-exact alias", async () => {
+    const { registry, track } = await session("untrack-shared-alias");
+    await track("DURABLE-RAW", "DURABLE-NATIVE", { aliases: ["shared"], now: 1_000 });
+    await track("VOLATILE-RAW", undefined, { aliases: ["shared"], now: 2_000 });
+    const before = openStore().entries();
+
+    await registry.untrackSessionBrowserTab({ ...main, targetId: "shared" });
+
+    expect(openStore().entries()).toEqual(before);
+    const tabs = targetRows("DURABLE-RAW", "VOLATILE-RAW");
+    await expect(registry.filterTrackedSessionBrowserTabs({ ...main, tabs })).resolves.toEqual(
+      tabs,
+    );
+  });
+
+  it("retires cold native activity when untracking an identity without aliases", async () => {
+    const { registry, track } = await session("untrack-cold-native");
+    const cold = { ...main, targetId: "NATIVE-COLD-UNTRACK" };
+    await track(cold.targetId, cold.targetId, { now: 1_000 });
+    // Keep the admitted store and persisted row, but lose process-local aliases.
+    clearProcessLocalTabState();
+    await registry.touchSessionBrowserTab({ ...cold, now: 10_000 });
+    expect(openStore().entries()[0]?.value).toMatchObject({ lastUsedAt: 1_000 });
+    const closeTab = vi.fn(async () => {});
+    const sweep = () => registry.sweepTrackedBrowserTabs({ now: 12_000, idleMs: 5_000, closeTab });
+    await expect(sweep()).resolves.toBe(0);
+    expect(closeTab).not.toHaveBeenCalled();
+
+    await registry.untrackSessionBrowserTab(cold);
+
+    expect(openStore().entries()).toHaveLength(1);
+    await expect(sweep()).resolves.toBe(1);
+    expect(closeTab).toHaveBeenCalledOnce();
+    expect(openStore().entries()).toEqual([]);
   });
 
   it("rejects membership when requester authority expires during the worker read", async () => {
@@ -426,16 +456,10 @@ describe("session tab membership and lifecycle", () => {
         started.resolve();
         await finish.promise;
       });
-      const closeDurableTab: NonNullable<CloseOptions["closeDurableTab"]> = async (tab, options) =>
-        await options.closeIfCurrent(async () => {
-          await closeTab({ targetId: tab.nativeTargetId });
-          return { status: "closed" };
-        });
       const cleanup = close({
         isCurrent: () => guard === "prepared" || current,
         ...(guard === "prepared" ? { prepareCurrent: async () => current } : {}),
         closeTab,
-        closeDurableTab,
       });
       try {
         await started.promise;
@@ -447,7 +471,7 @@ describe("session tab membership and lifecycle", () => {
           expect(openStore().entries()).toHaveLength(1);
           expect(openStore().entries()[0]?.value).not.toHaveProperty("cleanupAttemptToken");
         }
-        await expect(close({ closeTab, closeDurableTab })).resolves.toBe(1);
+        await expect(close({ closeTab })).resolves.toBe(1);
         expect(closeTab.mock.calls.map(([tab]) => tab.targetId).toSorted()).toEqual([
           "tab-a",
           "tab-b",
@@ -463,17 +487,17 @@ describe("session tab membership and lifecycle", () => {
   it.each([true, false])(
     "retries pending lifecycle cleanup with ordinary cleanup %s",
     async (ordinaryCleanup) => {
+      setBrowserProfileConfig();
       const { registry, track, close } = await session("lifecycle-retry", {
         ...main,
         sessionKey: "agent:subagent:ended",
       });
       await track("opaque", "NATIVE-PENDING", { now: 1_000 });
-      await expect(
-        close({
-          now: 2_000,
-          closeDurableTab: async () => ({ status: "unavailable", reason: "target-lookup-failed" }),
-        }),
-      ).resolves.toBe(0);
+      cdpMocks.closeTrackedCdpTarget.mockResolvedValueOnce({
+        status: "unavailable",
+        reason: "target-lookup-failed",
+      });
+      await expect(close({ now: 2_000 })).resolves.toBe(0);
       expect(openStore().entries()[0]?.value).toMatchObject({
         nativeTargetId: "NATIVE-PENDING",
         cleanupKind: "lifecycle",
@@ -489,8 +513,6 @@ describe("session tab membership and lifecycle", () => {
           now: 10_000,
           ordinaryCleanup,
           sessionFilter: () => false,
-          closeDurableTab: async (_tab, options) =>
-            await options.closeIfCurrent(async () => ({ status: "closed" })),
         }),
       ).resolves.toBe(1);
       expect(
@@ -502,6 +524,7 @@ describe("session tab membership and lifecycle", () => {
   );
 
   it("converges after close succeeds but the first durable delete fails", async () => {
+    setBrowserProfileConfig();
     let failDelete = true;
     await installIntercepted((store) => ({
       compareAndApply: async (key, comparison, intent) => {
@@ -514,13 +537,14 @@ describe("session tab membership and lifecycle", () => {
     }));
     const { track, close } = await session("delete-failure");
     await track("tab-a", "NATIVE-A");
-    await close({ closeDurableTab: async () => ({ status: "closed" }) });
+    await close();
     expect(openStore().entries()).toHaveLength(1);
 
     resetPluginStateStoreForTests();
     await installRuntime();
     const restarted = await session("delete-failure-restart");
-    await restarted.close({ closeDurableTab: async () => ({ status: "missing" }) });
+    cdpMocks.closeTrackedCdpTarget.mockResolvedValueOnce({ status: "missing" });
+    await restarted.close();
     expect(openStore().entries()).toEqual([]);
   });
 });

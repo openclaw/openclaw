@@ -69,7 +69,6 @@ describe("resolveCodexCliBin", () => {
         resolveLocalAuthSpawnInvocation({
           command: commandPath,
           args: ["login"],
-          platform: "win32",
         }),
       ).toMatchObject({
         args: ["/d", "/s", "/c", `""${commandPath}" "login""`],

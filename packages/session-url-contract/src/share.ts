@@ -6,7 +6,6 @@ const CATALOG_SHARE_PATH_RE = /^([a-z][a-z0-9-]*)\/(?:[a-z0-9]+-)*([a-zA-Z0-9]{1
 // route-table test keeps it aligned with every built-in path and alias.
 export const CONTROL_UI_RESERVED_ROUTE_SEGMENTS: readonly string[] = Object.freeze([
   "activity",
-  "agents",
   "ai-agents",
   "appearance",
   "approve",
@@ -16,6 +15,7 @@ export const CONTROL_UI_RESERVED_ROUTE_SEGMENTS: readonly string[] = Object.free
   "automations",
   "channels",
   "chat",
+  "claws",
   "communications",
   "config",
   "cron",

@@ -1,9 +1,8 @@
 import "../../test-utils/prepare-compiled-subprocesses.js";
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { resolveSandboxContext } from "../../agents/sandbox/context.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -16,84 +15,64 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
-import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 
-const sandboxContextMocks = vi.hoisted(() => ({ resolveSandboxContext: vi.fn() }));
-// mock-isolation: suspend provisioning at its effect guard without launching a sandbox backend.
-vi.mock("../../agents/sandbox/context.js", () => sandboxContextMocks);
-
+const sandbox = vi.hoisted(() => ({ resolveSandboxContext: vi.fn() }));
+// mock-isolation: suspend provisioning at its effect guard without a sandbox backend.
+vi.mock("../../agents/sandbox/context.js", () => sandbox);
 import { createPluginRuntime } from "./index.js";
 
-const tempDirs = createTempDirTracker();
-
+let state: OpenClawTestState;
+beforeEach(async () => {
+  state = await createOpenClawTestState({ label: "plugin-sandbox" });
+});
 afterEach(async () => {
-  for (const stateDir of tempDirs.dirs) {
-    await cleanupSessionStateForTest({ stateDir });
-  }
-  tempDirs.cleanup();
-  clearRuntimeConfigSnapshot();
+  await state.cleanup();
   vi.restoreAllMocks();
-  vi.unstubAllEnvs();
-  sandboxContextMocks.resolveSandboxContext.mockReset();
+  sandbox.resolveSandboxContext.mockReset();
 });
 
-it("uses the supplied session store without a prepared global config", async () => {
-  const stateDir = tempDirs.make("plugin-sandbox-config-");
-  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-  const storePath = path.join(stateDir, "custom", "sessions.sqlite");
-  const config: OpenClawConfig = {
-    agents: { defaults: { sandbox: { mode: "all", workspaceAccess: "rw" } } },
-    session: { store: storePath },
-  };
-  setRuntimeConfigSnapshot(config);
-  const scope = { agentId: "main", sessionKey: "agent:main:custom-sandbox", storePath };
-  replaceSessionEntrySync(scope, {
-    sessionId: "custom-sandbox",
-    updatedAt: 1,
-    sandboxMode: "off",
-  });
-  clearRuntimeConfigSnapshot();
-
-  await expect(
-    createPluginRuntime().sandbox.prepareWorkspaceAuthority({
-      config,
-      agentId: scope.agentId,
-      sessionKey: scope.sessionKey,
-      workspaceDir: path.join(stateDir, "workspace"),
-    }),
-  ).resolves.toEqual({ sandboxed: false, workspaceAccess: "rw" });
-  expect(sandboxContextMocks.resolveSandboxContext).not.toHaveBeenCalled();
-});
-
-it.each([false, true])(
-  "checks published session policy at the sandbox effect without synchronous SQL (changed=%s)",
-  async (changed) => {
-    const stateDir = tempDirs.make("plugin-sandbox-authority-");
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+it.each(["custom store without global config", "concurrent rename", "revoked policy"] as const)(
+  "prepares workspace authority: %s",
+  async (scenario) => {
+    const custom = scenario === "custom store without global config";
+    const revoked = scenario === "revoked policy";
     const config: OpenClawConfig = {
-      agents: {
-        defaults: { sandbox: { mode: "all", scope: "session", workspaceAccess: "rw" } },
-        entries: { main: { workspace: "/workspace" } },
-      },
+      agents: { defaults: { sandbox: { mode: "all", scope: "session", workspaceAccess: "rw" } } },
       tools: { elevated: { enabled: false }, sandbox: { tools: { allow: ["read"] } } },
+      ...(custom
+        ? { session: { store: path.join(state.stateDir, "custom", "sessions.sqlite") } }
+        : {}),
     };
-    setRuntimeConfigSnapshot(config);
     const scope = {
       agentId: "main",
-      sessionKey: "agent:main:subagent:sandbox-policy",
-      storePath: resolveOpenClawAgentSqlitePath({ agentId: "main", env: process.env }),
+      sessionKey: custom ? "agent:main:custom-sandbox" : "agent:main:subagent:sandbox-policy",
+      storePath:
+        config.session?.store ??
+        resolveOpenClawAgentSqlitePath({ agentId: "main", env: process.env }),
     };
-    replaceSessionEntrySync(scope, { sessionId: "sandbox-policy", updatedAt: 1 });
+    setRuntimeConfigSnapshot(config);
+    replaceSessionEntrySync(scope, {
+      sessionId: "sandbox-policy",
+      updatedAt: 1,
+      ...(custom ? { sandboxMode: "off" as const } : {}),
+    });
+    if (custom) {
+      clearRuntimeConfigSnapshot();
+    }
     const runtime = createPluginRuntime();
     vi.spyOn(runtime.agent.session, "getSessionEntry").mockImplementation(() => {
       throw new Error("Sandbox preparation used the deprecated synchronous session reader");
     });
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
-    const provision = vi.fn();
-    const dispose = vi.fn();
+    const entered = createDeferredCore(),
+      release = createDeferredCore();
+    const provision = vi.fn(),
+      dispose = vi.fn();
     let effectGuard: (() => void) | undefined;
-    sandboxContextMocks.resolveSandboxContext.mockImplementation(
+    sandbox.resolveSandboxContext.mockImplementation(
       async (params: Parameters<typeof resolveSandboxContext>[0]) => {
         effectGuard = params.assertCurrent;
         entered.resolve();
@@ -111,34 +90,40 @@ it.each([false, true])(
     );
     const preparation = runtime.sandbox.prepareWorkspaceAuthority({
       config,
-      ...scope,
-      workspaceDir: "/workspace",
+      agentId: scope.agentId,
+      sessionKey: scope.sessionKey,
+      workspaceDir: state.workspaceDir,
+      ...(!custom ? { storePath: scope.storePath } : {}),
     });
-    const result = changed
-      ? expect(preparation).rejects.toThrow(
-          "Session workspace authority changed during sandbox preparation",
-        )
-      : expect(preparation).resolves.toEqual({ sandboxed: true, workspaceAccess: "rw" });
+    const changedError = "Session workspace authority changed during sandbox preparation";
+    const result = revoked
+      ? expect(preparation).rejects.toThrow(changedError)
+      : expect(preparation).resolves.toEqual({ sandboxed: !custom, workspaceAccess: "rw" });
     try {
-      await awaitGateBeforeSettlement(
-        entered.promise,
-        preparation,
-        "sandbox preparation did not enter",
-      );
-      await patchSessionEntryCore(
-        scope,
-        () => (changed ? { sandboxMode: "off" } : { displayName: "Renamed while preparing" }),
-        { skipMaintenance: true },
-      );
+      if (!custom) {
+        await awaitGateBeforeSettlement(
+          entered.promise,
+          preparation,
+          "sandbox preparation did not enter",
+        );
+        await patchSessionEntryCore(
+          scope,
+          () => (revoked ? { sandboxMode: "off" } : { displayName: "Renamed while preparing" }),
+          { skipMaintenance: true },
+        );
+      }
     } finally {
       release.resolve();
     }
     await result;
-    expect(provision).toHaveBeenCalledTimes(changed ? 0 : 1);
-    expect(dispose).toHaveBeenCalledTimes(changed ? 0 : 1);
-    expect(effectGuard).toBeTypeOf("function");
-    expect(() => effectGuard!()).toThrow(
-      "Session workspace authority changed during sandbox preparation",
-    );
+    if (custom) {
+      expect(sandbox.resolveSandboxContext).not.toHaveBeenCalled();
+    } else {
+      expect([provision.mock.calls.length, dispose.mock.calls.length]).toEqual(
+        revoked ? [0, 0] : [1, 1],
+      );
+      expect(effectGuard).toBeTypeOf("function");
+      expect(() => effectGuard!()).toThrow(changedError);
+    }
   },
 );

@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { API } from "typescript/unstable/sync";
+import { API } from "typescript/sync";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import {
   auditCanonicalCoercionExports,

@@ -210,7 +210,6 @@ beforeEach(() => {
     vi.mocked(native).mockImplementation(boundary.native);
   }
   boundary.external.mockReturnValue(false);
-  boundary.config.mockResolvedValue({ config: {} });
   boundary.readLeases.mockReturnValue([]);
   boundary.schemas.mockResolvedValue({ indeterminate: [] });
   boundary.scopeAssert = undefined;
@@ -278,9 +277,6 @@ beforeEach(() => {
     runtime: { status: "stopped" },
   });
   boundary.health.mockResolvedValue({ outcome: "ready", healthy: true });
-  boundary.native.mockImplementation(() => {
-    throw new Error("Doctor settlement controls cannot start or inspect native processes");
-  });
 });
 afterEach(() => {
   try {

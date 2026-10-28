@@ -6,6 +6,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
 import { withEnvAsync } from "../test-utils/env.js";
+import { listDirectoryTreeStrictSync } from "./directory-walk.js";
 import * as diskSpace from "./disk-space.js";
 import { collectNestedErrorCandidates } from "./error-graph-internal.js";
 import { renderUpdateRunReport, updateRunReportInputFromResult } from "./update-run-report.js";
@@ -52,8 +53,8 @@ function fixture(...options: Parameters<typeof createFixture>) {
 }
 
 function snapshotTree(root: string): string[] {
-  return fs
-    .readdirSync(root, { recursive: true, encoding: "utf8" })
+  return listDirectoryTreeStrictSync(root)
+    .map((walkEntry) => walkEntry.relativePath)
     .toSorted()
     .flatMap((name) => {
       const fullPath = path.join(root, name);

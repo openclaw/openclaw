@@ -1,3 +1,4 @@
+import { isResolvedSubagentCompletionBlockedNotice } from "../agents/subagents/completion/subagent-completion-delivery.js";
 import {
   captureSessionEventTargetForHost,
   enqueueSessionEventForHost,
@@ -16,6 +17,10 @@ export async function deliverRestartSentinelEvent(
   agentId: string,
   queueContext: OpenClawStateWorkerContext,
 ) {
+  if (await isResolvedSubagentCompletionBlockedNotice(entry, queueContext)) {
+    // The queue records its normal terminal receipt without admitting another obsolete notice.
+    return;
+  }
   if (entry.deliveryStartedAt !== undefined) {
     throw new SessionDeliveryDeadLetteredError(
       "queued session event dead-lettered after an interrupted unproven attempt",

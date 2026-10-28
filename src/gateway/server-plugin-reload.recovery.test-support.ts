@@ -37,6 +37,7 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createChannelManager } from "./server-channels.js";
+import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 import {
   firstReloaded,
   rejectWith,
@@ -376,21 +377,34 @@ export type RecoveryFixtureFactory = (
 
 type RecoveryFixture = Awaited<ReturnType<RecoveryFixtureFactory>>;
 
+export async function invokeReloadMethod(
+  registry: ReturnType<typeof createPluginRegistry>["registry"],
+  method: string,
+) {
+  const handler = registry.gatewayHandlers[method];
+  assert(handler, `${method} must be registered`);
+  const respond = vi.fn();
+  await handler({
+    req: { type: "req", id: "reload-probe", method },
+    params: {},
+    client: null,
+    isWebchatConnect: () => false,
+    respond,
+    context: {} as GatewayRequestHandlerOptions["context"],
+  });
+  return respond;
+}
+
 export function expectSiblingUnchanged(fixture: RecoveryFixture) {
   fixture.expectServices({ siblingStart: 1, siblingStop: 0 });
 }
 
-export function observeRetainedWork(
-  instance: NonNullable<ReturnType<typeof getPluginInstance>>,
-  consumersOnly = false,
-) {
+export function observeRetainedWork(instance: NonNullable<ReturnType<typeof getPluginInstance>>) {
   const entered = createDeferredCore();
   const wait = instance.waitForRetainedWork.bind(instance);
   const observation = vi.spyOn(instance, "waitForRetainedWork").mockImplementation((...args) => {
     const pending = wait(...args);
-    if (!consumersOnly || args[1]) {
-      entered.resolve();
-    }
+    entered.resolve();
     return pending;
   });
   return {

@@ -1,4 +1,4 @@
-import { consumeRootOptionToken } from "openclaw/plugin-sdk/cli-argv";
+import { consumeRootOptionToken, isValueToken } from "openclaw/plugin-sdk/cli-argv";
 
 const BROWSER_BOOLEAN_OPTIONS = new Set(["--json", "--expect-final"]);
 const BROWSER_VALUE_OPTIONS = new Set([
@@ -8,10 +8,6 @@ const BROWSER_VALUE_OPTIONS = new Set([
   "--timeout",
   "--gateway-url",
 ]);
-
-function isValueToken(arg: string | undefined): boolean {
-  return Boolean(arg && arg !== "--" && (!arg.startsWith("-") || /^-\d+(?:\.\d+)?$/.test(arg)));
-}
 
 function consumeOption(args: readonly string[], index: number): number {
   const arg = args[index];

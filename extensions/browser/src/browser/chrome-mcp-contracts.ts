@@ -1,6 +1,6 @@
 import { SdkErrorCode, type Client, type Tool } from "@modelcontextprotocol/client";
 import type { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
-import { createAsyncLock } from "openclaw/plugin-sdk/async-lock-runtime";
+import type { createPermitPool } from "openclaw/plugin-sdk/concurrency-runtime";
 import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
 import type { CdpActionTimeouts } from "./cdp.js";
 
@@ -29,7 +29,7 @@ export type ChromeMcpSession = {
 
 export type ChromeMcpRoutingState = {
   sessionNonce: string;
-  withOperationLock: ReturnType<typeof createAsyncLock>;
+  operationPermits: ReturnType<typeof createPermitPool>;
   targetIdByPageId: Map<number, string>;
   nextTargetHandleId: number;
   snapshotsByTarget: Map<

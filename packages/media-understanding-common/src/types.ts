@@ -9,6 +9,7 @@ export type MediaUnderstandingCapabilityRegistry = Map<
   string,
   {
     capabilities?: MediaUnderstandingCapability[];
+    sharedEntryCapabilities?: MediaUnderstandingCapability[];
   }
 >;
 

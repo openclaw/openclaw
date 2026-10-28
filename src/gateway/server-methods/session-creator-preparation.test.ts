@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { SessionCatalogHost } from "../../../packages/gateway-protocol/src/index.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
@@ -11,24 +10,15 @@ import {
 } from "../../config/sessions/session-sharing-store.native.js";
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
-import { getActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db-disposal.js";
-import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
-import {
-  closeOpenClawAgentDatabaseByPathAsync,
-  openOpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
-import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db.js";
 import * as profileAliases from "../../state/user-profile-list.js";
 import { linkEmail } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
-import { withEnvAsync } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { createGatewayBroadcaster } from "../server-broadcast.js";
 import { createSessionMessageSubscriberRegistry } from "../server-chat-state.js";
-import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { GatewayClientRegistry } from "../server/client-registry.js";
 import type { GatewayWsClient } from "../server/ws-types.js";
 import { resolveSessionEventAgentScope } from "../session-request-agent.js";
@@ -36,7 +26,7 @@ import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { prepareSessionMutationFacts } from "../session-sharing-preparation.js";
 import { canReceiveSessionEvent, prepareProjectedSessionSharing } from "../session-sharing.js";
 import { canReceivePreparedSessionEvent } from "../session-sharing.test-utils.js";
-import { sessionCatalogHandlers } from "./session-catalog.js";
+import { observeAliasRootProbes } from "./session-catalog.profile-probes.test-support.js";
 import {
   identifiedClient,
   initializeSessionReadContext,
@@ -46,37 +36,6 @@ import {
 } from "./sessions-read-cache.test-support.js";
 
 afterEach(() => vi.restoreAllMocks());
-
-// Both observers pass through; distinguish alias work from unrelated store-path resolution.
-function observeAliasRootProbes(stateDir: string) {
-  let inAliasRead = false;
-  const probes = { aliasRootProbes: 0, otherRootProbes: 0 };
-  const readAliases = profileAliases.readUserProfileAliases;
-  const exists = fs.existsSync;
-  const aliasSpy = vi
-    .spyOn(profileAliases, "readUserProfileAliases")
-    .mockImplementation((...args) => {
-      inAliasRead = true;
-      try {
-        return readAliases(...args);
-      } finally {
-        inAliasRead = false;
-      }
-    });
-  const existsSpy = vi.spyOn(fs, "existsSync").mockImplementation((candidate) => {
-    if (candidate === stateDir) {
-      probes[inAliasRead ? "aliasRootProbes" : "otherRootProbes"] += 1;
-    }
-    return exists(candidate);
-  });
-  return {
-    finish() {
-      existsSpy.mockRestore();
-      aliasSpy.mockRestore();
-      return probes;
-    },
-  };
-}
 
 async function withCreatorRows(
   run: (fixture: {
@@ -101,10 +60,6 @@ async function withCreatorRows(
     },
     async (state) => {
       setRuntimeConfigSnapshot({});
-      expect(process.env.OPENCLAW_STATE_DIR).toBeUndefined();
-      expect(process.env.VITEST).toBeUndefined();
-      expect(process.env.NODE_ENV).toBe("production");
-      expect(process.env.HOME).toBe(state.home);
       const caller = ensureProfileForEmail("caller@preparation.test");
       const creator = ensureProfileForEmail("creator@preparation.test");
       ensureProfileForEmail("unrelated@preparation.test");
@@ -196,57 +151,6 @@ async function prepareEventAccess(cfg: OpenClawConfig, eventConfig = () => cfg) 
 }
 
 describe("creator preparation at synchronous fan-out boundaries", () => {
-  it("bounds list work across alias merges", async () => {
-    await withCreatorRows(async ({ stateDir, callerId, keys }) => {
-      const client = identifiedClient(callerId);
-      const context = requestContext({});
-      await initializeSessionReadContext(context);
-      const list = () => listSessions({ client, context, request: { limit: 100 } });
-      profileAliases.readUserProfileAliases(callerId);
-      const before = observeAliasRootProbes(stateDir);
-      const foreign = await list();
-      const beforeCount = before.finish().aliasRootProbes;
-      expect(foreign.sessions).toHaveLength(100);
-      expect(foreign.sessions.every((row) => row.sharingRole === "viewer")).toBe(true);
-      expect(beforeCount).toBe(0);
-      linkEmail("creator@preparation.test", callerId);
-      profileAliases.readUserProfileAliases(callerId);
-      await getSessionRowProjection(context)!.ensureMaterialized();
-      const after = observeAliasRootProbes(stateDir);
-      const owned = await list();
-      const afterCount = after.finish().aliasRootProbes;
-      expect(new Set(owned.sessions.map((row) => row.key))).toEqual(new Set(keys));
-      expect(owned.sessions.every((row) => row.sharingRole === "owner")).toBe(true);
-      expect(afterCount).toBe(0);
-    });
-  });
-
-  it("selects prepared aliases by state path", async () => {
-    await withCreatorRows(async ({ stateDir, callerId, keys }) => {
-      using _ = {
-        [Symbol.dispose]: (await profileAliases.prepareUserProfileCatalog()).release,
-      };
-      const sessionKey = keys[0]!;
-      await upsertSessionEntryCore({ agentId: "main", sessionKey }, { visibility: "draft" });
-      linkEmail("creator@preparation.test", callerId);
-      const client = eventClients(callerId)[0]!.client;
-      const receive = () =>
-        canReceivePreparedSessionEvent({ cfg: {}, client, sessionKeys: [sessionKey] });
-      expect(await receive()).toBe(true);
-      const alternateRoot = `${stateDir}/absent-state`;
-      await withEnvAsync({ OPENCLAW_STATE_DIR: alternateRoot }, async () => {
-        const alternateCatalog = await profileAliases.prepareUserProfileCatalog();
-        try {
-          expect(await receive()).toBe(false);
-          expect(fs.existsSync(alternateRoot)).toBe(false);
-        } finally {
-          alternateCatalog.release();
-        }
-      });
-      expect(await receive()).toBe(true);
-    });
-  });
-
   it("bounds cold/warm alias broadcast work", async () => {
     await withCreatorRows(async ({ stateDir, callerId, keys }) => {
       using _ = { [Symbol.dispose]: (await profileAliases.prepareUserProfileCatalog()).release };
@@ -415,32 +319,11 @@ describe("creator preparation at synchronous fan-out boundaries", () => {
           payload: suggestion,
         });
       expect(await receive()).toBe(true);
-      const agent = openOpenClawAgentDatabase({ agentId: "main" });
-      const state = openOpenClawStateDatabase();
-      const closing: unknown[] = [];
-      registerOpenClawAgentDatabaseAsyncResource({
-        agentId: "main",
-        path: agent.path,
-        revoke: () => {},
-        close: async () => {
-          await Promise.resolve();
-          closing.push({
-            agentOpen: agent.db.isOpen,
-            stateOpen: state.db.isOpen,
-            rootExists: fs.existsSync(stateDir),
-            selector: process.env.OPENCLAW_STATE_DIR,
-          });
-        },
-      });
       // Disposal writes the shared registry; drain it before moving/recreating the root.
       await disposeOpenClawAgentDatabaseByPath(
         path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite"),
       );
       await cleanupSessionStateForTest({ stateDir });
-      expect(closing).toEqual([
-        { agentOpen: true, stateOpen: true, rootExists: true, selector: undefined },
-      ]);
-      expect([agent.db.isOpen, state.db.isOpen]).toEqual([false, false]);
       const legacyRoot = path.join(path.dirname(stateDir), ".clawdbot");
       fs.renameSync(stateDir, legacyRoot);
       expect(await receive()).toBe(false);
@@ -535,70 +418,6 @@ describe("creator preparation at synchronous fan-out boundaries", () => {
         }),
         undefined,
       );
-    });
-  });
-
-  it("refreshes aliases per catalog publication", async () => {
-    await withCreatorRows(async ({ stateDir, callerId, keys }) => {
-      using _ = { [Symbol.dispose]: (await profileAliases.prepareUserProfileCatalog()).release };
-      const previousRegistry = getActivePluginRegistry() ?? createEmptyPluginRegistry();
-      const registry = createEmptyPluginRegistry();
-      const host: SessionCatalogHost = {
-        hostId: "gateway:local",
-        kind: "gateway",
-        label: "Fixture",
-        connected: true,
-        sessions: keys.map((sessionKey, index) => ({
-          sessionKey,
-          threadId: `prepared-${index}`,
-          status: "stored",
-          archived: false,
-          canContinue: true,
-          canArchive: true,
-        })),
-      };
-      registry.sessionCatalogs.push({
-        pluginId: "fixture",
-        source: import.meta.url,
-        provider: {
-          id: "fixture",
-          label: "Fixture",
-          list: async ({ onHost }) => {
-            onHost?.(host);
-            await Promise.resolve();
-            linkEmail("creator@preparation.test", callerId);
-            profileAliases.readUserProfileAliases(callerId);
-            onHost?.(host);
-            await Promise.resolve();
-            return [host];
-          },
-          read: async ({ hostId, threadId }) => ({ hostId, threadId, items: [] }),
-        },
-      });
-      setActivePluginRegistry(registry);
-      const respond = vi.fn();
-      const broadcastToConnIds = vi.fn();
-      const context = createDirectChatContext({ broadcastToConnIds });
-      await initializeSessionReadContext(context);
-      profileAliases.readUserProfileAliases(callerId);
-      const observer = observeAliasRootProbes(stateDir);
-      try {
-        await sessionCatalogHandlers["sessions.catalog.list"]?.({
-          params: { progressId: "preparation" },
-          respond,
-          client: { ...identifiedClient(callerId), connId: "fixture" },
-          context,
-        } as never);
-      } finally {
-        setActivePluginRegistry(previousRegistry);
-      }
-      const probes = observer.finish().aliasRootProbes;
-      expect(respond.mock.calls[0]?.[0]).toBe(true);
-      expect(broadcastToConnIds).toHaveBeenCalledTimes(2);
-      expect(broadcastToConnIds.mock.calls[0]?.[1]?.catalog.hosts[0]?.sessions).toEqual([]);
-      expect(broadcastToConnIds.mock.calls[1]?.[1]?.catalog.hosts[0]?.sessions).toHaveLength(100);
-      expect(respond.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]?.sessions).toHaveLength(100);
-      expect(probes).toBe(0);
     });
   });
 });

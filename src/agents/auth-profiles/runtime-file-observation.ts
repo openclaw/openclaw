@@ -7,7 +7,7 @@ import { reportCommittedInlineAuthFailure } from "./constants.js";
 import {
   readAuthProfileDatabaseIdentity,
   refreshAuthProfileFileState,
-  registerAuthProfileFileChangeListener,
+  authProfileFileChanges,
 } from "./file-state.js";
 import type { runtimeAuthProfileRowsCache } from "./runtime-persisted-rows.js";
 import type { OwnedRuntimeSnapshot } from "./runtime-snapshot-selection.js";
@@ -108,30 +108,33 @@ export function createRuntimeAuthProfileFileObservation({
     });
   }
 
-  registerAuthProfileFileChangeListener(
-    ({ directory, identityChanged, sourcesChanged, createdPaths }) => {
-      const unprovenCreation = createdPaths.some((pathname) => !rowsCache.hasSource(pathname));
-      // In-process writes publish rows; file observation only retires replaced sources.
-      if (!identityChanged && !sourcesChanged && !unprovenCreation) {
-        return;
-      }
-      const paths = [...snapshots].flatMap(([key, entry]) => {
-        const candidates = entry.legacyCandidates;
-        return path.dirname(key) === directory ||
-          (entry.owner.kind === "resolved" &&
-            path.dirname(entry.owner.sharedDatabasePath) === directory) ||
-          (sourcesChanged &&
-            candidates &&
-            [...candidates.local, ...candidates.shared].some(
-              (source) => path.dirname(source.path) === directory,
-            ))
-          ? [key]
-          : [];
-      });
-      invalidatePaths(paths);
-      refreshExternalAuthPaths(paths);
-    },
-  );
+  authProfileFileChanges.onChange = ({
+    directory,
+    identityChanged,
+    sourcesChanged,
+    createdPaths,
+  }) => {
+    const unprovenCreation = createdPaths.some((pathname) => !rowsCache.hasSource(pathname));
+    // In-process writes publish rows; file observation only retires replaced sources.
+    if (!identityChanged && !sourcesChanged && !unprovenCreation) {
+      return;
+    }
+    const paths = [...snapshots].flatMap(([key, entry]) => {
+      const candidates = entry.legacyCandidates;
+      return path.dirname(key) === directory ||
+        (entry.owner.kind === "resolved" &&
+          path.dirname(entry.owner.sharedDatabasePath) === directory) ||
+        (sourcesChanged &&
+          candidates &&
+          [...candidates.local, ...candidates.shared].some(
+            (source) => path.dirname(source.path) === directory,
+          ))
+        ? [key]
+        : [];
+    });
+    invalidatePaths(paths);
+    refreshExternalAuthPaths(paths);
+  };
 
   return {
     recordRuntimeAuthProfilePersistedStore,

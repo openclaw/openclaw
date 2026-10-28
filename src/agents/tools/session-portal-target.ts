@@ -1,6 +1,6 @@
 import { getSessionRowProjection } from "../../gateway/session-row-projection-access.js";
 import { captureSessionPortalTarget } from "../../gateway/worker-environments/session-portal-target.js";
-import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../../security/dangerous-tools.js";
+import { resolveGatewayOwnerOnlyToolDenylist } from "../../security/dangerous-tools.js";
 import {
   bindActiveCronCreatorAuthorityResolver,
   bindCronManagementGrant,
@@ -23,6 +23,7 @@ export function prepareSessionPortalToolAccess(input: {
   sandboxed: boolean;
   runId?: string;
   cronSelfRemoveOnlyJobId?: string;
+  automationReadOnly?: boolean;
 }) {
   const cronCreatorAuthorityResolver = bindActiveCronCreatorAuthorityResolver(input.runId);
   // A scheduled run gets its self-scoped tool, not sender/administrator authority.
@@ -36,17 +37,18 @@ export function prepareSessionPortalToolAccess(input: {
     input.senderIsOwner === false && !input.sandboxed
       ? prepareSessionPortalToolTarget(input)
       : undefined;
+  // Recovery can inspect caller-scoped records without restoring an owner or
+  // creator grant. An absent caller identity must never become an unscoped read.
+  const scopedAutomationRead =
+    input.automationReadOnly === true && Boolean(input.agentId?.trim() && input.sessionKey?.trim());
   // Sessions owns its assignment/control action gates; portal and automation
   // remain scoped exceptions. Other control-plane tools require owner authority.
-  const ownerOnlyCoreToolDenylist =
-    input.senderIsOwner === false
-      ? GATEWAY_OWNER_ONLY_CORE_TOOLS.filter(
-          (name) =>
-            (name !== "portal" || !sessionPortalTarget) &&
-            name !== "sessions" &&
-            (name !== AUTOMATIONS_TOOL_NAME || !hasAutomationGrant),
-        )
-      : [];
+  const ownerOnlyCoreToolDenylist = resolveGatewayOwnerOnlyToolDenylist(input.senderIsOwner).filter(
+    (name) =>
+      (name !== "portal" || !sessionPortalTarget) &&
+      name !== "sessions" &&
+      (name !== AUTOMATIONS_TOOL_NAME || (!hasAutomationGrant && !scopedAutomationRead)),
+  );
   return {
     sessionPortalTarget,
     ownerOnlyCoreToolDenylist,

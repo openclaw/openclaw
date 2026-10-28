@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { setImmediate } from "node:timers/promises";
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "vitest";
 import type { WebSocket } from "ws";
 import { writeConfigFile } from "../config/config.js";
@@ -21,18 +22,10 @@ import { acknowledgeNodeInvokeRequestForTest } from "./test-helpers.node-invoke.
 
 installGatewayTestHooks({ scope: "suite" });
 
-function createDeviceIdentity(): DeviceIdentity {
-  return loadDeviceIdentity(`invoke-node-${crypto.randomUUID()}`).identity;
-}
-
 async function expectNoForwardedInvoke(hasInvoke: () => boolean): Promise<void> {
   // Yield a couple of macrotasks so any accidental async forwarding would fire.
-  await new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
-  await new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
+  await setImmediate();
+  await setImmediate();
   expect(hasInvoke()).toBe(false);
 }
 
@@ -51,7 +44,7 @@ function createInvokeParamCapture() {
       invokeCount += 1;
       lastInvokeParams = parseInvokeParamsJSON(payload);
     },
-    params: () => requireValue(lastInvokeParams, "forwarded invoke params"),
+    params: () => lastInvokeParams,
   };
 }
 
@@ -61,14 +54,7 @@ function expectForwardedApprovedParams(
 ): void {
   const forwardedParams = capture.params();
   expect(forwardedParams).toMatchObject({ approved: true, approvalDecision: "allow-once" });
-  expect(forwardedParams[absentKey]).toBeUndefined();
-}
-
-function requireValue<T>(value: T | null | undefined, label: string): T {
-  if (!value) {
-    throw new Error(`expected ${label}`);
-  }
-  return value;
+  expect(forwardedParams?.[absentKey]).toBeUndefined();
 }
 
 async function getConnectedNodeIds(ws: WebSocket): Promise<string[]> {
@@ -157,13 +143,20 @@ describe("node.invoke approval bypass", () => {
   let port: number;
   const sockets: WebSocket[] = [];
   const nodes: GatewayClient[] = [];
+  const acknowledgements: Promise<PromiseSettledResult<unknown>[]>[] = [];
 
-  afterEach(() => {
+  afterEach(async () => {
     for (const ws of sockets.splice(0)) {
       ws.close();
     }
-    for (const node of nodes.splice(0)) {
-      node.stop();
+    // The operator result can arrive before the node's acknowledgement settles.
+    const results = (await Promise.all(acknowledgements.splice(0))).flat();
+    results.push(...(await Promise.allSettled(nodes.splice(0).map((node) => node.stopAndWait()))));
+    const failures = results.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
+    );
+    if (failures.length > 0) {
+      throw new AggregateError(failures, "Node acknowledgement or shutdown failed");
     }
   });
 
@@ -294,7 +287,8 @@ describe("node.invoke approval bypass", () => {
     deviceIdentity?: DeviceIdentity,
     commands: string[] = ["system.run"],
   ) => {
-    const resolvedDeviceIdentity = deviceIdentity ?? createDeviceIdentity();
+    const resolvedDeviceIdentity =
+      deviceIdentity ?? loadDeviceIdentity(`invoke-node-${crypto.randomUUID()}`).identity;
 
     const startNodeClient = async () => {
       const client: GatewayClient = await connectGatewayClient({
@@ -311,7 +305,12 @@ describe("node.invoke approval bypass", () => {
         caps: ["system"],
         commands,
         deviceIdentity: resolvedDeviceIdentity,
-        onEvent: (event) => acknowledgeNodeInvokeRequestForTest({ client, event, onInvoke }),
+        onEvent: (event) => {
+          const acknowledgement = acknowledgeNodeInvokeRequestForTest({ client, event, onInvoke });
+          if (acknowledgement) {
+            acknowledgements.push(Promise.allSettled([acknowledgement]));
+          }
+        },
       });
       return client;
     };
@@ -326,7 +325,7 @@ describe("node.invoke approval bypass", () => {
   };
 
   const connectObservedNode = async (commands = ["system.run"]) => {
-    const identity = createDeviceIdentity();
+    const identity = loadDeviceIdentity(`invoke-node-${crypto.randomUUID()}`).identity;
     const capture = createInvokeParamCapture();
     await connectLinuxNode(capture.onInvoke, identity, commands);
     return { capture, nodeId: identity.deviceId };

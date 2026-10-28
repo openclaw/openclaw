@@ -3,6 +3,9 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { mediaTicketPayload } from "../test-helpers/control-ui-attachment-fixtures.ts";
+import { chatMessage } from "./chat-flow.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   tooltipTitleText,
@@ -62,12 +65,7 @@ async function expectRejectedTurn(page: Page, message: string, error: string) {
 }
 
 async function withNewSessionPage(run: (page: Page) => Promise<void>): Promise<void> {
-  const context = await suite.browser.newContext(createControlUiE2eContextOptions());
-  try {
-    await run(await context.newPage());
-  } finally {
-    await context.close();
-  }
+  await suite.withPage(createControlUiE2eContextOptions(), ({ page }) => run(page));
 }
 
 suite.define(() => {
@@ -165,9 +163,6 @@ suite.define(() => {
           lineHeight: Number.parseFloat(style.lineHeight),
           overflowY: style.overflowY,
           padding: Number.parseFloat(style.paddingTop) + Number.parseFloat(style.paddingBottom),
-          scrollbarWidth: style.scrollbarWidth,
-          webkitScrollbarWidth: getComputedStyle(element, "::-webkit-scrollbar").width,
-          webkitThumbInset: getComputedStyle(element, "::-webkit-scrollbar-thumb").borderLeftWidth,
         };
       });
 
@@ -175,18 +170,16 @@ suite.define(() => {
       expect(tenLines.height).toBeGreaterThanOrEqual(
         Math.floor(tenLines.lineHeight * 10 + tenLines.padding) - 1,
       );
-      expect(tenLines).toMatchObject({ overflowY: "hidden", scrollbarWidth: "thin" });
-      // Preserve a 12px drag target around the 6px painted thumb.
-      const composerScrollbar = Number.parseFloat(tenLines.webkitScrollbarWidth);
-      const composerThumbInset = Number.parseFloat(tenLines.webkitThumbInset);
-      expect(composerScrollbar).toBe(12);
-      expect(composerScrollbar - composerThumbInset * 2).toBe(6);
+      expect(tenLines.overflowY).toBe("hidden");
 
       const longPrompt = Array.from({ length: 14 }, (_, index) => `line ${index + 1}`).join("\n");
       await message.fill(longPrompt);
+      // Classic scrollbars retain their gutter at the cap to prevent draft-height oscillation.
+      await expect
+        .poll(() => message.evaluate((element) => getComputedStyle(element).overflowY))
+        .toBe("scroll");
       const capped = await message.evaluate((element) => ({
         clientHeight: element.clientHeight,
-        overflowY: getComputedStyle(element).overflowY,
         scrollHeight: element.scrollHeight,
       }));
       const [expandedIdentityBox, expandedTriggersBox, expandedComposerBox] = await Promise.all([
@@ -195,7 +188,6 @@ suite.define(() => {
         composer.boundingBox(),
       ]);
       expect(capped.clientHeight).toBeLessThan(capped.scrollHeight);
-      expect(capped.overflowY).toBe("auto");
       // Browser subpixel rounding may shift stable blocks by a pixel; larger movement is visible.
       for (const [before, after] of [
         [identityBox, expandedIdentityBox],
@@ -314,7 +306,7 @@ suite.define(() => {
         },
       });
       await startPrompt(page, message, sessionKey);
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
       await page.getByText("SKILL.md", { exact: true }).waitFor();
 
       await pollLocatorText(page.locator(".chat-group.user")).toContain(message);
@@ -339,7 +331,7 @@ suite.define(() => {
         ),
       });
       await startPrompt(page, message, sessionKey);
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
       await pollLocatorText(page.locator(".chat-group.user")).toContain(message);
 
       const socketsBeforeReconnect = await gateway.getSocketCount();
@@ -363,10 +355,7 @@ suite.define(() => {
       const message = "testing if dual prompts show";
       const source = "media://inbound/initial-prompt.png";
       const imageBytes = await readFile(path.join(process.cwd(), "ui/public/apple-touch-icon.png"));
-      let releaseMedia!: () => void;
-      const mediaGate = new Promise<void>((resolve) => {
-        releaseMedia = resolve;
-      });
+      const { promise: mediaGate, resolve: releaseMedia } = createDeferred();
       let metadataRequested = false;
       await page.route("**/__openclaw__/assistant-media?**", async (route) => {
         const url = new URL(route.request().url());
@@ -377,18 +366,12 @@ suite.define(() => {
         await route.fulfill(
           metadata
             ? {
-                json: {
-                  available: true,
-                  mediaTicket: "initial-prompt-ticket",
-                  mediaTicketExpiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
-                },
+                json: mediaTicketPayload("initial-prompt-ticket", 5 * 60_000),
               }
             : { contentType: "image/png", body: imageBytes },
         );
       });
-      const authoritative = {
-        role: "user",
-        content: [{ type: "text", text: message }],
+      const authoritative = chatMessage("user", message, {
         timestamp: Date.now(),
         __openclaw: {
           id: "persisted-image-prompt",
@@ -397,26 +380,23 @@ suite.define(() => {
           media: [{ path: source, contentType: "image/png", fileName: "pixel.png" }],
           mediaImageLayout: { slots: [{ kind: "inline", factIndex: 0 }] },
         },
-      };
+      });
+      const responses = initialPromptResponses(sessionKey, runId, "single-image-prompt");
       const gateway = await installMockGateway(page, {
+        subscriptionInitialHistory: false,
         deferredMethods: ["chat.startup"],
         methodResponses: {
+          ...responses,
           "sessions.create": {
-            key: sessionKey,
-            runId,
+            ...responses["sessions.create"],
             entry: { sessionId: "single-image-prompt" },
-            runStarted: true,
-            messageSeq: 1,
           },
-          "sessions.list": createdSessionListResult(sessionKey),
           "chat.startup": {
+            ...responses["chat.startup"],
             messages: [authoritative],
-            sessionId: "single-image-prompt",
             sessionInfo: {
+              ...responses["chat.startup"].sessionInfo,
               activeRunIds: [runId],
-              hasActiveRun: true,
-              key: sessionKey,
-              status: "running",
             },
           },
         },
@@ -447,6 +427,10 @@ suite.define(() => {
         const captureThumbnail = () => userImage.screenshot({ animations: "disabled" });
         const initialPixels = await captureThumbnail();
         await userImage.evaluate((image) => image.setAttribute("data-initial-image-node", "true"));
+        const expectStablePixels = async () => {
+          expect((await captureThumbnail()).equals(initialPixels)).toBe(true);
+          expect(await userRow.locator('[aria-busy="true"]').count()).toBe(0);
+        };
         await pollLocatorText(userRow).toContain(message);
         await pollLocatorText(userRow).not.toContain("Attached image");
 
@@ -476,8 +460,7 @@ suite.define(() => {
         await expect.poll(() => metadataRequested).toBe(true);
         await pollAttribute(userImage, "data-initial-image-node").toBe("true");
         await pollAttribute(userImage, "src").toBe(initialImageSrc);
-        expect((await captureThumbnail()).equals(initialPixels)).toBe(true);
-        expect(await userRow.locator('[aria-busy="true"]').count()).toBe(0);
+        await expectStablePixels();
 
         const worktreeSession = {
           key: sessionKey,
@@ -512,8 +495,7 @@ suite.define(() => {
         );
         expect(await userImage.getAttribute("data-initial-image-node")).toBe("true");
         expect(await userImage.getAttribute("src")).toBe(initialImageSrc);
-        expect((await captureThumbnail()).equals(initialPixels)).toBe(true);
-        expect(await userRow.locator('[aria-busy="true"]').count()).toBe(0);
+        await expectStablePixels();
 
         await gateway.resolveDeferred("chat.startup");
 
@@ -741,6 +723,9 @@ suite.define(() => {
         await page.getByRole("button", { name: "Retry queued message" }).click();
         const retry = await gateway.waitForRequest("chat.send");
         expect(retry.params).toMatchObject({ sessionKey, message, attachments: [pngAttachment] });
+        const retriedTurn = page.locator(".chat-group.user", { hasText: message });
+        await pollCount(retriedTurn.locator(".chat-send-status")).toBe(0);
+        await retriedTurn.locator("time.chat-group-timestamp").waitFor();
         expect(await gateway.getRequests("sessions.create")).toHaveLength(quota ? 1 : 0);
       });
     },

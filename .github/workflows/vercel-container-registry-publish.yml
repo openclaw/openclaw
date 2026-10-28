@@ -44,7 +44,7 @@ on:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.21.0"
+  NODE_VERSION: "24.22.1"
 
 concurrency:
   # Alias promotion is read-then-write. Serialize VCR independently so a slow

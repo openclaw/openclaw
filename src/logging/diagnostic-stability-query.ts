@@ -4,12 +4,6 @@ export const DEFAULT_DIAGNOSTIC_STABILITY_CAPACITY = 1000;
 const DEFAULT_DIAGNOSTIC_STABILITY_LIMIT = 50;
 export const MAX_DIAGNOSTIC_STABILITY_LIMIT = DEFAULT_DIAGNOSTIC_STABILITY_CAPACITY;
 
-type DiagnosticStabilityQueryInput = {
-  limit?: unknown;
-  type?: unknown;
-  sinceSeq?: unknown;
-};
-
 function parseOptionalNonNegativeInteger(value: unknown, field: string): number | undefined {
   if (value === undefined || value === null) {
     return undefined;
@@ -51,7 +45,11 @@ function normalizeLimit(limit: unknown, defaultLimit = DEFAULT_DIAGNOSTIC_STABIL
 
 /** Normalizes user-facing snapshot query options. */
 export function normalizeDiagnosticStabilityQuery(
-  input: DiagnosticStabilityQueryInput = {},
+  input: {
+    limit?: unknown;
+    type?: unknown;
+    sinceSeq?: unknown;
+  } = {},
   options?: { defaultLimit?: number },
 ) {
   return {

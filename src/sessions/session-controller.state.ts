@@ -4,6 +4,12 @@ import { isEmbeddedRunHandleCompacting } from "../agents/embedded-agent-runner/r
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { notifyGatewayWorkMetricsChanged } from "../infra/gateway-work-metrics-events.js";
 import { diagnosticLogger as diag, logSessionStateChange } from "../logging/diagnostic-runtime.js";
+import {
+  isDiagnosticSessionStateCurrent,
+  peekDiagnosticSessionState,
+  type SessionRef,
+  type SessionStateValue,
+} from "../logging/diagnostic-session-state.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { assertTurnAdmission } from "./session-controller.admission-rule.js";
 import {
@@ -24,6 +30,7 @@ import {
 } from "./session-controller.identity.js";
 import * as controllerStorage from "./session-controller.storage.js";
 import { sessionTargetOwnersMatch, type SessionTarget } from "./session-controller.target.js";
+import { emitSessionLifecycleEvent } from "./session-lifecycle-events.js";
 
 export {
   sessionControllers,
@@ -381,8 +388,18 @@ export function isReplyOperationPreBackendPhase(phase: ReplyOperationPhase): boo
 }
 
 export function markReplyOperationExecutionStarted(operation: ReplyOperation): void {
+  if (controllerStorage.executionStartedOperations.has(operation)) {
+    return;
+  }
   controllerStorage.executionStartedOperations.add(operation);
   notifyGatewayWorkMetricsChanged();
+  // Roster liveness must not wait for transcript preparation or first model activity.
+  emitSessionLifecycleEvent({
+    sessionKey: operation.key,
+    agentId: operation.agentId,
+    reason: "agent.run.started",
+    scope: "runtime",
+  });
 }
 export function hasReplyOperationExecutionStarted(operation: ReplyOperation): boolean {
   return controllerStorage.executionStartedOperations.has(operation);
@@ -401,11 +418,15 @@ export function hasOperationBackendRunId(operation: ReplyOperation, runId: strin
   return controllerStorage.backendRunIdsByOperation.get(operation)?.has(runId) === true;
 }
 
-export function getAttachedBackend(operation: ReplyOperation): ReplyBackendHandle | undefined {
+export function getAttachedBackendAttachment(operation: ReplyOperation) {
   const entry = controllerStorage.controllerEntryByOperation.get(operation);
   return entry?.active === operation && entry.attachment?.operation === operation
     ? entry.attachment.backend
     : undefined;
+}
+
+export function getAttachedBackend(operation: ReplyOperation): ReplyBackendHandle | undefined {
+  return getAttachedBackendAttachment(operation)?.handle;
 }
 
 // Committed output belongs to the bounded finalization owner. Stale recovery
@@ -547,6 +568,60 @@ export function clearReplyRunState(params: {
   notifyReplyRunEnded(entry);
 }
 
+/** Repair only the projection; missing execution never releases retained writer or input custody. */
+export function reconcileSessionControllerDiagnosticState(
+  params: SessionRef & { stateGeneration?: number; expectedState?: SessionStateValue },
+): "idle" | "waiting" | undefined {
+  if (
+    params.stateGeneration === undefined ||
+    !isDiagnosticSessionStateCurrent({
+      ...params,
+      generation: params.stateGeneration,
+      state: params.expectedState,
+    })
+  ) {
+    return undefined;
+  }
+  const entries = [
+    ...new Set(
+      [params.sessionKey, params.sessionId].flatMap((key) =>
+        key ? findSessionControllerEntries(key) : [],
+      ),
+    ),
+  ];
+  if (entries.some((entry) => entry.active)) {
+    return undefined;
+  }
+  const observed = peekDiagnosticSessionState(params);
+  if (!observed) {
+    return undefined;
+  }
+  const state =
+    observed.queueDepth > 0 ||
+    entries.some(
+      (entry) =>
+        entry.attachment ||
+        entry.followupBarrier ||
+        entry.successorBarrier ||
+        entry.mailbox?.entries.length ||
+        entry.mailbox?.claim ||
+        entry.lifecycle,
+    )
+      ? "waiting"
+      : "idle";
+  logSessionStateChange({
+    ...params,
+    state,
+    reason: state === "waiting" ? "session_work_pending" : "stale_session_state_reconciled",
+    consumeQueuedTurn: false,
+  });
+  // Publish first: waking the mailbox may synchronously start a successor.
+  for (const entry of entries) {
+    entry.mailbox?.wake();
+  }
+  return state;
+}
+
 /** Incoming sources consult the same owner policy as the autonomous timer. */
 export function isReplyRunEvidenceStale(operation: ReplyOperation): boolean {
   const action = operation.watchdog.decide().action;
@@ -576,7 +651,7 @@ export {
   acknowledgeReplySessionTransition,
 } from "./session-controller.session-reader.js";
 
-/** Await only this exact startup; neither a successor nor a new backend can satisfy it. */
+/** Await this exact owner's current backend generation, including recovery startup. */
 export async function waitForReplyOperationBackend(
   operation: ReplyOperation,
   signal?: AbortSignal,

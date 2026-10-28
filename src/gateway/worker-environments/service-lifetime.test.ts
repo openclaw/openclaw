@@ -1,9 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
+import {
+  resetGatewayWorkAdmission,
+  tryBeginGatewaySuspendAdmission,
+} from "../../process/gateway-work-admission.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../../test-utils/gateway-scheduler-clock.js";
+import { installWorkerPlacementReconcileGuard } from "../server-worker-placement-reconcile-guard.js";
+import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import * as support from "./service.test-support.js";
 import { WorkerEnvironmentInventoryClosedError } from "./store-errors.js";
 import { WorkerTunnelOwnerDisconnectedError } from "./tunnel-contract.js";
@@ -14,6 +21,117 @@ type WorkerLifecycleLease = support.WorkerLifecycleLease;
 
 describe("worker environment service", () => {
   support.setupWorkerEnvironmentServiceSuite();
+
+  it("cancels an in-flight inspection on suspend and reconciles again after resume", async () => {
+    const environment = await support.seedReady("suspend-in-flight");
+    const entered = createDeferred<AbortSignal | undefined>();
+    const release = createDeferred();
+    const inspect = vi.fn(async ({ signal }: WorkerLifecycleLease) => {
+      entered.resolve(signal);
+      await racePromiseWithAbortSignal(release.promise, signal);
+      return { status: "active" as const };
+    });
+    const workerService = support.createService(support.createProvider({ inspect }));
+    const reconciliation = workerService.reconcileOnce();
+    try {
+      const signal = await entered.promise;
+      const suspension = tryBeginGatewaySuspendAdmission(() => {});
+      expect(suspension).not.toBeNull();
+      expect(signal?.aborted).toBe(true);
+      await reconciliation;
+      expect(support.testState.store.get(environment.environmentId)).toEqual(environment);
+      suspension?.rollback();
+      release.resolve();
+      await workerService.reconcileOnce();
+      expect(inspect).toHaveBeenCalledTimes(2);
+    } finally {
+      resetGatewayWorkAdmission();
+      release.resolve();
+      await reconciliation;
+    }
+  });
+
+  it.each(["stop", "inspection budget"] as const)(
+    "releases a late read-only inspection on %s without publishing its result",
+    async (reason) => {
+      const environment = await support.seedReady("late-inspection");
+      const entered = createDeferred<AbortSignal | undefined>();
+      const release = createDeferred();
+      const workerService = support.createService(
+        support.createProvider({
+          inspect: async ({ signal }) => {
+            entered.resolve(signal);
+            await release.promise;
+            return { status: "unknown" };
+          },
+        }),
+      );
+      if (reason === "inspection budget") {
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      }
+      const reconciliation = workerService.reconcileOnce();
+      try {
+        const signal = await entered.promise;
+        if (reason === "stop") {
+          await workerService.stop();
+        } else {
+          await vi.advanceTimersByTimeAsync(15_000);
+        }
+        expect(signal?.aborted).toBe(true);
+        await reconciliation;
+        expect(workerService.get(environment.environmentId)).toMatchObject({
+          state: environment.state,
+          ownerEpoch: environment.ownerEpoch,
+          destroyRequestedAtMs: null,
+          lastError:
+            reason === "stop" ? environment.lastError : expect.stringContaining("15s budget"),
+        });
+      } finally {
+        vi.useRealTimers();
+        release.resolve();
+        await reconciliation;
+      }
+      expect(workerService.get(environment.environmentId)?.destroyRequestedAtMs).toBeNull();
+    },
+  );
+
+  it("cancels an idle reconciliation's owner lookup before joining the guard", async () => {
+    const environment = await support.seedReady("shutdown-owner-read");
+    const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
+    const entered = createDeferred();
+    const release = createDeferred<undefined>();
+    vi.spyOn(placements, "readEnvironmentOwner").mockImplementation(async (_id, signal) => {
+      entered.resolve();
+      return racePromiseWithAbortSignal(release.promise, signal);
+    });
+    const inspect = vi.fn(async () => ({ status: "active" as const }));
+    const service = support.createService(support.createProvider({ inspect }));
+    installWorkerPlacementReconcileGuard({
+      placements,
+      environments: service,
+      dispatch: {
+        resumeProvisioning: async () => {
+          throw new Error("Idle environment must not provision");
+        },
+        hasPendingPlacementLifecycleOperation: () => false,
+      },
+      isStopping: service.isStopping,
+    });
+    const reconciliation = service.reconcileEnvironment(environment.environmentId);
+    await entered.promise;
+    let stopped = false;
+    const stopping = service.stop().then(() => {
+      stopped = true;
+    });
+    try {
+      await support.waitForFast(() => expect(stopped).toBe(true));
+      expect(inspect).not.toHaveBeenCalled();
+      expect(support.testState.store.get(environment.environmentId)).toEqual(environment);
+    } finally {
+      release.resolve(undefined);
+      await Promise.all([reconciliation, stopping]);
+    }
+  });
 
   it.each([false, true])(
     "withdraws dedicated access before persistence settles (rejected=%s)",
@@ -626,7 +744,7 @@ describe("worker environment service", () => {
     expect(provision).toHaveBeenCalledTimes(1);
   });
 
-  it("drains a destroy accepted before service shutdown while it waits for the lock", async () => {
+  it("retains a destroy queued behind bootstrap when shutdown interrupts it", async () => {
     const { promise: bootstrapPending, resolve: finishBootstrap } = createDeferred();
     support.testState.bootstrapWorker = vi.fn(async () => {
       await bootstrapPending;
@@ -644,7 +762,7 @@ describe("worker environment service", () => {
     const environmentId = support.testState.store.list()[0]?.environmentId;
     expect(environmentId).toBeTruthy();
     const teardown = workerService.destroy(environmentId!);
-    const teardownResult = expect(teardown).resolves.toMatchObject({ state: "destroyed" });
+    const teardownResult = expect(teardown).rejects.toThrow("Worker reconciliation paused");
 
     const stopping = workerService.stop();
     finishBootstrap?.();
@@ -652,6 +770,14 @@ describe("worker environment service", () => {
     await expect(creation).resolves.toMatchObject({ state: "ready" });
     await teardownResult;
     await stopping;
+    expect(destroy).not.toHaveBeenCalled();
+    expect(workerService.get(environmentId!)).toMatchObject({
+      state: "destroying",
+      lastError: "Worker reconciliation paused",
+    });
+    const restarted = support.createService(support.createProvider({ destroy }));
+    await restarted.reconcileOnce();
+    expect(restarted.get(environmentId!)?.state).toBe("destroyed");
     expect(destroy).toHaveBeenCalledTimes(1);
   });
 
@@ -715,54 +841,112 @@ describe("worker environment service", () => {
     }
   });
 
-  it("retains a bootstrap lease when scheduler shutdown precedes service teardown", async () => {
-    const environmentId = "worker-scheduler-bootstrap";
-    const initial = await support.seedBootstrapping(environmentId);
-    const entered = createDeferred();
-    const finishProducer = createDeferred();
-    let signal: AbortSignal | undefined;
-    support.testState.bootstrapWorker = vi.fn(async (input) => {
-      signal = input.signal;
-      entered.resolve();
-      await finishProducer.promise;
-      input.signal.throwIfAborted();
-      return support.BOOTSTRAP_RECEIPT;
-    });
-    const destroy = vi.fn(async () => {});
-    const scheduler = createTestGatewayScheduler();
-    const workerService = support.createService(support.createProvider({ destroy }), { scheduler });
-    const reconciliation = workerService.reconcileEnvironment(environmentId).catch(() => undefined);
-    try {
-      await entered.promise;
-      scheduler.beginClose();
-      expect(signal?.aborted).toBe(true);
-      finishProducer.resolve();
-      await reconciliation;
-      expect(destroy).not.toHaveBeenCalled();
-      expect(support.testState.store.get(environmentId)).toMatchObject({
-        state: initial.state,
-        leaseId: initial.leaseId,
-        ownerEpoch: initial.ownerEpoch,
-        destroyRequestedAtMs: null,
-        lastError: initial.lastError,
-      });
-    } finally {
-      finishProducer.resolve();
-      await reconciliation;
-      await workerService.stop();
-    }
-  });
+  it.each(
+    (["ssh", "node"] as const).flatMap((transport) =>
+      (["scheduler", "suspend"] as const).map((interruption) => ({
+        transport,
+        interruption,
+      })),
+    ),
+  )(
+    "retains a $transport bootstrap lease on $interruption interruption before service teardown",
+    async ({ transport, interruption }) => {
+      const environmentId = "worker-scheduler-bootstrap";
+      const initial = await (transport === "ssh"
+        ? support.seedBootstrapping(environmentId)
+        : (async () => {
+            await support.testState.store.createIntent({
+              environmentId,
+              providerId: "fake",
+              profileId: "development",
+              profileSnapshot: { settings: { region: "test" } },
+              provisionOperationId: `provision:${environmentId}`,
+            });
+            return support.testState.store.transition({
+              environmentId,
+              from: "requested",
+              to: "provisioning",
+            });
+          })());
+      const entered = createDeferred();
+      const finishProducer = createDeferred();
+      let activeSignal: AbortSignal | undefined;
+      const install = async (workSignal?: AbortSignal) => {
+        activeSignal = workSignal;
+        entered.resolve();
+        await finishProducer.promise;
+        workSignal?.throwIfAborted();
+        return support.BOOTSTRAP_RECEIPT;
+      };
+      support.testState.bootstrapWorker = vi.fn(({ signal }) => install(signal));
+      const destroy = vi.fn(async () => {});
+      const scheduler = createTestGatewayScheduler();
+      const workerService = support.createService(
+        support.createProvider({
+          provision: async () => ({
+            leaseId: "lease:provisioning",
+            node: { deviceId: "node:provisioning" },
+          }),
+          destroy,
+        }),
+        { scheduler, ensureNodeWorkerBundle: ({ signal }) => install(signal) },
+      );
+      const reconciliation = workerService
+        .reconcileEnvironment(environmentId)
+        .catch(() => undefined);
+      try {
+        await entered.promise;
+        if (interruption === "scheduler") {
+          scheduler.beginClose();
+        } else {
+          expect(tryBeginGatewaySuspendAdmission(() => {})).not.toBeNull();
+        }
+        expect(activeSignal?.aborted).toBe(true);
+        finishProducer.resolve();
+        await reconciliation;
+        expect(destroy).not.toHaveBeenCalled();
+        expect(support.testState.store.get(environmentId)).toMatchObject({
+          state: initial.state,
+          leaseId: initial.leaseId,
+          ownerEpoch: initial.ownerEpoch,
+          provisionOperationId: initial.provisionOperationId,
+          destroyRequestedAtMs: null,
+          lastError: initial.lastError,
+        });
+      } finally {
+        resetGatewayWorkAdmission();
+        finishProducer.resolve();
+        await reconciliation;
+        await workerService.stop();
+      }
+    },
+  );
 
-  it.each(["bootstrap", "inspection", "bundle", "npm", "refresh"] as const)(
+  it.each(["provision", "provision-node", "bootstrap", "bundle", "npm", "refresh"] as const)(
     "cancels startup %s before teardown and retains its actual producer until settlement",
     async (kind) => {
       const environmentId = "worker-owner-cancellation";
       const preparing = kind === "bundle" || kind === "npm";
-      const initial = await (kind === "refresh"
-        ? support.seedReadyNodeDesktop(environmentId)
-        : kind === "bootstrap" || preparing
-          ? support.seedBootstrapping(environmentId, kind === "npm" ? "npm" : "bundle")
-          : support.seedReady(environmentId));
+      const initial = await (kind === "provision" || kind === "provision-node"
+        ? (async () => {
+            await support.testState.store.createIntent({
+              environmentId,
+              providerId: "fake",
+              profileId: "development",
+              profileSnapshot: { settings: { region: "test" } },
+              provisionOperationId: `provision:${environmentId}`,
+            });
+            return support.testState.store.transition({
+              environmentId,
+              from: "requested",
+              to: "provisioning",
+            });
+          })()
+        : kind === "refresh"
+          ? support.seedReadyNodeDesktop(environmentId)
+          : kind === "bootstrap" || preparing
+            ? support.seedBootstrapping(environmentId, kind === "npm" ? "npm" : "bundle")
+            : support.seedReady(environmentId));
       const entered = createDeferred();
       const finishProducer = createDeferred();
       let activeSignal: AbortSignal | undefined;
@@ -792,12 +976,15 @@ describe("worker environment service", () => {
       }
       const destroy = vi.fn(async () => {});
       const provider = support.createProvider({
-        inspect: async ({ signal }) => {
-          if (kind === "inspection") {
-            await holdProducer(signal);
+        provision: async (_profile, _operationId, options) => {
+          if (kind === "provision-node") {
+            return { leaseId: "lease:provisioning", node: { deviceId: "node:provisioning" } };
           }
-          return { status: kind === "inspection" ? "unknown" : "active" };
+          await holdProducer(options?.signal);
+          options?.signal?.throwIfAborted();
+          return { leaseId: "lease:unexpected", ssh: support.SSH_ENDPOINT };
         },
+        inspect: async () => ({ status: "active" }),
         destroy,
       });
       const workerService = support.createService(provider, {

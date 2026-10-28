@@ -50,8 +50,9 @@ export function createDeletionHarness(...args: Parameters<typeof createHarness>)
       h.emitEvent({ type: "event", event: "sessions.changed", payload }),
     message: (payload: unknown) =>
       h.emitEvent({ type: "event", event: "session.message", payload }),
-    finish: <T>(operation: Promise<T>, key = h.alpha.key, deleted = false) => {
-      h.responses.get(key)!.resolve({ deleted });
+    finish: async <T>(operation: Promise<T>, key = h.alpha.key, deleted = false) => {
+      const response = await h.waitForDeleteRequest(key);
+      response.resolve({ deleted });
       return operation;
     },
   };

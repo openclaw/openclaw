@@ -11,7 +11,6 @@ import {
   isOpenAiCuratedMarketplaceName,
   listCodexPluginMetadata,
   pluginReadParams,
-  type CodexPluginMarketplaceRef,
   type CodexPluginRuntimeRequest,
 } from "./plugin-inventory.js";
 import type { CodexPluginMetadataCache } from "./plugin-metadata-cache.js";
@@ -33,11 +32,9 @@ type CodexPluginActivationDiagnostic = {
 };
 
 export type CodexPluginActivationResult = {
-  identity: ResolvedCodexPluginPolicy;
   ok: boolean;
   reason: CodexPluginActivationReason;
   installAttempted: boolean;
-  marketplace?: CodexPluginMarketplaceRef;
   installResponse?: v2.PluginInstallResponse;
   diagnostics: CodexPluginActivationDiagnostic[];
 };
@@ -66,7 +63,7 @@ export async function ensureCodexPluginActivation(
   params: EnsureCodexPluginActivationParams,
 ): Promise<CodexPluginActivationResult> {
   if (params.identity.marketplaceName === CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME) {
-    return activationFailure(params.identity, "disabled", {
+    return activationFailure("disabled", {
       message:
         "workspace-directory plugins must be installed and enabled outside OpenClaw before use.",
     });
@@ -75,7 +72,7 @@ export async function ensureCodexPluginActivation(
     const target = params.identity.pluginName.endsWith(`@${params.identity.marketplaceName}`)
       ? params.identity.pluginName
       : `${params.identity.pluginName}@${params.identity.marketplaceName}`;
-    return activationFailure(params.identity, "disabled", {
+    return activationFailure("disabled", {
       message:
         `${params.identity.marketplaceName} plugins must be installed and enabled by an owner ` +
         `before use. Run /codex plugins install ${target}.`,
@@ -93,17 +90,17 @@ export async function ensureCodexPluginActivation(
       isOpenAiCuratedMarketplaceName(marketplace.name),
     );
     if (!hasCuratedMarketplace) {
-      return activationFailure(params.identity, "marketplace_missing", {
+      return activationFailure("marketplace_missing", {
         message: `Codex marketplace ${CODEX_PLUGINS_MARKETPLACE_NAME} was not found.`,
       });
     }
-    return activationFailure(params.identity, "plugin_missing", {
+    return activationFailure("plugin_missing", {
       message: `${params.identity.pluginName} was not found in ${CODEX_PLUGINS_MARKETPLACE_NAME}.`,
     });
   }
 
   if (resolved.marketplace.remoteMarketplaceName && !resolved.summary.remotePluginId) {
-    return activationFailure(params.identity, "plugin_missing", {
+    return activationFailure("plugin_missing", {
       message: `${params.identity.pluginName} detail unavailable: Codex did not return a remote plugin id.`,
     });
   }
@@ -112,18 +109,16 @@ export async function ensureCodexPluginActivation(
     resolved.summary.availability === "DISABLED_BY_ADMIN" ||
     resolved.summary.installPolicy === "NOT_AVAILABLE"
   ) {
-    return activationFailure(params.identity, "disabled", {
+    return activationFailure("disabled", {
       message: `${params.identity.pluginName} was disabled or made unavailable by its marketplace administrator.`,
     });
   }
 
   if (resolved.summary.installed && resolved.summary.enabled && !params.installEvenIfActive) {
     return {
-      identity: params.identity,
       ok: true,
       reason: "already_active",
       installAttempted: false,
-      marketplace: resolved.marketplace,
       diagnostics: [],
     };
   }
@@ -153,11 +148,9 @@ export async function ensureCodexPluginActivation(
     // The catalog can be stale by install time. Isolate only Codex's exact
     // terminal remote-install contract; unrelated RPC failures abort the turn.
     return {
-      identity: params.identity,
       ok: false,
       reason: "install_failed",
       installAttempted: true,
-      marketplace: resolved.marketplace,
       diagnostics: [
         {
           message: `Codex plugin install failed: ${coerceErrorMessage(error)}`,
@@ -178,7 +171,6 @@ export async function ensureCodexPluginActivation(
   }
   const authRequired = installResponse.appsNeedingAuth.length > 0;
   return {
-    identity: params.identity,
     ok: !authRequired && !refreshFailed,
     reason: refreshFailed
       ? "refresh_failed"
@@ -188,7 +180,6 @@ export async function ensureCodexPluginActivation(
           ? "already_active"
           : "installed",
     installAttempted: true,
-    marketplace: resolved.marketplace,
     installResponse,
     diagnostics: [
       ...refreshDiagnostics,
@@ -243,7 +234,7 @@ export async function refreshCodexAppRuntimeState(params: {
   deferAppInventoryRefresh?: boolean;
 }): Promise<void> {
   // Keep the previous snapshot stale if the refresh fails.
-  params.appCache.invalidate(params.appCacheKey, "Codex plugin app inventory refresh requested");
+  params.appCache.invalidate(params.appCacheKey);
   if (params.deferAppInventoryRefresh) {
     return;
   }
@@ -256,12 +247,10 @@ export async function refreshCodexAppRuntimeState(params: {
 }
 
 function activationFailure(
-  identity: ResolvedCodexPluginPolicy,
   reason: CodexPluginActivationReason,
   diagnostic: CodexPluginActivationDiagnostic,
 ): CodexPluginActivationResult {
   return {
-    identity,
     ok: false,
     reason,
     installAttempted: false,

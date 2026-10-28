@@ -47,4 +47,35 @@ describe("gateway startup plan for standalone plugin files", () => {
 
     expect(plan.pluginIds.includes("maintenance-access")).toBe(starts);
   });
+
+  it("plans an equal-ID mixed-case context engine through canonical policy", () => {
+    const root = tempDirs.make("openclaw-mixed-case-startup-");
+    vi.stubEnv("OPENCLAW_HOME", root);
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
+    vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
+    const source = path.join(root, "mixed-engine.cjs");
+    writeFileSync(source, `module.exports = { id: "MiXeD-demo", register() {} };`);
+    writeFileSync(
+      path.join(root, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "MiXeD-demo",
+        kind: "context-engine",
+        contextEngineIds: ["MiXeD-demo"],
+        configSchema: { type: "object" },
+      }),
+    );
+    const config: OpenClawConfig = {
+      plugins: {
+        load: { paths: [source] },
+        allow: ["unrelated"],
+        slots: { memory: "none", contextEngine: "MiXeD-demo" },
+      },
+    };
+    const plan = loadGatewayStartupPluginPlan({
+      config,
+      env: { ...process.env },
+      workspaceDir: root,
+    });
+    expect(plan.pluginIds).toContain("MiXeD-demo");
+  });
 });

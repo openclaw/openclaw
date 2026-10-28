@@ -36,12 +36,6 @@
 .palette-session-settings__title,
 .palette-session-settings__machine {
   padding-inline: 10px;
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  line-height: 1.2;
-  text-transform: uppercase;
 }
 
 .palette-session-settings__title {
@@ -115,13 +109,6 @@
   flex-direction: column;
   min-width: 0;
   gap: 1px;
-}
-
-.palette-session-settings__label,
-.palette-session-settings__secondary {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .palette-session-settings__secondary,

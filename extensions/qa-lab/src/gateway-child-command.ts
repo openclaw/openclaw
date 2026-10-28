@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn } from "node:child_process";
 import { existsSync, writeSync } from "node:fs";
 import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -89,113 +89,106 @@ export async function runQaGatewayCliCommand(params: {
   const owned = params.lifetime.register(child, null, "cli");
   const repair =
     params.args[0] === "update" && params.args[1] === "repair" && !params.args.includes("--help");
-  const result = readQaGatewayCliCommand(child, params.lifetime, owned, repair, report);
+  const lifetime = params.lifetime;
+  const result = (async (): Promise<string> => {
+    const stdout = createQaChildOutputCapture();
+    const stderr = createQaChildOutputTail();
+    child.stdout?.on("data", (chunk) => appendQaChildOutput(stdout, chunk));
+
+    let failure: Error | undefined;
+    const { promise: terminal, resolve: finish } = createDeferred<number | undefined>();
+    const fail = (error: unknown) => {
+      failure ??= createQaGatewayCliError(error);
+      finish(undefined);
+    };
+    monitorQaChildFailure(child, ({ source, error }) => {
+      fail(`qa gateway cli ${source} failed: ${createQaGatewayCliError(error).message}`);
+    });
+    child.stdin?.once("error", (error) =>
+      fail(`qa gateway cli stdin failed: ${createQaGatewayCliError(error).message}`),
+    );
+    child.once("exit", (code, signal) => {
+      report("exit", { exitCode: code, signalled: signal !== null });
+      finish(code ?? 1);
+    });
+    const onAbort = () => fail("qa gateway CLI cancelled: lifecycle is closed");
+    lifetime.signal.addEventListener("abort", onAbort, { once: true });
+    // Repair has serial phases, each with its own runtime budget. Do not spend the
+    // cache/settlement allowance while Doctor is still making forward progress.
+    const executionTimer = setTimeout(
+      () =>
+        fail(
+          repair
+            ? `qa gateway CLI made no update repair phase progress for ${QA_GATEWAY_CLI_EXECUTION_TIMEOUT_MS}ms`
+            : `qa gateway CLI exceeded ${QA_GATEWAY_CLI_EXECUTION_TIMEOUT_MS}ms`,
+        ),
+      QA_GATEWAY_CLI_EXECUTION_TIMEOUT_MS,
+    );
+    let observingProgress = true;
+    const observeProgress = repair
+      ? createQaRepairProgressObserver((progress) => {
+          if (observingProgress) {
+            executionTimer.refresh();
+            report("repair-phase", progress);
+          }
+        })
+      : undefined;
+    child.stderr?.on("data", (chunk) => {
+      appendQaChildOutputTail(stderr, chunk);
+      observeProgress?.(chunk);
+    });
+    let pipesClosed = false;
+    let exitCode: number | undefined;
+    let stopped: Awaited<ReturnType<QaGatewayChildLifecycle["stopProcess"]>>;
+    try {
+      exitCode = await terminal;
+      observingProgress = false;
+      clearTimeout(executionTimer);
+      // Leader exit is not group settlement or pipe closure. Settle the owned tree
+      // even after success/errors; never wait for close after unconfirmed shutdown.
+      stopped = await lifetime.stopProcess(owned);
+      if (stopped.process !== "unconfirmed") {
+        try {
+          await lifetime.waitForClose(owned);
+          pipesClosed = true;
+        } catch (error) {
+          fail(error);
+        }
+      }
+      report("settled", { processStopped: stopped.process !== "unconfirmed", pipesClosed });
+    } finally {
+      observingProgress = false;
+      clearTimeout(executionTimer);
+      lifetime.signal.removeEventListener("abort", onAbort);
+      child.stdin?.destroy();
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+    }
+    const stdoutText = readQaChildOutput(stdout);
+    if (failure || exitCode !== 0) {
+      // Preserve the first failure's reason, but include output drained during shutdown.
+      const reason = failure?.message ?? `OpenClaw CLI exited ${exitCode}`;
+      const stderrText = formatQaChildOutputTail(stderr, "stderr");
+      failure = createQaGatewayCliError(
+        `${reason}: ${[stderrText, stdoutText].filter(Boolean).join("\n")}`,
+      );
+    }
+    if (stopped.errors.length) {
+      throw new AggregateError(
+        failure ? [failure, ...stopped.errors] : stopped.errors,
+        failure?.message ?? "qa gateway CLI cleanup failed",
+        { cause: failure },
+      );
+    }
+    if (failure) {
+      throw failure;
+    }
+    lifetime.assertOpen();
+    return stdoutText;
+  })();
   params.lifetime.completeCli(owned, result);
   if (hasStdin) {
     child.stdin?.end(params.stdin);
   }
   return await result;
-}
-
-async function readQaGatewayCliCommand(
-  child: ChildProcess,
-  lifetime: QaGatewayChildLifecycle,
-  owned: ReturnType<QaGatewayChildLifecycle["register"]>,
-  repair: boolean,
-  report: (event: string, fields?: Record<string, string | number | boolean | null>) => void,
-): Promise<string> {
-  const stdout = createQaChildOutputCapture();
-  const stderr = createQaChildOutputTail();
-  child.stdout?.on("data", (chunk) => appendQaChildOutput(stdout, chunk));
-
-  let failure: Error | undefined;
-  const { promise: terminal, resolve: finish } = createDeferred<number | undefined>();
-  const fail = (error: unknown) => {
-    failure ??= createQaGatewayCliError(error);
-    finish(undefined);
-  };
-  monitorQaChildFailure(child, ({ source, error }) => {
-    fail(`qa gateway cli ${source} failed: ${createQaGatewayCliError(error).message}`);
-  });
-  child.stdin?.once("error", (error) =>
-    fail(`qa gateway cli stdin failed: ${createQaGatewayCliError(error).message}`),
-  );
-  child.once("exit", (code, signal) => {
-    report("exit", { exitCode: code, signalled: signal !== null });
-    finish(code ?? 1);
-  });
-  const onAbort = () => fail("qa gateway CLI cancelled: lifecycle is closed");
-  lifetime.signal.addEventListener("abort", onAbort, { once: true });
-  // Repair has serial phases, each with its own runtime budget. Do not spend the
-  // cache/settlement allowance while Doctor is still making forward progress.
-  const executionTimer = setTimeout(
-    () =>
-      fail(
-        repair
-          ? `qa gateway CLI made no update repair phase progress for ${QA_GATEWAY_CLI_EXECUTION_TIMEOUT_MS}ms`
-          : `qa gateway CLI exceeded ${QA_GATEWAY_CLI_EXECUTION_TIMEOUT_MS}ms`,
-      ),
-    QA_GATEWAY_CLI_EXECUTION_TIMEOUT_MS,
-  );
-  let observingProgress = true;
-  const observeProgress = repair
-    ? createQaRepairProgressObserver((progress) => {
-        if (observingProgress) {
-          executionTimer.refresh();
-          report("repair-phase", progress);
-        }
-      })
-    : undefined;
-  child.stderr?.on("data", (chunk) => {
-    appendQaChildOutputTail(stderr, chunk);
-    observeProgress?.(chunk);
-  });
-  let pipesClosed = false;
-  let exitCode: number | undefined;
-  let stopped: Awaited<ReturnType<QaGatewayChildLifecycle["stopProcess"]>>;
-  try {
-    exitCode = await terminal;
-    observingProgress = false;
-    clearTimeout(executionTimer);
-    // Leader exit is not group settlement or pipe closure. Settle the owned tree
-    // even after success/errors; never wait for close after unconfirmed shutdown.
-    stopped = await lifetime.stopProcess(owned);
-    if (stopped.process !== "unconfirmed") {
-      try {
-        await lifetime.waitForClose(owned);
-        pipesClosed = true;
-      } catch (error) {
-        fail(error);
-      }
-    }
-    report("settled", { processStopped: stopped.process !== "unconfirmed", pipesClosed });
-  } finally {
-    observingProgress = false;
-    clearTimeout(executionTimer);
-    lifetime.signal.removeEventListener("abort", onAbort);
-    child.stdin?.destroy();
-    child.stdout?.destroy();
-    child.stderr?.destroy();
-  }
-  const stdoutText = readQaChildOutput(stdout);
-  if (failure || exitCode !== 0) {
-    // Preserve the first failure's reason, but include output drained during shutdown.
-    const reason = failure?.message ?? `OpenClaw CLI exited ${exitCode}`;
-    const stderrText = formatQaChildOutputTail(stderr, "stderr");
-    failure = createQaGatewayCliError(
-      `${reason}: ${[stderrText, stdoutText].filter(Boolean).join("\n")}`,
-    );
-  }
-  if (stopped.errors.length) {
-    throw new AggregateError(
-      failure ? [failure, ...stopped.errors] : stopped.errors,
-      failure?.message ?? "qa gateway CLI cleanup failed",
-      { cause: failure },
-    );
-  }
-  if (failure) {
-    throw failure;
-  }
-  lifetime.assertOpen();
-  return stdoutText;
 }

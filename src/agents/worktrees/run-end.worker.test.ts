@@ -1,14 +1,12 @@
-import { StatementSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
-import {
-  SQLITE_WORKER_MAX_MESSAGE_BYTES,
-  SqliteWorkerError,
-} from "../../infra/sqlite-worker-contract.js";
+import { formatErrorMessageWithCode } from "../../infra/errors.js";
+import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
+import { SQLITE_WORKER_MAX_MESSAGE_BYTES } from "../../infra/sqlite-worker-contract.js";
 import * as admissions from "../../infra/sqlite-worker-operation-admission.js";
 import { removeSessionWorktree } from "../../sessions/session-worktree-lifecycle.js";
 import { withExistingOpenClawStateSchema } from "../../state/openclaw-state-db-schema-policy.js";
@@ -21,6 +19,7 @@ import {
   observeMainThreadReads,
   observeMainThreadSql,
 } from "../../test-utils/main-thread-sql-spies.test-support.js";
+import { renderAssistantRequestFailureCopy } from "../failover/assistant-request-failure-copy.js";
 import {
   SessionWorktreeLifecycleError,
   SessionWorktreeSourceChangedError,
@@ -52,6 +51,7 @@ import {
   releaseWorktreeRunLeaseRowAsync,
 } from "./run-lease-store.js";
 import {
+  makeWorktreeRecord,
   materializeManagedWorktreeFixture,
   useManagedWorktreeTestRepository,
 } from "./service.test-support.js";
@@ -128,19 +128,12 @@ async function fixture() {
   const root = dirs.make("worktree-run-end-worker-");
   const env = { ...process.env, OPENCLAW_STATE_DIR: root };
   const database = openOpenClawStateDatabase({ env });
-  await insert(env, {
-    id: "synthetic",
-    name: "synthetic",
-    repoFingerprint: "0123456789abcdef",
-    repoRoot: root,
-    path: root,
-    branch: "synthetic",
-    baseRef: "HEAD",
-    ownerKind: "session",
-    ownerId: "agent:main:synthetic",
-    createdAt: 1,
-    lastActiveAt: 1,
-  });
+  await insert(
+    env,
+    makeWorktreeRecord(root, "synthetic", {
+      ownerId: "agent:main:synthetic",
+    }),
+  );
   const claim = {
     worktreeId: "synthetic",
     token: "first",
@@ -331,18 +324,20 @@ it("keeps session worktree row reads out of worker admission callbacks", async (
     ownerId: "agent:main:worker-guard",
     now: 1,
   });
-  const reads = observeMainThreadReads();
+  const readSql: string[] = [];
+  const reads = observeMainThreadReads((sql) => readSql.push(sql));
   const worktreeReads: string[] = [];
   let grants = 0;
   const admission = interceptAdmission((_request, admit) => {
     grants += 1;
     reads.clear();
+    readSql.length = 0;
     try {
       return admit();
     } finally {
-      for (const statement of reads.calls.flatMap((call) => call.mock.contexts)) {
-        if (statement instanceof StatementSync && /\bworktrees\b/u.test(statement.sourceSQL)) {
-          worktreeReads.push(statement.sourceSQL);
+      for (const sql of readSql) {
+        if (/\bworktrees\b/u.test(sql)) {
+          worktreeReads.push(sql);
         }
       }
     }
@@ -424,12 +419,15 @@ it("preserves committed bytes after reply loss, rolls back refused commits, and 
     content: "090807",
   });
 
-  const uncertain = new SqliteWorkerError("Synthetic lost native settlement", "outcome-unknown");
+  const uncertain = Object.assign(new Error("database or disk is full"), { code: "SQLITE_FULL" });
+  const replyFailure = new Error("Worktree write reply was lost");
   let unknownWrites = 0;
   interceptWorktreeWorkerOperation(
     (execute) => async (command, executeOptions) => {
       if (command.type === "worktrees.writeProvisionedSnapshot") {
         unknownWrites += 1;
+        await execute(command, executeOptions);
+        throw replyFailure;
       }
       return execute(command, executeOptions);
     },
@@ -451,7 +449,18 @@ it("preserves committed bytes after reply loss, rolls back refused commits, and 
     const runContext = captureOpenClawStateWorkerContext({ env });
     const accept = captureGuard(runContext, "exact-owner");
     const assertCurrent = accept(await readWorktree(runContext, "synthetic"));
-    await expect(chunk(1)).rejects.toMatchObject({ code: "outcome-unknown" });
+    await expect(chunk(1)).rejects.toSatisfy((error: unknown) => {
+      expect(error).toMatchObject({ code: "outcome-unknown" });
+      expect(formatErrorMessageWithCode(error)).toContain(replyFailure.message);
+      const storageOutcome = classifyGatewayStorageFailure(error);
+      expect(storageOutcome).toBe("session_actor_reconciliation");
+      expect(
+        renderAssistantRequestFailureCopy({
+          storageFailure: storageOutcome,
+        }),
+      ).toMatch(/check.*history.*before trying again/i);
+      return true;
+    });
     expect(assertCurrent).toThrow("owner or lifecycle changed");
     await expect(Promise.resolve().then(() => clear())).rejects.toMatchObject({
       code: "outcome-unknown",

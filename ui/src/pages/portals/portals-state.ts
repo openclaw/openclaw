@@ -5,16 +5,16 @@ import type {
   PortalSummary,
   UiPortalPresentation,
 } from "@openclaw/gateway-protocol";
-import { onCleanup } from "solid-js";
+import { onCleanup, onSettled } from "solid-js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
+import { isLoopbackHostname } from "../../lib/gateway-locality.ts";
 import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
-import { projectSource } from "../../lib/reactive/projection.ts";
+import { projectMutableSource } from "../../lib/reactive/projection.ts";
 import { probePortalReachable, type PortalReachability } from "./portal-reachability.ts";
-import { portalNeedsNewTab, portalNeedsRemoteIngress } from "./portal-url.ts";
 
 export type PortalsPresentation = {
   embedded: boolean;
@@ -25,22 +25,47 @@ export type PortalsPresentation = {
 type PortalProbeState = {
   key: string;
   status: "probing" | "ingress-required" | "new-tab-required" | PortalReachability;
+  result: Promise<void>;
 };
 
 export function createPortals(
   context: ApplicationContext,
   presentation: () => PortalsPresentation,
 ) {
+  let active = true;
+  let presentationPending = false;
+  let presentationLifetime = Promise.withResolvers<void>();
+  let listLifetime = Promise.withResolvers<void>();
+  let presentationEpoch = 0;
+  function retirePresentation() {
+    presentationLifetime.resolve();
+    presentationLifetime = Promise.withResolvers<void>();
+    presentationEpoch += 1;
+  }
+  const snapshotPresentation = (): PortalsPresentation => {
+    const current = presentation();
+    return {
+      embedded: current.embedded,
+      presented: current.presented,
+      requestedPortalId: current.requestedPortalId,
+      requestedEnvironmentId: current.requestedEnvironmentId,
+    };
+  };
+  let previousPresentation = snapshotPresentation();
   // Selection and pending facts are synchronous admission state; Solid only projects them.
   const state: {
     portals: PortalSummary[];
     selectedPortalId: string | null;
     loading: boolean;
     loaded: boolean;
+    previewEpoch: number;
+    listReady: boolean;
+    listRead: { result: Promise<void> };
     error: string | null;
     closingPortalId: string | null;
     portalProbeState: PortalProbeState | null;
     pendingEnvironment: EnvironmentSummary | null;
+    environmentRead: { result: Promise<void> };
     environmentFailure: { environmentId: string; message: string } | null;
     connected: boolean;
     pendingEnvironmentId: string | null;
@@ -52,10 +77,14 @@ export function createPortals(
     selectedPortalId: null,
     loading: false,
     loaded: false,
+    previewEpoch: 1,
+    listReady: false,
+    listRead: { result: Promise.resolve() },
     error: null,
     closingPortalId: null,
     portalProbeState: null,
     pendingEnvironment: null,
+    environmentRead: { result: Promise.resolve() },
     environmentFailure: null,
     get connected() {
       return context.gateway.snapshot.phase === "connected";
@@ -86,16 +115,8 @@ export function createPortals(
   const lifecycle = createGatewayConnectionLifecycle(context.gateway.snapshot);
   let client = context.gateway.snapshot.client;
   let presentationScope = gatewayPresentationScope(context.gateway);
-  const projection = projectSource(state, {
-    read: (value) => value,
-    subscribe: (_value, listener) => {
-      publish = listener;
-      return () => {
-        publish = () => {};
-      };
-    },
-    equality: "revision",
-  });
+  const projection = projectMutableSource(state, (value) => value);
+  publish = projection.publish;
   // Connection receipts retire portal requests, probes, and presentation acknowledgements before reconnect.
   const stopGateway = context.gateway.subscribe((value) => {
     const nextPresentationScope = gatewayPresentationScope(context.gateway);
@@ -125,14 +146,17 @@ export function createPortals(
     }
   });
   onCleanup(() => {
+    active = false;
     stopGateway();
     stopEvents();
     lifecycle.dispose();
     resetGatewayState();
   });
-  if (state.connected) {
-    void loadPresentation();
-  }
+  onSettled(() => {
+    if (state.connected) {
+      void loadPresentation();
+    }
+  });
   function pollEnvironment(enabled: boolean) {
     if (!enabled) {
       clearInterval(environmentTimer);
@@ -226,8 +250,15 @@ export function createPortals(
     ) {
       return;
     }
+    const completion = Promise.withResolvers<void>();
+    const read = {
+      result: Promise.race([completion.promise, presentationLifetime.promise]),
+    };
+    state.environmentRead = read;
     const isCurrent = () =>
-      lifecycle.isCurrent(scope) && state.pendingEnvironmentId === environmentId;
+      lifecycle.isCurrent(scope) &&
+      state.pendingEnvironmentId === environmentId &&
+      state.environmentRead === read;
     environmentLoading = true;
     state.environmentFailure = null;
     notify();
@@ -252,12 +283,14 @@ export function createPortals(
       if (isCurrent()) {
         environmentLoading = false;
       }
+      completion.resolve();
       notify();
     }
   }
 
   function resetPendingEnvironment() {
     environmentLoading = false;
+    state.environmentRead = { result: Promise.resolve() };
     state.pendingEnvironment = null;
     state.environmentFailure = null;
     pollEnvironment(false);
@@ -266,15 +299,22 @@ export function createPortals(
   function resetGatewayState() {
     retireGatewayRequests();
     resetPendingEnvironment();
+    state.previewEpoch += 1;
     state.portals = [];
     state.selectedPortalId = null;
     state.loaded = false;
+    state.listReady = false;
     state.error = null;
     portalProbeCache.clear();
     state.portalProbeState = null;
   }
 
   function retireGatewayRequests() {
+    retirePresentation();
+    listLifetime.resolve();
+    listLifetime = Promise.withResolvers<void>();
+    state.listRead = { result: Promise.resolve() };
+    state.environmentRead = { result: Promise.resolve() };
     presentationRequest = null;
     environmentLoading = false;
     pollEnvironment(false);
@@ -318,19 +358,30 @@ export function createPortals(
       notify();
       return;
     }
-    if (portalNeedsRemoteIngress(url, context.gateway.connection.gatewayUrl)) {
-      state.portalProbeState = { key, status: "ingress-required" };
+    const portalAddress = new URL(url);
+    // A remote Gateway's loopback endpoint points at the browser, not the Gateway.
+    if (
+      isLoopbackHostname(portalAddress.hostname) &&
+      !isLoopbackHostname(new URL(context.gateway.connection.gatewayUrl).hostname)
+    ) {
+      state.portalProbeState = { key, status: "ingress-required", result: Promise.resolve() };
       notify();
       return;
     }
-    if (portalNeedsNewTab(url, location.href)) {
-      state.portalProbeState = { key, status: "new-tab-required" };
+    const controlUiAddress = new URL(location.href);
+    // Without secure partitioned cookies, HTTP previews need the same scheme and host.
+    if (
+      portalAddress.protocol === "http:" &&
+      (controlUiAddress.protocol !== portalAddress.protocol ||
+        controlUiAddress.hostname !== portalAddress.hostname)
+    ) {
+      state.portalProbeState = { key, status: "new-tab-required", result: Promise.resolve() };
       notify();
       return;
     }
     const cached = force ? undefined : portalProbeCache.get(key);
     if (cached !== undefined) {
-      state.portalProbeState = { key, status: cached };
+      state.portalProbeState = { key, status: cached, result: Promise.resolve() };
       notify();
       return;
     }
@@ -339,18 +390,25 @@ export function createPortals(
     if (!scope) {
       return;
     }
-    state.portalProbeState = { key, status: "probing" };
+    const completion = Promise.withResolvers<void>();
+    const probe: PortalProbeState = {
+      key,
+      status: "probing",
+      result: Promise.race([completion.promise, listLifetime.promise]),
+    };
+    state.portalProbeState = probe;
     notify();
     void probePortalReachable(url).then((reachability) => {
-      if (lifecycle.isCurrent(scope) && state.portalProbeState?.key === key) {
+      if (lifecycle.isCurrent(scope) && state.portalProbeState === probe) {
         portalProbeCache.set(key, reachability);
-        state.portalProbeState = { key, status: reachability };
+        probe.status = reachability;
         notify();
       }
+      completion.resolve();
     });
   }
 
-  async function loadPortals() {
+  function loadPortals(): Promise<void> {
     if (
       state.pendingEnvironmentId ||
       !state.canReadPortalState ||
@@ -358,63 +416,97 @@ export function createPortals(
       state.loading ||
       (presentation().embedded && !presentation().presented)
     ) {
-      return;
+      return Promise.resolve();
     }
     const scope = lifecycle.capture();
     if (!scope) {
-      return;
+      return Promise.resolve();
     }
     const isCurrent = () => lifecycle.isCurrent(scope);
     state.loading = true;
     state.error = null;
+    const pending = (async () => {
+      try {
+        const result = await scope.client.request<PortalListResult>("portal.list", {});
+        if (isCurrent()) {
+          state.listReady = true;
+          applyPortalSet(result.portals);
+        }
+      } catch (error) {
+        if (isCurrent() && state.portalListSupported) {
+          state.error = t("portalsPage.loadFailed", { error: formatUiError(error) });
+          state.loaded = true;
+        }
+      } finally {
+        if (isCurrent()) {
+          state.loading = false;
+        }
+        notify();
+      }
+    })();
+    // Hidden panels keep their admitted read; only Gateway retirement releases its readiness.
+    state.listRead = { result: Promise.race([pending, listLifetime.promise]) };
     notify();
-    try {
-      const result = await scope.client.request<PortalListResult>("portal.list", {});
-      if (isCurrent()) {
-        applyPortalSet(result.portals);
-      }
-    } catch (error) {
-      if (isCurrent() && state.portalListSupported) {
-        state.error = t("portalsPage.loadFailed", { error: formatUiError(error) });
-        state.loaded = true;
-      }
-    } finally {
-      if (isCurrent()) {
-        state.loading = false;
-      }
-      notify();
-    }
+    return pending;
   }
 
   return {
     state: projection.read,
-    presentation,
+    get presentationEpoch() {
+      return presentationEpoch;
+    },
+    get retired() {
+      return presentationLifetime.promise;
+    },
+    presentation: () => {
+      projection.revision();
+      return presentation();
+    },
     observePresentation(requestId: string, portalId?: string) {
       presentationRequest = { requestId, portalId };
       // Report this view's diagnosis without re-probing and discarding its live
       // iframe document. The explicit Retry action owns a fresh network check.
       reportPresentation();
     },
-    presentationChanged(previous: PortalsPresentation | undefined) {
-      if (!previous) {
+    presentationChanged() {
+      const incoming = snapshotPresentation();
+      if (
+        incoming.requestedPortalId !== previousPresentation.requestedPortalId ||
+        incoming.requestedEnvironmentId !== previousPresentation.requestedEnvironmentId ||
+        (!incoming.presented && previousPresentation.presented)
+      ) {
+        // Native target/visibility intent releases actions before Solid commits the new view.
+        retirePresentation();
+      }
+      if (presentationPending) {
         return;
       }
-      const targetChanged =
-        previous.requestedPortalId !== presentation().requestedPortalId ||
-        previous.requestedEnvironmentId !== presentation().requestedEnvironmentId;
-      if (targetChanged) {
-        resetPendingEnvironment();
-        state.loading = false;
-        state.portalProbeState = null;
-        applyPortalSet(state.portals);
-        void loadPresentation();
-      } else if (presentation().presented && !previous.presented) {
-        void loadPresentation();
-      } else if (!presentation().presented) {
-        pollEnvironment(false);
-        environmentLoading = false;
-      }
-      notify();
+      presentationPending = true;
+      // Paired native target writes must load and report only the final presentation.
+      queueMicrotask(() => {
+        presentationPending = false;
+        if (!active) {
+          return;
+        }
+        const previous = previousPresentation;
+        const current = (previousPresentation = snapshotPresentation());
+        const targetChanged =
+          previous.requestedPortalId !== current.requestedPortalId ||
+          previous.requestedEnvironmentId !== current.requestedEnvironmentId;
+        if (targetChanged) {
+          resetPendingEnvironment();
+          state.loading = false;
+          state.portalProbeState = null;
+          applyPortalSet(state.portals);
+          void loadPresentation();
+        } else if (current.presented && !previous.presented) {
+          void loadPresentation();
+        } else if (!current.presented) {
+          pollEnvironment(false);
+          environmentLoading = false;
+        }
+        notify();
+      });
     },
     selectPortal(portal: PortalSummary) {
       if (portal.id === state.selectedPortalId) {

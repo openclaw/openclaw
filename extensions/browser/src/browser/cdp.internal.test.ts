@@ -135,7 +135,6 @@ it("builds role refs, promotes cursor-interactive nodes, and appends link urls",
         return runtimeValueResult([
           {
             text: "Clickable Card",
-            tagName: "div",
             hasCursorPointer: true,
             hasOnClick: true,
           },

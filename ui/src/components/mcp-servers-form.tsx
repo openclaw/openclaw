@@ -10,6 +10,7 @@ export function McpServersForm(props: {
   disabled: boolean;
   blockedReason: string | null;
   autofocus?: boolean;
+  onNameRef?: (element: HTMLInputElement) => void;
   presentation?: "inline" | "modal";
   error?: string | null;
   onSubmit: (form: McpServerForm) => void;
@@ -19,20 +20,20 @@ export function McpServersForm(props: {
   const actions = () => (
     <>
       <button
-        type="submit"
-        class="btn btn--sm"
-        title={props.blockedReason ?? ""}
-        disabled={disabled()}
-      >
-        {props.busy ? t("mcpServers.adding") : t("mcpServers.add")}
-      </button>
-      <button
         type="button"
         class="btn btn--sm"
         disabled={props.busy}
         onClick={() => props.onCancel()}
       >
         {t("common.cancel")}
+      </button>
+      <button
+        type="submit"
+        class="btn btn--sm"
+        title={props.blockedReason ?? ""}
+        disabled={disabled()}
+      >
+        {props.busy ? t("mcpServers.adding") : t("mcpServers.add")}
       </button>
     </>
   );
@@ -55,6 +56,7 @@ export function McpServersForm(props: {
       <label>
         <span>{t("mcpServers.nameLabel")}</span>
         <input
+          ref={props.onNameRef}
           name="mcp-name"
           autofocus={props.autofocus}
           class="settings-input"

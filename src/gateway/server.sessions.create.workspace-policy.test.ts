@@ -5,18 +5,23 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { afterEach, expect, test, vi } from "vitest";
+import type { SessionsFilesGetResult } from "../../packages/gateway-protocol/src/index.js";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { captureMethodCall } from "../../test/helpers/capture-method-call.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { makeUserMessage } from "../../test/helpers/user-message.js";
+import { createSandboxTestContext } from "../agents/sandbox/test-fixtures.js";
+import { SessionManager } from "../agents/sessions/session-manager.js";
 import { findGitCheckoutRoot } from "../agents/worktrees/git.js";
 import { getRegistryWorktree } from "../agents/worktrees/registry.test-support.js";
 import { managedWorktrees, ManagedWorktreeService } from "../agents/worktrees/service.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { SessionEntry } from "../config/sessions.js";
-import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { isSessionMutationActive } from "../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
 import { sessionLog } from "./server-methods/sessions-shared.js";
 import {
@@ -27,6 +32,7 @@ import {
   setupSessionCreateTestHarness,
   requireNonEmptyString,
 } from "./server.sessions.create.test-support.js";
+import { adoptUnboundPullRequestWorkspace } from "./session-pr-workspace-adoption.js";
 import { rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
   sessionStoreEntry,
@@ -72,7 +78,7 @@ function expectInvalid(result: Awaited<ReturnType<typeof directSessionReq>>, mes
 async function openWorkspaceClient(root: string, scope = "operator.admin", name = "device") {
   const client = await openClient({
     scopes: [scope],
-    deviceIdentityPath: path.join(root, `${name}.json`),
+    deviceIdentityPath: path.join(root, name, "client", "credentials.sqlite"),
   });
   return {
     ...client,
@@ -90,10 +96,19 @@ async function setupResetWorktree(prefix: string, model?: { primary: string }) {
   testState.sessionConfig = { dmScope: "main" };
   const { storePath } = await createSessionStoreDir();
   await writeSessionStore({ entries: { main: sessionStoreEntry("sess-reset-parent") } });
+  const scope = { agentId: "main", sessionKey: "agent:main:main", storePath };
   let worktreeId: string | undefined;
   return {
     workspace,
     storePath,
+    scope,
+    readEntry: () => loadSessionEntry(scope),
+    async createWorktree(params: Record<string, unknown> = {}) {
+      const created = await mainSession({ worktree: true, ...params });
+      expect(created).toMatchObject({ ok: true, payload: { key: "agent:main:main" } });
+      worktreeId = created.payload!.worktree.id;
+      return created.payload!;
+    },
     track(id: string | undefined) {
       worktreeId = id;
     },
@@ -110,6 +125,39 @@ async function setupResetWorktree(prefix: string, model?: { primary: string }) {
       testState.sessionConfig = undefined;
       await state.cleanup();
     },
+  };
+}
+
+async function openWorkspaceEditor(fixture: Awaited<ReturnType<typeof setupResetWorktree>>) {
+  const { worktree } = await fixture.createWorktree();
+  const request = { sessionKey: "agent:main:main", path: "README.md" };
+  const options = { client: { connect: { scopes: ["operator.admin"] } } as never };
+  const read = () =>
+    directSessionReq<SessionsFilesGetResult>("sessions.files.get", request, options);
+  const opened = await read();
+  expect(opened.ok, JSON.stringify(opened.error)).toBe(true);
+  expect(opened.payload).toMatchObject({
+    source: { workspaceId: worktree.id },
+    file: { content: "base\n" },
+  });
+  return {
+    worktree,
+    opened,
+    read,
+    save(content: string, version = opened.payload!, includeSource = true) {
+      return directSessionReq<SessionsFilesGetResult>(
+        "sessions.files.set",
+        {
+          ...request,
+          content,
+          expectedHash: version.file.hash,
+          ...(includeSource ? { expectedSource: version.source } : {}),
+        },
+        options,
+      );
+    },
+    expectContent: (root: string, content = "base\n") =>
+      expect(fs.readFile(path.join(root, "README.md"), "utf8")).resolves.toBe(content),
   };
 }
 
@@ -231,6 +279,73 @@ test.each(["operator.admin", "operator.write"])(
   },
 );
 
+test("an ordinary session created through a workspace alias can adopt without accepting another cwd", async () => {
+  const root = tempDirs.make("openclaw-session-adopt-alias-");
+  const workspace = path.join(root, "workspace");
+  const alias = path.join(root, "alias");
+  const other = path.join(root, "other");
+  await fs.mkdir(workspace);
+  await fs.mkdir(other);
+  await fs.symlink(workspace, alias, directoryLinkType);
+  testState.agentConfig = { workspace: alias };
+  const { storePath } = await createSessionStoreDir();
+  let adoptedId: string | undefined;
+  try {
+    const ordinary = await createSession({ agentId: "main", worktree: false });
+    expect(ordinary.ok, JSON.stringify(ordinary.error)).toBe(true);
+    const key = requireNonEmptyString(ordinary.payload?.key, "ordinary session key");
+    const entry = loadSessionEntry({ agentId: "main", sessionKey: key, storePath })!;
+    expect(entry.sessionRoot).toBe(await fs.realpath(workspace));
+    expect(entry.spawnedCwd).toBeUndefined();
+    const transcript = await SessionManager.openAsync(
+      { agentId: "main", sessionKey: key, sessionId: entry.sessionId, storePath },
+      alias,
+    );
+    await transcript.appendMessageAsync(makeUserMessage("Continue this conversation", 1));
+    const context = createDirectChatContext();
+    const input = {
+      context,
+      target: { agentId: "main", sessionKey: key, storePath },
+      entry,
+      sandbox: createSandboxTestContext({
+        overrides: { sessionKey: key, workspaceDir: alias, workspaceSource: undefined },
+      }),
+      assertCurrent() {},
+      async verifyBeforeBinding() {},
+    };
+    const explicit = await createSession({ agentId: "main", cwd: other, worktree: false });
+    expect(explicit.ok).toBe(true);
+    const explicitKey = requireNonEmptyString(explicit.payload?.key, "explicit session key");
+    await expect(
+      adoptUnboundPullRequestWorkspace({
+        ...input,
+        target: { ...input.target, sessionKey: explicitKey },
+        entry: loadSessionEntry({ agentId: "main", sessionKey: explicitKey, storePath })!,
+      }),
+    ).rejects.toThrow("already has another source");
+    await fs.unlink(alias);
+    await fs.symlink(other, alias, directoryLinkType);
+    await expect(adoptUnboundPullRequestWorkspace(input)).rejects.toThrow(
+      "already has another source",
+    );
+    await fs.unlink(alias);
+    await fs.symlink(workspace, alias, directoryLinkType);
+    const adopted = await adoptUnboundPullRequestWorkspace(input);
+    adoptedId = adopted.worktree?.id;
+    expect(adoptedId).toBeDefined();
+    expect(adopted.priorWorkspace).toMatchObject({ workspaceDir: alias, fileRoot: alias });
+  } finally {
+    if (adoptedId) {
+      await managedWorktrees.remove({
+        id: adoptedId,
+        reason: "test-cleanup",
+        allowSnapshotLoss: true,
+      });
+    }
+    testState.agentConfig = undefined;
+  }
+});
+
 test("sessions.create requires admin for full permission mode", async () => {
   const workspace = tempDirs.make("openclaw-session-full-mode-");
   testState.agentConfig = { workspace };
@@ -257,7 +372,7 @@ test("sessions.create uses a non-git Gateway cwd directly but not as a worktree 
   expect(direct.payload?.entry?.spawnedCwd).toBe(cwd);
 
   const isolated = await createSession({ cwd, worktree: true });
-  expectInvalid(isolated, "agent workspace is not a git checkout");
+  expectInvalid(isolated, `requested working directory is not a git checkout: ${cwd}`);
 });
 
 test("sessions.create keeps its cwd contract absolute-only", async () => {
@@ -274,15 +389,11 @@ test.each([
   "sessions.create reset-in-place reports cleanup truth for $name",
   async ({ outcome }) => {
     await using fixture = await setupResetWorktree("openclaw-reset-retained-worktree-");
-    const { storePath } = fixture;
     using warnSpy = vi.spyOn(sessionLog, "warn").mockImplementation(() => {});
     const originalRemoveIfLossless = captureMethodCall("removeIfLossless")(
       ManagedWorktreeService.prototype,
     );
-    const created = await mainSession({ worktree: true });
-    expect(created.ok).toBe(true);
-    const worktree = created.payload!.worktree;
-    fixture.track(worktree.id);
+    const { worktree } = await fixture.createWorktree();
     const dirtyFile = path.join(worktree.path, "retained-work.txt");
     if (outcome === "dirty") {
       await fs.writeFile(dirtyFile, "preserve my work\n");
@@ -302,9 +413,7 @@ test.each([
 
     const reset = await mainSession({}, "operator.write");
     expectDetached(reset);
-    expect(
-      loadSessionEntry({ sessionKey: "agent:main:main", storePath })?.worktree,
-    ).toBeUndefined();
+    expect(fixture.readEntry()?.worktree).toBeUndefined();
     if (outcome === "dirty") {
       expect(getRegistryWorktree(process.env, worktree.id)).toMatchObject({
         runEndCleanup: { outcome: "retained-dirty" },
@@ -335,20 +444,33 @@ test("sessions.create reset-in-place detaches the prior worktree permission boun
   await using fixture = await setupResetWorktree("openclaw-reset-session-worktree-", {
     primary: "openai/current-model",
   });
-  const { workspace, storePath } = fixture;
+  const { workspace, storePath, scope } = fixture;
   using warnSpy = vi.spyOn(sessionLog, "warn").mockImplementation(() => {});
   const resolved = { modelProvider: "openai", model: "current-model" };
-  const created = await mainSession({ worktree: true, permissionMode: "workspace" });
-  expect(created).toMatchObject({ ok: true, payload: { key: "agent:main:main" } });
-  expect(created.payload?.resolved).toEqual(resolved);
-  const worktree = created.payload?.worktree;
-  fixture.track(worktree?.id);
-  expect(created.payload?.entry.spawnedCwd).toBe(worktree?.path);
-  expect(created.payload?.entry.sessionRoot).toBe(worktree?.path);
-  expect(created.payload?.entry.permissionMode).toBe("workspace");
-  expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })?.spawnedCwd).toBe(
-    worktree?.path,
-  );
+  const created = await fixture.createWorktree({ permissionMode: "workspace" });
+  expect(created.resolved).toEqual(resolved);
+  const { worktree } = created;
+  expect(created.entry).toMatchObject({
+    spawnedCwd: worktree.path,
+    sessionRoot: worktree.path,
+    permissionMode: "workspace",
+  });
+  expect(fixture.readEntry()?.spawnedCwd).toBe(worktree.path);
+
+  const priorWorkspace = {
+    worktreeId: worktree!.id,
+    sessionId: created.entry.sessionId,
+    workspaceDir: workspace,
+    fileRoot: workspace,
+    through: { generation: "before-adoption", maxSeq: 1 },
+  };
+  await upsertSessionEntryCore(scope, { ...fixture.readEntry()!, priorWorkspace });
+  const ordinaryReset = await directSessionReq("sessions.reset", {
+    key: scope.sessionKey,
+    reason: "reset",
+  });
+  expect(ordinaryReset.ok).toBe(true);
+  expect(fixture.readEntry()?.priorWorkspace).toEqual(priorWorkspace);
 
   // Pause the exact old-binding removal before destructive work. A same-key
   // worktree reset must remain fenced until that prior generation is gone.
@@ -399,7 +521,7 @@ test("sessions.create reset-in-place detaches the prior worktree permission boun
   expect(successorWorktree.id).not.toBe(worktree?.id);
   fixture.track(successorWorktree.id);
   await fs.access(successorWorktree.path);
-  expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
+  expect(fixture.readEntry()).toMatchObject({
     spawnedCwd: successorWorktree.path,
     worktree: {
       id: successorWorktree.id,
@@ -408,6 +530,35 @@ test("sessions.create reset-in-place detaches the prior worktree permission boun
     },
   });
   expect(getRegistryWorktree(process.env, successorWorktree.id)?.removedAt).toBeUndefined();
+  expect(fixture.readEntry()?.priorWorkspace).toBeUndefined();
+});
+
+test("an open Files editor cannot save into a replacement managed workspace", async () => {
+  await using fixture = await setupResetWorktree("openclaw-files-source-reset-");
+  const editor = await openWorkspaceEditor(fixture);
+  const staleSave = () => editor.save("draft from the original workspace\n");
+  const sourceChanged = { error: { details: { type: "session_file_source_changed" } } };
+
+  expectDetached(await mainSession({}, "operator.write"));
+  await expect(staleSave()).rejects.toMatchObject(sourceChanged);
+  await editor.expectContent(fixture.workspace);
+  const { worktree: current } = await fixture.createWorktree();
+  expect(current.id).not.toBe(editor.worktree.id);
+  await expect(staleSave()).rejects.toMatchObject(sourceChanged);
+  await editor.expectContent(current.path);
+
+  const fresh = await editor.read();
+  expect(fresh.payload).toMatchObject({
+    source: { workspaceId: current.id },
+    file: { content: "base\n" },
+  });
+  const saved = await editor.save("fresh edit\n", fresh.payload!);
+  expect(saved.ok, JSON.stringify(saved.error)).toBe(true);
+  expect(saved.payload?.source?.workspaceId).toBe(current.id);
+  await editor.expectContent(current.path, "fresh edit\n");
+  const legacy = await editor.save("legacy client edit\n", saved.payload!, false);
+  expect(legacy.ok, JSON.stringify(legacy.error)).toBe(true);
+  await editor.expectContent(current.path, "legacy client edit\n");
 });
 
 test("sessions.create rejects worktrees for agent workspaces without a commit", async () => {
@@ -423,4 +574,30 @@ test("sessions.create rejects worktrees for agent workspaces without a commit", 
   } finally {
     testState.agentConfig = undefined;
   }
+});
+
+test("an explicit cwd reset refuses the previous managed file source", async () => {
+  await using fixture = await setupResetWorktree("openclaw-files-explicit-cwd-");
+  const editor = await openWorkspaceEditor(fixture);
+  const { worktree: original, opened } = editor;
+  const replacement = path.join(fixture.workspace, "replacement");
+  await fs.mkdir(replacement);
+  await fs.writeFile(path.join(replacement, "README.md"), "base\n");
+  const reset = await mainSession({ cwd: replacement });
+  expect(reset.ok, JSON.stringify(reset.error)).toBe(true);
+  expect(reset.payload?.entry.spawnedCwd).toBe(replacement);
+  expect(reset.payload?.entry.worktree?.id).toBe(original.id);
+  const fresh = await editor.read();
+  expect(fresh.payload).toMatchObject({
+    source: { workspaceId: original.id },
+    file: { content: "base\n" },
+  });
+  await expect(editor.save("draft from A\n")).rejects.toMatchObject({
+    error: { details: { type: "session_file_source_changed" } },
+  });
+  await editor.expectContent(replacement);
+  expect(fresh.payload?.source).not.toEqual(opened.payload?.source);
+  const saved = await editor.save("fresh edit in B\n", fresh.payload!);
+  expect(saved.ok, JSON.stringify(saved.error)).toBe(true);
+  await editor.expectContent(replacement, "fresh edit in B\n");
 });

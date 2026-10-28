@@ -1,6 +1,12 @@
 import type { Request, Response } from "express";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
+import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import { waitUntilAbort } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  channelBlockedPatch,
+  channelReadyPatch,
+  channelStoppedPatch,
+} from "openclaw/plugin-sdk/gateway-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { registerPluginHttpRoute } from "openclaw/plugin-sdk/webhook-targets";
 import {
@@ -16,7 +22,6 @@ import {
 import { resolveMSTeamsRuntimeAccount, withAccountScopedMSTeamsConfig } from "./accounts.js";
 import { resolveMSTeamsSdkCloudOptions } from "./cloud.js";
 import { createMSTeamsConversationStoreState } from "./conversation-store-state.js";
-import type { MSTeamsConversationStore } from "./conversation-store.js";
 import { formatUnknownError } from "./errors.js";
 import { runMSTeamsFeedbackInvokeHandler } from "./feedback-invoke.js";
 import { runMSTeamsFileConsentInvokeHandler } from "./file-consent-invoke.js";
@@ -24,21 +29,12 @@ import { normalizeMSTeamsConversationId } from "./inbound.js";
 import { isMSTeamsInvokeAuthorized, createMSTeamsActivityHandler } from "./monitor-handler.js";
 import type { MSTeamsMessageHandlerDeps } from "./monitor-handler.types.js";
 import { createMSTeamsHandlerConfigReader } from "./monitor-handler/config.js";
-import {
-  publishMSTeamsBlocked,
-  publishMSTeamsReady,
-  publishMSTeamsStopped,
-  type MSTeamsStatusSink,
-} from "./monitor-status.js";
 import { createMSTeamsIngress } from "./msteams-ingress.js";
-import {
-  createMSTeamsPollStoreState,
-  extractMSTeamsPollVote,
-  type MSTeamsPollStore,
-} from "./polls.js";
+import { createMSTeamsPollStoreState, extractMSTeamsPollVote } from "./polls.js";
 import { resolveMSTeamsPrivateQaRuntime } from "./qa/private-runtime.js";
 import { createMSTeamsReplayContext } from "./replay-context.js";
 import {
+  keepConfiguredMSTeamsAllowlistActive,
   looksLikeMSTeamsConversationId,
   projectStableMSTeamsGroupAllowlist,
   projectStableMSTeamsUserAllowlist,
@@ -69,19 +65,10 @@ type MonitorMSTeamsOpts = {
   msteamsCfg?: MSTeamsConfig;
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
-  conversationStore?: MSTeamsConversationStore;
-  pollStore?: MSTeamsPollStore;
-  statusSink?: MSTeamsStatusSink;
+  statusSink?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
 };
 
-type MonitorMSTeamsResult = {
-  app: unknown;
-  shutdown: () => Promise<void>;
-};
-
-export async function monitorMSTeamsProvider(
-  opts: MonitorMSTeamsOpts,
-): Promise<MonitorMSTeamsResult> {
+export async function monitorMSTeamsProvider(opts: MonitorMSTeamsOpts): Promise<void> {
   const core = getMSTeamsRuntime();
   const log = core.logging.getChildLogger({ name: "msteams" });
   const account = resolveMSTeamsRuntimeAccount(opts);
@@ -91,14 +78,18 @@ export async function monitorMSTeamsProvider(
   let msteamsCfg = account.config;
   if (opts.cfg.channels?.msteams?.enabled !== true || msteamsCfg.enabled === false) {
     log.debug?.("msteams provider disabled");
-    publishMSTeamsBlocked(opts.statusSink, "Microsoft Teams provider is disabled");
-    return { app: null, shutdown: async () => {} };
+    opts.statusSink?.(
+      channelBlockedPatch("Microsoft Teams provider is disabled", { running: true }),
+    );
+    return;
   }
 
   if (!creds) {
     log.error("msteams credentials not configured");
-    publishMSTeamsBlocked(opts.statusSink, "Microsoft Teams credentials are not configured");
-    return { app: null, shutdown: async () => {} };
+    opts.statusSink?.(
+      channelBlockedPatch("Microsoft Teams credentials are not configured", { running: true }),
+    );
+    return;
   }
   const collisionIssue = resolveMSTeamsWebhookCollisionIssue(accountPolicyCfg);
   if (collisionIssue) {
@@ -191,6 +182,12 @@ export async function monitorMSTeamsProvider(
     );
   }
 
+  if (Array.isArray(configuredGroupAllowFrom)) {
+    // A configured sender list whose entries are all unresolvable names must keep restricting
+    // senders. An empty projection would fall back to the DM allowlist (or its wildcard).
+    groupAllowFrom = keepConfiguredMSTeamsAllowlistActive(configuredGroupAllowFrom, groupAllowFrom);
+  }
+
   if (configuredGroupAllowFrom == null && groupAllowFrom) {
     // Group fallback must include users resolved from the DM list without admitting DM chats.
     groupAllowFrom = mergeAllowlist({ existing: groupAllowFrom, additions: allowFrom ?? [] });
@@ -222,9 +219,8 @@ export async function monitorMSTeamsProvider(
       cfg,
       resolveChannelLimitMb: ({ cfg: channelCfg }) => channelCfg.channels?.msteams?.mediaMaxMb,
     }) ?? 8 * 1024 * 1024;
-  const conversationStore =
-    opts.conversationStore ?? createMSTeamsConversationStoreState({ accountId });
-  const pollStore = opts.pollStore ?? createMSTeamsPollStoreState({ accountId });
+  const conversationStore = createMSTeamsConversationStoreState({ accountId });
+  const pollStore = createMSTeamsPollStoreState({ accountId });
 
   log.info("starting provider on Gateway HTTP routes");
 
@@ -597,27 +593,18 @@ export async function monitorMSTeamsProvider(
     throw error;
   }
   log.info(`msteams provider started on Gateway route ${configuredPath}`);
-  publishMSTeamsReady(opts.statusSink);
+  opts.statusSink?.(channelReadyPatch());
 
-  let shutdownTask: Promise<void> | undefined;
-  const shutdown = () => {
-    shutdownTask ??= (async () => {
-      await webhook.close();
-      for (const unregister of unregisterRoutes.splice(0)) {
-        unregister();
-      }
-      await ingress.stop();
-      publishMSTeamsStopped(opts.statusSink);
-    })();
-    return shutdownTask;
-  };
   try {
-    await waitUntilAbort(opts.abortSignal, shutdown);
+    await waitUntilAbort(opts.abortSignal);
   } finally {
-    await shutdown();
+    await webhook.close();
+    for (const unregister of unregisterRoutes) {
+      unregister();
+    }
+    await ingress.stop();
+    opts.statusSink?.(channelStoppedPatch());
   }
-
-  return { app: expressApp, shutdown };
 }
 
 function cardActionMessage(value: string): MSTeamsCardActionResponse {
@@ -675,19 +662,9 @@ function adaptSdkContext(ctx: unknown, app: MSTeamsApp): MSTeamsTurnContext {
     isThreadable ? sdkCtx.reply!(activity) : sdkCtx.send!(activity);
   return Object.assign(Object.create(Object.getPrototypeOf(ctx)), ctx, {
     sendActivity,
-    sendActivities: async (activities: unknown[]) => {
-      const results: unknown[] = [];
-      for (const a of activities) {
-        results.push(await sendActivity(a));
-      }
-      return results;
-    },
     updateActivity: async (activity: { id?: string; [key: string]: unknown }) => {
       const activityId = activity.id ?? "";
       return activityApi.conversations.activities(conversationId).update(activityId, activity);
-    },
-    deleteActivity: async (activityId: string) => {
-      return activityApi.conversations.activities(conversationId).delete(activityId);
     },
     getTeamDetails,
     stream: sdkCtx.stream,

@@ -9,8 +9,8 @@ import {
   runGit,
 } from "../../agents/worktrees/git.js";
 import { normalizeCloudRepo } from "../../config/cloud-worker-project-profiles.js";
+import { ignoreMissingPath } from "../../infra/errno.js";
 import { executeGitCommand, requireGitCommandOutput } from "../../infra/git-exec.js";
-import { hasNodeErrorCode } from "../../infra/path-guards.js";
 import type { RepositoryWorkerProjectSnapshot } from "./repository-project-source.schema.js";
 import { workerSshCommandOptions } from "./ssh.js";
 import {
@@ -51,12 +51,7 @@ export async function prepareWorkerProjectSnapshot(params: {
     signal: params.signal,
     env: workerSshCommandOptions({ timeoutMs: GIT_TIMEOUT_MS }).baseEnv,
   };
-  const gitAdmin = await fsp.lstat(path.join(root, ".git")).catch((error: unknown) => {
-    if (hasNodeErrorCode(error, "ENOENT")) {
-      return undefined;
-    }
-    throw error;
-  });
+  const gitAdmin = await fsp.lstat(path.join(root, ".git")).catch(ignoreMissingPath);
   if (!gitAdmin) {
     // Linked checkouts can retain their committed seed in a bare primary repository.
     const bare = await runGit(root, ["rev-parse", "--is-bare-repository"], options);

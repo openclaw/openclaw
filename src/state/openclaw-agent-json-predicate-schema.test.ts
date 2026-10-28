@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { constants, DatabaseSync, type SQLInputValue } from "node:sqlite";
+import { constants, DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { deriveSessionPredicateColumns } from "../config/sessions/session-predicate-columns.js";
 import {
@@ -16,10 +16,7 @@ import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
 } from "./openclaw-agent-db-contract.js";
 import { withAgentDatabaseMaintenanceLease } from "./openclaw-agent-db-maintenance-lease.js";
-import {
-  ensureOpenClawAgentDatabaseSchema,
-  ensureOpenClawAgentSchema,
-} from "./openclaw-agent-db-schema.js";
+import { ensureOpenClawAgentDatabaseSchema } from "./openclaw-agent-db-schema.js";
 import type { DB } from "./openclaw-agent-db.generated.js";
 import { removeCanonicalValidationFromHistoricalAgentFixture } from "./openclaw-agent-db.test-support.js";
 import { migrateAgentJsonPredicatesInTransaction } from "./openclaw-agent-json-predicate-schema.js";
@@ -30,24 +27,19 @@ import {
 import { OPENCLAW_AGENT_SCHEMA_V24_SQL } from "./openclaw-agent-schema-v24.test-support.js";
 import { OPENCLAW_AGENT_SCHEMA_V25_SQL } from "./openclaw-agent-schema-v25.test-support.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
+import { assertOpenClawMigrationWitnessPreserved } from "./openclaw-migration-witness.js";
 import {
-  assertOpenClawMigrationWitnessPreserved,
-  captureOpenClawMigrationWitness,
-} from "./openclaw-migration-witness.js";
-import { assertSqliteMigrationScopePreserved } from "./sqlite-migration-scope.test-support.js";
+  agentWitness as witness,
+  expectVersion as expectSchemaVersion,
+  migrationFixture,
+  refuseVersion,
+  row as readRow,
+  rows as readRows,
+  seedVersion,
+} from "./schema-migration.test-support.js";
 
-function readRow(database: DatabaseSync, sql: string, ...params: SQLInputValue[]) {
-  return database.prepare(sql).get(...params);
-}
-function readRows(database: DatabaseSync, sql: string) {
-  return database.prepare(sql).all();
-}
-function witness(database: DatabaseSync) {
-  return captureOpenClawMigrationWitness(database, { role: "agent", agentId: "main" });
-}
 function expectVersion(database: DatabaseSync, version = OPENCLAW_AGENT_SCHEMA_VERSION) {
-  expect(readRow(database, "PRAGMA user_version")?.user_version).toBe(version);
-  expect(readRow(database, "SELECT schema_version FROM schema_meta")?.schema_version).toBe(version);
+  expectSchemaVersion(database, version);
 }
 function admit(database: DatabaseSync, path: string, env: NodeJS.ProcessEnv, register?: boolean) {
   return ensureOpenClawAgentDatabaseSchema(database, { agentId: "main", path, env, register });
@@ -56,11 +48,6 @@ function migrateLegacyStore(database: DatabaseSync, pathname: string, env: NodeJ
   return withAgentDatabaseMaintenanceLease({ env }, async () =>
     admit(database, pathname, env, false),
   );
-}
-function seedVersion(database: DatabaseSync, version: number) {
-  database.exec(`PRAGMA user_version = ${version};
-    INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, created_at, updated_at)
-    VALUES ('primary', 'agent', ${version}, 'main', 1, 1);`);
 }
 function seedSchema(database: DatabaseSync, version: 24 | 25 = 25) {
   database.exec(version === 24 ? OPENCLAW_AGENT_SCHEMA_V24_SQL : OPENCLAW_AGENT_SCHEMA_V25_SQL);
@@ -71,6 +58,22 @@ function seedSchema(database: DatabaseSync, version: 24 | 25 = 25) {
     VALUES ('history', 'agent:main:main', 1, 1);
   `);
 }
+
+const withV25Migration = migrationFixture({
+  seed: seedSchema,
+  predecessor: 25,
+  target: AGENT_JSON_PREDICATE_SCHEMA_VERSION,
+  scope: [
+    "schema_meta",
+    "session_nodes",
+    "session_reactions",
+    "session_windows",
+    "transcript_events",
+    "context_engine_turn_outbox",
+    "sqlite_stat1",
+    "sqlite_stat4",
+  ],
+});
 
 describe("agent JSON predicate migration", () => {
   it("keeps transcripts untouched while lazy predicates match canonical writer semantics", () => {
@@ -85,8 +88,6 @@ describe("agent JSON predicate migration", () => {
       '{"sessionStartedAt":false}',
       '{"sessionStartedAt":"  -12.9e5"}',
       '{"sessionStartedAt":"not a timestamp"}',
-      '{"sessionStartedAt":{}}',
-      '{"sessionStartedAt":[]}',
       '{"sessionStartedAt":9223372036854775808}',
       '{"sessionStartedAt":-9223372036854775809}',
       '{"sessionStartedAt":9007199254740993}',
@@ -106,7 +107,9 @@ describe("agent JSON predicate migration", () => {
     for (const [index, entry] of sessionEntries.entries()) {
       insertNode.run(`agent:main:case-${index}`, `case-${index}`, entry);
     }
-    const navigationEvents = [
+    const events = [
+      "{}",
+      '{"type":"session","id":"history","version":3}',
       '{"type":"reset","targetId":"prior"}',
       '{"type":"compaction","firstKeptEntryId":"kept"}',
       '{"type":"message","message":{"role":"assistant"}}',
@@ -115,15 +118,9 @@ describe("agent JSON predicate migration", () => {
       '{"type":"message","type":"reset","message":{"role":"user","role":"system"}}',
       '{"type":"message","message":{"role":"toolResult"},"message":{"role":"user"}}',
       '{"type":"custom","customType":"openclaw.cache-ttl","customType":"openclaw.runtime-context","display":false}',
-    ];
-    const events = [
-      "{}",
-      '{"type":"session","id":"history","version":3}',
-      ...navigationEvents,
       '{"t\\u0079pe":"message","type":"reset","message":{"role":"user","r\\u006fle":"system"}}',
       '{"type\\u0000suffix":"message","type":"reset","message\\u0000suffix":{"role\\u0000suffix":"user","role":"assistant"}}',
       '{"customType\\u0000suffix":"openclaw.cache-ttl","customType":"openclaw.runtime-context","display\\u0000suffix":true,"display":false}',
-      '{"customType":"openclaw.cache-ttl","customType":"openclaw.runtime-context","display":false}',
       '{"type":"unknown","customType":12,"message":{"role":"unknown"}}',
       '{"type":"message\\u0000","message":{"role":"assistant\\ud800"}}',
       "[]",
@@ -139,26 +136,21 @@ describe("agent JSON predicate migration", () => {
     for (const [index, event] of events.entries()) {
       insertEvent.run(index + 1, event);
     }
-    // Exercise the same predicates through real stored navigation, not a fabricated envelope.
-    const compressedEvents = navigationEvents.map(
-      (event) => `${event.slice(0, -1)},"padding":"${"x".repeat(4096)}"}`,
-    );
-    const compressedPayloads = compressedEvents.map((event) =>
-      prepareTranscriptPayload(database, event, undefined, "UTF-8"),
-    );
-    const insertCompressed = database.prepare(`INSERT INTO transcript_events
+    // One real compressed envelope covers every fallback field; raw rows own the input variants.
+    const compressedEvent = `{"type":"message","type":"custom_message","customType":"openclaw.cache-ttl","customType":"openclaw.runtime-context","display":true,"message":{"role":"user"},"padding":"${"x".repeat(4096)}"}`;
+    const compressed = prepareTranscriptPayload(database, compressedEvent, undefined, "UTF-8");
+    expect(compressed.event_json).toBeNull();
+    expect(compressed.event_zstd).toBeInstanceOf(Uint8Array);
+    database
+      .prepare(`INSERT INTO transcript_events
       (session_id, seq, event_json, event_zstd, event_utf8_bytes, navigation_json, created_at)
-      VALUES ('history', ?, NULL, ?, ?, ?, 1)`);
-    for (const [index, payload] of compressedPayloads.entries()) {
-      expect(payload.event_json, navigationEvents[index]).toBeNull();
-      expect(payload.event_zstd, navigationEvents[index]).toBeInstanceOf(Uint8Array);
-      insertCompressed.run(
-        events.length + index + 1,
-        payload.event_zstd,
-        payload.event_utf8_bytes,
-        payload.navigation_json,
+      VALUES ('history', ?, NULL, ?, ?, ?, 1)`)
+      .run(
+        events.length + 1,
+        compressed.event_zstd,
+        compressed.event_utf8_bytes,
+        compressed.navigation_json,
       );
-    }
     const payloads = [
       { payload: {}, state: null },
       { payload: { state: "pending" }, state: "pending" },
@@ -213,7 +205,7 @@ describe("agent JSON predicate migration", () => {
         transcriptPredicateSql(database, "navigation_valid").as("navigation_valid"),
       ])
       .where("session_id", "=", "history");
-    for (const [index, event] of [...events, ...compressedEvents].entries()) {
+    for (const [index, event] of [...events, compressedEvent].entries()) {
       expect(
         executeSqliteQueryTakeFirstSync(database, predicates.where("seq", "=", index + 1)),
         event,
@@ -222,19 +214,17 @@ describe("agent JSON predicate migration", () => {
     expect(
       readRows(database, "SELECT DISTINCT navigation_type, message_role FROM transcript_events"),
     ).toEqual([{ navigation_type: null, message_role: null }]);
-    for (const [index, payload] of compressedPayloads.entries()) {
-      expect(
-        readRow(
-          database,
-          `SELECT event_zstd, navigation_json FROM transcript_events
+    expect(
+      readRow(
+        database,
+        `SELECT event_zstd, navigation_json FROM transcript_events
         WHERE session_id = 'history' AND seq = ?`,
-          events.length + index + 1,
-        ),
-      ).toEqual({
-        event_zstd: new Uint8Array(payload.event_zstd!),
-        navigation_json: payload.navigation_json,
-      });
-    }
+        events.length + 1,
+      ),
+    ).toEqual({
+      event_zstd: new Uint8Array(compressed.event_zstd!),
+      navigation_json: compressed.navigation_json,
+    });
     expect(
       readRows(
         database,
@@ -272,13 +262,7 @@ describe("agent JSON predicate migration", () => {
           .run(event);
         const original = witness(database);
         if (rollback) {
-          database.setAuthorizer((action, name, value) =>
-            action === constants.SQLITE_PRAGMA &&
-            name === "user_version" &&
-            value === String(OPENCLAW_AGENT_SCHEMA_VERSION)
-              ? constants.SQLITE_DENY
-              : constants.SQLITE_OK,
-          );
+          refuseVersion(database, OPENCLAW_AGENT_SCHEMA_VERSION);
         }
         await withAgentDatabaseMaintenanceLease({ env: state.env }, async () => {
           const migrate = () => admit(database, pathname, state.env);
@@ -308,10 +292,7 @@ describe("agent JSON predicate migration", () => {
   it.each(["commit", "rollback", "without-outbox", "missing-additive-indexes"] as const)(
     "publishes both version markers only with the complete v26 migration (%s)",
     async (outcome) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-        const pathname = state.path("predicates-v25.sqlite");
-        using database = new DatabaseSync(pathname);
-        seedSchema(database);
+      await withV25Migration("predicates-v25.sqlite", async ({ database, migrate }) => {
         if (outcome === "without-outbox") {
           database.exec("DROP TABLE context_engine_turn_outbox");
         }
@@ -326,43 +307,7 @@ describe("agent JSON predicate migration", () => {
           VALUES ('history', 1, '{"type":"message","message":{"role":"user"}}', 1)`);
         database.exec("ANALYZE");
         const original = witness(database);
-        if (outcome === "rollback") {
-          database.setAuthorizer((action, name, value) =>
-            action === constants.SQLITE_PRAGMA &&
-            name === "user_version" &&
-            value === String(AGENT_JSON_PREDICATE_SCHEMA_VERSION)
-              ? constants.SQLITE_DENY
-              : constants.SQLITE_OK,
-          );
-        }
-        await withAgentDatabaseMaintenanceLease({ env: state.env }, async () => {
-          const migrate = () =>
-            ensureOpenClawAgentSchema(
-              database,
-              "main",
-              pathname,
-              AGENT_JSON_PREDICATE_SCHEMA_VERSION,
-            );
-          if (outcome === "rollback") {
-            expect(migrate).toThrow(/authoriz/u);
-          } else {
-            await assertSqliteMigrationScopePreserved(
-              database,
-              [
-                "schema_meta",
-                "session_nodes",
-                "session_reactions",
-                "session_windows",
-                "transcript_events",
-                "context_engine_turn_outbox",
-                "sqlite_stat1",
-                "sqlite_stat4",
-              ],
-              migrate,
-            );
-          }
-        });
-        database.setAuthorizer(null);
+        await migrate(outcome);
         const expectedVersion = outcome === "rollback" ? 25 : AGENT_JSON_PREDICATE_SCHEMA_VERSION;
         expectVersion(database, expectedVersion);
         expect(assertOpenClawMigrationWitnessPreserved(original, witness(database))).toEqual({

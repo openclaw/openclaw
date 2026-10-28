@@ -30,6 +30,10 @@ export const cliRecoveryEntrypoints = {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "../../extensions/memory-core/doctor-health-api",
   }),
+  openaiDoctorHealth: worker({
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../../extensions/openai/doctor-health-api",
+  }),
   signalExitBarrier: worker({
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "signal-exit-barrier",
@@ -41,9 +45,9 @@ export const cliRecoveryEntrypoints = {
 } as const;
 
 export const cliMessageExitEntrypoints = {
-  helpers: worker({
+  registration: worker({
     currentModuleUrl: import.meta.url,
-    sourceWorkerName: "program/message/helpers",
+    sourceWorkerName: "program/register.message",
   }),
   command: worker({ currentModuleUrl: import.meta.url, sourceWorkerName: "../commands/message" }),
   oneShotExit: worker({ currentModuleUrl: import.meta.url, sourceWorkerName: "one-shot-exit" }),

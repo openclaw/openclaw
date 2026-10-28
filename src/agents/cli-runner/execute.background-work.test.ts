@@ -24,6 +24,13 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+const backgroundTasks = (active: boolean) => ({
+  type: "system" as const,
+  subtype: "background_tasks_changed" as const,
+  tasks: active ? [{ task_id: "background", task_type: "local_agent" }] : [],
+});
+const execute = wrapPreparedCliRunWithTestAdmission(executePreparedCliRun);
+
 it("keeps background work alive through model recovery and releases its allowance on clear", async () => {
   vi.useFakeTimers({
     toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
@@ -57,14 +64,10 @@ it("keeps background work alive through model recovery and releases its allowanc
   context.executionTarget = {
     kind: "plugin",
     async *execute() {
-      yield {
-        type: "system",
-        subtype: "background_tasks_changed",
-        tasks: [{ task_id: "background-agent", task_type: "local_agent" }],
-      };
+      yield backgroundTasks(true);
       started.resolve(Date.now());
       await clear.promise;
-      yield { type: "system", subtype: "background_tasks_changed", tasks: [] };
+      yield backgroundTasks(false);
       cleared.resolve(Date.now());
       await finish.promise;
       yield { type: "result", subtype: "success", result: "background completed" };
@@ -75,12 +78,13 @@ it("keeps background work alive through model recovery and releases its allowanc
   logSessionStateChange({ ...context.params, state: "processing" });
   markDiagnosticEmbeddedRunStarted({ ...context.params, owner });
   markDiagnosticModelStartedForTest({ ...context.params, model: context.modelId });
-  const run = wrapPreparedCliRunWithTestAdmission(executePreparedCliRun)(context);
+  const run = execute(context);
+  const snapshot = () => getDiagnosticSessionActivitySnapshot(context.params);
   try {
     const startedAt = await started.promise;
     await vi.advanceTimersByTimeAsync(390_000);
     expect(recoverStuckSession).not.toHaveBeenCalled();
-    expect(getDiagnosticSessionActivitySnapshot(context.params)).toMatchObject({
+    expect(snapshot()).toMatchObject({
       activeWorkKind: "model_call",
       activeBackendLivenessDeadlineAtMs: startedAt + BLOCKED_TOOL_CALL_ABORT_FLOOR_MS,
       lastProgressAgeMs: 390_000,
@@ -88,16 +92,14 @@ it("keeps background work alive through model recovery and releases its allowanc
 
     clear.resolve();
     const clearedAt = await cleared.promise;
-    expect(getDiagnosticSessionActivitySnapshot(context.params)).toMatchObject({
+    expect(snapshot()).toMatchObject({
       activeBackendLivenessDeadlineAtMs: clearedAt + 180_000,
       lastProgressAgeMs: 390_000,
     });
     finish.resolve();
     await expect(run).resolves.toMatchObject({ text: "background completed" });
     await waitForDiagnosticEventsDrained();
-    expect(
-      getDiagnosticSessionActivitySnapshot(context.params).activeBackendLivenessDeadlineAtMs,
-    ).toBeUndefined();
+    expect(snapshot().activeBackendLivenessDeadlineAtMs).toBeUndefined();
   } finally {
     clear.resolve();
     finish.resolve();
@@ -126,11 +128,7 @@ it("emits transformed completed replies while the native continuation remains ac
   context.executionTarget = {
     kind: "plugin",
     async *execute() {
-      yield {
-        type: "system",
-        subtype: "background_tasks_changed",
-        tasks: [{ task_id: "background", task_type: "local_agent" }],
-      };
+      yield backgroundTasks(true);
       yield {
         type: "result",
         subtype: "success",
@@ -139,17 +137,15 @@ it("emits transformed completed replies while the native continuation remains ac
       };
       paused.resolve();
       await finish.promise;
-      yield { type: "system", subtype: "background_tasks_changed", tasks: [] };
+      yield backgroundTasks(false);
       yield { type: "result", subtype: "success", result: "Last PRIVATE_MARKER." };
     },
   };
-  let settled = false;
-  const run = wrapPreparedCliRunWithTestAdmission(executePreparedCliRun)(context).finally(() => {
-    settled = true;
-  });
+  const settled = vi.fn();
+  const run = execute(context).finally(settled);
   try {
     await paused.promise;
-    expect(settled).toBe(false);
+    expect(settled).not.toHaveBeenCalled();
     expect(replies).toEqual(["First answer."]);
     finish.resolve();
     await expect(run).resolves.toMatchObject({

@@ -4,79 +4,44 @@ import { finalizeDoctorConfigFlow } from "./finalize-config-flow.js";
 
 describe("doctor finalize config flow", () => {
   it.each([
-    {
-      name: "confirmed preview",
-      repair: false,
-      pending: true,
-      accepted: true,
-      write: true,
-      candidate: true,
+    // name, repair, pending, accepted, write, useCandidate
+    ["confirmed preview", false, true, true, true, true],
+    ["declined preview", false, true, false, false, false],
+    ["automatic repair", true, true, true, true, false],
+    ["unchanged preview", false, false, true, false, false],
+    ["unchanged repair", true, false, true, false, false],
+  ] as const)(
+    "finalizes %s against the original revision",
+    async (_name, repair, pending, accepted, write, useCandidate) => {
+      const cfg = {};
+      const candidate = { channels: { signal: { enabled: false } } };
+      const snapshot = { path: "/config.json", hash: "source-hash", raw: null };
+      const hint = 'Run "openclaw doctor --fix" to apply these changes.';
+      const note = vi.fn();
+      const confirm = vi.fn(async () => {
+        snapshot.path = "/different.json";
+        snapshot.hash = "different-revision";
+        return accepted;
+      });
+      const result = await finalizeDoctorConfigFlow({
+        cfg,
+        candidate,
+        snapshot,
+        pendingChanges: pending,
+        shouldRepair: repair,
+        fixHints: [hint],
+        confirm,
+        note,
+      });
+      expect(result).toEqual({
+        cfg: useCandidate ? candidate : cfg,
+        shouldWriteConfig: write,
+        confirmedConfigSource: { path: "/config.json", hash: "source-hash" },
+      });
+      expect(confirm).toHaveBeenCalledTimes(!repair && pending ? 1 : 0);
+      expect(note.mock.calls).toEqual(accepted ? [] : [[hint, "Doctor"]]);
     },
-    {
-      name: "declined preview",
-      repair: false,
-      pending: true,
-      accepted: false,
-      write: false,
-      candidate: false,
-    },
-    {
-      name: "automatic repair",
-      repair: true,
-      pending: true,
-      accepted: true,
-      write: true,
-      candidate: false,
-    },
-    {
-      name: "unchanged preview",
-      repair: false,
-      pending: false,
-      accepted: true,
-      write: false,
-      candidate: false,
-    },
-    {
-      name: "unchanged repair",
-      repair: true,
-      pending: false,
-      accepted: true,
-      write: false,
-      candidate: false,
-    },
-  ])("finalizes $name against the original revision", async (scenario) => {
-    const cfg = { channels: { signal: { enabled: true } } };
-    const candidate = { channels: { signal: { enabled: false } } };
-    const snapshot = { path: "/config.json", hash: "source-hash", raw: null };
-    const hint = 'Run "openclaw doctor --fix" to apply these changes.';
-    const note = vi.fn();
-    const confirm = vi.fn(async () => {
-      snapshot.path = "/different.json";
-      snapshot.hash = "different-revision";
-      return scenario.accepted;
-    });
-    const result = await finalizeDoctorConfigFlow({
-      cfg,
-      candidate,
-      snapshot,
-      pendingChanges: scenario.pending,
-      shouldRepair: scenario.repair,
-      fixHints: [hint],
-      confirm,
-      note,
-    });
-    expect(result).toEqual({
-      cfg: scenario.candidate ? candidate : cfg,
-      shouldWriteConfig: scenario.write,
-      confirmedConfigSource: { path: "/config.json", hash: "source-hash" },
-    });
-    expect(confirm).toHaveBeenCalledTimes(!scenario.repair && scenario.pending ? 1 : 0);
-    if (!scenario.accepted) {
-      expect(note).toHaveBeenCalledWith(hint, "Doctor");
-    } else {
-      expect(note).not.toHaveBeenCalled();
-    }
-  });
+  );
 
   it.each([null, "{}"])(
     "retains the raw revision when the snapshot has no hash (%s)",

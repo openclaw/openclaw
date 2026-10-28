@@ -2,7 +2,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isPathInside } from "@openclaw/fs-safe/path";
 import * as tar from "tar";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { readConfigFileSnapshot, resolveStateDir } from "../config/config.js";
+import { prepareRestoredClientCredentials } from "../infra/client-credential-restore.js";
 import { formatDiskSpaceBytes, tryReadDiskSpace } from "../infra/disk-space.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
@@ -143,8 +145,10 @@ async function restorePostgresExports(
   recoveryConfigPath: string | undefined,
   recoveryConfigContextPath: string | undefined,
   archiveRoot: string,
+  publishCompanions?: () => void,
 ): Promise<void> {
   if (candidates.length === 0) {
+    publishCompanions?.();
     return;
   }
   if (!recoveryConfigPath) {
@@ -213,6 +217,8 @@ async function restorePostgresExports(
             afterPublish: (guard) => guard.assertTargetMatchesExpectedContent(assertCurrent),
           });
         }
+        assertCurrent();
+        publishCompanions?.();
         for (const { directoryPath } of postgres) {
           for (const name of ["manifest.json", "anchor.sqlite", "database.sqlite"]) {
             await fs.unlink(path.join(targetPath, directoryPath, name));
@@ -256,13 +262,13 @@ async function restorePostgresExports(
 
 function formatRestoreResult(result: BackupRestoreResult): string {
   return [
-    `Backup archive restored to staging: ${shortenHomePath(result.targetPath)}`,
-    `Verified archive: ${shortenHomePath(result.archivePath)}`,
-    `Archive root: ${result.archiveRoot}`,
-    `Archive entries restored: ${result.entryCount}`,
+    terminalText`Backup archive restored to staging: ${shortenHomePath(result.targetPath)}`,
+    terminalText`Verified archive: ${shortenHomePath(result.archivePath)}`,
+    terminalText`Archive root: ${result.archiveRoot}`,
+    terminalText`Archive entries restored: ${result.entryCount}`,
     "",
     "Rollback warnings:",
-    ...result.warnings.map((warning) => `- ${warning}`),
+    ...result.warnings.map((warning) => terminalText`- ${warning}`),
     "",
     "Activation is explicit: stop the Gateway, move the restored asset tree into place or point OPENCLAW_STATE_DIR at the restored state asset, then run `openclaw doctor`.",
   ].join("\n");
@@ -283,6 +289,7 @@ export async function backupRestoreCommand(
     databaseRestoreCandidates,
     recoveryConfigPath,
     recoveryConfigContextPath,
+    manifest,
   } = await prepareBackupArchive(options.archive);
   assertRestoreCapacity(targetPath, regularFileExtractionBytes);
   const target = await prepareRestoreTarget(targetPath);
@@ -294,6 +301,7 @@ export async function backupRestoreCommand(
       hardlinkTargets,
       new Set(symbolicLinks.map(({ entryPath }) => entryPath)),
     );
+    const restoreClientCredentials = prepareRestoredClientCredentials({ manifest, targetPath });
     // Materialize all parents before links: filesystem aliases then collide with
     // directories instead of letting an earlier link redirect a later write.
     for (const { entryPath } of symbolicLinks) {
@@ -308,6 +316,7 @@ export async function backupRestoreCommand(
       recoveryConfigPath,
       recoveryConfigContextPath,
       verified.archiveRoot,
+      restoreClientCredentials,
     );
   } catch (extractionError) {
     try {

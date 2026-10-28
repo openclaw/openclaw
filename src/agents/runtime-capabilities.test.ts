@@ -1,18 +1,22 @@
 // Verifies runtime channel capabilities derived from channel account config.
 import { describe, expect, it } from "vitest";
-import { collectRuntimeChannelCapabilities } from "./runtime-capabilities.js";
+import { resolveRuntimeChannelPromptContext } from "./runtime-capabilities.js";
 
-describe("collectRuntimeChannelCapabilities", () => {
+describe("resolveRuntimeChannelPromptContext", () => {
   it("advertises markdown details for internal webchat", () => {
-    expect(collectRuntimeChannelCapabilities({ channel: "webchat" })).toEqual(["markdownDetails"]);
+    expect(resolveRuntimeChannelPromptContext({ channel: "webchat" }).runtimeCapabilities).toEqual([
+      "markdownDetails",
+    ]);
   });
 
   it("does not advertise markdown details for a plugin-less non-webchat channel", () => {
-    expect(collectRuntimeChannelCapabilities({ channel: "heartbeat" })).toBeUndefined();
+    expect(
+      resolveRuntimeChannelPromptContext({ channel: "heartbeat" }).runtimeCapabilities,
+    ).toBeUndefined();
   });
 
   it("adds thread-bound spawn capabilities when the channel account allows unified spawns", () => {
-    const capabilities = collectRuntimeChannelCapabilities({
+    const { runtimeCapabilities: capabilities } = resolveRuntimeChannelPromptContext({
       channel: "discord",
       accountId: "default",
       requester: { currentChannelId: "channel:parent" },
@@ -29,7 +33,7 @@ describe("collectRuntimeChannelCapabilities", () => {
   });
 
   it("omits thread-bound spawn capabilities when unified spawns are disabled", () => {
-    const capabilities = collectRuntimeChannelCapabilities({
+    const { runtimeCapabilities: capabilities } = resolveRuntimeChannelPromptContext({
       channel: "discord",
       accountId: "default",
       requester: { currentChannelId: "channel:parent" },
@@ -54,11 +58,11 @@ describe("collectRuntimeChannelCapabilities", () => {
     },
   ])("omits thread-bound capabilities without a trusted current conversation (%j)", (requester) => {
     expect(
-      collectRuntimeChannelCapabilities({
+      resolveRuntimeChannelPromptContext({
         channel: "discord",
         cfg: { session: { threadBindings: { spawnSessions: true } } },
         requester,
-      }),
+      }).runtimeCapabilities,
     ).toBeUndefined();
   });
 });

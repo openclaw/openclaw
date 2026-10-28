@@ -1,123 +1,144 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveCronJobConfigRevision } from "./config-revision.js";
+import { cronTestJob } from "./service.fixture-builders.test-support.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
 import { loadCronStore, saveCronStore } from "./store.js";
-import type { CronJob } from "./types.js";
+import { cronStoreKey } from "./store/key.js";
+import { loadedCronStoreFromRows, loadCronRows } from "./store/row-codec.js";
+import { makeCronStreamSandboxTarget } from "./stream-sandbox.test-support.js";
+import type { CronJob, CronStoredJob } from "./types.js";
 
 const { makeStorePath } = setupCronServiceSuite({ prefix: "cron-config-revision-" });
+const message = "Summarize the day";
 
-function makeJob(): CronJob {
-  return {
+function makeJob(overrides: Partial<CronJob> = {}): CronJob {
+  return cronTestJob({
     id: "job-1",
     name: "daily report",
-    enabled: true,
     createdAtMs: 1_000,
     updatedAtMs: 2_000,
     schedule: { kind: "cron", expr: "0 9 * * *", tz: "UTC" },
-    sessionTarget: "isolated",
-    wakeMode: "next-heartbeat",
-    payload: { kind: "agentTurn", message: "Summarize the day" },
+    payload: { kind: "agentTurn", message },
     delivery: { mode: "announce", channel: "telegram", to: "chat-1" },
-    state: {},
-  };
+    ...overrides,
+  });
 }
 
-describe("resolveCronJobConfigRevision", () => {
-  it("is stable across the SQLite store round-trip", async () => {
-    const { storePath } = await makeStorePath();
-    const job: CronJob = {
+it.each([
+  { sessionId: "replacement-session" },
+  { lifecycleRevision: "replacement-generation" },
+  { scopeKey: "different-sandbox" },
+  { workspaceDir: "/other/workspace" },
+  { configLabel: "changed-policy" },
+  {
+    operator: {
+      ...makeCronStreamSandboxTarget().operator!,
+      gatewayAccessGrant: { pluginId: "access", grantId: "replacement-grant" },
+    },
+  },
+])("binds sandbox target and original authority changes: %j", (change) => {
+  const job: CronStoredJob = {
+    ...makeJob(),
+    schedule: { kind: "stream", command: ["watch-source"] },
+    streamSandbox: makeCronStreamSandboxTarget(),
+  };
+  expect(
+    resolveCronJobConfigRevision({ ...job, streamSandbox: makeCronStreamSandboxTarget(change) }),
+  ).not.toBe(resolveCronJobConfigRevision(job));
+});
+
+it("preserves order when case-insensitive command env keys collide on Windows", () => {
+  const revision = (env: Record<string, string>) =>
+    resolveCronJobConfigRevision(
+      makeJob({ payload: { kind: "command", argv: ["printenv"], env } }),
+    );
+  expect(revision({ Path: "first", PATH: "second" })).not.toBe(
+    revision({ PATH: "second", Path: "first" }),
+  );
+});
+
+it("distinguishes inherited and explicitly cleared delivery fields", () => {
+  const inherited = makeJob();
+  expect(
+    resolveCronJobConfigRevision({
+      ...inherited,
+      delivery: { ...inherited.delivery!, failureDestination: { channel: undefined } },
+    }),
+  ).not.toBe(resolveCronJobConfigRevision(inherited));
+});
+
+it("matches SQLite normalization across optional fields, schedules, payloads, triggers, and alerts", async () => {
+  const { storePath } = await makeStorePath();
+  const jobs: CronStoredJob[] = [
+    {
       ...makeJob(),
+      id: "sandbox-stream",
+      schedule: { kind: "stream", command: ["watch-source"] },
+      streamSandbox: makeCronStreamSandboxTarget(),
+    },
+    makeJob({
       agentId: undefined,
       description: undefined,
-      payload: {
-        kind: "agentTurn",
-        message: "Summarize the day",
-        toolsAllow: ["read"],
-        toolsAllowIsDefault: false,
-      },
+      payload: { kind: "agentTurn", message, toolsAllow: ["read"], toolsAllowIsDefault: false },
       delivery: {
         mode: "announce",
-        failureDestination: {
-          channel: undefined,
-          accountId: undefined,
-        },
+        failureDestination: { channel: undefined, accountId: undefined },
       },
-    };
-
-    await saveCronStore(storePath, { version: 1, jobs: [job] });
-    const reloaded = (await loadCronStore(storePath)).jobs[0];
-    if (!reloaded) {
-      throw new Error("expected the persisted cron job to reload");
-    }
-
-    expect(resolveCronJobConfigRevision(reloaded)).toBe(resolveCronJobConfigRevision(job));
+    }),
+    makeJob({
+      id: "command-empty-env",
+      schedule: { kind: "every", everyMs: MAX_DATE_TIMESTAMP_MS, anchorMs: 0 },
+      payload: { kind: "command", argv: ["true"], env: {}, input: "" },
+      failureAlert: false,
+    }),
+    makeJob({
+      id: "default-tools-without-list",
+      schedule: { kind: "cron", expr: "0 9 * * *", tz: "" },
+      payload: { kind: "agentTurn", message, toolsAllowIsDefault: true },
+      failureAlert: {},
+      trigger: { script: "json({ fire: true })", once: true },
+    }),
+    makeJob({
+      id: "windows-env-key-order",
+      payload: { kind: "command", argv: ["printenv"], env: { Path: "first", PATH: "second" } },
+    }),
+    makeJob({
+      id: "default-empty-tools",
+      schedule: { kind: "at", at: "2027-01-01T00:00:00.000Z" },
+      payload: { kind: "agentTurn", message, toolsAllow: [], toolsAllowIsDefault: true },
+    }),
+    makeJob({
+      id: "on-exit-system-event",
+      schedule: { kind: "on-exit", command: "true", cwd: "/tmp" },
+      sessionTarget: "main",
+      payload: { kind: "systemEvent", text: "Process exited" },
+      delivery: undefined,
+      failureAlert: { after: 2, cooldownMs: 0, includeSkipped: false },
+    }),
+  ];
+  await saveCronStore(storePath, { version: 1, jobs });
+  const sandboxRow = expectDefined(
+    loadCronRows(openOpenClawStateDatabase().db, cronStoreKey(storePath)).find(
+      (row) => row.job_id === "sandbox-stream",
+    ),
+    "persisted sandbox stream row",
+  );
+  expect(JSON.parse(sandboxRow.job_json)).toMatchObject({
+    schedule: { kind: "sandbox-stream", command: ["watch-source"] },
+    streamSandbox: makeCronStreamSandboxTarget(),
   });
-
-  it("matches SQLite normalization across schedule, payload, trigger, and alert variants", async () => {
-    const { storePath } = await makeStorePath();
-    const jobs: CronJob[] = [
-      {
-        ...makeJob(),
-        id: "command-empty-env",
-        schedule: { kind: "every", everyMs: MAX_DATE_TIMESTAMP_MS, anchorMs: 0 },
-        payload: { kind: "command", argv: ["true"], env: {}, input: "" },
-        failureAlert: false,
-      },
-      {
-        ...makeJob(),
-        id: "default-tools-without-list",
-        schedule: { kind: "cron", expr: "0 9 * * *", tz: "" },
-        payload: {
-          kind: "agentTurn",
-          message: "Summarize the day",
-          toolsAllowIsDefault: true,
-        },
-        failureAlert: {},
-        trigger: { script: "json({ fire: true })", once: true },
-      },
-      {
-        ...makeJob(),
-        id: "windows-env-key-order",
-        payload: {
-          kind: "command",
-          argv: ["printenv"],
-          env: { Path: "first", PATH: "second" },
-        },
-      },
-      {
-        ...makeJob(),
-        id: "default-empty-tools",
-        schedule: { kind: "at", at: "2027-01-01T00:00:00.000Z" },
-        payload: {
-          kind: "agentTurn",
-          message: "Summarize the day",
-          toolsAllow: [],
-          toolsAllowIsDefault: true,
-        },
-      },
-      {
-        ...makeJob(),
-        id: "on-exit-system-event",
-        schedule: { kind: "on-exit", command: "true", cwd: "/tmp" },
-        sessionTarget: "main",
-        payload: { kind: "systemEvent", text: "Process exited" },
-        delivery: undefined,
-        failureAlert: { after: 2, cooldownMs: 0, includeSkipped: false },
-      },
-    ];
-
-    await saveCronStore(storePath, { version: 1, jobs });
-    const reloadedById = new Map((await loadCronStore(storePath)).jobs.map((job) => [job.id, job]));
-
-    for (const job of jobs) {
-      const reloaded = reloadedById.get(job.id);
-      if (!reloaded) {
-        throw new Error(`expected persisted cron job ${job.id} to reload`);
-      }
-      expect(resolveCronJobConfigRevision(reloaded), job.id).toBe(
-        resolveCronJobConfigRevision(job),
-      );
-    }
+  expect(loadedCronStoreFromRows([sandboxRow]).configJobs[0]).toMatchObject({
+    schedule: { kind: "sandbox-stream" },
   });
+  expect(
+    loadedCronStoreFromRows([{ ...sandboxRow, state_json: "invalid" }]).invalidConfigRows[0],
+  ).toMatchObject({ reason: "invalid-state", job: { schedule: { kind: "sandbox-stream" } } });
+  const reloadedById = new Map((await loadCronStore(storePath)).jobs.map((job) => [job.id, job]));
+  for (const job of jobs) {
+    const reloaded = expectDefined(reloadedById.get(job.id), `persisted cron job ${job.id}`);
+    expect(resolveCronJobConfigRevision(reloaded), job.id).toBe(resolveCronJobConfigRevision(job));
+  }
 });

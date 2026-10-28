@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { hasErrnoCode } from "../infra/errno.js";
+import { ignoreMissingPath } from "../infra/errno.js";
 import type { PluginDoctorStateMigration } from "./doctor-contract-module.js";
 
 type StateLocation = Pick<
@@ -44,9 +44,7 @@ export function defineRetiredPluginStateMigration(params: {
           }
         }
       } catch (error) {
-        if (!hasErrnoCode(error, "ENOENT")) {
-          throw error;
-        }
+        ignoreMissingPath(error);
       }
     }
     return [...new Set(sources)].toSorted();

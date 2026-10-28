@@ -126,21 +126,9 @@ export async function loadMemoryWikiVaultIdentity(
       if (fragments.length > 0) {
         consumeLine(fragments.join(""));
       }
-    } catch (error) {
-      try {
-        await handle.close();
-      } catch (closeError) {
-        throw new AggregateError(
-          [error, closeError],
-          "Memory Wiki journal read and close failed.",
-          {
-            cause: closeError,
-          },
-        );
-      }
-      throw error;
+    } finally {
+      await handle.close();
     }
-    await handle.close();
   } catch (error) {
     if (error instanceof Error && "code" in error && error.code === "ENOENT") {
       return emptyIdentity;
@@ -150,7 +138,7 @@ export async function loadMemoryWikiVaultIdentity(
   return identity;
 }
 
-export async function resolveMemoryWikiVaultSourceGeneration(vaultRoot: string): Promise<string> {
+async function resolveMemoryWikiVaultSourceGeneration(vaultRoot: string): Promise<string> {
   const files = (
     await Promise.all(
       COMPILED_SOURCE_DIRECTORIES.map((relativeDir) =>

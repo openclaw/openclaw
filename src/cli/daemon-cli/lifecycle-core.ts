@@ -1,7 +1,6 @@
-// Gateway service lifecycle command core: install, uninstall, start, stop, restart.
 import { readBestEffortConfig } from "../../config/config.js";
 import { resolveIsNixMode } from "../../config/paths.js";
-import { checkTokenDrift } from "../../daemon/service-audit.js";
+import { checkManagedServiceEnvDrift, checkTokenDrift } from "../../daemon/service-audit.js";
 import { readGatewayServiceLoadState } from "../../daemon/service-load-state.js";
 import {
   collectGatewayServiceStartRepairIssues,
@@ -143,6 +142,7 @@ function warnServiceConfig(
 export async function runServiceUninstall(params: {
   serviceNoun: string;
   service: GatewayService;
+  renderFailureHints: () => string[];
   opts?: ServiceLifecycleOptions;
   stopBeforeUninstall: boolean;
   assertNotLoadedAfterUninstall: boolean;
@@ -171,7 +171,7 @@ export async function runServiceUninstall(params: {
   try {
     await params.service.uninstall({ env: process.env, stdout });
   } catch (err) {
-    fail(`${params.serviceNoun} uninstall failed: ${String(err)}`);
+    fail(`${params.serviceNoun} uninstall failed: ${String(err)}`, params.renderFailureHints());
     return;
   }
   loaded = await resolveServiceLoadedOrFail(params, fail, {
@@ -181,7 +181,10 @@ export async function runServiceUninstall(params: {
     return;
   }
   if (loaded && params.assertNotLoadedAfterUninstall) {
-    fail(`${params.serviceNoun} service still loaded after uninstall.`);
+    fail(
+      `${params.serviceNoun} service still loaded after uninstall.`,
+      params.renderFailureHints(),
+    );
     return;
   }
   warnServiceConfig(await getServiceActionPreflightFailure("uninstall"), { json, warnings });
@@ -366,6 +369,7 @@ export async function runServiceStart(params: {
 export async function runServiceStop(params: {
   serviceNoun: string;
   service: GatewayService;
+  renderFailureHints: () => string[];
   opts?: ServiceLifecycleOptions;
   onNotLoaded?: (ctx: ServiceRecoveryContext) => Promise<ServiceRecoveryResult<"stopped"> | null>;
   stopWhenNotLoaded?: boolean;
@@ -402,7 +406,7 @@ export async function runServiceStop(params: {
       if (err instanceof ExitError) {
         throw err;
       }
-      fail(`${params.serviceNoun} stop failed: ${String(err)}`);
+      fail(`${params.serviceNoun} stop failed: ${String(err)}`, params.renderFailureHints());
       return;
     }
     warnServiceConfig(await getServiceActionPreflightFailure("stop"), { json, warnings });
@@ -422,7 +426,7 @@ export async function runServiceStop(params: {
       onMutation: gatewayStopAudit,
     });
   } catch (err) {
-    fail(`${params.serviceNoun} stop failed: ${String(err)}`);
+    fail(`${params.serviceNoun} stop failed: ${String(err)}`, params.renderFailureHints());
     return;
   }
 
@@ -592,35 +596,49 @@ export async function runServiceRestart(params: {
   }
 
   if (loaded && !handledRecovery && !configIssue && params.checkTokenDrift) {
+    const warnDrift = (message: string, source?: string) => {
+      const recovery = source
+        ? (resolveDaemonInstallBlockMessage("gateway") ??
+          `Run \`${formatCliCommand("openclaw gateway install --force")}\` to refresh the service ${source}.`)
+        : undefined;
+      const warning = recovery ? `${message} ${recovery}` : message;
+      warnings.push(warning);
+      if (!json) {
+        defaultRuntime.log(`\n⚠️  ${warning}\n`);
+      }
+    };
     try {
       const command = await params.service.readCommand(process.env);
-      const serviceToken = command?.environment?.OPENCLAW_GATEWAY_TOKEN;
       const cfg = await readBestEffortConfig();
-      const driftEnv = {
-        ...process.env,
-        ...command?.environment,
-      };
-      const configToken = await resolveGatewayTokenForDriftCheck({ cfg, env: driftEnv });
-      const driftIssue = checkTokenDrift({ serviceToken, configToken });
-      if (driftIssue) {
-        const recovery =
-          resolveDaemonInstallBlockMessage("gateway") ??
-          `Run \`${formatCliCommand("openclaw gateway install --force")}\` to refresh the service token source.`;
-        const warning = `${driftIssue.message} ${recovery}`;
-        warnings.push(warning);
-        if (!json) {
-          defaultRuntime.log(`\n⚠️  ${warning}\n`);
+      const driftEnv = { ...process.env, ...command?.environment };
+      try {
+        const configToken = await resolveGatewayTokenForDriftCheck({ cfg, env: driftEnv });
+        const issue = checkTokenDrift({
+          serviceToken: command?.environment?.OPENCLAW_GATEWAY_TOKEN,
+          configToken,
+        });
+        if (issue) {
+          warnDrift(issue.message, "token source");
+        }
+      } catch (err) {
+        if (isGatewaySecretRefUnavailableError(err, "gateway.auth.token")) {
+          warnDrift(
+            "Unable to verify gateway token drift: gateway.auth.token SecretRef is configured but unavailable in this command path.",
+          );
         }
       }
-    } catch (err) {
-      if (isGatewaySecretRefUnavailableError(err, "gateway.auth.token")) {
-        const warning =
-          "Unable to verify gateway token drift: gateway.auth.token SecretRef is configured but unavailable in this command path.";
-        warnings.push(warning);
-        if (!json) {
-          defaultRuntime.log(`\n⚠️  ${warning}\n`);
-        }
+      const { collectDurableServiceEnvVars } = await import("../../config/state-dir-dotenv.js");
+      const { collectEnvSecretRefIds } = await import("../../config/resolution-facts.js");
+      const issue = checkManagedServiceEnvDrift({
+        command,
+        durableEnvironment: collectDurableServiceEnvVars({ env: driftEnv, config: cfg }),
+        secretRefKeys: collectEnvSecretRefIds(cfg),
+      });
+      if (issue) {
+        warnDrift(issue.message, "environment");
       }
+    } catch {
+      // Drift inspection is best effort and must not block restart.
     }
   }
 

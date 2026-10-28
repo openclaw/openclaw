@@ -1,3 +1,6 @@
+import { markdownContentHtml } from "../lib/markdown-content.ts";
+import { toStreamingMarkdownDomParts } from "./markdown-live.ts";
+
 export function htmlFragment(html: string): HTMLElement {
   const container = document.createElement("div");
   container.innerHTML = html;
@@ -16,4 +19,11 @@ export function withControlUiBasePath<T>(basePath: string, fn: () => T): T {
   } finally {
     delete testWindow["__OPENCLAW_CONTROL_UI_BASE_PATH__"];
   }
+}
+
+export function toStreamingMarkdownParts(
+  ...args: Parameters<typeof toStreamingMarkdownDomParts>
+): [string, string] {
+  const [stable, tail] = toStreamingMarkdownDomParts(...args);
+  return [markdownContentHtml(stable), markdownContentHtml(tail)];
 }

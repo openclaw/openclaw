@@ -79,23 +79,17 @@ export async function startAgentRunExecution(params: StartAgentRunExecutionParam
   }
   const run = () =>
     // Autonomous turns prepare their own workspace and cannot borrow a previous chat run's gate.
-    runWithAgentWorkspaceReadiness(undefined, () => executeAgentRun(params));
-  try {
-    await runWithSessionControllerCleanup(() =>
-      input ? withSessionControllerSource(input, run) : run(),
-    );
-    cleanup.resolve();
-  } catch (error) {
-    // A resource-owner receipt proves completed disposal despite callback errors.
-    // Other cleanup failures retain source custody until explicit recovery.
-    if (error instanceof PluginRuntimeCloseCompletedError) {
-      cleanup.resolve();
-    }
-    throw error;
-  }
+    runWithAgentWorkspaceReadiness(undefined, () => executeAgentRun(params, cleanup.resolve));
+  await runWithSessionControllerCleanup(() =>
+    input ? withSessionControllerSource(input, run) : run(),
+  );
+  cleanup.resolve();
 }
 
-async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<void> {
+async function executeAgentRun(
+  params: StartAgentRunExecutionParams,
+  acknowledgeCleanup: () => void,
+): Promise<void> {
   const { prepared } = params;
   let deliverFinal: (() => void) | undefined;
   const deferFinal = (...args: Parameters<typeof params.io.emitFinal>) => {
@@ -123,9 +117,23 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
   let unpersistedOffloadedRefs = prepared.unpersistedOffloadedRefs;
   const releaseGatewayRootContinuation = retainGatewayRootWorkAdmissionContinuation() ?? undefined;
   let dispatched = false;
+  let executionSettled = false;
+  let runtimeDisposed = false;
   try {
-    await using runtimeResources = new AsyncDisposableStack();
-    let preparedModelRuntimeLease = runtimeResources.use(prepared.preparedModelRuntimeLease);
+    await using runtimeResources = {
+      stack: new AsyncDisposableStack(),
+      async [Symbol.asyncDispose]() {
+        try {
+          await this.stack.disposeAsync();
+          runtimeDisposed = true;
+        } catch (error) {
+          // Capture the owner's receipt before await-using combines it with a publication error.
+          runtimeDisposed = error instanceof PluginRuntimeCloseCompletedError;
+          throw error;
+        }
+      },
+    };
+    let preparedModelRuntimeLease = runtimeResources.stack.use(prepared.preparedModelRuntimeLease);
     let replyDispatchRuntime = prepared.replyDispatchRuntime;
     let workspaceOverride = prepared.workspaceOverride;
     let leaseActive = true;
@@ -141,7 +149,7 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
         }
       : undefined;
     const assertSettlementCurrent = () => {
-      params.assertContextCurrent?.();
+      params.assertGatewayLifetimeCurrent?.();
       assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
       // Cancellation closes execution, but its retained producer still records the outcome.
       if (
@@ -153,7 +161,8 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
       }
     };
     const assertDispatchCurrent = () => {
-      params.assertContextCurrent?.();
+      params.assertGatewayLifetimeCurrent?.();
+      params.executionSource?.();
       prepared.operatorAuthority?.assertCurrent();
       prepared.userTurn.assertRequesterCurrent?.();
       abortController.signal.throwIfAborted();
@@ -283,7 +292,7 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
             workspaceDir: entry.spawnedWorkspaceDir,
             cwd: entry.spawnedCwd,
           });
-          preparedModelRuntimeLease = runtimeResources.use(
+          preparedModelRuntimeLease = runtimeResources.stack.use(
             await prepared.acquireWorkspaceModelRuntime(workspaceOverride),
           );
           assertDispatchCurrent();
@@ -293,9 +302,7 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
           });
         }
 
-        let message = prepared.userTurn.message;
-        let execApprovalContinuationPromptRange =
-          prepared.userTurn.execApprovalContinuationPromptRange;
+        let { message, execApprovalContinuationPromptRange } = prepared.userTurn;
         const execApprovalContinuationTranscriptPromptRange = execApprovalContinuationPromptRange;
 
         // Admission owns plugin/settlement adoption; other inter-session work
@@ -304,10 +311,13 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
           await reactivateCompletedSubagentSession({
             sessionKey: params.resolvedSessionKey,
             runId: params.runId,
-            task: message,
+            ...(params.inputProvenance?.kind === "internal_system" &&
+            params.inputProvenance.sourceTool === "subagent_restart_recovery"
+              ? {}
+              : { task: message }),
             gatewayContextResolver: params.context.resolveGatewayContext,
             assertCurrent: assertDispatchCurrent,
-            acpSession: params,
+            session: params,
           });
         }
         if (
@@ -397,7 +407,7 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
           prepared.operatorAuthority?.profileId,
         );
         // Awaited routing can retire this owner before final dispatch.
-        params.assertContextCurrent?.();
+        params.assertGatewayLifetimeCurrent?.();
         const callerContext = resolveChatSendCallerContext(params.client);
         const clientCaps = [...callerContext.GatewayClientCaps];
         const gatewayUiCommandTarget = captureGatewayUiCommandTarget(params.client);
@@ -412,7 +422,7 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
                 {
                   client: params.client,
                   context: gatewayContext,
-                  sessionMutationCommitGuard: params.assertContextCurrent,
+                  sessionMutationCommitGuard: params.assertGatewayLifetimeCurrent,
                 },
                 params.resolvedSessionKey,
                 !params.inputProvenance &&
@@ -443,6 +453,7 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
               },
               cronCreatorAuthority: prepared.cronCreatorAuthority,
               ingressOpts: {
+                assertSourceCurrent: params.executionSource,
                 skillLibraryAuthoring,
                 message,
                 images: params.images,
@@ -474,9 +485,7 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
                 ...(execApprovalContinuationPromptRange
                   ? { execApprovalContinuationPromptRange }
                   : {}),
-                ...(execApprovalContinuationTranscriptPromptRange
-                  ? { execApprovalContinuationTranscriptPromptRange }
-                  : {}),
+                execApprovalContinuationTranscriptPromptRange,
                 groupId: params.groupId,
                 groupChannel: params.groupChannel,
                 groupSpace: params.groupSpace,
@@ -511,7 +520,7 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
                 cliSessionBindingFacts: params.restoredCronContinuation?.cliSessionBindingFacts,
                 acpTurnSource: params.request.acpTurnSource,
                 internalEvents: params.request.internalEvents,
-                runtimeContextFragments: params.client?.internal?.runtimeContextFragments,
+                runtimeContextFragments: prepared.userTurn.runtimeContextFragments,
                 inputProvenance: params.inputProvenance,
                 privateCompletion: prepared.userTurn.privateCompletion,
                 replyExpectation: prepared.userTurn.replyExpectation,
@@ -560,17 +569,6 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
                     return;
                   }
                   params.io.emitExecutionStarted?.();
-                  if (params.resolvedSessionKey) {
-                    emitSessionsChanged(
-                      params.context,
-                      {
-                        sessionKey: params.resolvedSessionKey,
-                        agentId: params.agentId,
-                        reason: "agent.run.started",
-                      },
-                      { accessChanged: false },
-                    );
-                  }
                 },
                 onActiveModelSelected: createAgentRunModelSelectionHandler({
                   runId: params.runId,
@@ -688,6 +686,7 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
     await (prepared.activeGatewayWorkAdmission
       ? prepared.activeGatewayWorkAdmission.run(execute)
       : execute());
+    executionSettled = true;
     deliverFinal?.();
   } finally {
     // Shutdown joins the execution through asynchronous runtime disposal, not just bookkeeping.
@@ -698,6 +697,10 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
       if (!dispatched) {
         prepared.followupCompletion?.finishExecution(params.runId);
       }
+    }
+    // A refused final response does not undo completed execution and disposal.
+    if (executionSettled && runtimeDisposed) {
+      acknowledgeCleanup();
     }
   }
 }

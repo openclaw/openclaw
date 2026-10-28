@@ -9,13 +9,10 @@ import {
 } from "openclaw/plugin-sdk/sandbox";
 import { afterEach, expect, it } from "vitest";
 import { sandboxExecServerRegistry } from "./sandbox-exec-server-registry.js";
-import { ensureCodexSandboxExecServerEnvironment } from "./sandbox-exec-server.js";
 import {
   codexFsSandboxContext,
-  createClient,
   createSandboxContext,
-  execServerUrlFromClient,
-  openSocket,
+  openSandboxSocket,
   rpc,
   specialPath,
 } from "./sandbox-exec-server.test-helpers.js";
@@ -121,14 +118,10 @@ it.runIf(process.platform !== "win32")(
       } as never,
       runtime: runtime as never,
     });
-    const client = createClient();
-    await ensureCodexSandboxExecServerEnvironment({
-      client: client as never,
-      sandbox: { ...createSandboxContext({ runShellCommand: runShell }), fsBridge },
+    const socket = await openSandboxSocket({
+      ...createSandboxContext({ runShellCommand: runShell }),
+      fsBridge,
     });
-    const socket = await openSocket(execServerUrlFromClient(client));
-    await rpc(socket, "initialize", { clientName: "test" });
-    socket.send(JSON.stringify({ method: "initialized" }));
     const workspacePolicy = codexFsSandboxContext({
       entries: [
         { path: specialPath("root"), access: "read" },

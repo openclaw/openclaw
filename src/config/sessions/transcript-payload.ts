@@ -41,7 +41,6 @@ export {
 
 const MAX_NAVIGATION_BYTES = 16 * 1024;
 const MIN_COMPRESS_BYTES = 1024;
-const utf8Decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
 export type TranscriptPayloadRecord = TranscriptPredicateFields & {
   event_json: string | null;
@@ -65,8 +64,35 @@ export type TranscriptEventInsertRow = {
   preparedPayload?: PreparedTranscriptPayload;
 };
 
+type StoredTranscriptIdentity = DB["transcript_event_identities"];
+export type TranscriptIdentityInsertRow = {
+  seq: number;
+  createdAt: number;
+  eventId: StoredTranscriptIdentity["event_id"];
+  eventType: StoredTranscriptIdentity["event_type"];
+  parentId: StoredTranscriptIdentity["parent_id"];
+  messageIdempotencyKey: StoredTranscriptIdentity["message_idempotency_key"];
+};
+
 // Fourteen bound columns per row use at most 7,168 parameters on either engine.
 export const TRANSCRIPT_INSERT_BATCH_SIZE = 512;
+
+export const TRANSCRIPT_PAYLOAD_COLUMNS = [
+  "session_id",
+  "seq",
+  "event_json",
+  "event_zstd",
+  "event_utf8_bytes",
+  "navigation_json",
+  "navigation_type",
+  "navigation_custom_type",
+  "navigation_display",
+  "message_role",
+  "navigation_last_type",
+  "navigation_last_custom_type",
+  "navigation_valid",
+  "created_at",
+] as const;
 
 /** Physical payload writes participate in the transcript owner's admitted transaction. */
 export function createTranscriptEventInserter(database: EngineConnection, sessionId: string) {
@@ -83,46 +109,87 @@ export function createTranscriptEventInserter(database: EngineConnection, sessio
     return { session_id: sessionId, seq: row.seq, ...payload, created_at: row.createdAt };
   };
   type StoredRow = ReturnType<typeof prepareRow>;
-  const columns = [
-    "session_id",
-    "seq",
-    "event_json",
-    "event_zstd",
-    "event_utf8_bytes",
-    "navigation_json",
-    "navigation_type",
-    "navigation_custom_type",
-    "navigation_display",
-    "message_role",
-    "navigation_last_type",
-    "navigation_last_custom_type",
-    "navigation_valid",
-    "created_at",
-  ] as const;
-  // Each executor is used only with the chunk length that defines its bound indexes.
-  const createBatchInsert = (count: number) =>
-    prepareSqliteQuerySync<readonly StoredRow[]>(database, (parameter) =>
-      kysely.insertInto("transcript_events").values(
+  type BatchRows = {
+    events: readonly StoredRow[];
+    identities: readonly TranscriptIdentityInsertRow[];
+  };
+  type IdentitySourceRow = {
+    seq: number;
+    event_id: string;
+    event_type: string | null;
+    parent_id: string | null;
+    message_idempotency_key: string | null;
+    created_at: number;
+  };
+  // Each executor is used only with the chunk lengths that define its bound indexes.
+  const createBatchInsert = (count: number, identityCount = 0) =>
+    prepareSqliteQuerySync<BatchRows>(database, (parameter) => {
+      const events = kysely.insertInto("transcript_events").values(
         Array.from({ length: count }, (_, index) => ({
           session_id: sessionId,
-          seq: parameter((rows) => rows[index]!.seq),
-          event_json: parameter((rows) => rows[index]!.event_json),
-          event_zstd: parameter((rows) => rows[index]!.event_zstd),
-          event_utf8_bytes: parameter((rows) => rows[index]!.event_utf8_bytes),
-          navigation_json: parameter((rows) => rows[index]!.navigation_json),
-          navigation_type: parameter((rows) => rows[index]!.navigation_type),
-          navigation_custom_type: parameter((rows) => rows[index]!.navigation_custom_type),
-          navigation_display: parameter((rows) => rows[index]!.navigation_display),
-          message_role: parameter((rows) => rows[index]!.message_role),
-          navigation_last_type: parameter((rows) => rows[index]!.navigation_last_type),
+          seq: parameter((chunk) => chunk.events[index]!.seq),
+          event_json: parameter((chunk) => chunk.events[index]!.event_json),
+          event_zstd: parameter((chunk) => chunk.events[index]!.event_zstd),
+          event_utf8_bytes: parameter((chunk) => chunk.events[index]!.event_utf8_bytes),
+          navigation_json: parameter((chunk) => chunk.events[index]!.navigation_json),
+          navigation_type: parameter((chunk) => chunk.events[index]!.navigation_type),
+          navigation_custom_type: parameter((chunk) => chunk.events[index]!.navigation_custom_type),
+          navigation_display: parameter((chunk) => chunk.events[index]!.navigation_display),
+          message_role: parameter((chunk) => chunk.events[index]!.message_role),
+          navigation_last_type: parameter((chunk) => chunk.events[index]!.navigation_last_type),
           navigation_last_custom_type: parameter(
-            (rows) => rows[index]!.navigation_last_custom_type,
+            (chunk) => chunk.events[index]!.navigation_last_custom_type,
           ),
-          navigation_valid: parameter((rows) => rows[index]!.navigation_valid),
-          created_at: parameter((rows) => rows[index]!.created_at),
+          navigation_valid: parameter((chunk) => chunk.events[index]!.navigation_valid),
+          created_at: parameter((chunk) => chunk.events[index]!.created_at),
         })),
-      ),
-    );
+      );
+      if (identityCount === 0) {
+        return events;
+      }
+      // PG's writable CTE exposes only accepted sequences to the dependent identity insert.
+      // The batch owner already deduplicates identities by event ID before this boundary.
+      const identities =
+        /* kysely-allow-raw: Bound PG VALUES rows carry the existing identity insert columns. */
+        sql<IdentitySourceRow>`(values ${sql.join(
+          Array.from(
+            { length: identityCount },
+            (_, index) =>
+              sql`(${parameter((chunk) => chunk.identities[index]!.seq)}::bigint, ${parameter((chunk) => chunk.identities[index]!.eventId)}::text, ${parameter((chunk) => chunk.identities[index]!.eventType)}::text, ${parameter((chunk) => chunk.identities[index]!.parentId)}::text, ${parameter((chunk) => chunk.identities[index]!.messageIdempotencyKey)}::text, ${parameter((chunk) => chunk.identities[index]!.createdAt)}::bigint)`,
+          ),
+        )})`;
+      return kysely
+        .with(
+          "identity_rows(seq, event_id, event_type, parent_id, message_idempotency_key, created_at)",
+          () => identities,
+        )
+        .with("inserted_events", () => events.returning("seq"))
+        .insertInto("transcript_event_identities")
+        .columns([
+          "session_id",
+          "event_id",
+          "seq",
+          "event_type",
+          "parent_id",
+          "message_idempotency_key",
+          "created_at",
+        ])
+        .expression((db) =>
+          db
+            .selectFrom("identity_rows")
+            .innerJoin("inserted_events", "inserted_events.seq", "identity_rows.seq")
+            .select((eb) => [
+              eb.val(sessionId).as("session_id"),
+              "identity_rows.event_id",
+              "inserted_events.seq",
+              "identity_rows.event_type",
+              "identity_rows.parent_id",
+              "identity_rows.message_idempotency_key",
+              "identity_rows.created_at",
+            ]),
+        )
+        .onConflict((conflict) => conflict.columns(["session_id", "event_id"]).doNothing());
+    });
   const batchInserts = new Map<number, ReturnType<typeof createBatchInsert>>();
   const batch = (rows: readonly TranscriptEventInsertRow[]) => {
     for (let offset = 0; offset < rows.length; offset += TRANSCRIPT_INSERT_BATCH_SIZE) {
@@ -132,20 +199,49 @@ export function createTranscriptEventInserter(database: EngineConnection, sessio
         insert = createBatchInsert(prepared.length);
         batchInserts.set(prepared.length, insert);
       }
-      insert(prepared);
+      insert({ events: prepared, identities: [] });
     }
   };
-  const createIdentityInsert = () =>
-    prepareSqliteQueryTakeFirstSync<StoredRow & { eventId: string }, { seq: number }>(
-      database,
-      (parameter) =>
-        kysely
-          .insertInto("transcript_events")
-          .columns(columns)
-          .expression(
-            kysely
-              .selectNoFrom(columns.map((column) => parameter((row) => row[column]).as(column)))
-              .where((eb) =>
+  const identityBatchInserts = new Map<string, ReturnType<typeof createBatchInsert>>();
+  const batchWithIdentities = isPostgresSqlConnection(database)
+    ? (
+        rows: readonly TranscriptEventInsertRow[],
+        identities: readonly TranscriptIdentityInsertRow[],
+      ) => {
+        const bySeq = new Map(identities.map((identity) => [identity.seq, identity]));
+        for (let offset = 0; offset < rows.length; offset += TRANSCRIPT_INSERT_BATCH_SIZE) {
+          const events = rows.slice(offset, offset + TRANSCRIPT_INSERT_BATCH_SIZE);
+          const selected = events.flatMap((event) => {
+            const identity = bySeq.get(event.seq);
+            return identity ? [identity] : [];
+          });
+          const key = `${events.length}:${selected.length}`;
+          let insert = identityBatchInserts.get(key);
+          if (!insert) {
+            insert = createBatchInsert(events.length, selected.length);
+            identityBatchInserts.set(key, insert);
+          }
+          // At most 512 * (14 payload + 6 identity) + 1 session parameters.
+          insert({ events: events.map(prepareRow), identities: selected });
+        }
+      }
+    : undefined;
+  type Identity = Omit<TranscriptIdentityInsertRow, "seq" | "createdAt">;
+  type SingleRow = StoredRow & { eventId?: string; identity?: Identity };
+  const createSingleInsert = (checkEventId: boolean, includeIdentity: boolean) =>
+    prepareSqliteQueryTakeFirstSync<SingleRow, { seq: number }>(database, (parameter) => {
+      const event = kysely
+        .insertInto("transcript_events")
+        .columns(TRANSCRIPT_PAYLOAD_COLUMNS)
+        .expression(
+          kysely
+            .selectNoFrom(
+              TRANSCRIPT_PAYLOAD_COLUMNS.map((column) =>
+                parameter((row) => row[column]).as(column),
+              ),
+            )
+            .$if(checkEventId, (query) =>
+              query.where((eb) =>
                 eb.not(
                   eb.exists(
                     eb
@@ -155,25 +251,77 @@ export function createTranscriptEventInserter(database: EngineConnection, sessio
                       .where(
                         "event_id",
                         "=",
-                        parameter((row) => row.eventId),
+                        parameter((row) => row.eventId!),
                       ),
                   ),
                 ),
               ),
+            ),
+        );
+      if (!includeIdentity) {
+        return event.returning("seq");
+      }
+      return (
+        kysely
+          .with("inserted_event", () => event.returning(["session_id", "seq"]))
+          .with("inserted_identity", (db) =>
+            db
+              .insertInto("transcript_event_identities")
+              .columns([
+                "session_id",
+                "event_id",
+                "seq",
+                "event_type",
+                "parent_id",
+                "message_idempotency_key",
+                "created_at",
+              ])
+              .expression(
+                db
+                  .selectFrom("inserted_event")
+                  .select([
+                    "session_id",
+                    parameter((row) => row.identity!.eventId).as("event_id"),
+                    "seq",
+                    parameter((row) => row.identity!.eventType).as("event_type"),
+                    parameter((row) => row.identity!.parentId).as("parent_id"),
+                    parameter((row) => row.identity!.messageIdempotencyKey).as(
+                      "message_idempotency_key",
+                    ),
+                    parameter((row) => row.created_at).as("created_at"),
+                  ]),
+              )
+              .onConflict((conflict) => conflict.columns(["session_id", "event_id"]).doNothing())
+              .returning("seq"),
           )
-          .returning("seq"),
-    );
-  let insertIdentity: ReturnType<typeof createIdentityInsert> | undefined;
+          // Event acceptance is independent of an ignored identity conflict.
+          .selectFrom("inserted_event")
+          .select("seq")
+      );
+    });
+  let insertIdentity: ReturnType<typeof createSingleInsert> | undefined;
+  const fusedInserts = new Map<boolean, ReturnType<typeof createSingleInsert>>();
+  const withIdentity = isPostgresSqlConnection(database)
+    ? (row: TranscriptEventInsertRow, identity: Identity): boolean => {
+        const checkEventId = row.eventId !== undefined;
+        let insert = fusedInserts.get(checkEventId);
+        if (!insert) {
+          insert = createSingleInsert(checkEventId, true);
+          fusedInserts.set(checkEventId, insert);
+        }
+        return insert({ ...prepareRow(row), eventId: row.eventId, identity }) !== undefined;
+      }
+    : undefined;
   return Object.assign(
     (row: TranscriptEventInsertRow): boolean => {
       if (row.eventId === undefined) {
         batch([row]);
         return true;
       }
-      insertIdentity ??= createIdentityInsert();
+      insertIdentity ??= createSingleInsert(true, false);
       return insertIdentity({ ...prepareRow(row), eventId: row.eventId }) !== undefined;
     },
-    { batch },
+    { batch, withIdentity, batchWithIdentities },
   );
 }
 
@@ -350,11 +498,11 @@ export function prepareTranscriptPayload(
   if (rawBytes < MIN_COMPRESS_BYTES) {
     return identity;
   }
-  const bytes = Buffer.from(eventJson, "utf8");
   // A literal unpaired surrogate cannot round-trip through a UTF-8 frame.
-  if (utf8Decoder.decode(bytes) !== eventJson) {
+  if (!eventJson.isWellFormed()) {
     return identity;
   }
+  const bytes = Buffer.from(eventJson, "utf8");
   const compressed = codec.compress(bytes, 1, true);
   const maximumStoredBytes = rawBytes - Math.max(64, Math.ceil(rawBytes / 10));
   if (compressed.byteLength > maximumStoredBytes) {
@@ -515,15 +663,14 @@ export function transcriptEventModelNavigationSql(
 export function transcriptEventModelBytesSql(
   database: EngineConnection,
   omitCheckpoint: Expression<number>,
-  alias: TranscriptPayloadAlias = "transcript_events",
 ): RawBuilder<number> {
   const metadata =
     /* kysely-allow-raw: closed transcript aliases select native projection accounting. */ sql.ref(
-      `${alias}.navigation_json`,
+      "transcript_events.navigation_json",
     );
   const identity =
     /* kysely-allow-raw: closed transcript aliases select the native identity fallback. */ sql.ref<string>(
-      `${alias}.event_json`,
+      "transcript_events.event_json",
     );
   return /* kysely-allow-raw: native fallback preserves UTF-16 byte units; metadata excludes the JSONL separator. */ sql<number>`CASE WHEN ${metadata} IS NULL
     THEN octet_length(${projectModelContextEventSql(database, identity, omitCheckpoint)})

@@ -36,10 +36,8 @@ import type {
   SessionMessageCutMutationParams,
   SessionMessageCutMutationResult,
 } from "./session-accessor.types.js";
-import {
-  captureSessionActorStorageOwner,
-  withSessionActorStorage,
-} from "./session-actor-storage-binding.js";
+import { withSessionActorStorage } from "./session-actor-storage-acquisition.js";
+import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
 import { planSessionMessageCut } from "./session-message-cut-plan.js";
 import type {
@@ -77,16 +75,6 @@ export async function forkSessionAtMessage(
   return await mutateSqliteSessionAtMessage(params, "fork", expectedState);
 }
 
-/** Gateway-owned source predicates are checked beside the transaction's fresh session row. */
-export async function mutateSessionAtMessageWithPreconditions(
-  params: SessionMessageCutMutationParams,
-  mode: SessionTranscriptMutationMode,
-  expectedState: SessionEntryExpectedState | undefined,
-  preconditions: SessionMessageCutPreconditions,
-): Promise<SessionMessageCutResult> {
-  return mutateSqliteSessionAtMessage(params, mode, expectedState, preconditions);
-}
-
 export async function switchSessionBranch(
   params: SessionBranchSwitchMutationParams,
   expectedState?: SessionEntryExpectedState,
@@ -98,26 +86,27 @@ export async function switchSessionBranch(
   );
 }
 
-function mutateSqliteSessionAtMessage(
+export function mutateSqliteSessionAtMessage(
   params: SessionMessageCutMutationParams,
   mode: "fork" | "rewind",
   expectedState?: SessionEntryExpectedState,
   preconditions?: SessionMessageCutPreconditions,
 ): Promise<SessionMessageCutMutationResult | { status: "conflict" }>;
-function mutateSqliteSessionAtMessage(
+export function mutateSqliteSessionAtMessage(
   params: SessionMessageCutMutationParams,
   mode: "switch",
   expectedState?: SessionEntryExpectedState,
   preconditions?: SessionMessageCutPreconditions,
 ): Promise<SessionBranchSwitchMutationResult | { status: "conflict" }>;
-function mutateSqliteSessionAtMessage(
+export function mutateSqliteSessionAtMessage(
   params: SessionMessageCutMutationParams,
   mode: SessionTranscriptMutationMode,
   expectedState?: SessionEntryExpectedState,
   preconditions?: SessionMessageCutPreconditions,
 ): Promise<SessionMessageCutResult>;
 
-async function mutateSqliteSessionAtMessage(
+/** Gateway-owned source predicates are checked beside the transaction's fresh session row. */
+export async function mutateSqliteSessionAtMessage(
   params: SessionMessageCutMutationParams,
   mode: SessionTranscriptMutationMode,
   expectedState?: SessionEntryExpectedState,
@@ -187,12 +176,13 @@ async function mutateSqliteSessionAtMessage(
                     ?.before?.entry;
                   if (capture && receipt.value.status === "created" && entry) {
                     companions.settlement = capture([{ sessionKey: sourceKey, entry }]);
-                    companions.settlement.beforeCommit();
+                    return companions.settlement.beforeCommit();
                   }
+                  return undefined;
                 },
+                settled: (settledOutcome) => companions.settlement?.settle(settledOutcome.kind),
               },
             );
-            companions.settlement?.settle(outcome.kind);
             if (outcome.kind === "rolled-back" && authorityError) {
               throw toErrorObject(
                 authorityError,

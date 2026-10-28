@@ -345,7 +345,7 @@ function resolveIncludeOwnedWriteCandidate(params: {
       ? getLegacyTopLevelIncludeBoundary({ snapshot: params.snapshot, changed })
       : resolveIncludeWriteBoundary({ provenance: params.snapshot.includeProvenance, changed });
   // A removed section belongs to the root writer, never a rewrite from an absent value.
-  if (!boundary || getConfigValueAtPath(nextConfig, [...boundary.boundaryPath]) === undefined) {
+  if (!boundary || getConfigValueAtPath(nextConfig, boundary.boundaryPath) === undefined) {
     return null;
   }
   // Explicit local overrides belong beside the include, not in its shared source.
@@ -491,7 +491,7 @@ async function tryWriteIncludeOwnedConfigMutation(params: {
           ) {
             throw new ConfigMutationConflictError("included config changed since last load");
           }
-          const includedValueToWrite = getConfigValueAtPath(nextConfig, [...boundaryPath]);
+          const includedValueToWrite = getConfigValueAtPath(nextConfig, boundaryPath);
           if (previousIncludeRaw !== null) {
             let authoredIncludeValue: unknown;
             let parsedInclude = false;
@@ -517,11 +517,9 @@ async function tryWriteIncludeOwnedConfigMutation(params: {
               );
               // Read-time compatibility migrations can add keys the authored include file
               // does not carry, so compare against the pre-migration source when present.
-              const authoredSnapshotSource =
+              const authoredSource =
                 params.snapshot.sourceConfigBeforeMigrations ?? params.snapshot.sourceConfig;
-              const snapshotIncludedValue = getConfigValueAtPath(authoredSnapshotSource, [
-                ...boundaryPath,
-              ]);
+              const snapshotIncludedValue = getConfigValueAtPath(authoredSource, boundaryPath);
               if (!isDeepStrictEqual(currentIncludedValue, snapshotIncludedValue)) {
                 throw new ConfigMutationConflictError("included config changed since last load");
               }
@@ -1055,11 +1053,8 @@ export async function mutateConfigFile<T = void>(
 }
 
 export async function mutateConfigFileWithRetry<T = void>(
-  params: MutateConfigFileParams<T> & { maxAttempts?: number },
+  params: MutateConfigFileParams<T>,
 ): Promise<ConfigMutationResult<T>> {
-  return await transformConfigFileWithRetry<T>({
-    ...configMutationTransform(params),
-    maxAttempts: params.maxAttempts,
-  });
+  return await transformConfigFileWithRetry<T>(configMutationTransform(params));
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,34 +1,29 @@
-import { DatabaseSync } from "node:sqlite";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
-import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
-import { resolveAgentRunContext } from "../../agents/command/run-context.js";
+import {
+  createAdmittedRunOperatorAuthority,
+  createOperationalRunInstanceRef,
+} from "../../agents/admitted-run-context.js";
+import {
+  prepareCommandSessionRecoveryEntry,
+  prepareEmbeddedSessionState,
+} from "../../agents/command/session-preparation.js";
 import {
   getPreparedModelRuntimeBorrowedSnapshot,
   getPreparedModelRuntimePluginGeneration,
 } from "../../agents/prepared-model-runtime-generation-scope.js";
 import {
-  retainPreparedPluginGeneration,
-  retainPreparedPluginRegistry,
-} from "../../agents/prepared-model-runtime.plugin-lifetime.js";
-import { PreparedModelRuntimeBuildResources } from "../../agents/prepared-model-runtime.resources.js";
-import type { PreparedModelRuntimePluginGeneration } from "../../agents/prepared-model-runtime.types.js";
-import { retainRuntimePluginWork } from "../../agents/runtime-plugin-work.js";
-import * as runtimePlugins from "../../agents/runtime-plugins.js";
-import {
-  createPluginMetadataSnapshot,
-  makeRegistry,
-} from "../../config/plugin-auto-enable.test-helpers.js";
-import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
-import { PluginRegistryInspectionResources } from "../../plugins/registry-inspection-resources.js";
-import { retireInspectionInstances } from "../../plugins/registry-inspection.test-support.js";
+import {
+  clearAgentRunContext,
+  getAgentRunLifecycleGeneration,
+} from "../../infra/agent-run-registry.js";
+import { PluginRuntimeCloseCompletedError } from "../../plugins/runtime-close-error.js";
 import {
   getCurrentSessionControllerOwner,
   SESSION_CONTROLLER_DRAIN_TIMEOUT_MS,
@@ -42,6 +37,7 @@ import {
   resetSessionControllerStateForTest,
   rpcSourceTesting,
 } from "../../sessions/session-lifecycle-admission.test-support.js";
+import { classifySessionStateActor } from "../../sessions/session-state-events.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { isWebchatClient } from "../../utils/message-channel.js";
 import { readGatewayAccessRevision } from "../gateway-access-revision.js";
@@ -53,6 +49,7 @@ import { expectSuccessorWorkspaceRead } from "../workspace-readiness.test-suppor
 import { replayAgentTurnIfCached } from "./agent-dedupe.js";
 import { resolveAgentDeliveryPhase } from "./agent-delivery-phase.js";
 import * as agentHandlerHelpers from "./agent-handler-helpers.js";
+import { createGate, expectCalls } from "./agent-owner.test-support.js";
 import { startAgentRunExecution } from "./agent-run-execution-phase.js";
 import {
   createExecution,
@@ -76,24 +73,20 @@ vi.mock("./agent-run-dispatch.js", () => ({
   dispatchAgentRunFromGateway,
 }));
 
-function createGate() {
-  const entered = createDeferred();
-  const finish = createDeferred();
-  return {
-    entered: entered.promise,
-    resolve: finish.resolve,
-    wait: () => {
-      entered.resolve();
-      return finish.promise;
-    },
-  };
-}
-
-function expectCalls(count: number, ...spies: unknown[]) {
-  for (const spy of spies) {
-    expect(spy).toHaveBeenCalledTimes(count);
-  }
-}
+// mock-isolation: Routing cases prepare command context without skills or exec-policy discovery.
+vi.mock("../../agents/command/runtime-loaders.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/command/runtime-loaders.js")>()),
+  loadSkillsRuntime: async () => ({
+    getRemoteSkillEligibility: () => ({}),
+    resolveReusableWorkspaceSkillSnapshot: () => ({
+      snapshot: undefined,
+      shouldRefresh: false,
+    }),
+  }),
+  loadExecDefaultsRuntime: async () => ({
+    resolveNodeExecEligibilityAsync: () => ({ canExec: false }),
+  }),
+}));
 
 describe("startAgentRunExecution Gateway ownership", () => {
   it("reads the workspace after resuming from a retired same-session preparation", async () => {
@@ -129,8 +122,11 @@ describe("startAgentRunExecution Gateway ownership", () => {
   it.each([
     "success",
     "startup failure",
+    "publication failure",
+    "publication and cleanup failure",
     "cleanup failure",
     "completed cleanup failure",
+    "publication and completed cleanup failure",
     "prewriter abort",
   ] as const)("retains the exact run owner through runtime disposal: %s", async (outcome) => {
     const prewriter = outcome === "prewriter abort";
@@ -161,83 +157,34 @@ describe("startAgentRunExecution Gateway ownership", () => {
     const actualDispatch =
       await vi.importActual<typeof import("./agent-run-dispatch.js")>("./agent-run-dispatch.js");
     dispatchAgentRunFromGateway.mockImplementationOnce(actualDispatch.dispatchAgentRunFromGateway);
-    const cleanupFault = new Error("Synthetic unfinished runtime cleanup");
-    execution.runtimeRelease.mockImplementation(
-      prewriter
-        ? disposal.wait
-        : async () => {
-            await disposal.wait();
-            if (outcome === "cleanup failure") {
-              throw cleanupFault;
-            }
-          },
-    );
-    const callbackFault = new Error("Synthetic completed inspection callback failure");
-    let database: DatabaseSync | undefined;
-    let nativeDisposals = 0;
-    if (outcome === "completed cleanup failure") {
-      const registry = createEmptyPluginRegistry();
-      const resources = new PluginRegistryInspectionResources(retireInspectionInstances);
-      resources.attach(registry);
-      const native = (database = new DatabaseSync(":memory:"));
-      let releaseGeneration: (() => Promise<void>) | undefined = undefined;
-      onTestFinished(async () => {
-        disposal.resolve();
-        await releaseGeneration?.().catch(() => {});
-        await resources.release().catch(() => {});
-        if (native.isOpen) {
-          native.close();
-        }
+    const publicationFault = new Error("Synthetic final response refusal");
+    const publicationFails =
+      outcome === "publication failure" ||
+      outcome === "publication and cleanup failure" ||
+      outcome === "publication and completed cleanup failure";
+    const cleanupFails =
+      outcome === "cleanup failure" || outcome === "publication and cleanup failure";
+    if (publicationFails) {
+      vi.mocked(execution.params.io.emitFinal).mockImplementationOnce(() => {
+        throw publicationFault;
       });
-      const nativeDispose = async () => {
-        nativeDisposals++;
-        await disposal.wait();
-        native.close();
-        throw callbackFault;
-      };
-      resources.runRegistration("completed-cleanup", () => {
-        resources.register("completed-cleanup", { id: "sqlite", dispose: nativeDispose });
-      });
-      const construction = new PreparedModelRuntimeBuildResources(retainPreparedPluginRegistry);
-      const discovery = vi
-        .spyOn(runtimePlugins, "acquireAgentRuntimePluginRegistry")
-        .mockResolvedValueOnce({
-          registry,
-          primaryRegistry: registry,
-          resources,
-          releaseRegistry: resources.release.bind(resources),
-          releaseWork: retainRuntimePluginWork([registry]),
-        });
-      try {
-        await construction.load({ config: {} }, () => {});
-      } finally {
-        discovery.mockRestore();
-      }
-      const generation: PreparedModelRuntimePluginGeneration = {
-        remoteCatalog: null,
-        pluginMetadataSnapshot: createPluginMetadataSnapshot({
-          config: {},
-          manifestRegistry: makeRegistry([]),
-        }),
-        inlineProviderModels: [],
-        configuredCatalogEntries: [],
-        pluginRegistry: registry,
-      };
-      releaseGeneration = retainPreparedPluginGeneration(generation);
-      await construction[Symbol.asyncDispose]();
-      execution.params.prepared.preparedModelRuntimeLease = {
-        ...expectDefined(
-          execution.params.prepared.preparedModelRuntimeLease,
-          "ready session runtime",
-        ),
-        pluginGeneration: generation,
-        [Symbol.asyncDispose]: releaseGeneration,
-      };
-      execution.params.prepared.replyDispatchRuntime = {
-        ...execution.params.prepared.replyDispatchRuntime,
-        pluginGeneration: generation,
-      };
     }
+    const cleanupFault = new Error("Synthetic unfinished runtime cleanup");
+    const callbackFault = new Error("Synthetic completed inspection callback failure");
+    const completedCleanupFails =
+      outcome === "completed cleanup failure" ||
+      outcome === "publication and completed cleanup failure";
+    // Native close-once and callback errors belong to registry-inspection-resources.test.ts.
+    // This owner must distinguish its completed receipt from unfinished cleanup.
+    execution.runtimeRelease.mockImplementation(async () => {
+      await disposal.wait();
+      if (cleanupFails) {
+        throw cleanupFault;
+      }
+      if (completedCleanupFails) {
+        throw new PluginRuntimeCloseCompletedError([callbackFault], "completed inspection cleanup");
+      }
+    });
     const finished = vi.fn();
     const completion = registration.run().then(finished);
     const observed = completion.catch((error: unknown) => error);
@@ -279,21 +226,25 @@ describe("startAgentRunExecution Gateway ownership", () => {
       expect(registration.markExecutionStarted()).toBe(false);
       expect(rpcSourceTesting.get(execution.params.runId)).toBe(entry);
       expectCalls(0, execution.callerRelease, finished);
-      if (database) {
-        expect(database.isOpen).toBe(true);
-      }
       disposal.resolve();
-      if (outcome === "completed cleanup failure") {
+      if (completedCleanupFails) {
         expect(collectNestedErrorCandidates(await observed)).toContain(callbackFault);
-        expect(database?.isOpen).toBe(false);
-        expect(nativeDisposals).toBe(1);
-      } else if (outcome === "cleanup failure") {
+        if (publicationFails) {
+          expect(collectNestedErrorCandidates(await observed)).toContain(publicationFault);
+        }
+      } else if (outcome === "publication and cleanup failure") {
+        expect(collectNestedErrorCandidates(await observed)).toEqual(
+          expect.arrayContaining([publicationFault, cleanupFault]),
+        );
+      } else if (outcome === "publication failure") {
+        expect(await observed).toBe(publicationFault);
+      } else if (cleanupFails) {
         expect(await observed).toBe(cleanupFault);
       } else {
         await completion;
       }
-      expect(rpcSourceTesting.has(execution.params.runId)).toBe(outcome === "cleanup failure");
-      if (outcome === "cleanup failure") {
+      expect(rpcSourceTesting.has(execution.params.runId)).toBe(cleanupFails);
+      if (cleanupFails) {
         expect(sourceSettled).not.toHaveBeenCalled();
       } else {
         expect(sourceSettled).toHaveBeenCalledOnce();
@@ -432,7 +383,6 @@ describe("startAgentRunExecution Gateway ownership", () => {
       expect(notices).toEqual([
         { reason: "create", accessChanges: expect.any(Number) },
         { reason: "send", accessChanges: 0 },
-        { reason: "agent.run.started", accessChanges: 0 },
         { reason: "agent.input.settled", accessChanges: 0 },
       ]);
       expect(notices[0]?.accessChanges).toBeGreaterThan(0);
@@ -447,9 +397,12 @@ describe("startAgentRunExecution Gateway ownership", () => {
     sourceChannel?: string;
     replyChannel?: string;
     sessionDelivery?: SessionEntry["delivery"];
+    recoveryIngress?: "internal" | "control-ui";
     expectedChannel?: string;
   }>([
     { name: "unbound CLI" },
+    { name: "channel-less operator recovery", recoveryIngress: "internal" },
+    { name: "Control UI recovery", recoveryIngress: "control-ui", expectedChannel: "webchat" },
     { name: "CLI with internal delivery history", sessionDelivery: { kind: "internal" } },
     { name: "WebChat client", webchat: true, expectedChannel: "webchat" },
     { name: "WebChat continuation", sourceChannel: "webchat", expectedChannel: "webchat" },
@@ -472,6 +425,55 @@ describe("startAgentRunExecution Gateway ownership", () => {
     { name: "explicit internal channel", replyChannel: "webchat", expectedChannel: "webchat" },
   ])("preserves $name provider context through command resolution", async (testCase) => {
     const execution = createExecution();
+    let sessionEntry: SessionEntry = {
+      sessionId: "source-session",
+      updatedAt: 1,
+      delivery: testCase.sessionDelivery,
+    };
+    if (testCase.recoveryIngress) {
+      const operatorAuthority = createAdmittedRunOperatorAuthority({
+        profileId: "operator",
+        scopes: ["operator.read"],
+        assertCurrent() {},
+        recoverySnapshot: {
+          profileId: "operator",
+          scopes: ["operator.read"],
+          assignedRole: null,
+          githubLogin: null,
+          grant: null,
+          aliasBindingIds: [],
+          authPolicy: {
+            generation: "",
+            grantGeneration: "grant",
+            role: "operator",
+            authMethod: "token",
+          },
+          controlUiAdmin: false,
+          localOperator: false,
+          sourceIngress: testCase.recoveryIngress,
+        },
+      });
+      sessionEntry = prepareCommandSessionRecoveryEntry({
+        entry: sessionEntry,
+        sessionId: sessionEntry.sessionId,
+        sessionKey: "agent:main:lab-recovery",
+        agentId: "main",
+        runId: "interrupted-run",
+        now: 1,
+        lifecycleGeneration: getAgentRunLifecycleGeneration(),
+        isSessionRollover: false,
+        opts: { message: "continue", operatorAuthority, messageChannel: testCase.expectedChannel },
+      }).nextEntry;
+      sessionEntry.restartRecoveryDeliveryRunId = execution.params.runId;
+      Object.assign(execution.params, {
+        canUseInternalRuntimeHandoff: true,
+        isRestartRecoveryResumeRun: true,
+        resolvedSessionId: sessionEntry.sessionId,
+        resolvedSessionKey: "agent:main:lab-recovery",
+        sessionEntry,
+      });
+      execution.params.request.expectedExistingSessionId = sessionEntry.sessionId;
+    }
     const client: AgentTurnPrincipal = {
       connect: {
         minProtocol: 1,
@@ -491,9 +493,7 @@ describe("startAgentRunExecution Gateway ownership", () => {
         replyChannel: testCase.replyChannel,
       },
       cfg: {},
-      sessionEntry: testCase.sessionDelivery
-        ? { sessionId: "source-session", updatedAt: 1, delivery: testCase.sessionDelivery }
-        : undefined,
+      sessionEntry,
       agentId: "main",
       recipientChannel: testCase.sourceChannel,
       replyTo: "",
@@ -517,9 +517,29 @@ describe("startAgentRunExecution Gateway ownership", () => {
 
     expect(dispatchAgentRunFromGateway).toHaveBeenCalledOnce();
     const dispatch = dispatchAgentRunFromGateway.mock.calls[0]?.[0];
-    const runContext = resolveAgentRunContext(dispatch.ingressOpts);
-    expect(runContext.messageChannel).toBe(testCase.expectedChannel);
-    expect(runContext.currentChannelId).toBeUndefined();
+    const runId = execution.params.runId;
+    try {
+      const { runContext } = await prepareEmbeddedSessionState({
+        cfg: execution.params.cfg,
+        opts: dispatch.ingressOpts,
+        sessionKey: dispatch.ingressOpts.sessionKey,
+        sessionId: dispatch.ingressOpts.sessionId ?? "source-session",
+        storePath: "/unused/command.sqlite",
+        sessionAgentId: "main",
+        lifecycleGeneration: getAgentRunLifecycleGeneration(),
+        runId,
+        executionWorkspaceDir: "/workspace/A",
+        watchSkills: false,
+        isNewSession: false,
+        isSubagentLaneTurn: false,
+        suppressVisibleSessionEffects: execution.params.suppressVisibleSessionEffects,
+        sessionStateActor: classifySessionStateActor(dispatch.ingressOpts),
+      });
+      expect(runContext.messageChannel).toBe(testCase.expectedChannel);
+      expect(runContext.currentChannelId).toBeUndefined();
+    } finally {
+      clearAgentRunContext(runId);
+    }
   });
 
   it.each([
@@ -645,7 +665,7 @@ describe("startAgentRunExecution Gateway ownership", () => {
         aborted: ending === "aborted",
         ...(ending === "failed"
           ? {
-              assertContextCurrent: () => {
+              assertGatewayLifetimeCurrent: () => {
                 throw new Error("Gateway owner retired");
               },
             }
@@ -750,7 +770,7 @@ describe("startAgentRunExecution Gateway ownership", () => {
       const fail = () => {
         throw new Error(privateMessage);
       };
-      execution.params.assertContextCurrent = fail;
+      execution.params.assertGatewayLifetimeCurrent = fail;
       execution.params.prepared.userTurn.releaseProcessingAbortObserver = fail;
       Object.assign(execution.params.prepared.userTurn.recorder ?? {}, {
         completeProcessing: fail,

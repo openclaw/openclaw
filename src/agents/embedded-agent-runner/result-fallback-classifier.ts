@@ -42,6 +42,7 @@ export function mergeEmbeddedAgentRunResultForModelFallbackExhaustion(params: {
     meta: {
       ...params.latestResult.meta,
       error: params.preferredResult.meta.error,
+      suppressErrorNotice: params.preferredResult.meta.suppressErrorNotice,
       terminalReply: params.preferredResult.meta.terminalReply,
       finalAssistantRawText: params.preferredResult.meta.finalAssistantRawText,
       finalAssistantVisibleText: params.preferredResult.meta.finalAssistantVisibleText,

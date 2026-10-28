@@ -12,9 +12,10 @@ import { summarizeGatewayServiceLayout } from "../../daemon/service-layout.js";
 import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
 import type { GatewayServiceState } from "../../daemon/service-types.js";
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
+import { ignoreMissingPath } from "../../infra/errno.js";
 import { readActiveGatewayLockIdentity } from "../../infra/gateway-lock.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
-import { hasNodeErrorCode, isPathInside } from "../../infra/path-guards.js";
+import { isPathInside } from "../../infra/path-guards.js";
 import { probePortUsage } from "../../infra/ports-probe.js";
 import { throwSqliteLifecycleErrors } from "../../infra/sqlite-lifecycle-errors.js";
 import {
@@ -99,17 +100,10 @@ export async function withGatewayRuntimeArtifactPublication<T>(
         return await identity(file);
       } catch (error) {
         assertCurrent();
-        if (!hasNodeErrorCode(error, "ENOENT")) {
-          throw error;
-        }
+        ignoreMissingPath(error);
         // Missing descendants retain their existing ancestor's physical namespace;
         // a dangling symlink cannot attest a disjoint publication destination.
-        const present = await fs.lstat(file).catch((statError: unknown) => {
-          if (!hasNodeErrorCode(statError, "ENOENT")) {
-            throw statError;
-          }
-          return undefined;
-        });
+        const present = await fs.lstat(file).catch(ignoreMissingPath);
         assertCurrent();
         if (present) {
           throw error;

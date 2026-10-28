@@ -5,6 +5,7 @@
 import { Type } from "typebox";
 import { isRequestedExecTargetAllowed } from "./bash-tools.exec-target.js";
 import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
+import { createCachedToolSchema } from "./schema/cached-schema.js";
 import { executionTitleSchema, optionalStringEnum } from "./schema/typebox.js";
 
 const EXEC_TOOL_HOST_VALUES = ["auto", "sandbox", "gateway", "node"] as const;
@@ -86,6 +87,25 @@ export const execSchema = Type.Object({
 export function createExecSchema(
   defaults?: Pick<ExecToolDefaults, "host" | "sandbox" | "sandboxRequired">,
 ) {
+  return execSchemas(defaults).standard;
+}
+
+/** Exec parameters when no process-control continuation is authorized. */
+export function createExecCompletionSchema(
+  defaults?: Pick<ExecToolDefaults, "host" | "sandbox" | "sandboxRequired">,
+) {
+  return execSchemas(defaults).completion;
+}
+
+const execSchemas = createCachedToolSchema({
+  key: (defaults?: Pick<ExecToolDefaults, "host" | "sandbox" | "sandboxRequired">) =>
+    `${defaults?.sandboxRequired ? "sandbox" : (defaults?.host ?? "auto")}:${Boolean(defaults?.sandbox)}`,
+  build: buildExecSchemas,
+});
+
+function buildExecSchemas(
+  defaults?: Pick<ExecToolDefaults, "host" | "sandbox" | "sandboxRequired">,
+) {
   const sandboxAvailable = Boolean(defaults?.sandbox);
   const configuredTarget = defaults?.sandboxRequired ? "sandbox" : (defaults?.host ?? "auto");
   const hosts = EXEC_TOOL_HOST_VALUES.filter(
@@ -94,12 +114,13 @@ export function createExecSchema(
       ((requestedTarget !== "sandbox" || sandboxAvailable) &&
         isRequestedExecTargetAllowed({ configuredTarget, requestedTarget, sandboxAvailable })),
   );
-  return Type.Object({
+  const standard = Type.Object({
     ...execSchema.properties,
     host: optionalStringEnum(hosts, {
       description: `Omit: named node or configured host (${configuredTarget === "auto" ? (sandboxAvailable ? "sandbox" : "gateway") : configuredTarget}). auto: configured host.`,
     }),
   });
+  return { standard, completion: Type.Omit(standard, ["yieldMs", "background"]) };
 }
 
 /** Parameters exposed by node-only exec surfaces. */

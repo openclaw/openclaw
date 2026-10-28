@@ -1,7 +1,7 @@
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { SessionsListResult } from "../../api/types.ts";
+import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { SidebarSessionSortMode } from "../../components/app-sidebar-session-types.ts";
 import { createSessionCapability } from "../../lib/sessions/index.ts";
 import {
@@ -12,9 +12,11 @@ import {
   createSessionsHarness,
   createSessionState,
   mountSidebar,
+  type SidebarLifecycleState,
   type TestSessionMenu,
   TWO_AGENTS,
 } from "../app-sidebar.ts";
+import { sessionListResult } from "../chat-model.ts";
 import { createTestGatewayClient } from "../gateway-client.ts";
 import { settleLitElement } from "../lit-settle.ts";
 import "./session-pagination.ts";
@@ -24,6 +26,51 @@ type SidebarSortModeHost = {
   sessionSortMode: SidebarSessionSortMode;
   setSessionSortMode: (mode: SidebarSessionSortMode) => void;
 };
+
+function required<T>(value: T | null | undefined): T {
+  if (value == null) {
+    throw new Error("Expected fixture value");
+  }
+  return value;
+}
+
+function expectCleared(sidebar: SidebarLifecycleState) {
+  expect(sidebar.sessionData).toMatchObject({
+    sessionsResult: null,
+    sessionsAgentId: null,
+    sessionResultsByAgent: {},
+  });
+  expect(sidebar.sessionData.sessionResultsByAgent).toEqual({});
+}
+
+async function mountRow(key: string, patch: Partial<GatewaySessionRow>) {
+  const sessions = createSessionsHarness("main", [key]);
+  const state = createSessionState("main", [key]);
+  Object.assign(required(state.result?.sessions[0]), patch);
+  sessions.publishList({ result: state.result, agentId: state.agentId });
+  const { sidebar } = await mountSidebar(
+    createGateway({} as GatewayBrowserClient),
+    sessions.sessions,
+  );
+  sidebar.connected = true;
+  await sidebar.updateComplete;
+  required(sidebar.querySelector(`[data-session-key="${key}"]`)).dispatchEvent(
+    new MouseEvent("contextmenu", { bubbles: true, cancelable: true }),
+  );
+  await sidebar.updateComplete;
+  const menu = required(sidebar.querySelector<TestSessionMenu>("openclaw-session-menu"));
+  await menu.updateComplete;
+  return { sidebar, sessions, menu };
+}
+
+function expectAttributes(
+  element: Element | null | undefined,
+  attributes: Record<string, string | null>,
+) {
+  for (const [name, value] of Object.entries(attributes)) {
+    expect(required(element).getAttribute(name), name).toBe(value);
+  }
+}
 
 describe("AppSidebar session sort persistence", () => {
   it("restores the selected sort mode on a later mount", async () => {
@@ -35,8 +82,6 @@ describe("AppSidebar session sort persistence", () => {
     firstSidebar.setSessionSortMode("updated");
     expect(localStorage.getItem("openclaw:sidebar:sessions:sort-mode")).toBe("updated");
 
-    // A remount is what a reload does to this element; the preference must
-    // survive it like every other stored sidebar choice.
     document.body.replaceChildren();
     const second = await mountSidebar(gateway, createSessions("main", ["agent:main:session-a"]));
 
@@ -63,15 +108,7 @@ describe("AppSidebar session pagination", () => {
     const sessions = createSessionsHarness("main", olderKeys);
     const { sidebar } = await mountSidebar(gateway, sessions.sessions);
     const refreshed = createSessionState("main", [...olderKeys, "agent:main:external-new"]);
-    const rows = refreshed.result?.sessions;
-    if (!rows) {
-      throw new Error("expected refreshed session rows");
-    }
-    const newestRow = rows.at(-1);
-    if (!newestRow) {
-      throw new Error("expected newest session row");
-    }
-    newestRow.createdAt = 2_000;
+    required(refreshed.result?.sessions.at(-1)).createdAt = 2_000;
 
     sessions.publishList({ result: refreshed.result, agentId: refreshed.agentId });
     await settleLitElement(sidebar);
@@ -87,10 +124,7 @@ describe("AppSidebar session pagination", () => {
   });
 
   it("reveals sessions ten at a time and offers Collapse after thirty", async () => {
-    const keys = [
-      "agent:main:session-0",
-      ...Array.from({ length: 40 }, (_, index) => `agent:main:session-${index + 1}`),
-    ];
+    const keys = Array.from({ length: 41 }, (_, index) => `agent:main:session-${index}`);
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, createSessions("main", keys));
     const rows = () => sidebar.querySelectorAll(".sidebar-recent-session");
@@ -101,27 +135,15 @@ describe("AppSidebar session pagination", () => {
     expect(button("Show more")).not.toBeNull();
     expect(button("Collapse")).toBeNull();
 
-    button("Show more")?.click();
-    await settleLitElement(sidebar);
-    expect(rows()).toHaveLength(20);
-    expect(button("Collapse")).toBeNull();
-
-    button("Show more")?.click();
-    await settleLitElement(sidebar);
-    expect(rows()).toHaveLength(30);
-    expect(button("Collapse")).toBeNull();
-
-    button("Show more")?.click();
-    await settleLitElement(sidebar);
-    expect(rows()).toHaveLength(40);
-    expect(button("Show more")).not.toBeNull();
-    expect(button("Collapse")).not.toBeNull();
-
-    button("Show more")?.click();
-    await settleLitElement(sidebar);
-    expect(rows()).toHaveLength(41);
-    expect(button("Show more")).toBeNull();
-    expect(button("Collapse")).not.toBeNull();
+    for (const count of [20, 30, 40, 41]) {
+      button("Show more")?.click();
+      await settleLitElement(sidebar);
+      expect(rows()).toHaveLength(count);
+      expect(button("Collapse") !== null).toBe(count >= 40);
+      if (count >= 40) {
+        expect(button("Show more") !== null).toBe(count < 41);
+      }
+    }
 
     button("Collapse")?.click();
     await settleLitElement(sidebar);
@@ -162,70 +184,29 @@ async function createReconnectFixture(initial: ReturnType<typeof createSessionSt
 
 describe("AppSidebar session source lifecycle", () => {
   it("disables Fork session for model-selection-locked rows", async () => {
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const sessions = createSessionsHarness("main", ["agent:main:locked"]);
-    const lockedState = createSessionState("main", ["agent:main:locked"]);
-    const lockedRow = lockedState.result?.sessions[0];
-    if (!lockedRow) {
-      throw new Error("Expected locked session row");
-    }
-    lockedRow.modelSelectionLocked = true;
-    sessions.publishList({ result: lockedState.result, agentId: lockedState.agentId });
-    const { sidebar } = await mountSidebar(gateway, sessions.sessions);
-    sidebar.connected = true;
-    await sidebar.updateComplete;
-
-    const sessionRow = sidebar.querySelector<HTMLElement>('[data-session-key="agent:main:locked"]');
-    if (!sessionRow) {
-      throw new Error("Expected sidebar session row");
-    }
-    sessionRow.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
-    await sidebar.updateComplete;
-
-    const menu = sidebar.querySelector<TestSessionMenu>("openclaw-session-menu");
-    if (!menu) {
-      throw new Error("Expected sidebar session menu");
-    }
-    await menu.updateComplete;
+    const { menu } = await mountRow("agent:main:locked", { modelSelectionLocked: true });
     expect(menu.forkDisabled).toBe(true);
     expect(menu.querySelector<HTMLButtonElement>('[data-shortcut="f"]')?.disabled).toBe(true);
   });
 
   it("forks from stable history when Gateway liveness outlives display status", async () => {
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const sessions = createSessionsHarness("main", ["agent:main:active"]);
-    const state = createSessionState("main", ["agent:main:active"]);
-    const row = state.result?.sessions[0];
-    if (!row) {
-      throw new Error("Expected active session row");
-    }
-    row.status = "done";
-    row.hasActiveRun = true;
-    sessions.publishList({ result: state.result, agentId: state.agentId });
-    const { sidebar } = await mountSidebar(gateway, sessions.sessions);
-    sidebar.connected = true;
-    await sidebar.updateComplete;
-
-    sidebar
-      .querySelector<HTMLElement>('[data-session-key="agent:main:active"]')
-      ?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
-    await sidebar.updateComplete;
-
-    const menu = sidebar.querySelector<TestSessionMenu>("openclaw-session-menu");
-    if (!menu) {
-      throw new Error("Expected sidebar session menu");
-    }
-    await menu.updateComplete;
+    const { sessions, menu } = await mountRow("agent:main:active", {
+      status: "done",
+      hasActiveRun: true,
+    });
     expect(menu.forkFromLastCompleted).toBe(true);
     menu.onAction({ kind: "fork" });
     await vi.dynamicImportSettled();
 
-    expect(sessions.create).toHaveBeenCalledWith({
-      parentSessionKey: "agent:main:active",
-      fork: true,
-      forkFrom: "last-completed",
-      agentId: "main",
-    });
+    expect(sessions.create).toHaveBeenCalledWith(
+      {
+        parentSessionKey: "agent:main:active",
+        fork: true,
+        forkFrom: "last-completed",
+        agentId: "main",
+      },
+      { signal: expect.any(AbortSignal) },
+    );
   });
 
   it("resets per-agent cached results when the sessions source changes", async () => {
@@ -252,9 +233,7 @@ describe("AppSidebar session source lifecycle", () => {
 
   it("preserves the scoped result through a disconnect on the same Gateway client", async () => {
     const initial = createSessionState("main", ["main-a", "main-b"]);
-    if (initial.result) {
-      initial.result.owners = [{ type: "human", id: "profile-ada", label: "Ada" }];
-    }
+    required(initial.result).owners = [{ type: "human", id: "profile-ada", label: "Ada" }];
     const { gateway, sessions, reconnectList } = await createReconnectFixture(initial);
     const { sidebar } = await mountSidebar(gateway.gateway, sessions);
     const cachedResult = sidebar.sessionData.sessionsResult;
@@ -285,10 +264,7 @@ describe("AppSidebar session source lifecycle", () => {
     ]);
 
     const refreshed = createSessionState("main", ["main-c"]);
-    if (!refreshed.result) {
-      throw new Error("Expected refreshed roster");
-    }
-    reconnectList.resolve(refreshed.result);
+    reconnectList.resolve(required(refreshed.result));
     await vi.waitFor(() => expect(sessions.canonicalListRevision).toBe(2));
     await sidebar.updateComplete;
 
@@ -299,19 +275,16 @@ describe("AppSidebar session source lifecycle", () => {
   it("retires protected session views on client replacement without removing personal pins", async () => {
     const key = "agent:main:pinned";
     const initial = createSessionState("main", [key]);
-    const pinned = initial.result?.sessions[0];
-    if (!pinned) {
-      throw new Error("expected pinned session row");
-    }
-    pinned.pinned = true;
-    pinned.pinnedAt = 1;
+    Object.assign(required(initial.result?.sessions[0]), { pinned: true, pinnedAt: 1 });
     const { gateway, sessions, reconnectList, replacementClient } =
       await createReconnectFixture(initial);
     const { sidebar } = await mountSidebar(gateway.gateway, sessions);
     sidebar.sidebarEntries = [`session:${key}`];
     await sidebar.updateComplete;
     const pinnedEntry = () =>
-      sidebar.querySelector(`.sidebar-rail [data-sidebar-entry="session:${key}"] a`);
+      sidebar.querySelector(
+        `[data-session-section="pinned"] [data-session-key="${key}"] .sidebar-recent-session__link`,
+      );
 
     expect(pinnedEntry()).not.toBeNull();
 
@@ -321,9 +294,7 @@ describe("AppSidebar session source lifecycle", () => {
     });
     await sidebar.updateComplete;
 
-    expect(sidebar.sessionData.sessionsResult).toBeNull();
-    expect(sidebar.sessionData.sessionsAgentId).toBeNull();
-    expect(sidebar.sessionData.sessionResultsByAgent).toEqual({});
+    expectCleared(sidebar);
     expect(pinnedEntry()).toBeNull();
     expect(sidebar.sidebarEntries).toEqual([`session:${key}`]);
 
@@ -333,10 +304,7 @@ describe("AppSidebar session source lifecycle", () => {
     await sidebar.updateComplete;
     expect(pinnedEntry()).toBeNull();
 
-    if (!unpinned.result) {
-      throw new Error("Expected unpinned roster");
-    }
-    reconnectList.resolve(unpinned.result);
+    reconnectList.resolve(required(unpinned.result));
     await vi.waitFor(() => expect(sessions.canonicalListRevision).toBe(2));
     await sidebar.updateComplete;
     expect(pinnedEntry()).not.toBeNull();
@@ -344,13 +312,10 @@ describe("AppSidebar session source lifecycle", () => {
     sidebar.onUpdateSidebarEntries = (entries) => {
       sidebar.sidebarEntries = entries;
     };
-    await sidebar.sidebarMenus.preloadMenuRenderer();
-    pinnedEntry()!.dispatchEvent(
-      new MouseEvent("contextmenu", { bubbles: true, cancelable: true }),
-    );
-    await sidebar.updateComplete;
-    const menu = sidebar.querySelector(".sidebar-rail-pin-menu")!;
-    menu.querySelector<HTMLElement>('[data-value="remove"]')!.click();
+    pinnedEntry()!
+      .closest(".sidebar-recent-session")!
+      .querySelector<HTMLButtonElement>("[data-sidebar-session-pin]")!
+      .click();
     await sidebar.updateComplete;
     expect(pinnedEntry()).toBeNull();
     expect(sidebar.sidebarEntries).toEqual([]);
@@ -369,15 +334,10 @@ describe("AppSidebar session source lifecycle", () => {
       value: 1,
     });
 
-    gateway.publish({
-      client: {} as GatewayBrowserClient,
-      phase: "reconnecting",
-    });
+    gateway.publish({ client: {} as GatewayBrowserClient, phase: "reconnecting" });
     await sidebar.updateComplete;
 
-    expect(sidebar.sessionData.sessionsResult).toBeNull();
-    expect(sidebar.sessionData.sessionsAgentId).toBeNull();
-    expect(sidebar.sessionData.sessionResultsByAgent).toEqual({});
+    expectCleared(sidebar);
   });
 
   it("clears every cached session view when the Gateway source is replaced", async () => {
@@ -390,9 +350,7 @@ describe("AppSidebar session source lifecycle", () => {
     provider.setContext(createContext(replacementGateway.gateway, sessions.sessions));
     await sidebar.updateComplete;
 
-    expect(sidebar.sessionData.sessionsResult).toBeNull();
-    expect(sidebar.sessionData.sessionsAgentId).toBeNull();
-    expect(sidebar.sessionData.sessionResultsByAgent).toEqual({});
+    expectCleared(sidebar);
   });
 });
 
@@ -405,23 +363,17 @@ describe("AppSidebar session accessibility", () => {
     (sidebar as unknown as { activeRouteId: string }).activeRouteId = "chat";
     sidebar.sessionKey = key;
     harness.publishList({
-      result: {
-        ts: 2,
-        path: "",
-        count: 1,
-        defaults: { modelProvider: null, model: null, contextTokens: null },
-        sessions: [
-          {
-            key,
-            kind: "direct",
-            label: key,
-            displayName: key,
-            derivedTitle: "Quarterly launch plan",
-            updatedAt: Date.now(),
-            unread: true,
-          },
-        ],
-      },
+      result: sessionListResult(2, [
+        {
+          key,
+          kind: "direct",
+          label: key,
+          displayName: key,
+          derivedTitle: "Quarterly launch plan",
+          updatedAt: Date.now(),
+          unread: true,
+        },
+      ]),
       agentId: "main",
     });
     await sidebar.updateComplete;
@@ -430,29 +382,27 @@ describe("AppSidebar session accessibility", () => {
     const row = sidebar.querySelector(`[data-session-key="${key}"]`);
     const tree = row?.closest(".sidebar-session-tree");
     const link = row?.querySelector<HTMLAnchorElement>(".sidebar-recent-session__link");
-    expect(list?.getAttribute("aria-label")).toBe("Other");
-    expect(tree?.parentElement).toBe(list);
-    expect(tree?.getAttribute("role")).toBe("listitem");
-    expect(row?.hasAttribute("role")).toBe(false);
-    expect(sidebar.querySelector(".sidebar-recent-sessions")?.hasAttribute("aria-label")).toBe(
-      false,
-    );
-    expect(row?.hasAttribute("aria-label")).toBe(false);
-    expect(link?.hasAttribute("aria-label")).toBe(false);
-    expect(link?.getAttribute("aria-current")).toBe("page");
+    expectAttributes(list, { "aria-label": "Other" });
+    expect(tree?.closest('[role="list"]')).toBe(list);
+    expectAttributes(tree, { role: "listitem" });
+    expectAttributes(row, { role: null, "aria-label": null });
+    expectAttributes(sidebar.querySelector(".sidebar-recent-sessions"), { "aria-label": null });
+    expectAttributes(link, {
+      "aria-label": null,
+      "aria-current": "page",
+      title: null,
+      "aria-describedby": null,
+    });
     const lead = link?.querySelector(".sidebar-session-indicator");
     expect(lead).not.toBeNull();
     expect(lead?.childElementCount).toBe(1);
     expect(link?.querySelector(".sidebar-recent-session__text")).not.toBeNull();
     const unread = lead?.querySelector(".session-unread-dot");
-    expect(unread?.getAttribute("role")).toBe("img");
-    expect(unread?.getAttribute("aria-label")).toBe("Unread");
+    expectAttributes(unread, { role: "img", "aria-label": "Unread" });
     expect(row?.querySelector(".session-row-state")).toBeNull();
     expect(link?.querySelector(".sidebar-recent-session__name")?.textContent).toBe(
       "Quarterly launch plan",
     );
-    expect(link?.hasAttribute("title")).toBe(false);
-    expect(link?.hasAttribute("aria-describedby")).toBe(false);
     expect(row?.querySelector(".session-row-trail")).toBeNull();
   });
 });

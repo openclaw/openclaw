@@ -1,23 +1,26 @@
 import { ProcSafeError } from "@openclaw/proc-safe/errors";
 import { readProcessIdentity } from "@openclaw/proc-safe/identity";
 import { listProcesses } from "@openclaw/proc-safe/inspect";
-
-type WindowsProcessObservation = {
-  pid: number;
-  parentPid?: number;
-  startIdentity?: string;
-  commandLine?: string;
-  cwd?: string;
-  foreignOwner?: true;
-  accessDenied?: true;
-};
+import { PinnedProcess } from "@openclaw/proc-safe/windows-job";
 
 /** Missing fields never establish absence for same-user or unknown-owner work. */
-export function readWindowsProcessCensus(timeoutMs: number): WindowsProcessObservation[] {
+export function readWindowsProcessCensus(timeoutMs: number) {
   return listProcesses({ timeoutMs, includeCommand: true }).flatMap(
     ({ pid, owner, identity, command }) => {
       if (pid === 0 || pid === 4 || identity?.exited) {
         return [];
+      }
+      let executable = command?.executable;
+      if (!command && identity) {
+        try {
+          using pinned = PinnedProcess.open(pid, {
+            access: "observe",
+            expect: { startTimeMicros: identity.startTimeMicros },
+          });
+          executable = pinned?.imagePath;
+        } catch {
+          // Image names are best-effort diagnostics, never proof of non-custody.
+        }
       }
       let accessDenied: true | undefined;
       if (owner === "unknown" && !identity && !command) {
@@ -42,6 +45,7 @@ export function readWindowsProcessCensus(timeoutMs: number): WindowsProcessObser
               }
             : {}),
           ...(command?.commandLine === undefined ? {} : { commandLine: command.commandLine }),
+          ...(executable ? { executable } : {}),
           ...(command?.cwd === undefined ? {} : { cwd: command.cwd }),
           ...(owner === "different" ? { foreignOwner: true as const } : {}),
           ...(accessDenied ? { accessDenied } : {}),

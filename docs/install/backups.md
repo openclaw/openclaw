@@ -19,9 +19,9 @@ This guide covers protecting that state: one-off archives, per-database
 snapshots, scheduling, offsite copies, and continuous replication for installs
 that should not re-upload whole databases on every backup.
 
-The experimental PostgreSQL Workboard store uses a local SQLite anchor plus
-PostgreSQL rows. Back it up with `openclaw backup create`, which includes the
-matched export and anchor. Stop the Gateway through its service owner first;
+PostgreSQL stores in the state, agent, Workboard, Logbook and Team Reports
+families use local SQLite anchors plus PostgreSQL rows. Use `openclaw backup create`
+to capture their matched exports and anchors. Stop the Gateway through its service owner first;
 PostgreSQL backups refuse while it is running and never stop it automatically.
 See [Database engines](/reference/database-engines#anchors-and-backups).
 
@@ -348,9 +348,9 @@ snapshot repositories remain ordinary files that external backup tools can copy.
 
 ## Versioned backups to a Git repository
 
-`openclaw backup git create --all` includes the PostgreSQL Workboard store through
-its plugin backup-resource declaration. Explicit `--global` and `--agent` selections
-keep their existing scope. A PostgreSQL source requires the Gateway stopped
+`openclaw backup git create --all` includes declared PostgreSQL plugin stores and
+retained roots through their backup-resource declarations. Explicit `--global`
+and `--agent` selections keep their existing scope. A PostgreSQL source requires the Gateway stopped
 through its service owner; Git backup capture or restore refuses while it is running. The backup contains a
 sanitized SQLite export, its original anchor, and a format-2 manifest without a
 DSN. Restore verifies the matched set and creates a fresh owned PostgreSQL
@@ -508,8 +508,12 @@ openclaw backup restore "$ARCHIVE" --target ./restored-openclaw
 The target must not exist or must be empty, and it must not be inside the live
 state directory or any configured live agent directory. OpenClaw verifies
 archive structure, the manifest, hardlinks, symbolic-link entries, and the root
-SQLite snapshot and its durably registered agent snapshots before it writes the
-target. Other payload remains opaque. A non-empty target is refused,
+SQLite snapshot, its durably registered agent snapshots, and declared PostgreSQL
+capsules before it writes the target. PostgreSQL recovery imports those capsules
+into fresh namespaces and publishes their matching anchors and recovered config
+after verification; supply the archived configuration's connection SecretRef.
+See [PostgreSQL restore](/gateway/postgresql#restore-all-postgresql-stores).
+Other payload remains opaque. A non-empty target is refused,
 and a failed extraction cleans its incomplete output. The command never writes
 into live state or agent roots and has no force or in-place mode. Treat the
 restored directory as sensitive: it can contain credentials, auth profiles,

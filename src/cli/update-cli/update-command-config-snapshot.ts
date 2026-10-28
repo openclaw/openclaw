@@ -18,7 +18,7 @@ import {
   readBackupConfigCaptureFile,
   resolveBackupConfigCapture,
 } from "../../infra/backup-config-capture.js";
-import { hasNodeErrorCode } from "../../infra/path-guards.js";
+import { ignoreMissingPath } from "../../infra/errno.js";
 
 type UpdateConfigFileSnapshot = {
   path: string;
@@ -33,12 +33,7 @@ export type UpdateConfigSnapshot = UpdateConfigFileSnapshot & {
 };
 
 export async function readUpdateConfigSnapshot(path: string): Promise<UpdateConfigSnapshot> {
-  const raw = await fs.readFile(path, "utf8").catch((error: unknown) => {
-    if (!hasNodeErrorCode(error, "ENOENT")) {
-      throw error;
-    }
-    return null;
-  });
+  const raw = (await fs.readFile(path, "utf8").catch(ignoreMissingPath)) ?? null;
   return { path, raw, hash: hashConfigRaw(raw) };
 }
 

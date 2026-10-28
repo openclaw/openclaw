@@ -402,6 +402,8 @@ suite.define(() => {
           agentModel: "openai/gpt-5.5",
           historyMessages: BASE_HISTORY,
           sessions: [{ key: "main", sessionId, label: "Synthetic PR landing" }],
+          // Reconnect refreshes can retire and reissue viewport-fill reads.
+          heldRequests: [{ method: "chat.history", match: { offset: 80 } }],
         });
         const { runId } = await openChatAndSubmitProbe(page, gateway, {
           deferSend: true,
@@ -481,28 +483,14 @@ suite.define(() => {
         await gateway.setMethodResponse("chat.startup", latestPage);
         await gateway.setMethodResponse("chat.history", {
           cases: [
-            {
-              match: { inputRunIds: [runId], limit: 1000 },
-              response: {
-                ...response,
-                messages: history,
-                hasMore: false,
-                inputReceipts: [
-                  { runId, state: "consumed", consumedByEventId: USER_ECHO_ENTRY_ID },
-                ],
-              },
-            },
             { match: { offset: 80 }, response: { ...response, messages: older, hasMore: false } },
             { match: {}, response: latestPage },
           ],
         });
-        // Collapsed tool turns fit the viewport, so automatic history loading
-        // can begin immediately. Hold that response until after receipt recovery.
-        await gateway.deferNext("chat.history", { offset: 80 });
+        await gateway.setMethodResponse("chat.send", { runId, status: "ok", messageSeq: 489 });
         await gateway.setOnline(true);
-        await gateway.waitForRequest("chat.history", {
-          match: { inputRunIds: [runId], limit: 1000 },
-        });
+        const replay = await gateway.waitForRequest("chat.send", { after: 1 });
+        expect(replay.params).toMatchObject({ idempotencyKey: runId, message: prompt });
         await page.getByText(finalText, { exact: true }).waitFor();
         await expect.poll(() => page.locator(".chat-send-status").count()).toBe(0);
         await emitSessionMessage(gateway, finalMessage, "consumed-prompt-final", 605, [], {
@@ -517,7 +505,7 @@ suite.define(() => {
         const userBubbles = page.locator(".chat-bubble").getByText(prompt, { exact: true });
         const latestPromptCount = await userBubbles.count();
         await gateway.waitForRequest("chat.history", { match: { offset: 80 } });
-        await gateway.resolveDeferred("chat.history");
+        await gateway.resolveDeferred("chat.history", undefined, { match: { offset: 80 } });
         await waitForChatScrollIdle(page);
         const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
         await thread.hover();
@@ -529,7 +517,7 @@ suite.define(() => {
         expect(await userBubbles.count()).toBe(1);
         expect(await page.locator(".chat-send-status").count()).toBe(0);
         expect(await page.getByRole("button", { name: "Stop", exact: true }).count()).toBe(0);
-        expect(await gateway.getRequests("chat.send")).toHaveLength(1);
+        expect(await gateway.getRequests("chat.send")).toHaveLength(2);
       },
     );
   });

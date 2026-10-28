@@ -10,6 +10,10 @@ import {
 } from "@openclaw/uirouter";
 import type { RouteLocation } from "@openclaw/uirouter";
 import { isValidWorkboardBoardId } from "@openclaw/workboard-contract";
+import {
+  pluginCatalogIdFromRouteSuffix,
+  pluginCatalogRouteSuffix,
+} from "../../packages/plugin-package-contract/src/catalog-route.ts";
 import { DEFAULT_AGENT_PANEL, isAgentsPanel, type AgentsPanel } from "./lib/agents/panels.ts";
 import type { BoardFace } from "./lib/board/settings.ts";
 import { takeGraphemes } from "./lib/graphemes.ts";
@@ -49,8 +53,7 @@ const APP_ROUTE_DEFINITIONS = {
   meetings: { path: "/meetings" },
   apps: { path: "/apps" },
   portals: { path: "/portals" },
-  "agents-home": { path: "/agents" },
-  claws: { path: "/agents/claws" },
+  claws: { path: "/claws" },
   agents: { path: "/settings/agents" },
   channels: { path: "/settings/channels", aliases: ["/channels"] },
   connection: { path: "/settings/connection" },
@@ -341,24 +344,32 @@ export function pathForPluginCatalogEntry(id: string, basePath = ""): string {
   if (!isPluginCatalogId(id)) {
     throw new Error("Invalid plugin catalog id for a route path.");
   }
-  return `${pathForRoute("plugins", basePath)}/${id}`;
+  return `${pathForRoute("plugins", basePath)}/${pluginCatalogRouteSuffix(id)}`;
 }
 
 export function pluginCatalogIdFromPath(pathname: string, basePath = ""): string | null {
   const id = routePathSuffix(pathname, "plugins", basePath);
-  return id && isPluginCatalogId(id) ? id : null;
+  return id ? pluginCatalogIdFromRouteSuffix(id) : null;
 }
 
 export function pathForClawCatalogEntry(packageName: string, basePath = ""): string {
-  const match = /^@openclaw\/([a-z0-9][a-z0-9._-]*)$/u.exec(packageName);
-  if (!match) {
-    throw new Error("Only official Claws can be opened from a route path.");
+  if (!isClawCatalogPackageName(packageName)) {
+    throw new Error("Invalid Claw package name for a route path.");
   }
-  return `${pathForRoute("claws", basePath)}/${match[1]}`;
+  return `${pathForRoute("claws", basePath)}/packages/${encodeURIComponent(packageName)}`;
+}
+
+function isClawCatalogPackageName(value: string): boolean {
+  return /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/u.test(value);
 }
 
 export function clawCatalogPackageNameFromPath(pathname: string, basePath = ""): string | null {
   const slug = routePathSuffix(pathname, "claws", basePath);
+  if (slug?.startsWith("packages/")) {
+    const packageName = decodeRouteSegment(slug.slice("packages/".length));
+    return packageName && isClawCatalogPackageName(packageName) ? packageName : null;
+  }
+  // Preserve the original official-only detail links.
   return slug && /^[a-z0-9][a-z0-9._-]*$/u.test(slug) ? `@openclaw/${slug}` : null;
 }
 
@@ -464,6 +475,7 @@ const DYNAMIC_ROUTE_MATCHERS = [
   ["activity", activityPersonFromPath],
   ["workboard", workboardBoardIdFromPath],
   ["memory", memoryTabFromPath],
+  ["plugins", pluginCatalogIdFromPath],
   ["plugins", isLegacyPluginsDiscoveryPath],
   ["plugin-settings", pluginSettingsIdFromPath],
 ] as const;

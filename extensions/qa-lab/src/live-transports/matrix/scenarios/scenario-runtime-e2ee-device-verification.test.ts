@@ -1,9 +1,6 @@
 import type { MatrixVerificationSummary } from "@openclaw/matrix/test-api.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  createMatrixQaE2eeScenarioClient,
-  type MatrixQaE2eeScenarioClient,
-} from "../substrate/e2ee-client.js";
+import { createMatrixQaE2eeScenarioClient } from "../substrate/e2ee-client.js";
 import {
   runMatrixQaE2eeDeviceSasVerificationScenario,
   runMatrixQaE2eeQrVerificationScenario,
@@ -27,22 +24,6 @@ const context = () =>
     observerDeviceId: "OBSERVER",
     observerPassword: "observer-password",
   });
-
-type NativeVerificationClient = Pick<
-  MatrixQaE2eeScenarioClient,
-  | "bootstrapOwnDeviceVerification"
-  | "getRecoveryKey"
-  | "stop"
-  | "requestVerification"
-  | "listVerifications"
-  | "acceptVerification"
-  | "startVerification"
-  | "confirmVerificationSas"
-  | "generateVerificationQr"
-  | "scanVerificationQr"
-  | "confirmVerificationReciprocateQr"
-  | "getDeviceVerificationStatus"
->;
 
 function installNativeClients() {
   let phase = "requested";
@@ -82,7 +63,7 @@ function installNativeClients() {
       phase = next;
       return summary(actor);
     };
-    const client: NativeVerificationClient = {
+    const client = {
       bootstrapOwnDeviceVerification: async () => bootstrap,
       getRecoveryKey: async () => null,
       stop: async () => undefined,
@@ -102,7 +83,7 @@ function installNativeClients() {
       generateVerificationQr: async () => ({ qrDataBase64: "AQIDBA==" }),
       scanVerificationQr: async () => advance("reciprocate"),
       confirmVerificationReciprocateQr: async () => advance("done"),
-      getDeviceVerificationStatus: async (userId, deviceId) => ({
+      getDeviceVerificationStatus: async (userId?: string, deviceId?: string) => ({
         encryptionEnabled: true,
         userId: userId ?? null,
         deviceId: deviceId ?? null,
@@ -112,52 +93,30 @@ function installNativeClients() {
         signedByOwner: true,
       }),
     };
-    // Acquisition-only fixture: the typed Pick implements every native operation
-    // these scenarios use; unrelated send/media/deletion operations are omitted.
+    // The acquisition boundary checks this inferred fixture against the native client API.
     vi.mocked(createMatrixQaE2eeScenarioClient, { partial: true }).mockResolvedValueOnce(client);
   }
 }
 
 const cases = [
-  {
-    method: "sas",
-    run: runMatrixQaE2eeDeviceSasVerificationScenario,
-    label: "device SAS verification",
-  },
-  { method: "qr", run: runMatrixQaE2eeQrVerificationScenario, label: "QR verification" },
+  [
+    "sas",
+    runMatrixQaE2eeDeviceSasVerificationScenario,
+    "device SAS verification",
+    "driver-to-observer device verification completed with real SAS\ninitiator transaction: transaction-1\nrecipient transaction: transaction-1\ndriver trusts observer device: yes\nobserver trusts driver device: yes\nemoji: 🐈 Cat",
+  ],
+  [
+    "qr",
+    runMatrixQaE2eeQrVerificationScenario,
+    "QR verification",
+    "driver-to-observer QR verification completed through real QR scan\ntransaction: transaction-1\ndriver trusts observer device: yes\nobserver trusts driver device: yes\nqr bytes: 4",
+  ],
 ] as const;
 
-describe.each(cases)("Matrix device $method verification", ({ method, run, label }) => {
-  it("completes its native protocol and preserves the exact result contract", async () => {
+describe.each(cases)("Matrix device %s verification", (_method, run, label, details) => {
+  it("completes its native protocol and reports exact verification details", async () => {
     installNativeClients();
-    const result = await run(context());
-    expect(result).toEqual(
-      method === "sas"
-        ? {
-            artifacts: {
-              completedVerificationIds: ["driver-request", "observer-request"],
-              currentDeviceId: "DRIVER",
-              driverTrustsObserverDevice: true,
-              observerTrustsDriverDevice: true,
-              sasEmoji: ["🐈 Cat"],
-              secondaryDeviceId: "OBSERVER",
-            },
-            details:
-              "driver-to-observer device verification completed with real SAS\ninitiator transaction: transaction-1\nrecipient transaction: transaction-1\ndriver trusts observer device: yes\nobserver trusts driver device: yes\nemoji: 🐈 Cat",
-          }
-        : {
-            artifacts: {
-              completedVerificationIds: ["driver-request", "observer-request"],
-              driverTrustsObserverDevice: true,
-              identityVerificationCompleted: true,
-              observerTrustsDriverDevice: true,
-              qrBytes: 4,
-              secondaryDeviceId: "OBSERVER",
-            },
-            details:
-              "driver-to-observer QR verification completed through real QR scan\ntransaction: transaction-1\ndriver trusts observer device: yes\nobserver trusts driver device: yes\nqr bytes: 4",
-          },
-    );
+    expect(await run(context())).toEqual({ details });
   });
 
   it("retains its method-specific missing-device diagnostic", async () => {

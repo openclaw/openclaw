@@ -33,7 +33,7 @@ import {
 import { expectDefined } from "@openclaw/normalization-core";
 import type { WizardPromptNavigation } from "./prompts.js";
 
-type NavigationPromptOptions<Options> = Omit<Options, "withGuide" | "maxItems"> & {
+type NavigationPromptOptions<Options> = Omit<Options, "withGuide" | "maxItems" | "input"> & {
   navigation?: WizardPromptNavigation;
 };
 
@@ -116,7 +116,6 @@ export function selectWithNavigationFooter<Value>(
   return new SelectPrompt({
     options: opts.options as Array<Option<Value>>,
     signal: opts.signal,
-    input: opts.input,
     output: opts.output,
     initialValue: opts.initialValue,
     render() {
@@ -287,7 +286,7 @@ function renderAutocomplete<Value>(
 
 export function autocompleteWithNavigationFooter<Value>(
   opts: NavigationPromptOptions<
-    Omit<AutocompleteOptions<Value>, "initialUserInput" | "placeholder">
+    Omit<AutocompleteOptions<Value>, "initialUserInput" | "placeholder" | "validate">
   >,
 ): Promise<Value | symbol> {
   return new AutocompletePrompt<Option<Value>>({
@@ -295,9 +294,7 @@ export function autocompleteWithNavigationFooter<Value>(
     initialValue: opts.initialValue === undefined ? undefined : [opts.initialValue],
     filter: opts.filter,
     signal: opts.signal,
-    input: opts.input,
     output: opts.output,
-    validate: opts.validate,
     render() {
       return renderAutocomplete(this, opts);
     },
@@ -348,7 +345,6 @@ export function textWithNavigationFooter(
     initialValue: opts.initialValue,
     output: opts.output,
     signal: opts.signal,
-    input: opts.input,
     render() {
       const placeholder = opts.placeholder
         ? styleText("inverse", opts.placeholder[0] ?? "") +
@@ -371,7 +367,6 @@ export function passwordWithNavigationFooter(
     validate: opts.validate,
     mask: S_PASSWORD_MASK,
     signal: opts.signal,
-    input: opts.input,
     output: opts.output,
     render() {
       return renderTextPrompt(this, opts, this.userInputWithCursor, this.masked ?? "", true);
@@ -385,7 +380,6 @@ export function multiselectWithNavigationFooter<Value>(
   return new MultiSelectPrompt({
     options: opts.options as Array<Option<Value>>,
     signal: opts.signal,
-    input: opts.input,
     output: opts.output,
     initialValues: opts.initialValues,
     validate(selected: Value[] | undefined) {
@@ -505,7 +499,6 @@ export function autocompleteMultiselectWithNavigationFooter<Value>(
     filter: opts.filter,
     initialValue: opts.initialValues,
     signal: opts.signal,
-    input: opts.input,
     output: opts.output,
     render() {
       return renderAutocomplete(this, opts);
@@ -522,7 +515,6 @@ export function confirmWithNavigationFooter(
     active,
     inactive,
     signal: opts.signal,
-    input: opts.input,
     output: opts.output,
     initialValue: opts.initialValue ?? true,
     render() {

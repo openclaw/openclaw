@@ -1,8 +1,7 @@
 // Prompt composition scenarios build reusable agent prompt fixtures.
 import fs from "node:fs/promises";
-import { buildBootstrapPromptWarning } from "../../../src/agents/bootstrap-budget-warning.js";
 import {
-  analyzeBootstrapBudget,
+  buildBootstrapBudgetState,
   buildBootstrapInjectionStats,
   buildBootstrapPromptWarningNotice,
 } from "../../../src/agents/bootstrap-budget.js";
@@ -173,22 +172,17 @@ async function createBootstrapWarningScenario(workspaceDir: string): Promise<Pro
     workspaceDir,
     config: bootstrapConfig,
   });
-  const analysis = analyzeBootstrapBudget({
-    files: buildBootstrapInjectionStats({
-      bootstrapFiles,
-      injectedFiles: contextFiles,
-    }),
-    bootstrapMaxChars: bootstrapConfig.agents.defaults.bootstrapMaxChars,
-    bootstrapTotalMaxChars: bootstrapConfig.agents.defaults.bootstrapTotalMaxChars,
-  });
+  const { bootstrapAnalysis: analysis, bootstrapPromptWarning: warning } =
+    buildBootstrapBudgetState({
+      config: bootstrapConfig,
+      files: buildBootstrapInjectionStats({
+        bootstrapFiles,
+        injectedFiles: contextFiles,
+      }),
+    });
   if (!analysis.hasTruncation) {
     throw new Error("bootstrap-warning scenario expected truncated bootstrap context");
   }
-  const warning = buildBootstrapPromptWarning({
-    analysis,
-    mode: "always",
-    seenSignatures: [],
-  });
   const truncationNotice = buildBootstrapPromptWarningNotice(warning.lines);
   if (!truncationNotice) {
     throw new Error("bootstrap-warning scenario expected a truncation notice");

@@ -1,9 +1,11 @@
+import { channel } from "node:diagnostics_channel";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, expect, it } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { reconcileNodePairingOnConnect as reconcile } from "../gateway/node-connect-reconcile.js";
+import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
 import { closeOpenClawStateDatabaseByPathAsync as closeDatabase } from "../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase as openDatabase } from "../state/openclaw-state-db.js";
 import { migrateLegacyDesktopStreamOptOuts as migrateDesktop } from "./device-pairing-node-desktop-migration.js";
@@ -111,7 +113,29 @@ it.each(["desktop", "unrelated"] as const)(
     expect(reapproval.request.silent).not.toBe(true);
     await approveNode(reapproval.request.requestId, approval, baseDir);
     await closeDatabase(database().path);
-    expect(await migrateDesktop({}, baseDir)).toBe(0);
+    await expect(
+      withArtifactPreservingStateReads(() => migrateDesktop({}, baseDir), { agentDatabases: true }),
+    ).rejects.toThrow("shared-state write during artifact-preserving inspection");
+    const statements: string[] = [];
+    const observation = channel("openclaw.database.statement");
+    const observe = (message: unknown) => {
+      if (
+        message &&
+        typeof message === "object" &&
+        "sql" in message &&
+        typeof message.sql === "string"
+      ) {
+        statements.push(message.sql);
+      }
+    };
+    observation.subscribe(observe);
+    try {
+      expect(await migrateDesktop({}, baseDir)).toBe(0);
+    } finally {
+      observation.unsubscribe(observe);
+    }
+    expect(statements.filter((sql) => /^(BEGIN|COMMIT|ROLLBACK)\b/i.test(sql))).toEqual([]);
+    expect(statements.filter((sql) => /^select .*migration_runs/i.test(sql))).toHaveLength(1);
     expect((await getDevice(nodeId, baseDir))?.nodeSurface?.commands).toContain("desktop.stream");
   },
 );

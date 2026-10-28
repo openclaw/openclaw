@@ -1,6 +1,10 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
+  annotateRuntimeExecutionError,
+  noteRuntimeDynamicExecution,
+} from "../infra/runtime-profile.js";
+import {
   CodeModeHeadlessAbortError,
   CodeModeHeadlessTimeoutError,
   normalizeCodeModeTimeoutResult,
@@ -13,6 +17,16 @@ import type {
 } from "./code-mode-executor-types.js";
 import { EMPTY_CODE_MODE_OUTPUT } from "./code-mode-json.js";
 import type { CodeModeWorkerPayload } from "./code-mode-worker-types.js";
+
+function normalizeCodeModeRuntimeResult(result: CodeModeWorkerResult): CodeModeWorkerResult {
+  const normalized = normalizeCodeModeTimeoutResult(result);
+  return normalized.status === "failed"
+    ? {
+        ...normalized,
+        error: formatErrorMessage(annotateRuntimeExecutionError(normalized.error, "Code Mode")),
+      }
+    : normalized;
+}
 
 export async function runCodeModeExecutor(
   input: CodeModeWorkerPayload<CodeModeExecutorContinuation>,
@@ -29,9 +43,13 @@ export async function runCodeModeExecutor(
   };
   try {
     options.signal?.throwIfAborted();
+    const executorId = input.kind === "resume" ? input.continuation.executor : options.executor;
+    if (executorId === "node") {
+      noteRuntimeDynamicExecution("code-mode");
+    }
     if (input.kind === "resume") {
       const { continuation, ...resumeInput } = input;
-      return normalizeCodeModeTimeoutResult(
+      return normalizeCodeModeRuntimeResult(
         await continuation.resume(resumeInput, executionOptions),
       );
     }
@@ -48,7 +66,7 @@ export async function runCodeModeExecutor(
     if (timeoutMs <= 0 || executionOptions.timeoutMs <= preparationMs) {
       throw new CodeModeHeadlessTimeoutError();
     }
-    return normalizeCodeModeTimeoutResult(
+    return normalizeCodeModeRuntimeResult(
       await executor.execute(
         { ...input, config: { ...input.config, timeoutMs } },
         { ...executionOptions, timeoutMs: executionOptions.timeoutMs - preparationMs },
@@ -69,7 +87,7 @@ export async function runCodeModeExecutor(
         ? "code mode timeout exceeded"
         : aborted
           ? "code mode execution aborted"
-          : formatErrorMessage(error),
+          : formatErrorMessage(annotateRuntimeExecutionError(error, "Code Mode")),
       failurePhase: "host",
       bridgeDispatchStarted: false,
       output: EMPTY_CODE_MODE_OUTPUT,

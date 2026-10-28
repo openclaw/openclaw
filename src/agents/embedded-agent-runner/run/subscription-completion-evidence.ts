@@ -22,7 +22,6 @@ export function readSubscriptionCompletionEvidence(subscription: EmbeddedAttempt
     messagingToolSentMediaUrls: subscription.getMessagingToolSentMediaUrls(),
     messagingToolSentTargets: subscription.getMessagingToolSentTargets(),
     messagingToolSourceReplyPayloads: subscription.getMessagingToolSourceReplyPayloads(),
-    heartbeatToolResponse: subscription.getHeartbeatToolResponse(),
     sourceReplyDelivered: subscription.getSourceReplyDelivered(),
     sourceReplyDeliveryState: subscription.getSourceReplyDeliveryState(),
     toolMediaUrls: media?.mediaUrls,

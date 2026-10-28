@@ -34,6 +34,7 @@ export function buildNativeHookRelayCommandPlan(
     generation: string;
     /** Canonical tool names requiring bundled execution custody. */
     executionAdmissionToolNames?: readonly string[];
+    postToolUseToolNames?: readonly string[];
   },
 ): NativeHookRelayCommandPlan {
   const stateDbPath = resolveOpenClawStateSqlitePath();

@@ -31,10 +31,6 @@ function relativeRef(value: string): string | undefined {
   return ref && !/^(?:[a-z][a-z\d+.-]*:|[/\\#])/i.test(ref) ? ref : undefined;
 }
 
-function escapeAttribute(value: string): string {
-  return value.replaceAll("&", "&amp;").replaceAll('"', "&quot;");
-}
-
 function srcsetRefs(value: string): Reference[] {
   const refs: Reference[] = [];
   let cursor = 0;
@@ -306,7 +302,9 @@ export async function prepareHtmlPreviewAssets(
           {
             start: text.start,
             end: text.end,
-            text: text.attribute ? `${text.attribute}="${escapeAttribute(content)}"` : content,
+            text: text.attribute
+              ? `${text.attribute}="${content.replaceAll("&", "&amp;").replaceAll('"', "&quot;")}"`
+              : content,
           },
         ];
   });

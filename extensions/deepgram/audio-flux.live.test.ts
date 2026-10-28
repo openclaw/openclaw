@@ -2,8 +2,7 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { expectDefined } from "@openclaw/normalization-core";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { MediaUnderstandingProvider } from "openclaw/plugin-sdk/media-understanding";
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import { createCapturedPluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { expect, it } from "vitest";
 import { WebSocketServer } from "ws";
 import plugin from "./index.js";
@@ -11,12 +10,8 @@ import plugin from "./index.js";
 // Exercises index.ts registration -> transcribeAudio -> real ffmpeg -> provider socket.
 // Requires ffmpeg; the endpoint is local and no provider credential is used.
 it("transcribes audio beyond twenty minutes while another transcription completes", async () => {
-  const providers: MediaUnderstandingProvider[] = [];
-  plugin.register(
-    createTestPluginApi({
-      registerMediaUnderstandingProvider: (provider) => providers.push(provider),
-    }),
-  );
+  const { api, mediaUnderstandingProviders: providers } = createCapturedPluginRegistration();
+  plugin.register(api);
   const transcribeAudio = expectDefined(providers[0]?.transcribeAudio, "registered transcription");
   const pcm = Buffer.alloc(1500 * 16_000 * 2);
   const marker = Buffer.alloc(16_000 * 2, 23);

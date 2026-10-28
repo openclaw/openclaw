@@ -259,25 +259,17 @@ async function approvePendingNodePairing(nodeId: string, commands: string[]) {
   return pending;
 }
 
-async function invokeCanvasSnapshot(
-  nodeId: string,
-  idempotencyKey: string,
-  params: { format?: string } = { format: "png" },
-) {
+async function invokeCanvasSnapshot(nodeId: string, idempotencyKey: string) {
   return rpcReq<{ payload?: unknown; payloadJSON?: string | null }>(ws, "node.invoke", {
     nodeId,
     command: "canvas.snapshot",
-    params,
+    params: { format: "png" },
     idempotencyKey,
   });
 }
 
-async function expectCanvasSnapshotDenied(
-  nodeId: string,
-  idempotencyKey: string,
-  params?: { format?: string },
-) {
-  expect(await invokeCanvasSnapshot(nodeId, idempotencyKey, params)).toMatchObject({
+async function expectCanvasSnapshotDenied(nodeId: string, idempotencyKey: string) {
+  expect(await invokeCanvasSnapshot(nodeId, idempotencyKey)).toMatchObject({
     ok: false,
     error: { message: expect.stringContaining("node command not allowed") },
   });
@@ -323,6 +315,12 @@ async function respondToInvoke(
     nodeId: payload.nodeId ?? fallbackNodeId,
     ok: true,
     payloadJSON: JSON.stringify({ ok: true }),
+  });
+}
+
+function createDeviceIdentityForTest(prefix: string) {
+  return loadOrCreateDeviceIdentity({
+    path: path.join(updateDirs.make(`${prefix}-`), "client", "credentials.sqlite"),
   });
 }
 
@@ -496,12 +494,7 @@ function nodeFixture(displayName: string, options: Partial<Omit<NodeFixture, "di
     commands: ["canvas.snapshot"],
     platform: "macos",
     deviceFamily: "Mac",
-    deviceIdentity: loadOrCreateDeviceIdentity({
-      path: path.join(
-        os.tmpdir(),
-        `${displayName}-${Date.now()}-${Math.random().toString(36).slice(2)}.sqlite`,
-      ),
-    }),
+    deviceIdentity: createDeviceIdentityForTest(displayName),
     ...options,
   };
 }
@@ -515,7 +508,7 @@ describe("gateway node command allowlist", () => {
     });
     const emptyClient = await connectNodeClientWithNodePairing(empty);
     const emptyNodeId = await findConnectedNodeIdByDisplayName(empty.displayName);
-    await expectCanvasSnapshotDenied(emptyNodeId, "allowlist-2", {});
+    await expectCanvasSnapshotDenied(emptyNodeId, "allowlist-2");
     await emptyClient.stopAndWait();
     await expectConnectedNodeCount(0);
 

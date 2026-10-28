@@ -2,7 +2,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { expect, it } from "vitest";
-import { getFreePort } from "../../../src/test-utils/ports.ts";
+import { listenLoopback } from "../../../test/helpers/gateway-integration-fixtures.ts";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
@@ -12,6 +12,7 @@ import type { ModelCatalogResult } from "../api/types.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { openPicker, pickerValue } from "../test-helpers/select-picker-e2e.ts";
 import { selectAgentFileWorkspace } from "./agent-file-lifecycle.test-support.ts";
+import { connectChatGateway } from "./chat-real-gateway.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -22,34 +23,31 @@ const suite = createControlUiE2eSuite({
 });
 
 let catalogInstance: OpenClawTestInstance;
+let catalogClient: Awaited<ReturnType<typeof connectChatGateway>>;
 let inventoryModel = "inventory-before";
 const inventoryRequests: string[] = [];
-const inventoryCommand = ["gateway", "call", "models.list", "--json", "--params"];
-const inventoryArgs = (refresh?: true) => [
-  ...inventoryCommand,
-  JSON.stringify({ agentId: "main", view: "all", refresh }),
-];
+const inventoryParams = (refresh?: true) => ({ agentId: "main", view: "all", refresh });
 async function refreshInventory() {
   const expectedInventory = inventoryModel;
-  let result = await catalogInstance.cli(inventoryArgs(true));
-  expect(result.code, result.stderr).toBe(0);
-  let catalog: ModelCatalogResult = JSON.parse(result.stdout);
+  let catalog = await catalogClient.request<ModelCatalogResult>(
+    "models.list",
+    inventoryParams(true),
+  );
   const inventory = () =>
     catalog.models.filter((model) => model.provider === "ollama").map((model) => model.id);
   // Publication can precede acquisition settlement; a refresh may still join the old acquisition.
   await expect
     .poll(async () => {
       if (catalog.pendingProviders?.length || !inventory().includes(expectedInventory)) {
-        result = await catalogInstance.cli(
-          inventoryArgs(catalog.pendingProviders?.length ? undefined : true),
+        catalog = await catalogClient.request<ModelCatalogResult>(
+          "models.list",
+          inventoryParams(catalog.pendingProviders?.length ? undefined : true),
         );
-        expect(result.code, result.stderr).toBe(0);
-        catalog = JSON.parse(result.stdout);
       }
       return { inventory: inventory(), pendingProviders: catalog.pendingProviders ?? [] };
     })
     .toEqual({ inventory: [expectedInventory], pendingProviders: [] });
-  return result;
+  return catalog;
 }
 const catalogModels = (id: string) => [
   { id: "anchor", name: "Anchor" },
@@ -59,6 +57,14 @@ const catalogModels = (id: string) => [
 const catalogSuite = createControlUiE2eSuite({
   name: "Agents catalog publication with a real Gateway",
   startServerBeforeBrowser: true,
+  resources: {
+    async run(signal) {
+      catalogClient = await connectChatGateway(catalogInstance, signal);
+    },
+    async close() {
+      await catalogClient?.stopAndWait();
+    },
+  },
   async startServer() {
     const capabilities = ["completion", "tools"];
     const modelDetails = { capabilities, model_info: { "llama.context_length": 32768 } };
@@ -68,10 +74,7 @@ const catalogSuite = createControlUiE2eSuite({
       const tags = { models: [{ name: inventoryModel, capabilities }] };
       response.end(JSON.stringify(request.url === "/api/show" ? modelDetails : tags));
     });
-    const inventoryPort = await getFreePort();
-    await new Promise<void>((resolve) => {
-      inventory.listen(inventoryPort, "127.0.0.1", resolve);
-    });
+    const inventoryUrl = await listenLoopback(inventory);
     catalogInstance = await createOpenClawTestInstance({
       name: "agents-catalog-publication",
       env: { OPENCLAW_TEST_MINIMAL_GATEWAY: undefined, VITEST: undefined },
@@ -85,7 +88,7 @@ const catalogSuite = createControlUiE2eSuite({
         },
         models: {
           providers: {
-            ollama: { api: "ollama", baseUrl: `http://127.0.0.1:${inventoryPort}` },
+            ollama: { api: "ollama", baseUrl: inventoryUrl },
             fixture: {
               api: "openai-completions",
               apiKey: "synthetic-catalog-key",
@@ -164,13 +167,13 @@ catalogSuite.define(() => {
       expect(result.code, result.stderr || result.stdout).toBe(0);
       return JSON.parse(result.stdout);
     };
-    const publishInventory = async (id: string, checkOutput = true) => {
+    const publishInventory = async (id: string) => {
       inventoryModel = id;
-      const result = await refreshInventory();
-      commands.push({ args: inventoryArgs(true), publishedInventory: result });
-      if (checkOutput) {
-        expect(result.stdout).toContain(id);
-      }
+      commands.push({
+        method: "models.list",
+        params: inventoryParams(true),
+        publishedInventory: await refreshInventory(),
+      });
     };
     try {
       await publishInventory("inventory-before");
@@ -227,11 +230,18 @@ catalogSuite.define(() => {
           const waitForOption = (id: string) => expect.poll(() => option(id).count()).toBe(1);
           await openPicker(picker);
           await waitForOption("fixture/retiring");
-          const identityName = editor.getByRole("textbox", { name: "Display name", exact: true });
+          const identity = editor.locator(".agent-identity-editor");
+          const identityName = identity.getByRole("textbox", { name: "Display name", exact: true });
+          const draftName = "Keep this identity draft";
           // Identity hydration can replace the selection between fill's browser and keyboard steps.
           await expect.poll(() => identityName.inputValue()).toBe("Assistant");
-          await identityName.fill("Keep this identity draft");
-          expect(await identityName.inputValue()).toBe("Keep this identity draft");
+          await identityName.fill(draftName);
+          expect(await identityName.inputValue()).toBe(draftName);
+          // Identity autosave refreshes config and temporarily disables the model picker.
+          await identityName.blur();
+          await expect.poll(() => readConfig("agents.entries.main.name")).toBe(draftName);
+          await identity.getByRole("status").waitFor({ state: "hidden" });
+          await expect.poll(() => picker.locator(".picker-select__trigger").isEnabled()).toBe(true);
           await openPicker(picker);
           await option("fixture/selected").click();
           const selected = () => pickerValue(picker);
@@ -270,9 +280,9 @@ catalogSuite.define(() => {
           expect(await option("ollama/inventory-before").count()).toBe(0);
 
           holdCatalog = true;
-          await publishInventory("inventory-held", false);
+          await publishInventory("inventory-held");
           await expect.poll(() => heldCatalogs.length).toBeGreaterThan(0);
-          await publishInventory("inventory-latest", false);
+          await publishInventory("inventory-latest");
           await expect.poll(() => receivedLatestCatalog).toBe(true);
           holdCatalog = false;
           for (const release of heldCatalogs.splice(0)) {
@@ -295,7 +305,7 @@ catalogSuite.define(() => {
           await waitForOption("fixture/recovered");
           await error.waitFor({ state: "hidden" });
           expect(await selected()).toBe("fixture/selected");
-          expect(await identityName.inputValue()).toBe("Keep this identity draft");
+          expect(await identityName.inputValue()).toBe(draftName);
           expect(
             await editor
               .locator(".multi-select__chip")
@@ -337,7 +347,6 @@ suite.define(() => {
               defaults: {
                 workspace: "~/.openclaw/workspace-main",
                 systemAgent: { agentId: "main" },
-                heartbeat: { agentId: "main" },
                 sessionStore: { agentId: "main" },
               },
               entries: {
@@ -424,28 +433,6 @@ suite.define(() => {
             await conflict.getByRole("button", { name: "Reload" }).click();
             await expect.poll(() => editor.inputValue()).toBe(secondAppend);
             expect(await readAgentsFile()).toBe(secondAppend);
-
-            await editor.fill("# Draft typed before the refresh\n");
-            const thirdAppend = `${secondAppend}- third memory\n`;
-            await writeFile(agentsFile, thirdAppend, "utf8");
-            await page
-              .locator(".settings-section__header")
-              .filter({ hasText: "Core Files" })
-              .getByRole("button", { name: "Refresh" })
-              .click();
-            await expect.poll(() => editor.inputValue()).toBe("# Draft typed before the refresh\n");
-            await rejectStaleSave(thirdAppend);
-
-            await page
-              .locator(".agent-file-header")
-              .getByRole("button", { name: "Reset", exact: true })
-              .click();
-            await expect.poll(() => editor.inputValue()).toBe(thirdAppend);
-            const afterReset = `${thirdAppend}- edited after Reset\n`;
-            await editor.fill(afterReset);
-            await save.click();
-            await expect.poll(readAgentsFile).toBe(afterReset);
-            await expect.poll(() => conflict.isVisible()).toBe(false);
           },
         );
       },

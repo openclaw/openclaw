@@ -8,7 +8,7 @@ import {
   type SessionsCreateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
-import { withSessionActorStorage } from "../../config/sessions/session-actor-storage-binding.js";
+import { withSessionActorStorage } from "../../config/sessions/session-actor-storage-acquisition.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
 import {
@@ -543,7 +543,14 @@ export async function prepareSessionWorkspaceForRun(params: {
           runSetupScript: !cfg.cloudWorkers?.requiredProfile && params.runSetupScript,
           signal,
           commitGuard: assertProjectCurrent,
-          onProgress: (stage) => status(stage === "setup" ? "running_setup" : "creating_worktree"),
+          onProgress: (stage) =>
+            status(
+              stage === "base"
+                ? "preparing_worktree_base"
+                : stage === "setup"
+                  ? "running_setup"
+                  : "creating_worktree",
+            ),
           acceptedSource: pending.source,
           onPromptReady: params.onPromptReady
             ? async (promptWorkspace) => {

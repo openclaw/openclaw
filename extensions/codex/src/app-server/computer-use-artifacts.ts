@@ -146,7 +146,7 @@ async function reconcileCodexComputerUseStartArtifactsOnce(
         assertCurrent: params.assertCurrent,
       });
       params.assertCurrent();
-      if (desktopCandidates.length > 0 && service.status === "source_missing") {
+      if (desktopCandidates.length > 0 && service === "source_missing") {
         throw new CodexComputerUseCandidateArtifactsUnavailableError();
       }
     } catch (error) {

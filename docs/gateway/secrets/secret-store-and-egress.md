@@ -56,6 +56,10 @@ The secret egress proxy lets Gateway-hosted agent subprocesses use shared-store 
 
 The listener runs in a dedicated Gateway Worker that owns TLS, certificate preparation, substitution, and forwarding. Request and response bytes stay off the Gateway's main event loop. The Gateway exchanges process grants and certificate health with that Worker; revocation immediately fences the grant before its connections are closed. A failed Worker closes protected egress and requires a Gateway restart.
 
+The proxy's destination trust and exported subprocess CA bundle exclude the emSign ECC G3 root following the published eMudhra incident distrust policy. This also rejects legitimate chains relying exclusively on that root. The generated local proxy CA and other bundled public roots remain trusted. Restart the Gateway after installing this repair. Child runtimes and clients that use their own trust stores, including blind `bypassHosts` tunnels, still require their appropriate security updates; an extra CA file does not remove Node's built-in trust.
+
+Upstream connections honor the Gateway's `HTTPS_PROXY` and `HTTP_PROXY` environment settings and `NO_PROXY` exclusions, including loopback destinations, using the same routing rules as Gateway outbound traffic. This also applies to `bypassHosts` tunnels and permitted loopback HTTP requests. HTTPS destinations use CONNECT through the upstream proxy, keeping substituted secrets inside destination TLS. Destination allowlists and secret bindings still apply to the destination, not the proxy hop. With no proxy environment configured, connections remain direct. Restart the Gateway after changing its proxy environment.
+
 Each secret must also name the exact HTTPS hosts where substitution is allowed. Hostnames are stored lowercase in ASCII/punycode form and matched exactly; wildcards, suffix matching, and ports are not supported. A secret with no allowed hosts is never substituted. Bind a host without replacing the stored value:
 
 ```bash
@@ -129,6 +133,8 @@ Destination binding does not make an allowed host trustworthy. A bound service t
 
 The CA is generated once per Gateway start under the state directory with a ten-year certificate validity window. Its key is still process-owned, not retained for ten years. The proxy reuses up to 128 hostname certificates across commands while keeping each command's TLS connections and secret bindings separate. This cache belongs to the process CA and is cleared at shutdown. One-day leaf certificates renew on demand within their final hour without replacing the CA or interrupting established TLS connections. This keeps already-running subprocesses trusting the same issuer across renewal. Its directory is mode `0700`, its private keys are mode `0600`, it is removed during Gateway shutdown, and OpenClaw never installs it in a system trust store. Requests are rejected when a sentinel cannot be authenticated or resolved; the proxy never forwards or silently strips an unresolved sentinel. Request bodies are scanned as a stream with a bounded carry window, so substitution also works when a sentinel crosses chunk boundaries or appears in a large upload.
 
+Service installation excludes the proxy's process-owned environment, including its temporary CA trust, while preserving operator-provided CA files. If an older installation captured those values, run `openclaw doctor --fix` to repair the managed service definition, or `openclaw gateway install --force` to reinstall it. Operator-owned service overrides remain under your control.
+
 `openclaw status` and `openclaw doctor` report certificate preparation failures and warn when the process CA is within seven days of expiry. Failed preparation refuses the new CONNECT request with an actionable error; the next request can retry after OpenSSL, filesystem access, or clock problems are corrected. An expired or not-yet-valid CA requires checking the system clock and restarting the Gateway, not disabling TLS verification. Gateway RPC can remain reachable while protected egress is degraded. For a read-only, machine-readable check, run `openclaw doctor --lint --only core/doctor/gateway-health --json`; the default JSON checks do not check the running Gateway.
 
 Generated certificates include the key identifiers required by strict TLS clients, including Python 3.13 and later, with either OpenSSL or macOS LibreSSL. After updating, restart the Gateway to generate its new process CA and start a new command to load the new trust bundle.
@@ -183,7 +189,7 @@ grant destinations. Missing mappings are reported together before repository
 commands run. See [cloud environment files](/gateway/cloud-workers/environment-file).
 
 Profile setup, preparation, and post-create/start use Crabbox native `egress run`
-on the worker's owned coordinator Linux lease. Crabbox 0.77.0 or newer permits
+on the worker's owned coordinator Linux lease. Crabbox 0.79.2 or newer permits
 public destinations for ordinary HTTPS package downloads, while the Gateway
 substitutes each sentinel only at that secret's bound host. This job does not
 require `secrets.egressProxy.enabled`. Unsupported leases, unavailable helpers or

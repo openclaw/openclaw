@@ -548,6 +548,7 @@ describe("worker environment service", () => {
     const request = { ...support.LIVE_EVENT, runEpoch: identity.ownerEpoch };
     const push = workerService.pushLiveEvent.bind(workerService, identity);
     await push(request);
+    expect(liveEvents.apply).toHaveBeenCalledOnce();
     await expect(push({ ...request, runEpoch: identity.ownerEpoch + 1 })).resolves.toEqual({
       ok: false,
       details: { reason: "epoch-mismatch" },
@@ -573,6 +574,7 @@ describe("worker environment service", () => {
       ok: false,
       details: { reason: "session-not-attached" },
     });
+    expect(liveEvents.apply).toHaveBeenCalledOnce();
     liveEvents.rotateCredential.mockClear();
     support.testState.nowMs += 10_000;
     await workerService.reconcileOnce();

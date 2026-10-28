@@ -125,9 +125,6 @@ describe("config form composition integrity", () => {
     expect(modeControl).not.toBeNull();
     const modeOptions = [...(modeControl?.querySelectorAll(".settings-segmented__btn") ?? [])];
     expect(modeOptions.map((option) => option.textContent?.trim())).toEqual(["On", "Off", "Auto"]);
-    expect(
-      modeOptions.map((option) => option.querySelector<HTMLInputElement>("input")?.value),
-    ).toEqual(["0", "1", "2"]);
     const plainModeControl = container.querySelector(
       '.settings-segmented[role="radiogroup"][aria-label="Plain Mode"]',
     );

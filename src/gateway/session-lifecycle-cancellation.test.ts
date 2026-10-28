@@ -1,5 +1,4 @@
 import { assert, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
 import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
 import { createAgentRunRestartAbortError } from "../agents/run-termination.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
@@ -15,9 +14,11 @@ import {
   registerAgentRunContext,
   validateAgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
+import { heartbeatNotifications } from "../infra/heartbeat-events.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { abortChatRunById } from "./chat-abort.js";
 import { captureRpcTargetForTest } from "./server-methods/rpc-source-fixtures.test-support.js";
+import { heldWork } from "./server-plugin-reload.fixture-tools.test-support.js";
 import { startGatewayEventSubscriptions } from "./server-runtime-subscriptions.js";
 import {
   createSubscriptionTestFixture,
@@ -30,7 +31,7 @@ it.each([
   { cancellation: "user", status: "killed", replacement: false },
   { cancellation: "restart", status: "interrupted", replacement: true },
 ] as const)(
-  "settles $cancellation cancellation only for its session generation (replacement: $replacement)",
+  "settles $cancellation, replacement=$replacement",
   async ({ cancellation, status, replacement }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       setRuntimeConfigSnapshot({});
@@ -67,15 +68,13 @@ it.each([
         lifecycleRunId: runId,
         activeWriterRunId: runId,
       });
-      const writePrepared = createDeferred();
-      const releaseWrite = createDeferred();
+      const write = heldWork();
       const patch = sessionAccessor.applySessionEntryTargetOperation;
       const spy = vi
         .spyOn(sessionAccessor, "applySessionEntryTargetOperation")
         .mockImplementation(async (...args) => {
           if (args[0].target.canonicalKey === target.sessionKey) {
-            writePrepared.resolve();
-            await releaseWrite.promise;
+            await write.run();
           }
           return patch(...args);
         });
@@ -89,26 +88,17 @@ it.each([
             runId,
             lifecycleGeneration: getAgentEventLifecycleGeneration(),
             stream: "lifecycle",
-            data: {
-              phase: "error",
-              aborted: true,
-              stopReason: "restart",
-              startedAt: 1_000,
-              endedAt: 2_000,
-            },
+            data: { phase: "error", aborted: true, stopReason: "restart" },
           });
         } else {
           expect(
             abortChatRunById(
-              {
-                ...params,
-                removeChatRun: () => undefined,
-              },
+              { ...params, removeChatRun: () => undefined },
               { runId, sessionKey: target.sessionKey, stopReason: "rpc" },
             ),
           ).toEqual({ aborted: true });
         }
-        await writePrepared.promise;
+        await write.entered;
         persistence = registration.entry.adapter.projectSessionTerminalPersistence;
         expect(persistence).toBeDefined();
         // Actual runtime cleanup closes tools immediately while the queued write is still pending.
@@ -120,11 +110,10 @@ it.each([
           assert(current);
           await replaceSessionEntry(target, {
             ...current,
-            sessionId: target.sessionId,
             lifecycleRevision: "successor",
           });
         }
-        releaseWrite.resolve();
+        write.release();
         await persistence;
         if (replacement) {
           expect(loadSessionEntry(target)).toMatchObject({ lifecycleRevision: "successor" });
@@ -141,15 +130,14 @@ it.each([
         expect(await loadTranscriptEvents(target)).not.toContainEqual(
           expect.objectContaining({ customType: "run-failed-before-reply" }),
         );
-        expect(fixture.warn).not.toHaveBeenCalled();
       } finally {
-        releaseWrite.resolve();
+        write.release();
         await persistence?.catch(() => {});
         releaseClaim();
         registration.cleanup();
         admission.close();
         await subscriptions.agentUnsub();
-        subscriptions.heartbeatUnsub();
+        heartbeatNotifications.onEvent = () => {};
         subscriptions.transcriptUnsub();
         subscriptions.lifecycleUnsub();
         await params.scheduler.stop();

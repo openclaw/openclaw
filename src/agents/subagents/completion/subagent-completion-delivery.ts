@@ -8,6 +8,7 @@ import {
   type QueuedSessionDeliveryPayload,
   type SessionDeliverySettledOutcome,
 } from "../../../infra/session-delivery-queue.records.js";
+import { resolveEventSessionKey } from "../../../routing/session-key.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import {
   RUNTIME_EVENT_USER_PROMPT,
@@ -61,7 +62,11 @@ export async function admitCorrelatedSubagentSessionDelivery(params: {
       },
       plan(current) {
         const now = Date.now();
-        const subagent = structuredClone(current);
+        // The registry freezes the source row; only delivery changes here.
+        const subagent = {
+          ...current,
+          delivery: current.delivery && { ...current.delivery },
+        };
         const delivery = ensureDeliveryState(subagent);
         const generation = delivery.generation ?? 1;
         const windowStartedAt = delivery.windowStartedAt ?? subagent.execution.endedAt ?? now;
@@ -130,6 +135,43 @@ export function resolveCorrelatedSubagentDelivery(
       { kind: "conversation-data", text: result },
     ],
   };
+}
+
+/** Retire an old blocked notice only when the durable completion proves recovery. */
+export async function isResolvedSubagentCompletionBlockedNotice(
+  queued: QueuedSessionDelivery,
+  context: OpenClawStateWorkerContext,
+): Promise<boolean> {
+  if (queued.kind !== "systemEvent") {
+    return false;
+  }
+  // Reuse the shipped producer identity so already-pending notices reconcile too.
+  const owner = /^subagent-completion-blocked:(.+):generation:([1-9]\d*)$/.exec(
+    queued.idempotencyKey ?? "",
+  );
+  if (!owner) {
+    return false;
+  }
+  const [, runId, generationText] = owner;
+  const generation = Number(generationText);
+  if (!runId || !Number.isSafeInteger(generation)) {
+    return false;
+  }
+  assertSubagentReadContext(context);
+  const runs = await readFullSubagentRuns(
+    context,
+    { kind: "ids", runIds: [runId] },
+    { current: true },
+  );
+  assertSubagentReadContext(context);
+  const subagent = runs.get(runId);
+  return (
+    subagent !== undefined &&
+    resolveEventSessionKey(subagent.requesterSessionKey) === queued.sessionKey &&
+    subagent.requesterAgentId === queued.agentId &&
+    (subagent.delivery?.generation ?? 1) >= generation &&
+    subagent.delivery?.status === "delivered"
+  );
 }
 
 export async function settleCorrelatedSubagentDelivery(

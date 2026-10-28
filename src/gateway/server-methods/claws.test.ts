@@ -1,178 +1,96 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { ClawHubSourceError } from "../../claws/clawhub-source.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
+import { callAgentHandler } from "./agents-mutate.test-support.js";
 import { clawsHandlers } from "./claws.js";
 import { coreGatewayHandlers } from "./core-handlers.js";
 import type { RespondFn } from "./types.js";
 
 const listClawHubClaws = vi.hoisted(() => vi.fn());
-const searchClawHubClaws = vi.hoisted(() => vi.fn());
 const readClawHubClawDetail = vi.hoisted(() => vi.fn());
 const readClawHubClawPreview = vi.hoisted(() => vi.fn());
 vi.mock("../../claws/clawhub-source.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../claws/clawhub-source.js")>()),
   listClawHubClaws,
-  searchClawHubClaws,
   readClawHubClawDetail,
   readClawHubClawPreview,
 }));
 
-afterEach(() => {
-  vi.unstubAllEnvs();
-  vi.clearAllMocks();
-});
+afterEach(() => vi.clearAllMocks());
 
-it("does not expose installed-Claw status as a Gateway method", () => {
-  expect(coreGatewayHandlers["claws.status"]).toBeUndefined();
-});
+const enabled = { gateway: { controlUi: { experimental: { claws: true } } } };
+
+async function catalogRequest(
+  method: string,
+  params: Record<string, unknown>,
+  getRuntimeConfig: () => unknown = () => enabled,
+) {
+  const handler = expectDefined(clawsHandlers[method], method);
+  const respond = await callAgentHandler(handler, method, params, {
+    context: { getRuntimeConfig } as never,
+  });
+  return respond.mock.calls;
+}
+
+function expectError(replies: Parameters<RespondFn>[], code: string, message?: string) {
+  expect(replies).toHaveLength(1);
+  expect(replies[0]?.[2]).toMatchObject({ code, ...(message ? { message } : {}) });
+}
 
 describe("ClawHub Claw catalog Gateway methods", () => {
-  const entry = {
-    packageName: "@openclaw/workflow-operator",
-    displayName: "Workflow Operator",
-    channel: "official",
-    official: true,
-    downloads: 0,
-    updatedAtMs: 1,
-  };
+  const entry = { packageName: "@openclaw/workflow-operator" };
+  const release = { packageName: entry.packageName, version: "1.0.0" };
+  const previewParams = { ...release, kind: "instruction", name: "AGENTS.md" };
+  const preview = { kind: "instruction", name: "AGENTS.md", content: "# Instructions" };
 
-  it("registers read-scoped catalog methods but rejects discovery with Labs off", async () => {
-    for (const method of [
-      "claws.catalog.search",
-      "claws.catalog.detail",
-      "claws.catalog.preview",
-    ] as const) {
+  it("rejects discovery with Labs off", async () => {
+    expectError(await catalogRequest("claws.catalog.search", {}, () => ({})), "FORBIDDEN");
+    expect(listClawHubClaws).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["claws.catalog.search", listClawHubClaws, {}, "entries", [entry]],
+    ["claws.catalog.detail", readClawHubClawDetail, release, "detail", release],
+    ["claws.catalog.preview", readClawHubClawPreview, previewParams, "preview", preview],
+  ] as const)(
+    "%s returns the requested result only while Labs remains enabled",
+    async (method, sourceMock, params, field, result) => {
       expect(coreGatewayHandlers[method]).toBeDefined();
       expect(authorizeOperatorScopesForMethod(method, ["operator.read"])).toEqual({
         allowed: true,
       });
-    }
-    const replies: Parameters<RespondFn>[] = [];
-    await expectDefined(
-      clawsHandlers["claws.catalog.search"],
-      "claws.catalog.search handler",
-    )({
-      req: { type: "req", id: "search", method: "claws.catalog.search" },
-      params: {},
-      respond: (...args) => replies.push(args),
-      context: { getRuntimeConfig: () => ({}) } as never,
-      client: null,
-      isWebchatConnect: () => false,
-    });
-    expect(replies[0]?.[2]).toMatchObject({ code: "FORBIDDEN" });
-    expect(listClawHubClaws).not.toHaveBeenCalled();
-  });
-
-  it("lists starters and reads one exact official release with Labs on", async () => {
-    listClawHubClaws.mockResolvedValue([entry]);
-    readClawHubClawDetail.mockResolvedValue({
-      ...entry,
-      version: "1.0.0",
-      workspaceFiles: 1,
-      skills: 0,
-      plugins: 1,
-      mcpServers: 0,
-      scheduledJobs: 0,
-    });
-    const replies: Parameters<RespondFn>[] = [];
-    const context = {
-      getRuntimeConfig: () => ({ gateway: { controlUi: { experimental: { claws: true } } } }),
-    } as never;
-    await expectDefined(
-      clawsHandlers["claws.catalog.search"],
-      "claws.catalog.search handler",
-    )({
-      req: { type: "req", id: "search", method: "claws.catalog.search" },
-      params: {},
-      respond: (...args) => replies.push(args),
-      context,
-      client: null,
-      isWebchatConnect: () => false,
-    });
-    expect(replies[0]?.[1]).toEqual({ entries: [entry] });
-
-    await expectDefined(
-      clawsHandlers["claws.catalog.detail"],
-      "claws.catalog.detail handler",
-    )({
-      req: { type: "req", id: "detail", method: "claws.catalog.detail" },
-      params: { packageName: entry.packageName, version: "1.0.0" },
-      respond: (...args) => replies.push(args),
-      context,
-      client: null,
-      isWebchatConnect: () => false,
-    });
-    expect(readClawHubClawDetail).toHaveBeenCalledWith({
-      packageName: entry.packageName,
-      version: "1.0.0",
-    });
-    expect(replies[1]?.[1]).toMatchObject({ detail: { ...entry, version: "1.0.0" } });
-  });
-
-  it("returns the requested preview only for an exact official release", async () => {
-    const preview = { kind: "instruction", name: "AGENTS.md", content: "# Instructions" };
-    readClawHubClawPreview.mockResolvedValue(preview);
-    const replies: Parameters<RespondFn>[] = [];
-    const params = {
-      packageName: entry.packageName,
-      version: "1.0.0",
-      kind: "instruction",
-      name: "AGENTS.md",
-    };
-    await expectDefined(
-      clawsHandlers["claws.catalog.preview"],
-      "claws.catalog.preview handler",
-    )({
-      req: { type: "req", id: "preview", method: "claws.catalog.preview" },
-      params,
-      respond: (...args) => replies.push(args),
-      context: {
-        getRuntimeConfig: () => ({ gateway: { controlUi: { experimental: { claws: true } } } }),
-      } as never,
-      client: null,
-      isWebchatConnect: () => false,
-    });
-    expect(readClawHubClawPreview).toHaveBeenCalledWith(params);
-    expect(replies[0]?.[1]).toEqual({ preview });
-  });
-
-  it.each(["claws.catalog.search", "claws.catalog.detail"] as const)(
-    "drops %s when Labs turns off during the ClawHub request",
-    async (method) => {
-      let resolveSource: (value: unknown) => void = () => {};
-      const source = new Promise<unknown>((resolve) => {
-        resolveSource = resolve;
-      });
-      const sourceMock =
-        method === "claws.catalog.search" ? listClawHubClaws : readClawHubClawDetail;
-      sourceMock.mockReturnValue(source);
+      sourceMock.mockResolvedValue(result);
+      expect((await catalogRequest(method, params))[0]?.[1]).toEqual({ [field]: result });
+      expect(sourceMock).toHaveBeenCalledWith(params);
+      const source = createDeferredCore<unknown>();
+      sourceMock.mockReturnValue(source.promise);
       let labsEnabled = true;
-      const replies: Parameters<RespondFn>[] = [];
-      const request = expectDefined(
-        clawsHandlers[method],
-        `${method} handler`,
-      )({
-        req: { type: "req", id: "catalog", method },
-        params:
-          method === "claws.catalog.search"
-            ? {}
-            : { packageName: entry.packageName, version: "1.0.0" },
-        respond: (...args) => replies.push(args),
-        context: {
-          getRuntimeConfig: () => ({
-            gateway: { controlUi: { experimental: { claws: labsEnabled } } },
-          }),
-        } as never,
-        client: null,
-        isWebchatConnect: () => false,
-      });
+      const pending = catalogRequest(method, params, () => (labsEnabled ? enabled : {}));
 
       labsEnabled = false;
-      resolveSource(method === "claws.catalog.search" ? [entry] : { ...entry, version: "1.0.0" });
-      await request;
-
-      expect(replies).toHaveLength(1);
-      expect(replies[0]?.[2]).toMatchObject({ code: "FORBIDDEN" });
+      source.resolve(result);
+      expectError(await pending, "FORBIDDEN");
     },
   );
+
+  it.each([
+    ["claws.catalog.search", { query: 42 }],
+    ["claws.catalog.detail", { packageName: 42 }],
+    ["claws.catalog.preview", { ...release, kind: "unknown", name: "AGENTS.md" }],
+  ])("rejects malformed %s before catalog I/O", async (method, params) => {
+    expectError(await catalogRequest(method, params), "INVALID_REQUEST");
+    expect(listClawHubClaws).not.toHaveBeenCalled();
+    expect(readClawHubClawDetail).not.toHaveBeenCalled();
+    expect(readClawHubClawPreview).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [new ClawHubSourceError("unavailable", "Release is unavailable."), "Release is unavailable."],
+    [new Error("upstream internal detail"), "ClawHub catalog is unavailable."],
+  ])("preserves the public catalog failure for %s", async (failure, message) => {
+    readClawHubClawDetail.mockRejectedValue(failure);
+    expectError(await catalogRequest("claws.catalog.detail", release), "UNAVAILABLE", message);
+  });
 });

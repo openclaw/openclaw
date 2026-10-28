@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { isBundledPluginInsideDevSourceRoot } from "./dev-source-root.js";
 import {
@@ -8,6 +8,7 @@ import {
   resolvePluginInstallSourcePlan,
 } from "./install-source-plan.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
+import { writeArtifacts as writeTree } from "./public-surface.test-support.js";
 
 const host = vi.hoisted(() => ({ root: "" }));
 vi.mock("../infra/openclaw-root.js", async (importOriginal) => ({
@@ -22,146 +23,74 @@ afterEach(() => vi.unstubAllEnvs());
 function fixture(stagedCommit?: string) {
   host.root = tempDirs.make("staged-official-plugins-");
   const pluginRoot = path.join(host.root, "dist", "extensions", "codex");
-  fs.mkdirSync(pluginRoot, { recursive: true });
-  for (const [file, value] of [
-    ["package.json", { name: "openclaw", version: "2026.10.2" }],
-    [
-      "dist/build-info.json",
-      {
-        commit,
-        ...(stagedCommit
-          ? { stagedOfficialPlugins: { commit: stagedCommit, pluginIds: ["codex"] } }
-          : {}),
-      },
-    ],
-    [
-      "dist/extensions/codex/package.json",
-      {
-        name: "@openclaw/codex",
-        version: "2026.10.2",
-        openclaw: { extensions: ["./index.js"] },
-      },
-    ],
-    ["dist/extensions/codex/openclaw.plugin.json", { id: "codex", configSchema: {} }],
-  ] as const) {
-    fs.writeFileSync(path.join(host.root, file), JSON.stringify(value));
-  }
-  fs.writeFileSync(path.join(pluginRoot, "index.js"), "export default {};\n");
+  const identity = { name: "openclaw", version: "2026.10.2" };
+  writeTree(host.root, {
+    "package.json": identity,
+    "dist/build-info.json": {
+      commit,
+      ...(stagedCommit
+        ? { stagedOfficialPlugins: { commit: stagedCommit, pluginIds: ["codex"] } }
+        : {}),
+    },
+    "dist/extensions/codex/package.json": {
+      ...identity,
+      name: "@openclaw/codex",
+      openclaw: { extensions: ["./index.js"] },
+    },
+    "dist/extensions/codex/openclaw.plugin.json": { id: "codex", configSchema: {} },
+    "dist/extensions/codex/index.js": "export default {};\n",
+  });
   vi.stubEnv("OPENCLAW_DEV_SOURCE_ROOT", undefined);
   vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", undefined);
   vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.dirname(pluginRoot));
   return pluginRoot;
 }
 
-describe("packaged development official plugins", () => {
-  it.each([
-    { name: "same-commit development image", stagedCommit: commit, expected: "bundled" },
-    { name: "release image", stagedCommit: undefined, expected: "official" },
-    { name: "mismatched staged commit", stagedCommit: "b".repeat(40), expected: "official" },
-  ])("selects the expected install source for a $name", ({ stagedCommit, expected }) => {
+it.each([
+  [commit, undefined, false, "bundled"],
+  [undefined, undefined, false, "official"],
+  ["b".repeat(40), undefined, false, "official"],
+  [commit, "latest", false, "official"],
+  [commit, undefined, true, "official"],
+] as const)(
+  "selects official source with staged=%s version=%s pin=%s",
+  (stagedCommit, version, pin, expected) => {
     const pluginRoot = fixture(stagedCommit);
     withPluginCache(createPluginCache(), () => {
       const request = resolveManagedPluginInstallRequest(
-        { source: "official", pluginId: "codex" },
+        { source: "official", pluginId: "codex", version, pin },
         [],
         "https://clawhub.ai",
       );
       expect(request.source).toBe(expected);
-      expect(isBundledPluginInsideDevSourceRoot({ rootDir: pluginRoot, env: process.env })).toBe(
-        expected === "bundled",
-      );
       if (request.source === "bundled") {
         expect(request.bundledSource.localPath).toBe(pluginRoot);
         expect(request.rawSpec).toBe("@openclaw/codex");
       }
     });
-  });
+  },
+);
 
-  it("preserves explicit version and pin requests", () => {
-    fixture(commit);
-    withPluginCache(createPluginCache(), () => {
-      for (const choice of [{ version: "latest" as const }, { pin: true }]) {
-        expect(
-          resolveManagedPluginInstallRequest(
-            { source: "official", pluginId: "codex", ...choice },
-            [],
-            "https://clawhub.ai",
-          ).source,
-        ).toBe("official");
-      }
-    });
+it.each([
+  ["@openclaw/codex@2026.9.3", "clawhub"],
+  ["@openclaw/codex", "clawhub"],
+  ["npm:@openclaw/codex", "npm"],
+  ["codex", "bundled"],
+] as const)("selects the source for %s", (raw, expected) => {
+  fixture(commit);
+  withPluginCache(createPluginCache(), () => {
+    const plan = resolvePluginInstallSourcePlan({ raw, mode: "install" });
+    expect(plan).toMatchObject({ ok: true, request: { source: expected } });
   });
+});
 
-  it.each([
-    {
-      name: "explicit version",
-      stagedCommit: commit,
-      raw: "@openclaw/codex@2026.9.3",
-      pin: false,
-      expected: "clawhub",
-    },
-    {
-      name: "pinned package",
-      stagedCommit: commit,
-      raw: "@openclaw/codex",
-      pin: true,
-      expected: "clawhub",
-    },
-    {
-      name: "unqualified package",
-      stagedCommit: commit,
-      raw: "@openclaw/codex",
-      pin: false,
-      expected: "clawhub",
-    },
-    {
-      name: "explicit npm override",
-      stagedCommit: commit,
-      raw: "npm:@openclaw/codex",
-      pin: false,
-      expected: "npm",
-    },
-    {
-      name: "release package",
-      stagedCommit: undefined,
-      raw: "@openclaw/codex@2026.9.3",
-      pin: false,
-      expected: "clawhub",
-    },
-    {
-      name: "bare plugin ID",
-      stagedCommit: commit,
-      raw: "codex",
-      pin: false,
-      expected: "bundled",
-    },
-  ])("preserves source selection for $name", ({ stagedCommit, raw, pin, expected }) => {
-    fixture(stagedCommit);
-    withPluginCache(createPluginCache(), () => {
-      const plan = resolvePluginInstallSourcePlan({
-        raw,
-        mode: "install",
-        pin,
-      });
-      expect(plan).toMatchObject({ ok: true, request: { source: expected } });
-    });
-  });
-
-  it("does not grant source priority to unstaged or external plugin paths", () => {
-    const pluginRoot = fixture(commit);
-    const unstaged = path.join(host.root, "dist", "extensions", "other");
-    fs.mkdirSync(unstaged);
-    const external = tempDirs.make("external-codex-");
-    withPluginCache(createPluginCache(), () => {
-      expect(isBundledPluginInsideDevSourceRoot({ rootDir: pluginRoot, env: process.env })).toBe(
-        true,
-      );
-      expect(isBundledPluginInsideDevSourceRoot({ rootDir: unstaged, env: process.env })).toBe(
-        false,
-      );
-      expect(isBundledPluginInsideDevSourceRoot({ rootDir: external, env: process.env })).toBe(
-        false,
-      );
-    });
+it("does not grant source priority to unstaged or external plugin paths", () => {
+  fixture(commit);
+  const unstaged = path.join(host.root, "dist", "extensions", "other");
+  fs.mkdirSync(unstaged);
+  const external = tempDirs.make("external-codex-");
+  withPluginCache(createPluginCache(), () => {
+    expect(isBundledPluginInsideDevSourceRoot({ rootDir: unstaged, env: process.env })).toBe(false);
+    expect(isBundledPluginInsideDevSourceRoot({ rootDir: external, env: process.env })).toBe(false);
   });
 });

@@ -39,28 +39,6 @@ export async function readJsonFileIfExists(filePath: string): Promise<unknown> {
   return (await readJsonBytesIfExists(filePath))?.value;
 }
 
-function normalizeScriptProducerEvidence(params: {
-  evidence: QaEvidenceSummaryJson;
-  evidencePath: string;
-  repoRoot: string;
-}): QaEvidenceSummaryJson {
-  const evidenceDir = path.dirname(params.evidencePath);
-  const evidence = params.evidence;
-  for (const artifact of collectQaEvidenceArtifacts(evidence)) {
-    const absolutePath = resolveQaArtifactPath(params.repoRoot, evidenceDir, artifact.path);
-    if (evidence.schemaVersion === 3) {
-      artifact.path = toRepoArtifactPath(params.repoRoot, absolutePath);
-    } else {
-      // External v2 artifacts stay absolute rather than exposing traversal segments.
-      const relativePath = toRepoRelativePath(params.repoRoot, absolutePath);
-      artifact.path = isRepoRootRelativeRef(relativePath)
-        ? relativePath
-        : path.normalize(absolutePath);
-    }
-  }
-  return evidence;
-}
-
 function assertScenarioOwnsEvidencePath(scenarioOutputDir: string, evidencePath: string): void {
   const relativePath = path.relative(scenarioOutputDir, evidencePath);
   if (
@@ -178,18 +156,28 @@ export async function readScriptProducerEvidence(params: {
       continue;
     }
     const evidence = validateQaEvidenceSummaryJson(captured.value);
+    const producerArtifact = {
+      kind: "producer-evidence",
+      path: toRepoArtifactPath(params.repoRoot, evidencePath),
+      source: "script",
+      sha256: createHash("sha256").update(captured.bytes).digest("hex"),
+    };
+    const evidenceDir = path.dirname(evidencePath);
+    for (const artifact of collectQaEvidenceArtifacts(evidence)) {
+      const absolutePath = resolveQaArtifactPath(params.repoRoot, evidenceDir, artifact.path);
+      if (evidence.schemaVersion === 3) {
+        artifact.path = toRepoArtifactPath(params.repoRoot, absolutePath);
+      } else {
+        // External v2 artifacts stay absolute rather than exposing traversal segments.
+        const relativePath = toRepoRelativePath(params.repoRoot, absolutePath);
+        artifact.path = isRepoRootRelativeRef(relativePath)
+          ? relativePath
+          : path.normalize(absolutePath);
+      }
+    }
     return {
-      producerArtifact: {
-        kind: "producer-evidence",
-        path: toRepoArtifactPath(params.repoRoot, evidencePath),
-        source: "script",
-        sha256: createHash("sha256").update(captured.bytes).digest("hex"),
-      },
-      producerEvidence: normalizeScriptProducerEvidence({
-        evidence,
-        evidencePath,
-        repoRoot: params.repoRoot,
-      }),
+      producerArtifact,
+      producerEvidence: evidence,
     };
   }
   return {};

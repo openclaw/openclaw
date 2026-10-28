@@ -178,7 +178,7 @@ test("delivers equivalent presence through deltas, resets after backpressure, an
         const [connected] = await Promise.all([
           connectReq(actor, {
             client: { ...CONTROL_UI_CLIENT, instanceId: "presence-delta-actor" },
-            deviceIdentityPath: path.join(identityDir, "actor.sqlite"),
+            deviceIdentityPath: path.join(identityDir, "actor", "client", "credentials.sqlite"),
             browserOrigin: `http://127.0.0.1:${port}`,
             prePairDevice: true,
           }),

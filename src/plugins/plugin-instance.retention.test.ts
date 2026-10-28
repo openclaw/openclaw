@@ -9,6 +9,7 @@ import {
   expectLiveObjects,
   readRegistryLabel,
   selectRegistry,
+  throwing,
 } from "./plugin-instance.test-support.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import {
@@ -23,49 +24,32 @@ class RetainedRegistry {
   readonly fixtureLabel = "RetainedRegistry";
 }
 
-it.each([
-  { kind: "run", reject: false },
-  { kind: "run", reject: true },
-  { kind: "consumer", reject: false },
-  { kind: "consumer", reject: true },
-] as const)(
-  "retains an adopted selection through a pending $kind (reject: $reject)",
-  async ({ kind, reject }) => {
-    const { record, instance } = createOwnedInstance("retention");
-    const consumer = kind === "consumer" ? instance.retainConsumer() : undefined;
-    const resume = createDeferredCore();
-    const failure = new Error("callback failed");
-    let observed: string | undefined;
-    selectRegistry(record, "intermediate", new RetainedRegistry());
-    const pending = (consumer ?? instance).run(async () => {
-      await resume.promise;
-      observed = readRegistryLabel();
-      if (reject) {
-        throw failure;
-      }
-      return observed;
-    });
-    selectRegistry(record, "successor");
-    void pending.catch(() => {});
-    try {
-      await expectLiveObjects(RetainedRegistry, 1);
-      resume.resolve();
-      if (reject) {
-        await expect(pending).rejects.toBe(failure);
-      } else {
-        await expect(pending).resolves.toBe("intermediate");
-      }
-      expect(observed).toBe("intermediate");
-      await expectLiveObjects(RetainedRegistry, 0);
-      expect((consumer ?? instance).run(readRegistryLabel)).toBe("successor");
-    } finally {
-      resume.resolve();
-      await pending.catch(() => {});
-      consumer?.release();
-      await instance.dispose();
-    }
-  },
-);
+it("retains an adopted selection until a pending call rejects", async () => {
+  const { record, instance } = createOwnedInstance("retention");
+  const resume = createDeferredCore();
+  const failure = new Error("callback failed");
+  let observed: string | undefined;
+  selectRegistry(record, "intermediate", new RetainedRegistry());
+  const pending = instance.run(async () => {
+    await resume.promise;
+    observed = readRegistryLabel();
+    throw failure;
+  });
+  selectRegistry(record, "successor");
+  void pending.catch(() => {});
+  try {
+    await expectLiveObjects(RetainedRegistry, 1);
+    resume.resolve();
+    await expect(pending).rejects.toBe(failure);
+    expect(observed).toBe("intermediate");
+    await expectLiveObjects(RetainedRegistry, 0);
+    expect(instance.run(readRegistryLabel)).toBe("successor");
+  } finally {
+    resume.resolve();
+    await pending.catch(() => {});
+    await instance.dispose();
+  }
+});
 
 it("keeps resolved value identity and independent registry custody for concurrent consumer calls", async () => {
   const { record, instance } = createOwnedInstance("retention");
@@ -280,9 +264,7 @@ it.each(["host", "module"] as const)(
   async (kind) => {
     const { registry, instance } = createOwnedInstance("retention");
     const failure = new Error("cleanup prerequisite failed");
-    const fail = () => {
-      throw failure;
-    };
+    const fail = throwing(failure);
     if (kind === "module") {
       instance.onModuleDispose(fail);
     }

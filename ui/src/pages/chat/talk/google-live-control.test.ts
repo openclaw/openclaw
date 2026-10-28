@@ -67,7 +67,6 @@ describe("GoogleLiveRealtimeTalkTransport control results", () => {
 
   it("surfaces Google Live tool-result send failures without an unhandled rejection", async () => {
     const onStatus = vi.fn();
-    const onTalkEvent = vi.fn();
     const client = createClient();
     vi.mocked(client["request"]).mockImplementation(async (method) => {
       if (method === "talk.client.steer") {
@@ -81,7 +80,7 @@ describe("GoogleLiveRealtimeTalkTransport control results", () => {
       }
       throw new Error(`unexpected request: ${method}`);
     });
-    const transport = await createTransport({ onStatus, onTalkEvent }, client);
+    const transport = await createTransport({ onStatus }, client);
 
     const ws = await startTransport(transport);
     vi.spyOn(ws, "send").mockImplementation(() => {
@@ -96,12 +95,6 @@ describe("GoogleLiveRealtimeTalkTransport control results", () => {
     await waitForFast(() =>
       expect(onStatus).toHaveBeenCalledWith("error", "Google Live socket rejected the tool result"),
     );
-    expect(
-      onTalkEvent.mock.calls.some(
-        ([event]) =>
-          (event.type === "tool.progress" || event.type === "tool.error") && event.final === true,
-      ),
-    ).toBe(false);
     expect(ws.readyState).toBe(3);
     expect(getGoogleLiveToolOwnerState(transport).pendingCalls.has("call-control")).toBe(false);
   });

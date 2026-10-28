@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { throwCollectedErrors, throwIfSettledRejected } from "../infra/error-graph-internal.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import {
   createPluginCache,
@@ -53,29 +54,16 @@ export function createPluginToolInspection(
             (async () => {
               if (supplementalCache) {
                 const { failures } = await retirePluginCache(supplementalCache);
-                if (failures.length === 1) {
-                  throw failures[0]!.error;
-                }
-                if (failures.length > 0) {
-                  throw new AggregateError(
-                    failures.map((failure) => failure.error),
-                    "Supplemental plugin inspection cleanup failed",
-                  );
-                }
+                throwCollectedErrors(
+                  failures.map((failure) => failure.error),
+                  "Supplemental plugin inspection cleanup failed",
+                );
               }
             })(),
           ]),
         )
         .then((cleanup) => {
-          const failures = cleanup.flatMap((outcome) =>
-            outcome.status === "rejected" ? [outcome.reason] : [],
-          );
-          if (failures.length === 1) {
-            throw failures[0];
-          }
-          if (failures.length > 0) {
-            throw new AggregateError(failures, "Plugin tool inspection cleanup failed");
-          }
+          throwIfSettledRejected(cleanup, "Plugin tool inspection cleanup failed");
         }));
     },
   };

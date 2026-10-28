@@ -1,13 +1,18 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createOverlay } from "../../components/overlay-lifecycle.ts";
+import { registerModalSurface } from "../../components/overlay-registry.ts";
 import { t } from "../../i18n/index.ts";
+import { createFrameClock } from "../../test-helpers/animation-frame-clock.ts";
+import { createMediaQueryList } from "../../test-helpers/media-query.ts";
 import * as attachmentInputs from "../chat/components/chat-attachment-inputs.tsx";
-import type { ChatDetailPanel } from "../chat/components/chat-detail-panel.tsx";
-import { NewSessionDictationControl } from "./composer-dictation-control.ts";
+import type { ChatDetailPanel } from "../chat/components/chat-sidebar-view-types.ts";
+import { DirectDictationControl } from "../chat/composer-direct-dictation.ts";
+import * as draftBody from "./draft-body.solid.tsx";
 import { DraftPlaceBrowser } from "./draft-place-browser.ts";
 import type { NewSessionRouteData } from "./location.ts";
+import "./new-session-page-entry.ts";
 import { NewSessionModelControl } from "./model-control.ts";
 import { NewSessionPageOwner } from "./new-session-page-owner.ts";
-import "./new-session-page-entry.ts";
 
 type NewSessionElement = HTMLElement & {
   data: NewSessionRouteData | undefined;
@@ -53,8 +58,10 @@ function message(page: NewSessionElement): string {
   return page.querySelector<HTMLTextAreaElement>(".new-session-page__message")?.value ?? "";
 }
 
-afterEach(() => {
+afterEach(async () => {
   document.querySelectorAll("openclaw-new-session-page").forEach((element) => element.remove());
+  // Keyboard intent prefetches custom elements; finish registration before the shared graph resets.
+  await vi.dynamicImportSettled();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   sessionStorage.clear();
@@ -62,6 +69,58 @@ afterEach(() => {
 });
 
 describe("new session draft route ownership", () => {
+  it.each(["pointerdown", "keydown"] as const)(
+    "preloads submission on first composer %s after model configuration intent",
+    async (firstIntent) => {
+      const preload = vi.spyOn(draftBody, "preloadNewSessionSubmission");
+      const page = await mount(routeData("research"));
+      const dispatch = (target: Element, type: "pointerdown" | "keydown") =>
+        target.dispatchEvent(
+          type === "keydown"
+            ? new KeyboardEvent(type, { key: "ArrowDown", bubbles: true, composed: true })
+            : new Event(type, { bubbles: true, composed: true }),
+        );
+      for (const selector of [
+        ".chat-controls__model-trigger .chat-controls__inline-select-label",
+        ".chat-controls__effort-trigger .chat-controls__inline-select-label",
+      ]) {
+        const control = page.querySelector<HTMLElement>(selector)!;
+        expect(control).not.toBeNull();
+        dispatch(control, "pointerdown");
+        dispatch(control, "keydown");
+        expect(preload).not.toHaveBeenCalled();
+      }
+      const textarea = page.querySelector<HTMLTextAreaElement>(".new-session-page__message")!;
+      expect(textarea).not.toBeNull();
+      dispatch(textarea, firstIntent);
+      expect(preload).toHaveBeenCalledOnce();
+      dispatch(textarea, "pointerdown");
+      dispatch(textarea, "keydown");
+      expect(preload).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("releases submission intent listeners on detach and reinstalls them on reconnect", async () => {
+    const preload = vi.spyOn(draftBody, "preloadNewSessionSubmission");
+    const page = await mount(routeData("research"));
+    page.remove();
+    await settle(page);
+    page.dispatchEvent(new Event("pointerdown", { bubbles: true, composed: true }));
+    page.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, composed: true }),
+    );
+    expect(preload).not.toHaveBeenCalled();
+
+    document.body.append(page);
+    await settle(page);
+    const textarea = page.querySelector<HTMLTextAreaElement>(".new-session-page__message")!;
+    expect(textarea).not.toBeNull();
+    textarea.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, composed: true }),
+    );
+    expect(preload).toHaveBeenCalledOnce();
+  });
+
   it("prepares composer options once per published typing revision without replacing the input", async () => {
     const prepare = vi.spyOn(NewSessionPageOwner.prototype, "composerOptions");
     const projectRecents = vi.spyOn(DraftPlaceBrowser.prototype, "resolveProjectRecents");
@@ -85,9 +144,7 @@ describe("new session draft route ownership", () => {
   it("keeps retained attachment callbacks connected to live draft and lock state", async () => {
     const inputs = vi.spyOn(attachmentInputs, "ChatAttachmentInputs");
     let dictating = false;
-    vi.spyOn(NewSessionDictationControl.prototype, "active", "get").mockImplementation(
-      () => dictating,
-    );
+    vi.spyOn(DirectDictationControl.prototype, "active", "get").mockImplementation(() => dictating);
     const page = await mount(routeData("research"));
     await enterMessage(page, "initial draft");
     const retained = inputs.mock.calls.at(-1)?.[0];
@@ -104,31 +161,17 @@ describe("new session draft route ownership", () => {
   it.each([false, true])(
     "retires composer frames through detach and reattach (reduced motion: %s)",
     async (reducedMotion) => {
-      vi.stubGlobal("matchMedia", (media: string) => ({
-        media,
-        matches: reducedMotion && media === "(prefers-reduced-motion: reduce)",
-        onchange: null,
-        addListener() {},
-        removeListener() {},
-        addEventListener() {},
-        removeEventListener() {},
-        dispatchEvent: () => true,
-      }));
-      let nextFrame = 0;
-      const frames = new Map<number, FrameRequestCallback>();
-      vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
-        const id = ++nextFrame;
-        frames.set(id, callback);
-        return id;
-      });
-      vi.stubGlobal("cancelAnimationFrame", (id: number) => frames.delete(id));
+      vi.stubGlobal("matchMedia", (media: string) =>
+        createMediaQueryList(media, reducedMotion && media === "(prefers-reduced-motion: reduce)"),
+      );
+
+      const framesClock = createFrameClock();
+      const frames = framesClock.frames;
+      vi.stubGlobal("requestAnimationFrame", framesClock.request);
+      vi.stubGlobal("cancelAnimationFrame", framesClock.cancel);
       const page = await mount(routeData("research"));
       const flushFrames = async (timestamp: number) => {
-        const callbacks = [...frames.values()];
-        frames.clear();
-        for (const callback of callbacks) {
-          callback(timestamp);
-        }
+        framesClock.flush(timestamp);
         await settle(page);
       };
       const placeholder = () => page.querySelector<HTMLTextAreaElement>("textarea")?.placeholder;
@@ -185,11 +228,12 @@ describe("new session draft route ownership", () => {
     async (transition) => {
       let dictating = false;
       if (transition === "finish dictation") {
-        vi.spyOn(NewSessionDictationControl.prototype, "active", "get").mockImplementation(
+        vi.spyOn(DirectDictationControl.prototype, "active", "get").mockImplementation(
           () => dictating,
         );
       }
       const page = await mount(routeData("research"));
+      await enterMessage(page, "Review the attachment");
       const original = "# Original pasted content\n  preserve indentation 漢字 😀\n".repeat(50);
       const fetchMock = vi
         .fn<typeof fetch>()
@@ -202,6 +246,7 @@ describe("new session draft route ownership", () => {
       page.querySelector("textarea")?.dispatchEvent(paste);
       expect(paste.defaultPrevented).toBe(true);
       await settle(page);
+      await vi.dynamicImportSettled();
       await expect
         .poll(() => page.querySelector("openclaw-chat-pasted-text .chat-attachment-file__open"))
         .not.toBeNull();
@@ -289,10 +334,15 @@ describe("new session draft route ownership", () => {
     const menu = append(document.createElement("div"));
     menu.setAttribute("role", "menu");
     menu.popover = "manual";
+    const menuOwner = createOverlay("new-session-routing-test", undefined, {
+      dismissOutsideFocus: false,
+    });
+    menuOwner.bindSurface(menu);
     const menuItem = menu.appendChild(document.createElement("button"));
     menuItem.setAttribute("role", "menuitemradio");
     menuItem.tabIndex = -1;
     const dialog = append(document.createElement("dialog"));
+    const releaseDialog = registerModalSurface(dialog);
     dialog.open = true;
     const dialogButton = dialog.appendChild(document.createElement("button"));
     const details = append(document.createElement("details"));
@@ -337,25 +387,30 @@ describe("new session draft route ownership", () => {
       { name: "input/contenteditable", targets: [input, editable], expected: element },
     ];
 
-    for (const row of routing) {
-      for (const target of row.targets) {
-        for (const [index, key] of keys.entries()) {
-          menu.togglePopover(row.openMenu === true);
-          dialog.open = row.openDialog === true;
-          target.focus();
-          target.dispatchEvent(
-            new KeyboardEvent("keydown", { key, bubbles: true, composed: true }),
-          );
-          const destination = row.expected[index];
-          if (destination === "composer") {
-            expect(document.activeElement, `${row.name} / ${key} -> composer`).toBe(textarea);
-          } else if (destination === "overlay") {
-            expect(document.activeElement, `${row.name} / ${key} -> overlay`).not.toBe(textarea);
-          } else {
-            expect(document.activeElement, `${row.name} / ${key} -> ${destination}`).toBe(target);
+    try {
+      for (const row of routing) {
+        for (const target of row.targets) {
+          for (const [index, key] of keys.entries()) {
+            menuOwner.request(row.openMenu === true);
+            dialog.open = row.openDialog === true;
+            target.focus();
+            target.dispatchEvent(
+              new KeyboardEvent("keydown", { key, bubbles: true, composed: true }),
+            );
+            const destination = row.expected[index];
+            if (destination === "composer") {
+              expect(document.activeElement, `${row.name} / ${key} -> composer`).toBe(textarea);
+            } else if (destination === "overlay") {
+              expect(document.activeElement, `${row.name} / ${key} -> overlay`).not.toBe(textarea);
+            } else {
+              expect(document.activeElement, `${row.name} / ${key} -> ${destination}`).toBe(target);
+            }
           }
         }
       }
+    } finally {
+      menuOwner.dispose();
+      releaseDialog();
     }
   });
 

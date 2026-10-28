@@ -486,7 +486,7 @@ it.each(["worker", "native"] as const)(
       if (writer === "worker") {
         await persistence.rejects.toBe(failure);
       } else {
-        await persistence.resolves.toMatchObject({ appendedCount: 1 });
+        await persistence.resolves.toMatchObject({ messages: [{ appended: true }] });
       }
       const database = openOpenClawAgentDatabase({
         agentId: scope.agentId,

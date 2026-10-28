@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
-import * as codexRuntimePlugin from "../commands/codex-runtime-plugin-install.js";
+import * as codexRuntimePlugin from "../commands/runtime-plugin-install.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as records from "../plugins/installed-plugin-index-records.js";
@@ -45,18 +45,14 @@ function stageContext(
       runtime: createNonExitingRuntime(),
       isCancelled,
     },
-    deps: {},
-    effects: { credentialsSaved: false },
+    effects: { credentialsSaved: false, configPersisted: false },
     beforePersistentEffect: async () => {},
   };
 }
 
-it("binds automatic Codex path trust to the selected bundle", async () => {
-  await withOpenClawTestState(
-    {
-      label: "codex-bundled-path-trust",
-      env: isolatedPlugins,
-    },
+it("binds automatic Codex path trust to the selected bundle", () =>
+  withOpenClawTestState(
+    { label: "codex-bundled-path-trust", env: isolatedPlugins },
     async (state) => {
       const rootDir = state.statePath("bundled", "codex");
       const cfg: OpenClawConfig = {};
@@ -103,8 +99,7 @@ it("binds automatic Codex path trust to the selected bundle", async () => {
         }
       }
     },
-  );
-});
+  ));
 
 it.each([
   { candidate: false, revoke: false },
@@ -113,8 +108,8 @@ it.each([
   { candidate: true, revoke: true },
 ])(
   "fences Codex repair publication (candidate=$candidate, revoked=$revoke)",
-  async ({ candidate, revoke }) => {
-    await withOpenClawTestState(
+  ({ candidate, revoke }) =>
+    withOpenClawTestState(
       {
         label: "codex-repair-authority",
         env: {
@@ -159,21 +154,15 @@ it.each([
         // Package acquisition is synthetic; Doctor, leases and SQLite publication stay real.
         vi.spyOn(update, "updateNpmInstalledPlugins").mockImplementation(async (params) => {
           repaired = true;
+          const config = structuredClone(params.config);
+          const installs = ((config.plugins ??= {}).installs ??= {});
+          installs.codex = {
+            ...installs.codex,
+            ...installedRecord,
+            integrity: "sha512-after-repair",
+          };
           return {
-            config: {
-              ...params.config,
-              plugins: {
-                ...params.config.plugins,
-                installs: {
-                  ...params.config.plugins?.installs,
-                  codex: {
-                    ...params.config.plugins?.installs?.codex,
-                    ...installedRecord,
-                    integrity: "sha512-after-repair",
-                  },
-                },
-              },
-            },
+            config,
             outcomes: [{ pluginId: "codex", status: "updated", message: "Repaired fixture" }],
             changed: true,
           };
@@ -191,38 +180,30 @@ it.each([
         });
         let revoked = false;
         const isCancelled = () => revoked;
-        const beforePersistentApply = () => throwIfSetupInferenceCancelled({ isCancelled });
-        const beforePersistentEffect = async () => {};
-        const runtime = createNonExitingRuntime();
         const snapshot = await readConfigFileSnapshot();
+        const context = stageContext(state, cfg, snapshot, isCancelled);
         const preparing = candidate
-          ? stageCodexCandidate(stageContext(state, cfg, snapshot, isCancelled), "openai/fixture")
+          ? stageCodexCandidate(context, "openai/fixture")
           : prepareAutomaticSetupCodex({
               cfg,
-              runtime,
-              workspace: state.workspaceDir,
-              beforePersistentEffect,
-              beforePersistentApply,
+              runtime: context.params.runtime,
+              workspace: context.workspace,
+              beforePersistentEffect: context.beforePersistentEffect,
+              beforePersistentApply: () => throwIfSetupInferenceCancelled(context.params),
             });
-        const checked = preparing.then((value) => {
-          if ("error" in value) {
-            throw new Error(value.error);
-          }
-          return value;
-        });
-        const settled = checked.catch(() => {});
+        const settled = preparing.catch(() => {});
         try {
           await awaitGateBeforeSettlement(
             entered.promise,
-            checked,
+            preparing,
             "repair never reached index preparation",
           );
           revoked = revoke;
           release.resolve();
           if (revoke) {
-            await expect(checked).rejects.toBeInstanceOf(SetupInferenceCancelledError);
+            await expect(preparing).rejects.toBeInstanceOf(SetupInferenceCancelledError);
           } else {
-            expect(await checked).not.toHaveProperty("error");
+            expect(await preparing).not.toHaveProperty("error");
           }
           const persisted = await records.readPersistedInstalledPluginIndexInstallRecordsAsync();
           expect(persisted?.codex?.integrity).toBe(
@@ -233,6 +214,5 @@ it.each([
           await settled;
         }
       },
-    );
-  },
+    ),
 );

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { installClawPackages } from "./packages.boundary.test-support.js";
+import { installClawPackages, testPackageLease } from "./packages.boundary.test-support.js";
 import { packageInstallPlan } from "./packages.test-support.js";
 
 describe("Claw package reviewed access", () => {
@@ -37,13 +37,8 @@ describe("Claw package reviewed access", () => {
               .fn()
               .mockResolvedValue({ ok: true, action: "install", integrity: skillIntegrity }),
             acquirePackageLease: vi.fn(async () => ({
-              identity: {
-                scope: "claw-package-lifecycle" as const,
-                key: "test-package",
-                owner: "test-owner",
-              },
-              heartbeat: vi.fn(),
-              release: vi.fn(),
+              ...testPackageLease(vi.fn()),
+              assertCurrent: vi.fn(),
             })),
           },
         },

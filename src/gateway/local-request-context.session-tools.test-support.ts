@@ -16,7 +16,10 @@ import { persistAgentSessionMessage } from "../agents/sessions/agent-session-tra
 import type { AgentSessionEvent } from "../agents/sessions/agent-session-types.js";
 import { registerQueuedUserMessageRetirement } from "../agents/sessions/queued-user-message-retirement.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
-import { setSteeringMessageIdentity } from "../agents/sessions/steering-message-identity.js";
+import {
+  reportSteeringMessagePersistenceFailure,
+  setSteeringMessageIdentity,
+} from "../agents/sessions/steering-message-identity.js";
 import {
   getGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
@@ -28,6 +31,8 @@ import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   appendTranscriptMessage,
+  loadSessionEntry,
+  loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -51,7 +56,22 @@ export const INCOGNITO = "agent:main:dashboard:incognito-session-tools";
 export const PARTICIPANT_SHARED = "agent:main:dashboard:participant-shared";
 export const PARTICIPANT_DRAFT = "agent:main:dashboard:participant-draft";
 export const PARTICIPANT_DRAFT_ID = "participant-draft-id";
+export const sessionToolsContext = () =>
+  expectDefined(getPluginRuntimeGatewayRequestScope()?.context, "local Gateway context");
+export const sessionToolsEntry = (sessionKey: string) =>
+  loadSessionEntry({ agentId: "main", sessionKey });
+export const sessionToolsStorePath = (cfg: OpenClawConfig) =>
+  resolveSessionStorePathCore(cfg.session?.store, { agentId: "main" });
+export const sessionToolsTranscript = (sessionKey: string, sessionId: string) =>
+  loadTranscriptEvents({ agentId: "main", sessionKey, sessionId });
 let fixtureRun: Promise<void> | undefined;
+
+export const seedSessionToolsEntry = (
+  sessionKey: string,
+  sessionId: string,
+  entry: Parameters<typeof upsertSessionEntryCore>[1] = {},
+  agentId = "main",
+) => upsertSessionEntryCore({ agentId, sessionKey }, { sessionId, updatedAt: 1, ...entry });
 
 export async function seedSessionToolsFixtureSession({
   agentId = "main",
@@ -66,15 +86,15 @@ export async function seedSessionToolsFixtureSession({
   creatorId?: string;
   visibility?: "shared" | "draft";
 }) {
-  await upsertSessionEntryCore(
-    { agentId, sessionKey },
+  await seedSessionToolsEntry(
+    sessionKey,
+    sessionId,
     {
-      sessionId,
-      updatedAt: 1,
       visibility,
       createdVia: "operator",
       createdActor: { type: "human", source: "profile", id: creatorId },
     },
+    agentId,
   );
   return { sessionKey, sessionId };
 }
@@ -142,7 +162,7 @@ export function withParticipantSessionToolsFixture(
         profileId,
         senderId: `${name.toLowerCase()}-sender`,
         name,
-        readCurrentRoleAssignment: () => "write",
+        readCurrentRoleFacts: () => ({ assignedRole: "write" }),
       };
     };
     const alice = person("Alice");
@@ -198,6 +218,7 @@ export async function withDelayedSessionToolsSteering(
   run: (receiver: {
     commit: () => Promise<void>;
     cancel: () => Promise<void>;
+    waitForAccepted: () => Promise<void>;
     pendingCount: () => number;
     end: () => void;
     abort: () => boolean;
@@ -209,7 +230,7 @@ export async function withDelayedSessionToolsSteering(
     agentId: "main",
     sessionKey: PARTICIPANT_SHARED,
     sessionId: "participant-shared-id",
-    storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: "main" }),
+    storePath: sessionToolsStorePath(cfg),
   };
   const manager = guardSessionManager(await SessionManager.openAsync(target), {
     ...target,
@@ -221,6 +242,7 @@ export async function withDelayedSessionToolsSteering(
     recorder: UserTurnTranscriptRecorder;
   }> = [];
   const listeners = new Set<(event: AgentSessionEvent) => unknown>();
+  const accepted = createDeferredCore();
   const settled = createDeferredCore();
   const emit = (event: AgentSessionEvent) => {
     for (const listener of listeners) {
@@ -269,9 +291,16 @@ export async function withDelayedSessionToolsSteering(
       steerActiveSessionWithOptionalDeliveryWait(
         session,
         text,
-        options?.reportSettlement === false
-          ? { ...queueOptions, onQueueSettled: undefined }
-          : queueOptions,
+        {
+          ...queueOptions,
+          onQueueAccepted: (value) => {
+            queueOptions?.onQueueAccepted?.(value);
+            if (value) {
+              accepted.resolve();
+            }
+          },
+          ...(options?.reportSettlement === false ? { onQueueSettled: undefined } : {}),
+        },
         target.sessionKey,
         () => {
           assertCurrent();
@@ -329,6 +358,7 @@ export async function withDelayedSessionToolsSteering(
         );
         await withGatewayToolCallerIdentity(source, () =>
           run({
+            waitForAccepted: () => accepted.promise,
             pendingCount: () => queued.length,
             cancel,
             end: () => {
@@ -351,12 +381,16 @@ export async function withDelayedSessionToolsSteering(
               );
             },
             commit: async () => {
-              const entry = expectDefined(queued[0], "Expected an accepted steering message");
-              await persistAgentSessionMessage(manager, entry.message, {
-                invalidateSerializedPrefixCache: true,
-              });
-              await entry.recorder.waitForRuntimePersistence();
-              queued.shift();
+              const entry = expectDefined(queued.shift(), "Expected an accepted steering message");
+              try {
+                await persistAgentSessionMessage(manager, entry.message, {
+                  invalidateSerializedPrefixCache: true,
+                });
+                await entry.recorder.waitForRuntimePersistence();
+              } catch (error) {
+                reportSteeringMessagePersistenceFailure(entry.message, error);
+                throw error;
+              }
               emit({ type: "message_end", message: entry.message });
               await settled.promise;
             },

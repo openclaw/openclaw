@@ -7,7 +7,9 @@ const RESTART_TRACE_HANDOFF_STARTED_AT_ENV = "OPENCLAW_GATEWAY_RESTART_TRACE_STA
 const RESTART_TRACE_HANDOFF_LAST_AT_ENV = "OPENCLAW_GATEWAY_RESTART_TRACE_LAST_AT_MS";
 const RESTART_TRACE_HANDOFF_MAX_AGE_MS = 10 * 60_000;
 const CLOSE_STEP_SLOW_MS = 1_000;
+const CLOSE_PENDING_REPORT_MS = 5_000;
 const MAX_PENDING_CLOSE_STEPS = 8;
+const MAX_PENDING_CLOSE_METRICS = 8;
 
 type RestartTraceMetricValue = boolean | number | string | null | undefined;
 type RestartTraceMetrics =
@@ -21,7 +23,13 @@ type GatewayRestartTraceHandoff = {
 let startedAt = 0;
 let lastAt = 0;
 let active = false;
-const pendingCloseSteps = new Set<{ name: string; startedAt: number }>();
+const pendingCloseSteps = new Set<{
+  name: string;
+  startedAt: number;
+  metrics?: () => RestartTraceMetrics | undefined;
+}>();
+let pendingCloseCount = 0;
+let pendingCloseTimer: ReturnType<typeof setInterval> | undefined;
 
 function nowMs(): number {
   return performance.timeOrigin + performance.now();
@@ -115,12 +123,14 @@ export function finishGatewayRestartTrace(name: string, metrics?: RestartTraceMe
   active = false;
 }
 
+/** Tracked runtime waits become visible if shutdown begins before they finish. */
 export async function measureGatewayRestartTrace<T>(
   name: string,
   run: () => Promise<T> | T,
   metrics?: RestartTraceMetrics | (() => RestartTraceMetrics | undefined),
+  trackPending = false,
 ): Promise<T> {
-  return await measureGatewayTraceSpan(name, run, metrics, false);
+  return await measureGatewayTraceSpan(name, run, metrics, false, trackPending);
 }
 
 /** Tracks shutdown joins even when detailed restart tracing is disabled. */
@@ -134,10 +144,27 @@ export async function measureGatewayCloseStep<T>(
 
 /** A bounded snapshot for the process deadline; overlapping joins retain separate identities. */
 export function formatGatewayPendingCloseSteps(): string {
+  if (pendingCloseCount === 0) {
+    return "none";
+  }
   const now = nowMs();
   const entries: string[] = [];
   for (const step of pendingCloseSteps) {
-    entries.push(`${step.name}=${Math.max(0, Math.round(now - step.startedAt))}ms`);
+    let detail = "";
+    try {
+      const metrics = step.metrics?.();
+      if (metrics) {
+        detail = formatMetrics(
+          (Array.isArray(metrics) ? metrics : Object.entries(metrics)).slice(
+            0,
+            MAX_PENDING_CLOSE_METRICS,
+          ),
+        );
+      }
+    } catch {
+      // Retiring an observed owner must not turn diagnostics into a shutdown failure.
+    }
+    entries.push(`${step.name}=${Math.max(0, Math.round(now - step.startedAt))}ms${detail}`);
     if (entries.length === MAX_PENDING_CLOSE_STEPS) {
       break;
     }
@@ -154,15 +181,34 @@ async function measureGatewayTraceSpan<T>(
   run: () => Promise<T> | T,
   metrics: RestartTraceMetrics | (() => RestartTraceMetrics | undefined) | undefined,
   closeStep: boolean,
+  trackPending = false,
 ): Promise<T> {
   const trace = isGatewayRestartTraceActive();
-  if (!trace && !closeStep) {
+  if (!trace && !closeStep && !trackPending) {
     return await run();
   }
   const before = nowMs();
-  const pending = closeStep ? { name, startedAt: before } : undefined;
+  const pending =
+    closeStep || trackPending
+      ? {
+          name: formatMetricValue(name) ?? "unnamed",
+          startedAt: before,
+          ...(typeof metrics === "function" ? { metrics } : {}),
+        }
+      : undefined;
   if (pending) {
     pendingCloseSteps.add(pending);
+  }
+  if (closeStep) {
+    pendingCloseCount += 1;
+    if (!pendingCloseTimer) {
+      pendingCloseTimer = setInterval(() => {
+        restartTraceLog.info(
+          `shutdown pending: count=${pendingCloseSteps.size} ${formatGatewayPendingCloseSteps()}`,
+        );
+      }, CLOSE_PENDING_REPORT_MS);
+      pendingCloseTimer.unref();
+    }
     markGatewayRestartTrace(`${name}.begin`);
   }
   try {
@@ -170,6 +216,13 @@ async function measureGatewayTraceSpan<T>(
   } finally {
     if (pending) {
       pendingCloseSteps.delete(pending);
+    }
+    if (closeStep) {
+      pendingCloseCount -= 1;
+      if (pendingCloseCount === 0) {
+        clearInterval(pendingCloseTimer);
+        pendingCloseTimer = undefined;
+      }
     }
     const now = nowMs();
     if (trace) {

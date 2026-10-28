@@ -6,14 +6,6 @@ import type { Root } from "@openclaw/fs-safe";
 
 const JSON_WHITESPACE = new Set([" ", "\t", "\r", "\n"]);
 
-type LegacyJsonStreamSnapshot = {
-  dev: bigint;
-  ino: bigint;
-  mtimeMs: number;
-  sha256: string;
-  size: number;
-};
-
 class JsonCharacterCursor {
   private readonly chunks: AsyncIterator<string>;
   private chunk = "";
@@ -214,7 +206,7 @@ export async function readLegacyJsonObjectStream(params: {
   relativePath: string;
   property?: string;
   onEntry?: (key: string, value: unknown) => void;
-}): Promise<LegacyJsonStreamSnapshot> {
+}) {
   await using opened = await params.stateRoot.open(params.relativePath, {
     hardlinks: "reject",
     symlinks: "reject",

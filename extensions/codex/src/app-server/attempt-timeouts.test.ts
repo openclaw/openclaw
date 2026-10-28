@@ -1,110 +1,95 @@
-// Codex tests cover attempt timeouts plugin behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import {
-  isCodexAppServerStartupError,
-  resolveCodexGatewayTimeoutWithGraceMs,
-  resolveCodexStartupTimeoutMs,
+  isCodexAppServerStartupError as isStartupError,
+  resolveCodexStartupTimeoutMs as startupBudget,
   withCodexStartupTimeout,
 } from "./attempt-timeouts.js";
+import { withAbortableTimeout } from "./timeout.js";
 
-const CODEX_APP_SERVER_STARTUP_TIMEOUT_FLOOR_MS = 100;
+afterEach(() => vi.useRealTimers());
 
-describe("Codex app-server attempt timeouts", () => {
-  afterEach(() => {
-    vi.useRealTimers();
-  });
+it.each([
+  [5, undefined, undefined, 100],
+  [500, undefined, undefined, 500],
+  [5, 250, undefined, 250],
+  [Number.NaN, undefined, undefined, 100],
+  [500, Number.NaN, undefined, 500],
+  [Number.MAX_SAFE_INTEGER, undefined, undefined, MAX_TIMER_TIMEOUT_MS],
+  [48 * 60 * 60 * 1000, undefined, 60_000, 600_000],
+  [120_000, undefined, 60_000, 120_000],
+])(
+  "resolves startup timeout=%s floor=%s request=%s",
+  (timeoutMs, timeoutFloorMs, requestTimeoutMs, expected) => {
+    expect(startupBudget({ timeoutMs, timeoutFloorMs, requestTimeoutMs })).toBe(expected);
+  },
+);
 
-  it("resolves startup timeout with a configurable floor", () => {
-    expect(resolveCodexStartupTimeoutMs({ timeoutMs: 5 })).toBe(
-      CODEX_APP_SERVER_STARTUP_TIMEOUT_FLOOR_MS,
-    );
-    expect(resolveCodexStartupTimeoutMs({ timeoutMs: 500 })).toBe(500);
-    expect(resolveCodexStartupTimeoutMs({ timeoutMs: 5, timeoutFloorMs: 250 })).toBe(250);
-    expect(resolveCodexStartupTimeoutMs({ timeoutMs: Number.NaN })).toBe(
-      CODEX_APP_SERVER_STARTUP_TIMEOUT_FLOOR_MS,
-    );
-    expect(resolveCodexStartupTimeoutMs({ timeoutMs: 500, timeoutFloorMs: Number.NaN })).toBe(500);
-    expect(resolveCodexStartupTimeoutMs({ timeoutMs: Number.MAX_SAFE_INTEGER })).toBe(
-      MAX_TIMER_TIMEOUT_MS,
-    );
-    expect(
-      resolveCodexStartupTimeoutMs({
-        timeoutMs: Number.MAX_SAFE_INTEGER,
-        timeoutFloorMs: Number.MAX_SAFE_INTEGER,
-      }),
-    ).toBe(MAX_TIMER_TIMEOUT_MS);
-    expect(
-      resolveCodexStartupTimeoutMs({
-        timeoutMs: Number.NaN,
-        timeoutFloorMs: Number.NaN,
-      }),
-    ).toBe(CODEX_APP_SERVER_STARTUP_TIMEOUT_FLOOR_MS);
-  });
-
-  it("bounds startup by request timeouts when the turn budget is longer", () => {
-    const interactiveTurnMs = 48 * 60 * 60 * 1000;
-    expect(
-      resolveCodexStartupTimeoutMs({ timeoutMs: interactiveTurnMs, requestTimeoutMs: 60_000 }),
-    ).toBe(600_000);
-    expect(resolveCodexStartupTimeoutMs({ timeoutMs: 120_000, requestTimeoutMs: 60_000 })).toBe(
-      120_000,
-    );
-  });
-
-  it("caps gateway timeout grace", () => {
-    expect(resolveCodexGatewayTimeoutWithGraceMs(120_000)).toBe(130_000);
-    expect(resolveCodexGatewayTimeoutWithGraceMs(120_000, 500)).toBe(120_500);
-    expect(resolveCodexGatewayTimeoutWithGraceMs(Number.MAX_SAFE_INTEGER)).toBe(
-      MAX_TIMER_TIMEOUT_MS,
-    );
-    expect(resolveCodexGatewayTimeoutWithGraceMs(MAX_TIMER_TIMEOUT_MS - 100, 500)).toBe(
-      MAX_TIMER_TIMEOUT_MS,
-    );
-  });
-
-  it("waits for startup timeout cleanup before rejecting", async () => {
+it.each(["operation", "cleanup", "never"])(
+  "settles startup after abort during %s",
+  async (abortDuring) => {
     vi.useFakeTimers();
     const events: string[] = [];
+    const controller = new AbortController();
     const run = withCodexStartupTimeout({
       timeoutMs: 10,
-      signal: new AbortController().signal,
+      signal: controller.signal,
       onTimeout: async () => {
         events.push("cleanup-start");
+        if (abortDuring === "cleanup") {
+          controller.abort();
+        }
         await new Promise<void>((resolve) => {
-          setTimeout(() => {
-            events.push("cleanup-done");
-            resolve();
-          }, 5);
+          setTimeout(resolve, 5);
         });
+        events.push("cleanup-done");
       },
       operation: async () => new Promise<never>(() => {}),
     });
-    const errorResult = run.catch((error: unknown) => error);
-
-    await vi.advanceTimersByTimeAsync(10);
-    expect(events).toEqual(["cleanup-start"]);
-    await vi.advanceTimersByTimeAsync(5);
-    const error = await errorResult;
-    expect(isCodexAppServerStartupError(error, "timed_out")).toBe(true);
-    expect((error as Error).message).toBe("codex app-server startup timed out");
-    expect(events).toEqual(["cleanup-start", "cleanup-done"]);
-  });
-
-  it("rejects startup timeout when aborted before completion", async () => {
-    vi.useFakeTimers();
-    const controller = new AbortController();
-    const run = withCodexStartupTimeout({
-      timeoutMs: 1_000,
-      signal: controller.signal,
-      operation: async () => new Promise<never>(() => {}),
+    const errorResult = run.catch((error: unknown) => {
+      events.push("rejected");
+      return error;
     });
-    const errorResult = run.catch((error: unknown) => error);
 
-    controller.abort();
+    if (abortDuring === "operation") {
+      controller.abort();
+    } else {
+      await vi.advanceTimersByTimeAsync(10);
+      expect(events).toEqual(["cleanup-start"]);
+      await vi.advanceTimersByTimeAsync(5);
+    }
+    const aborted = abortDuring === "operation";
+    expect(isStartupError(await errorResult, aborted ? "aborted" : "timed_out")).toBe(true);
+    expect(events).toEqual(aborted ? ["rejected"] : ["cleanup-start", "cleanup-done", "rejected"]);
+  },
+);
 
-    const error = await errorResult;
-    expect(isCodexAppServerStartupError(error, "aborted")).toBe(true);
-    expect((error as Error).message).toBe("codex app-server startup aborted");
-  });
-});
+it.each([0, Number.POSITIVE_INFINITY, MAX_TIMER_TIMEOUT_MS + 600_000])(
+  "honors cancellation and the full request budget %s",
+  async (timeoutMs) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    const controller = new AbortController();
+    const reason = new Error("request ended");
+    const settled = vi.fn();
+    const timed = Number.isFinite(timeoutMs) && timeoutMs > 0;
+    const outcome = withAbortableTimeout({
+      promise: new Promise<never>(() => {}),
+      signal: timed ? undefined : controller.signal,
+      timeoutMs,
+      timeoutMessage: "unexpected deadline",
+      createTimeoutError: () => reason,
+    }).catch((error: unknown) => {
+      settled();
+      return error;
+    });
+
+    await vi.advanceTimersByTimeAsync(timed ? timeoutMs - 1 : 1_000);
+    expect(settled).not.toHaveBeenCalled();
+    if (timed) {
+      await vi.advanceTimersByTimeAsync(1);
+    } else {
+      controller.abort(reason);
+    }
+    await expect(outcome).resolves.toBe(reason);
+  },
+);

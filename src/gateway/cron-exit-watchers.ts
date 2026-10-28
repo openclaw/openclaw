@@ -80,7 +80,6 @@ function isWatchableExitJob(job: CronJob, defaultAgentId?: string): job is OnExi
 export function createCronExitWatchers(
   initialHandlers: CronExitWatcherHandlers,
   scheduler: GatewayScheduler,
-  options?: { retryBackoffMs?: readonly number[] },
 ): CronExitWatchers {
   let handlers = initialHandlers;
   let retries = scheduler.scope();
@@ -98,10 +97,6 @@ export function createCronExitWatchers(
     }
   };
   const shell = resolveExitWatchShell();
-  const retryBackoffMs =
-    options?.retryBackoffMs && options.retryBackoffMs.length > 0
-      ? options.retryBackoffMs
-      : ON_EXIT_WATCH_RETRY_BACKOFF_MS;
   // Reserving the slot before spawn lets cancel/replace retire an in-flight arm.
   // Async continuations publish only while this exact slot remains current.
   type WatcherSlot = {
@@ -223,7 +218,9 @@ export function createCronExitWatchers(
         return;
       }
       const delayMs =
-        retryBackoffMs[Math.min(slot.consecutiveFailures - 1, retryBackoffMs.length - 1)]!;
+        ON_EXIT_WATCH_RETRY_BACKOFF_MS[
+          Math.min(slot.consecutiveFailures - 1, ON_EXIT_WATCH_RETRY_BACKOFF_MS.length - 1)
+        ]!;
       slot.retryJob = retries.schedule({
         id: `${scopeKey(job.id)}:retry`,
         delayMs,

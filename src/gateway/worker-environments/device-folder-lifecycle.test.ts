@@ -1,15 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, expect, test, vi } from "vitest";
-import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
-import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
+import { expect, test, vi } from "vitest";
 import { DEVICE_FOLDER_MANIFEST_REF } from "../../worker/device-folder.js";
-import { seedSyncingPlacement, REQUEST } from "./placement-dispatch-test-fixtures.js";
+import { createDispatchEnvironmentFixtures, REQUEST } from "./placement-dispatch-test-fixtures.js";
 import { createHarness } from "./placement-dispatch-test-harness.js";
 import { forceAbandonWorkerEnvironment } from "./placement-force-abandon.js";
 import { createWorkerPlacementReclaim } from "./placement-reclaim.js";
-import { createWorkerSessionPlacementStore } from "./placement-store.js";
-import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
+import { usePlacementStoreFixture } from "./placement-store-fixture.test-support.js";
+import { placementClaim, sessionIdentity } from "./placement-suite.test-support.js";
+import { advancePlacementFixtureToActive } from "./placement-test-fixtures.js";
 import type { WorkerTunnelHandle } from "./tunnel-contract.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 import {
@@ -17,39 +16,31 @@ import {
   reconcileWorkspaceAfterTurn,
 } from "./workspace-result-finalize.js";
 
-const dirs = useStateDatabaseTempDirs();
-afterEach(() => vi.restoreAllMocks());
+const storeFixture = usePlacementStoreFixture();
 
-async function fixture() {
-  const root = dirs.make("device-folder-lifecycle-");
-  const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
-  const placements = createWorkerSessionPlacementStore({ database, now: () => 1000 });
+async function fixture(folderPlacement = false) {
+  const { root, database, store: placements } = storeFixture;
   const harness = await createHarness(database, placements, { workspacePath: root });
-  const seeded = await harness.placements.seedActive(1);
+  const { environmentId } = createDispatchEnvironmentFixtures();
+  const placement = await advancePlacementFixtureToActive(placements, database, REQUEST, {
+    environmentId,
+    ownerEpoch: 1,
+    workspaceBaseManifestRef: folderPlacement ? DEVICE_FOLDER_MANIFEST_REF : undefined,
+    remoteWorkspaceDir: folderPlacement ? "/user-folder" : "/worker/workspace",
+    seedEnvironment: "before-dispatch",
+  });
   harness.markEnvironmentOwnerEpoch(1);
   const folder = path.join(root, "user-folder");
   await fs.mkdir(folder);
   await fs.writeFile(path.join(folder, "keep.txt"), "user data");
   const workspace = { kind: "device-folder" as const, deviceId: "paired-node", path: folder };
-  return { root, database, placements, harness, seeded, folder, workspace };
+  return { root, placements, placement, harness, folder, workspace };
 }
 
-test("device-folder results release the turn without capture, transfer, reconciliation, or quiescence", async () => {
+test("device-folder turn settlement and reclaim release ownership without synchronizing user data", async () => {
   const f = await fixture();
-  const placement = f.placements.get(REQUEST.sessionId);
-  if (placement?.state !== "active") {
-    throw new Error("missing active fixture");
-  }
-  const claim = await f.placements.claimTurn({
-    ...REQUEST,
-    owner: {
-      kind: "worker",
-      environmentId: placement.environmentId,
-      ownerEpoch: placement.activeOwnerEpoch,
-    },
-    claimId: "folder-turn",
-    runId: "folder-turn",
-  });
+  const { placement } = f;
+  const claim = await f.placements.claimTurn(placementClaim(placement, "folder-turn"));
   await f.placements.markWorkspaceResultPending(claim);
   const unexpected = vi.fn(async () => {
     throw new Error("folder must not be synchronized");
@@ -63,25 +54,23 @@ test("device-folder results release the turn without capture, transfer, reconcil
     quiesceWorkspace: unexpected,
     stop: unexpected,
   };
-  const workspaceOperations = createWorkerWorkspaceOperationCoordinator();
-  await recoverWorkspaceBeforeTurn({
+  const result = {
     placement,
     placements: f.placements,
     turnClaim: claim,
-    workspaceOperations,
+    workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
     workspace: f.workspace,
+  };
+  await recoverWorkspaceBeforeTurn({
+    ...result,
+    tunnel,
+    turn: sessionIdentity(REQUEST.sessionId),
   });
   await reconcileWorkspaceAfterTurn({
-    placement,
-    placements: f.placements,
-    turnClaim: claim,
-    workspaceOperations,
-    workspace: f.workspace,
+    ...result,
     tunnel,
     transcriptTarget: {
-      agentId: REQUEST.agentId,
-      sessionKey: REQUEST.sessionKey,
-      sessionId: REQUEST.sessionId,
+      ...sessionIdentity(REQUEST.sessionId),
       storePath: path.join(f.root, "sessions.json"),
     },
   });
@@ -89,10 +78,6 @@ test("device-folder results release the turn without capture, transfer, reconcil
   expect(f.placements.get(REQUEST.sessionId)?.turnClaim).toBeNull();
   expect(await f.placements.listPendingWorkspaceResultsAsync()).toEqual([]);
   expect(await fs.readdir(f.folder)).toEqual(["keep.txt"]);
-});
-
-test("device-folder reclaim stops its environment without touching user data", async () => {
-  const f = await fixture();
   const reclaimPlacement = createWorkerPlacementReclaim({
     placements: f.placements,
     environments: f.harness.environments,
@@ -110,45 +95,13 @@ test("device-folder reclaim stops its environment without touching user data", a
 });
 
 test("forced abandonment refuses a device-folder placement before mutation", async () => {
-  const root = dirs.make("device-folder-abandon-");
-  const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
-  const placements = createWorkerSessionPlacementStore({ database });
-  const syncing = await seedSyncingPlacement(placements, "folder-device");
-  const starting = await placements.transition({
-    sessionId: REQUEST.sessionId,
-    from: "syncing",
-    to: "starting",
-    expectedGeneration: syncing.generation,
-    patch: {
-      workspaceBaseManifestRef: DEVICE_FOLDER_MANIFEST_REF,
-      remoteWorkspaceDir: "/user-folder",
-    },
-  });
-  seedAttachedPlacementEnvironment(database, {
-    environmentId: "folder-device",
-    sessionId: REQUEST.sessionId,
-    ownerEpoch: 1,
-  });
-  const active = await placements.transition({
-    sessionId: REQUEST.sessionId,
-    from: "starting",
-    to: "active",
-    expectedGeneration: starting.generation,
-    patch: { activeOwnerEpoch: 1 },
-  });
-  if (active.state !== "active") {
-    throw new Error("missing active fixture");
-  }
+  const f = await fixture(true);
   await expect(
     forceAbandonWorkerEnvironment({
-      placements,
-      environmentId: active.environmentId,
-      resolveWorkspace: async () => ({
-        kind: "device-folder",
-        deviceId: "node",
-        path: "/user-folder",
-      }),
+      placements: f.placements,
+      environmentId: f.placement.environmentId,
+      resolveWorkspace: async () => f.workspace,
     }),
   ).rejects.toThrow("cannot be abandoned");
-  expect(placements.get(REQUEST.sessionId)).toMatchObject({ state: "active", turnClaim: null });
+  expect(f.placements.get(REQUEST.sessionId)).toMatchObject({ state: "active", turnClaim: null });
 });

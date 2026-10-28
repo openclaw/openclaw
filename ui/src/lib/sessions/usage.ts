@@ -1,4 +1,3 @@
-import type { SessionUsageTimeSeries } from "../../../../src/shared/session-usage-timeseries-types.js";
 import type { SessionsUsageResult } from "../../../../src/shared/usage-types.js";
 import type { SessionRequestClient } from "./session-capability.ts";
 
@@ -80,23 +79,4 @@ export function requestSessionUsage(
   return options?.signal
     ? client.request<SessionsUsageResult>("sessions.usage", params, { signal: options.signal })
     : client.request<SessionsUsageResult>("sessions.usage", params);
-}
-
-export function requestSessionUsageTimeSeries(
-  client: SessionRequestClient,
-  target: SessionUsageTarget,
-): Promise<SessionUsageTimeSeries | null> {
-  return client
-    .request<SessionUsageTimeSeries | undefined>("sessions.usage.timeseries", target)
-    .then((result) => result ?? null);
-}
-
-export function requestSessionUsageLogs(
-  client: SessionRequestClient,
-  target: SessionUsageTarget,
-): Promise<{ logs?: unknown }> {
-  return client.request<{ logs?: unknown }>("sessions.usage.logs", {
-    ...target,
-    limit: 1000,
-  });
 }

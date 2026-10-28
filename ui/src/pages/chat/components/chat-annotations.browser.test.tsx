@@ -8,7 +8,8 @@ import "../../../styles/chat/composer.css";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import "./chat-comment-pins.tsx";
 import { CommentPreviewChip, CommentPreviewRow } from "./chat-comment-preview.tsx";
-import { removeChatSelectionPopup, showChatAnnotationEditor } from "./chat-selection-popup.ts";
+import { removeChatSelectionPopup, showChatAnnotationEditor } from "./chat-selection-popup.tsx";
+import { createTranscriptMessageElements } from "./chat-transcript-message-elements.ts";
 
 const longSelection = "Selected passage with enough words to exceed a compact preview. ".repeat(8);
 const longComment =
@@ -229,19 +230,23 @@ describe("annotation chip and hovercard", () => {
   );
 });
 
-function openEditor(expanded = false) {
+async function openEditor(expanded = false) {
   const onSave = vi.fn();
   const onCancel = vi.fn();
   const onDelete = vi.fn();
-  showChatAnnotationEditor({
-    paneId: "pane-a",
-    anchorRect: new DOMRect(120, 120, 100, 20),
-    comment: "",
-    expanded,
-    onSave,
-    onCancel,
-    onDelete,
-  });
+  const owner = container;
+  await showChatAnnotationEditor(
+    {
+      paneId: "pane-a",
+      anchorRect: new DOMRect(120, 120, 100, 20),
+      comment: "",
+      expanded,
+      onSave,
+      onCancel,
+      onDelete,
+    },
+    () => owner.isConnected,
+  );
   return {
     input: document.querySelector<HTMLTextAreaElement>(".chat-annotation-editor textarea")!,
     popup: document.querySelector<HTMLElement>(".chat-annotation-editor")!,
@@ -285,7 +290,7 @@ describe("annotation editor", () => {
       }
     };
     for (const expanded of [false, true]) {
-      const { input, popup } = openEditor(expanded);
+      const { input, popup } = await openEditor(expanded);
       input.blur();
       const idleBorder = getComputedStyle(popup).borderTopColor;
       const controls = [input, ...popup.querySelectorAll("button")].filter(
@@ -315,7 +320,7 @@ describe("annotation editor", () => {
   it.each(["Cancel", "Delete comment"])(
     "activates %s with Enter without saving edits",
     async (name) => {
-      const { input, popup, onSave, onCancel, onDelete } = openEditor(true);
+      const { input, popup, onSave, onCancel, onDelete } = await openEditor(true);
       await page.elementLocator(input).fill("Unsaved replacement");
       const control = page.getByRole("button", { name, exact: true });
       control.element().focus();
@@ -336,7 +341,7 @@ describe("annotation editor", () => {
     "grows to five lines and scrolls without fading editable text ($width px, editing=$expanded)",
     async ({ width, expanded }) => {
       await page.viewport(width, 900);
-      const { input, popup } = openEditor(expanded);
+      const { input, popup } = await openEditor(expanded);
       const oneLine = input.getBoundingClientRect().height;
       const originalTop = popup.getBoundingClientRect().top;
       const lineHeight = Number.parseFloat(getComputedStyle(input).lineHeight);
@@ -369,7 +374,7 @@ describe("annotation editor", () => {
   it.each([false, true])(
     "supports Enter, Shift+Enter and Escape (editing=%s)",
     async (expanded) => {
-      const { input, popup, onSave, onCancel } = openEditor(expanded);
+      const { input, popup, onSave, onCancel } = await openEditor(expanded);
       await page.elementLocator(input).fill("First");
       await userEvent.keyboard("{Shift>}{Enter}{/Shift}");
       expect(input.value).toBe("First\n");
@@ -382,7 +387,7 @@ describe("annotation editor", () => {
       expect(onSave).toHaveBeenCalledExactlyOnceWith("First\n");
       expect(popup.isConnected).toBe(false);
       expect(onCancel).not.toHaveBeenCalled();
-      const cancelled = openEditor(expanded);
+      const cancelled = await openEditor(expanded);
       await page.elementLocator(cancelled.input).fill("Discard this draft");
       await userEvent.keyboard("{Escape}");
       expect(cancelled.onSave).not.toHaveBeenCalled();
@@ -423,10 +428,21 @@ describe("comment pins", () => {
     const before = bubble("before");
     const source = bubble("source");
     const after = bubble("after");
+    const messageElements = createTranscriptMessageElements(() => undefined);
+    messageElements.forKey("source")(source);
+    onTestFinished(() => messageElements.dispose());
     const pins = document.createElement("openclaw-chat-comment-pins") as HTMLElement & {
       attachments: ChatAttachment[];
       sessionKey: string;
+      transcript: {
+        messageElements: typeof messageElements;
+        contentElement: HTMLDivElement;
+      };
       updateComplete: Promise<unknown>;
+    };
+    pins.transcript = {
+      messageElements,
+      contentElement: thread.querySelector<HTMLDivElement>(".chat-thread-inner")!,
     };
     pins.attachments = [
       {

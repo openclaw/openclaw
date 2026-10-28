@@ -38,6 +38,30 @@ function registerPlugins(...plugins: ChannelPlugin[]) {
   );
 }
 
+export function registerSlackTextPlugin(
+  accountIds: string[] = ["default"],
+  defaultAccountId?: string,
+  deliveryMode: "direct" | "gateway" = "direct",
+  messaging?: ChannelPlugin["messaging"],
+) {
+  const sendText = vi.fn().mockResolvedValue({ channel: "slack", messageId: "m1", chatId: "C123" });
+  registerPlugins({
+    ...createChannelTestPluginBase({
+      id: "slack",
+      config: {
+        listAccountIds: () => accountIds,
+        ...(defaultAccountId ? { defaultAccountId: () => defaultAccountId } : {}),
+        resolveAccount: () => ({ enabled: true }),
+        isConfigured: () => true,
+      },
+    }),
+    outbound: { deliveryMode, sendText },
+    threading: { threadAddressing: "message" },
+    ...(messaging ? { messaging } : {}),
+  });
+  return sendText;
+}
+
 export function createMessageActionContextFixture() {
   const handleWorkspaceAction = vi.fn(successfulAction);
   const handleForumAction = vi.fn(successfulAction);

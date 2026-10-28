@@ -27,6 +27,20 @@ export function operatorScopeSatisfied(
   );
 }
 
+/** Grants must be canonical; requests retain blank skipping and original error strings. */
+export function resolveMissingOperatorScope(
+  requestedScopes: readonly string[],
+  allowedScopes: readonly string[],
+): string | null {
+  for (const scope of requestedScopes) {
+    const requested = scope.trim();
+    if (requested && !operatorScopeSatisfied(requested, allowedScopes)) {
+      return scope;
+    }
+  }
+  return null;
+}
+
 /** Returns true when a role grant satisfies requested scopes, including operator implications. */
 export function roleScopesAllow(params: {
   role: string;
@@ -70,18 +84,17 @@ export function resolveMissingRequestedScope(params: {
   allowedScopes: readonly string[];
 }): string | null {
   const role = params.role.trim();
-  const prefix = `${role}.`;
   const allowedScopes = params.allowedScopes.map((scope) => scope.trim());
+  if (role === OPERATOR_ROLE) {
+    return resolveMissingOperatorScope(params.requestedScopes, allowedScopes);
+  }
+  const prefix = `${role}.`;
   for (const scope of params.requestedScopes) {
     const requestedScope = scope.trim();
     if (!requestedScope) {
       continue;
     }
-    const satisfied =
-      role === OPERATOR_ROLE
-        ? operatorScopeSatisfied(requestedScope, allowedScopes)
-        : requestedScope.startsWith(prefix) && allowedScopes.includes(requestedScope);
-    if (!satisfied) {
+    if (!requestedScope.startsWith(prefix) || !allowedScopes.includes(requestedScope)) {
       return scope;
     }
   }

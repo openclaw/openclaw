@@ -6,12 +6,7 @@ const CURSOR_WRITE_RETRY_MS = [0, 100, 300] as const;
 const CURSOR_RECOVERY_RETRY_MS = 1_000;
 
 /** Tracks the largest EOSE-safe Nostr timestamp without skipping undurable relay events. */
-export function createNostrDurableCursor(options: {
-  since: number;
-  replayOverlapSec: number;
-  nowSec?: () => number;
-}) {
-  const nowSec = options.nowSec ?? (() => Math.floor(Date.now() / 1000));
+export function createNostrDurableCursor(options: { since: number; replayOverlapSec: number }) {
   let durableCandidate: number | undefined;
   let transientReplayCeiling: number | undefined;
   let backfillComplete = false;
@@ -29,7 +24,8 @@ export function createNostrDurableCursor(options: {
         return undefined;
       }
       const previousSafeCandidate = safeCandidate();
-      durableCandidate = Math.max(durableCandidate ?? 0, Math.min(event.created_at, nowSec()));
+      const nowSec = Math.floor(Date.now() / 1000);
+      durableCandidate = Math.max(durableCandidate ?? 0, Math.min(event.created_at, nowSec));
       const nextSafeCandidate = safeCandidate();
       return backfillComplete && nextSafeCandidate !== previousSafeCandidate
         ? nextSafeCandidate
@@ -68,7 +64,6 @@ export function createNostrCursorStateWriter(options: {
   let desiredCursor = Math.max(options.minimumCursor, options.initialCursor);
   let dirty = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
-  let writeTail: Promise<void> = Promise.resolve();
   let activeFlush: Promise<void> | undefined;
   let recoveryFlush: Promise<void> | undefined;
 
@@ -85,23 +80,16 @@ export function createNostrCursorStateWriter(options: {
     }
   };
 
-  const enqueueWrite = (cursor: number): Promise<void> => {
-    const write = writeTail.then(() => writeWithRetry(cursor));
-    writeTail = write.catch(() => undefined);
-    return write;
-  };
-
   const clearTimer = (): void => {
-    if (timer) {
-      clearTimeout(timer);
-      timer = undefined;
-    }
+    clearTimeout(timer);
+    timer = undefined;
   };
 
   const runFlush = async (): Promise<void> => {
     for (;;) {
       if (!dirty) {
-        await writeTail;
+        // Let an immediately queued persistNow join this active flush before it settles.
+        await Promise.resolve();
         if (!dirty) {
           return;
         }
@@ -109,7 +97,8 @@ export function createNostrCursorStateWriter(options: {
       dirty = false;
       const cursor = desiredCursor;
       try {
-        await enqueueWrite(cursor);
+        // Publish activeFlush before invoking a writer that may queue another cursor.
+        await Promise.resolve().then(() => writeWithRetry(cursor));
       } catch (error) {
         dirty = true;
         throw error;

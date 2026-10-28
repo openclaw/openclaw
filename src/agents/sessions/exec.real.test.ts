@@ -4,19 +4,11 @@ import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { isProcessAlive } from "../../../test/scripts/live-process-fixture.test-support.js";
 import { execCommand } from "./exec.js";
 
 const cleanupPids = new Set<number>();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 function forceKillPid(pid: number): void {
   if (!isProcessAlive(pid)) {

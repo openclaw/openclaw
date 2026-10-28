@@ -2,6 +2,12 @@ import type { StoreWriterQueue } from "../../src/shared/store-writer-queue.js";
 
 export { createDeferredCore as createDeferred } from "../../src/shared/deferred.js";
 
+export function nextEventLoopTurn(): Promise<void> {
+  return new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
+}
+
 /** Waits for active drains to settle while rejecting still-pending test writes. */
 export async function drainStoreWriterQueuesForTest(
   queues: Map<string, StoreWriterQueue>,

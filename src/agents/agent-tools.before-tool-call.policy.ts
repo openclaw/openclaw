@@ -67,8 +67,10 @@ export function getBeforeToolCallPolicyDiagnosticState(): BeforeToolCallPolicyDi
 }
 
 export function hasBeforeToolCallPolicy(): boolean {
-  const state = getBeforeToolCallPolicyDiagnosticState();
-  return state.hasBeforeToolCallHook || state.trustedToolPolicies.length > 0;
+  return (
+    getGlobalHookRunner()?.hasHooks("before_tool_call") === true ||
+    hasTrustedToolPolicies(getGlobalHookRunnerRegistry() ?? undefined)
+  );
 }
 
 export async function runBeforeToolCallHook(args: {
@@ -179,6 +181,7 @@ export async function runBeforeToolCallHook(args: {
       ...(args.toolCallId && { toolCallId: args.toolCallId }),
       ...(args.ctx?.channelId && { channelId: args.ctx.channelId }),
       ...(args.ctx?.requester ? { requester: args.ctx.requester } : {}),
+      ...(args.ctx?.trigger && { trigger: args.ctx.trigger }),
     });
     const toolContext = buildToolContext(toolIdentity);
     // Policies form a mutation chain. Reconcile each decision against the prior

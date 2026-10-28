@@ -22,7 +22,9 @@ it("opens help on its own retained header and retires native overlays when prese
     { leafEntryId: "other", headline: "Earlier idea", messageCount: 2, active: false },
   ];
   const first = mountChatPaneHeader(containers, { branches });
-  await first.container.querySelector("openclaw-chat-pane-versions-menu")?.updateComplete;
+  await waitForSolid(() =>
+    expect(first.container.querySelector(".chat-pane__branches-menu")).not.toBeNull(),
+  );
   // Cached chats can retain headers with the same pane slot identity in one document.
   first.container.hidden = true;
   first.container.inert = true;
@@ -33,7 +35,9 @@ it("opens help on its own retained header and retires native overlays when prese
     branches,
     presented: { owner, isPresented: () => presented },
   });
-  await second.container.querySelector("openclaw-chat-pane-versions-menu")?.updateComplete;
+  await waitForSolid(() =>
+    expect(second.container.querySelector(".chat-pane__branches-menu")).not.toBeNull(),
+  );
   const menu = second.container.querySelector<HTMLElement>(".chat-pane__branches-menu")!;
   const trigger = menu.querySelector<HTMLButtonElement>(".chat-pane__branches-trigger")!;
   const menuSurface = menu.querySelector<HTMLElement>('[role="menu"]')!;

@@ -13,6 +13,7 @@ import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import type { CliDeps } from "../../cli/deps.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { AgentRunDelegatedAuthority } from "../../infra/agent-run-authority.types.js";
+import type { DiffReadTiming } from "../../infra/diff-read-timing.js";
 import type { ExecApprovalRequest, ExecApprovalResolved } from "../../infra/exec-approvals.js";
 import type {
   PluginApprovalRequest,
@@ -202,7 +203,7 @@ type GatewayKernelContext = {
     readonly hasPendingAgents: boolean;
     waitForAgentPreparation: (
       agentId: string,
-      options?: { signal?: AbortSignal },
+      options?: { signal?: AbortSignal; forWrite?: boolean },
     ) => Promise<void> | undefined;
   };
   channelAdmissionAudit?: import("../../channels/message-access/admission-evidence.js").ChannelAdmissionAudit;
@@ -277,9 +278,12 @@ type GatewayKernelContext = {
     agentId?: string;
     agentDir?: string;
     workspaceDir?: string;
+    /** Display-only consumers can omit the eager session-row invalidation snapshot. */
+    includeSessionRowPolicy?: boolean;
   }) => Promise<PreparedGatewayModelCatalog | undefined>;
   readPreparedGatewayModelCatalogBatch?: (
     agentIds: readonly string[],
+    options?: { includeSessionRowPolicy?: boolean },
   ) => Promise<PreparedGatewayModelCatalogReadResult[]>;
   readChatMetadata: (params: ChatMetadataReadParams) => Promise<ChatMetadataResult>;
   readPreparedModelsList?: (
@@ -292,6 +296,7 @@ type GatewayKernelContext = {
     params: ChatStartupProjectionReadParams,
   ) => Promise<ChatStartupProjectionResult | undefined>;
   getHealthCache: () => HealthSummary | null;
+  getReadiness?: import("../server/readiness.js").ReadinessChecker;
   logHealth: { error: (message: string) => void };
   logGateway: SubsystemLogger;
   publishPresence: () => void;
@@ -330,6 +335,10 @@ type GatewayKernelContext = {
   wizardRunner: import("./wizard.js").SetupWizardRunner;
   channelWizardRunner: import("./wizard.js").ChannelSetupWizardRunner;
   unavailableGatewayMethods?: ReadonlySet<string>;
+  inputRecovery?: Pick<
+    import("../agent-input-recovery.js").GatewayInputRecovery,
+    "isPending" | "waitForAgentInputRecovery"
+  >;
 };
 
 /** Socket-bound services and connection state supplied by the Gateway transports. */
@@ -413,7 +422,9 @@ type GatewayResidentBridgeContext = {
   /** Durable per-session worker placement; absent only from lightweight in-process contexts. */
   workerSessionPlacementService?: WorkerSessionPlacementReader &
     Partial<WorkerSessionPlacementRetirementService> &
-    Partial<Pick<WorkerSessionPlacementStore, "withWorkspaceExclusion">>;
+    Partial<
+      Pick<WorkerSessionPlacementStore, "withWorkspaceExclusion" | "withLocalWorkspaceReservation">
+    >;
   /** Process-local health samples fenced to the exact active placement owner. */
   workerPlacementDiskSpaceReader?: WorkerPlacementDiskSpaceReader;
   /** Process-current paired-device runner proof for active placement projection. */
@@ -588,6 +599,7 @@ export type GatewayRequestHandlerOptions = Omit<
     target: { sessionKey: string; agentId?: string; sessionId: string },
     consume: (entry: import("../../config/sessions/types.js").InternalSessionEntry) => T,
   ) => Promise<T>;
+  diffTiming?: DiffReadTiming;
   markSessionSubscribePhase?: (
     phase: import("../slow-request-diagnostics.js").SessionSubscribePhase,
   ) => void;
@@ -610,7 +622,9 @@ export type SessionEventProjection = {
   serializeSession?: () => string;
   /** Publication-owned UTF-8 message field, including its trailing comma. */
   serializeMessage?: () => Buffer;
-  delivered?: () => void;
+  /** Producer-owned payload fragment; three segments preserve the shared message compression boundary. */
+  serializePayload?: () => readonly [Buffer] | readonly [Buffer, Buffer, Buffer];
+  delivered?: (client: GatewayClient) => void;
 };
 
 type SessionEventProjectionScope = {
@@ -627,7 +641,6 @@ type SessionEventProjectionContext = {
   ) => readonly [string | undefined, string | undefined, string | undefined] | null;
   forgetAncestors: (key?: string) => void;
   references: (client: GatewayClient) => ConnectionSessionRows;
-  forgetConnectionAncestors: (client: GatewayClient) => void;
   createRunProjector: () => VisibleActiveSessionRunProjector;
 };
 

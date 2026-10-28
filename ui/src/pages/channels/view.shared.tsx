@@ -4,11 +4,14 @@ import { createMemo, For, Show } from "solid-js";
 import type { ChannelAccountSnapshot, ChannelStatus } from "../../api/types.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsRow, SettingsStatus } from "../../components/solid/settings-ui.tsx";
+import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { resolveChannelAccounts } from "../../lib/channels/index.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import type { ChannelsProps } from "./view.types.ts";
+
+registerEnglishCatalog(registerSettingsEnglish);
 
 type ChannelStatusKind = "ok" | "warn" | "danger" | "accent" | "muted";
 
@@ -49,7 +52,6 @@ export function resolveChannelDisplayState(key: string, props: ChannelsProps) {
     configured,
     running,
     connected,
-    defaultAccount,
     status,
   };
 }
@@ -158,7 +160,7 @@ export function ChannelAccount(params: {
   lastInboundAt?: number | null;
   lastError?: string | null;
 }) {
-  const factLine = createMemo(() => [params.accountId, ...(params.facts ?? [])].join(" · "));
+  const factLine = () => [params.accountId, ...(params.facts ?? [])].join(" · ");
   return (
     <div class="settings-row">
       <div class="settings-row__text">

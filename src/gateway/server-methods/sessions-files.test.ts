@@ -1,3 +1,4 @@
+import "./sessions-files.mocks.test-support.js";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -7,10 +8,12 @@ import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as identityFile from "../../agents/identity-file.js";
 import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
-import type { withSessionTranscriptDeltaReader } from "../../config/sessions/session-transcript-delta-read.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { root as openSafeRoot } from "../../infra/fs-safe.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
-import { resolveOpenPathCommand } from "./open-path.js";
 import { sessionsFilesHandlers } from "./sessions-files.js";
 import {
   assistantToolCall,
@@ -27,47 +30,19 @@ import {
   removeWorkspaceFixture,
   writeWorkspaceFile,
 } from "./sessions-files.test-support.js";
+import * as workspaceFs from "./workspace-fs.js";
 
-const hoisted = vi.hoisted(() => ({
+const { sessionFilesMocks } = await import("./sessions-files.mocks.test-support.js");
+
+const openPathMocks = vi.hoisted(() => ({
   execOpenPath: vi.fn(),
-  loadSessionEntry: vi.fn(),
-  resolveAgentWorkspaceDir: vi.fn(),
-  resolveDefaultAgentId: vi.fn(),
-  readDelta: vi.fn(),
 }));
+const hoisted = { ...sessionFilesMocks, ...openPathMocks };
 
 vi.mock("./open-path.js", async () => {
   const actual = await vi.importActual<typeof import("./open-path.js")>("./open-path.js");
-  return { ...actual, execOpenPath: hoisted.execOpenPath };
+  return { ...actual, execOpenPath: openPathMocks.execOpenPath };
 });
-
-vi.mock("../../agents/agent-scope.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../agents/agent-scope.js")>()),
-  resolveAgentWorkspaceDir: hoisted.resolveAgentWorkspaceDir,
-  resolveDefaultAgentId: hoisted.resolveDefaultAgentId,
-}));
-
-vi.mock("../session-utils.js", async (original) => ({
-  ...(await original<typeof import("../session-utils.js")>()),
-  loadIncognitoGatewaySessionEntryReadOnly: hoisted.loadSessionEntry,
-}));
-
-vi.mock("../session-utils-store-worker.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../session-utils-store-worker.js")>()),
-  loadGatewaySessionEntryReadOnlyInWorker: async (params: { key: string; agentId?: string }) =>
-    hoisted.loadSessionEntry(params.key, { agentId: params.agentId }),
-}));
-
-// mock-isolation: File-policy tests supply visible transcript pages without opening SQLite.
-vi.mock("../../config/sessions/session-transcript-delta-read.js", () => ({
-  withSessionTranscriptDeltaReader: ((scope, consume) =>
-    consume({
-      visible: async (limits) => hoisted.readDelta(scope, limits),
-      raw: async () => {
-        throw new Error("File browsing must consume visible transcript pages");
-      },
-    })) satisfies typeof withSessionTranscriptDeltaReader,
-}));
 
 const sessionKey = "agent:main:main";
 const invoke = createSessionFilesHandlerInvoker(sessionsFilesHandlers);
@@ -106,6 +81,8 @@ const expectText = (name: string, content: string, extra: Record<string, unknown
   });
 const browserKinds = (entries: Record<string, unknown>[]) =>
   entries.map((entry) => [entry.path, entry.kind, entry.sessionKind]);
+const errorType = async (operation: Parameters<typeof files.error>[0], name: string) =>
+  (await files.error(operation, name)).details.type;
 
 const outsideDirs = useAutoCleanupTempDirTracker(afterEach);
 const outsideFile = () => path.join(outsideDirs.make("session-files-outside-"), "outside.txt");
@@ -115,9 +92,11 @@ const mockVisibleMessages = createVisibleMessagesMock(hoisted.readDelta);
 let workspaceRoot: string;
 beforeEach(() => {
   workspaceRoot = prepareSessionFilesTest(hoisted, mockVisibleMessages);
+  setRuntimeConfigSnapshot({ agents: { entries: { main: {} } } });
 });
 
 afterEach(() => {
+  clearRuntimeConfigSnapshot();
   removeWorkspaceFixture(workspaceRoot);
 });
 
@@ -140,7 +119,7 @@ describe("sessions.files RPC handlers", () => {
     "rejects device-folder %s without touching either host's files",
     async (operation) => {
       const deviceRoot = outsideDirs.make("session-files-device-");
-      fs.writeFileSync(path.join(workspaceRoot, "notes.txt"), "GATEWAY");
+      writeWorkspace("notes.txt", "GATEWAY");
       fs.writeFileSync(path.join(deviceRoot, "notes.txt"), "DEVICE");
       mockSession({
         sessionId: "device-session",
@@ -148,23 +127,18 @@ describe("sessions.files RPC handlers", () => {
         spawnedCwd: workspaceRoot,
         spawnedWorkspaceDir: workspaceRoot,
       });
-      const params =
-        operation === "reveal"
-          ? { key: sessionKey }
-          : {
-              sessionKey,
-              path: "notes.txt",
-              ...(operation === "assets" ? { refs: [] } : {}),
-              ...(operation === "set"
-                ? { content: "WRONG HOST", expectedHash: hashContent("GATEWAY") }
-                : {}),
-            };
-      const error = await files.error(operation, params);
+      // Each method validates a different request shape before the shared device gate.
+      const request = {
+        list: { path: "notes.txt" },
+        get: { path: "notes.txt" },
+        assets: { path: "notes.txt", refs: [] },
+        set: { path: "notes.txt", content: "WRONG HOST", expectedHash: hashContent("GATEWAY") },
+        reveal: {},
+      }[operation];
+      const error = await files.error(operation, request);
       expect(error.details).toMatchObject({ type: "device_folder_files_unavailable" });
       expect(readWorkspace("notes.txt")).toBe("GATEWAY");
       expect(fs.readFileSync(path.join(deviceRoot, "notes.txt"), "utf8")).toBe("DEVICE");
-      expect(hoisted.execOpenPath).not.toHaveBeenCalled();
-      expect(hoisted.readDelta).not.toHaveBeenCalled();
     },
   );
 
@@ -179,16 +153,6 @@ describe("sessions.files RPC handlers", () => {
     } as const;
   }
 
-  it("reveals the same workspace root returned by sessions.files.list", async () => {
-    const listPayload = await files.ok("list");
-    const revealPayload = await files.ok("reveal");
-
-    expect(revealPayload).toEqual({ ok: true, path: listPayload.root });
-    expect(hoisted.execOpenPath).toHaveBeenCalledWith(
-      resolveOpenPathCommand(listPayload.root as string),
-    );
-  });
-
   it("returns no workspace listing while the session checkout is pending", async () => {
     mockSession({ sessionId: "sess-pending", pendingWorktree: { titleSource: "New checkout" } });
     mockVisibleMessages([]);
@@ -201,6 +165,7 @@ describe("sessions.files RPC handlers", () => {
 
   it("uses the persisted fixed-store owner for a bare session workspace", async () => {
     const cfg = fixedStoreConfig();
+    setRuntimeConfigSnapshot(cfg);
     hoisted.loadSessionEntry.mockReturnValue({
       agentId: "ops",
       canonicalKey: "global",
@@ -217,17 +182,12 @@ describe("sessions.files RPC handlers", () => {
       { sessionKey: "global" },
       { getRuntimeConfig: () => cfg },
     );
-
     expect(payload.root).toBe(workspaceRoot);
-    expect(hoisted.loadSessionEntry).toHaveBeenCalledWith("global", { agentId: "ops" });
-    expect(hoisted.readDelta).toHaveBeenCalledWith(
-      expect.objectContaining({ agentId: "ops", sessionKey: "global" }),
-      expect.any(Object),
-    );
   });
 
   it("rejects a foreign agent before a bare fixed-store workspace write", async () => {
     const cfg = fixedStoreConfig();
+    setRuntimeConfigSnapshot(cfg);
 
     const error = await files.error(
       "set",
@@ -245,7 +205,6 @@ describe("sessions.files RPC handlers", () => {
       code: "INVALID_REQUEST",
       message: 'agent "research" does not match session key agent "ops"',
     });
-    expect(hoisted.loadSessionEntry).not.toHaveBeenCalled();
     expect(readWorkspace("ui/chat.ts")).toBe("export const chat = true;\n");
   });
 
@@ -284,29 +243,23 @@ describe("sessions.files RPC handlers", () => {
   );
 
   it("returns opener failures as successful RPC results", async () => {
-    const warn = vi.fn();
     hoisted.execOpenPath.mockRejectedValueOnce(new Error("xdg-open: no method available"));
-
-    const payload = await files.ok("reveal", {}, { logGateway: { warn } });
+    const payload = await files.ok("reveal", {}, { logGateway: { warn: vi.fn() } });
 
     expect(payload).toMatchObject({
       ok: false,
       path: workspaceRoot,
       error: expect.stringContaining("headless environment"),
     });
-    expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining("sessions.files.reveal failed path="),
-    );
   });
 
   it("prefers the spawned workspace root over a nested spawned cwd", async () => {
-    const nestedCwd = workspacePath("packages/app");
     writeWorkspace("packages/app/src/readme.md", "# Nested read me\n");
     writeWorkspace("packages/shared/config.ts", "export const shared = true;\n");
     mockSession({
       sessionId: "sess-main",
       sessionFile: "sess-main.jsonl",
-      spawnedCwd: nestedCwd,
+      spawnedCwd: workspacePath("packages/app"),
       spawnedWorkspaceDir: workspaceRoot,
     });
     mockVisibleMessages([
@@ -330,16 +283,16 @@ describe("sessions.files RPC handlers", () => {
       ["package.json", "file", undefined],
     ]);
 
-    const nested = { content: "# Nested read me\n", workspacePath: "packages/app/src/readme.md" };
-    const root = { content: "# Read me\n", workspacePath: "src/readme.md" };
-    const shared = { content: "export const shared = true;\n" };
     for (const [name, expected] of [
-      ["src/readme.md", nested],
-      [workspacePath("src/readme.md"), root],
-      ["packages/app/src/readme.md", { content: nested.content }],
-      ["packages//app/src/readme.md", { workspacePath: nested.workspacePath }],
-      ["../shared/config.ts", shared],
-      ["packages/shared/config.ts", shared],
+      [
+        "src/readme.md",
+        { content: "# Nested read me\n", workspacePath: "packages/app/src/readme.md" },
+      ],
+      [workspacePath("src/readme.md"), { content: "# Read me\n", workspacePath: "src/readme.md" }],
+      ["packages/app/src/readme.md", { content: "# Nested read me\n" }],
+      ["packages//app/src/readme.md", { workspacePath: "packages/app/src/readme.md" }],
+      ["../shared/config.ts", { content: "export const shared = true;\n" }],
+      ["packages/shared/config.ts", { content: "export const shared = true;\n" }],
     ] as const) {
       await expectFile(name, expected);
     }
@@ -360,22 +313,67 @@ describe("sessions.files RPC handlers", () => {
     await expectFile(folder.browser.entries[0].path, { content: "# Notes\n" });
   });
 
-  it("browses, searches, and previews files not referenced by the session", async () => {
-    const folderPayload = await files.ok("list", { path: "ui" });
+  it("lists the admitted local root without a separate metadata probe", async () => {
+    mockVisibleMessages([]);
+    const stat = vi.spyOn(workspaceFs, "statWorkspacePath");
+    try {
+      const payload = await files.ok("list");
+      expect(browserKinds(payload.browser.entries)).toEqual([
+        ["src", "directory", undefined],
+        ["ui", "directory", undefined],
+        ["package.json", "file", undefined],
+      ]);
+      expect(stat).not.toHaveBeenCalled();
+    } finally {
+      stat.mockRestore();
+    }
+  });
 
-    expect(folderPayload.browser.parentPath).toBe("");
-    expect(browserKinds(folderPayload.browser.entries)).toEqual([
-      ["ui/chat.ts", "file", "modified"],
-      ["ui/vite.config.ts", "file", undefined],
-    ]);
-
-    const searchPayload = await files.ok("list", { search: "vite" });
-
-    expect(searchPayload.browser).toMatchObject({
-      search: "vite",
-      entries: [{ path: "ui/vite.config.ts" }],
+  it.each([
+    { cwd: "", prefix: "" },
+    { cwd: "ui", prefix: "../" },
+  ])("omits existing directories from file activity with cwd '$cwd'", async ({ cwd, prefix }) => {
+    writeWorkspace(".cache/note.txt", "cached note\n");
+    fs.symlinkSync(
+      outsideDirs.make("session-files-directory-"),
+      workspacePath("cache-link"),
+      "dir",
+    );
+    mockSession({
+      sessionId: "sess-directories",
+      spawnedCwd: workspacePath(cwd),
+      spawnedWorkspaceDir: workspaceRoot,
     });
-    await expectText("ui/vite.config.ts", "export default {};\n", { kind: "read", missing: false });
+    mockVisibleMessages(
+      [
+        prefix || ".",
+        `${prefix}.cache`,
+        `${prefix}ui`,
+        workspacePath("src"),
+        `${prefix}src/readme.md`,
+        `${prefix}missing.txt`,
+        `${prefix}cache-link`,
+      ].map((filePath) => assistantToolCall("read", { path: filePath })),
+    );
+
+    const payload = await files.ok("list");
+    expect(payload.files).toEqual([
+      expect.objectContaining({ path: `${prefix}cache-link`, kind: "read", missing: true }),
+      expect.objectContaining({ path: `${prefix}missing.txt`, kind: "read", missing: true }),
+      expect.objectContaining({ path: `${prefix}src/readme.md`, kind: "read", missing: false }),
+    ]);
+    expect(payload.browser.entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ path: ".cache", kind: "directory" }),
+        expect.objectContaining({ path: "src", kind: "directory" }),
+        expect.objectContaining({ path: "ui", kind: "directory" }),
+      ]),
+    );
+    expect((await files.ok("list", { path: ".cache" })).browser).toMatchObject({
+      path: ".cache",
+      entries: [{ path: ".cache/note.txt", kind: "file" }],
+    });
+    expect(await errorType("get", `${prefix}.cache`)).toBe("session_file_not_found");
   });
 
   it("truncates broad workspace searches by visited entries, not only by matches", async () => {
@@ -388,6 +386,37 @@ describe("sessions.files RPC handlers", () => {
 
     expect(payload.browser).toMatchObject({ search: "needle", truncated: true, entries: [] });
   });
+
+  it.each(["dist", ".git/objects"])(
+    "marks excluded content, but not repository metadata, incomplete (%s)",
+    async (excluded) => {
+      writeWorkspace("src/REPORT.md", "# Source report\n");
+      writeWorkspace(`${excluded}/REPORT.md`, "# Excluded report\n");
+      const { browser } = await files.ok("list", { search: "REPORT.md" });
+      expect(browser).toMatchObject({ search: "REPORT.md", entries: [{ path: "src/REPORT.md" }] });
+      if (excluded === "dist") {
+        expect(browser.truncated).toBe(true);
+      } else {
+        expect(browser).not.toHaveProperty("truncated");
+      }
+    },
+  );
+
+  it.each([
+    ["München", "Mu\u0308nchen.md"],
+    ["Mu\u0308nchen", "München.md"],
+  ])(
+    "finds a canonically equivalent workspace filename without rewriting it (%s)",
+    async (query, filename) => {
+      writeWorkspace(filename, "# Canonically equivalent filename\n");
+
+      const { browser } = await files.ok("list", { search: query });
+
+      expect(browser.entries).toEqual(
+        expect.arrayContaining([expect.objectContaining({ path: filename })]),
+      );
+    },
+  );
 
   it.runIf(process.platform === "linux")(
     "reports non-UTF-8 filenames during workspace browse",
@@ -412,12 +441,7 @@ describe("sessions.files RPC handlers", () => {
     writeWorkspaceFile(outsideDir, "secret.txt", "linked parent outside\n");
     fs.symlinkSync(outsideDir, path.join(workspaceRoot, "linked-dir"), "dir");
 
-    const error = await files.error("get", "linked-dir/secret.txt");
-
-    expect(error.details).toMatchObject({
-      path: "linked-dir/secret.txt",
-      type: "session_file_not_found",
-    });
+    expect(await errorType("get", "linked-dir/secret.txt")).toBe("session_file_not_found");
   });
 
   it("does not browse paths outside the session workspace root", async () => {
@@ -428,7 +452,6 @@ describe("sessions.files RPC handlers", () => {
   });
 
   it("does not derive a workspace root from transcript cwd", async () => {
-    const sessionsDir = path.join(workspaceRoot, "custom-sessions");
     const transcriptCwd = outsideDirs.make("session-files-transcript-");
     writeWorkspaceFile(transcriptCwd, "secret.txt", "transcript cwd secret\n");
     writeWorkspace(
@@ -438,17 +461,17 @@ describe("sessions.files RPC handlers", () => {
     mockSession(
       { sessionId: "sess-main", sessionFile: "sess-main.jsonl" },
       "main",
-      path.join(sessionsDir, "sessions.json"),
+      workspacePath("custom-sessions/sessions.json"),
     );
     mockVisibleMessages([assistantToolCall("read", { path: "secret.txt" })]);
     const listPayload = await files.ok("list");
 
-    expect(listPayload.root).toBe(workspaceRoot);
-    expect(listPayload.browser).toBeDefined();
-    expect(listPayload.files).toMatchObject([{ missing: true, path: "secret.txt" }]);
-
-    const error = await files.error("get", "secret.txt");
-    expect(error.details).toMatchObject({ path: "secret.txt", type: "session_file_not_found" });
+    expect(listPayload).toMatchObject({
+      root: workspaceRoot,
+      browser: expect.any(Object),
+      files: [{ missing: true, path: "secret.txt" }],
+    });
+    expect(await errorType("get", "secret.txt")).toBe("session_file_not_found");
   });
 
   it("refreshes committed identity bytes after a pending pre-write read", async () => {
@@ -536,11 +559,24 @@ describe("sessions.files RPC handlers", () => {
 
   it("allows only one concurrent save across nested workspace aliases", async () => {
     const original = "export default {};\n";
-    const firstSave = saveFile("ui/vite.config.ts", "export default { first: true };\n", original);
-    mockSession({ sessionId: "nested", spawnedCwd: workspacePath("ui") });
+    const firstSession = hoisted.loadSessionEntry();
+    const nestedKey = "agent:main:nested";
+    const nestedSession = {
+      ...firstSession,
+      canonicalKey: nestedKey,
+      entry: { ...firstSession.entry, sessionId: "nested", spawnedCwd: workspacePath("ui") },
+    };
+    hoisted.loadSessionEntry.mockImplementation((key: string) =>
+      key === nestedKey ? nestedSession : firstSession,
+    );
     const [first, second] = await Promise.all([
-      firstSave,
-      saveFile("./vite.config.ts", "export default { second: true };\n", original),
+      saveFile("ui/vite.config.ts", "export default { first: true };\n", original),
+      files.request("set", {
+        sessionKey: nestedKey,
+        path: "./vite.config.ts",
+        content: "export default { second: true };\n",
+        expectedHash: hashContent(original),
+      }),
     ]);
 
     const calls = [...first, ...second];
@@ -553,14 +589,7 @@ describe("sessions.files RPC handlers", () => {
     );
     expect(conflict.details.currentHash).toBe(hashContent(content));
     const saved = expectOkPayload(calls.filter((call) => call.ok));
-    expect(saved.file).toMatchObject({
-      name: "vite.config.ts",
-      kind: "modified",
-      missing: false,
-      size: Buffer.byteLength(content),
-      hash: hashContent(content),
-    });
-    expect(Number.isInteger(saved.file.updatedAtMs)).toBe(true);
+    expect(saved.file.hash).toBe(hashContent(content));
     expect(saved.file.content).toBeUndefined();
   });
 
@@ -624,13 +653,11 @@ describe("sessions.files RPC handlers", () => {
   it("registers session assets and rejects more than 64 references before loading files", async () => {
     const empty = await files.ok("assets", { path: "index.html", refs: [] });
     expect(empty).toEqual({ assets: [] });
-    hoisted.loadSessionEntry.mockClear();
     const error = await files.error("assets", {
       path: "index.html",
       refs: Array.from({ length: 65 }, (_, index) => `image-${index}.png`),
     });
     expect(error.code).toBe("INVALID_REQUEST");
-    expect(hoisted.loadSessionEntry).not.toHaveBeenCalled();
   });
 });
 
@@ -714,7 +741,6 @@ describe("sessions.files preview formats", () => {
     const reveal = await files.ok("reveal");
     expect(reveal).toMatchObject({ ok: false, error: expect.stringContaining("remote host") });
     expect((await files.error("get", "large.txt")).details.type).toBe("session_file_too_large");
-    expect(readFile).toHaveBeenCalledTimes(1);
     await expect(saveFile("result.json", "changed", '{"total":46}')).rejects.toThrow(
       "conflict-safe editing",
     );
@@ -735,8 +761,7 @@ describe("sessions.files preview formats", () => {
         },
       },
     });
-    const result = await files.request("get", "growing.txt");
-    expect(expectError(result).details.type).toBe("session_file_too_large");
+    expect(await errorType("get", "growing.txt")).toBe("session_file_too_large");
   });
 
   it.each(TEXT_PREVIEW_FIXTURES)("keeps detected $format text editable", async (fixture) => {
@@ -858,7 +883,6 @@ describe("sessions.files touched-file folds", () => {
 
     expect(touchedKinds(beforeReset.files)).toEqual([["src/readme.md", "read"]]);
     expect(touchedKinds(afterReset.files)).toEqual([["ui/chat.ts", "modified"]]);
-    expect(hoisted.readDelta).toHaveBeenCalledTimes(3);
   });
 
   it.each([

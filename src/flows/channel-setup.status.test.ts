@@ -73,6 +73,7 @@ function statusSummary(overrides: Partial<Parameters<typeof collectChannelStatus
     cfg: {},
     accountOverrides: {},
     installedPlugins: [],
+    resolveAdapter: () => undefined,
     ...overrides,
   });
 }

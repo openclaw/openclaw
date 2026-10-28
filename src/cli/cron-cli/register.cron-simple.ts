@@ -97,6 +97,13 @@ export function registerCronSimpleCommands(cron: Command) {
     ["enable", "Enable an automation", "cron.update"],
     ["disable", "Disable an automation", "cron.update"],
     ["get", "Get an automation as JSON", "cron.get"],
+    // The Gateway admits bind only from the parent conversation's signed agent turn and
+    // refuses this shell caller with that instruction.
+    [
+      "bind",
+      "Link a key-only automation to its parent conversation (ask the agent in that conversation)",
+      "cron.bind",
+    ],
   ] as const) {
     addGatewayClientOptions(
       createCronOutputCommand(cron, name)

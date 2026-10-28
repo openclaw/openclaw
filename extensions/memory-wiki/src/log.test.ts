@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, it } from "vitest";
-import { loadMemoryWikiVaultIdentity } from "./log.js";
+import { loadMemoryWikiVaultIdentity as loadIdentity } from "./log.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const open = fs.open;
@@ -93,20 +93,20 @@ function observeIO(
 it("replays LF, CRLF and an authoritative final record without a newline", async () => {
   for (const raw of [journal, journal.replaceAll("\n", "\r\n"), journal.trimEnd()]) {
     const { root } = await createJournal(raw);
-    assert.deepEqual(await loadMemoryWikiVaultIdentity(root), expected);
+    assert.deepEqual(await loadIdentity(root), expected);
   }
 });
 
 it("ignores malformed records and partial tails without splitting lone CR", async () => {
   const { root, file } = await createJournal(journal + 'not-json\n{"partial":');
-  assert.deepEqual(await loadMemoryWikiVaultIdentity(root), expected);
+  assert.deepEqual(await loadIdentity(root), expected);
   await fs.writeFile(file, generation + reservation.trimEnd() + "\r" + publication.trimEnd());
-  assert.deepEqual(await loadMemoryWikiVaultIdentity(root), generationOnly);
+  assert.deepEqual(await loadIdentity(root), generationOnly);
 });
 
 it("preserves the first generation and reservation/parent/source rollback checks", async () => {
   const { root, file } = await createJournal(generation + publication);
-  assert.deepEqual(await loadMemoryWikiVaultIdentity(root), generationOnly);
+  assert.deepEqual(await loadIdentity(root), generationOnly);
   await fs.writeFile(
     file,
     journal +
@@ -117,22 +117,17 @@ it("preserves the first generation and reservation/parent/source rollback checks
       publish("next", "no-source", "publication"),
   );
   const nextReservation = { ...expected, compiledCacheReservationId: "next" };
-  assert.deepEqual(await loadMemoryWikiVaultIdentity(root), nextReservation);
+  assert.deepEqual(await loadIdentity(root), nextReservation);
 });
 
-it("decodes an oversized identity across a UTF-8 chunk boundary", async () => {
+it("decodes a long journal across UTF-8 chunks with bounded reads", async () => {
   const prefix = '{"details":{"vaultGeneration":"';
   const identity = "a".repeat(64 * 1024 - Buffer.byteLength(prefix) - 1) + "🦊雪";
   const { root } = await createJournal(
-    row({ vaultGeneration: identity }) + reservation + publication.trimEnd(),
-  );
-  const oversized = { ...expected, vaultGeneration: identity };
-  assert.deepEqual(await loadMemoryWikiVaultIdentity(root), oversized);
-});
-
-it("uses bounded reads on a long journal rather than materializing its history", async () => {
-  const { root } = await createJournal(
-    generation + row({ note: "x".repeat(1024) }).repeat(1024) + reservation + publication,
+    row({ vaultGeneration: identity }) +
+      row({ note: "x".repeat(1024) }).repeat(1024) +
+      reservation +
+      publication.trimEnd(),
   );
   const calls = observeIO({
     beforeRead: (buffer, length) => {
@@ -140,7 +135,7 @@ it("uses bounded reads on a long journal rather than materializing its history",
       assert.ok(length <= buffer.byteLength);
     },
   });
-  assert.deepEqual(await loadMemoryWikiVaultIdentity(root), expected);
+  assert.deepEqual(await loadIdentity(root), { ...expected, vaultGeneration: identity });
   assert.ok(calls.reads > 1);
   assert.equal(calls.closes, 1);
 });
@@ -148,12 +143,12 @@ it("uses bounded reads on a long journal rather than materializing its history",
 it("returns empty for a missing journal and propagates other open failures", async () => {
   const { root, file } = await createJournal();
   await fs.unlink(file);
-  assert.deepEqual(await loadMemoryWikiVaultIdentity(root), empty);
+  assert.deepEqual(await loadIdentity(root), empty);
   const failure = Object.assign(new Error("open failed"), { code: "EACCES" });
   fs.open = async () => {
     throw failure;
   };
-  await assert.rejects(loadMemoryWikiVaultIdentity(root), (error) => error === failure);
+  await assert.rejects(loadIdentity(root), (error) => error === failure);
 });
 
 it.each(["EIO", "ENOENT"])(
@@ -169,34 +164,19 @@ it.each(["EIO", "ENOENT"])(
       },
     });
     if (code === "ENOENT") {
-      assert.deepEqual(await loadMemoryWikiVaultIdentity(root), empty);
+      assert.deepEqual(await loadIdentity(root), empty);
     } else {
-      await assert.rejects(loadMemoryWikiVaultIdentity(root), (error) => error === failure);
+      await assert.rejects(loadIdentity(root), (error) => error === failure);
     }
     assert.deepEqual(calls, { reads: 2, closes: 1 });
   },
 );
 
-it("closes after stat failure and preserves both read and close errors in order", async () => {
+it.each(["statError", "closeError"] as const)("propagates %s and closes once", async (phase) => {
   const { root } = await createJournal();
-  const readError = new Error("stat failed");
-  const closeError = new Error("close failed");
-  const calls = observeIO({ statError: readError, closeError });
-  await assert.rejects(loadMemoryWikiVaultIdentity(root), (error) => {
-    assert.ok(error instanceof AggregateError);
-    assert.deepEqual(error.errors, [readError, closeError]);
-    assert.equal(error.cause, closeError);
-    assert.equal(error.message, "Memory Wiki journal read and close failed.");
-    return true;
-  });
-  assert.equal(calls.closes, 1);
-});
-
-it("does not return an identity when closing the handle fails", async () => {
-  const { root } = await createJournal();
-  const failure = new Error("close failed");
-  const calls = observeIO({ closeError: failure });
-  await assert.rejects(loadMemoryWikiVaultIdentity(root), (error) => error === failure);
+  const failure = new Error(phase);
+  const calls = observeIO({ [phase]: failure });
+  await assert.rejects(loadIdentity(root), (error) => error === failure);
   assert.equal(calls.closes, 1);
 });
 
@@ -212,10 +192,10 @@ it.each([
         ? fs.truncate(file, Buffer.byteLength(generation + reservation) + 10)
         : fs.appendFile(file, append),
   });
-  assert.deepEqual(await loadMemoryWikiVaultIdentity(root), identity);
+  assert.deepEqual(await loadIdentity(root), identity);
   if (reread) {
     fs.open = open;
-    assert.deepEqual(await loadMemoryWikiVaultIdentity(root), expected);
+    assert.deepEqual(await loadIdentity(root), expected);
   }
 });
 
@@ -225,5 +205,5 @@ it("keeps the opened journal when the path is replaced", async () => {
     await fs.rename(file, file + ".old");
     await fs.writeFile(file, row({ vaultGeneration: "replacement" }));
   });
-  assert.deepEqual(await loadMemoryWikiVaultIdentity(root), expected);
+  assert.deepEqual(await loadIdentity(root), expected);
 });

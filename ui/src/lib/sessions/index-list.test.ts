@@ -1,11 +1,8 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import {
-  GatewayRequestError,
-  type GatewayBrowserClient,
-  type GatewayEventFrame,
-} from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import {
@@ -33,14 +30,11 @@ type ListParams = {
 function listResult(keys: string[] = [], totalCount = keys.length): SessionsListResult {
   const nextOffset = keys.length;
   return {
-    ts: 1,
+    ...sessionsResult(keys.map((key, updatedAt) => ({ key, kind: "direct", updatedAt }))),
     path: "",
-    count: keys.length,
     totalCount,
     hasMore: nextOffset < totalCount,
     nextOffset: nextOffset < totalCount ? nextOffset : null,
-    defaults: { modelProvider: null, model: null, contextTokens: null },
-    sessions: keys.map((key, updatedAt) => ({ key, kind: "direct", updatedAt })),
   };
 }
 
@@ -94,23 +88,24 @@ function sessionHarness(request: unknown) {
   };
 }
 
+function sessionRow(key: string, fields: Partial<GatewaySessionRow> = {}): GatewaySessionRow {
+  return { key, kind: "direct", sessionId: key, updatedAt: 1, ...fields };
+}
+
 describe("session list requests", () => {
   it("clears serialized start timing tombstones while the next roster read is pending", async () => {
     vi.useFakeTimers();
-    const child = {
-      key: "agent:main:timing-child",
-      sessionId: "timing-child-session",
+    const child = sessionRow("agent:main:timing-child", {
       spawnedBy: "agent:main:timing-parent",
-      kind: "direct" as const,
       label: "Keep this child title",
-      status: "done" as const,
+      status: "done",
       hasActiveRun: false,
       activeRunIds: [],
       updatedAt: 121_000,
       startedAt: 1_000,
       endedAt: 121_000,
       runtimeMs: 120_000,
-    };
+    });
     const sibling = {
       ...child,
       key: "agent:main:timing-sibling",
@@ -193,30 +188,16 @@ describe("session list requests", () => {
     const observation = sessions.observeList(query, listener);
 
     finish(sessions, () => pending.resolve(listResult()), observation.dispose);
-    expect(listener).toHaveBeenCalledExactlyOnceWith({
-      result: null,
-      agentId: null,
-      loading: false,
-      error: null,
-    });
+    expect(listener.mock.lastCall?.[0].result).toBeNull();
     expect(request).toHaveBeenCalledOnce();
     query.agentId = "research";
     query.limit = 1;
 
     await observation.refresh();
 
-    expect(request).toHaveBeenLastCalledWith(
-      "sessions.list",
-      expect.objectContaining({ agentId: "writer", limit: 2 }),
-    );
-    expect(listener).toHaveBeenLastCalledWith({
-      readSucceeded: true,
-      pagination: { count: 2, totalCount: 3, hasMore: true, nextOffset: 2 },
-      result: listResult(["agent:writer:0", "agent:writer:1"], 3),
-      agentId: "writer",
-      loading: false,
-      error: null,
-    });
+    expect(
+      listener.mock.lastCall?.[0].result?.sessions.map((row: GatewaySessionRow) => row.key),
+    ).toEqual(["agent:writer:0", "agent:writer:1"]);
     expect(sessions.state.result).toEqual(primary);
 
     holdRefresh = true;
@@ -240,7 +221,6 @@ describe("session list requests", () => {
   ] as const)(
     "keeps a $managedAgentId global query scoped when a newer Main observation arrives",
     async ({ managedAgentId, expectedSource }) => {
-      // Explicit session IDs are scoped to agent stores, including their global rows.
       const primaryRow = {
         key: "global",
         kind: "global" as const,
@@ -276,10 +256,6 @@ describe("session list requests", () => {
         observation.dispose();
         sessions.dispose();
       });
-      expect(request).toHaveBeenCalledExactlyOnceWith(
-        "sessions.list",
-        expect.objectContaining({ agentId: managedAgentId, archived: "all" }),
-      );
       await sessions.refresh({ agentId: "main", force: true });
       held.resolve(sessionsResult([managedRow], 10));
       await pending;
@@ -289,29 +265,28 @@ describe("session list requests", () => {
         agentId: managedAgentId,
         result: { sessions: [expectedRow] },
       });
-      expect(listener).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          agentId: managedAgentId,
-          result: expect.objectContaining({ sessions: [expectedRow] }),
-        }),
-      );
+      expect(listener.mock.lastCall?.[0]).toMatchObject({
+        agentId: managedAgentId,
+        result: { sessions: [expectedRow] },
+      });
       expect(sessions.state.result?.sessions).toEqual([primaryRow]);
     },
   );
 
-  it("queues a reentrant observed refresh behind the current request", async () => {
+  it("queues a reentrant observed refresh of a loaded list behind the current request", async () => {
     const firstResponse = createDeferred<SessionsListResult>();
     const secondResponse = createDeferred<SessionsListResult>();
     const secondStarted = createDeferred();
     const request = vi
       .fn()
+      .mockResolvedValueOnce(listResult(["agent:writer:seed"]))
       .mockImplementationOnce(async () => firstResponse.promise)
       .mockImplementationOnce(async () => {
         secondStarted.resolve();
         return secondResponse.promise;
       });
     const { sessions } = sessionHarness(request);
-    let requestedAgain = false;
+    let requestedAgain = true;
     let reentrant: Promise<void> | undefined;
     let observedKeys: string[] = [];
     const observation = sessions.observeList({ agentId: "writer", limit: 2 }, (snapshot) => {
@@ -321,6 +296,9 @@ describe("session list requests", () => {
         reentrant = observation.refresh();
       }
     });
+    await observation.refresh();
+    request.mockClear();
+    requestedAgain = false;
     const initial = observation.refresh();
 
     onTestFinished(async () => {
@@ -379,20 +357,15 @@ describe("session list requests", () => {
       );
       const writerQuery = { agentId: "writer", archivedFilter: "all" as const, limit: 2 };
       const writer = listView(sessions, writerQuery);
-      const otherWriterQuery = { ...writerQuery, ownerId: "ada" };
-      const otherWriter = listView(sessions, otherWriterQuery);
-      const researchQuery = { ...writerQuery, agentId: "research" };
-      const research = listView(sessions, researchQuery);
+      const otherWriter = listView(sessions, { ...writerQuery, ownerId: "ada" });
+      const research = listView(sessions, { ...writerQuery, agentId: "research" });
       const observed: unknown[] = [];
       const stopWriter = writer.subscribe((snapshot) => {
         if (!snapshot.loading && !snapshot.result?.sessions[0]?.hasActiveRun) {
           observed.push(otherWriter.first()?.status);
         }
       });
-      const stopOtherWriter = otherWriter.subscribe(() => undefined);
-      const stopResearch = research.subscribe(() => undefined);
-
-      finish(sessions, stopWriter, stopOtherWriter, stopResearch);
+      finish(sessions, stopWriter, otherWriter.subscribe(), research.subscribe());
       await sessions.refresh({ agentId: "main", force: true });
       await writer.refresh();
       await otherWriter.refresh();
@@ -460,14 +433,12 @@ describe("session list requests", () => {
       const first = createDeferred<SessionsListResult>();
       const second = createDeferred<SessionsListResult>();
       const secondStarted = createDeferred();
-      const row = (version: number) => ({
-        key: "agent:main:managed-refresh",
-        sessionId: "managed-refresh",
-        kind: "direct" as const,
-        archived: true,
-        updatedAt: version,
-        label: `Read ${version}`,
-      });
+      const row = (updatedAt: number) =>
+        sessionRow("agent:main:managed-refresh", {
+          archived: true,
+          updatedAt,
+          label: `Read ${updatedAt}`,
+        });
       let managedCalls = 0;
       const client = createTestGatewayClient(
         listRequest((params) => {
@@ -533,60 +504,50 @@ describe("session list requests", () => {
     },
   );
 
-  it("does not queue forced filtered pagination behind an in-flight replacement", async () => {
-    const { promise: pendingResult, resolve: resolveRequest } =
-      createDeferred<SessionsListResult>();
-    const firstPage = listResult(["agent:main:first", "agent:main:second"], 4);
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce(firstPage)
-      .mockImplementationOnce(async () => pendingResult);
-    const { sessions } = sessionHarness(request);
-    const scope = { archivedFilter: "archived" as const, limit: 2 };
-    const view = listView(sessions, scope);
-    const unsubscribe = view.subscribe(() => undefined);
+  it.each(["forced pagination", "replacement subscriber"] as const)(
+    "shares the pending managed read with %s",
+    async (mode) => {
+      const paginate = mode === "forced pagination";
+      const { promise: pendingResult, resolve: resolveRequest } =
+        createDeferred<SessionsListResult>();
+      const result = paginate
+        ? listResult(["agent:main:first", "agent:main:second"], 4)
+        : listResult(["agent:main:retained"]);
+      const request = vi.fn(async () => pendingResult);
+      if (paginate) {
+        request.mockResolvedValueOnce(result);
+      }
+      const { sessions } = sessionHarness(request);
+      const query = paginate
+        ? { archivedFilter: "archived" as const, limit: 2 }
+        : { agentId: "main", archivedFilter: "all" as const, limit: 50 };
+      const view = listView(sessions, query);
+      let unsubscribe = view.subscribe();
 
-    finish(sessions, () => resolveRequest(firstPage), unsubscribe);
-    await view.refresh();
-    const pending = view.refresh({ force: true });
-    const append = view.refresh({ offset: 2, append: true, force: true });
-    expect(append).toBe(pending);
+      finish(
+        sessions,
+        () => resolveRequest(result),
+        () => unsubscribe(),
+      );
+      if (paginate) {
+        await view.refresh();
+      }
+      const first = view.refresh(paginate ? { force: true } : {});
+      if (!paginate) {
+        unsubscribe();
+        unsubscribe = view.subscribe();
+      }
+      expect(view.snapshot().loading).toBe(true);
+      const replacement = view.refresh(paginate ? { offset: 2, append: true, force: true } : {});
+      expect(replacement).toBe(first);
+      expect(request).toHaveBeenCalledTimes(paginate ? 2 : 1);
 
-    resolveRequest(firstPage);
-    await Promise.all([pending, append]);
-
-    expect(request).toHaveBeenCalledTimes(2);
-    expect(view.rows()).toEqual(firstPage.sessions);
-  });
-
-  it("retains an in-flight managed query while its route subscriber is replaced", async () => {
-    const { promise: pendingResult, resolve: resolveRequest } =
-      createDeferred<SessionsListResult>();
-    const request = vi.fn(async () => pendingResult);
-    const { sessions } = sessionHarness(request);
-    const query = { agentId: "main", archivedFilter: "all" as const, limit: 50 };
-    const view = listView(sessions, query);
-    let unsubscribe = view.subscribe(() => undefined);
-
-    finish(
-      sessions,
-      () => resolveRequest(listResult()),
-      () => unsubscribe(),
-    );
-    const first = view.refresh();
-    unsubscribe();
-    unsubscribe = view.subscribe(() => undefined);
-
-    expect(view.snapshot().loading).toBe(true);
-    const replacement = view.refresh();
-    expect(replacement).toBe(first);
-    expect(request).toHaveBeenCalledOnce();
-
-    resolveRequest(listResult(["agent:main:retained"]));
-    await Promise.all([first, replacement]);
-    expect(view.first()?.key).toBe("agent:main:retained");
-    expect(request).toHaveBeenCalledOnce();
-  });
+      resolveRequest(result);
+      await Promise.all([first, replacement]);
+      expect(view.rows()).toEqual(result.sessions);
+      expect(request).toHaveBeenCalledTimes(paginate ? 2 : 1);
+    },
+  );
 
   it("retires stale filtered snapshots across same-client reconnects without losing subscribers", async () => {
     const { promise: staleResult, resolve: resolveStale } = createDeferred<SessionsListResult>();

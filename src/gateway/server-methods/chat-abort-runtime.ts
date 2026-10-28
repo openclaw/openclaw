@@ -7,6 +7,10 @@ import {
 import { killSubagentRunAdmin } from "../../agents/subagents/registry/subagent-control-kill.js";
 import { ensureSubagentControllerOwnsRun } from "../../agents/subagents/registry/subagent-control-scope.js";
 import {
+  SUBAGENT_KILL_TASK_ERROR,
+  type SubagentAdminKillResult,
+} from "../../agents/subagents/registry/subagent-control.types.js";
+import {
   getCurrentSubagentRunOwner,
   subagentRuns,
 } from "../../agents/subagents/registry/subagent-registry-memory.js";
@@ -25,14 +29,9 @@ import {
 import { captureWorkerInferenceForSession, createChatAbortOps } from "../chat-abort-ops.js";
 import { resolveChatRunOwnerAgentId } from "../chat-run-owner.js";
 import { errorShapeFromError } from "../error-shape.js";
-import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { resolveSessionStoreKey } from "../session-utils.js";
 import { canRequesterAbortChatRun } from "./chat-abort-authorization.js";
 import { abortControlledSubagents } from "./chat-abort-descendants.js";
-import {
-  createQueuedCollectorPublication,
-  getQueuedCollectorCancellationRunId,
-} from "./chat-abort-queued-collector-publication.js";
 import type { ChatSessionAbortParams, ChatSessionAbortResult } from "./chat-abort-runtime.types.js";
 import { prepareChatSessionAbort } from "./chat-abort-session-plan.js";
 import {
@@ -41,8 +40,19 @@ import {
   type QueuedCollectorAbortOutcome,
   type ChatAbortSessionSnapshot,
 } from "./chat-aborted-partial.js";
+import { emitSessionsChanged } from "./session-change-event.js";
 
 export { abortControlledSubagents, descendantAbortError } from "./chat-abort-descendants.js";
+
+function getQueuedCollectorCancellationRunId(result: SubagentAdminKillResult): string | undefined {
+  return result.found &&
+    result.killed &&
+    result.targetState?.state === "terminal" &&
+    result.targetState.task.status === "cancelled" &&
+    result.targetState.task.error === SUBAGENT_KILL_TASK_ERROR
+    ? result.runId
+    : undefined;
+}
 
 /** Stops registry-owned work that has no active executor to reach through ordinary abort. */
 export function abortDormantSubagentSession(
@@ -142,26 +152,23 @@ export function abortDormantSubagentSession(
       ),
     };
     let failure: { error: unknown } | undefined;
-    try {
-      assertCurrent();
-      const projection = getSessionRowProjection(params.context);
-      if (projection) {
-        do {
-          await projection.ensureMaterialized();
-        } while (projection.needsMaterialization);
+    const publishSnapshot = (result: SubagentAdminKillResult) => {
+      if (
+        blocked !== undefined ||
+        (plan && (plan.result.unauthorized || !plan.canCascade)) ||
+        getQueuedCollectorCancellationRunId(result) === undefined
+      ) {
+        return;
       }
-      const publication = createQueuedCollectorPublication({
-        context: params.context,
+      // The event owner prepares current row truth; cancellation retains its exact result.
+      emitSessionsChanged(params.context, {
         sessionKey: params.sessionKey,
         agentId: params.agentId,
-        get sessionId() {
-          return params.sessionId;
-        },
-        defaultAgentId: params.defaultAgentId,
-        projection,
-        canPublish: () =>
-          blocked === undefined && (!plan || (!plan.result.unauthorized && plan.canCascade)),
+        reason: "abort",
       });
+    };
+    try {
+      assertCurrent();
       let prepared = prepareSession === undefined;
       let preparation: Promise<void> | undefined;
       await killSubagentRunAdmin(
@@ -173,7 +180,7 @@ export function abortDormantSubagentSession(
           expectedGeneration: entry.generation,
           expectedOwnerKey: entry.requesterSessionKey,
           onResult: (result) => {
-            publication.publishSnapshot(result, true);
+            publishSnapshot(result);
             if (blocked) {
               outcome = { ok: false, error: blocked };
               return;
@@ -228,7 +235,7 @@ export function abortDormantSubagentSession(
               prepared = true;
             }));
           },
-          preparePublication: publication,
+          onSnapshot: publishSnapshot,
           beforeSessionKill: async () => {
             await params.beforeAbort?.();
             assertCurrent();

@@ -245,6 +245,10 @@ Scope implications:
 
 Reverse-proxy scope capping: if your proxy sends `x-openclaw-scopes` on the Control UI WebSocket upgrade request, OpenClaw caps device enrollment or upgrade requests and the final union of device-authorized and identity-granted session scopes. This header does not grant scopes; it only narrows authority. When `deviceAutoApprove.enabled` is true, the cap also limits the persistent device grant written by [automatic device approval](#automatic-device-approval).
 
+The cap honors operator scope implications. For example, an `operator.write`
+grant with an `operator.read` header retains read access without write access,
+whether or not the grant also lists the redundant `operator.read` scope.
+
 Implications:
 
 - Pairing is no longer the primary gate for device-less Control UI access. A matching `identityScopes` entry can authorize that session without creating a pairing record. When `deviceAutoApprove.enabled` is true, the proxy identity also becomes the approval gate for new browser and native UI operator device enrollment.

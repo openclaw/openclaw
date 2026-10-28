@@ -68,14 +68,6 @@ function normalizeToolPolicyName(value: string): string | undefined {
   return /^[a-z0-9._-]+$/.test(normalized) ? normalized : undefined;
 }
 
-function parseToolNameFromTitle(title: string | undefined | null): string | undefined {
-  if (!title) {
-    return undefined;
-  }
-  const head = normalizeOptionalString(title.split(":", 1)[0]);
-  return head ? normalizeToolPolicyName(head) : undefined;
-}
-
 function resolveToolNameForPermission(
   toolCall: AcpApprovalToolCall | undefined,
 ): string | undefined {
@@ -92,7 +84,10 @@ function resolveToolNameForPermission(
   ]);
   const metaName = fromMeta ? normalizeToolPolicyName(fromMeta) : undefined;
   const rawInputName = fromRawInput ? normalizeToolPolicyName(fromRawInput) : undefined;
-  const titleName = parseToolNameFromTitle(toolCall?.title);
+  const titleHead = toolCall?.title
+    ? normalizeOptionalString(toolCall.title.split(":", 1)[0])
+    : undefined;
+  const titleName = titleHead ? normalizeToolPolicyName(titleHead) : undefined;
   if ((fromMeta && !metaName) || (fromRawInput && !rawInputName)) {
     return undefined;
   }
@@ -127,30 +122,16 @@ function extractPathFromToolTitle(
   return toolName === "read" ? tail : undefined;
 }
 
-function resolveToolPathCandidates(
-  toolCall: AcpApprovalToolCall | undefined,
-  toolName: string,
-): string[] {
-  const locations =
-    toolName !== "read" && Array.isArray(toolCall?.locations) ? toolCall.locations : [];
-  const pathKeys = ["path", "file_path", "filePath"];
-  return [
-    readFirstStringValue(asRecord(toolCall?.rawInput), pathKeys),
-    extractPathFromToolTitle(toolCall?.title ?? undefined, toolName),
-    ...locations.map((location) => readFirstStringValue(asRecord(location), pathKeys)),
-  ].filter((value): value is string => value !== undefined);
-}
-
-function resolveAbsoluteScopedPath(value: string, cwd: string): string | undefined {
-  let candidate = value.trim();
+function isToolPathScopedToCwd(rawPath: string, cwd: string): boolean {
+  let candidate = rawPath.trim();
   if (!candidate) {
-    return undefined;
+    return false;
   }
   // Parse every file-scheme spelling first; alternate URL forms otherwise look cwd-relative.
   if (/^file:/i.test(candidate)) {
     candidate = trySafeFileURLToPath(candidate) ?? "";
     if (!candidate) {
-      return undefined;
+      return false;
     }
   }
   if (candidate === "~") {
@@ -158,14 +139,9 @@ function resolveAbsoluteScopedPath(value: string, cwd: string): string | undefin
   } else if (candidate.startsWith("~/")) {
     candidate = path.join(homedir(), candidate.slice(2));
   }
-  return path.isAbsolute(candidate) ? path.normalize(candidate) : path.resolve(cwd, candidate);
-}
-
-function isToolPathScopedToCwd(rawPath: string, cwd: string): boolean {
-  const absolutePath = resolveAbsoluteScopedPath(rawPath, cwd);
-  if (!absolutePath) {
-    return false;
-  }
+  const absolutePath = path.isAbsolute(candidate)
+    ? path.normalize(candidate)
+    : path.resolve(cwd, candidate);
   return isPathInside(path.resolve(cwd), absolutePath);
 }
 
@@ -181,7 +157,16 @@ export function classifyAcpToolApproval(params: {
 
   const isTrustedToolId = isKnownCoreToolId(toolName) || TRUSTED_SAFE_TOOL_ALIASES.has(toolName);
   if (isTrustedToolId && (toolName === "read" || SAFE_SEARCH_TOOL_IDS.has(toolName))) {
-    const rawPaths = resolveToolPathCandidates(params.toolCall, toolName);
+    const locations =
+      toolName !== "read" && Array.isArray(params.toolCall?.locations)
+        ? params.toolCall.locations
+        : [];
+    const pathKeys = ["path", "file_path", "filePath"];
+    const rawPaths = [
+      readFirstStringValue(asRecord(params.toolCall?.rawInput), pathKeys),
+      extractPathFromToolTitle(params.toolCall?.title ?? undefined, toolName),
+      ...locations.map((location) => readFirstStringValue(asRecord(location), pathKeys)),
+    ].filter((value): value is string => value !== undefined);
     const autoApprove =
       (toolName !== "read" || rawPaths.length > 0) &&
       rawPaths.every((rawPath) => isToolPathScopedToCwd(rawPath, params.cwd));

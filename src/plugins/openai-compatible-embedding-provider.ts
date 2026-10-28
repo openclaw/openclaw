@@ -16,6 +16,7 @@ import {
   createProviderHttpError,
   readProviderJsonResponse,
 } from "../agents/provider-http-errors.js";
+import { attachLocalServiceDiagnostics } from "../agents/provider-local-service-diagnostics.js";
 import type {
   AcquireConfiguredProviderLocalService,
   ConfiguredProviderLocalServiceTarget,
@@ -112,6 +113,33 @@ function normalizeDimensions(value: number): number {
     throw new Error("openai-compatible embeddings: dimensions must be a positive integer.");
   }
   return value;
+}
+
+// Servers that ignore `dimensions` return the model's native size instead of failing.
+// Accepting those vectors would index them under an identity that records the requested size.
+function assertRequestedDimensions(
+  vectors: number[][],
+  dimensions: number | undefined,
+  errorPrefix: string,
+): void {
+  if (dimensions === undefined) {
+    return;
+  }
+  const index = vectors.findIndex((vector) => vector.length !== dimensions);
+  if (index === -1) {
+    return;
+  }
+  const actual = vectors[index]?.length;
+  throw Object.assign(
+    new Error(
+      `${errorPrefix}: expected ${dimensions} dimensions, got ${actual} at index ${index}; the endpoint did not honor the requested dimensions. Remove memory.search.outputDimensionality or request dimensions, or use a server that supports them.`,
+    ),
+    {
+      code: "INVALID_EMBEDDING_RESPONSE",
+      expectedDimensions: dimensions,
+      actualDimensions: actual,
+    },
+  );
 }
 
 function resolveRequestInputType(
@@ -393,6 +421,7 @@ async function postEmbeddingRequest(params: {
             input.length,
             context,
           );
+          assertRequestedDimensions(vectors, client.dimensions, context);
           callOptions?.onUsage?.(extractEmbeddingUsage(payload));
           return vectors;
         } catch (error) {
@@ -403,6 +432,10 @@ async function postEmbeddingRequest(params: {
         }
       },
     });
+  } catch (error) {
+    throw callOptions?.signal?.aborted
+      ? error
+      : attachLocalServiceDiagnostics(error, localServiceLease);
   } finally {
     localServiceLease?.release();
   }

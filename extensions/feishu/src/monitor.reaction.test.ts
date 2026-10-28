@@ -10,6 +10,8 @@ import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runt
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
 import { parseFeishuMessageEvent, type FeishuMessageEvent } from "./bot.js";
+import { createFeishuTestEvent, withFeishuRuntimeDefaults } from "./bot.test-support.js";
+import { FeishuConfigSchema } from "./config-schema.js";
 import * as dedup from "./dedup.js";
 import {
   monitorSingleAccount,
@@ -18,6 +20,7 @@ import {
 } from "./monitor.account.js";
 import { createFeishuTestIngressQueue } from "./monitor.test-mocks.js";
 import { setFeishuRuntime } from "./runtime.js";
+import * as send from "./send.js";
 import type { FeishuMessageInfo, ResolvedFeishuAccount } from "./types.js";
 
 const handleFeishuMessageMock = vi.hoisted(() =>
@@ -92,23 +95,25 @@ function fetchedMessage(overrides: Partial<FeishuMessageInfo> = {}): FeishuMessa
   };
 }
 function resolveReaction(
-  params: Partial<Parameters<typeof resolveReactionSyntheticEvent>[0]> = {},
+  params: Partial<Parameters<typeof resolveReactionSyntheticEvent>[0]> & {
+    fetchMessage?: typeof send.getMessageFeishu;
+  } = {},
 ) {
+  const { cfg = {}, fetchMessage = async () => fetchedMessage(), ...options } = params;
+  vi.spyOn(send, "getMessageFeishu").mockImplementation(fetchMessage);
   return resolveReactionSyntheticEvent({
-    cfg: {},
+    cfg: withFeishuRuntimeDefaults(cfg),
     accountId: "default",
     event: makeReactionEvent(),
     botOpenId: "ou_bot",
-    fetchMessage: async () => fetchedMessage(),
-    uuid: () => "fixed-uuid",
-    ...params,
+    ...options,
   });
 }
 function monitorParams(): Parameters<typeof monitorSingleAccount>[0] {
   return {
     cfg: {
       messages: { inbound: { debounceMs: 0, byChannel: { feishu: 20 } } },
-      channels: { feishu: { enabled: true } },
+      channels: { feishu: FeishuConfigSchema.parse({ enabled: true }) },
     } as ClawdbotConfig,
     account: {
       accountId: "default",
@@ -117,7 +122,7 @@ function monitorParams(): Parameters<typeof monitorSingleAccount>[0] {
       appId: "cli_test",
       appSecret: "secret_test", // pragma: allowlist secret
       domain: "feishu",
-      config: { enabled: true, connectionMode: "websocket" },
+      config: FeishuConfigSchema.parse({ enabled: true, connectionMode: "websocket" }),
     } as ResolvedFeishuAccount,
     runtime: createNonExitingRuntimeEnv(),
     botOpenIdSource: { kind: "prefetched", botOpenId: "ou_bot" },
@@ -164,18 +169,17 @@ function createTextEvent(params: {
   mentions?: FeishuMention[];
   threadId?: string;
 }): FeishuMessageEvent {
-  return {
-    sender: { sender_id: { open_id: "ou_sender" }, sender_type: "user" },
+  return createFeishuTestEvent({
+    ...params,
+    senderOpenId: "ou_sender",
+    senderType: "user",
+    chatId: "oc_group_1",
+    chatType: "group",
     message: {
-      message_id: params.messageId,
-      chat_id: "oc_group_1",
-      chat_type: "group",
-      message_type: "text",
-      content: JSON.stringify({ text: params.text }),
       mentions: params.mentions,
       ...(params.threadId ? { thread_id: params.threadId } : {}),
     },
-  };
+  });
 }
 function mention(openId: string, name: string, key = "@_user_1"): FeishuMention {
   return { key, id: { open_id: openId }, name };
@@ -245,8 +249,7 @@ describe("resolveReactionSyntheticEvent", () => {
       event: makeReactionEvent({ user_id: { user_id: "u_actor_only" }, chat_type: "bogus" }),
     });
     expect(result?.sender.sender_id).toEqual({ user_id: "u_actor_only" });
-    expect(result?.message.chat_id).toBe("oc_group_from_lookup");
-    expect(result?.message.chat_type).toBe("group");
+    expect(result?.message).toMatchObject({ chat_id: "oc_group_from_lookup", chat_type: "group" });
     expect(parseFeishuMessageEvent(result!, "ou_bot").senderOpenId).toBe("u_actor_only");
   });
 
@@ -275,10 +278,9 @@ describe("resolveReactionSyntheticEvent", () => {
   it("drops unverified reactions when sender verification times out", async () => {
     vi.useFakeTimers();
     const pending = resolveReaction({
-      verificationTimeoutMs: 1,
       fetchMessage: () => new Promise<never>(() => {}),
     });
-    await vi.advanceTimersByTimeAsync(1);
+    await vi.advanceTimersByTimeAsync(1_500);
     await expect(pending).resolves.toBeNull();
   });
 
@@ -286,8 +288,7 @@ describe("resolveReactionSyntheticEvent", () => {
     const result = await resolveReaction({
       fetchMessage: async () => fetchedMessage({ chatId: "", chatType: "p2p" }),
     });
-    expect(result?.message.chat_id).toBe("p2p:ou_user1");
-    expect(result?.message.chat_type).toBe("p2p");
+    expect(result?.message).toMatchObject({ chat_id: "p2p:ou_user1", chat_type: "p2p" });
   });
 
   it("drops reactions without chat context when lookup does not provide chat_type", async () => {
@@ -340,7 +341,7 @@ describe("Feishu inbound debounce regressions", () => {
     ]);
   });
 
-  it("releases pending text before a bare abort trigger instead of debouncing it", async () => {
+  it("dispatches a bare abort trigger without flushing pending text", async () => {
     setDedupPassThroughMocks();
     const dispatcher = await setupDebounceMonitor();
     await enqueueText(dispatcher, { messageId: "om_1", text: "first" });
@@ -349,10 +350,13 @@ describe("Feishu inbound debounce regressions", () => {
     await Promise.resolve();
     await Promise.resolve();
     await vi.advanceTimersByTimeAsync(0);
+    expect(handleFeishuMessageMock).toHaveBeenCalledTimes(1);
+    expect(dispatchedMessage().event.message.message_id).toBe("om_stop");
+    expect(JSON.parse(dispatchedMessage().event.message.content)).toEqual({ text: "stop" });
+    await vi.advanceTimersByTimeAsync(25);
     expect(handleFeishuMessageMock).toHaveBeenCalledTimes(2);
-    expect(JSON.parse(dispatchedMessage().event.message.content)).toEqual({ text: "first" });
-    expect(dispatchedMessage(1).event.message.message_id).toBe("om_stop");
-    expect(JSON.parse(dispatchedMessage(1).event.message.content)).toEqual({ text: "stop" });
+    expect(dispatchedMessage(1).event.message.message_id).toBe("om_1");
+    expect(JSON.parse(dispatchedMessage(1).event.message.content)).toEqual({ text: "first" });
   });
 
   it("preserves only the bot mention across separate messages ending without mentions", async () => {
@@ -399,7 +403,7 @@ describe("Feishu inbound debounce regressions", () => {
     const { dispatched, parsed } = parsedDispatch();
     expect(dispatched.message.message_id).toBe("om_literal_last");
     expect(parsed.content).toBe(
-      '<at user_id="ou_alice">Alice @_user_10</at> first\n<at user_id="ou_bob">Bob</at> <at user_id="ou_carol">Carol</at>thanks',
+      '<at user_id="ou_bot">Bot</at> <at user_id="ou_alice">Alice @_user_10</at> first\n<at user_id="ou_bot">Bot</at> <at user_id="ou_bob">Bob</at> <at user_id="ou_carol">Carol</at>thanks',
     );
     expect(parsed.mentionedBot).toBe(true);
     expect(parsed.mentionTargets?.map((target) => target.openId)).toEqual(["ou_bob", "ou_carol"]);

@@ -605,6 +605,7 @@ async function acquireCommittedSimpleCompletionModel(
         agentDir,
         workspaceDir: requestedWorkspaceDir,
         loadRuntimePlugins: true,
+        runtimePluginPurpose: "isolated-completion",
         runtimePluginSelections: [
           { provider: selection.provider, modelId: selection.modelId, agentId },
         ],

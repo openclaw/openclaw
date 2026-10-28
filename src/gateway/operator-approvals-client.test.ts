@@ -80,6 +80,12 @@ vi.mock("./client.js", () => ({
   GatewayClient: MockGatewayClient,
 }));
 
+// mock-isolation: This transport fixture has no native credential worker broker.
+vi.mock("../infra/exec-approvals-socket.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/exec-approvals-socket.js")>()),
+  readExecApprovalsSocket: vi.fn(async () => null),
+}));
+
 const { withOperatorApprovalsGatewayClient } = await import("./operator-approvals-client.js");
 
 const DEFAULT_APPROVAL_CLIENT_DISPLAY_NAME = "Matrix approval (@owner:example.org)";

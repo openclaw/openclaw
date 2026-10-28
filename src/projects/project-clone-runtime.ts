@@ -31,6 +31,32 @@ type ProjectCloneOptions = {
   token?: string;
 };
 const PROJECT_FETCH_TIMEOUT_MS = 60_000;
+const PROJECT_REF_INVENTORY_MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
+const PROJECT_MAINTENANCE_CONFIG = [
+  ["maintenance.auto", "false"],
+  ["gc.auto", "0"],
+  ["pack.threads", "1"],
+  ["pack.windowMemory", "64m"],
+] as const;
+
+/** The checkout lifecycle owner adopts existing managed clones before reuse. */
+export async function configureProjectCheckoutMaintenance(
+  target: string,
+  options: ProjectCloneOptions,
+): Promise<void> {
+  for (const [key, value] of PROJECT_MAINTENANCE_CONFIG) {
+    requireGitCommandOutput(
+      "git config managed maintenance",
+      await runProjectCheckoutGit({ target }, options, [
+        "config",
+        "--local",
+        "--replace-all",
+        key,
+        value,
+      ]),
+    );
+  }
+}
 
 export class ProjectCloneError extends Error {
   constructor(
@@ -178,7 +204,18 @@ export async function cloneProjectCheckout(
       const attempt = await runProjectGitCommand(() =>
         withGitProcessOperation("project.clone", () =>
           runCommandWithTimeout(
-            ["git", "clone", "--no-recurse-submodules", "--", input.url, input.target],
+            [
+              "git",
+              "clone",
+              ...PROJECT_MAINTENANCE_CONFIG.flatMap(([key, value]) => [
+                "--config",
+                `${key}=${value}`,
+              ]),
+              "--no-recurse-submodules",
+              "--",
+              input.url,
+              input.target,
+            ],
             {
               env: commandEnv,
               timeoutMs,
@@ -370,16 +407,20 @@ async function readProjectRemoteRefs(
   input: { target: string },
   options: ProjectCloneOptions,
 ): Promise<Map<string, string>> {
-  const result = await runProjectCheckoutGit(input, options, [
-    "for-each-ref",
-    "--format=%(refname) %(objectname) %(symref)",
-    "refs/remotes/origin",
-  ]);
+  const result = await runProjectCheckoutGit(
+    input,
+    options,
+    ["for-each-ref", "--format=%(refname) %(objectname) %(symref)", "refs/remotes/origin"],
+    {
+      // Refresh needs the complete inventory; diagnostic output keeps its smaller budget.
+      maxOutputBytes: { stdout: PROJECT_REF_INVENTORY_MAX_OUTPUT_BYTES, stderr: 256 * 1024 },
+    },
+  );
   const stdout = requireGitCommandOutput("git for-each-ref", result, (_command, failed) =>
     failed.outputLimitExceeded
       ? new ProjectCloneError(
           "clone_failed",
-          "Git returned too many managed repository refs to refresh safely. Remove obsolete remote branches, then retry.",
+          `The managed repository ref inventory exceeded the ${PROJECT_REF_INVENTORY_MAX_OUTPUT_BYTES / (1024 * 1024)} MiB refresh limit. Choose a base already available in the checkout or ask the Gateway administrator for help.`,
         )
       : new ProjectCloneError("clone_failed", "Git could not read the managed repository refs."),
   );

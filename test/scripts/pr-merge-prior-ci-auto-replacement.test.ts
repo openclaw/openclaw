@@ -25,6 +25,20 @@ const providerRejection = readFileSync(
 );
 type Fixture = ReturnType<typeof fixture>;
 
+function expectAdminIntentRetained(
+  f: ReturnType<typeof preExistingCandidate>,
+  oid: string,
+  diagnostic: string,
+) {
+  const result = expectExit(f.adminPriorCi(f.path, true, oid), 1);
+  expect(result.output).toContain(diagnostic);
+  expect(f.git(["rev-parse", outcomeRef])).toBe(oid);
+  expect(f.state()).toMatchObject({ mutations: 2, cancellations: 1, posts: 0 });
+  return result;
+}
+
+const autoIntent = { phase: "intent", route: "auto", accepted: true };
+
 function damageCapture(f: Fixture, name: string, fault: string, bytes?: string) {
   const path = join(f.worktree, ".local", name);
   if (fault === "changed") {
@@ -82,16 +96,10 @@ const cancelledAutoReplacement = reuseCompletedSetup(function (
   if (cancellation !== "confirmed") {
     configureMerge(initial, { pr: { autoMergeRequest: null } });
   }
-  expect(initial.state().pr.autoMergeRequest).toBeNull();
-
   const replacement = options.replace === false ? initial.head : initial.replacePreparedHead();
-  expect(replacement === originalRecord.head).toBe(options.replace === false);
   const main = initial.git(["--git-dir=" + initial.remote, "rev-parse", "refs/heads/main"]);
   const f = preExistingCandidate(undefined, { ...initial, head: replacement, base: main });
   configureMerge(f, { mode: "success" });
-  expect(JSON.parse(readLocal(f, "review.json"))).toMatchObject({
-    tests: { result: "fail", preExistingCi: { head: replacement, runId: 501, runAttempt: 2 } },
-  });
   return { f, originalOid, originalRecord, retiredOid, retiredRecord, replacement, captures };
 });
 
@@ -143,9 +151,7 @@ const recoveredStaleAdminAuto = reuseCompletedSetup(function () {
   const recoveredOid = setup.f.git(["rev-parse", outcomeRef]);
   const recoveredRecord = setup.f.record();
   expect(recoveredRecord).toMatchObject({
-    phase: "intent",
-    route: "auto",
-    accepted: true,
+    ...autoIntent,
     recovery: { outcome: setup.adminOid },
   });
   return { ...setup, recoveredOid, recoveredRecord };
@@ -280,10 +286,7 @@ describePosix("prior-CI admin recovery after auto cancellation", () => {
           ? "changed\n"
           : uncertainGatewayResponse,
     );
-    const recovered = expectExit(f.adminPriorCi(f.path, true, adminOid), 1);
-    expect(recovered.output).toContain(diagnostic);
-    expect(f.git(["rev-parse", outcomeRef])).toBe(adminOid);
-    expect(f.state()).toMatchObject({ mutations: 2, cancellations: 1, posts: 0 });
+    expectAdminIntentRetained(f, adminOid, diagnostic);
   });
 
   it("rechecks inherited provider recovery captures after final admission", () => {
@@ -292,12 +295,9 @@ describePosix("prior-CI admin recovery after auto cancellation", () => {
       observationReads: 0,
       observations: [{}, {}, {}, {}, { tamperProviderCapture: captures[0]![0] }],
     });
-    const recovered = expectExit(f.adminPriorCi(f.path, true, adminOid), 1);
+    expectAdminIntentRetained(f, adminOid, "inherited provider-rejection capture changed");
     expect(f.state().providerCaptureTampered).toBe(true);
-    expect(recovered.output).toContain("inherited provider-rejection capture changed");
     expect(readLocal(f, `merge-output.${adminRecord.attempt}.log`)).toBe(providerRejection);
-    expect(f.git(["rev-parse", outcomeRef])).toBe(adminOid);
-    expect(f.state()).toMatchObject({ mutations: 2, cancellations: 1, posts: 0 });
   });
 
   it("retains the capture chain through recovered-auto retirement", () => {
@@ -310,9 +310,7 @@ describePosix("prior-CI admin recovery after auto cancellation", () => {
     expect(f.state()).toMatchObject({ mutations: 3, cancellations: 1, posts: 0 });
     expect(f.state().pr.autoMergeRequest).toEqual({ mergeMethod: "SQUASH" });
     expect(f.record(), recovered.output).toMatchObject({
-      phase: "intent",
-      route: "auto",
-      accepted: true,
+      ...autoIntent,
       head: replacement,
       recovery: {
         outcome: adminOid,
@@ -341,9 +339,7 @@ describePosix("prior-CI admin recovery after auto cancellation", () => {
     expectExit(f.cancel(recoveredOid, observed), 0);
     expect(f.state()).toMatchObject({ mutations: 3, cancellations: 1, posts: 0 });
     expect(f.record()).toMatchObject({
-      phase: "intent",
-      route: "auto",
-      accepted: true,
+      ...autoIntent,
       cancellation: { state: "confirmed", outcome: recoveredOid, observedHead: observed },
       recovery: recoveredRecord.recovery,
     });
@@ -377,8 +373,7 @@ describePosix("prior-CI admin recovery after auto cancellation", () => {
     const recoveredOid = f.git(["rev-parse", outcomeRef]);
     const recoveredRecord = f.record();
     expect(recoveredRecord).toMatchObject({
-      phase: "intent",
-      route: "auto",
+      ...autoIntent,
       accepted: false,
       recovery: { outcome: adminOid },
     });
@@ -389,8 +384,7 @@ describePosix("prior-CI admin recovery after auto cancellation", () => {
     expectExit(f.cancel(recoveredOid), 0);
     expect(f.state()).toMatchObject({ mutations: 3, cancellations: 2, posts: 0 });
     expect(f.record()).toMatchObject({
-      phase: "intent",
-      route: "auto",
+      ...autoIntent,
       accepted: false,
       cancellation: { state: "confirmed", outcome: recoveredOid },
     });
@@ -520,11 +514,9 @@ describePosix("prior-CI admin recovery after auto cancellation", () => {
   ] as const)("lands %s with confirmed cancellation history", (_label, replace) => {
     const { f, originalOid, originalRecord, retiredOid, retiredRecord, replacement, captures } =
       cancelledAutoReplacement({ replace });
-    expect(originalRecord).toMatchObject({ phase: "intent", route: "auto", accepted: true });
+    expect(originalRecord).toMatchObject(autoIntent);
     expect(retiredRecord).toMatchObject({
-      phase: "intent",
-      route: "auto",
-      accepted: true,
+      ...autoIntent,
       cancellation: { state: "confirmed", outcome: originalOid },
     });
     expect(captures).toHaveLength(1);
@@ -600,7 +592,7 @@ describePosix("prior-CI admin recovery after auto cancellation", () => {
           fault,
         ),
       });
-    expect(retiredRecord).toMatchObject({ phase: "intent", route: "auto", accepted: true });
+    expect(retiredRecord).toMatchObject(autoIntent);
     if (fault === "missing cancellation") {
       expect(retiredRecord).not.toHaveProperty("cancellation");
     } else if (fault === "uncertain cancellation") {

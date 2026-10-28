@@ -7,6 +7,16 @@ import type {
   SessionBindingRecord,
 } from "./session-binding.types.js";
 
+export function warnLegacySessionBindingMethod(
+  method: "listBySession" | "resolveByConversation" | "inspectByConversation" | "touch",
+): void {
+  warnPluginSdkDeprecation({
+    family: "conversation-bindings",
+    method: `SessionBindingAdapter.${method}`,
+    replacement: `SessionBindingAdapterV2.${method}Async`,
+  });
+}
+
 /** Projects plugin-owned lifecycle facts without normalizing its identity or expiry policy. */
 export function projectThreadBindingRecord(
   record: {
@@ -58,11 +68,9 @@ function createAccountScopedBindingAdapter<T>(params: {
   listBySessionKey: (targetSessionKey: string) => T[];
   getByConversation: (ref: ConversationRef) => T | null | undefined;
   touchConversation: (conversationId: string, at?: number) => unknown;
-  touchConversationAsync?: (conversationId: string, at?: number) => Promise<unknown>;
   unbindConversation: (conversationId: string, reason: string) => T | null | Promise<T | null>;
   unbindBySessionKey: (targetSessionKey: string, reason: string) => T[] | Promise<T[]>;
 }): SessionBindingAdapter {
-  const touchAsync = params.touchConversationAsync;
   const conversationIdFromBinding = (bindingId?: string) =>
     resolveThreadBindingConversationIdFromBindingId({ accountId: params.accountId, bindingId });
   return {
@@ -71,43 +79,21 @@ function createAccountScopedBindingAdapter<T>(params: {
     capabilities: params.capabilities,
     bind: params.bind,
     listBySession: (sessionKey) => {
-      warnPluginSdkDeprecation({
-        family: "conversation-bindings",
-        method: "SessionBindingAdapter.listBySession",
-        replacement: "SessionBindingAdapterV2.listBySessionAsync",
-      });
+      warnLegacySessionBindingMethod("listBySession");
       return params.listBySessionKey(sessionKey).map(params.project);
     },
     resolveByConversation: (ref) => {
-      warnPluginSdkDeprecation({
-        family: "conversation-bindings",
-        method: "SessionBindingAdapter.resolveByConversation",
-        replacement: "SessionBindingAdapterV2.resolveByConversationAsync",
-      });
+      warnLegacySessionBindingMethod("resolveByConversation");
       const record = ref.channel === params.channel ? params.getByConversation(ref) : null;
       return record ? params.project(record) : null;
     },
     touch: (bindingId, at) => {
-      warnPluginSdkDeprecation({
-        family: "conversation-bindings",
-        method: "SessionBindingAdapter.touch",
-        replacement: "SessionBindingAdapterV2.touchAsync",
-      });
+      warnLegacySessionBindingMethod("touch");
       const conversationId = conversationIdFromBinding(bindingId);
       if (conversationId) {
         params.touchConversation(conversationId, at);
       }
     },
-    ...(touchAsync
-      ? {
-          touchAsync: async (bindingId: string, at?: number) => {
-            const conversationId = conversationIdFromBinding(bindingId);
-            if (conversationId) {
-              await touchAsync(conversationId, at);
-            }
-          },
-        }
-      : {}),
     unbind: async (input) => {
       if (input.targetSessionKey?.trim()) {
         return (await params.unbindBySessionKey(input.targetSessionKey, input.reason)).map(

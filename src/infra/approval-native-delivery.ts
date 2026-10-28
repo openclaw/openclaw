@@ -1,4 +1,3 @@
-// Native delivery contract for approval prompts and responses.
 import type {
   ChannelApprovalNativeAdapter,
   ChannelApprovalNativeAdapterAsync,

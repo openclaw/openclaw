@@ -1,3 +1,4 @@
+import { floorPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -91,10 +92,7 @@ function normalizeVoiceWakeRoutingConfig(input: unknown): VoiceWakeRoutingConfig
         .map((entry) => normalizeRouteRule(entry))
         .filter((entry): entry is VoiceWakeRouteRule => Boolean(entry))
     : [];
-  const updatedAtMs =
-    typeof rec.updatedAtMs === "number" && Number.isFinite(rec.updatedAtMs) && rec.updatedAtMs > 0
-      ? Math.floor(rec.updatedAtMs)
-      : 0;
+  const updatedAtMs = floorPositiveFiniteNumber(rec.updatedAtMs) ?? 0;
   return {
     version: 1,
     defaultTarget,
@@ -115,21 +113,6 @@ export async function loadVoiceWakeRoutingConfig(
 
 type VoiceWakeResolvedRoute = { mode: "current" } | { agentId: string } | { sessionKey: string };
 
-function resolveVoiceWakeRouteTarget(
-  routeTarget: VoiceWakeRouteTarget | undefined,
-): VoiceWakeResolvedRoute {
-  if (routeTarget?.mode === "current") {
-    return { mode: "current" };
-  }
-  if (routeTarget?.agentId) {
-    return { agentId: routeTarget.agentId };
-  }
-  if (routeTarget?.sessionKey) {
-    return { sessionKey: routeTarget.sessionKey };
-  }
-  return { mode: "current" };
-}
-
 export function resolveVoiceWakeRouteByTrigger(params: {
   trigger: string | undefined;
   config: VoiceWakeRoutingConfig;
@@ -138,5 +121,5 @@ export function resolveVoiceWakeRouteByTrigger(params: {
   const matched = normalizedTrigger
     ? params.config.routes.find((route) => route.trigger === normalizedTrigger)
     : undefined;
-  return resolveVoiceWakeRouteTarget(matched ? matched.target : params.config.defaultTarget);
+  return matched ? matched.target : params.config.defaultTarget;
 }

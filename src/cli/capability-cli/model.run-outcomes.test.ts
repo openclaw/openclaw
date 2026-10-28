@@ -1,20 +1,15 @@
 import "../../test-utils/prepare-compiled-subprocesses.js";
 import { Command } from "commander";
 import { beforeEach, expect, it, vi } from "vitest";
+import type { NormalizedUsage, UsageLike } from "../../agents/usage.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { registerModelCapabilityCommands } from "./model.js";
 
-const mocks = vi.hoisted(() => ({
-  runtime: {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn((code: number) => {
-      throw new Error(`exit ${code}`);
-    }),
-    writeJson: vi.fn(),
-    writeStdout: vi.fn(),
-  },
+const mocks = await vi.hoisted(async () => ({
+  runtime: (await import("../test-runtime-mock.js")).createInertRuntime(vi),
   complete: vi.fn(),
   callGateway: vi.fn(),
+  acquire: vi.fn(),
 }));
 
 vi.mock("../../runtime.js", async (importOriginal) => ({
@@ -45,148 +40,150 @@ vi.mock("./local-account-secrets.js", () => ({
 
 // mock-isolation: Supply controlled provider completions without opening auth stores or transports.
 vi.mock("../../agents/simple-completion-runtime.js", () => ({
-  acquireSimpleCompletionModelForAgent: vi.fn(async () => ({
-    async [Symbol.asyncDispose]() {},
-    selection: { provider: "openai", modelId: "gpt-5.4", agentDir: "/tmp/agent" },
-    model: { provider: "openai", id: "gpt-5.4", maxTokens: 128 },
-    auth: { apiKey: "sk-test", source: "env:TEST_API_KEY", mode: "api-key" },
-  })),
+  acquireSimpleCompletionModelForAgent: mocks.acquire,
   completeWithPreparedSimpleCompletionModel: mocks.complete,
 }));
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.acquire.mockResolvedValue({
+    async [Symbol.asyncDispose]() {},
+    selection: { provider: "openai", modelId: "gpt-5.4", agentDir: "/tmp/agent" },
+    model: { provider: "openai", id: "gpt-5.4", maxTokens: 128, input: ["text"] },
+    auth: { apiKey: "sk-test", source: "env:TEST_API_KEY", mode: "api-key" },
+  });
 });
 
 async function runModel(...options: string[]) {
-  const program = new Command();
-  program.exitOverride();
+  const program = new Command().exitOverride();
   registerModelCapabilityCommands(program);
   return await program.parseAsync(["model", "run", "--prompt", "hello", "--json", ...options], {
     from: "user",
   });
 }
 
-it.each([
-  {
-    stopReason: "stop",
-    error: 'Model returned reasoning but no text output for provider "openai" model "gpt-5.4".',
-  },
-  {
-    stopReason: "length",
-    error:
-      'Model returned reasoning but no text output for provider "openai" model "gpt-5.4". It stopped at the output token limit while reasoning; a lower --thinking level may leave room for text.',
-  },
-  {
-    stopReason: "error",
-    errorMessage: "socket hang up",
-    error: 'No text output returned for provider "openai" model "gpt-5.4": socket hang up.',
-  },
-  {
-    stopReason: "aborted",
-    error: 'No text output returned for provider "openai" model "gpt-5.4".',
-  },
-  {
-    stopReason: "error",
-    text: "partial answer",
-    errorMessage: "socket hang up",
-    error: 'Model run failed for provider "openai" model "gpt-5.4": socket hang up.',
-  },
-  {
-    stopReason: "error",
-    text: "partial answer",
-    error: 'Model run failed for provider "openai" model "gpt-5.4".',
-  },
-  {
-    stopReason: "aborted",
-    text: "partial answer",
-    errorMessage: "request cancelled",
-    error: 'Model run aborted for provider "openai" model "gpt-5.4": request cancelled.',
-  },
-  {
-    stopReason: "aborted",
-    text: "partial answer",
-    error: 'Model run aborted for provider "openai" model "gpt-5.4".',
-  },
-])(
-  "rejects an unsuccessful local model response (stopReason $stopReason, text $text)",
-  async ({ stopReason, text = " ", errorMessage, error }) => {
-    mocks.complete.mockResolvedValueOnce({
-      role: "assistant",
-      content: [
-        { type: "thinking", thinking: "private chain of thought" },
-        { type: "text", text },
-      ],
-      stopReason,
-      ...(errorMessage ? { errorMessage } : {}),
-    });
-    await expect(runModel()).rejects.toThrow("exit 1");
-
-    expect(mocks.runtime.error.mock.calls.map((call) => call[0])).toEqual([error]);
+const target = 'for provider "openai" model "gpt-5.4"';
+const reasoningOnly = `Model returned reasoning but no text output ${target}.`;
+const limitHint =
+  " It stopped at the output token limit while reasoning; a lower --thinking level may leave room for text.";
+it.each<[string, string, string, string | undefined, string | undefined]>([
+  ["local", "stop", " ", undefined, reasoningOnly],
+  ["local", "length", " ", undefined, reasoningOnly + limitHint],
+  ["local", "error", " ", "socket hang up", `No text output returned ${target}: socket hang up.`],
+  ["local", "aborted", " ", undefined, `No text output returned ${target}.`],
+  ["local", "error", "partial", "socket hang up", `Model run failed ${target}: socket hang up.`],
+  ["local", "aborted", "partial", undefined, `Model run aborted ${target}.`],
+  ["gateway", "error", "stream failed", "failed", "stream failed"],
+  ["gateway", "timeout", "", "aborted", "aborted"],
+  ["gateway", "cancelled", "", undefined, "Gateway model run cancelled."],
+  ["gateway", "ok", "", undefined, undefined],
+  ["gateway", "completed", "", undefined, undefined],
+])("handles %s status %s (%j)", async (transport, status, text, detail, error) => {
+  mocks.complete.mockResolvedValue({
+    role: "assistant",
+    stopReason: status,
+    errorMessage: detail,
+    content: [
+      { type: "thinking", thinking: "reasoning" },
+      { type: "text", text },
+    ],
+  });
+  mocks.callGateway.mockResolvedValue({
+    status,
+    summary: detail,
+    result: {
+      payloads: [{ text: error ? "partial" : "complete answer" }],
+      ...(text ? { meta: { error: { kind: "incomplete_turn", message: text } } } : {}),
+    },
+  });
+  const run = runModel(`--${transport}`);
+  if (error) {
+    await expect(run).rejects.toThrow("exit 1");
+    expect(mocks.runtime.error).toHaveBeenCalledExactlyOnceWith(error);
     expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
-  },
-);
-
-it.each(["stop", "length"])(
-  "keeps text output successful for stopReason %s",
-  async (stopReason) => {
-    mocks.complete.mockResolvedValueOnce({
-      role: "assistant",
-      content: [{ type: "text", text: "complete answer" }],
-      stopReason,
-    });
-    await runModel();
-
+  } else {
+    await run;
     expect(mocks.runtime.error).not.toHaveBeenCalled();
-    expect(mocks.runtime.exit).not.toHaveBeenCalled();
     expect(mocks.runtime.writeJson).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
         ok: true,
-        outputs: [{ text: "complete answer", mediaUrl: null }],
+        outputs: [expect.objectContaining({ text: "complete answer" })],
       }),
       2,
     );
-  },
-);
+  }
+});
+
+for (const transport of ["local", "gateway"] as const) {
+  it.each<[string, UsageLike | undefined, NormalizedUsage | undefined]>([
+    ["absent", undefined, undefined],
+    ["adapter-default zeros", { input: 0, output: 0, total: 0, cost: { total: 0 } }, undefined],
+    [
+      "reported",
+      {
+        input: 17,
+        output: 4,
+        totalTokens: 21,
+        cost: { total: 0.25, totalOrigin: "provider-billed" },
+      },
+      { input: 17, output: 4, total: 21, cost: { total: 0.25, totalOrigin: "provider-billed" } },
+    ],
+    [
+      "measured zeros",
+      { input: 0, output: 0, totalTokens: 0, usageReport: { state: "available" } },
+      { input: 0, output: 0, total: 0, usageReport: { state: "available" } },
+    ],
+    [
+      "unavailable",
+      { input: 17, usageReport: { state: "unavailable" } },
+      { usageReport: { state: "unavailable" }, contextUsage: { state: "unavailable" } },
+    ],
+  ])(`preserves ${transport} usage observations: %s`, async (_name, usage, expected) => {
+    const gatewayUsage = expected ?? usage;
+    const agentMeta = { usage: gatewayUsage, lastCallUsage: gatewayUsage };
+    mocks.complete.mockResolvedValue({ content: [{ type: "text", text: "OK" }], usage });
+    mocks.callGateway.mockResolvedValue({
+      result: { payloads: [{ text: "OK", mediaUrl: null }], meta: { agentMeta } },
+    });
+    await runModel(`--${transport}`);
+    const json = JSON.stringify(mocks.runtime.writeJson.mock.calls[0]?.[0]);
+    const envelope = JSON.parse(json);
+    expect(envelope.usage).toEqual(expected);
+    expect(envelope.lastCallUsage).toEqual(expected);
+  });
+}
 
 it.each([
-  { status: "error", detail: "stream failed", summary: "failed", expected: "stream failed" },
-  { status: "timeout", summary: "aborted", expected: "aborted" },
-  { status: "cancelled", expected: "Gateway model run cancelled." },
-])(
-  "rejects a Gateway model run with status $status",
-  async ({ status, detail, summary, expected }) => {
-    mocks.callGateway.mockResolvedValueOnce({
-      status,
-      summary,
-      result: {
-        payloads: [{ text: "partial answer" }],
-        meta: detail ? { error: { kind: "incomplete_turn", message: detail } } : {},
-      },
-    });
-    await expect(runModel("--gateway")).rejects.toThrow("exit 1");
-
-    expect(mocks.runtime.error).toHaveBeenCalledExactlyOnceWith(expected);
-    expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
-  },
-);
-
-it.each(["ok", "completed"])(
-  "keeps Gateway model output successful for status %s",
-  async (status) => {
-    mocks.callGateway.mockResolvedValueOnce({
-      status,
-      result: { payloads: [{ text: "complete answer" }] },
+  ["unavailable", 48],
+  ["complete", 0],
+  ["unavailable", 0],
+] as const)(
+  "preserves %s Gateway billing totals of %s separately from last-call usage",
+  async (costStatus, total) => {
+    const usage = {
+      total,
+      costStatus,
+      ...(total ? { input: 40, output: 8 } : {}),
+      ...(costStatus === "complete" ? { cost: { total: 0 } } : {}),
+    };
+    const lastCallUsage = total ? { input: 7, output: 2, total: 9 } : undefined;
+    mocks.callGateway.mockResolvedValue({
+      result: { meta: { agentMeta: { usage, lastCallUsage } } },
     });
     await runModel("--gateway");
-
-    expect(mocks.runtime.exit).not.toHaveBeenCalled();
-    expect(mocks.runtime.writeJson).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        ok: true,
-        outputs: [{ text: "complete answer", mediaUrl: undefined, mediaUrls: undefined }],
-      }),
-      2,
-    );
+    expect(mocks.runtime.writeJson.mock.calls[0]?.[0]).toMatchObject({
+      usage: { total, costStatus, ...(costStatus === "complete" ? { cost: { total: 0 } } : {}) },
+      lastCallUsage: total ? { total: 9 } : undefined,
+    });
   },
 );
+
+it("rejects --file before sending it to a text-only local model", async () =>
+  withOpenClawTestState({}, async (state) => {
+    const file = await state.writeText("pixel.svg", '<svg xmlns="http://www.w3.org/2000/svg"/>');
+    await expect(runModel("--local", "--file", file)).rejects.toThrow("exit 1");
+    expect(mocks.complete).not.toHaveBeenCalled();
+    expect(mocks.runtime.error).toHaveBeenCalledExactlyOnceWith(
+      'Model "openai/gpt-5.4" does not accept image input, so --file cannot be sent to it. Use an image-capable model, run openclaw infer image describe, or add --gateway to describe images for text-only models.',
+    );
+  }));

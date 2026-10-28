@@ -3,7 +3,7 @@ import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayEventFrame } from "../../api/gateway.ts";
-import type { SessionsListResult } from "../../api/types.ts";
+import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { clearBootRecords, type BootRecord } from "../../app/boot-record.ts";
 import * as snapshotPrewarm from "../../pages/chat/session-snapshot-prewarm.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
@@ -27,26 +27,26 @@ const bootRecord: BootRecord = {
   groups: [{ name: "Work", position: 0 }],
   sectionOrder: ["category:Work"],
 };
+function directRow(name: string, fields: Partial<GatewaySessionRow> = {}): GatewaySessionRow {
+  return { key: `agent:main:${name}`, kind: "direct", ...fields };
+}
+
 function roster(): BootRoster {
   return {
     agentId: "main",
     result: sessionsResult(
       [
-        {
-          key: "agent:main:deleted",
+        directRow("deleted", {
           sessionId: "deleted",
-          kind: "direct",
           agentId: "main",
           derivedTitle: "Removed later",
-        },
-        {
-          key: "agent:main:kept",
+        }),
+        directRow("kept", {
           sessionId: "kept",
-          kind: "direct",
           agentId: "main",
           derivedTitle: "Stale title",
           lastMessagePreview: "Stale preview",
-        },
+        }),
       ],
       1,
     ),
@@ -174,13 +174,21 @@ function harness(
   };
 }
 
+async function connectCached(h: ReturnType<typeof harness>) {
+  await h.sessions.whenCachedRosterSettled();
+  h.connect();
+  await vi.waitFor(() =>
+    expect(h.request).toHaveBeenCalledWith("sessions.list", expect.anything()),
+  );
+}
+
 describe("session capability warm roster", () => {
   it.each(["client", "profile", "credentials", "gateway", "stop"])(
     "retains canonical display identity through transport loss, then retires it on %s",
     async (retirement) => {
       const h = harness({ withBootRecord: false });
       h.connect();
-      const live = sessionsResult([{ key: "agent:main:retained", kind: "direct" }], 2);
+      const live = sessionsResult([directRow("retained")], 2);
       h.live.resolve(live);
       await h.sessions.refresh();
       expect(h.sessions.presentation.result).toEqual(live);
@@ -253,11 +261,7 @@ describe("session capability warm roster", () => {
     "preserves event ordering during cached startup (event updatedAt: %s)",
     async (updatedAt) => {
       const h = harness();
-      await h.sessions.whenCachedRosterSettled();
-      h.connect();
-      await vi.waitFor(() =>
-        expect(h.request).toHaveBeenCalledWith("sessions.list", expect.anything()),
-      );
+      await connectCached(h);
       const history = {
         key: "agent:main:kept",
         sessionId: "kept",
@@ -379,7 +383,7 @@ describe("session capability warm roster", () => {
     expect(h.sessions.state.result).toBeNull();
 
     h.connect();
-    const live = sessionsResult([{ key: "agent:main:live", kind: "direct" }], 2);
+    const live = sessionsResult([directRow("live")], 2);
     h.live.resolve(live);
     await vi.waitFor(() => expect(h.sessions.state.result).toEqual(live));
     expect(h.sessions.state.resultCached).toBe(false);
@@ -389,16 +393,9 @@ describe("session capability warm roster", () => {
     "replaces cached presentation while retaining a newer live observation: %s",
     async (observeWhileLoading) => {
       const h = harness();
-      await h.sessions.whenCachedRosterSettled();
-      h.connect();
-      await vi.waitFor(() =>
-        expect(h.request).toHaveBeenCalledWith("sessions.list", expect.anything()),
-      );
+      await connectCached(h);
       expect(h.sessions.captureBootRoster()).toBeNull();
-      const live = sessionsResult(
-        [{ key: "agent:main:kept", sessionId: "kept", kind: "direct" }],
-        2,
-      );
+      const live = sessionsResult([directRow("kept", { sessionId: "kept" })], 2);
       const observed = observeWhileLoading
         ? { ...live.sessions[0]!, label: "Confirmed live name" }
         : undefined;
@@ -429,18 +426,10 @@ describe("session capability warm roster", () => {
     "keeps omitted $source rows only for the selected session during bootstrap: $selected",
     async ({ source, selected }) => {
       const h = harness();
-      const canonical = {
-        key: "agent:main:live",
-        sessionId: "live",
-        kind: "direct" as const,
-      };
+      const canonical = directRow("live", { sessionId: "live" });
       const live = sessionsResult([canonical], 2);
       try {
-        await h.sessions.whenCachedRosterSettled();
-        h.connect();
-        await vi.waitFor(() =>
-          expect(h.request).toHaveBeenCalledWith("sessions.list", expect.anything()),
-        );
+        await connectCached(h);
         const observed = {
           key: selected ? "agent:main:deleted" : "agent:main:kept",
           sessionId: selected ? "deleted" : "kept",
@@ -564,7 +553,7 @@ describe("session capability warm roster", () => {
     expect(h.sessions.state.result).toBeNull();
     expect(h.sessions.state.groups).toEqual([]);
     expect(h.sessions.state.resultCached).toBe(false);
-    const live = sessionsResult([{ key: "agent:main:new-profile", kind: "direct" }], 2);
+    const live = sessionsResult([directRow("new-profile")], 2);
     h.live.resolve(live);
     await vi.waitFor(() => expect(h.sessions.state.result).toEqual(live));
     expect(h.sessions.captureBootRoster()?.result).toEqual(live);
@@ -636,7 +625,7 @@ describe("session capability warm roster", () => {
       h.publish({ phase: "offline" });
       expect(h.sessions.state.result).toBeNull();
       h.connect();
-      const live = sessionsResult([{ key: "agent:main:other", kind: "direct" }], 2);
+      const live = sessionsResult([directRow("other")], 2);
       h.live.resolve(live);
       await vi.waitFor(() => expect(h.sessions.state.result).toEqual(live));
       h.publish({ sessionKey: "agent:main:other" });

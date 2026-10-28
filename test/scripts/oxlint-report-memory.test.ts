@@ -17,14 +17,19 @@ afterEach(() => vi.clearAllMocks());
 const { createTempDir } = createScriptTestHarness();
 const env = {
   ...process.env,
+  CI: "false",
   GITHUB_ACTIONS: "false",
+  OPENCLAW_LINT_TOOL: "oxlint",
   OPENCLAW_CI_STATIC_EVIDENCE: "0",
   OPENCLAW_OXLINT_SKIP_PREPARE: "1",
 };
 
-it.for([false, true].flatMap((evidence) => [0, 1].map((status) => ({ evidence, status }))))(
+it.for([
+  ...[false, true].flatMap((evidence) => [0, 1].map((status) => ({ evidence, status, ci: false }))),
+  { evidence: false, status: 0, ci: true },
+])(
   "bounds advisory capture, preserves warnings, and respects stdout backpressure: %j",
-  async ({ evidence, status }) => {
+  async ({ evidence, status, ci }) => {
     const root = createTempDir("oxlint-report-memory-");
     // Keep advisory-report locks local even under an ancestor checkout.
     fs.mkdirSync(path.join(root, ".git"));
@@ -67,17 +72,24 @@ it.for([false, true].flatMap((evidence) => [0, 1].map((status) => ({ evidence, s
       expect(
         await runOxlint(["--config", config, "scripts/run-oxlint.mts"], {
           ...env,
+          CI: ci ? "true" : "false",
+          ...(ci ? { OPENCLAW_BUN_PATH: process.execPath } : {}),
           GITHUB_ACTIONS: "true",
           GITHUB_STEP_SUMMARY: summary,
           OPENCLAW_CI_STATIC_EVIDENCE: evidence ? "1" : "0",
           OPENCLAW_CI_STATIC_EVIDENCE_ID: "bounded-report",
         }),
-      ).toEqual({ status });
+      ).toEqual({ status: ci ? 1 : status });
       expect(forwarded.join("")).toBe(chunks.join(""));
       expect(process.stdout.listenerCount("drain")).toBe(drains);
       expect(warnings).toHaveBeenCalledWith(
         expect.stringMatching(/::warning .*::The report exceeded 1 MiB/u),
       );
+      if (ci) {
+        expect(warnings).toHaveBeenCalledWith(
+          "[lint] parity failed: oxlint report exceeded capture limit.",
+        );
+      }
       expect(fs.readFileSync(summary, "utf8")).toContain(
         "Individual advisory annotations and static evidence were skipped",
       );

@@ -167,11 +167,13 @@ async function projectNormalizedModelRuntimeOwner<T>(
     input.agentId === undefined ||
     input.runtimePluginSelections === undefined,
 ): Promise<T> {
-  const replacement = context.getPendingReplacement(input);
-  if (replacement) {
+  let replacement = context.getPendingReplacement(input);
+  // A superseded gate resolves early; follow its successors like lease admission does.
+  for (let waits = 0; replacement && waits < 3; waits += 1) {
     assertPreparedModelRuntimeAdmissionCanWait();
     await replacement.promise;
     assertLifetime();
+    replacement = context.getPendingReplacement(input);
   }
   const existing = resolvePublishedOwner(context.owners, input, {
     allowConfiguredWorkspaceFallback,

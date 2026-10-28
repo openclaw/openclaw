@@ -24,7 +24,7 @@ scenario:
     - src/auto-reply/source-reply-delivery-mode.ts
     - src/auto-reply/reply/reply-delivery.ts
     - extensions/codex/src/app-server/event-projector-assistant.ts
-    - extensions/discord/src/monitor/message-run-queue.ts
+    - extensions/discord/src/monitor/message-dispatcher.ts
     - extensions/slack/src/monitor/message-handler/prepare-routing.ts
   gatewayConfigPatch:
     tools:

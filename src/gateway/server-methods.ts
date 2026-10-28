@@ -1,8 +1,10 @@
+import { performance } from "node:perf_hooks";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
 import { resolveChannelMessageActionFacts } from "../channels/plugins/message-action-names.js";
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
+import { startDiffReadTiming } from "../infra/diff-read-timing.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import {
@@ -272,6 +274,11 @@ export async function handleGatewayRequest(
     opts.methodRegistry?.getHandler(req.method) !== undefined
       ? opts.methodRegistry
       : createRequestGatewayMethodRegistry(opts.extraHandlers);
+  using diffTiming =
+    req.method === "sessions.diff"
+      ? startDiffReadTiming("sessions.diff", diagnostics?.startedAt)
+      : undefined;
+  const diffAdmissionStarted = diffTiming ? (diagnostics?.startedAt ?? performance.now()) : 0;
   const observation = methodRegistry.isObservation(req.method);
   let observationResponded = false;
   let respondCancelled = opts.respond;
@@ -315,12 +322,22 @@ export async function handleGatewayRequest(
     // Reads still require current authority when their contents are released.
     const preserveMessageWriteOutcome =
       req.method === "send" || (messageActionFacts !== undefined && !messageActionFacts.readOnly);
+    let acceptedAgentRun = false;
     const respondUnobserved: GatewayRequestOptions["respond"] = runtimeAuthority
       ? (ok, ...response) => {
-          if (ok && !preserveMessageWriteOutcome) {
+          if (ok && !preserveMessageWriteOutcome && !acceptedAgentRun) {
             runtimeAuthority.assertCurrent();
           }
           profileRespond(ok, ...response);
+          // Accepted execution owns its final outcome after the submitting turn closes.
+          if (
+            req.method === "agent" &&
+            ok &&
+            isRecord(response[0]) &&
+            response[0].status === "accepted"
+          ) {
+            acceptedAgentRun = true;
+          }
         }
       : profileRespond;
     respondCancelled = respondUnobserved;
@@ -485,6 +502,7 @@ export async function handleGatewayRequest(
             sessionMutationAuthorization,
             withSessionTurnAuthority,
             markSessionSubscribePhase: subscribeDiagnostics?.mark,
+            diffTiming,
             ...(authorization.sessionAccessAuthority
               ? { sessionAccessAuthority: authorization.sessionAccessAuthority }
               : {}),
@@ -515,6 +533,9 @@ export async function handleGatewayRequest(
           ? methodRegistry.getReadSharing?.(req.method)
           : undefined;
         chatSendPhase?.finish();
+        if (diffTiming) {
+          diffTiming.durations.admission = performance.now() - diffAdmissionStarted;
+        }
         return GatewayRpcDiagnostics.runHandler(
           req.method,
           () =>

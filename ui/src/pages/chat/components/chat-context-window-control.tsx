@@ -22,7 +22,7 @@ export function ChatContextWindowControl(props: {
   const selectedOption = createMemo(() =>
     props.contextWindow.options.find((option) => option.id === props.contextWindow.selected),
   );
-  const toggle = createMemo(() => {
+  const toggle = () => {
     if (props.contextWindow.options.length !== 2) {
       return undefined;
     }
@@ -34,7 +34,7 @@ export function ChatContextWindowControl(props: {
     }
     const active = selectedOption()?.id === larger.id;
     return { active, next: active ? smaller.id : larger.id };
-  });
+  };
 
   // Native listeners contain clicks before the surrounding picker handles them.
   return (

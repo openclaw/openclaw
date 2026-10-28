@@ -25,29 +25,21 @@ import {
 const log = createSubsystemLogger("gateway/conversations");
 
 /** Lists persisted and channel-directory addresses from the Gateway's live plugin runtime. */
-export async function runGatewayConversationList(
-  params: {
-    config: OpenClawConfig;
-    readCurrentConfig?: () => OpenClawConfig;
-    agentId: string;
-    channel?: string;
-    query?: string;
-    limit: number;
-  },
-  deps = {
-    listConversations,
-    registerConversationAddresses,
-    resolveOutboundChannelPlugin,
-    resolveOutboundSessionRoute,
-  },
-): Promise<ConversationListResult> {
+export async function runGatewayConversationList(params: {
+  config: OpenClawConfig;
+  readCurrentConfig?: () => OpenClawConfig;
+  agentId: string;
+  channel?: string;
+  query?: string;
+  limit: number;
+}): Promise<ConversationListResult> {
   const scope = await prepareConversationRegistryScope(params);
   const query = params.query?.trim() || undefined;
   let discoveryChannel: string | undefined;
   let registeredConversations: ConversationRecord[] | undefined;
   const discoveredConversationRefs = new Set<string>();
   if (params.channel) {
-    const plugin = deps.resolveOutboundChannelPlugin({
+    const plugin = resolveOutboundChannelPlugin({
       channel: params.channel,
       cfg: params.config,
     });
@@ -116,7 +108,7 @@ export async function runGatewayConversationList(
             continue;
           }
           const display = entry.name?.trim() || entry.handle?.trim() || undefined;
-          const route = await deps.resolveOutboundSessionRoute({
+          const route = await resolveOutboundSessionRoute({
             cfg: params.config,
             channel: plugin.id,
             plugin,
@@ -166,7 +158,7 @@ export async function runGatewayConversationList(
         discoveredIdentities.map((identity, index) => [identity.conversationRef, index]),
       );
       try {
-        registeredConversations = await deps.registerConversationAddresses(
+        registeredConversations = await registerConversationAddresses(
           scope,
           discoveredIdentities,
           Date.now(),
@@ -195,7 +187,7 @@ export async function runGatewayConversationList(
   }
   const conversations =
     registeredConversations ??
-    (await deps.listConversations(
+    (await listConversations(
       scope,
       discoveryChannel !== undefined ? { channel: discoveryChannel } : {},
     ));

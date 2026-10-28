@@ -13,10 +13,10 @@ describe("normalizeZaiEnv", () => {
 
 describe("isFastTestRuntimeEnv", () => {
   it.each(["1"])(
-    "uses the caller's fast flag (%j) when the process supplies the test marker",
+    "uses the process fast flag (%j) when the process supplies the test marker",
     (fastFlag) => {
-      withEnv({ VITEST: "true", OPENCLAW_TEST_FAST: "1" }, () => {
-        expect(isFastTestRuntimeEnv({ OPENCLAW_TEST_FAST: fastFlag })).toBe(fastFlag === "1");
+      withEnv({ VITEST: "true", OPENCLAW_TEST_FAST: fastFlag }, () => {
+        expect(isFastTestRuntimeEnv()).toBe(fastFlag === "1");
       });
     },
   );

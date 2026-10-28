@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { getEnvironmentData } from "node:worker_threads";
 import pg from "pg";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   createBuiltRuntime,
@@ -15,22 +15,22 @@ import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
 import { acquireTestPortBlock } from "../../test-utils/port-claims.js";
 import { startRuntimePty, type PtyRun } from "../../tui/tui-pty-test-support.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
+import {
+  cliSqliteFiles,
+  dropCliSchemas,
+  inspectPostgresCliStore,
+} from "./cli-storage.test-support.js";
 
 const configured: unknown = getEnvironmentData("openclaw.test.state.conformance.connection");
 const connection = typeof configured === "string" ? configured : undefined;
 const roots = useAutoCleanupTempDirTracker(afterAll);
 const nodeExecutable = resolveTestNodeExecPath();
 const commandTimeoutMs = 60_000;
-const localJournals = new Map([
-  [
-    path.join("state", "openclaw-quarantine.sqlite"),
-    ["agent_integrity_verifications", "quarantined_databases"],
-  ],
-  [
-    path.join("control", "services.sqlite"),
-    ["daemon_runtime_pin_migration", "daemon_runtime_pins"],
-  ],
-]);
+let runtimeRoot: string;
+
+beforeAll(() => {
+  runtimeRoot = createBuiltRuntime(roots.make("interactive-runtime-"));
+});
 
 async function answer(run: PtyRun, prompt: string, input = "\r") {
   await run.waitForOutput(prompt);
@@ -59,7 +59,6 @@ for (const engine of ["sqlite", "postgres"] as const) {
         label,
         async () => {
           const root = roots.make(`interactive-${entry}-${engine}-`);
-          const runtimeRoot = createBuiltRuntime(root);
           const stateDir = path.join(root, ".openclaw");
           const configPath = path.join(stateDir, "openclaw.json");
           const workspace = path.join(stateDir, "workspace");
@@ -114,10 +113,13 @@ for (const engine of ["sqlite", "postgres"] as const) {
             engine === "postgres" ? new pg.Client({ connectionString: connection }) : undefined;
           await client?.connect();
           const runs: PtyRun[] = [];
-          const start = async (args: string[]) =>
+          const start = async (
+            args: string[],
+            entryArgs = [path.join(runtimeRoot, "dist", "entry.js")],
+          ) =>
             await startRuntimePty(
               nodeExecutable,
-              [...ISOLATED_RUNTIME_NODE_ARGS, path.join(runtimeRoot, "dist", "entry.js"), ...args],
+              [...ISOLATED_RUNTIME_NODE_ARGS, ...entryArgs, ...args],
               {
                 activeRuns: runs,
                 cwd: runtimeRoot,
@@ -126,46 +128,31 @@ for (const engine of ["sqlite", "postgres"] as const) {
                 outputTimeoutMs: commandTimeoutMs,
               },
             );
+          const assertUnrepaired = async () => {
+            expect(await fs.readFile(configPath, "utf8")).toBe(
+              `synthetic warning\n${initialConfig}`,
+            );
+            expect(await cliSqliteFiles(stateDir)).toEqual([]);
+          };
           try {
-            const args =
-              entry === "bare-root"
-                ? []
-                : entry === "crestodian"
-                  ? [entry]
-                  : [
-                      entry,
-                      ...(entry === "setup" ? ["--wizard"] : []),
-                      "--skip-ui",
-                      "--agent-name",
-                      "main",
-                      "--workspace",
-                      workspace,
-                    ];
+            const args: string[] = entry === "bare-root" ? [] : [entry];
+            if (entry === "setup") {
+              args.push("--wizard");
+            }
+            if (entry === "setup" || entry === "onboard") {
+              args.push("--skip-ui", "--agent-name", "main", "--workspace", workspace);
+            }
             const setup = await start(args);
             if (entry === "bare-root") {
               await answer(setup, "Continue?");
               await setup.waitForOutput("Config invalid. Run");
               expect((await setup.waitForExit()).exitCode, setup.output()).toBe(1);
-              expect(await fs.readFile(configPath, "utf8")).toBe(
-                `synthetic warning\n${initialConfig}`,
-              );
-              expect(
-                (await fs.readdir(stateDir, { recursive: true })).filter((file) =>
-                  file.endsWith(".sqlite"),
-                ),
-              ).toEqual([]);
+              await assertUnrepaired();
               return;
             }
             if (recoverConfig) {
               await setup.waitForOutput('Run "openclaw doctor --fix" now?');
-              expect(
-                (await fs.readdir(stateDir, { recursive: true })).filter((file) =>
-                  file.endsWith(".sqlite"),
-                ),
-              ).toEqual([]);
-              expect(await fs.readFile(configPath, "utf8")).toBe(
-                `synthetic warning\n${initialConfig}`,
-              );
+              await assertUnrepaired();
               await setup.write("\r");
               await setup.waitForOutput("Removed non-JSON prefix");
             }
@@ -185,10 +172,9 @@ for (const engine of ["sqlite", "postgres"] as const) {
             expect((await setup.waitForExit()).exitCode, setup.output()).toBe(0);
 
             const config = JSON.parse(await fs.readFile(configPath, "utf8"));
-            expect(config.wizard.securityAcknowledgedAt).toEqual(expect.any(String));
-            expect(config.telemetry).toMatchObject({
-              enabled: false,
-              consentedAt: expect.any(String),
+            expect(config).toMatchObject({
+              wizard: { securityAcknowledgedAt: expect.any(String) },
+              telemetry: { enabled: false, consentedAt: expect.any(String) },
             });
             if (entry !== "crestodian") {
               expect(config.wizard.accessMode).toBe("guarded");
@@ -199,34 +185,24 @@ for (const engine of ["sqlite", "postgres"] as const) {
               expect(await fs.readFile(path.join(workspace, "AGENTS.md"), "utf8")).not.toBe("");
             }
 
-            const databases = (await fs.readdir(stateDir, { recursive: true }))
-              .filter((file) => file.endsWith(".sqlite"))
-              .map((file) => path.join(stateDir, file));
+            const databases = (await cliSqliteFiles(stateDir)).map((file) =>
+              path.join(stateDir, file),
+            );
             expect(databases.length).toBeGreaterThan(0);
             let onboardingState: unknown;
             let stateSchema: string | undefined;
             for (const database of databases) {
-              using local = openNodeSqliteDatabase(database, { readOnly: true });
+              const relative = path.relative(stateDir, database);
               if (engine === "postgres") {
-                const journal = localJournals.get(path.relative(stateDir, database));
-                expect(
-                  local
-                    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
-                    .all(),
-                  `${entry} left application state in ${path.relative(stateDir, database)}`,
-                ).toEqual((journal ?? ["openclaw_engine_anchor"]).map((name) => ({ name })));
-                if (!journal) {
-                  const anchor = local
-                    .prepare("SELECT engine, schema FROM openclaw_engine_anchor")
-                    .get();
-                  expect(anchor?.engine).toBe(engine);
-                  if (path.relative(stateDir, database) === path.join("state", "openclaw.sqlite")) {
-                    stateSchema = String(anchor?.schema);
-                  }
+                const schema = inspectPostgresCliStore(database, stateDir, entry);
+                if (relative === path.join("state", "openclaw.sqlite")) {
+                  stateSchema = schema;
                 }
               } else if (
-                path.relative(stateDir, database) === path.join("state", "openclaw.sqlite")
+                entry !== "crestodian" &&
+                relative === path.join("state", "openclaw.sqlite")
               ) {
+                using local = openNodeSqliteDatabase(database, { readOnly: true });
                 onboardingState = local
                   .prepare("SELECT value_json FROM config_machine_state WHERE state_key = ?")
                   .get(localOnboardingStateKey(configPath))?.value_json;
@@ -234,6 +210,8 @@ for (const engine of ["sqlite", "postgres"] as const) {
             }
             if (client) {
               expect(stateSchema).toBeDefined();
+            }
+            if (client && entry !== "crestodian") {
               const stored = await client.query<{ value_json: string }>(
                 `SELECT value_json FROM "${stateSchema!.replaceAll('"', '""')}".config_machine_state WHERE state_key = $1`,
                 [localOnboardingStateKey(configPath)],
@@ -261,11 +239,8 @@ for (const engine of ["sqlite", "postgres"] as const) {
                 },
               }),
             );
-            const gateway = await startRuntimePty(
-              nodeExecutable,
+            const gateway = await start(
               [
-                ...ISOLATED_RUNTIME_NODE_ARGS,
-                "--import",
                 path.join(runtimeRoot, "scripts", "tsx.mjs"),
                 fileURLToPath(
                   new URL(
@@ -276,13 +251,7 @@ for (const engine of ["sqlite", "postgres"] as const) {
                 path.join(runtimeRoot, "dist", "entry.js"),
                 String(port.port),
               ],
-              {
-                activeRuns: runs,
-                cwd: runtimeRoot,
-                env,
-                exitTimeoutMs: commandTimeoutMs,
-                outputTimeoutMs: commandTimeoutMs,
-              },
+              ["--import"],
             );
             await gateway.waitForOutput("Onboarding child authenticated and ready");
             await gateway.write("\x03");
@@ -297,13 +266,7 @@ for (const engine of ["sqlite", "postgres"] as const) {
             }
             if (client) {
               try {
-                const schemas = await client.query<{ schema_name: string }>(
-                  "SELECT schema_name FROM information_schema.schemata WHERE starts_with(schema_name, $1)",
-                  [`${prefix}_`],
-                );
-                for (const { schema_name: schema } of schemas.rows) {
-                  await client.query(`DROP SCHEMA "${schema}" CASCADE`);
-                }
+                await dropCliSchemas(client, prefix);
               } finally {
                 await client.end();
               }

@@ -4,6 +4,8 @@ import {
   type Transferable,
   type Worker,
 } from "node:worker_threads";
+import { postgresPoolTransferList } from "../infra/postgres-sync/pool.js";
+import { receiveWorkerMemoryPort } from "../infra/worker-cpu.js";
 import { recordWorkerMessage } from "../infra/worker-message-metrics.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -123,6 +125,9 @@ export function acquireLeaseHeartbeatCarrier(params: {
     }
   };
   const receive = (reply: CarrierReply) => {
+    if (primary && receiveWorkerMemoryPort(owned.worker, reply)) {
+      return;
+    }
     if (ports) {
       recordWorkerMessage("lifecycle", "from_worker");
     }
@@ -142,6 +147,7 @@ export function acquireLeaseHeartbeatCarrier(params: {
     try {
       owned.worker.postMessage({ registration: params.data, port: ports.port2 }, [
         params.data.databaseAdmissionPort,
+        ...postgresPoolTransferList(params.data.postgresPool),
         ports.port2,
       ]);
     } catch (error) {

@@ -90,7 +90,7 @@ export function runPlugin(
     >;
     activeToolCount?: () => number;
     getActiveLoopbackAskUserDeadline?: () => number | undefined;
-    onActiveLoopbackAskUserDeadlineChange?: (listener: () => void) => () => void;
+    setOnActiveLoopbackAskUserDeadlineChange?: (listener: (() => void) | undefined) => void;
     onInterrupted?: (reason: "aborted" | "timeout") => boolean;
   } = {},
 ) {
@@ -115,7 +115,7 @@ export function runPlugin(
     onOutstandingWorkChange: options.onOutstandingWorkChange,
     activeToolCount: options.activeToolCount,
     getActiveLoopbackAskUserDeadline: options.getActiveLoopbackAskUserDeadline,
-    onActiveLoopbackAskUserDeadlineChange: options.onActiveLoopbackAskUserDeadlineChange,
+    setOnActiveLoopbackAskUserDeadlineChange: options.setOnActiveLoopbackAskUserDeadlineChange,
     ...(options.onInterrupted ? { onInterrupted: options.onInterrupted } : {}),
     noOutputTimeoutMs: options.noOutputTimeoutMs ?? 2_000,
     consumeStdout: options.consumeStdout ?? (() => {}),

@@ -4,10 +4,7 @@ import { BROWSER_ACTION_NAVIGATION_GRACE_MS } from "./act-policy.js";
 import type { BrowserBatchAbort, BrowserBatchActionResult } from "./client-actions-types.js";
 import type { BrowserActRequest } from "./client-actions.types.js";
 import type { BrowserDownloadResult } from "./download-types.js";
-import {
-  assertBrowserNavigationResultAllowed,
-  type BrowserNavigationPolicyOptions,
-} from "./navigation-guard.js";
+import { assertBrowserNavigationResultAllowed } from "./navigation-guard.js";
 import { pageTargetInfo } from "./pw-session-connection.js";
 import {
   beginActionDownloadCaptureOnPage,
@@ -40,8 +37,6 @@ import {
   interactionNavigationPolicy,
 } from "./pw-tools-core.interactions.navigation.js";
 import { closePageViaPlaywright, resizeViewportViaPlaywright } from "./pw-tools-core.snapshot.js";
-
-const ACT_DOWNLOAD_MAX_DRAIN_MS = 1_000;
 
 type ActionExecutionOptions = GuardedInteractionOptions & {
   evaluateEnabled?: boolean;
@@ -147,17 +142,6 @@ function actionUsesNavigationRequestGuard(action: BrowserActRequest): boolean {
     : action.kind !== "close" && action.kind !== "resize";
 }
 
-function actionNeedsStandaloneDownloadGrace(
-  action: BrowserActRequest,
-  navigationPolicy: BrowserNavigationPolicyOptions,
-): boolean {
-  // Guarded interactions already hold a 250 ms event window while policy is
-  // active. Policy-free internal callers need that window from download capture.
-  return (
-    actionUsesNavigationRequestGuard(action) && !hasInteractionNavigationPolicy(navigationPolicy)
-  );
-}
-
 export async function executeActViaPlaywright(
   opts: GuardedInteractionOptions & {
     action: BrowserActRequest;
@@ -195,14 +179,16 @@ export async function executeActViaPlaywright(
       });
     },
   });
-  const downloadGraceMs = actionNeedsStandaloneDownloadGrace(opts.action, navigationPolicy)
-    ? BROWSER_ACTION_NAVIGATION_GRACE_MS
-    : 0;
+  // Guarded interactions already hold a 250 ms event window while policy is
+  // active. Policy-free internal callers need that window from download capture.
+  const downloadGraceMs =
+    actionUsesNavigationRequestGuard(opts.action) &&
+    !hasInteractionNavigationPolicy(navigationPolicy)
+      ? BROWSER_ACTION_NAVIGATION_GRACE_MS
+      : 0;
   const drainDownloads = async (firstEventGraceMs = downloadGraceMs) =>
     await downloadCapture.drain({
       firstEventGraceMs,
-      maxWaitMs: ACT_DOWNLOAD_MAX_DRAIN_MS,
-      quietMs: BROWSER_ACTION_NAVIGATION_GRACE_MS,
     });
   const dialogAbort = createObservedDialogAbortSignalForPage({
     page,
@@ -322,7 +308,6 @@ async function batchViaPlaywright(
       if (page.isClosed()) {
         return finishAborted("closed", index, page.url(), opts.actions.length - index);
       }
-      navigated = false;
       let result: BrowserBatchActionResult;
       try {
         await executeSingleAction(action, { ...opts, ...navigationPolicy });

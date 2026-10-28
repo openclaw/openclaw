@@ -1,3 +1,4 @@
+import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { stripMixedSilentReplyTokens } from "../../auto-reply/reply/mixed-silent-reply-tokens.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { projectAgentToolActivity } from "../../infra/agent-activity-events.js";
@@ -6,9 +7,12 @@ import { emitTrustedDiagnosticEvent } from "../../infra/diagnostic-events.js";
 import { markToolExecutionLivenessDiagnosticEvent } from "../../infra/diagnostic-tool-execution-liveness.js";
 import { projectProgressCardChannelUpdate } from "../../session-cards/progress-card-channel-summary.js";
 import { isAgentPlanProgressToolName } from "../../session-cards/progress-card-input.js";
-import { registerListener } from "../../shared/listeners.js";
 import { projectAgentActivityItem } from "../agent-activity-presentation.js";
 import { prepareAgentRunTerminalReply } from "../agent-run-terminal-reply.js";
+import {
+  recordSkillUsed,
+  resolvedSkillUsageMatch,
+} from "../agent-tools.before-tool-call.diagnostics.js";
 import type {
   CliCompactionDelta,
   CliStreamingDelta,
@@ -33,6 +37,20 @@ function resolveCliToolSource(name: string, kind?: CliToolUseStartDelta["kind"])
   return kind === "mcp_tool_use" || name.startsWith("mcp__") ? "mcp" : "core";
 }
 
+// Live tool output text is read only from content block arrays; other shapes stay untouched.
+function withBrowserTabDetails(result: unknown, browserTab: unknown): unknown {
+  if (isRecord(result) && Array.isArray(result.content)) {
+    return { ...result, details: { ...asOptionalRecord(result.details), browserTab } };
+  }
+  if (Array.isArray(result)) {
+    return { content: result, details: { browserTab } };
+  }
+  if (typeof result === "string" || typeof result === "number" || typeof result === "boolean") {
+    return { content: [{ type: "text", text: String(result) }], details: { browserTab } };
+  }
+  return result;
+}
+
 export function createCliEventHandlers(params: {
   context: PreparedCliRunContext;
   toolTracking: CliToolTracking;
@@ -48,7 +66,7 @@ export function createCliEventHandlers(params: {
   };
   let observedCliActivity = false;
   let compactionActive = false;
-  const compactionChangeListeners = new Set<() => void>();
+  let onCompactionActiveChange: (() => void) | undefined;
   const signaledPhases = new Set<"tool_execution_started" | "assistant_output_started">();
   const signalExecutionPhase = (phase: "tool_execution_started" | "assistant_output_started") => {
     if (signaledPhases.has(phase)) {
@@ -64,10 +82,7 @@ export function createCliEventHandlers(params: {
   };
   let commentaryCounter = 0;
   let assistantVisibleText = "";
-  const toolSummaryById = new Map<
-    string,
-    { name: string; failed: boolean; terminalObserved?: boolean }
-  >();
+  const toolSummaryById = new Map<string, { failed: boolean; terminalObserved?: boolean }>();
   // CLI results report an outcome without repeating the request, so the terminal
   // progress event would otherwise describe the output instead of the command.
   const toolArgsByCallId = new Map<
@@ -99,7 +114,11 @@ export function createCliEventHandlers(params: {
     if (data.phase === "start") {
       emitAgentEvent(activity);
     }
-    emitAgentEvent({ runId: runParams.runId, stream: "tool", data });
+    emitAgentEvent({
+      runId: runParams.runId,
+      stream: "tool",
+      data: { ...data, name: stripOpenClawMcpToolPrefix(data.name) },
+    });
     if (data.phase !== "start") {
       emitAgentEvent(activity);
     }
@@ -113,11 +132,8 @@ export function createCliEventHandlers(params: {
     let current = toolSummaryById.get(event.toolCallId);
     if (current) {
       current.failed ||= failed;
-      if (!current.name && event.name) {
-        current.name = event.name;
-      }
     } else {
-      current = { name: event.name, failed };
+      current = { failed };
       toolSummaryById.set(event.toolCallId, current);
     }
     if (event.name) {
@@ -153,6 +169,10 @@ export function createCliEventHandlers(params: {
       });
     }
   };
+  const readNativeSkillCommand = (args: Record<string, unknown> | undefined) =>
+    typeof args?.skill === "string"
+      ? context.claudeSkillsPlugin.skillCommands?.get(args.skill.trim())
+      : undefined;
   const emitToolResult = (event: CliToolResultDelta, tracked: boolean) => {
     observedCliActivity = true;
     const readResult = prepareToolResult(event.result);
@@ -162,9 +182,28 @@ export function createCliEventHandlers(params: {
     const loopbackOutcome = tracked
       ? params.toolTracking.resolveCliLoopbackTerminalOutcome(event.toolCallId)
       : undefined;
+    // Resolve presentation metadata before the result retires loopback correlation.
+    const browserTab =
+      tracked && !event.isError && stripOpenClawMcpToolPrefix(event.name) === "browser"
+        ? params.toolTracking.resolveCliLoopbackBrowserTab(event.toolCallId)
+        : undefined;
     const executedArgs = tracked ? params.toolTracking.handleCliToolResult(event) : undefined;
     const startedCall = toolArgsByCallId.get(event.toolCallId);
     toolArgsByCallId.delete(event.toolCallId);
+    // Claude loads plugin skills through its own Skill tool, which never passes the
+    // OpenClaw tool wrapper; map the materialized command back to its canonical SKILL.md.
+    const nativeSkill =
+      event.name === "Skill" && firstTerminal && !event.isError
+        ? readNativeSkillCommand(startedCall?.args)
+        : undefined;
+    if (nativeSkill) {
+      recordSkillUsed({
+        ctx: runParams,
+        match: resolvedSkillUsageMatch({ activation: "read", skill: nativeSkill }),
+        toolName: event.name,
+        toolCallId: event.toolCallId,
+      });
+    }
     // Gateway owns loopback completion even when CLI correlation is absent or ambiguous.
     if (
       event.name.trim() &&
@@ -222,7 +261,10 @@ export function createCliEventHandlers(params: {
           name: event.name,
           toolCallId: event.toolCallId,
           isError: event.isError,
-          result: readResult(),
+          result:
+            browserTab === undefined
+              ? readResult()
+              : withBrowserTabDetails(readResult(), browserTab),
           ...(tracked && startedArgs ? { args: startedArgs } : {}),
           ...(resultContentSource ? { resultContentSource } : {}),
         },
@@ -374,9 +416,7 @@ export function createCliEventHandlers(params: {
     const previous = compactionActive;
     compactionActive = event.phase === "start";
     if (compactionActive !== previous) {
-      for (const listener of compactionChangeListeners) {
-        listener();
-      }
+      onCompactionActiveChange?.();
     }
     emitLiveEvent("compaction", () => ({ ...event, backend: context.backendResolved.id }));
   };
@@ -391,7 +431,7 @@ export function createCliEventHandlers(params: {
     }
   };
   const emitCliCommentaryText = (text: string) => {
-    if (!emitLiveEvents) {
+    if (!emitLiveEvents || params.toolTracking.shouldSuppressAssistantOutput()) {
       return;
     }
     const prepared = prepareAgentRunTerminalReply({ rawText: text });
@@ -415,6 +455,9 @@ export function createCliEventHandlers(params: {
     }));
   };
   const emitCliAssistantDelta = ({ text, delta }: CliStreamingDelta) => {
+    if (params.toolTracking.shouldSuppressAssistantOutput()) {
+      return;
+    }
     if (text || delta) {
       runParams.diagnosticOwner?.watchdogAttempt?.progress("semantic", "cli:assistant");
       observedCliActivity = true;
@@ -447,6 +490,9 @@ export function createCliEventHandlers(params: {
     }));
   };
   const emitCliCompletedReply = (text: string, assistantMessageIndex: number) => {
+    if (params.toolTracking.shouldSuppressAssistantOutput()) {
+      return;
+    }
     if (text) {
       runParams.diagnosticOwner?.watchdogAttempt?.progress("semantic", "cli:completed_reply");
       observedCliActivity = true;
@@ -469,6 +515,9 @@ export function createCliEventHandlers(params: {
   // Emit-always: thinking reaches the event bus and session archive like the
   // embedded reasoning stream; /reasoning and /verbose gate presentation only.
   const emitCliThinkingDelta = ({ text, delta, isReasoningSnapshot }: CliThinkingDelta) => {
+    if (params.toolTracking.shouldSuppressAssistantOutput()) {
+      return;
+    }
     if (text || delta) {
       observedCliActivity = true;
     }
@@ -506,8 +555,9 @@ export function createCliEventHandlers(params: {
     emitCliThinkingProgress,
     hasObservedCliActivity: () => observedCliActivity,
     hasActiveCompaction: () => compactionActive,
-    onCompactionActiveChange: (listener: () => void) =>
-      registerListener(compactionChangeListeners, listener),
+    setOnCompactionActiveChange: (listener: (() => void) | undefined) => {
+      onCompactionActiveChange = listener;
+    },
     activeParsedToolCount: () => activeParsedTools.size,
     isActiveForegroundAgentTool: (toolCallId: string) => {
       const tool = activeParsedTools.get(toolCallId);

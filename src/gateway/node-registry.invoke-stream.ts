@@ -325,9 +325,7 @@ export class NodeInvokeStreamController {
   clearTimers(pending: PendingInvoke): void {
     pending.cancelHardDeadline?.();
     pending.cancelHardDeadline = undefined;
-    if (pending.idleTimer) {
-      clearTimeout(pending.idleTimer);
-    }
+    clearTimeout(pending.idleTimer);
     pending.idleTraceContext = undefined;
     pending.removeAbortListener?.();
     pending.removeAbortListener = undefined;

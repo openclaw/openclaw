@@ -5,7 +5,7 @@ import { parseJsonl } from "../../jsonl/parse.js";
 import { parseOcPath } from "../../oc-path.js";
 
 function rt(raw: string): string {
-  return parseJsonl(raw).ast.raw;
+  return parseJsonl(raw).raw;
 }
 
 describe("jsonl byte-fidelity", () => {
@@ -15,7 +15,7 @@ describe("jsonl byte-fidelity", () => {
 
   it("CRLF input preserves CRLF after a structural edit", () => {
     const raw = '{"a":1}\r\n{"b":2}\r\n';
-    const { ast } = parseJsonl(raw);
+    const ast = parseJsonl(raw);
     const result = setJsonlOcPath(ast, parseOcPath("oc://events/L1/a"), {
       kind: "number",
       value: 2,
@@ -29,7 +29,7 @@ describe("jsonl byte-fidelity", () => {
   it("LF input preserves LF after a structural edit", () => {
     // Symmetric: a Unix-authored log doesn't mysteriously gain CRLF.
     const raw = '{"a":1}\n{"b":2}\n';
-    const { ast } = parseJsonl(raw);
+    const ast = parseJsonl(raw);
     const result = setJsonlOcPath(ast, parseOcPath("oc://events/L1/a"), {
       kind: "number",
       value: 2,

@@ -1,6 +1,4 @@
 /**
- * Realtime voice tool definition and helpers for delegating work to OpenClaw.
- *
  * Voice providers call this function tool when a spoken request needs normal
  * agent tools, memory, workspace context, or current information before reply.
  */

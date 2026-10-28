@@ -31,6 +31,7 @@ const MODULE_IMPORT_ERROR_PATTERN =
 
 type StaleChunkReloadDeps = {
   buildId?: string;
+  reloadOnce?: boolean;
   storage?: Pick<Storage, "getItem" | "setItem"> | null;
   reload?: () => void;
   canReload?: () => boolean;
@@ -171,6 +172,15 @@ export async function scheduleStaleChunkReload(deps: StaleChunkReloadDeps = {}):
   let guardDelayMs = 0;
   try {
     const guard = JSON.parse(storage?.getItem(RELOAD_GUARD_STORAGE_KEY) ?? "null");
+    // Rejected handshakes must settle on visible recovery guidance, not a timer
+    // that keeps replacing an incompatible bundle. Also bound alternating builds.
+    if (
+      deps.reloadOnce &&
+      (guard?.buildId === buildId ||
+        (typeof guard?.at === "number" && Date.now() - guard.at < 60_000))
+    ) {
+      return false;
+    }
     if (guard?.buildId === buildId && typeof guard.at === "number") {
       guardDelayMs = Math.max(0, guard.at + RELOAD_GUARD_WINDOW_MS - Date.now());
     }

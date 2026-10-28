@@ -1,8 +1,10 @@
 import { maxBytesForKind, type MediaKind } from "@openclaw/media-core/constants";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveChatAttachmentMaxBytes } from "../gateway/chat-attachment-policy.js";
 import { normalizeAccountId } from "../routing/account-id.js";
 import { resolveChannelAccountEntry } from "../routing/account-lookup.js";
+import { STAGED_INPUT_MAX_BYTES } from "./staged-inputs.js";
 import { MEDIA_MAX_BYTES } from "./store.js";
 
 const MB = 1024 * 1024;
@@ -15,12 +17,11 @@ const TELEGRAM_DEFAULT_MEDIA_MAX_MB = 100;
  * RGBA (33.2 MB). Measured Gemini 4K photo PNGs were 27-29 MiB.
  */
 const GENERATED_IMAGE_DOWNLOAD_MAX_BYTES = 64 * MB;
-type GeneratedMediaKind = Extract<MediaKind, "audio" | "image" | "video">;
 
 /** Returns the configured media cap, falling back to the media-core per-kind default. */
 export function resolveGeneratedMediaMaxBytes(
   cfg: OpenClawConfig | undefined,
-  kind: GeneratedMediaKind,
+  kind: Extract<MediaKind, "audio" | "image" | "video">,
 ) {
   const configured = cfg?.agents?.defaults?.mediaMaxMb;
   return typeof configured === "number" && Number.isFinite(configured) && configured > 0
@@ -57,6 +58,23 @@ export function resolveChannelAccountMediaMaxMb(params: {
       : undefined;
   const accountMediaMax = accountCfg?.mediaMaxMb;
   return (typeof accountMediaMax === "number" ? accountMediaMax : undefined) ?? channelMediaMax;
+}
+
+/** Staging follows explicit admission limits without lowering the existing floor. */
+export function resolveStagedInputMaxBytes(
+  cfg: OpenClawConfig,
+  channel?: string,
+  accountId?: string,
+): number {
+  const channelMb = resolveChannelAccountMediaMaxMb({ cfg, channel, accountId });
+  const channelBytes =
+    typeof channelMb === "number" && Number.isFinite(channelMb) && channelMb > 0
+      ? Math.floor(channelMb * 1024 * 1024)
+      : 0;
+  return Math.min(
+    Number.MAX_SAFE_INTEGER,
+    Math.max(STAGED_INPUT_MAX_BYTES, resolveChatAttachmentMaxBytes(cfg), channelBytes),
+  );
 }
 
 /** Resolves the byte cap for staging an outbound reply's media from its configured channel/account, agent, or Telegram default. */

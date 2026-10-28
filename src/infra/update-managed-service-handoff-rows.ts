@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import type { DatabaseSync as HandoffDatabase } from "node:sqlite";
 import { z } from "zod";
-import { hasErrnoCode } from "./errno.js";
+import { ignoreMissingPath } from "./errno.js";
 import {
   createSqliteQueryCache,
   executeSqliteQuerySync,
@@ -162,10 +162,7 @@ export function createManagedHandoffLeaseRows(
     try {
       fs.lstatSync(databasePath);
     } catch (error) {
-      if (hasErrnoCode(error, "ENOENT")) {
-        return [];
-      }
-      throw error;
+      return ignoreMissingPath(error) ?? [];
     }
     return withDatabase(false, (db) => {
       // Only ordinary inspection may accept an uninitialized store.

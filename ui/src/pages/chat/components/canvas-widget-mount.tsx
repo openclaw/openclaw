@@ -1,6 +1,9 @@
 import { spread } from "@solidjs/web";
-import { createMemo, createSignal, omit, onSettled, Show, useContext } from "solid-js";
-import type { OpenClawCanvasWidgetView } from "../../../components/canvas-widget-view.tsx";
+import { createSignal, omit, onSettled, Show, useContext } from "solid-js";
+import {
+  CanvasWidgetView,
+  type OpenClawCanvasWidgetView,
+} from "../../../components/canvas-widget-view.tsx";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 
 type WidgetProperties = Pick<
@@ -50,11 +53,8 @@ function CanvasWidgetHost(props: {
       container.isConnected && typeof container.moveBefore === "function"
         ? parkedWidgets.get(props.widgetKey)
         : undefined;
-    const view = retained?.element ?? document.createElement("openclaw-canvas-widget-view");
+    const view = retained?.element ?? new CanvasWidgetView.Element();
     Object.assign(view, props.properties);
-    if (!customElements.get("openclaw-canvas-widget-view")) {
-      view.style.cssText = `display:block;min-height:${props.properties.preferredHeight ?? 420}px`;
-    }
     view.presentationActive = presented();
     if (retained) {
       container.moveBefore(view, null);
@@ -131,9 +131,8 @@ function CanvasWidgetHost(props: {
 
 export function CanvasWidgetMount(props: CanvasWidgetMountProps) {
   const properties = omit(props, "onElement");
-  const key = createMemo(() => `${props.sessionKey}\0${props.docId}`);
   return (
-    <Show when={key()} keyed>
+    <Show when={`${props.sessionKey}\0${props.docId}`} keyed>
       {(widgetKey) => (
         <CanvasWidgetHost
           properties={properties}

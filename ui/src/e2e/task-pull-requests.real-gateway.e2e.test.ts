@@ -1,9 +1,11 @@
 import { execFile } from "node:child_process";
+import { channel } from "node:diagnostics_channel";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import { withTimeout } from "@openclaw/fs-safe/advanced";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { createServer, type ViteDevServer } from "vite";
+import type { ViteDevServer } from "vite";
 import { expect, it, vi } from "vitest";
 import { replaceSessionEntrySync } from "../../../src/config/sessions/session-accessor.ts";
 import { GatewayClient } from "../../../src/gateway/client.ts";
@@ -13,6 +15,7 @@ import { repositoryGitHubPublicationDigest } from "../../../src/gateway/github-r
 import type { GatewayServer } from "../../../src/gateway/server-public.ts";
 import { racePromiseWithAbortSignal } from "../../../src/infra/abort-signal.ts";
 import { loadOrCreateDeviceIdentity } from "../../../src/infra/device-identity.ts";
+import { getWorkerComputeCapacity } from "../../../src/infra/worker-task-capacity.ts";
 import { createDeferredCore } from "../../../src/shared/deferred.ts";
 import { publicationRowDefaults } from "../../../src/state/github-publication-fixtures.test-support.ts";
 import type { RepositoryGitHubPublicationRow } from "../../../src/state/github-publication-read.types.ts";
@@ -26,9 +29,13 @@ import { getFreePort } from "../../../src/test-utils/ports.ts";
 import { cleanupSessionStateForTest } from "../../../src/test-utils/session-state-cleanup.ts";
 import { acquireGatewayTestClient } from "../../../test/helpers/gateway-client.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
+import { recordControlUiE2eFailureFacts } from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
+import { controlUiSessionUrl, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { deviceGatewayEnv } from "./device-gateway-env.test-support.ts";
+import { createGatewayProxy, gatewayProxyRoute } from "./gateway-proxy.test-support.ts";
+import { recordTaskPrDiagnostics } from "./task-pull-requests.diagnostics.test-support.ts";
 
 const parentKey = "agent:main:task-pr-parent";
 const selectedKey = "agent:main:release-planning";
@@ -38,6 +45,7 @@ const repository = "openclaw/openclaw";
 const branch = "proof/coordination-no-published-pr";
 const execFileAsync = promisify(execFile);
 const live = process.env.OPENCLAW_TASK_PR_LIVE_GITHUB === "1";
+const foregroundReadinessTimeoutMs = 30_000;
 const suite = createControlUiE2eSuite({
   name: "Delegated task PRs through a real Gateway",
   startServerBeforeBrowser: true,
@@ -159,6 +167,32 @@ suite.define(() => {
     let gateway: GatewayServer | undefined;
     let proxy: ViteDevServer | undefined;
     let restoreFetch: (() => void) | undefined;
+    const gitOperations = [
+      ["checkout.context", "Context"],
+      ["checkout.revision", "Revision"],
+      ["pull-request.branch-comparison", "Comparison"],
+      ["pull-request.branch-facts", "BranchFacts"],
+    ].map(([type, label]) => ({ type, label, count: 0, errors: 0, elapsedMs: 0 }));
+    const gitOperationChannel = channel("openclaw.git.operation");
+    const recordGitOperation = (message: unknown) => {
+      if (!isRecord(message) || typeof message.operation !== "string") {
+        return;
+      }
+      const operation = gitOperations.find((entry) => entry.type === message.operation);
+      if (!operation || typeof message.elapsedMs !== "number") {
+        return;
+      }
+      operation.count++;
+      operation.errors += Number(message.outcome === "error");
+      operation.elapsedMs += message.elapsedMs;
+    };
+    gitOperationChannel.subscribe(recordGitOperation);
+    test.onTestFinished(() => gitOperationChannel.unsubscribe(recordGitOperation));
+    const diagnostics = recordTaskPrDiagnostics([
+      parentKey,
+      ...numbers.map((_, index) => "agent:main:subagent:task-pr-child-" + index),
+    ]);
+    test.onTestFinished(diagnostics.stop);
     await suite.runScenario(test, {
       retainedState: () => state?.root,
       async run() {
@@ -170,14 +204,7 @@ suite.define(() => {
             GITHUB_TOKEN: undefined,
             OPENCLAW_GATEWAY_PASSWORD: undefined,
             OPENCLAW_GATEWAY_TOKEN: undefined,
-            OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-            OPENCLAW_SKIP_CANVAS_HOST: "1",
-            OPENCLAW_SKIP_CHANNELS: "1",
-            OPENCLAW_SKIP_CRON: "1",
-            OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-            OPENCLAW_SKIP_PROVIDERS: "1",
-            OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-            VITEST: "1",
+            ...deviceGatewayEnv,
           },
         });
         const port = await getFreePort();
@@ -270,27 +297,8 @@ suite.define(() => {
             sidecarStartup: "defer",
           });
         gateway = await start();
-        proxy = await createServer({
-          configFile: false,
-          envFile: false,
-          root: state.workspaceDir,
-          appType: "custom",
-          logLevel: "error",
-          server: {
-            host: "127.0.0.1",
-            port: 0,
-            proxy: {
-              "/": {
-                target: "http://127.0.0.1:" + port,
-                ws: true,
-                headers: {
-                  "x-forwarded-for": "192.0.2.10",
-                  "x-forwarded-proto": "http",
-                  "x-forwarded-user": viewerEmail,
-                },
-              },
-            },
-          },
+        proxy = await createGatewayProxy(state.workspaceDir, {
+          "/": gatewayProxyRoute(port, viewerEmail),
         });
         await proxy.listen();
         const proxyUrl = proxy.resolvedUrls?.local[0];
@@ -301,6 +309,11 @@ suite.define(() => {
         browserGatewayUrl.protocol = "ws:";
         // Browser WebSocket traffic is never replaced: only external GitHub HTTP is fixture-backed.
         for (const stage of ["initial", "restarted"] as const) {
+          const stageStartedAt = performance.now();
+          diagnostics.beginStage();
+          for (const operation of gitOperations) {
+            operation.count = operation.errors = operation.elapsedMs = 0;
+          }
           const requestsBeforeStage = githubRequests.length;
           await suite.withPage(
             {
@@ -318,9 +331,57 @@ suite.define(() => {
                 );
               });
               const snapshots: Record<string, unknown>[] = [];
-              page.on("websocket", (socket) =>
+              type Subscription = {
+                foreground: boolean;
+                passive: boolean;
+                acknowledged: boolean | null;
+              };
+              let latestSubscription: Subscription | undefined;
+              let foregroundEver = false;
+              let foregroundAcknowledged = false;
+              let foregroundRejected = false;
+              page.on("websocket", (socket) => {
+                const trace = diagnostics.socket();
+                socket.on("close", trace.close);
+                const pending = new Map<string, Subscription>();
+                socket.on("framesent", ({ payload }) => {
+                  const frame: unknown = JSON.parse(String(payload));
+                  trace.sent(frame);
+                  if (
+                    !isRecord(frame) ||
+                    frame.type !== "req" ||
+                    frame.method !== "controlUi.sessionPullRequests.subscribe" ||
+                    typeof frame.id !== "string" ||
+                    !isRecord(frame.params)
+                  ) {
+                    return;
+                  }
+                  const subscription: Subscription = {
+                    foreground:
+                      Array.isArray(frame.params.sessionKeys) &&
+                      frame.params.sessionKeys.includes(parentKey),
+                    passive:
+                      Array.isArray(frame.params.passiveSessionKeys) &&
+                      frame.params.passiveSessionKeys.includes(parentKey),
+                    acknowledged: null,
+                  };
+                  pending.set(frame.id, subscription);
+                  latestSubscription = subscription;
+                  foregroundEver ||= subscription.foreground;
+                });
                 socket.on("framereceived", ({ payload }) => {
                   const frame: unknown = JSON.parse(String(payload));
+                  trace.received(frame);
+                  if (isRecord(frame) && frame.type === "res" && typeof frame.id === "string") {
+                    const subscription = pending.get(frame.id);
+                    if (subscription) {
+                      subscription.acknowledged = frame.ok === true;
+                      foregroundAcknowledged ||=
+                        subscription.foreground && subscription.acknowledged;
+                      foregroundRejected ||= subscription.foreground && !subscription.acknowledged;
+                      pending.delete(frame.id);
+                    }
+                  }
                   if (
                     !isRecord(frame) ||
                     frame.event !== CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT ||
@@ -333,8 +394,8 @@ suite.define(() => {
                   if (isRecord(snapshot)) {
                     snapshots.push(snapshot);
                   }
-                }),
-              );
+                });
+              });
               const url = new URL(controlUiSessionUrl(suite.server.baseUrl, selectedKey));
               url.hash = new URLSearchParams({ gatewayUrl: browserGatewayUrl.href }).toString();
               await page.goto(url.href);
@@ -342,6 +403,7 @@ suite.define(() => {
                 .locator("openclaw-gateway-url-confirmation")
                 .getByRole("button", { name: "Switch to " + browserGatewayUrl.host, exact: true })
                 .click();
+              await waitForControlUiRoute(page, { routeId: "chat" });
               const row = page.locator(
                 '.sidebar-recent-session[data-session-key="' + parentKey + '"]',
               );
@@ -353,8 +415,15 @@ suite.define(() => {
                   return;
                 }
                 await row.locator(".sidebar-recent-session__link").focus();
-                await card.waitFor();
-                await expect.poll(() => snapshots.at(-1)?.status).toBeTruthy();
+                await card.waitFor({ timeout: foregroundReadinessTimeoutMs });
+                // The earlier passive receipt snapshot is already ready.
+                await expect
+                  .poll(() => latestSubscription)
+                  .toMatchObject({
+                    foreground: true,
+                    passive: false,
+                    acknowledged: true,
+                  });
                 activated = true;
               };
               try {
@@ -367,7 +436,9 @@ suite.define(() => {
                 await activate();
                 await expect.poll(() => snapshots.at(-1)?.taskPullRequestCount).toBe(3);
                 await expect
-                  .poll(() => snapshots.at(-1)?.taskPullRequests)
+                  .poll(() => snapshots.at(-1)?.taskPullRequests, {
+                    timeout: foregroundReadinessTimeoutMs,
+                  })
                   .toEqual(
                     expect.arrayContaining(
                       numbers.map((number, index) =>
@@ -390,9 +461,7 @@ suite.define(() => {
                   .poll(() => row.locator(".session-row-badge--pull-request").count())
                   .toBe(1);
                 expect(
-                  await card
-                    .getByRole("link", { name: "Create a pull request for " + branch })
-                    .count(),
+                  await card.getByRole("link", { name: "Create PR for " + branch }).count(),
                 ).toBe(1);
                 for (const number of numbers) {
                   expect(
@@ -403,6 +472,69 @@ suite.define(() => {
                       .count(),
                   ).toBe(1);
                 }
+              } catch (error) {
+                diagnostics.capture(page, stage);
+                const hydratedCount = (snapshot: Record<string, unknown> | undefined) =>
+                  Array.isArray(snapshot?.taskPullRequests)
+                    ? snapshot.taskPullRequests.filter(
+                        (item: unknown) => isRecord(item) && isRecord(item.pullRequest),
+                      ).length
+                    : 0;
+                const latestSnapshot = snapshots.at(-1);
+                const workerCompute = getWorkerComputeCapacity().getSnapshot();
+                recordControlUiE2eFailureFacts(page, {
+                  taskPrStageElapsedMs: performance.now() - stageStartedAt,
+                  ...Object.fromEntries(
+                    gitOperations.flatMap((operation) => [
+                      [`taskPrGit${operation.label}Completed`, operation.count],
+                      [`taskPrGit${operation.label}Errors`, operation.errors],
+                      [`taskPrGit${operation.label}ElapsedMs`, operation.elapsedMs],
+                    ]),
+                  ),
+                  taskPrWorkerComputeLimit: workerCompute.limit,
+                  taskPrWorkerComputeActive: workerCompute.active,
+                  taskPrWorkerComputeWaitingPools: workerCompute.waitingPools,
+                  taskPrWorkerComputePendingTasks: workerCompute.pendingTasks,
+                  taskPrWorkerComputePendingBytes: workerCompute.pendingBytes,
+                  taskPrSnapshotCount: snapshots.length,
+                  taskPrLatestReceiptCount: Array.isArray(latestSnapshot?.taskPullRequests)
+                    ? latestSnapshot.taskPullRequests.length
+                    : 0,
+                  taskPrLatestHydratedCount: hydratedCount(latestSnapshot),
+                  taskPrMaxHydratedCount: Math.max(0, ...snapshots.map(hydratedCount)),
+                  taskPrLatestReceiptOnly: latestSnapshot?.branchRead === false,
+                  taskPrLatestUnavailable: latestSnapshot?.status === "unavailable",
+                  taskPrForegroundEver: foregroundEver,
+                  taskPrForegroundAcknowledged: foregroundAcknowledged,
+                  taskPrForegroundRejected: foregroundRejected,
+                  taskPrLatestForeground: latestSubscription?.foreground ?? null,
+                  taskPrLatestPassive: latestSubscription?.passive ?? null,
+                  taskPrLatestAcknowledged: latestSubscription?.acknowledged ?? null,
+                  taskPrGithubRequestCount: githubRequests.length - requestsBeforeStage,
+                });
+                await withTimeout(
+                  page.evaluate((key) => {
+                    const diagnosticRow = document.querySelector(
+                      '.sidebar-recent-session[data-session-key="' + key + '"]',
+                    );
+                    const trigger = diagnosticRow?.querySelector(".sidebar-recent-session__link");
+                    const diagnosticCard = document.querySelector(".session-progress-hovercard");
+                    return {
+                      taskPrDocumentHidden: document.hidden,
+                      taskPrTriggerPresent: Boolean(trigger),
+                      taskPrTriggerFocused: Boolean(trigger && document.activeElement === trigger),
+                      taskPrCardPresent: Boolean(diagnosticCard),
+                      taskPrCardVisible:
+                        diagnosticCard?.checkVisibility({ visibilityProperty: true }) ?? false,
+                      taskPrCardRowCount:
+                        diagnosticCard?.querySelectorAll(".session-hovercard__pr-row").length ?? 0,
+                    };
+                  }, parentKey),
+                  1_000,
+                )
+                  .then((facts) => recordControlUiE2eFailureFacts(page, facts))
+                  .catch(() => undefined);
+                throw error;
               } finally {
                 // On red, show the same parent hovercard rather than a transient loading shell.
                 await activate();
@@ -496,14 +628,7 @@ suite.define(() => {
             GITHUB_TOKEN: undefined,
             OPENCLAW_GATEWAY_PASSWORD: undefined,
             OPENCLAW_GATEWAY_TOKEN: undefined,
-            OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-            OPENCLAW_SKIP_CANVAS_HOST: "1",
-            OPENCLAW_SKIP_CHANNELS: "1",
-            OPENCLAW_SKIP_CRON: "1",
-            OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-            OPENCLAW_SKIP_PROVIDERS: "1",
-            OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-            VITEST: "1",
+            ...deviceGatewayEnv,
           },
         });
         const ownerEmail = "task-authority-owner@example.test";
@@ -657,26 +782,13 @@ suite.define(() => {
           sidecarStartup: "defer",
         });
         const route = (email: string) => ({
-          target: origin,
-          ws: true,
+          ...gatewayProxyRoute(port, email),
           rewrite: () => "/",
-          headers: {
-            "x-forwarded-for": "192.0.2.10",
-            "x-forwarded-proto": "http",
-            "x-forwarded-user": email,
-          },
         });
-        proxy = await createServer({
-          configFile: false,
-          envFile: false,
-          root: state.workspaceDir,
-          appType: "custom",
-          logLevel: "error",
-          server: {
-            host: "127.0.0.1",
-            port: 0,
-            proxy: { "/owner": route(ownerEmail), "/a": route(aEmail), "/b": route(bEmail) },
-          },
+        proxy = await createGatewayProxy(state.workspaceDir, {
+          "/owner": route(ownerEmail),
+          "/a": route(aEmail),
+          "/b": route(bEmail),
         });
         await proxy.listen();
         const address = proxy.resolvedUrls?.local[0];

@@ -5,6 +5,7 @@ import {
   createChannelApproverDmTargetResolverAsync,
   createChannelNativeOriginTargetResolverAsync,
   createNativeApprovalChannelRouteGatesAsync,
+  createNativeApprovalMessagingTargetResolvers,
   shouldSuppressLocalNativeExecApprovalPrompt,
 } from "openclaw/plugin-sdk/approval-native-runtime";
 import type {
@@ -40,11 +41,6 @@ type GoogleChatApprovalTarget = {
   accountId?: string | null;
   threadId?: string | number | null;
 };
-type ChannelApprovalForwardTarget = Parameters<
-  NonNullable<
-    NonNullable<ChannelApprovalCapability["delivery"]>["shouldSuppressForwardingFallback"]
-  >
->[0]["target"];
 
 const DEFAULT_APPROVAL_FORWARDING_MODE = "session";
 
@@ -62,21 +58,11 @@ function isGoogleChatApprovalTransportEnabled(params: {
   );
 }
 
-function normalizeGoogleChatForwardTarget(
-  target: Pick<ChannelApprovalForwardTarget, "channel" | "to" | "accountId" | "threadId">,
-): GoogleChatApprovalTarget | null {
-  if (normalizeLowercaseStringOrEmpty(target.channel) !== "googlechat") {
-    return null;
-  }
-  const to = normalizeGoogleChatTarget(target.to);
-  return to
-    ? {
-        to,
-        accountId: normalizeOptionalString(target.accountId),
-        threadId: target.threadId ?? null,
-      }
-    : null;
-}
+const { normalizeForwardTarget: normalizeGoogleChatForwardTarget } =
+  createNativeApprovalMessagingTargetResolvers({
+    channel: "googlechat",
+    normalizeTo: normalizeGoogleChatTarget,
+  });
 
 function resolveTurnSourceGoogleChatOriginTarget(
   request: ApprovalRequest,

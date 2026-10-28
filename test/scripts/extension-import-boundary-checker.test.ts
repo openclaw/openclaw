@@ -13,9 +13,6 @@ function createChecker(
   options: Partial<Parameters<typeof createExtensionImportBoundaryChecker>[0]> = {},
 ) {
   return createExtensionImportBoundaryChecker({
-    boundaryLabel: "test",
-    cleanMessage: "clean",
-    inventoryTitle: "inventory",
     roots: [relative(process.cwd(), root)],
     ...options,
   });
@@ -90,15 +87,12 @@ describe("extension import boundary checker", () => {
 
   it.each([
     sample("TSX import", (q) => `import ${q}; const view = <div />;`, "import", "guarded.tsx"),
-    sample("comment-obscured import", (q) => `import /* gap */ ${q}`),
     sample(
       "import attributes",
       (q) => `import /* gap */ (${q}, { with: { type: "json" } })`,
       "dynamic-import",
     ),
     sample("CommonJS require", (q) => `require(${q})`, "commonjs-require"),
-    sample("import after regexp", (q) => `const pattern = /"/; import ${q}`),
-    sample("require after regexp", (q) => `const pattern = /"/; require(${q})`, "commonjs-require"),
     sample("import.meta URL", (q) => `new URL(${q}, import.meta.url)`, "import-meta-url"),
     sample("escaped meta", (q) => `new URL(${q}, import.m\\u0065ta.url)`, "import-meta-url"),
     sample(

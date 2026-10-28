@@ -155,7 +155,7 @@ export async function prepareSessionActivitySummaryView(
     storePath: string;
     admitted: boolean;
   },
-): Promise<SessionActivitySummary> {
+): Promise<() => SessionActivitySummary> {
   const watermark =
     params.entry && readSessionActivitySummary(params.entry)
       ? await readSessionTranscriptWatermarkAsync({
@@ -165,8 +165,10 @@ export async function prepareSessionActivitySummaryView(
           sessionId: params.entry.sessionId,
         })
       : undefined;
-  const projected = projectSessionActivitySummary({ ...params, watermark });
-  return !params.admitted && projected?.state !== "current"
-    ? { ...projected, state: "unavailable" }
-    : (projected ?? { state: "updating" });
+  return () => {
+    const projected = projectSessionActivitySummary({ ...params, watermark });
+    return !params.admitted && projected?.state !== "current"
+      ? { ...projected, state: "unavailable" }
+      : (projected ?? { state: "updating" });
+  };
 }

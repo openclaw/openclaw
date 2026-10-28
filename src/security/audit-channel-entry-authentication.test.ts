@@ -1,9 +1,10 @@
-// Covers the entry-authentication audit findings with a synthetic channel fixture;
-// bundled-channel classifier wiring is proven in each channel's own suite.
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { describe, expect, it, vi } from "vitest";
 import { identityEntryAuthenticationClassifier } from "../channels/message-access/runtime-identity.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
+import { stubAuditChannelPlugin } from "./audit-channel-test-helpers.js";
 import { collectChannelSecurityFindingsCore } from "./audit-channel.js";
 
 vi.mock("../channels/message-access/store-allow-from.js", () => ({
@@ -28,73 +29,38 @@ const classifyEntryAuthentication = identityEntryAuthenticationClassifier({
   ],
 });
 
-function createFixturePlugin(params: {
-  accounts: Record<
-    string,
-    {
-      allowFrom: Array<string | number>;
-      dangerouslyAllowNameMatching?: boolean;
-    }
-  >;
-}): ChannelPlugin {
-  const accountIds = Object.keys(params.accounts);
-  return {
+type FixtureAccount = { allowFrom: Array<string | number>; dangerouslyAllowNameMatching?: boolean };
+
+function createFixturePlugin(accounts: Record<string, FixtureAccount>): ChannelPlugin {
+  const accountIds = Object.keys(accounts);
+  const plugin = stubAuditChannelPlugin({
     id: "whatsapp",
-    meta: {
-      id: "whatsapp",
-      label: "WhatsApp",
-      selectionLabel: "WhatsApp",
-      docsPath: "/channels/whatsapp",
-      blurb: "Test",
-    },
-    capabilities: { chatTypes: ["direct"] },
-    config: {
-      listAccountIds: () => accountIds,
-      defaultAccountId: () => accountIds[0] ?? "default",
-      inspectAccount: (_cfg, accountId) => {
-        const resolvedAccountId = accountId ?? "default";
-        return {
-          accountId: resolvedAccountId,
-          enabled: true,
-          configured: true,
-          config: {
-            dangerouslyAllowNameMatching:
-              params.accounts[resolvedAccountId]?.dangerouslyAllowNameMatching,
-          },
-        };
-      },
-      resolveAccount: (_cfg, accountId) => {
-        const resolvedAccountId = accountId ?? "default";
-        return {
-          accountId: resolvedAccountId,
-          config: {
-            dangerouslyAllowNameMatching:
-              params.accounts[resolvedAccountId]?.dangerouslyAllowNameMatching,
-          },
-        };
-      },
-      isEnabled: () => true,
-      isConfigured: () => true,
-    },
-    security: {
-      resolveDmPolicy: ({ accountId }: { accountId?: string | null }) => {
-        const resolvedAccountId = accountId ?? "default";
-        const account = params.accounts[resolvedAccountId];
-        if (!account) {
-          return null;
-        }
-        const scope = resolvedAccountId === "default" ? "" : `accounts.${resolvedAccountId}.`;
-        return {
-          policy: "allowlist",
-          allowFrom: account.allowFrom,
-          policyPath: `channels.whatsapp.${scope}dmPolicy`,
-          allowFromPath: `channels.whatsapp.${scope}`,
-          approveHint: `approve ${resolvedAccountId}`,
-          classifyEntryAuthentication,
-        };
-      },
+    label: "WhatsApp",
+    commands: undefined,
+    collectAuditFindings: undefined,
+    resolveAccount: (_cfg, accountId) => ({
+      accountId: accountId ?? "default",
+      config: accounts[accountId ?? "default"],
+    }),
+  });
+  plugin.config.listAccountIds = () => accountIds;
+  plugin.config.defaultAccountId = () => accountIds[0] ?? "default";
+  plugin.security = {
+    resolveDmPolicy: ({ accountId }: { accountId?: string | null }) => {
+      const resolvedAccountId = accountId ?? "default";
+      const account = expectDefined(accounts[resolvedAccountId], "fixture account");
+      const scope = resolvedAccountId === "default" ? "" : `accounts.${resolvedAccountId}.`;
+      return {
+        policy: "allowlist",
+        allowFrom: account.allowFrom,
+        policyPath: `channels.whatsapp.${scope}dmPolicy`,
+        allowFromPath: `channels.whatsapp.${scope}`,
+        approveHint: `approve ${resolvedAccountId}`,
+        classifyEntryAuthentication,
+      };
     },
   };
+  return plugin;
 }
 
 describe("channel entry authentication audit", () => {
@@ -104,62 +70,53 @@ describe("channel entry authentication audit", () => {
   const cfg: OpenClawConfig = { session: { dmScope: "per-account-channel-peer" } };
 
   it.each([
-    { caseName: "default policy", allowFrom: [name, stableId], enabled: undefined, count: 1 },
-    { caseName: "stable IDs only", allowFrom: [stableId], enabled: false, count: 0 },
-    {
-      caseName: "access group reference",
-      allowFrom: ["accessGroup:operators"],
-      enabled: false,
-      count: 0,
-    },
-    {
-      caseName: "access group preview",
-      allowFrom: ["accessGroup:operators", name],
-      enabled: true,
-      count: 1,
-    },
-    { caseName: "wildcard excluded", allowFrom: [name, stableId, "*"], enabled: false, count: 1 },
-    { caseName: "lockout preview", allowFrom: [name, stableId], enabled: true, count: 1 },
-    { caseName: "zero lockout preview", allowFrom: [stableId], enabled: true, count: 0 },
-  ])("reports counts without identifiers: $caseName", async ({ allowFrom, enabled, count }) => {
-    const plugin = createFixturePlugin({
-      accounts: { default: { allowFrom, dangerouslyAllowNameMatching: enabled } },
-    });
-    const findings = await collectChannelSecurityFindingsCore({ cfg, plugins: [plugin] });
+    ["default policy", [name, stableId], undefined, 1],
+    ["stable IDs only", [stableId], false, 0],
+    ["access group reference", ["accessGroup:operators"], false, 0],
+    ["access group preview", ["accessGroup:operators", name], true, 1],
+    ["wildcard excluded", [name, stableId, "*"], false, 1],
+    ["lockout preview", [name, stableId], true, 1],
+    ["zero lockout preview", [stableId], true, 0],
+  ] satisfies [string, string[], boolean | undefined, number][])(
+    "reports counts without identifiers: %s",
+    async (_caseName, allowFrom, enabled, count) => {
+      const plugin = createFixturePlugin({
+        default: { allowFrom, dangerouslyAllowNameMatching: enabled },
+      });
+      const findings = await collectChannelSecurityFindingsCore({ cfg, plugins: [plugin] });
 
-    const configuredEntries = allowFrom.filter((raw) => raw !== "*");
-    const inert = findings.find((finding) => finding.checkId === inertCheckId);
-    if (!enabled && count > 0) {
-      expect(inert).toMatchObject({ severity: "warn" });
-      expect(inert?.detail).toContain(
-        `${count} of ${configuredEntries.length} entries in channels.whatsapp.allowFrom`,
-      );
-      expect(inert?.detail).toContain("silently inert");
-    } else {
-      expect(inert).toBeUndefined();
-    }
-    if (enabled) {
-      const preview = findings.find((finding) =>
-        finding.checkId.endsWith("dangerous_name_matching_enabled"),
-      );
-      expect(preview?.detail).toContain(
-        `${count} of ${configuredEntries.length} allowFrom entries depend on mutable matching`,
-      );
-      expect(preview?.detail).toContain("mutable_identifier_disabled");
-      expect(preview?.detail).toContain("identifier_authentication_too_weak");
-    }
-    const serialized = JSON.stringify(findings);
-    for (const raw of [name, stableId, "stored-only#9999"]) {
-      expect(serialized).not.toContain(raw);
-    }
-  });
+      const configuredEntries = allowFrom.filter((raw) => raw !== "*");
+      const inert = findings.find((finding) => finding.checkId === inertCheckId);
+      if (!enabled && count > 0) {
+        expect(inert).toMatchObject({ severity: "warn" });
+        expect(inert?.detail).toContain(
+          `${count} of ${configuredEntries.length} entries in channels.whatsapp.allowFrom`,
+        );
+        expect(inert?.detail).toContain("silently inert");
+      } else {
+        expect(inert).toBeUndefined();
+      }
+      if (enabled) {
+        const preview = findings.find((finding) =>
+          finding.checkId.endsWith("dangerous_name_matching_enabled"),
+        );
+        expect(preview?.detail).toContain(
+          `${count} of ${configuredEntries.length} allowFrom entries depend on mutable matching`,
+        );
+        expect(preview?.detail).toContain("mutable_identifier_disabled");
+        expect(preview?.detail).toContain("identifier_authentication_too_weak");
+      }
+      const serialized = JSON.stringify(findings);
+      for (const raw of [name, stableId, "stored-only#9999"]) {
+        expect(serialized).not.toContain(raw);
+      }
+    },
+  );
 
   it("uses the account policy and exposes inert entries to doctor", async () => {
     const plugin = createFixturePlugin({
-      accounts: {
-        default: { allowFrom: [stableId], dangerouslyAllowNameMatching: true },
-        work: { allowFrom: [name], dangerouslyAllowNameMatching: false },
-      },
+      default: { allowFrom: [stableId], dangerouslyAllowNameMatching: true },
+      work: { allowFrom: [name], dangerouslyAllowNameMatching: false },
     });
     const findings = await collectChannelSecurityFindingsCore({
       cfg,
@@ -176,8 +133,6 @@ describe("channel entry authentication audit", () => {
   });
 
   it("warns when real WhatsApp and Slack channel accounts use mutable toolsBySender keys without leaking identifiers", async () => {
-    const { loadBundledPluginFacade } =
-      await import("../test-utils/bundled-plugin-public-surface.js");
     const { whatsappSetupPlugin } = await loadBundledPluginFacade<{
       whatsappSetupPlugin: ChannelPlugin;
     }>({
@@ -196,6 +151,9 @@ describe("channel entry authentication audit", () => {
     const listReadOnlySpy = vi
       .spyOn(readOnlyPluginsModule, "listReadOnlyChannelPluginsForConfig")
       .mockReturnValue([whatsappSetupPlugin, slackPlugin]);
+    const readOverride = (sender: string) => ({
+      toolsBySender: { [sender]: { allow: ["read"] } },
+    });
 
     const auditConfig: OpenClawConfig = {
       session: { dmScope: "per-account-channel-peer" },
@@ -212,17 +170,11 @@ describe("channel entry authentication audit", () => {
             },
           },
           accounts: {
-            default: {
-              authDir: "/tmp/openclaw-whatsapp-default-audit-test",
-            },
+            default: { authDir: "/tmp/openclaw-whatsapp-default-audit-test" },
             work: {
               authDir: "/tmp/openclaw-whatsapp-work-audit-test",
               groups: {
-                "120363999999999@g.us": {
-                  toolsBySender: {
-                    "username:bob-handle": { allow: ["read"] },
-                  },
-                },
+                "120363999999999@g.us": readOverride("username:bob-handle"),
               },
             },
           },
@@ -231,13 +183,7 @@ describe("channel entry authentication audit", () => {
           enabled: true,
           botToken: "xoxb-test-token",
           appToken: "xapp-test-token",
-          channels: {
-            accounts: {
-              toolsBySender: {
-                "username:alice-handle": { allow: ["read"] },
-              },
-            },
-          },
+          channels: { accounts: readOverride("username:alice-handle") },
         },
       },
     };
@@ -247,55 +193,38 @@ describe("channel entry authentication audit", () => {
         config: auditConfig,
         sourceConfig: auditConfig,
         includeFilesystem: false,
-        includeChannelSecurity: true,
         loadPluginSecurityCollectors: false,
         plugins: [whatsappSetupPlugin, slackPlugin],
       });
       const doctorFindings = await collectSecurityWarnings(auditConfig);
 
       for (const findings of [report.findings, doctorFindings]) {
-        const whatsappDefaultFinding = findings.find(
-          (entry) =>
-            entry.checkId === "channels.whatsapp.toolsBySender.mutable_entries" &&
-            entry.title.includes("(account: default)"),
-        );
-        expect(whatsappDefaultFinding).toMatchObject({
-          severity: "warn",
-          detail: expect.stringContaining(
-            "1 toolsBySender entry in channels.whatsapp.accounts.default.groups.120363123456789@g.us.toolsBySender match mutable username:/name: sender attributes",
-          ),
-          remediation:
-            "Prefer stable id: keys in toolsBySender, especially for entries that grant extra tools or override group deny rules.",
-        });
-
-        const whatsappWorkFinding = findings.find(
-          (entry) =>
-            entry.checkId === "channels.whatsapp.toolsBySender.mutable_entries" &&
-            entry.title.includes("(account: work)"),
-        );
-        expect(whatsappWorkFinding).toMatchObject({
-          severity: "warn",
-          detail: expect.stringContaining(
-            "1 toolsBySender entry in channels.whatsapp.accounts.work.groups.120363999999999@g.us.toolsBySender match mutable username:/name: sender attributes",
-          ),
-        });
-
-        const slackFinding = findings.find(
-          (entry) => entry.checkId === "channels.slack.toolsBySender.mutable_entries",
-        );
-        expect(slackFinding).toMatchObject({
-          severity: "warn",
-          detail: expect.stringContaining(
-            "1 toolsBySender entry in channels.slack.channels.accounts.toolsBySender match mutable username:/name: sender attributes",
-          ),
-          remediation:
-            "Prefer stable id: keys in toolsBySender, especially for entries that grant extra tools or override group deny rules.",
-        });
-
+        for (const [channel, account, scope] of [
+          ["whatsapp", "default", "accounts.default.groups.120363123456789@g.us"],
+          ["whatsapp", "work", "accounts.work.groups.120363999999999@g.us"],
+          ["slack", "", "channels.accounts"],
+        ]) {
+          const finding = findings.find(
+            (entry) =>
+              entry.checkId === `channels.${channel}.toolsBySender.mutable_entries` &&
+              (!account || entry.title.includes(`(account: ${account})`)),
+          );
+          expect(finding).toMatchObject({
+            severity: "warn",
+            detail: expect.stringContaining(
+              `1 toolsBySender entry in channels.${channel}.${scope}.toolsBySender match mutable username:/name: sender attributes`,
+            ),
+          });
+          if (account !== "work") {
+            expect(finding?.remediation).toBe(
+              "Prefer stable id: keys in toolsBySender, especially for entries that grant extra tools or override group deny rules.",
+            );
+          }
+        }
         const serialized = JSON.stringify(findings);
-        expect(serialized).not.toContain("ops-lead-name");
-        expect(serialized).not.toContain("alice-handle");
-        expect(serialized).not.toContain("bob-handle");
+        for (const identifier of ["ops-lead-name", "alice-handle", "bob-handle"]) {
+          expect(serialized).not.toContain(identifier);
+        }
       }
     } finally {
       listReadOnlySpy.mockRestore();

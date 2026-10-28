@@ -1,8 +1,9 @@
 import type { TranscriptsGetResult } from "@openclaw/gateway-protocol";
 import MarkdownIt from "markdown-it";
-import { Show } from "solid-js";
+import { Errored, Loading, Show } from "solid-js";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import { SanitizedHtml } from "../../components/solid/sanitized-html.tsx";
+import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { TranscriptsViewProps } from "./view-types.ts";
 
@@ -42,9 +43,15 @@ function summaryNotesMarkdown(markdown: string): string {
 
 export function MeetingSummary(props: {
   page: TranscriptsGetResult;
-  generation: TranscriptsViewProps["summaryGeneration"];
+  generating: TranscriptsViewProps["summaryGenerating"];
+  completion: TranscriptsViewProps["summaryCompletion"];
+  read: TranscriptsViewProps["summaryRead"];
   onRetry: TranscriptsViewProps["onSummaryRetry"];
 }) {
+  const completed = () => {
+    props.read?.();
+    return null;
+  };
   const markdown = () => {
     const summary = props.page.summary;
     const titleLine = `# ${props.page.session.title || props.page.session.sessionId}\n`;
@@ -57,7 +64,7 @@ export function MeetingSummary(props: {
     );
   };
   return (
-    <section class="transcripts-summary">
+    <section class="transcripts-summary" aria-busy={props.generating ? "true" : "false"}>
       {props.page.summary ? (
         <>
           {props.page.session.active ? (
@@ -92,30 +99,40 @@ export function MeetingSummary(props: {
           </Show>
           <p class="transcripts-caption">{t("transcripts.summaryHint")}</p>
         </>
-      ) : props.generation?.kind === "loading" ? (
-        <div class="meetings-loading" role="status" aria-live="polite">
-          <span class="btn__spinner" aria-hidden="true" />
-          <span>{t("transcripts.generatingSummary")}</span>
-        </div>
-      ) : props.generation?.kind === "error" ? (
-        <div role="alert">
-          <p>
-            {t("transcripts.summaryError")} {props.generation.message}
-          </p>
-          <button class="btn" onClick={() => props.onRetry?.()}>
-            {t("common.retry")}
-          </button>
-        </div>
       ) : (
-        <p role="status">
-          {t(
-            props.page.session.utteranceCount === 0
-              ? props.page.session.active
-                ? "meetings.waitingForSpeech"
-                : "meetings.noSpeech"
-              : "transcripts.noSummary",
-          )}
-        </p>
+        <Loading
+          on={props.completion}
+          fallback={
+            <div class="meetings-loading" role="status" aria-live="polite">
+              <span class="btn__spinner" aria-hidden="true" />
+              <span>{t("transcripts.generatingSummary")}</span>
+            </div>
+          }
+        >
+          <Errored
+            fallback={(error) => (
+              <div role="alert">
+                <p>
+                  {t("transcripts.summaryError")} {formatUiError(error())}
+                </p>
+                <button class="btn" onClick={() => props.onRetry?.()}>
+                  {t("common.retry")}
+                </button>
+              </div>
+            )}
+          >
+            {completed()}
+            <p role="status">
+              {t(
+                props.page.session.utteranceCount === 0
+                  ? props.page.session.active
+                    ? "meetings.waitingForSpeech"
+                    : "meetings.noSpeech"
+                  : "transcripts.noSummary",
+              )}
+            </p>
+          </Errored>
+        </Loading>
       )}
     </section>
   );

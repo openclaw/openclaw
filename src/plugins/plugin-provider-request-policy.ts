@@ -1,8 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { PluginManifestRecord } from "./manifest-registry.types.js";
 import type { PluginManifestProviderRequestProvider } from "./manifest-types.js";
 
@@ -37,17 +34,8 @@ export function collectPluginProviderRequestOwners(plugins: readonly PluginManif
     { plugin: PluginManifestRecord; policy: PluginManifestProviderRequestProvider }
   >();
   for (const plugin of plugins) {
-    const requests = isRecord(plugin.providerRequest?.providers)
-      ? plugin.providerRequest.providers
-      : {};
-    for (const [rawProvider, request] of Object.entries(requests)) {
-      const provider = normalizeLowercaseStringOrEmpty(rawProvider);
-      if (provider && isRecord(request)) {
-        owners.set(provider, {
-          plugin,
-          policy: normalizeManifestProviderRequestProvider(request) ?? {},
-        });
-      }
+    for (const [provider, policy] of Object.entries(plugin.providerRequest?.providers ?? {})) {
+      owners.set(provider, { plugin, policy });
     }
   }
   return owners;

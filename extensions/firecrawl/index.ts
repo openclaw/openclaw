@@ -1,4 +1,8 @@
-import { optionalStringEnum } from "openclaw/plugin-sdk/channel-actions";
+import {
+  optionalNonNegativeIntegerSchema,
+  optionalPositiveIntegerSchema,
+  optionalStringEnum,
+} from "openclaw/plugin-sdk/channel-actions";
 import { definePluginEntry, type AnyAgentTool } from "openclaw/plugin-sdk/plugin-entry";
 import {
   jsonResult,
@@ -32,12 +36,9 @@ const FirecrawlScrapeToolSchema = Type.Object(
         description: "Keep only main content when Firecrawl supports it.",
       }),
     ),
-    maxAgeMs: Type.Optional(
-      Type.Integer({
-        description: "Maximum Firecrawl cache age in milliseconds.",
-        minimum: 0,
-      }),
-    ),
+    maxAgeMs: optionalNonNegativeIntegerSchema({
+      description: "Maximum Firecrawl cache age in milliseconds.",
+    }),
     proxy: optionalStringEnum(["auto", "basic", "stealth"] as const, {
       description: 'Firecrawl proxy mode ("auto", "basic", or "stealth").',
     }),
@@ -46,12 +47,9 @@ const FirecrawlScrapeToolSchema = Type.Object(
         description: "Whether Firecrawl should store the scrape in its cache.",
       }),
     ),
-    timeoutSeconds: Type.Optional(
-      Type.Integer({
-        description: "Timeout in seconds for the Firecrawl scrape request.",
-        minimum: 1,
-      }),
-    ),
+    timeoutSeconds: optionalPositiveIntegerSchema({
+      description: "Timeout in seconds for the Firecrawl scrape request.",
+    }),
   },
   { additionalProperties: false },
 );
@@ -59,13 +57,10 @@ const FirecrawlScrapeToolSchema = Type.Object(
 const FirecrawlSearchToolSchema = Type.Object(
   {
     query: Type.String({ description: "Search query string." }),
-    count: Type.Optional(
-      Type.Integer({
-        description: "Number of results to return (1-100).",
-        minimum: 1,
-        maximum: 100,
-      }),
-    ),
+    count: optionalPositiveIntegerSchema({
+      description: "Number of results to return (1-100).",
+      maximum: 100,
+    }),
     sources: Type.Optional(
       Type.Array(Type.String(), {
         description: 'Optional sources list, for example ["web"], ["news"], or ["images"].',
@@ -110,12 +105,9 @@ const FirecrawlSearchToolSchema = Type.Object(
         description: "Include scraped result content when Firecrawl returns it.",
       }),
     ),
-    timeoutSeconds: Type.Optional(
-      Type.Integer({
-        description: "Timeout in seconds for the Firecrawl Search request.",
-        minimum: 1,
-      }),
-    ),
+    timeoutSeconds: optionalPositiveIntegerSchema({
+      description: "Timeout in seconds for the Firecrawl Search request.",
+    }),
   },
   { additionalProperties: false },
 );

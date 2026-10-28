@@ -8,13 +8,15 @@ import {
   PluginInstallRuntimeBatch,
   type PluginInstallBatchReload,
 } from "../plugins/install-runtime-batch.js";
-import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
+import { withPluginLifecycleLeaseAsync } from "../plugins/plugin-lifecycle-lease.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
-import { withOpenClawStateLease } from "../state/openclaw-state-lease.js";
+import { withOpenClawStateLeaseAsync } from "../state/openclaw-state-lease.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import {
-  applyClawAddPlanStateless,
+  type applyClawAddPlanStateless,
   stageClawAddHostRequirementsStateless,
+  type StatelessClawAddOptions,
 } from "./add-stateless.js";
 import { ClawAddMutationError } from "./add.js";
 import { withResolvedClawHubSource, type ClawHubCoordinate } from "./clawhub-source.js";
@@ -39,8 +41,8 @@ import {
 import type { ClawAddPlan } from "./types.js";
 
 export class ClawGatewayPlanChangedError extends Error {
-  constructor(message = "The Claw changed since review. Preview it again.") {
-    super(message);
+  constructor() {
+    super("The Claw changed since review. Preview it again.");
     this.name = "ClawGatewayPlanChangedError";
   }
 }
@@ -61,7 +63,7 @@ export type GatewayClawAddApplyResult = {
 
 type StagedAddHandoff = {
   stage: Awaited<ReturnType<typeof stageClawAddHostRequirementsStateless>>;
-  runtimeBatch: PluginInstallRuntimeBatch;
+  runtimeBatch?: PluginInstallRuntimeBatch;
   readiness: GatewayClawAddApplyResult["readiness"];
 };
 
@@ -79,7 +81,12 @@ export async function applyClawAddForGateway(
     signal?: AbortSignal;
     stateDir?: string;
     reloadPlugins?: PluginInstallBatchReload;
-    cronGateway?: Pick<ClawCronGateway, "add" | "list" | "waitUntilAgentAvailable"> &
+    configWriteOptions?: StatelessClawAddOptions["configWriteOptions"];
+    waitForAgentRuntime?: () => Promise<void>;
+    cronGateway?: Pick<
+      ClawCronGateway,
+      "add" | "list" | "waitUntilAgentAvailable" | "writeScratch" | "enable"
+    > &
       Partial<Pick<ClawCronGateway, "get" | "remove">>;
     rollbackNewAgent?: (
       agentId: string,
@@ -89,6 +96,7 @@ export async function applyClawAddForGateway(
   },
 ): Promise<GatewayClawAddApplyResult> {
   input.assertCurrent();
+  const stateContext = captureOpenClawStateWorkerContext({ env: input.policyConfig.env });
   let settledResult: GatewayClawAddApplyResult | undefined;
   try {
     const resolved = await withResolvedClawHubSource({
@@ -98,14 +106,12 @@ export async function applyClawAddForGateway(
       ...(input.baseUrl ? { baseUrl: input.baseUrl } : {}),
       ...(input.token ? { token: input.token } : {}),
       ...(input.timeoutMs ? { timeoutMs: input.timeoutMs } : {}),
-      ...(input.fetchImpl ? { fetchImpl: input.fetchImpl } : {}),
       ...(input.stateDir ? { stateDir: input.stateDir } : {}),
       run: async (source, trust, persistSource) =>
-        await withOpenClawStateLease(
+        await withOpenClawStateLeaseAsync(
           {
             scope: "core:claw-add-allocation",
             key: normalizeAgentId(source.manifest.agent.id),
-            database: { scope: "shared", options: {} },
             leaseMs: 60_000,
             waitMs: 10 * 60_000,
             heartbeat: "worker",
@@ -113,10 +119,11 @@ export async function applyClawAddForGateway(
             leaseLabel: "Claw agent allocation",
             operationLabel: "claw.add.allocation",
           },
+          stateContext,
           async (allocationLease) => {
             const assertAllocationCurrent = () => {
               input.assertCurrent();
-              allocationLease.assertOwned();
+              allocationLease.assertCurrent();
             };
             assertAllocationCurrent();
             const initialContext = await input.getPlanningContext();
@@ -145,11 +152,10 @@ export async function applyClawAddForGateway(
                 initialProjection.blockers[0]?.message ?? "This Claw cannot be added right now.",
               );
             }
-            return await withOpenClawStateLease(
+            return await withOpenClawStateLeaseAsync(
               {
                 scope: "core:agent-deletion",
                 key: initialPlan.agent.finalId,
-                database: { scope: "shared", options: {} },
                 leaseMs: 60_000,
                 waitMs: 5_000,
                 heartbeat: "worker",
@@ -157,10 +163,16 @@ export async function applyClawAddForGateway(
                 leaseLabel: "Claw add",
                 operationLabel: "claw.add.lease",
               },
+              stateContext,
               async (lease) => {
                 const assertCurrent = () => {
                   assertAllocationCurrent();
-                  lease.assertOwned();
+                  lease.assertCurrent();
+                };
+                const prepareEffect = async () => {
+                  await allocationLease.assertOwned();
+                  await lease.assertOwned();
+                  assertCurrent();
                 };
                 const settleResult = (
                   result: Awaited<ReturnType<typeof applyClawAddPlanStateless>>,
@@ -207,7 +219,7 @@ export async function applyClawAddForGateway(
                   return settleResult(result, readiness, precedingStageError?.code);
                 };
                 let abortableStage: StagedAddHandoff | undefined;
-                const prepared = await withPluginLifecycleLease(
+                const prepared = await withPluginLifecycleLeaseAsync(
                   {
                     env: input.policyConfig.env,
                     signal: input.signal,
@@ -277,6 +289,7 @@ export async function applyClawAddForGateway(
                           );
                         }
                         assertCurrent();
+                        await prepareEffect();
                         const persisted = await persistSource();
                         assertCurrent();
                         const persistedContext = {
@@ -362,7 +375,7 @@ export async function applyClawAddForGateway(
                             ? new PluginInstallRuntimeBatch(
                                 { env: input.policyConfig.env },
                                 (targets) =>
-                                  withPluginLifecycleLease(
+                                  withPluginLifecycleLeaseAsync(
                                     {
                                       env: input.policyConfig.env,
                                       signal: input.signal,
@@ -384,6 +397,8 @@ export async function applyClawAddForGateway(
                                             assertCurrent();
                                           };
                                           assertRuntimePolicyCurrent();
+                                          await prepareEffect();
+                                          assertRuntimePolicyCurrent();
                                           return await reloadPlugins(targets, {
                                             commitGuard: assertRuntimePolicyCurrent,
                                           });
@@ -395,9 +410,14 @@ export async function applyClawAddForGateway(
                         const applyOptions = {
                           stateMode: "worker" as const,
                           assertCurrent,
+                          prepareEffect,
+                          leaseSet: { context: stateContext, leases: [allocationLease, lease] },
                           getCurrentConfig: getCurrentClawsConfig,
                           assertReviewedConfig,
                           config: persistedContext.config,
+                          ...(input.configWriteOptions
+                            ? { configWriteOptions: input.configWriteOptions }
+                            : {}),
                           consentPlanIntegrity: persistedPlan.planIntegrity,
                           ...(pluginConsent ? { pluginConsent } : {}),
                           ...(skillConsent ? { skillConsent } : {}),
@@ -423,22 +443,12 @@ export async function applyClawAddForGateway(
                           requirements: [],
                         };
                         assertCurrent();
-                        if (!runtimeBatch) {
-                          const result = await applyClawAddPlanStateless(
-                            persistedPlan,
-                            applyOptions,
-                          );
-                          return {
-                            kind: "settled" as const,
-                            result: settleResult(result, readiness),
-                          };
-                        }
                         const stage = await stageClawAddHostRequirementsStateless(
                           persistedPlan,
                           applyOptions,
                         );
                         abortableStage = { stage, runtimeBatch, readiness };
-                        await runtimeBatch.prepare(pluginLease);
+                        await runtimeBatch?.prepare(pluginLease);
                         const installOwners =
                           stage.kind === "ready"
                             ? await snapshotClawPluginInstallOwners(pluginIds, pluginLease)
@@ -457,27 +467,28 @@ export async function applyClawAddForGateway(
                   if (!abortableStage) {
                     throw error;
                   }
-                  abortableStage.runtimeBatch.close();
+                  abortableStage.runtimeBatch?.close();
                   return {
                     kind: "aborted" as const,
                     result: await failBatch(abortableStage, error, "package_runtime_failed"),
                   };
                 });
-                if (prepared.kind === "settled" || prepared.kind === "aborted") {
+                if (prepared.kind === "aborted") {
                   return prepared.result;
                 }
                 const { stage, runtimeBatch, applyOptions, readiness, installOwners } = prepared;
                 try {
-                  await runtimeBatch.finish((message) => defaultRuntime.log(message));
+                  await runtimeBatch?.finish((message) => defaultRuntime.log(message));
                 } catch (error) {
                   return await failBatch(prepared, error, "package_runtime_failed");
                 }
                 if (stage.kind === "partial") {
                   return settleResult(stage.result, readiness);
                 }
-                let continuationStarted = false;
-                try {
-                  return await withPluginLifecycleLease(
+                const withCurrentAddPolicy = async <T>(
+                  run: (options: StatelessClawAddOptions) => Promise<T>,
+                ): Promise<T> =>
+                  withPluginLifecycleLeaseAsync(
                     {
                       env: input.policyConfig.env,
                       signal: input.signal,
@@ -499,21 +510,55 @@ export async function applyClawAddForGateway(
                             return config;
                           };
                           getCurrentClawsConfig();
-                          continuationStarted = true;
-                          const result = await stage.continue({
+                          return await run({
                             ...applyOptions,
                             runtimeBatch: undefined,
                             getCurrentConfig: getCurrentClawsConfig,
                           });
-                          return settleResult(result, readiness);
                         },
                       ),
                   );
-                } catch (error) {
-                  if (!continuationStarted) {
-                    return await failBatch(prepared, error, "policy_recheck_failed");
+                let continuationStarted = false;
+                const agentStage = await withCurrentAddPolicy(async (options) => {
+                  continuationStarted = true;
+                  return await stage.stageAgent(options);
+                }).catch(async (error: unknown) => {
+                  if (continuationStarted) {
+                    throw error;
                   }
-                  throw error;
+                  return {
+                    kind: "partial" as const,
+                    result: await stage.failBeforeContinue(error, "policy_recheck_failed"),
+                  };
+                });
+                if (agentStage.kind === "partial") {
+                  return settleResult(agentStage.result, readiness);
+                }
+                // The reload owner needs the plugin lease to admit the new agent's
+                // database and publish its runtime roster before cron can use it.
+                try {
+                  await input.waitForAgentRuntime?.();
+                  assertCurrent();
+                } catch (error) {
+                  return settleResult(
+                    await agentStage.fail(error, "agent_runtime_failed"),
+                    readiness,
+                  );
+                }
+                let finishStarted = false;
+                try {
+                  return await withCurrentAddPolicy(async (options) => {
+                    finishStarted = true;
+                    return settleResult(await agentStage.finish(options), readiness);
+                  });
+                } catch (error) {
+                  if (finishStarted) {
+                    throw error;
+                  }
+                  return settleResult(
+                    await agentStage.fail(error, "policy_recheck_failed"),
+                    readiness,
+                  );
                 }
               },
             );

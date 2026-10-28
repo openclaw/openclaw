@@ -19,8 +19,7 @@ import {
 } from "../infra/exec-approvals.js";
 import { applyExecPolicyLayer } from "../infra/exec-policy.js";
 import { resolveAgentConfig, resolveSessionAgentId } from "./agent-scope.js";
-import { resolveExecTarget } from "./bash-tools.exec-runtime.js";
-import { isRequestedExecTargetAllowed } from "./bash-tools.exec-target.js";
+import { isRequestedExecTargetAllowed, resolveExecTarget } from "./bash-tools.exec-target.js";
 import {
   resolveSandboxRuntimeStatus,
   withSandboxRuntimeStatusInWorker,

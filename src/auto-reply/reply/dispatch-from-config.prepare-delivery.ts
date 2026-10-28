@@ -2,8 +2,10 @@ import { isParentOwnedBackgroundAcpSession } from "@openclaw/acp-core/session-in
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { withAcpSessionEntryRead } from "../../acp/runtime/session-meta-read.js";
+import { normalizeChatType } from "../../channels/chat-type.js";
 import { logVerbose } from "../../globals.js";
 import { RUN_STALE_TAKEOVER_MS } from "../../logging/diagnostic-run-activity.js";
+import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import {
   copyReplyPayloadMetadata,
@@ -17,7 +19,6 @@ import {
   loadReplyMediaPathsRuntime,
   loadRouteReplyRuntime,
 } from "./dispatch-from-config.runtime-loaders.js";
-import { resolveReplyPolicyConversationType } from "./get-reply-conversation-type.js";
 import type { ReplyDispatchKind, ReplyDispatchOperation } from "./reply-dispatcher.types.js";
 import { beginReplyOperationFinalizationWork } from "./reply-run-finalization-lease.js";
 import {
@@ -26,7 +27,16 @@ import {
   resolveReplyToMode,
 } from "./reply-threading.js";
 import type { ResponsePrefixContext } from "./response-prefix-template.js";
-import { resolveReplyRoutingDecision } from "./routing-policy.js";
+
+function resolveReplyPolicyConversationType(ctx: GatherDispatchRequestReadyState["ctx"]) {
+  const sourceSessionKey = ctx.SessionKey;
+  const targetSessionKey = resolveCommandTurnTargetSessionKey(ctx);
+  if (targetSessionKey && targetSessionKey !== sourceSessionKey) {
+    return undefined;
+  }
+  const chatType = normalizeChatType(ctx.ChatType);
+  return chatType === "channel" ? "group" : chatType;
+}
 
 export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyState) {
   const {
@@ -68,25 +78,39 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
   assertPreparationCurrent();
   const effectiveExplicitDeliverRoute =
     ctx.ExplicitDeliverRoute === true || replyRoute.inheritedExternalRoute === true;
-  const resolveRouting = (isRoutableChannel: (channel: string | undefined) => boolean) =>
-    resolveReplyRoutingDecision({
-      provider: ctx.Provider,
-      surface: ctx.Surface,
-      explicitDeliverRoute: effectiveExplicitDeliverRoute,
-      originatingChannel: replyRoute.channel,
-      originatingTo: replyRoute.to,
-      suppressDirectUserDelivery: suppressAcpChildUserDelivery,
-      isRoutableChannel,
-    });
+  const resolveRouting = (isRoutableChannel: (channel: string | undefined) => boolean) => {
+    const originatingChannel = normalizeMessageChannel(replyRoute.channel);
+    const providerChannel = normalizeMessageChannel(ctx.Provider);
+    const surfaceChannel = normalizeMessageChannel(ctx.Surface);
+    const resolvedSurface = providerChannel ?? surfaceChannel;
+    const internalWebchatTurn =
+      resolvedSurface === INTERNAL_MESSAGE_CHANNEL &&
+      (surfaceChannel === INTERNAL_MESSAGE_CHANNEL || !surfaceChannel) &&
+      !effectiveExplicitDeliverRoute;
+    const routeToOriginating = Boolean(
+      !suppressAcpChildUserDelivery &&
+      !internalWebchatTurn &&
+      isRoutableChannel(originatingChannel) &&
+      replyRoute.to &&
+      originatingChannel !== resolvedSurface,
+    );
+    return {
+      originatingChannel,
+      currentSurface: resolvedSurface,
+      isInternalWebchatTurn: internalWebchatTurn,
+      shouldRouteToOriginating: routeToOriginating,
+      shouldSuppressTyping:
+        suppressAcpChildUserDelivery ||
+        routeToOriginating ||
+        originatingChannel === INTERNAL_MESSAGE_CHANNEL,
+    };
+  };
   const {
     currentSurface: normalizedCurrentSurface,
     isInternalWebchatTurn,
     shouldRouteToOriginating: hasRouteReplyCandidate,
   } = resolveRouting(Boolean);
-  const routeReplyRuntime =
-    hasRouteReplyCandidate && !state.replyOperationRunState.heartbeat
-      ? await loadRouteReplyRuntime()
-      : undefined;
+  const routeReplyRuntime = hasRouteReplyCandidate ? await loadRouteReplyRuntime() : undefined;
   const {
     originatingChannel: routeReplyChannel,
     currentSurface,
@@ -103,11 +127,9 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
     routeReplyTo &&
     routeReplyChannel === normalizedCurrentSurface,
   );
-  // Heartbeat's custom dispatcher routes the reply, but synthesis still needs its destination.
-  const deliveryChannel =
-    shouldRouteToOriginating || state.replyOperationRunState.heartbeat
-      ? (routeReplyChannel ?? currentSurface)
-      : currentSurface;
+  const deliveryChannel = shouldRouteToOriginating
+    ? (routeReplyChannel ?? currentSurface)
+    : currentSurface;
   const { preparedTtsPreferences, getDispatchReplyOperation } = state;
   const maybeApplyTtsWithFinalizationLease = async (
     payload: ReplyPayload,

@@ -45,6 +45,20 @@ function visualizeSkillPath(home: string) {
   return path.join(home, ".codex/plugins/cache/openai-bundled/visualize/skills/visualize/SKILL.md");
 }
 
+function skillClient(
+  home: string,
+  respond: Parameters<typeof createFakeCodexAppServerClient>[0] = async () => skillResponse(home),
+) {
+  const fixture = createFakeCodexAppServerClient(respond);
+  return {
+    ...fixture,
+    load: (
+      options: Partial<Omit<Parameters<typeof resolveCodexNativeSkillIsolation>[0], "client">> = {},
+    ) => resolveCodexNativeSkillIsolation({ client: fixture.client, cwd: home, ...options }),
+    changed: () => fixture.notify({ method: "skills/changed", params: {} }),
+  };
+}
+
 it("refreshes isolated skill rules on native changes and coalesces each client snapshot", async () => {
   return withNativeSkillHome(async (home) => {
     const codexHome = path.join(home, "scratch-state", "codex");
@@ -52,14 +66,9 @@ it("refreshes isolated skill rules on native changes and coalesces each client s
     const pluginSkill = path.join(home, "plugin-cache", "skills", "plugin", "SKILL.md");
     const instanceSkill = path.join(codexHome, "skills", "instance", "SKILL.md");
     const skills: CodexSkillsListResponse["data"][number]["skills"] = [];
-    const fixture = createFakeCodexAppServerClient(async () => skillResponse(home, skills));
-    const { client, request } = fixture;
+    const { load, changed, request } = skillClient(home, async () => skillResponse(home, skills));
 
-    const params = { client, codexHome, cwd: home };
-    const [first, second] = await Promise.all([
-      resolveCodexNativeSkillIsolation(params),
-      resolveCodexNativeSkillIsolation(params),
-    ]);
+    const [first, second] = await Promise.all([load({ codexHome }), load({ codexHome })]);
     expect(second).toBe(first);
     expect(first?.disabledUserSkillPaths).toEqual([]);
     expect(request).toHaveBeenCalledTimes(1);
@@ -72,11 +81,8 @@ it("refreshes isolated skill rules on native changes and coalesces each client s
       await writeSkill(skillPath, name);
       skills.push(skill(name, skillPath, "user"));
     }
-    await fixture.notify({ method: "skills/changed", params: {} });
-    const [refreshed, shared] = await Promise.all([
-      resolveCodexNativeSkillIsolation(params),
-      resolveCodexNativeSkillIsolation(params),
-    ]);
+    await changed();
+    const [refreshed, shared] = await Promise.all([load({ codexHome }), load({ codexHome })]);
     expect(shared).toBe(refreshed);
     expect(request).toHaveBeenCalledTimes(2);
     const enabledRules = [pluginSkill, instanceSkill].map((skillPath) => ({
@@ -93,10 +99,7 @@ it("refreshes isolated skill rules on native changes and coalesces each client s
       ],
     });
 
-    await resolveCodexNativeSkillIsolation({
-      client,
-      cwd: path.join(home, "another-workspace"),
-    });
+    await load({ cwd: path.join(home, "another-workspace") });
     expect(request).toHaveBeenCalledTimes(3);
   });
 });
@@ -107,11 +110,9 @@ it("retries a failed native skill reload instead of caching its rejection", asyn
       .fn()
       .mockRejectedValueOnce(new Error("skill reload failed"))
       .mockResolvedValue(skillResponse(home));
-    const { client } = createFakeCodexAppServerClient(request);
-
-    const params = { client, cwd: home };
-    await expect(resolveCodexNativeSkillIsolation(params)).rejects.toThrow("skill reload failed");
-    await expect(resolveCodexNativeSkillIsolation(params)).resolves.toEqual({
+    const { load } = skillClient(home, request);
+    await expect(load()).rejects.toThrow("skill reload failed");
+    await expect(load()).resolves.toEqual({
       disabledUserSkillPaths: [],
       suppressNativeSkillInstructions: true,
     });
@@ -121,20 +122,16 @@ it("retries a failed native skill reload instead of caching its rejection", asyn
 
 it("does not share native skill reloads across independently cancellable turns", async () => {
   return withNativeSkillHome(async (home) => {
-    const { client, request } = createFakeCodexAppServerClient(async () => skillResponse(home));
+    const { load, request } = skillClient(home);
     const firstSignal = new AbortController();
     const secondSignal = new AbortController();
 
     await Promise.all([
-      resolveCodexNativeSkillIsolation({ client, cwd: home, signal: firstSignal.signal }),
-      resolveCodexNativeSkillIsolation({ client, cwd: home, signal: secondSignal.signal }),
+      load({ signal: firstSignal.signal }),
+      load({ signal: secondSignal.signal }),
     ]);
     expect(request).toHaveBeenCalledTimes(2);
-    await resolveCodexNativeSkillIsolation({
-      client,
-      cwd: home,
-      signal: new AbortController().signal,
-    });
+    await load({ signal: new AbortController().signal });
     expect(request).toHaveBeenCalledTimes(2);
   });
 });
@@ -158,14 +155,12 @@ it("restarts an in-flight scan after native skills change in an already-read roo
       }
       return await openDirectory(...args);
     });
-    const fixture = createFakeCodexAppServerClient(async () => skillResponse(home));
-    const { client, request } = fixture;
-
-    const resolving = resolveCodexNativeSkillIsolation({ client, cwd: home });
+    const { load, changed, request } = skillClient(home);
+    const resolving = load();
     try {
       await scanPaused.promise;
       await writeSkill(lateSkill, "late");
-      await fixture.notify({ method: "skills/changed", params: {} });
+      await changed();
       releaseScan.resolve();
       await expect(resolving).resolves.toEqual({
         disabledUserSkillPaths: [lateSkill],
@@ -187,7 +182,7 @@ it("keeps a refreshed snapshot when an invalidated reload is later canceled", as
     const lateSkill = path.join(home, ".agents", "skills", "late", "SKILL.md");
     const firstController = new AbortController();
     let firstRequest = true;
-    const fixture = createFakeCodexAppServerClient(async () => {
+    const { load, changed, request } = skillClient(home, async () => {
       if (firstRequest) {
         firstRequest = false;
         firstRequestStarted.resolve();
@@ -196,23 +191,17 @@ it("keeps a refreshed snapshot when an invalidated reload is later canceled", as
       }
       return skillResponse(home);
     });
-    const { client, request } = fixture;
-
-    const first = resolveCodexNativeSkillIsolation({
-      client,
-      cwd: home,
-      signal: firstController.signal,
-    });
+    const first = load({ signal: firstController.signal });
     try {
       await firstRequestStarted.promise;
       await writeSkill(lateSkill, "late");
-      await fixture.notify({ method: "skills/changed", params: {} });
-      const refreshed = await resolveCodexNativeSkillIsolation({ client, cwd: home });
+      await changed();
+      const refreshed = await load();
       expect(refreshed?.disabledUserSkillPaths).toEqual([lateSkill]);
       firstController.abort(new Error("turn canceled"));
       releaseFirstRequest.resolve();
       await expect(first).rejects.toThrow("turn canceled");
-      expect(await resolveCodexNativeSkillIsolation({ client, cwd: home })).toBe(refreshed);
+      expect(await load()).toBe(refreshed);
       expect(request).toHaveBeenCalledTimes(2);
     } finally {
       releaseFirstRequest.resolve();
@@ -253,7 +242,7 @@ it("disables native user-scope skills only for non-default state directories", a
       "dir",
     );
     await fs.symlink(nestedSymlinkTarget, skillNamedDirectoryLink, "dir");
-    const { client, request } = createFakeCodexAppServerClient(async () =>
+    const { load, request } = skillClient(home, async () =>
       skillResponse(workspace, [
         skill("personal", personalSkill, "user"),
         skill("project", projectSkill, "repo"),
@@ -264,10 +253,10 @@ it("disables native user-scope skills only for non-default state directories", a
         skill("nested", nestedSymlinkSkill, "user"),
       ]),
     );
-    const params = { client, codexHome: customCodexHome, cwd: workspace };
+    const params = { codexHome: customCodexHome, cwd: workspace };
     await expect(
       withEnvAsync({ HOME: home, OPENCLAW_STATE_DIR: path.join(home, ".openclaw") }, () =>
-        resolveCodexNativeSkillIsolation(params),
+        load(params),
       ),
     ).resolves.toBe(undefined);
     expect(request).toHaveBeenCalledTimes(1);
@@ -277,7 +266,7 @@ it("disables native user-scope skills only for non-default state directories", a
         HOME: path.join(home, "gateway-home"),
         OPENCLAW_STATE_DIR: path.join(home, "scratch-state"),
       },
-      () => resolveCodexNativeSkillIsolation({ ...params, home }),
+      () => load({ ...params, home }),
     );
     expect(request).toHaveBeenLastCalledWith(
       "skills/list",
@@ -310,11 +299,11 @@ it.runIf(process.platform !== "win32")(
       const personalSkillRealPath = await writeSkill(personalSkill, "personal");
       const outsideSkillRealPath = await writeSkill(outsideSkill, "outside");
       await fs.symlink(path.join(skillsDir, "loop"), path.join(skillsDir, "loop"));
-      const { client } = createFakeCodexAppServerClient(async () =>
+      const { load } = skillClient(home, async () =>
         skillResponse(home, [skill("outside", outsideSkillRealPath, "user", "Outside")]),
       );
 
-      const isolation = await resolveCodexNativeSkillIsolation({ client, cwd: home });
+      const isolation = await load();
       expect(isolation?.disabledUserSkillPaths).toEqual([
         personalSkillRealPath,
         outsideSkillRealPath,
@@ -326,12 +315,12 @@ it.runIf(process.platform !== "win32")(
 it("captures a personal skill created during the authoritative Codex reload", async () => {
   return withNativeSkillHome(async (home) => {
     const skillPath = path.join(home, ".claude", "skills", "late", "SKILL.md");
-    const { client } = createFakeCodexAppServerClient(async () => {
+    const { load } = skillClient(home, async () => {
       await writeSkill(skillPath, "late");
       return skillResponse(home);
     });
 
-    const isolation = await resolveCodexNativeSkillIsolation({ client, cwd: home });
+    const isolation = await load();
     expect(isolation?.disabledUserSkillPaths).toEqual([await fs.realpath(skillPath)]);
   });
 });
@@ -340,7 +329,7 @@ it("disables renderer-incompatible Codex skills via legacy cache identity with i
   await withNativeSkillHome(async (home) => {
     const visualizeSkill = visualizeSkillPath(home);
     const otherSkill = path.join(home, ".codex", "plugins", "cache", "other", "SKILL.md");
-    const { client, request } = createFakeCodexAppServerClient(async () =>
+    const { load, request } = skillClient(home, async () =>
       skillResponse(home, [
         skill("visualize", visualizeSkill, "user", "Render inline visualizations"),
         {
@@ -352,7 +341,7 @@ it("disables renderer-incompatible Codex skills via legacy cache identity with i
 
     const isolation = await withEnvAsync(
       { CODEX_HOME: undefined, HOME: home, OPENCLAW_STATE_DIR: undefined },
-      () => resolveCodexNativeSkillIsolation({ client, cwd: home }),
+      () => load(),
     );
     const config = {
       "skills.include_instructions": true,
@@ -385,16 +374,15 @@ it("retries error-bearing default-state skill discovery responses", async () => 
           },
         ]),
       );
-    const { client } = createFakeCodexAppServerClient(request);
+    const { load } = skillClient(home, request);
 
     await withEnvAsync(
       { CODEX_HOME: undefined, HOME: home, OPENCLAW_STATE_DIR: path.join(home, ".openclaw") },
       async () => {
-        const params = { client, cwd: home };
-        await expect(resolveCodexNativeSkillIsolation(params)).resolves.toBe(undefined);
-        const recovered = await resolveCodexNativeSkillIsolation(params);
+        await expect(load()).resolves.toBe(undefined);
+        const recovered = await load();
         expect(recovered?.disabledUserSkillPaths).toEqual([visualizeSkill]);
-        await expect(resolveCodexNativeSkillIsolation(params)).resolves.toBe(recovered);
+        await expect(load()).resolves.toBe(recovered);
       },
     );
     expect(request).toHaveBeenCalledTimes(2);
@@ -405,12 +393,12 @@ it("preserves direct skills under a state-owned default Codex home", async () =>
   return withNativeSkillHome(async (stateHome) => {
     const skillPath = path.join(stateHome, ".codex", "skills", "state-owned", "SKILL.md");
     const skillRealPath = await writeSkill(skillPath, "state-owned");
-    const { client } = createFakeCodexAppServerClient(async () =>
+    const { load } = skillClient(stateHome, async () =>
       skillResponse(stateHome, [skill("state-owned", skillRealPath, "user", "State owned")]),
     );
 
     const isolation = await withEnvAsync({ HOME: stateHome, OPENCLAW_STATE_DIR: stateHome }, () =>
-      resolveCodexNativeSkillIsolation({ client, cwd: stateHome }),
+      load(),
     );
     expect(isolation?.disabledUserSkillPaths).toEqual([]);
   });

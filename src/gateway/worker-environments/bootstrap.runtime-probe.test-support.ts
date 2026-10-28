@@ -57,7 +57,7 @@ export function registerBootstrapRuntimeProbeTests({
         throw new Error("forced exit");
       });
       const child = {
-        versions: { node: scenario === "unsupported-node" ? "22.0.0" : "26.1.0" },
+        versions: { node: scenario === "unsupported-node" ? "22.0.0" : "26.12.1" },
         exitCode: 0,
         exit: forcedExit,
         reallyExit: forcedExit,

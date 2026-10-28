@@ -1,4 +1,3 @@
-// Managed gateway service lifecycle before and after an update.
 import { confirm, isCancel } from "@clack/prompts";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { stylePromptMessage } from "../../../packages/terminal-core/src/prompt-style.js";
@@ -189,9 +188,9 @@ export async function maybeRestartService(params: {
   );
   const recordPhase = (phase: "restarting" | "verifying") => {
     assertCurrent();
-    if (params.opts.run) {
-      recordUpdateRunPhase(params.opts.run.runId, phase, undefined, { env: params.opts.run.env });
-      recordMutableUpdateSignalPhase(params.opts.run, phase);
+    if (run) {
+      recordUpdateRunPhase(run.runId, phase, undefined, run);
+      recordMutableUpdateSignalPhase(run, phase);
     }
   };
   let verificationObserved = false;

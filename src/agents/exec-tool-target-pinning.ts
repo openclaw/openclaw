@@ -5,6 +5,9 @@
 // translate that alias back to its canonical tool name. The registry is
 // in-memory object identity only — nothing here is persisted.
 import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { requireValidExecTarget } from "../infra/exec-approvals-core.js";
+import { markToolExecutionNotStarted } from "./tool-effect-receipt.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 /** Canonical identity of a host-created scheduled tool alias. */
@@ -188,8 +191,16 @@ function pinExecToolArgs(
   pinnedNode: string | undefined,
 ): Record<string, unknown> {
   const source = asNonArrayRecord(args);
-  const { host: _host, security: _security, ask: _ask, node: requestedNode, ...rest } = source;
+  const { host: rawHost, security: _security, ask: _ask, node: requestedNode, ...rest } = source;
   if (target.host === "gateway") {
+    const host = requireValidExecTarget(rawHost);
+    if ((host && host !== "auto" && host !== "gateway") || normalizeOptionalString(requestedNode)) {
+      throw markToolExecutionNotStarted(
+        new Error(
+          "exec is pinned to host=gateway; the requested host or node is not allowed for this job. Use the pinned target or ask the operator to change the job's tool policy.",
+        ),
+      );
+    }
     return { ...rest, host: "gateway", ...(target.ask ? { ask: target.ask } : {}) };
   }
   const nodeArgs = Object.fromEntries(

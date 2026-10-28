@@ -23,9 +23,6 @@ const FIXTURE_READY_TYPE = "openclaw-mcp-parity-ready";
 const NODE_DISPLAY_NAME = "QA MCP parity node";
 export const NODE_MCP_COMMAND = "mcp.tools.call.v1";
 export const WAIT_OPTIONS = { timeout: WAIT_TIMEOUT_MS, interval: 100 };
-export const MCP_SERVERS = ["sse", "stdio", "streamableHttp"] as const;
-const MCP_LABELS = { sse: "sse", stdio: "stdio", streamableHttp: "streamable-http" } as const;
-type McpServerName = keyof typeof MCP_LABELS;
 
 export type GatewayHandle = QaGatewayChild;
 export type CapturedChild = {
@@ -51,15 +48,6 @@ export type ProbeResult = {
   marker: string;
   pid: number;
 };
-type EffectiveTool = {
-  id?: string;
-  source?: string;
-  pluginId?: string;
-};
-export type ToolsEffectiveResult = {
-  groups?: Array<{ tools?: EffectiveTool[] }>;
-};
-
 const CHILD_ENV_KEYS = ["PATH", "PATHEXT", "SystemRoot", "WINDIR", "ComSpec"] as const;
 
 export async function createMcpPlacement(root: string, placement: "node" | "session") {
@@ -114,7 +102,8 @@ export function startMcpGateway(
       executablePath: process.execPath,
       argsPrefix: ["dist/index.js"],
       cwd: repoRoot,
-      usePackagedPlugins: true,
+      // MCP transport recovery needs no packaged-install repair.
+      usePackagedPlugins: false,
     },
     transportBaseUrl: "http://127.0.0.1",
     controlUiEnabled: false,
@@ -465,7 +454,7 @@ export function parseNodeMcpTextRecord(value: unknown): Record<string, unknown> 
   return parsed;
 }
 
-export function parseProbeResult(value: unknown): ProbeResult {
+function parseProbeResult(value: unknown): ProbeResult {
   const parsed = parseNodeMcpTextRecord(value);
   const { label, marker, pid } = parsed;
   if (typeof label !== "string" || typeof marker !== "string" || typeof pid !== "number") {
@@ -503,10 +492,6 @@ export async function invokeNodeMcp(
   return parseProbeResult(await invokeNodeMcpPayload(params));
 }
 
-export function flattenEffectiveTools(result: ToolsEffectiveResult): EffectiveTool[] {
-  return (result.groups ?? []).flatMap((group) => group.tools ?? []);
-}
-
 function createMcpServers(params: {
   placement: "session" | "node";
   fixture: HttpFixture;
@@ -539,22 +524,4 @@ function createMcpServers(params: {
       url: params.fixture.urls.sse,
     },
   };
-}
-
-export function expectedProbeResults(
-  placement: "session" | "node",
-  markerPrefix: string,
-  httpPid: number,
-  servers: readonly McpServerName[] = MCP_SERVERS,
-) {
-  return Object.fromEntries(
-    servers.map((server) => [
-      server,
-      {
-        label: `${placement}-${MCP_LABELS[server]}`,
-        marker: `${markerPrefix}-${server}`,
-        pid: server === "stdio" ? expect.any(Number) : httpPid,
-      },
-    ]),
-  );
 }

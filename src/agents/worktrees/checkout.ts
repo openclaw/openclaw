@@ -9,7 +9,6 @@ import {
 } from "../../infra/git-exec.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { OpenClawStateLeaseError } from "../../state/openclaw-state-lease-error.js";
-import type { WorktreeWaitBudget } from "./allocation.js";
 import { withWorktreeGitConfig } from "./checkout-git-config.js";
 import { prepareWorktreePromptFiles } from "./checkout-inputs.js";
 import { materializeManagedWorktree } from "./checkout-materialize.js";
@@ -32,6 +31,7 @@ import {
   timeWorktreePreparationPhase,
 } from "./preparation-timing.js";
 import { prepareWorktreeTemplate } from "./template-cache.js";
+import type { WorktreeWaitBudget } from "./types.js";
 
 const log = createSubsystemLogger("agents/worktrees");
 
@@ -526,6 +526,7 @@ export async function addManagedWorktree(input: CheckoutOptions): Promise<Checko
     const markerPath = path.join(options.destination, ".git");
     const marker = await fs.readFile(markerPath);
     let destinationRemoved = false;
+    let promptPublished = false;
     try {
       assertOwned(options);
       await fs.unlink(markerPath);
@@ -545,18 +546,28 @@ export async function addManagedWorktree(input: CheckoutOptions): Promise<Checko
       await fs.unlink(markerPath);
       assertOwned(options);
       await fs.writeFile(markerPath, marker);
+      if (!options.deferGitCheckout && options.onPromptReady) {
+        // Cloning completed every prompt file; index preparation can overlap inference.
+        // Once published, failures must cancel preparation rather than replace its files.
+        promptPublished = true;
+        assertOwned(options);
+        await options.onPromptReady(commit);
+        assertOwned(options);
+      }
       let copied = false;
       if (template.backend.id === "apfs") {
         const { copyApfsCloneIndex } = await import("./checkout-apfs.js");
-        copied = await copyApfsCloneIndex(
-          template.record.path,
-          options.destination,
-          template.sourceIndex,
-          destinationIndex,
-          {
-            ...options,
-            cloneCompletedAtMs,
-          },
+        copied = await timeWorktreePreparationPhase("indexCopy", () =>
+          copyApfsCloneIndex(
+            template.record.path,
+            options.destination,
+            template.sourceIndex,
+            destinationIndex,
+            {
+              ...options,
+              cloneCompletedAtMs,
+            },
+          ),
         );
       }
       if (!copied) {
@@ -595,10 +606,18 @@ export async function addManagedWorktree(input: CheckoutOptions): Promise<Checko
         ),
       );
     } catch (error) {
-      if (hasWorktreeUnknownOutcome(error)) {
+      if (promptPublished || hasWorktreeUnknownOutcome(error)) {
         throw error;
       }
       rollbackGuard();
+      if (existingBranch && destinationRemoved && !(await worktreePathExists(absolute))) {
+        // Native PR provisioning owns this new clone, not its caller's branch.
+        // A lost registration cannot validate it; remove the settled clone while
+        // its template reader is still held, so the same PR can provision again.
+        rollbackGuard();
+        await fs.rm(options.destination, { recursive: true, force: true });
+        throw error;
+      }
       await assertRegistration(rollbackOptions);
       if (existingBranch) {
         throw new Error(

@@ -5,6 +5,7 @@ import type { WorkerProfile } from "../../plugins/types.js";
 import type { EnvironmentRecipe } from "./environment-recipe.js";
 import {
   WorkerPreparationTargetSchema,
+  type WorkerEmptyPreparationIdentity,
   type WorkerPreparationArtifacts,
   type WorkerProjectPreparationIdentity,
 } from "./preparation-identity.schema.js";
@@ -12,8 +13,14 @@ import type { WorkerProjectSnapshot } from "./workspace-git-base.js";
 
 export type WorkerProviderPreparedIntent = {
   providerId: string;
-  profileSnapshot: WorkerProfile;
-  preparationKey?: string;
+  profileSnapshot: WorkerProfile &
+    (
+      | {
+          project?: WorkerProjectSnapshot & { preparation?: WorkerProjectPreparationIdentity };
+          runtimePreparation?: never;
+        }
+      | { project?: never; runtimePreparation: WorkerEmptyPreparationIdentity }
+    );
 };
 
 export function createWorkerPreparationIdentity(params: {

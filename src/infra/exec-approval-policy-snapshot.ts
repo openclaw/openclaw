@@ -12,7 +12,25 @@ export type ExecApprovalPolicySnapshot = Omit<PolicySnapshot, "allowlistRules"> 
 };
 
 function compareUtf8(left: string, right: string): number {
-  return Buffer.compare(Buffer.from(left, "utf8"), Buffer.from(right, "utf8"));
+  let leftIndex = 0;
+  let rightIndex = 0;
+  while (leftIndex < left.length && rightIndex < right.length) {
+    let leftPoint = left.codePointAt(leftIndex)!;
+    let rightPoint = right.codePointAt(rightIndex)!;
+    leftIndex += leftPoint > 0xffff ? 2 : 1;
+    rightIndex += rightPoint > 0xffff ? 2 : 1;
+    // UTF-8 preserves scalar order; Buffer encodes lone surrogates as U+FFFD.
+    if (leftPoint >= 0xd800 && leftPoint <= 0xdfff) {
+      leftPoint = 0xfffd;
+    }
+    if (rightPoint >= 0xd800 && rightPoint <= 0xdfff) {
+      rightPoint = 0xfffd;
+    }
+    if (leftPoint !== rightPoint) {
+      return leftPoint - rightPoint;
+    }
+  }
+  return left.length - leftIndex - (right.length - rightIndex);
 }
 
 function compareOptionalUtf8(left: string | undefined, right: string | undefined): number {

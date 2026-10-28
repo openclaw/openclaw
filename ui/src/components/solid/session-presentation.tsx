@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { For, Match, Show, Switch, createMemo, createSignal } from "solid-js";
+import { Match, Show, Switch, createMemo, createSignal } from "solid-js";
 import type {
   SessionParticipant,
   SessionParticipantIdentity,
@@ -8,8 +8,9 @@ import {
   SESSION_ICON_GLYPH_IDS,
   SESSION_ICON_SVG_DATA_URL_PREFIX,
 } from "../../../../packages/gateway-protocol/src/session-agent-status.js";
+import { registerChatToolLabelsEnglish } from "../../i18n/locales/en-chat-tool-labels.ts";
 import { resolveToolDisplayIcon } from "../../lib/chat/tool-display-icon.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import type { SessionCreatedActor, SessionOwnerOption } from "../../lib/session-owner.ts";
 import {
   summarizeSidebarSessionAttention,
@@ -28,21 +29,29 @@ import {
 import type { resolveSidebarSessionSubtitle } from "../session-row-subtitle.ts";
 import { createSessionRunVisibility as sessionRunVisibility } from "../session-run-visibility-controller.ts";
 import { ChannelAvatar } from "./channel-avatar.tsx";
-import { Icon } from "./icon.tsx";
-import { SessionOwnerAvatar, SessionOwnerChip } from "./session-owner-chip.tsx";
 import "../tooltip.ts";
+import { Icon, sessionIcon, sessionIconMask } from "./icon.tsx";
+import { SessionOwnerAvatar, SessionOwnerChip } from "./session-owner-chip.tsx";
+
+registerEnglishCatalog(registerChatToolLabelsEnglish);
 
 type SessionRunVisibility = typeof sessionRunVisibility;
 export { sessionRunVisibility };
 
-function SessionAttentionIcon(props: { attention: SidebarSessionAttention }) {
+function SessionAttentionIcon(props: { attention: SidebarSessionAttention; size: number }) {
   const parts = createMemo(() => sessionAttentionTooltipParts(props.attention, t));
   const label = () =>
     [parts().status, parts().preview, parts().more].filter(Boolean).join("\n") || undefined;
   const icon = () => sessionAttentionIconName(props.attention);
   return (
     <Show when={props.attention.kind !== "none"}>
-      <openclaw-tooltip prop:content={parts().preview ? "" : parts().status} open-on-click>
+      {/* Sidebar rows sit against the app rail; open inline to the right so the
+          tooltip never clamps over the rail or the row's own title. */}
+      <openclaw-tooltip
+        prop:content={parts().preview ? "" : parts().status}
+        prop:placement="right"
+        open-on-click
+      >
         <span
           class={[
             "sidebar-session-attention__icon",
@@ -65,7 +74,7 @@ function SessionAttentionIcon(props: { attention: SidebarSessionAttention }) {
             }
           }}
         >
-          <Icon name={icon()} />
+          {sessionIcon(icon(), props.size, 1.8)}
         </span>
         <Show when={parts().preview}>
           <span slot="content" class="sidebar-session-attention-tooltip">
@@ -80,20 +89,17 @@ function SessionAttentionIcon(props: { attention: SidebarSessionAttention }) {
     </Show>
   );
 }
-type SessionGlyphRing = "circle" | "pair";
-
 const PAIR_TRACE_PATH = "M0,-9.798A11,11 0 1 1 0,9.798A11,11 0 1 1 0,-9.798Z";
-type SessionGlyphOptions = {
+export function SessionGlyph(props: {
   content: JSX.Element;
   running: boolean;
   queued?: boolean;
   runningLabel?: string;
   circular?: boolean;
   badge?: JSX.Element;
-  ring?: SessionGlyphRing;
+  ring?: "circle" | "pair";
   runVisibility?: SessionRunVisibility;
-};
-export function SessionGlyph(props: SessionGlyphOptions) {
+}) {
   const label = () =>
     props.runningLabel ?? t(props.queued ? "sessionsView.statusQueued" : "sessionsView.activeRun");
   const glyph = () => (
@@ -109,22 +115,49 @@ export function SessionGlyph(props: SessionGlyphOptions) {
     >
       <span class="session-glyph__content">{props.content}</span>
       <Show when={props.running && (props.runVisibility ?? true)} keyed>
-        {(createVisibility) =>
-          renderSessionGlyphRun(
-            {
-              get pair() {
-                return props.ring === "pair";
-              },
-              get queued() {
-                return props.queued;
-              },
-              get label() {
-                return label();
-              },
-            },
-            typeof createVisibility === "function" ? createVisibility : undefined,
-          )
-        }
+        {(createVisibility) => {
+          const [offscreen, setOffscreen] = createSignal(false);
+          const observe = (typeof createVisibility === "function" ? createVisibility : undefined)?.(
+            setOffscreen,
+          );
+          return (
+            <Show
+              when={props.ring === "pair"}
+              fallback={
+                <span
+                  ref={(element) => observe?.(element)}
+                  class={[
+                    "session-glyph__ring",
+                    {
+                      "session-glyph__ring--queued": props.queued,
+                      "session-run-indicator--offscreen": offscreen(),
+                    },
+                  ]}
+                  role="img"
+                  aria-label={label()}
+                />
+              }
+            >
+              <svg
+                class={["session-glyph__trace", { "session-glyph__trace--queued": props.queued }]}
+                viewBox="-16 -11 32 22"
+                role="img"
+                aria-label={label()}
+              >
+                <path class="session-glyph__trace-track" d={PAIR_TRACE_PATH} />
+                <path
+                  ref={(element) => observe?.(element)}
+                  class={[
+                    "session-glyph__trace-run",
+                    { "session-run-indicator--offscreen": offscreen() },
+                  ]}
+                  d={PAIR_TRACE_PATH}
+                  pathLength="100"
+                />
+              </svg>
+            </Show>
+          );
+        }}
       </Show>
       {props.badge}
     </span>
@@ -134,48 +167,6 @@ export function SessionGlyph(props: SessionGlyphOptions) {
       <openclaw-tooltip prop:content={props.runningLabel} prop:describe={false}>
         {glyph()}
       </openclaw-tooltip>
-    </Show>
-  );
-}
-
-function renderSessionGlyphRun(
-  props: { pair: boolean; queued?: boolean; label: string },
-  createVisibility: SessionRunVisibility | undefined,
-) {
-  const [offscreen, setOffscreen] = createSignal(false);
-  const observe = createVisibility?.(setOffscreen);
-  return (
-    <Show
-      when={props.pair}
-      fallback={
-        <span
-          ref={(element) => observe?.(element)}
-          class={[
-            "session-glyph__ring",
-            {
-              "session-glyph__ring--queued": props.queued,
-              "session-run-indicator--offscreen": offscreen(),
-            },
-          ]}
-          role="img"
-          aria-label={props.label}
-        />
-      }
-    >
-      <svg
-        class={["session-glyph__trace", { "session-glyph__trace--queued": props.queued }]}
-        viewBox="-16 -11 32 22"
-        role="img"
-        aria-label={props.label}
-      >
-        <path class="session-glyph__trace-track" d={PAIR_TRACE_PATH} />
-        <path
-          ref={(element) => observe?.(element)}
-          class={["session-glyph__trace-run", { "session-run-indicator--offscreen": offscreen() }]}
-          d={PAIR_TRACE_PATH}
-          pathLength="100"
-        />
-      </svg>
     </Show>
   );
 }
@@ -191,41 +182,48 @@ export function renderSessionUnreadBadge(): JSX.Element {
 }
 
 export function SessionRowBadges(props: SessionRowBadgesParams) {
-  const badges = createMemo(() => resolveSessionRowBadges(props, t));
-  return (
-    <Show when={badges().length}>
-      <span class="session-row-badges">
-        <For each={badges()} keyed={(badge) => badge.modifier}>
-          {(badge) => (
-            <openclaw-tooltip prop:content={badge().label}>
-              <span
-                class={["session-row-badge", `session-row-badge--${badge().modifier}`]}
-                data-pull-request-state={badge().pullRequestState}
-                data-placement-state={badge().placementState}
-                data-disk-space-status={badge().diskSpaceStatus}
-                data-workspace-conflicts={
-                  badge().workspaceConflictCount
-                    ? String(badge().workspaceConflictCount)
-                    : undefined
-                }
-                role="img"
-                aria-label={badge().label}
-              >
-                <Icon name={badge().icon} />
-                <Show when={badge().count}>
-                  <span aria-hidden="true">{badge().count}</span>
-                </Show>
-              </span>
-            </openclaw-tooltip>
-          )}
-        </For>
-      </span>
-    </Show>
-  );
+  const rendered = createMemo<{ facts: string; node?: HTMLElement }>((previous) => {
+    const badges = resolveSessionRowBadges(props, t);
+    const facts = JSON.stringify(badges);
+    if (previous?.facts === facts) {
+      return previous;
+    }
+    if (!badges.length) {
+      return { facts };
+    }
+    const group = document.createElement("span");
+    group.className = "session-row-badges";
+    for (const badge of badges) {
+      const element = document.createElement("span");
+      element.classList.add("session-row-badge", `session-row-badge--${badge.modifier}`);
+      element.title = badge.label;
+      element.setAttribute("role", "img");
+      element.setAttribute("aria-label", badge.label);
+      for (const [key, value] of Object.entries({
+        "pull-request-state": badge.pullRequestState,
+        "placement-state": badge.placementState,
+        "disk-space-status": badge.diskSpaceStatus,
+        "workspace-conflicts": badge.workspaceConflictCount || undefined,
+      })) {
+        if (value !== undefined) {
+          element.setAttribute(`data-${key}`, String(value));
+        }
+      }
+      element.append(sessionIcon(badge.icon, 12, 1.6));
+      if (badge.count) {
+        const count = document.createElement("span");
+        count.setAttribute("aria-hidden", "true");
+        count.textContent = String(badge.count);
+        element.append(count);
+      }
+      group.append(element);
+    }
+    return { facts, node: group };
+  });
+  return <>{rendered().node}</>;
 }
 
-type SidebarSessionSubtitle = ReturnType<typeof resolveSidebarSessionSubtitle>;
-export function SidebarSessionSubtitle(props: SidebarSessionSubtitle) {
+export function SidebarSessionSubtitle(props: ReturnType<typeof resolveSidebarSessionSubtitle>) {
   const label = () =>
     props.toolName ? `${t("chat.toolCards.tool")}: ${props.toolName}` : undefined;
   return (
@@ -296,7 +294,7 @@ function SessionIdleState(props: { session: SidebarRecentSession }) {
             aria-label={current().label}
             title={current().label}
           >
-            <Icon name={current().icon} />
+            {sessionIcon(current().icon, 12, 1.8)}
           </span>
         )}
       </Show>
@@ -372,7 +370,7 @@ export function TeamSessionSlots(props: TeamSessionSlotsProps) {
                 role="img"
                 aria-label={t("sessionsView.childSessions") + ": " + props.childCount}
               >
-                <Icon name="gitFork" />
+                {sessionIcon("gitFork")}
                 {props.childCount}
               </span>
             </Show>
@@ -394,7 +392,7 @@ export function TeamSessionSlots(props: TeamSessionSlotsProps) {
           <span class="sidebar-session-team-state__status">
             <Switch>
               <Match when={summary().attention.kind !== "none"}>
-                <SessionAttentionIcon attention={summary().attention} />
+                <SessionAttentionIcon attention={summary().attention} size={12} />
               </Match>
               <Match when={summary().failed}>
                 <span
@@ -402,7 +400,7 @@ export function TeamSessionSlots(props: TeamSessionSlotsProps) {
                   role="img"
                   aria-label={t("sessionsView.statusFailed")}
                 >
-                  <Icon name="alertTriangle" />
+                  {sessionIcon("alertTriangle")}
                 </span>
               </Match>
               <Match when={props.groupConflicts}>
@@ -412,7 +410,7 @@ export function TeamSessionSlots(props: TeamSessionSlotsProps) {
                     count: String(props.groupConflicts),
                   })}
                 >
-                  <Icon name="globe" />
+                  {sessionIcon("globe")}
                 </span>
               </Match>
               <Match when={!props.statusOnly && summary().active > 0}>
@@ -446,13 +444,21 @@ function SessionIcon(props: { icon: string }) {
         <Match when={image()}>
           <img src={props.icon} alt="" aria-hidden="true" />
         </Match>
-        <Match when={glyph()}>{(name) => <Icon name={name()} />}</Match>
+        <Match when={glyph()}>
+          {(name) => (
+            <i
+              class="session-css-icon"
+              aria-hidden="true"
+              style={{ "mask-image": sessionIconMask(name()) }}
+            />
+          )}
+        </Match>
       </Switch>
     </span>
   );
 }
 
-type SessionLeadingStateProps = {
+export function renderSessionLeadingState(props: {
   session: SidebarRecentSession;
   ownerActor?: SessionCreatedActor | null;
   attribution: "created" | "owned" | "archived";
@@ -461,9 +467,7 @@ type SessionLeadingStateProps = {
   trailingState?: boolean;
   icon?: JSX.Element;
   runVisibility?: SessionRunVisibility;
-};
-
-export function renderSessionLeadingState(props: SessionLeadingStateProps) {
+}) {
   const session = () => props.session;
   const subagentsWorking = createMemo(
     () => !props.trailingState && session().runningChildCount > 0,
@@ -511,7 +515,11 @@ export function renderSessionLeadingState(props: SessionLeadingStateProps) {
       stackedParticipants() === 1 ? session().participants?.[0]?.identity : undefined,
     ].filter((identity): identity is SessionParticipantIdentity => identity !== undefined);
   });
-  const hasContent = createMemo(() => hasIcon() || Boolean(channelAvatarUrl()) || hasOwner());
+  const hasContent = createMemo(
+    () =>
+      (attentionIcon() || props.icon !== false) &&
+      (hasIcon() || Boolean(channelAvatarUrl()) || hasOwner()),
+  );
   const showGlyph = createMemo(
     () =>
       hasIcon() ||
@@ -522,7 +530,7 @@ export function renderSessionLeadingState(props: SessionLeadingStateProps) {
   const content = (
     <Switch fallback={<OwnerChip />}>
       <Match when={attentionIcon()}>
-        <SessionAttentionIcon attention={session().attention} />
+        <SessionAttentionIcon attention={session().attention} size={15} />
       </Match>
       <Match when={props.icon != null}>{props.icon}</Match>
       <Match when={Boolean(icon())}>
@@ -557,9 +565,7 @@ export function renderSessionLeadingState(props: SessionLeadingStateProps) {
       }
     >
       <SessionGlyph
-        content={
-          hasContent() ? (!attentionIcon() && props.icon === false ? false : content) : undefined
-        }
+        content={hasContent() ? content : undefined}
         running={showRun()}
         queued={ownRunQueued() && !subagentsWorking()}
         runningLabel={runningLabel()}
@@ -575,21 +581,8 @@ export function renderSessionLeadingState(props: SessionLeadingStateProps) {
     </Show>
   );
   return {
-    get running() {
-      return running();
-    },
+    running,
     leadingIndicator,
-    get visible() {
-      return (
-        showGlyph() ||
-        (!props.trailingState &&
-          (session().isChild
-            ? Boolean(resolveSessionIdleBadge(session().status, t))
-            : session().unread))
-      );
-    },
-    get renderedIdentities() {
-      return renderedIdentities();
-    },
+    renderedIdentities,
   };
 }

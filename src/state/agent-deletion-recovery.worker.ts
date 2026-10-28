@@ -1,5 +1,4 @@
 import type { EngineConnection } from "../infra/sql-connection.js";
-import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { resolveAgentDeletionRecoveryHolds } from "./agent-deletion-journal-recovery.js";
 import {
   readAgentDeletionRecoveryHolds,
@@ -16,18 +15,14 @@ export const agentRecoveryOperations = {
     input: { predicate: AgentDeletionRecoveryHoldPredicate; paths: string[] },
     context: WorkerWriteOperationContext,
   ) =>
-    context.write(
-      (database) => {
-        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
-        const resolved = resolveAgentDeletionRecoveryHolds(
+    context.writeAdmitted(
+      (database) =>
+        resolveAgentDeletionRecoveryHolds(
           database,
           input.predicate.agentId,
           input.paths,
           input.predicate,
-        );
-        requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
-        return resolved;
-      },
+        ),
       { operationLabel: "agent.recovery.resolve" },
     ),
 };

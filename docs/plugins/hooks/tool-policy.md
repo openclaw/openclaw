@@ -38,6 +38,11 @@ contributions, and transcript persistence. Part of the [Plugin hooks](/plugins/h
   message run. It can include `channel`, `accountId`, `senderId`,
   `senderIsOwner`, and provider-native `roleIds`. Missing fields are unproven,
   not false assurances; deny the action if policy requires those fields.
+- optional `ctx.trigger`, the run origin when its producer supplies one, such as
+  `"user"`, `"cron"`, or `"memory"`. Memory flushes retain the originating turn's
+  requester. This field is metadata, not authorization: it never grants owner
+  identity or overrides requester checks. It is absent when the producer does
+  not supply a trigger; other tool hooks do not gain this field automatically.
 
 It can return:
 

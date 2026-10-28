@@ -25,8 +25,9 @@ How the Gateway reports which nodes are connected, and which server-pushed event
 ### Opt-in presence deltas
 
 Operator clients can advertise `presence-deltas` in connect `caps`. The Control
-UI does so; native clients retain the existing `presence` event payload
-`{ presence: [...] }` and the ordinary `system-presence` array response.
+UI and current macOS, iOS, and Android operator connections do so. Older app
+versions and clients without the capability retain the existing `presence` event
+payload `{ presence: [...] }`. Ordinary `system-presence` calls still return an array.
 
 For opted-in readers, the same `presence` event carries one of two payloads:
 
@@ -35,7 +36,7 @@ For opted-in readers, the same `presence` event carries one of two payloads:
   "reset": true,
   "version": 12,
   "presence": [{ "connectionId": "connection-a", "ts": 1000 }],
-  "keys": ["entry:connection-a"]
+  "keys": ["1"]
 }
 ```
 
@@ -43,14 +44,16 @@ For opted-in readers, the same `presence` event carries one of two payloads:
 {
   "base": 12,
   "version": 13,
-  "upsert": [{ "key": "entry:connection-a", "set": { "ts": 2000 }, "unset": ["watchedSessions"] }],
+  "upsert": [{ "key": "1", "set": { "ts": 2000 }, "unset": ["watchedSessions"] }],
   "remove": [],
-  "order": ["entry:connection-a"]
+  "order": ["1"]
 }
 ```
 
 Keys are opaque, stable identities assigned by the presence owner, independent
 of display names and recipient visibility. A reset replaces the complete roster;
+keys are compact identifiers, not connection or device IDs, and are never reused
+within a Gateway process after a row expires or is removed. Do not persist or parse them.
 `keys` parallels `presence`. For an existing row, an upsert's `set` contains only
 changed top-level fields and `unset` names removed fields. Nested objects and arrays
 are replaced as fields, not merged. A new row uses `{ key, presence }` with its
@@ -68,6 +71,12 @@ the last accepted version. On mismatch, request `system-presence` with
 `{ "snapshot": true }`; an opted-in client receives the reset shape above.
 Ordinary calls still return the existing array. The Control UI reconciles these
 updates in its Gateway store so downstream consumers receive full rosters.
+The shared macOS/iOS channel reconstructs rosters before bounded subscriber
+queues, and reconnects to resynchronize if a version or transport sequence gap
+occurs. It also accepts full snapshots from older Gateways. Android currently
+ignores roster events, so its operator sockets opt in without maintaining a roster.
+Node-only connections do not receive presence events. Native changes take effect
+with app updates; a Gateway restart does not upgrade connected app code.
 
 The hello snapshot remains `snapshot.presence` with `snapshot.stateVersion.presence`.
 This implementation sends a reset on the first post-hello presence event instead
@@ -136,16 +145,29 @@ The Gateway accepts updates only from the current node connection and stamps
 updates appear as `hostStats` in `node.list` and `node.describe` and broadcast
 `node.hostStats` with `{ nodeId, hostStats }` to read-scoped operators, using
 `dropIfSlow: true`. Stats are operator-facing and do not update model-visible
-node context. When received, the Gateway persists the snapshot as `lastHostStats`
-on the paired node record. Disconnecting or reconnecting without a new snapshot
-leaves the previous value intact.
-`node.list` and `node.describe` use live session stats while connected and
-project the saved snapshot as `hostStats` while offline, keeping its original
-`updatedAtMs` so clients can show the last-known age.
+node context. The first accepted snapshot is persisted immediately as
+`lastHostStats` on the paired node record. Later snapshots stay in the live
+session until the last successfully saved snapshot's receipt time plus five
+minutes, when the latest snapshot is checkpointed. New reports do not postpone
+that deadline. Disconnect folds the final snapshot into its connection-history
+write, and orderly Gateway shutdown drains pending snapshots before closing
+storage. Disconnecting or reconnecting without a new snapshot leaves the
+previous value intact. Pairing identity, approval, revocation, token, name, and
+consent changes remain immediately durable.
+
+`node.list` and `node.describe` use live session stats while connected and project
+the saved snapshot as `hostStats` while offline, keeping its original `updatedAtMs`
+so clients can show the last-known age. The offline view can briefly show the
+previous saved snapshot while the disconnect write completes. A crash can lose
+roughly the last five minutes of accepted telemetry while reports continue and
+checkpoints succeed; scheduling or write delays extend that interval. Failed
+writes are logged and retried on a later report or final drain, without an
+immediate retry loop. Sensor silence can leave the saved sample arbitrarily old.
 
 The structured `node.event` result uses `reason: "updated"`, `"stale_connection"`,
 or `"invalid_payload"`. An older Gateway may return `handled: false`; the node
-continues at the normal cadence without an immediate retry.
+continues at the normal cadence without an immediate retry. An accepted result
+and live broadcast do not wait for checkpoint persistence.
 
 ### Node background alive event
 

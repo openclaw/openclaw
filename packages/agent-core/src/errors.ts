@@ -7,6 +7,14 @@ export const REPEATED_TOOL_ERROR_CODE = "openclaw_repeated_tool_error";
 export const REPEATED_TOOL_ERROR_MESSAGE =
   "OpenClaw stopped this turn after 3 consecutive identical tool failures. Check the tool arguments or switch to a model with native tool calling before retrying.";
 
+/** A tool rejected model-authored arguments during prepareArguments, before execution. */
+export class ToolArgumentValidationError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "ToolArgumentValidationError";
+  }
+}
+
 export class TranscriptNotContinuableError extends Error {
   public readonly code = TRANSCRIPT_NOT_CONTINUABLE_ERROR_CODE;
   public readonly role: AgentMessage["role"];

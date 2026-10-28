@@ -1,21 +1,15 @@
-import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { fixture } from "./native-subagent-inventory.test-support.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import {
   createClient,
-  createRuntime,
+  createMonitorFixture,
   nativeHistoryOwner,
   notifyChildStarted,
   threadRead,
 } from "./native-subagent-monitor.test-support.js";
 import { setupRunAttemptTestHooks } from "./run-attempt-test-harness.js";
 
-beforeEach(() => setRuntimeConfigSnapshot({}));
-afterEach(() => clearRuntimeConfigSnapshot());
 setupRunAttemptTestHooks();
 
 describe("native parent retirement after rotation", () => {
@@ -32,11 +26,7 @@ describe("native parent retirement after rotation", () => {
       first.bindTurn("parent-turn");
       await f.spawn(client);
       await first.unregister();
-      await f.store.mutate(f.identity, {
-        kind: "replace-thread",
-        expectedThreadId: "parent-thread",
-        binding: { ...f.binding, threadId: "replacement-parent" },
-      });
+      await f.rotate("replacement-parent");
       client.setThreadRead(
         "child-thread",
         threadRead({ turnId: "child-turn", status: "inProgress" }),
@@ -55,24 +45,23 @@ describe("native parent retirement after rotation", () => {
         await codexNativeSubagentMonitorRuntime.retireParent(client.client, "parent-thread");
         await codexNativeSubagentMonitorRuntime.retireParent(client.client, "replacement-parent");
         await replacement.unregister();
-        client.close();
       }
     },
   );
 
-  it.each(["requester", "session", "lifecycle", "connection", "agent"] as const)(
+  it.each([
+    ["requester", { requesterSessionKey: "agent:main:other" }, {}],
+    ["session", {}, { sessionId: "other-physical-session" }],
+    ["lifecycle", {}, { lifecycleRevision: "other-revision" }],
+    ["connection", {}, { connectionFingerprint: "0".repeat(64) }],
+    ["agent", { agentId: "other" }, {}],
+  ] as const)(
     "preserves retained child ownership for a different %s",
-    async (difference) => {
-      const client = createClient();
+    async (_difference, parentOverride, historyOverride) => {
       const releasePin = vi.fn();
-      const monitor = new codexNativeSubagentMonitorRuntime.Monitor(
-        client.client,
-        createRuntime(),
-        {
-          recoveryPollDelaysMs: [],
-          retainParentThread: () => releasePin,
-        },
-      );
+      const { client, monitor } = createMonitorFixture({
+        retainParentThread: () => releasePin,
+      });
       const original = {
         parentThreadId: "parent-thread",
         requesterSessionKey: "agent:main:original",
@@ -87,19 +76,13 @@ describe("native parent retirement after rotation", () => {
         const other = {
           ...original,
           parentThreadId: "other-parent",
-          historyOwner: { ...original.historyOwner, parentThreadId: "other-parent" },
+          ...parentOverride,
+          historyOwner: {
+            ...original.historyOwner,
+            parentThreadId: "other-parent",
+            ...historyOverride,
+          },
         };
-        if (difference === "requester") {
-          other.requesterSessionKey = "agent:main:other";
-        } else if (difference === "session") {
-          other.historyOwner.sessionId = "other-physical-session";
-        } else if (difference === "lifecycle") {
-          other.historyOwner.lifecycleRevision = "other-revision";
-        } else if (difference === "connection") {
-          other.historyOwner.connectionFingerprint = "0".repeat(64);
-        } else {
-          other.agentId = "other";
-        }
         const replacement = await monitor.registerParent(other);
         await monitor.retireParent("other-parent");
         expect(releasePin).not.toHaveBeenCalled();
@@ -108,7 +91,6 @@ describe("native parent retirement after rotation", () => {
         await replacement.unregister();
       } finally {
         await monitor.dispose();
-        client.close();
       }
     },
   );

@@ -41,8 +41,17 @@ export function registerEmbeddingCapabilityCommands(capability: Command): void {
           targetIds: getMemoryEmbeddingCommandSecretTargetIds(),
           agent,
         });
-        const requestedProvider =
-          normalizeOptionalString(opts.provider) || modelRef?.provider || "auto";
+        const flagProvider = normalizeOptionalString(opts.provider);
+        if (
+          flagProvider &&
+          modelRef &&
+          flagProvider.toLowerCase() !== modelRef.provider.toLowerCase()
+        ) {
+          throw new Error(
+            `Embedding --provider "${flagProvider}" must match the provider "${modelRef.provider}" in --model. Model ids that contain a slash need the provider prefix, for example --model ${flagProvider}/<model id>.`,
+          );
+        }
+        const requestedProvider = flagProvider || modelRef?.provider || "auto";
         const result = await createEmbeddingProvider({
           config: cfg,
           agentDir,

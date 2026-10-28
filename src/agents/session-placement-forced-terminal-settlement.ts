@@ -1,13 +1,11 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import type { SessionSourceAssertion } from "../config/sessions/session-source-authority.js";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { AsyncContext } from "../shared/async-context.js";
 
 // Carry exact turn cleanup to its reply and backend owners; never recover by session id.
-const forcedTerminalSettlement = resolveGlobalSingleton(
-  Symbol.for("openclaw.sessionPlacementForcedTerminalSettlement"),
-  () =>
-    new AsyncLocalStorage<{ settle: () => Promise<void>; assertCurrent: SessionSourceAssertion }>(),
-);
+const forcedTerminalSettlement = new AsyncContext<{
+  settle: () => Promise<void>;
+  assertCurrent: SessionSourceAssertion;
+}>(Symbol.for("openclaw.sessionPlacementForcedTerminalSettlement"));
 
 export function withSessionPlacementForcedTerminalSettlement<T>(
   settle: () => Promise<void>,

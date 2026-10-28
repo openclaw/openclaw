@@ -1,7 +1,7 @@
-import path from "node:path";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { runUtf8CommandWithTimeout } from "../process/exec.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 
 export const POST_CORE_EXECUTOR_CAPABILITY = "stdin-pid-start-v1";
 export const POST_CORE_MUTATION_PROTOCOL = "original-cancellation-v1";
@@ -11,7 +11,10 @@ export async function supportsPostCoreExecutor(root: string, nodeRunner: string)
   const check = await runUtf8CommandWithTimeout(
     [
       nodeRunner,
-      path.join(root, "dist", runtimeProcessEntrypoints.updateMigratedFinalize.distWorkerPath),
+      ...resolveRuntimeWorkerArgv(
+        resolveRuntimeWorkerUrl({ ...runtimeProcessEntrypoints.updateMigratedFinalize, root }),
+        nodeRunner,
+      ),
       "--check",
     ],
     {

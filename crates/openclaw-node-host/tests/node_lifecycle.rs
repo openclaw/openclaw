@@ -1,5 +1,6 @@
 use ed25519_dalek::{Signer, SigningKey};
 use futures_util::{SinkExt, StreamExt};
+use openclaw_gateway_client::protocol::PROTOCOL_VERSION;
 use openclaw_node_host::{
     ClientError, ClientErrorClass, CommandRuntime, ConnectAuth, IdentityError,
     LifecycleDisconnectReason, LifecycleEvent, NodeClient, NodeClientConfig, NodeConnectOptions,
@@ -119,7 +120,7 @@ async fn gateway_fixture() -> (std::net::SocketAddr, tokio::task::JoinHandle<()>
             &mut socket,
             json!({
                 "type":"res", "id":connect["id"], "ok":true,
-                "payload":{"type":"hello-ok","protocol":4,
+                "payload":{"type":"hello-ok","protocol":PROTOCOL_VERSION,
                     "server":{"version":"test-gateway"},
                     "auth":{"deviceToken":"issued-device-token"}}
             }),
@@ -151,7 +152,7 @@ fn expected_events() -> Vec<LifecycleEvent> {
         LifecycleEvent::Connecting { attempt: 2 },
         LifecycleEvent::Connected {
             attempt: 2,
-            protocol: Some(4),
+            protocol: Some(u64::from(PROTOCOL_VERSION)),
             server_version: Some("test-gateway".into()),
         },
         LifecycleEvent::Ready { attempt: 2 },

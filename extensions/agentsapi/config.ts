@@ -4,7 +4,7 @@ import type { AgentToolParam, EnvironmentParam } from "openai/resources/beta/age
 import type { AgentHarnessAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { z } from "zod";
 
-export const DEFAULT_NATIVE_TOOLS = [
+const DEFAULT_NATIVE_TOOLS = [
   { type: "web_search", mode: "live" },
   { type: "programmatic_tool_calling", enabled: true },
 ] satisfies AgentToolParam[];
@@ -37,7 +37,13 @@ export const agentsApiConfigSchema = z.strictObject({
     })
     .optional(),
   environment: z.enum(["openai_hosted", "self_hosted"]).default("openai_hosted"),
-  executorController: z.string().trim().min(1).optional(),
+  // Recognize retired configuration so repair cannot silently discard its owner.
+  executorController: z
+    .never({
+      error:
+        "Agents API executorController is no longer supported. Retire controlled sessions with the previous OpenClaw version and original controller plugin, then remove executorController and configure an external executor lifecycle owner before upgrading.",
+    })
+    .optional(),
   openai_host: z
     .strictObject({
       network: z

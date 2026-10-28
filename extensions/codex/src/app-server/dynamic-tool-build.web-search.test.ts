@@ -1,6 +1,9 @@
 import "./dynamic-tool-build.test-support.js";
 import path from "node:path";
-import type { createOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
+import {
+  resolveWebSearchToolPolicyAsync,
+  type createOpenClawCodingTools,
+} from "openclaw/plugin-sdk/agent-harness";
 import type { EmbeddedRunAttemptParamsV2 as RunParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { shouldEnableCodexAppServerNativeToolSurface } from "./dynamic-tool-build.js";
@@ -13,12 +16,13 @@ const {
   createCodexRuntimePlanFixture,
   createParams,
   createRuntimeDynamicTool,
-  hoisted,
   setupDynamicToolBuildFixture,
 } = await import("./dynamic-tool-build.test-support.js");
 
 type ToolOptions = Parameters<typeof createOpenClawCodingTools>[0];
-type SearchCase = Partial<Pick<RunParams, "config" | "toolsAllow" | "senderId">> & {
+type SearchCase = Partial<
+  Pick<RunParams, "config" | "toolsAllow" | "senderId" | "preparedWebSearchPolicy">
+> & {
   name: string;
   excludes?: string[];
   source: string[];
@@ -27,7 +31,7 @@ type SearchCase = Partial<Pick<RunParams, "config" | "toolsAllow" | "senderId">>
   allowed: boolean;
   fetchAllowlist?: string[];
   nativeProviderWebSearchSupport?: "unsupported";
-  skipsPolicyLookup?: boolean;
+  unprepared?: boolean;
 };
 
 let tempDir: string;
@@ -119,7 +123,6 @@ it.each([
     toolsAllow: ["message"],
     source: ["web_search", "message"],
     allowed: false,
-    skipsPolicyLookup: true,
   }),
   searchCase("transient sender denial", {
     senderId: "restricted-sender",
@@ -131,10 +134,39 @@ it.each([
     source: ["web_search", "message"],
     exposed: ["web_search", "message"],
   }),
+  ...[undefined, ["message"]].map((toolsAllow) =>
+    searchCase(`prepared search allowance with runtime cap ${JSON.stringify(toolsAllow)}`, {
+      preparedWebSearchPolicy: { allowed: true, persistentAllowed: true },
+      toolsAllow,
+      allowed: toolsAllow === undefined,
+    }),
+  ),
+  searchCase("missing prepared policy", { unprepared: true, ...denied }),
+  searchCase("missing prepared policy despite a managed candidate", {
+    unprepared: true,
+    source: ["web_search", "message"],
+    ...denied,
+  }),
+  searchCase("prepared requester denial", {
+    preparedWebSearchPolicy: { allowed: false, persistentAllowed: false },
+    ...denied,
+  }),
 ])("projects search tools and persistent policy for $name", async (testCase) => {
   params.config = testCase.config;
   params.toolsAllow = testCase.toolsAllow;
   params.senderId = testCase.senderId;
+  params.preparedWebSearchPolicy = testCase.unprepared
+    ? undefined
+    : (testCase.preparedWebSearchPolicy ??
+      (await resolveWebSearchToolPolicyAsync({
+        config: params.config,
+        modelProvider: params.model.provider,
+        modelId: params.modelId,
+        agentId: "main",
+        sessionKey: params.sessionKey,
+        senderId: params.senderId,
+        runtimeToolAllowlist: params.toolsAllow,
+      })));
   const factory = vi.fn((_options: ToolOptions) => testCase.source.map(createRuntimeDynamicTool));
   setCodexTestToolFactory(params, factory);
   const persistent = vi.fn();
@@ -153,9 +185,6 @@ it.each([
   expect(options?.webFetchHostnameAllowlistRef?.value).toEqual(testCase.fetchAllowlist);
   expect(persistent).toHaveBeenCalledExactlyOnceWith(testCase.persistent);
   expect(allowed).toHaveBeenCalledExactlyOnceWith(testCase.allowed);
-  if (testCase.skipsPolicyLookup) {
-    expect(hoisted.resolveWebSearchToolPolicyAsync).not.toHaveBeenCalled();
-  }
 });
 
 it.each([true, false])(
@@ -170,6 +199,7 @@ it.each([true, false])(
     params.trigger = "memory";
     params.memoryFlushWritePath = "memory/2026-05-22.md";
     params.config = searchEnabled ? undefined : { tools: { web: { search: { enabled: false } } } };
+    params.preparedWebSearchPolicy = { allowed: searchEnabled, persistentAllowed: searchEnabled };
     const persistent = vi.fn();
     const allowed = vi.fn();
     const sandbox = { enabled: true, backendId: "docker" } as never;

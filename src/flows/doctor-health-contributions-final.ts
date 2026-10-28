@@ -1,4 +1,7 @@
+import type { DoctorOptions } from "../commands/doctor-prompter.js";
+import { shouldManageGatewayService } from "../commands/doctor-service-repair-policy.js";
 import { shouldDeferConfiguredPluginInstallRepair } from "../commands/doctor/shared/update-phase.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasActiveGatewayExecCredential } from "./doctor-gateway-exec-credential.js";
 import { runCoreHealthFindingNote } from "./doctor-health-contribution-core.js";
 import {
@@ -8,6 +11,7 @@ import {
 } from "./doctor-health-contribution-runners.config.js";
 import {
   runBrowserHealth,
+  runBundleLspEnvHealth,
   runDevicePairingHealth,
   runGatewayDaemonHealth,
   runGatewayServicesHealth,
@@ -19,27 +23,55 @@ import {
   runWebFetchProxyHealth,
   runWhatsappResponsivenessHealth,
 } from "./doctor-health-contribution-runners.gateway.js";
-import {
-  collectWorkspaceStatusPluginVersionReadiness,
-  runBootstrapSizeHealth,
-  runHeartbeatCadenceMigrationHealth,
-  runHeartbeatScratchMigrationHealth,
-  runHeartbeatTaskMigrationHealth,
-  runHooksModelHealth,
-  runMemorySearchHealthContribution,
-  runSkillsHealth,
-  runToolsMdMigrationHealth,
-  runWorkspaceAliasHealth,
-  runWorkspaceStatusHealth,
-  runWorkspaceSuggestionsHealth,
-} from "./doctor-health-contribution-runners.workspace.js";
+import { runMemorySearchHealthContribution } from "./doctor-health-contribution-runners.workspace.js";
 import type {
   DoctorHealthCheckContext,
   DoctorHealthContribution,
   DoctorHealthFlowContext,
 } from "./doctor-health-contribution-types.js";
-import { createDoctorHealthContribution } from "./doctor-health-contribution.js";
+import {
+  recordDoctorHealthWarnings,
+  renderStructuredHealthFindings,
+  createDoctorHealthContribution,
+} from "./doctor-health-contribution.js";
+import { resolveDoctorWorkspaceSuggestionScopes } from "./doctor-workspace-suggestion-scopes.js";
 import type { HealthCheck } from "./health-checks.js";
+
+type PluginVersionRestartReadiness =
+  import("../plugins/plugin-version-drift.js").PluginVersionRestartReadiness;
+
+async function collectWorkspaceStatusPluginVersionReadiness(params: {
+  cfg: OpenClawConfig;
+  options?: Pick<DoctorOptions, "allowExec" | "deep" | "nonInteractive">;
+}): Promise<PluginVersionRestartReadiness | undefined> {
+  if (params.cfg.gateway?.mode === "remote" || !(await shouldManageGatewayService())) {
+    return undefined;
+  }
+  try {
+    const { gatherDaemonStatus } = await import("../cli/daemon-cli/status.gather.js");
+    const status = await gatherDaemonStatus({
+      rpc: { timeout: params.options?.nonInteractive === true ? "3000" : "10000", json: true },
+      probe: true,
+      requireRpc: false,
+      deep: params.options?.deep === true,
+      allowExecSecretRefs: params.options?.allowExec === true,
+      pluginVersionTarget: "restart",
+    });
+    if (status.pluginVersionRestartReadiness?.status === "resolved") {
+      const { resolvePluginVersionDriftTargets } =
+        await import("../plugins/plugin-version-drift.js");
+      return {
+        ...status.pluginVersionRestartReadiness,
+        report: await resolvePluginVersionDriftTargets(status.pluginVersionRestartReadiness.report),
+      };
+    }
+    return status.pluginVersionRestartReadiness;
+  } catch {
+    // The core Gateway health check owns general collection failures. Without status we
+    // cannot establish that a managed service and version-bound plugin make this check apply.
+    return undefined;
+  }
+}
 
 const CHANNEL_PACKAGE_STATE_CAPABILITIES_CHECK_ID =
   "core/doctor/channel-package-state-capabilities";
@@ -162,6 +194,10 @@ export function resolveFinalDoctorHealthContributions(params: {
       updateWork: { kind: "inspection", scope: "run" },
       run: runWebFetchProxyHealth,
     }),
+    createDoctorHealthContribution("doctor:bundle-lsp-env", "Bundle LSP environment", {
+      updateWork: { kind: "inspection", scope: "agent" },
+      run: runBundleLspEnvHealth,
+    }),
     createDoctorHealthContribution("doctor:github-projects", "GitHub projects", {
       updateWork: { kind: "standalone" },
       run: runGitHubProjectHealth,
@@ -178,7 +214,22 @@ export function resolveFinalDoctorHealthContributions(params: {
     createDoctorHealthContribution("doctor:hooks-model", "Hooks model", {
       updateWork: { kind: "inspection", scope: "run" },
       healthCheckIds: ["core/doctor/hooks-model"],
-      run: runHooksModelHealth,
+      async run(ctx) {
+        const { collectHooksModelIssues } = await import("../commands/doctor-hooks-model.js");
+        const issues = await collectHooksModelIssues(ctx.cfg);
+        if (issues.length === 0) {
+          return;
+        }
+        const { note } = await import("../../packages/terminal-core/src/note.js");
+        const warnings = issues.map(({ kind, model }) =>
+          kind === "unresolved"
+            ? `- hooks.gmail.model "${model}" could not be resolved`
+            : kind === "not-allowed"
+              ? `- hooks.gmail.model "${model}" not allowed by agents.defaults.modelPolicy.allow (will use primary instead)`
+              : `- hooks.gmail.model "${model}" not in the model catalog (may fail at runtime)`,
+        );
+        note(warnings.join("\n"), "Hooks");
+      },
     }),
     ...(
       [
@@ -224,7 +275,22 @@ export function resolveFinalDoctorHealthContributions(params: {
           });
         },
       },
-      run: runWorkspaceStatusHealth,
+      async run(ctx) {
+        const pluginVersionReadiness = await collectWorkspaceStatusPluginVersionReadiness({
+          cfg: ctx.cfg,
+          options: ctx.options,
+        });
+        const { collectWorkspaceStatusHealthFindings } =
+          await import("../commands/doctor-workspace-status.js");
+        const findings = collectWorkspaceStatusHealthFindings(ctx.cfg, {
+          pluginVersionReadiness,
+          ...(ctx.runWithPluginMetadataSnapshot
+            ? { runWithPluginMetadataSnapshot: ctx.runWithPluginMetadataSnapshot }
+            : {}),
+        });
+        recordDoctorHealthWarnings(ctx, findings);
+        renderStructuredHealthFindings(ctx, findings);
+      },
     }),
     createDoctorHealthContribution("doctor:workspace-alias", "Workspace alias", {
       healthChecks: {
@@ -237,17 +303,34 @@ export function resolveFinalDoctorHealthContributions(params: {
           return collectRepointedWorkspaceAliasFindings(ctx.cfg);
         },
       },
-      run: runWorkspaceAliasHealth,
+      async run(ctx) {
+        const { collectRepointedWorkspaceAliasFindings } =
+          await import("../commands/doctor-workspace-alias.js");
+        const findings = await collectRepointedWorkspaceAliasFindings(ctx.cfg);
+        renderStructuredHealthFindings(ctx, findings);
+      },
     }),
     createDoctorHealthContribution("doctor:skills", "Skills", {
       updateWork: { kind: "inspection", scope: "agent", repairs: true },
       healthCheckIds: ["core/doctor/skills-readiness"],
-      run: runSkillsHealth,
+      async run(ctx) {
+        const { maybeRepairSkillReadiness } = await import("../commands/doctor-skills.js");
+        ctx.cfg = await maybeRepairSkillReadiness({
+          cfg: ctx.cfg,
+          prompter: ctx.prompter,
+          ...(ctx.runWithPluginMetadataSnapshot
+            ? { runWithPluginMetadataSnapshot: ctx.runWithPluginMetadataSnapshot }
+            : {}),
+        });
+      },
     }),
     createDoctorHealthContribution("doctor:bootstrap-size", "Bootstrap size", {
       updateWork: { kind: "standalone" },
       healthCheckIds: ["core/doctor/bootstrap-size"],
-      run: runBootstrapSizeHealth,
+      async run(ctx) {
+        const { noteBootstrapFileSize } = await import("../commands/doctor-bootstrap-size.js");
+        await noteBootstrapFileSize(ctx.cfg);
+      },
     }),
     createDoctorHealthContribution(
       "doctor:heartbeat-cadence-migration",
@@ -262,7 +345,15 @@ export function resolveFinalDoctorHealthContributions(params: {
             return collectHeartbeatCadenceMigrationFindings(ctx.cfg, ctx.env);
           },
         },
-        run: runHeartbeatCadenceMigrationHealth,
+        async run(ctx) {
+          const { maybeMigrateHeartbeatCadenceToCron } =
+            await import("../commands/doctor-heartbeat-retirement.js");
+          await maybeMigrateHeartbeatCadenceToCron({
+            cfg: ctx.configResult.heartbeatMigrationSource ?? ctx.cfg,
+            shouldRepair: ctx.prompter.shouldRepair,
+            env: ctx.env,
+          });
+        },
       },
     ),
     createDoctorHealthContribution(
@@ -278,7 +369,15 @@ export function resolveFinalDoctorHealthContributions(params: {
             return collectHeartbeatScratchMigrationFindings(ctx.cfg);
           },
         },
-        run: runHeartbeatScratchMigrationHealth,
+        async run(ctx) {
+          const { maybeMigrateHeartbeatCadenceToCron } =
+            await import("../commands/doctor-heartbeat-retirement.js");
+          await maybeMigrateHeartbeatCadenceToCron({
+            cfg: ctx.configResult.heartbeatMigrationSource ?? ctx.cfg,
+            shouldRepair: ctx.prompter.shouldRepair,
+            env: ctx.env,
+          });
+        },
       },
     ),
     createDoctorHealthContribution("doctor:tools-md-migration", "TOOLS.md migration", {
@@ -291,7 +390,14 @@ export function resolveFinalDoctorHealthContributions(params: {
           return collectToolsMdMigrationFindings(ctx.cfg);
         },
       },
-      run: runToolsMdMigrationHealth,
+      async run(ctx) {
+        const { maybeMigrateToolsMd } = await import("../commands/doctor-tools-md-migration.js");
+        await maybeMigrateToolsMd({
+          cfg: ctx.cfg,
+          shouldRepair: ctx.prompter.shouldRepair,
+          env: ctx.env,
+        });
+      },
     }),
     createDoctorHealthContribution(
       "doctor:heartbeat-task-cron-migration",
@@ -306,7 +412,15 @@ export function resolveFinalDoctorHealthContributions(params: {
             return collectHeartbeatTaskMigrationFindings(ctx.cfg, ctx.env);
           },
         },
-        run: runHeartbeatTaskMigrationHealth,
+        async run(ctx) {
+          const { maybeMigrateHeartbeatTasksToCron } =
+            await import("../commands/doctor-heartbeat-task-migration.js");
+          await maybeMigrateHeartbeatTasksToCron({
+            cfg: ctx.cfg,
+            shouldRepair: ctx.prompter.shouldRepair,
+            env: ctx.env,
+          });
+        },
       },
     ),
     createDoctorHealthContribution("doctor:shell-completion", "Shell completion", {
@@ -398,7 +512,22 @@ export function resolveFinalDoctorHealthContributions(params: {
     createDoctorHealthContribution("doctor:workspace-suggestions", "Workspace suggestions", {
       updateWork: { kind: "standalone" },
       healthCheckIds: ["core/doctor/workspace-suggestions"],
-      run: runWorkspaceSuggestionsHealth,
+      async run(ctx) {
+        if (ctx.options.workspaceSuggestions === false) {
+          return;
+        }
+        const { collectWorkspaceSuggestionNotes } =
+          await import("../commands/doctor-workspace-suggestions.js");
+        const { note } = await import("../../packages/terminal-core/src/note.js");
+        for (const { agentId, workspaceDir, labelAgent } of resolveDoctorWorkspaceSuggestionScopes(
+          ctx.cfg,
+        )) {
+          const prefix = labelAgent ? `Agent "${agentId}": ` : "";
+          for await (const suggestion of collectWorkspaceSuggestionNotes(workspaceDir)) {
+            note(`${prefix}${suggestion}`, "Workspace");
+          }
+        }
+      },
     }),
     createDoctorHealthContribution("doctor:final-config-validation", "Final config validation", {
       updateWork: { kind: "finalize" },

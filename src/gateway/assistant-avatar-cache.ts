@@ -4,14 +4,12 @@ import { resolveMutableAgentEntry } from "../agents/agent-scope-config.js";
 import type { PreparedLocalAgentAvatarFile } from "../agents/identity-avatar-file.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isRenderableAvatarImageDataUrl } from "../shared/avatar-limits.js";
-import { resolveAvatarMime } from "../shared/avatar-policy.js";
 
 export type GatewayAvatarImageSource =
   | { file: PreparedLocalAgentAvatarFile; revision: string }
   | { dataUrl: string; revision: string };
 
 const fileSources = new WeakMap<PreparedLocalAgentAvatarFile, GatewayAvatarImageSource>();
-const inlineFiles = new WeakMap<PreparedLocalAgentAvatarFile, string>();
 const dataSources = new WeakMap<object, Extract<GatewayAvatarImageSource, { dataUrl: string }>>();
 
 export function prepareGatewayAvatarFile(
@@ -51,16 +49,4 @@ export function prepareGatewayAvatarDataUrl(
   };
   dataSources.set(owner, source);
   return source;
-}
-
-export function gatewayAvatarFileDataUrl(file: PreparedLocalAgentAvatarFile): string | undefined {
-  if (!file.body) {
-    return undefined;
-  }
-  let dataUrl = inlineFiles.get(file);
-  if (!dataUrl) {
-    dataUrl = `data:${resolveAvatarMime(file.path)};base64,${file.body.toString("base64")}`;
-    inlineFiles.set(file, dataUrl);
-  }
-  return dataUrl;
 }

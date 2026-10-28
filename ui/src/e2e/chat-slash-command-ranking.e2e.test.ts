@@ -3,6 +3,7 @@ import type { Page } from "playwright";
 import { assert, expect, it } from "vitest";
 import type { CommandEntry } from "../../../packages/gateway-protocol/src/index.js";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { agentRoster } from "./agent-roster.test-support.ts";
 import { polledAttribute, polledText } from "./chat-presentation.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { setupPages } from "./model-setup-fixtures.test-support.ts";
@@ -39,12 +40,7 @@ async function installCommands(
   return installMockGateway(page, {
     methodResponses: {
       "chat.startup": {
-        agentsList: {
-          agents: [{ id: "main", name: "OpenClaw" }],
-          defaultId: "main",
-          mainKey: "main",
-          scope: "agent",
-        },
+        agentsList: agentRoster({ main: "OpenClaw" }, "main", "agent"),
         messages: [],
         metadata: { commands, models: [] },
         sessionId,
@@ -58,7 +54,7 @@ async function installCommands(
 
 async function openChat(page: Page, gateway: Awaited<ReturnType<typeof installMockGateway>>) {
   await page.goto(`${suite.server.baseUrl}chat`);
-  await gateway.waitForRequest("chat.startup");
+  await gateway.waitForRequest("sessions.messages.subscribe");
   const composer = page.locator(".agent-chat__composer-combobox textarea");
   await composer.waitFor({ state: "visible" });
   return composer;
@@ -99,41 +95,64 @@ suite.define(() => {
     },
   );
 
-  it("downloads a populated conversation as Markdown without sending a chat request", async () => {
-    await withPage(async ({ page }) => {
-      const question = "What can you export?";
-      const answer = "A readable conversation.";
-      const gateway = await installMockGateway(page, {
-        historyMessages: [
-          { role: "user", content: question },
-          { role: "assistant", content: answer },
-        ],
+  it.each(["/export", "/export-session"])(
+    "downloads the complete conversation without scrolling for %s",
+    async (command) => {
+      await withPage(async ({ page }) => {
+        const messages = Array.from({ length: 160 }, (_, index) => ({
+          __openclaw: { seq: index + 1 },
+          role: index % 2 ? "assistant" : "user",
+          content: `Export marker ${index + 1} ${"Synthetic detail. ".repeat(15)}`,
+        }));
+        const history = (rows: unknown[], hasMore: boolean, nextOffset?: number) => ({
+          messages: rows,
+          hasMore,
+          nextOffset,
+          totalMessages: messages.length,
+          sessionId: "export-pagination",
+          deltaCursor: "stable-export-cursor",
+        });
+        const gateway = await installMockGateway(page, {
+          methodResponses: {
+            "chat.startup": history(messages.slice(80), true, 80),
+            "chat.history": {
+              cases: [
+                { match: { offset: 0, limit: 1 }, response: history(messages.slice(-1), true, 1) },
+                { match: { offset: 0 }, response: history(messages.slice(80), true, 80) },
+                { match: { offset: 80 }, response: history(messages.slice(0, 80), false) },
+              ],
+            },
+          },
+        });
+        const composer = await openChat(page, gateway);
+        await page
+          .locator(".chat-thread-inner")
+          .getByText("Export marker 160", { exact: false })
+          .waitFor();
+        const firstMessage = messages[0];
+        assert(firstMessage, "paginated export fixture needs an earliest message");
+        expect(await page.getByText(firstMessage.content, { exact: true }).count()).toBe(0);
+        expect(await gateway.getRequests("chat.history")).toHaveLength(0);
+
+        await composer.fill(command);
+        const pending = page.waitForEvent("download");
+        await page.getByRole("button", { name: "Send message" }).click();
+        const download = await pending;
+        expect(download.suggestedFilename()).toMatch(/^chat-OpenClaw-.+\.md$/);
+        const stream = await download.createReadStream();
+        assert(stream, "chat export did not provide a readable download");
+        const markdown = await text(stream);
+        expect(markdown.match(/Export marker \d+ /g)).toHaveLength(160);
+        let previous = -1;
+        for (let index = 1; index <= 160; index += 1) {
+          const position = markdown.indexOf(`Export marker ${index} `);
+          expect(position).toBeGreaterThan(previous);
+          previous = position;
+        }
+        expect(await gateway.getRequests("chat.send")).toHaveLength(0);
       });
-
-      await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
-      await page.locator(".chat-thread-inner").getByText(answer, { exact: true }).waitFor({
-        state: "visible",
-      });
-
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
-      await composer.fill("/export");
-      const downloadPromise = page.waitForEvent("download");
-      await page.getByRole("button", { name: "Send message" }).click();
-      const download = await downloadPromise;
-
-      expect(download.suggestedFilename()).toMatch(/^chat-OpenClaw-.+\.md$/);
-      const stream = await download.createReadStream();
-      assert(stream, "chat export did not provide a readable download");
-      const markdown = await text(stream);
-      expect(markdown).toContain("# Chat with OpenClaw");
-      expect(markdown).toContain("## Message");
-      expect(markdown).toContain(question);
-      expect(markdown).toContain("## OpenClaw");
-      expect(markdown).toContain(answer);
-      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-    });
-  });
+    },
+  );
 
   it.each(["Enter", "Tab", "pointer"])(
     "shows the first argument after selecting from a scrolled command menu with %s",
@@ -168,10 +187,11 @@ suite.define(() => {
           nodes.findIndex((node) => node.textContent?.trim().startsWith("/viewport-15")),
         );
         expect(targetIndex).toBeGreaterThan(10);
+        await polledAttribute(options.first(), "aria-selected").toBe("true");
         for (let index = 0; index < targetIndex; index += 1) {
           await composer.press("ArrowDown");
+          await polledAttribute(options.nth(index + 1), "aria-selected").toBe("true");
         }
-        await polledAttribute(options.nth(targetIndex), "aria-selected").toBe("true");
         await expect.poll(() => scroll.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
         if (selection === "pointer") {
           await options.nth(targetIndex).click();
@@ -209,6 +229,7 @@ suite.define(() => {
         expect(activeIndex).toBeGreaterThanOrEqual(0);
         for (let index = activeIndex; index < choices.length - 1; index += 1) {
           await composer.press("ArrowDown");
+          await polledAttribute(options.nth(index + 1), "aria-selected").toBe("true");
         }
         await expect.poll(() => scroll.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
         await composer.fill("/viewport-");
@@ -240,6 +261,7 @@ suite.define(() => {
         )
         .toEqual(["/pair", "/pair-device", "/openclaw"]);
 
+      await polledAttribute(options.first(), "aria-selected").toBe("true");
       await composer.press("ArrowDown");
       await polledAttribute(options.nth(1), "aria-selected").toBe("true");
       await polledText(options.nth(1).locator(".slash-menu-name")).toContain("/pair-device");

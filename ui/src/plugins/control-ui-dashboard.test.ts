@@ -2,12 +2,14 @@
 
 import type { BoardGetParams, BoardWidget } from "@openclaw/gateway-protocol";
 import { expect, it, onTestFinished, vi } from "vitest";
-import type { ControlUiHost, ControlUiViewContext } from "../../../src/plugin-sdk/control-ui.js";
+import type { ControlUiViewContext } from "../../../src/plugin-sdk/control-ui.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient, GatewayEventListener } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { acquireBoardProviderForSession } from "../lib/board/provider.ts";
+import { createBoardWidget } from "../lib/board/widget.test-support.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
+import { createInertViewHost } from "./control-ui-view.test-support.ts";
 import "./control-ui-dashboard.tsx";
 import "./control-ui-contributions.solid.tsx";
 
@@ -58,18 +60,13 @@ async function setPermissions(element: DashboardElement, value: boolean) {
 }
 
 function widget(overrides: Partial<BoardWidget> = {}): BoardWidget {
-  return {
+  return createBoardWidget({
     name: "status",
-    tabId: "main",
     title: "Status",
-    contentKind: "html",
     sizeW: 12,
     sizeH: 2,
-    position: 0,
-    grantState: "none",
-    revision: 1,
     ...overrides,
-  };
+  });
 }
 
 function createClient(widgets: BoardWidget[] = [], load?: (params?: BoardGetParams) => unknown) {
@@ -128,14 +125,7 @@ it.each([
   async ({ sessionKey, hydrateOwner }) => {
     const widgetSignals: AbortSignal[] = [];
     const signal = new AbortController().signal;
-    const host = {
-      signal,
-      sessions: {},
-      agents: {},
-      navigation: {},
-      ui: {},
-      components: {},
-    } as unknown as ControlUiHost;
+    const host = createInertViewHost(signal);
     const entry = {
       key: "identity/context",
       pluginId: "identity",
@@ -181,6 +171,7 @@ it.each([
     const initial: BoardGetParams = hydrateOwner ? { sessionKey } : session;
     const element = await mountDashboard(initial, client, {}, provider);
 
+    await customElements.whenDefined("openclaw-board-view");
     await vi.waitFor(() => expect(nativeOwner(element)).not.toBeNull());
     expect(request).toHaveBeenCalledWith("board.get", initial);
     expect(nativeOwner(element)?.textContent).toBe(`${initial.agentId}/${sessionKey}`);
@@ -234,9 +225,14 @@ it("updates mounted dashboard controls immediately when gateway permissions or c
   expect([board.canMutate, board.canGrant]).toEqual([true, true]);
   expect(allow.disabled).toBe(false);
 
+  toggle(element).click();
+  await element.updateComplete;
+  expect(expanded(element)).toBe("false");
+
   for (const permitted of [false, true]) {
     await setPermissions(element, permitted);
     expect(allow.disabled).toBe(!permitted);
+    expect(expanded(element)).toBe("false");
   }
   element.connected = false;
   await settle(element);

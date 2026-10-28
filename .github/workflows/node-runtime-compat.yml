@@ -22,13 +22,13 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           cache-mode: restore
-          node-version: "26.1.0"
+          node-version: "26.12.1"
           install-bun: "false"
 
       - name: Resolve trusted declaration cache artifact
         id: declaration_cache
         env:
-          ARTIFACT_NAME: build-all-cache-v1-Linux-X64-node-26.1.0
+          ARTIFACT_NAME: build-all-cache-v1-Linux-X64-node-26.12.1
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
@@ -104,7 +104,6 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=8192
         run: |
           pnpm build
-          pnpm ui:build
           node openclaw.mjs --help
           node openclaw.mjs status --json --timeout 1
           pnpm test:build:singleton
@@ -117,7 +116,7 @@ jobs:
           compression-level: 1
           if-no-files-found: error
           include-hidden-files: true
-          name: build-all-cache-v1-${{ runner.os }}-${{ runner.arch }}-node-26.1.0
+          name: build-all-cache-v1-${{ runner.os }}-${{ runner.arch }}-node-26.12.1
           overwrite: true
           path: .artifacts/build-all-cache
           retention-days: 14

@@ -15,5 +15,9 @@ openclaw onboard --auth-choice fal-api-key
 You can also supply the key through `FAL_KEY` in the Gateway's environment.
 Choose a media model for the kind of content you want to generate.
 
+Image, video, and music API requests honor the existing
+`models.providers.fal.request` headers and proxy settings. Generated asset
+downloads do not inherit those request settings or the fal API key.
+
 See the [fal guide](https://docs.openclaw.ai/providers/fal) for image, video, and
 music setup, supported inputs, and model-specific controls.

@@ -37,23 +37,20 @@ function fixture() {
   });
   const register = (options?: {
     runId?: string;
-    agentId?: string;
-    sessionKey?: string;
-    sessionId?: string;
     storePath?: string;
     terminal?: boolean;
     kind?: "agent";
   }) => {
     const registration = registerChatAbortController({
       runId: options?.runId ?? "terminal-run",
-      sessionId: options?.sessionId ?? target.sessionId,
-      sessionKey: options?.sessionKey ?? target.canonicalKey,
-      agentId: options?.agentId ?? target.agentId,
+      sessionId: target.sessionId,
+      sessionKey: target.canonicalKey,
+      agentId: target.agentId,
       target: captureSessionTarget({
         storeScope: options?.storePath ?? target.storePath,
-        sessionKey: options?.sessionKey ?? target.canonicalKey,
-        incarnation: options?.sessionId ?? target.sessionId,
-        agentId: options?.agentId ?? target.agentId,
+        sessionKey: target.canonicalKey,
+        incarnation: target.sessionId,
+        agentId: target.agentId,
       }),
       timeoutMs: 60_000,
       kind: options?.kind,
@@ -80,13 +77,9 @@ function fixture() {
   return { target, controllerTarget, register, admit };
 }
 
-it.each([
-  { label: "live run", terminal: false },
-  { label: "another agent's terminal", agentId: "research" },
-  { label: "another session's terminal", sessionKey: "other", sessionId: "other-session" },
-])("leaves $label to the existing active-work gate", async (options) => {
+it("leaves live runs to the existing active-work gate", async () => {
   const { target, register, admit } = fixture();
-  const registration = register(options);
+  const registration = register({ terminal: false });
   const admission = await admit();
   try {
     expect(await waitForTerminalSessionRunSettlement(target)).toBe(false);

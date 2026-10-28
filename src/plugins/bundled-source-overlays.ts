@@ -8,6 +8,7 @@ import {
   pluginCacheStatSync,
   readPluginCacheDirectory,
 } from "./plugin-cache-files.js";
+import type { PluginDirectoryEntry } from "./plugin-cache-files.types.js";
 import { getPluginCache } from "./plugin-cache.js";
 
 /** Parses Linux mountinfo content into absolute mount points. */
@@ -67,7 +68,6 @@ export function isBundledSourceOverlayPath(params: {
 export function listBundledSourceOverlayDirs(params: {
   bundledRoot?: string;
   env?: NodeJS.ProcessEnv;
-  mountPoints?: ReadonlySet<string>;
 }): string[] {
   const env = params.env ?? process.env;
   if (sourceOverlaysDisabled(env) || !params.bundledRoot) {
@@ -78,14 +78,14 @@ export function listBundledSourceOverlayDirs(params: {
     return [];
   }
 
-  let entries: fs.Dirent[];
+  let entries: PluginDirectoryEntry[];
   try {
     entries = readPluginCacheDirectory(legacyRoot);
   } catch {
     return [];
   }
 
-  const mountPoints = params.mountPoints ?? readLinuxMountPoints();
+  const mountPoints = readLinuxMountPoints();
   const legacyRootMounted = isBundledSourceOverlayPath({
     sourcePath: legacyRoot,
     mountPoints,

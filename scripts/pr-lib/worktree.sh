@@ -32,6 +32,25 @@ repo_root() {
   (cd "$base_dir/.." && pwd)
 }
 
+show_pr_workspace() {
+  local root state
+  root=$(repo_root) || return 1
+  state=$(pr_worktree_state "$root/.worktrees/pr-$1" "" entry) || return 1
+  node - "$root" "$state" <<'EOF_WORKSPACE'
+const path = require("node:path");
+const [canonicalRoot, stateJson] = process.argv.slice(2);
+const state = JSON.parse(stateJson);
+const artifactDirectory = path.join(state.path, ".local");
+process.stdout.write(JSON.stringify({
+  canonicalRoot,
+  commonGitDir: state.common,
+  worktree: state.path,
+  artifactDirectory,
+  reviewJson: path.join(artifactDirectory, "review.json"),
+}) + "\n");
+EOF_WORKSPACE
+}
+
 ensure_gh_api_auth() {
   local context login
   # Keep credential selection in non-exported process memory; never record it in artifacts.
@@ -181,6 +200,30 @@ check_prep_baseline_transition() {
     "$command" "$pr" "$source" "$target" "$branch" "$root" "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID"
 }
 
+prefetch_review_transition_objects() {
+  # Path-based restore fetches cold blobs individually. Refetch skips Git's
+  # local-history negotiation; bounded batches keep each fetch small. Retain
+  # one restore because directory/file replacements can span path batches.
+  GIT_NO_LAZY_FETCH=1 pr_git rev-list --objects --missing=print --no-object-names \
+    --quiet --max-count=1 "$1" |
+    {
+      local oid
+      local batch=()
+      while IFS= read -r oid; do
+        case "$oid" in \?*) batch+=("${oid#?}") ;; *) continue ;; esac
+        if [ "${#batch[@]}" -eq 1024 ]; then
+          printf '%s\n' "${batch[@]}" |
+            fetch_canonical_ref "${batch[0]}" --stdin --refetch --no-write-fetch-head || return 1
+          batch=()
+        fi
+      done
+      if [ "${#batch[@]}" -gt 0 ]; then
+        printf '%s\n' "${batch[@]}" |
+          fetch_canonical_ref "${batch[0]}" --stdin --refetch --no-write-fetch-head || return 1
+      fi
+    }
+}
+
 recover_review_transition() {
   local pr="$1"
   local journal=.local/review-transition.json
@@ -216,6 +259,8 @@ recover_review_transition() {
     return 1
   fi
 
+  # Network preparation precedes the existing admission immediately before writes.
+  prefetch_review_transition_objects "$target" || return 1
   validate_review_transition_state "$pr" "$source" "$target" || return 1
   if [ "$mode" = prep ]; then
     validate_prep_baseline_transition install-transition "$pr" "$source" "$target" "$branch" || return 1
@@ -578,7 +623,23 @@ pr_meta_json() {
 write_pr_meta_files() {
   local json="$1"
 
-  printf '%s\n' "$json" > .local/pr-meta.json
+  # A fresh hosted review must not destroy the incoming identity still bound to
+  # a retained correction. Finish and verify the snapshot before either write.
+  local archive="" artifact
+  for artifact in .local/pr-meta.json .local/pr-meta.env .local/review.json .local/review.md; do
+    [ -e "$artifact" ] || [ -L "$artifact" ] || continue
+    if [ ! -f "$artifact" ] || [ -L "$artifact" ]; then
+      echo "Cannot retain review identity at $artifact: expected a regular file." >&2
+      return 1
+    fi
+    if [ -z "$archive" ]; then
+      archive=$(mktemp -d .local/review-evidence.XXXXXX) || return 1
+    fi
+    cp -p "$artifact" "$archive/" || return 1
+    cmp -s "$artifact" "$archive/${artifact##*/}" || return 1
+  done
+
+  printf '%s\n' "$json" > .local/pr-meta.json || return 1
 
   # Security: shell-escape all values with printf %q to prevent command injection
   # via malicious branch names containing $() or backticks. See GHSA-xxxx-xxxx-xxxx.
@@ -667,6 +728,22 @@ gc_pr_worktrees() {
       else
         echo "skipping $dir (PR #$pr operation lock state is indeterminate)"
       fi
+      continue
+    fi
+    # A failed clone has no review state or PR registration. Retire only its
+    # directory, even while the PR is open; keep branches for a native retry.
+    local checkout_state
+    if checkout_state=$(pr_worktree_state "$dir" "" entry) &&
+      printf '%s\n' "$checkout_state" | jq -e '.failedTemplateClone' >/dev/null; then
+      if remove_worktree_if_present "$dir" "$dry_run"; then
+        if [ "$dry_run" = true ]; then
+          echo "would remove $dir (failed template clone)"
+        else
+          echo "removed $dir (failed template clone)"
+        fi
+        removed=$((removed + 1))
+      fi
+      release_pr_operation_lock
       continue
     fi
     local state

@@ -1,5 +1,5 @@
 import path from "node:path";
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
 import { expectDefined } from "../../../packages/normalization-core/src/expect.js";
 import {
   canonicalSymbolInfo,

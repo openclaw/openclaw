@@ -6,14 +6,18 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { readDeletedSessionStartup } from "../../app/deleted-session-startup.ts";
 import type { GatewayStatusProps } from "../../components/gateway-status.ts";
 import type { BoardFace } from "../../lib/board/settings.ts";
+import { elementRef } from "../../lib/reactive/element-ref.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import {
   areUiSessionKeysEquivalent,
   parseAgentSessionKey,
 } from "../../lib/sessions/session-key.ts";
+import { ClawCreatorReview } from "../claws/creator-review.tsx";
 import type { DropIndicator } from "./chat-page-drop-indicator.ts";
+import { registerUnboundPane } from "./chat-pane-elements.ts";
 import type { PaneSessionChangeOptions } from "./chat-pane-shared.ts";
 import { ChatPaneView } from "./chat-pane.tsx";
+import { PendingSessionCreate } from "./pending-session-create-lazy.ts";
 import type { RouteDraftComposerFocus } from "./route-draft-focus-handoff.ts";
 import { routeDraft } from "./route-draft.ts";
 import type { SessionChatRouteData } from "./route-loader.ts";
@@ -21,22 +25,6 @@ import type { ChatMessageCache } from "./session-message-cache.ts";
 import type { SessionSnapshotStore } from "./session-snapshot-store.ts";
 import type { ChatSplitLayout, ChatSplitColumn, ChatSplitPane } from "./split-layout-types.ts";
 import { findPane, splitRatio } from "./split-layout.ts";
-
-// The route loader loads this bridge only for pending creation; ordinary Chat stays lazy.
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-pending-session-create": HTMLAttributes<HTMLElement> & {
-        "prop:context": ApplicationContext | undefined;
-        "prop:sessionKey": string;
-        "prop:narrow": boolean;
-        "prop:mergedChrome": boolean;
-        "prop:navDrawerOpen": boolean;
-        "prop:gatewayStatus"?: GatewayStatusProps | null;
-      };
-    }
-  }
-}
 
 type ChatPagePaneRenderOptions = {
   active: boolean;
@@ -177,16 +165,16 @@ function ChatPageSession(props: { options: ChatPagePaneRenderOptions; sessionKey
     <Show
       when={!pending()}
       fallback={
-        <openclaw-pending-session-create
+        <PendingSessionCreate
           class={className()}
           aria-hidden={presented() ? "false" : "true"}
           inert={!presented()}
-          prop:context={props.options.context}
-          prop:sessionKey={props.sessionKey}
-          prop:narrow={props.options.narrow}
-          prop:mergedChrome={props.options.mergedChrome && active()}
-          prop:navDrawerOpen={props.options.navDrawerOpen && active()}
-          prop:gatewayStatus={active() ? props.options.gatewayStatus : null}
+          context={props.options.context}
+          sessionKey={props.sessionKey}
+          narrow={props.options.narrow}
+          mergedChrome={props.options.mergedChrome && active()}
+          navDrawerOpen={props.options.navDrawerOpen && active()}
+          gatewayStatus={active() ? props.options.gatewayStatus : null}
         />
       }
     >
@@ -209,6 +197,7 @@ function ChatPageSession(props: { options: ChatPagePaneRenderOptions; sessionKey
           props.options.splitMode ? parseAgentSessionKey(props.sessionKey)?.agentId : undefined
         }
         routeLoadingSkeleton={routeLoadingSkeleton()}
+        routeResolutionPending={retainedRoute()?.sessionResolutionFromCache === "snapshot"}
         presented={presented()}
         visuallyPresented={presented()}
         active={active()}
@@ -259,6 +248,7 @@ function ChatPagePaneCell(props: { options: ChatPagePaneRenderOptions }) {
       <div class="chat-pane-cache">
         <Show when={props.options.unbound}>
           <div
+            ref={[elementRef(registerUnboundPane)]}
             class="chat-split-view__unbound"
             data-unbound-pane-id={props.options.pane.id}
             tabindex={0}
@@ -380,6 +370,7 @@ function SplitLayout(props: { snapshot: ChatPageSnapshot }) {
 }
 
 export function ChatPageBody(props: {
+  context: ApplicationContext;
   snapshot: ChatPageSnapshot | null;
   indicator: DropIndicator | null;
   containerRef: (element: HTMLDivElement) => void;
@@ -389,6 +380,7 @@ export function ChatPageBody(props: {
       {(snapshot) => (
         <div class="chat-split-view__drop-container" ref={props.containerRef}>
           <SplitLayout snapshot={snapshot()} />
+          <ClawCreatorReview context={props.context} />
           <Show when={props.indicator}>
             {(indicator) => (
               <div

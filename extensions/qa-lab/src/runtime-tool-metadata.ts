@@ -11,19 +11,7 @@ type QaRuntimeToolExpectedLayer = (typeof QA_RUNTIME_TOOL_EXPECTED_LAYERS)[numbe
 
 type QaRuntimeCapabilityLayer = (typeof QA_RUNTIME_CAPABILITY_LAYERS)[number];
 
-export type RuntimeParityComparisonMode = "default" | "codex-native-workspace" | "outcome-only";
-
-export type QaRuntimeToolCoverageMetadata = {
-  bucket: QaRuntimeToolBucket;
-  expectedLayer: QaRuntimeToolExpectedLayer;
-  capabilityLayer: QaRuntimeCapabilityLayer;
-  required: boolean;
-  tracking?: string;
-  reason?: string;
-  codexDefaultImpact?: string;
-  qaImpact?: string;
-  action?: string;
-};
+export type QaRuntimeToolCoverageMetadata = ReturnType<typeof readRuntimeToolCoverageMetadata>;
 
 const QA_RUNTIME_TOOL_BUCKETS = [
   "codex-native-workspace",
@@ -80,9 +68,7 @@ export function readRuntimeToolCoverageConfig(
   return isRecord(config?.toolCoverage) ? config.toolCoverage : undefined;
 }
 
-export function readRuntimeToolCoverageMetadata(params: {
-  config?: Record<string, unknown>;
-}): QaRuntimeToolCoverageMetadata {
+export function readRuntimeToolCoverageMetadata(params: { config?: Record<string, unknown> }) {
   const toolCoverage = readRuntimeToolCoverageConfig(params.config);
   const bucket = readRuntimeToolEnum(
     toolCoverage?.bucket,
@@ -114,21 +100,15 @@ export function readRuntimeToolCoverageMetadata(params: {
     expectedLayer,
     capabilityLayer,
     required,
-    ...((readString(toolCoverage?.tracking) ?? readString(toolCoverage?.issue))
-      ? { tracking: readString(toolCoverage?.tracking) ?? readString(toolCoverage?.issue) }
-      : {}),
-    ...(readString(toolCoverage?.reason) ? { reason: readString(toolCoverage?.reason) } : {}),
-    ...(readString(toolCoverage?.codexDefaultImpact)
-      ? { codexDefaultImpact: readString(toolCoverage?.codexDefaultImpact) }
-      : {}),
-    ...(readString(toolCoverage?.qaImpact) ? { qaImpact: readString(toolCoverage?.qaImpact) } : {}),
-    ...(readString(toolCoverage?.action) ? { action: readString(toolCoverage?.action) } : {}),
+    tracking: readString(toolCoverage?.tracking) ?? readString(toolCoverage?.issue),
+    reason: readString(toolCoverage?.reason),
+    codexDefaultImpact: readString(toolCoverage?.codexDefaultImpact),
+    qaImpact: readString(toolCoverage?.qaImpact),
+    action: readString(toolCoverage?.action),
   };
 }
 
-export function readScenarioRuntimeToolCoverageMetadata(
-  scenario: QaSeedScenarioWithSource,
-): QaRuntimeToolCoverageMetadata {
+export function readScenarioRuntimeToolCoverageMetadata(scenario: QaSeedScenarioWithSource) {
   return readRuntimeToolCoverageMetadata({
     config: scenario.execution.config,
   });

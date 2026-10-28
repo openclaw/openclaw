@@ -17,9 +17,9 @@ scenario:
     - docs/cli/plugins.md
     - docs/plugins/manifest.md
   codeRefs:
-    - src/cli/plugins-cli.clawhub-install.e2e.test.ts
+    - src/cli/plugins-cli.recovery-install.e2e.test.ts
     - src/plugins/clawhub.ts
   execution:
     kind: vitest
-    path: src/cli/plugins-cli.clawhub-install.e2e.test.ts
+    path: src/cli/plugins-cli.recovery-install.e2e.test.ts
     summary: Runs real CLI installs against a local ClawHub HTTP fixture and checks compatibility rejection ordering plus compatible install side effects.

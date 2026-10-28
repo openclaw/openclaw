@@ -1,7 +1,7 @@
 import { afterEach, expect, it } from "vitest";
+import { nativeDockPanelCss as dockStyles } from "./dock-panel-styles.ts";
 import browserStyles from "./browser/browser-panel.css?inline";
 import desktopStyles from "./desktop/desktop-panel.css?inline";
-import dockStyles from "./dock-panel-solid.css?inline";
 
 afterEach(() => document.body.replaceChildren());
 

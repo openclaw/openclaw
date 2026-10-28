@@ -1,4 +1,3 @@
-// Bootstraps approval handlers from channel plugin capabilities.
 import { randomUUID } from "node:crypto";
 import { resolveChannelApprovalCapability } from "../channels/plugins/approvals.js";
 import type { ChannelRuntimeSurface } from "../channels/plugins/channel-runtime-surface.types.js";

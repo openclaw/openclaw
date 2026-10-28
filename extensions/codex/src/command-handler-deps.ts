@@ -17,5 +17,5 @@ export type CodexCommandDeps = {
   bindingStore: CodexAppServerBindingStore;
   listCodexCliSessionsOnNode: ListCodexCliSessionsOnNodeFn;
   resolveCodexCliSessionForBindingOnNode: ResolveCodexCliSessionForBindingOnNodeFn;
-  codexPluginsManagementIo?: CodexPluginsManagementIO;
+  codexPluginsManagementIo: CodexPluginsManagementIO;
 };

@@ -6,6 +6,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import type { ChannelInboundTurnPlan } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { createMockIncomingRequest, withServer } from "openclaw/plugin-sdk/test-env";
 import { WEBHOOK_IN_FLIGHT_DEFAULTS } from "openclaw/plugin-sdk/webhook-request-guards";
@@ -152,6 +153,7 @@ async function expectWebhookResponse(
     marker: response.headers.get("x-openclaw-delivery-accepted"),
     body: await response.json(),
   }).toEqual({ status, marker, body });
+  expect(response.headers.get("content-type")).toBe("application/json");
 }
 
 describe("monitorLineProvider lifecycle", () => {
@@ -358,49 +360,77 @@ describe("monitorLineProvider lifecycle", () => {
     },
   );
 
-  it("refreshes direct-chat loading until a failed inbound turn settles", async () => {
+  it.each<[string, ReplyPayload, "final" | "block", string | undefined, boolean, boolean]>([
+    ["push-only text", { text: "hello" }, "final", undefined, false, true],
+    ["unused token", { text: "hello" }, "final", "reply-token", false, false],
+    ["consumed token", { text: "hello" }, "final", "reply-token", true, true],
+    [
+      "rich content",
+      { text: "hello", channelData: { line: { quickReplies: ["One"] } } },
+      "final",
+      undefined,
+      true,
+      false,
+    ],
+    [
+      "media",
+      { text: "photo", mediaUrl: "https://example.com/image.png" },
+      "final",
+      undefined,
+      true,
+      false,
+    ],
+    ["non-final", { text: "hello" }, "block", undefined, true, false],
+  ])(
+    "selects durable delivery for %s",
+    async (_name, payload, kind, replyToken, consumeToken, durable) => {
+      const resolvedTurn = await captureTurn();
+      const monitor = await startMonitor();
+      try {
+        await dispatchInbound({ from: "U123", replyToken });
+        const delivery = expectDefined(resolvedTurn(), "LINE inbound turn").delivery;
+        if (consumeToken) {
+          const { deliverLineAutoReply } = await import("./auto-reply-delivery.js");
+          vi.mocked(deliverLineAutoReply).mockResolvedValueOnce({
+            status: "delivered",
+            replyTokenUsed: true,
+            visibleReplySent: true,
+          });
+          await expectDefined(delivery.deliver, "LINE direct delivery")(
+            { text: "first block" },
+            { kind: "block" },
+          );
+        }
+        if (typeof delivery.durable !== "function") {
+          throw new Error("LINE turn must select durable delivery per reply");
+        }
+        expect(await delivery.durable(payload, { kind })).toEqual(durable ? { to: "U123" } : false);
+      } finally {
+        await monitor.stop();
+      }
+    },
+  );
+
+  it("leaves direct-chat loading to the admitted reply lifecycle", async () => {
     const { messagingApi } = await import("@line/bot-sdk");
-    const { setLineRuntime } = await import("./runtime.js");
-    const entered = createDeferred<void>();
-    const finished = createDeferred<void>();
     const loading = vi
       .spyOn(messagingApi.MessagingApiClient.prototype, "showLoadingAnimation")
       .mockResolvedValue({});
-    setLineRuntime({
-      channel: {
-        inbound: {
-          run: async () => {
-            entered.resolve();
-            await finished.promise;
-            throw new Error("turn failed");
-          },
-        },
-      },
-    } as unknown as Parameters<typeof setLineRuntime>[0]);
+    const resolvedTurn = await captureTurn();
     const monitor = await startMonitor();
-    vi.useFakeTimers();
-    const task = dispatchInbound(
-      { from: `line:${directUserId}`, sessionKey: `line:${directUserId}`, userId: directUserId },
-      { channels: { line: { channelAccessToken: "token" } } },
-    );
     try {
-      await entered.promise;
-      expect(loading).toHaveBeenCalledWith({
-        chatId: directUserId,
-        loadingSeconds: 20,
-      });
-      await vi.advanceTimersByTimeAsync(18_000);
-      expect(loading).toHaveBeenCalledTimes(2);
-      finished.resolve();
-      await expect(task).rejects.toThrow("turn failed");
-      await vi.advanceTimersByTimeAsync(18_000);
-      expect(loading).toHaveBeenCalledTimes(2);
+      await dispatchInbound(
+        { from: `line:${directUserId}`, sessionKey: `line:${directUserId}`, userId: directUserId },
+        { channels: { line: { channelAccessToken: "token" } } },
+      );
+      // Core starts typing only for an admitted reply, so a denied send stays silent.
+      expect(loading).not.toHaveBeenCalled();
+      const typing = expectDefined(resolvedTurn()?.replyPipeline?.typing, "LINE reply typing");
+      await typing.start();
+      expect(loading).toHaveBeenCalledWith({ chatId: directUserId, loadingSeconds: 20 });
     } finally {
-      finished.resolve();
-      await Promise.resolve(task).catch(() => {});
       await monitor.stop();
       loading.mockRestore();
-      vi.useRealTimers();
     }
   });
 

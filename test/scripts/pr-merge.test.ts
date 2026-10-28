@@ -797,23 +797,13 @@ describePosix("native squash attribution", () => {
   ])(
     "omits machine author preview credit from a reviewed body while retaining human authors: %j",
     (machine) => {
-      const humanCredit = "Co-authored-by: Contributor <contributor@example.com>";
       const result = prepareBody({
-        sourceCommits: [
-          {
-            message: "Repair",
-            author: { name: "Contributor", email: "contributor@example.com" },
-          },
-          {
-            message: "Test fixture",
-            author: machine,
-          },
-        ],
-        previewBody: `Repair summary\n\nCo-authored-by: ${machine.name} <${machine.email}>\n${humanCredit}`,
+        sourceCommits: [source("Repair", contributor), source("Test fixture", machine)],
+        previewBody: `Repair summary\n\nCo-authored-by: ${machine.name} <${machine.email}>\n${contributorTrailer}`,
         overrideBody: "Reviewed correction.\n",
       });
       expect(result.status, result.stderr).toBe(0);
-      expect(result.mergeBody).toBe(`Reviewed correction.\n\n${humanCredit}\n`);
+      expect(result.mergeBody).toBe(`Reviewed correction.\n\n${contributorTrailer}\n`);
     },
   );
 

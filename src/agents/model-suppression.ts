@@ -1,3 +1,4 @@
+import type { ModelApi } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildManifestBuiltInModelSuppressionResolver } from "../plugins/manifest-model-suppression.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
@@ -6,6 +7,7 @@ export function resolveBuiltInModelSuppressionFromManifest(params: {
   provider?: string | null;
   id?: string | null;
   baseUrl?: string | null;
+  api?: ModelApi;
   config?: OpenClawConfig;
   unconditionalOnly?: boolean;
   workspaceDir?: string;
@@ -48,7 +50,6 @@ export function buildSuppressedBuiltInModelError(params: {
 
 export function buildShouldSuppressBuiltInModelCore(params: {
   config?: OpenClawConfig;
-  workspaceDir?: string;
 }): (input: { provider?: string | null; id?: string | null; baseUrl?: string | null }) => boolean {
   const resolver = buildManifestBuiltInModelSuppressionResolver({
     env: process.env,

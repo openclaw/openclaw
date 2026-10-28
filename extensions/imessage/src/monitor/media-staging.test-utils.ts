@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import * as mediaStore from "openclaw/plugin-sdk/media-store";
+import * as runtimeEnv from "openclaw/plugin-sdk/runtime-env";
 import * as securityRuntime from "openclaw/plugin-sdk/security-runtime";
 import * as webMedia from "openclaw/plugin-sdk/web-media";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -100,7 +101,7 @@ describe("stageIMessageAttachments", () => {
     await fs.symlink(outsideRoot, path.join(allowedRoot, "link"), "dir");
 
     const saveMediaBuffer = vi.spyOn(mediaStore, "saveMediaBuffer");
-    const logVerbose = vi.fn();
+    const logVerbose = vi.spyOn(runtimeEnv, "logVerbose").mockImplementation(() => {});
 
     await expect(
       stageIMessageAttachments(
@@ -111,7 +112,7 @@ describe("stageIMessageAttachments", () => {
             missing: false,
           },
         ],
-        { maxBytes: 1024, allowedRoots: [allowedRoot], deps: { logVerbose } },
+        { maxBytes: 1024, allowedRoots: [allowedRoot] },
       ),
     ).resolves.toEqual({
       attachments: [{ contentType: "image/png", kind: "image" }],
@@ -170,7 +171,7 @@ describe("stageIMessageAttachments", () => {
     const sourcePath = await writeTempFile("IMG_0002.HEIC", Buffer.from("heic"));
     const saveMediaBuffer = vi.spyOn(mediaStore, "saveMediaBuffer");
     const loadWebMedia = vi.spyOn(webMedia, "loadWebMedia");
-    const logVerbose = vi.fn();
+    const logVerbose = vi.spyOn(runtimeEnv, "logVerbose").mockImplementation(() => {});
     vi.spyOn(securityRuntime, "openLocalFileSafely").mockImplementation(async (options) => {
       const opened = await openLocalFileSafely(options);
       await fs.appendFile(sourcePath, Buffer.alloc(64));
@@ -182,9 +183,6 @@ describe("stageIMessageAttachments", () => {
         [{ original_path: sourcePath, mime_type: "image/heic", missing: false }],
         {
           maxBytes: 4,
-          deps: {
-            logVerbose,
-          },
         },
       ),
     ).resolves.toEqual({
@@ -200,12 +198,12 @@ describe("stageIMessageAttachments", () => {
   it("drops attachments over the inbound media limit", async () => {
     const sourcePath = await writeTempFile("huge.png", Buffer.from("too large"));
     const saveMediaBuffer = vi.spyOn(mediaStore, "saveMediaBuffer");
-    const logVerbose = vi.fn();
+    const logVerbose = vi.spyOn(runtimeEnv, "logVerbose").mockImplementation(() => {});
 
     await expect(
       stageIMessageAttachments(
         [{ original_path: sourcePath, mime_type: "image/png", missing: false }],
-        { maxBytes: 4, deps: { logVerbose } },
+        { maxBytes: 4 },
       ),
     ).resolves.toEqual({
       attachments: [{ contentType: "image/png", kind: "image" }],

@@ -9,6 +9,10 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import {
+  addPreCutoverClientCredentialTablesForTest,
+  withStateMigrationBackupForTest,
+} from "../../state/openclaw-state-schema.test-support.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { insertRegistryWorktreeProvisionedChunk } from "./provisioned-snapshot.test-support.js";
@@ -220,13 +224,14 @@ it("keeps record reads bounded when a worktree has a large provisioning manifest
   expect(await getRegistryWorktreeProvisionedPaths(env, record.id)).toEqual(provisionedPaths);
 });
 
-it("adds the provisioned-path ledger to an existing worktree registry", async () => {
+it("reads the provisioned-path ledger after captured shared-state migration", async () => {
   const databasePath = openOpenClawStateDatabase({ env }).path;
   await closeDatabase();
   await fs.rename(databasePath, `${databasePath}.template`);
   await fs.copyFile(`${databasePath}.template`, databasePath, fs.constants.COPYFILE_EXCL);
   const { DatabaseSync } = requireNodeSqlite();
   const legacy = new DatabaseSync(databasePath);
+  addPreCutoverClientCredentialTablesForTest(legacy);
   legacy.exec(`
       ALTER TABLE worktrees DROP COLUMN provisioned_paths_json;
       DROP INDEX idx_worker_session_placements_environment;
@@ -235,6 +240,7 @@ it("adds the provisioned-path ledger to an existing worktree registry", async ()
     `);
   legacy.close();
 
+  await withStateMigrationBackupForTest({ env }, () => openOpenClawStateDatabase({ env }));
   const database = openOpenClawStateDatabase({ env }).db;
   expect(await getRegistryWorktreeProvisionedPaths(env, "missing")).toBeUndefined();
   expect(database.prepare("PRAGMA table_info(worktrees)").all()).toContainEqual(

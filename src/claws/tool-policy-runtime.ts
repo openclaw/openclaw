@@ -6,9 +6,9 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { CLAW_INSTALL_RECORD_ADOPTED_SCHEMA_VERSION } from "./provenance-agent-origin.js";
 import {
+  clawSchemaVersionNotifications,
   prepareClawInstallSchemaVersions,
   readCachedClawInstallSchemaVersions,
-  registerClawInstallSchemaVersionSnapshotListener,
 } from "./provenance-runtime-read.js";
 import { CLAW_INSTALL_RECORD_SCHEMA_VERSION } from "./provenance-schema-version.js";
 import {
@@ -24,9 +24,6 @@ type PreparedClawToolPolicy =
 const preparedClawToolPolicies = new WeakMap<object, PreparedClawToolPolicy>();
 let preparedCandidates: ClawToolPolicyCandidate[] = [];
 let preparedStateOptions: OpenClawStateDatabaseOptions = {};
-const uninitializedStateError = new Error(
-  "OpenClaw state database has not initialized Claw consent provenance.",
-);
 
 export function markFrozenClawToolAllowPolicy(policy: object | undefined): void {
   if (policy) {
@@ -47,7 +44,7 @@ function applyPreparedClawToolPolicyConsent(
     if (snapshot.kind === "uninitialized") {
       preparedClawToolPolicies.set(candidate.tools, {
         kind: "state-error",
-        error: uninitializedStateError,
+        error: new Error("OpenClaw state database has not initialized Claw consent provenance."),
       });
       continue;
     }
@@ -147,7 +144,7 @@ async function prepareClawToolPolicyConsentAsync(
   };
 }
 
-registerClawInstallSchemaVersionSnapshotListener(() => applyPreparedClawToolPolicyConsent());
+clawSchemaVersionNotifications.onChanged = () => applyPreparedClawToolPolicyConsent();
 registerRuntimeConfigSnapshotPreparer(prepareClawToolPolicyConsent, {
   prepareAsync: prepareClawToolPolicyConsentAsync,
 });

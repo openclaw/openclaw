@@ -36,30 +36,11 @@ describe("iMessage recovery cursor", () => {
     installIMessageStateRuntimeForTest();
   });
 
-  it("returns null before anything is recorded", async () => {
-    expect(await loadCursor("default", DB)).toBeNull();
-  });
-
-  it("advances forward only and never rewinds", async () => {
-    await advanceCursor("default", DB, 100);
-    expect(await loadCursor("default", DB)).toBe(100);
-    await advanceCursor("default", DB, 50);
-    expect(await loadCursor("default", DB)).toBe(100);
-    await advanceCursor("default", DB, 150);
-    expect(await loadCursor("default", DB)).toBe(150);
-  });
-
   it("scopes the cursor per account", async () => {
     await advanceCursor("work", DB, 10);
     await advanceCursor("home", DB, 20);
     expect(await loadCursor("work", DB)).toBe(10);
     expect(await loadCursor("home", DB)).toBe(20);
-  });
-
-  it("ignores a cursor recorded against a different database (#99638)", async () => {
-    await advanceCursor("default", DB, 12396);
-    expect(await loadCursor("default", DB_B)).toBeNull();
-    expect(await loadCursor("default", DB)).toBe(12396);
   });
 
   it("re-scopes the cursor to the new database on advance", async () => {

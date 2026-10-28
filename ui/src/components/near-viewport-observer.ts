@@ -1,5 +1,7 @@
+import { observeIntersection } from "../lib/reactive/observers.ts";
+
 export class NearViewportObserver {
-  private observer?: IntersectionObserver;
+  private stop?: () => void;
   nearVisible = false;
   target?: Element;
 
@@ -15,10 +17,8 @@ export class NearViewportObserver {
     this.disconnect();
     this.target = target;
     this.setNearVisible(this.isNearViewport(target));
-    if (typeof IntersectionObserver === "undefined") {
-      return;
-    }
-    this.observer = new IntersectionObserver(
+    this.stop = observeIntersection(
+      [target],
       (entries) => {
         const entry = entries.at(-1);
         if (!entry || entry.target !== this.target) {
@@ -28,12 +28,11 @@ export class NearViewportObserver {
       },
       { rootMargin: `${this.marginPx}px 0px` },
     );
-    this.observer.observe(target);
   }
 
   disconnect(): void {
-    this.observer?.disconnect();
-    this.observer = undefined;
+    this.stop?.();
+    this.stop = undefined;
     this.target = undefined;
     this.setNearVisible(false);
   }

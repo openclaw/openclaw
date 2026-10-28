@@ -1,9 +1,25 @@
 import { describe, expect, it } from "vitest";
 import {
   resolveMemoryIndexIdentityDiagnostic,
-  resolveMemorySearchStaleness,
+  resolveMemorySearchStaleness as staleness,
   type MemoryProviderStatus,
 } from "./types.js";
+
+const withIdentity = (
+  indexIdentity: Record<string, unknown>,
+  extra?: Partial<MemoryProviderStatus>,
+) => ({
+  ...extra,
+  custom: { indexIdentity },
+});
+const mismatch = (reason: string, code: string, owner = "openclaw") => ({
+  status: "mismatched",
+  reason,
+  code,
+  owner,
+});
+const diagnose = (indexIdentity: Record<string, unknown>) =>
+  resolveMemoryIndexIdentityDiagnostic(withIdentity(indexIdentity));
 
 describe("memory search staleness", () => {
   it("keeps routine pending index work silent", () => {
@@ -12,13 +28,11 @@ describe("memory search staleness", () => {
       provider: "none",
       dirty: true,
     };
-    expect(resolveMemorySearchStaleness(status)).toBeNull();
+    expect(staleness(status)).toBeNull();
   });
 
   it("reports the latest automatic sync failure", () => {
-    expect(
-      resolveMemorySearchStaleness({ lastSyncError: "embedding request timed out" }, "main"),
-    ).toEqual({
+    expect(staleness({ lastSyncError: "embedding request timed out" }, "main")).toEqual({
       stale: true,
       warning:
         "Memory index is stale: embedding request timed out. Search results may be incomplete.",
@@ -29,87 +43,57 @@ describe("memory search staleness", () => {
 
   it("gives an incompatible index identity precedence over a sync failure", () => {
     expect(
-      resolveMemorySearchStaleness({
-        lastSyncError: "embedding request timed out",
-        custom: {
-          indexIdentity: {
-            status: "mismatched",
-            reason: "embedding model changed",
-            code: "model",
-            owner: "configuration",
-          },
-        },
-      }),
+      staleness(
+        withIdentity(mismatch("embedding model changed", "model", "configuration"), {
+          lastSyncError: "embedding request timed out",
+        }),
+      ),
     ).toMatchObject({ warning: expect.stringContaining("embedding model changed") });
   });
 
-  it.each(["embedding_input_format"])(
-    "reports the failed repair prerequisite while %s is still incompatible",
-    (code) => {
-      expect(
-        resolveMemorySearchStaleness(
-          {
-            lastSyncError: "HTTP 400: embedding provider unavailable",
-            custom: {
-              indexIdentity: {
-                status: "mismatched",
-                reason: "runtime format changed",
-                code,
-                owner: "openclaw",
-              },
-            },
-          },
-          "main",
-        ),
-      ).toEqual({
-        stale: true,
-        warning:
-          "Memory index repair failed: HTTP 400: embedding provider unavailable. The existing index was left unchanged.",
-        action:
-          "Run: openclaw memory status --deep --agent main. Resolve the reported sync failure before retrying the search.",
-      });
-    },
-  );
+  it("reports the failed repair prerequisite while the embedding format is still incompatible", () => {
+    expect(
+      staleness(
+        withIdentity(mismatch("runtime format changed", "embedding_input_format"), {
+          lastSyncError: "HTTP 400: embedding provider unavailable",
+        }),
+        "main",
+      ),
+    ).toEqual({
+      stale: true,
+      warning:
+        "Memory index repair failed: HTTP 400: embedding provider unavailable. The existing index was left unchanged.",
+      action:
+        "Run: openclaw memory status --deep --agent main. Resolve the reported sync failure before retrying the search.",
+    });
+  });
 
-  it.each(["embedding_input_format"])(
-    "keeps newer-index recovery visible after a prior sync failure (%s)",
-    (code) => {
-      const status: MemoryProviderStatus = {
-        backend: "builtin",
-        provider: "openai",
-        lastSyncError: "HTTP 400: embedding provider unavailable",
-        custom: {
-          indexIdentity: {
-            status: "mismatched",
-            reason:
-              "the index was written by a newer OpenClaw version; upgrade OpenClaw or reindex explicitly",
-            code,
-            owner: "openclaw",
-            versionOrder: "newer",
-          },
-        },
-      };
-      const result = resolveMemorySearchStaleness(status, "main");
-      expect(result?.warning).toContain("newer OpenClaw version");
-      expect(result?.warning).toContain("Previous memory sync failed: HTTP 400");
-      expect(result?.action).toContain("Upgrade OpenClaw or reindex explicitly");
-      expect(result?.action).toContain("provider cost");
-      expect(status.lastSyncError).toBe("HTTP 400: embedding provider unavailable");
-    },
-  );
+  it("keeps newer-index recovery visible after a prior sync failure", () => {
+    const status: MemoryProviderStatus = {
+      backend: "builtin",
+      provider: "openai",
+      lastSyncError: "HTTP 400: embedding provider unavailable",
+      ...withIdentity({
+        ...mismatch(
+          "the index was written by a newer OpenClaw version; upgrade OpenClaw or reindex explicitly",
+          "embedding_input_format",
+        ),
+        versionOrder: "newer",
+      }),
+    };
+    const result = staleness(status, "main");
+    expect(result?.warning).toContain("newer OpenClaw version");
+    expect(result?.warning).toContain("Previous memory sync failed: HTTP 400");
+    expect(result?.action).toContain("Upgrade OpenClaw or reindex explicitly");
+    expect(result?.action).toContain("provider cost");
+    expect(status.lastSyncError).toBe("HTTP 400: embedding provider unavailable");
+  });
 
   it("attributes an OpenClaw-owned format mismatch and names the repair cost", () => {
     const status: MemoryProviderStatus = {
       backend: "builtin",
       provider: "openai",
-      custom: {
-        indexIdentity: {
-          status: "mismatched",
-          reason: "index provenance classifier changed",
-          code: "provenance_version",
-          owner: "openclaw",
-        },
-      },
+      ...withIdentity(mismatch("index provenance classifier changed", "provenance_version")),
     };
     expect(resolveMemoryIndexIdentityDiagnostic(status)).toEqual({
       status: "mismatched",
@@ -117,7 +101,7 @@ describe("memory search staleness", () => {
       code: "provenance_version",
       owner: "openclaw",
     });
-    expect(resolveMemorySearchStaleness(status, "main")).toEqual({
+    expect(staleness(status, "main")).toEqual({
       stale: true,
       warning:
         "Memory index is stale: index provenance classifier changed (owner: openclaw, code: provenance_version). Search results may be incomplete.",
@@ -126,69 +110,30 @@ describe("memory search staleness", () => {
     });
   });
 
-  it("preserves the keyword-only marker only when a pending upgrade carries it", () => {
-    const base = {
-      status: "mismatched",
-      reason: "index chunking implementation changed",
-      code: "chunking_version",
-      owner: "openclaw",
-    } as const;
-    expect(
-      resolveMemoryIndexIdentityDiagnostic({
-        custom: { indexIdentity: { ...base, chunkingVersionOnly: true } },
-      }),
-    ).toEqual({ ...base, chunkingVersionOnly: true });
-    expect(
-      resolveMemoryIndexIdentityDiagnostic({
-        custom: { indexIdentity: { ...base, versionOrder: "newer", chunkingVersionOnly: true } },
-      }),
-    ).toEqual(base);
-    expect(
-      resolveMemoryIndexIdentityDiagnostic({
-        custom: { indexIdentity: { ...base } },
-      }),
-    ).toEqual({ ...base });
-  });
-
-  it("preserves lexical compatibility only for an older embedding format", () => {
-    const base = {
-      status: "mismatched",
-      reason: "index embedding input format changed",
-      code: "embedding_input_format",
-      owner: "openclaw",
-    } as const;
-    expect(
-      resolveMemoryIndexIdentityDiagnostic({
-        custom: { indexIdentity: { ...base, lexicalCompatible: true } },
-      }),
-    ).toEqual({ ...base, lexicalCompatible: true });
-    expect(
-      resolveMemoryIndexIdentityDiagnostic({
-        custom: { indexIdentity: { ...base, versionOrder: "newer", lexicalCompatible: true } },
-      }),
-    ).toEqual(base);
-    expect(
-      resolveMemoryIndexIdentityDiagnostic({
-        custom: { indexIdentity: { ...base, code: "provenance_version", lexicalCompatible: true } },
-      }),
-    ).toEqual({ ...base, code: "provenance_version" });
+  it.each([
+    ["chunking_version", "chunkingVersionOnly", "index chunking implementation changed"],
+    ["embedding_input_format", "lexicalCompatible", "index embedding input format changed"],
+  ])("preserves %s compatibility only for a pending upgrade", (code, flag, reason) => {
+    const base = mismatch(reason, code);
+    expect(diagnose({ ...base, [flag]: true })).toEqual({ ...base, [flag]: true });
+    expect(diagnose({ ...base, versionOrder: "newer", [flag]: true })).toEqual(base);
+    if (flag === "chunkingVersionOnly") {
+      expect(diagnose(base)).toEqual(base);
+    } else {
+      expect(diagnose({ ...base, code: "provenance_version", [flag]: true })).toEqual({
+        ...base,
+        code: "provenance_version",
+      });
+    }
   });
 
   it("does not claim provider cost for a keyword-only index", () => {
     expect(
-      resolveMemorySearchStaleness(
-        {
+      staleness(
+        withIdentity(mismatch("index sources changed", "sources", "configuration"), {
           provider: "none",
           requestedProvider: "none",
-          custom: {
-            indexIdentity: {
-              status: "mismatched",
-              reason: "index sources changed",
-              code: "sources",
-              owner: "configuration",
-            },
-          },
-        },
+        }),
         "main",
       ),
     ).toEqual({
@@ -201,12 +146,7 @@ describe("memory search staleness", () => {
   });
 
   it.each([
-    {
-      status: "mismatched",
-      reason: "invalid owner for code",
-      code: "provider",
-      owner: "openclaw",
-    },
+    mismatch("invalid owner for code", "provider"),
     {
       status: "missing",
       reason: "invalid missing state",
@@ -214,6 +154,6 @@ describe("memory search staleness", () => {
       owner: "configuration",
     },
   ])("rejects malformed identity diagnostic %#", (indexIdentity) => {
-    expect(resolveMemoryIndexIdentityDiagnostic({ custom: { indexIdentity } })).toBeUndefined();
+    expect(diagnose(indexIdentity)).toBeUndefined();
   });
 });

@@ -1,4 +1,3 @@
-// Tests session reset cleanup for stale files and persisted state.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -8,6 +7,8 @@ import {
   clearPreparedEmbeddedAgentSettings,
   createPreparedEmbeddedAgentSettingsManager,
 } from "../../agents/agent-project-settings.js";
+import { completePromptCacheObservation } from "../../agents/embedded-agent-runner/prompt-cache-observability.js";
+import { beginOpenAIObservation } from "../../agents/embedded-agent-runner/prompt-cache-observability.test-support.js";
 import {
   clearEmbeddedSessionPromptStates,
   retainEmbeddedSessionPromptState,
@@ -106,12 +107,29 @@ describe("clearSessionResetRuntimeState", () => {
   it("disposes prompt projections with the archived session", () => {
     using original = retainEmbeddedSessionPromptState("old-session");
     const state = original.state;
-    state.toolResults.frozen.add("sent-tool-result");
 
     clearArchived(["old-session"]);
 
     using replacement = retainEmbeddedSessionPromptState("old-session");
     expect(replacement.state).not.toBe(state);
+  });
+
+  it("clears the archived diagnostic baseline when a reply rotates its session", () => {
+    const identity = { sessionId: "old-session", sessionKey: replySessionKey };
+    beginOpenAIObservation(identity);
+    completePromptCacheObservation({ ...identity, usage: { cacheRead: 8_000 } });
+
+    clearCommittedSessionResetRuntimeState({
+      previousSessionEntry: { sessionId: identity.sessionId },
+      storePath: "/synthetic/reset-observability.sqlite",
+      agentId: "main",
+      sessionKey: replySessionKey,
+      onError: (error) => {
+        throw error;
+      },
+    });
+
+    expect(beginOpenAIObservation(identity).previousCacheRead).toBeNull();
   });
 
   it("clears reset queues and drains system events for normalized keys", () => {
@@ -174,12 +192,16 @@ describe("clearSessionResetRuntimeState", () => {
     }
   });
 
-  it("does not clear a fresh active reply under the same key when only the archived id is reset", () => {
-    const operation = createOperation("new-session");
-    operation.setPhase("running");
-
+  it.each([
+    ["new-session", "running"],
+    ["old-session", "queued"],
+  ] as const)("preserves %s/%s while clearing archived runtime state", (sessionId, phase) => {
+    const operation = createOperation(sessionId);
+    if (phase === "running") {
+      operation.setPhase(phase);
+    }
     clearArchived();
-
+    expect(operation.phase).toBe(phase);
     expect(getSessionControllerOperation(replySessionKey)).toBe(operation);
   });
 
@@ -201,15 +223,6 @@ describe("clearSessionResetRuntimeState", () => {
 
     expect(replacement).toBeDefined();
     expect(getSessionControllerOperation(replySessionKey)).toBe(replacement);
-  });
-
-  it("leaves queued reservations for the archived id so session init can rebind them", () => {
-    const operation = createOperation();
-
-    clearArchived();
-
-    expect(operation.phase).toBe("queued");
-    expect(getSessionControllerOperation(replySessionKey)).toBe(operation);
   });
 
   it("clears queued sources without cancelling the executing reset turn that requested it", async () => {

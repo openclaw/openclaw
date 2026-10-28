@@ -8,6 +8,7 @@ import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js"
 import { createGatewayPortalService } from "../portals/portal-service.js";
 import * as httpListen from "../server/http-listen.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
+import { createWorkerConnectionIdentity } from "./connection-identity.test-support.js";
 import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementStore,
@@ -126,17 +127,12 @@ beforeEach(async () => {
     sourceClaim.claimId,
     await placements.prepareTurnClaimAuthority(sourceClaim),
   );
-  identity = {
+  identity = createWorkerConnectionIdentity(sourceClaim, {
     ...WORKER,
-    credentialHash: "credential-hash",
-    bundleHash: "a".repeat(64),
     sessionId: SOURCE.sessionId,
-    runId: sourceClaim.runId,
-    turnClaim: sourceClaim,
-    rpcSetVersion: 1,
     protocolFeatures: ["worker-portal-v1"],
     credentialExpiresAtMs: Date.now() + 60_000,
-  };
+  });
   portalOpen.mockReset().mockResolvedValue(PORTAL);
   portalList.mockReset().mockReturnValue([PORTAL]);
   portalWorkerList.mockReset().mockReturnValue([PORTAL]);

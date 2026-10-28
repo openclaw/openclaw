@@ -74,6 +74,10 @@ continuation and returns a resume token. Approval requests can also carry a
 short approval ID. The call ends at the checkpoint; no process waits for the
 user's answer.
 
+Lobster validates workflow input and LLM output schemas on Node, Bun, and AOT
+standalone hosts. Schema validation uses the host runtime profile automatically;
+there is no extra setting to enable it.
+
 ## Enable
 
 Lobster is an **optional** plugin tool, not installed or enabled by default.

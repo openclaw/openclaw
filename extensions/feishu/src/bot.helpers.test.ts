@@ -1,7 +1,6 @@
 import { expect, it } from "vitest";
 import { buildFeishuAgentBody } from "./bot-agent-body.js";
 import { resolveBroadcastAgents } from "./bot-broadcast.js";
-import { parseMessageContent } from "./bot-content.js";
 import { parseFeishuMessageEvent, type FeishuMessageEvent } from "./bot.js";
 import { createFeishuTestEvent } from "./bot.test-support.js";
 import { parseMergeForwardContent } from "./message-content.js";
@@ -24,36 +23,25 @@ it("quotes and bounds untrusted mention names in agent context", () => {
   expect(body).not.toMatch(/[\uD800-\uDFFF]/u);
 });
 
-it.each([
-  ["image", "not-json", ""],
-  ["sticker", '{"file_key":"sticker_\\"<&"}', '<sticker key="sticker_&quot;&lt;&amp;"/>'],
-  ["sticker", '{"file_key":"../sticker"}', "[Sticker]"],
-])("renders safe %s content: %s", (type, content, expected) => {
-  expect(parseMessageContent(content, type)).toBe(expected);
-});
-
 it("ignores empty broadcast lists", () => {
   expect(resolveBroadcastAgents({ broadcast: { group: [] } }, "group")).toBeNull();
 });
 
 it("keeps forwarded sticker keys and styled posts in chronological order", async () => {
+  const forwarded = (msg_type: string, create_time: string, content: string) => ({
+    upper_message_id: "om_forward",
+    msg_type,
+    create_time,
+    body: { content },
+  });
   const items = [
     { msg_type: "merge_forward" },
-    {
-      upper_message_id: "om_forward",
-      msg_type: "post",
-      create_time: "2000",
-      body: {
-        content:
-          '{"post":{"zh_cn":{"title":"Forwarded","content":[[{"tag":"text","text":"Status","style":["bold"]},{"tag":"text","text":" "},{"tag":"a","text":"Docs","href":"https://example.com","style":["italic"]}]]}}}',
-      },
-    },
-    {
-      upper_message_id: "om_forward",
-      msg_type: "sticker",
-      create_time: "1000",
-      body: { content: JSON.stringify({ file_key: "file_forwarded_sticker" }) },
-    },
+    forwarded(
+      "post",
+      "2000",
+      '{"post":{"zh_cn":{"title":"Forwarded","content":[[{"tag":"text","text":"Status","style":["bold"]},{"tag":"text","text":" "},{"tag":"a","text":"Docs","href":"https://example.com","style":["italic"]}]]}}}',
+    ),
+    forwarded("sticker", "1000", JSON.stringify({ file_key: "file_forwarded_sticker" })),
   ];
   const before = structuredClone(items);
   expect(await parseMergeForwardContent(items)).toBe(
@@ -76,9 +64,14 @@ function parseEvent(input: Partial<EventInput>, botId = bot) {
     botId,
   );
 }
-function post(content: unknown[][], botId = bot) {
-  return parseEvent({ messageType: "post", content: JSON.stringify({ content }) }, botId);
-}
+it.each([
+  ["image", "not-json", ""],
+  ["sticker", '{"file_key":"sticker_\\"<&"}', '<sticker key="sticker_&quot;&lt;&amp;"/>'],
+  ["sticker", '{"file_key":"../sticker"}', "[Sticker]"],
+])("renders safe %s content: %s", (messageType, content, expected) => {
+  expect(parseEvent({ messageType, content }).content).toBe(expected);
+});
+
 function textEvent(text: string, mentions: Mention[], chatType: EventInput["chatType"] = "group") {
   return { text, chatType, message: { mentions } };
 }
@@ -98,7 +91,7 @@ it.each(["p2p", "group"] as const)(
     );
     expect(ctx).toMatchObject({
       content:
-        '/model <at user_id="ou_alice">Alice @_user_1</at> <at user_id="ou_bob">$& &lt;Bob&gt;</at>thanks <at user_id="all">all</at>',
+        '<at user_id="ou_bot">Bot</at> /model <at user_id="ou_alice">Alice @_user_1</at> <at user_id="ou_bob">$& &lt;Bob&gt;</at>thanks <at user_id="all">all</at>',
       mentionedBot: true,
     });
     expect(ctx.mentionTargets).toEqual([
@@ -144,34 +137,23 @@ it.each([
   }
 });
 
-it("preserves post code while ignoring broadcast-only addressing", () => {
-  const ctx = post(
-    [
-      [
-        { tag: "at", user_id: "ou_other", user_name: "Other" },
-        { tag: "at", user_id: "all", user_name: "all" },
-        { tag: "text", text: "before " },
-        { tag: "code", text: "inline()" },
-      ],
-      [{ tag: "code_block", language: "ts", text: "const x = 1;" }],
-    ],
-    "all",
-  );
-  expect(ctx.mentionedBot).toBe(false);
-  expect(ctx.content).toContain("before `inline()`");
-  expect(ctx.content).toContain("```ts\nconst x = 1;\n```");
-});
-
-it("detects a post bot mention alongside broadcast addressing", () => {
-  expect(
-    post([
+it.each([
+  ["all", "ou_other", false],
+  [bot, bot, true],
+] as const)(
+  "distinguishes post bot mentions from broadcast addressing: %s",
+  (botId, user_id, expected) => {
+    const content = [
       [
         { tag: "at", user_id: "all", user_name: "all" },
-        { tag: "at", user_id: bot, user_name: "Bot" },
+        { tag: "at", user_id, user_name: "Other" },
       ],
-    ]).mentionedBot,
-  ).toBe(true);
-});
+    ];
+    expect(
+      parseEvent({ messageType: "post", content: JSON.stringify({ content }) }, botId).mentionedBot,
+    ).toBe(expected);
+  },
+);
 
 it.each([
   [{ body: "Merged message", share_chat_id: "sc_123" }, "Merged message"],

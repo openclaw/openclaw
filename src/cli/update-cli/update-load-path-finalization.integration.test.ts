@@ -20,6 +20,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { runRegisteredCli } from "../../test-utils/command-runner.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { writeFixtureJson } from "../cli-fixtures.test-support.js";
 import { registerUpdateCli } from "../update-cli.js";
 import * as postCore from "./update-command-post-core.js";
 import { resumePostCoreUpdate } from "./update-command-resume.js";
@@ -50,15 +51,11 @@ it.each(["finalize", "repair", "resume", "resume-unowned", "resume-write-failure
   async (command) => {
     await withOpenClawTestState({ label: `load-path-${command}` }, async (state) => {
       controls.root = state.root;
-      await fs.writeFile(
-        state.path("package.json"),
-        JSON.stringify({ name: "openclaw", version: "2026.9.4" }),
-      );
+      await writeFixtureJson(state.path("package.json"), { name: "openclaw", version: "2026.9.4" });
       await fs.mkdir(state.path("dist"));
-      await fs.writeFile(
-        state.path("dist/build-info.json"),
-        JSON.stringify({ buildId: "installed-candidate-build" }),
-      );
+      await writeFixtureJson(state.path("dist/build-info.json"), {
+        buildId: "installed-candidate-build",
+      });
       const pluginId = "local-provider";
       const localDir = state.statePath("plugins-local", pluginId);
       const managedRelative = `managed/${"shadow-".repeat(34)}${pluginId}`;

@@ -1,4 +1,4 @@
-import { toImageDataUrl } from "openclaw/plugin-sdk/image-generation";
+import { resolveImageSourceUrl } from "openclaw/plugin-sdk/image-generation";
 import {
   downloadGeneratedVideoAsset,
   resolveGeneratedMediaMaxBytes,
@@ -137,21 +137,6 @@ function resolveModel(req: VideoGenerationRequest): string {
   return images.length > 0 ? model.replace(/-t2v$/, "-i2v") : model;
 }
 
-function resolveImage(req: VideoGenerationRequest): string | undefined {
-  const image = req.inputImages?.[0];
-  if (!image) {
-    return undefined;
-  }
-  const url = normalizeOptionalString(image.url);
-  if (url) {
-    return url;
-  }
-  if (!image.buffer) {
-    throw new Error("Novita image-to-video input is missing image data.");
-  }
-  return toImageDataUrl({ ...image, buffer: image.buffer, defaultMimeType: "image/png" });
-}
-
 function resolveResolution(req: VideoGenerationRequest, wan: boolean): string {
   const resolution = normalizeOptionalString(req.resolution)?.toUpperCase();
   return resolution === "1080P" ? "1080P" : wan ? "720P" : "768P";
@@ -170,7 +155,10 @@ function resolveWanSize(req: VideoGenerationRequest): string {
 
 function buildBody(req: VideoGenerationRequest, model: string): Record<string, unknown> {
   const wan = model.startsWith("wan");
-  const image = resolveImage(req);
+  const image = resolveImageSourceUrl(
+    req.inputImages?.[0],
+    "Novita image-to-video input is missing image data.",
+  );
   const options = req.providerOptions ?? {};
   const mode = image ? "imageToVideo" : "generate";
   const schema = MODEL_CATALOG[model]?.capabilities?.[mode]?.providerOptions ?? {};
@@ -315,7 +303,7 @@ export function buildNovitaVideoGenerationProvider(): VideoGenerationProvider {
         deadline,
         defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
         fetchFn: fetch,
-        allowPrivateNetwork,
+        ssrfPolicy: { allowPrivateNetwork },
         dispatcherPolicy,
         maxAttempts: 120,
         pollIntervalMs: 5_000,

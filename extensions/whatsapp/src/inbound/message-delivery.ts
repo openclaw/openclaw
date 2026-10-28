@@ -34,10 +34,7 @@ import {
   createWhatsAppInboundMessageDebouncer,
   type WhatsAppQueuedInboundMessage,
 } from "./message-debounce.js";
-import {
-  enrichWhatsAppInboundMessage,
-  type WhatsAppEnrichedInboundMessage,
-} from "./message-enrichment.js";
+import { enrichWhatsAppInboundMessage } from "./message-enrichment.js";
 import {
   createWhatsAppInboundMessageNormalizer,
   type WhatsAppNormalizedInboundMessage,
@@ -91,7 +88,6 @@ type WhatsAppMessageDeliveryOptions = {
   debounceMs?: number;
   /** Bounded reconnect window for offline append auto-replies. */
   appendReplyWindow?: WhatsAppAppendReplyWindow;
-  /** Optional debounce gating predicate. */
   shouldDebounce?: (msg: WebInboundCallbackMessage) => boolean;
   onPendingWorkChanged?: (pendingWorkCount: number, at?: number) => void;
   durableInboundQueue?: WhatsAppDurableInboundQueue;
@@ -219,16 +215,66 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
   type PreparedInbound = NonNullable<Awaited<ReturnType<typeof normalizeInboundMessage>>>;
   const preparedInboundByDurableId = new Map<string, Promise<PreparedInbound | null | undefined>>();
 
-  const enqueueInboundMessage = async (
-    msg: WAMessage,
-    inbound: WhatsAppNormalizedInboundMessage,
-    enriched: WhatsAppEnrichedInboundMessage,
-    durable: {
-      readReceipt?: WhatsAppReadReceiptTarget;
-      receiveOrder?: number;
-      turnAdoptionLifecycle?: WhatsAppIngressLifecycle;
-    },
-  ) => {
+  const resolveApprovalReaction = (msg: WAMessage) =>
+    maybeResolveWhatsAppApprovalReaction({
+      cfg: options.loadConfig?.() ?? options.cfg,
+      accountId: options.accountId,
+      msg,
+      selfJid: self.jid,
+      selfLid: self.lid,
+      resolveInboundJid,
+      resolveReactionTargetJids,
+      logVerboseMessage: (message) => logWhatsAppVerbose(options.verbose, message),
+    });
+
+  const processDurableInboundMessage = async (
+    admission: WhatsAppIngressAdmission,
+    lifecycle: WhatsAppIngressLifecycle,
+  ): Promise<"completed" | "deferred"> => {
+    const { message: msg, ...context } = admission;
+    rememberBaileysMessage(msg.key?.remoteJid, msg.key?.id, msg.message);
+    const remoteJid = msg.key?.remoteJid;
+    const id = msg.key?.id;
+    const durableId =
+      remoteJid && id ? createWhatsAppDurableInboundMessageId({ remoteJid, id }) : undefined;
+    const preparation = durableId ? preparedInboundByDurableId.get(durableId) : undefined;
+    if (durableId) {
+      preparedInboundByDurableId.delete(durableId);
+    }
+    if (context.skipRecentOutboundEcho === true) {
+      return "completed";
+    }
+    // Reactions do not normalize into chat messages. Resolve them while the drain
+    // owns the claim so transient failures remain replayable.
+    if (await resolveApprovalReaction(msg)) {
+      return "completed";
+    }
+    const prepared = await preparation;
+    if (prepared === null) {
+      return "completed";
+    }
+    const inbound = prepared ?? (await normalizeInboundMessage(msg));
+    if (!inbound) {
+      return "completed";
+    }
+    const readReceipt = buildReadReceiptTarget(inbound);
+    const deliveryReadReceipt = inbound.access.isSelfChat ? undefined : readReceipt;
+    if (context.skipStaleAppend === true) {
+      await maybeMarkNonSelfChatReadReceipt(inbound, readReceipt);
+      return "completed";
+    }
+
+    const enriched = await enrichWhatsAppInboundMessage({
+      msg,
+      sock,
+      mediaMaxMb: options.mediaMaxMb,
+    });
+    if (!enriched) {
+      await maybeMarkNonSelfChatReadReceipt(inbound, deliveryReadReceipt);
+      return "completed";
+    }
+
+    recordAcceptedInboundActivity(options.accountId);
     const chatJid = inbound.remoteJid;
     const sendComposing = async () => {
       const currentSock = getCurrentSock();
@@ -354,20 +400,20 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
           }
         : undefined,
       group,
-      turnAdoptionLifecycle: durable.turnAdoptionLifecycle,
-      readReceipt: durable.readReceipt,
-      receiveOrder: durable.receiveOrder,
+      turnAdoptionLifecycle: lifecycle,
+      readReceipt: deliveryReadReceipt,
+      receiveOrder: context.receiveOrder ?? context.receivedAt,
     };
     if (inboundMessage.event.id) {
-      const admission = inboundMessage.admission;
+      const messageAdmission = inboundMessage.admission;
       cacheInboundMessageMeta(
-        admission.accountId,
+        messageAdmission.accountId,
         inboundMessage.platform.chatJid,
         inboundMessage.event.id,
         {
           participant: inboundMessage.platform.senderJid,
           participantE164:
-            admission.conversation.kind === "direct"
+            messageAdmission.conversation.kind === "direct"
               ? inboundMessage.platform.senderE164
               : undefined,
           body: inboundMessage.payload.body,
@@ -377,73 +423,6 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
       );
     }
     await messageDebouncer.enqueue(inboundMessage);
-  };
-
-  const resolveApprovalReaction = (msg: WAMessage) =>
-    maybeResolveWhatsAppApprovalReaction({
-      cfg: options.loadConfig?.() ?? options.cfg,
-      accountId: options.accountId,
-      msg,
-      selfJid: self.jid,
-      selfLid: self.lid,
-      resolveInboundJid,
-      resolveReactionTargetJids,
-      logVerboseMessage: (message) => logWhatsAppVerbose(options.verbose, message),
-    });
-
-  const processDurableInboundMessage = async (
-    admission: WhatsAppIngressAdmission,
-    lifecycle: WhatsAppIngressLifecycle,
-  ): Promise<"completed" | "deferred"> => {
-    const { message: msg, ...context } = admission;
-    rememberBaileysMessage(msg.key?.remoteJid, msg.key?.id, msg.message);
-    const remoteJid = msg.key?.remoteJid;
-    const id = msg.key?.id;
-    const durableId =
-      remoteJid && id ? createWhatsAppDurableInboundMessageId({ remoteJid, id }) : undefined;
-    const preparation = durableId ? preparedInboundByDurableId.get(durableId) : undefined;
-    if (durableId) {
-      preparedInboundByDurableId.delete(durableId);
-    }
-    if (context.skipRecentOutboundEcho === true) {
-      return "completed";
-    }
-    // Reactions do not normalize into chat messages. Resolve them while the drain
-    // owns the claim so transient failures remain replayable.
-    if (await resolveApprovalReaction(msg)) {
-      return "completed";
-    }
-    const prepared = await preparation;
-    if (prepared === null) {
-      return "completed";
-    }
-    const inbound = prepared ?? (await normalizeInboundMessage(msg));
-    if (!inbound) {
-      return "completed";
-    }
-    const readReceipt = buildReadReceiptTarget(inbound);
-    const deliveryReadReceipt = inbound.access.isSelfChat ? undefined : readReceipt;
-    if (context.skipStaleAppend === true) {
-      await maybeMarkNonSelfChatReadReceipt(inbound, readReceipt);
-      return "completed";
-    }
-
-    const enriched = await enrichWhatsAppInboundMessage({
-      msg,
-      sock,
-      mediaMaxMb: options.mediaMaxMb,
-    });
-    if (!enriched) {
-      await maybeMarkNonSelfChatReadReceipt(inbound, deliveryReadReceipt);
-      return "completed";
-    }
-
-    recordAcceptedInboundActivity(options.accountId);
-    await enqueueInboundMessage(msg, inbound, enriched, {
-      readReceipt: deliveryReadReceipt,
-      receiveOrder: context.receiveOrder ?? context.receivedAt,
-      turnAdoptionLifecycle: lifecycle,
-    });
     return "deferred";
   };
 

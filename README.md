@@ -35,7 +35,7 @@ curl -fsSL https://openclaw.ai/install.sh | bash
 iwr -useb https://openclaw.ai/install.ps1 | iex
 ```
 
-Already manage Node.js? Install the published package instead (Node 24.16+ or 26.1+; Node 26 recommended):
+Already manage Node.js? Install the published package instead (Node 24.22.1+ or 26.12.1+; Node 26 recommended):
 
 ```bash
 npm install -g openclaw@latest --allow-scripts=openclaw
@@ -113,7 +113,7 @@ OpenClaw is developed in the open by the [OpenClaw Foundation](https://openclaw.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for maintainers and contribution guidelines; AI-assisted PRs are welcome.
 
-Use the [issue chooser](https://github.com/openclaw/openclaw/issues/new/choose) for bugs and feature requests, ask setup questions in [Discord](https://discord.gg/clawd), and report vulnerabilities through [SECURITY.md](SECURITY.md). New capabilities usually belong in plugins built on the [plugin SDK](https://docs.openclaw.ai/plugins/building-plugins) and shared through [ClawHub](https://clawhub.ai).
+Use the [issue chooser](https://github.com/openclaw/openclaw/issues/new/choose) for bugs and feature requests, get official OpenClaw support at [community.openclaw.ai](https://community.openclaw.ai/), and report vulnerabilities through [SECURITY.md](SECURITY.md). New capabilities usually belong in plugins built on the [plugin SDK](https://docs.openclaw.ai/plugins/building-plugins) and shared through [ClawHub](https://clawhub.ai).
 
 OpenClaw was built for **Molty**, a space lobster AI assistant, by Peter Steinberger and the community. Explore the [project lore](https://docs.openclaw.ai/start/lore), [soul.md](https://soul.md), [Peter's site](https://steipete.me), [Star History](https://www.star-history.com/#openclaw/openclaw&type=date&legend=top-left), and [@openclaw](https://x.com/openclaw).
 

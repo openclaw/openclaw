@@ -1,6 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.js";
-import { projectPublicSessionEntry } from "../../config/sessions/session-entry-projection.js";
+import { projectExecutionSessionEntry } from "../../config/sessions/session-entry-projection.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
@@ -211,7 +211,7 @@ export async function compactEmbeddedAgentSession(
             abortSignal: params.abortSignal
               ? AbortSignal.any([operationSignal, params.abortSignal])
               : operationSignal,
-            sessionEntry: entry ? projectPublicSessionEntry(entry) : undefined,
+            sessionEntry: entry ? projectExecutionSessionEntry(entry) : undefined,
             agentHarnessId: resolveSessionPinnedHarnessId(entry) ?? params.agentHarnessId,
             modelSelectionLocked: entry?.modelSelectionLocked ?? params.modelSelectionLocked,
             agentId: runtimeTarget.agentId,
@@ -222,28 +222,20 @@ export async function compactEmbeddedAgentSession(
             spawnedBy: normalizeOptionalString(params.spawnedBy) ?? entry?.spawnedBy,
             contextEngineAgentId,
           };
-          if (resolvedParams.trigger !== "manual") {
-            return await withQueuedCompactionCancellationResult(resolvedParams, () =>
-              compactEmbeddedAgentSessionImpl(
-                resolvedParams,
-                expectedEntry,
-                host,
-                contextEngineSessionKey,
-              ),
-            );
+          let activeParams = resolvedParams;
+          if (resolvedParams.trigger === "manual") {
+            // The native compactor borrows this turn and must not overlap its attached writer.
+            const attachment = operation
+              ? getSessionControllerEntryForOperation(operation).attachment
+              : undefined;
+            if (attachment && "handle" in attachment) {
+              return manualCompactionActiveRunFailure();
+            }
+            activeParams = {
+              ...resolvedParams,
+              abortSignal: attachManualCompactionRun(resolvedParams, operation, onSettled),
+            };
           }
-          // The native compactor borrows this turn and must not overlap its attached writer.
-          const attachment = operation
-            ? getSessionControllerEntryForOperation(operation).attachment
-            : undefined;
-          if (attachment && "handle" in attachment) {
-            return manualCompactionActiveRunFailure();
-          }
-
-          const activeParams = {
-            ...resolvedParams,
-            abortSignal: attachManualCompactionRun(resolvedParams, operation, onSettled),
-          };
           return await withQueuedCompactionCancellationResult(activeParams, () =>
             compactEmbeddedAgentSessionImpl(
               activeParams,

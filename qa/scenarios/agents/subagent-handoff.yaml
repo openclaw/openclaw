@@ -27,7 +27,7 @@ scenario:
 
 flow:
   steps:
-    - name: delegates a bounded task and reports the child's result
+    - name: starts the requester
       actions:
         - call: reset
         # A transport reset does not remove previous sessions or their children.
@@ -44,6 +44,8 @@ flow:
                 expr: config.prompt
               timeoutMs:
                 expr: liveTurnTimeoutMs(env, 90000)
+    - name: observes an accepted child run
+      actions:
         - call: waitForCondition
           saveAs: child
           args:
@@ -62,6 +64,8 @@ flow:
                   })()
             - expr: liveTurnTimeoutMs(env, 45000)
             - 250
+    - name: observes the accepted child's terminal reply
+      actions:
         # agent.wait retains the terminal reply even if normal cleanup retires the child.
         - call: waitForAgentRun
           saveAs: completion
@@ -75,6 +79,8 @@ flow:
               completion.yielded !== true && Number.isFinite(completion.endedAt) &&
               completion.terminalReply?.disposition === 'visible' && completion.terminalReply.text.trim()
             message: expected the accepted child to finish with a visible terminal reply
+    - name: observes the child's result in the requester's reply
+      actions:
         # This tests yielded settlement. A result carried only in private runtime context
         # cannot establish the delivery below; do not substitute matching public text alone.
         - call: waitForAgentHistory

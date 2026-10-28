@@ -14,6 +14,7 @@ import {
   fsSafeEnvInput,
   normalizeFsSafeNativeEnv,
 } from "../../infra/fs-safe-env.js";
+import { applyProcessEnvKeys } from "../../infra/process-env.js";
 import { ExitError, type RuntimeEnv } from "../../runtime.js";
 import { withArtifactPreservingStateReads } from "../../state/openclaw-state-db-readonly.js";
 import { formatCliCommand } from "../command-format.js";
@@ -104,19 +105,6 @@ function snapshotGatewayConfigSelectionEnvironment(
   return Object.fromEntries([...GATEWAY_CONFIG_SELECTION_ENV_KEYS].map((key) => [key, env[key]]));
 }
 
-function restoreGatewayConfigSelectionEnvironment(
-  snapshot: Record<string, string | undefined>,
-): void {
-  for (const key of GATEWAY_CONFIG_SELECTION_ENV_KEYS) {
-    const value = snapshot[key];
-    if (value === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = value;
-    }
-  }
-}
-
 function resolveInvocationDestructiveOverride(): string | undefined {
   if (process.env.OPENCLAW_SERVICE_MARKER?.trim()) {
     delete process.env[ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV];
@@ -199,12 +187,14 @@ async function readGuardedGatewayRunConfig(
     () => import("../../config/io.factory.js"),
   );
   return await withArtifactPreservingStateReads(async () => {
-    const current = await createConfigIO({
-      env: cloneEnvWithPlatformSemantics(process.env),
-      observe: false,
-      pluginValidation: "core-only",
-      measure: (name, run) => measureGatewayBootstrapStep(`cli.environment.${name}`, run),
-    }).readConfigFileSnapshot();
+    const current = await measureGatewayBootstrapStep("cli.environment.config-read", () =>
+      createConfigIO({
+        env: cloneEnvWithPlatformSemantics(process.env),
+        observe: false,
+        pluginValidation: "core-only",
+        measure: (name, run) => measureGatewayBootstrapStep(`cli.environment.${name}`, run),
+      }).readConfigFileSnapshot(),
+    );
     const guard = (snapshot: ConfigFileSnapshot) =>
       enforceGatewayRunFutureConfigGuard({ ...params, snapshot });
     if (!guard(current)) {
@@ -388,7 +378,7 @@ export async function recheckGatewayRunReset(params: GatewayRunGuardParams): Pro
   preparedGatewayRunReset = undefined;
   const rejectDrift = async () => {
     if (expected) {
-      restoreGatewayConfigSelectionEnvironment(expected.selectionEnvironment);
+      applyProcessEnvKeys(GATEWAY_CONFIG_SELECTION_ENV_KEYS, expected.selectionEnvironment);
       await pinGatewayRunRuntimePaths();
     }
     params.runtime.error(
@@ -535,7 +525,6 @@ async function createTrustedGatewayEnvLoader() {
     const loaded = loadGlobalRuntimeDotEnvFiles({
       ...(gatewayRunTargetSelectedByConfig ? { entryFilter: isConfigRuntimeEnvVarAllowed } : {}),
       overrideKeys: readManagedSystemdServiceEnvKeysFromEnvironment(process.env),
-      quiet: true,
       stateEnvPath,
       ...(path.resolve(stateEnvPath) === path.resolve(configEnvPath)
         ? {}
@@ -584,7 +573,9 @@ export async function selectGatewayRunEnvironment(params: GatewayRunGuardParams)
   selectedGatewayRunEnvironment = undefined;
   let guarded: boolean;
   try {
-    guarded = await guardGatewayRunSelectedConfig(params);
+    guarded = await measureGatewayBootstrapStep("cli.environment.config-guard", () =>
+      guardGatewayRunSelectedConfig(params),
+    );
   } finally {
     if (params.opts.reset) {
       restoreAppliedGatewayRunConfigEnvironment(false);
@@ -599,7 +590,7 @@ export async function selectGatewayRunEnvironment(params: GatewayRunGuardParams)
     before: envBeforeGuard,
     after: { ...fsSafeEnvInput(process.env) },
   };
-  await pinGatewayRunRuntimePaths();
+  await measureGatewayBootstrapStep("cli.environment.pin-runtime-paths", pinGatewayRunRuntimePaths);
   return guarded;
 }
 

@@ -10,6 +10,10 @@ import {
   repairOpenClawStateDatabaseSchema,
 } from "./openclaw-state-db.js";
 import { removePreparedWorkerOwnershipColumns } from "./openclaw-state-schema-v17.test-support.js";
+import {
+  addPreCutoverClientCredentialTablesForTest,
+  withStateMigrationBackupForTest,
+} from "./openclaw-state-schema.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const now = Date.parse("2026-09-07T12:00:00Z");
@@ -46,6 +50,7 @@ function createV15Database(version: string | null = "2026.9.2") {
   closeOpenClawStateDatabaseForTest();
   const db = new DatabaseSync(databasePath);
   try {
+    addPreCutoverClientCredentialTablesForTest(db);
     removePreparedWorkerOwnershipColumns(db);
     db.exec(`
       PRAGMA user_version = 15;
@@ -78,12 +83,19 @@ function reopen(options: Parameters<typeof openOpenClawStateDatabase>[0]) {
 
 describe("shared state schema publication", () => {
   it.each(["runtime open", "doctor repair"] as const)(
-    "%s applies current content while preserving the unfenced updater's v15 floor",
-    (entry) => {
+    "captured %s applies current content while preserving the unfenced updater's v15 floor",
+    async (entry) => {
       const { options } = createV15Database();
       if (entry === "doctor repair") {
-        expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
+        expect(
+          (
+            await withStateMigrationBackupForTest(options, () =>
+              repairOpenClawStateDatabaseSchema(options),
+            )
+          ).warnings,
+        ).toEqual([]);
       }
+      await withStateMigrationBackupForTest(options, () => openOpenClawStateDatabase(options));
       const db = openOpenClawStateDatabase(options).db;
       expectVersion(db, 15);
       expect(db.prepare("PRAGMA table_info(worker_environments)").all()).toEqual(
@@ -99,9 +111,9 @@ describe("shared state schema publication", () => {
     },
   );
 
-  it("skips content on repeated deferred opens and repair", () => {
+  it("skips content on repeated deferred opens and repair", async () => {
     const { options } = createV15Database();
-    openOpenClawStateDatabase(options);
+    await withStateMigrationBackupForTest(options, () => openOpenClawStateDatabase(options));
     vi.setSystemTime(now + 60_000);
     expectVersion(reopen(options), 15);
     closeOpenClawStateDatabaseForTest();
@@ -116,32 +128,39 @@ describe("shared state schema publication", () => {
   it.each([
     { description: "terminal row's finish", terminal: true, duration: graceMs },
     { description: "running row's last update", terminal: false, duration: abandonedMs + 1 },
-  ])("publishes only at the deadline anchored to the $description", ({ terminal, duration }) => {
-    const { options } = createV15Database();
-    const db = openOpenClawStateDatabase(options).db;
-    if (terminal) {
-      finishRun(db, now);
-    }
-    vi.setSystemTime(now + duration - 1);
-    expectVersion(reopen(options), 15);
-    vi.setSystemTime(now + duration);
-    expectVersion(openOpenClawStateDatabase(options).db, OPENCLAW_STATE_SCHEMA_VERSION);
-  });
+  ])(
+    "publishes only at the deadline anchored to the $description",
+    async ({ terminal, duration }) => {
+      const { options } = createV15Database();
+      await withStateMigrationBackupForTest(options, () => openOpenClawStateDatabase(options));
+      const db = openOpenClawStateDatabase(options).db;
+      if (terminal) {
+        finishRun(db, now);
+      }
+      vi.setSystemTime(now + duration - 1);
+      expectVersion(reopen(options), 15);
+      vi.setSystemTime(now + duration);
+      expectVersion(openOpenClawStateDatabase(options).db, OPENCLAW_STATE_SCHEMA_VERSION);
+    },
+  );
 
-  it("uses finished_at_ms even when a terminal record was enriched more recently", () => {
+  it("uses finished_at_ms even when a terminal record was enriched more recently", async () => {
     const { options } = createV15Database();
+    await withStateMigrationBackupForTest(options, () => openOpenClawStateDatabase(options));
     finishRun(openOpenClawStateDatabase(options).db, now - graceMs);
     expectVersion(reopen(options), OPENCLAW_STATE_SCHEMA_VERSION);
   });
 
-  it("publishes deferred content when its legacy ledger row is absent", () => {
+  it("publishes deferred content when its legacy ledger row is absent", async () => {
     const { options } = createV15Database();
+    await withStateMigrationBackupForTest(options, () => openOpenClawStateDatabase(options));
     openOpenClawStateDatabase(options).db.exec("DELETE FROM update_runs");
     expectVersion(reopen(options), OPENCLAW_STATE_SCHEMA_VERSION);
   });
 
-  it("requires every legacy row to clear its own deadline, including a new running update", () => {
+  it("requires every legacy row to clear its own deadline, including a new running update", async () => {
     const { options } = createV15Database();
+    await withStateMigrationBackupForTest(options, () => openOpenClawStateDatabase(options));
     let db = openOpenClawStateDatabase(options).db;
     finishRun(db, now - graceMs);
     seedRun(db, "2026.9.2-1", secondRunId);
@@ -155,8 +174,9 @@ describe("shared state schema publication", () => {
 
   it.each(["2026.9.1", "2026.9.3", "2026.9.4", null])(
     "publishes immediately for driver %s without creating a deferred marker",
-    (version) => {
+    async (version) => {
       const { options } = createV15Database(version);
+      await withStateMigrationBackupForTest(options, () => openOpenClawStateDatabase(options));
       const db = openOpenClawStateDatabase(options).db;
       expectVersion(db, OPENCLAW_STATE_SCHEMA_VERSION);
       expect(
@@ -169,7 +189,7 @@ describe("shared state schema publication", () => {
     },
   );
 
-  it("retains the typed manual-update fallback and rolls back on missing metadata", () => {
+  it("retains the typed manual-update fallback and rolls back on missing metadata", async () => {
     const { options, databasePath } = createV15Database();
     const before = new DatabaseSync(databasePath);
     try {
@@ -177,7 +197,9 @@ describe("shared state schema publication", () => {
     } finally {
       before.close();
     }
-    expect(() => openOpenClawStateDatabase(options)).toThrow(
+    await expect(
+      withStateMigrationBackupForTest(options, () => openOpenClawStateDatabase(options)),
+    ).rejects.toThrow(
       expect.objectContaining({
         name: "UpdateSchemaRefusalError",
       }),

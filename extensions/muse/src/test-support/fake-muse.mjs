@@ -5,104 +5,76 @@ import { createConnection } from "node:net";
 import { createInterface } from "node:readline";
 import { EXPECTED_SCHEMA_FINGERPRINT } from "@muse-code/sdk";
 
-if (process.env.MUSE_REQUEST_LOG) {
-  appendFileSync(
-    process.env.MUSE_REQUEST_LOG,
-    `${JSON.stringify({
-      event: "spawn",
-      pid: process.pid,
-      args: process.argv.slice(2),
-      noAutoUpdate: process.env.MUSE_NO_AUTO_UPDATE,
-      credentialBackend: process.env.TBH_CREDENTIAL_BACKEND,
-      configHome: process.env.XDG_CONFIG_HOME,
-      path: process.env.PATH,
-      inheritedValue: process.env.MUSE_FIXTURE_INHERITED_VALUE,
-    })}\n`,
-  );
+function log(value) {
+  if (process.env.MUSE_REQUEST_LOG) {
+    const line = typeof value === "string" ? value : JSON.stringify(value);
+    appendFileSync(process.env.MUSE_REQUEST_LOG, `${line}\n`);
+  }
 }
+log({
+  event: "spawn",
+  pid: process.pid,
+  args: process.argv.slice(2),
+  noAutoUpdate: process.env.MUSE_NO_AUTO_UPDATE,
+  credentialBackend: process.env.TBH_CREDENTIAL_BACKEND,
+  configHome: process.env.XDG_CONFIG_HOME,
+  path: process.env.PATH,
+});
 
 let cursor = 0;
-let sessionCount = 0;
 let active;
 const sessions = new Map();
 const send = (value) => process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", ...value })}\n`);
 const reply = (id, result) => send({ id, result });
+const reject = (id, code, message, kind) => send({ id, error: { code, message, data: { kind } } });
+const accept = (id, params, extra = {}) =>
+  reply(id, { commandId: params.commandId, status: "accepted", ...extra });
 const event = (method, params) =>
-  send({ method, params: { ...params, viewCursor: String(++cursor) } });
+  send({ method, params: { ...active, ...params, viewCursor: String(++cursor) } });
 const sourceRange = { start: 0, end: 1 };
-function item(kind, text, status = "completed", extra = {}) {
-  return {
-    itemId: `${active.turnId}-${kind}`,
-    turnId: active.turnId,
-    kind,
-    text,
-    revision: status === "inProgress" ? 1 : 2,
-    status,
-    ...extra,
-  };
+function item(kind, status, extra = {}) {
+  const itemId = `${active.turnId}-${kind}`;
+  const starting = status === "inProgress";
+  event(starting ? "item/started" : "item/completed", {
+    item: { itemId, turnId: active.turnId, kind, revision: starting ? 1 : 2, status, ...extra },
+    ...(starting ? {} : { sourceRange }),
+  });
+  return itemId;
 }
 function complete(terminal, error) {
-  if (process.env.MUSE_REQUEST_LOG) {
-    appendFileSync(
-      process.env.MUSE_REQUEST_LOG,
-      `${JSON.stringify({ event: "terminal", terminal })}\n`,
-    );
-  }
-  event("turn/completed", { ...active, terminal, sourceRange, ...(error ? { error } : {}) });
+  log({ event: "terminal", terminal });
+  event("turn/completed", { terminal, sourceRange, ...(error ? { error } : {}) });
 }
+const fail = (kind, message) => complete("failed", { kind, message, retryable: false });
+const choice = (choiceId, decision, label) => ({ choiceId, decision, scope: "once", label });
 function answer() {
-  const reasoning = item("reasoning", "", "inProgress");
-  event("item/started", { ...active, item: reasoning });
-  event("item/delta", {
-    ...active,
-    itemId: reasoning.itemId,
-    field: "summary.0",
-    delta: "Considering",
-  });
-  event("item/completed", {
-    ...active,
-    item: { ...reasoning, status: "completed", revision: 2, summary: ["Considering"] },
-    sourceRange,
-  });
+  const itemId = item("reasoning", "inProgress", { text: "" });
+  event("item/delta", { itemId, field: "summary.0", delta: "Considering" });
+  item("reasoning", "completed", { text: "", summary: ["Considering"] });
   if (active.prompt === "tool" || active.prompt === "tool-failure") {
-    event("item/completed", {
-      ...active,
-      item: item("toolCall", undefined, active.prompt === "tool-failure" ? "failed" : "completed", {
-        tool: "read_file",
-        callId: "call-1",
-        args: '{"path":"a.txt"}',
-        visibleOutput: "file content",
-      }),
-      sourceRange,
+    item("toolCall", active.prompt === "tool-failure" ? "failed" : "completed", {
+      tool: "read_file",
+      callId: "call-1",
+      args: '{"path":"a.txt"}',
+      visibleOutput: "file content",
     });
   }
-  const text =
-    active.prompt === "credential"
-      ? `credential:${process.env.META_API_KEY ?? "cli-login"}`
-      : active.prompt === "effort"
-        ? `effort:${active.reasoningEffort}`
-        : `${active.resumed ? "resumed" : "started"}: hello`;
-  const message = item("agentMessage", "", "inProgress");
-  event("item/started", { ...active, item: message });
-  event("item/delta", { ...active, itemId: message.itemId, delta: text.slice(0, 8) });
-  event("item/delta", { ...active, itemId: message.itemId, delta: text.slice(8) });
-  event("item/completed", {
-    ...active,
-    item: { ...message, text, status: "completed", revision: 2 },
-    sourceRange,
-  });
+  const responses = new Map([
+    ["credential", `credential:${process.env.META_API_KEY ?? "cli-login"}`],
+    ["effort", `effort:${active.reasoningEffort}`],
+  ]);
+  const text = responses.get(active.prompt) ?? `${active.resumed ? "resumed" : "started"}: hello`;
+  const messageId = item("agentMessage", "inProgress", { text: "" });
+  event("item/delta", { itemId: messageId, delta: text.slice(0, 8) });
+  event("item/delta", { itemId: messageId, delta: text.slice(8) });
+  item("agentMessage", "completed", { text });
   if (active.prompt !== "settle") {
     complete("completed");
   }
 }
 createInterface({ input: process.stdin }).on("line", (line) => {
-  if (process.env.MUSE_REQUEST_LOG) {
-    appendFileSync(process.env.MUSE_REQUEST_LOG, `${line}\n`);
-  }
+  log(line);
   const { id, method, params = {} } = JSON.parse(line);
-  if (method === "initialized") {
-    return;
-  }
   if (method === "initialize") {
     const result = {
       serverInfo: { name: "fake_muse", version: "1" },
@@ -127,46 +99,25 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       providerId: "meta",
       profileId: "fixture",
       source: process.env.MUSE_FIXTURE_CATALOG_SOURCE ?? "providerCatalog",
-      models:
-        process.env.META_API_KEY === "rejected-test-key"
-          ? []
-          : [{ providerId: "meta", modelId: "muse-spark-1.3" }],
+      models: [{ providerId: "meta", modelId: "muse-spark-1.3" }],
     });
-  } else if (method === "session/start") {
-    const sessionId = process.env.MUSE_REQUEST_LOG ? randomUUID() : `session-${++sessionCount}`;
-    sessions.set(sessionId, false);
-    reply(id, { session: { sessionId }, viewCursor: String(cursor) });
-  } else if (method === "session/resume") {
-    if (params.sessionId === "missing-session") {
-      send({
-        id,
-        error: { code: -32020, message: "session not found", data: { kind: "sessionNotFound" } },
-      });
+  } else if (method === "session/start" || method === "session/resume") {
+    const resumed = method === "session/resume";
+    // Muse 1.3 uses `internal` for retained sessions it can no longer compose.
+    const refusal = new Map([
+      ["missing-session", [-32020, "session not found", "sessionNotFound"]],
+      ["refused-session", [-32603, "retained session refused (class c)", "internal"]],
+      ["busy-session", [-32021, "session in use", "sessionInUse"]],
+    ]).get(params.sessionId);
+    if (resumed && refusal) {
+      reject(id, ...refusal);
       return;
     }
-    if (params.sessionId === "refused-session") {
-      // Muse 1.3 refuses a retained session it can no longer compose as `internal`.
-      send({
-        id,
-        error: {
-          code: -32603,
-          message: "retained session refused (class c)",
-          data: { kind: "internal" },
-        },
-      });
-      return;
-    }
-    if (params.sessionId === "busy-session") {
-      send({
-        id,
-        error: { code: -32021, message: "session in use", data: { kind: "sessionInUse" } },
-      });
-      return;
-    }
-    sessions.set(params.sessionId, true);
+    const sessionId = resumed ? params.sessionId : randomUUID();
+    sessions.set(sessionId, resumed);
     reply(id, {
-      session: { sessionId: params.sessionId },
-      history: { mode: "none" },
+      session: { sessionId },
+      ...(resumed ? { history: { mode: "none" } } : {}),
       viewCursor: String(cursor),
     });
   } else if (method === "turn/start") {
@@ -180,43 +131,30 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       resumed: sessions.get(params.sessionId),
       reasoningEffort: params.reasoningEffort,
     };
-    reply(id, {
-      commandId: params.commandId,
-      status: "accepted",
-      disposition: "started",
-      startedNewTurn: true,
-      turnId: active.turnId,
-    });
+    accept(id, params, { disposition: "started", startedNewTurn: true, turnId: active.turnId });
     setImmediate(() => {
-      event("turn/started", { ...active, commandId: params.commandId, sourceRange });
-      if (active.prompt === "crash") {
+      const { prompt, turnId } = active;
+      event("turn/started", { commandId: params.commandId, sourceRange });
+      if (prompt === "crash") {
         process.stderr.write("fixture: provider process crashed\n");
         process.exit(7);
-      } else if (active.prompt === "fail") {
-        complete("failed", {
-          kind: "providerError",
-          message: "fixture provider rejected authentication",
-          retryable: false,
-        });
-      } else if (active.prompt === "loggedout") {
+      } else if (prompt === "fail") {
+        fail("providerError", "fixture provider rejected authentication");
+      } else if (prompt === "loggedout") {
         // Muse 1.3 reports a missing credential this way.
-        complete("failed", {
-          kind: "authRequired",
-          message: "not logged in: run /login to add an API key",
-          retryable: false,
-        });
-      } else if (active.prompt === "approval" || active.prompt === "approval-settle") {
+        fail("authRequired", "not logged in: run /login to add an API key");
+      } else if (["approval", "approval-settle", "approval-deny-only"].includes(prompt)) {
+        const denyOnly = prompt === "approval-deny-only";
         event("approval/requested", {
-          ...active,
           // Real Muse mints one approval id per request; the SDK ignores repeats.
-          approvalId: `approval-${active.turnId}`,
-          currentRequirementId: { approvalId: `approval-${active.turnId}`, sourceIndex: 0 },
+          approvalId: `approval-${turnId}`,
+          currentRequirementId: { approvalId: `approval-${turnId}`, sourceIndex: 0 },
           availableChoices: [
-            { choiceId: "server-allow-id", decision: "approved", scope: "once", label: "Allow" },
-            { choiceId: "server-deny-id", decision: "denied", scope: "once", label: "Deny" },
+            ...(denyOnly ? [] : [choice("server-allow-id", "approved", "Allow")]),
+            choice(denyOnly ? "server-only" : "server-deny-id", "denied", "Deny"),
           ],
-          itemId: `tool-${active.turnId}`,
-          toolCallId: `call-${active.turnId}`,
+          itemId: `tool-${turnId}`,
+          toolCallId: `call-${turnId}`,
           toolName: "shell",
           rawArgs: '{"command":"pwd"}',
           subject: { kind: "command", command: "pwd" },
@@ -225,26 +163,26 @@ createInterface({ input: process.stdin }).on("line", (line) => {
           taskId: "task-1",
           sourceRange,
         });
-      } else if (active.prompt !== "wait") {
+      } else if (prompt !== "wait") {
         answer();
       }
     });
   } else if (method === "approval/decide") {
-    reply(id, { commandId: params.commandId, status: "accepted", approvalId: params.approvalId });
+    accept(id, params, { approvalId: params.approvalId });
     if (params.choiceId !== "server-allow-id") {
-      complete("failed", { kind: "approvalDenied", message: "denied", retryable: false });
+      fail("approvalDenied", "denied");
     } else {
       setImmediate(answer);
     }
   } else if (method === "turn/interrupt") {
-    reply(id, { commandId: params.commandId, status: "accepted" });
+    accept(id, params);
     if (active.prompt === "settle" || active.prompt === "approval-settle") {
       // Deliberately separate admission from native settlement.
       setTimeout(() => complete("cancelled"), 80);
     } else {
       complete("cancelled");
     }
-  } else {
+  } else if (method !== "initialized") {
     send({ id, error: { code: -32601, message: `Unsupported fixture method ${method}` } });
   }
 });

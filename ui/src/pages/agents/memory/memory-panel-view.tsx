@@ -1,4 +1,4 @@
-import { createMemo } from "solid-js";
+import { createMemo, latest } from "solid-js";
 import { SettingsDefaultDescription } from "../../../components/solid/settings-ui.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 import type { AgentMemoryState } from "./memory-panel-state.ts";
@@ -7,6 +7,8 @@ import { renderDreaming as Dreaming } from "./view.tsx";
 
 export function AgentMemoryView(props: { state: AgentMemoryState }) {
   const model = createMemo(() => props.state.view());
+  // Interrupted/confirmed receipts remain visible while a retired action is still pending.
+  const diaryOutcome = () => latest(() => props.state.diaryOutcome());
   return (
     <>
       <section class="content-header content-header--page agent-memory-panel__header">
@@ -32,6 +34,9 @@ export function AgentMemoryView(props: { state: AgentMemoryState }) {
               )}
             </span>
             <button
+              role="switch"
+              aria-checked={model().header.dreamingOn ? "true" : "false"}
+              aria-label={t("dreaming.header.toggle")}
               class={[
                 "dreams__phase-toggle",
                 { "dreams__phase-toggle--on": model().header.dreamingOn },
@@ -51,7 +56,13 @@ export function AgentMemoryView(props: { state: AgentMemoryState }) {
           </div>
         </div>
       </section>
-      <Dreaming {...model().dreaming} />
+      <Dreaming
+        {...model().dreaming}
+        configOpening={props.state.configOpening()}
+        dreamDiaryActionLoading={props.state.diaryActionBusy()}
+        dreamDiaryActionMessage={diaryOutcome().message}
+        dreamDiaryActionArchivePath={diaryOutcome().archivePath}
+      />
       <DreamingToggleConfirmation {...model().toggle} />
     </>
   );

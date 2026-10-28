@@ -1,7 +1,7 @@
 import { vi } from "vitest";
 import type { RuntimeEnv } from "../runtime-api.js";
 import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
-import type { NextcloudTalkInboundMessage } from "./types.js";
+import type { NextcloudTalkInboundAttachment, NextcloudTalkInboundMessage } from "./types.js";
 
 export function createRuntimeEnv() {
   return {
@@ -33,6 +33,36 @@ export function createAccount(
       groupPolicy: "allowlist",
       groupAllowFrom: [],
     },
+    ...overrides,
+  };
+}
+
+export function createAllowlistedAccount(
+  config: ResolvedNextcloudTalkAccount["config"] = {},
+): ResolvedNextcloudTalkAccount {
+  return createAccount({
+    config: {
+      dmPolicy: "allowlist",
+      allowFrom: ["user-1"],
+      mediaAllowFrom: ["user-1"],
+      groupPolicy: "allowlist",
+      groupAllowFrom: [],
+      ...config,
+    },
+  });
+}
+
+export function createAttachment(
+  fileId: string,
+  overrides?: Partial<NextcloudTalkInboundAttachment>,
+): NextcloudTalkInboundAttachment {
+  return {
+    fileId,
+    name: "receipt.pdf",
+    mimeType: "application/pdf",
+    declaredSizeBytes: 1_024,
+    shareUrl: "https://cloud.example.com/s/redacted-share-token",
+    hideDownload: false,
     ...overrides,
   };
 }

@@ -56,7 +56,7 @@ const suite = createControlUiE2eSuite({
 });
 
 suite.define(() => {
-  it("applies real row events in the page and sidebar before a one-minute fallback", async () => {
+  it("applies real row events in the page and sidebar without periodic list reads", async () => {
     if (!instance) {
       throw new Error("Gateway fixture is not running");
     }
@@ -145,20 +145,11 @@ suite.define(() => {
             await expect.poll(() => selected.textContent()).toContain(label);
           }
         };
-        const pageReads = () =>
-          lists.filter(
-            ({ params }) =>
-              params.includeUnknown === false &&
-              params.includeOwnerSessionCounts !== true &&
-              params.includeDerivedTitles === undefined &&
-              params.includeLastMessage === undefined,
-          );
-        const primaryReads = () => lists.filter(({ params }) => params.includeLastMessage === true);
-        const pageBefore = pageReads().length;
-        const primaryBefore = primaryReads().length;
-        expect(pageBefore).toBeGreaterThan(0);
-        expect(primaryBefore).toBeGreaterThan(0);
+        const rosterReads = () =>
+          lists.filter(({ params }) => params.includeOwnerSessionCounts !== true);
+        expect(rosterReads().length).toBeGreaterThan(0);
         const before = [...lists];
+        const rosterBefore = rosterReads();
         await patch(key, "First rate update");
         await roster.getByText("First rate update", { exact: true }).waitFor();
         for (let index = 0; index < 3; index += 1) {
@@ -168,18 +159,10 @@ suite.define(() => {
         }
         await page.clock.runFor(56_999 - 4 * eventRenderMs);
         expect(lists).toEqual(before);
-        // Later rows cannot postpone the first row's minute fallback + collection window.
         await page.clock.runFor(5_001);
-        await expect.poll(() => pageReads().length).toBe(pageBefore + 1);
-        await expect.poll(() => responses.has(pageReads().at(-1)!.id)).toBe(true);
+        expect(lists).toEqual(before);
         await roster.getByText("Trailing rate update 2", { exact: true }).waitFor();
         await expect.poll(() => selected.textContent()).toContain("Trailing rate update 2");
-        expect(primaryReads()).toHaveLength(primaryBefore + 1);
-        expect(lists.every(({ params }) => params.source)).toBe(true);
-        expect(pageReads().every(({ params }) => params.rowMode === "compact")).toBe(true);
-        expect(primaryReads().every(({ params }) => params.rowMode === "sidebar")).toBe(true);
-
-        expect(pageReads().every(({ params }) => params.agentId === "main")).toBe(true);
         const beforeOther = lists.length;
         await patch(otherKey, "Unrelated rate update");
         await page.clock.runFor(15_000);
@@ -191,9 +174,8 @@ suite.define(() => {
         // A relevant successor proves the quiet interval did not retire the subscription.
         await patch(key, "Relevant after unrelated");
         await page.clock.runFor(5_000);
-        expect(pageReads()).toHaveLength(pageBefore + 1);
+        expect(rosterReads()).toEqual(rosterBefore);
         await roster.getByText("Relevant after unrelated", { exact: true }).waitFor();
-        expect(primaryReads()).toHaveLength(primaryBefore + 1);
         await page.clock.resume();
       });
     } finally {

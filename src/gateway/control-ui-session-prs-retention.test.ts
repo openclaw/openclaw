@@ -5,8 +5,14 @@ import { runGitWorkerOperation } from "../infra/git-worker.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createControlUiSessionPullRequestSubscriptions as createSubscriptions } from "./control-ui-session-pr-subscriptions.js";
 import {
+  spyOnSessionPrLoader,
+  type SessionPrLoader,
+} from "./control-ui-session-pr-subscriptions.test-support.js";
+import {
   createSessionPullRequestsFixture,
   githubJson,
+  localPrGitReads as localGitReads,
+  mockPrCheckout,
   pullListItem,
   routedFetch,
   testGitContext,
@@ -44,16 +50,6 @@ function loadFromRoot(root: string | ((key: string) => string), signals?: Set<Ab
   };
 }
 
-function localGitReads() {
-  return vi
-    .mocked(runGitWorkerOperation)
-    .mock.calls.filter(
-      ([operation]) =>
-        operation.type !== "checkout.revision" &&
-        operation.type !== "pull-request.branch-comparison",
-    );
-}
-
 const listenerCount = (signal: AbortSignal) => getEventListeners(signal, "abort").length;
 const watchedKeys = (count: number, offset = 0) =>
   Array.from({ length: count }, (_, index) => `watched-${index + offset}`);
@@ -63,43 +59,34 @@ function mockCheckout(
   branch: (root: string) => string | null,
   additions?: () => number,
 ) {
-  vi.mocked(runGitWorkerOperation).mockImplementation(async (operation) => {
-    switch (operation.type) {
-      case "pull-request.branch-comparison":
-        return { statsBase: null, creatable: false, equalPushedTips: false, complete: true };
-      case "checkout.revision":
-        return revision();
-      case "checkout.context": {
-        const selected = branch(operation.input.root);
-        return selected
-          ? {
-              ...testGitContext,
-              branch: selected,
-              root: operation.input.root,
-              defaultBranch: "main",
-            }
-          : null;
-      }
-      case "pull-request.branch-facts":
-        return additions
-          ? { creatable: true, stats: { additions: additions(), deletions: 0, changedFiles: 1 } }
-          : undefined;
-      default:
-        throw new Error("Unexpected local Git operation");
-    }
+  mockPrCheckout({
+    revision,
+    additions,
+    emptyFacts: true,
+    resolve: (root) => {
+      const selected = branch(root);
+      return selected ? { ...testGitContext, branch: selected, root, defaultBranch: "main" } : null;
+    },
   });
 }
 
 function subscribe(
-  options: Pick<Parameters<typeof createSubscriptions>[0], "load" | "broadcastToConnIds">,
+  load: SessionPrLoader,
+  broadcastToConnIds: Parameters<typeof createSubscriptions>[0]["broadcastToConnIds"] = vi.fn(),
 ) {
+  spyOnSessionPrLoader(load);
   const subscriptions = createSubscriptions({
     scheduler: createTestGatewayScheduler("fake-timers"),
     prepareRead: fixture.prepareRead,
-    ...options,
+    broadcastToConnIds,
   });
   subscriptionsToStop.add(subscriptions);
   return subscriptions;
+}
+
+async function pollAfter(subscriptions: ReturnType<typeof subscribe>, elapsed: number) {
+  vi.setSystemTime(Date.now() + elapsed);
+  await subscriptions.pollNow();
 }
 
 beforeEach(() => {
@@ -132,10 +119,7 @@ describe("watched session PR retention", () => {
       () => additions,
     );
     const broadcastToConnIds = vi.fn();
-    const subscriptions = subscribe({
-      broadcastToConnIds,
-      load: loadFromRoot("/watched/shared-checkout"),
-    });
+    const subscriptions = subscribe(loadFromRoot("/watched/shared-checkout"), broadcastToConnIds);
     const expectReads = (count: number) => {
       for (const type of ["checkout.context", "pull-request.branch-facts"]) {
         expect(localGitReads().filter(([operation]) => operation.type === type)).toHaveLength(
@@ -144,16 +128,13 @@ describe("watched session PR retention", () => {
       }
     };
     const expectDelivered = (connId: string, sessionKey: string, expectedAdditions: number) => {
+      const snapshot = expect.objectContaining({
+        status: "ready",
+        branch: expect.objectContaining({ additions: expectedAdditions }),
+      });
       expect(broadcastToConnIds).toHaveBeenCalledWith(
         "controlUi.sessionPullRequests.changed",
-        {
-          sessions: {
-            [sessionKey]: expect.objectContaining({
-              status: "ready",
-              branch: expect.objectContaining({ additions: expectedAdditions }),
-            }),
-          },
-        },
+        { sessions: { [sessionKey]: snapshot } },
         new Set([connId]),
         expect.anything(),
       );
@@ -202,8 +183,13 @@ describe("watched session PR retention", () => {
         );
       }
     };
-    const subscriptions = subscribe({
-      broadcastToConnIds: (_event, payload) => {
+    const subscriptions = subscribe(
+      (params, cacheSignal) =>
+        loadPrs(params, {
+          cacheSignal,
+          resolveGitContext: async () => ({ ...testGitContext, branch: params.sessionKey }),
+        }),
+      (_event, payload) => {
         if (!isRecord(payload) || !isRecord(payload.sessions)) {
           throw new Error("invalid subscription event");
         }
@@ -215,21 +201,12 @@ describe("watched session PR retention", () => {
           snapshots.set(key, snapshot);
         }
       },
-      load: (params, cacheSignal) =>
-        loadPrs(params, {
-          cacheSignal,
-          resolveGitContext: async () => ({
-            ...testGitContext,
-            branch: params.sessionKey,
-          }),
-        }),
-    });
+    );
     const keys = Array.from({ length: 101 }, (_, index) => `quota-${index}`);
     await subscriptions.replace("watcher", keys);
     expect(fetchImpl.mock.calls).toHaveLength(101);
     limited = true;
-    vi.setSystemTime(Date.now() + 90_001);
-    await subscriptions.pollNow();
+    await pollAfter(subscriptions, 90_001);
     const callsAtBackoff = fetchImpl.mock.calls.length;
     expect(callsAtBackoff).toBeGreaterThan(101);
     expectSnapshots(true);
@@ -238,8 +215,7 @@ describe("watched session PR retention", () => {
     expect(fetchImpl.mock.calls).toHaveLength(callsAtBackoff);
     expectSnapshots(true);
     limited = false;
-    vi.setSystemTime(Date.now() + 240_001);
-    await subscriptions.pollNow();
+    await pollAfter(subscriptions, 240_001);
     expect(fetchImpl.mock.calls).toHaveLength(callsAtBackoff + 101);
     expectSnapshots(false);
   });
@@ -251,23 +227,18 @@ describe("watched session PR retention", () => {
       () => "unchanged",
       (root) => root.slice("/watched/".length),
     );
-    const subscriptions = subscribe({
-      broadcastToConnIds: vi.fn(),
-      load: loadFromRoot((key) => `/watched/${key}`, signals),
-    });
+    const subscriptions = subscribe(loadFromRoot((key) => `/watched/${key}`, signals));
     await subscriptions.replace("first", watchedKeys(200));
     await subscriptions.replace("second", watchedKeys(100, 200));
     expect(fetchImpl.mock.calls).toHaveLength(300);
     expect(localGitReads()).toHaveLength(600);
 
     for (const elapsed of [60_000, 15_001]) {
-      vi.setSystemTime(Date.now() + elapsed);
-      await subscriptions.pollNow();
+      await pollAfter(subscriptions, elapsed);
       expect(fetchImpl.mock.calls).toHaveLength(300);
       expect(localGitReads()).toHaveLength(600);
     }
-    vi.setSystemTime(Date.now() + 225_000);
-    await subscriptions.pollNow();
+    await pollAfter(subscriptions, 225_000);
     expect(localGitReads()).toHaveLength(900);
     expect(signals.size).toBe(300);
     expect([...signals].map(listenerCount)).toEqual(Array<number>(300).fill(1));
@@ -280,13 +251,17 @@ describe("watched session PR retention", () => {
 
   it("releases obsolete GitHub snapshots when a watched checkout changes or disappears", async () => {
     const cacheLifetime = new AbortController();
-    let root: string | null = "/retained/first";
-    let branch: string | null = "feature-a";
-    let rootFailure = false;
-    let fetchFailure = false;
-    stubPulls(() => githubJson(fetchFailure ? {} : [], fetchFailure ? 503 : 200), true);
+    let root: string | null = null;
+    let branch: string | null = null;
+    let response: 200 | 503 | "throws" = 200;
+    stubPulls(() => githubJson(response === 503 ? {} : [], response === 503 ? 503 : 200), true);
     mockCheckout(
-      () => branch,
+      () => {
+        if (response === "throws") {
+          throw new Error("session unavailable");
+        }
+        return branch;
+      },
       () => branch,
     );
     const load = () =>
@@ -294,47 +269,40 @@ describe("watched session PR retention", () => {
         { sessionKey: "retained", refresh: true },
         {
           cacheSignal: cacheLifetime.signal,
-          resolveGitRoot: async () => {
-            if (rootFailure) {
-              throw new Error("session unavailable");
-            }
-            return root;
-          },
+          resolveGitRoot: async () => root,
         },
       );
     const pins = () => listenerCount(cacheLifetime.signal);
     try {
-      for (const [nextRoot, nextBranch, expectedPins] of [
-        [root, branch, 1],
-        ["/retained/second", "feature-b", 1],
-        [null, "feature-b", 0],
+      // Walk the same watch through moves, absent roots, failures, recovery and detach.
+      for (const [nextRoot, nextBranch, result, elapsed, expectedPins] of [
+        ["/retained/first", "feature-a", 200, 0, 1],
+        ["/retained/second", "feature-b", 200, 0, 1],
+        [null, "feature-b", 200, 0, 0],
+        ["/retained/third", "feature-c", 503, 0, 1],
+        ["/retained/third", "feature-c", 200, 30_001, 1],
+        ["/retained/third", null, 200, 0, 0],
+        ["/retained/third", "feature-c", 200, 0, 1],
+        ["/retained/third", "feature-c", "throws", 0, 0],
       ] as const) {
         root = nextRoot;
         branch = nextBranch;
-        await load();
+        response = result;
+        vi.setSystemTime(Date.now() + elapsed);
+        if (result === "throws") {
+          await expect(load()).rejects.toThrow("session unavailable");
+        } else if (result === 503) {
+          await expect(load()).resolves.toEqual({
+            pullRequests: [],
+            repository: { owner: "openclaw", repo: "openclaw" },
+            rateLimited: false,
+            status: "unavailable",
+          });
+        } else {
+          await load();
+        }
         expect(pins()).toBe(expectedPins);
       }
-      root = "/retained/third";
-      branch = "feature-c";
-      fetchFailure = true;
-      await expect(load()).resolves.toEqual({
-        pullRequests: [],
-        repository: { owner: "openclaw", repo: "openclaw" },
-        rateLimited: false,
-        status: "unavailable",
-      });
-      // Keep the GitHub failure expiry pinned until this watch retires.
-      expect(pins()).toBe(1);
-      fetchFailure = false;
-      vi.setSystemTime(Date.now() + 30_001);
-      await load();
-      expect(pins()).toBe(1);
-      branch = null;
-      await load();
-      expect(pins()).toBe(0);
-      rootFailure = true;
-      await expect(load()).rejects.toThrow("session unavailable");
-      expect(pins()).toBe(0);
     } finally {
       cacheLifetime.abort();
     }

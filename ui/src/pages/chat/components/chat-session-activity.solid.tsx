@@ -2,31 +2,40 @@ import type { JSX } from "@solidjs/web";
 import { For, Show, type Accessor } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
+import { resolveIdentityHue } from "../../../lib/identity-avatar.ts";
+import { participantPalette } from "../../../lib/reactive/participant-palette.ts";
 import { rawMessageTimestamp } from "../chat-thread-items.ts";
 import { ForwardedAttribution } from "./chat-forwarded-attribution.tsx";
 import type { RenderMessageGroupOptions } from "./chat-message-group-options.ts";
 import { ChatTimestamp } from "./chat-message-timestamp-view.tsx";
 import "./chat-session-activity.css";
 
-type ChatSessionActivityProps = {
+export function ChatSessionActivity(props: {
   group: MessageGroup;
   options: RenderMessageGroupOptions;
   renderEntry: (
     item: Accessor<MessageGroup["messages"][number]>,
     index: Accessor<number>,
-  ) => { content: JSX.Element; actions: JSX.Element };
-};
-
-export function ChatSessionActivity(props: ChatSessionActivityProps) {
+  ) => {
+    content: JSX.Element;
+    actions: JSX.Element;
+    actionsRef?: (element: HTMLDivElement) => void;
+  };
+}) {
   const disclosureId = () => "session-activity:" + props.group.key;
   const expanded = () =>
     Boolean(props.options.searchResult) ||
     (props.options.isToolMessageExpanded?.(disclosureId()) ?? false);
-  const count = () =>
-    props.group.messages.reduce((total, message) => total + (message.duplicateCount ?? 1), 0);
   return (
     <div
       class="chat-group tool chat-group--turn-block"
+      style={
+        props.group.senderSession?.sessionKey
+          ? participantPalette
+              .read()
+              ?.style(resolveIdentityHue({ id: props.group.senderSession.sessionKey }))
+          : undefined
+      }
       data-chat-row-key={props.group.key}
       data-file-session-key={props.group.senderSession?.sessionKey}
     >
@@ -66,7 +75,7 @@ export function ChatSessionActivity(props: ChatSessionActivityProps) {
               group={props.group}
               options={{
                 ...props.options,
-                updateCount: count(),
+                updateCount: props.group.messages.length,
               }}
             />
             <Show when={!props.options.searchResult}>
@@ -88,6 +97,7 @@ export function ChatSessionActivity(props: ChatSessionActivityProps) {
                           timestamp={rawMessageTimestamp(item().message) ?? props.group.timestamp}
                         />
                         <div
+                          ref={(element) => entry.actionsRef?.(element)}
                           class="chat-group-footer-actions"
                           data-message-actions-for={item().key}
                         >

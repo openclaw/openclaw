@@ -55,7 +55,7 @@ export function createOpenClawStateWorkerLease(
     context,
     {
       open: (captured) => owner().open(captured),
-      retainOperation: (store) => owner().retainOperation(store),
+      retainOperation: (store, onNativeLost) => owner().retainOperation(store, onNativeLost),
     },
     finalize,
   );

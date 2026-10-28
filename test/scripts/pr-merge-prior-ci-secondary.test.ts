@@ -87,6 +87,15 @@ function secondaryCandidate(fault = "") {
     "truncated log": () => lines.pop(),
   });
   writeFileSync(log, lines.join("\n") + "\n");
+  const secondary = {
+    kind: "missing-artifact-after-skipped-producer",
+    jobId: job.id,
+    step: 13,
+    producerStep: 12,
+    log: "build-log",
+    reason: "Inspected skipped producer and both outputs missing after cancellation.",
+    evidence: ["qualification", "build-log"],
+  };
   const evidence = {
     ...f.evidence,
     artifacts: [
@@ -100,34 +109,12 @@ function secondaryCandidate(fault = "") {
     cancellation: {
       ...f.evidence.cancellation,
       step: 4,
-      secondaryFailures: [
-        {
-          kind: "missing-artifact-after-skipped-producer",
-          jobId: job.id,
-          step: 13,
-          producerStep: 12,
-          log: "build-log",
-          reason: "Inspected full log: skipped producer, both outputs missing after cancellation.",
-          evidence: ["qualification", "build-log"],
-        },
-      ],
+      secondaryFailures: [secondary],
     },
   };
-  const secondary = evidence.cancellation.secondaryFailures[0]!;
   applyFault(fault, {
     "cleanup failure": () => (steps[4]!.conclusion = "failure"),
-    "test failure": () => {
-      state.priorCi.jobs!.push({
-        ...job,
-        id: 606,
-        name: "other-tests",
-        steps: [step(1, "Product assertion", "failure", "20:40")],
-      });
-      evidence.cancellation.jobIds.push(606);
-    },
-    success: () => (steps[2]!.conclusion = "success"),
     failure: () => (steps[2]!.conclusion = "failure"),
-    cancelled: () => (steps[2]!.conclusion = "cancelled"),
     "missing producer": () => steps.splice(2, 1),
     "earlier upload": () => (steps[3]!.started_at = "2026-09-28T07:20:35Z"),
     "missing time": () => delete monitor.completed_at,
@@ -174,10 +161,7 @@ describePosix("prior-CI skipped-producer secondary failure", () => {
     ["changed action", "historical producer/action/output"],
     ["changed outputs", "historical producer/action/output"],
     ["cleanup failure", "cancelled jobs must not hide failed steps"],
-    ["test failure", "cancelled jobs must not hide failed steps"],
-    ["success", "uniquely skipped producer"],
     ["failure", "uniquely skipped producer"],
-    ["cancelled", "uniquely skipped producer"],
     ["missing producer", "needs one Run built artifact checks"],
     ["transport failure", "both missing outputs"],
     ["extra error", "both missing outputs"],

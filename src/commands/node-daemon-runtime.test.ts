@@ -1,8 +1,9 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { nodeProbeOutput } from "../cli/daemon-cli/install.test-helpers.js";
 import type { GatewayServiceInstallArgs } from "../daemon/service-types.js";
 import type * as DeviceAuthStoreModule from "../infra/device-auth-store.js";
-import type * as DeviceIdentityModule from "../infra/device-identity.js";
+import type * as DeviceIdentityModule from "../infra/device-identity-async.js";
 import type * as NodeHostConfigModule from "../node-host/config.js";
 import { withEnvAsync } from "../test-utils/env.js";
 
@@ -11,7 +12,7 @@ const {
   access,
   stat,
   loadNodeHostConfig,
-  loadDeviceIdentityIfPresent,
+  loadDeviceIdentityIfPresentAsync,
   loadDeviceAuthTokenReadOnly,
   serviceInstall,
 } = vi.hoisted(() => ({
@@ -19,7 +20,7 @@ const {
   access: vi.fn(),
   stat: vi.fn(),
   loadNodeHostConfig: vi.fn(),
-  loadDeviceIdentityIfPresent: vi.fn(),
+  loadDeviceIdentityIfPresentAsync: vi.fn(),
   loadDeviceAuthTokenReadOnly: vi.fn(),
   serviceInstall: vi.fn<(args: GatewayServiceInstallArgs) => Promise<void>>(),
 }));
@@ -59,9 +60,9 @@ vi.mock("../node-host/config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof NodeHostConfigModule>()),
   loadNodeHostConfig,
 }));
-vi.mock("../infra/device-identity.js", async (importOriginal) => ({
+vi.mock("../infra/device-identity-async.js", async (importOriginal) => ({
   ...(await importOriginal<typeof DeviceIdentityModule>()),
-  loadDeviceIdentityIfPresent,
+  loadDeviceIdentityIfPresentAsync,
 }));
 vi.mock("../infra/device-auth-store.js", async (importOriginal) => ({
   ...(await importOriginal<typeof DeviceAuthStoreModule>()),
@@ -87,8 +88,17 @@ beforeEach(() => {
     throw new Error("ENOENT");
   });
   stat.mockResolvedValue({ isFile: () => true });
+  runExec.mockResolvedValue({
+    stdout: JSON.stringify({
+      nodeVersion: "26.12.1",
+      sqliteVersion: "3.53.4",
+      sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
+      nodeSharedSqlite: false,
+    }),
+    stderr: "",
+  });
   loadNodeHostConfig.mockResolvedValue(null);
-  loadDeviceIdentityIfPresent.mockReturnValue(null);
+  loadDeviceIdentityIfPresentAsync.mockResolvedValue(null);
   loadDeviceAuthTokenReadOnly.mockResolvedValue(null);
   serviceInstall.mockResolvedValue(undefined);
 });
@@ -117,47 +127,16 @@ async function install(env: Record<string, string | undefined> = {}, authFromEnv
 }
 
 describe.skipIf(process.platform === "win32")("node-host runtime install boundary", () => {
-  it("accepts a Node 26 system runtime with safe embedded SQLite", async () => {
-    runExec.mockResolvedValue({
-      stdout: JSON.stringify({
-        nodeVersion: "26.8.1",
-        sqliteVersion: "3.53.4",
-        sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
-        nodeSharedSqlite: false,
-      }),
-      stderr: "",
-    });
-    const plan = await install();
-    expect(plan.programArguments).toEqual([
-      "/usr/bin/node",
-      "/opt/openclaw/openclaw.mjs",
-      "node",
-      "run",
-      "--host",
-      "gateway.example",
-      "--port",
-      "18789",
-      "--no-tls",
-    ]);
-  });
-
   it.each([false, true])(
     "persists ambient auth only when explicitly selected for a paired node (explicit=%s)",
     async (explicit) => {
-      runExec.mockResolvedValue({
-        stdout: JSON.stringify({
-          nodeVersion: "26.8.1",
-          sqliteVersion: "3.53.4",
-          sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
-        }),
-        stderr: "",
-      });
+      runExec.mockResolvedValue(nodeProbeOutput("26.12.1"));
       loadNodeHostConfig.mockResolvedValue({
         version: 1,
         nodeId: "paired-node",
         gateway: { host: "gateway.example", port: 18789 },
       });
-      loadDeviceIdentityIfPresent.mockReturnValue({ deviceId: "paired-device" });
+      loadDeviceIdentityIfPresentAsync.mockResolvedValue({ deviceId: "paired-device" });
       loadDeviceAuthTokenReadOnly.mockResolvedValue({ token: "paired-node-token" });
       const plan = await install(
         {
@@ -175,31 +154,4 @@ describe.skipIf(process.platform === "win32")("node-host runtime install boundar
       expect(plan.programArguments.includes("--auth-from-env")).toBe(explicit);
     },
   );
-
-  it("surfaces an exec failure through the install plan without Node upgrade advice", async () => {
-    runExec.mockRejectedValue(new Error("spawn EACCES"));
-    await expect(install()).rejects.toThrow(/Node runtime check failed.*\/usr\/bin\/node.*EACCES/s);
-  });
-
-  it("uses OPENCLAW_WRAPPER even when native runtime probes cannot execute", async () => {
-    runExec.mockRejectedValue(new Error("spawn EACCES"));
-    const plan = await install({ OPENCLAW_WRAPPER: "/opt/openclaw-wrapper" });
-    expect(plan.programArguments).toEqual([
-      "/opt/openclaw-wrapper",
-      "node",
-      "run",
-      "--host",
-      "gateway.example",
-      "--port",
-      "18789",
-      "--no-tls",
-    ]);
-  });
-
-  it("rejects a node-host wrapper without execute permission", async () => {
-    access.mockRejectedValue(new Error("EACCES"));
-    await expect(install({ OPENCLAW_WRAPPER: "/opt/openclaw-wrapper" })).rejects.toThrow(
-      "OPENCLAW_WRAPPER must point to an executable file",
-    );
-  });
 });

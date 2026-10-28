@@ -4,6 +4,7 @@ import {
   isPrivateNetworkAllowedByPolicy,
   normalizeHostname,
 } from "openclaw/plugin-sdk/security-runtime";
+import { readNonBlankString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import type { Frame, Page } from "playwright-core";
 import { DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS } from "./constants.js";
@@ -26,15 +27,12 @@ import {
   restoreRoleRefsForTarget,
   withPageNavigationRequestGuard,
 } from "./pw-session.js";
-import {
-  clickViaPlaywright,
-  setFileChooserFilesViaPlaywright,
-} from "./pw-tools-core.interactions.js";
+import { clickViaPlaywright } from "./pw-tools-core.interactions.actions.js";
+import { setFileChooserFilesViaPlaywright } from "./pw-tools-core.interactions.content.js";
 import {
   awaitActionWithAbort,
   assertInteractionCurrent,
   BrowserInteractionAuthorityError,
-  createAbortPromiseWithListener,
   hasInteractionNavigationPolicy,
   interactionNavigationPolicy,
   type InteractionTargetOptions,
@@ -119,7 +117,6 @@ async function runFileUpload(opts: UploadOptions): Promise<void> {
   const signal = opts.signal
     ? AbortSignal.any([opts.signal, controller.signal])
     : controller.signal;
-  const { abortPromise, cleanup } = createAbortPromiseWithListener(signal);
   const armed = createDeferred<void>();
   let started = false;
   let deadline = 0;
@@ -136,7 +133,7 @@ async function runFileUpload(opts: UploadOptions): Promise<void> {
     startDeadline();
   }
   const completion = (async () => {
-    const page = await awaitActionWithAbort(getPageForTargetId(opts), abortPromise);
+    const page = await awaitActionWithAbort(getPageForTargetId(opts), signal);
     signal.throwIfAborted();
     if (opts.assertCurrent) {
       await assertInteractionCurrent(opts);
@@ -187,7 +184,7 @@ async function runFileUpload(opts: UploadOptions): Promise<void> {
         if (!atomic) {
           const resolved = await awaitActionWithAbort(
             resolveStrictExistingUploadPaths({ requestedPaths: paths }),
-            abortPromise,
+            signal,
           );
           signal.throwIfAborted();
           if (!paths.length || !resolved.ok) {
@@ -240,14 +237,13 @@ async function runFileUpload(opts: UploadOptions): Promise<void> {
     }
   })().finally(() => {
     clearTimeout(timer);
-    cleanup();
   });
   // Passive arming intentionally outlives this call; its errors are contained.
   void completion.catch(() => {});
   try {
     await awaitActionWithAbort(
       atomic ? completion : Promise.race([armed.promise, completion]),
-      abortPromise,
+      signal,
     );
   } catch (error) {
     if (atomic && started) {
@@ -381,7 +377,7 @@ export async function downloadViaPlaywright(
   const timeout = normalizeTimeoutMs(opts.timeoutMs, 120_000);
 
   const ref = requireRef(opts.ref);
-  const outPath = opts.path?.trim() ?? "";
+  const outPath = readNonBlankString(opts.path);
   if (!outPath) {
     throw new Error("path is required");
   }
@@ -446,7 +442,6 @@ export async function downloadCurrentDocumentViaPlaywright(
   }
   const operation = new AbortController();
   const signal = opts.signal ? AbortSignal.any([opts.signal, operation.signal]) : operation.signal;
-  const { abortPromise, cleanup } = createAbortPromiseWithListener(signal);
   let page: Page | undefined;
   const changedError = () => new Error("The tab changed before its download completed. Try again.");
   const assertCurrentDocument = () => {
@@ -462,7 +457,7 @@ export async function downloadCurrentDocumentViaPlaywright(
     }
   };
   try {
-    page = await awaitActionWithAbort(getPageForTargetId(opts), abortPromise);
+    page = await awaitActionWithAbort(getPageForTargetId(opts), signal);
     page.on("close", onClose);
     page.on("framenavigated", onNavigation);
     assertCurrentDocument();
@@ -473,7 +468,7 @@ export async function downloadCurrentDocumentViaPlaywright(
         browserProxyMode: opts.browserProxyMode,
         signal,
       }),
-      abortPromise,
+      signal,
     );
     assertCurrentDocument();
     if (opts.assertCurrent) {
@@ -529,6 +524,5 @@ export async function downloadCurrentDocumentViaPlaywright(
   } finally {
     page?.off("close", onClose);
     page?.off("framenavigated", onNavigation);
-    cleanup();
   }
 }

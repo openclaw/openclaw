@@ -47,7 +47,6 @@ export async function resolveTelegramDmAllow(params: {
   senderId?: string;
 }): Promise<{
   allowFrom?: Array<string | number>;
-  expandedAllowFrom: string[];
   effectiveAllow: NormalizedAllowFrom;
 }> {
   const allowFrom = params.groupAllowOverride ?? params.allowFrom;
@@ -57,7 +56,6 @@ export async function resolveTelegramDmAllow(params: {
   });
   return {
     allowFrom,
-    expandedAllowFrom,
     effectiveAllow: normalizeDmAllowFromWithStore({
       allowFrom: expandedAllowFrom,
       storeAllowFrom: params.storeAllowFrom,

@@ -1,0 +1,55 @@
+diff --git a/lib/coreBundle.js b/lib/coreBundle.js
+index 6893f1cf133efec2c5dccc35c77cc7a53870ccbc..c03befdacbc4a184f0e92fffd41ee3fdf2f911e6 100644
+--- a/lib/coreBundle.js
++++ b/lib/coreBundle.js
+@@ -20638,15 +20638,16 @@ function parseUnserializableValue(unserializableValue) {
+ function normalizeEvaluationExpression(expression2, isFunction2) {
+   expression2 = expression2.trim();
+   if (isFunction2) {
++    // Parse callback syntax without compiling JavaScript in the host process.
+     try {
+-      new Function("(" + expression2 + ")");
++      require("acorn").parse("function anonymous() {\n(" + expression2 + ")\n}", { ecmaVersion: "latest" });
+     } catch (e1) {
+       if (expression2.startsWith("async "))
+         expression2 = "async function " + expression2.substring("async ".length);
+       else
+         expression2 = "function " + expression2;
+       try {
+-        new Function("(" + expression2 + ")");
++        require("acorn").parse("function anonymous() {\n(" + expression2 + ")\n}", { ecmaVersion: "latest" });
+       } catch (e2) {
+         throw new Error("Passed function is not well-serializable!");
+       }
+diff --git a/lib/utilsBundle.js b/lib/utilsBundle.js
+index 78a1a81a682c55fa412f14361e8a2ceaa245d10f..d9959bd6780f11e7c97b7f6a91c47a85cdd03b21 100644
+--- a/lib/utilsBundle.js
++++ b/lib/utilsBundle.js
+@@ -32128,27 +32128,7 @@ var require_yauzl = __commonJS({
+ var require_polyfills = __commonJS({
+   "node_modules/graceful-fs/polyfills.js"(exports2, module2) {
+     var constants = require("constants");
+-    var origCwd = process.cwd;
+-    var cwd = null;
+     var platform2 = process.env.GRACEFUL_FS_PLATFORM || process.platform;
+-    process.cwd = function() {
+-      if (!cwd)
+-        cwd = origCwd.call(process);
+-      return cwd;
+-    };
+-    try {
+-      process.cwd();
+-    } catch (er) {
+-    }
+-    if (typeof process.chdir === "function") {
+-      chdir = process.chdir;
+-      process.chdir = function(d) {
+-        cwd = null;
+-        chdir.call(process, d);
+-      };
+-      if (Object.setPrototypeOf) Object.setPrototypeOf(process.chdir, chdir);
+-    }
+-    var chdir;
+     module2.exports = patch;
+     function patch(fs7) {
+       if (constants.hasOwnProperty("O_SYMLINK") && process.version.match(/^v0\.6\.[0-2]|^v0\.5\./)) {

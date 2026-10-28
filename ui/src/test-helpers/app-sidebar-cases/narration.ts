@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import { setSessionsShowPreview } from "../../components/session-organizer-menu.runtime.ts";
 import { createGatewayHarness, createSessionsHarness, mountSidebar } from "../app-sidebar.ts";
 import { waitForFast } from "../wait-for.ts";
 import "../../components/app-sidebar.tsx";
@@ -41,7 +42,7 @@ describe("AppSidebar live narration", () => {
     const sessions = createSessionsHarness("main", [key]);
     sessions.publishList({ result: sessionsResult([runningRow(key, 5)]), agentId: "main" });
     const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
-    sidebar.sessionOrganizer.setSessionsShowPreview(false);
+    setSessionsShowPreview(sidebar.sessionOrganizer, false);
     sidebar.connected = true;
     await sidebar.updateComplete;
     await waitForFast(() => expect(sessions.subscribeMessages).toHaveBeenCalledTimes(1));
@@ -70,7 +71,7 @@ describe("AppSidebar live narration", () => {
     expect(row()?.classList.contains("sidebar-recent-session--single-line")).toBe(true);
     expect(row()?.querySelector(".sidebar-session-tool")).toBeNull();
     expect(row()?.querySelector(".sidebar-recent-session__subtitle")).toBeNull();
-    sidebar.sessionOrganizer.setSessionsShowPreview(true);
+    setSessionsShowPreview(sidebar.sessionOrganizer, true);
     await sidebar.updateComplete;
     expect(row()?.querySelector(".sidebar-session-tool")?.getAttribute("aria-label")).toBe(
       "Tool: exec",
@@ -85,7 +86,7 @@ describe("AppSidebar live narration", () => {
     expect(
       row()?.querySelector(".sidebar-recent-session__details .sidebar-session-tool"),
     ).not.toBeNull();
-    sidebar.sessionOrganizer.setSessionsShowPreview(false);
+    setSessionsShowPreview(sidebar.sessionOrganizer, false);
     await sidebar.updateComplete;
     expect(row()?.querySelector(".sidebar-session-tool")).toBeNull();
     expect(row()?.querySelector(".sidebar-recent-session__subtitle")).toBeNull();
@@ -104,7 +105,7 @@ describe("AppSidebar live narration", () => {
       });
       sessions.publishList({ result: sessionsResult([runningRow(key, 5)]), agentId: "main" });
       const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
-      sidebar.sessionOrganizer.setSessionsShowPreview(true);
+      setSessionsShowPreview(sidebar.sessionOrganizer, true);
       sidebar.connected = true;
       await sidebar.updateComplete;
       await acquired.promise;
@@ -150,7 +151,7 @@ describe("AppSidebar live narration", () => {
     const sessions = createSessionsHarness("main", [key]);
     sessions.publishList({ result: sessionsResult([runningRow(key, 5)]), agentId: "main" });
     const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
-    sidebar.sessionOrganizer.setSessionsShowPreview(true);
+    setSessionsShowPreview(sidebar.sessionOrganizer, true);
     sidebar.connected = true;
     await sidebar.updateComplete;
 
@@ -197,7 +198,7 @@ describe("AppSidebar live narration", () => {
     const sessions = createSessionsHarness("main", [key]);
     sessions.publishList({ result: sessionsResult([runningRow(key, 5)]), agentId: "main" });
     const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
-    sidebar.sessionOrganizer.setSessionsShowPreview(true);
+    setSessionsShowPreview(sidebar.sessionOrganizer, true);
     sidebar.connected = true;
     await sidebar.updateComplete;
 
@@ -257,7 +258,7 @@ describe("AppSidebar live narration", () => {
     }));
     sessions.publishList({ result: sessionsResult(rows), agentId: "main" });
     const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
-    sidebar.sessionOrganizer.setSessionsShowPreview(true);
+    setSessionsShowPreview(sidebar.sessionOrganizer, true);
     sidebar.connected = true;
     await sidebar.updateComplete;
 
@@ -297,7 +298,7 @@ describe("AppSidebar live narration", () => {
     const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
     sidebar.activeRouteId = "chat";
     sidebar.sessionKey = openKey;
-    sidebar.sessionOrganizer.setSessionsShowPreview(true);
+    setSessionsShowPreview(sidebar.sessionOrganizer, true);
     sidebar.connected = true;
     await sidebar.updateComplete;
 

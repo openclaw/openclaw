@@ -14,19 +14,9 @@ import {
   type GoogleMeetAttendanceResult,
   type GoogleMeetAttendanceRow,
   type GoogleMeetConferenceRecord,
-  type GoogleMeetParticipant,
-  type GoogleMeetParticipantSession,
   type GoogleMeetSmartNotesListResult,
   type GoogleMeetSpace,
 } from "./meet-api.js";
-
-function getParticipantDisplayName(participant: GoogleMeetParticipant): string | undefined {
-  return (
-    participant.signedinUser?.displayName ??
-    participant.anonymousUser?.displayName ??
-    participant.phoneUser?.displayName
-  );
-}
 
 async function attachDocumentText<T extends { docsDestination?: Record<string, unknown> }>(
   accessToken: string,
@@ -66,46 +56,16 @@ function timestampBound(
   return parsed.length > 0 ? timestampMsToIsoString(bound(...parsed)) : undefined;
 }
 
-function sumSessionDurationMs(
-  sessions: GoogleMeetParticipantSession[],
-  fallbackStart?: string,
-  fallbackEnd?: string,
-): number | undefined {
-  const sessionTotal = sessions.reduce((total, session) => {
-    const startMs = parseGoogleMeetTimestamp(session.startTime);
-    const endMs = parseGoogleMeetTimestamp(session.endTime);
-    return startMs !== undefined && endMs !== undefined && endMs > startMs
-      ? total + (endMs - startMs)
-      : total;
-  }, 0);
-  if (sessionTotal > 0) {
-    return sessionTotal;
-  }
-  const startMs = parseGoogleMeetTimestamp(fallbackStart);
-  const endMs = parseGoogleMeetTimestamp(fallbackEnd);
-  return startMs !== undefined && endMs !== undefined && endMs > startMs
-    ? endMs - startMs
-    : undefined;
-}
-
-function attendanceMergeKey(row: GoogleMeetAttendanceRow): string {
-  return (row.user ?? row.displayName ?? row.participant).trim().toLocaleLowerCase();
-}
-
-function sortSessions(sessions: GoogleMeetParticipantSession[]): GoogleMeetParticipantSession[] {
-  return sessions.toSorted(
-    (left, right) =>
-      (parseGoogleMeetTimestamp(left.startTime) ?? 0) -
-      (parseGoogleMeetTimestamp(right.startTime) ?? 0),
-  );
-}
-
 function decorateAttendanceRow(
   row: GoogleMeetAttendanceRow,
   conferenceRecord: GoogleMeetConferenceRecord,
   params: { lateAfterMinutes?: number; earlyBeforeMinutes?: number },
 ): GoogleMeetAttendanceRow {
-  const sessions = sortSessions(row.sessions);
+  const sessions = row.sessions.toSorted(
+    (left, right) =>
+      (parseGoogleMeetTimestamp(left.startTime) ?? 0) -
+      (parseGoogleMeetTimestamp(right.startTime) ?? 0),
+  );
   const firstJoinTime = timestampBound(
     [row.earliestStartTime, ...sessions.map((session) => session.startTime)],
     Math.min,
@@ -114,11 +74,23 @@ function decorateAttendanceRow(
     [row.latestEndTime, ...sessions.map((session) => session.endTime)],
     Math.max,
   );
-  const durationMs = sumSessionDurationMs(sessions, firstJoinTime, lastLeaveTime);
   const conferenceStartMs = parseGoogleMeetTimestamp(conferenceRecord.startTime);
   const conferenceEndMs = parseGoogleMeetTimestamp(conferenceRecord.endTime);
   const firstJoinMs = parseGoogleMeetTimestamp(firstJoinTime);
   const lastLeaveMs = parseGoogleMeetTimestamp(lastLeaveTime);
+  const sessionTotal = sessions.reduce((total, session) => {
+    const startMs = parseGoogleMeetTimestamp(session.startTime);
+    const endMs = parseGoogleMeetTimestamp(session.endTime);
+    return startMs !== undefined && endMs !== undefined && endMs > startMs
+      ? total + (endMs - startMs)
+      : total;
+  }, 0);
+  const durationMs =
+    sessionTotal > 0
+      ? sessionTotal
+      : firstJoinMs !== undefined && lastLeaveMs !== undefined && lastLeaveMs > firstJoinMs
+        ? lastLeaveMs - firstJoinMs
+        : undefined;
   const lateGraceMs = (params.lateAfterMinutes ?? 5) * 60_000;
   const earlyGraceMs = (params.earlyBeforeMinutes ?? 5) * 60_000;
   const lateByMs =
@@ -174,7 +146,7 @@ function mergeAttendanceRows(
   }
   const grouped = new Map<string, GoogleMeetAttendanceRow>();
   for (const row of rows) {
-    const key = attendanceMergeKey(row);
+    const key = (row.user ?? row.displayName ?? row.participant).trim().toLocaleLowerCase();
     const existing = grouped.get(key);
     if (!existing) {
       grouped.set(key, { ...row, participants: [row.participant] });
@@ -295,7 +267,10 @@ export async function fetchGoogleMeetAttendance(
         participants.map(async (participant) => ({
           conferenceRecord: conferenceRecord.name,
           participant: participant.name,
-          displayName: getParticipantDisplayName(participant),
+          displayName:
+            participant.signedinUser?.displayName ??
+            participant.anonymousUser?.displayName ??
+            participant.phoneUser?.displayName,
           user: participant.signedinUser?.user,
           earliestStartTime: participant.earliestStartTime,
           latestEndTime: participant.latestEndTime,

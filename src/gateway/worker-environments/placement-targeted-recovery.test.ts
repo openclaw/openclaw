@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import * as stateReads from "../../state/openclaw-state-db-readonly.js";
 import { installWorkerPlacementReconcileGuard } from "../server-worker-placement-reconcile-guard.js";
 import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
 import {
@@ -75,6 +76,24 @@ describe("targeted worker placement recovery", () => {
       (_request, run) => run(),
     );
   }
+
+  it("reads one projection per unchanged active placement recovery", async () => {
+    const environmentId = "worker-unchanged";
+    await activateRemote(environmentId);
+    const environments = support.createService(support.createProvider());
+    const dispatch = await createDispatch(environments);
+    const before = await placements.getAsync(REQUEST.sessionId);
+    using reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+
+    for (let sweep = 0; sweep < 3; sweep++) {
+      await dispatch.reconcileActive(environmentId);
+    }
+
+    expect(await placements.getAsync(REQUEST.sessionId)).toEqual(before);
+    expect(
+      reads.mock.calls.filter(([, command]) => command.type === "workers.placementProjection"),
+    ).toHaveLength(3);
+  });
 
   it("does not wait for a sibling provider inspection; full sweeps still inspect and maintain it", async () => {
     const targetId = "worker-target";

@@ -1,10 +1,9 @@
-// Record-key config patches exercise persisted source and suppressed runtime projections.
-import { describe, expect, it } from "vitest";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { expect, it } from "vitest";
 import {
   getCurrentConfigObject,
   installConfigWriteGatewayHooks,
   requireClient,
-  requireConfigObject,
   restoreConfigFileForTest,
   rpcReq,
   sendConfigApply,
@@ -12,103 +11,71 @@ import {
 import { getRuntimeConfig } from "../config/config.js";
 import { configRawPayload } from "./server.config-patch.test-support.js";
 
-describe("gateway config methods", () => {
-  // Channel policy replaces plugin runtime, which global per-case cleanup retires.
-  installConfigWriteGatewayHooks();
+async function apply(config: Record<string, unknown>, hash: string) {
+  const result = await sendConfigApply(configRawPayload(config, hash));
+  expect(result.ok, result.error?.message).toBe(true);
+}
 
-  it("accepts exact numeric record keys in replacePaths", async () => {
-    const original = await getCurrentConfigObject();
-    const channels =
-      original.config.channels &&
-      typeof original.config.channels === "object" &&
-      !Array.isArray(original.config.channels)
-        ? (original.config.channels as Record<string, unknown>)
-        : {};
-    const discord = {
-      ...(channels.discord as Record<string, unknown> | undefined),
-      allowFrom: ["*"],
-      guilds: {
-        "123": {
-          channels: {
-            general: {
-              users: ["111", "222"],
-            },
-          },
-        },
-      },
-    };
-    const seed = await sendConfigApply(
-      configRawPayload({ ...original.config, channels: { ...channels, discord } }, original.hash),
-    );
-    expect(seed.ok, seed.error?.message).toBe(true);
-
-    try {
-      const before = await getCurrentConfigObject();
-      const res = await rpcReq<{ ok?: boolean }>(requireClient(), "config.patch", {
-        raw: JSON.stringify({
-          channels: {
-            discord: {
-              guilds: { "123": { channels: { general: { users: ["111"] } } } },
-            },
-          },
-        }),
-        baseHash: before.hash,
-        replacePaths: ["channels.discord.guilds.123.channels.general.users"],
-      });
-
-      expect(res.ok, res.error?.message).toBe(true);
-      const after = await getCurrentConfigObject();
-      const afterChannels = requireConfigObject(after.config.channels, "channels");
-      expect(
-        (
-          afterChannels.discord as {
-            guilds?: { "123"?: { channels?: { general?: { users?: unknown[] } } } };
-          }
-        ).guilds?.["123"]?.channels?.general?.users,
-      ).toEqual(["111"]);
-      const reapplied = await sendConfigApply(configRawPayload(after.config, after.hash));
-      expect(reapplied.ok, reapplied.error?.message).toBe(true);
-      expect(getRuntimeConfig().channels).toBeUndefined();
-    } finally {
-      await restoreConfigFileForTest(original);
-    }
+async function patch(raw: unknown, replacePath: string) {
+  const before = await getCurrentConfigObject();
+  const result = await rpcReq(requireClient(), "config.patch", {
+    raw: JSON.stringify(raw),
+    baseHash: before.hash,
+    replacePaths: [replacePath],
   });
+  expect(result.ok, result.error?.message).toBe(true);
+  return { before, after: await getCurrentConfigObject() };
+}
 
-  it("allows nested destructive array patches inside id-keyed arrays with replacePaths", async () => {
-    const original = await getCurrentConfigObject();
-    const agents = {
-      ...(original.config.agents as Record<string, unknown> | undefined),
-      ownership: "explicit",
-      entries: {
-        main: { skills: ["alpha", "beta"] },
-        worker: { skills: ["gamma"] },
-      },
-    };
-    const seed = await sendConfigApply(
-      configRawPayload({ ...original.config, agents }, original.hash),
+installConfigWriteGatewayHooks();
+
+it("accepts exact numeric record keys in replacePaths", async () => {
+  const original = await getCurrentConfigObject();
+  const channels = asOptionalRecord(original.config.channels) ?? {};
+  const discord = {
+    ...asOptionalRecord(channels.discord),
+    allowFrom: ["*"],
+    guilds: { "123": { channels: { general: { users: ["111", "222"] } } } },
+  };
+  await apply({ ...original.config, channels: { ...channels, discord } }, original.hash);
+
+  try {
+    const patchedDiscord = { guilds: { "123": { channels: { general: { users: ["111"] } } } } };
+    const { after } = await patch(
+      { channels: { discord: patchedDiscord } },
+      "channels.discord.guilds.123.channels.general.users",
     );
-    expect(seed.ok, seed.error?.message).toBe(true);
+    expect(after.config).toMatchObject({ channels: { discord: patchedDiscord } });
+    await apply(after.config, after.hash);
+    expect(getRuntimeConfig().channels).toBeUndefined();
+  } finally {
+    await restoreConfigFileForTest(original);
+  }
+});
 
-    try {
-      const before = await getCurrentConfigObject();
-      const beforeEntries = (before.config.agents as { entries?: Record<string, unknown> }).entries;
-      const res = await rpcReq<{ ok?: boolean }>(requireClient(), "config.patch", {
-        raw: JSON.stringify({ agents: { entries: { main: { skills: ["alpha"] } } } }),
-        baseHash: before.hash,
-        replacePaths: ["agents.entries.main.skills"],
-      });
+it("allows nested destructive array patches inside id-keyed arrays with replacePaths", async () => {
+  const original = await getCurrentConfigObject();
+  const agents = {
+    ...asOptionalRecord(original.config.agents),
+    ownership: "explicit",
+    entries: {
+      main: { skills: ["alpha", "beta"] },
+      worker: { skills: ["gamma"] },
+    },
+  };
+  await apply({ ...original.config, agents }, original.hash);
 
-      expect(res.ok, res.error?.message).toBe(true);
-      const after = await getCurrentConfigObject();
-      expect((after.config.agents as { entries?: Record<string, unknown> }).entries).toEqual({
-        ...beforeEntries,
-        main: {
-          ...(beforeEntries?.main as Record<string, unknown> | undefined),
-          skills: ["alpha"],
-        },
-      });
-    } finally {
-      await restoreConfigFileForTest(original);
-    }
-  });
+  try {
+    const { before, after } = await patch(
+      { agents: { entries: { main: { skills: ["alpha"] } } } },
+      "agents.entries.main.skills",
+    );
+    const beforeEntries = asOptionalRecord(asOptionalRecord(before.config.agents)?.entries);
+    expect(asOptionalRecord(after.config.agents)?.entries).toEqual({
+      ...beforeEntries,
+      main: { ...asOptionalRecord(beforeEntries?.main), skills: ["alpha"] },
+    });
+  } finally {
+    await restoreConfigFileForTest(original);
+  }
 });

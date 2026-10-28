@@ -1,14 +1,15 @@
 /* @vitest-environment jsdom */
 
-import { createSignal, flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SystemAgentSetupDetectResult } from "../../api/types.ts";
 import { i18n } from "../../i18n/index.ts";
-import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { ConfiguredModel } from "./configured-model.tsx";
 import type { ModelSetupVerifyState } from "./state.ts";
-
-const disposals: (() => void)[] = [];
+import {
+  disposeViews,
+  mount as mountView,
+  props,
+  renderSetup,
+} from "./test-helpers/view.test-support.tsx";
 
 function mount(
   result: SystemAgentSetupDetectResult,
@@ -18,25 +19,11 @@ function mount(
     error: "connect ECONNREFUSED",
   },
 ) {
-  const container = document.createElement("div");
-  document.body.append(container);
   const onVerify = vi.fn();
-  const [currentVerify, setVerify] = createSignal(verify);
-  disposals.push(
-    mountSolid(
-      () =>
-        ConfiguredModel({
-          result,
-          get verify() {
-            return currentVerify();
-          },
-          canVerify: true,
-          actionsDisabled: false,
-          onVerify,
-        }),
-      { container },
-    ).unmount,
-  );
+  const view = props({ page: { phase: "ready", result }, verify, onVerify });
+  const root = mountView(view);
+  const container = root.querySelector<HTMLElement>(".model-setup__current")!;
+  const setVerify = (next: ModelSetupVerifyState) => renderSetup({ ...view, verify: next }, root);
   return { container, onVerify, setVerify };
 }
 
@@ -50,9 +37,7 @@ describe("ConfiguredModel", () => {
   });
 
   afterEach(() => {
-    for (const dispose of disposals.splice(0)) {
-      dispose();
-    }
+    disposeViews();
     document.body.replaceChildren();
   });
 
@@ -148,11 +133,8 @@ describe("ConfiguredModel", () => {
     expect(container.querySelector('[data-provider-icon="ollama"]')).not.toBeNull();
 
     setVerify({ phase: "ok", modelRef: "openai/verified-model", latencyMs: 12 });
-    flush();
 
-    expect(
-      container.querySelector(".model-setup__current")?.getAttribute("data-verify-phase"),
-    ).toBe("ok");
+    expect(container.getAttribute("data-verify-phase")).toBe("ok");
     expect(text(container)).toContain("OpenAI");
     expect(text(container)).toContain("verified-model");
     expect(text(container)).not.toContain("initial-model");

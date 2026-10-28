@@ -61,6 +61,10 @@ export function continueStalledReplyTurn({
   runFollowupTurn: FinalizeReplyAgentRunInput["runFollowupTurn"];
   guidance?: string;
 }): boolean {
+  // A rerun would hit the same saturated quota.
+  if (replyOperation.staleExpiryReason === "rate_limited") {
+    return false;
+  }
   // Preflight can stall before admission persists the request. Transcript-only
   // recovery cannot answer that input; leave its notice with dispatch.
   if (
@@ -134,6 +138,7 @@ type ExecutePreparedReplyAgentRunInput = Omit<
     isRestartRecoveryArmed: () => Promise<boolean>;
     onCompactionNoticePayload: (payload: ReplyPayload) => void;
     preflightCompactionApplied: boolean;
+    recoveryMemoryFlushAttempted?: boolean;
     setRunFollowupTurn: (runner: FinalizeReplyAgentRunInput["runFollowupTurn"]) => void;
     shouldEmitToolOutput: () => boolean;
     shouldEmitToolResult: () => boolean;
@@ -143,8 +148,18 @@ type ExecutePreparedReplyAgentRunInput = Omit<
 export async function executePreparedReplyAgentRun(
   context: ExecutePreparedReplyAgentRunInput,
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
+  const onAgentRunTerminalOutcome = context.opts?.onAgentRunTerminalOutcome;
+  let terminalOutcome: "completed" | "failed" | undefined;
+  const executionOpts = onAgentRunTerminalOutcome
+    ? {
+        ...context.opts,
+        onAgentRunTerminalOutcome: (outcome: "completed" | "failed") => {
+          terminalOutcome = outcome === "failed" ? outcome : (terminalOutcome ?? outcome);
+        },
+      }
+    : context.opts;
   const activitySummaryCompletion =
-    !context.isHeartbeat && context.sessionKey && context.storePath
+    context.sessionKey && context.storePath
       ? getGatewayContextResolver(
           context.replyOperation,
         )?.()?.sessionActivitySummaries?.beginCompletion(
@@ -157,17 +172,26 @@ export async function executePreparedReplyAgentRun(
         )
       : undefined;
   try {
-    return await executePreparedReplyAgentRunWithCompletion({
-      ...context,
-      activitySummaryCompletion,
-    });
+    return await executePreparedReplyAgentRunWithCompletion(
+      { ...context, activitySummaryCompletion },
+      executionOpts,
+    );
+  } catch (error) {
+    if (terminalOutcome !== undefined) {
+      terminalOutcome = "failed";
+    }
+    throw error;
   } finally {
     activitySummaryCompletion?.release();
+    if (terminalOutcome) {
+      onAgentRunTerminalOutcome?.(terminalOutcome);
+    }
   }
 }
 
 async function executePreparedReplyAgentRunWithCompletion(
   context: ExecutePreparedReplyAgentRunInput,
+  executionOpts: ExecutePreparedReplyAgentRunInput["opts"],
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
   const {
     activeSessionStore,
@@ -193,6 +217,7 @@ async function executePreparedReplyAgentRunWithCompletion(
   } = context;
   let activeSessionEntry = getActiveSessionEntry();
 
+  // Queued turns outlive this invocation and must not inherit its terminal buffer.
   const runFollowupTurn = createFollowupRunner({
     resolveGatewayContext: getGatewayContextResolver(replyOperation),
     opts,
@@ -218,8 +243,7 @@ async function executePreparedReplyAgentRunWithCompletion(
   // New input and its recovery claim share admission; otherwise lifecycle start owns the claim.
   await admitFollowupRunLifecycle(followupRun);
   const runWithGoalReturn = createGoalContinuationReturn(
-    !context.isHeartbeat &&
-      sessionKey &&
+    sessionKey &&
       storePath &&
       activeSessionEntry?.goal?.status === "active" &&
       (activeSessionEntry.agentHarnessId === undefined ||
@@ -299,7 +323,7 @@ async function executePreparedReplyAgentRunWithCompletion(
         }
         await checkpointBeforeAgentReply(hookCheckpoint);
         activeSessionEntry = getActiveSessionEntry();
-        return { ...hookResult, reply: hookReply };
+        return hookResult;
       },
     },
     () =>
@@ -308,6 +332,7 @@ async function executePreparedReplyAgentRunWithCompletion(
           runWithGoalReturn(() =>
             executeAgentTurn({
               ...context,
+              opts: executionOpts,
               resolveVisibleReplyDelivery: context.resolveVisibleReplyDelivery,
               replyThreading: replyThreadingOverride ?? sessionCtx.ReplyThreading,
             }),
@@ -356,6 +381,7 @@ async function executePreparedReplyAgentRunWithCompletion(
   const result = await runWithGoalReturn(() =>
     finalizeReplyAgentRun({
       ...context,
+      opts: executionOpts,
       activeSessionEntry,
       preflightCompactionApplied,
       runFollowupTurn,

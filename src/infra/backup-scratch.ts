@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import { getChildLogger } from "../logging/logger.js";
-import { isMissingPathError } from "./errno.js";
+import { ignoreMissingPath, isMissingPathError } from "./errno.js";
 import { formatErrorMessage, hasErrnoCode } from "./errors.js";
 import { root as createRoot, type Root } from "./fs-safe.js";
 import { isSqliteLockError } from "./sqlite-error-diagnostics.js";
@@ -294,12 +294,7 @@ export async function maintainBackupScratch(params: {
           }
           const token = await fs
             .lstat(path.join(directory, SQLITE_STAGING_TOKEN_FILES[0]))
-            .catch((error: unknown) => {
-              if (hasErrnoCode(error, "ENOENT")) {
-                return undefined;
-              }
-              throw error;
-            });
+            .catch(ignoreMissingPath);
           const owned = entry.name.startsWith(ownedPrefix);
           // Live snapshots can remove journals while inspection awaits lstat.
           // Token-backed and newly owned repair inspect after exclusive admission below.

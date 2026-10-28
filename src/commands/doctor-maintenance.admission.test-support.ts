@@ -9,6 +9,7 @@ import {
 } from "../../test/helpers/managed-handoff-isolation.js";
 import { withRuntimePreload } from "../../test/helpers/runtime-preload.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveClientCredentialStorePath } from "../infra/client-credential-paths.js";
 import * as tempRoot from "../infra/tmp-openclaw-dir.js";
 import { resolveManagedUpdateLeaseDatabasePath } from "../infra/update-managed-service-handoff-lease.js";
 import { createUpdateRun } from "../infra/update-run-ledger.js";
@@ -18,7 +19,33 @@ import {
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db-cache.js";
 import { resolveDoctorUpdateAdmission } from "./doctor-maintenance-admission.js";
+import type { DoctorMaintenanceParams } from "./doctor-maintenance-types.js";
+import { beginDoctorMaintenance } from "./doctor-maintenance.js";
 import { useDoctorMaintenanceRuntimeDirectory } from "./doctor-maintenance.test-support.js";
+
+export const doctorMaintenanceTestEnv = {
+  OPENCLAW_HOME: undefined,
+  OPENCLAW_STATE_DIR: undefined,
+  OPENCLAW_CONFIG_PATH: undefined,
+  OPENCLAW_PROFILE: undefined,
+  OPENCLAW_SUPERVISOR_MODE: undefined,
+  OPENCLAW_SERVICE_REPAIR_POLICY: undefined,
+  OPENCLAW_SERVICE_MARKER: undefined,
+  OPENCLAW_SERVICE_KIND: undefined,
+  OPENCLAW_SYSTEMD_UNIT: undefined,
+  OPENCLAW_UPDATE_RUN_ID: undefined,
+  OPENCLAW_UPDATE_IN_PROGRESS: undefined,
+  OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION: undefined,
+};
+
+export function beginDoctorRepair(overrides: Partial<DoctorMaintenanceParams> = {}) {
+  return beginDoctorMaintenance({
+    root: null,
+    options: { repair: true, nonInteractive: true },
+    runtime: { log() {}, error() {}, exit() {} },
+    ...overrides,
+  });
+}
 
 export function setupDoctorAdmissionFixture() {
   const directories = createTempDirTracker();
@@ -162,7 +189,7 @@ export function setupDoctorAdmissionFixture() {
             fs.readFileSync(path.join(root, `sqlite-open-guard-${pid}.json`), "utf8"),
           );
           expect(guarded).toEqual({ pid, entry, databasePath: binding.databasePath });
-          expect(args[marker + 2]).toBe(database);
+          expect([database, resolveClientCredentialStorePath(env)]).toContain(args[marker + 2]);
           // An actual resolver consumer must have its own witness. Explicit-path
           // workers need no fabricated consumer; their native opener is fenced.
           if (records.some((record) => record.phase === "consumer")) {
@@ -184,6 +211,7 @@ export function setupDoctorAdmissionFixture() {
       family,
       admission: admitted.assertCurrent,
       assertIsolation,
+      [Symbol.dispose]: assertIsolation,
       createStateDir: () => directories.make("doctor-admission-replacement-"),
     };
   };

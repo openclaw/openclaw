@@ -1,7 +1,9 @@
 import type { AgentWaitParams } from "../../packages/gateway-protocol/src/index.js";
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import type { RuntimeContextFragment } from "../agents/internal-runtime-context.js";
+import type { ReplyExpectation } from "../agents/reply-completion.js";
 import type { SubagentCompletionToolHandoffRegistration } from "../agents/subagents/announce/subagent-announce-handoff.js";
+import type { SessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayNativeApprovalRuntime } from "../infra/approval-gateway-runtime.types.js";
 import type { ChannelApprovalKind } from "../infra/approval-types.js";
@@ -21,9 +23,13 @@ export type GatewayInstanceAgentDispatchOptions = {
   restartRecoveryOperatorTarget?: import("./operator-run-recovery.js").OperatorRecoveryTarget;
   /** Exact process-local source reserved by a durable lifecycle owner. */
   controllerInput?: SessionControllerInput;
+  /** Host-owned input semantics, never supplied by wire request parameters. */
+  replyExpectation?: ReplyExpectation;
 
   restartRecoveryRequesterTarget?: import("./operator-run-recovery.js").OperatorRecoveryTarget;
   assertAdmissionCurrent?: () => void;
+  /** Live source permission retained by accepted execution, independently of its admission claim. */
+  executionSource?: SessionSourceAssertion;
   /** Refresh source facts immediately before dispatch; the accepted turn owns execution. */
   prepareDispatchCurrent?: () => Promise<void>;
   allowModelOverride?: boolean;
@@ -69,6 +75,19 @@ export type GatewayRecoveryTypingParams = {
 };
 
 export type GatewayRecoveryRuntime = {
+  prepareFailedWorkerPlacement: (target: {
+    sessionId: string;
+    sessionKey: string;
+    agentId: string;
+  }) => Promise<{ reason: string; isCurrent: () => boolean; release: () => void } | undefined>;
+  resumeChatInput: (
+    target: import("./chat-input-recovery-source.js").ChatInputRecoveryTarget,
+    options: {
+      signal: AbortSignal;
+      assertCurrent: () => void;
+      trace?: import("./pending-input-recovery-trace.js").PendingInputRecoveryTrace;
+    },
+  ) => Promise<void>;
   /** Healthy boots are ready synchronously; safe mode returns its owner's pause deadline. */
   prepareRestartRecovery: (signal?: AbortSignal) => Promise<number | undefined> | undefined;
   dispatchSessionMethod: <T = unknown>(

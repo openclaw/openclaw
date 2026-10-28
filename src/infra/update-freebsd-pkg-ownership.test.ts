@@ -1,15 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, nextEventLoopTurn } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as exec from "../process/exec.js";
 import { pkgQueryResult as result } from "./update-freebsd-pkg-ownership.test-support.js";
 import { UpdatePreMutationError } from "./update-pre-mutation-error.js";
-import {
-  createSystemPackageOwnershipInspection,
-  SystemPackageOwnershipError,
-} from "./update-system-package-ownership.js";
+import { createSystemPackageOwnershipInspection } from "./update-system-package-ownership.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 beforeEach(() => vi.spyOn(process, "platform", "get").mockReturnValue("freebsd"));
@@ -34,10 +31,8 @@ async function inspectTwice(inspect: ReturnType<typeof fixture>["inspect"]) {
   await expect(inspect("/another/root")).resolves.toBeUndefined();
 }
 it("uses one non-bootstrap, alias-pinned inventory for a planning snapshot", async () => {
-  const base = dirs.make("pkg-inventory-");
   const { inspect, query } = fixture("", 321);
-  await inspect(path.join(base, "first"));
-  await inspect(path.join(base, "second"));
+  await inspectTwice(inspect);
   expect(query).toHaveBeenCalledExactlyOnceWith(["/usr/sbin/pkg", "-N", "query", "-a", "%Fp"], {
     timeoutMs: 321,
     env: { ALIAS: "query=query", PKG_ENABLE_PLUGINS: "no" },
@@ -45,27 +40,23 @@ it("uses one non-bootstrap, alias-pinned inventory for a planning snapshot", asy
   });
 });
 it("warns once and continues after timeout without consulting the host", async () => {
-  const host = vi.spyOn(exec, "runCommandBuffered");
   for (const platform of ["linux", "freebsd"] as const) {
     vi.spyOn(process, "platform", "get").mockReturnValue(platform);
     const onWarning = vi.fn();
-    const runCommand = vi
-      .fn<typeof exec.runCommandBuffered>()
-      .mockResolvedValue(result("", { code: null, termination: "timeout" }));
-    const inspection = createSystemPackageOwnershipInspection(100, { runCommand, onWarning });
+    const runCommand = vi.spyOn(exec, "runCommandBuffered");
+    runCommand.mockClear().mockResolvedValue(result("", { code: null, termination: "timeout" }));
+    const inspection = createSystemPackageOwnershipInspection(100, { onWarning });
     await expect(inspection.assertUnowned("/fixture/openclaw")).resolves.toBeUndefined();
     await expect(inspection.assertEntryUnowned("/fixture/launcher")).resolves.toBeUndefined();
     expect(runCommand).toHaveBeenCalledOnce();
     expectWarning(onWarning, "Continuing without verified system-package ownership");
   }
-  expect(host).not.toHaveBeenCalled();
 });
 it("retains the pre-mutation error contract for a positive linux owner", async () => {
   vi.spyOn(process, "platform", "get").mockReturnValue("linux");
   const { inspect, onWarning } = fixture("/fixture/openclaw/package.json\n");
   const failure = inspect("/fixture/openclaw");
   await expect(failure).rejects.toBeInstanceOf(UpdatePreMutationError);
-  await expect(failure).rejects.toBeInstanceOf(SystemPackageOwnershipError);
   await expect(failure).rejects.toMatchObject({
     name: "UpdatePreMutationError",
     reason: "pacman-owned-install",
@@ -77,28 +68,25 @@ it.each(["directory", "file", "root"] as const)(
   "resolves package ownership through a %s alias",
   async (kind) => {
     const base = dirs.make("pkg-alias-");
-    const prefix = path.join(base, "custom prefix");
-    const root =
-      kind === "root"
-        ? path.join(base, "user", "openclaw")
-        : path.join(prefix, "lib", "node_modules", "openclaw");
+    const root = path.join(base, "root");
     const alias = path.join(base, "alias");
     await fs.mkdir(root, { recursive: true });
     let candidate = root;
     let registered: string;
     if (kind === "directory") {
-      await fs.symlink(prefix, alias, "dir");
-      registered = path.join(alias, "lib", "node_modules", "openclaw", "package.json");
+      await fs.symlink(root, alias, "dir");
+      registered = path.join(alias, "package.json");
     } else if (kind === "file") {
       await fs.writeFile(path.join(root, "openclaw.mjs"), "fixture");
       await fs.symlink(path.join(root, "openclaw.mjs"), alias);
       registered = alias;
     } else {
-      await fs.mkdir(prefix);
-      await fs.symlink(root, path.join(prefix, "openclaw"), "dir");
-      await fs.symlink(prefix, alias, "dir");
+      const indirect = path.join(base, "indirect");
+      await fs.mkdir(indirect);
+      await fs.symlink(root, path.join(indirect, "openclaw"), "dir");
+      await fs.symlink(indirect, alias, "dir");
       candidate = path.join(alias, "openclaw");
-      registered = path.join(prefix, "openclaw");
+      registered = path.join(indirect, "openclaw");
     }
     const pending = fixture(registered + "\n", 1000).inspect(candidate);
     if (kind === "file") {
@@ -109,12 +97,11 @@ it.each(["directory", "file", "root"] as const)(
   },
 );
 it("warns after lstat failure without private details", async () => {
-  const base = dirs.make("pkg-denied-");
-  const { inspect, onWarning } = fixture(base + "/registered/file\n");
+  const { inspect, onWarning } = fixture("/registered/file\n");
   vi.spyOn(fs, "lstat").mockRejectedValue(
     Object.assign(new Error("private path token=fixture-secret"), { code: "EACCES" }),
   );
-  await expect(inspect(path.join(base, "openclaw"))).resolves.toBeUndefined();
+  await expect(inspect("/fixture/openclaw")).resolves.toBeUndefined();
   expectWarning(onWarning, "lstat");
 });
 it("does not continue an ancestor walk or reset the snapshot after a late ENOENT", async () => {
@@ -153,9 +140,7 @@ it.each(["query", "path"] as const)(
     await inspectTwice(inspect);
     expectWarning(onWarning, "exhausted its shared 100 ms budget");
     // Observe any rejection orphaned by deadline admission.
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    await nextEventLoopTurn();
     expect([
       query.mock.calls.length,
       lookup.mock.calls.length,

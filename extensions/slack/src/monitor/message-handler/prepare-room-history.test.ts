@@ -185,6 +185,33 @@ describe("Slack platform-authoritative automatic room history", () => {
     },
   );
 
+  it("shares the history media budget across direct files, forwarded images and later messages", async () => {
+    const f = fixture();
+    mediaFetchMock.mockImplementation(async () => imageResponse());
+    f.setHistory([
+      { ts: "19.000", user: "U1", text: "later image", files: [imageFile("LATER")] },
+      {
+        ts: "18.000",
+        user: "U1",
+        text: "mixed images",
+        files: [imageFile("DIRECT")],
+        attachments: [
+          { is_share: false, image_url: "https://files.slack.com/ignored.png" },
+          {
+            is_share: true,
+            image_url: "https://files.slack.com/forwarded.png",
+            files: [imageFile("FORWARDED1"), imageFile("FORWARDED2"), imageFile("EXCESS")],
+          },
+        ],
+      },
+    ]);
+
+    const prepared = await f.prepare();
+    expect(mediaFetchMock).toHaveBeenCalledTimes(4);
+    expect(prepared?.InboundHistory?.map((entry) => entry.media?.length ?? 0)).toEqual([4, 0]);
+    expect(prepared?.RawBody).toContain("current request");
+  });
+
   it.each([
     { mode: "allowlist", allowed: false },
     { mode: "allowlist", allowed: true },

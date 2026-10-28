@@ -48,7 +48,8 @@ it(
         executablePath: process.execPath,
         argsPrefix: ["dist/entry.js"],
         cwd: process.cwd(),
-        usePackagedPlugins: true,
+        // Pending-node delivery needs no packaged-install repair.
+        usePackagedPlugins: false,
       },
       transportBaseUrl: "http://127.0.0.1",
       controlUiEnabled: false,
@@ -72,7 +73,7 @@ it(
       },
     });
     const identity = loadOrCreateDeviceIdentity({
-      path: path.join(gateway.tempRoot, "pending-work-node.sqlite"),
+      path: path.join(gateway.tempRoot, "pending-work-node", "client", "credentials.sqlite"),
     });
     const nodeId = identity.deviceId;
     const handlerErrors: Error[] = [];

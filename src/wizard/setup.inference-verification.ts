@@ -328,7 +328,6 @@ export async function offerLiveModelVerification(params: {
                     }
                   : binding.auth,
               stagedOwnerPluginArtifacts: binding,
-              deps: {},
             });
           },
         );

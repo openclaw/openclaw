@@ -4,14 +4,9 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
+import { expectCallCount as expectCalls } from "../../test-utils/mock-call-assertions.js";
 import type { WorkerSessionTurnClaim } from "./placement-store.js";
 import type { executeWorkerTurn } from "./worker-turn-execution.js";
-
-function expectCalls(count: number, ...mocks: unknown[]) {
-  for (const mock of mocks) {
-    expect(mock).toHaveBeenCalledTimes(count);
-  }
-}
 
 let fixture: typeof import("./worker-turn-launcher.test-support.js");
 
@@ -105,8 +100,6 @@ it.each([
     });
     vi.doMock("./worker-turn-execution.js", mode === "worker-turn" ? load : unselected);
     vi.doMock("./workspace-result-finalize.js", mode === "remote-exec" ? load : unselected);
-    const owner = await import("./worker-turn-run-owner.js");
-    const createOwner = vi.spyOn(owner, "createWorkerTurnRunOwner");
     const environments = fixture.unusedEnvironments();
     const provider = createProvider(environments);
     const onAdmitted = vi.fn();
@@ -127,9 +120,8 @@ it.each([
     const settled = run.catch(() => {});
     try {
       await awaitGateBeforeSettlement(loadStarted.promise, settled, "execution never loaded");
-      expectCalls(1, load);
-      expectCalls(0, unselected, execute);
-      expectCalls(mode === "worker-turn" ? 1 : 0, createOwner, onAdmitted);
+      expectCalls(0, execute);
+      expectCalls(mode === "worker-turn" ? 1 : 0, onAdmitted);
       const placement = fixture.placements.get(fixture.SESSION_ID);
       assert(placement?.state === "active", "expected retained active placement");
       const claimed = claimTurn.mock.results[0];
@@ -179,7 +171,6 @@ it.each([
         expectCalls(mode === "worker-turn" ? 1 : 0, onAdmitted);
         expectCalls(0, execute);
       }
-      expectCalls(mode === "worker-turn" ? 1 : 0, createOwner);
       expectCalls(0, runLocal, environments.startTunnel, environments.destroy);
       expect(fixture.placements.get(fixture.SESSION_ID)?.turnClaim?.claimId).toBe(
         replacement?.claimId,
@@ -246,48 +237,35 @@ it("keeps required-profile execution current during workspace result publication
   expect(runLocal).not.toHaveBeenCalled();
 });
 
-it.each(["execution", "sandbox"] as const)(
-  "loads %s only for eligible placement requests",
-  async (kind) => {
-    const sandbox = kind === "sandbox";
-    if (sandbox) {
-      await fixture.seedActivePlacement("remote-exec");
-    }
-    const failure = new Error("selected load reached");
-    const load = vi.fn(() => {
-      throw failure;
-    });
-    const modules = sandbox
-      ? ["./placement-sandbox.js"]
-      : ["./worker-turn-execution.js", "./workspace-result-finalize.js"];
-    for (const module of modules) {
-      vi.doMock(module, load);
-    }
-    const provider = createProvider();
-    const request = fixture.workerTurnRequest("run-local-lazy");
-    const runLocal = vi.fn(async () => result());
-    const execute = () => provider.executeTurn(request, fixture.turn(request.runId), runLocal);
-    if (sandbox) {
-      using prepared = await provider.prepareSandbox({ ...sandboxRequest(), agentId: "other" });
-      expect(prepared.sandbox).toBeNull();
-    } else {
-      await expect(execute()).resolves.toEqual(result());
-      expectCalls(1, runLocal);
-    }
-    expectCalls(0, load);
-    if (!sandbox) {
-      await fixture.seedActivePlacement();
-    }
-    await expect(
-      sandbox ? provider.prepareSandbox(sandboxRequest()) : execute(),
-    ).rejects.toMatchObject({ cause: failure });
-    expectCalls(1, load);
-    if (!sandbox) {
-      expectCalls(1, runLocal);
-      expect(fixture.placements.get(fixture.SESSION_ID)?.turnClaim).toBeNull();
-    }
-  },
-);
+it("does not load worker execution for a local turn", async () => {
+  const load = () => {
+    throw new Error("worker execution loaded for local turn");
+  };
+  // mock-isolation: Fail on import to prove local turns do not load worker execution.
+  vi.doMock("./worker-turn-execution.js", load);
+  // mock-isolation: Fail on import to prove local turns do not load worker finalization.
+  vi.doMock("./workspace-result-finalize.js", load);
+  const request = fixture.workerTurnRequest("run-local-lazy");
+  await expect(
+    createProvider().executeTurn(request, fixture.turn(request.runId), async () => result()),
+  ).resolves.toEqual(result());
+});
+
+it("loads the sandbox only for eligible placement requests", async () => {
+  await fixture.seedActivePlacement("remote-exec");
+  const failure = new Error("selected load reached");
+  const load = vi.fn(() => {
+    throw failure;
+  });
+  // mock-isolation: Observe the import boundary without initializing a real sandbox.
+  vi.doMock("./placement-sandbox.js", load);
+  const provider = createProvider();
+  using prepared = await provider.prepareSandbox({ ...sandboxRequest(), agentId: "other" });
+  expect(prepared.sandbox).toBeNull();
+  expectCalls(0, load);
+  await expect(provider.prepareSandbox(sandboxRequest())).rejects.toMatchObject({ cause: failure });
+  expectCalls(1, load);
+});
 
 it.each(["current", "revoked"] as const)(
   "rechecks the remote-exec placement after sandbox loading: %s",

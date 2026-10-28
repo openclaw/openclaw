@@ -16,6 +16,7 @@ import {
 } from "../../model-selection.js";
 import { resolveThinkingDefault } from "../../model-thinking-default.js";
 import { OPENAI_PROVIDER_ID } from "../../openai-routing.js";
+import type { PreparedModelRuntimeInput } from "../../prepared-model-runtime.types.js";
 import type { AgentRuntimePlan } from "../../runtime-plan/types.js";
 import type { RunEmbeddedAgentParamsWithSessionFile } from "./internal-params.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
@@ -23,6 +24,23 @@ import type { RunEmbeddedAgentParams } from "./params.js";
 export const CODEX_HARNESS_ID = "codex";
 const OPENAI_RESPONSES_API = "openai-responses";
 const OPENAI_CODEX_RESPONSES_API = "openai-chatgpt-responses";
+
+export function resolveEmbeddedRuntimePluginPreparation(
+  run: RunEmbeddedAgentParamsWithSessionFile,
+): Pick<PreparedModelRuntimeInput, "loadRuntimePlugins" | "runtimePluginPurpose"> {
+  if (run.preparedModelRuntimeMode !== "isolated-read-only") {
+    return {};
+  }
+  // Prompt-only probes need only their selected inference owners.
+  return {
+    loadRuntimePlugins: true,
+    ...(run.sessionPersistence === "detached" &&
+    run.disableTools === true &&
+    (run.modelRun === true || run.promptMode === "none")
+      ? { runtimePluginPurpose: "isolated-completion" }
+      : {}),
+  };
+}
 
 export function resolveEmbeddedRuntimePluginSelections(input: {
   run: RunEmbeddedAgentParamsWithSessionFile;

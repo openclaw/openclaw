@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { createServer as createHttpServer } from "node:http";
 import { createServer } from "node:https";
 import type { LookupFunction, Server } from "node:net";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import {
   redactProviderResponseErrorText,
   resolveProviderHttpRequestConfigWithOriginTrust,
@@ -16,8 +15,14 @@ import {
 } from "openclaw/plugin-sdk/test-env";
 import { Agent, EnvHttpProxyAgent, ProxyAgent, fetch as undiciFetch } from "undici";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
-import plugin from "../index.js";
-import type { ModelProviderConfig } from "./config.js";
+import type { RuntimeConfig } from "./config.js";
+import {
+  collectRequest,
+  decisionContext,
+  registeredDecisionProvider,
+  scoreAnswer,
+  stubAmbientProxies,
+} from "./transport.test-support.js";
 
 vi.mock("openclaw/plugin-sdk/secret-input-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/secret-input-runtime")>()),
@@ -61,13 +66,15 @@ async function listen<T extends Server>(listener: T) {
   });
   return {
     listener,
-    claim,
-    releaseListener: () =>
-      new Promise<void>((resolve, reject) => {
-        listener.close((error) => (error ? reject(error) : resolve()));
-      }),
+    port: claim.port,
+    async close() {
+      await listener[Symbol.asyncDispose]();
+      await claim.release();
+    },
   };
 }
+
+type ModelProviderConfig = NonNullable<RuntimeConfig["providerConfig"]>;
 
 const batch = {
   state: { evidence: "Synthetic outage" },
@@ -86,9 +93,7 @@ const received: Array<{
   body: unknown;
 }> = [];
 let redirect: string | undefined;
-let responseModel: string | undefined;
-let escapeResponse = false;
-let responsePayload: object | undefined;
+let responsePayload: string;
 let fixture: Awaited<ReturnType<typeof listen<ReturnType<typeof createServer>>>>;
 let baseUrl: string;
 let pinnedAddress = "10.123.0.5";
@@ -98,33 +103,24 @@ beforeAll(async () => {
     createServer(
       { key: PROXY_FIXTURE_KEY, cert: PROXY_FIXTURE_CERTIFICATE },
       (request, response) => {
-        const chunks: Buffer[] = [];
-        request.on("data", (chunk: Buffer) => chunks.push(chunk));
-        request.on("end", () => {
-          received.push({
-            url: request.url,
-            host: request.headers.host,
-            authorization: request.headers.authorization,
-            apiKey: request.headers["x-api-key"],
-            body: JSON.parse(Buffer.concat(chunks).toString("utf8")),
-          });
+        collectRequest(request, (body) => {
+          const {
+            url,
+            headers: { host, authorization, "x-api-key": apiKey },
+          } = request;
+          received.push({ url, host, authorization, apiKey, body: JSON.parse(body) });
           if (redirect) {
             response.writeHead(302, { location: redirect });
             response.end();
           } else {
             response.setHeader("content-type", "application/json");
-            const body = JSON.stringify(
-              responsePayload ?? { ...answer, model: responseModel ?? answer.model },
-            );
-            response.end(
-              escapeResponse ? body.replaceAll("-", String.fromCharCode(92) + "u002d") : body,
-            );
+            response.end(responsePayload);
           }
         });
       },
     ),
   );
-  baseUrl = `https://files.proxy.test:${fixture.claim.port}`;
+  baseUrl = `https://files.proxy.test:${fixture.port}`;
   // Network proof starts after host-policy/loader initialization, as on a running
   // Gateway. Cold import and deadline admission have separate registration.lazy tests.
   await import("./client.js");
@@ -135,19 +131,13 @@ beforeAll(async () => {
   });
   redactProviderResponseErrorText("{}", {});
 });
-afterAll(async () => {
-  await fixture.releaseListener();
-  await fixture.claim.release();
-});
+afterAll(() => fixture.close());
 beforeEach(() => {
   received.length = 0;
   redirect = undefined;
-  responseModel = undefined;
-  escapeResponse = false;
-  responsePayload = undefined;
+  responsePayload = JSON.stringify(answer);
   pinnedAddress = "10.123.0.5";
-  vi.mocked(lookup).mockReset();
-  vi.mocked(lookup).mockResolvedValue([{ address: "10.123.0.5", family: 4 }]);
+  lookup.mockReset().mockResolvedValue([{ address: pinnedAddress, family: 4 }]);
   vi.stubGlobal("__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__", {
     Agent: FixtureAgent,
     EnvHttpProxyAgent,
@@ -159,20 +149,8 @@ beforeEach(() => {
     revision: 1,
     value: "synthetic-hosted-key",
   });
-  for (const key of [
-    "HTTP_PROXY",
-    "HTTPS_PROXY",
-    "ALL_PROXY",
-    "http_proxy",
-    "https_proxy",
-    "all_proxy",
-  ]) {
-    vi.stubEnv(key, "http://127.0.0.1:1");
-  }
-  vi.stubEnv("NO_PROXY", "");
-  vi.stubEnv("no_proxy", "");
+  stubAmbientProxies();
   vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "0");
-  vi.stubEnv("OPENCLAW_DEBUG_PROXY_ENABLED", "false");
 });
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -181,40 +159,17 @@ afterEach(() => {
 });
 
 function provider(source: ModelProviderConfig | (() => ModelProviderConfig)) {
-  const registerDecisionProvider = vi.fn<OpenClawPluginApi["registerDecisionProvider"]>();
-  plugin.register({
-    runtime: {
-      config: {
-        current: () => ({
-          models: { providers: { typesafe: typeof source === "function" ? source() : source } },
-          plugins: {
-            entries: {
-              typesafe: {
-                config: {
-                  get apiKey(): never {
-                    throw new Error("hosted key read");
-                  },
-                },
-              },
-            },
-          },
-        }),
-      },
+  const config = {
+    get apiKey(): never {
+      throw new Error("hosted key read");
     },
-    registerDecisionProvider,
-  } as unknown as OpenClawPluginApi);
-  const registered = registerDecisionProvider.mock.calls[0]?.[0];
-  assert(registered);
-  if (registered.contractVersion !== 1) {
-    throw new Error("TypeSafe fixture registered an unexpected decision contract");
-  }
-  return registered;
+  };
+  return registeredDecisionProvider(() => ({
+    models: { providers: { typesafe: typeof source === "function" ? source() : source } },
+    plugins: { entries: { typesafe: { config } } },
+  }));
 }
-const context = () => ({
-  model: "nemotron-deciffusion",
-  signal: new AbortController().signal,
-  deadlineMonotonicMs: performance.now() + 3000,
-});
+const context = () => decisionContext("nemotron-deciffusion", 3000);
 const endpointRef = {
   source: "store",
   provider: "default",
@@ -226,108 +181,89 @@ const settings = (overrides: Partial<ModelProviderConfig> = {}): ModelProviderCo
   request: { tls: { ca: PROXY_FIXTURE_CERTIFICATE } },
   ...overrides,
 });
+const evaluate = (overrides: Partial<ModelProviderConfig> = {}) =>
+  provider(settings(overrides)).evaluate(batch, context());
+async function expectUnavailable(
+  pending: ReturnType<typeof evaluate>,
+  reason = "transport",
+  requests = 0,
+) {
+  await expect(pending).resolves.toEqual({ status: "unavailable", reason });
+  expect(received).toHaveLength(requests);
+}
+const tls = { ca: PROXY_FIXTURE_CERTIFICATE };
+const bearer = (token: string) => ({ mode: "authorization-bearer" as const, token });
+const header = (value: string) => ({
+  mode: "header" as const,
+  headerName: "X-Server-Key",
+  value,
+  prefix: "Token ",
+});
 
-it.each([false, true])(
-  "uses models.providers.typesafe for private HTTPS with apiKey=%s",
-  async (auth) => {
-    const registered = provider(settings(auth ? { apiKey: "synthetic-server-key" } : {}));
-    expect(registered.isReady?.()).toBe(true);
-    await expect(registered.evaluate(batch, context())).resolves.toMatchObject({
-      status: "ok",
-      result: {
+const replacement = "replacement";
+const override = "Bearer override";
+const headerAuth = { mode: "header" as const, headerName: "X-API-Key", value: replacement };
+const staleHeaders = { authorization: "Bearer stale", "x-api-key": "stale" };
+const overrideRequest = (request: ModelProviderConfig["request"]) => ({
+  apiKey: "synthetic-default",
+  headers: staleHeaders,
+  request: { tls, ...request },
+});
+it.each<[string, Partial<ModelProviderConfig>, string | undefined, string | undefined]>([
+  ["anonymous", {}, undefined, undefined],
+  ["api key", { apiKey: "synthetic-server-key" }, "Bearer synthetic-server-key", undefined],
+  ["bearer", overrideRequest({ auth: bearer("override") }), override, "stale"],
+  ["header", overrideRequest({ auth: headerAuth }), undefined, replacement],
+  [
+    "headers",
+    overrideRequest({ headers: { Authorization: override, "X-API-Key": replacement } }),
+    override,
+    replacement,
+  ],
+])("uses private HTTPS with %s credentials", async (mode, config, authorization, apiKey) => {
+  const registered = provider(
+    settings({
+      ...config,
+      ...(mode === "bearer" ? { baseUrl: baseUrl + "/v1/" } : {}),
+    }),
+  );
+  expect(registered.isReady?.()).toBe(true);
+  await expect(registered.evaluate(batch, context())).resolves.toMatchObject({
+    status: "ok",
+    result: {
+      model: "nemotron-deciffusion",
+      answers: { q: { type: "boolean", probabilityTrue: 0.75 } },
+    },
+  });
+  expect(received).toEqual([
+    {
+      url: "/v1/systemone",
+      host: new URL(baseUrl).host,
+      authorization,
+      apiKey,
+      body: {
+        ...batch,
         model: "nemotron-deciffusion",
-        answers: { q: { type: "boolean", probabilityTrue: 0.75 } },
+        questions: { q: { type: "noul", instructions: null } },
       },
-    });
-    expect(received).toEqual([
-      {
-        url: "/v1/systemone",
-        host: new URL(baseUrl).host,
-        authorization: auth ? "Bearer synthetic-server-key" : undefined,
-        body: {
-          ...batch,
-          model: "nemotron-deciffusion",
-          questions: { q: { type: "noul", instructions: null } },
-        },
-      },
-    ]);
-    expect(lookup).toHaveBeenCalled();
-    expect(lookup.mock.calls.every(([host]) => host === "files.proxy.test")).toBe(true);
-    expect(getPreparedPluginSecretInput).not.toHaveBeenCalled();
-  },
-);
+    },
+  ]);
+  expect([...new Set(lookup.mock.calls.map(([host]) => host))]).toEqual(["files.proxy.test"]);
+  expect(getPreparedPluginSecretInput).not.toHaveBeenCalled();
+});
 
-it("uses the common private-network opt-out and explicit opt-in", async () => {
-  const tls = { ca: PROXY_FIXTURE_CERTIFICATE };
-  await expect(
-    provider(settings({ request: { allowPrivateNetwork: false, tls } })).evaluate(batch, context()),
-  ).resolves.toEqual({ status: "unavailable", reason: "transport" });
-  expect(received).toHaveLength(0);
+it("honors private-network opt-out and opt-in", async () => {
+  await expectUnavailable(evaluate({ request: { allowPrivateNetwork: false, tls } }));
   pinnedAddress = "127.0.0.1";
   lookup.mockResolvedValue([{ address: pinnedAddress, family: 4 }]);
-  await expect(
-    provider(settings({ request: { allowPrivateNetwork: true, tls } })).evaluate(batch, context()),
-  ).resolves.toMatchObject({ status: "ok" });
-  expect(received).toHaveLength(1);
-});
-
-it("applies the shared bearer override and /v1 base URL without duplicating paths", async () => {
-  await expect(
-    provider(
-      settings({
-        baseUrl: baseUrl + "/v1/",
-        apiKey: "synthetic-key",
-        headers: { authorization: "Bearer synthetic-stale" },
-        request: {
-          tls: { ca: PROXY_FIXTURE_CERTIFICATE },
-          auth: { mode: "authorization-bearer", token: "synthetic-override" },
-        },
-      }),
-    ).evaluate(batch, context()),
-  ).resolves.toMatchObject({ status: "ok" });
-  expect(received).toHaveLength(1);
-  expect(received[0]).toMatchObject({
-    url: "/v1/systemone",
-    authorization: "Bearer synthetic-override",
+  await expect(evaluate({ request: { allowPrivateNetwork: true, tls } })).resolves.toMatchObject({
+    status: "ok",
   });
+  expect(received).toHaveLength(1);
 });
-
-it.each(["header-auth", "request-headers"] as const)(
-  "applies %s after provider header defaults",
-  async (mode) => {
-    const tls = { ca: PROXY_FIXTURE_CERTIFICATE };
-    const request: NonNullable<ModelProviderConfig["request"]> =
-      mode === "header-auth"
-        ? { tls, auth: { mode: "header", headerName: "X-API-Key", value: "synthetic-replacement" } }
-        : {
-            tls,
-            headers: {
-              Authorization: "Bearer synthetic-override",
-              "X-API-Key": "synthetic-replacement",
-            },
-          };
-    await expect(
-      provider(
-        settings({
-          apiKey: "synthetic-default",
-          headers: {
-            authorization: "Bearer synthetic-stale",
-            "x-api-key": "synthetic-stale-header",
-          },
-          request,
-        }),
-      ).evaluate(batch, context()),
-    ).resolves.toMatchObject({ status: "ok" });
-    expect(received).toHaveLength(1);
-    expect(received[0]?.authorization).toBe(
-      mode === "header-auth" ? undefined : "Bearer synthetic-override",
-    );
-    expect(received[0]?.apiKey).toBe("synthetic-replacement");
-  },
-);
 
 it.each(["untrusted certificate", "hostname mismatch", "insecure override"])(
-  "preserves shared TLS verification: %s",
+  "enforces TLS verification: %s",
   async (failure) => {
     const config = settings(
       failure === "hostname mismatch"
@@ -345,39 +281,30 @@ it.each(["https://api.typesafe.ai/v1/systemone", "https://other.proxy.test/sink"
   "never follows a redirect to %s",
   async (target) => {
     redirect = target;
-    await expect(
-      provider(settings({ apiKey: "synthetic-server-key" })).evaluate(batch, context()),
-    ).resolves.toEqual({ status: "unavailable", reason: "transport" });
-    expect(received).toHaveLength(1);
+    await expectUnavailable(evaluate({ apiKey: "synthetic-server-key" }), "transport", 1);
     expect(received[0]?.host).toBe(new URL(baseUrl).host);
   },
 );
 
-it.each(["origin", "policy", "credential", "credential loss"])(
-  "rechecks current provider %s after DNS before dispatch",
-  async (change) => {
+it.each([
+  ["origin", { baseUrl: "https://other.proxy.test" }],
+  ["policy", { request: { allowPrivateNetwork: false } }],
+  ["credential", { apiKey: "synthetic-rotated" }],
+  ["credential loss", { apiKey: endpointRef }],
+] satisfies [string, Partial<ModelProviderConfig>][])(
+  "rechecks provider %s after DNS",
+  async (_change, update) => {
     let config = settings({ apiKey: "synthetic-server-key" });
     const registered = provider(() => config);
     lookup.mockImplementationOnce(async () => {
-      config = {
-        ...config,
-        ...(change === "origin"
-          ? { baseUrl: "https://other.proxy.test" }
-          : change === "policy"
-            ? { request: { allowPrivateNetwork: false } }
-            : { apiKey: change === "credential" ? "synthetic-rotated" : endpointRef }),
-      };
+      config = { ...config, ...update };
       return [{ address: pinnedAddress, family: 4 }];
     });
-    await expect(registered.evaluate(batch, context())).resolves.toEqual({
-      status: "unavailable",
-      reason: "transport",
-    });
-    expect(received).toHaveLength(0);
+    await expectUnavailable(registered.evaluate(batch, context()));
   },
 );
 
-it("honors an explicit managed proxy rather than bypassing its refusal", async () => {
+it("never bypasses a managed proxy refusal", async () => {
   const connects: string[] = [];
   const proxy = await listen(createHttpServer());
   proxy.listener.on("connect", (request, socket) => {
@@ -385,22 +312,18 @@ it("honors an explicit managed proxy rather than bypassing its refusal", async (
     socket.end("HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n");
   });
   try {
-    const url = "http://127.0.0.1:" + proxy.claim.port;
+    const url = "http://127.0.0.1:" + proxy.port;
     vi.stubEnv("HTTPS_PROXY", url);
     vi.stubEnv("https_proxy", url);
     vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "1");
-    await expect(
-      provider(settings({ apiKey: "synthetic-server-key" })).evaluate(batch, context()),
-    ).resolves.toEqual({ status: "unavailable", reason: "transport" });
+    await expectUnavailable(evaluate({ apiKey: "synthetic-server-key" }));
     expect(connects).toEqual([new URL(baseUrl).host]);
-    expect(received).toHaveLength(0);
   } finally {
-    await proxy.releaseListener();
-    await proxy.claim.release();
+    await proxy.close();
   }
 });
 
-it("fails cold for unavailable provider secrets and observes rotation and recovery", async () => {
+it("observes provider credential loss, rotation and recovery", async () => {
   let config = settings({ apiKey: endpointRef });
   const registered = provider(() => config);
   for (const key of [
@@ -426,102 +349,59 @@ it("fails cold for unavailable provider secrets and observes rotation and recove
   expect(getPreparedPluginSecretInput).not.toHaveBeenCalled();
 });
 
-it.each<ModelProviderConfig>([
-  { baseUrl: "https://files.proxy.test", models: [], headers: { Authorization: endpointRef } },
-  {
-    baseUrl: "https://files.proxy.test",
-    models: [],
-    request: { auth: { mode: "authorization-bearer", token: endpointRef } },
-  },
-])("fails closed for unresolved configured headers/request auth", async (config) => {
-  await expect(
-    provider(settings({ ...config, baseUrl })).evaluate(batch, context()),
-  ).resolves.toEqual({ status: "unavailable", reason: "credentials-unavailable" });
-  expect(received).toHaveLength(0);
+it.each<Partial<ModelProviderConfig>>([
+  { headers: { Authorization: endpointRef } },
+  { request: { auth: { mode: "authorization-bearer", token: endpointRef } } },
+])("rejects unresolved headers/request auth", async (config) => {
+  await expectUnavailable(evaluate(config), "credentials-unavailable");
   expect(lookup).not.toHaveBeenCalled();
 });
 
 it.each(["127.0.0.1", "169.254.169.254", "0.0.0.0"])(
-  "retains the common unsafe DNS restriction for %s",
+  "rejects unsafe DNS answer %s",
   async (address) => {
     lookup.mockResolvedValue([{ address, family: 4 }]);
-    await expect(provider(settings()).evaluate(batch, context())).resolves.toEqual({
-      status: "unavailable",
-      reason: "transport",
-    });
-    expect(received).toHaveLength(0);
+    await expectUnavailable(evaluate());
+  },
+);
+
+const reflected = "synthetic-request-token";
+const reflectedHeaders = { "X-API-Key": reflected };
+const bearerRequest = { request: { tls, auth: bearer(reflected) } };
+const headerRequest = { request: { tls, auth: header(reflected) } };
+it.each([
+  ["bearer", bearerRequest, false],
+  ["header", headerRequest, false],
+  ["escaped bearer", bearerRequest, true],
+  ["escaped header", headerRequest, true],
+  ["provider headers", { headers: reflectedHeaders }, true],
+  ["request headers", { request: { tls, headers: reflectedHeaders } }, true],
+] satisfies [string, Partial<ModelProviderConfig>, boolean][])(
+  "rejects reflected %s credentials",
+  async (name, config, escaped) => {
+    responsePayload = JSON.stringify({ ...answer, model: reflected });
+    if (escaped) {
+      responsePayload = responsePayload.replaceAll("-", "\\u002d");
+    }
+    const result = await evaluate(config);
+    expect(result).toEqual({ status: "unavailable", reason: "invalid-response" });
+    expect(JSON.stringify(result)).not.toContain(reflected);
+    if (name.endsWith("headers")) {
+      expect(received).toHaveLength(1);
+      expect(received[0]?.apiKey).toBe(reflected);
+    }
   },
 );
 
 it.each(["authorization-bearer", "header"] as const)(
-  "rejects reflected shared %s credentials without returning them",
-  async (mode) => {
-    responseModel = "synthetic-request-token";
-    const result = await provider(
-      settings({
-        request: {
-          tls: { ca: PROXY_FIXTURE_CERTIFICATE },
-          auth:
-            mode === "authorization-bearer"
-              ? { mode, token: responseModel }
-              : { mode, headerName: "X-Server-Key", value: responseModel, prefix: "Token " },
-        },
-      }),
-    ).evaluate(batch, context());
-    expect(result).toEqual({ status: "unavailable", reason: "invalid-response" });
-    expect(JSON.stringify(result)).not.toContain(responseModel);
-  },
-);
-
-it.each(["provider", "request"] as const)(
-  "rejects credentials reflected from configured %s headers",
-  async (owner) => {
-    responseModel = "synthetic-configured-header-key";
-    escapeResponse = true;
-    const headers = { "X-API-Key": responseModel };
-    const result = await provider(
-      settings(
-        owner === "provider"
-          ? { headers }
-          : { request: { tls: { ca: PROXY_FIXTURE_CERTIFICATE }, headers } },
-      ),
-    ).evaluate(batch, context());
-    expect(received).toHaveLength(1);
-    expect(received[0]?.apiKey).toBe(responseModel);
-    expect(result).toEqual({ status: "unavailable", reason: "invalid-response" });
-    expect(JSON.stringify(result)).not.toContain(responseModel);
-  },
-);
-
-it.each(["authorization-bearer", "header"] as const)(
-  "fails closed instead of sending anonymous requests for empty %s auth",
+  "rejects empty %s auth before DNS",
   async (mode) => {
     const auth =
       mode === "authorization-bearer"
-        ? { mode, token: "" }
+        ? bearer("")
         : { mode, headerName: "X-Server-Key", value: "" };
-    await expect(
-      provider(settings({ request: { auth } })).evaluate(batch, context()),
-    ).resolves.toEqual({ status: "unavailable", reason: "credentials-unavailable" });
-    expect(received).toHaveLength(0);
+    await expectUnavailable(evaluate({ request: { auth } }), "credentials-unavailable");
     expect(lookup).not.toHaveBeenCalled();
-  },
-);
-
-it.each(["authorization-bearer", "header"] as const)(
-  "rejects JSON-escaped reflected %s credentials after decoding",
-  async (mode) => {
-    responseModel = "synthetic-request-token";
-    escapeResponse = true;
-    const auth =
-      mode === "authorization-bearer"
-        ? { mode, token: responseModel }
-        : { mode, headerName: "X-Server-Key", value: responseModel, prefix: "Token " };
-    const result = await provider(
-      settings({ request: { tls: { ca: PROXY_FIXTURE_CERTIFICATE }, auth } }),
-    ).evaluate(batch, context());
-    expect(result).toEqual({ status: "unavailable", reason: "invalid-response" });
-    expect(JSON.stringify(result)).not.toContain(responseModel);
   },
 );
 
@@ -532,19 +412,12 @@ it.each([false, true])(
       state: "synthetic",
       questions: { q: { type: "score" as const, criteria: ["Bearer demo", "Routine"] } },
     };
-    responsePayload = {
-      model: "nemotron-deciffusion",
+    responsePayload = JSON.stringify({
+      ...answer,
       answers: {
-        q: {
-          type: "score",
-          score: 0,
-          confidence: 1,
-          probabilities: { 0: 1, 1: 0 },
-          legend: { 0: "Bearer demo", 1: "Routine" },
-        },
+        q: scoreAnswer(0, { 0: 1, 1: 0 }, { 0: "Bearer demo", 1: "Routine" }, 1),
       },
-      usage: { input_tokens: 8, output_tokens: 1 },
-    };
+    });
     const result = await provider(
       settings(authenticated ? { apiKey: "synthetic-server-key" } : {}),
     ).evaluate(score, context());

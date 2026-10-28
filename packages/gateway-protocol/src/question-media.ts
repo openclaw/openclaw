@@ -1,5 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { QuestionResourcePreview, QuestionResourceInput } from "./schema/questions.js";
+import type { QuestionResourcePreview } from "./schema/questions.js";
 
 /** Images are rendered by clients, never fetched by the Gateway. */
 export function isQuestionThumbnail(value: unknown): value is string {
@@ -57,45 +57,5 @@ export function readQuestionResourcePreview(value: unknown): QuestionResourcePre
     ...(typeof value.title === "string" ? { title: value.title } : {}),
     ...(typeof value.description === "string" ? { description: value.description } : {}),
     ...(typeof value.mimeType === "string" ? { mimeType: value.mimeType } : {}),
-  };
-}
-
-export function readQuestionResourceInput(value: unknown): QuestionResourceInput | undefined {
-  if (
-    !isRecord(value) ||
-    (value.viewId !== undefined &&
-      (typeof value.viewId !== "string" || !value.viewId || value.viewId.length > 128)) ||
-    (value.selection !== "explicit" && value.selection !== "implicit")
-  ) {
-    return undefined;
-  }
-  let userOptions: QuestionResourceInput["userOptions"];
-  if (value.userOptions !== undefined) {
-    if (
-      !isRecord(value.userOptions) ||
-      (value.userOptions.kind !== "file" && value.userOptions.kind !== "directory")
-    ) {
-      return undefined;
-    }
-    const accept = value.userOptions.accept;
-    if (
-      accept !== undefined &&
-      (!Array.isArray(accept) ||
-        accept.length > 32 ||
-        !accept.every((entry): entry is string => typeof entry === "string" && entry.length <= 128))
-    ) {
-      return undefined;
-    }
-    userOptions = {
-      kind: value.userOptions.kind,
-      ...(Array.isArray(accept)
-        ? { accept: accept.filter((entry): entry is string => typeof entry === "string") }
-        : {}),
-    };
-  }
-  return {
-    ...(typeof value.viewId === "string" ? { viewId: value.viewId } : {}),
-    selection: value.selection,
-    ...(userOptions ? { userOptions } : {}),
   };
 }

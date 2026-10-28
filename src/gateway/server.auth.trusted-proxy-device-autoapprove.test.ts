@@ -29,7 +29,13 @@ import { loggingState } from "../logging/state.js";
 import { resolveGatewayClientPlatformIdentity } from "../shared/gateway-client-platform.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { useAuthIdentityFixture } from "./server.auth.identity-fixture.test-support.js";
-import { CONTROL_UI_CLIENT, NODE_CLIENT } from "./server.auth.test-helpers.js";
+import {
+  BROWSER_ORIGIN,
+  TRUSTED_BROWSER_HEADERS,
+  CONTROL_UI_CLIENT,
+  NODE_CLIENT,
+  openWs,
+} from "./server.auth.test-helpers.js";
 import {
   connectReq,
   createGatewaySuiteHarness,
@@ -37,7 +43,6 @@ import {
   onceMessage,
   readConnectChallengeNonce,
   testState,
-  trackConnectChallengeNonce,
   withGatewayServer,
 } from "./test-helpers.js";
 
@@ -83,20 +88,19 @@ async function closeSharedProxyGateway(): Promise<void> {
   }
 }
 
-async function withSharedProxyGateway<T>(run: (context: { port: number }) => Promise<T>) {
+async function sharedProxyPort() {
   // Authentication is fixed; each handshake reads the case's current auto-approval policy.
   sharedProxyGateway ??= await createGatewaySuiteHarness();
-  return await run(sharedProxyGateway);
+  return sharedProxyGateway.port;
 }
 
 async function connectSharedUi(
   identityPath: string,
   params: Omit<Parameters<typeof connectOperatorUi>[0], "port" | "identityPath"> = {},
 ) {
-  return withSharedProxyGateway(({ port }) => connectOperatorUi({ port, identityPath, ...params }));
+  return connectOperatorUi({ port: await sharedProxyPort(), identityPath, ...params });
 }
 
-const BROWSER_ORIGIN = "https://control.example.com";
 const READ = ["operator.read"];
 const READ_WRITE = [...READ, "operator.write"];
 const WITH_APPROVALS = [...READ_WRITE, "operator.approvals"];
@@ -107,9 +111,7 @@ const NATIVE_UI_CLIENT = {
   version: "1.0.0",
 } satisfies ConnectParams["client"];
 const TRUSTED_PROXY_HEADERS = {
-  origin: BROWSER_ORIGIN,
-  "x-forwarded-for": "203.0.113.50",
-  "x-forwarded-proto": "https",
+  ...TRUSTED_BROWSER_HEADERS,
   "x-forwarded-user": "operator@example.com",
 };
 
@@ -122,16 +124,6 @@ function trustedProxyHeaders(declaredScopes?: string): Record<string, string> {
 
 function deviceIdentityPath(label: string): string {
   return makeIdentityPath(`openclaw-${label}-${randomUUID()}.sqlite`);
-}
-
-async function openBrowserWs(port: number, headers: Record<string, string>): Promise<WebSocket> {
-  const ws = new WebSocket(`ws://127.0.0.1:${port}`, { headers });
-  clientSockets.add(ws);
-  trackConnectChallengeNonce(ws);
-  await new Promise<void>((resolve) => {
-    ws.once("open", () => resolve());
-  });
-  return ws;
 }
 
 async function writeGatewayAuthConfig(params: {
@@ -171,7 +163,8 @@ async function withBrowserWs<T>(
   headers: Record<string, string>,
   run: (ws: WebSocket) => Promise<T>,
 ) {
-  const ws = await openBrowserWs(port, headers);
+  const ws = await openWs(port, headers);
+  clientSockets.add(ws);
   try {
     return await run(ws);
   } finally {
@@ -188,10 +181,12 @@ async function prepareAutoApproval(scopes?: string[]) {
   return { identityPath, identity: loadOrCreateDeviceIdentity({ path: identityPath }) };
 }
 
+async function expectApprovedScopes(deviceId: string, scopes: string[]) {
+  expect((await getPairedDevice(deviceId))?.approvedScopes).toEqual(scopes);
+}
+
 async function expectConnected(response: ReturnType<typeof connectOperatorUi>) {
-  const result = await response;
-  expect(result.ok).toBe(true);
-  return result;
+  await expect(response).resolves.toMatchObject({ ok: true });
 }
 
 async function signedDevice(
@@ -252,7 +247,7 @@ async function connectOperatorUi(params: {
   trustedProxy?: boolean;
   declaredProxyScopes?: string;
 }) {
-  const client = params.client ?? CONTROL_UI_CLIENT;
+  const { client = CONTROL_UI_CLIENT, identityPath, scopes, token } = params;
   const headers: Record<string, string> =
     params.trustedProxy === false
       ? { origin: BROWSER_ORIGIN, "x-forwarded-for": "203.0.113.50" }
@@ -260,14 +255,14 @@ async function connectOperatorUi(params: {
   if (client.mode === GATEWAY_CLIENT_MODES.UI) {
     delete headers.origin;
   }
-  return withBrowserWs(params.port, headers, async (ws) => {
-    return await connectReq(ws, {
-      ...(params.token ? { token: params.token } : { skipDefaultAuth: true }),
-      ...(params.scopes === undefined ? {} : { scopes: [...params.scopes] }),
+  return withBrowserWs(params.port, headers, (ws) =>
+    connectReq(ws, {
+      ...(token ? { token } : { skipDefaultAuth: true }),
+      ...(scopes === undefined ? {} : { scopes: [...scopes] }),
       client,
-      deviceIdentityPath: params.identityPath,
-    });
-  });
+      deviceIdentityPath: identityPath,
+    }),
+  );
 }
 
 async function connectBrowserWithoutScopes(params: {
@@ -395,20 +390,18 @@ describe("trusted-proxy operator device auto-approval", () => {
   test("leaves mixed node and operator requests pending for manual approval", async () => {
     const { identityPath, identity } = await prepareAutoApproval(READ);
 
-    await withSharedProxyGateway(async ({ port }) => {
-      await withBrowserWs(port, trustedProxyHeaders(), async (nodeWs) => {
-        const nodeRes = await connectReq(nodeWs, {
-          skipDefaultAuth: true,
-          client: NODE_CLIENT,
-          role: "node",
-          scopes: [],
-          deviceIdentityPath: identityPath,
-        });
-        expect(nodeRes.ok).toBe(false);
+    const port = await sharedProxyPort();
+    await withBrowserWs(port, trustedProxyHeaders(), async (nodeWs) => {
+      const nodeRes = await connectReq(nodeWs, {
+        skipDefaultAuth: true,
+        client: NODE_CLIENT,
+        role: "node",
+        scopes: [],
+        deviceIdentityPath: identityPath,
       });
-
-      expect((await connectOperatorUi({ port, identityPath, scopes: READ })).ok).toBe(false);
+      expect(nodeRes.ok).toBe(false);
     });
+    expect((await connectSharedUi(identityPath, { scopes: READ })).ok).toBe(false);
 
     await expect(getPairedDevice(identity.deviceId)).resolves.toBeNull();
     expect(
@@ -416,20 +409,27 @@ describe("trusted-proxy operator device auto-approval", () => {
     ).toMatchObject({ roles: ["node", "operator"] });
   });
 
-  test("caps omitted scopes to the declared proxy scopes", async () => {
-    const { identityPath, identity } = await prepareAutoApproval(WITH_APPROVALS);
+  test.each<[string[], string, string[]]>([
+    [WITH_APPROVALS, "operator.read", READ],
+    [["operator.write"], "operator.read", READ],
+    [WITH_APPROVALS, "", []],
+  ])(
+    "caps omitted scopes %j to declared proxy scopes '%s'",
+    async (configuredScopes, declaredProxyScopes, expectedScopes) => {
+      const { identityPath, identity } = await prepareAutoApproval(configuredScopes);
 
-    await withSharedProxyGateway(async ({ port }) => {
-      const res = await connectBrowserWithoutScopes({
-        port,
-        identityPath,
-        declaredProxyScopes: "operator.read",
-      });
-      expect(res.ok).toBe(true);
-    });
-
-    expect((await getPairedDevice(identity.deviceId))?.approvedScopes).toEqual(["operator.read"]);
-  });
+      expect(
+        (
+          await connectBrowserWithoutScopes({
+            port: await sharedProxyPort(),
+            identityPath,
+            declaredProxyScopes,
+          })
+        ).ok,
+      ).toBe(true);
+      await expectApprovedScopes(identity.deviceId, expectedScopes);
+    },
+  );
 
   test("caps requested scopes to the configured and declared proxy scopes", async () => {
     const { identityPath, identity } = await prepareAutoApproval(WITH_APPROVALS);
@@ -439,44 +439,26 @@ describe("trusted-proxy operator device auto-approval", () => {
         declaredProxyScopes: "operator.read",
       }),
     );
-    expect((await getPairedDevice(identity.deviceId))?.approvedScopes).toEqual(["operator.read"]);
+    await expectApprovedScopes(identity.deviceId, READ);
   });
 
   test("keeps configured and requested scope behavior when the proxy header is absent", async () => {
-    await writeGatewayAuthConfig({
-      mode: "trusted-proxy",
-      deviceAutoApprove: {
-        enabled: true,
-        scopes: ["operator.read", "operator.approvals"],
-      },
-    });
-    const omittedIdentityPath = deviceIdentityPath("trusted-proxy-omitted-scopes-no-cap");
-    const omittedIdentity = loadOrCreateDeviceIdentity({ path: omittedIdentityPath });
+    const { identityPath: omittedIdentityPath, identity: omittedIdentity } =
+      await prepareAutoApproval(["operator.read", "operator.approvals"]);
     const requestedIdentityPath = deviceIdentityPath("trusted-proxy-requested-scopes-no-cap");
     const requestedIdentity = loadOrCreateDeviceIdentity({ path: requestedIdentityPath });
 
-    await withSharedProxyGateway(async ({ port }) => {
-      expect(
-        (await connectBrowserWithoutScopes({ port, identityPath: omittedIdentityPath })).ok,
-      ).toBe(true);
-      expect(
-        (
-          await connectOperatorUi({
-            port,
-            identityPath: requestedIdentityPath,
-            scopes: ["operator.read", "operator.write"],
-          })
-        ).ok,
-      ).toBe(true);
-    });
-
-    expect((await getPairedDevice(omittedIdentity.deviceId))?.approvedScopes).toEqual([
-      "operator.approvals",
-      "operator.read",
-    ]);
-    expect((await getPairedDevice(requestedIdentity.deviceId))?.approvedScopes).toEqual([
-      "operator.read",
-    ]);
+    expect(
+      (
+        await connectBrowserWithoutScopes({
+          port: await sharedProxyPort(),
+          identityPath: omittedIdentityPath,
+        })
+      ).ok,
+    ).toBe(true);
+    await expectConnected(connectSharedUi(requestedIdentityPath, { scopes: READ_WRITE }));
+    await expectApprovedScopes(omittedIdentity.deviceId, ["operator.approvals", "operator.read"]);
+    await expectApprovedScopes(requestedIdentity.deviceId, READ);
   });
 
   test("auto-approves same-key scope upgrades on existing devices", async () => {
@@ -486,7 +468,7 @@ describe("trusted-proxy operator device auto-approval", () => {
     await expectConnected(connectSharedUi(identityPath, { client, scopes: READ_WRITE }));
 
     expect(await pendingFor(identity.deviceId)).toHaveLength(0);
-    expect((await getPairedDevice(identity.deviceId))?.approvedScopes).toEqual(READ_WRITE);
+    await expectApprovedScopes(identity.deviceId, READ_WRITE);
   });
 
   test("narrows same-key reconnects without a pairing round-trip", async () => {
@@ -503,11 +485,10 @@ describe("trusted-proxy operator device auto-approval", () => {
     });
 
     expect(await pendingFor(identity.deviceId)).toEqual([]);
-    expect((await getPairedDevice(identity.deviceId))?.approvedScopes).toEqual(READ_WRITE);
+    await expectApprovedScopes(identity.deviceId, READ_WRITE);
     expect(
-      warnings.filter((message) => message.includes("device access upgrade requested")),
+      warnings.filter((message) => /device access upgrade requested|auto-approved/.test(message)),
     ).toEqual([]);
-    expect(warnings.filter((message) => message.includes("auto-approved"))).toEqual([]);
   });
 
   test("rejects a foreign-key connect for an already-paired deviceId", async () => {
@@ -516,21 +497,16 @@ describe("trusted-proxy operator device auto-approval", () => {
       path: deviceIdentityPath("trusted-proxy-key-mismatch-attacker"),
     });
 
-    await withSharedProxyGateway(async ({ port }) => {
-      await expectConnected(connectOperatorUi({ port, identityPath, scopes: READ }));
-
-      // Same deviceId, different key pair: a valid signature over the attacker
-      // key must not ride the trusted-proxy upgrade lane.
-      await withBrowserWs(port, trustedProxyHeaders(), async (ws) => {
-        const scopes = ["operator.read", "operator.write"];
-        const response = await connectReq(ws, {
-          skipDefaultAuth: true,
-          client: CONTROL_UI_CLIENT,
-          scopes,
-          device: await signedDevice(ws, attackerIdentity, scopes, identity.deviceId),
-        });
-        expect(response.ok).toBe(false);
+    await expectConnected(connectSharedUi(identityPath, { scopes: READ }));
+    // A valid signature from a foreign key must not inherit the paired deviceId's authority.
+    await withBrowserWs(await sharedProxyPort(), trustedProxyHeaders(), async (ws) => {
+      const response = await connectReq(ws, {
+        skipDefaultAuth: true,
+        client: CONTROL_UI_CLIENT,
+        scopes: READ_WRITE,
+        device: await signedDevice(ws, attackerIdentity, READ_WRITE, identity.deviceId),
       });
+      expect(response.ok).toBe(false);
     });
 
     expect(await pendingFor(identity.deviceId)).toEqual([]);
@@ -556,20 +532,18 @@ describe("trusted-proxy operator device auto-approval", () => {
     "does not auto-approve $client.id/$client.mode with role $role",
     async ({ client, role, scopes }) => {
       const { identityPath, identity } = await prepareAutoApproval();
-      await withSharedProxyGateway(async ({ port }) => {
-        const headers = trustedProxyHeaders();
-        delete headers.origin;
-        await withBrowserWs(port, headers, async (ws) => {
-          const res = await connectReq(ws, {
-            skipDefaultAuth: true,
-            client,
-            role,
-            scopes,
-            deviceIdentityPath: identityPath,
-          });
-          expect(res.ok).toBe(false);
-          expect(res.error?.message).toContain("pairing required");
+      const headers = trustedProxyHeaders();
+      delete headers.origin;
+      await withBrowserWs(await sharedProxyPort(), headers, async (ws) => {
+        const res = await connectReq(ws, {
+          skipDefaultAuth: true,
+          client,
+          role,
+          scopes,
+          deviceIdentityPath: identityPath,
         });
+        expect(res.ok).toBe(false);
+        expect(res.error?.message).toContain("pairing required");
       });
       expect(await getPairedDevice(identity.deviceId)).toBeNull();
       expect(await pendingFor(identity.deviceId)).toHaveLength(1);

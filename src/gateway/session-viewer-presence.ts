@@ -1,5 +1,6 @@
 // Per-connection viewer presence declarations. Message subscriptions are transport state,
 // while this replace-set records only the sessions a client is actually rendering.
+import { normalizeOptionalString } from "@openclaw/normalization-core";
 import { upsertPresence } from "../infra/system-presence.js";
 import { WEBSOCKET_OPEN_READY_STATE } from "./server-constants.js";
 import { recordClientPresenceActivity } from "./server/client-presence.js";
@@ -57,10 +58,34 @@ export function createSessionViewerPresenceDeclarations(
     }
   };
 
+  /** True only while an open connection of this paired device currently renders the session. */
+  const isViewedOnDevice = (deviceId: string, sessionKey: string): boolean => {
+    for (const [connId, sessionKeys] of declarations) {
+      if (!sessionKeys.includes(sessionKey)) {
+        continue;
+      }
+      const client = deps.clients.getByConnectionId(connId);
+      if (
+        client &&
+        !client.invalidated &&
+        !client.connectionSignal?.aborted &&
+        client.socket.readyState === WEBSOCKET_OPEN_READY_STATE &&
+        normalizeOptionalString(client.connect.device?.id) === deviceId
+      ) {
+        return true;
+      }
+    }
+    return false;
+  };
+
   const stop = () => {
     stopped = true;
     declarations.clear();
   };
 
-  return { replace, unsubscribe, stop };
+  return { replace, unsubscribe, isViewedOnDevice, stop };
 }
+
+export type SessionViewerPresenceDeclarations = ReturnType<
+  typeof createSessionViewerPresenceDeclarations
+>;

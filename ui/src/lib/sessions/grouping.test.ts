@@ -426,7 +426,8 @@ describe("groupSessionRows", () => {
               ["two-days-ago", at(2, 23, 59)], ["six-days-ago", at(6)],
               ["older", at(7, 23, 59)], ["unknown", null],
             ].map(([key, updatedAt]) => ({ key, updatedAt, kind: "direct" }));
-            return groupSessionRows({ mode: "date", now: at(0, 12), rows })
+            Date.now = () => at(0, 12);
+            return groupSessionRows({ mode: "date", rows })
               .map((group) => [group.id, group.rows.map((row) => row.key)]);
           });
           process.stdout.write(JSON.stringify(results));

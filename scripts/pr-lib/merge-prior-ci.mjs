@@ -153,7 +153,9 @@ function qualifyProviderRejection(recordJson, outcome, source) {
     !priorCaptures.some((entry) => entry.name === capture),
     "provider rejection must name a new attempt capture",
   );
-  const expected = [capture, ...priorCaptures.map((entry) => entry.name)].toSorted();
+  const expected = [capture, ...priorCaptures.map((entry) => entry.name)].toSorted((left, right) =>
+    left < right ? -1 : left > right ? 1 : 0,
+  );
   // The request reached GitHub. This exact response qualifies provider rejection,
   // never a claim that dispatch did not happen or permission for an automatic retry.
   const response = Buffer.from(
@@ -519,6 +521,8 @@ async function preparePreExistingFailure(
       repositoryId,
       pr: evidence.pr,
       head: evidence.head,
+      ciRunId: evidence.runId,
+      ciRunAttempt: evidence.runAttempt,
       main: qualifiedMain,
       statusId: combined[0].statusId,
     });
@@ -749,50 +753,6 @@ async function verifyPriorCiAdmin({
       parameters.required_approving_review_count > 0 || parameters.require_last_push_approval;
     requireThreads ||= parameters.required_review_thread_resolution;
   }
-  const query =
-    "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){headRefOid reviewDecision reviewThreads(first:100){nodes{isResolved} pageInfo{hasNextPage}}}}}";
-  const authorityRead = readWriterAuthority(repository, actor, evidence, policy, writerRead);
-  const readReview = () =>
-    execPrGhAsync(
-      [
-        "api",
-        "graphql",
-        "--hostname",
-        repo.host,
-        "--include",
-        "-H",
-        "Cache-Control: max-age=0",
-        "-f",
-        `owner=${repository.split("/")[0]}`,
-        "-f",
-        `name=${repository.split("/")[1]}`,
-        "-F",
-        `number=${pr}`,
-        "-f",
-        `query=${query}`,
-      ],
-      { encoding: "utf8" },
-      "plain",
-    );
-  const [writer, reviewRaw, run, latest, pages] = await readAll([
-    authorityRead,
-    deferFinalAuthority ? null : readReview(),
-    read(`repos/${repository}/actions/runs/${evidence.runId}/attempts/${evidence.runAttempt}`),
-    preExisting(evidence) ? read(`repos/${repository}/actions/runs/${evidence.runId}`) : null,
-    immutable.jobs
-      ? [{ jobs: immutable.jobs, total_count: immutable.jobs.length }]
-      : read(
-          `repos/${repository}/actions/runs/${evidence.runId}/attempts/${evidence.runAttempt}/jobs?per_page=100`,
-          true,
-        ),
-  ]);
-  const { authority, delegation } = writer;
-  if (sharedSnapshot) {
-    requireEvidence(
-      sharedSnapshot.repositoryId === authority.id,
-      "qualified snapshot changed the repository identity",
-    );
-  }
   const verifyReview = (raw) => {
     const reviewResponse = parseGithubResponse(raw);
     const review = reviewResponse.body?.data?.repository?.pullRequest;
@@ -812,9 +772,135 @@ async function verifyPriorCiAdmin({
         "required review threads must all be resolved (more than 100 threads require ordinary landing)",
       );
     }
+    return review;
   };
-  if (!deferFinalAuthority) {
-    verifyReview(reviewRaw);
+  const query =
+    "query($owner:String!,$name:String!,$number:Int!,$cursor:String){repository(owner:$owner,name:$name){pullRequest(number:$number){headRefOid reviewDecision reviewThreads(first:100){nodes{isResolved} pageInfo{hasNextPage}} commits(last:1){nodes{commit{oid statusCheckRollup{contexts(first:100,after:$cursor){totalCount nodes{__typename ... on CheckRun{name isRequired(pullRequestNumber:$number) checkSuite{app{databaseId}}} ... on StatusContext{context isRequired(pullRequestNumber:$number)}} pageInfo{hasNextPage endCursor}}}}}}}}}";
+  const readReview = async () => {
+    const requirements = new Map();
+    const cursors = new Set();
+    let cursor;
+    let count = 0;
+    let total;
+    do {
+      const review = verifyReview(
+        await execPrGhAsync(
+          [
+            "api",
+            "graphql",
+            "--hostname",
+            repo.host,
+            "--include",
+            "-H",
+            "Cache-Control: max-age=0",
+            "-f",
+            `owner=${repository.split("/")[0]}`,
+            "-f",
+            `name=${repository.split("/")[1]}`,
+            "-F",
+            `number=${pr}`,
+            ...(cursor ? ["-f", `cursor=${cursor}`] : []),
+            "-f",
+            `query=${query}`,
+          ],
+          { encoding: "utf8" },
+          "plain",
+        ),
+      );
+      const commits = review.commits?.nodes;
+      requireEvidence(
+        commits?.length === 1 && commits[0]?.commit?.oid === head,
+        "per-PR required checks changed the prepared head",
+      );
+      const rollup = commits[0].commit.statusCheckRollup;
+      const page = rollup?.contexts;
+      requireEvidence(
+        rollup === null ||
+          (Array.isArray(page?.nodes) &&
+            Number.isSafeInteger(page.totalCount) &&
+            page.totalCount >= 0 &&
+            typeof page.pageInfo?.hasNextPage === "boolean"),
+        "per-PR required check inventory is incomplete",
+      );
+      const pageTotal = page?.totalCount ?? 0;
+      total ??= pageTotal;
+      requireEvidence(total === pageTotal, "per-PR required check inventory changed while paging");
+      for (const node of page?.nodes ?? []) {
+        requireEvidence(
+          ["CheckRun", "StatusContext"].includes(node?.__typename) &&
+            typeof node.isRequired === "boolean",
+          "per-PR required check marker is unavailable",
+        );
+        if (!node.isRequired) {
+          continue;
+        }
+        const requirement =
+          node.__typename === "CheckRun"
+            ? { context: node.name, integration_id: node.checkSuite?.app?.databaseId }
+            : { context: node.context, integration_id: null };
+        requireEvidence(
+          nonempty(requirement.context) &&
+            (node.__typename === "StatusContext" || positiveInteger(requirement.integration_id)),
+          "per-PR required check publisher is unavailable",
+        );
+        requirements.set(JSON.stringify(requirement), requirement);
+      }
+      count += page?.nodes.length ?? 0;
+      if (!page?.pageInfo.hasNextPage) {
+        break;
+      }
+      cursor = page.pageInfo.endCursor;
+      requireEvidence(
+        nonempty(cursor) && !cursors.has(cursor) && page.nodes.length > 0 && count < total,
+        "per-PR required check pagination is incomplete",
+      );
+      cursors.add(cursor);
+    } while (cursor);
+    requireEvidence(count === total, "per-PR required check inventory is incomplete");
+    const known = policy.rules
+      .filter((rule) => rule.type === "required_status_checks")
+      .flatMap((rule) => rule.parameters.required_status_checks);
+    const additional = [...requirements.values()].filter(
+      (check) =>
+        !known.some(
+          (existing) =>
+            existing.context === check.context &&
+            (check.integration_id === null || existing.integration_id === check.integration_id),
+        ),
+    );
+    if (additional.length > 0) {
+      // Native per-PR markers supply requirement facts, not historical results.
+      // The existing REST owner selects latest runs and binds their publishers.
+      const checks = await readRequiredMergeChecksAsync(repo, head, {
+        rules: [
+          { type: "required_status_checks", parameters: { required_status_checks: additional } },
+        ],
+      });
+      requireEvidence(
+        checks.every((check) => check.bucket === "pass"),
+        "admin CI authority does not waive other required checks, including security",
+      );
+    }
+  };
+  const authorityRead = readWriterAuthority(repository, actor, evidence, policy, writerRead);
+  const [writer, , run, latest, pages] = await readAll([
+    authorityRead,
+    deferFinalAuthority ? null : readReview(),
+    read(`repos/${repository}/actions/runs/${evidence.runId}/attempts/${evidence.runAttempt}`),
+    preExisting(evidence) ? read(`repos/${repository}/actions/runs/${evidence.runId}`) : null,
+    immutable.jobs
+      ? [{ jobs: immutable.jobs, total_count: immutable.jobs.length }]
+      : read(
+          `repos/${repository}/actions/runs/${evidence.runId}/attempts/${evidence.runAttempt}/jobs?per_page=20`,
+          true,
+        ),
+  ]);
+  const { authority, delegation } = writer;
+  if (sharedSnapshot) {
+    requireEvidence(
+      sharedSnapshot.repositoryId === authority.id,
+      "qualified snapshot changed the repository identity",
+    );
   }
   const runHead = preExisting(evidence) ? head : evidence.priorHead;
   let samePullRequest =
@@ -952,15 +1038,12 @@ async function verifyPriorCiAdmin({
     }
     // Historical proof precedes the final observation; mutable reviews and
     // security follow it, with writer authority last and no duplicate inventory.
-    const [finalReview, finalFailureProof] = await readAll([
+    const [, finalFailureProof] = await readAll([
       deferFinalAuthority ? readReview() : null,
       deferFinalAuthority && finishFailureProof
         ? finishFailureProof(currentChecks, qualifiedMain)
         : failureProof,
     ]);
-    if (deferFinalAuthority) {
-      verifyReview(finalReview);
-    }
     // Security qualification awaits external work. Re-read effective policy
     // afterward so a CI-only grant cannot waive newly tightened requirements.
     const finalPolicy = await readMergePolicyAsync(repo);

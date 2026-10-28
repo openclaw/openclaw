@@ -9,13 +9,72 @@ import { FsSafeError } from "../infra/fs-safe.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import { openPluginRootFileSync } from "./path-safety.js";
 import type {
+  PluginDirectoryEntry,
   PluginEntryCheck,
   PluginFileCacheEntry,
   PluginJsonCacheResult,
+  PluginStatFacts,
 } from "./plugin-cache-files.types.js";
 import { bindPluginCacheRoot, getPluginCacheRoot } from "./plugin-cache.js";
 
 const DEFAULT_PLUGIN_METADATA_MAX_BYTES = 16 * 1024 * 1024;
+
+// Metadata generations need type/identity facts, not Node's full filesystem objects.
+class CachedFileType {
+  readonly mode: number;
+
+  constructor(mode: number) {
+    this.mode = mode;
+  }
+
+  isFile() {
+    return (this.mode & fs.constants.S_IFMT) === fs.constants.S_IFREG;
+  }
+
+  isDirectory() {
+    return (this.mode & fs.constants.S_IFMT) === fs.constants.S_IFDIR;
+  }
+
+  isSymbolicLink() {
+    return (this.mode & fs.constants.S_IFMT) === fs.constants.S_IFLNK;
+  }
+}
+
+class CachedStat extends CachedFileType implements PluginStatFacts {
+  readonly uid: number;
+  readonly nlink: number;
+  readonly dev: number;
+  readonly ino: number;
+  readonly size: number;
+  readonly mtimeMs: number;
+
+  constructor(stat: fs.Stats) {
+    super(stat.mode);
+    this.uid = stat.uid;
+    this.nlink = stat.nlink;
+    this.dev = stat.dev;
+    this.ino = stat.ino;
+    this.size = stat.size;
+    this.mtimeMs = stat.mtimeMs;
+  }
+}
+
+class CachedDirectoryEntry extends CachedFileType implements PluginDirectoryEntry {
+  readonly name: string;
+
+  constructor(entry: fs.Dirent) {
+    super(
+      entry.isFile()
+        ? fs.constants.S_IFREG
+        : entry.isDirectory()
+          ? fs.constants.S_IFDIR
+          : entry.isSymbolicLink()
+            ? fs.constants.S_IFLNK
+            : 0,
+    );
+    this.name = entry.name;
+  }
+}
 
 function capturedPluginFile(
   filePath: string,
@@ -119,17 +178,20 @@ export function pluginCacheRealpathSync(targetPath: string, native = false): str
 }
 
 /** A trusted owner that changes permissions replaces its own observed stat. */
-export function refreshPluginCacheStat(targetPath: string): fs.Stats | null {
+export function refreshPluginCacheStat(targetPath: string): PluginStatFacts | null {
   pathFacts(targetPath).stat = undefined;
   return pluginCacheStatSync(targetPath);
 }
 
-export function pluginCacheStatSync(targetPath: string, throwOnError = false): fs.Stats | null {
+export function pluginCacheStatSync(
+  targetPath: string,
+  throwOnError = false,
+): PluginStatFacts | null {
   const facts = pathFacts(targetPath);
   if (facts.stat === undefined) {
     facts.statError = undefined;
     try {
-      facts.stat = fs.statSync(targetPath);
+      facts.stat = new CachedStat(fs.statSync(targetPath));
       facts.exists = true;
     } catch (error) {
       materializeErrorStack(error);
@@ -144,11 +206,11 @@ export function pluginCacheStatSync(targetPath: string, throwOnError = false): f
 }
 
 /** Final symlink checks must retain lstat facts separately from followed target stats. */
-export function pluginCacheLstatSync(targetPath: string): fs.Stats | null {
+export function pluginCacheLstatSync(targetPath: string): PluginStatFacts | null {
   const facts = pathFacts(targetPath);
   if (facts.lstat === undefined) {
     try {
-      facts.lstat = fs.lstatSync(targetPath);
+      facts.lstat = new CachedStat(fs.lstatSync(targetPath));
     } catch {
       facts.lstat = null;
     }
@@ -156,11 +218,16 @@ export function pluginCacheLstatSync(targetPath: string): fs.Stats | null {
   return facts.lstat;
 }
 
-export function readPluginCacheDirectory(targetPath: string): fs.Dirent[] {
+export function readPluginCacheDirectory(targetPath: string): PluginDirectoryEntry[] {
   const root = getPluginCacheRoot(targetPath);
   if (!root.directory) {
     try {
-      root.directory = { ok: true, entries: fs.readdirSync(targetPath, { withFileTypes: true }) };
+      root.directory = {
+        ok: true,
+        entries: fs
+          .readdirSync(targetPath, { withFileTypes: true })
+          .map((entry) => new CachedDirectoryEntry(entry)),
+      };
     } catch (error) {
       materializeErrorStack(error);
       root.directory = { ok: false, error };
@@ -220,7 +287,7 @@ export function checkPluginCacheEntry(params: {
     } else {
       fs.closeSync(opened.fd);
       root = bindPluginCacheRoot(params.rootDir, opened.rootRealPath);
-      Object.assign(pathFacts(opened.path), { exists: true, stat: opened.stat });
+      Object.assign(pathFacts(opened.path), { exists: true, stat: new CachedStat(opened.stat) });
       // Safe-open already resolved this path natively. Windows admission can rebase root aliases.
       if (process.platform !== "win32") {
         pathFacts(opened.path).nativeRealpath = opened.path;
@@ -244,22 +311,21 @@ export function readPluginCacheFile(params: {
   /** null preserves the uncapped bundle JSON contract; ordinary metadata stays bounded. */
   maxBytes?: number | null;
 }): PluginFileCacheEntry {
-  const lexicalRoot = path.resolve(params.rootDir);
-  let root = getPluginCacheRoot(lexicalRoot);
+  let root = getPluginCacheRoot(params.rootDir);
   const maxBytes =
     params.maxBytes === null ? undefined : (params.maxBytes ?? DEFAULT_PLUGIN_METADATA_MAX_BYTES);
   const key = entryKey(params.relativePath, params.rejectHardlinks);
-  const limitKey = JSON.stringify([key, maxBytes]);
+  let cached = root.files.get(key) ?? root.files.get(JSON.stringify([key, maxBytes]));
   // A successful strict check also satisfies the bundled/raw-reader policy;
   // its failures never stand in for a more permissive read.
-  const strict = params.rejectHardlinks
-    ? undefined
-    : root.files.get(entryKey(params.relativePath, true));
-  const cached =
-    root.files.get(key) ?? root.files.get(limitKey) ?? (strict?.ok ? strict : undefined);
+  if (!cached && !params.rejectHardlinks) {
+    const strict = root.files.get(entryKey(params.relativePath, true));
+    cached = strict?.ok ? strict : undefined;
+  }
   if (cached) {
     return enforceFileSize(cached, maxBytes);
   }
+  const lexicalRoot = path.resolve(params.rootDir);
   const requestedPath = path.resolve(lexicalRoot, params.relativePath);
   const checked = root.checkedEntries.get(key);
   if (pathFacts(requestedPath).exists === false || (checked && (!checked.ok || !checked.exists))) {
@@ -306,7 +372,7 @@ export function readPluginCacheFile(params: {
           ? fs.readFileSync(opened.fd)
           : readFileDescriptorBoundedSync(opened.fd, maxBytes);
       entry = capturedPluginFile(opened.path, opened.rootRealPath, contents, opened.stat);
-      Object.assign(pathFacts(absolutePath), { exists: true, stat: opened.stat });
+      Object.assign(pathFacts(absolutePath), { exists: true, stat: new CachedStat(opened.stat) });
       root.checkedEntries.set(key, {
         ok: true,
         path: opened.path,
@@ -328,7 +394,7 @@ export function readPluginCacheFile(params: {
   if (!entry.ok) {
     materializeErrorStack(entry.failure.error);
   }
-  root.files.set(entry.ok ? key : limitKey, entry);
+  root.files.set(entry.ok ? key : JSON.stringify([key, maxBytes]), entry);
   return entry;
 }
 
@@ -357,7 +423,7 @@ function readPluginCacheRegularFile(params: {
         maxBytes: params.maxBytes,
       });
       entry = capturedPluginFile(path.join(canonicalRoot, filename), canonicalRoot, contents, stat);
-      Object.assign(pathFacts(absolutePath), { exists: true, stat });
+      Object.assign(pathFacts(absolutePath), { exists: true, stat: new CachedStat(stat) });
       root.files.set(key, entry);
     } catch (error) {
       materializeErrorStack(error);

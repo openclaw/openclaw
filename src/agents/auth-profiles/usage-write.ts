@@ -235,7 +235,7 @@ export async function withAuthProfileUsage<T>(
           committed = receipt;
           if (receipt.result) {
             await publishInlineAuthFailure(owner, receipt, readTarget, assertCurrent);
-            store.usageStats = { ...store.usageStats, [profileId]: receipt.result.next };
+            store.usageStats = { ...store.usageStats, [profileId]: receipt.result };
             if (reduction.kind === "success" && !inherited) {
               store.lastGood = {
                 ...Object.fromEntries(

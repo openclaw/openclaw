@@ -6,6 +6,7 @@ import type { SessionNarrationEvent } from "../../packages/gateway-protocol/src/
 import { stripInternalRuntimeContext } from "../agents/internal-runtime-context.js";
 import { extractAssistantPhaseText } from "../shared/chat-message-content.js";
 import { sanitizeAssistantVisibleTextWithProfile } from "../shared/text/assistant-visible-text.js";
+import { isPlainEventPayload } from "./server-broadcast-scopes.js";
 import type {
   GatewayBroadcastOpts,
   GatewayBroadcastToConnIdsFn,
@@ -31,7 +32,6 @@ type NarrationState = {
   timer?: ReturnType<typeof setTimeout>;
 };
 type ConnectionNarration = {
-  socket: GatewayWsClient["socket"];
   sessions: Map<string, NarrationState>;
   close: () => void;
 };
@@ -71,10 +71,9 @@ export function createGatewayNarrationDelivery(params: {
   };
   const connectionFor = (client: GatewayWsClient) => {
     const existing = connections.get(client);
-    if (existing?.socket === client.socket) {
+    if (existing) {
       return existing;
     }
-    existing?.close();
     const socket = client.socket;
     const sessions = new Map<string, NarrationState>();
     const close = () => {
@@ -85,7 +84,7 @@ export function createGatewayNarrationDelivery(params: {
       socket.off("close", close);
       connections.delete(client);
     };
-    const connection = { socket, sessions, close };
+    const connection = { sessions, close };
     connections.set(client, connection);
     socket.once("close", close);
     return connection;
@@ -153,14 +152,10 @@ export function createGatewayNarrationDelivery(params: {
     projection.digest = digest;
     return digest;
   };
-  const flush = (
-    client: GatewayWsClient,
-    connection: ConnectionNarration,
-    state: NarrationState,
-  ) => {
+  const flush = (client: GatewayWsClient, state: NarrationState) => {
     const pending = state.pending;
     cancelPending(state);
-    if (!pending || client.socket !== connection.socket || !params.clients.has(client)) {
+    if (!pending || !params.clients.has(client)) {
       return;
     }
     const { payload, projection, sessionKeys, opts } = pending;
@@ -193,6 +188,29 @@ export function createGatewayNarrationDelivery(params: {
 
   return {
     isNarration,
+    prepareToolPayload: (event: string, payload: unknown) => {
+      if (
+        (event !== "agent" && event !== "session.tool") ||
+        !isPlainEventPayload(payload) ||
+        payload.stream !== "tool" ||
+        !isPlainEventPayload(payload.data)
+      ) {
+        return undefined;
+      }
+      const toolData = payload.data;
+      // Background narration renders identity and progress. Prepare its body
+      // only when needed; the broadcaster shares its encoding within this publication.
+      return () => {
+        const {
+          args: _args,
+          diff: _diff,
+          partialResult: _partial,
+          result: _result,
+          ...data
+        } = toolData;
+        return { ...payload, data };
+      };
+    },
     consume: (
       client: GatewayWsClient,
       event: string,
@@ -200,6 +218,17 @@ export function createGatewayNarrationDelivery(params: {
       sessionKeys: readonly string[],
       opts?: GatewayBroadcastOpts,
     ): boolean => {
+      if (event === "session.narration") {
+        return !isNarration(client.connId, sessionKeys);
+      }
+      if (
+        event !== "chat" &&
+        event !== "agent" &&
+        event !== "session.tool" &&
+        event !== "session.observer"
+      ) {
+        return false;
+      }
       if (!isRecord(payload) || !isNarration(client.connId, sessionKeys)) {
         return false;
       }
@@ -259,15 +288,14 @@ export function createGatewayNarrationDelivery(params: {
       }
       if (terminal) {
         if (state.pending?.payload.runId === payload.runId) {
-          flush(client, connection, state);
+          flush(client, state);
         }
       } else if (state.pending) {
         const delay = NARRATION_INTERVAL_MS - (Date.now() - (state.lastSentAt ?? -Infinity));
         if (delay <= 0) {
-          flush(client, connection, state);
+          flush(client, state);
         } else if (!state.timer) {
-          state.timer = setTimeout(() => flush(client, connection, state), delay);
-          state.timer.unref?.();
+          state.timer = setTimeout(() => flush(client, state), delay).unref();
         }
       }
       return delta;

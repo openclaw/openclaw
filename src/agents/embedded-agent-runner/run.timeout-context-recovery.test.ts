@@ -1,7 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
-import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
-import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import { createReplyOperation } from "../../sessions/session-controller.js";
 import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
@@ -13,7 +10,7 @@ import { isSessionRunActive } from "../../sessions/session-controller.queries.js
 import { testing as deliveryTesting } from "../subagents/announce/subagent-announce-delivery.test-support.js";
 import { sendSubagentAnnounceDirectly } from "../subagents/announce/subagent-announce-direct-delivery.js";
 import { makeAttemptResult, makeCompactionSuccess } from "./run.overflow-compaction.fixture.js";
-import { createEmbeddedRunContextRecoveryState } from "./run/context-recovery-state.js";
+import { createRecoveryDefaults, createRecoveryOwner } from "./run.recovery.test-support.js";
 import { recoverEmbeddedRunTimeout } from "./run/timeout-context-recovery.js";
 import {
   attachActiveEmbeddedRun,
@@ -28,7 +25,6 @@ import {
   createEmbeddedRunHandle,
   testing as runsTesting,
 } from "./runs.test-support.js";
-import { createUsageAccumulator } from "./usage-accumulator.js";
 
 const mocks = vi.hoisted(() => ({ compact: vi.fn(), postCompactionSideEffects: vi.fn() }));
 vi.mock("./compaction-hooks.js", () => ({
@@ -47,62 +43,11 @@ const successfulCompaction = (sessionId?: string) =>
 
 function makeInput(overrides: Partial<RecoveryInput> = {}): RecoveryInput {
   const input: RecoveryInput = {
-    runParams: {
-      runId: "run-1",
-      sessionId: "session-1",
-      sessionKey: "agent:main:session-1",
-      config: {},
-      workspaceDir: "/tmp/workspace",
-      prompt: "continue",
-      timeoutMs: 1_000,
-      onAutoCompactionSucceeded: vi.fn(),
-    },
-    state: createEmbeddedRunContextRecoveryState(),
-    assertRecoveryActive: vi.fn(),
+    ...createRecoveryDefaults(mocks.compact, () => input),
     // Admission and writer fencing have composed coverage in run.compaction-runtime.test.ts.
-    prepareRecoveryOwner: () => {
-      const assertActive = composeSessionSourceAssertion([
-        () => {
-          input.runParams.abortSignal?.throwIfAborted();
-          input.assertRecoveryActive();
-        },
-      ]);
-      assertActive();
-      const session = input.getActiveSession();
-      return {
-        session: {
-          ...session,
-          target: {
-            agentId: input.sessionAgentId,
-            sessionId: session.id,
-            sessionKey: input.resolvedSessionKey,
-            storePath: "/tmp/workspace/openclaw-agent.sqlite",
-          },
-        },
-        assertActive,
-        withTranscriptWrites: async <T>(signal: AbortSignal | undefined, run: () => Promise<T>) => {
-          signal?.throwIfAborted();
-          assertActive();
-          return await run();
-        },
-      };
-    },
-    prepareRecoverySession: async () => ({
-      sessionManager: undefined,
-      assertActive: composeSessionSourceAssertion([]),
-      withSessionManagerRewriteLock: async <T>(operation: () => Promise<T> | T) =>
-        await operation(),
-    }),
-    contextEngine: {
-      info: { id: "legacy", name: "Legacy" },
-      ingest: vi.fn(),
-      assemble: vi.fn(),
-      compact: mocks.compact,
-    },
-    contextTokenBudget: 200_000,
-    genericCompactionRecoveryAllowed: true,
+    prepareRecoveryOwner: () => createRecoveryOwner(input, input.assertRecoveryActive),
+    prepareRecoverySession: vi.fn<RecoveryInput["prepareRecoverySession"]>(),
     timedOut: true,
-    signalOwnedInterruption: false,
     timedOutDuringCompaction: false,
     timedOutDuringToolExecution: false,
     timedOutByRunBudget: false,
@@ -111,34 +56,8 @@ function makeInput(overrides: Partial<RecoveryInput> = {}): RecoveryInput {
       terminal: { kind: "timeout", phase: "prompt", source: "runtime" },
       sessionIdUsed: "session-1",
       assistantTexts: [],
-      messagesSnapshot: [],
     }),
-    runtimeAuthPlan: { providerForAuth: "openai", authProfileProviderForAuth: "openai" },
-    resolvedSessionKey: "agent:main:session-1",
-    sessionAgentId: "main",
-    agentDir: "/tmp/agent",
-    workspaceDir: "/tmp/workspace",
-    modelSelection: { provider: "openai", model: "gpt-5.6-luna", authProfileIdSource: "auto" },
     harnessRuntime: "openclaw",
-    thinkLevel: "off",
-    resolveContextEnginePluginId: () => undefined,
-    buildRuntimeSettings: ({ tokenBudget, degradedReason }) =>
-      buildContextEngineRuntimeSettings({
-        contextEngineHost: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
-        provider: input.modelSelection.provider,
-        requestedModel: input.modelSelection.model,
-        resolvedModel: input.modelSelection.model,
-        promptTokenBudget: tokenBudget,
-        degradedReason,
-      }),
-    onCompactionHookMessages: vi.fn(async () => {}),
-    runOwnsCompactionBeforeHook: vi.fn(async () => {}),
-    runOwnsCompactionAfterHook: vi.fn(async () => {}),
-    adoptCompactionTranscript: vi.fn(async () => undefined),
-    getActiveSession: () => ({ id: "session-1", file: "/tmp/session-1.jsonl" }),
-    prepareCompactedTranscriptRetry: vi.fn(async () => {}),
-    armPostCompactionGuard: vi.fn(),
-    usageAccumulator: createUsageAccumulator(),
     ...overrides,
   };
   return input;
@@ -224,9 +143,7 @@ describe("timeout recovery", () => {
       }),
     ).toBe(true);
     const input = makeInput({
-      runOwnsCompactionAfterHook: vi.fn(async () => {
-        throw new Error("after-hook failed");
-      }),
+      runOwnsCompactionAfterHook: vi.fn().mockRejectedValue(new Error("after-hook failed")),
     });
     await expect(recoverEmbeddedRunTimeout(input)).rejects.toThrow("after-hook failed");
     expect(resolveEmbeddedRunAbandonment({ sessionId: "session-1" })).toBe("timeout");
@@ -274,32 +191,30 @@ describe("timeout recovery", () => {
         reservationId: `timeout-recovery-completion:${++deliveryAttempt}`,
         policy: { mode: "followup" },
       });
-    const sendCompletionWithInput = (controllerInput: ReturnType<typeof reserveCompletion>) =>
-      sendSubagentAnnounceDirectly({
-        requesterSessionKey: sessionKey,
-        targetRequesterSessionKey: sessionKey,
-        triggerMessage: "child completed",
-        expectsCompletionMessage: true,
-        requesterIsSubagent: true,
-        directIdempotencyKey: "timeout-recovery-completion",
-        controllerInput,
-      });
     const sendCompletion = async () => {
       const controllerInput = reserveCompletion();
       try {
-        return await sendCompletionWithInput(controllerInput);
+        return await sendSubagentAnnounceDirectly({
+          requesterSessionKey: sessionKey,
+          targetRequesterSessionKey: sessionKey,
+          triggerMessage: "child completed",
+          expectsCompletionMessage: true,
+          requesterIsSubagent: true,
+          directIdempotencyKey: "timeout-recovery-completion",
+          controllerInput,
+        });
       } finally {
         if (!controllerInput.custody.rpcAdopted) {
           retireSessionControllerInput(controllerInput);
         }
       }
     };
-    const abandon = (runId: string) => {
+    const abandonRun = (runId: string, runTarget = target) => {
       const handle = createEmbeddedRunHandle({ runId });
       const operation = createReplyOperation({
         sessionId,
         sessionKey,
-        target,
+        target: runTarget,
         resetTriggered: false,
       });
       attachActiveEmbeddedRun(sessionId, handle, sessionKey, undefined, "main", operation);
@@ -308,6 +223,10 @@ describe("timeout recovery", () => {
       ).toBe(true);
       clearActiveEmbeddedRun(sessionId, handle, sessionKey);
       operation.complete();
+      return operation;
+    };
+    const abandon = (runId: string) => {
+      const operation = abandonRun(runId);
       const marker = markEmbeddedRunRecoveringTimeout({ sessionId, runId, operation });
       expect(marker).toBeDefined();
       return marker!;
@@ -333,24 +252,7 @@ describe("timeout recovery", () => {
       sessionKey,
       incarnation: sessionId,
     });
-    const otherOperation = createReplyOperation({
-      sessionId,
-      sessionKey,
-      target: otherTarget,
-      resetTriggered: false,
-    });
-    const otherHandle = createEmbeddedRunHandle({ runId: "other-store-timeout" });
-    attachActiveEmbeddedRun(sessionId, otherHandle, sessionKey, undefined, "main", otherOperation);
-    expect(
-      markActiveEmbeddedRunAbandoned({
-        sessionId,
-        sessionKey,
-        handle: otherHandle,
-        reason: "timeout",
-      }),
-    ).toBe(true);
-    clearActiveEmbeddedRun(sessionId, otherHandle, sessionKey);
-    otherOperation.complete();
+    abandonRun("other-store-timeout", otherTarget);
     abandon("run-timeout");
     // Delivery is recorded once and never retried (c6ecb5f9f2a), so a recovering requester
     // receives the completion through one dispatch that waits in its mailbox.
@@ -367,27 +269,16 @@ describe("timeout recovery", () => {
     const successor = createEmbeddedRunHandle({
       runId: "run-successor",
       queueMessage,
+      guarded: true,
       supportsTranscriptCommitWait: true,
     });
-    successor.messageInjectionV2 = {
-      version: 2,
-      isAvailable: () => true,
-      queueMessage: async (_text, _options, assertCurrent) => {
-        assertCurrent();
-        await queueMessage();
-      },
-    };
     const successorDelivery = withSessionTurn(
       { sessionKey, sessionId, target },
       async (operation) => {
         setActiveEmbeddedRun(sessionId, successor, sessionKey, undefined, "main", operation);
-        const controllerInput = reserveCompletion();
         try {
-          return await sendCompletionWithInput(controllerInput);
+          return await sendCompletion();
         } finally {
-          if (!controllerInput.custody.rpcAdopted) {
-            retireSessionControllerInput(controllerInput);
-          }
           clearActiveEmbeddedRun(sessionId, successor, sessionKey);
         }
       },

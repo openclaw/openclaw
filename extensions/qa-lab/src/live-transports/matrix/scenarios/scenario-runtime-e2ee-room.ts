@@ -31,7 +31,6 @@ import {
   MATRIX_QA_SYNC_STATE_AFTER_PARAM,
   createMatrixQaE2eeAccountClient,
   createMatrixQaE2eeActorClient,
-  requireMatrixQaE2eeOutputDir,
   requireMatrixQaGatewayConfigPath,
   registerMatrixQaE2eeScenarioAccount,
   resolveMatrixQaE2eeScenarioGroupRoom,
@@ -157,7 +156,7 @@ export async function runMatrixQaFaultedE2eeBootstrap(context: MatrixQaScenarioC
       actorId: "driver",
       baseUrl: proxy.baseUrl,
       deviceId: context.driverDeviceId,
-      outputDir: requireMatrixQaE2eeOutputDir(context),
+      outputDir: context.outputDir,
       ...(context.driverPassword ? { password: context.driverPassword } : {}),
       scenarioId: "matrix-e2ee-key-bootstrap-failure",
       timeoutMs: context.timeoutMs,
@@ -196,7 +195,7 @@ export async function runMatrixQaFaultedRecoveryOwnerVerification(params: {
       baseUrl: proxy.baseUrl,
       deviceId: params.deviceId,
       observedEvents: params.context.observedEvents,
-      outputDir: requireMatrixQaE2eeOutputDir(params.context),
+      outputDir: params.context.outputDir,
       scenarioId: "matrix-e2ee-recovery-owner-verification-required",
       timeoutMs: params.context.timeoutMs,
       userId: params.userId,
@@ -268,9 +267,8 @@ export async function withMatrixQaE2eeDriver<T>(
   context: MatrixQaScenarioContext,
   scenarioId: MatrixQaE2eeScenarioId,
   run: (client: MatrixQaE2eeScenarioClient) => Promise<T>,
-  opts: { actorId?: "driver" | `driver-${string}` } = {},
 ) {
-  const client = await createMatrixQaE2eeActorClient(context, scenarioId, "driver", opts);
+  const client = await createMatrixQaE2eeActorClient(context, scenarioId, "driver");
   try {
     return await run(client);
   } finally {
@@ -288,11 +286,6 @@ export async function withMatrixQaIsolatedE2eeDriverRoom<T>(
     roomKey: string;
   }) => Promise<T>,
 ) {
-  if (!context.restartGatewayAfterStateMutation) {
-    throw new Error(
-      "Matrix E2EE isolated driver room scenario requires hard gateway restart support",
-    );
-  }
   const accountId = context.sutAccountId ?? "sut";
   const configPath = requireMatrixQaGatewayConfigPath(context);
   const accountConfig = await readMatrixQaGatewayMatrixAccount({
@@ -338,7 +331,7 @@ export async function withMatrixQaIsolatedE2eeDriverRoom<T>(
     },
   };
   const applyPatch = async (accountPatch: Record<string, unknown>) => {
-    await context.restartGatewayAfterStateMutation?.(
+    await context.restartGatewayAfterStateMutation(
       async () => {
         await patchMatrixQaGatewayMatrixAccount({
           accountId,

@@ -1,11 +1,10 @@
 import { insert, render, spread } from "@solidjs/web";
-import { createComponent, createRoot, createSignal, onCleanup, runWithOwner } from "solid-js";
+import { createRoot, createSignal, onCleanup } from "solid-js";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import { registerRouteElement } from "../app/route-elements.ts";
 import { shellLayoutOwnerForHost } from "../app/shell-layout-owner.ts";
-import { ShellLayoutProvider } from "../app/shell-layout-traits-solid.tsx";
 import type { JSX } from "../types/solid-elements.d.ts";
-import { ApplicationProvider } from "./reactive/context.ts";
+import { renderSolidBridgeView } from "./solid-bridge-view.tsx";
 
 type Property<T> = {
   default: T;
@@ -20,18 +19,6 @@ export type SolidBridgeElement<Props, Methods = object> = HTMLElement &
     readonly updateComplete: Promise<boolean>;
   };
 
-type Spec<Props, Methods> = {
-  properties: { [Key in keyof Props]-?: Property<Props[Key]> };
-  connected?: (host: SolidBridgeElement<Props, Methods>) => void;
-  disconnected?: (host: SolidBridgeElement<Props, Methods>) => void;
-  propertyChanged?: (host: SolidBridgeElement<Props, Methods>, key: keyof Props) => void;
-  methods?: {
-    [Key in keyof Methods]: Methods[Key] extends (...args: infer Args) => infer Result
-      ? (host: SolidBridgeElement<Props, Methods>, ...args: Args) => Result
-      : never;
-  };
-};
-
 type ComponentProps<Props, Methods> = Partial<Props> &
   Omit<JSX.HTMLAttributes<SolidBridgeElement<Props, Methods>>, keyof Props> & {
     children?: JSX.Element;
@@ -44,7 +31,17 @@ export function defineSolidBridge<Props extends object, Methods extends object =
     props: Props & { children?: JSX.Element },
     host: SolidBridgeElement<Props, Methods>,
   ) => JSX.Element,
-  spec: Spec<Props, Methods>,
+  spec: {
+    properties: { [Key in keyof Props]-?: Property<Props[Key]> };
+    connected?: (host: SolidBridgeElement<Props, Methods>) => void;
+    disconnected?: (host: SolidBridgeElement<Props, Methods>) => void;
+    propertyChanged?: (host: SolidBridgeElement<Props, Methods>, key: keyof Props) => void;
+    methods?: {
+      [Key in keyof Methods]: Methods[Key] extends (...args: infer Args) => infer Result
+        ? (host: SolidBridgeElement<Props, Methods>, ...args: Args) => Result
+        : never;
+    };
+  },
 ) {
   const properties = Object.entries<Property<unknown>>(spec.properties);
   const defaults = Object.fromEntries(
@@ -219,7 +216,7 @@ export function defineSolidBridge<Props extends object, Methods extends object =
             this.#connectContext();
           }
           if (!this.#dispose) {
-            runWithOwner(null, () => this.#mount());
+            this.#mount();
           }
         }
         return true;
@@ -242,12 +239,8 @@ export function defineSolidBridge<Props extends object, Methods extends object =
       this.#mountedApplication = this.#application;
       const layout = !this.#solidOwned ? shellLayoutOwnerForHost(this) : undefined;
       const view = () => {
-        const props = {
-          ...defaults,
-          get children() {
-            return children ? children() : source;
-          },
-        };
+        // Spreading defaults can let V8 retain old view getters through shared descriptors.
+        const props: Record<string, unknown> = {};
         for (const [key] of properties) {
           // Wrap callable values so Solid treats callbacks as data, not computations.
           const [value, setValue] = createSignal(
@@ -256,31 +249,28 @@ export function defineSolidBridge<Props extends object, Methods extends object =
           );
           this.#publish.set(key, () => setValue({ value: this.#values.get(key) }));
           Object.defineProperty(props, key, {
+            enumerable: true,
+            configurable: true,
             get: () => {
               value();
               return this.#values.get(key);
             },
           });
         }
-        // Provider child memos must not subscribe to component setup reads.
-        const renderContent = () => createComponent(() => content(props, this.#host), {});
-        const contentView = () =>
-          layout
-            ? createComponent(ShellLayoutProvider, {
-                value: { owner: layout, host: this },
-                get children() {
-                  return renderContent();
-                },
-              })
-            : renderContent();
-        return this.#application
-          ? createComponent(ApplicationProvider, {
-              value: this.#application,
-              get children() {
-                return contentView();
-              },
-            })
-          : contentView();
+        if (!declarations.has("children")) {
+          Object.defineProperty(props, "children", {
+            enumerable: true,
+            configurable: true,
+            get: () => (children ? children() : source),
+          });
+        }
+        return renderSolidBridgeView(
+          // SAFETY: Each declared property was materialized with its live getter above.
+          () => content(props as Props & { children?: JSX.Element }, this.#host),
+          this.#application,
+          layout,
+          this,
+        );
       };
       // A nested top-level render would flush child effects under the parent's render owner.
       this.#dispose = this.#solidOwned

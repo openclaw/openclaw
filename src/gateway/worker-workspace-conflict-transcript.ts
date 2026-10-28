@@ -11,6 +11,7 @@ import {
   projectWorkspaceResultConflict,
   WORKSPACE_CONFLICT_CLEARED_TRANSCRIPT_TYPE,
   WORKSPACE_CONFLICT_TRANSCRIPT_TYPE,
+  WORKSPACE_HISTORY_NOTE_TRANSCRIPT_TYPE,
   WORKSPACE_RECOVERY_FAILURE_TRANSCRIPT_TYPE,
   type WorkerWorkspaceConflictReport,
   type WorkspaceResultConflictLookup,
@@ -129,6 +130,22 @@ export function createWorkerWorkspaceConflictTranscriptHandlers(
             },
           }),
         "Recovered cloud workspace conflict",
+      );
+    },
+    reportNote: async (note: string) => {
+      await withWorkerTranscript(
+        () =>
+          appendSessionTranscriptReport(target, {
+            kind: "custom",
+            customTypes: [WORKSPACE_HISTORY_NOTE_TRANSCRIPT_TYPE],
+            selectReport: (latestNote) => {
+              const content = boundedWorkerError(note, 768);
+              return latestNote?.content === content
+                ? undefined
+                : { customType: WORKSPACE_HISTORY_NOTE_TRANSCRIPT_TYPE, content, display: true };
+            },
+          }),
+        "Cloud workspace history note",
       );
     },
     reportFailure: async (failure: string) => {

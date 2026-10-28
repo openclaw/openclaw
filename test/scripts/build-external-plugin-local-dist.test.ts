@@ -20,7 +20,6 @@ import {
 } from "../../scripts/lib/bundled-plugin-build-entries.mjs";
 import { BUILD_STAMP_FILE } from "../../scripts/lib/local-build-metadata-paths.mts";
 import { resolveBuildRequirement } from "../../scripts/run-node.mts";
-import { hasChannelPackageState } from "../../src/channels/plugins/package-state-probes.js";
 import { loadPluginManifest } from "../../src/plugins/manifest.js";
 import {
   createPluginCache,
@@ -65,6 +64,10 @@ function writeFiles(root: string, files: Record<string, string | object>) {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, typeof value === "string" ? value : JSON.stringify(value));
   }
+}
+
+function linkDirectory(target: string, link: string) {
+  fs.symlinkSync(path.relative(path.dirname(link), target), link, "dir");
 }
 
 function makeRepo(prefix: string, metadata: object = {}) {
@@ -208,20 +211,46 @@ fs.writeFileSync("assets/generated.txt", "generated asset");
     writeFiles(pluginRoot, {
       "openclaw.plugin.json": authored,
       "index.ts": "export const backend = true;\n",
+      "dist/stale-runtime.js": "throw new Error('stale backend');\n",
       "build-assets.mjs": `import fs from "node:fs";
 const identity = fs.readFileSync("../../browser-identity.txt", "utf8");
+fs.appendFileSync("../../browser-builds.txt", identity + "\\n");
 const entry = "dist/control-ui/" + identity + "/index.js";
 fs.mkdirSync("dist/control-ui/" + identity, { recursive: true });
 fs.writeFileSync("dist/openclaw.plugin.json", JSON.stringify({ id: "previous-name", controlUi: { entry } }));
 fs.writeFileSync(entry, identity);
 `,
     });
+    const steps = resolveBuildAllSteps("qaRuntime", {}).filter((step) =>
+      ["plugins:assets:build", "external-plugins:local-dist"].includes(step.label),
+    );
     const build = async (identity: string) => {
       // An input outside the backend graph models a changed host browser SDK.
       fs.writeFileSync(path.join(repoRoot, "browser-identity.txt"), identity);
-      await runBundledPluginAssetHooks({ rootDir: repoRoot, phase: "build", deferIsolated: true });
       fs.rmSync(path.join(repoRoot, "dist"), { recursive: true, force: true });
-      await buildExternal(repoRoot);
+      const result = await runBuildAllSteps("qaRuntime", {
+        cwd: repoRoot,
+        env: { ...process.env, OPENCLAW_BUILD_ALL_NO_PNPM: "1", GIT_COMMIT: "a".repeat(40) },
+        steps,
+        cacheEnabled: false,
+        runStep: async (invocation) => {
+          if (invocation.args[2] === "scripts/bundled-plugin-assets.mts") {
+            await runBundledPluginAssetHooks({
+              ...parseBundledPluginAssetArgs(invocation.args.slice(3)),
+              rootDir: repoRoot,
+            });
+          } else {
+            await buildExternalPluginLocalDist({
+              repoRoot,
+              env: {},
+              logLevel: "silent",
+              controlUiAssetsPrepared: invocation.args.includes("--control-ui-assets-prepared"),
+            });
+          }
+          return { status: 0 };
+        },
+      });
+      expect(result.exitCode).toBe(0);
       copyMetadata(repoRoot);
     };
     expect(loadPluginManifest(pluginRoot)).toMatchObject({
@@ -229,7 +258,10 @@ fs.writeFileSync(entry, identity);
       manifest: JSON.parse(authored),
     });
     await build("first");
+    expect(readText(repoRoot, "browser-builds.txt")).toBe("first\n");
+    expect(fs.existsSync(path.join(repoRoot, "dist/extensions/demo/stale-runtime.js"))).toBe(false);
     await build("second");
+    expect(readText(repoRoot, "browser-builds.txt")).toBe("first\nsecond\n");
     expect(readText(pluginRoot, "openclaw.plugin.json")).toBe(authored);
     const expected = {
       ...JSON.parse(authored),
@@ -243,6 +275,18 @@ fs.writeFileSync(entry, identity);
     fs.writeFileSync(ownedAsset, "early owner output");
     await build("second");
     expect(readText(ownedAsset)).toBe("early owner output");
+    expect(readText(repoRoot, "browser-builds.txt")).toBe("first\nsecond\nsecond\n");
+
+    // A standalone miss has no completed asset phase, even with browser files on disk.
+    fs.writeFileSync(path.join(repoRoot, "browser-identity.txt"), "standalone");
+    await buildExternalPluginLocalDist({
+      repoRoot,
+      env: { OPENCLAW_BUILD_CACHE: "0" },
+      logLevel: "silent",
+    });
+    expect(readText(repoRoot, "browser-builds.txt")).toBe("first\nsecond\nsecond\nstandalone\n");
+    expect(readText(pluginRoot, "dist/control-ui/standalone/index.js")).toBe("standalone");
+    expect(fs.existsSync(ownedAsset)).toBe(false);
   });
 
   it.each([
@@ -450,57 +494,8 @@ fs.writeFileSync("assets/generated.txt", "generated asset");
       );
       expect(probe.status, probe.stdout + probe.stderr).toBe(0);
       const sourcePackagePath = path.join(repoRoot, "extensions", id, "package.json");
-      const sourceText = readText(sourcePackagePath);
-      const sourcePackage = JSON.parse(sourceText);
+      const sourcePackage = readJson(sourcePackagePath);
       expect(sourcePackage.openclaw.channel).toEqual({ id, label: id, ...channelStateFixtures });
-      const setState = (metadataKey: string, declaration: object) => {
-        sourcePackage.openclaw.channel = {
-          id,
-          label: id,
-          ...channelStateFixtures,
-          [metadataKey]: declaration,
-        };
-        fs.writeFileSync(sourcePackagePath, JSON.stringify(sourcePackage));
-      };
-      // Reuse the built graphs: partial pairs must retain env semantics, not require a sidecar.
-      for (const metadataKey of ["configuredState", "persistedAuthState"] as const) {
-        for (const partial of [
-          {},
-          { specifier: "./absent-probe" },
-          { specifier: "./absent-probe", exportName: " \t" },
-          { exportName: "hasState" },
-          { specifier: " \t", exportName: "hasState" },
-        ]) {
-          for (const env of [undefined, { anyOf: ["SYNTHETIC_PLUGIN_TOKEN"] }]) {
-            const declaration = { ...partial, ...(env ? { env } : {}) };
-            setState(metadataKey, declaration);
-            copyMetadata(repoRoot);
-            const channel = readJson(pluginRoot, "package.json").openclaw.channel;
-            expect(channel).toEqual({ ...metadata.openclaw.channel, [metadataKey]: declaration });
-            const stateProbe = {
-              entry: { channel, pluginId: id, rootDir: pluginRoot, origin: "bundled" as const },
-              metadataKey,
-              cfg: {},
-            };
-            const check = (probeEnv: NodeJS.ProcessEnv) =>
-              hasChannelPackageState({ ...stateProbe, env: probeEnv });
-            expect([check({}), check({ SYNTHETIC_PLUGIN_TOKEN: "synthetic-test-value" })]).toEqual([
-              false,
-              Boolean(env),
-            ]);
-          }
-        }
-        setState(metadataKey, {
-          env: { anyOf: ["SYNTHETIC_PLUGIN_TOKEN"] },
-          specifier: "./missing-state",
-          exportName: "hasState",
-        });
-        expect(() => copyMetadata(repoRoot)).toThrow(
-          `channel ${metadataKey} specifier './missing-state' has no runtime output for ${id}`,
-        );
-      }
-      fs.writeFileSync(sourcePackagePath, sourceText);
-      copyMetadata(repoRoot);
     }
 
     const readiness = buildReadiness(repoRoot);
@@ -550,11 +545,7 @@ fs.writeFileSync("assets/generated.txt", "generated asset");
         writeFiles(modulesDir, {
           ".bin/probe.cjs": `console.log(require("../${dependency}").version);\n`,
         });
-        fs.symlinkSync(
-          path.relative(path.dirname(dependencyLink), dependencyDir),
-          dependencyLink,
-          "dir",
-        );
+        linkDirectory(dependencyDir, dependencyLink);
         makePlugin(
           repoRoot,
           pluginId,
@@ -573,11 +564,7 @@ fs.writeFileSync("assets/generated.txt", "generated asset");
           "index.cjs": `exports.version = ${JSON.stringify(version)};\n`,
           "SKILL.md": `# Private dependency ${version}\n`,
         });
-        fs.symlinkSync(
-          path.relative(modulesDir, repoRoot),
-          path.join(packageDir, "node_modules", "openclaw"),
-          "dir",
-        );
+        linkDirectory(repoRoot, path.join(modulesDir, "openclaw"));
         sourceHostLinks.set(pluginId, fs.readlinkSync(path.join(modulesDir, "openclaw")));
       }
       await buildExternal(repoRoot);

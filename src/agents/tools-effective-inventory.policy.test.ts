@@ -22,7 +22,10 @@ vi.mock("./auth-profiles/source-check.js", () => ({
 function messagingAgentConfig(tools: OpenClawConfig["tools"] = {}): OpenClawConfig {
   return {
     tools: { profile: "full", ...tools },
-    agents: { entries: { assistant: { tools: { profile: "messaging" } } } },
+    agents: {
+      defaults: { model: "openai/test-model" },
+      entries: { assistant: { tools: { profile: "messaging" } } },
+    },
   };
 }
 
@@ -94,8 +97,6 @@ describe("tool access diagnostics", () => {
     const result = resolveConfiguredToolAccess({
       config: messagingAgentConfig(tools),
       agentId: "assistant",
-      modelProvider: "openai",
-      modelId: "test-model",
     });
     const exec = result.tools.find((tool) => tool.id === "exec");
 

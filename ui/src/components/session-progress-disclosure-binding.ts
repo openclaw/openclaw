@@ -1,6 +1,8 @@
 import { createEffect, onCleanup, useContext, type Accessor } from "solid-js";
 import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
 import { listen } from "../lib/reactive/listener.ts";
+import { observeResize } from "../lib/reactive/observers.ts";
+import { observeWindowResize } from "../lib/reactive/window-resize.ts";
 import { ContentPresentation } from "../lib/solid/presentation.ts";
 import {
   subscribeTranscriptScroll,
@@ -21,6 +23,7 @@ export type ComposerProgressDisclosureContext = {
   sessionIdentity?: string;
   cardLifetime?: object;
   readingHistory?: boolean;
+  getTranscriptElement?: () => HTMLElement | null;
   onManipulate?: () => void;
 };
 
@@ -55,8 +58,10 @@ function createDisclosure(
   let settleTimer: ReturnType<typeof setTimeout> | undefined;
   let scrollSettled = false;
   let lifecycle: ComposerProgressDisclosureContext | undefined;
-  let listeners: AbortController | undefined;
-  let resizeObserver: ResizeObserver | undefined;
+  let headerConnected = false;
+  let stopViewportResize: (() => void) | undefined;
+  let dragListeners: AbortController | undefined;
+  let stopResize: (() => void) | undefined;
   let drag: { id: number; x: number; y: number; extent: number; active: boolean } | undefined;
   let suppressClick = false;
   let lastWheelAt: number | undefined;
@@ -252,7 +257,7 @@ function createDisclosure(
     const transcript =
       lifecycle?.presented === false || lifecycle?.manualOnly
         ? null
-        : (element.closest(".chat-main")?.querySelector<HTMLElement>(".chat-thread") ?? null);
+        : (lifecycle?.getTranscriptElement?.() ?? null);
     if (transcript === currentTranscript) {
       return;
     }
@@ -268,34 +273,28 @@ function createDisclosure(
     if (disposed || lifecycle?.presented === false || lifecycle?.manualOnly) {
       return;
     }
-    if (listeners) {
+    if (headerConnected) {
       return;
     }
-    listeners = new AbortController();
-    const signal = listeners.signal;
-    listen(summary.ownerDocument, "pointerdown", otherPointer, {
-      capture: true,
-      signal,
-    });
+    headerConnected = true;
     const window = summary.ownerDocument.defaultView;
     if (window) {
-      listen(window, "blur", cancelDrag, { signal });
       // Only viewport changes can clamp a retained manual extent. Streamed card
       // revisions cannot resize it, even when the revised note is shorter.
-      listen(window, "resize", clampExtent, { signal });
+      stopViewportResize = observeWindowResize(window, clampExtent);
     }
     if (typeof ResizeObserver !== "undefined") {
-      resizeObserver = new ResizeObserver(clampExtent);
-      resizeObserver.observe(body);
+      stopResize = observeResize([body], clampExtent);
     }
   }
 
   function disconnectHeader(): void {
     cancelDrag();
-    listeners?.abort();
-    listeners = undefined;
-    resizeObserver?.disconnect();
-    resizeObserver = undefined;
+    headerConnected = false;
+    stopViewportResize?.();
+    stopViewportResize = undefined;
+    stopResize?.();
+    stopResize = undefined;
   }
 
   function readChoice(): boolean | number {
@@ -389,7 +388,7 @@ function createDisclosure(
 
   function wheel(event: WheelEvent) {
     if (
-      !listeners ||
+      !headerConnected ||
       event.defaultPrevented ||
       isControl(event) ||
       drag ||
@@ -418,7 +417,7 @@ function createDisclosure(
 
   function pointerDown(event: PointerEvent) {
     if (
-      !listeners ||
+      !headerConnected ||
       !event.isPrimary ||
       event.button !== 0 ||
       isControl(event) ||
@@ -426,6 +425,7 @@ function createDisclosure(
     ) {
       return;
     }
+    cancelDrag();
     suppressClick = false;
     drag = {
       id: event.pointerId,
@@ -435,6 +435,13 @@ function createDisclosure(
       active: false,
     };
     summary.setPointerCapture(event.pointerId);
+    dragListeners = new AbortController();
+    const signal = dragListeners.signal;
+    listen(summary.ownerDocument, "pointerdown", otherPointer, { capture: true, signal });
+    const window = summary.ownerDocument.defaultView;
+    if (window) {
+      listen(window, "blur", cancelDrag, { signal });
+    }
   }
 
   function pointerMove(event: PointerEvent) {
@@ -481,6 +488,8 @@ function createDisclosure(
   function cancelDrag() {
     const activeDrag = drag;
     drag = undefined;
+    dragListeners?.abort();
+    dragListeners = undefined;
     if (activeDrag && summary.hasPointerCapture(activeDrag.id)) {
       summary.releasePointerCapture(activeDrag.id);
     }

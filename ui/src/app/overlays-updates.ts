@@ -5,8 +5,8 @@ import {
   isAcknowledgedAbandonedUpdateRun,
   type UpdateRunRecord,
 } from "../../../src/infra/update-run-record.js";
-import { isReportableUpdateRun } from "../../../src/shared/update-outcome.js";
-import { GatewayRequestError } from "../api/gateway.ts";
+import { isReportableUpdateRun } from "../../../src/shared/update-outcome-classification.js";
+import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
 import type { UpdateHoldResult } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
 import { formatUiError } from "../lib/format-error.ts";
@@ -87,6 +87,7 @@ export function createApplicationUpdateOverlays(
   const receipts = createUpdateRunReceipts();
   let updateRequestRunning = false;
   let updateRunGeneration = 0;
+  let statusProjectionGeneration = 0;
   let updateHoldInFlight = false;
   let runId: string | null = null;
   let updateHistory: UpdateHistory = { kind: "unknown" };
@@ -233,7 +234,7 @@ export function createApplicationUpdateOverlays(
     publish();
   };
 
-  const applyRun = (run: UpdateRunRecord) => {
+  const applyRun = (run: UpdateRunRecord, failure: UpdateFailureTriage | null) => {
     const current = snapshot.updateRun;
     if (current?.runId === run.runId && current.updatedAtMs > run.updatedAtMs) {
       // A status read can still carry independently newer schedule fields.
@@ -247,7 +248,6 @@ export function createApplicationUpdateOverlays(
     }
     runId = run.runId;
     updateAttempt = null;
-    const failure = projectUpdateRunFailure(run);
     setCurrentFailure(failure);
     snapshot = {
       ...snapshot,
@@ -277,7 +277,11 @@ export function createApplicationUpdateOverlays(
         return;
       }
       if (response.run) {
-        applyRun(response.run);
+        const failure = await projectUpdateRunFailure(response.run);
+        if (!isCurrent()) {
+          return;
+        }
+        applyRun(response.run, failure);
         if (response.run.status !== "running") {
           // Refresh the install owner's availability after completion so closing
           // the report cannot re-offer the just-installed target.
@@ -301,10 +305,19 @@ export function createApplicationUpdateOverlays(
     }
   };
 
-  const applyUpdateStatusResponse = (response: UpdateRestartStatusResponse) => {
+  const applyUpdateStatusResponse = async (
+    response: UpdateRestartStatusResponse,
+    isCurrent: () => boolean,
+  ) => {
+    const generation = ++statusProjectionGeneration;
+    const run = response.activeRun ?? response.lastRun;
+    const runFailure = run ? await projectUpdateRunFailure(run) : null;
+    // Newer status or a changed connection/grant can win the cold formatter load.
+    if (generation !== statusProjectionGeneration || !isCurrent()) {
+      return;
+    }
     const { failure, updateStatusBanner, recordedUpdateAttempt, ...status } =
       projectUpdateStatusResponse(response, snapshot);
-    const run = response.activeRun ?? response.lastRun;
     const history = updateAttempt?.history;
     // A failed history read is not an empty baseline. Until a current identity
     // is observed, a status check cannot certify terminal history as this attempt.
@@ -328,7 +341,7 @@ export function createApplicationUpdateOverlays(
         run.runId === snapshot.updateRun.runId ||
         run.createdAtMs >= snapshot.updateRun.createdAtMs)
     ) {
-      applyRun(run);
+      applyRun(run, runFailure);
     } else {
       if (!snapshot.updateRun && !previousOutcome) {
         setCurrentFailure(failure);

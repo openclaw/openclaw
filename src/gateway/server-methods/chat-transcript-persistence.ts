@@ -51,11 +51,10 @@ type AssistantTranscriptScopeParams = {
   agentId?: string;
 };
 
-type ResolvedAssistantTranscriptScope = SessionTranscriptWriteScope & { sessionId: string };
-
-type SourceReplyTranscriptMirrorMetadata = NonNullable<
-  ReturnType<typeof getReplyPayloadMetadata>
->["sourceReplyTranscriptMirror"];
+export type ResolvedAssistantTranscriptScope = SessionTranscriptWriteScope & {
+  sessionId: string;
+  sessionKey: string;
+};
 
 export type SourceReplyContentState = {
   broadcastContent: AssistantDisplayContentBlock[];
@@ -66,7 +65,7 @@ export type SourceReplyContentState = {
 
 export type SourceReplyTranscriptMirror = {
   idempotencyKey: string;
-  metadata: SourceReplyTranscriptMirrorMetadata;
+  metadata: NonNullable<ReturnType<typeof getReplyPayloadMetadata>>["sourceReplyTranscriptMirror"];
 };
 
 export type SourceReplyTranscriptRewrite = SourceReplyTranscriptMirror & {
@@ -103,7 +102,7 @@ function mergeAssistantDisplayContent(
   return content;
 }
 
-function buildAssistantDisplayRewrite(params: {
+export function buildAssistantDisplayRewrite(params: {
   message: Record<string, unknown>;
   displayContent: AssistantDisplayContentBlock[];
   mediaBySource?: AssistantDisplayMediaBySource;
@@ -337,11 +336,7 @@ function mediaReferenceSet(mediaUrls: readonly string[]) {
 
 function findAssistantTranscriptMessageByTurnIndexAndMediaInEvents(
   events: readonly TranscriptEvent[],
-  params: {
-    assistantMessageIndex: number;
-    mediaUrls: readonly string[];
-    rejectedMediaCount: number;
-  },
+  params: Parameters<typeof rewriteAssistantTranscriptMessageByTurnIndexAndMedia>[0],
 ): { messageId: string; message: Record<string, unknown> } | null {
   const expectedMedia = mediaReferenceSet(params.mediaUrls);
   if (

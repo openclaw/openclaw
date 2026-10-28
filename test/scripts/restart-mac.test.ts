@@ -235,30 +235,27 @@ describe("scripts/restart-mac.sh", () => {
     expect(result.stderr).toContain("No process is listening on gateway port 18789.");
   });
 
-  it("uses a fail-closed gateway port verification helper", () => {
-    expectContents(
-      script,
+  it.each([
+    [
+      "uses fail-closed gateway verification",
       [
         'source "${ROOT_DIR}/scripts/lib/restart-mac-gateway.sh"',
         'run_step "verify gateway port ${GATEWAY_PORT} (unsigned)" verify_gateway_port_listening "${GATEWAY_PORT}"',
       ],
       ["lsof -iTCP:${GATEWAY_PORT} -sTCP:LISTEN | head -n 5 || true"],
-    );
-  });
-
-  it("avoids login-shell noise and early-exit pipe warnings", () => {
-    expectContents(
-      script,
+    ],
+    [
+      "avoids login-shell noise and early-exit pipe warnings",
       ["/usr/bin/awk -F ' = '"],
       ["bash -lc", `printf '%s\\n' "\${job}" | /usr/bin/awk`],
-    );
-  });
-
-  it("keeps the default restart log scoped to the current worktree lock", () => {
-    expect(script).toContain(
-      'LOG_PATH="${OPENCLAW_RESTART_LOG:-${TMPDIR:-/tmp}/openclaw-restart-${LOCK_KEY}.log}"',
-    );
-    expect(script).not.toContain('LOG_PATH="${OPENCLAW_RESTART_LOG:-/tmp/openclaw-restart.log}"');
+    ],
+    [
+      "scopes the restart log to the worktree lock",
+      ['LOG_PATH="${OPENCLAW_RESTART_LOG:-${TMPDIR:-/tmp}/openclaw-restart-${LOCK_KEY}.log}"'],
+      ['LOG_PATH="${OPENCLAW_RESTART_LOG:-/tmp/openclaw-restart.log}"'],
+    ],
+  ] satisfies [string, string[], string[]][])("%s", (_name, included, excluded) => {
+    expectContents(script, included, excluded);
   });
 
   it("rejects named app profiles before global process or launchd cleanup", () => {
@@ -290,14 +287,9 @@ describe("scripts/restart-mac.sh", () => {
 
   it("prefers the freshly packaged app unless an explicit app bundle is set", () => {
     const chooseBlock = block("choose_app_bundle()", "choose_app_bundle");
-
     expect(script).toContain('fail "OPENCLAW_APP_BUNDLE does not exist: ${APP_BUNDLE}"');
     expect(chooseBlock).toContain("canonicalize_app_bundle");
-    expect(chooseBlock.indexOf("${ROOT_DIR}/dist/OpenClaw.app")).toBeGreaterThan(-1);
-    expect(chooseBlock.indexOf("/Applications/OpenClaw.app")).toBeGreaterThan(-1);
-    expect(chooseBlock.indexOf("${ROOT_DIR}/dist/OpenClaw.app")).toBeLessThan(
-      chooseBlock.indexOf("/Applications/OpenClaw.app"),
-    );
+    expectBefore("${ROOT_DIR}/dist/OpenClaw.app", "/Applications/OpenClaw.app", chooseBlock);
   });
 
   it("stops launchd supervision before killing app processes", () => {

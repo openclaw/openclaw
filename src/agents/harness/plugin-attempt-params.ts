@@ -1,3 +1,4 @@
+import type { ProviderModelRef as ModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { isHostScopedAgentToolActive } from "../agent-tools.ring-zero-context.js";
 import { appendCurrentInboundContext } from "../embedded-agent-runner/run/runtime-context-prompt.js";
 import { buildAgentInternalEventContext } from "../internal-events.js";
@@ -22,6 +23,7 @@ export async function preparePluginHarnessParams(
   nativePermissionsConsented: boolean,
   setInputAttachmentReadAllowed: (allowed: boolean) => void,
   hasRuntimePluginToolGrant: boolean,
+  webSearchModel?: ModelRef | null,
 ): Promise<import("./types.js").AgentHarnessAttemptParamsV2> {
   const boundary = "plugin harness handoff";
   const resolvedApiKey = params.resolvedApiKey
@@ -41,6 +43,12 @@ export async function preparePluginHarnessParams(
       ? harness.conversationToolPolicySafeDenyTools
       : undefined,
     harness.conversationToolPolicyNativeTools,
+    webSearchModel === undefined
+      ? {
+          provider: preparedParams.model.provider,
+          model: preparedParams.modelId,
+        }
+      : webSearchModel,
   );
   if (policies.requiresLiveToolAuthority) {
     // Native-runtime consent does not waive a separate revocable delegation grant.
@@ -48,13 +56,16 @@ export async function preparePluginHarnessParams(
   }
   const policyParams = {
     ...preparedParams,
+    preparedWebSearchPolicy: policies.webSearchPolicy,
     pluginHarnessToolPolicySafeDeniedTools:
       policies.safeDeniedToolNames.length > 0 ? policies.safeDeniedToolNames : undefined,
     pluginHarnessToolPolicyRestricted: policies.toolPolicyRestricted,
     pluginHarnessToolPolicyScope: hasRuntimePluginToolGrant ? "turn" : policies.toolPolicyScope,
   };
+  // Consent means the user accepted that the native runtime runs unrestricted;
+  // native harnesses pick their own approval mode from permissionMode.
   const effectiveParams = nativePermissionsConsented
-    ? policyParams
+    ? { ...policyParams, permissionMode: "full" as const }
     : applyPluginHarnessDenyAllToolPolicy(policyParams, policies);
   setInputAttachmentReadAllowed(
     isRuntimeToolAllowed("read", effectiveParams.toolsAllow) &&

@@ -19,7 +19,6 @@ import { createPlacementRecoveryActions } from "./placement-dispatch-recovery.js
 import {
   createWorkerPlacementDispatchStartup,
   type WorkerDevicePlacementRequirementResolver,
-  type WorkerPlacementRecoveryBarrier,
 } from "./placement-dispatch-startup.js";
 import { createWorkerPlacementMoveAbandonment } from "./placement-move-abandon.js";
 import {
@@ -37,7 +36,10 @@ import {
   type WorkerPlacementReclaimOptions,
 } from "./placement-reclaim.js";
 import { reportPlacementTransition } from "./placement-record.js";
-import type { PlacementRecoveryDeps } from "./placement-recovery-contract.js";
+import type {
+  PlacementRecoveryDeps,
+  WorkerPlacementRecoveryBarrier,
+} from "./placement-recovery-contract.js";
 import {
   isFailedWorkerPlacementEnvironmentGone,
   matchesWorkerPlacementTarget,
@@ -571,6 +573,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     },
     move: moveService.move,
     reclaim,
+    subscribeOrphanWorkspaceChanges: recovery.subscribeOrphanWorkspaceChanges,
     reconcile: recovery.reconcile,
     reconcileActive: recovery.reconcileActive,
     isInterruptedTurn: recovery.isInterruptedTurn,

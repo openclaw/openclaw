@@ -32,6 +32,11 @@ describe("update conversation notices", () => {
     },
     {
       status: "skipped",
+      reason: "managed-service-handoff-already-running",
+      headline: "⚠️ A previous update still holds this installation.",
+    },
+    {
+      status: "skipped",
       reason: "still-starting",
       headline: "⏳ OpenClaw is installed and still starting.",
     },

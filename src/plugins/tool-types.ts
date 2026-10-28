@@ -4,8 +4,10 @@ import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ConversationReadInvocationOrigin } from "../channels/plugins/conversation-read-origin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HookEntry } from "../hooks/types.js";
+import type { InputProvenance } from "../sessions/input-provenance.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import type { MemoryAudience } from "./memory-provider-types.js";
+import type { PluginRequesterModels } from "./model-catalog.types.js";
 
 export type OpenClawPluginActiveModelContext = {
   provider?: string;
@@ -65,6 +67,15 @@ type OpenClawPluginToolContextBase = {
   approvalReviewerDeviceIds?: readonly string[];
   /** Ephemeral session UUID - regenerated on /new and /reset. Use for per-conversation isolation. */
   sessionId?: string;
+  /** Host run id of the agent turn that builds this tool. Correlation only; never authority. */
+  runId?: string;
+  /**
+   * Host-stamped origin of this turn's input, when its producer supplied one. A background
+   * exec completion wake names the run that started the command:
+   * `{ kind: "internal_system", sourceTool: "exec", runId }`. A fact for plugin-owned
+   * policy; it never grants owner identity.
+   */
+  inputProvenance?: InputProvenance;
   /** Out-of-band plugin-owned bindings attached by the current run initiator. */
   toolBindings?: Readonly<Record<string, unknown>>;
   /** Host-prepared repository identities for project-aware tool behavior. */
@@ -80,6 +91,9 @@ type OpenClawPluginToolContextBase = {
   browser?: {
     sandboxBridgeUrl?: string;
     allowHostControl?: boolean;
+    /** Prepared local exec parity; not standalone authority or permission for remote browsers. */
+    allowLocalLoopback?: boolean;
+    assertLocalLoopbackCurrent?: () => void;
   };
   messageChannel?: string;
   agentAccountId?: string;
@@ -132,7 +146,11 @@ type OpenClawPluginToolContextBase = {
 
 /** Version 1 is the source-compatible direct-turn context; version 2 requires final-effect authority. */
 export type OpenClawPluginToolContext<Version extends 1 | 2 = 1> = Version extends 2
-  ? OpenClawPluginToolContextBase & { assertInvocationCurrent: () => void }
+  ? OpenClawPluginToolContextBase & {
+      assertInvocationCurrent: () => void;
+      /** Optional on older hosts and on turns without admitted requester/session authority. */
+      runtimeContext?: { models?: PluginRequesterModels };
+    }
   : OpenClawPluginToolContextBase;
 
 /** A version 2 descriptor explicitly opts into owner-authorized continuations. */

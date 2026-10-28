@@ -7,8 +7,9 @@ import {
   type FixtureReceiptChannel,
 } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { isProcessAlive } from "../../test-support/process.test-support.js";
 import { loadQaRunnerModelOptions } from "./model-catalog.runtime.js";
-import { isProcessAlive, waitForDead } from "./process-wait.test-helper.js";
+import { waitForDead } from "./process-wait.test-helper.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
 const { cleanup, makeTempDir } = createTempDirHarness();
@@ -33,18 +34,16 @@ async function fixtureReadyBeforeSettlement(
     });
   // A receipt can arrive after the operation settles; the fixture writes this
   // record before reporting readiness, so the durable fact wins that race.
-  const settled = Promise.resolve(operation).then(
-    async () => {
-      if (!(await recorded())) {
-        throw new Error(`Operation settled while waiting for ${recordPath}`);
-      }
-    },
-    async (error: unknown) => {
+  const settled = Promise.resolve(operation)
+    .then(
+      () => new Error(`Operation settled while waiting for ${recordPath}`),
+      (error: unknown) => error,
+    )
+    .then(async (error: unknown) => {
       if (!(await recorded())) {
         throw error;
       }
-    },
-  );
+    });
   await Promise.race([receipts.waitFor(recordPath, "ready"), settled]);
 }
 
@@ -121,18 +120,15 @@ describe("qa runner model catalog", () => {
       available,
       missing: false,
     });
+    const models = [
+      null,
+      model("anthropic/claude-sonnet-4-6", "Claude Sonnet 4.6"),
+      model("openai/gpt-5.6-luna", "gpt-5.6-luna", "text,image"),
+      model("openrouter/auto", "OpenRouter Auto", "text", false),
+    ];
     await writeCatalog(
       repoRoot,
-      `process.stdout.write(${JSON.stringify(
-        JSON.stringify({
-          models: [
-            null,
-            model("anthropic/claude-sonnet-4-6", "Claude Sonnet 4.6"),
-            model("openai/gpt-5.6-luna", "gpt-5.6-luna", "text,image"),
-            model("openrouter/auto", "OpenRouter Auto", "text", false),
-          ],
-        }),
-      )});\n`,
+      `process.stdout.write(${JSON.stringify(JSON.stringify({ models }))});\n`,
     );
 
     await expect(loadQaRunnerModelOptions({ repoRoot })).resolves.toEqual([

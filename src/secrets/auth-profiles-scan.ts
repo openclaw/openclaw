@@ -1,23 +1,15 @@
 /** Scans auth-profile stores for plaintext credentials, SecretRefs, and OAuth tokens. */
 import { isNonEmptyString, isRecord } from "./shared.js";
-import { listAuthProfileSecretTargetEntries } from "./target-registry.js";
-
-/** Auth-profile credential kinds that can carry SecretRef-backed values. */
-type AuthProfileCredentialType = "api_key" | "token";
-
-type AuthProfileFieldSpec = {
-  valueField: string;
-  refField: string;
-};
+import { AUTH_PROFILE_SECRET_FIELDS } from "./target-registry-data.js";
 
 type StaticCredentialVisit = {
   profileId: string;
   provider: string;
   /** Original mutable profile record from auth-profiles.json. */
   profile: Record<string, unknown>;
-  /** Plaintext value field name derived from the secret target registry. */
+  /** Canonical plaintext credential field name. */
   valueField: string;
-  /** SecretRef sibling field name derived from the secret target registry. */
+  /** Canonical SecretRef sibling field name. */
   refField: string;
   value: unknown;
   refValue: unknown;
@@ -36,33 +28,6 @@ type OauthCredentialVisit = {
 
 type AuthProfileCredentialVisit = StaticCredentialVisit | OauthCredentialVisit;
 
-function getAuthProfileFieldName(pathPattern: string): string {
-  const segments = pathPattern.split(".").filter(Boolean);
-  return segments[segments.length - 1] ?? "";
-}
-
-const AUTH_PROFILE_FIELD_SPEC_BY_TYPE = (() => {
-  const defaults: Record<AuthProfileCredentialType, AuthProfileFieldSpec> = {
-    api_key: { valueField: "key", refField: "keyRef" },
-    token: { valueField: "token", refField: "tokenRef" },
-  };
-  for (const target of listAuthProfileSecretTargetEntries()) {
-    if (!target.authProfileType) {
-      continue;
-    }
-    // Target registry owns shipped auth-profile field names; derive scan fields from it so
-    // policy checks and runtime collection cannot drift when a ref path changes.
-    defaults[target.authProfileType] = {
-      valueField: getAuthProfileFieldName(target.pathPattern),
-      refField:
-        target.refPathPattern !== undefined
-          ? getAuthProfileFieldName(target.refPathPattern)
-          : defaults[target.authProfileType].refField,
-    };
-  }
-  return defaults;
-})();
-
 /** Iterates credential-bearing auth profiles with normalized field metadata for audit/apply. */
 export function* iterateAuthProfileCredentials(
   profiles: Record<string, unknown>,
@@ -73,7 +38,7 @@ export function* iterateAuthProfileCredentials(
     }
     const provider = value.provider;
     if (value.type === "api_key" || value.type === "token") {
-      const spec = AUTH_PROFILE_FIELD_SPEC_BY_TYPE[value.type];
+      const spec = AUTH_PROFILE_SECRET_FIELDS[value.type];
       yield {
         kind: value.type,
         profileId,

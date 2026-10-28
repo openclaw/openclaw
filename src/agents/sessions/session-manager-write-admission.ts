@@ -373,11 +373,10 @@ export async function appendSessionTranscriptNote(
     }
     releases.push(
       registerOpenClawStateDatabaseAsyncResource({
-        close: async (identity) => {
-          if (!identity || identity.key === state.identity.key) {
-            revoke();
-            await completion.promise;
-          }
+        admission: state,
+        close: async () => {
+          revoke();
+          await completion.promise;
         },
       }),
     );

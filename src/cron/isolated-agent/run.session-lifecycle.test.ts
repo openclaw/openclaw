@@ -244,12 +244,14 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
       );
       const controller = new AbortController();
       let interrupted = false;
+      let cliReturned = false;
       const interrupt = () => {
         interrupted = true;
         controller.abort(new Error("Synthetic binding commit interruption"));
       };
       runCliAgentMock.mockImplementationOnce(async (params: RunCliAgentParams) => {
         expect(params.cliSessionId).toBe(previousBinding.sessionId);
+        cliReturned = true;
         return {
           payloads: [{ text: "Synthetic cron answer" }],
           meta: {
@@ -271,7 +273,8 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
                   ...options?.workerGuard,
                   assertCurrent: () => {
                     const isBase = scope.sessionKey === target.sessionKey;
-                    if ((failurePoint !== "continuation") === isBase) {
+                    // Preparation now uses guarded writes too; interrupt only CLI settlement.
+                    if (cliReturned && (failurePoint !== "continuation") === isBase) {
                       interrupt();
                     }
                     assertCommitAllowed();
@@ -596,6 +599,8 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
       const releaseFirst = createDeferred();
       const secondPreparing = createDeferred();
       const releaseSecond = createDeferred();
+      const secondStarted = createDeferred();
+      const releaseCancellation = createDeferred();
       const postExecutionWriteStarted = createDeferred();
       const releasePostExecutionWrite = createDeferred();
       const controller = new AbortController();
@@ -787,6 +792,8 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
             throw new FailoverError("429 rate limit", { reason: "rate_limit", provider, model });
           }
           if (outcome === "cancelled") {
+            secondStarted.resolve();
+            await releaseCancellation.promise;
             emitAssistantEnd({ stopReason: "aborted", content: [] });
             return { payloads: [], meta: { aborted: true, stopReason: "aborted", agentMeta: {} } };
           }
@@ -843,10 +850,12 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
         expect(runIds.size).toBe(1);
         expect(getAgentRunContextOwnership(runId)?.clearRequested).toBe(false);
         expect(clearTrackedActiveRun).not.toHaveBeenCalled();
-        if (cancelled) {
-          controller.abort();
-        }
         releaseSecond.resolve();
+        if (cancelled) {
+          await Promise.race([secondStarted.promise, exited]);
+          controller.abort();
+          releaseCancellation.resolve();
+        }
         if (outcome === "post-execution-abort") {
           await Promise.race([postExecutionWriteStarted.promise, exited]);
           controller.abort(new Error("post-execution abort"));
@@ -904,6 +913,7 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
       } finally {
         releaseFirst.resolve();
         releaseSecond.resolve();
+        releaseCancellation.resolve();
         releasePostExecutionWrite.resolve();
         await run.catch(() => {});
         await unsubscribe();

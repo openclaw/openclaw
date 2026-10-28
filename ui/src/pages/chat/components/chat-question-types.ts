@@ -22,6 +22,7 @@ export type QuestionPanelViewModel = {
 };
 
 export type QuestionPanelProps = {
+  getTranscriptElement?: () => HTMLElement | null;
   model: QuestionPanelViewModel;
   onSubmit?: (answersById: Record<string, string[]>) => void | Promise<void>;
   onSkip?: () => void | Promise<void>;

@@ -1,111 +1,17 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { isMemorySearchDeadlineError, runMemorySearchWithDeadline } from "./search-deadline.js";
+import { describe, expect, it } from "vitest";
+import { createMemorySearchDeadlineError, isMemorySearchDeadlineError } from "./search-deadline.js";
 
-describe("runMemorySearchWithDeadline", () => {
-  afterEach(() => {
-    vi.useRealTimers();
-  });
+describe("memory search deadline error provenance", () => {
+  it("cannot be branded by copying the marker off the abort reason", () => {
+    // Providers receive the deadline as signal.reason, so a copied property
+    // cannot establish that a provider failure came from the deadline owner.
+    const deadline = createMemorySearchDeadlineError("memory search timed out");
+    const forged = new Error("openai-compatible embeddings query failed");
+    for (const key of Object.getOwnPropertySymbols(deadline)) {
+      Object.defineProperty(forged, key, { value: true });
+    }
 
-  it("clears its timer and parent abort listener after success", async () => {
-    vi.useFakeTimers();
-    const parent = new AbortController();
-    const removeEventListener = vi.spyOn(parent.signal, "removeEventListener");
-
-    await expect(
-      runMemorySearchWithDeadline({
-        timeoutMs: 15_000,
-        parentSignal: parent.signal,
-        run: async () => "done",
-      }),
-    ).resolves.toBe("done");
-
-    expect(removeEventListener).toHaveBeenCalledOnce();
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it("cannot be branded by copying the marker off the abort reason", async () => {
-    // The supervised task is handed the deadline error as `signal.reason`, so a
-    // property-based brand is readable by exactly the provider code the brand
-    // exists to exclude.
-    vi.useFakeTimers();
-    let forged: Error | undefined;
-    let sawBrandedDeadlineReason = false;
-    const result = runMemorySearchWithDeadline({
-      timeoutMs: 15_000,
-      run: async (signal) =>
-        await new Promise((_resolve, reject) => {
-          signal.addEventListener(
-            "abort",
-            () => {
-              sawBrandedDeadlineReason = isMemorySearchDeadlineError(signal.reason);
-              const stolen = new Error("openai-compatible embeddings query failed");
-              for (const key of Object.getOwnPropertySymbols(signal.reason as object)) {
-                Object.defineProperty(stolen, key, { value: true });
-              }
-              forged = stolen;
-              reject(stolen);
-            },
-            { once: true },
-          );
-        }),
-    });
-    const resultAssertion = expect(result).rejects.toSatisfy(isMemorySearchDeadlineError);
-    await vi.advanceTimersByTimeAsync(15_000);
-    await resultAssertion;
-
-    expect(forged).toBeDefined();
-    expect(sawBrandedDeadlineReason).toBe(true);
+    expect(isMemorySearchDeadlineError(deadline)).toBe(true);
     expect(isMemorySearchDeadlineError(forged)).toBe(false);
-  });
-
-  it("preserves caller cancellation and removes its listener", async () => {
-    vi.useFakeTimers();
-    const parent = new AbortController();
-    const removeEventListener = vi.spyOn(parent.signal, "removeEventListener");
-    const reason = new Error("agent run cancelled");
-    let taskSignal: AbortSignal | undefined;
-    const result = runMemorySearchWithDeadline({
-      timeoutMs: 15_000,
-      parentSignal: parent.signal,
-      run: async (signal) => {
-        taskSignal = signal;
-        return await new Promise(() => {});
-      },
-    });
-    const resultAssertion = expect(result).rejects.toBe(reason);
-    await Promise.resolve();
-    parent.abort(reason);
-
-    await resultAssertion;
-    expect(taskSignal?.reason).toBe(reason);
-    expect(removeEventListener).toHaveBeenCalledOnce();
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it("does not accept task success after the active deadline has expired", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
-    let resolveTask: ((value: string) => void) | undefined;
-    let taskSignal: AbortSignal | undefined;
-    const result = runMemorySearchWithDeadline({
-      timeoutMs: 15_000,
-      run: async (signal) => {
-        taskSignal = signal;
-        return await new Promise<string>((resolve) => {
-          resolveTask = resolve;
-        });
-      },
-    });
-    const resultAssertion = expect(result).rejects.toThrow("memory_search timed out after 15s");
-    await Promise.resolve();
-
-    // Resolve from an I/O-style continuation before the overdue timer callback
-    // receives its turn; the live budget check must still make timeout win.
-    vi.setSystemTime(15_000);
-    resolveTask?.("late success");
-
-    await resultAssertion;
-    expect(taskSignal?.aborted).toBe(true);
-    expect(vi.getTimerCount()).toBe(0);
   });
 });

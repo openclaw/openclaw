@@ -1,3 +1,4 @@
+import type { inspectCronOwnerRowsForDoctor } from "../../commands/doctor/cron/store-inventory.js";
 import type { SqliteWorkerReply } from "../../infra/sqlite-worker-contract.js";
 import type { PluginDoctorCronJob } from "../../plugins/doctor-contract-module.js";
 import type { CronRunRecord } from "./run-history.types.js";
@@ -25,7 +26,10 @@ export type CronReadOnlyRequest = {
   /** Omitted only for Doctor's all-partition raw inventory. */
   storeKey?: string;
   stagingRoot?: string;
+  /** Owner rows need a store key; schema admits the state store and reads nothing. */
+  inspect?: "owners" | "schema";
 };
+export type CronOwnerInspectionRow = ReturnType<typeof inspectCronOwnerRowsForDoctor>[number];
 export type CronReadOnlyResult =
   | {
       ok: true;
@@ -34,5 +38,6 @@ export type CronReadOnlyResult =
       candidates?: CronRunHistoryCandidates;
       binding?: CronRunHistoryBinding;
       inventory?: PluginDoctorCronJob[];
+      owners?: CronOwnerInspectionRow[];
     }
   | { ok: false; error: Extract<SqliteWorkerReply, { ok: false }>["error"] };

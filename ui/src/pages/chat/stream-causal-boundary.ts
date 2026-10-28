@@ -5,7 +5,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { streamSegmentHasItemId, type ChatStreamSegment } from "../../lib/chat/chat-types.ts";
-import { userTurnRunId } from "./chat-thread-items.ts";
+import { userTurnRunId } from "../../lib/chat/history-message-identity.ts";
 
 export type StreamCausalBoundaryState = {
   chatMessages?: unknown[];

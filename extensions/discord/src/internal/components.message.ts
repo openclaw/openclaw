@@ -1,62 +1,31 @@
 import {
-  ButtonStyle,
   ComponentType,
-  type APIActionRowComponent,
-  type APIButtonComponent,
-  type APIChannelSelectComponent,
-  type APIComponentInMessageActionRow,
-  type APIContainerComponent,
-  type APIFileComponent,
-  type APIMediaGalleryComponent,
-  type APISectionComponent,
-  type APISeparatorComponent,
   type APIStringSelectComponent,
   type APITextDisplayComponent,
-  type APIThumbnailComponent,
 } from "discord-api-types/v10";
 import {
-  BaseComponent,
+  type BaseComponent,
   BaseMessageInteractiveComponent,
   clean,
-  colorToNumber,
+  parseCustomId,
+  type ComponentData,
 } from "./components.base.js";
-
-export abstract class Button extends BaseMessageInteractiveComponent {
-  readonly type = ComponentType.Button;
-  abstract label: string;
-  emoji?: { name: string; id?: string; animated?: boolean };
-  style: ButtonStyle = ButtonStyle.Primary;
-  disabled = false;
-  serialize(): APIButtonComponent {
-    const link = this instanceof LinkButton;
-    return clean({
-      type: this.type,
-      style: this.style,
-      custom_id: link ? undefined : this.customId,
-      label: this.label,
-      emoji: this.emoji,
-      disabled: this.disabled || undefined,
-      url: link ? this.url : undefined,
-    }) as APIButtonComponent;
-  }
-}
-
-export abstract class LinkButton extends Button {
-  customId = "";
-  abstract url: string;
-  override style = ButtonStyle.Link;
-  override async run(): Promise<never> {
-    throw new Error("Link buttons do not run handlers");
-  }
-}
+import type { BaseComponentInteraction } from "./interactions.js";
 
 export abstract class AnySelectMenu extends BaseMessageInteractiveComponent {
+  readonly isV2 = false;
+  override defer: BaseMessageInteractiveComponent["defer"] = false;
+  override ephemeral: BaseMessageInteractiveComponent["ephemeral"] = false;
+  override customIdParser = parseCustomId;
   placeholder?: string;
   minValues?: number;
   maxValues?: number;
   disabled = false;
   required?: boolean;
   defaultValues?: unknown[];
+  run(_interaction: BaseComponentInteraction, _data: ComponentData): unknown {
+    return undefined;
+  }
   serializeOptions(): Record<string, unknown> {
     return { type: this.type, default_values: this.defaultValues };
   }
@@ -89,157 +58,9 @@ export abstract class RoleSelectMenu extends AnySelectMenu {
   readonly type = ComponentType.RoleSelect;
 }
 
-export abstract class MentionableSelectMenu extends AnySelectMenu {
-  readonly type = ComponentType.MentionableSelect;
-}
-
-export abstract class ChannelSelectMenu extends AnySelectMenu {
-  readonly type = ComponentType.ChannelSelect;
-  channelTypes?: APIChannelSelectComponent["channel_types"];
-  override serializeOptions() {
-    return {
-      type: this.type,
-      default_values: this.defaultValues,
-      channel_types: this.channelTypes,
-    };
-  }
-}
-
-export class Row<T extends BaseMessageInteractiveComponent> extends BaseComponent {
-  readonly type = ComponentType.ActionRow;
-  override readonly isV2 = false;
-  constructor(public components: T[] = []) {
-    super();
-  }
-  addComponent(component: T): void {
-    this.components.push(component);
-  }
-  serialize(): APIActionRowComponent<APIComponentInMessageActionRow> {
-    return {
-      type: this.type,
-      components: this.components.map(
-        (entry) => entry.serialize() as APIComponentInMessageActionRow,
-      ),
-    };
-  }
-}
-
-abstract class V2Component extends BaseComponent {
-  override readonly isV2 = true;
-}
-
-export class TextDisplay extends V2Component {
-  readonly type = ComponentType.TextDisplay;
-  constructor(public content?: string) {
-    super();
-  }
-  serialize(): APITextDisplayComponent {
-    return clean({ type: this.type, content: this.content }) as APITextDisplayComponent;
-  }
-}
-
-export class Separator extends V2Component {
-  readonly type = ComponentType.Separator;
-  divider = true;
-  spacing: 1 | 2 | "small" | "large" = "small";
-  constructor(options?: { spacing?: Separator["spacing"]; divider?: boolean }) {
-    super();
-    this.spacing = options?.spacing ?? this.spacing;
-    this.divider = options?.divider ?? this.divider;
-  }
-  serialize(): APISeparatorComponent {
-    return clean({
-      type: this.type,
-      divider: this.divider,
-      spacing: this.spacing === "large" ? 2 : this.spacing === "small" ? 1 : this.spacing,
-    }) as APISeparatorComponent;
-  }
-}
-
-export class Thumbnail extends V2Component {
-  readonly type = ComponentType.Thumbnail;
-  constructor(public url?: string) {
-    super();
-  }
-  serialize(): APIThumbnailComponent {
-    return clean({
-      type: this.type,
-      media: this.url ? { url: this.url } : undefined,
-    }) as APIThumbnailComponent;
-  }
-}
-
-export class Section extends V2Component {
-  readonly type = ComponentType.Section;
-  constructor(
-    public components: TextDisplay[] = [],
-    public accessory?: Thumbnail | Button | LinkButton,
-  ) {
-    super();
-  }
-  serialize(): APISectionComponent {
-    return clean({
-      type: this.type,
-      components: this.components.map((entry) => entry.serialize()),
-      accessory: this.accessory?.serialize(),
-    }) as APISectionComponent;
-  }
-}
-
-export class MediaGallery extends V2Component {
-  readonly type = ComponentType.MediaGallery;
-  constructor(public items: Array<{ url: string; description?: string; spoiler?: boolean }> = []) {
-    super();
-  }
-  serialize(): APIMediaGalleryComponent {
-    return {
-      type: this.type,
-      items: this.items.map((entry) => ({
-        media: { url: entry.url },
-        description: entry.description,
-        spoiler: entry.spoiler,
-      })),
-    };
-  }
-}
-
-export class File extends V2Component {
-  readonly type = ComponentType.File;
-  constructor(
-    public file?: `attachment://${string}`,
-    public spoiler = false,
-  ) {
-    super();
-  }
-  serialize(): APIFileComponent {
-    return clean({
-      type: this.type,
-      file: this.file ? { url: this.file } : undefined,
-      spoiler: this.spoiler || undefined,
-    }) as APIFileComponent;
-  }
-}
-
-export class Container extends V2Component {
-  readonly type = ComponentType.Container;
-  accentColor?: string | number;
-  spoiler = false;
-  constructor(
-    public components: Array<
-      Row<BaseMessageInteractiveComponent> | TextDisplay | Section | MediaGallery | Separator | File
-    > = [],
-    options?: { accentColor?: string | number; spoiler?: boolean },
-  ) {
-    super();
-    this.accentColor = options?.accentColor;
-    this.spoiler = options?.spoiler ?? false;
-  }
-  serialize(): APIContainerComponent {
-    return clean({
-      type: this.type,
-      components: this.components.map((entry) => entry.serialize()),
-      accent_color: colorToNumber(this.accentColor),
-      spoiler: this.spoiler || undefined,
-    }) as APIContainerComponent;
-  }
+export interface TextDisplay extends BaseComponent {
+  readonly type: ComponentType.TextDisplay;
+  readonly isV2: true;
+  content?: string;
+  serialize(): APITextDisplayComponent;
 }

@@ -147,6 +147,7 @@ export type ApplyShortTermPromotionsOptions = PromotionThresholdOptions & {
   consolidation?: {
     subagent?: import("./dreaming-narrative.js").DreamingCompletion;
     model?: string;
+    timeoutMs?: number;
     logger: {
       info: (message: string) => void;
       warn: (message: string) => void;

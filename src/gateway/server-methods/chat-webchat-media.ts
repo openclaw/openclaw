@@ -5,8 +5,8 @@ import { isAudioFileName, mimeTypeFromFilePath } from "@openclaw/media-core/mime
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { openLocalFileSafely } from "../../infra/fs-safe.js";
+import { resolveSendableOutboundReplyParts } from "../../infra/outbound/reply-payload-parts.js";
 import { assertLocalMediaAllowed, LocalMediaAccessError } from "../../media/local-media-access.js";
-import { resolveSendableOutboundReplyParts } from "../../plugin-sdk/reply-payload.js";
 import { sanitizeReplyDirectiveId } from "../../utils/directive-tags.js";
 
 /** Cap local audio files exposed through assistant media. */
@@ -27,11 +27,6 @@ type WebchatAudioEmbeddingOptions = {
   assertCurrent?: () => void;
   localRoots?: readonly string[];
   onLocalAudioAccessDenied?: (err: LocalMediaAccessError) => void;
-};
-
-type LocalAudioContentBlock = {
-  path: string;
-  block: Record<string, unknown>;
 };
 
 /** Map `mediaUrl` strings to an absolute filesystem path for local embedding (plain paths or `file:` URLs). */
@@ -59,7 +54,10 @@ async function readLocalAudioContentBlockForEmbedding(
   payload: ReplyPayload,
   raw: string,
   options: WebchatAudioEmbeddingOptions | undefined,
-): Promise<LocalAudioContentBlock | null> {
+): Promise<{
+  path: string;
+  block: Record<string, unknown>;
+} | null> {
   if (payload.trustedLocalMedia !== true) {
     // WebChat may embed local audio only after an upstream path normalizer grants trust.
     return null;

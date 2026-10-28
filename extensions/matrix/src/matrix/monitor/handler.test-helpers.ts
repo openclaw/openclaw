@@ -1,5 +1,6 @@
 // Matrix helper module supports handler helpers behavior.
 import * as channelInbound from "openclaw/plugin-sdk/channel-inbound";
+import type { ChannelIngressMonitorLifecycle } from "openclaw/plugin-sdk/channel-outbound";
 import type { RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
 import { finalizeInboundContext as finalizeCoreInboundContext } from "openclaw/plugin-sdk/reply-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
@@ -81,8 +82,6 @@ type MatrixHandlerTestHarnessOptions = {
   dmEnabled?: boolean;
   dmPolicy?: "pairing" | "allowlist" | "open" | "disabled";
   mediaMaxBytes?: number;
-  startupMs?: number;
-  dropPreStartupMessages?: boolean;
   needsRoomAliasesForConfig?: boolean;
   isDirectMessage?: boolean;
   historyLimit?: number;
@@ -105,7 +104,6 @@ type MatrixHandlerTestHarnessOptions = {
   dispatchInboundMessage?: MatrixDispatchInboundMessage;
   runChannelInboundEvent?: MatrixMonitorHandlerParams["core"]["channel"]["inbound"]["run"];
   runPrepared?: MatrixRunPreparedMock;
-  inboundDeduper?: MatrixMonitorHandlerParams["inboundDeduper"];
   shouldAckReaction?: MatrixMonitorHandlerParams["core"]["channel"]["reactions"]["shouldAckReaction"];
   getRoomInfo?: MatrixMonitorHandlerParams["getRoomInfo"];
   getMemberDisplayName?: MatrixMonitorHandlerParams["getMemberDisplayName"];
@@ -114,7 +112,11 @@ type MatrixHandlerTestHarnessOptions = {
 type MatrixHandlerTestHarness = {
   dispatchInboundMessage: MatrixDispatchInboundMessage;
   finalizeInboundContext: (ctx: Record<string, unknown>) => unknown;
-  handler: ReturnType<typeof createMatrixRoomMessageHandler>;
+  handler: (
+    roomId: string,
+    event: MatrixRawEvent,
+    lifecycle?: ChannelIngressMonitorLifecycle,
+  ) => Promise<void>;
   readAllowFromStore: MatrixMonitorHandlerParams["core"]["channel"]["pairing"]["readAllowFromStore"];
   recordInboundSession: (...args: unknown[]) => Promise<void>;
   resolveAgentRoute: () => typeof DEFAULT_ROUTE;
@@ -125,6 +127,17 @@ type MatrixHandlerTestHarness = {
 type MatrixRunPreparedInput = channelInbound.PreparedInboundReply<unknown>;
 type MatrixRunPreparedMockFn = (turn: MatrixRunPreparedInput) => Promise<unknown>;
 type MatrixRunPreparedMock = Mock<MatrixRunPreparedMockFn>;
+
+export function createMatrixIngressLifecycle() {
+  return {
+    admission: "exclusive",
+    abortSignal: new AbortController().signal,
+    onAdopted: vi.fn(async () => {}),
+    onDeferred: vi.fn(),
+    onAdoptionFinalizing: vi.fn(),
+    onAbandoned: vi.fn(async () => {}),
+  } satisfies ChannelIngressMonitorLifecycle;
+}
 
 export function createMatrixHandlerTestHarness(
   options: MatrixHandlerTestHarnessOptions = {},
@@ -254,7 +267,10 @@ export function createMatrixHandlerTestHarness(
               },
               onError: turn.delivery.onError,
             },
-            replyOptions: turn.replyOptions,
+            replyOptions: {
+              ...turn.replyOptions,
+              turnAdoptionLifecycle: params.turnAdoptionLifecycle,
+            },
             replyResolver: turn.replyResolver,
           }),
       });
@@ -370,9 +386,6 @@ export function createMatrixHandlerTestHarness(
     dmEnabled: options.dmEnabled ?? true,
     dmPolicy,
     mediaMaxBytes: options.mediaMaxBytes ?? 10_000_000,
-    startupMs: options.startupMs ?? 0,
-    dropPreStartupMessages: options.dropPreStartupMessages ?? true,
-    inboundDeduper: options.inboundDeduper,
     directTracker: {
       isDirectMessage: async () => options.isDirectMessage ?? true,
     },
@@ -385,7 +398,8 @@ export function createMatrixHandlerTestHarness(
   return {
     dispatchInboundMessage,
     finalizeInboundContext,
-    handler,
+    handler: (roomId, event, lifecycle = createMatrixIngressLifecycle()) =>
+      handler(roomId, event, lifecycle),
     readAllowFromStore,
     recordInboundSession,
     resolveAgentRoute,

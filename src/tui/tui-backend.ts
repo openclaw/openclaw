@@ -135,6 +135,12 @@ export type TuiSessionCreateOptions = {
   succeedsParent?: boolean;
 };
 
+export type TuiRequestScope = {
+  sessionKey: string;
+  agentId?: string;
+  runId?: string;
+};
+
 export type TuiModelCatalogScope = {
   agentId?: string;
   sessionKey?: string;
@@ -154,6 +160,7 @@ export type TuiBackend = {
   onGap?: (info: { expected: number; received: number }) => void;
   start: () => void;
   stop: () => void | Promise<void>;
+  cancelPendingRequests?: (scope: TuiRequestScope) => void;
   subscribeSessionEvents?: () => Promise<unknown>;
   sendChat: (opts: ChatSendOptions) => Promise<TuiChatSendResult>;
   /** runId optional: omit for session-scoped abort (queued turns then active). */
@@ -170,7 +177,10 @@ export type TuiBackend = {
   ) => Promise<TuiSessionDescription>;
   listAgents: () => Promise<TuiAgentsList>;
   patchSession: (opts: SessionsPatchParams) => Promise<SessionsPatchResult>;
-  createSession: (opts: TuiSessionCreateOptions) => Promise<TuiSessionMutationResult>;
+  createSession: (
+    opts: TuiSessionCreateOptions,
+    requestScope?: TuiRequestScope,
+  ) => Promise<TuiSessionMutationResult>;
   resetSession: (
     key: string,
     reason?: "new" | "reset",

@@ -64,6 +64,8 @@ SQLite target, verifies the target exists and is usable, and reports the physica
 path it actually read. Combine it with `--agent <id>` when you must select the
 configured agent that owns the store.
 
+Human-readable store headers escape terminal controls in paths. JSON output keeps the original path.
+
 `--agent` and `--store` require non-blank values. Selection errors exit non-zero
 and use the standard [CLI JSON failure envelope](/cli#json-failures) when `--json`
 is set.
@@ -331,6 +333,7 @@ openclaw sessions export-trajectory --session-key "agent:main:telegram:direct:12
 This is the command path used by the `/export-trajectory` slash command after
 the owner approves the exec request. The output directory is always resolved
 inside `.openclaw/trajectory-exports/` under the selected workspace.
+Nonblank `--output` names preserve leading and trailing whitespace.
 The file list in text and JSON output reports only artifacts written to the bundle.
 
 For stored keys without an agent prefix, such as `global`, export uses the

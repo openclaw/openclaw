@@ -2,9 +2,12 @@ import { Show } from "solid-js";
 import type { McpServerForm } from "../../../components/mcp-server-form.ts";
 import { McpServersForm } from "../../../components/mcp-servers-form.tsx";
 import { SettingsSegmented } from "../../../components/solid/settings-ui.tsx";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerChatComposerMenuEnglish } from "../../../i18n/locales/en-chat-composer-menu.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 
-export type ComposerAddServerDialogProps = {
+registerEnglishCatalog(registerChatComposerMenuEnglish);
+
+export function ComposerAddServerDialog(props: {
   open: boolean;
   busy: boolean;
   scope: "session" | "everywhere";
@@ -14,12 +17,12 @@ export type ComposerAddServerDialogProps = {
   onScopeChange: (scope: "session" | "everywhere") => void;
   onCancel: () => void;
   onSubmit: (form: McpServerForm) => void;
-};
-
-export function ComposerAddServerDialog(props: ComposerAddServerDialogProps) {
+}) {
+  let nameInput!: HTMLInputElement;
   return (
     <Show when={props.open}>
       <openclaw-modal-dialog
+        prop:initialFocus={() => nameInput}
         label={t("chat.composer.menu.addMcpServerTitle")}
         description={t("chat.composer.menu.addMcpServerDescription")}
         onModal-cancel={(event) => {
@@ -58,6 +61,9 @@ export function ComposerAddServerDialog(props: ComposerAddServerDialogProps) {
             </span>
           </div>
           <McpServersForm
+            onNameRef={(element) => {
+              nameInput = element;
+            }}
             busy={props.busy}
             disabled={props.submitBlockedReason !== null}
             blockedReason={props.submitBlockedReason}

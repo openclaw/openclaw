@@ -2,6 +2,7 @@ import path from "node:path";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.types.js";
 import { rebasePluginMetadataSnapshotManifestRegistry } from "./plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
+import { createIndexFixture } from "./test-helpers/installed-plugin-index-fixture.js";
 
 export function createPluginManifestRecordFixture(
   overrides: Partial<PluginManifestRecord> & Pick<PluginManifestRecord, "id">,
@@ -27,19 +28,16 @@ export function createPluginMetadataSnapshotFixture(
     plugins: Array<Partial<PluginManifestRecord> & Pick<PluginManifestRecord, "id">>;
     diagnostics?: PluginManifestRegistry["diagnostics"];
   } = { plugins: [] },
+  policyHash = "test-policy",
 ): PluginMetadataSnapshot {
   const plugins = registry.plugins.map(createPluginManifestRecordFixture);
   const manifestRegistry = { plugins, diagnostics: registry.diagnostics ?? [] };
-  const index: PluginMetadataSnapshot["index"] = {
-    version: 1,
-    hostContractVersion: "test",
-    compatRegistryVersion: "test",
-    migrationVersion: 1,
-    policyHash: "test-policy",
+  const index: PluginMetadataSnapshot["index"] = createIndexFixture({
+    policyHash,
     generatedAtMs: 0,
-    installRecords: {},
     plugins: plugins.map((plugin) => ({
       pluginId: plugin.id,
+      contextEngineIds: plugin.contextEngineIds,
       origin: plugin.origin,
       manifestPath: plugin.manifestPath,
       manifestHash: "test-manifest",
@@ -51,9 +49,9 @@ export function createPluginMetadataSnapshotFixture(
       compat: [],
     })),
     diagnostics: manifestRegistry.diagnostics,
-  };
+  });
   const snapshot: Parameters<typeof rebasePluginMetadataSnapshotManifestRegistry>[0] = {
-    policyHash: "test-policy",
+    policyHash,
     index,
     registryIndex: index,
     registryDiagnostics: [],

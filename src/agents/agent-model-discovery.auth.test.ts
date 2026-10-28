@@ -8,7 +8,7 @@ import {
   resolveAgentCredentialMapFromStore,
   resolveUsableAgentCredentialModes,
 } from "./agent-auth-credentials.js";
-import { addEnvBackedAgentCredentials } from "./agent-auth-discovery-core.js";
+import { resolveAmbientAgentCredentialsForDiscovery } from "./agent-auth-discovery.js";
 import { discoverAuthStorageFacts } from "./agent-model-discovery.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
 import {
@@ -304,13 +304,11 @@ describe("discoverAuthStorageFacts auth storage", () => {
   });
 
   it("includes workspace-scoped auth evidence in agent discovery credentials", () => {
-    const credentials = addEnvBackedAgentCredentials(
-      {},
-      {
-        env: {},
-        workspaceDir: "/tmp/workspace",
-      },
-    );
+    const credentials = resolveAmbientAgentCredentialsForDiscovery({
+      env: {},
+      workspaceDir: "/tmp/workspace",
+      syntheticAuthProviderRefs: [],
+    });
 
     expect(credentials["workspace-cloud"]).toEqual({
       type: "api_key",

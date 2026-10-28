@@ -5,11 +5,11 @@ import { readConfigFileSnapshot, writeConfigFile } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runInitialConfigWriteHealth } from "../flows/doctor-health-contribution-runners.config.js";
 import { buildUpdateRehearsalPathEnv } from "../infra/update-rehearsal-paths.js";
-import { buildUpdateDoctorEnv } from "../infra/update-runner-doctor.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { VERSION } from "../version.js";
 import { prepareDoctorContext } from "./doctor-config-flow.test-support.js";
 import { useDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
+import { externalDoctorEnv } from "./doctor-update.test-support.js";
 
 const withHome = useDoctorConfigPreflightHome();
 
@@ -35,12 +35,7 @@ it("preserves the released updater's bookkeeping comparison during candidate Doc
     await withEnvAsync(
       {
         ...buildUpdateRehearsalPathEnv(home),
-        ...buildUpdateDoctorEnv({
-          allowGatewayServiceRepair: false,
-          allowGatewayActivation: false,
-          serviceRepairPolicy: "external",
-          deferConfiguredPluginInstallRepair: true,
-        }),
+        ...externalDoctorEnv(),
         OPENCLAW_COMPATIBILITY_HOST_VERSION: undefined,
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
       },

@@ -43,10 +43,14 @@ const INSTALL_INPUT_FILES = [
   ".github/actions/setup-node-env/dependency-fingerprint.mjs",
   ".github/actions/setup-node-env/install-dependencies.sh",
   "node-version.mjs",
+  "runtime-process-bootstrap.generated.mjs",
+  "runtime-process-scripts.generated.mjs",
   "scripts/lib/pnpm-lockfile-documents.mjs",
   "scripts/check-install-dependency-ownership.mjs",
   "scripts/postinstall-bundled-plugins.mjs",
   "scripts/lib/fs-safe-prebuild.mjs",
+  "scripts/lib/fs-safe-npm-cli-preload.generated.mjs",
+  "scripts/lib/fs-safe-npm-cli-protocol.mjs",
   "scripts/windows-cmd-helpers.mjs",
   "scripts/lib/package-dist-imports.mjs",
   "scripts/lib/javascript-statements.mjs",
@@ -256,10 +260,10 @@ function installSource(workspace) {
   readSparse(INSTALL_INPUT_FILES);
   return {
     readSparse,
-    patches: [...patches].toSorted(),
+    patches: [...patches].toSorted((left, right) => (left < right ? -1 : left > right ? 1 : 0)),
     manifests: [...tracked.keys()]
       .filter((file) => file === "package.json" || file.endsWith("/package.json"))
-      .toSorted(),
+      .toSorted((left, right) => (left < right ? -1 : left > right ? 1 : 0)),
     read,
   };
 }
@@ -293,14 +297,14 @@ function frozenInstallManifests(read, manifests) {
     if (!line.trim() || line.trimStart().startsWith("#")) {
       continue;
     }
-    if (/^  \S/u.test(line)) {
-      const match = /^  ([a-zA-Z0-9_./-]+):(?: \{\})?$/u.exec(line);
+    if (/^ {2}\S/u.test(line)) {
+      const match = /^ {2}([a-zA-Z0-9_./-]+):(?: \{\})?$/u.exec(line);
       if (!match) {
         return manifests;
       }
       importer = match[1];
       selected.add(path.posix.join(importer, "package.json"));
-    } else if (!/^    /u.test(line)) {
+    } else if (!line.startsWith("    ")) {
       return manifests;
     }
     const link = /^ +version: link:([a-zA-Z0-9_./-]+)$/u.exec(line);

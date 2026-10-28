@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { configureAiTransportHost } from "../host.js";
 import { convertMessages } from "../openai-completions-messages.js";
 import { resolveOpenAICompletionsCompat } from "../transports/openai-completions-compat.js";
@@ -293,10 +294,8 @@ describe.each([
         reasoningEffort,
       };
       const stream = createStream(reasoningModel, scenario);
-      let resolveFirstVisible: ((value: string) => void) | undefined;
-      const firstVisible = new Promise<string>((resolve) => {
-        resolveFirstVisible = resolve;
-      });
+      const firstVisible = createDeferred<string>();
+      let resolveFirstVisible: ((value: string) => void) | undefined = firstVisible.resolve;
       const textDeltas: string[] = [];
       const consumeEvents = (async () => {
         for await (const event of stream as AsyncIterable<{ type: string; delta?: string }>) {
@@ -310,7 +309,7 @@ describe.each([
       let timeout: ReturnType<typeof setTimeout> | undefined;
       try {
         const firstDelta = await Promise.race([
-          firstVisible,
+          firstVisible.promise,
           new Promise<never>((_, reject) => {
             timeout = setTimeout(
               () => reject(new Error("Visible content was buffered until the terminal chunk")),

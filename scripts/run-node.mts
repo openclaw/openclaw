@@ -10,6 +10,8 @@ import path from "node:path";
 import process from "node:process";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
+import { isForegroundGatewayRunArgv } from "../gateway-run-argv.mjs";
+import { GATEWAY_SERVICE_STOP_TIMEOUT_MS } from "../gateway-shutdown-budget.mjs";
 import { applyCliProfileEnv, parseCliProfileArgs } from "../src/cli/profile.ts";
 import {
   getCommandArgsWithRootOptions,
@@ -536,7 +538,10 @@ export const resolveBuildRequirement = (
         ? { shouldBuild: true, reason: "missing_bundled_plugin_dist_entry" }
         : { shouldBuild: false, reason: "clean" };
     }
-    if (options.allowEquivalentInputs && stamp.inputSignature !== null && !immutable) {
+    // Dirty inputs whose bytes match the stamp reuse dist: a co-located launcher
+    // must not republish outputs a running source Gateway executes. Without
+    // allowEquivalentInputs, a changed HEAD already returned above.
+    if (stamp.inputSignature !== null && !immutable) {
       if (stamp.inputSignature !== resolveRunNodeInputSignature(deps, "build")) {
         return { shouldBuild: true, reason: "build_inputs_changed" };
       }
@@ -639,11 +644,7 @@ export const resolveRuntimePostBuildRequirement = (
         ? { shouldSync: true, reason: "missing_runtime_postbuild_output" }
         : { shouldSync: false, reason: "clean" };
     }
-    if (
-      options.allowEquivalentInputs &&
-      stamp.inputSignature !== null &&
-      !isImmutableGitDeployment(deps)
-    ) {
+    if (stamp.inputSignature !== null && !isImmutableGitDeployment(deps)) {
       if (stamp.inputSignature !== resolveRunNodeInputSignature(deps, "runtime")) {
         return { shouldSync: true, reason: "runtime_inputs_changed" };
       }
@@ -1049,11 +1050,12 @@ const waitForSpawnedProcess = async (
   childProcess: ChildProcess,
   deps: RunNodeDeps,
   acceptShutdownGrace = false,
+  initialShutdownGraceMs = RUN_NODE_DEFAULT_SHUTDOWN_GRACE_MS,
 ) => {
   let forwardedSignal: NodeJS.Signals | null = null;
   let forceKillTimer: NodeJS.Timeout | null = null;
   let cleanedForwardedSignalGroup = false;
-  let shutdownGraceMs = RUN_NODE_DEFAULT_SHUTDOWN_GRACE_MS;
+  let shutdownGraceMs = initialShutdownGraceMs;
   const useProcessGroup = shouldUseRunNodeChildProcessGroup(deps);
 
   const onMessage = (message: unknown) => {
@@ -1140,6 +1142,11 @@ const getInterruptedSpawnOutcome = (
 const runNodeChild = async (deps: RunNodeDeps, args: string[], execPath = deps.execPath) => {
   deps.cancellation.signal.throwIfAborted();
   const useProcessGroup = shouldUseRunNodeChildProcessGroup(deps);
+  // The source launcher must leave the Gateway time to drain and close under
+  // the same stop policy as an installed service. Other commands keep 5s.
+  const shutdownGraceMs = isForegroundGatewayRunArgv([deps.execPath, "openclaw.mjs", ...deps.args])
+    ? GATEWAY_SERVICE_STOP_TIMEOUT_MS
+    : RUN_NODE_DEFAULT_SHUTDOWN_GRACE_MS;
   // The parent route grants lifecycle IPC; generic children must not extend
   // the launcher's five-second force-kill boundary with a shaped message.
   const acceptShutdownGrace =
@@ -1160,7 +1167,7 @@ const runNodeChild = async (deps: RunNodeDeps, args: string[], execPath = deps.e
         : "inherit",
   });
   pipeSpawnedOutput(nodeProcess, deps);
-  const res = await waitForSpawnedProcess(nodeProcess, deps, acceptShutdownGrace);
+  const res = await waitForSpawnedProcess(nodeProcess, deps, acceptShutdownGrace, shutdownGraceMs);
   const interrupted = getInterruptedSpawnOutcome(res, deps.platform);
   if (interrupted !== null) {
     return interrupted;

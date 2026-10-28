@@ -8,6 +8,7 @@ import {
   type SqliteWorkerOperationAdmission,
 } from "../../infra/sqlite-worker-operation-admission.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { createPendingPromiseTracker } from "../../shared/pending-promises.js";
 import { isStateDatabaseReadAdmissionInvalidatedError } from "../../state/openclaw-state-db-async-lifecycle.js";
 import {
   assertPublishedOpenClawStateDatabaseLifecycle,
@@ -110,14 +111,7 @@ export async function createWorkerEnvironmentStore(
     }
     return reply.facts;
   }
-  function track<T>(operation: Promise<T>): Promise<T> {
-    operations.add(operation);
-    void operation.then(
-      () => operations.delete(operation),
-      () => operations.delete(operation),
-    );
-    return operation;
-  }
+  const track = createPendingPromiseTracker(operations);
   function mutate<Key extends keyof Operations>(
     type: Key,
     input: Omit<Operations[Key]["input"], "publicationIncarnation">,

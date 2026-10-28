@@ -52,6 +52,27 @@ export const overflowCases = [
       },
     ],
     [
+      "billing-context-siliconflow-max-seq-len",
+      {
+        message:
+          '400 {"code":20015,"message":"length of prompt_tokens (51353) must be less than max_seq_len (32768).","data":null}',
+      },
+    ],
+    [
+      "billing-context-vllm-decoder-prompt",
+      {
+        message:
+          "400 The decoder prompt (length 40000) is longer than the maximum model length of 32768. Make sure that `max_model_len` is no smaller than the number of text tokens.",
+      },
+    ],
+    [
+      "billing-context-vllm-engine-prompt",
+      {
+        message:
+          "400 The engine prompt length 40000 exceeds the max_model_len 32768. Please reduce prompt.",
+      },
+    ],
+    [
       "billing-context-kimi-status",
       {
         message:

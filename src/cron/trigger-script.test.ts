@@ -23,7 +23,7 @@ function completed(value: unknown, output: unknown[] = []): CodeModeHeadlessResu
 function createPreparedRuntime(config: OpenClawConfig, tools?: AnyAgentTool[]) {
   const context = { config, agentId: "main", sessionKey: "cron:test:trigger" };
   const tool = wrapToolWithBeforeToolCallHook(makeTool("probe", vi.fn()), context);
-  return { createTools: async () => tools ?? [tool], context };
+  return { createTools: async () => tools ?? [tool], context, scheduledToolPolicy: undefined };
 }
 
 function makeTool(name: string, execute: AnyAgentTool["execute"]): AnyAgentTool {
@@ -173,18 +173,32 @@ it.each([
 ] as const)(
   "honors current host $host for a canonically captured pinned exec cap",
   async ({ host, expected }) => {
-    // Automatic placement must honor the pin despite the script's node request;
-    // an explicit current node restriction must reject the captured Gateway host.
+    // Conflicting requests fail at the pin; targetless calls still honor current host restrictions.
     const evaluate = execEvaluator(host, "configured-node-must-not-run");
+    const input = {
+      ...INPUT,
+      toolsAllow: ["exec", "process"],
+      scheduledToolPolicy: { version: 1, mode: "trusted" },
+      execTarget: { version: 1, host: "gateway" },
+    } satisfies Parameters<typeof evaluate>[0];
 
     await expect(
       evaluate({
-        ...INPUT,
+        ...input,
         script:
           'await exec({ command: "printf openclaw-canonical-ok", host: "node", node: "remote" }); return { fire: false };',
-        toolsAllow: ["exec", "process"],
-        scheduledToolPolicy: { version: 1, mode: "trusted" },
-        execTarget: { version: 1, host: "gateway" },
+      }),
+    ).resolves.toEqual({
+      kind: "error",
+      code: "internal_error",
+      error: expect.stringContaining(
+        "exec is pinned to host=gateway; the requested host or node is not allowed for this job.",
+      ),
+    });
+    await expect(
+      evaluate({
+        ...input,
+        script: 'await exec({ command: "printf openclaw-canonical-ok" }); return { fire: false };',
       }),
     ).resolves.toEqual(expected);
   },

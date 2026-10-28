@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { extractTextCached } from "../../lib/chat/message-extract.ts";
 import { buildChatItems, type BuildChatItemsProps } from "./chat-thread-build.ts";
+import { nativeMessage } from "./chat-thread-fixtures.test-support.ts";
 import { createProps } from "./chat-thread.test-support.ts";
 import { buildCachedChatItems, resetChatThreadState } from "./chat-thread.ts";
 
@@ -302,14 +303,14 @@ describe("transcript input order", () => {
     },
   );
 
-  it.each(["unconfirmed", "waiting-reconnect", "accepted", "reordered"] as const)(
+  it.each(["waiting-reconnect", "accepted", "reordered"] as const)(
     "keeps an earlier %s input ahead of a new submission through custody",
     (state) => {
       const reordered = state === "reordered";
       const earlier = queuedInput(
         "Earlier input",
         reordered ? 30 : 10,
-        state === "unconfirmed" || state === "waiting-reconnect" ? state : "submitting",
+        state === "waiting-reconnect" ? state : "submitting",
       );
       const later = queuedInput("New input", reordered ? 10 : 20);
       const queue =
@@ -347,7 +348,7 @@ describe("transcript input order", () => {
     ({ state, timestamps }) => {
       const notice =
         state === "interrupted"
-          ? "Interrupted before the agent started it. It will not run automatically; copy it and send again."
+          ? "Interrupted before the agent started it. If it does not resume, copy it and send again."
           : state === "cancelled"
             ? "Cancelled before the agent started it. It will not run automatically; copy it and send again."
             : null;
@@ -421,12 +422,7 @@ describe("transcript input order", () => {
   it("reuses loaded history when a render rebuilds its pending input list", () => {
     let messageReads = 0;
     const loaded = new Proxy(
-      {
-        role: "assistant",
-        content: "Loaded history",
-        timestamp: 1,
-        __openclaw: { id: "loaded", seq: 1 },
-      },
+      nativeMessage("assistant", "Loaded history", 1, { id: "loaded", seq: 1 }),
       {
         get(target, key, receiver) {
           messageReads += 1;

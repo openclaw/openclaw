@@ -4,7 +4,6 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
-import { insertRegistryWorktree } from "../../agents/worktrees/registry.js";
 import { captureRuntimeConfigAsyncReader } from "../../config/io.runtime.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
@@ -12,12 +11,9 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../p
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { performGatewaySessionReset } from "../session-reset-service.js";
 import { loadGatewaySessionEntryReadOnlyAsync } from "../session-utils-store.js";
-import { withLocalWorkspaceStore } from "../worker-environments/local-workspace-store.js";
-import {
-  localWorkspaceProjectionFixture,
-  readLocalWorkspaceProjection,
-} from "../worker-environments/local-workspace-store.test-support.js";
+import { readLocalWorkspaceProjection } from "../worker-environments/local-workspace-store.test-support.js";
 import { loadSessionDiff } from "./sessions-diff.js";
+import { initRepo, seedManagedReview } from "./sessions-diff.test-support.js";
 
 afterEach(() => resetPluginRuntimeStateForTest());
 
@@ -33,10 +29,7 @@ it("reads the accepted base immediately after a real same-session reset", async 
     await captureRuntimeConfigAsyncReader()();
     const git = (...args: string[]) =>
       execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" }).trim();
-    git("init", "-q", "-b", "main");
-    git("config", "user.name", "Test");
-    git("config", "user.email", "test@openclaw.test");
-    git("config", "commit.gpgsign", "false");
+    initRepo(repo);
     await fs.writeFile(path.join(repo, "base.txt"), "base\n");
     git("add", ".");
     git("commit", "-qm", "base");
@@ -53,17 +46,6 @@ it("reads the accepted base immediately after a real same-session reset", async 
     const sessionId = randomUUID();
     const sessionKey = "agent:main:review-reset";
     const worktree = { id, repoRoot: repo, branch: "task" };
-    await insertRegistryWorktree(process.env, {
-      ...worktree,
-      name: "review-reset",
-      repoFingerprint: "review-fixture",
-      path: repo,
-      baseRef: "main",
-      ownerKind: "session",
-      ownerId: sessionKey,
-      createdAt: 0,
-      lastActiveAt: 0,
-    });
     await upsertSessionEntryCore(
       { agentId: "main", sessionKey },
       {
@@ -74,14 +56,12 @@ it("reads the accepted base immediately after a real same-session reset", async 
         worktree,
       },
     );
-    await withLocalWorkspaceStore({ worktreeId: id }, (store) =>
-      store.create({
-        ...localWorkspaceProjectionFixture(id, state.statePath("worktree-projections")),
-        session_key: sessionKey,
-        session_id: sessionId,
-        lifecycle_revision: "before-reset",
-        base_commit: acceptedBase,
-      }),
+    await seedManagedReview(
+      worktree,
+      { sessionKey, sessionId, lifecycleRevision: "before-reset" },
+      state.statePath("worktree-projections"),
+      acceptedBase,
+      "review-reset",
     );
     expect((await loadSessionDiff({ sessionKey })).files.map((file) => file.path)).toEqual([
       "task.txt",
@@ -96,8 +76,7 @@ it("reads the accepted base immediately after a real same-session reset", async 
     });
     expect(reset).toMatchObject({ ok: true });
     const after = await loadGatewaySessionEntryReadOnlyAsync(sessionKey, { agentId: "main" }, cfg);
-    expect(after.entry?.sessionId).toBe(sessionId);
-    expect(after.entry?.worktree?.id).toBe(id);
+    expect(after.entry).toMatchObject({ sessionId, worktree: { id } });
     expect(after.entry?.lifecycleRevision).not.toBe("before-reset");
     expect((await readLocalWorkspaceProjection(id))?.lifecycle_revision).toBe("before-reset");
     const diff = await loadSessionDiff({ sessionKey });

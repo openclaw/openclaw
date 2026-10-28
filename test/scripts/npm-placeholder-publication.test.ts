@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { basename, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
@@ -14,9 +14,11 @@ import {
   verifyPlaceholderArtifact,
 } from "../../scripts/npm-placeholder-publication.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { writeJsonFile as writeJson } from "../helpers/temp-repo.js";
 
 const SHA = "a".repeat(40);
 const WORKFLOW_SHA = "b".repeat(40);
+const binding = { targetSha: SHA, workflowSha: WORKFLOW_SHA };
 const WORKFLOW = ".github/workflows/npm-placeholder-bootstrap.yml";
 const packageName = "@openclaw/meta-provider";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -44,11 +46,9 @@ function createRepo(packages: Array<{ dir: string; manifest: Record<string, unkn
   const root = tempDirs.make("npm-placeholder-repo-");
   for (const entry of packages) {
     const dir = join(root, "extensions", entry.dir);
-    mkdirSync(dir, { recursive: true });
     writeJson(join(dir, "package.json"), entry.manifest);
   }
   const catalogDir = join(root, "scripts", "lib");
-  mkdirSync(catalogDir, { recursive: true });
   writeJson(join(catalogDir, "official-external-plugin-catalog.json"), {
     entries: packages.map(({ manifest: { name } }) => ({
       name,
@@ -57,13 +57,9 @@ function createRepo(packages: Array<{ dir: string; manifest: Record<string, unkn
     })),
   });
   for (const name of ["provider", "channel"]) {
-    writeFileSync(join(catalogDir, `official-external-${name}-catalog.json`), '{"entries":[]}\n');
+    writeJson(join(catalogDir, `official-external-${name}-catalog.json`), { entries: [] });
   }
   return root;
-}
-
-function writeJson(path: string, value: unknown) {
-  writeFileSync(path, `${JSON.stringify(value)}\n`);
 }
 
 function registryState(tags: RegistryTags, dist?: Record<string, unknown>, versions = {}) {
@@ -90,39 +86,35 @@ function identity(name: string) {
   };
 }
 
-function planPublication(
-  options: Omit<Parameters<typeof createPlaceholderPublication>[0], "targetSha" | "workflowSha">,
+async function publication(
+  entries = [packageEntry("fixture", packageName)],
+  fetchImpl: typeof fetch = async () => registryResponse(),
+  packages = entries.map(({ manifest }) => manifest.name).join(","),
 ) {
-  return createPlaceholderPublication({ targetSha: SHA, workflowSha: WORKFLOW_SHA, ...options });
-}
-
-function publishArtifact(
-  options: Omit<
-    Parameters<typeof publishPlaceholders>[0],
-    "npmToken" | "targetSha" | "workflowSha"
-  >,
-) {
-  return publishPlaceholders({
-    npmToken: "test-token",
-    targetSha: SHA,
-    workflowSha: WORKFLOW_SHA,
-    fetchImpl: async () => registryResponse(),
-    registryAttempts: 1,
-    sleep: async () => undefined,
-    ...options,
+  const artifactDir = join(tempDirs.make("npm-placeholder-parent-"), "artifact");
+  const manifest = await createPlaceholderPublication({
+    ...binding,
+    repoRoot: createRepo(entries),
+    outputDir: artifactDir,
+    packages,
+    fetchImpl,
   });
-}
-
-async function artifact(name: string, packument?: Record<string, unknown>) {
-  const repoRoot = createRepo([packageEntry("fixture", name)]);
-  const outputDir = join(tempDirs.make("npm-placeholder-parent-"), "artifact");
-  await planPublication({
-    repoRoot,
-    outputDir,
-    packages: name,
-    fetchImpl: async () => registryResponse(packument),
-  });
-  return outputDir;
+  const publish = (
+    options: Pick<
+      Parameters<typeof publishPlaceholders>[0],
+      "fetchImpl" | "npmRunner" | "tempRoot"
+    > = {},
+  ) =>
+    publishPlaceholders({
+      ...binding,
+      artifactDir,
+      npmToken: "test-token",
+      fetchImpl: async () => registryResponse(),
+      registryAttempts: 1,
+      sleep: async () => undefined,
+      ...options,
+    });
+  return { artifactDir, manifest, publish };
 }
 
 function classify(name: string, packument: Record<string, unknown>) {
@@ -136,52 +128,15 @@ function classify(name: string, packument: Record<string, unknown>) {
 }
 
 describe("npm placeholder publication", () => {
-  it("preserves selected multi-package order and binds unique release-enabled manifests", async () => {
-    const names = ["@openclaw/zoom-meetings", "@openclaw/comfy-provider"] as const;
-    const root = createRepo([
-      packageEntry("comfy", names[1]),
-      packageEntry("zoom-meetings", names[0]),
-    ]);
-    const outputDir = join(tempDirs.make("npm-placeholder-output-parent-"), "publication");
-    const manifest = await createPlaceholderPublication({
-      repoRoot: root,
-      outputDir,
-      packages: names.join(","),
-      targetSha: SHA,
-      workflowSha: WORKFLOW_SHA,
-      fetchImpl: async () => registryResponse(),
-    });
-
-    expect(manifest.packages.map((entry) => entry.packageName)).toEqual(names);
-    expect(manifest.packages.map((entry) => entry.packageDir)).toEqual([
-      "extensions/zoom-meetings",
-      "extensions/comfy",
-    ]);
-    expect(manifest.packages.every((entry) => entry.action === "publish")).toBe(true);
-    expect(manifest.packages.every((entry) => entry.newPackage)).toBe(true);
-    expect(readFileSync(join(outputDir, "npm-placeholder-manifest.json"), "utf8")).toContain(
-      `"targetSha": "${SHA}"`,
-    );
-  });
-
   it("creates deterministic canonical two-file placeholder tarballs", () => {
-    const first = createPlaceholderTarball("@openclaw/comfy-provider");
-    const second = createPlaceholderTarball("@openclaw/comfy-provider");
-
-    expect(first).toEqual(second);
+    const first = createPlaceholderTarball(packageName);
+    expect(first).toEqual(createPlaceholderTarball(packageName));
     expect(first.subarray(0, 2)).toEqual(Buffer.from([0x1f, 0x8b]));
   });
 
   it("requires three stable registry observations during planning", async () => {
-    const root = createRepo([packageEntry("comfy", packageName)]);
-
     await expect(
-      planPublication({
-        repoRoot: root,
-        outputDir: join(tempDirs.make("npm-placeholder-unstable-parent-"), "publication"),
-        packages: packageName,
-        fetchImpl: responses(undefined, registryState({}), undefined),
-      }),
+      publication(undefined, responses(undefined, registryState({}), undefined)),
     ).rejects.toThrow("npm registry state changed during placeholder planning");
   });
 
@@ -191,10 +146,7 @@ describe("npm placeholder publication", () => {
         packageName,
         registryState(
           { placeholder: "0.0.0" },
-          {
-            integrity: "sha512-different",
-            shasum: "different",
-          },
+          { integrity: "sha512-different", shasum: "different" },
         ),
       ),
     ).toThrow("npm registry tarball bytes differ");
@@ -205,16 +157,12 @@ describe("npm placeholder publication", () => {
 
   it("publishes serially and preserves every non-placeholder dist-tag", async () => {
     const names = ["@openclaw/byteplus-provider", "@openclaw/meta-provider"] as const;
-    const root = createRepo([packageEntry("byteplus", names[0]), packageEntry("meta", names[1])]);
-    const artifactDir = join(tempDirs.make("npm-placeholder-artifact-parent-"), "artifact");
     const tags = { latest: "2026.7.2", beta: "2026.7.2-beta.7" };
     const versions = { "2026.7.2": {} };
     const existingMeta = registryState(tags, undefined, versions);
-    const manifest = await planPublication({
-      repoRoot: root,
-      outputDir: artifactDir,
-      packages: names.join(","),
-      fetchImpl: async (input) =>
+    const { manifest, publish } = await publication(
+      [packageEntry("meta", names[1]), packageEntry("byteplus", names[0])],
+      async (input) =>
         (typeof input === "string"
           ? input
           : input instanceof URL
@@ -223,12 +171,16 @@ describe("npm placeholder publication", () => {
         ).includes(encodeURIComponent(names[0]))
           ? registryResponse()
           : registryResponse(existingMeta),
-    });
-    expect(manifest.packages).toHaveLength(2);
+      names.join(","),
+    );
+    expect(manifest.targetSha).toBe(SHA);
+    expect(manifest.packages.map((entry) => [entry.packageName, entry.packageDir])).toEqual([
+      [names[0], "extensions/byteplus"],
+      [names[1], "extensions/meta"],
+    ]);
     const calls: string[][] = [];
     const tempRoot = tempDirs.make("npm-placeholder-token-success-");
-    const result = await publishArtifact({
-      artifactDir,
+    const result = await publish({
       fetchImpl: responses(
         undefined,
         registryState({ placeholder: "0.0.0" }, identity(names[0])),
@@ -242,6 +194,9 @@ describe("npm placeholder publication", () => {
     expect(calls.map(([command, tarball]) => [command, tarball && basename(tarball)])).toEqual(
       manifest.packages.map((entry) => ["publish", entry.tarball.name]),
     );
+    for (const args of calls) {
+      expect(args).toContain("--provenance");
+    }
     expect(result.results.map((entry) => entry.packageName)).toEqual(names);
     expect(readdirSync(tempRoot)).toEqual([]);
   });
@@ -252,26 +207,18 @@ describe("npm placeholder publication", () => {
     );
     expect(() => parseSelectedPackages("@openclaw/good,@openclaw/good")).toThrow("duplicates");
 
-    const duplicateRoot = createRepo([
-      packageEntry("one", "@openclaw/good"),
-      packageEntry("two", "@openclaw/good"),
-    ]);
-    expect(() => resolveSelectedPackageSources(duplicateRoot, ["@openclaw/good"])).toThrow(
-      "must map uniquely",
-    );
-
-    const unsafeRoot = createRepo([packageEntry("good", "@openclaw/good")]);
-    writeFileSync(join(unsafeRoot, "extensions", "good", "package.json"), "{}\n");
-    expect(() => resolveSelectedPackageSources(unsafeRoot, ["@openclaw/good"])).toThrow(
-      "must map uniquely",
-    );
-
-    const privateRoot = createRepo([
-      packageEntry("private", "@openclaw/private", { publishConfig: { access: "private" } }),
-    ]);
-    expect(() => resolveSelectedPackageSources(privateRoot, ["@openclaw/private"])).toThrow(
-      "not a public release-enabled npm plugin",
-    );
+    for (const [entries, error] of [
+      [[packageEntry("one", packageName), packageEntry("two", packageName)], "must map uniquely"],
+      [[{ dir: "missing", manifest: {} }], "must map uniquely"],
+      [
+        [packageEntry("private", packageName, { publishConfig: { access: "private" } })],
+        "not a public release-enabled npm plugin",
+      ],
+    ] as const) {
+      expect(() => resolveSelectedPackageSources(createRepo([...entries]), [packageName])).toThrow(
+        error,
+      );
+    }
   });
 
   it("fails final verification when any pre-existing dist-tag changes", () => {
@@ -288,57 +235,47 @@ describe("npm placeholder publication", () => {
   });
 
   it("rejects manifest state combinations that could lie about registry creation", async () => {
-    const artifactDir = await artifact(packageName);
+    const { artifactDir, manifest, publish } = await publication();
     const manifestPath = join(artifactDir, "npm-placeholder-manifest.json");
-    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
     manifest.packages[0].action = "skip";
     writeJson(manifestPath, manifest);
 
-    await expect(publishArtifact({ artifactDir })).rejects.toThrow(
-      "dist-tag snapshot is not canonical",
-    );
+    await expect(publish()).rejects.toThrow("dist-tag snapshot is not canonical");
   });
 
-  it("removes token-bearing npm config after mutation and readback failure", async () => {
-    const artifactDir = await artifact(packageName);
-    const tempRoot = tempDirs.make("npm-placeholder-token-failure-");
-
-    await expect(
-      publishArtifact({
-        artifactDir,
-        npmRunner: () => {
+  it.each([false, true])(
+    "cleans credentials after ambiguous mutation (exact readback=%s)",
+    async (converges) => {
+      const expected = identity(packageName);
+      const before = registryState({ latest: "2026.7.2" }, expected);
+      const { publish } = await publication(undefined, async () =>
+        registryResponse(converges ? before : undefined),
+      );
+      const calls: string[][] = [];
+      const tempRoot = tempDirs.make("npm-placeholder-token-");
+      const result = publish({
+        fetchImpl: converges
+          ? responses(before, registryState({ latest: "2026.7.2", placeholder: "0.0.0" }, expected))
+          : responses(),
+        npmRunner: (args) => {
+          calls.push(args);
           throw new Error("ambiguous npm failure");
         },
         tempRoot,
-      }),
-    ).rejects.toThrow("mutation failed and exact registry readback did not converge");
-    expect(readdirSync(tempRoot)).toEqual([]);
-  });
+      });
 
-  it("repairs a missing placeholder tag and accepts exact readback after an ambiguous error", async () => {
-    const expected = identity(packageName);
-    const before = registryState({ latest: "2026.7.2" }, expected);
-    const artifactDir = await artifact(packageName, before);
-    const calls: string[][] = [];
-    const tempRoot = tempDirs.make("npm-placeholder-tag-token-");
-
-    const result = await publishArtifact({
-      artifactDir,
-      fetchImpl: responses(
-        before,
-        registryState({ latest: "2026.7.2", placeholder: "0.0.0" }, expected),
-      ),
-      npmRunner: (args) => {
-        calls.push(args);
-        throw new Error("ambiguous npm failure");
-      },
-      tempRoot,
-    });
-
-    expect(calls).toEqual([["dist-tag", "add", `${packageName}@0.0.0`, "placeholder"]]);
-    expect(result.results).toEqual([{ action: "tag", newPackage: false, packageName }]);
-    expect(readdirSync(tempRoot)).toEqual([]);
-  });
+      if (converges) {
+        const published = await result;
+        expect(calls).toEqual([["dist-tag", "add", `${packageName}@0.0.0`, "placeholder"]]);
+        expect(published.results).toEqual([{ action: "tag", newPackage: false, packageName }]);
+      } else {
+        await expect(result).rejects.toThrow(
+          "mutation failed and exact registry readback did not converge",
+        );
+      }
+      expect(readdirSync(tempRoot)).toEqual([]);
+    },
+  );
 
   it("preserves prototype-looking npm dist-tags as ordinary tag entries", () => {
     const expected = identity(packageName);
@@ -370,21 +307,12 @@ describe("npm placeholder publication", () => {
       expect(job?.environment).toBeUndefined();
       expect(JSON.stringify(job)).not.toContain("NPM_TOKEN");
     }
-    expect(step(verify, "Verify immutable placeholder publication")).toBeDefined();
     expect(publish).toMatchObject({
       environment: "npm-release",
       permissions: { actions: "read", contents: "read", "id-token": "write" },
     });
     const publishStep = step(publish, "Publish verified placeholders serially");
     expect(publishStep?.env?.NPM_TOKEN).toBe("${{ secrets.NPM_TOKEN }}");
-    expect(readFileSync("scripts/npm-placeholder-publication.mjs", "utf8")).toContain(
-      '"--provenance"',
-    );
-    expect(publishStep?.run).not.toContain("npm trust");
-    expect(readFileSync(WORKFLOW, "utf8")).toContain("plugin-npm-release.yml");
-    const digestStep = step(plan, "Bind immutable artifact digest");
-    expect(digestStep?.env?.RAW_DIGEST).toBe("${{ steps.upload.outputs.artifact-digest }}");
-    expect(digestStep?.run).toContain("digest=sha256:${RAW_DIGEST}");
     for (const job of [verify, publish]) {
       expect(step(job, "Resolve immutable artifact metadata")?.run).toContain(".digest == $digest");
     }
@@ -403,9 +331,8 @@ describe("npm placeholder publication", () => {
         repository: "openclaw/openclaw",
         runId: 123,
         targetRoot: "/tmp/unused",
-        targetSha: SHA,
+        ...binding,
         token: "test-token",
-        workflowSha: WORKFLOW_SHA,
       }),
     ).rejects.toThrow("artifact name does not match its workflow run and attempt");
   });

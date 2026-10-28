@@ -3,6 +3,7 @@ import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
+import { omitNullRequestHeaders } from "../../../packages/llm-core/src/utils/request-headers.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { captureAmbientGatewayOperatorAuthority } from "../../gateway/operator-invocation-authority.js";
 import { providerSupportsNativePdfDocument } from "../../media-understanding/defaults.js";
@@ -40,7 +41,7 @@ import { optionalFiniteNumberSchema } from "../schema/typebox.js";
 import { completeWithPreparedSimpleCompletionModel } from "../simple-completion-execution.js";
 import { prepareSimpleCompletionModel } from "../simple-completion-runtime.js";
 import type { ToolFsPolicy } from "../tool-fs-policy.js";
-import { readFiniteNumberParam, textResult, ToolInputError, type AnyAgentTool } from "./common.js";
+import { textResult, ToolInputError, type AnyAgentTool } from "./common.js";
 import { coerceImageModelConfig } from "./image-tool.helpers.js";
 import {
   buildMediaReferenceDetails,
@@ -48,9 +49,10 @@ import {
   REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS,
   resolveMediaToolSandboxConfig,
   resolveMediaToolReferenceAccess,
-  resolvePromptAndModelOverride,
+  resolveMediaAnalysisParams,
   type MediaToolSandbox,
 } from "./media-tool-shared.js";
+import { createMediaAssistantTextCoercer } from "./media-tool-text.js";
 import {
   applyAgentDefaultModelConfig,
   hasToolModelConfig,
@@ -59,13 +61,14 @@ import {
 import { anthropicAnalyzePdf, geminiAnalyzePdf } from "./pdf-native-providers.js";
 import {
   buildPdfExtractionContext,
-  coercePdfAssistantText,
   coercePdfModelConfig,
   parsePageRange,
   resolvePdfInputs,
   resolvePdfToolMaxTokens,
 } from "./pdf-tool.helpers.js";
 import { type PdfToolActiveModel, resolvePdfModelConfigForTool } from "./pdf-tool.model-config.js";
+
+const coercePdfAssistantText = createMediaAssistantTextCoercer("PDF");
 
 const DEFAULT_PROMPT = "Analyze this PDF document.";
 const DEFAULT_MAX_PDFS = 10;
@@ -162,17 +165,12 @@ export function createPdfTool(options?: {
       );
     }
 
-    const { prompt: promptRaw, modelOverride } = resolvePromptAndModelOverride(
-      record,
-      DEFAULT_PROMPT,
-    );
-    const maxBytesMb =
-      readFiniteNumberParam(record, "maxBytesMb", {
-        min: 0,
-        minExclusive: true,
-        message: "maxBytesMb must be greater than 0",
-      }) ?? configuredMaxBytesMb;
-    const maxBytes = Math.floor(maxBytesMb * 1024 * 1024);
+    const {
+      prompt: promptRaw,
+      modelOverride,
+      maxBytesMb,
+    } = resolveMediaAnalysisParams(record, DEFAULT_PROMPT);
+    const maxBytes = Math.floor((maxBytesMb ?? configuredMaxBytesMb) * 1024 * 1024);
 
     const pagesRaw = normalizeOptionalString(record.pages);
     const pageSelection = pagesRaw ? parsePageRange(pagesRaw, configuredMaxPages) : undefined;
@@ -470,7 +468,7 @@ export function createPdfTool(options?: {
                 : {}),
               baseUrl: model.baseUrl,
               requestConfig: {
-                headers: model.headers,
+                headers: omitNullRequestHeaders(model.headers),
                 request: getModelProviderRequestTransport(model),
               },
               signal: modelSignal,

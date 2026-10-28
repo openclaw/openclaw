@@ -171,7 +171,11 @@ export function createDirectChatContext(
       throw new Error("prepared chat metadata is unavailable in direct handler tests");
     }),
     recoveryRuntime: {
+      prepareFailedWorkerPlacement: async () => undefined,
       prepareRestartRecovery: () => undefined,
+      resumeChatInput: async () => {
+        throw new Error("Unexpected chat input recovery");
+      },
       dispatchAgent: vi.fn(),
       waitForAgent: vi.fn(),
       sendRecoveryNotice: vi.fn(),

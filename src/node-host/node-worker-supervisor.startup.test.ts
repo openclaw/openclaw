@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import type { TimerOptions } from "node:timers";
 import { deserialize } from "node:v8";
 import { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi, type MockInstance } from "vitest";
@@ -7,8 +8,13 @@ import {
   WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
   WORKER_LINEAGE_START_PROTOCOL_FEATURE,
   WORKER_NATIVE_PROCESS_OWNER_PROTOCOL_FEATURE,
+  WORKER_NATIVE_PROCESS_OWNER_V2_PROTOCOL_FEATURE,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
-import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE } from "../infra/node-commands.js";
 import type {
   SqliteWorkerCommand,
@@ -20,23 +26,38 @@ import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import type { OpenClawStateWorkerOperations } from "../state/openclaw-state-worker-contract.js";
 import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
+import { NodeWorkerCapacity } from "./node-worker-capacity.js";
 import { NodeWorkerJournalWorker } from "./node-worker-journal-worker.js";
 import { NodeWorkerLaunchStore } from "./node-worker-launch-store.js";
 import type { NodeWorkerChildAdapter } from "./node-worker-launch-transport.js";
 import * as workerProcessIdentity from "./node-worker-process-identity.js";
+import { createNodeWorkerLaunchRecovery } from "./node-worker-supervisor-recovery.js";
 import {
-  createNodeWorkerSupervisorFixture,
+  createObservedNodeWorkerSupervisorFixture,
   observeNodeWorkerAdapters,
-  waitForNodeWorkerTerminal as waitForTerminal,
 } from "./node-worker-supervisor.fixture.test-support.js";
 import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
 import {
   TEST_WORKER_ENDPOINT,
+  TEST_WORKER_SOURCE,
   testNodeWorkerEnvironmentIdentity,
   testNodeWorkerLaunchIdentity,
+  testIsolatedWorkerLaunchInput as launchInput,
   testWorkerLaunchInput,
 } from "./node-worker-supervisor.test-support.js";
 import * as workerTreeControl from "./node-worker-tree-control.js";
+
+const recoveryClock = vi.hoisted(() => ({
+  wait: undefined as ((ms?: number) => Promise<void> | undefined) | undefined,
+}));
+vi.mock("node:timers/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:timers/promises")>();
+  return {
+    ...actual,
+    setTimeout: (ms?: number, value?: unknown, options?: TimerOptions) =>
+      recoveryClock.wait?.(ms)?.then(() => value) ?? actual.setTimeout(ms, value, options),
+  };
+});
 
 const tempDirs = useStateDatabaseTempDirs();
 
@@ -46,31 +67,17 @@ afterEach(() => {
 });
 
 function fixture(options: Parameters<typeof createNodeWorkerSupervisor>[0] = {}) {
-  const capacities: Array<{ total: number; available: number }> = [];
-  const value = createNodeWorkerSupervisorFixture(tempDirs.make("node-worker-startup-"), {
-    onCapacityChanged: (capacity) => capacities.push(capacity),
-    ...options,
-  });
-  const { supervisor, env, workspaceDir } = value;
+  const value = createObservedNodeWorkerSupervisorFixture(
+    tempDirs.make("node-worker-startup-"),
+    options,
+  );
+  const { supervisor, env } = value;
   return {
     ...value,
-    capacities,
     store: () => new NodeWorkerLaunchStore(new NodeWorkerJournalWorker({ env })),
-    receipt: (id: string) =>
-      new NodeWorkerLaunchStore(new NodeWorkerJournalWorker({ env })).get(id),
     launch: (input: ReturnType<typeof launchInput>, signal?: AbortSignal) =>
       supervisor.launch(input, TEST_WORKER_ENDPOINT, signal),
-    terminal: (id: string) => waitForTerminal(supervisor, id),
-    file: (name: string) => path.join(workspaceDir, name),
-    [Symbol.asyncDispose]: () => supervisor.close(),
   };
-}
-
-function launchInput(workspaceDir: string, launchId: string, prompt = "success") {
-  const input = testWorkerLaunchInput(workspaceDir, launchId, prompt);
-  input.descriptor.admission.environmentId = `environment-${launchId}`;
-  input.descriptor.admission.sessionId = `session-${launchId}`;
-  return input;
 }
 
 function writeWorker(bundleRoot: string, input: ReturnType<typeof launchInput>, source: string) {
@@ -86,34 +93,71 @@ function writeWorker(bundleRoot: string, input: ReturnType<typeof launchInput>, 
   );
 }
 
+async function prepareWindowsRecovery(
+  f: ReturnType<typeof fixture>,
+  cleanupMode: "windows-job" | "process-group",
+) {
+  const store = f.store();
+  const input = launchInput(f.workspaceDir, "windows-recovery", "wait");
+  const claim = {
+    ...testNodeWorkerLaunchIdentity(input),
+    gatewayNamespace: input.gatewayNamespace,
+  };
+  const supervisor = { pid: 2_000_000_001, startTime: 1 };
+  const worker = { pid: 2_000_000_002, startTime: 2 };
+  vi.spyOn(workerProcessIdentity, "getNodeWorkerBootIdentity").mockReturnValue("win32:test-boot");
+  await store.claim(claim, supervisor, 1);
+  const receipt = await store.markRunning({ ...claim, supervisor, worker, cleanupMode });
+  const inspect = workerProcessIdentity.inspectNodeWorkerProcessIdentity;
+  const observation: { workerState: "live" | "dead" | "reused" } = { workerState: "live" };
+  vi.spyOn(workerProcessIdentity, "inspectNodeWorkerProcessIdentity").mockImplementation(
+    (identity) =>
+      identity.pid === supervisor.pid
+        ? "dead"
+        : identity.pid === worker.pid
+          ? observation.workerState
+          : inspect(identity),
+  );
+  return { store, input, receipt, worker, observation };
+}
+
 describe("node worker startup", () => {
   it.runIf(process.platform === "linux" || process.platform === "darwin").each([
-    { build: "lineage-only", lineage: true },
-    { build: "released", lineage: false },
+    { build: "native-v1", lineage: true, nativeOwner: "v1" },
+    { build: "native-v2", lineage: true, nativeOwner: "v2" },
+    { build: "lineage-only", lineage: true, nativeOwner: "none" },
+    { build: "released", lineage: false, nativeOwner: "none" },
+    { build: "native-v2-without-lineage", lineage: false, nativeOwner: "v2" },
   ])(
     "preserves the $build worker's start envelope and process group",
-    async ({ build, lineage }) => {
+    async ({ build, lineage, nativeOwner }) => {
       await using f = fixture();
       const { bundleRoot, workspaceDir } = f;
       const input = launchInput(workspaceDir, `start-contract-${build}`);
-      input.descriptor.admission.handshake.openclawVersion = "2026.9.4";
+      input.descriptor.admission.handshake.openclawVersion =
+        nativeOwner === "v2" ? "2026.10.7" : "2026.9.4";
       input.descriptor.admission.handshake.protocolFeatures =
         input.descriptor.admission.handshake.protocolFeatures.filter(
           (feature) =>
-            feature !== WORKER_NATIVE_PROCESS_OWNER_PROTOCOL_FEATURE &&
+            (feature !== WORKER_NATIVE_PROCESS_OWNER_PROTOCOL_FEATURE || nativeOwner === "v1") &&
+            (feature !== WORKER_NATIVE_PROCESS_OWNER_V2_PROTOCOL_FEATURE || nativeOwner === "v2") &&
             (lineage ||
               (feature !== WORKER_LINEAGE_START_PROTOCOL_FEATURE &&
                 feature !== WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE)),
         );
-      const expectedKeys = lineage ? ["lineageFds", "type"] : ["type"];
+      const native =
+        lineage && (nativeOwner === "v2" || (process.platform === "linux" && nativeOwner === "v1"));
+      const expectedKeys = [
+        ...(lineage ? ["lineageFds"] : []),
+        ...(native ? ["nativeProcessOwner"] : []),
+        "type",
+      ];
       const reportPath = f.file("start-contract.json");
       writeWorker(
         bundleRoot,
         input,
-        `import fs from "node:fs";
-import { spawnSync } from "node:child_process";
-import { createInterface } from "node:readline";
-const started = new Promise(resolve => process.once("message", message => {
+        `import { spawnSync } from "node:child_process";
+process.once("message", message => {
   const keys = Object.keys(message).sort();
   const expected = ${JSON.stringify(expectedKeys)};
   if (message.type !== "openclaw-worker-start-v1" || JSON.stringify(keys) !== JSON.stringify(expected)) {
@@ -124,16 +168,8 @@ const started = new Promise(resolve => process.once("message", message => {
   const group = spawnSync("ps", ["-p", String(process.pid), "-o", "pgid="], { encoding: "utf8" });
   if (group.status !== 0) process.exit(25);
   fs.writeFileSync(${JSON.stringify(reportPath)}, JSON.stringify({ pid: process.pid, pgid: Number(group.stdout.trim()), keys }));
-  resolve();
-}));
-await started;
-const lines = createInterface({ input: process.stdin });
-lines.once("line", line => {
-  const turn = JSON.parse(line);
-  fs.writeSync(1, JSON.stringify({ type: "result", turnId: turn.turnId, retainWorker: false,
-    result: { status: "completed", transcriptLeafId: "leaf-1", transcriptNextSeq: 2 } }) + "\\n");
-  process.exit(0);
-});`,
+});
+${TEST_WORKER_SOURCE}`,
       );
       let adapterPid: number | undefined;
       observeNodeWorkerAdapters((adapter) => {
@@ -309,6 +345,68 @@ lines.once("line", line => {
 });
 
 describe("node worker supervisor initialization", () => {
+  it.each(["dead", "reused"] as const)(
+    "holds Windows capacity until the recorded worker is %s and the Job grace expires",
+    async (gone) => {
+      await using f = fixture();
+      const { store, input, receipt, worker, observation } = await prepareWindowsRecovery(
+        f,
+        "windows-job",
+      );
+      const poll = createDeferred();
+      const grace = createDeferred();
+      const exited = createDeferred();
+      const graceExpired = createDeferred();
+      const capacities: Array<{ total: number; available: number }> = [];
+      const capacity = new NodeWorkerCapacity(store, {
+        capacity: 1,
+        onCapacityChanged: (value) => capacities.push(value),
+      });
+      await capacity.initialize(async () => {});
+      capacities.length = 0;
+      let active = true;
+      const recover = createNodeWorkerLaunchRecovery({
+        store,
+        capacity,
+        recoveries: new Map(),
+        isRecoveryActive: () => active,
+      });
+      recoveryClock.wait = (ms) => {
+        if (ms === 25) {
+          poll.resolve();
+          return exited.promise;
+        }
+        if (ms === 1_000) {
+          grace.resolve();
+          return graceExpired.promise;
+        }
+        return undefined;
+      };
+      const recovering = recover(receipt, true, undefined, true);
+      try {
+        await awaitGateBeforeSettlement(poll.promise, recovering, "released a live Windows worker");
+        expect((await store.get(input.launchId))?.state).toBe("running");
+        expect(await store.nonterminalCount()).toBe(1);
+        expect(capacities).toEqual([]);
+        observation.workerState = gone;
+        exited.resolve();
+        await awaitGateBeforeSettlement(grace.promise, recovering, "skipped Windows Job grace");
+        expect((await store.get(input.launchId))?.state).toBe("running");
+        expect(capacities).toEqual([]);
+        graceExpired.resolve();
+        expect(await recovering).toMatchObject({ state: "interrupted", worker });
+        expect(await store.nonterminalCount()).toBe(0);
+        expect(capacities.at(-1)).toEqual({ total: 1, available: 1 });
+      } finally {
+        active = false;
+        recoveryClock.wait = undefined;
+        exited.resolve();
+        graceExpired.resolve();
+        await recovering;
+      }
+    },
+  );
+
   it("keeps the additive table absent until the first stateful operation", async () => {
     await using f = fixture();
     const { bundleRoot, env, supervisor } = f;
@@ -332,34 +430,11 @@ describe("node worker supervisor initialization", () => {
     await active.close();
   });
 
-  it("retains Windows restart capacity when the recorded worker root is reused", async () => {
+  it("keeps older Windows receipts reserved without recorded Job custody", async () => {
     await using f = fixture();
-    const { bundleRoot, env, workspaceDir } = f;
-    const store = f.store();
-    const input = launchInput(workspaceDir, "windows-reused", "wait");
-    const claim = {
-      ...testNodeWorkerLaunchIdentity(input),
-      gatewayNamespace: input.gatewayNamespace,
-    };
-    const previousSupervisor = { pid: 2_000_000_001, startTime: 1 };
-    const worker = { pid: 2_000_000_002, startTime: 2 };
-    await store.claim(claim, previousSupervisor, 1);
-    await store.markRunning({
-      ...claim,
-      supervisor: previousSupervisor,
-      worker,
-      cleanupMode: "process-group",
-    });
-
-    const inspectIdentity = workerProcessIdentity.inspectNodeWorkerProcessIdentity;
-    vi.spyOn(workerProcessIdentity, "inspectNodeWorkerProcessIdentity").mockImplementation(
-      (identity) => {
-        if (identity.pid === previousSupervisor.pid) {
-          return "dead";
-        }
-        return identity.pid === worker.pid ? "reused" : inspectIdentity(identity);
-      },
-    );
+    const { bundleRoot, env } = f;
+    const { store, input, worker, observation } = await prepareWindowsRecovery(f, "process-group");
+    observation.workerState = "reused";
     const inspectTree = workerTreeControl.inspectOwnedNodeWorkerTree;
     vi.spyOn(workerTreeControl, "inspectOwnedNodeWorkerTree").mockImplementation((identity) => {
       // Scope the Windows observation to its owner; the real database remains host-native.
@@ -380,7 +455,11 @@ describe("node worker supervisor initialization", () => {
     });
     try {
       await recovered.initialize();
-      expect(await store.get(input.launchId)).toMatchObject({ state: "running", worker });
+      expect(await store.get(input.launchId)).toMatchObject({
+        state: "running",
+        worker,
+        workerCleanupMode: "process-group",
+      });
       expect(capacities.at(-1)).toEqual({ total: 1, available: 0 });
       expect(await recovered.hasActiveWork()).toBe(true);
       expect(signal).not.toHaveBeenCalled();
@@ -394,7 +473,7 @@ it.skipIf(process.platform === "win32").for(["uncertain", "confirmed"] as const)
   "settles durable capacity from the native cleanup certificate (%s)",
   { timeout: 20_000 },
   async (cleanupStatus, { signal }) => {
-    await using f = fixture({ capacity: 1, capacityWaitMs: 0 });
+    await using f = fixture({ capacity: 1 });
     const { supervisor, workspaceDir, capacities } = f;
     const input = testWorkerLaunchInput(workspaceDir, "uncertain-owner");
     const store = f.store();
@@ -439,9 +518,29 @@ it.skipIf(process.platform === "win32").for(["uncertain", "confirmed"] as const)
       const replacement = testWorkerLaunchInput(workspaceDir, "replacement-owner");
       replacement.descriptor.admission.environmentId = "replacement-environment";
       replacement.descriptor.admission.sessionId = "replacement-session";
-      await expect(supervisor.launch(replacement, TEST_WORKER_ENDPOINT)).rejects.toMatchObject({
-        code: NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE,
-      });
+      let clock: MockInstance<typeof performance.now> | undefined;
+      const capacityClaim = vi.spyOn(NodeWorkerLaunchStore.prototype, "claim");
+      try {
+        const launching = supervisor.launch(replacement, TEST_WORKER_ENDPOINT);
+        await vi.waitFor(async () => {
+          const results = await Promise.all(
+            capacityClaim.mock.results.flatMap((result) =>
+              result.type === "return" ? [result.value] : [],
+            ),
+          );
+          expect(results.some((result) => result.action === "at-capacity")).toBe(true);
+        });
+        // Expire the real policy only after the worker proves the slot remains reserved.
+        // Timers and database/process lifecycle keep their native behavior.
+        clock = vi.spyOn(performance, "now").mockReturnValue(performance.now() + 10_000);
+        await expect(launching).rejects.toMatchObject({
+          code: NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE,
+          message: "node worker capacity remained full for 10000 ms",
+        });
+      } finally {
+        clock?.mockRestore();
+        capacityClaim.mockRestore();
+      }
     } finally {
       capture.mockRestore();
       restoreConfirmation?.();
@@ -454,7 +553,6 @@ it.skipIf(process.platform === "win32")(
   async ({ signal }) => {
     const f = fixture({
       capacity: 1,
-      capacityWaitMs: 0,
     });
     const { env, supervisor, workspaceDir, capacities } = f;
     const input = testWorkerLaunchInput(workspaceDir, "unknown-turn");

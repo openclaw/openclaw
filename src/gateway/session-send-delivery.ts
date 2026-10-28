@@ -18,6 +18,8 @@ export type SessionSendDelivery = {
   target: SessionSendDeliveryEndpoint;
   sandboxed: boolean;
   message: string;
+  /** Returned results owe no new reply; retain their host-authored intake instructions. */
+  returnedResult?: { extraSystemPrompt: string };
 };
 
 type Admission = { delivery: SessionSendDelivery; acceptedMessage?: PersistedUserTurnMessage };
@@ -77,6 +79,14 @@ export function readSessionSendDelivery(
   ) {
     return undefined;
   }
+  const returnedResult = value.returnedResult;
+  let returned: SessionSendDelivery["returnedResult"];
+  if (returnedResult !== undefined) {
+    if (!isRecord(returnedResult) || typeof returnedResult.extraSystemPrompt !== "string") {
+      return undefined;
+    }
+    returned = { extraSystemPrompt: returnedResult.extraSystemPrompt };
+  }
   return {
     version: 1,
     runId: value.runId,
@@ -84,6 +94,7 @@ export function readSessionSendDelivery(
     target: value.target,
     sandboxed: value.sandboxed,
     message: value.message,
+    ...(returned ? { returnedResult: returned } : {}),
     // The operator recovery owner validates its own bounded representation.
     operatorSource: value.operatorSource,
   };

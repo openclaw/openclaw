@@ -1,3 +1,4 @@
+import { findNormalizedProviderKey } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
 import { ALL_THINKING_LEVELS } from "../auto-reply/thinking.shared.js";
@@ -39,6 +40,7 @@ export const GatewayRemoteConfigSchema = z
 
 export const SecuritySchema = z
   .strictObject({
+    preset: z.enum(["personal", "corporate"]).optional(),
     audit: z
       .strictObject({
         suppressions: z
@@ -199,7 +201,7 @@ function validateTalkProviderSelection(
 ): void {
   const provider = normalizeLowercaseStringOrEmpty(value.provider ?? "");
   const providers = value.providers ? Object.keys(value.providers) : [];
-  if (provider && providers.length > 0 && !Object.hasOwn(value.providers!, provider)) {
+  if (provider && providers.length > 0 && !findNormalizedProviderKey(value.providers, provider)) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ["provider"],
@@ -218,7 +220,19 @@ function validateTalkProviderSelection(
 const TalkRealtimeSchema = z
   .strictObject({
     provider: z.string().optional(),
-    providers: z.record(z.string(), TalkProviderEntrySchema).optional(),
+    providers: z
+      .record(
+        z.string(),
+        TalkProviderEntrySchema.extend({
+          inputTranscriptionModel: z
+            .string()
+            .optional()
+            .describe(
+              "Input transcription model or deployment name. Omit to keep the provider default.",
+            ),
+        }),
+      )
+      .optional(),
     model: z.string().optional(),
     speakerVoice: z.string().optional(),
     speakerVoiceId: z.string().optional(),

@@ -1,42 +1,37 @@
 import { clampThinkingLevel, type Model } from "openclaw/plugin-sdk/llm";
 import { parseModelRef } from "openclaw/plugin-sdk/provider-model-shared";
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { buildKimiCodingProvider, normalizeKimiCodingModelId } from "./provider-catalog.js";
 import { KIMI_K3_MODEL_IDS } from "./provider-policy-api.js";
 
-describe("kimi provider catalog", () => {
-  it.each(["k3", "k3-256k"])("keeps documented off thinking selectable for %s", (id) => {
-    const provider = manifest.modelCatalog.providers.kimi;
-    const row = provider.models.find((model) => model.id === id);
-    if (!row) {
-      throw new Error(`Missing catalog model ${id}`);
-    }
+const catalog = manifest.modelCatalog.providers.kimi;
+
+it.each(catalog.models.filter((model) => ["k3", "k3-256k"].includes(model.id)))(
+  "keeps documented off thinking selectable for $id",
+  (row) => {
     const model: Model<"anthropic-messages"> = {
       ...row,
       api: "anthropic-messages",
       compat: undefined,
       provider: "kimi",
-      baseUrl: provider.baseUrl,
+      baseUrl: catalog.baseUrl,
       input: ["text", "image"],
     };
     expect(clampThinkingLevel(model, "off")).toBe("off");
+  },
+);
+
+it("builds the bundled Kimi coding defaults", () => {
+  const provider = buildKimiCodingProvider();
+
+  expect(provider).toMatchObject({
+    api: "anthropic-messages",
+    baseUrl: "https://api.kimi.com/coding/",
   });
-
-  it("builds the bundled Kimi coding defaults", () => {
-    const provider = buildKimiCodingProvider();
-
-    expect(provider.api).toBe("anthropic-messages");
-    expect(provider.baseUrl).toBe("https://api.kimi.com/coding/");
-    expect(provider.headers).toEqual({ "User-Agent": "claude-code/0.1.0" });
-    expect(provider.models.map((model) => model.id)).toEqual([
-      "k3",
-      "k3-256k",
-      "kimi-for-coding",
-      "kimi-for-coding-highspeed",
-    ]);
-    const k3Contract = {
-      reasoning: true,
+  expect(provider.headers).toEqual({ "User-Agent": "claude-code/0.1.0" });
+  for (const model of provider.models.slice(0, 2)) {
+    expect(model).toMatchObject({
       thinkingLevelMap: {
         minimal: "low",
         low: "low",
@@ -46,58 +41,37 @@ describe("kimi provider catalog", () => {
         max: "max",
       },
       cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 0 },
-      maxTokens: 131_072,
       compat: { codeMode: "preferred" },
-    };
-    expect(provider.models.find((model) => model.id === "k3")).toMatchObject({
-      ...k3Contract,
-      name: "Kimi K3",
-      contextWindow: 1_048_576,
     });
-    expect(provider.models.find((model) => model.id === "k3-256k")).toMatchObject({
-      ...k3Contract,
-      name: "Kimi K3 (256k)",
-      contextWindow: 262_144,
-    });
-    expect(provider.models.find((model) => model.id === "kimi-for-coding-highspeed")).toMatchObject(
-      {
-        name: "Kimi K2.7 Code HighSpeed",
-        reasoning: true,
-        contextWindow: 262_144,
-        maxTokens: 32_768,
-      },
-    );
-    // K2.7 stays unflagged here and in the sibling `moonshot` catalog; only K3 is preferred.
-    for (const id of ["kimi-for-coding", "kimi-for-coding-highspeed"]) {
-      expect(provider.models.find((model) => model.id === id)?.compat?.codeMode).toBeUndefined();
-    }
-  });
+  }
+  expect(provider.models.map((m) => [m.id, m.name, m.contextWindow, m.maxTokens])).toEqual([
+    ["k3", "Kimi K3", 1_048_576, 131_072],
+    ["k3-256k", "Kimi K3 (256k)", 262_144, 131_072],
+    ["kimi-for-coding", "Kimi Code", 262_144, 32_768],
+    ["kimi-for-coding-highspeed", "Kimi K2.7 Code HighSpeed", 262_144, 32_768],
+  ]);
+  expect(provider.models.map((m) => m.reasoning)).toEqual([true, true, true, true]);
+  expect(provider.models.slice(2).map((model) => model.compat?.codeMode)).toEqual([
+    undefined,
+    undefined,
+  ]);
+});
 
-  it("covers every K3 catalog row with the K3 thinking policy", () => {
-    // The manifest owns the rows and `provider-policy-api` owns the thinking
-    // profile, so a new bundled K3 variant must land in both or lose its
-    // levels. The policy list may additionally carry self-hosted wire ids
-    // (e.g. "kimi-k3") that have no bundled catalog row.
-    const thinkingRows = buildKimiCodingProvider()
-      .models.filter((model) => model.thinkingLevelMap)
-      .map((model) => model.id);
+it("covers every K3 catalog row with the K3 thinking policy", () => {
+  const ids = buildKimiCodingProvider()
+    .models.filter((model) => model.thinkingLevelMap)
+    .map((model) => model.id);
 
-    expect(KIMI_K3_MODEL_IDS).toEqual(expect.arrayContaining(thinkingRows));
-    expect(KIMI_K3_MODEL_IDS).toContain("kimi-k3");
-  });
+  expect(KIMI_K3_MODEL_IDS).toEqual(expect.arrayContaining([...ids, "kimi-k3"]));
+});
 
-  it.each([
-    ["kimi-code", "kimi-for-coding"],
-    ["k2p5", "kimi-for-coding"],
-    ["kimi-for-coding", "kimi-for-coding"],
-    ["k3[1m]", "k3"],
-  ])("normalizes %s to %s through the helper and static manifest", (input, expected) => {
-    expect(normalizeKimiCodingModelId(input)).toBe(expected);
-    expect(
-      parseModelRef(`kimi/${input}`, "kimi", {
-        manifestPlugins: [manifest],
-        allowPluginNormalization: false,
-      }),
-    ).toEqual({ provider: "kimi", model: expected });
-  });
+it.each([
+  ["kimi-code", "kimi-for-coding"],
+  ["k2p5", "kimi-for-coding"],
+  ["kimi-for-coding", "kimi-for-coding"],
+  ["k3[1m]", "k3"],
+])("normalizes %s to %s through the helper and static manifest", (input, model) => {
+  const options = { manifestPlugins: [manifest], allowPluginNormalization: false };
+  expect(normalizeKimiCodingModelId(input)).toBe(model);
+  expect(parseModelRef(`kimi/${input}`, "kimi", options)).toEqual({ provider: "kimi", model });
 });

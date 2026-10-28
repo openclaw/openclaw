@@ -16,6 +16,12 @@ import {
 } from "./store-maintenance.js";
 import type { SessionEntry } from "./types.js";
 
+export type SessionMaintenanceAgeContinuation = {
+  at: number;
+  after?: { updatedAt: number; sessionKey: string };
+  modelRunPrune: boolean;
+};
+
 export type SessionEntryMaintenanceAgeFact = {
   maintenance: ResolvedSessionMaintenanceConfig;
   entryCount?: number;
@@ -38,6 +44,23 @@ export type SessionEntryMaintenanceAgeChange = {
   entry: MaintenanceActivity;
   previousEntry?: MaintenanceActivity;
 };
+
+export function restartSessionMaintenanceAgeScan(
+  continuation: SessionMaintenanceAgeContinuation | undefined,
+  changes: ReadonlyMap<string, SessionEntryMaintenanceAgeChange>,
+): SessionMaintenanceAgeContinuation | undefined {
+  const after = continuation?.after;
+  if (
+    after &&
+    [...changes.values()].some(
+      ({ entry }) => entry.archivedAt === undefined && entry.updatedAt <= after.updatedAt,
+    )
+  ) {
+    // A late historical write can sort behind the cursor. Keep the initial age policy.
+    return { at: continuation.at, modelRunPrune: continuation.modelRunPrune };
+  }
+  return undefined;
+}
 const changeObservers = new Map<
   string | symbol,
   Set<(change: SessionEntryMaintenanceAgeChange) => void>
@@ -331,21 +354,19 @@ export function recordSessionEntryMaintenanceAgeFact(
   // Certified keys support indexed namespaces; pending aliases retain the canonical decoder.
   // Older maintenance readers have no pending projection and keep their full row path.
   const dashboardRows = hasCanonicalSessionValidationProjection(database)
-    ? [queries.dashboards(undefined), queries.uncertified(undefined)]
-    : [queries.activity(undefined)];
-  for (const rows of dashboardRows) {
-    for (const row of rows) {
-      if (
-        !isDashboardKey(row.session_key) ||
-        shouldPreserveMaintenanceEntry({ key: row.session_key, entry: undefined })
-      ) {
-        continue;
-      }
-      next.at = Math.min(
-        next.at,
-        nextAgeAt(readActivityAt(row), maintenance.archiveDashboardAfterMs, plannedAt),
-      );
+    ? queries.dashboards(undefined)
+    : queries.activity(undefined);
+  for (const row of dashboardRows) {
+    if (
+      !isDashboardKey(row.session_key) ||
+      shouldPreserveMaintenanceEntry({ key: row.session_key, entry: undefined })
+    ) {
+      continue;
     }
+    next.at = Math.min(
+      next.at,
+      nextAgeAt(readActivityAt(row), maintenance.archiveDashboardAfterMs, plannedAt),
+    );
   }
   const recentAge = maintenance.preserveRecentMs;
   if (recentAge != null && recentAge > 0) {

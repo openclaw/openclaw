@@ -1,10 +1,12 @@
 import { resolveSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import { sameSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
+import type {
+  SessionMetadataChange,
+  SessionMetadataCommit,
+} from "../../config/sessions/transcript-write-context-store.js";
 import {
   captureSessionMetadataPublication,
   SessionTranscriptWriterClaimReboundError,
-  type SessionMetadataChange,
-  type SessionMetadataCommit,
 } from "../../config/sessions/transcript-write-context.js";
 import { withSessionManagerAppend } from "./session-manager-append-admission.js";
 import { SessionManagerEntries } from "./session-manager-entries.js";
@@ -12,26 +14,42 @@ import { generateSessionEntryId } from "./session-manager-id.js";
 import { SessionMetadataCommittedError } from "./session-manager-metadata-error.js";
 import { canonicalizeSessionEntry } from "./session-manager-persistence-entry.js";
 
+/** @internal Session factory initialization is not part of the public SessionManager API. */
+export const sessionManagerAppendInitialMetadata = Symbol("sessionManagerAppendInitialMetadata");
+
 export class SessionManagerMetadata extends SessionManagerEntries {
-  private async appendMetadataEntry(change: SessionMetadataChange): Promise<string> {
+  private async appendMetadataEntry(
+    change: SessionMetadataChange,
+    initialModelChange?: Extract<SessionMetadataChange, { type: "model_change" }>,
+  ): Promise<string> {
     const publication = captureSessionMetadataPublication(this, change);
     return await withSessionManagerAppend(this, async (admission) => {
       this.assertTranscriptViewAvailable();
-      const entry = {
+      const initialModel = initialModelChange
+        ? canonicalizeSessionEntry({
+            ...initialModelChange,
+            id: generateSessionEntryId(),
+            parentId: this.appendParentId,
+            timestamp: new Date().toISOString(),
+          })
+        : undefined;
+      const canonical = canonicalizeSessionEntry({
         ...change,
         id: generateSessionEntryId(),
-        parentId: this.appendParentId,
+        parentId: initialModel?.id ?? this.appendParentId,
         timestamp: new Date().toISOString(),
-      };
+      });
       if (!admission) {
-        const appended = this.appendEntry(entry);
+        if (initialModel) {
+          this.appendEntry(initialModel);
+        }
+        const appended = this.appendEntry(canonical);
         return this.publishMetadataCommit(
           { entry: appended.entry, version: this.transcriptVersion, target: publication.target },
           publication.publish,
         );
       }
       const assertNavigation = this.captureTranscriptNavigationAssertion();
-      const canonical = canonicalizeSessionEntry(entry);
       const appendIntent =
         !this.pendingDeliberateAppend && this.appendMode !== "side" ? "active-branch" : undefined;
       const admittedUserId = this.persistenceTarget
@@ -47,6 +65,7 @@ export class SessionManagerMetadata extends SessionManagerEntries {
         undefined,
         true,
         assertNavigation,
+        initialModel,
       );
       const { result, committedVersion, viewFailure } = committed;
       const commit: SessionMetadataCommit = {
@@ -76,7 +95,7 @@ export class SessionManagerMetadata extends SessionManagerEntries {
             : rebound;
         }
         assertNavigation();
-        await this.adoptWorkerCommittedEntry(canonical, committed, admittedUserId);
+        await this.adoptWorkerCommittedEntry(canonical, committed, admittedUserId, initialModel);
       } catch (cause) {
         failure = { cause };
       }
@@ -111,6 +130,17 @@ export class SessionManagerMetadata extends SessionManagerEntries {
       throw error;
     }
     return commit.entry.id;
+  }
+
+  [sessionManagerAppendInitialMetadata](
+    provider: string,
+    modelId: string,
+    thinkingLevel: string,
+  ): Promise<string> {
+    return this.appendMetadataEntry(
+      { type: "thinking_level_change", thinkingLevel },
+      { type: "model_change", provider, modelId },
+    );
   }
 
   appendThinkingLevelChange(thinkingLevel: string): Promise<string> {

@@ -9,47 +9,39 @@ import * as admission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { sessionCompactHandlers } from "./server-methods/sessions-compact.js";
 import { dispatchGatewayMethodInProcess } from "./server-plugin-in-process-dispatch.js";
+import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
 
 afterEach(() => vi.restoreAllMocks());
 
 it.each([
-  { authority: "prepared", revoke: false },
-  { authority: "prepared", revoke: true },
-  { authority: "opaque", revoke: false },
-])(
-  "keeps in-process manual compaction authority at its worker commit ($authority, revoked=$revoke)",
-  async ({ authority, revoke }) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+  ["prepared", false],
+  ["prepared", true],
+  ["opaque", false],
+] as const)(
+  "keeps in-process manual compaction authority at its worker commit (%s, revoked=%s)",
+  (authority, revoke) =>
+    withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const cfg = { agents: { entries: { main: {} } } };
       await state.writeConfig(cfg);
       const f = createSessionCompoundWorkerFixture();
       const records = createManualCompactRecords(f.scope.sessionId);
       replaceTranscriptEventsSync(f.scope, records);
-      const before = f.read();
-      const rawBefore = readTranscriptEventRows(f.database, f.scope.sessionId);
-      const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
-      context.getGatewayMethodRegistry = () =>
-        createGatewayMethodRegistry([
-          {
-            name: "sessions.compact",
-            scope: "operator.admin",
-            owner: { kind: "core", area: "sessions" },
-            handler: sessionCompactHandlers["sessions.compact"]!,
-          },
-        ]);
-      let current = true;
-      let atCommit = false;
-      let commits = 0;
-      let commitChecks = 0;
+      const readEvents = () => readTranscriptEventRows(f.database, f.scope.sessionId);
+      const before = { entry: f.read(), events: readEvents() };
+      const handler = sessionCompactHandlers["sessions.compact"]!;
+      const context = createDirectChatContext({
+        getRuntimeConfig: () => cfg,
+        getGatewayMethodRegistry: createContext([
+          ["sessions.compact", "operator.admin", "sessions", handler],
+        ]).getGatewayMethodRegistry,
+      });
+      const commit = { current: true, active: false, checks: 0 };
       const assertCurrent = () => {
-        if (atCommit) {
-          commitChecks++;
-        }
-        if (!current) {
+        commit.checks += Number(commit.active);
+        if (!commit.current) {
           throw new Error("manual compaction request authority revoked");
         }
       };
@@ -69,17 +61,17 @@ it.each([
           callback(request, grant);
           return;
         }
-        commits++;
-        current = !revoke;
-        atCommit = true;
+        commit.current = !revoke;
+        commit.active = true;
         try {
           callback(request, grant);
         } finally {
-          atCommit = false;
+          commit.active = false;
         }
       });
-      const sql = observeHostDataSql();
-      try {
+      {
+        const sql = observeHostDataSql();
+        using observation = { [Symbol.dispose]: sql.restore, queries: sql.queries };
         const compact = withPluginRuntimeGatewayRequestScope(
           { context, isWebchatConnect: () => false },
           () =>
@@ -93,37 +85,26 @@ it.each([
               },
             ),
         );
-        if (authority === "opaque") {
-          await expect(compact).rejects.toThrow(
-            "Manual compaction requires worker-prepared request authority",
-          );
-        } else if (revoke) {
-          await expect(compact).rejects.toThrow("manual compaction request authority revoked");
-        } else {
+        if (authority === "prepared" && !revoke) {
           await expect(compact).resolves.toMatchObject({ compacted: true, kept: 3 });
-        }
-        if (authority === "prepared") {
-          expect(commits).toBe(1);
-          expect(commitChecks).toBe(1);
         } else {
-          expect(commitChecks).toBe(0);
+          await expect(compact).rejects.toThrow(
+            authority === "opaque"
+              ? "Manual compaction requires worker-prepared request authority"
+              : "manual compaction request authority revoked",
+          );
         }
-        expect(sql.queries.filter((query) => /\btranscript_events\b/i.test(query))).toEqual([]);
-      } finally {
-        sql.restore();
+        expect(commit.checks).toBe(authority === "prepared" ? 1 : 0);
+        expect(observation.queries.join("\n")).not.toMatch(/\btranscript_events\b/i);
       }
       if (revoke || authority === "opaque") {
-        expect(readTranscriptEventRows(f.database, f.scope.sessionId)).toEqual(rawBefore);
-        expect(f.read()).toEqual(before);
+        expect({ entry: f.read(), events: readEvents() }).toEqual(before);
       } else {
-        expect(
-          readTranscriptEventRows(f.database, f.scope.sessionId).map((row) => row.eventJson),
-        ).toEqual([
-          rawBefore[0]!.eventJson,
+        expect(readEvents().map((row) => row.eventJson)).toEqual([
+          before.events[0]!.eventJson,
           JSON.stringify({ ...records[3], parentId: null }),
-          rawBefore[4]!.eventJson,
+          before.events[4]!.eventJson,
         ]);
       }
-    });
-  },
+    }),
 );

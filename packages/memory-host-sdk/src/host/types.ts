@@ -9,7 +9,14 @@ export type MemoryOriginClass = "owner" | "agent" | "untrusted" | "system";
 export type MemorySessionKind = "interactive" | "cron" | "heartbeat" | "subagent" | "unknown";
 
 /** Additional memory root, optionally narrowed by a root-relative glob. */
-export type MemoryExtraPath = string | { path: string; pattern?: string };
+export type MemoryExtraPath =
+  | string
+  | {
+      path: string;
+      pattern?: string;
+      /** Keep matching reference files out of mtime-based temporal decay. */
+      evergreen?: boolean;
+    };
 
 export type MemoryEntryProvenance = {
   originClass: MemoryOriginClass;

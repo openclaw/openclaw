@@ -1,31 +1,28 @@
-import { definePage, type RouteLocation } from "@openclaw/uirouter";
-import { createComponent } from "solid-js";
-import {
-  INTERNAL_CLAWS_PATH_PARAM,
-  restoreBridgedRouteLocation,
-  routePageSpec,
-} from "../../app-route-paths.ts";
-import type { SolidRouteProps } from "../../app-route-types.ts";
+import { notFound, type RouteLocation } from "@openclaw/uirouter";
+import { INTERNAL_CLAWS_PATH_PARAM, restoreBridgedRouteLocation } from "../../app-route-paths.ts";
+import { defineSolidPage } from "../../app-route-types.tsx";
 import type { ApplicationContext } from "../../app/context.ts";
+import { isClawsAvailable } from "./availability.ts";
 
 export type ClawsRouteData = { location: RouteLocation; basePath: string };
 
-export const page = definePage({
-  ...routePageSpec("claws"),
-  loaderDeps: (_context: ApplicationContext, location) =>
-    restoreBridgedRouteLocation(location, INTERNAL_CLAWS_PATH_PARAM).pathname,
-  loader: (context: ApplicationContext, options): ClawsRouteData => ({
-    location: restoreBridgedRouteLocation(options.location, INTERNAL_CLAWS_PATH_PARAM),
-    basePath: context.basePath,
-  }),
-  component: () =>
-    import("./page.tsx").then((module) => ({
-      header: true,
-      renderSolid: (props: SolidRouteProps<ClawsRouteData>) =>
-        createComponent(module.ClawsPage, {
-          get routeData() {
-            return props.data;
-          },
-        }),
-    })),
-});
+export const page = defineSolidPage<"claws", ApplicationContext, ClawsRouteData>(
+  "claws",
+  () => import("./page.tsx").then((module) => module.ClawsPage),
+  {
+    loaderDeps: (context, location) => {
+      const restored = restoreBridgedRouteLocation(location, INTERNAL_CLAWS_PATH_PARAM);
+      return `${restored.pathname}${restored.search}:${isClawsAvailable(context.runtimeConfig.state)}`;
+    },
+    loader: async (context, { location }) => {
+      await context.runtimeConfig.ensureLoaded();
+      if (isClawsAvailable(context.runtimeConfig.state) === false) {
+        return notFound();
+      }
+      return {
+        location: restoreBridgedRouteLocation(location, INTERNAL_CLAWS_PATH_PARAM),
+        basePath: context.basePath,
+      };
+    },
+  },
+);

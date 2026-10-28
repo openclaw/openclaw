@@ -167,7 +167,7 @@ struct OpenClawSidebarControlButton: View {
 
     private var icon: some View {
         Image(systemName: self.action.systemName)
-            .font(OpenClawType.subheadSemiBold)
+            .font(.system(size: 15, weight: .semibold))
             .foregroundStyle(OpenClawBrand.accent)
             .frame(
                 width: OpenClawProMetric.compactControlSize,

@@ -18,7 +18,7 @@ import { CodexThreadPolicyHandoffError } from "./thread-policy.js";
 export async function startCodexAttemptRuntime(resources: CodexAttemptResources) {
   const {
     prompt,
-    state,
+    state: preparingState,
     trajectoryRecorder,
     startupTimeoutMs,
     buildNativeHookRelayFinalConfigPatch,
@@ -84,6 +84,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
         connection.assertCurrent();
         runtime.nativeExecutionPolicy.source?.();
       },
+      assertCurrentAsync: runtime.nativeExecutionPolicy.assertCurrent,
       authority: connection.authority,
       attemptClientFactory,
       bindingStore,
@@ -109,6 +110,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
       effectiveWorkspace,
       effectiveCwd,
       dynamicTools: toolBridge.specs,
+      askUserAvailable: toolBridge.availableTools.some((tool) => tool.name === "ask_user"),
       persistentWebSearchAllowed: toolState.persistentWebSearchAllowed,
       webSearchAllowed: toolState.webSearchAllowed,
       developerInstructions,
@@ -147,16 +149,19 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
       signal: runAbortController.signal,
       onStartupTimeout: () => runAbortController.abort("codex_startup_timeout"),
       onExecutionDisconnect: (error) => {
-        state.executionDisconnectError = error;
+        preparingState.executionDisconnectError = error;
         embeddedAgentLog.warn(error.message);
         runAbortController.abort("client_closed");
       },
       spawnedBy: params.spawnedBy,
     });
-    state.client = startupResult.client;
-    state.thread = startupResult.thread;
+    // Keep cleanup and the active turn on the same state object.
+    const state = Object.assign(preparingState, {
+      client: startupResult.client,
+      thread: startupResult.thread,
+      turnRouter: startupResult.turnRouter,
+    });
     state.runtimeArtifact = startupResult.runtimeArtifact;
-    state.turnRouter = startupResult.turnRouter;
     state.turnRoute = startupResult.turnRoute;
     // Adopt cleanup ownership before any fallible validation of the started thread.
     state.sandboxExecEnvironment = startupResult.sandboxEnvironment;
@@ -231,10 +236,13 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
     });
     connection.mutable.pluginAppServer = pluginAppServer;
     // Monitor setup still belongs to startup's resource cleanup boundary.
-    await resources.registerNativeSubagentMonitor(state.thread.threadId);
+    await resources.registerNativeSubagentMonitor(state);
+    return { ...resources, state };
   } catch (error) {
     throw error instanceof CodexThreadPolicyHandoffError
       ? error
-      : (state.executionDisconnectError ?? error);
+      : (preparingState.executionDisconnectError ?? error);
   }
 }
+
+export type StartedCodexAttemptResources = Awaited<ReturnType<typeof startCodexAttemptRuntime>>;

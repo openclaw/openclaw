@@ -1,4 +1,3 @@
-// Dependency Changes Report tests cover dependency changes report script behavior.
 import { describe, expect, it } from "vitest";
 import {
   createDependencyChangesReport,
@@ -7,23 +6,26 @@ import {
   parseArgs,
 } from "../../scripts/dependency-changes-report.mts";
 
+const flags = [
+  "--root",
+  "--base-ref",
+  "--base-lockfile",
+  "--head-lockfile",
+  "--json",
+  "--markdown",
+];
+
 describe("dependency-changes-report", () => {
   it("reports added, removed, and changed packages", () => {
+    const dependencyFileChanges = ["pnpm-lock.yaml", "pnpm-workspace.yaml"].map((path) => ({
+      status: "M",
+      path,
+      oldPath: null,
+    }));
     const report = createDependencyChangesReport({
-      basePayload: {
-        removed: ["1.0.0"],
-        stable: ["1.0.0"],
-        changed: ["1.0.0"],
-      },
-      headPayload: {
-        added: ["1.0.0"],
-        stable: ["1.0.0"],
-        changed: ["2.0.0"],
-      },
-      dependencyFileChanges: [
-        { status: "M", path: "pnpm-lock.yaml", oldPath: null },
-        { status: "M", path: "pnpm-workspace.yaml", oldPath: null },
-      ],
+      basePayload: { removed: ["1.0.0"], stable: ["1.0.0"], changed: ["1.0.0"] },
+      headPayload: { added: ["1.0.0"], stable: ["1.0.0"], changed: ["2.0.0"] },
+      dependencyFileChanges,
       generatedAt: "2026-05-12T00:00:00Z",
     });
 
@@ -61,65 +63,29 @@ describe("dependency-changes-report", () => {
   });
 
   it.each([
-    {
-      name: "git ref",
-      baseArgs: ["--base-ref", "origin/main"],
-      expectedBaseRef: "origin/main",
-      expectedBaseLockfile: null,
-    },
-    {
-      name: "lockfile",
-      baseArgs: ["--base-lockfile", "base-lock.yaml"],
-      expectedBaseRef: null,
-      expectedBaseLockfile: "base-lock.yaml",
-    },
-  ])("parses all report options with a $name base", (testCase) => {
-    expect(
-      parseArgs([
-        "--root",
-        "/repo",
-        ...testCase.baseArgs,
-        "--head-lockfile",
-        "head-lock.yaml",
-        "--json",
-        "artifacts/report.json",
-        "--",
-        "--markdown",
-        "artifacts/report.md",
-      ]),
-    ).toEqual({
+    ["--base-ref", "origin/main", "origin/main", null],
+    ["--base-lockfile", "base-lock.yaml", null, "base-lock.yaml"],
+  ] as const)("parses all report options with %s", (flag, value, baseRef, baseLockfile) => {
+    const outputs = "--head-lockfile head.yaml --json r.json -- --markdown r.md".split(" ");
+    expect(parseArgs(["--root", "/repo", flag, value, ...outputs])).toEqual({
       rootDir: "/repo",
-      baseRef: testCase.expectedBaseRef,
-      baseLockfile: testCase.expectedBaseLockfile,
-      headLockfile: "head-lock.yaml",
-      jsonPath: "artifacts/report.json",
-      markdownPath: "artifacts/report.md",
+      baseRef,
+      baseLockfile,
+      headLockfile: "head.yaml",
+      jsonPath: "r.json",
+      markdownPath: "r.md",
     });
   });
 
   it("rejects missing report artifact path option values", () => {
-    for (const flag of [
-      "--root",
-      "--base-ref",
-      "--base-lockfile",
-      "--head-lockfile",
-      "--json",
-      "--markdown",
-    ]) {
+    for (const flag of flags) {
       expect(() => parseArgs([flag, "--json"])).toThrow(`${flag} requires a value`);
       expect(() => parseArgs([flag, "-h"])).toThrow(`${flag} requires a value`);
     }
   });
 
   it("rejects duplicate and conflicting dependency report inputs", () => {
-    for (const flag of [
-      "--root",
-      "--base-ref",
-      "--base-lockfile",
-      "--head-lockfile",
-      "--json",
-      "--markdown",
-    ]) {
+    for (const flag of flags) {
       expect(() => parseArgs(["--base-ref", "main", flag, "one", flag, "two"])).toThrow(
         `${flag} was provided more than once.`,
       );

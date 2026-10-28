@@ -1,7 +1,8 @@
 import { types } from "node:util";
-import { isMainThread } from "node:worker_threads";
+import { isMainThread, type Worker } from "node:worker_threads";
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.ts";
 import { resolveGlobalSingleton } from "../shared/global-singleton.ts";
+import { normalizeWorkerRequestClass } from "./sqlite-worker-request-class.ts";
 
 export type WorkerMessageKind =
   | "sqlite_request"
@@ -26,6 +27,7 @@ export type WorkerMessageMetric = {
   direction: WorkerMessageDirection;
   messages: number;
   payloadBytes: number;
+  payloadBytesByRequestClass?: Record<string, number>;
   unmeasuredMessages: number;
 };
 
@@ -39,6 +41,7 @@ export function recordWorkerMessage(
   kind: WorkerMessageKind,
   direction: WorkerMessageDirection,
   payloadBytes?: number,
+  requestClass?: string,
 ): void {
   if (!isMainThread) {
     return;
@@ -60,13 +63,26 @@ export function recordWorkerMessage(
     counter.unmeasuredMessages++;
   } else {
     counter.payloadBytes += payloadBytes;
+    if (kind === "sqlite_request" || kind === "sqlite_reply") {
+      const classes = (counter.payloadBytesByRequestClass ??= {});
+      const label = normalizeWorkerRequestClass(requestClass);
+      classes[label] = (classes[label] ?? 0) + payloadBytes;
+    }
   }
 }
 
 /** Process-lifetime totals survive worker retirement and Gateway restarts in the same process. */
 export function getWorkerMessageMetrics(): WorkerMessageMetric[] {
   return [...counters.values()].flatMap((directions) =>
-    Object.values(directions).map((counter) => Object.assign({}, counter)),
+    Object.values(directions).map((counter) =>
+      Object.assign(
+        {},
+        counter,
+        counter.payloadBytesByRequestClass
+          ? { payloadBytesByRequestClass: Object.assign({}, counter.payloadBytesByRequestClass) }
+          : undefined,
+      ),
+    ),
   );
 }
 
@@ -183,7 +199,6 @@ function messageKind(message: unknown, fallback: WorkerMessageKind): WorkerMessa
     case "close":
     case "closed":
     case "release":
-    case "ref":
     case "execution-exit":
     case "error":
     case "messageerror":
@@ -201,12 +216,38 @@ export function observeWorkerMessage(
   direction: "to_worker" | "from_worker",
   fallbackKind: WorkerMessageKind = "other",
   payloadBytes?: number | null,
+  requestClass?: string,
 ): void {
   if (isMainThread) {
     recordWorkerMessage(
       messageKind(message, fallbackKind),
       direction,
       payloadBytes === undefined ? workerMessagePayloadBytes(message) : (payloadBytes ?? undefined),
+      requestClass,
     );
   }
+}
+
+/** Inspect instrumentation safety without invoking foreign worker accessors. */
+export function canObserveWorkerMessages(worker: Worker): boolean {
+  if (!Object.isExtensible(worker)) {
+    return false;
+  }
+  for (const method of ["postMessage", "emit"]) {
+    let owner: object | null = worker;
+    while (owner) {
+      const descriptor = Object.getOwnPropertyDescriptor(owner, method);
+      if (descriptor) {
+        if (!descriptor.writable || typeof descriptor.value !== "function") {
+          return false;
+        }
+        break;
+      }
+      owner = Reflect.getPrototypeOf(owner);
+    }
+    if (!owner) {
+      return false;
+    }
+  }
+  return true;
 }

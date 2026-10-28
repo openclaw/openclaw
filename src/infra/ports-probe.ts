@@ -128,6 +128,12 @@ async function probePortOnHost(
     if (isErrno(err) && err.code === "EADDRINUSE") {
       return "busy";
     }
+    if (process.platform === "win32" && isErrno(err) && err.code === "EACCES") {
+      // Exclusive wildcard listeners can deny a loopback bind; reservations alone are inconclusive.
+      return (await probeTcpListener(port, host, signal, deadlineMs)) === "busy"
+        ? "busy"
+        : "unknown";
+    }
     if (isErrno(err) && (err.code === "EADDRNOTAVAIL" || err.code === "EAFNOSUPPORT")) {
       return "skip";
     }

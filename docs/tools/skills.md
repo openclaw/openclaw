@@ -233,7 +233,6 @@ regardless of where they are loaded from.
     ownership: "explicit",
     defaults: {
       skills: ["github", "weather"], // shared baseline
-      heartbeat: { agentId: "writer" },
       systemAgent: { agentId: "writer" },
       authInheritance: { agentId: "writer" },
     },
@@ -770,12 +769,15 @@ below apply to ordinary file-backed skill roots.
 
 One background worker discovers local file-backed skills across managed,
 bundled, plugin, personal, and workspace skill roots. With `skills.load.watch`
-enabled, it checks for passive on-disk changes about once per minute. Edits made
-outside OpenClaw may therefore take up to about a minute to appear, including
+enabled, filesystem events trigger discovery after on-disk changes, including
 adding or removing a skill and creating, removing, or replacing a skill root or
-workspace. Each discovery pass reads a shared root once for matching discovery
+workspace. A safety rescan every 30 minutes catches missed events, including on
+filesystems without reliable native notifications. Each discovery pass reads a shared root once for matching discovery
 limits and file policies, then applies each workspace's precedence separately.
-The next pass reads those roots again to observe changes.
+Unchanged roots need no discovery work between events and safety rescans.
+Sessions share immutable parsed skill facts for unchanged files while retaining
+their own eligibility, allowlists, and prompt selections. A changed file replaces
+those facts on refresh; snapshots already in use keep their original revision.
 
 Explicit OpenClaw actions request an immediate rescan: installing, updating,
 uninstalling, or editing a skill; changing configuration that affects skills;
@@ -798,6 +800,8 @@ OpenClaw actions and Gateway startup still refresh skills immediately.
   <Accordion title="Automatic skill refresh">
     The background discovery worker scans configured skill roots, so ordinary
     source edits elsewhere in a workspace do not trigger skill rescans.
+    Missing skill roots observe their nearest existing ancestor; unrelated
+    sibling writes and ancestor metadata changes do not trigger discovery.
     Configure under `skills.load`:
 
     ```json5
@@ -812,7 +816,7 @@ OpenClaw actions and Gateway startup still refresh skills immediately.
     }
     ```
 
-    Passive edits are coalesced into the next periodic scan. Supporting-file
+    Native file events are coalesced into a discovery pass. Supporting-file
     changes refresh sandbox copies without changing the skill catalog. Unchanged
     names, configuration keys, sources, precedence winners, and `SKILL.md` content
     keep the same snapshot version and do not notify chat metadata consumers.
@@ -880,6 +884,11 @@ ineligible, and model-hidden skills are not added by search. Existing explicit
 user references remain separate. Search does not query ClawHub, install a
 skill, or grant permission to execute its commands.
 
+When Tool Search defers these tools in its default `tools` mode, call
+`dispatch_action` with `{"id":"skills_read","args":{"name":"<name>"}}` or
+`{"id":"skills_search","args":{"query":"<query>"}}`. The Skills prompt selects
+this invocation automatically; directly callable tools keep their normal syntax.
+
 Instruction-body indexing requires the effective native `skills_read` tool.
 When reads are denied or shadowed, search uses metadata only and performs no
 instruction-body reads. Revocation also excludes cached body matches and rejects
@@ -888,13 +897,24 @@ in-flight indexing started under the previous grant.
 In OpenClaw Code Mode, use `await skills.search(query, limit)` and
 `await skills.read(name)`. These calls dispatch through the same tools and
 policies. The read returns a string with the same location context and complete
-instructions. `await skills.list(offset)` returns up to 20 directory entries;
+instructions. Cloud worker turns use the Gateway's admitted skill catalog for
+search and reads, with the same turn-lifetime checks. If a request fails, the
+Code Mode bridge reports a bounded, redacted cause.
+`await skills.list(offset)` returns up to 20 directory entries;
 the default offset is 0. Codex receives the OpenClaw tools through its dynamic
 tool surface; these are distinct from Codex's native skill-resource tools.
 Codex refuses a skill read that exceeds the turn's dynamic-tool output budget
 instead of returning partial instructions as a successful read.
 An existing `read` policy grant also permits `skills_read`. An explicit
 `skills_read` denial still wins; search permission alone does not grant reads.
+
+For embedded runs, finite runtime tool allowlists retain the Skills catalog when
+the final callable tool set supports reading instructions. Missing readers are
+not added automatically, and an explicit `toolsAllow: []` remains tool-less.
+Skill and reference files must also be accessible in the run's execution environment.
+
+List and search results cap descriptions at 512 UTF-16 code units without splitting
+surrogate pairs. The source `SKILL.md` and complete skill instructions stay unchanged.
 
 Search uses an in-memory lexical index of the prepared catalog. It follows the
 existing [snapshot and refresh rules](/tools/skills#snapshots-and-refresh), with

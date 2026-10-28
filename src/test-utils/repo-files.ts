@@ -19,7 +19,7 @@ export function toRepoRelativePath(repoRoot: string, filePath: string): string {
   return toRepoPath(path.relative(repoRoot, filePath));
 }
 
-export function sortRepoPaths(paths: Iterable<string>): string[] {
+function sortRepoPaths(paths: Iterable<string>): string[] {
   return [...paths].map(toRepoPath).toSorted();
 }
 

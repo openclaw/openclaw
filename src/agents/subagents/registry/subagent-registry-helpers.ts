@@ -2,6 +2,7 @@ import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES } from "../../../config/agent-limits.js";
 import { getRuntimeConfig } from "../../../config/config.js";
+import { sqliteSessionEntriesEqual } from "../../../config/sessions/session-accessor.sqlite-entry-equality.js";
 import { applySessionEntryExactReplacements } from "../../../config/sessions/session-accessor.sqlite-replacement-projection.js";
 import type {
   SessionEntryCurrentCheck,
@@ -18,10 +19,8 @@ import { computeBackoff } from "../../../infra/backoff.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { isSessionMutationActive } from "../../../sessions/session-controller.lifecycle-projections.js";
-import {
-  recordGatewaySessionRunFailure,
-  resolveSessionRunError,
-} from "../../../sessions/session-run-error.js";
+import { resolveSessionRunError } from "../../../sessions/session-run-error-format.js";
+import { recordGatewaySessionRunFailure } from "../../../sessions/session-run-error.js";
 import { truncateUtf8Prefix } from "../../../utils/utf8-truncate.js";
 import { cleanupMaterializedSubagentAttachments } from "../subagent-attachment-cleanup.js";
 import { resolveSubagentChildSessionOwner } from "./subagent-child-session-owner.js";
@@ -229,7 +228,7 @@ export async function persistSubagentSessionTiming(
     } else if (status && status !== "killed") {
       delete next.abortedLastRun;
     }
-    return next;
+    return sqliteSessionEntriesEqual(sessionEntry, next) ? null : next;
   };
   const persist = async (expected: SessionEntry | undefined, assertSessionCurrent?: () => void) => {
     let selected: InternalSessionEntry | undefined;
@@ -368,10 +367,7 @@ function resolveArchiveAfterMs(cfg?: OpenClawConfig) {
   const minutes =
     config.agents?.defaults?.subagents?.archiveAfterMinutes ??
     DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES;
-  if (!Number.isFinite(minutes) || minutes <= 0) {
-    return undefined;
-  }
-  return Math.max(1, Math.floor(minutes)) * 60_000;
+  return minutes === 0 ? undefined : minutes * 60_000;
 }
 
 /** Arms retention only after the run or its waitable collector result has completed. */

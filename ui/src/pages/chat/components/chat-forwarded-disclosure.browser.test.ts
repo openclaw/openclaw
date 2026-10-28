@@ -7,6 +7,7 @@ import groupedCss from "../../../styles/chat/grouped.css?inline";
 import messageCss from "../../../styles/chat/message-layout.css?inline";
 import startupCss from "../../../styles/chat/startup-layout.css?inline";
 import textCss from "../../../styles/chat/text.css?inline";
+import identityAvatarCss from "../../../styles/identity-avatar.css?inline";
 import mobileCss from "../../../styles/layout.mobile.css?inline";
 
 let stylesheet: HTMLStyleElement;
@@ -14,9 +15,15 @@ let stylesheet: HTMLStyleElement;
 // Match the app's default font before measuring the disclosure's inline baseline.
 beforeEach(async () => {
   stylesheet = document.createElement("style");
-  stylesheet.textContent = [baseCss, mobileCss, startupCss, messageCss, textCss, groupedCss].join(
-    "\n",
-  );
+  stylesheet.textContent = [
+    baseCss,
+    identityAvatarCss,
+    mobileCss,
+    startupCss,
+    messageCss,
+    textCss,
+    groupedCss,
+  ].join("\n");
   document.head.append(stylesheet);
   const typefaces = resolveTypefaces("claw");
   syncTypefaceStylesheets(typefaces);
@@ -165,17 +172,26 @@ it("keeps a forwarded stream open until final while collapsing prior messages", 
   group.messages = group.messages.slice(0, 2);
   group.isStreaming = true;
   draw();
-  const bubbles = host.querySelectorAll(".chat-bubble");
-  expect(bubbles[0]!.querySelector(".chat-message-disclosure")).not.toBeNull();
-  expect(bubbles[1]!.querySelector(".chat-message-disclosure")).toBeNull();
+  await expect
+    .poll(() =>
+      Array.from(
+        host.querySelectorAll(".chat-bubble"),
+        (bubble) => bubble.querySelector(".chat-message-disclosure") !== null,
+      ),
+    )
+    .toEqual([true, false]);
   group.isStreaming = false;
   draw();
   await expect
-    .poll(() => bubbles[1]!.querySelector("button[aria-expanded='false']") !== null)
-    .toBe(true);
+    .poll(
+      () =>
+        host.querySelectorAll(".chat-bubble")[1]?.querySelector("button[aria-expanded='false']") ??
+        null,
+    )
+    .not.toBeNull();
 });
 
-it("rechecks wrapped content when the transcript width changes", async () => {
+it("rechecks retained content when the transcript width or message text changes", async () => {
   const { group, draw } = fixture("assistant", 1000);
   group.messages = [
     {
@@ -201,6 +217,10 @@ it("rechecks wrapped content when the transcript width changes", async () => {
   host.style.width = "1000px";
   await expect.poll(() => toggle.hidden).toBe(true);
   expect(content.scrollHeight - content.clientHeight).toBeLessThanOrEqual(1);
+  group.messages[0]!.message = { role: "assistant", content: longText };
+  draw();
+  expect(host.querySelector(".chat-message-disclosure__content")).toBe(content);
+  await expect.poll(() => toggle.hidden).toBe(false);
 });
 
 it.each([
@@ -231,7 +251,7 @@ it.each([
     const fallback = slot.querySelector<HTMLElement>(":scope > .identity-avatar--agent")!;
     await expect.poll(() => fallback.querySelector("svg") !== null).toBe(true);
     expect(image.getBoundingClientRect().height).toBe(loaded ? 18 : 0);
-    expect(fallback.getBoundingClientRect().height).toBe(loaded ? 0 : 18);
+    expect(fallback.getBoundingClientRect().height).toBe(18);
     expect(slot.scrollHeight).toBe(18);
   },
 );

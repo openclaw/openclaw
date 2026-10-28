@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { acknowledgeInternalToolResult } from "../../packages/agent-core/src/internal-hooks.js";
 import { publishTranscriptUpdate } from "../config/sessions/session-accessor.js";
 import type { TranscriptEntryAnchor } from "../config/sessions/transcript-entry-anchor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -20,7 +21,6 @@ import { isTranscriptOnlyOpenClawAssistantModel } from "../shared/transcript-onl
 import type { AssistantErrorTranscript } from "./assistant-error-transcript.js";
 import { prepareCodeModeCheckpoint } from "./code-mode-checkpoint.js";
 import type { AgentMessage } from "./runtime/index.js";
-import { acknowledgeInternalToolResult } from "./runtime/internal-hooks.js";
 import {
   getRawSessionAppendMessage,
   setRawSessionAppendMessage,
@@ -168,7 +168,6 @@ export function installSessionToolResultGuard(
   flushPendingToolResults: () => void;
   flushPendingToolResultsAsync: () => Promise<void>;
   clearPendingToolResults: () => void;
-  setNextUserMessagePersistence: (mode: NextUserMessagePersistence) => void;
   getPendingIds: () => string[];
 } {
   const originalAppend = getRawSessionAppendMessage(sessionManager);
@@ -348,6 +347,7 @@ export function installSessionToolResultGuard(
     // Destructive tool-side state commits only after this exact result is durable.
     acknowledgeInternalToolResult(acknowledgementSource);
     if (assistantSource && appended) {
+      assistantSource.committedMessageId = entryId;
       assistantSource.committedMessageSeq =
         messageSeq ?? (anchor ? anchor.activeMessagePosition + 1 : null);
       bindAgentAssistantSource(persistedMessage, assistantSource);
@@ -631,9 +631,6 @@ export function installSessionToolResultGuard(
     flushPendingToolResults,
     flushPendingToolResultsAsync,
     clearPendingToolResults: () => pending.clear(),
-    setNextUserMessagePersistence: (mode) => {
-      captureMessageContext().nextUserMessagePersistence = mode;
-    },
     getPendingIds: () => Array.from(pending.keys()),
   };
 }

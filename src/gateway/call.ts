@@ -48,7 +48,6 @@ import {
 import {
   GatewayClient,
   isGatewayConnectAssemblyError,
-  prepareGatewayClientDeviceAuth,
   type GatewayClientCloseInfo,
   type GatewayClientOptions,
   type GatewayClientRequestOptions,
@@ -122,6 +121,7 @@ type CallGatewayBaseOptions = Pick<GatewayClientOptions, "caps"> &
     expectFinal?: boolean;
     timeoutMs?: number | null;
     signal?: AbortSignal;
+    assertConnectionCurrent?: () => void;
     prepareDispatchCurrent?: () => Promise<void>;
     assertDispatchCurrent?: () => void;
     onAccepted?: GatewayClientRequestOptions["onAccepted"];
@@ -377,15 +377,7 @@ function resolveGatewayConfigPath(env: NodeJS.ProcessEnv): string {
 }
 
 export function buildGatewayConnectionDetails(
-  options: {
-    config?: OpenClawConfig;
-    url?: string;
-    configPath?: string;
-    urlSource?: "cli" | "env";
-    ignoreEnvUrlOverride?: boolean;
-    localPortOverride?: number;
-    serviceTargetUrl?: string;
-  } = {},
+  options: Parameters<typeof buildGatewayConnectionDetailsWithResolvers>[0] = {},
 ): GatewayConnectionDetails {
   return buildGatewayConnectionDetailsWithResolvers(options, {
     getRuntimeConfig: readGatewayDispatchConfig,
@@ -679,29 +671,6 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
       });
     }
   }
-  try {
-    await prepareGatewayClientDeviceAuth(
-      {
-        url,
-        token,
-        password,
-        edgeAuthHeaders,
-        tlsFingerprint,
-        deviceIdentity,
-        deviceAuthScope,
-        sharedStateMode: opts.sharedStateMode,
-        preparedDeviceAuth: storedAuth ?? undefined,
-        approvalRuntimeToken: opts.approvalRuntimeToken,
-        agentRuntimeIdentityToken: opts.agentRuntimeIdentityToken,
-      },
-      opts.signal,
-    );
-  } catch (error) {
-    if (opts.signal?.aborted) {
-      throw createGatewayRequestAbortError(opts.method);
-    }
-    throw error;
-  }
   // A one-shot shared-auth CLI connection cannot match an earlier run's owner.
   // Request admin authority for cancellation; the Gateway still validates it.
   const effectiveScopes: OperatorScope[] | undefined =
@@ -731,9 +700,7 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     const cleanup = () => {
       startAbort.abort();
       opts.signal?.removeEventListener("abort", abortHandler);
-      if (timer) {
-        clearTimeout(timer);
-      }
+      clearTimeout(timer);
     };
     const stopClientThenSettle = (err?: Error, value?: T) => {
       const complete = () => {
@@ -787,6 +754,7 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
       edgeAuthHeaders,
       tlsFingerprint,
       preauthHandshakeTimeoutMs: opts.preauthHandshakeTimeoutMs,
+      assertConnectionCurrent: opts.assertConnectionCurrent,
       instanceId: opts.instanceId ?? randomUUID(),
       clientName: opts.clientName ?? GATEWAY_CLIENT_NAMES.CLI,
       clientDisplayName: resolveGatewayClientDisplayName(opts),

@@ -13,6 +13,7 @@ import {
   getGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "../../agents/tools/gateway-caller-context.js";
+import * as gatewayModule from "../../agents/tools/gateway.js";
 import { isConfiguredCommandOwner } from "../../auto-reply/command-auth.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -37,7 +38,7 @@ import { mintCronCreatorAuthorityGrant } from "../cron-creator-authority-grant.j
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
 import { callCron, createHistoryJob, createReadService } from "./cron-read.test-support.js";
-import { requireRecord } from "./cron.validation.test-support.js";
+import { cronAccountPolicy, requireRecord } from "./cron.validation.test-support.js";
 import type { GatewayClient } from "./types.js";
 
 const sessionKey = "agent:main:discord:group:policy-adoption";
@@ -47,12 +48,7 @@ const cfg: OpenClawConfig = {
   agents: { entries: { main: {} } },
   commands: { ownerAllowFrom: ["discord:owner-1"] },
 };
-const accountPolicy = {
-  version: 1,
-  mode: "account",
-  ownerSessionKey: sessionKey,
-  ownerAccountId: accountId,
-} as const;
+const accountPolicy = cronAccountPolicy(sessionKey, accountId);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let stateDir: string | undefined;
 let cron: CronService | undefined;
@@ -135,7 +131,6 @@ function createFixture() {
     storePath,
     cronEnabled: false,
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
   });
   cron = service;
@@ -162,8 +157,11 @@ it.each([
   "other account",
   "borrowed capture",
   "no capture",
+  "native owner",
 ] as const)("captures owner authority and preserves manager cap edits: %s", async (caller) => {
   const { storePath, service, context, makeJob } = createFixture();
+  const native = caller === "native owner";
+  const toolsAllow = native ? ["read", "dispatch_action"] : ["calendar_search"];
   const owner = {
     agentId: "main",
     sessionKey:
@@ -181,7 +179,7 @@ it.each([
       payload: {
         kind: "agentTurn",
         message: "Check calendar",
-        toolsAllow: ["read", "calendar_search"],
+        toolsAllow: native ? ["read", "tool_call"] : ["read", "calendar_search"],
       },
       owner,
     }),
@@ -191,51 +189,53 @@ it.each([
         ownerSessionKey: owner.sessionKey,
         ownerAccountId: owner.accountId,
       },
-      captureRuntimeAuthority: () => runtimeAuthority,
+      ...(native ? {} : { captureRuntimeAuthority: () => runtimeAuthority }),
     },
   );
   const before = (await loadCronStore(storePath)).jobs;
   await withAgentManagement(async (identity, _management, capability) => {
     const mint = () => mintCronCreatorAuthorityGrant(capability, undefined, runtimeAuthority);
-    const tool = createCronTool(
-      {
-        runId: identity.operationalRunInstance.runId,
-        agentSessionKey: sessionKey,
-        agentAccountId: accountId,
-        creatorToolAllowlist: caller === "known tool" ? ["calendar_search"] : ["read"],
-        resolveCreatorToolAuthority:
-          caller === "no capture"
-            ? undefined
-            : async () => ({
-                tools: caller === "owner" || caller === "known tool" ? ["calendar_search"] : [],
-                provenance: { version: 1, source: "final-executable-surface" },
-                grant: mint(),
-                holdsRuntimeAuthority: true,
-              }),
-      },
-      {
-        callGatewayTool: async <T>(method: string, _options: unknown, params: unknown) => {
-          const request = requireRecord(params, "Cron tool request");
-          const client = createSyntheticPluginRuntimeClient();
-          const agentRuntimeIdentity = { ...identity, ...getGatewayToolCallerIdentity() };
-          if (caller === "borrowed capture" && method === "cron.update") {
-            agentRuntimeIdentity.cronToolsAllowCapture = "final-executable-surface";
-            agentRuntimeIdentity.cronCreatorAuthorityGrant = mint();
-          }
-          client.internal = { ...client.internal, agentRuntimeIdentity };
-          const respond = await callCron(context, method, request, { client });
-          const [ok, result, error] = expectDefined(respond.mock.calls[0], "response");
-          if (!ok) {
-            throw new Error(error?.message);
-          }
-          return result as T;
-        },
+    vi.spyOn(gatewayModule, "callGatewayTool").mockImplementation(
+      async <T>(method: string, _options: unknown, params: unknown) => {
+        const request = requireRecord(params, "Cron tool request");
+        const client = createSyntheticPluginRuntimeClient();
+        const agentRuntimeIdentity = { ...identity, ...getGatewayToolCallerIdentity() };
+        if (caller === "borrowed capture" && method === "cron.update") {
+          agentRuntimeIdentity.cronToolsAllowCapture = "final-executable-surface";
+          agentRuntimeIdentity.cronCreatorAuthorityGrant = mint();
+        }
+        client.internal = { ...client.internal, agentRuntimeIdentity };
+        const respond = await callCron(context, method, request, { client });
+        const [ok, result, error] = expectDefined(respond.mock.calls[0], "response");
+        if (!ok) {
+          throw new Error(error?.message);
+        }
+        return result as T;
       },
     );
+    const tool = createCronTool({
+      runId: identity.operationalRunInstance.runId,
+      agentSessionKey: sessionKey,
+      agentAccountId: accountId,
+      creatorToolAllowlist: native
+        ? toolsAllow
+        : caller === "known tool"
+          ? ["calendar_search"]
+          : ["read"],
+      resolveCreatorToolAuthority:
+        caller === "no capture" || native
+          ? undefined
+          : async () => ({
+              tools: caller === "owner" || caller === "known tool" ? ["calendar_search"] : [],
+              provenance: { version: 1, source: "final-executable-surface" },
+              grant: mint(),
+              holdsRuntimeAuthority: true,
+            }),
+    });
     const update = tool.execute("app-update", {
       action: "update",
       jobId: created.id,
-      job: { payload: { toolsAllow: ["calendar_search"] } },
+      job: { payload: { toolsAllow } },
     });
     if (caller === "no capture") {
       await expect(update).rejects.toThrow(/calendar_search.*[Rr]ecreate/);
@@ -246,6 +246,12 @@ it.each([
   const stored = (await loadCronStore(storePath)).jobs;
   if (caller === "no capture") {
     expect(stored).toEqual(before);
+  } else if (native) {
+    expect(stored[0]).toMatchObject({
+      owner,
+      payload: { toolsAllow },
+      scheduledToolPolicy: accountPolicy,
+    });
   } else {
     const owned = caller === "owner" || caller === "known tool";
     expect(stored[0]).toMatchObject({ owner, payload: { toolsAllow: ["calendar_search"] } });
@@ -254,7 +260,6 @@ it.each([
     );
   }
 });
-
 it.each([
   { caller: "agent management", definition: "known account", expected: accountPolicy },
   { caller: "operator", definition: "known account", expected: accountPolicy },

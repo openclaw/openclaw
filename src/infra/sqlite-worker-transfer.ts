@@ -186,7 +186,11 @@ export function createSqliteWorkerTransferReceiver(
           if (frame.offset !== 0) {
             throw new Error("SQLite read transfer omitted the start of a record");
           }
-          record = { kind: frame.kind, bytes: new Uint8Array(frame.recordBytes), offset: 0 };
+          record = {
+            kind: frame.kind,
+            bytes: frame.recordDone ? frame.bytes : new Uint8Array(frame.recordBytes),
+            offset: 0,
+          };
         }
         const end = frame.offset + frame.bytes.byteLength;
         if (
@@ -198,7 +202,9 @@ export function createSqliteWorkerTransferReceiver(
         ) {
           throw new Error("SQLite read transfer returned a discontinuous record");
         }
-        record.bytes.set(frame.bytes, frame.offset);
+        if (record.bytes !== frame.bytes) {
+          record.bytes.set(frame.bytes, frame.offset);
+        }
         record.offset = end;
         if (frame.recordDone) {
           const value: unknown = deserialize(record.bytes);

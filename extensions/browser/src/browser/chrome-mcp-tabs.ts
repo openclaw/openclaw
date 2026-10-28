@@ -14,7 +14,6 @@ import {
   ChromeMcpReconnectRequiredError,
   type ChromeMcpCallOptions,
   type ChromeMcpOpenOptions,
-  type ChromeMcpOperationOptions,
   type ChromeMcpProfileOptions,
 } from "./chrome-mcp-contracts.js";
 import { extractStructuredPages } from "./chrome-mcp-result.js";
@@ -48,7 +47,8 @@ export async function ensureChromeMcpAvailable(
   });
 }
 
-async function readChromeMcpTabs(
+/** List Chrome MCP pages converted to persistent BrowserTab handles. */
+export async function listChromeMcpTabs(
   profileName: string,
   profileOptions?: ChromeMcpProfileOptions,
   options: ChromeMcpCallOptions = {},
@@ -70,27 +70,6 @@ async function readChromeMcpTabs(
       throw err;
     }
   }
-}
-
-/** List Chrome MCP pages converted to persistent BrowserTab handles. */
-export async function listChromeMcpTabs(
-  profileName: string,
-  profileOptions?: ChromeMcpProfileOptions,
-  options: ChromeMcpOperationOptions = {},
-): Promise<BrowserTab[]> {
-  return await readChromeMcpTabs(profileName, profileOptions, {
-    timeoutMs: options.timeoutMs,
-    signal: options.signal,
-  });
-}
-
-/** Count Chrome MCP pages without returning handles from an ephemeral session. */
-export async function countChromeMcpTabs(
-  profileName: string,
-  profileOptions?: ChromeMcpProfileOptions,
-  options: ChromeMcpCallOptions = {},
-): Promise<number> {
-  return (await readChromeMcpTabs(profileName, profileOptions, options)).length;
 }
 
 async function lookupChromeMcpMarkerNativeTarget(params: {

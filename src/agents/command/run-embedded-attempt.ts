@@ -1,7 +1,6 @@
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { buildTerminalAgentRunFailureReplyPayload } from "../../auto-reply/reply/agent-runner-failure-reply.js";
 import { applyModelRuntimeDirective } from "../../auto-reply/reply/directive-handling.model-runtime.js";
-import { formatThinkingLevelClampNotice } from "../../auto-reply/thinking.shared.js";
 import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { clearAgentRunTerminalWriteContext } from "../../infra/agent-run-terminal-writes.js";
@@ -15,7 +14,6 @@ import {
   ModelSelectionLockedError,
   isModelSelectionLocked,
 } from "../../sessions/model-overrides.js";
-import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTrajectoryRuntimeRecorder } from "../../trajectory/runtime.js";
 import { resolveMessageChannel } from "../../utils/message-channel.js";
 import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../agent-run-terminal-outcome.js";
@@ -23,9 +21,7 @@ import {
   clearAutoFallbackPrimaryProbeSelection,
   entryMatchesAutoFallbackPrimaryProbe,
   markAutoFallbackPrimaryProbe,
-  resolveEffectiveModelFallbacks,
 } from "../agent-scope.js";
-import { isHeartbeatLifecycleRunKind } from "../bootstrap-mode.js";
 import { buildRunEntryTerminal } from "../embedded-agent-runner/run-entry-terminal.js";
 import {
   runEmbeddedAgentEntry,
@@ -33,7 +29,6 @@ import {
 } from "../embedded-agent-runner/run-entry.js";
 import { createDeferredEmbeddedRunLifecycleManager } from "../embedded-agent-runner/run/deferred-lifecycle-owner.js";
 import { resolveFastModeState } from "../fast-mode.js";
-import { runAgentHarnessBeforeMessageWriteHook } from "../harness/hook-helpers.js";
 import { prepareInternalSessionEffectsSession } from "../internal-session-effects.js";
 import { LiveSessionModelSwitchError } from "../live-model-switch.js";
 import {
@@ -41,6 +36,7 @@ import {
   hasNewGeneratedMediaTaskForSessionKey,
 } from "../media-generation-activity.js";
 import { findModelInCatalog, prepareModelRunCapabilities } from "../model-catalog-lookup.js";
+import { resolveEffectiveModelFallbacks } from "../model-selection-config.js";
 import {
   resolveConfiguredThinkingDefault,
   resolveThinkingSelection,
@@ -67,9 +63,13 @@ import {
 import { persistAgentSession } from "./attempt-execution.shared.js";
 import { createCommandCompactionAccounting } from "./compaction-accounting.js";
 import { createAgentCommandLifecycle } from "./lifecycle.js";
+import { withCommandThinkingClamp } from "./model-selection.js";
 import type { RunEmbeddedAgentAttemptParams } from "./run-embedded-attempt.types.js";
 import { loadAttemptExecutionRuntime, type AgentAttemptResult } from "./runtime-loaders.js";
-import { resolveInternalSessionEffectsSource } from "./session-helpers.js";
+import {
+  prepareCommandUserTurnTranscript,
+  resolveInternalSessionEffectsSource,
+} from "./session-helpers.js";
 const log = createSubsystemLogger("agents/agent-command");
 const MAX_LIVE_SWITCH_RETRIES = 5;
 
@@ -141,7 +141,6 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
 
   const startedAt = Date.now();
   const attemptLifecycleState: AgentAttemptLifecycleState = {
-    currentTurnUserMessagePersisted: false,
     lifecycleFinishing: false,
     lifecycleEnded: false,
   };
@@ -153,41 +152,8 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
       return params.preparedRunAdmission.onRuntimeTurnStarted();
     },
   );
-  const transcriptMedia = params.opts.transcriptMedia ?? [];
-  const hasTranscriptMedia = transcriptMedia.length > 0;
-  const suppressUserTurnPersistence =
-    params.opts.suppressPromptPersistence === true ||
-    (params.opts.transcriptMessage === "" && !hasTranscriptMedia);
-  const recorderTranscriptText = transcriptBody || undefined;
-  const userTurnTranscriptRecorder =
-    (internalSessionTarget ? undefined : params.opts.userTurnTranscriptRecorder) ??
-    createUserTurnTranscriptRecorder({
-      ...(!suppressUserTurnPersistence && (recorderTranscriptText || hasTranscriptMedia)
-        ? {
-            input: {
-              text: recorderTranscriptText,
-              ...(hasTranscriptMedia ? { media: transcriptMedia } : {}),
-              senderIsOwner: params.opts.senderIsOwner,
-              ...(params.opts.inputProvenance ? { provenance: params.opts.inputProvenance } : {}),
-            },
-          }
-        : {}),
-      target: {
-        sessionId: internalSessionTarget?.sessionId ?? sessionId,
-        agentId: internalSessionTarget?.agentId ?? sessionAgentId,
-        sessionKey: internalSessionTarget?.sessionKey ?? sessionKey ?? sessionId,
-        sessionEntry: internalSessionTarget?.sessionEntry ?? sessionEntry,
-        sessionStore: params.suppressVisibleSessionEffects ? undefined : sessionStore,
-        storePath: internalSessionTarget?.storePath ?? storePath,
-        cwd: cwd ?? workspaceDir,
-        config: cfg,
-      },
-      beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
-      errorContext: "agent command user turn transcript",
-    });
-  if (suppressUserTurnPersistence) {
-    userTurnTranscriptRecorder.markBlocked();
-  }
+  const { suppressUserTurnPersistence, userTurnTranscriptRecorder } =
+    prepareCommandUserTurnTranscript(params, internalSessionTarget, sessionEntry);
   const lifecycle = createAgentCommandLifecycle({
     runId,
     lifecycleGeneration: () => lifecycleGeneration,
@@ -273,6 +239,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
             cfg,
             agentId: sessionAgentId,
             sessionKey,
+            selectedModel: { provider, model },
             hasSessionModelOverride:
               hasExplicitRunOverride || Boolean(storedProviderOverride || storedModelOverride),
             modelOverrideSource: hasExplicitRunOverride ? "user" : storedModelOverrideSource,
@@ -283,7 +250,6 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
           }));
 
       const fallbackRuntimeState: { originRuntime?: "cli" | "embedded" } = {};
-      attemptLifecycleState.currentTurnUserMessagePersisted = false;
       attemptMediaTaskIds = liveSwitchMediaTaskIds;
       const fallbackResult = await runEmbeddedAgentEntry<AgentAttemptResult>({
         preparedRunAdmission: params.preparedRunAdmission,
@@ -312,6 +278,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
           requestedRouteResolution: params.modelSelection.requestedRouteResolution,
           agentDir,
           fallbacksOverride: effectiveFallbacksOverride,
+          cyberAccessProgram: sessionEntryForAttempt?.cyberAccessProgram,
           userLockedAuthProfileId:
             resolveSessionAuthProfileOverrideSource(sessionEntryForAttempt) === "user"
               ? sessionEntryForAttempt?.authProfileOverride
@@ -496,7 +463,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
                 [candidateThinkingCatalog, params.prepared.configuredThinkingCatalog],
                 [providerOverride, modelOverride, candidateRuntime],
               ),
-              configuredAuthProfileId,
+              configuredAuthProfileId: runOptions.authProfileId ?? configuredAuthProfileId,
               modelFallbacksOverride: runOptions.modelFallbacksOverride,
               originalProvider: provider,
               cfg,
@@ -510,9 +477,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
               cwd,
               body,
               transcriptBody,
-              preserveCliSessionBinding:
-                isHeartbeatLifecycleRunKind(logicalTurnOpts.bootstrapContextRunKind) ||
-                params.preserveUserFacingSessionModelState,
+              preserveCliSessionBinding: params.preserveUserFacingSessionModelState,
               resolvedThinkLevel: candidateThinkLevel,
               thinkingExplicit: candidateConfiguredThinkLevel !== undefined,
               fastMode,
@@ -548,11 +513,8 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
               suppressPromptPersistenceOnRetry:
                 suppressUserTurnPersistence ||
                 userTurnTranscriptRecorder.hasPersisted() ||
-                userTurnTranscriptRecorder.isBlocked() ||
-                (runOptions.isFallbackRetry &&
-                  attemptLifecycleState.currentTurnUserMessagePersisted),
+                userTurnTranscriptRecorder.isBlocked(),
               userTurnTranscriptRecorder,
-              onUserMessagePersisted: attemptLifecycleCallbacks.onUserMessagePersisted,
               onCompactionAccounting: candidateAccounting.observe,
               onCompactionRequestBudget: candidateAccounting.observeRequestBudget,
               onSuccessfulAuthProfile: (selection) => {
@@ -569,26 +531,12 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
               deferTerminalLifecycle: true,
               deferredLifecycle,
             });
-            const thinking = candidateResult.meta.requestShaping?.thinking ?? candidateThinkLevel;
-            const thinkingClamp = formatThinkingLevelClampNotice({
-              requested: requestedLevel,
-              effective: thinking,
-              provider: candidateResult.meta.agentMeta?.provider ?? providerOverride,
-              model: candidateResult.meta.agentMeta?.model ?? modelOverride,
+            return withCommandThinkingClamp(candidateResult, {
+              requestedLevel,
+              candidateThinkLevel,
+              provider: providerOverride,
+              model: modelOverride,
             });
-            return thinkingClamp
-              ? {
-                  ...candidateResult,
-                  meta: {
-                    ...candidateResult.meta,
-                    requestShaping: {
-                      ...candidateResult.meta.requestShaping,
-                      thinking,
-                      thinkingClamp,
-                    },
-                  },
-                }
-              : candidateResult;
           } finally {
             await candidateAccounting.finish(sessionEntry);
           }
@@ -608,16 +556,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
       fallbackExhausted = fallbackResult.outcome === "exhausted";
       await fallbackResult.settleSessionOverride();
       if (fallbackResult.attempts.length > 0 && result.meta.agentMeta) {
-        result = {
-          ...result,
-          meta: {
-            ...result.meta,
-            agentMeta: {
-              ...result.meta.agentMeta,
-              fallbackAttempts: fallbackResult.attempts,
-            },
-          },
-        };
+        result.meta.agentMeta.fallbackAttempts = fallbackResult.attempts;
       }
       if (!fallbackExhausted) {
         lifecycle.emitFinishing(terminal);

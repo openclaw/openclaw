@@ -1,6 +1,7 @@
 // OpenClaw test instance helper spawns isolated OpenClaw processes.
 import { type ChildProcess, type ChildProcessByStdio, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { once } from "node:events";
 import fs from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
@@ -36,6 +37,7 @@ import { sleep } from "../../src/utils.js";
 import { decodeUtf8Tail } from "./bounded-child-output.js";
 import { createOpenClawTestProcess, type OpenClawTestProcess } from "./openclaw-test-process.js";
 import { runQaGatewayFixture } from "./qa-gateway-cleanup.js";
+import { beginUiE2ePhase } from "./ui-e2e-phase.js";
 
 type OpenClawTestStateOptions = NonNullable<Parameters<typeof createOpenClawTestState>[0]>;
 
@@ -107,6 +109,8 @@ export type OpenClawTestInstance = {
     options?: { timeoutMs?: number; execPath?: string },
   ) => Promise<OpenClawTestInstanceCommandResult>;
   startGateway: () => Promise<void>;
+  /** Crash only the command; retain descendant custody until stop/cleanup. */
+  crashGateway: () => Promise<void>;
   stopGateway: () => Promise<void>;
   logs: () => string;
   /** Bounded owner/readiness/listener facts for a failure after startup. */
@@ -372,6 +376,7 @@ async function waitForGatewayReady(
   signal?: AbortSignal,
   record?: (diagnostic: GatewayReadinessDiagnostic) => void,
 ) {
+  const finishPhase = beginUiE2ePhase("gateway-readiness");
   const startedAt = Date.now();
   const probes: GatewayReadinessDiagnostic["probes"] = [];
   let outcome: GatewayReadinessDiagnostic["outcome"] = "timeout";
@@ -621,6 +626,7 @@ async function waitForGatewayReady(
     signal?.throwIfAborted();
     throw error;
   } finally {
+    finishPhase();
     record?.({
       probe: "GET /readyz",
       settlementProbe: "GET /startupz",
@@ -959,6 +965,7 @@ export async function createOpenClawTestInstance(
       }
     | undefined;
   let constructionCleanup: Promise<ProcessExtinctionResult> | undefined;
+  const crashedChildren = new Set<NonNullable<typeof child>>();
   const commands = new Set<Promise<OpenClawTestInstanceCommandResult>>();
   const reserveIdlePort = async () => {
     if (
@@ -971,18 +978,33 @@ export async function createOpenClawTestInstance(
     }
   };
   let cleanupPromise: Promise<void> | undefined;
-  let operation: { kind: "start" | "stop" | "cleanup"; promise: Promise<void> } | undefined;
+  let operation:
+    | { kind: "start" | "stop" | "crash" | "cleanup"; promise: Promise<void> }
+    | undefined;
   const enqueue = (kind: NonNullable<typeof operation>["kind"], action: () => Promise<void>) => {
     if (operation?.kind === kind) {
       return operation.promise;
     }
     // Claim ordering before preparation can yield. Teardown joins pending startup,
     // and another start cannot borrow readiness from a child being stopped.
+    const finishQueue = beginUiE2ePhase(kind === "start" ? "gateway-start-queue" : undefined);
     const next = {
       kind,
       promise: Promise.resolve(operation?.promise)
         .catch(() => undefined)
-        .then(action),
+        .then(() => {
+          finishQueue();
+          const finishPhase = beginUiE2ePhase(
+            kind === "start"
+              ? "gateway-start"
+              : kind === "stop"
+                ? "gateway-stop"
+                : kind === "cleanup"
+                  ? "gateway-cleanup"
+                  : undefined,
+          );
+          return action().finally(finishPhase);
+        }),
     };
     operation = next;
     const release = () => {
@@ -1088,6 +1110,17 @@ export async function createOpenClawTestInstance(
       );
     }
     await reserveIdlePort();
+  };
+  const stopAllGatewayChildren = async (stopOptions: GatewayProcessStopOptions = {}) => {
+    await runQaGatewayFixture(
+      () => stopGatewayChild(stopOptions),
+      ...[...crashedChildren].map((target) => async () => {
+        if (!(await target.stop(Date.now() + stopTimeoutMs * 2, stopOptions))) {
+          throw new Error("crashed Gateway process cleanup could not verify termination");
+        }
+        crashedChildren.delete(target);
+      }),
+    );
   };
 
   const instance: OpenClawTestInstance = {
@@ -1291,7 +1324,28 @@ export async function createOpenClawTestInstance(
         }
       });
     },
-    stopGateway: () => enqueue("stop", stopGatewayChild),
+    crashGateway: () =>
+      enqueue("crash", async () => {
+        signal?.throwIfAborted();
+        const target = child;
+        if (
+          !acceptingWork ||
+          !target?.ready ||
+          !target.process.pid ||
+          hasChildExited(target.process)
+        ) {
+          throw new Error("Running Gateway command is unavailable for crash");
+        }
+        target.ready = false;
+        // The adapter exposes the command PID, not its relay/anchor. Do not use
+        // target.process.kill(), whose adapter implementation cancels the entire tree.
+        const exited = once(target.process, "exit");
+        process.kill(target.process.pid, "SIGKILL");
+        await exited;
+        crashedChildren.add(target);
+        child = undefined;
+      }),
+    stopGateway: () => enqueue("stop", stopAllGatewayChildren),
     logs: () => formatLogs(stdout, stderr),
     diagnose: async () => {
       const owner = child;
@@ -1353,7 +1407,7 @@ export async function createOpenClawTestInstance(
           () => {
             // Terminal cleanup has no graceful-shutdown contract. Force the Windows
             // tree so inherited pipes cannot outlive the completed test instance.
-            return stopGatewayChild({ forceWindowsTree: true });
+            return stopAllGatewayChildren({ forceWindowsTree: true });
           },
           releasePort,
         );

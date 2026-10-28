@@ -63,6 +63,7 @@ import {
 } from "../message-action-turn-capability.js";
 import { createChatRunState } from "../server-chat-state.js";
 import { handleGatewayRequest } from "../server-methods.js";
+import { gatewayProfile } from "../server/client-fixtures.test-support.js";
 import { resolveSessionMutationAuthorizationAsync } from "../session-sharing-authorization-async.js";
 import * as chatDispatch from "./chat-send-agent-dispatch.js";
 import { holdProjectedChatDispatch } from "./chat-send-authority.test-support.js";
@@ -107,12 +108,7 @@ function createBindingClient(options: {
           },
         }
       : {}),
-    authenticatedUserProfile: {
-      profileId: options.profileId,
-      displayName: null,
-      hasAvatar: false,
-      updatedAt: 1,
-    },
+    authenticatedUserProfile: gatewayProfile(options.profileId),
     connect: {
       minProtocol: 1,
       maxProtocol: 1,
@@ -631,7 +627,6 @@ it.each(
               opts: {
                 dashboardReadAdmission: initial.options.replyOptions?.dashboardReadAdmission,
               },
-              isHeartbeat: false,
             },
             executionRunId,
           );

@@ -81,6 +81,21 @@ describe("pw-tools-core.snapshot navigate guard", () => {
     expect(goto).not.toHaveBeenCalled();
   });
 
+  it("cancels the navigation policy preflight before acquiring a page", async () => {
+    const controller = new AbortController();
+    const reason = new Error("navigation caller cancelled");
+    controller.abort(reason);
+
+    await expect(
+      mod.navigateViaPlaywright({
+        ...target,
+        url: "https://example.com",
+        signal: controller.signal,
+      }),
+    ).rejects.toBe(reason);
+    expect(getPwToolsCoreSessionMocks().getPageForTargetId).not.toHaveBeenCalled();
+  });
+
   it("returns managed download metadata when navigation starts an attachment download", async () => {
     const download = {
       url: "https://example.com/export.csv",
@@ -119,12 +134,10 @@ describe("pw-tools-core.snapshot navigate guard", () => {
   });
 
   it("handles capture timeouts that win before ordinary navigation settles", async () => {
-    let rejectCapture!: (err: Error) => void;
+    const { promise: capture, reject: rejectCapture } = Promise.withResolvers<never>();
     const downloadCapture = {
       armed: true,
-      promise: new Promise<never>((_, reject) => {
-        rejectCapture = reject;
-      }),
+      promise: capture,
       cancel: vi.fn(),
     };
     setPwToolsCoreDownloadCapture(downloadCapture);

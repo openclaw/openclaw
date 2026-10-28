@@ -45,12 +45,7 @@ export function placeChatInputs(
   props: ChatInputPlacementProps,
   orderState: ChatInputOrderState,
   currentRunId: string | null,
-): {
-  pendingKeys: Set<string>;
-  historicalKeys: Set<string>;
-  hiddenKeys: Set<string>;
-  activeInputKey?: string;
-} {
+) {
   const orderedQueue = (props.queue ?? []).toSorted(compareChatQueueOrder);
   const { queue, pendingInputs } = selectChatInputDisplay(
     history,
@@ -77,11 +72,8 @@ export function placeChatInputs(
   for (const input of pendingInputs) {
     const inputItems = buildPendingInputItems(
       [input],
-      undefined,
-      orderedQueue,
       props.workspaceSyncPendingRunIds,
       props.workerSetupPending,
-      props.messageRecovery,
     );
     const first = inputItems[0];
     if (!first) {

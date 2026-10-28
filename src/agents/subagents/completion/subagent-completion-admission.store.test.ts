@@ -13,23 +13,18 @@ import type { SqliteWorkerOperationAdmission } from "../../../infra/sqlite-worke
 import * as workerAdmission from "../../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  openOpenClawStateDatabase,
-} from "../../../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import { forbidMainThreadSql } from "../../../test-utils/main-thread-sql-spies.test-support.js";
-import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import {
   bindSubagentRunGatewayOwners,
   retryDeferredSubagentCompletionSource,
 } from "../registry/subagent-registry-gateway-owner.js";
-import { subagentRuns } from "../registry/subagent-registry-memory.js";
+import { getSubagentActivationRuns, subagentRuns } from "../registry/subagent-registry-memory.js";
 import {
   assertSubagentRegistryWriteOutcomeKnown,
-  mutateSubagentRuns,
   restoreSubagentRunsFromDisk,
 } from "../registry/subagent-registry-persistence.js";
 import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry-state.fixture.test-support.js";
@@ -43,6 +38,7 @@ import {
   currentCompletionRun,
   armRequesterWake,
   settleRequesterCompletionBatch,
+  updateCompletionOwner,
 } from "./subagent-completion-admission.test-helpers.js";
 import {
   admitCorrelatedSubagentSessionDelivery,
@@ -53,8 +49,6 @@ function records() {
   const now = Date.now();
   const subagent = createSubagentRunRecord({
     runId: "completion-run",
-    childSessionKey: "agent:main:subagent:child",
-    requesterSessionKey: "agent:main:main",
     requesterAgentId: "main",
     generation: 1,
     expectsCompletionMessage: true,
@@ -94,35 +88,14 @@ function records() {
   return { subagent, queueEntry, expected };
 }
 
-async function withAdmissionState(
-  run: (fixture: Awaited<ReturnType<typeof setup>>) => Promise<void>,
-) {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const fixture = await setup();
-    try {
-      await run(fixture);
-      expect(
-        fixture.database.db.prepare("SELECT COUNT(*) AS count FROM task_runs").get()?.count,
-      ).toBe(0);
-      expect(
-        fixture.database.db.prepare("SELECT COUNT(*) AS count FROM flow_runs").get()?.count,
-      ).toBe(0);
-    } finally {
-      vi.restoreAllMocks();
-      subagentRuns.delete(fixture.input.expected.runId);
-    }
-  });
-}
-async function setup() {
+function setup(database: Parameters<Parameters<typeof withSubagentCompletionWorkerState>[0]>[0]) {
   const input = records();
-  const database = openOpenClawStateDatabase();
-  seedSubagentCompletionDelivery({ subagent: input.expected, databaseOptions: { database } });
-  subagentRuns.set(input.expected.runId, input.expected);
+  seedSubagentCompletionOwner({ subagent: input.expected, databaseOptions: { database } });
+  const runId = input.expected.runId;
   const context = captureOpenClawStateWorkerContext();
-  await loadPendingSessionDeliveries(context);
   const admit = (assertCurrent = () => {}) =>
     admitSubagentCompletionDelivery({
-      runId: input.expected.runId,
+      runId,
       plan: (current) => ({
         queueEntry: input.queueEntry,
         subagent: {
@@ -133,7 +106,31 @@ async function setup() {
       context,
       assertCurrent,
     });
-  return { input, database, context, admit };
+  return {
+    input,
+    database,
+    context,
+    admit,
+    runId,
+    owner: () => readSubagentRun(database, runId),
+    pending: () => loadPendingSessionDeliveries(context),
+  };
+}
+
+async function withAdmissionState(run: (fixture: ReturnType<typeof setup>) => Promise<void>) {
+  await withSubagentCompletionWorkerState(async (database) => {
+    await run(setup(database));
+    expect(
+      ["task_runs", "flow_runs"].map(
+        (table) => database.db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get()?.count,
+      ),
+    ).toEqual([0, 0]);
+  });
+}
+
+function guardHostSql() {
+  const sql = forbidMainThreadSql("Correlated completion touched main-thread SQLite");
+  return { [Symbol.dispose]: () => sql.restore() };
 }
 
 afterEach(() => vi.restoreAllMocks());
@@ -142,7 +139,7 @@ describe("native subagent completion worker admission", () => {
   it.each(["pending", "acknowledged", "failed"] as const)(
     "preserves a legacy completion queue until its %s receipt reconciles",
     async (receipt) => {
-      await withAdmissionState(async ({ input, database, context, admit }) => {
+      await withAdmissionState(async ({ input, context, admit, owner, pending, runId }) => {
         await admit();
         if (receipt === "acknowledged") {
           await markSessionDeliverySettlement(input.queueEntry, "recovered", context);
@@ -151,15 +148,16 @@ describe("native subagent completion worker admission", () => {
         const resolver = () => gateway;
         await bindSubagentRunGatewayOwners({
           runs: subagentRuns,
+          entries: [...getSubagentActivationRuns(subagentRuns)],
           resumedRuns: new Set(),
           getGatewayContextResolver: () => resolver,
           onRecovered: () => {},
         });
-        expect(readSubagentRun(database, input.subagent.runId)?.delivery).toMatchObject({
+        expect(owner()?.delivery).toMatchObject({
           status: "in_progress",
           queueId: input.queueEntry.id,
         });
-        const [queued] = await loadPendingSessionDeliveries(context);
+        const [queued] = await pending();
         expect(queued?.id).toBe(input.queueEntry.id);
         const outcome = receipt === "failed" ? "moved-to-failed" : "recovered";
         if (receipt !== "acknowledged") {
@@ -175,11 +173,11 @@ describe("native subagent completion worker admission", () => {
         } else {
           await completeSessionDelivery(input.queueEntry.id, context);
         }
-        expect(await loadPendingSessionDeliveries(context)).toEqual([]);
+        expect(await pending()).toEqual([]);
         await retryDeferredSubagentCompletionSource(
-          expectDefined(subagentRuns.get(input.subagent.runId), "settled completion"),
+          expectDefined(subagentRuns.get(runId), "settled completion"),
         );
-        expect(readSubagentRun(database, input.subagent.runId)?.delivery).toMatchObject({
+        expect(owner()?.delivery).toMatchObject({
           status: receipt === "failed" ? "failed" : "delivered",
           disposition: receipt === "failed" ? "permanent_failure" : "delivered",
         });
@@ -188,47 +186,37 @@ describe("native subagent completion worker admission", () => {
   );
 
   it("commits queue and native owner atomically, then acknowledges replay without rewriting them", async () => {
-    await withAdmissionState(async ({ input, database, admit }) => {
-      await mutateSubagentRuns([input.subagent.runId], (rows) => ({
-        value: undefined,
-        postimages: new Map([
-          [input.subagent.runId, { ...rows.get(input.subagent.runId)!, label: "before admission" }],
-        ]),
-      }));
+    await withAdmissionState(async ({ input, database, admit, owner, runId }) => {
+      await updateCompletionOwner(runId, (current) => ({ ...current, label: "before admission" }));
       const result = await admit();
       expect(result).toMatchObject({
         claimed: true,
         status: "pending",
         subagent: { label: "before admission" },
       });
-      expect(readSubagentRun(database, input.subagent.runId)?.delivery).toMatchObject({
+      expect(owner()?.delivery).toMatchObject({
         queueId: input.queueEntry.id,
         status: "in_progress",
         generation: 1,
       });
-      const published = expectDefined(
-        readSubagentRun(database, input.subagent.runId),
-        "native owner",
-      );
+      const published = expectDefined(owner(), "native owner");
       expect(result.subagent).toEqual({ ...published, cleanupHandled: true });
       await expect(admit()).resolves.toMatchObject({
         claimed: false,
         status: "pending",
         subagent: { ...published, cleanupHandled: true },
       });
-      expect(readSubagentRun(database, input.subagent.runId)).toEqual(published);
+      expect(owner()).toEqual(published);
       expect(
         database.db.prepare("SELECT COUNT(*) AS count FROM delivery_queue_entries").get()?.count,
       ).toBe(1);
-      const updateAcknowledged = vi.fn((rows: ReadonlyMap<string, typeof input.subagent>) => ({
-        value: undefined,
-        postimages: new Map([
-          [input.subagent.runId, { ...rows.get(input.subagent.runId)!, label: "after replay" }],
-        ]),
+      const updateAcknowledged = vi.fn((current: typeof input.subagent) => ({
+        ...current,
+        label: "after replay",
       }));
-      await mutateSubagentRuns([input.subagent.runId], updateAcknowledged);
+      await updateCompletionOwner(runId, updateAcknowledged);
       expect(updateAcknowledged).toHaveBeenCalledOnce();
-      expect(readSubagentRun(database, input.subagent.runId)).toMatchObject({
+      expect(owner()).toMatchObject({
         label: "after replay",
         delivery: published.delivery,
         completion: published.completion,
@@ -237,46 +225,51 @@ describe("native subagent completion worker admission", () => {
     });
   });
 
-  it("rolls back both owners after the native subagent write fails", async () => {
-    await withAdmissionState(async ({ input, database, context, admit }) => {
-      const before = readSubagentRun(database, input.expected.runId);
-      database.db.exec(
-        "CREATE TRIGGER reject_completion AFTER UPDATE ON subagent_runs BEGIN SELECT RAISE(ABORT, 'completion crash cut'); END",
-      );
-      await expect(admit()).rejects.toThrow("completion crash cut");
-      expect(await loadPendingSessionDeliveries(context)).toEqual([]);
-      expect(readSubagentRun(database, input.expected.runId)).toEqual(before);
-    });
-  });
-
-  it("refuses mismatched queue and native delivery generations before either write", async () => {
-    await withAdmissionState(async ({ input, database, context, admit }) => {
-      const before = readSubagentRun(database, input.expected.runId);
-      input.subagent.delivery!.generation = 2;
-      await expect(admit()).rejects.toThrow("one owner generation");
-      expect(await loadPendingSessionDeliveries(context)).toEqual([]);
-      expect(readSubagentRun(database, input.expected.runId)).toEqual(before);
-    });
-  });
-
-  it("refuses a durable replacement with a newer sibling identity", async () => {
-    await withAdmissionState(async ({ input, database, context, admit }) => {
-      const replacement = {
-        ...structuredClone(input.expected),
-        generation: 2,
-        runId: "newer-run",
-      };
-      seedSubagentCompletionDelivery({ subagent: replacement, databaseOptions: { database } });
-      const before = readSubagentRun(database, input.expected.runId);
-      await expect(admit()).rejects.toThrow(/completion owner (changed|was replaced)/);
-      expect(await loadPendingSessionDeliveries(context)).toEqual([]);
-      expect(readSubagentRun(database, input.expected.runId)).toEqual(before);
+  it.each([
+    ["native write failure", /completion crash cut/],
+    ["mismatched delivery generations", /one owner generation/],
+    ["newer sibling identity", /completion owner (changed|was replaced)/],
+    ["revoked transaction authority", /completion source retired/],
+    ["revoked commit authority", /completion source retired/],
+  ] as const)("leaves both owners unchanged after %s", async (cut, error) => {
+    await withAdmissionState(async ({ input, database, admit, owner, pending }) => {
+      let current = true;
+      if (cut === "native write failure") {
+        database.db.exec(
+          "CREATE TRIGGER reject_completion AFTER UPDATE ON subagent_runs BEGIN SELECT RAISE(ABORT, 'completion crash cut'); END",
+        );
+      } else if (cut === "mismatched delivery generations") {
+        input.subagent.delivery!.generation = 2;
+      } else if (cut === "newer sibling identity") {
+        seedSubagentCompletionDelivery({
+          subagent: { ...structuredClone(input.expected), generation: 2, runId: "newer-run" },
+          databaseOptions: { database },
+        });
+      } else {
+        const stage = cut === "revoked transaction authority" ? "transaction" : "commit";
+        probe.admission(workerAdmission, (request, grant, grantOwner) => {
+          if (request.stage === stage) {
+            current = false;
+          }
+          grantOwner(request, grant);
+        });
+      }
+      const before = owner();
+      await expect(
+        admit(() => {
+          if (!current) {
+            throw new Error("completion source retired");
+          }
+        }),
+      ).rejects.toThrow(error);
+      expect(await pending()).toEqual([]);
+      expect(owner()).toEqual(before);
     });
   });
 
   it("admits a raw-key completion independently of another agent's newer run", async () => {
-    await withSubagentCompletionWorkerState(async (database) => {
-      const { subagent, queueEntry, expected } = records();
+    await withAdmissionState(async ({ input, database, admit, pending }) => {
+      const { subagent, queueEntry, expected } = input;
       for (const entry of [subagent, expected]) {
         entry.childSessionKey = "global";
         entry.childAgentId = "main";
@@ -293,51 +286,17 @@ describe("native subagent completion worker admission", () => {
         readSubagentRun(database, other.runId),
         "other agent's completion owner",
       );
-      const context = captureOpenClawStateWorkerContext();
-      const result = await admitSubagentCompletionDelivery({
-        runId: expected.runId,
-        plan: () => ({ subagent, queueEntry }),
-        context,
-        assertCurrent: () => {},
-      });
-
+      const result = await admit();
       expect(result).toMatchObject({ claimed: true, status: "pending" });
-      expect((await loadPendingSessionDeliveries(context)).map((entry) => entry.id)).toEqual([
-        queueEntry.id,
-      ]);
+      expect((await pending()).map((entry) => entry.id)).toEqual([queueEntry.id]);
       expect(readSubagentRun(database, other.runId)).toEqual(otherBefore);
     });
   });
 
-  it.each(["transaction", "commit"] as const)(
-    "refuses revoked authority at worker %s admission",
-    async (stage) => {
-      await withAdmissionState(async ({ input, database, context, admit }) => {
-        let current = true;
-        const before = readSubagentRun(database, input.expected.runId);
-        probe.admission(workerAdmission, (request, grant, grantOwner) => {
-          if (request.stage === stage) {
-            current = false;
-          }
-          grantOwner(request, grant);
-        });
-        await expect(
-          admit(() => {
-            if (!current) {
-              throw new Error("completion source retired");
-            }
-          }),
-        ).rejects.toThrow("completion source retired");
-        expect(await loadPendingSessionDeliveries(context)).toEqual([]);
-        expect(readSubagentRun(database, input.expected.runId)).toEqual(before);
-      });
-    },
-  );
-
   it.each(["ordinary", "reply lost", "replacement", "metadata successor"] as const)(
     "publishes native completion before its admitted successor without host SQLite or record parsing (%s)",
     async (change) => {
-      await withAdmissionState(async ({ input, database, context }) => {
+      await withAdmissionState(async ({ input, context, owner, pending, runId }) => {
         let crossed = false;
         let successor: Promise<void> | undefined;
         probe.command(stateWorker, async (command, executeOptions, scope) => {
@@ -345,22 +304,18 @@ describe("native subagent completion worker admission", () => {
           if (command.type === "sessionDelivery.admitSubagentCompletion") {
             crossed = true;
             if (change === "replacement" || change === "metadata successor") {
-              successor = mutateSubagentRuns(
-                [input.expected.runId],
-                (rows) => {
-                  const current = expectDefined(
-                    rows.get(input.expected.runId),
-                    "admitted successor predecessor",
-                  );
+              successor = updateCompletionOwner(
+                runId,
+                (current) => {
                   expect(current.delivery?.status).toBe("in_progress");
                   const next = structuredClone(current);
                   if (change === "replacement") {
                     next.generation = 2;
                     next.delivery = { status: "pending", generation: 2 };
                   } else {
-                    next.task = "metadata updated after completion admission";
+                    next.task = "updated task";
                   }
-                  return { value: undefined, postimages: new Map([[next.runId, next]]) };
+                  return next;
                 },
                 { context },
               );
@@ -370,81 +325,80 @@ describe("native subagent completion worker admission", () => {
           }
           return result;
         });
-        const sql = forbidMainThreadSql("Correlated completion touched main-thread SQLite");
         const parse = JSON.parse;
         const parsedRecords: string[] = [];
-        const parser = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
-          if (text.includes(input.expected.childSessionKey)) {
-            parsedRecords.push(text);
-          }
-          return parse(text, reviver);
-        });
         let result: Awaited<ReturnType<typeof admitCorrelatedSubagentSessionDelivery>>;
-        try {
-          result = await admitCorrelatedSubagentSessionDelivery({
-            runId: input.expected.runId,
-            queueContext: context,
-            payload: {
-              kind: "agentTurn",
-              sessionKey: input.expected.requesterSessionKey,
-              message: "done",
-              messageId: "facade-completion",
-            },
+        {
+          using _ = guardHostSql();
+          using clone = vi.spyOn(globalThis, "structuredClone");
+          const beforeAdmission = expectDefined(subagentRuns.get(runId), "completion owner");
+          const beforeDelivery = { ...beforeAdmission.delivery };
+          const parser = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
+            if (text.includes(input.expected.childSessionKey)) {
+              parsedRecords.push(text);
+            }
+            return parse(text, reviver);
           });
-          expect(crossed).toBe(true);
-          await successor;
-          expect(parsedRecords).toEqual([]);
-        } finally {
-          parser.mockRestore();
-          sql.restore();
+          try {
+            result = await admitCorrelatedSubagentSessionDelivery({
+              runId,
+              queueContext: context,
+              payload: {
+                kind: "agentTurn",
+                sessionKey: input.expected.requesterSessionKey,
+                message: "done",
+                messageId: "facade-completion",
+              },
+            });
+            expect(crossed).toBe(true);
+            expect(beforeAdmission.delivery).toEqual(beforeDelivery);
+            await successor;
+            expect.soft(clone.mock.calls.some(([value]) => value === beforeAdmission)).toBe(false);
+            expect(parsedRecords).toEqual([]);
+          } finally {
+            parser.mockRestore();
+          }
         }
         expect(result).toMatchObject({ claimed: true, status: "pending" });
         if (change === "replacement") {
-          expect(subagentRuns.get(input.expected.runId)).toMatchObject({
+          expect(subagentRuns.get(runId)).toMatchObject({
             generation: 2,
             delivery: { status: "pending", generation: 2 },
           });
-          expect(readSubagentRun(database, input.expected.runId)?.generation).toBe(2);
+          expect(owner()?.generation).toBe(2);
         } else {
-          expect(readSubagentRun(database, input.expected.runId)?.delivery).toMatchObject({
-            queueId: result.id,
-            generation: 1,
-          });
+          const delivery = { queueId: result.id, generation: 1 };
+          expect(owner()?.delivery).toMatchObject(delivery);
           if (change === "metadata successor") {
-            expect(subagentRuns.get(input.expected.runId)?.task).toBe(
-              "metadata updated after completion admission",
-            );
+            expect(subagentRuns.get(runId)?.task).toBe("updated task");
           }
-          expect(subagentRuns.get(input.expected.runId)?.delivery).toMatchObject({
-            queueId: result.id,
-            generation: 1,
+          expect(subagentRuns.get(runId)?.delivery).toMatchObject({
+            ...delivery,
             status: "in_progress",
           });
           const queued = expectDefined(
-            (await loadPendingSessionDeliveries(context)).find((entry) => entry.id === result.id),
+            (await pending()).find((entry) => entry.id === result.id),
             "committed correlated queue entry",
           );
-          const settlementSql = forbidMainThreadSql(
-            "Correlated settlement touched main-thread SQLite",
-          );
-          try {
+          {
+            using _ = guardHostSql();
             await markSessionDeliverySettlement(queued, "recovered", context);
+            using clone = vi.spyOn(globalThis, "structuredClone");
+            const beforeSettlement = expectDefined(subagentRuns.get(runId), "completion owner");
+            const beforeDelivery = { ...beforeSettlement.delivery };
             await settleCorrelatedSubagentDelivery(queued, "recovered", context);
-          } finally {
-            settlementSql.restore();
+            expect(beforeSettlement.delivery).toEqual(beforeDelivery);
+            expect.soft(clone.mock.calls.some(([value]) => value === beforeSettlement)).toBe(false);
           }
-          expect(readSubagentRun(database, input.expected.runId)?.delivery).toMatchObject({
+          expect(owner()?.delivery).toMatchObject({
             status: "delivered",
             generation: 1,
           });
-          expect(subagentRuns.get(input.expected.runId)?.delivery?.status).toBe("delivered");
+          expect(subagentRuns.get(runId)?.delivery?.status).toBe("delivered");
           if (change === "metadata successor") {
-            expect(readSubagentRun(database, input.expected.runId)?.task).toBe(
-              "metadata updated after completion admission",
-            );
-            expect(subagentRuns.get(input.expected.runId)?.task).toBe(
-              "metadata updated after completion admission",
-            );
+            for (const entry of [owner(), subagentRuns.get(runId)]) {
+              expect(entry?.task).toBe("updated task");
+            }
           }
         }
       });
@@ -470,7 +424,7 @@ it("settles a requester cohort after concurrently admitted children complete", a
     const acknowledged = createDeferredCore();
     const release = createDeferredCore();
     let held = false;
-    const worker = probe.command(stateWorker, async (command, executeOptions, scope) => {
+    using _ = probe.command(stateWorker, async (command, executeOptions, scope) => {
       const receipt = await scope.execute(command, executeOptions);
       if (command.type === "subagents.persistChanges" && !held) {
         held = true;
@@ -480,21 +434,20 @@ it("settles a requester cohort after concurrently admitted children complete", a
       return receipt;
     });
     const completions = inputs.map(({ subagent }, index) =>
-      mutateSubagentRuns([subagent.runId], (rows) => {
-        const next = structuredClone(rows.get(subagent.runId)!);
-        next.execution = {
-          ...next.execution,
+      updateCompletionOwner(subagent.runId, (current) => ({
+        ...current,
+        execution: {
+          ...current.execution,
           status: "terminal",
           endedAt: Date.now(),
           outcome: { status: "ok" },
-        };
-        next.completion = {
+        },
+        completion: {
           required: true,
           resultText: `child result ${index}`,
           capturedAt: Date.now(),
-        };
-        return { value: undefined, postimages: new Map([[next.runId, next]]) };
-      }),
+        },
+      })),
     );
     const settled = settleRequesterCompletionBatch({
       entries: inputs.map(({ subagent }) => subagent),
@@ -507,21 +460,18 @@ it("settles a requester cohort after concurrently admitted children complete", a
       release.resolve();
       await Promise.all(completions);
       await expect(settled).resolves.toEqual({ applied: true, publication: "published" });
-      await mutateSubagentRuns([ids[0]!], (rows) => {
-        const current = rows.get(ids[0]!)!;
-        return {
-          value: undefined,
-          postimages: new Map([[current.runId, { ...current, label: "after batch settlement" }]]),
-        };
-      });
+      await updateCompletionOwner(ids[0]!, (current) => ({
+        ...current,
+        label: "after batch settlement",
+      }));
       const stored = loadSubagentRegistryFromSqlite();
       for (const [index, input] of inputs.entries()) {
         expect(currentCompletionRun(input)).toMatchObject({
           execution: { status: "terminal", outcome: { status: "ok" } },
           delivery: { status: "delivered" },
         });
-        expect(currentCompletionRun(input).completion?.resultText).toBeUndefined();
         expect(currentCompletionRun(input).requesterSettleWake).toBeUndefined();
+        expect(currentCompletionRun(input).completion?.resultText).toBeUndefined();
         expect(stored.get(input.subagent.runId)).toMatchObject({
           execution: { status: "terminal", outcome: { status: "ok" } },
           completion: { resultText: `child result ${index}` },
@@ -533,7 +483,6 @@ it("settles a requester cohort after concurrently admitted children complete", a
     } finally {
       release.resolve();
       await Promise.allSettled([...completions, settled]);
-      worker.mockRestore();
     }
   });
 });
@@ -545,8 +494,7 @@ it("retains a committed wake with unreadable facts until canonical restore", asy
     const runWorker = stateWorker.runOpenClawStateWorkerOperation;
     let executions = 0;
     let corrupt = true;
-    let observedError: unknown;
-    const worker = vi
+    using _ = vi
       .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
       .mockImplementation((context, operation, options) => {
         let admission: SqliteWorkerOperationAdmission | undefined;
@@ -585,46 +533,38 @@ it("retains a committed wake with unreadable facts until canonical restore", asy
         );
       });
     const context = captureOpenClawStateWorkerContext();
-    try {
-      const settle = () =>
-        settleRequesterCompletionBatch({
-          entries: [input.subagent],
-          outcome: { delivered: true, path: "direct" },
-          context,
-        });
-      try {
-        await settle();
-      } catch (error) {
-        observedError = error;
-      }
-      expect(executions).toBe(1);
-      expect(corrupt).toBe(false);
-      expect(loadSubagentRegistryFromSqlite().get(input.subagent.runId)?.delivery?.status).toBe(
-        "delivered",
-      );
-      expect(observedError).toMatchObject({ outcome: "committed" });
-      expect(hasSqliteWorkerOutcomeUnknown(observedError)).toBe(true);
-      if (!(observedError instanceof Error)) {
-        throw new Error("Expected the requester's retained write error");
-      }
-      expect(currentCompletionRun(input).requesterSettleWake).toBeDefined();
-      await expect(settle()).rejects.toThrow(observedError);
-      expect(executions).toBe(1);
-      await closeOpenClawStateDatabaseAsync();
-      expect(() =>
-        assertSubagentRegistryWriteOutcomeKnown([input.subagent.runId], context.admission),
-      ).toThrow(observedError);
-      await restoreSubagentRunsFromDisk({ runs: subagentRuns });
-      expect(() =>
-        assertSubagentRegistryWriteOutcomeKnown(
-          [input.subagent.runId],
-          captureOpenClawStateWorkerContext().admission,
-        ),
-      ).not.toThrow();
-      expect(subagentRuns.get(input.subagent.runId)).not.toBe(input.subagent);
-      expect(executions).toBe(1);
-    } finally {
-      worker.mockRestore();
+    const settle = () =>
+      settleRequesterCompletionBatch({
+        entries: [input.subagent],
+        outcome: { delivered: true, path: "direct" },
+        context,
+      });
+    const observedError: unknown = await settle().catch((error: unknown) => error);
+    expect(executions).toBe(1);
+    expect(corrupt).toBe(false);
+    expect(loadSubagentRegistryFromSqlite().get(input.subagent.runId)?.delivery?.status).toBe(
+      "delivered",
+    );
+    expect(observedError).toMatchObject({ outcome: "committed" });
+    expect(hasSqliteWorkerOutcomeUnknown(observedError)).toBe(true);
+    if (!(observedError instanceof Error)) {
+      throw new Error("Expected the requester's retained write error");
     }
+    expect(currentCompletionRun(input).requesterSettleWake).toBeDefined();
+    await expect(settle()).rejects.toThrow(observedError);
+    expect(executions).toBe(1);
+    await closeOpenClawStateDatabaseAsync();
+    expect(() =>
+      assertSubagentRegistryWriteOutcomeKnown([input.subagent.runId], context.admission),
+    ).toThrow(observedError);
+    await restoreSubagentRunsFromDisk({ runs: subagentRuns });
+    expect(() =>
+      assertSubagentRegistryWriteOutcomeKnown(
+        [input.subagent.runId],
+        captureOpenClawStateWorkerContext().admission,
+      ),
+    ).not.toThrow();
+    expect(subagentRuns.get(input.subagent.runId)).not.toBe(input.subagent);
+    expect(executions).toBe(1);
   });
 });

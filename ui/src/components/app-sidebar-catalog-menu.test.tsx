@@ -1,11 +1,26 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
+import { SidebarCatalogMenu } from "./app-sidebar-catalog-menu.runtime.tsx";
 import { createSidebarCatalogMenu } from "./app-sidebar-catalog-menu.tsx";
 import type { CatalogSessionMenuRequest } from "./app-sidebar-session-catalogs.ts";
 import { SESSION_MENU_OPEN_EVENT } from "./session-progress-hovercard-target.ts";
+
+const popupSelector = "openclaw-catalog-session-menu";
+const item = (menu: Element, action: string) =>
+  menu.querySelector<HTMLButtonElement>(`[data-value="${action}"]`)!;
+const expectOpen = (view: ReturnType<typeof mountSolid>) =>
+  waitForSolid(() => expect(view.container.querySelector('[data-value="viewer"]')).not.toBeNull());
+
+async function mountMenu(props: Partial<HTMLElementTagNameMap[typeof popupSelector]> = {}) {
+  const menu = document.createElement(popupSelector);
+  Object.assign(menu, props);
+  document.body.append(menu);
+  await menu.updateComplete;
+  return menu;
+}
 
 const request: CatalogSessionMenuRequest = {
   key: { catalogId: "codex", hostId: "gateway:local", threadId: "thread-1" },
@@ -38,12 +53,7 @@ function fixture(beforeOpen = () => {}) {
   const mount = () =>
     mountSolid(() => {
       const view = owner.createView(host);
-      return (
-        <>
-          <output>{view.isOpenFor(request.key) ? "open" : "closed"}</output>
-          {view.render()}
-        </>
-      );
+      return view.render(SidebarCatalogMenu);
     });
   return { owner, mount };
 }
@@ -51,66 +61,87 @@ function fixture(beforeOpen = () => {}) {
 afterEach(() => {
   cleanupSolid();
   document.body.replaceChildren();
+  vi.restoreAllMocks();
 });
 
-describe("sidebar catalog menu", () => {
-  it("dismisses the hovercard before opening and updates the mounted row", async () => {
-    const trigger = document.createElement("button");
-    document.body.append(trigger);
+it.each([false, true])("projects open/close menu state (replace view=%s)", async (replace) => {
+  const trigger = document.createElement("button");
+  document.body.append(trigger);
+  const order: string[] = [];
+  trigger.addEventListener(SESSION_MENU_OPEN_EVENT, () => order.push("dismiss"));
+  const { owner, mount } = fixture(() => order.push("open"));
+  let view = mount();
+  owner.open(request, 10, 20, replace ? undefined : trigger);
+  expect(order).toEqual(replace ? ["open"] : ["dismiss", "open"]);
+  expect(owner.isOpen()).toBe(true);
+  expect(owner.isOpenFor(request.key)).toBe(true);
+  await expectOpen(view);
+  if (replace) {
+    view.unmount();
+    view = mount();
+    await expectOpen(view);
+  }
+  owner.close();
+  expect(owner.isOpen()).toBe(false);
+  await waitForSolid(() => expect(view.container.querySelector(popupSelector)).toBeNull());
+});
+
+it.each(["terminal", "viewer"] as const)(
+  "dispatches %s before closing, including synchronous removal",
+  async (action) => {
+    const warnings = vi.spyOn(console, "warn");
+    let backingState: { open: true } | null = { open: true };
     const order: string[] = [];
-    trigger.addEventListener(SESSION_MENU_OPEN_EVENT, () => order.push("dismiss"));
-    const { owner, mount } = fixture(() => order.push("open"));
-    const view = mount();
-
-    owner.open(request, 10, 20, trigger);
-
-    expect(order).toEqual(["dismiss", "open"]);
-    expect(owner.isOpen()).toBe(true);
-    expect(owner.isOpenFor(request.key)).toBe(true);
-    await waitForSolid(() => {
-      expect(view.container.querySelector("output")?.textContent).toBe("open");
-      expect(view.container.querySelector('[data-value="viewer"]')).not.toBeNull();
+    const onClose = () => {
+      backingState = null;
+      order.push("close");
+    };
+    const menu = await mountMenu({
+      onAction: (selected) => {
+        order.push(backingState ? selected : "cleared");
+        if (action === "viewer") {
+          menu.remove();
+        }
+      },
+      onClose,
     });
-    owner.close();
-    expect(owner.isOpen()).toBe(false);
-    await waitForSolid(() => {
-      expect(view.container.querySelector("output")?.textContent).toBe("closed");
-      expect(view.container.querySelector("openclaw-catalog-session-menu")).toBeNull();
-    });
-  });
+    item(menu, action).click();
 
-  it("projects retained menu state after the mounted view is replaced", async () => {
-    const { owner, mount } = fixture();
-    const first = mount();
-    owner.open(request, 10, 20);
-    await waitForSolid(() =>
-      expect(first.container.querySelector("output")?.textContent).toBe("open"),
-    );
-    first.unmount();
-    const replacement = mount();
-    await waitForSolid(() =>
-      expect(replacement.container.querySelector("output")?.textContent).toBe("open"),
-    );
-    owner.close();
-    await waitForSolid(() =>
-      expect(replacement.container.querySelector("output")?.textContent).toBe("closed"),
-    );
-  });
+    await waitForSolid(() => expect(order).toEqual([action, "close"]));
+    expect(
+      warnings.mock.calls.filter(
+        ([message]) => typeof message === "string" && message.includes("[NO_OWNER_EFFECT]"),
+      ),
+    ).toEqual([]);
+  },
+);
 
-  it("retargets an adopted row without remounting its open popup", async () => {
-    const original = document.createElement("button");
-    const replacement = document.createElement("button");
-    document.body.append(original, replacement);
-    const { owner, mount } = fixture();
-    const view = mount();
-    owner.open(request, 10, 20, original);
-    await waitForSolid(() =>
-      expect(view.container.querySelector("openclaw-catalog-session-menu")).not.toBeNull(),
-    );
-    const popup = view.container.querySelector("openclaw-catalog-session-menu")!;
-    original.remove();
-    owner.retargetTrigger(request.key, replacement);
-    await waitForSolid(() => expect(popup.trigger).toBe(replacement));
-    expect(view.container.querySelector("openclaw-catalog-session-menu")).toBe(popup);
+it("opens and focuses the native menu while keeping unavailable terminal selection disabled", async () => {
+  const onAction = vi.fn();
+  const menu = await mountMenu({ lastActive: "57d", terminalDisabled: true, onAction });
+  const terminal = item(menu, "terminal");
+  await waitForSolid(() => expect(document.activeElement).toBe(item(menu, "viewer")));
+  expect(menu.querySelector('[role="menu"]')!.matches(":popover-open")).toBe(true);
+  expect(menu.querySelector(".session-menu__info")?.textContent?.trim()).toBe("Last active 57d");
+  expect(terminal).toMatchObject({
+    disabled: true,
+    title: "Terminal opening is unavailable for this session.",
   });
+  terminal.click();
+  expect(onAction).not.toHaveBeenCalled();
+});
+
+it("retargets an adopted row without remounting its open popup", async () => {
+  const original = document.createElement("button");
+  const replacement = document.createElement("button");
+  document.body.append(original, replacement);
+  const { owner, mount } = fixture();
+  const view = mount();
+  owner.open(request, 10, 20, original);
+  await waitForSolid(() => expect(view.container.querySelector(popupSelector)).not.toBeNull());
+  const popup = view.container.querySelector(popupSelector)!;
+  original.remove();
+  owner.retargetTrigger(request.key, replacement);
+  await waitForSolid(() => expect(popup.trigger).toBe(replacement));
+  expect(view.container.querySelector(popupSelector)).toBe(popup);
 });

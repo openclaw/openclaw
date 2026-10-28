@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import type { SqliteCommittedFact } from "../infra/sqlite-commit-receipt.js";
 import * as admission from "../infra/sqlite-worker-operation-admission.js";
 import {
@@ -6,12 +7,13 @@ import {
   type SqliteWorkerOperationContext,
 } from "../infra/sqlite-worker-operation-settlement.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
-import * as stateRead from "../state/openclaw-state-db-readonly.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { createNodeEvalArgs } from "../test-utils/node-process.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { observePluginStateReads } from "./plugin-state-fixtures.test-support.js";
 import {
   capturePluginStateReadDependencies,
   pluginStatePublication,
@@ -29,7 +31,7 @@ import {
 } from "./plugin-state-store.test-helpers.js";
 import { executePluginStateCommand } from "./plugin-state.worker.js";
 
-type PluginStateChange = Parameters<Parameters<typeof pluginStatePublication.subscribe>[0]>[0];
+type PluginStateChange = Parameters<Parameters<typeof pluginStatePublication.subscribeFacts>[0]>[0];
 
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -115,7 +117,7 @@ describe("plugin state committed facts", () => {
       }
     });
   });
-  it("reuses namespace lists until a committed write changes their rows", async () => {
+  it("updates resident namespaces directly from committed writes", async () => {
     await withOpenClawTestState(
       { label: "plugin-state-namespace-read-receipts" },
       async ({ env }) => {
@@ -127,15 +129,29 @@ describe("plugin state committed facts", () => {
           namespace: "sibling",
         });
         await store.register("first", { count: 1 });
-        const dispatch = vi.spyOn(stateRead, "executeExistingOpenClawStateRead");
+        const dispatch = observePluginStateReads();
+        const read = async (key: string, expected: { count: number } | undefined) => {
+          const value = await store.lookup(key);
+          expect(value).toEqual(expected);
+          expect(await store.lookupMany([key, key])).toEqual([
+            { ok: true, value: expected },
+            { ok: true, value: expected },
+          ]);
+          expect(dispatch).not.toHaveBeenCalled();
+          return value;
+        };
         const initial = await store.entries();
         expect(initial).toMatchObject([{ key: "first", value: { count: 1 } }]);
         expect(dispatch).toHaveBeenCalledOnce();
         initial[0]!.value.count = 99;
         dispatch.mockClear();
+        const first = await read("first", { count: 1 });
+        first!.count = 99;
         sibling.register("other", true);
         expect(await store.entries()).toMatchObject([{ key: "first", value: { count: 1 } }]);
         expect(dispatch).not.toHaveBeenCalled();
+
+        await read("first", { count: 1 });
 
         const asyncSibling = createPluginStateKeyedStore("receipt-test", {
           ...options,
@@ -156,27 +172,34 @@ describe("plugin state committed facts", () => {
           await store.register("first", { count: 2 });
           expect(pendingReads).toHaveLength(1);
           expect(await pendingReads.shift()).toMatchObject([{ key: "first", value: { count: 2 } }]);
-          expect(dispatch).toHaveBeenCalledOnce();
+          expect(dispatch).not.toHaveBeenCalled();
           dispatch.mockClear();
         } finally {
           stopPending();
         }
 
+        await read("first", { count: 2 });
         native.register("second", { count: 2 });
+        await read("second", { count: 2 });
         expect(await store.entries()).toMatchObject([
           { key: "first", value: { count: 2 } },
           { key: "second", value: { count: 2 } },
         ]);
-        expect(dispatch).toHaveBeenCalledOnce();
+        expect(dispatch).not.toHaveBeenCalled();
         await store.delete("first");
+        await read("first", undefined);
         expect(await store.entries()).toMatchObject([{ key: "second", value: { count: 2 } }]);
         native.clear();
+        await read("second", undefined);
         expect(await store.entries()).toEqual([]);
         dispatch.mockClear();
         expect(await store.entries()).toEqual([]);
         expect(dispatch).not.toHaveBeenCalled();
         await store.register("renewed", { count: 3 });
+        await read("renewed", { count: 3 });
         expect(await store.entries()).toMatchObject([{ key: "renewed", value: { count: 3 } }]);
+        await store.clear();
+        await read("renewed", undefined);
       },
     );
   });
@@ -191,9 +214,12 @@ describe("plugin state committed facts", () => {
       native.register("expiring", true, { ttlMs: 10_000 });
       native.register("permanent", true);
       expect((await store.entries()).map((entry) => entry.key)).toEqual(["expiring", "permanent"]);
-      const dispatch = vi.spyOn(stateRead, "executeExistingOpenClawStateRead");
+      const dispatch = observePluginStateReads();
       now += 10_000;
       expect((await store.entries()).map((entry) => entry.key)).toEqual(["permanent"]);
+      expect(dispatch).not.toHaveBeenCalled();
+      now -= 10_000;
+      expect((await store.entries()).map((entry) => entry.key)).toEqual(["expiring", "permanent"]);
       expect(dispatch).not.toHaveBeenCalled();
       const stopFault = pluginStatePublication.subscribeFacts((change) => {
         if (change.kind === "committed") {
@@ -210,36 +236,130 @@ describe("plugin state committed facts", () => {
     });
   });
 
-  it("serves warm keyed reads from committed receipts across worker and native writes", async () => {
-    await withOpenClawTestState({ label: "plugin-state-keyed-read-receipts" }, async ({ env }) => {
+  it("discards a cold load overtaken by a committed write", async () => {
+    await withOpenClawTestState({ label: "plugin-state-load-overlap" }, async ({ env }) => {
       const options = { namespace: "receipts", maxEntries: 10, env };
-      const store = createPluginStateKeyedStore<{ count: number }>("receipt-test", options);
-      const native = createPluginStateSyncKeyedStore<{ count: number }>("receipt-test", options);
-      await store.register("key", { count: 1 });
-      const dispatch = vi.spyOn(stateRead, "executeExistingOpenClawStateRead");
-      const read = async (expected: { count: number } | undefined) => {
-        dispatch.mockClear();
-        expect(await store.lookup("key")).toEqual(expected);
-        expect(await store.lookupMany(["key", "key"])).toEqual([
-          { ok: true, value: expected },
-          { ok: true, value: expected },
-        ]);
-        expect(dispatch).not.toHaveBeenCalled();
-      };
-      await read({ count: 1 });
-      const first = await store.lookup("key");
-      first!.count = 99;
-      await read({ count: 1 });
-      native.register("key", { count: 2 });
-      await read({ count: 2 });
-      await store.register("key", { count: 3 });
-      await read({ count: 3 });
-      await store.delete("key");
-      await read(undefined);
-      native.register("key", { count: 4 });
-      await read({ count: 4 });
-      await store.clear();
-      await read(undefined);
+      const store = createPluginStateKeyedStore("receipt-test", options);
+      const native = createPluginStateSyncKeyedStore("receipt-test", options);
+      native.register("key", "before");
+      let changed = false;
+      const dispatch = observePluginStateReads(() => {
+        if (!changed) {
+          changed = true;
+          native.register("key", "after");
+        }
+      });
+      expect(await store.entries()).toMatchObject([{ key: "key", value: "after" }]);
+      expect(changed).toBe(true);
+      expect(await store.lookup("key")).toBe("after");
+      dispatch.mockClear();
+      expect(await store.lookup("key")).toBe("after");
+      expect(dispatch).not.toHaveBeenCalled();
+    });
+  });
+
+  it("reloads evicted namespaces and never rejects a write to satisfy residency bounds", async () => {
+    await withOpenClawTestState({ label: "plugin-state-resident-bounds" }, async ({ env }) => {
+      const stores = Array.from({ length: 65 }, (_, index) =>
+        createPluginStateKeyedStore("receipt-test", {
+          namespace: `scope-${index}`,
+          maxEntries: 10,
+          env,
+        }),
+      );
+      await stores[0]!.register("key", "durable");
+      for (const store of stores) {
+        await store.entries();
+      }
+      const dispatch = observePluginStateReads();
+      expect(await stores[1]!.lookup("key")).toBeUndefined();
+      expect(dispatch).not.toHaveBeenCalled();
+      expect(await stores[0]!.lookup("key")).toBe("durable");
+      expect(dispatch).toHaveBeenCalledOnce();
+      const large = createPluginStateKeyedStore<string>("receipt-test", {
+        namespace: "large",
+        maxEntries: 10,
+        env,
+      });
+      const value = "x".repeat(1_000_000);
+      seedPluginStateEntriesForTests(
+        Array.from({ length: 4 }, (_, index) => ({
+          pluginId: "receipt-test",
+          namespace: "large",
+          key: String(index),
+          value,
+        })),
+      );
+      expect(await large.count()).toBe(4);
+      dispatch.mockClear();
+      await large.register("4", value);
+      expect(await large.count()).toBe(5);
+      expect(dispatch).toHaveBeenCalledTimes(2);
+      dispatch.mockClear();
+      expect(await large.count()).toBe(5);
+      expect(dispatch).toHaveBeenCalledOnce();
+      await large.delete("4");
+      dispatch.mockClear();
+      expect(await large.count()).toBe(4);
+      expect(dispatch).toHaveBeenCalledOnce();
+      dispatch.mockClear();
+      expect(await large.count()).toBe(4);
+      expect(dispatch).not.toHaveBeenCalled();
+
+      await large.delete("3");
+      for (const [index, rows] of [3, 2].entries()) {
+        const other = createPluginStateKeyedStore<string>("receipt-test", {
+          namespace: `byte-bound-${index}`,
+          maxEntries: 10,
+          env,
+        });
+        seedPluginStateEntriesForTests(
+          Array.from({ length: rows }, (_, row) => ({
+            pluginId: "receipt-test",
+            namespace: `byte-bound-${index}`,
+            key: String(row),
+            value,
+          })),
+        );
+        await other.count();
+      }
+      // Growing one resident map can evict a later map during the same fact batch.
+      await large.register("growth", "x".repeat(500_000));
+      dispatch.mockClear();
+      expect(await large.count()).toBe(4);
+      expect(dispatch).not.toHaveBeenCalled();
+    });
+  });
+
+  it("rebuilds from durable state after a writer exits between commit and acknowledgement", async () => {
+    await withOpenClawTestState({ label: "plugin-state-crash-reload" }, async ({ env }) => {
+      const options = { namespace: "receipts", maxEntries: 10, env };
+      const store = createPluginStateKeyedStore("receipt-test", options);
+      await store.register("key", "before");
+      await store.entries();
+      await closeOpenClawStateDatabaseAsync();
+      const result = await runNodeScript(
+        createNodeEvalArgs(
+          `
+        import { createPluginStateSyncKeyedStore } from ${JSON.stringify(new URL("./plugin-state-store.ts", import.meta.url).href)};
+        import { pluginStatePublication } from ${JSON.stringify(new URL("./plugin-state-publication.ts", import.meta.url).href)};
+        pluginStatePublication.subscribeFacts((change) => { if (change.kind === "committed") process.exit(76); });
+        createPluginStateSyncKeyedStore("receipt-test", { namespace: "receipts", maxEntries: 10 }).register("key", "committed");
+        process.exit(77);
+      `,
+          { imports: [import.meta.resolve("tsx/esm")] },
+        ),
+        env,
+        30_000,
+      );
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stderr).toBe(76);
+      const reads = observePluginStateReads();
+      expect(await store.lookup("key")).toBe("committed");
+      expect(reads).toHaveBeenCalledOnce();
+      reads.mockClear();
+      expect(await store.lookup("key")).toBe("committed");
+      expect(reads).not.toHaveBeenCalled();
     });
   });
 
@@ -252,10 +372,12 @@ describe("plugin state committed facts", () => {
       });
       await store.register("session", { model: "first" });
       const captured = await capturePluginStateReadDependencies(() => store.observe("session"));
+      const reads = observePluginStateReads();
       try {
         clearPluginStateStoreForTests();
         expect(captured.isCurrent()).toBe(false);
         expect((await store.observe("session")).value).toBeUndefined();
+        expect(reads).not.toHaveBeenCalled();
       } finally {
         captured.release();
       }
@@ -441,7 +563,7 @@ describe("plugin state committed facts", () => {
     });
   });
 
-  it("installs every native transaction fact before observers and discards savepoint rollback", async () => {
+  it("installs native transaction facts after commit and discards savepoint rollback", async () => {
     await withOpenClawTestState({ label: "plugin-state-native-receipt" }, async ({ env }) => {
       const store = createPluginStateSyncKeyedStore("receipt-test", {
         namespace: "receipts",
@@ -449,10 +571,6 @@ describe("plugin state committed facts", () => {
         env,
       });
       const seen = observe();
-      const snapshots: unknown[] = [];
-      const unsubscribe = pluginStatePublication.subscribe(() =>
-        snapshots.push([seen.fact("a"), seen.fact("b")]),
-      );
       try {
         runOpenClawStateWriteTransaction(
           () => {
@@ -481,9 +599,6 @@ describe("plugin state committed facts", () => {
           value: { value_json: '"second"' },
         });
         expect(seen.fact("discard")).toBeUndefined();
-        expect(snapshots).toEqual(
-          Array.from({ length: 2 }, () => [seen.fact("a"), seen.fact("b")]),
-        );
         const count = seen.changes.length;
         expect(() =>
           runOpenClawStateWriteTransaction(
@@ -530,7 +645,6 @@ describe("plugin state committed facts", () => {
           stopMutation();
         }
       } finally {
-        unsubscribe();
         seen.unsubscribe();
       }
     });
@@ -550,14 +664,19 @@ describe("plugin state committed facts", () => {
       try {
         sibling.register("keep", true);
         store.register("old", 1);
+        const reader = createPluginStateKeyedStore("receipt-test", options);
+        await reader.entries();
+        const reads = observePluginStateReads();
         now++;
         store.register("expiring", 2, { ttlMs: 1 });
         now++;
         store.register("new", 3);
         expect(seen.fact("expiring")).toEqual({ kind: "absent" });
+        expect(await reader.lookup("expiring")).toBeUndefined();
         now++;
         store.register("newest", 4);
         expect(seen.fact("old")).toEqual({ kind: "absent" });
+        expect(await reader.lookup("old")).toBeUndefined();
         expect(store.registerIfAbsent("newest", 5)).toBe(false);
         expect(seen.fact("newest")).toMatchObject({
           kind: "postimage",
@@ -566,13 +685,16 @@ describe("plugin state committed facts", () => {
         expect(store.consume("new")).toBe(3);
         expect(store.consume("new")).toBeUndefined();
         expect(seen.fact("new")).toEqual({ kind: "absent" });
+        expect(await reader.lookup("new")).toBeUndefined();
         expect(store.update("newest", () => 6)).toBe(true);
         expect(seen.fact("newest")).toMatchObject({
           kind: "postimage",
           value: { value_json: "6" },
         });
+        expect(await reader.lookup("newest")).toBe(6);
         expect(store.deleteIf("newest", (value) => value === 6)).toBe(true);
         expect(seen.fact("newest")).toEqual({ kind: "absent" });
+        expect(await reader.lookup("newest")).toBeUndefined();
         expect(store.registerIfAbsent("again", true)).toBe(true);
         store.register("unicode-\ud800", true);
         expect(seen.fact("unicode-\ufffd")).toMatchObject({ kind: "postimage" });
@@ -581,16 +703,23 @@ describe("plugin state committed facts", () => {
         expect(seen.fact("unicode-\ufffd")).toEqual({ kind: "absent" });
         expect(seen.fact("keep", "sibling")).toMatchObject({ kind: "postimage" });
         expect(sibling.lookup("keep")).toBe(true);
+        expect(await reader.entries()).toEqual([]);
+        expect(reads).not.toHaveBeenCalled();
       } finally {
         seen.unsubscribe();
       }
     });
   });
 
-  it("keeps successful Doctor import prefixes and fences fact failures before notifying", async () => {
+  it("keeps successful Doctor import prefixes and invalidates failed fact installation", async () => {
     await withOpenClawTestState({ label: "plugin-state-import-facts" }, async ({ env }) => {
       const options = { namespace: "receipts", maxEntries: 2, env };
       const seen = observe();
+      const reader = createPluginStateKeyedStore("receipt-test", options);
+      await reader.register("seed", true);
+      await reader.clear();
+      await reader.entries();
+      const reads = observePluginStateReads();
       try {
         expect(() =>
           importPluginStateEntriesForDoctor("receipt-test", options, [
@@ -600,10 +729,10 @@ describe("plugin state committed facts", () => {
         ).toThrow();
         expect(seen.fact("first")).toMatchObject({ kind: "postimage" });
         expect(seen.fact("bad")).toBeUndefined();
-        const notifications: PluginStateChange[] = [];
-        const stopObserver = pluginStatePublication.subscribe((change) =>
-          notifications.push(change),
-        );
+        expect(await reader.lookup("first")).toBe(true);
+        expect(await reader.lookup("bad")).toBeUndefined();
+        expect(reads).not.toHaveBeenCalled();
+        const beforeFailure = seen.changes.length;
         const stopFault = pluginStatePublication.subscribeFacts((change) => {
           if (change.kind === "committed") {
             throw new Error("fact sink unavailable");
@@ -613,10 +742,11 @@ describe("plugin state committed facts", () => {
           const store = createPluginStateSyncKeyedStore("receipt-test", options);
           expect(() => store.delete("first")).not.toThrow();
           expect(store.lookup("first")).toBeUndefined();
-          expect(notifications).toEqual([expect.objectContaining({ kind: "unknown" })]);
+          expect(seen.changes.slice(beforeFailure)).toContainEqual(
+            expect.objectContaining({ kind: "unknown" }),
+          );
         } finally {
           stopFault();
-          stopObserver();
         }
       } finally {
         seen.unsubscribe();
@@ -670,50 +800,36 @@ describe("plugin state committed facts", () => {
     });
   });
 
-  it("preserves native deletions before receipt installation and during postcommit notification", async () => {
+  it("preserves native deletions before delayed worker receipt installation", async () => {
     await withOpenClawTestState({ label: "plugin-state-receipt-supersession" }, async ({ env }) => {
       const options = { namespace: "receipts", maxEntries: 2, env };
       const native = createPluginStateSyncKeyedStore("receipt-test", options);
       const worker = createPluginStateKeyedStore("receipt-test", options);
       native.register("key", "before");
+      await worker.entries();
+      const reads = observePluginStateReads();
       const seen = observe();
       const original = admission.observeSqliteWorkerCommittedFacts;
-      const intercept = vi
-        .spyOn(admission, "observeSqliteWorkerCommittedFacts")
-        .mockImplementation((owner, listener) => {
+      vi.spyOn(admission, "observeSqliteWorkerCommittedFacts").mockImplementation(
+        (owner, listener) => {
           original(owner, (receipt) => {
             native.delete("key");
             listener(receipt);
           });
-        });
+        },
+      );
       try {
         await worker.register("key", "late");
         expect(native.lookup("key")).toBeUndefined();
+        expect(await worker.entries()).toEqual([]);
+        expect(reads).toHaveBeenCalledOnce();
+        reads.mockClear();
+        expect(await worker.lookup("key")).toBeUndefined();
+        expect(reads).not.toHaveBeenCalled();
         expect(seen.fact("key")).toEqual({ kind: "unknown" });
         const committed = seen.changes.filter((change) => change.kind === "committed");
         expect(committed).toHaveLength(2);
         expect([...committed[0]!.receipt.facts.values()]).toEqual([{ kind: "absent" }]);
-        intercept.mockRestore();
-        let deletedDuringNotification = false;
-        const stopNotification = pluginStatePublication.subscribe((change) => {
-          if (change.kind !== "committed") {
-            return;
-          }
-          const current = change.receipt.facts.get(
-            JSON.stringify(["receipt-test", "receipts", "key"]),
-          );
-          if (current?.kind === "postimage" && current.value.value_json === '"notification"') {
-            deletedDuringNotification = native.delete("key");
-          }
-        });
-        try {
-          await worker.register("key", "notification");
-          expect(deletedDuringNotification).toBe(true);
-          expect(native.lookup("key")).toBeUndefined();
-          expect(seen.fact("key")).toEqual({ kind: "absent" });
-        } finally {
-          stopNotification();
-        }
       } finally {
         seen.unsubscribe();
       }

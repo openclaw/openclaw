@@ -7,6 +7,7 @@ it("keeps a resident new-session link current as permission and agent change", (
   const [disabledReason, setDisabledReason] = createSignal<string | undefined>("Connecting");
   const [agentId, setAgentId] = createSignal("main");
   const open = vi.fn();
+  let onOpen: typeof open | undefined = open;
   const view = mountSolid(() =>
     renderNewSessionLink({
       basePath: "",
@@ -19,7 +20,9 @@ it("keeps a resident new-session link current as permission and agent change", (
       get disabledReason() {
         return disabledReason();
       },
-      onOpen: open,
+      get onOpen() {
+        return onOpen;
+      },
     }),
   );
   const link = view.getByRole<HTMLAnchorElement>("link", { name: "New conversation" });
@@ -50,5 +53,19 @@ it("keeps a resident new-session link current as permission and agent change", (
   expect(link.hasAttribute("href")).toBe(false);
   expect(view.container.querySelector('[slot="content"]')).toBeNull();
   link.click();
+  expect(open).toHaveBeenCalledOnce();
+
+  onOpen = undefined;
+  setDisabledReason(undefined);
+  flush();
+  link.addEventListener(
+    "click",
+    (event) => {
+      expect(event.defaultPrevented).toBe(false);
+      event.preventDefault();
+    },
+    { once: true },
+  );
+  link.dispatchEvent(new MouseEvent("click", { cancelable: true }));
   expect(open).toHaveBeenCalledOnce();
 });

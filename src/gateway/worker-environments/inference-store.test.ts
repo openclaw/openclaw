@@ -29,6 +29,7 @@ import {
 import { claimOpenClawStateOwnership } from "../../state/openclaw-state-ownership-operations.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import type { WorkerConnectionIdentity, WorkerInferenceExecutor } from "./connection-identity.js";
+import { createWorkerConnectionIdentity } from "./connection-identity.test-support.js";
 import type { AcceptedWorkerInferenceSessionDrain } from "./inference-control-internal.js";
 import {
   createWorkerInferenceStore,
@@ -37,6 +38,7 @@ import {
 } from "./inference-store.js";
 import { createWorkerInferenceStoreKernel } from "./inference-store.kernel.js";
 import { createWorkerInferenceManager, type WorkerInferenceSink } from "./inference.js";
+import { createSink as createInferenceSink } from "./inference.test-support.js";
 import { serializeWorkerSessionTurnClaim } from "./placement-record.js";
 import { createWorkerEnvironmentStore } from "./store.js";
 
@@ -50,24 +52,18 @@ const REQUEST: WorkerInferenceStartParams = {
   context: { messages: [] },
   options: {},
 };
-const IDENTITY: WorkerConnectionIdentity = {
-  environmentId: ENVIRONMENT_ID,
+const TURN_CLAIM: NonNullable<WorkerConnectionIdentity["turnClaim"]> = {
+  sessionId: REQUEST.sessionId,
+  claimId: "claim-store",
+  runId: REQUEST.runId,
+  placementGeneration: 4,
+  owner: { kind: "worker", environmentId: ENVIRONMENT_ID, ownerEpoch: REQUEST.runEpoch },
+};
+const IDENTITY: WorkerConnectionIdentity = createWorkerConnectionIdentity(TURN_CLAIM, {
   credentialHash: ["fixture", "digest"].join("-"),
   bundleHash: ["fixture", "bundle", "digest"].join("-"),
-  sessionId: REQUEST.sessionId,
-  runId: REQUEST.runId,
-  turnClaim: {
-    sessionId: REQUEST.sessionId,
-    claimId: "claim-store",
-    runId: REQUEST.runId,
-    placementGeneration: 4,
-    owner: { kind: "worker", environmentId: ENVIRONMENT_ID, ownerEpoch: REQUEST.runEpoch },
-  },
-  ownerEpoch: REQUEST.runEpoch,
-  rpcSetVersion: 1,
   protocolFeatures: ["worker-inference-v1"],
-  credentialExpiresAtMs: 10_000,
-};
+});
 const PROVIDER_ERROR: WorkerInferenceTerminalOutcome = {
   type: "error",
   reason: "provider-error",
@@ -94,18 +90,8 @@ const BASE_INPUT: WorkerInferenceTurnInput = {
 };
 
 function createSink() {
-  const frames: Parameters<WorkerInferenceSink["send"]>[0][] = [];
-  const terminal = createDeferred<WorkerInferenceTerminalOutcome>();
-  const sink: WorkerInferenceSink = {
-    connectionId: "connection-inference-store",
-    send: (frame) => {
-      frames.push(frame);
-      if (frame.event === "worker.inference.terminal") {
-        terminal.resolve(frame.payload.outcome);
-      }
-    },
-  };
-  return { frames, sink, terminal: terminal.promise };
+  const sink = createInferenceSink("connection-inference-store");
+  return { ...sink, terminal: sink.terminal.then((frame) => frame.payload.outcome) };
 }
 
 describe("worker inference SQLite store", async () => {
@@ -208,8 +194,9 @@ describe("worker inference SQLite store", async () => {
     };
     claimOpenClawStateOwnership("inference-owner", options);
     expect(openOpenClawStateDatabase(options)).toBe(database);
+    vi.stubEnv("OPENCLAW_SUPERVISOR_MODE", "external");
     await expect(
-      createWorkerInferenceStore(options).recoverPending(PROVIDER_ERROR),
+      createWorkerInferenceStore({ path: database.path }).recoverPending(PROVIDER_ERROR),
     ).rejects.toThrow("is externally supervised by inference-owner");
   });
 
@@ -358,7 +345,7 @@ describe("worker inference SQLite store", async () => {
           },
         );
         await Promise.race([dispatched.promise, endedBeforeDispatch]);
-        drain = manager.reserveSessionDrain(REQUEST.sessionId).accept();
+        drain = manager.reserveSessionDrain(REQUEST.sessionId);
         const drained = Promise.allSettled([drain.drained]);
         const [native] = await Promise.allSettled([promise]);
         assert(native.status === "rejected", "native begin unexpectedly succeeded");
@@ -544,7 +531,7 @@ describe("worker inference SQLite store", async () => {
           expect(begin).toHaveBeenCalledOnce();
           expect(complete).toHaveBeenCalledOnce();
         }
-        const acceptedDrain = manager.reserveSessionDrain(REQUEST.sessionId).accept();
+        const acceptedDrain = manager.reserveSessionDrain(REQUEST.sessionId);
         drain = acceptedDrain;
         let drainSettled = false;
         void drain.drained.then(
@@ -649,7 +636,7 @@ describe("worker inference SQLite store", async () => {
           expect(replayed.result.status).toBe("replayed");
           replayed.launch();
           expect(await replaySink.terminal).toEqual(PROVIDER_ERROR);
-          const successorDrain = manager.reserveSessionDrain(REQUEST.sessionId).accept();
+          const successorDrain = manager.reserveSessionDrain(REQUEST.sessionId);
           successorDrain.start();
           await expect(successorDrain.drained).resolves.toBeUndefined();
           successorDrain.release();

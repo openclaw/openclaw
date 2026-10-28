@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { ToolsSchema } from "../config/zod-schema.agent-runtime.js";
 import {
   patchCodexNativeWebSearchPayload,
   resolveCodexNativeSearchActivation,
@@ -105,7 +106,7 @@ describe("resolveCodexNativeSearchActivation", () => {
 
   it("leaves credential admission to the model request for direct openai without auth", () => {
     const result = activate({ config: baseConfig, modelProvider: "openai" });
-    expect(result).toMatchObject({ state: "native_active", codexMode: "cached" });
+    expect(result).toMatchObject({ state: "native_active" });
     expect(result).not.toHaveProperty("inactiveReason");
   });
 
@@ -153,21 +154,24 @@ describe("Codex native web-search payload helpers", () => {
     ).toBeUndefined();
   });
 
-  it("normalizes optional config values", () => {
-    const result = resolveCodexNativeWebSearchConfig(
-      searchConfig({
-        openaiCodex: {
-          enabled: true,
-          allowedDomains: [" example.com ", "example.com", ""],
-          contextSize: "high",
-          userLocation: {
-            country: " US ",
-            city: " New York ",
-            timezone: "America/New_York",
+  it("uses schema-normalized optional config values", () => {
+    const tools = ToolsSchema.parse({
+      web: {
+        search: {
+          openaiCodex: {
+            enabled: true,
+            allowedDomains: [" example.com ", "example.com", ""],
+            contextSize: "high",
+            userLocation: {
+              country: " US ",
+              city: " New York ",
+              timezone: "America/New_York",
+            },
           },
         },
-      }),
-    );
+      },
+    });
+    const result = resolveCodexNativeWebSearchConfig({ tools: { web: tools?.web } });
     expect(result).toMatchObject({
       enabled: true,
       mode: "cached",

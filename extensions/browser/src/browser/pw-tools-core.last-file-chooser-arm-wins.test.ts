@@ -10,30 +10,28 @@ import {
   heldAction,
   managedDownload,
 } from "./pw-tools-core.guard-test-support.js";
-import {
-  getPwToolsCoreSessionMocks,
-  installPwToolsCoreTestHooks,
-  setPwToolsCoreCurrentPage,
-  setPwToolsCoreCurrentRefLocator,
-  setPwToolsCoreDownloadCapture,
-} from "./pw-tools-core.test-harness.js";
+import * as harness from "./pw-tools-core.test-harness.js";
 
-installPwToolsCoreTestHooks();
+harness.installPwToolsCoreTestHooks();
 const mod = await import("./pw-tools-core.downloads.js");
-const interactions = await import("./pw-tools-core.interactions.js");
+const interactions = await import("./pw-tools-core.interactions.actions.js");
 const { waitForViaPlaywright } = await import("./pw-tools-core.interactions.content.js");
 const target = { cdpUrl: "http://127.0.0.1:18792" };
-const session = getPwToolsCoreSessionMocks();
+const session = harness.getPwToolsCoreSessionMocks();
 
 describe("pw-tools-core", () => {
   it("preserves an accepted download waiter when a stale successor finishes page preparation", async () => {
     const page = {};
-    setPwToolsCoreCurrentPage(page);
+    harness.setPwToolsCoreCurrentPage(page);
     const click = vi.fn(async () => {});
-    setPwToolsCoreCurrentRefLocator({ click });
+    harness.setPwToolsCoreCurrentRefLocator({ click });
     const result = managedDownload("accepted.txt");
     const captured = createDeferred<typeof result>();
-    setPwToolsCoreDownloadCapture({ armed: true, promise: captured.promise, cancel: vi.fn() });
+    harness.setPwToolsCoreDownloadCapture({
+      armed: true,
+      promise: captured.promise,
+      cancel: vi.fn(),
+    });
     const accepted = mod.waitForDownloadViaPlaywright({ ...target, targetId: "T1" });
     const acceptedResult = Promise.allSettled([accepted]);
     await Promise.resolve();
@@ -72,7 +70,7 @@ describe("pw-tools-core", () => {
     "checks dialog authority after %s",
     async (boundary) => {
       const page = {};
-      setPwToolsCoreCurrentPage(page);
+      harness.setPwToolsCoreCurrentPage(page);
       const held = heldAction();
       if (boundary === "page preparation") {
         session.getPageForTargetId.mockImplementationOnce(async () => {
@@ -125,7 +123,7 @@ describe("pw-tools-core", () => {
 
     const { currentPage, fileChooser, waitForEvent, emitChooser, listenerCount } =
       fileChooserPage();
-    setPwToolsCoreCurrentPage(currentPage);
+    harness.setPwToolsCoreCurrentPage(currentPage);
 
     try {
       await mod.armFileUploadViaPlaywright({ ...target, paths: [firstPath] });
@@ -153,7 +151,7 @@ describe("pw-tools-core", () => {
   });
   it("arms the next dialog with the default timeout", async () => {
     const page = {};
-    setPwToolsCoreCurrentPage(page);
+    harness.setPwToolsCoreCurrentPage(page);
 
     const response = { accept: true, promptText: "x" };
     await mod.armDialogViaPlaywright({ ...target, ...response });
@@ -169,24 +167,24 @@ describe("pw-tools-core", () => {
     });
   });
   it("waits for selector, url, load state, and function", async () => {
-    const waitForSelector = vi.fn(async () => {});
-    const waitForURL = vi.fn(async () => {});
-    const waitForLoadState = vi.fn(async () => {});
-    const waitForFunction = vi.fn(
-      async (_predicate: unknown, _state: unknown, _options: unknown) => {},
-    );
-    const waitForTimeout = vi.fn(async () => {});
+    const waits = {
+      selector: vi.fn(async () => {}),
+      url: vi.fn(async () => {}),
+      load: vi.fn(async () => {}),
+      predicate: vi.fn(async (_fn: unknown, _state: unknown, _options: unknown) => {}),
+      delay: vi.fn(async () => {}),
+    };
     const documentHandle = { dispose: vi.fn(async () => {}) };
 
     const page = {
       evaluateHandle: vi.fn(async () => documentHandle),
-      locator: vi.fn(() => ({ first: () => ({ waitFor: waitForSelector }) })),
-      waitForURL,
-      waitForLoadState,
-      waitForFunction,
-      waitForTimeout,
+      locator: vi.fn(() => ({ first: () => ({ waitFor: waits.selector }) })),
+      waitForURL: waits.url,
+      waitForLoadState: waits.load,
+      waitForFunction: waits.predicate,
+      waitForTimeout: waits.delay,
     };
-    setPwToolsCoreCurrentPage(page);
+    harness.setPwToolsCoreCurrentPage(page);
 
     await waitForViaPlaywright({
       ...target,
@@ -199,33 +197,36 @@ describe("pw-tools-core", () => {
     });
 
     expect({
-      delay: waitForTimeout.mock.calls,
+      ...Object.fromEntries(Object.entries(waits).map(([name, mock]) => [name, mock.mock.calls])),
       selector: page.locator.mock.calls,
-      visible: waitForSelector.mock.calls,
-      url: waitForURL.mock.calls,
-      load: waitForLoadState.mock.calls,
-      predicate: waitForFunction.mock.calls,
+      visible: waits.selector.mock.calls,
     }).toEqual({
       delay: [[50]],
       selector: [["#main"]],
       visible: [[{ state: "visible", timeout: 1234 }]],
       url: [["**/dash", { timeout: 1234 }]],
       load: [["networkidle", { timeout: 1234 }]],
-      predicate: [[expect.any(Function), { document: documentHandle }, { timeout: 1234 }]],
+      predicate: [
+        [
+          expect.any(Function),
+          { document: documentHandle, source: expect.any(String) },
+          { timeout: 1234 },
+        ],
+      ],
     });
     expect(documentHandle.dispose).toHaveBeenCalledOnce();
   });
 
   it("clamps passive wait deadlines without running an executable predicate", async () => {
     const waitFor = vi.fn(async () => {});
-    setPwToolsCoreCurrentPage({ locator: () => ({ first: () => ({ waitFor }) }) });
+    harness.setPwToolsCoreCurrentPage({ locator: () => ({ first: () => ({ waitFor }) }) });
     await waitForViaPlaywright({ ...target, selector: "#main", timeoutMs: 999_999 });
     expect(waitFor).toHaveBeenCalledWith({ state: "visible", timeout: 120_000 });
   });
 
   it("clamps interaction timeoutMs to 60000 for click steps", async () => {
     const click = vi.fn(async () => {});
-    setPwToolsCoreCurrentPage({
+    harness.setPwToolsCoreCurrentPage({
       url: vi.fn(() => "https://example.com"),
       locator: vi.fn(() => ({ click })),
     });

@@ -21,6 +21,7 @@ import {
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { prepareCronRunAdmission } from "../cron/run-admission.js";
+import { TEST_SCHEDULED_EXECUTION } from "../cron/scheduled-occurrence.test-support.js";
 import {
   bindGatewayContextResolver,
   withPluginRuntimeGatewayRequestScope,
@@ -148,6 +149,7 @@ async function createHostedCreation(state: OpenClawTestState, source: HostedSour
   const scheduled =
     source === "scheduled"
       ? prepareCronRunAdmission({
+          scheduledExecution: TEST_SCHEDULED_EXECUTION,
           deliveryAttemptFence: { beforeAttempt: async () => {}, assertCurrent: () => {} },
           cfg,
           runId: "scope-parent-run",
@@ -172,6 +174,10 @@ async function createHostedCreation(state: OpenClawTestState, source: HostedSour
   const caller = expectDefined(
     createAdmittedGatewayToolCallerIdentity({
       admittedRunContext: admitted,
+      // Operator scenarios start with a human request, not only an execution grant.
+      // Keep those causal facts separate from the authority captured above.
+      requesterOrigin:
+        source === "operator" ? { sessionKey: parentKey, operatorProfileId: profileId } : undefined,
       agentId: "main",
       sessionKey: parentKey,
       approvalSignals: [sourceController.signal],
@@ -254,13 +260,7 @@ async function createHostedCreation(state: OpenClawTestState, source: HostedSour
       params: Record<string, unknown> = {},
       toolCallId = "create-independent",
       signal?: AbortSignal,
-    ) =>
-      withCaller(async () => {
-        if (!tool) {
-          throw new Error("Session creation unavailable");
-        }
-        return await tool.execute(toolCallId, params, signal);
-      }),
+    ) => withCaller(() => tool.execute(toolCallId, params, signal)),
     create,
     spawn: (mode: SessionEntry["permissionMode"], agentId?: string) =>
       withCaller(() =>
@@ -553,10 +553,13 @@ describe("independent session creation tool", () => {
   it.each(["unidentified", "scheduled"] as const)(
     "does not turn a %s run into an operator creation grant",
     (source) =>
-      withHostedCreation(async ({ tool, toolCreate, handler }) => {
-        expect(tool).toBeNull();
-        await expect(toolCreate({ message: "Investigate" })).rejects.toThrow(/unavailable/);
+      withHostedCreation(async ({ tool, toolCreate, handler, keys }) => {
+        const before = await keys();
+        expect(tool.name).toBe("sessions_create");
+        const refused = await toolCreate({ message: "Investigate" });
+        expect(refused.details).toMatchObject({ gated: true });
         expect(handler).not.toHaveBeenCalled();
+        expect(await keys()).toEqual(before);
       }, source),
   );
 

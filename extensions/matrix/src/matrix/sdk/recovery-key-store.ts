@@ -176,7 +176,6 @@ export class MatrixRecoveryKeyStore {
   stageEncodedRecoveryKey(params: {
     encodedPrivateKey: string;
     keyId?: string | null;
-    keyInfo?: MatrixStoredRecoveryKey["keyInfo"];
   }): Promise<void> {
     const encodedPrivateKey = params.encodedPrivateKey.trim();
     if (!encodedPrivateKey) {
@@ -192,9 +191,8 @@ export class MatrixRecoveryKeyStore {
     }
     const keyId =
       typeof params.keyId === "string" && params.keyId.trim() ? params.keyId.trim() : null;
-    const preparedKeyInfo = params.keyInfo;
     return this.enqueuePersistence(async () => {
-      const keyInfo = preparedKeyInfo ?? (await this.loadStoredRecoveryKey())?.keyInfo;
+      const keyInfo = (await this.loadStoredRecoveryKey())?.keyInfo;
       this.clearStagedCache();
       this.stagedRecoveryKey = {
         version: 1,

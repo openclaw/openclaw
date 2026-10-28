@@ -77,12 +77,6 @@ export type VoiceRealtimeSession = {
   canReceiveDuringPlayback: () => boolean;
 };
 
-type VoiceRealtimeLifecycle =
-  | { status: "inactive" }
-  | { status: "starting"; instance: VoiceRealtimeSession }
-  | { status: "active"; instance: VoiceRealtimeSession }
-  | { status: "stopped"; reason: string };
-
 export type VoiceGuildLifecycle =
   | { status: "inactive"; generation: number }
   | {
@@ -103,7 +97,6 @@ export type VoiceSessionEntry = {
   guildName?: string;
   channelId: string;
   channelName?: string;
-  sessionChannelId: string;
   voiceSessionKey: string;
   route: ReturnType<typeof resolveAgentRoute>;
   audio: import("./audio-transport.js").DiscordAudioTransport;
@@ -116,7 +109,11 @@ export type VoiceSessionEntry = {
   >;
   ttsStreamFallbackWarned: boolean;
   capture: VoiceCaptureState;
-  realtimeLifecycle: VoiceRealtimeLifecycle;
+  realtimeLifecycle:
+    | { status: "inactive" }
+    | { status: "starting"; instance: VoiceRealtimeSession }
+    | { status: "active"; instance: VoiceRealtimeSession }
+    | { status: "stopped"; reason: string };
   transcripts?: DiscordVoiceTranscriptCapture;
   receiveRecovery: VoiceReceiveRecoveryState;
   stop: (reason?: string, disposition?: "abort" | "text-fallback") => void | Promise<void>;

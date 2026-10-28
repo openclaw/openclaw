@@ -2,6 +2,11 @@
 
 mod session;
 
+/// Gateway compatibility levels generated from the canonical protocol owner.
+pub mod protocol {
+    include!(concat!(env!("OUT_DIR"), "/protocol_versions.rs"));
+}
+
 pub use session::{
     ClientError, ConnectAttempt, ConnectChallenge, DispatchContext, DispatchRejection, Event,
     EventSubscription, GatewayClient, GatewayClientConfig, GatewaySession,

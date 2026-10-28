@@ -13,6 +13,7 @@ import {
   type GatewayControlUiIngressWebSocketRequestV1,
   type GatewayIngressSocketV1,
 } from "../plugins/gateway-ingress.types.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { readGatewayPluginReadCookies } from "./control-ui-plugin-auth-cookie.js";
 import { markGatewayIngressTransport } from "./ingress-attribution.js";
 import { MAX_PAYLOAD_BYTES } from "./payload-limits.js";
@@ -49,10 +50,7 @@ export function createRemoteControlUiTransport({
     signal.throwIfAborted();
     const [client, serverSocket] = duplexPair({ highWaterMark: 64 * 1024 });
     let finished = false;
-    let resolveClosed!: () => void;
-    const closed = new Promise<void>((resolve) => {
-      resolveClosed = resolve;
-    });
+    const { promise: closed, resolve: resolveClosed } = createDeferredCore();
     const abort = (error: unknown) => controller.abort(error);
     let idleMs = 0;
     let idleTimer: ReturnType<typeof setTimeout> | undefined;
@@ -61,23 +59,18 @@ export function createRemoteControlUiTransport({
       idleTimer = idleMs > 0 ? setTimeout(() => serverSocket.emit("timeout"), idleMs) : undefined;
       idleTimer?.unref();
     };
-    const finish = () => {
+    const finish = (error?: Error) => {
       if (finished) {
         return;
       }
       finished = true;
       clearTimeout(idleTimer);
       signal.removeEventListener("abort", destroy);
-      client.destroy();
-      serverSocket.destroy();
-      resolveClosed();
-    };
-    const destroy = () => {
-      const error = toStringifiedError(signal.reason);
       client.destroy(error);
       serverSocket.destroy(error);
-      finish();
+      resolveClosed();
     };
+    const destroy = () => finish(toStringifiedError(signal.reason));
     signal.addEventListener("abort", destroy, { once: true });
     const check = () => {
       signal.throwIfAborted();

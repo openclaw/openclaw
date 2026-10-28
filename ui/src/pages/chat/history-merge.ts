@@ -83,10 +83,9 @@ function isInitialSubmissionReceipt(
     submission?.kind === "initial" &&
     identity?.role === "user" &&
     !identity.isImported &&
-    ((submission.consumedByEventId && identity.id === submission.consumedByEventId) ||
-      ((identity.id !== null || identity.sequence !== null) &&
-        (identity.idempotencyKey === submission.pendingRunId ||
-          identity.idempotencyKey === `${submission.pendingRunId}:user`)))
+    (identity.id !== null || identity.sequence !== null) &&
+    (identity.idempotencyKey === submission.pendingRunId ||
+      identity.idempotencyKey === `${submission.pendingRunId}:user`)
   );
 }
 

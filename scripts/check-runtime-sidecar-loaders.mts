@@ -2,7 +2,7 @@
 
 // Finds hidden local runtime sidecar loaders missing tsdown entries.
 import path from "node:path";
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {
   collectFileViolations,

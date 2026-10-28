@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { requireValidExecTarget } from "../infra/exec-approvals.js";
-import { resolveExecTarget } from "./bash-tools.exec-runtime.js";
-import { createExecHostResolver } from "./bash-tools.exec-support.js";
+import { resolveExecHost, resolveExecTarget } from "./bash-tools.exec-target.js";
 import { createExecTool } from "./bash-tools.js";
 import { pinExecToolTarget } from "./exec-tool-target-pinning.js";
 import { createLazyExecTool } from "./lazy-exec-tool.js";
@@ -184,8 +183,7 @@ describe("named node host policy", () => {
     { sandbox },
     { host: "node" as const, sandbox, sandboxRequired: true },
   ])("keeps node-only calls within configured policy %j", (defaults) => {
-    const resolveHost = createExecHostResolver(defaults);
-    expect(() => resolveHost({ command: "echo ok", node: "node-1" })).toThrow(
+    expect(() => resolveExecHost({ node: "node-1" }, defaults)).toThrow(
       /exec host not allowed.*node/,
     );
   });
@@ -209,7 +207,7 @@ describe("foreground node exec wait budgets", () => {
         expect(nodeTool.getExecutionTimeoutMs?.({ ...args, host: "gateway" })).toBe(expectedMs);
 
         const gatewayTool = pinExecToolTarget(tool, { host: "gateway" });
-        expect(gatewayTool.getExecutionTimeoutMs?.({ ...args, host: "node" })).toBeUndefined();
+        expect(gatewayTool.getExecutionTimeoutMs?.(args)).toBeUndefined();
       }
     },
   );

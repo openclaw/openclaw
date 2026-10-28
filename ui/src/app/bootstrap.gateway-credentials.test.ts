@@ -10,7 +10,10 @@ import { MockWebSocket, wsInstances } from "../api/gateway-socket.test-support.t
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
 import { fetchControlUiResource } from "./browser-http.ts";
-import { createGatewayStoreTestStore } from "./gateway-store.test-support.ts";
+import {
+  createGatewayStoreTestStore,
+  GATEWAY_STORE_TEST_HELLO,
+} from "./gateway-store.test-support.ts";
 import * as gatewayStore from "./gateway-store.ts";
 import { loadSettings, loadUiPreferences, patchSettings, persistSessionToken } from "./settings.ts";
 import * as staleChunkReload from "./stale-chunk-reload.ts";
@@ -44,7 +47,7 @@ function mockBrowserHandoff() {
   return fetchMock;
 }
 function rejectAuth(store: ReturnType<typeof useGateway>, code: string) {
-  store.current().opts.onClose?.({
+  store.current().testOptions.onClose?.({
     code: 4008,
     reason: "connect failed",
     willRetry: false,
@@ -68,6 +71,51 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
+
+it.each(["start", "connect", "plugins"])(
+  "retires the %s config response when the application stops",
+  async (entry) => {
+    window.history.replaceState({}, "", "/focus/terminal");
+    const store = useGateway();
+    const fetchMock = vi.fn<typeof fetch>(async () => Response.json({ basePath: "" }));
+    vi.stubGlobal("fetch", fetchMock);
+    runtime = bootstrapApplication();
+    if (entry !== "start") {
+      await runtime.start();
+      vi.spyOn(Date, "now").mockReturnValue(Date.now() + 10 * 60_000);
+    }
+    const previous = runtime.context.config.current;
+    const response = createDeferred<Response>();
+    fetchMock.mockClear();
+    fetchMock.mockImplementation(async () => (await response.promise).clone());
+    const refresh = vi.spyOn(runtime.context.config, "refresh");
+    if (entry === "start") {
+      await runtime.start();
+    } else {
+      store.current().testOptions.onHello?.({
+        ...GATEWAY_STORE_TEST_HELLO,
+        auth: { role: "operator", scopes: ["operator.read"] },
+        ...(entry === "plugins" ? { features: { methods: ["plugins.controlUi.list"] } } : {}),
+      });
+    }
+    expect(refresh).toHaveBeenCalledTimes(entry === "plugins" ? 2 : 1);
+    const requests = refresh.mock.results.map((request) => {
+      if (request.type !== "return") {
+        throw new Error("expected a pending config refresh");
+      }
+      return request.value;
+    });
+    const signal = fetchMock.mock.calls.at(-1)?.[1]?.signal;
+
+    runtime.stop();
+    response.resolve(Response.json({ basePath: "", serverVersion: "retired-runtime" }));
+    await Promise.all(requests);
+
+    expect(runtime.context.config.current).toBe(previous);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(signal?.aborted).toBe(true);
+  },
+);
 
 describe("pending Gateway credentials", () => {
   it.each([
@@ -237,7 +285,7 @@ describe("pending Gateway credentials", () => {
 
       if (retryUnavailable) {
         const revision = store.gateway.connectionRevision;
-        store.current().opts.onClose?.({
+        store.current().testOptions.onClose?.({
           code: 4008,
           reason: "connect failed",
           error: { code: "UNAVAILABLE", message: "Gateway temporarily unavailable" },
@@ -268,7 +316,7 @@ describe("pending Gateway credentials", () => {
           redirect: "error",
         }),
       );
-      expect(store.current().opts.bootstrapProfile).toBe("owner");
+      expect(store.current().testOptions.bootstrapProfile).toBe("owner");
       expect(window.location.href).toBe(initialUrl);
     },
   );
@@ -368,7 +416,7 @@ describe("pending Gateway credentials", () => {
     });
 
     try {
-      client.opts.onHello?.({
+      client.testOptions.onHello?.({
         type: "hello-ok",
         protocol: 1,
         auth: { role: "operator", scopes: ["operator.admin"], deviceToken: "fixture-device-token" },

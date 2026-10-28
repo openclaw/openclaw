@@ -73,8 +73,12 @@ state can repeat notifications, but cannot authorize a retry or publication.
 `rerun --child` waits for one failed child, sends exactly one retry request,
 confirms the new attempt has no duplicate jobs, and
 records an audit line. It refuses children past `--max-attempts` (default 2,
-which allows one rerun). When a failed consumer is bound to a green producer's
-run attempt, it reruns that producer and its dependents instead. It returns
+which allows one rerun). The install-smoke update and non-root installer jobs
+verify the candidate payload against the current run attempt. When a failed-jobs
+rerun would re-execute one of them (the job itself failed, or an upstream job
+such as its installer image build failed), it reruns the green producer and its
+dependents instead (`mode: producer`). If a failed job sits outside that dependent set, it reruns the whole
+child (`mode: all-jobs`), because a job rerun cannot also retry it. It returns
 after the new attempt starts; `continue --failed` still owns the final reseal.
 
 When every workload passed and only **Seal child receipt** failed, the preview
@@ -85,7 +89,8 @@ and still requires `continue --failed` plus strict verification before reporting
 qualification accepted. A metadata retry starting is not qualification success.
 
 `continue --failed` reruns each failed child's jobs as soon as that child is
-terminal, while sibling children and the original parent may still run. It
+terminal (choosing the same producer or all-jobs mode for attempt-bound install-smoke
+payload consumers), while sibling children and the original parent may still run. It
 adopts active attempts without duplicating them and leaves green child
 workflows untouched. After the resulting child evidence is green and the
 original parent finishes, it reruns the parent once. The original Decision and
@@ -222,16 +227,17 @@ operations and never run as an automatic response to a test outcome.
 
 Published artifacts may contain empty `knownFlakyJobs` and `automaticRetries`
 fields. Readers retain their original plan digest and reject nonempty allowances
-or retry records. Current qualification requires successful selected results. A
+or retry records. Current FRV must conclude success under the pinned
+[release-tooling policy](/reference/full-release-validation/evidence#release-tooling-waivers). A
 campaign already dispatched with an
 older pinned Tooling SHA remains owned by that immutable tooling and must not be
 retargeted mid-run. Current strict tooling rejects retained `windows-node-ci`
 advisory evidence; start a fresh campaign that satisfies the restored blocking
 gate. Candidate-owned qualification still uses Q=C: if the frozen harness needs
 the policy repair, deliberately backport it and freeze a new candidate instead
-of substituting newer main tooling. Retired waivers and pre-declared advisory failure
-allowances remain rejected and must be replaced with a fresh qualifying run; they
-cannot authorize publication.
+of substituting newer main tooling. Retired candidate-side omission waivers and
+pre-declared advisory failure allowances remain rejected and must be replaced
+with a fresh qualifying run; they cannot authorize publication.
 
 ### Read publication observations
 

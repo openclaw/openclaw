@@ -31,7 +31,6 @@ import {
 } from "./code-mode.js";
 import {
   createCodeModeHarness,
-  fakeTool,
   mcpTool,
   pluginTool,
   resetCodeModeTestState,
@@ -52,6 +51,7 @@ import { prepareInstalledSkillCatalog } from "./installed-skill-runtime.js";
 import { createReadTool } from "./sessions/index.js";
 import { SessionManager } from "./sessions/session-manager.js";
 import { readToolInputSchema } from "./sessions/tools/tool-schemas.js";
+import { fakeTool } from "./test-helpers/fake-tool.js";
 import { filterToolsByPolicy } from "./tool-policy-match.js";
 import { addClientToolsToToolCatalog, restrictToolSearchCatalog } from "./tool-search-catalog.js";
 import { clearToolSearchCatalog } from "./tool-search.js";
@@ -106,6 +106,15 @@ function contractedTool(name: string, pluginId?: string) {
 
 function skillBody(location: string, content: string) {
   return `Skill location: ${location}\nResolve relative resource paths from the directory containing this SKILL.md.\n\n${content}`;
+}
+
+function expectFragments(value: unknown, included: string[], excluded: string[] = []) {
+  for (const fragment of included) {
+    expect(value).toContain(fragment);
+  }
+  for (const fragment of excluded) {
+    expect(value).not.toContain(fragment);
+  }
 }
 
 describe("Code Mode catalog and model-visible surface", () => {
@@ -171,33 +180,65 @@ describe("Code Mode catalog and model-visible surface", () => {
     expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual(indexed);
   });
 
-  it("includes resolvable callable contracts in the catalog prompt", () => {
+  it("includes resolvable callable contracts in the catalog prompt", async () => {
     const alpha = pluginTool("alpha_tool", "Another deferred description.");
     alpha.outputSchema = Type.Array(
       Type.Object({ id: Type.String(), score: Type.Number() }, { additionalProperties: false }),
     );
-    const { catalogPrompt } = catalog([
+    const incomplete = pluginTool("incomplete_tool", "Use schedule to start the source.");
+    incomplete.parameters = Type.Object({
+      job: Type.Object({
+        ...Object.fromEntries(
+          Array.from({ length: 16 }, (_, index) => [
+            `metadata_${String(index).padStart(2, "0")}`,
+            Type.Optional(Type.String()),
+          ]),
+        ),
+        schedule: Type.Optional(Type.Object({ kind: Type.Literal("stream") })),
+      }),
+    });
+    const { catalogPrompt, ctx } = catalog([
+      incomplete,
       pluginTool("zeta_tool", "Description stays deferred."),
       alpha,
       { ...fakeTool("read", "Read file"), parameters: readToolInputSchema },
     ]);
     const prompt = catalogPrompt();
-    for (const fragment of [
-      "- alpha_tool { value?: string } -> Array<{ id: string; score: number }>",
-      "- zeta_tool { value?: string } -> ?",
-      "- read { path: string; cursor?: number /* integer, >= 0 */; limit?: number; offset?: number /* integer, >= 1 */; optional?: true } -> ?",
-    ]) {
-      expect(prompt).toContain(fragment);
-    }
-    for (const fragment of [
-      "Description stays deferred.",
-      "openclaw:fake-code-mode",
-      "paired Gateway nodes",
-      "MCP tools use the `MCP` namespace",
-    ]) {
-      expect(prompt).not.toContain(fragment);
-    }
+    expectFragments(
+      prompt,
+      [
+        "- alpha_tool { value?: string } -> Array<{ id: string; score: number }>",
+        "- zeta_tool { value?: string } -> ?",
+        "- read { path: string; cursor?: number /* integer, >= 0 */; limit?: number; offset?: number /* integer, >= 1 */; optional?: true } -> ?",
+        "If an input hint leaves needed arguments unclear (`...` or `unknown`), read `await callableName.describe()`",
+        "Call globals directly when their input contract is clear",
+      ],
+      [
+        "Description stays deferred.",
+        "openclaw:fake-code-mode",
+        "paired Gateway nodes",
+        "MCP tools use the `MCP` namespace",
+      ],
+    );
     expect(prompt.indexOf("alpha_tool")).toBeLessThan(prompt.indexOf("zeta_tool"));
+    const incompleteLine = prompt.split("\n").find((line) => line.startsWith("- incomplete_tool "));
+    expectFragments(incompleteLine, ["..."], ["schedule"]);
+    const described = await runCodeModeScriptHeadless({
+      ctx,
+      code: "return await incomplete_tool.describe();",
+    });
+    expect(described).toMatchObject({
+      status: "completed",
+      value: {
+        description: "Use schedule to start the source.",
+        parameters: {
+          properties: {
+            job: { properties: { schedule: { properties: { kind: { const: "stream" } } } } },
+          },
+        },
+      },
+    });
+    expect(incomplete.execute).not.toHaveBeenCalled();
   });
 
   function catalogIndex(targets: AnyAgentTool[]) {
@@ -215,13 +256,11 @@ describe("Code Mode catalog and model-visible surface", () => {
       ),
       contractedTool("zzz_contracted_tool", pluginId),
     ]);
-    for (const fragment of [
+    expectFragments(index, [
       "additional tools omitted",
       "zzz_contracted_tool",
       "-> { ok: boolean }",
-    ]) {
-      expect(index).toContain(fragment);
-    }
+    ]);
   });
 
   it("skips a single oversized entry instead of blanking the whole index", () => {
@@ -229,10 +268,7 @@ describe("Code Mode catalog and model-visible surface", () => {
     const index = catalogIndex(
       [`a_${"z".repeat(9_000)}`, ...shortNames].map((name) => contractedTool(name)),
     );
-    expect(index).not.toContain("z".repeat(9_000));
-    for (const name of shortNames) {
-      expect(index).toContain(name);
-    }
+    expectFragments(index, shortNames, ["z".repeat(9_000)]);
   });
 });
 
@@ -262,7 +298,7 @@ describe("Code Mode search", () => {
     expectToolCalls(1, plugin, client);
   });
 
-  function setup(maxSearchLimit = 50) {
+  it("keeps discovery intact beyond the display budget and leaves narrowed discovery callable", async () => {
     const targets = Array.from({ length: 50 }, (_, index) =>
       pluginTool(
         `shipment_${String(index).padStart(2, "0")}_${"long_name_".repeat(5)}`,
@@ -270,14 +306,11 @@ describe("Code Mode search", () => {
       ),
     );
     const { ctx } = createCatalogCodeModeHarness(targets, {
-      codeMode: { maxOutputBytes: 1024, maxSearchLimit },
+      codeMode: { maxOutputBytes: 1024, maxSearchLimit: 50 },
     });
     const run = (code: string) => runCodeModeScriptHeadless({ ctx, code });
-    return { run, targets };
-  }
-
-  it("keeps discovery intact beyond the display budget and leaves narrowed discovery callable", async () => {
-    const { run, targets } = setup();
+    const missing = await run('return await catalog.search("zzzz_missing_tool", { limit: 50 });');
+    expectCompleted(missing, []);
     const overflow = await run(
       'const matches = await catalog.search("shipment", { limit: 50 }); return { count: matches.length, callable: matches.every(tool => typeof tool === "function") };',
     );
@@ -292,18 +325,6 @@ describe("Code Mode search", () => {
     expectCompleted(narrowed, { name: targets[0]?.name, input: { value: "ship" } });
     expect(targets[0]?.execute).toHaveBeenCalledOnce();
     expectToolCalls(0, ...targets.slice(1));
-    expect(testing.activeRuns.size).toBe(0);
-    expect(testing.resumingRunIds.size).toBe(0);
-  });
-
-  it("returns no callable matches for an unknown tool", async () => {
-    const { run, targets } = setup();
-    const result = await run(`
-      const matches = await catalog.search("zzzz_missing_tool", { limit: 50 });
-      return { count: matches.length, frozen: Object.isFrozen(matches), callable: matches.every(tool => typeof tool === "function") };
-    `);
-    expectCompleted(result, { count: 0, frozen: true, callable: true });
-    expectToolCalls(0, ...targets);
   });
 });
 
@@ -312,8 +333,8 @@ it("records Code Mode skills.read of a workshop skill as run usage and skill.use
   const codeModeSkills = resolveCodeModeSkills({
     skillsPrompt: await resolveSkillsPrompt({ entries: [learned], workspaceDir: "/workspace" }),
     candidates: [learned.skill],
-    reader: async () => "# Learned instructions\n",
   });
+  codeModeSkills[0]!.reader = async () => "# Learned instructions\n";
   const used: Array<{ event: DiagnosticEventPayload; skillFile?: string }> = [];
   const stop = onTrustedInternalDiagnosticEvent(
     (event, _metadata, privateData) => {
@@ -578,13 +599,11 @@ it("returns missing implicitly optional daily memory through Code Mode", async (
 
 function replay(targets: AnyAgentTool[], options?: Parameters<typeof createCodeModeHarness>[0]) {
   const { tools } = createCatalogCodeModeHarness(targets, options);
-  const execTool = tools[0]!;
-  const waitTool = tools[1]!;
   return {
-    execTool,
-    waitTool,
+    execTool: tools[0]!,
+    waitTool: tools[1]!,
     run: (code: string, restartSafe = true) =>
-      runUntilCompleted({ execTool, waitTool, code, restartSafe }),
+      runUntilCompleted({ execTool: tools[0]!, waitTool: tools[1]!, code, restartSafe }),
   };
 }
 
@@ -736,19 +755,14 @@ describe("session store bridge", () => {
       for (const key of ["a", "b", "c", "d"]) await store(key, max);
       const errors = [];
       for (const [key, value] of [["a", max + "x"], ["a", "é".repeat(128 * 1024)], ["e", 1]]) {
-        try { await store(key, value); } catch (error) { errors.push(error instanceof RangeError); }
+        try { await store(key, value); } catch (error) { errors.push(error instanceof RangeError && error.code === "store_range" && /unchanged/.test(error.message)); }
       }
       const unchanged = (await load("a")).length;
       await store("b", undefined);
       await store("e", 1);
       return { errors, unchanged, deleted: (await load("b")) === undefined, added: await load("e") };
     `,
-      {
-        errors: [true, true, true],
-        unchanged: 256 * 1024 - 2,
-        deleted: true,
-        added: 1,
-      },
+      { errors: [true, true, true], unchanged: 256 * 1024 - 2, deleted: true, added: 1 },
     );
   });
 
@@ -779,10 +793,13 @@ describe("session store bridge", () => {
     expectFailure(
       result,
       "bridge",
-      "internal_error",
+      set ? "internal_error" : "invalid_input",
       set
         ? { error: expect.stringContaining("repair the session") }
-        : { bridgeDispatchStarted: true, error: expect.stringMatching(/^RangeError/) },
+        : {
+            bridgeDispatchStarted: true,
+            error: expect.stringMatching(/^RangeError:.*save a summary/),
+          },
     );
     expect(log).toHaveBeenCalledExactlyOnceWith(
       set ? expect.objectContaining({ cause: expect.any(cause) }) : expect.any(cause),
@@ -895,3 +912,26 @@ it.each(["aborted", "timeout"] as const)(
     await next.check('return (await load("key")) === undefined;', true);
   },
 );
+
+it("keeps an astral skill description whole at the skills.list cap", async () => {
+  const prefix = "a".repeat(511);
+  const skills = [
+    {
+      name: "boundary-guide",
+      description: `${prefix}😀tail`,
+      location: "/skills/boundary-guide/SKILL.md",
+      source: { filePath: "/skills/boundary-guide/SKILL.md" },
+    },
+  ];
+  const harness = createCatalogCodeModeHarness(createInstalledSkillTools(skills), {
+    codeModeSkills: skills,
+  });
+  const result = await harness.complete("return await skills.list(0);");
+  expectCompleted(result, [
+    {
+      name: "boundary-guide",
+      description: prefix,
+      location: "/skills/boundary-guide/SKILL.md",
+    },
+  ]);
+});

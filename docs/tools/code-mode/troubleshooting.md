@@ -25,7 +25,9 @@ and `typecheck` fields, rejected module access, JavaScript syntax errors, unknow
 wrong-scope `runId` values, and too many suspended runs. It also covers an
 uncaught nested tool call that the host rejected as invalid input (an
 `input_contract` schema mismatch or a tool's own input error); the error names
-the missing or unexpected arguments. Other uncaught tool failures report
+the missing or unexpected arguments. Host-rejected session-store keys and capacity rejections
+also report `invalid_input`, with `TypeError` or `RangeError` and recovery guidance.
+Other uncaught tool failures report
 `internal_error`. Codes the guest assigns to `error.code` never change the
 terminal code. `runtime_unavailable`
 covers an unavailable executor or a worker that fails to start or exits
@@ -103,8 +105,9 @@ The run metadata (`meta.agentMeta` in `openclaw agent --json`, mirrored on the
   `codeModeOnly` is a separate native feature that this field does not track.
 - `assistantTurns`: completed assistant/provider round trips across the run.
 - `bridgeCalls`: the run's cumulative inner bridge counts
-  (`{ search, describe, call }`). These calls never reach the provider;
-  provider-visible outer tool calls remain in `meta.toolSummary.calls`.
+  (`{ search, describe, call }`). These are not provider requests. The embedded
+  runtime's `meta.toolSummary.calls` includes outer and nested tool terminals,
+  so bridge counts can overlap it and must not be added to it.
 - `costUsd`: estimated USD cost from the run's accumulated usage and the
   model's cost config (cache read/write tiers included); omitted when the
   model has no cost data.
@@ -119,8 +122,10 @@ warning level under `agents/code-mode`. Worker startup/crash failures, bridge
 infrastructure failures, and output-contract violations remain errors. A bridge
 rejection is logged once at its host boundary, including when the guest catches
 it; an uncaught rejection does not add a second projected error record.
-The server record preserves the original
-error class, message, and stack head before guest projection and output limits.
+The server record includes a bounded error category and failure kind, without
+message or tool content. Serialized worker errors are restored before
+classification; `errorCategory: "object"` in older builds can represent an
+ordinary input or guest Error serialized across the worker boundary.
 It includes session, agent-run, Code Mode run, outer tool-call, bridge-request,
 and executor worker identifiers when available. No debug flag is required. File
 logs retain the raw diagnostic; log exports apply their normal redaction.

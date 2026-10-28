@@ -1,4 +1,3 @@
-import { Type } from "typebox";
 import { resolveExecCommandHighlighting } from "../config/exec-command-highlighting.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { applyExecPolicyLayer } from "../infra/exec-policy.js";
@@ -14,7 +13,11 @@ import { resolveAgentConfig } from "./agent-scope.js";
 import { bindAgentToolAvailability } from "./agent-tool-availability.js";
 import { describeExecTool } from "./bash-tools.descriptions.js";
 import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
-import { createExecSchema, execSchema as execExecutionSchema } from "./bash-tools.schemas.js";
+import {
+  createExecCompletionSchema,
+  createExecSchema,
+  execSchema as execExecutionSchema,
+} from "./bash-tools.schemas.js";
 import { createExecToolExecutionTimeoutResolver } from "./exec-tool-timeout.js";
 import { EXEC_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
 import type { AnyAgentTool } from "./tools/common.js";
@@ -43,7 +46,7 @@ export function createLazyExecTool(
   });
   const processToolAvailabilityRef = defaults?.processToolAvailabilityRef ?? {};
   const execSchema = createExecSchema(defaults);
-  const execCompletionSchema = Type.Omit(execSchema, ["yieldMs", "background"]);
+  const execCompletionSchema = createExecCompletionSchema(defaults);
   let loadedTool: LoadedExecTool | undefined;
   let loadingTool: Promise<LoadedExecTool> | undefined;
   const loadTool = () => {

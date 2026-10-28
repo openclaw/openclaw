@@ -26,39 +26,35 @@ export function transformUnprotectedTelegramHtmlText(
   return result + transform(html.slice(lastIndex));
 }
 
-function wrapStandaloneFileRef(match: string, prefix: string, filename: string): string {
-  if (filename.startsWith("//") || /https?:\/\/$/i.test(prefix)) {
-    return match;
-  }
-  return `${prefix}<code>${escapeTelegramHtml(filename)}</code>`;
-}
-
-function wrapSegmentFileRefs(text: string): string {
-  if (!text.includes(".")) {
-    return text;
-  }
-  if (!fileReferencePatterns) {
-    const fileExtensionsPattern = Array.from(FILE_REF_EXTENSIONS_WITH_TLD)
-      .map(escapeRegExp)
-      .join("|");
-    fileReferencePatterns = {
-      standalone: new RegExp(
-        `(^|[^a-zA-Z0-9_\\-/])([a-zA-Z0-9_.\\-./]+\\.(?:${fileExtensionsPattern}))(?=$|[^a-zA-Z0-9_\\-/])`,
-        "gi",
-      ),
-      orphanedTld: new RegExp(
-        `([^a-zA-Z0-9]|^)([A-Za-z]\\.(?:${fileExtensionsPattern}))(?=[^a-zA-Z0-9/]|$)`,
-        "g",
-      ),
-    };
-  }
-  const patterns = fileReferencePatterns;
-  const wrappedStandalone = text.replace(patterns.standalone, wrapStandaloneFileRef);
-  return wrappedStandalone.replace(patterns.orphanedTld, (match, prefix: string, tld: string) =>
-    prefix === ">" ? match : `${prefix}<code>${escapeTelegramHtml(tld)}</code>`,
-  );
-}
-
 export function wrapFileReferencesInHtml(html: string): string {
-  return transformUnprotectedTelegramHtmlText(html, ["code", "pre", "a"], wrapSegmentFileRefs);
+  return transformUnprotectedTelegramHtmlText(html, ["code", "pre", "a"], (text) => {
+    if (!text.includes(".")) {
+      return text;
+    }
+    if (!fileReferencePatterns) {
+      const fileExtensionsPattern = Array.from(FILE_REF_EXTENSIONS_WITH_TLD)
+        .map(escapeRegExp)
+        .join("|");
+      fileReferencePatterns = {
+        standalone: new RegExp(
+          `(^|[^a-zA-Z0-9_\\-/])([a-zA-Z0-9_.\\-./]+\\.(?:${fileExtensionsPattern}))(?=$|[^a-zA-Z0-9_\\-/])`,
+          "gi",
+        ),
+        orphanedTld: new RegExp(
+          `([^a-zA-Z0-9]|^)([A-Za-z]\\.(?:${fileExtensionsPattern}))(?=[^a-zA-Z0-9/]|$)`,
+          "g",
+        ),
+      };
+    }
+    const { standalone, orphanedTld } = fileReferencePatterns;
+    const wrapped = text.replace(standalone, (match, prefix: string, filename: string) => {
+      if (filename.startsWith("//") || /https?:\/\/$/i.test(prefix)) {
+        return match;
+      }
+      return `${prefix}<code>${escapeTelegramHtml(filename)}</code>`;
+    });
+    return wrapped.replace(orphanedTld, (match, prefix: string, tld: string) =>
+      prefix === ">" ? match : `${prefix}<code>${escapeTelegramHtml(tld)}</code>`,
+    );
+  });
 }

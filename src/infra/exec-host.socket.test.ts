@@ -71,9 +71,16 @@ async function withExecPeer(
           hmac: string;
           requestJson: string;
         };
-        expect(envelope.type).toBe("exec");
-        expect(envelope.id).toMatch(/^[0-9a-f-]{36}$/);
-        expect(envelope.nonce).toMatch(/^[0-9a-f]{32}$/);
+        expect(envelope).toEqual({
+          type: "exec",
+          id: expect.stringMatching(
+            /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+          ),
+          nonce: expect.stringMatching(/^[0-9a-f]{32}$/),
+          ts: expect.any(Number),
+          hmac: expect.any(String),
+          requestJson: expect.any(String),
+        });
         expect(Math.abs(Date.now() - envelope.ts)).toBeLessThan(10_000);
         const hmac = crypto
           .createHmac("sha256", token)
@@ -275,27 +282,23 @@ describe.runIf(process.platform !== "win32")("exec host real UDS boundary", () =
             await vi.advanceTimersByTimeAsync(1_000);
           }
           const result = await pending;
-          if (fault === "close") {
-            expect(result).toEqual({
-              ok: false,
-              error: {
-                code: "UNKNOWN",
-                reason: "response-lost",
-                message:
-                  "UNKNOWN: macOS app exec host response was lost; execution outcome is unknown",
-              },
-            });
-          } else {
-            expect(result).toEqual({
-              ok: false,
-              error: {
-                code: "TIMEOUT",
-                reason: "timeout",
-                message:
-                  "TIMEOUT: macOS app exec host response timed out; execution outcome is unknown",
-              },
-            });
-          }
+          expect(result).toEqual({
+            ok: false,
+            error:
+              fault === "close"
+                ? {
+                    code: "UNKNOWN",
+                    reason: "response-lost",
+                    message:
+                      "UNKNOWN: macOS app exec host response was lost; execution outcome is unknown",
+                  }
+                : {
+                    code: "TIMEOUT",
+                    reason: "timeout",
+                    message:
+                      "TIMEOUT: macOS app exec host response timed out; execution outcome is unknown",
+                  },
+          });
           order.push("client-outcome-unknown");
           expect(await fs.readFile(markers, "utf8")).toBe("START\n");
         } finally {

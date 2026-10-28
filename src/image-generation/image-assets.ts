@@ -109,6 +109,24 @@ export function toImageDataUrl(params: {
   return `data:${mimeType};base64,${params.buffer.toString("base64")}`;
 }
 
+/** Prefer a supplied image URL; inline bytes only when no URL is available. */
+export function resolveImageSourceUrl(
+  image: { url?: string; buffer?: Buffer; mimeType?: string } | undefined,
+  missingDataMessage: string,
+): string | undefined {
+  if (!image) {
+    return undefined;
+  }
+  const url = normalizeOptionalString(image.url);
+  if (url) {
+    return url;
+  }
+  if (!image.buffer) {
+    throw new Error(missingDataMessage);
+  }
+  return toImageDataUrl({ buffer: image.buffer, mimeType: image.mimeType });
+}
+
 export function parseImageDataUrl(
   dataUrl: string,
 ): { mimeType: string; base64: string } | undefined {

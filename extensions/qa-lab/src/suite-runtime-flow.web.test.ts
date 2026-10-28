@@ -154,7 +154,6 @@ it.each(["navigation", "title"] as const)(
         runtime.runQaSuiteScenarioDefinition({
           env,
           scenario: nextScenario,
-          runScenario: runtime.runQaSuiteScenarioSteps,
           constants: {
             imageUnderstandingPngBase64: "small",
             imageUnderstandingLargePngBase64: "large",

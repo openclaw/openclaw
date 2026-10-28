@@ -1,16 +1,17 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { selectResetKeptEntries } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import type { SessionTranscriptBoundedActiveContext } from "./session-accessor.sqlite-contract.js";
-import {
-  DEFAULT_VISIBLE_MESSAGE_MAX_BYTES,
-  DEFAULT_VISIBLE_MESSAGE_MAX_MESSAGES,
-  MAX_VISIBLE_MESSAGE_MAX_BYTES,
-  MAX_VISIBLE_MESSAGE_MAX_MESSAGES,
-  normalizeVisibleMessageLimit,
-} from "./session-accessor.sqlite-visible-cursor.js";
 import type { SessionActorHotState } from "./session-actor-state.types.js";
-import { selectBoundedContextRows } from "./session-bounded-context-selection.js";
+import {
+  normalizeBoundedContextLimits,
+  selectBoundedContextRows,
+} from "./session-bounded-context-selection.js";
 import { collectCacheTtlProjectionPrefix } from "./session-cache-ttl-prefix-values.js";
-import type { PreparedSessionTranscriptHydration } from "./session-history-read.types.js";
+import { isIndexedSessionEntry } from "./session-entry-codec.js";
+import type {
+  PreparedSessionTranscriptHydration,
+  SessionTranscriptContextSelection,
+} from "./session-history-read.types.js";
 import {
   shouldProjectActiveEvent,
   transcriptEventContextEligibility,
@@ -25,21 +26,10 @@ export type SessionActorTranscriptRow = { rawSeq: number; event: unknown; serial
 /** Select from bytes already held by the actor, using the same bounded-window policy. */
 export function readSessionActorBoundedHistory(
   state: { hot: SessionActorHotState; events: SessionActorTranscriptRow[] },
-  limits: { maxBytes: number; maxEvents: number },
+  limits: SessionTranscriptContextSelection,
 ): Extract<PreparedSessionTranscriptHydration, { kind: "bounded" }> {
   const version = { ...state.hot.transcript.version };
-  const maxBytes = normalizeVisibleMessageLimit(
-    limits.maxBytes,
-    DEFAULT_VISIBLE_MESSAGE_MAX_BYTES,
-    MAX_VISIBLE_MESSAGE_MAX_BYTES,
-    "maxBytes",
-  );
-  const maxEvents = normalizeVisibleMessageLimit(
-    limits.maxEvents,
-    DEFAULT_VISIBLE_MESSAGE_MAX_MESSAGES,
-    MAX_VISIBLE_MESSAGE_MAX_MESSAGES,
-    "maxEvents",
-  );
+  const boundedLimits = normalizeBoundedContextLimits(limits);
   const navigation = scanSessionTranscriptTree(state.events.map((row) => row.event));
   const active = selectSessionTranscriptTreePathNodes(navigation, navigation.leafId)
     .filter((node) => shouldProjectActiveEvent(node.entry))
@@ -55,28 +45,48 @@ export function readSessionActorBoundedHistory(
     });
   const header = state.events.find((row) => isRecord(row.event) && row.event.type === "session");
   const headerBytes = header ? header.serializedBytes : 0;
-  const retained = new Set(
-    state.hot.transcript.modelContext.kind === "resident"
-      ? state.hot.transcript.modelContext.entries.map((entry) => entry.rawSeq)
-      : [],
-  );
-  const eligible = active.filter(
-    (row) => transcriptEventContextEligibility(row.event) === 1 || retained.has(row.rawSeq),
-  );
-  const selection = selectBoundedContextRows(eligible.toReversed(), headerBytes, {
-    maxBytes,
-    maxEvents,
-  });
-  const { selectedRows } = selection;
-  let { serializedBytes, truncated } = selection;
   const boundaries = active.filter(
     ({ event }) => isRecord(event) && (event.type === "reset" || event.type === "compaction"),
   );
   const boundary = boundaries.at(-1);
+  const boundaryEvent = !boundedLimits && boundary?.event;
+  const firstKept = isRecord(boundaryEvent)
+    ? active.find((row) => row.node.id === boundaryEvent.firstKeptEntryId)
+    : undefined;
+  const contextStart =
+    firstKept && boundary && firstKept.activePosition < boundary.activePosition
+      ? firstKept.activePosition
+      : (boundary?.activePosition ?? 0);
+  const resetKept =
+    boundary && isRecord(boundaryEvent) && boundaryEvent.type === "reset"
+      ? new Set<unknown>(
+          selectResetKeptEntries(
+            active
+              .slice(contextStart, boundary.activePosition)
+              .flatMap(({ event }) => (isIndexedSessionEntry(event) ? [event] : [])),
+          ),
+        )
+      : undefined;
+  const retained = new Set(
+    boundedLimits && state.hot.transcript.modelContext.kind === "resident"
+      ? state.hot.transcript.modelContext.entries.map((entry) => entry.rawSeq)
+      : [],
+  );
+  const eligible = active.filter((row) => {
+    if (!boundedLimits && boundary && row.activePosition < boundary.activePosition) {
+      return resetKept
+        ? resetKept.has(row.event)
+        : row.activePosition >= contextStart && transcriptEventContextEligibility(row.event) === 1;
+    }
+    return transcriptEventContextEligibility(row.event) === 1 || retained.has(row.rawSeq);
+  });
+  const selection = selectBoundedContextRows(eligible.toReversed(), headerBytes, boundedLimits);
+  const { selectedRows } = selection;
+  let { serializedBytes, truncated } = selection;
   const rows = selectedRows.toSorted((left, right) => left.rawSeq - right.rawSeq);
   let injected: typeof boundary;
   if (boundary && !selectedRows.includes(boundary)) {
-    if (serializedBytes + boundary.serialized_bytes <= maxBytes) {
+    if (!boundedLimits || serializedBytes + boundary.serialized_bytes <= boundedLimits.maxBytes) {
       injected = boundary;
       rows.unshift(boundary);
       serializedBytes += boundary.serialized_bytes;

@@ -12,24 +12,13 @@ import {
   readWorkerPlacementIdentity,
 } from "./placement-projector.js";
 import type { WorkerSessionPlacementRecord } from "./placement-store.js";
+import { localPlacement } from "./placement-suite.test-support.js";
 
 const BUNDLE_HASH = "a".repeat(64);
 
 const RECORD_BASE = {
-  sessionId: "session-1",
-  agentId: "main",
-  sessionKey: "agent:main:session-1",
-  executionMode: "worker-turn" as const,
+  ...localPlacement(),
   generation: 4,
-  workspaceBaseManifestRef: null,
-  remoteWorkspaceDir: null,
-  workerBundleHash: null,
-  lastTranscriptAckCursor: null,
-  lastLiveEventAckCursor: null,
-  recoveryError: null,
-  terminalReason: null,
-  terminalAtMs: null,
-  turnClaim: null,
   createdAtMs: 100,
   updatedAtMs: 200,
   stateChangedAtMs: 150,
@@ -88,6 +77,10 @@ const PROJECTED_TIMING = {
   updatedAtMs: 200,
   stateChangedAtMs: 150,
 };
+
+function projectReconciliation(record: WorkerSessionPlacementRecord, enabled = true) {
+  return projectWorkerSessionPlacement(record, undefined, undefined, undefined, undefined, enabled);
+}
 
 describe("worker placement projection", () => {
   it("limits inference metadata to the exact active worker-turn binding", () => {
@@ -269,14 +262,7 @@ describe("worker placement projection", () => {
       expect(projectWorkerSessionPlacement(placement)).not.toHaveProperty(
         "workspaceResultReconciling",
       );
-      const projected = projectWorkerSessionPlacement(
-        placement,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        true,
-      );
+      const projected = projectReconciliation(placement);
       expect(projected).toMatchObject({ workspaceResultReconciling: true });
       expect(Value.Check(SessionPlacementSchema, projected)).toBe(true);
     },
@@ -288,9 +274,7 @@ describe("worker placement projection", () => {
       state: "reconciling",
     } satisfies WorkerSessionPlacementRecord;
 
-    expect(
-      projectWorkerSessionPlacement(placement, undefined, undefined, undefined, undefined, true),
-    ).not.toHaveProperty("workspaceResultReconciling");
+    expect(projectReconciliation(placement)).not.toHaveProperty("workspaceResultReconciling");
   });
 
   it("projects device availability from the exact active environment and current runner proof", () => {

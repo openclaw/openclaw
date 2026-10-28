@@ -60,25 +60,25 @@ vi.mock("../../media-understanding/apply.runtime.js", () => ({
 }));
 registerGetReplyRuntimeOverrides(mocks);
 
-let getReplyFromConfig: typeof import("./get-reply.js").getReplyFromConfig;
-let defaultModel: typeof import("./directive-handling.defaults.js").resolveDefaultModel;
-let runReply: typeof import("./get-reply-run.js").runPreparedReply;
-let stageMedia: typeof import("./stage-sandbox-media.js").stageSandboxMedia;
-
-async function loadGetReplyRuntimeForTest() {
-  ({ getReplyFromConfig } = await loadGetReplyModuleForTest({ cacheKey: import.meta.url }));
-  ({ resolveDefaultModel: defaultModel } = await import("./directive-handling.defaults.js"));
-  ({ runPreparedReply: runReply } = await import("./get-reply-run.js"));
-  ({ stageSandboxMedia: stageMedia } = await import("./stage-sandbox-media.js"));
-  const scope = await import("../../agents/agent-scope.js");
-  const actualScope = await vi.importActual<typeof scope>("../../agents/agent-scope.js");
-  vi.mocked(scope.resolveSessionAgentId).mockImplementation(actualScope.resolveSessionAgentId);
-}
+const { getReplyFromConfig } = await loadGetReplyModuleForTest({ cacheKey: import.meta.url });
+const { resolveDefaultModel: defaultModel } = await import("./directive-handling.defaults.js");
+const { runPreparedReply: runReply } = await import("./get-reply-run.js");
+const { stageSandboxMedia: stageMedia } = await import("./stage-sandbox-media.js");
+const scope = await import("../../agents/agent-scope.js");
+const actualScope = await vi.importActual<typeof scope>("../../agents/agent-scope.js");
+const actualHooks = await vi.importActual<typeof import("../../hooks/internal-hooks.js")>(
+  "../../hooks/internal-hooks.js",
+);
 
 const model = { provider: "anthropic", model: "claude-opus-4-6" };
 const sessionAndDirectives = [mocks.initSessionState, mocks.resolveReplyDirectives];
 const hooks = [mocks.createInternalHookEvent, mocks.triggerInternalHook];
 const emptyAliasIndex = () => ({ byAlias: new Map(), byKey: new Map() });
+const defaultModelFacts = () => ({
+  defaultProvider: "openai",
+  defaultModel: "gpt-4o-mini",
+  aliasIndex: emptyAliasIndex(),
+});
 const bodyFields = (body: string) => ({
   Body: body,
   BodyForAgent: body,
@@ -133,13 +133,11 @@ function buildTextCtx(body: string, overrides: Partial<MsgContext> = {}): MsgCon
 }
 
 async function resetMocks() {
-  await loadGetReplyRuntimeForTest();
+  vi.mocked(scope.resolveSessionAgentId).mockImplementation(actualScope.resolveSessionAgentId);
   delete process.env.OPENCLAW_TEST_FAST;
-  Object.values(mocks).forEach((mock) => mock.mockReset());
-  vi.mocked(defaultModel).mockReset();
-  vi.mocked(runReply).mockReset();
-  vi.mocked(stageMedia).mockReset();
-  vi.mocked(logVerbose).mockReset();
+  for (const mock of [...Object.values(mocks), defaultModel, runReply, stageMedia, logVerbose]) {
+    vi.mocked(mock).mockReset();
+  }
 
   mocks.applyMediaUnderstanding.mockImplementation(async ({ ctx }) => {
     ctx.Transcript = "voice transcript";
@@ -147,16 +145,7 @@ async function resetMocks() {
     ctx.BodyForAgent = "[Audio]\nTranscript:\nvoice transcript";
   });
   mocks.applyLinkUnderstanding.mockResolvedValue(undefined);
-  mocks.createInternalHookEvent.mockImplementation(
-    (type: string, action: string, sessionKey: string, context: Record<string, unknown>) => ({
-      type,
-      action,
-      sessionKey,
-      context,
-      timestamp: new Date(),
-      messages: [],
-    }),
-  );
+  mocks.createInternalHookEvent.mockImplementation(actualHooks.createInternalHookEvent);
   mocks.triggerInternalHook.mockResolvedValue(undefined);
   mocks.handleInlineActions.mockImplementation(async (...args: unknown[]) => {
     const params = args[0] as {
@@ -172,11 +161,7 @@ async function resetMocks() {
     };
   });
   mocks.resolveReplyDirectives.mockResolvedValue({ kind: "reply", reply: { text: "ok" } });
-  vi.mocked(defaultModel).mockReturnValue({
-    defaultProvider: "openai",
-    defaultModel: "gpt-4o-mini",
-    aliasIndex: emptyAliasIndex(),
-  });
+  vi.mocked(defaultModel).mockReturnValue(defaultModelFacts());
   vi.mocked(runReply).mockResolvedValue({ text: "ok" });
   vi.mocked(stageMedia).mockResolvedValue({ staged: new Map() });
   mocks.resolveReplySessionPreprocessingState.mockReturnValue({
@@ -187,7 +172,6 @@ async function resetMocks() {
   mocks.initSessionState.mockResolvedValue(
     createGetReplySessionState({
       sessionKey: "agent:main:telegram:-100123",
-      sessionScope: "per-chat",
       isGroup: true,
     }),
   );
@@ -524,15 +508,13 @@ describe("getReplyFromConfig message hooks", () => {
     const catalog = createDeferred<[]>();
     const entered = createDeferred();
     const controller = new AbortController();
-    const directives = createGetReplyContinueDirectivesResult({
+    const directives = continueReply(buildTextCtx("/status"), {
       body: "/status",
       abortKey: "agent:main:telegram:-100123",
       from: "telegram:user:42",
       to: "telegram:-100123",
       senderId: "42",
-      commandSource: "message",
       senderIsOwner: true,
-      resetHookTriggered: false,
     });
     directives.result.inlineStatusRequested = true;
     directives.result.modelState.resolveThinkingCatalog = async () => {
@@ -541,11 +523,7 @@ describe("getReplyFromConfig message hooks", () => {
     };
     mocks.resolveReplyDirectives.mockResolvedValueOnce(directives);
 
-    const pending = getReplyFromConfig(
-      buildTextCtx("/status"),
-      { abortSignal: controller.signal },
-      withFastReplyConfig({}),
-    );
+    const pending = reply(buildTextCtx("/status"), {}, { abortSignal: controller.signal });
     await entered.promise;
     const outcome = pending.then(
       () => "completed",
@@ -584,16 +562,10 @@ describe("getReplyFromConfig message hooks", () => {
 
 describe("getReplyFromConfig media staging", () => {
   beforeAll(async () => {
-    await loadGetReplyRuntimeForTest();
-    const scope = await import("../../agents/agent-scope.js");
     vi.mocked(scope.resolveSessionAgentId).mockImplementation(() => "main");
     const globals = await vi.importActual<typeof import("../../globals.js")>("../../globals.js");
     vi.mocked(logVerbose).mockImplementation(globals.logVerbose);
-    vi.mocked(defaultModel).mockReturnValue({
-      defaultProvider: "openai",
-      defaultModel: "gpt-4o-mini",
-      aliasIndex: emptyAliasIndex(),
-    });
+    vi.mocked(defaultModel).mockReturnValue(defaultModelFacts());
   });
 
   function prepareMediaReply(
@@ -603,9 +575,7 @@ describe("getReplyFromConfig media staging", () => {
   ) {
     Object.values(mocks).forEach((mock) => mock.mockReset());
     vi.mocked(stageMedia).mockReset().mockResolvedValue({ staged: new Map() });
-    vi.mocked(mocks.applyMediaUnderstanding)
-      .mockReset()
-      .mockResolvedValue({ extractedFileImages: [] });
+    mocks.applyMediaUnderstanding.mockResolvedValue({ extractedFileImages: [] });
     vi.mocked(runReply).mockReset().mockResolvedValue({ text: "ready" });
     mocks.initSessionState.mockResolvedValue(
       createGetReplySessionState({
@@ -627,9 +597,6 @@ describe("getReplyFromConfig media staging", () => {
     mocks.resolveReplyDirectives.mockResolvedValue(
       continueReply(ctx, {
         body: "inspect this attachment",
-        abortKey: ctx.SessionKey ?? "agent:main:telegram:-100123",
-        from: ctx.From ?? "telegram:user:42",
-        to: ctx.To ?? "telegram:-100123",
         senderId: sessionEntry ? "owner" : "42",
         senderIsOwner: Boolean(sessionEntry),
       }),

@@ -1,5 +1,5 @@
 import type { AgentEvent } from "../../packages/gateway-protocol/src/schema/agent.js";
-import type { AgentRunContext } from "./agent-run-registry.types.js";
+import type { AgentRunContext, AgentRunEventState } from "./agent-run-registry.types.js";
 import type { captureAgentRunTerminalPersistence } from "./agent-run-terminal-writes.js";
 
 /** Payload for approval requests and their later resolution events. */
@@ -60,6 +60,8 @@ export type AgentAssistantSourceReceipt = {
   itemId?: string;
   /** Undefined until commit; null is durable without an available transcript position. */
   committedMessageSeq?: number | null;
+  /** Exact transcript occurrence assigned by the persistence owner after commit. */
+  committedMessageId?: string;
 };
 
 export type AgentAssistantProjection = {
@@ -81,7 +83,35 @@ export type AgentEventRuntimePayload = AgentEventPayload & {
   readonly mainSessionRestartRecovery?: true;
   readonly projectSessionLifecycle?: boolean;
   readonly projectSessionMessages?: boolean;
-  readonly isHeartbeat?: boolean;
   readonly verboseLevel?: AgentRunContext["verboseLevel"];
   readonly registeredAt?: number;
+};
+
+export type AgentEventListener = (
+  evt: AgentEventRuntimePayload,
+  isDeliveryCurrent?: () => boolean,
+) => void;
+export type CaptureAgentEventDelivery = (evt: AgentEventRuntimePayload) => () => boolean;
+export type AgentEventRegistration = {
+  readonly listener: AgentEventListener;
+  readonly id: number;
+  readonly captureDelivery?: CaptureAgentEventDelivery;
+  active: boolean;
+};
+type AgentEventListeners = { registrations: readonly AgentEventRegistration[] };
+
+export type AgentEventState = {
+  runs: Map<string, AgentRunEventState>;
+  assistantSources?: WeakMap<object, AgentAssistantSourceReceipt>;
+  listeners: AgentEventListeners;
+  runListeners: Map<string, AgentEventListeners>;
+  nextListenerId: number;
+  auditListeners: Set<(evt: AgentEventPayload) => void>;
+  lifecycleRotationHandlers?: Map<string, (lifecycleGeneration: string) => void>;
+};
+
+export type AgentTerminalEventData = Record<string, unknown> & { phase: "end" | "error" };
+export type AgentTerminalEventReservation = {
+  publish: (data: AgentTerminalEventData) => void;
+  release: () => void;
 };

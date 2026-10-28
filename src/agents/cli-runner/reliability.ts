@@ -69,7 +69,6 @@ export function resolveCliRunTimeoutOverrideMs(params: {
   const hasConfiguredTimeout =
     params.lane !== AGENT_LANE_SUBAGENT &&
     configuredTimeoutSeconds !== undefined &&
-    Number.isFinite(configuredTimeoutSeconds) &&
     configuredTimeoutSeconds > 0;
   return hasConfiguredTimeout ? params.timeoutMs : undefined;
 }

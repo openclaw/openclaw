@@ -1,10 +1,7 @@
 import path from "node:path";
-import { type DatabaseSync, StatementSync } from "node:sqlite";
+import type { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it } from "vitest";
-import {
-  observeSqliteReadSql,
-  trackSqliteStatementExecutions,
-} from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { admitSqliteSchema, runSqliteReadOperationSync } from "../../infra/sqlite-schema-facts.js";
@@ -17,7 +14,6 @@ import { assertSupportedStateSchemaVersion } from "../../state/openclaw-state-db
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../../state/openclaw-state-schema.js";
 import {
   buildAcpDatabaseSessionKey,
-  deleteAcpSessionMetaRows,
   readPublishedAcpSessionRows,
   upsertAcpSessionMetaRow,
 } from "./session-meta-keys.js";
@@ -29,15 +25,11 @@ import {
 } from "./session-meta-read.worker.js";
 import { applyAcpSessionMutation, bindAcpSessionMeta } from "./session-meta-write.kernel.js";
 
-const databases: DatabaseSync[] = [];
-const restorers: Array<() => void> = [];
+let resources = new DisposableStack();
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(() => {
-    restorers.splice(0).forEach((restore) => restore());
-    closeRetainedOpenClawStateReadConnections();
-    for (const db of databases.splice(0).filter((database) => database.isOpen)) {
-      db.close();
-    }
+    resources.dispose();
+    resources = new DisposableStack();
     cleanup();
   }),
 );
@@ -61,13 +53,13 @@ function insert(db: DatabaseSync, name: string) {
     }),
   );
 }
-function expectName(row: unknown, name: string) {
+const expectName = (row: unknown, name: string) =>
   expect(row).toMatchObject({ runtime_session_name: name });
-}
 function fixture() {
   const pathname = path.join(tempDirs.make("openclaw-acp-read-cache-"), "state.sqlite");
   const writer = openNodeSqliteDatabase(pathname);
-  databases.push(writer);
+  resources.use(writer);
+  resources.defer(closeRetainedOpenClawStateReadConnections);
   writer.exec(`PRAGMA journal_mode=WAL; ${schema}
     CREATE TABLE config_machine_state (state_key TEXT PRIMARY KEY, value_json TEXT, updated_at_ms INTEGER);`);
   const readerLocation = [pathname, pathname, undefined, undefined, undefined, true] as const;
@@ -84,41 +76,28 @@ function fixture() {
   return { writer, pathname, read, withReader };
 }
 
-it("reuses admitted ACP rows and committed postimages without rereading metadata", () => {
-  const { writer, pathname, read } = fixture();
-  expect(read().rows).toEqual([null]);
-  const observation = observeSqliteReadSql(StatementSync.prototype);
-  restorers.push(observation.restore);
-  expect(read().rows).toEqual([null]);
-  insert(writer, "first");
-  expectName(readPublishedAcpSessionRows(pathname, command.entries)?.[0], "first");
-  const rows = read().rows;
-  expectName(rows[0], "first");
-  if (rows[0] && "runtime_session_name" in rows[0]) {
-    rows[0].runtime_session_name = "caller-mutated";
-  }
-  expectName(read().rows[0], "first");
-  expect(
-    read({ ...command, entries: [{ keys: [key], entry: { sessionId: "successor" } }] }).rows,
-  ).toEqual([null]);
-  writer.prepare("INSERT INTO config_machine_state VALUES ('unrelated', '{}', 1)").run();
-  expectName(read().rows[0], "first");
-  insert(writer, "second");
-  expectName(read().rows[0], "second");
-  deleteAcpSessionMetaRows(writer, [key]);
-  expect(read().rows).toEqual([null]);
-  expect(readPublishedAcpSessionRows(pathname, command.entries)).toEqual([null]);
-  expect(
-    observation.queries.filter((sql) =>
-      /^select\b.*(?:from|join) "acp_sessions"|data_version/isu.test(sql),
-    ),
-  ).toEqual([]);
+it("matches missing rows and metadata beyond the first admission batch", () => {
+  const { writer, read } = fixture();
+  insert(writer, "last-cohort");
+  const entries = Array.from({ length: 501 }, (_, index) => ({
+    keys: [index === 500 ? key : `missing-${index}`],
+    entry: command.entries[0]!.entry,
+  }));
+  const result = read({ type: "acpSessions.metadata", entries });
+  expect(result.rows.slice(0, 500)).toEqual(Array.from({ length: 500 }, () => null));
+  expectName(result.rows[500], "last-cohort");
 });
 
-it("keeps a pinned ACP snapshot and refreshes after it closes", () => {
+it("invalidates local writes and retired readers while preserving a pinned ACP snapshot", () => {
   const { writer, pathname, read, withReader } = fixture();
   insert(writer, "before");
-  expectName(read().rows[0], "before");
+  admitSqliteSchema(writer);
+  const localRead = () =>
+    runSqliteReadOperationSync(writer, () => readAcpSessionCommand(writer, command));
+  expectName(localRead().rows[0], "before");
+  insert(writer, "local");
+  expectName(localRead().rows[0], "local");
+  expectName(read().rows[0], "local");
   withReader(({ db }) => {
     db.exec("BEGIN");
     const readPinned = () => {
@@ -129,34 +108,22 @@ it("keeps a pinned ACP snapshot and refreshes after it closes", () => {
       });
     };
     try {
-      expectName(readPinned().rows[0], "before");
+      expectName(readPinned().rows[0], "local");
       insert(writer, "after");
-      expectName(readPinned().rows[0], "before");
+      expectName(readPinned().rows[0], "local");
       expectName(readPublishedAcpSessionRows(pathname, command.entries)?.[0], "after");
     } finally {
       db.exec("COMMIT");
     }
   });
   expectName(read().rows[0], "after");
-});
-
-it("invalidates admitted ACP rows after local native writes and reader retirement", () => {
-  const { writer, read } = fixture();
-  insert(writer, "initial");
-  admitSqliteSchema(writer);
-  const localRead = () =>
-    runSqliteReadOperationSync(writer, () => readAcpSessionCommand(writer, command));
-  expectName(localRead().rows[0], "initial");
-  insert(writer, "local");
-  expectName(localRead().rows[0], "local");
-  expectName(read().rows[0], "local");
   closeRetainedOpenClawStateReadConnections();
   insert(writer, "reopened");
   expectName(read().rows[0], "reopened");
 });
 
 it("publishes decoded set and clear postimages without rereading metadata after either write", () => {
-  const { writer, read } = fixture();
+  const { writer, pathname, read } = fixture();
   const input = {
     agentId: "main",
     storageSessionKey: "agent:main:acp:cache",
@@ -178,22 +145,20 @@ it("publishes decoded set and clear postimages without rereading metadata after 
     runtimeOptions: { model: "fixture-model" },
     lastError: "synthetic error",
   });
-  const counter = trackSqliteStatementExecutions(writer, ["read", "write"], (sql) => {
-    if (!/\bacp_sessions\b/iu.test(sql)) {
-      return null;
-    }
-    return /^select\b/iu.test(sql) ? "read" : "write";
-  });
-  restorers.push(counter.restore);
+  const counter = trackSqliteStatementExecutions(writer, ["read", "write"], (sql) =>
+    /\bacp_sessions\b/iu.test(sql) ? (/^select\b/iu.test(sql) ? "read" : "write") : null,
+  );
+  resources.defer(counter.restore);
   const mutate = (decision: Parameters<typeof applyAcpSessionMutation>[1]["decision"]) =>
     applyAcpSessionMutation(writer, { ...input, decision });
   expect(mutate({ kind: "set", meta })).toEqual({ ...result, acp: meta });
-  expect(read().rows[0]).toMatchObject({
-    runtime_session_name: "returned-row",
-    runtime_options_json: JSON.stringify(meta.runtimeOptions),
-    last_error: meta.lastError,
-  });
+  Object.assign(read().rows[0]!, { runtime_session_name: "caller-mutated" });
+  expectName(read().rows[0], "returned-row");
+  expect(
+    read({ ...command, entries: [{ keys: [key], entry: { sessionId: "successor" } }] }).rows,
+  ).toEqual([null]);
   expect(mutate({ kind: "clear" })).toEqual({ ...result, acp: null });
   expect(counter.counts).toEqual({ read: 0, write: 2 });
   expect(read().rows).toEqual([null]);
+  expect(readPublishedAcpSessionRows(pathname, command.entries)).toEqual([null]);
 });

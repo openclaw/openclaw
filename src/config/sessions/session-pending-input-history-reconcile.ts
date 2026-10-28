@@ -14,11 +14,11 @@ export function interruptPendingInputHistoryInDatabase(
   input: { sessionKey: string; sessionId: string; ids: string[] },
   admit: (stage: "commit", publication: PendingInputHistoryReceipt) => void,
   publish: (receipt: PendingInputHistoryReceipt) => void,
-): PendingInputHistoryReceipt {
+): void {
   if (input.ids.length > 20) {
     throw new Error("Pending input reconciliation exceeds its page bound");
   }
-  return runOpenClawAgentWriteTransaction(
+  runOpenClawAgentWriteTransaction(
     (current) => {
       if (current.db !== database.db) {
         throw new Error("Pending input history lost its database owner");
@@ -32,7 +32,9 @@ export function interruptPendingInputHistoryInDatabase(
           .where("session_key", "=", input.sessionKey)
           .where("session_id", "=", input.sessionId)
           .where("input_id", "in", input.ids)
-          .where("state", "=", "queued")
+          // Another history reader may have reconciled this snapshot first.
+          // Return its still-interrupted rows too, never stale queued facts.
+          .where("state", "in", ["queued", "interrupted"])
           .where("consumed_event_id", "is", null)
           .returning("input_id"),
       ).rows;
@@ -42,7 +44,6 @@ export function interruptPendingInputHistoryInDatabase(
       };
       publish(receipt);
       admit("commit", receipt);
-      return receipt;
     },
     options,
     { operationLabel: "session.pending-input.interrupt-stale" },

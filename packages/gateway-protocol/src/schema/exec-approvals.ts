@@ -226,6 +226,56 @@ const ExecApprovalPolicySnapshotSchema = closedObject({
   ),
 });
 
+const NativeExecApprovalCommitFields = {
+  agentId: NonEmptyString,
+  command: Type.String(),
+  uses: Type.Array(
+    closedObject({
+      match: ExecApprovalsAllowlistEntrySchema,
+      resolvedPath: Type.Optional(Type.String()),
+    }),
+    { maxItems: 256 },
+  ),
+  grants: Type.Array(
+    closedObject({
+      pattern: NonEmptyString,
+      argPattern: Type.Optional(Type.String()),
+      resolvedPath: Type.Optional(Type.String()),
+    }),
+    { maxItems: 256 },
+  ),
+  authorization: closedObject({
+    source: stringLiteralUnion([
+      "current-policy",
+      "ask-fallback",
+      "explicit-approval",
+      "auto-review",
+    ]),
+    security: ExecSecuritySchema,
+    ask: ExecAskSchema,
+    allowlistSatisfied: Type.Boolean(),
+    policySnapshot: Type.Optional(ExecApprovalPolicySnapshotSchema),
+    requireAutoAllowSkills: Type.Optional(Type.Boolean()),
+  }),
+};
+
+/** Final native decision; the caller retains the live native request through spawn. */
+export const ExecApprovalsNativeCommitParamsSchema = closedObject({
+  ...NativeExecApprovalCommitFields,
+  expectedOwnerId: NonEmptyString,
+});
+
+/** Private stdin transport; policy and authorization data never appear in argv. */
+export const ExecApprovalsNativeRequestSchema = Type.Union([
+  closedObject({ operation: Type.Literal("get") }),
+  closedObject({
+    operation: Type.Literal("set"),
+    file: ExecApprovalsFileSchema,
+    baseHash: NonEmptyString,
+  }),
+  closedObject({ operation: Type.Literal("commit"), ...NativeExecApprovalCommitFields }),
+]);
+
 /** Pending command execution approval request shown to reviewers. */
 export const ExecApprovalRequestParamsSchema = closedObject({
   id: Type.Optional(NonEmptyString),
@@ -354,6 +404,8 @@ export const ExecApprovalGrantsRevokeResultSchema = closedObject({
 // public plugin-sdk declaration graph never pulls in the ProtocolSchemas registry.
 export type ExecApprovalsGetParams = Static<typeof ExecApprovalsGetParamsSchema>;
 export type ExecApprovalsSetParams = Static<typeof ExecApprovalsSetParamsSchema>;
+export type ExecApprovalsNativeCommitParams = Static<typeof ExecApprovalsNativeCommitParamsSchema>;
+export type ExecApprovalsNativeRequest = Static<typeof ExecApprovalsNativeRequestSchema>;
 export type ExecApprovalsNodeGetParams = Static<typeof ExecApprovalsNodeGetParamsSchema>;
 export type ExecApprovalsNodeSnapshot = Static<typeof ExecApprovalsNodeSnapshotSchema>;
 export type ExecApprovalsNodeSetParams = Static<typeof ExecApprovalsNodeSetParamsSchema>;

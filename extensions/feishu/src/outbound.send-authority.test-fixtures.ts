@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { ServerResponse } from "node:http";
 import path from "node:path";
+import { buffer as consumeBuffer } from "node:stream/consumers";
 import * as Lark from "@larksuiteoapi/node-sdk";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
@@ -38,14 +39,11 @@ export async function withFeishuTransport(
   await withServer(
     (request, response) => {
       void (async () => {
-        const chunks: Buffer[] = [];
-        for await (const chunk of request) {
-          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-        }
+        const bodyBuffer = await consumeBuffer(request);
         const record: WireRequest = {
           method: request.method ?? "",
           path: new URL(request.url ?? "/", "http://127.0.0.1").pathname,
-          body: Buffer.concat(chunks).toString("utf8"),
+          body: bodyBuffer.toString("utf8"),
         };
         requests.push(record);
         if (await handleRequest(record, response)) {

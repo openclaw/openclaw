@@ -6,7 +6,7 @@ import { withEnvAsync } from "../test-utils/env.js";
 import * as authProfileStoreRuntime from "./auth-profiles/store-runtime.js";
 import { modelDefinition, providerConfig } from "./model-auth.fixtures.test-support.js";
 import { planModelsJsonForTest } from "./models-config.plan.test-support.js";
-import * as modelsConfigProviders from "./models-config.providers.js";
+import * as modelsConfigProviders from "./models-config.providers.implicit.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
 import { AuthStorage, ModelRegistry } from "./sessions/index.js";
 
@@ -24,12 +24,9 @@ vi.mock("./provider-auth-aliases.js", () => ({
   resolveProviderIdForAuth: (providerId: string) => providerId.trim().toLowerCase(),
 }));
 // mock-isolation: Model-config planning uses supplied catalog and environment policies without external credential discovery.
-vi.mock("../plugins/provider-external-auth-core.js", () => ({
-  createProviderExternalAuthResolver: () => ({
-    resolveExternalAuthProfilesWithPlugins: () => [],
-    withPreparedExternalAuthProfiles: async <T>(_params: unknown, run: () => Promise<T>) => run(),
-  }),
-}));
+vi.mock("../plugins/provider-external-auth-core.js", async () =>
+  (await import("../plugins/provider-external-auth.test-support.js")).createExternalAuthMock(),
+);
 vi.mock("../plugins/provider-runtime.js", () => ({
   normalizeProviderConfigWithPlugin: providerRuntimeMocks.normalizeProviderConfigWithPlugin,
   resolveProviderConfigApiKeyWithPlugin: providerRuntimeMocks.resolveProviderConfigApiKeyWithPlugin,

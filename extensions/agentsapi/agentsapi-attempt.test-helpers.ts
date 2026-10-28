@@ -1,5 +1,13 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import type { AgentHarnessAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { AuthStorage, ModelRegistry } from "openclaw/plugin-sdk/agent-sessions";
+import {
+  createWorkspaceAttachmentPreparer,
+  registerAgentWorkspaceAccess,
+  type AgentWorkspaceAccess,
+} from "openclaw/plugin-sdk/agent-workspace-runtime";
+import { onTestFinished, vi } from "vitest";
 import { createModel } from "./agentsapi.test-support.js";
 
 export function createAttemptParams({
@@ -37,5 +45,57 @@ export function createAttemptParams({
       ...hostCapabilities,
     },
     ...overrides,
+  };
+}
+
+export async function createWorkspaceAttachmentFixture(directory: string) {
+  const gatewayRoot = path.join(directory, "gateway");
+  const remoteRoot = path.join(directory, "executor");
+  vi.stubEnv("OPENCLAW_STATE_DIR", path.join(directory, "state"));
+  await fs.mkdir(gatewayRoot);
+  await fs.mkdir(remoteRoot);
+  const bridge = {
+    readFile: ({ filePath }) => fs.readFile(path.join(remoteRoot, filePath)),
+    writeFile: async () => {
+      throw new Error("Attachment staging must use exclusive creation");
+    },
+    async createFileExclusive({ filePath, data, mkdir }) {
+      const destination = path.join(remoteRoot, filePath);
+      if (mkdir) {
+        await fs.mkdir(path.dirname(destination), { recursive: true, mode: 0o700 });
+      }
+      const exists = await fs
+        .writeFile(destination, data, { flag: "wx", mode: 0o600 })
+        .catch(fsFallback("EEXIST", true));
+      return exists ? "exists" : "created";
+    },
+    async stat({ filePath }) {
+      const stat = await fs.stat(path.join(remoteRoot, filePath)).catch(fsFallback("ENOENT", null));
+      return (
+        stat && {
+          type: stat.isFile() ? "file" : stat.isDirectory() ? "directory" : "other",
+          size: stat.size,
+          mtimeMs: stat.mtimeMs,
+        }
+      );
+    },
+  } satisfies AgentWorkspaceAccess["bridge"];
+  const release = registerAgentWorkspaceAccess(gatewayRoot, {
+    bridge,
+    prepareTurnAttachments: createWorkspaceAttachmentPreparer({
+      remoteRoot,
+      createBridge: () => bridge,
+    }),
+  });
+  onTestFinished(release);
+  return { gatewayRoot, remoteRoot, release };
+}
+
+function fsFallback<T>(code: string, fallback: T) {
+  return (error: NodeJS.ErrnoException) => {
+    if (error.code !== code) {
+      throw error;
+    }
+    return fallback;
   };
 }

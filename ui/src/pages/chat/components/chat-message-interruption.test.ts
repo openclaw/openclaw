@@ -53,7 +53,6 @@ describe("interrupted assistant replies", () => {
       chatLoading: false,
       chatHistoryPagination: { hasMore: false },
       chatMessages: [],
-      chatThinkingLevel: null,
       chatVerboseLevel: null,
       chatSending: false,
       chatMessage: "",

@@ -1,62 +1,31 @@
-import { createServer } from "node:http";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
-import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
+import { closeHttpServer } from "../../test/helpers/gateway-integration-fixtures.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { recoverRestartAbortedMainSessions } from "../agents/main-session-recovery/main-session-restart-recovery.js";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
-import { maybeWakeRequesterAfterAllChildrenSettled } from "../agents/subagents/announce/subagent-announce.requester-settle-wake.js";
-import {
-  mutateRequesterCompletionBatch,
-  SubagentCompletionSourceChangedError,
-} from "../agents/subagents/completion/subagent-completion-admission.store.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
-import {
-  mutateSubagentRuns,
-  restoreSubagentRunsFromDisk,
-} from "../agents/subagents/registry/subagent-registry-persistence.js";
-import { loadSubagentRegistryFromSqlite } from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
+import { mutateSubagentRuns } from "../agents/subagents/registry/subagent-registry-persistence.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
-import { isSameSubagentRun } from "../agents/subagents/registry/subagent-run-generation.js";
 import {
   appendTranscriptMessage,
   loadSessionEntryReadOnly,
   patchSessionEntryCore,
-  persistSessionTranscriptTurn,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { resolvePhysicalSessionStorePath } from "../config/sessions/session-store-path.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { getRpcSource } from "../sessions/session-controller.rpc-sources.js";
-import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
-import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { observeGatewayRunExecution } from "./agent-command.test-helpers.js";
-import type { GatewayRequestContext } from "./server-methods/types.js";
 import { getGatewayRecoveryRuntime } from "./server-recovery-runtime-context.js";
+import { createStartupRecoveryFixture } from "./server.startup-recovery.test-support.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
-import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
 it(
   "admits startup resends as mailbox inputs ahead of same-session WebChat and keeps child context out of a reset parent",
   { timeout: 90_000 },
   async () => {
-    const token = "startup-recovery-webchat-token";
-    const state = await createOpenClawTestState({
-      label: "startup-recovery-webchat",
-      env: {
-        OPENCLAW_GATEWAY_TOKEN: token,
-        OPENCLAW_SKIP_CHANNELS: "1",
-        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-        OPENCLAW_SKIP_CRON: "1",
-        OPENCLAW_SKIP_CANVAS_HOST: "1",
-        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-        OPENCLAW_SKIP_PROVIDERS: "1",
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      },
-    });
     const sessionKey = "agent:main:main";
     const sessionId = "startup-recovery-session";
     const recoveryMessage = "Resume this interrupted task after restart.";
@@ -68,178 +37,129 @@ it(
     const secondRecoveryMessage = "Finish the second interrupted job.";
     const originalChildMarker = "recovery-child-before-reset";
     const currentChildMarker = "recovery-child-after-reset";
-    const batchChildMarker = "saved-batch-child";
     const afterResetRequest = createDeferred<string>();
-    const readPromptFrames = (payload: string) => {
+    const readPrompt = (payload: string, ...markers: string[]) => {
       const request: unknown = JSON.parse(payload);
       const input = isRecord(request) && Array.isArray(request.input) ? request.input : [];
-      return input.flatMap((message: unknown) => {
+      const prompts = input.flatMap((message: unknown) => {
         const content = isRecord(message) && Array.isArray(message.content) ? message.content : [];
-        return content.flatMap((part: unknown) =>
-          isRecord(part) && typeof part.text === "string" ? [part.text] : [],
-        );
+        return content.flatMap((part: unknown) => {
+          const text = isRecord(part) && typeof part.text === "string" ? part.text : undefined;
+          return text && markers.every((marker) => text.includes(marker)) ? [text] : [];
+        });
       });
-    };
-    const readRecoveryPrompt = (payload: string) => {
-      const prompts = readPromptFrames(payload).filter(
-        (text) =>
-          text.includes("Your previous turn was interrupted by a gateway restart") &&
-          text.includes("Unfinished child sessions to reconcile:"),
-      );
       expect(prompts).toHaveLength(1);
       return prompts[0] ?? "";
     };
-    const readBatchPrompt = (payload: string) => {
-      const prompts = readPromptFrames(payload).filter((text) =>
-        text.includes("[Subagent Context] Every subagent in this batch has now settled"),
+    const readRecoveryPrompt = (payload: string) =>
+      readPrompt(
+        payload,
+        "Your previous turn was interrupted by a gateway restart",
+        "Unfinished child sessions to reconcile:",
       );
-      expect(prompts).toHaveLength(1);
-      return prompts[0] ?? "";
-    };
     const recoveryGate = createDeferred();
     const secondRecoveryGate = createDeferred();
     const targetRequests: string[] = [];
     const secondRequests: string[] = [];
-    const batchRequests: string[] = [];
     let holdRecovery = false;
-    let providerRequestCount = 0;
-    const providerServer = createServer((request, response) => {
-      void (async () => {
-        const chunks: Buffer[] = [];
-        for await (const chunk of request) {
-          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-        }
-        if (request.method !== "POST" || request.url !== "/v1/responses") {
-          response.writeHead(404).end();
-          return;
-        }
-        const body = Buffer.concat(chunks).toString("utf8");
-        const isTitleRequest = body.includes("Generate a concise session title");
-        if (!isTitleRequest && body.includes("Every subagent in this batch has now settled")) {
-          batchRequests.push(body);
-        }
+    const {
+      state,
+      provider: providerServer,
+      cfg,
+      token,
+      responseCount,
+    } = await createStartupRecoveryFixture(
+      "startup-recovery-webchat",
+      async (body) => {
         if (
-          !isTitleRequest &&
           [recoveryMessage, canceledMessage, survivorMessage, afterResetMessage].some((text) =>
             body.includes(text),
           )
         ) {
           targetRequests.push(body);
         }
-        if (!isTitleRequest && body.includes(secondRecoveryMessage)) {
+        if (body.includes(secondRecoveryMessage)) {
           secondRequests.push(body);
           await secondRecoveryGate.promise;
         }
-        if (!isTitleRequest && body.includes(afterResetMessage)) {
+        if (body.includes(afterResetMessage)) {
           afterResetRequest.resolve(body);
         }
-        if (holdRecovery && !isTitleRequest && body.includes(recoveryMessage)) {
+        if (holdRecovery && body.includes(recoveryMessage)) {
           holdRecovery = false;
           await recoveryGate.promise;
         }
-        providerRequestCount += 1;
-        writeOpenAiResponsesText(response, {
-          text: "WEBCHAT_OK",
-          messageId: `startup-recovery-${providerRequestCount}`,
-          responseId: `startup-recovery-response-${providerRequestCount}`,
-        });
-      })().catch((error: unknown) => response.writeHead(500).end(String(error)));
-    });
+      },
+      { maxConcurrent: 2, responseText: "WEBCHAT_OK" },
+    );
     let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
     let recovery: ReturnType<typeof recoverRestartAbortedMainSessions> | undefined;
     const startupRecoveryStop = new AbortController();
-    let gatewayContext: GatewayRequestContext | undefined;
     let requestExecution: Awaited<ReturnType<typeof observeGatewayRunExecution>> | undefined;
 
     try {
       const storePath = state.statePath("agents", "main", "sessions", "sessions.json");
-      await replaceSessionEntry(
-        { storePath, sessionKey },
-        { sessionId, updatedAt: Date.now() + 60_000, status: "done" },
-      );
-      await appendTranscriptMessage(
-        { agentId: "main", sessionId, sessionKey, storePath },
-        {
-          cwd: state.workspaceDir,
-          message: {
-            role: "user",
-            content: recoveryMessage,
-            idempotencyKey: "startup-recovery-source:user",
-          },
-        },
-      );
-      await replaceSessionEntry(
-        { storePath, sessionKey: secondSessionKey },
-        { sessionId: secondSessionId, updatedAt: Date.now() + 60_000, status: "done" },
-      );
-      await appendTranscriptMessage(
-        {
-          agentId: "main",
-          sessionId: secondSessionId,
-          sessionKey: secondSessionKey,
-          storePath,
-        },
-        {
-          cwd: state.workspaceDir,
-          message: {
-            role: "user",
-            content: secondRecoveryMessage,
-            idempotencyKey: "startup-recovery-second-source:user",
-          },
-        },
-      );
-      await new Promise<void>((resolve, reject) => {
-        providerServer.once("error", reject);
-        providerServer.listen(0, "127.0.0.1", resolve);
+      const scope = (key = sessionKey, id = sessionId) => ({
+        agentId: "main",
+        storePath,
+        sessionKey: key,
+        sessionId: id,
       });
-      const address = providerServer.address();
-      if (!address || typeof address === "string") {
-        throw new Error("startup recovery provider did not bind");
-      }
-      const provider = buildMockOpenAiResponsesProvider(
-        `http://127.0.0.1:${address.port}/v1`,
-        "gpt-startup-recovery-webchat",
-      );
-      const cfg = {
-        agents: {
-          defaults: {
-            workspace: state.workspaceDir,
-            skipBootstrap: true,
-            // Each recovered session uses its own controller and the shared execution capacity.
-            maxConcurrent: 2,
-            model: { primary: provider.modelRef },
-            models: {
-              [provider.modelRef]: { params: { transport: "sse", openaiWsWarmup: false } },
-            },
-          },
-          entries: { main: {} },
+      const readSession = (key = sessionKey) => loadSessionEntryReadOnly(scope(key));
+      const physicalStore = (key = sessionKey, path = storePath) =>
+        resolvePhysicalSessionStorePath({ agentId: "main", sessionKey: key, storePath: path });
+      const interrupted = (cycleId: string) => ({
+        status: "interrupted" as const,
+        abortedLastRun: true,
+        mainRestartRecovery: { cycleId, revision: 1, chargedAttempts: 0 },
+        updatedAt: Date.now() - 10_000,
+      });
+      const saveChild = (child: SubagentRunRecord) =>
+        mutateSubagentRuns([child.runId], () => ({
+          value: undefined,
+          postimages: new Map([[child.runId, child]]),
+        }));
+      const recoverySessions = [
+        {
+          key: sessionKey,
+          id: sessionId,
+          message: recoveryMessage,
+          source: "startup-recovery-source:user",
+          cycleId: "before-reset",
         },
-        messages: { queue: { mode: "followup", debounceMsByChannel: { webchat: 0 } } },
-        models: { mode: "replace", providers: { [provider.providerId]: provider.config } },
-        gateway: { auth: { mode: "token", token } },
-        plugins: { slots: { memory: "none" } },
-      } satisfies OpenClawConfig;
-      const kernelModule = await import("./server-kernel.js");
-      const createKernel = kernelModule.createGatewayKernel;
-      const captureKernel = vi
-        .spyOn(kernelModule, "createGatewayKernel")
-        .mockImplementation(async (...args) => {
-          const kernel = await createKernel(...args);
-          gatewayContext = kernel.gatewayRequestContext;
-          return kernel;
+        {
+          key: secondSessionKey,
+          id: secondSessionId,
+          message: secondRecoveryMessage,
+          source: "startup-recovery-second-source:user",
+          cycleId: "second-session",
+        },
+      ];
+      for (const { key, id, message, source } of recoverySessions) {
+        await replaceSessionEntry(scope(key, id), {
+          sessionId: id,
+          updatedAt: Date.now() + 60_000,
+          status: "done",
         });
-      try {
-        gateway = await startGatewayWithClient({
-          cfg,
-          configPath: state.configPath,
-          token,
-          clientDisplayName: "startup-recovery-webchat",
+        await appendTranscriptMessage(scope(key, id), {
+          cwd: state.workspaceDir,
+          message: { role: "user", content: message, idempotencyKey: source },
         });
-      } finally {
-        captureKernel.mockRestore();
       }
+      gateway = await startGatewayWithClient({
+        cfg,
+        configPath: state.configPath,
+        token,
+        clientDisplayName: "startup-recovery-webchat",
+      });
       await gateway.server.startupSettled;
       const client = gateway.client;
+      const waitOk = (runId: string | undefined) =>
+        expect(client.request("agent.wait", { runId, timeoutMs: 30_000 })).resolves.toMatchObject({
+          status: "ok",
+        });
+      const waitRequests = (requests: string[], count: number) =>
+        vi.waitFor(() => expect(requests).toHaveLength(count), { timeout: 30_000 });
       const execution = await observeGatewayRunExecution();
       requestExecution = execution;
 
@@ -250,41 +170,16 @@ it(
         deliver: false,
         idempotencyKey: warmupRunId,
       });
-      await expect(
-        client.request("agent.wait", { runId: warmupRunId, timeoutMs: 30_000 }),
-      ).resolves.toMatchObject({ status: "ok" });
-      expect(providerRequestCount).toBeGreaterThan(0);
+      await waitOk(warmupRunId);
+      expect(responseCount()).toBeGreaterThan(0);
       targetRequests.length = 0;
 
-      await replaceSessionEntry(
-        { storePath, sessionKey },
-        {
-          sessionId,
-          updatedAt: Date.now() - 10_000,
-          status: "interrupted",
-          abortedLastRun: true,
-          mainRestartRecovery: { cycleId: "before-reset", revision: 1, chargedAttempts: 0 },
-        },
-      );
-      await replaceSessionEntry(
-        { storePath, sessionKey: secondSessionKey },
-        {
-          sessionId: secondSessionId,
-          updatedAt: Date.now() - 10_000,
-          status: "interrupted",
-          abortedLastRun: true,
-          mainRestartRecovery: { cycleId: "second-session", revision: 1, chargedAttempts: 0 },
-        },
-      );
+      for (const { key, id, cycleId } of recoverySessions) {
+        await replaceSessionEntry(scope(key, id), { sessionId: id, ...interrupted(cycleId) });
+      }
       clearSessionStoreCacheForTest();
-      const addRecoveryChild = async (
-        marker: string,
-        overrides: Partial<SubagentRunRecord> = {},
-      ) => {
-        const parent = loadSessionEntryReadOnly({ storePath, sessionKey });
-        if (!parent) {
-          throw new Error("Recovery parent is missing");
-        }
+      const addRecoveryChild = async (marker: string) => {
+        const parent = expectDefined(readSession(), "recovery parent");
         const child = createSubagentRunRecord({
           runId: marker,
           childSessionKey: `agent:main:subagent:${marker}`,
@@ -292,54 +187,37 @@ it(
           childSessionIdentity: { sessionId: `session-${marker}` },
           requesterSessionKey: sessionKey,
           requesterAgentId: "main",
-          requesterStorePath: resolvePhysicalSessionStorePath({
-            agentId: "main",
-            storePath,
-            sessionKey,
-          }),
+          requesterStorePath: physicalStore(),
           completionRequesterSessionId: parent.sessionId,
           completionRequesterLifecycleRevision: parent.lifecycleRevision,
           label: marker,
           expectsCompletionMessage: false,
           cleanupHandled: true,
           cleanupCompletedAt: Date.now(),
-          completion: { required: false },
-          delivery: { status: "not_required" },
           execution: {
             status: "terminal",
             endedAt: Date.now(),
             outcome: { status: "error", error: "Interrupted by restart" },
             interruptionReason: "gateway-restart",
           },
-          ...overrides,
         });
-        await mutateSubagentRuns([child.runId], () => ({
-          value: undefined,
-          postimages: new Map([[child.runId, child]]),
-        }));
-        return child;
+        await saveChild(child);
       };
       await addRecoveryChild(originalChildMarker);
-      const recoveryRuntime = getGatewayRecoveryRuntime();
-      if (!recoveryRuntime) {
-        throw new Error("Gateway recovery runtime is unavailable");
-      }
+      const recoveryRuntime = expectDefined(getGatewayRecoveryRuntime(), "recovery runtime");
+      const startRecovery = (signal?: AbortSignal) =>
+        recoverRestartAbortedMainSessions({
+          cfg,
+          stateDir: state.stateDir,
+          gatewayRuntime: recoveryRuntime,
+          signal,
+        });
       holdRecovery = true;
-      // The startup scheduler passes its stop signal to recovery admission.
-      recovery = recoverRestartAbortedMainSessions({
-        cfg,
-        stateDir: state.stateDir,
-        gatewayRuntime: recoveryRuntime,
-        signal: startupRecoveryStop.signal,
-      });
-      await vi.waitFor(() => expect(targetRequests).toHaveLength(1), { timeout: 30_000 });
-      expect(readRecoveryPrompt(targetRequests[0] ?? "").includes(originalChildMarker)).toBe(true);
-      const resendRunId = loadSessionEntryReadOnly({
-        storePath,
-        sessionKey,
-      })?.restartRecoveryDeliveryRunId;
+      recovery = startRecovery(startupRecoveryStop.signal);
+      await waitRequests(targetRequests, 1);
+      expect(readRecoveryPrompt(targetRequests[0] ?? "")).toContain(originalChildMarker);
+      const resendRunId = readSession()?.restartRecoveryDeliveryRunId;
       const resendSource = getRpcSource(expectDefined(resendRunId, "resend run id"));
-      // The resend is the session's selected mailbox input, not a side owner.
       expect(resendSource?.input.claim).toBeDefined();
 
       const canceledRunId = "webchat-canceled-during-recovery";
@@ -355,8 +233,7 @@ it(
             idempotencyKey: runId,
           }),
         ).resolves.toMatchObject({ runId, status: "started" });
-        // The ACK precedes queue admission, which no longer completes the run.
-        // Join dispatch before taking an immediate observation of queued custody.
+        // ACK precedes admission; join dispatch before observing queued custody.
         await execution.waitForDispatch(runId);
         await expect(client.request("agent.wait", { runId, timeoutMs: 0 })).resolves.toMatchObject({
           runId,
@@ -367,9 +244,7 @@ it(
       };
       // Hold the cancellation target in controller custody before queueing the survivor.
       await sendQueuedTurn(canceledRunId, canceledMessage);
-      await vi.waitFor(() => {
-        expect(getRpcSource(canceledRunId)).toBeDefined();
-      });
+      await vi.waitFor(() => expect(getRpcSource(canceledRunId)).toBeDefined());
       const canceledSource = getRpcSource(canceledRunId)!;
       await sendQueuedTurn(survivorRunId, survivorMessage);
       await vi.waitFor(() => {
@@ -391,10 +266,9 @@ it(
 
       recoveryGate.resolve();
       await expect(recovery).resolves.toMatchObject({ started: 2, failed: 0 });
-      await vi.waitFor(() => expect(secondRequests).toHaveLength(1), { timeout: 30_000 });
+      await waitRequests(secondRequests, 1);
       const secondResendRunId = expectDefined(
-        loadSessionEntryReadOnly({ storePath, sessionKey: secondSessionKey })
-          ?.restartRecoveryDeliveryRunId,
+        readSession(secondSessionKey)?.restartRecoveryDeliveryRunId,
         "second resend run id",
       );
       const secondResendSource = expectDefined(
@@ -407,266 +281,53 @@ it(
         agentId: "main",
         incarnation: secondSessionId,
       });
-      expect(
-        resolvePhysicalSessionStorePath({
-          agentId: "main",
-          sessionKey: secondSessionKey,
-          storePath: secondTarget.storeScope,
-        }),
-      ).toBe(
-        resolvePhysicalSessionStorePath({
-          agentId: "main",
-          sessionKey: secondSessionKey,
-          storePath,
-        }),
+      expect(physicalStore(secondSessionKey, secondTarget.storeScope)).toBe(
+        physicalStore(secondSessionKey),
       );
       expect(secondResendSource.input.claim).toBeDefined();
       expect(secondResendSource.input.mailbox).not.toBe(resendSource?.input.mailbox);
       secondRecoveryGate.resolve();
-      await expect(
-        client.request("agent.wait", { runId: resendRunId, timeoutMs: 30_000 }),
-      ).resolves.toMatchObject({ status: "ok" });
-      await vi.waitFor(() => expect(targetRequests).toHaveLength(2), { timeout: 30_000 });
+      await waitOk(resendRunId);
+      await waitRequests(targetRequests, 2);
       expect(targetRequests[1]).toContain(survivorMessage);
       expect(targetRequests[1]).not.toContain(canceledMessage);
-      await expect(
-        client.request("agent.wait", { runId: survivorRunId, timeoutMs: 30_000 }),
-      ).resolves.toMatchObject({ status: "ok" });
+      await waitOk(survivorRunId);
       await vi.waitFor(() => expect(getRpcSource(survivorRunId)).toBeUndefined());
       // The sweep reports admission; join this exact resend before inspecting its durable result.
-      await expect(
-        client.request("agent.wait", { runId: secondResendRunId, timeoutMs: 30_000 }),
-      ).resolves.toMatchObject({ status: "ok" });
+      await waitOk(secondResendRunId);
       await secondResendSource.input.settlement.promise;
-      expect(loadSessionEntryReadOnly({ storePath, sessionKey: secondSessionKey })).toMatchObject({
+      expect(readSession(secondSessionKey)).toMatchObject({
         abortedLastRun: false,
         status: "done",
       });
-      // Each resend and the surviving WebChat turn executed exactly once.
       expect(secondRequests).toHaveLength(1);
       expect(targetRequests).toHaveLength(2);
 
-      const beforeReset = loadSessionEntryReadOnly({ storePath, sessionKey });
+      const beforeReset = readSession();
       await client.request("sessions.reset", { key: sessionKey });
-      const afterReset = loadSessionEntryReadOnly({ storePath, sessionKey });
+      const afterReset = readSession();
       expect(afterReset?.sessionId).toBe(beforeReset?.sessionId);
       expect(afterReset?.lifecycleRevision).not.toBe(beforeReset?.lifecycleRevision);
-      await appendTranscriptMessage(
-        { agentId: "main", sessionKey, sessionId, storePath },
-        { message: { role: "user", content: afterResetMessage } },
-      );
-      await patchSessionEntryCore({ storePath, sessionKey }, (entry) => ({
+      await appendTranscriptMessage(scope(), {
+        message: { role: "user", content: afterResetMessage },
+      });
+      await patchSessionEntryCore(scope(), (entry) => ({
         ...entry,
-        status: "interrupted",
-        abortedLastRun: true,
-        mainRestartRecovery: { cycleId: "after-reset", revision: 1, chargedAttempts: 0 },
-        updatedAt: Date.now() - 10_000,
+        ...interrupted("after-reset"),
       }));
       await addRecoveryChild(currentChildMarker);
-      const resetRecovery = recoverRestartAbortedMainSessions({
-        cfg,
-        stateDir: state.stateDir,
-        gatewayRuntime: recoveryRuntime,
-      });
       const [resetResult, providerPayload] = await Promise.all([
-        resetRecovery,
+        startRecovery(),
         afterResetRequest.promise,
       ]);
       expect(resetResult).toMatchObject({ started: 1, failed: 0 });
       const resetPrompt = readRecoveryPrompt(providerPayload);
-      expect(resetPrompt.includes(currentChildMarker)).toBe(true);
-      expect(resetPrompt.includes(originalChildMarker)).toBe(false);
+      expect(resetPrompt).toContain(currentChildMarker);
+      expect(resetPrompt).not.toContain(originalChildMarker);
 
-      const resetRunId = loadSessionEntryReadOnly({ storePath, sessionKey })?.lifecycleRunId;
+      const resetRunId = readSession()?.lifecycleRunId;
       expect(typeof resetRunId).toBe("string");
-      await expect(
-        client.request("agent.wait", { runId: resetRunId, timeoutMs: 30_000 }),
-      ).resolves.toMatchObject({ status: "ok" });
-      if (!gatewayContext) {
-        throw new Error("Saved-batch proof needs the active Gateway owner");
-      }
-      // Startup activation schedules a registry sweep that also resumes pending settle
-      // wakes. Retire it so the manual replays below are the only claimants.
-      const registry = Reflect.get(globalThis, Symbol.for("openclaw.subagentRegistryTestApi")) as {
-        resetSubagentRegistryForTests(options: { persist: false }): Promise<void>;
-      };
-      await registry.resetSubagentRegistryForTests({ persist: false });
-      const resolver = () => gatewayContext;
-      const reloadSavedBatch = async (entry: SubagentRunRecord) => {
-        await mutateSubagentRuns([entry.runId], () => ({
-          value: undefined,
-          postimages: new Map([[entry.runId, entry]]),
-        }));
-        await restoreSubagentRunsFromDisk({ runs: subagentRuns });
-        const saved = subagentRuns.get(entry.runId);
-        if (!saved) {
-          throw new Error("Saved completion batch did not survive its SQLite round trip");
-        }
-        bindGatewayContextResolver(saved, resolver);
-        return saved;
-      };
-      const currentBatch = (batch: readonly SubagentRunRecord[]) =>
-        batch.map((member) => {
-          const current = subagentRuns.get(member.runId);
-          if (
-            !current ||
-            !isSameSubagentRun(current, member) ||
-            current.requesterSettleWake?.rearmGeneration !==
-              member.requesterSettleWake?.rearmGeneration
-          ) {
-            throw new Error("Saved batch owner changed");
-          }
-          return current;
-        });
-      const wakeSavedBatch = (entry: SubagentRunRecord) =>
-        maybeWakeRequesterAfterAllChildrenSettled({
-          isSourceCurrent: () => true,
-          requesterSessionKey: sessionKey,
-          settledEntry: entry,
-          transitionBatch: async (batch, next, onPublished) => {
-            const result = await mutateRequesterCompletionBatch({
-              entries: batch,
-              operation: { kind: "transition", state: next },
-              context: captureOpenClawStateWorkerContext(),
-              assertCurrent: () => {
-                currentBatch(batch);
-              },
-              onCommitted: () => {},
-              onPublished: () => {
-                const published = currentBatch(batch);
-                onPublished?.(published);
-              },
-            });
-            expect(result.publication).toBe("published");
-          },
-          completeBatch: async (batch, rearmGeneration, outcome, onCommitted) => {
-            if (!outcome) {
-              throw new Error("Saved batch did not produce a delivery outcome");
-            }
-            const result = await mutateRequesterCompletionBatch({
-              entries: batch,
-              operation: { kind: "settle", outcome },
-              assertCurrent: () => {
-                if (
-                  !batch.every((member) => {
-                    const current = subagentRuns.get(member.runId);
-                    return (
-                      isSameSubagentRun(current, member) &&
-                      current?.requesterSettleWake?.rearmGeneration === rearmGeneration
-                    );
-                  })
-                ) {
-                  throw new SubagentCompletionSourceChangedError(
-                    "Subagent completion owner changed before settlement",
-                  );
-                }
-              },
-            });
-            expect(result.publication).toBe("published");
-            await onCommitted?.();
-          },
-        });
-      let batchChild = await addRecoveryChild(batchChildMarker, {
-        expectsCompletionMessage: true,
-        completion: {
-          required: true,
-          resultText: "saved interrupted batch result",
-          terminalReply: { disposition: "visible", text: "saved interrupted batch result" },
-        },
-        delivery: { status: "delivered" },
-        requesterSettleWake: {
-          status: "pending",
-          attemptCount: 0,
-          batchRunIds: [batchChildMarker],
-          requesterYieldBatch: true,
-          afterRequesterYield: true,
-          rearmGeneration: 1,
-        },
-      });
-      const batchChildSessionId = expectDefined(
-        batchChild.childSessionIdentity?.sessionId,
-        "saved batch child session id",
-      );
-      const batchChildScope = {
-        agentId: "main",
-        sessionKey: batchChild.childSessionKey,
-        sessionId: batchChildSessionId,
-        storePath,
-      };
-      await replaceSessionEntry(batchChildScope, {
-        sessionId: batchChildSessionId,
-        updatedAt: Date.now(),
-      });
-      await persistSessionTranscriptTurn(batchChildScope, {
-        config: cfg,
-        runId: batchChild.runId,
-        expectedSessionId: batchChildSessionId,
-        touchSessionEntry: false,
-        updateMode: "none",
-        messages: [
-          {
-            message: {
-              role: "assistant",
-              phase: "final_answer",
-              stopReason: "stop",
-              content: [{ type: "text", text: "saved interrupted batch result" }],
-            },
-          },
-        ],
-      });
-      batchChild = await reloadSavedBatch(batchChild);
-      expect(await wakeSavedBatch(batchChild)).toBe(true);
-      expect(batchRequests).toHaveLength(1);
-      const ownedBatchPrompt = readBatchPrompt(batchRequests[0] ?? "");
-      expect(ownedBatchPrompt).toContain("Unfinished child sessions to reconcile:");
-      expect(ownedBatchPrompt).toContain(`"sessionKey": "${batchChild.childSessionKey}"`);
-      expect(subagentRuns.get(batchChild.runId)?.requesterSettleWake).toBeUndefined();
-
-      batchChild = await reloadSavedBatch({
-        ...expectDefined(
-          loadSubagentRegistryFromSqlite().get(batchChild.runId),
-          "settled batch child",
-        ),
-        requesterSettleWake: {
-          status: "pending",
-          attemptCount: 0,
-          batchRunIds: [batchChild.runId],
-          requesterYieldBatch: true,
-          afterRequesterYield: true,
-          rearmGeneration: 2,
-        },
-      });
-      const fixtureHistory = structuredClone(batchChild);
-      await client.request("sessions.reset", { key: sessionKey });
-      const revokedTransition = vi.fn();
-      const revokedCompletion = vi.fn();
-      expect(
-        await maybeWakeRequesterAfterAllChildrenSettled({
-          isSourceCurrent: () => true,
-          requesterSessionKey: sessionKey,
-          settledEntry: batchChild,
-          transitionBatch: revokedTransition,
-          completeBatch: revokedCompletion,
-        }),
-      ).toBe(false);
-      expect(revokedTransition).not.toHaveBeenCalled();
-      expect(revokedCompletion).not.toHaveBeenCalled();
-      expect(batchRequests).toHaveLength(1);
-      const resetBatchParent = loadSessionEntryReadOnly({ storePath, sessionKey });
-      expect(resetBatchParent?.sessionId).toBe(fixtureHistory.completionRequesterSessionId);
-      expect(resetBatchParent?.lifecycleRevision).not.toBe(
-        fixtureHistory.completionRequesterLifecycleRevision,
-      );
-      // Current reset revoked the live wake above. This explicitly restored older
-      // fixture history exercises compatibility, not a wake left behind by reset.
-      batchChild = await reloadSavedBatch(fixtureHistory);
-      expect(await wakeSavedBatch(batchChild)).toBe(true);
-      expect(batchRequests).toHaveLength(2);
-      const staleBatchPrompt = readBatchPrompt(batchRequests[1] ?? "");
-      expect(staleBatchPrompt).toContain("saved interrupted batch result");
-      expect(staleBatchPrompt).not.toContain("Unfinished child sessions to reconcile:");
-      expect(staleBatchPrompt).not.toContain(`"sessionKey": "${batchChild.childSessionKey}"`);
-      expect(staleBatchPrompt).not.toContain("parent recovery required");
+      await waitOk(resetRunId);
     } finally {
       recoveryGate.resolve();
       secondRecoveryGate.resolve();
@@ -679,15 +340,11 @@ it(
         await gateway.server.close().catch(() => undefined);
       }
       if (providerServer.listening) {
-        providerServer.closeAllConnections();
-        await new Promise<void>((resolve) => {
-          providerServer.close(() => resolve());
-        });
+        await closeHttpServer(providerServer);
       }
       await requestExecution?.restore();
       subagentRuns.delete(originalChildMarker);
       subagentRuns.delete(currentChildMarker);
-      subagentRuns.delete(batchChildMarker);
       await state.cleanup();
     }
   },

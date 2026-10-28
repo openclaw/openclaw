@@ -1,7 +1,7 @@
 import { assertCronJobStateTimestamps } from "../persisted-shape.js";
 import { createCronSourceIdentity, ownsCronSource } from "../source-schedule.js";
 import { noteCronJobsStoreCommit } from "../store.js";
-import { loadCronJobsStoreWithConfigJobsReadOnly } from "../store/read-only.js";
+import { loadCronJobsStoreWithConfigJobsReadOnlyByKey } from "../store/read-only.js";
 import type {
   CronRuntimeMutationContracts,
   CronExternalStateChange,
@@ -14,7 +14,7 @@ import { locked } from "./locked.js";
 import { runCronRuntimeMutation } from "./runtime-mutation.js";
 import { applyCronRuntimeRowsToState } from "./runtime-publication.js";
 import { refreshCronScheduler } from "./scheduler-actor.js";
-import type { CronServiceState } from "./state.js";
+import { prepareCronServiceStore, type CronServiceState } from "./state.js";
 import {
   captureCronJobMutationSource,
   ensureLoaded,
@@ -29,6 +29,10 @@ async function mutateExternalState(
   jobId: string,
   requested: CronExternalStateChange,
 ): Promise<CronJob | undefined> {
+  const preparation = prepareCronServiceStore(state);
+  if (preparation) {
+    await preparation;
+  }
   const source = captureCronJobMutationSource(state);
   const change = structuredClone(requested);
   return await locked(state, async () => {
@@ -123,8 +127,8 @@ async function mutateExternalState(
       if (change.kind === "retire" && retiredIdentity === undefined) {
         try {
           // A lost reply can hide a committed retirement; read its chosen identity once.
-          const loaded = await loadCronJobsStoreWithConfigJobsReadOnly(
-            state.deps.storePath,
+          const loaded = await loadCronJobsStoreWithConfigJobsReadOnlyByKey(
+            state.deps.storeKey,
             source.context.environment,
           );
           source.assertStorageCurrent();

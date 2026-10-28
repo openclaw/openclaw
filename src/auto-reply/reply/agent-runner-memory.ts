@@ -8,10 +8,12 @@ import { resolveEffectiveCompactionReserveTokens } from "../../agents/agent-comp
 import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
 import { MemoryFlushToolsUnavailableError } from "../../agents/agent-tools.memory-flush.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
+import { readCompactionTranscriptBytes } from "../../agents/compaction-transcript-bytes.js";
 import { isBenignCompactionSkipResult } from "../../agents/embedded-agent-runner/compact-reasons.js";
 import type { AcceptedCompactionSuccessor } from "../../agents/embedded-agent-runner/compaction-successor.js";
 import { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import { createDeferredEmbeddedRunLifecycleManager } from "../../agents/embedded-agent-runner/run/deferred-lifecycle-owner.js";
+import { emitInternalRunUsageDiagnostic } from "../../agents/internal-run-usage.js";
 import { resolveModelCallUrgency } from "../../agents/run-trigger.js";
 import { resolveSandboxConfigForAgent } from "../../agents/sandbox/config.js";
 import { withSandboxRuntimeStatusInWorker } from "../../agents/sandbox/runtime-status.js";
@@ -35,7 +37,6 @@ import {
   refreshTranscriptByteCompactionLatch,
 } from "../../context-engine/transcript-byte-limit.js";
 import { logVerbose } from "../../globals.js";
-import { isAbortError } from "../../infra/abort-signal.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { emitAgentRunStatusEvent } from "../../infra/agent-run-status-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -58,11 +59,7 @@ import {
   estimatePromptTokensFromSessionTranscript,
   readSessionLogSnapshot,
 } from "./agent-runner-memory-transcript-context.js";
-import type {
-  MemoryFlushOutcome,
-  MemoryFlushResult,
-  MemoryFlushRunParams,
-} from "./agent-runner-memory.types.js";
+import type { MemoryFlushResult, MemoryFlushRunParams } from "./agent-runner-memory.types.js";
 import { buildRunEntrySelection } from "./agent-runner-run-params.js";
 import {
   buildEmbeddedRunExecutionParams,
@@ -76,8 +73,8 @@ import {
 import {
   buildVisibleMemoryFlushFailure,
   resolveVisibleMemoryFlushErrorPayloads,
-  truncateMemoryFlushErrorMessage,
 } from "./memory-flush-errors.js";
+import { recordMemoryFlushFailure } from "./memory-flush-failure.js";
 import {
   isToolsMemoryFlushPlan,
   memoryFlushResultIsSilent,
@@ -85,6 +82,7 @@ import {
   type MemoryFlushPlanForRunResolution,
 } from "./memory-flush-plan.js";
 import {
+  TRANSCRIPT_OUTPUT_READ_BUFFER_TOKENS,
   estimatePromptTokensForMemoryFlush,
   hasAlreadyFlushedForCurrentCompaction,
   resolveCompactionThreshold,
@@ -92,6 +90,7 @@ import {
   resolveResponsesServerCompactionThreshold,
   shouldRunMemoryFlush,
   shouldRunPreflightCompaction,
+  shouldReadMemoryFlushTranscript,
 } from "./memory-flush.js";
 import { appendPostCompactionRefreshPrompt } from "./post-compaction-context.js";
 import { refreshQueuedFollowupSession, type FollowupRun } from "./queue.js";
@@ -99,7 +98,6 @@ import { startFollowupRunPreAdoptionHeartbeat } from "./queue/lifecycle.js";
 import { resolveFollowupAbortSignal } from "./queue/types.js";
 import { incrementCompactionCount } from "./session-updates.js";
 
-const MAX_FLUSH_FAILURES = 3;
 const preflightCompactionLog = createSubsystemLogger("auto-reply/preflight-compaction");
 const memoryFlushLog = createSubsystemLogger("auto-reply/memory-flush");
 
@@ -109,9 +107,6 @@ const embeddedAgentRuntimeLoader = createLazyImportLoader(
 const memoryFlushPreparationLoader = createLazyImportLoader(
   () => import("./memory-flush-prepare.js"),
 );
-
-// Leave room for large assistant outputs when checking near-threshold usage.
-const TRANSCRIPT_OUTPUT_READ_BUFFER_TOKENS = 8192;
 
 /** Compacts session context before a reply or after a completed direct command. */
 export async function runSessionCompactionIfNeeded(params: {
@@ -127,7 +122,6 @@ export async function runSessionCompactionIfNeeded(params: {
   sessionKey?: string;
   runtimePolicySessionKey?: string;
   storePath?: string;
-  isHeartbeat: boolean;
   /** Completed commands carry the actual harness, not the originally requested runtime. */
   agentHarnessId?: string;
   abortSignal?: AbortSignal;
@@ -182,13 +176,14 @@ export async function runSessionCompactionIfNeeded(params: {
     sessionKey: compactionSessionKey,
     storePath: compactionStorePath,
   };
-  const readTranscriptSize = (sessionId: string) =>
-    readSessionLogSnapshot({
-      ...compactionTarget,
-      sessionId,
-      includeByteSize: true,
-      includeUsage: false,
-      abortSignal: params.abortSignal,
+  const readTranscriptSize = async (sessionId: string, rawBytes?: number) =>
+    readCompactionTranscriptBytes({
+      target: { ...compactionTarget, sessionId },
+      rawBytes,
+      runtime: params.followupRun.run,
+      maxBytes: maxActiveTranscriptBytes,
+      contextTokenBudget: contextWindowTokens,
+      signal: params.abortSignal,
     });
 
   const contextWindowTokens = resolveFollowupContextTokens(runtimeParams, runtimeId);
@@ -225,7 +220,7 @@ export async function runSessionCompactionIfNeeded(params: {
   const maxActiveTranscriptBytes = resolveMaxActiveTranscriptBytes(params.cfg);
   const shouldCheckActiveTranscriptBytes = maxActiveTranscriptBytes !== undefined;
   const transcriptUsageTokens =
-    params.isHeartbeat || (freshPersistedTokens !== undefined && !freshNeedsOutputRead)
+    freshPersistedTokens !== undefined && !freshNeedsOutputRead
       ? undefined
       : await estimatePromptTokensFromSessionTranscript({
           ...compactionTarget,
@@ -233,13 +228,10 @@ export async function runSessionCompactionIfNeeded(params: {
           sessionId: entry.sessionId,
           contextWindowTokens,
         });
-  const transcriptSizeSnapshot =
-    shouldCheckActiveTranscriptBytes && transcriptUsageTokens?.transcriptByteSize === undefined
-      ? await readTranscriptSize(entry.sessionId)
-      : undefined;
+  const activeTranscriptBytes = shouldCheckActiveTranscriptBytes
+    ? await readTranscriptSize(entry.sessionId, transcriptUsageTokens?.transcriptByteSize)
+    : undefined;
   assertActive();
-  const activeTranscriptBytes =
-    transcriptUsageTokens?.transcriptByteSize ?? transcriptSizeSnapshot?.byteSize;
   const exceedsTranscriptByteThreshold =
     activeTranscriptBytes !== undefined &&
     maxActiveTranscriptBytes !== undefined &&
@@ -289,13 +281,11 @@ export async function runSessionCompactionIfNeeded(params: {
   );
   const tokenCountForCompaction = asPositiveFiniteNumber(projectedTokenCount);
 
-  const shouldCompactByTokens =
-    !params.isHeartbeat &&
-    shouldRunPreflightCompaction({
-      entry,
-      tokenCount: tokenCountForCompaction,
-      threshold,
-    });
+  const shouldCompactByTokens = shouldRunPreflightCompaction({
+    entry,
+    tokenCount: tokenCountForCompaction,
+    threshold,
+  });
   if (!shouldCompactByTokens && !shouldCompactByTranscriptBytes) {
     return entry;
   }
@@ -334,7 +324,7 @@ export async function runSessionCompactionIfNeeded(params: {
     amount = 1,
   ) => {
     const postCompactionBytes = exceedsTranscriptByteThreshold
-      ? (await readTranscriptSize(acceptedEntry.sessionId)).byteSize
+      ? await readTranscriptSize(acceptedEntry.sessionId)
       : undefined;
     assertActive();
     const transcriptByteCompactionLatch =
@@ -425,7 +415,7 @@ export async function runSessionCompactionIfNeeded(params: {
         trigger: "budget",
         modelCallUrgency: resolveModelCallUrgency({
           ...params.followupRun.run,
-          trigger: params.isHeartbeat ? "heartbeat" : "user",
+          trigger: "user",
           currentInboundEventKind: params.followupRun.currentInboundEventKind,
         }),
         force: true,
@@ -583,10 +573,7 @@ export async function runMemoryFlushIfNeeded(
     followupOwnsNativeCompaction(runtimeParams, runtimeId);
   // Only a native provider's flush can persist without a writable workspace, so other
   // resolvers are never called for a session whose workspace cannot be written.
-  const canAttemptFlush =
-    (memoryFlushWritable || isMemoryFlushPlanNativeProviderOwned()) &&
-    !params.isHeartbeat &&
-    !isCli;
+  const canAttemptFlush = (memoryFlushWritable || isMemoryFlushPlanNativeProviderOwned()) && !isCli;
   if (!canAttemptFlush) {
     return { sessionEntry: entry, outcome: "skipped" };
   }
@@ -594,7 +581,10 @@ export async function runMemoryFlushIfNeeded(
   const flushRunId = crypto.randomUUID();
   let flushRunRegistered = false;
   const recordFailure = (error: unknown) => recordMemoryFlushFailure(error, params, entry);
-  const contextWindowTokens = resolveFollowupContextTokens(runtimeParams, runtimeId);
+  const contextWindowTokens = Math.min(
+    resolveFollowupContextTokens(runtimeParams, runtimeId),
+    params.recoveryContextTokenBudget ?? Number.POSITIVE_INFINITY,
+  );
   let memoryFlushResolution: MemoryFlushPlanForRunResolution | null;
   try {
     memoryFlushResolution = resolveMemoryFlushPlanForRun({ cfg: params.cfg, contextWindowTokens });
@@ -613,7 +603,6 @@ export async function runMemoryFlushIfNeeded(
     params.promptForEstimate ?? params.followupRun.prompt,
   );
   const persistedPromptTokens = resolveFreshSessionTotalTokens(entry);
-  const hasFreshPersistedPromptTokens = persistedPromptTokens !== undefined;
 
   // The soft margin belongs only to early flushing, leaving room before blocking compaction.
   const flushThreshold = Math.max(
@@ -624,21 +613,9 @@ export async function runMemoryFlushIfNeeded(
     }) - Math.max(0, Math.floor(memoryFlushPlan.softThresholdTokens)),
   );
 
-  // When totals are stale/unknown, derive prompt + last output from transcript so memory
-  // flush can still be evaluated against projected next-input size.
-  //
-  // When totals are fresh, only read the transcript when we're close enough to the
-  // threshold that missing the last output tokens could flip the decision.
-  const shouldReadTranscriptForOutput =
-    entry &&
-    hasFreshPersistedPromptTokens &&
-    promptTokenEstimate !== undefined &&
-    flushThreshold > 0 &&
-    persistedPromptTokens + promptTokenEstimate >=
-      flushThreshold - TRANSCRIPT_OUTPUT_READ_BUFFER_TOKENS;
-
   const shouldReadTranscript = Boolean(
-    entry && (!hasFreshPersistedPromptTokens || shouldReadTranscriptForOutput),
+    entry &&
+    shouldReadMemoryFlushTranscript({ persistedPromptTokens, promptTokenEstimate, flushThreshold }),
   );
 
   const forceFlushTranscriptBytes = memoryFlushPlan.forceFlushTranscriptBytes;
@@ -725,6 +702,9 @@ export async function runMemoryFlushIfNeeded(
   const tokenCountForFlush = asPositiveFiniteNumber(projectedTokenCount);
 
   const shouldFlushMemory =
+    (params.recoveryContextTokenBudget !== undefined &&
+      entry != null &&
+      !hasAlreadyFlushedForCurrentCompaction(entry)) ||
     shouldRunMemoryFlush({
       entry,
       tokenCount: tokenCountForFlush,
@@ -928,6 +908,15 @@ export async function runMemoryFlushIfNeeded(
         return result;
       },
     });
+    emitInternalRunUsageDiagnostic(flushExecution.result, {
+      config: params.cfg,
+      agentId: params.followupRun.run.agentId ?? resolveDefaultAgentId(params.cfg),
+      agentDir: params.followupRun.run.agentDir,
+      sessionId: memorySession.sessionId,
+      sessionKey: memorySession.sessionKey,
+      provider: flushExecution.provider,
+      model: flushExecution.model,
+    });
     deferredLifecycle.signal.throwIfAborted();
     if (visibleErrorPayloads.length > 0) {
       // Do not stamp memory-flush success for a resolved run that returned an error.
@@ -979,70 +968,5 @@ export async function runMemoryFlushIfNeeded(
     preparedRunAdmission.close();
     preparedAttempt.release();
   }
-}
-
-async function recordMemoryFlushFailure(
-  error: unknown,
-  run: MemoryFlushRunParams,
-  initialSessionEntry?: SessionEntry,
-): Promise<MemoryFlushResult> {
-  let sessionEntry = initialSessionEntry;
-  let outcome: MemoryFlushOutcome = "failed";
-  // Caller cancellation may use any reason, not only an AbortError instance.
-  if ((run.replyOperation?.abortSignal ?? run.abortSignal)?.aborted) {
-    logVerbose("memory flush cancelled by its owner");
-    return { sessionEntry, outcome };
-  }
-  const truncatedError = truncateMemoryFlushErrorMessage(error);
-  const { sessionKey, storePath } = run;
-  if (!isAbortError(error) && storePath && sessionKey) {
-    try {
-      let failureCount = 0;
-      const updatedEntry = await updateSessionEntry(
-        { storePath, sessionKey },
-        (currentEntry) => {
-          failureCount =
-            (currentEntry.memoryFlush?.kind === "failed"
-              ? currentEntry.memoryFlush.failureCount
-              : 0) + 1;
-          return {
-            memoryFlush:
-              failureCount >= MAX_FLUSH_FAILURES
-                ? { kind: "succeeded", compactionCount: currentEntry.compactionCount ?? 0 }
-                : {
-                    kind: "failed",
-                    ...(currentEntry.memoryFlush?.compactionCount !== undefined
-                      ? { compactionCount: currentEntry.memoryFlush.compactionCount }
-                      : {}),
-                    failureCount,
-                  },
-          };
-        },
-        { skipMaintenance: true, takeCacheOwnership: true },
-      );
-      if (updatedEntry) {
-        sessionEntry = updatedEntry;
-        if (run.sessionStore) {
-          run.sessionStore[sessionKey] = updatedEntry;
-        }
-      } else {
-        failureCount = 0;
-      }
-      logVerbose(
-        `memory flush failed (attempt ${failureCount}/${MAX_FLUSH_FAILURES}): ${truncatedError}`,
-      );
-      if (updatedEntry && failureCount >= MAX_FLUSH_FAILURES) {
-        outcome = "exhausted";
-        logVerbose(
-          `memory flush exhausted: skipping flush for this compaction cycle after ${failureCount} consecutive failures`,
-        );
-      }
-    } catch (persistError) {
-      logVerbose(`failed to persist memory flush failure metadata: ${String(persistError)}`);
-    }
-  } else {
-    logVerbose(`memory flush run failed: ${String(error)}`);
-  }
-  return { sessionEntry, outcome };
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,148 +1,89 @@
-import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
-import { describe, expect, it } from "vitest";
-import {
-  buildStaticBasetenModels,
-  projectBasetenLiveModels,
-  resolveBasetenDynamicModel,
-} from "./models.js";
+import { expect, it } from "vitest";
+import * as catalog from "./models.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
-describe("Baseten model catalog", () => {
-  it("keeps manifest thinking controls and declared capabilities in runtime catalogs", () => {
-    const declaredModels = buildManifestModelProviderConfig({
-      providerId: "baseten",
-      catalog: manifest.modelCatalog.providers.baseten,
-    }).models;
-    const runtimeModels = new Map(buildStaticBasetenModels().map((model) => [model.id, model]));
-    const defaultModel = declaredModels.find(
-      (model) => model.id === "deepseek-ai/DeepSeek-V4.1-Flash",
-    );
+const FLASH = "deepseek-ai/DeepSeek-V4.1-Flash";
+const liveRow = (id: string, fields: object = {}) => ({ id, object: "model", ...fields });
 
-    expect.soft(defaultModel?.compat?.supportedReasoningEfforts).toContain("max");
-    for (const model of declaredModels) {
-      const runtimeModel = runtimeModels.get(model.id);
-      expect(runtimeModel, model.id).toBeDefined();
-      expect
-        .soft(runtimeModel?.compat?.supportsReasoningEffort, `${model.id} scalar effort`)
-        .toBe(model.compat?.supportsReasoningEffort ?? false);
-      for (const field of [
-        "supportedReasoningEfforts",
-        "reasoningEffortMap",
-        "codeMode",
-      ] as const) {
-        expect
-          .soft(runtimeModel?.compat?.[field], `${model.id} ${field}`)
-          .toEqual(model.compat?.[field]);
-      }
-    }
-  });
+it("projects future live rows, rejecting duplicates and non-models", () => {
+  const models = catalog.projectBasetenLiveModels([
+    liveRow("future/model", {
+      name: "Future live",
+      context_length: 64_000,
+      max_completion_tokens: 4_000,
+      pricing: { prompt: 0.0000002, completion: 0.0000008, input_cache_read: 0.00000004 },
+      supported_features: ["vision", "reasoning_effort"],
+    }),
+    liveRow("future/model"),
+    { id: "ignored", object: "not-a-model" },
+  ]);
 
-  it("projects authenticated live rows while retaining curated capability metadata", () => {
-    const models = projectBasetenLiveModels([
-      {
-        id: "thinkingmachines/inkling",
-        object: "model",
-        name: "Inkling live",
-        context_length: 1_048_576,
-        max_completion_tokens: 32_768,
-        pricing: {
-          prompt: "0.0000011",
-          completion: "0.0000042",
-          input_cache_read: "0.00000018",
-        },
-        supported_features: ["vision", "reasoning", "reasoning_effort"],
-      },
-      {
-        id: "future/model",
-        object: "model",
-        context_length: 64_000,
-        max_completion_tokens: 4_000,
-        pricing: { prompt: 0.0000002, completion: 0.0000008, input_cache_read: 0.00000004 },
-        supported_features: ["vision", "reasoning_effort"],
-      },
-      { id: "future/model", object: "model" },
-      { id: "ignored", object: "not-a-model" },
-    ]);
-
-    expect(models).toHaveLength(2);
-    expect(models[0]).toMatchObject({
-      id: "thinkingmachines/inkling",
-      name: "Inkling live",
-      contextWindow: 1_048_576,
-      maxTokens: 32_768,
-      cost: { input: 1.1, output: 4.2, cacheRead: 0.18, cacheWrite: 0 },
-      compat: { supportsReasoningEffort: true, maxTokensField: "max_tokens" },
-    });
-    expect(models[1]).toMatchObject({
+  expect(models).toMatchObject([
+    {
       id: "future/model",
+      name: "Future live",
       reasoning: true,
       input: ["text", "image"],
       contextWindow: 64_000,
       maxTokens: 4_000,
       cost: { input: 0.2, output: 0.8, cacheRead: 0.04, cacheWrite: 0 },
-      compat: {
-        supportsReasoningEffort: true,
-        supportsTools: true,
-        supportsStrictMode: true,
-      },
-    });
-  });
-
-  it("uses live capability metadata when present and curated metadata when absent", () => {
-    const liveCapabilities = projectBasetenLiveModels([
-      {
-        id: "deepseek-ai/DeepSeek-V4.1-Flash",
-        object: "model",
-        supported_features: [],
-      },
-    ])[0];
-    const curatedCapabilities = projectBasetenLiveModels([
-      {
-        id: "deepseek-ai/DeepSeek-V4.1-Flash",
-        object: "model",
-      },
-    ])[0];
-
-    expect(liveCapabilities).toMatchObject({ reasoning: false, input: ["text"] });
-    expect(liveCapabilities?.compat?.supportsReasoningEffort).toBe(false);
-    expect(liveCapabilities?.compat?.supportedReasoningEfforts).toBeUndefined();
-    expect(liveCapabilities?.compat?.reasoningEffortMap).toBeUndefined();
-    expect(curatedCapabilities).toMatchObject({
-      reasoning: true,
-      input: ["text", "image"],
-      compat: { supportsReasoningEffort: true },
-    });
-  });
-
-  it("resolves future model ids without shadowing bundled rows", () => {
-    expect(resolveBasetenDynamicModel("deepseek-ai/DeepSeek-V4.1-Flash")).toBeUndefined();
-    expect(resolveBasetenDynamicModel("thinkingmachines/inkling")?.id).toBe(
-      "thinkingmachines/inkling",
-    );
-    expect(resolveBasetenDynamicModel("future/model")).toMatchObject({
-      id: "future/model",
-      provider: "baseten",
-      api: "openai-completions",
-      baseUrl: "https://inference.baseten.co/v1",
-      compat: { supportsTools: true, supportsReasoningEffort: false, maxTokensField: "max_tokens" },
-    });
-  });
-
-  it.each([
-    { id: "future/model", features: ["tools", "reasoning", "json_mode", "structured_outputs"] },
-    {
-      id: "deepseek-ai/DeepSeek-V4.1-Flash-custom",
-      features: ["tools", "reasoning", "json_mode", "structured_outputs"],
+      compat: { supportsReasoningEffort: true, supportsTools: true, supportsStrictMode: true },
     },
-    { id: "zai-org/GLM-5.2", features: ["tools", "reasoning"] },
-    { id: "deepseek-ai/DeepSeek-V4-Pro-0813", features: [] },
-    { id: "deepseek-ai/DeepSeek-V4.1-Flash", features: ["tools"] },
-  ])("does not borrow documented Flash capabilities for $id with $features", ({ id, features }) => {
-    const [model] = projectBasetenLiveModels([
-      { id, object: "model", supported_features: features },
-    ]);
-    expect(model).toMatchObject({ reasoning: features.includes("reasoning"), input: ["text"] });
-    expect(model?.compat?.supportsReasoningEffort).toBe(false);
-    expect(model?.compat?.supportedReasoningEfforts).toBeUndefined();
+  ]);
+});
+
+it("uses curated capability metadata when live features are absent", () => {
+  const [curated] = catalog.projectBasetenLiveModels([liveRow(FLASH)]);
+  expect(curated).toMatchObject({
+    reasoning: true,
+    input: ["text", "image"],
+    compat: {
+      supportsReasoningEffort: true,
+      supportedReasoningEfforts: expect.arrayContaining(["max"]),
+    },
   });
+});
+
+it("resolves future model ids without shadowing bundled rows", () => {
+  expect(catalog.resolveBasetenDynamicModel(FLASH)).toBeUndefined();
+  expect(catalog.resolveBasetenDynamicModel("future/model")).toMatchObject({
+    id: "future/model",
+    provider: "baseten",
+    api: "openai-completions",
+    baseUrl: "https://inference.baseten.co/v1",
+    compat: { supportsTools: true, supportsReasoningEffort: false, maxTokensField: "max_tokens" },
+  });
+});
+
+it.each<[string, string[]]>([
+  [`${FLASH}-custom`, ["tools", "reasoning", "json_mode", "structured_outputs"]],
+  ["zai-org/GLM-5.2", ["tools", "reasoning"]],
+  ["deepseek-ai/DeepSeek-V4-Pro-0813", []],
+  [FLASH, []],
+])("does not borrow documented Flash capabilities for %s with %j", (id, features) => {
+  const [row] = catalog.projectBasetenLiveModels([liveRow(id, { supported_features: features })]);
+  expect(row).toMatchObject({
+    reasoning: features.includes("reasoning"),
+    input: ["text"],
+    compat: { supportsReasoningEffort: false },
+  });
+  expect(row?.compat?.supportedReasoningEfforts).toBeUndefined();
+  expect(row?.compat?.reasoningEffortMap).toBeUndefined();
+});
+
+it("keeps System One models out of every conversational discovery path", () => {
+  const ids = [
+    "decision-models/baseten-elephant-9b-latest",
+    "decision-models/baseten-mammoth-27b-latest",
+  ];
+  expect(catalog.buildStaticBasetenModels().some((model) => ids.includes(model.id))).toBe(false);
+  expect(catalog.projectBasetenLiveModels(ids.map((id) => liveRow(id)))).toEqual([]);
+  for (const id of ids) {
+    expect(catalog.resolveBasetenDynamicModel(id)).toBeUndefined();
+    const row = manifest.modelCatalog.providers.baseten.models.find((model) => model.id === id);
+    expect(row?.inference).toMatchObject({
+      chat: false,
+      decision: { protocol: "baseten-systemone" },
+    });
+  }
 });

@@ -1,6 +1,7 @@
 import type { GatewaySessionRow } from "../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
 import { t } from "../i18n/index.ts";
+import { registerSessionOrganizationSharedEnglish } from "../i18n/locales/en-session-organization-shared.ts";
 import {
   readSessionMethodAccess,
   sessionAccessRowForBatch,
@@ -9,6 +10,8 @@ import {
 import type { CloudWorkerStopAction } from "./cloud-worker-stop.ts";
 import type { SessionMenuActionKind } from "./session-menu-solid.tsx";
 import { sessionPlacementActionReason } from "./session-placement-action.ts";
+
+registerSessionOrganizationSharedEnglish();
 
 type SessionMenuAccessRow = Pick<
   GatewaySessionRow,
@@ -33,6 +36,7 @@ export function sessionMenuReasons(params: {
   const involvementReason = reason({
     method: "sessions.setInvolvement",
     requiredScope: "operator.read",
+    sessionScope: true,
   });
   const patchReason = (patch: Record<string, unknown>, sessionScope = false) =>
     reason({
@@ -40,6 +44,7 @@ export function sessionMenuReasons(params: {
       params: { key: session.key, ...patch },
       sessionScope,
       session,
+      allowDeferred: true,
     });
   const renameReason = patchReason({ label: null }, true);
   const promotionReason = !session.sessionId?.trim()
@@ -65,7 +70,22 @@ export function sessionMenuReasons(params: {
   const lifecycleRows = batchRows ?? [session];
   const archiveReason = lifecycleRows.some((row) => !row.sessionId?.trim())
     ? "Session lifecycle action requires a durable session identity."
-    : batchPatchReason({ archived: true }, true);
+    : batchRows &&
+        snapshot?.phase === "connected" &&
+        !snapshot.deferredIntentCount &&
+        !snapshot.deferredIntentDraining
+      ? batchPatchReason({ archived: true }, true)
+      : lifecycleRows
+          .map((row) =>
+            reason({
+              method: "sessions.patch",
+              params: { key: row.key, archived: !row.archived },
+              sessionScope: true,
+              session: row,
+              allowDeferred: true,
+            }),
+          )
+          .find((value) => value !== undefined);
   const snoozeReason = !session.sessionId?.trim()
     ? "Session lifecycle action requires a durable session identity."
     : patchReason({ snoozedUntil: null }, true);
@@ -77,6 +97,7 @@ export function sessionMenuReasons(params: {
     .map((row) =>
       reason({
         method: "sessions.delete",
+        allowDeferred: true,
         params: {
           key: row.key,
           ...(row.sessionId ? { expectedSessionId: row.sessionId } : {}),

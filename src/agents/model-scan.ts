@@ -87,7 +87,6 @@ export type ModelScanResult = {
 
 type OpenRouterScanOptions = {
   apiKey?: string;
-  fetchImpl?: typeof fetch;
   timeoutMs?: number;
   concurrency?: number;
   minParamB?: number;
@@ -150,17 +149,14 @@ function isFreeOpenRouterModel(entry: OpenRouterModelMeta): boolean {
   return entry.pricing.prompt === 0 && entry.pricing.completion === 0;
 }
 
-async function fetchOpenRouterModels(
-  fetchImpl: typeof fetch,
-  timeoutMs: number,
-): Promise<OpenRouterModelMeta[]> {
+async function fetchOpenRouterModels(timeoutMs: number): Promise<OpenRouterModelMeta[]> {
   let res: Response | undefined;
   try {
     // fetch resolves after headers, so keep the shared timeout active until
     // the provider-controlled catalog body has been consumed.
     return await runAbortableTimeout(
       async (signal) => {
-        res = await fetchImpl(OPENROUTER_MODELS_URL, {
+        res = await fetch(OPENROUTER_MODELS_URL, {
           headers: { Accept: "application/json" },
           signal,
         });
@@ -287,7 +283,6 @@ async function probeModel(
 export async function scanOpenRouterModels(
   options: OpenRouterScanOptions = {},
 ): Promise<ModelScanResult[]> {
-  const fetchImpl = options.fetchImpl ?? fetch;
   const probe = options.probe ?? true;
   const apiKey = options.apiKey?.trim() || getEnvApiKey("openrouter") || "";
   if (probe && !apiKey) {
@@ -302,7 +297,7 @@ export async function scanOpenRouterModels(
   const maxAgeDays = Math.max(0, Math.floor(options.maxAgeDays ?? 0));
   const providerFilter = normalizeProviderId(options.providerFilter ?? "");
 
-  const catalog = await fetchOpenRouterModels(fetchImpl, timeoutMs);
+  const catalog = await fetchOpenRouterModels(timeoutMs);
   const llmRuntime = createLlmRuntime();
   registerBuiltInApiProviders(llmRuntime.registry);
   const now = Date.now();

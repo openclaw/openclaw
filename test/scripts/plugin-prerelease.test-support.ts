@@ -1,15 +1,14 @@
-import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { spawnSync } from "node:child_process";
+import { existsSync, readFileSync, symlinkSync } from "node:fs";
+import { join } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach } from "vitest";
 import { parse } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { writeFixtureFiles } from "./z0632-fixtures.test-support.js";
 
-type WorkflowStep = {
-  id?: string;
+type WorkflowStep = Partial<Record<"id" | "name" | "run", string>> & {
   env?: Record<string, string>;
-  name?: string;
-  run?: string;
 };
 
 type ExtensionMatrixRow = {
@@ -54,14 +53,36 @@ export function createPrereleaseFixtures() {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   return {
     make: tempDirs.make.bind(tempDirs),
+    manifest(
+      eventName = "workflow_dispatch",
+      runtimePolicy = "",
+      cwd?: string,
+      fullReleaseValidation = eventName !== "schedule",
+      phase = "independent",
+    ) {
+      const outputPath = join(tempDirs.make("plugin-prerelease-manifest-"), "github-output");
+      const run = expectDefined(
+        findStep(readWorkflow().jobs.preflight, "Build plugin prerelease manifest").run,
+        "plugin prerelease manifest script",
+      );
+      const result = spawnSync("bash", ["-c", run], {
+        cwd,
+        encoding: "utf8",
+        env: {
+          PATH: process.env.PATH,
+          FULL_RELEASE_VALIDATION: String(fullReleaseValidation),
+          GITHUB_EVENT_NAME: eventName,
+          GITHUB_OUTPUT: outputPath,
+          PHASE: phase,
+          OPENCLAW_CI_TEST_RUNTIME_POLICY: runtimePolicy,
+        },
+      });
+      return { result, output: existsSync(outputPath) ? readFileSync(outputPath, "utf8") : "" };
+    },
     target(prefix: string, files: Record<string, string>, linkType: "dir" | "junction") {
       const root = tempDirs.make(prefix);
       symlinkSync(join(process.cwd(), "node_modules"), join(root, "node_modules"), linkType);
-      for (const [file, content] of Object.entries(files)) {
-        const target = join(root, file);
-        mkdirSync(dirname(target), { recursive: true });
-        writeFileSync(target, content);
-      }
+      writeFixtureFiles(root, files);
       return root;
     },
   };

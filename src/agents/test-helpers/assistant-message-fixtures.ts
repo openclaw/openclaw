@@ -5,7 +5,7 @@
  * defaults while overriding only the fields relevant to a scenario.
  */
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
-import { ZERO_USAGE_FIXTURE } from "./usage-fixtures.js";
+import { createZeroUsageFixture } from "./usage-fixtures.js";
 
 /** Builds an assistant message fixture with deterministic error-style defaults. */
 export function makeAssistantMessageFixture(
@@ -17,7 +17,7 @@ export function makeAssistantMessageFixture(
     api: "openai-responses",
     provider: "openai",
     model: "test-model",
-    usage: ZERO_USAGE_FIXTURE,
+    usage: createZeroUsageFixture(),
     timestamp: 0,
     stopReason: "error",
     errorMessage: errorText,

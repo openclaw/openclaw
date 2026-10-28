@@ -9,27 +9,17 @@ import { Icon } from "../../components/solid/icon.tsx";
 import { ProviderBrandIcon } from "../../components/solid/provider-icon.tsx";
 import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import {
-  activationTargetId,
-  type ModelSetupActivationState,
-  type ModelSetupVerifyState,
-} from "./state.ts";
+import { activationTargetId, type ModelSetupActivationState } from "./state.ts";
+import type { ModelSetupViewProps } from "./view-types.ts";
 
 registerModelSetupEnglish();
 
-type Candidate = SystemAgentSetupDetectResult["candidates"][number];
-
-export function ConfiguredUtilityModel(props: {
-  result: SystemAgentSetupDetectResult;
-  activation: ModelSetupActivationState;
-  canRepair: boolean;
-  actionsDisabled: boolean;
-  onOpenAssistant: () => void;
-  onActivateCandidate: (candidate: Candidate) => void;
-}) {
+export function ConfiguredUtilityModel(
+  props: ModelSetupViewProps & { result: SystemAgentSetupDetectResult },
+) {
   const modelRef = createMemo(() => props.result.utilityModel ?? props.result.setupModel);
   const repairCandidate = createMemo(() =>
-    props.canRepair
+    props.canAdmin && !props.gatewayTooOld
       ? props.result.candidates.find(
           (candidate) =>
             candidate.modelTarget === "utility" &&
@@ -69,7 +59,7 @@ export function ConfiguredUtilityModel(props: {
                 <button
                   type="button"
                   class="btn"
-                  disabled={props.actionsDisabled}
+                  disabled={props.actionsDisabled || props.detecting === true}
                   onClick={() => props.onActivateCandidate(candidate())}
                 >
                   {t(
@@ -83,8 +73,8 @@ export function ConfiguredUtilityModel(props: {
             <button
               type="button"
               class="btn primary"
-              disabled={props.actionsDisabled}
-              onClick={() => props.onOpenAssistant()}
+              disabled={props.actionsDisabled || props.detecting === true}
+              onClick={() => (props.onOpenSetupAssistant ?? props.onOpenChat)()}
             >
               {t("modelSetup.utility.openAssistant")}
             </button>
@@ -131,21 +121,18 @@ const VERIFICATION_BUTTON_LABELS = {
   idle: "modelSetup.verify.button",
 };
 
-export function ConfiguredModel(props: {
-  result: SystemAgentSetupDetectResult;
-  verify: ModelSetupVerifyState;
-  canVerify: boolean;
-  actionsDisabled: boolean;
-  onVerify: () => void;
-  onContinue?: () => void;
-}): JSX.Element {
+export function ConfiguredModel(
+  props: ModelSetupViewProps & { result: SystemAgentSetupDetectResult },
+): JSX.Element {
   const configuredRef = createMemo(() => props.result.configuredModel!);
+  const canContinue = () =>
+    props.firstRun && props.result.setupComplete && props.activation.phase !== "success";
   // A successful verify reports the model that actually answered; prefer it over
   // the detect-time snapshot so concurrent config changes cannot mislabel the result.
   const displayRef = createMemo(() =>
     props.verify.phase === "ok" ? props.verify.modelRef : configuredRef(),
   );
-  const providerId = createMemo(() => providerIdFromModelRef(displayRef()));
+  const providerId = () => providerIdFromModelRef(displayRef());
   const configuredCandidate = createMemo(() =>
     displayRef() === configuredRef()
       ? props.result.candidates.find(
@@ -158,7 +145,7 @@ export function ConfiguredModel(props: {
     const id = providerId();
     return id ? providerDisplayLabel(id) : displayRef();
   };
-  const description = createMemo(() => {
+  const description = () => {
     const name = displayRef().slice(displayRef().indexOf("/") + 1);
     const detail = configuredCandidate()?.detail.trim();
     return !detail || configuredCandidate()?.kind === "existing-model"
@@ -166,7 +153,7 @@ export function ConfiguredModel(props: {
       : detail.toLowerCase().includes(name.toLowerCase())
         ? detail
         : `${name} · ${detail}`;
-  });
+  };
 
   return (
     <section class="settings-section model-setup__current" data-verify-phase={props.verify.phase}>
@@ -203,14 +190,14 @@ export function ConfiguredModel(props: {
             <button
               type="button"
               class="btn"
-              disabled={props.actionsDisabled}
+              disabled={props.actionsDisabled || props.detecting === true}
               onClick={() => props.onVerify()}
             >
               {t(VERIFICATION_BUTTON_LABELS[props.verify.phase])}
             </button>
           ) : undefined}
-          {props.onContinue ? (
-            <button type="button" class="btn primary" onClick={() => props.onContinue?.()}>
+          {canContinue() ? (
+            <button type="button" class="btn primary" onClick={() => props.onOpenChat()}>
               <Icon name="messageSquare" /> {t("modelSetup.success.continueSetup")}
             </button>
           ) : undefined}

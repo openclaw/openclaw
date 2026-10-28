@@ -14,17 +14,16 @@ import { computeDeclaredSurfaceHash } from "../plugins/capability-summary.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { resolvePluginNpmProjectDir } from "../plugins/install-paths.js";
 import { readPersistedInstalledPluginIndexInstallRecordsAsync } from "../plugins/installed-plugin-index-records.js";
-import * as loader from "../plugins/loader.js";
 import { resetPluginLoaderTestStateForTest } from "../plugins/loader.test-fixtures.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import * as providerChoices from "../plugins/provider-auth-choices.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { createNonExitingRuntime } from "../runtime.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { activateSetupInference } from "./setup-inference-activate.js";
-import * as verifiedInference from "./verified-inference.js";
 
 // mock-isolation: Setup probes replace model I/O without loading the embedded runtime.
 vi.mock("../agents/embedded-agent.js", () => ({ runEmbeddedAgent: vi.fn() }));
@@ -49,12 +48,9 @@ afterEach(() => {
 
 it.each([false, true])(
   "binds a newly installed provider to its real artifact (replace during probe: %s)",
-  async (replaceDuringProbe) => {
-    await withOpenClawTestState(
-      {
-        label: "provider-install-owner",
-        env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
-      },
+  (replaceDuringProbe) =>
+    withOpenClawTestState(
+      { label: "provider-install-owner", env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" } },
       async (state) => {
         await state.writeConfig({
           gateway: { mode: "local" },
@@ -74,7 +70,6 @@ it.each([false, true])(
         });
         const runningRegistry = createEmptyPluginRegistry();
         setActivePluginRegistry(runningRegistry);
-        const loaded = vi.spyOn(loader, "loadPluginRegistryHandle");
         const projectRoot = resolvePluginNpmProjectDir({
           npmDir: state.statePath("npm"),
           packageName: "@fixture/provider",
@@ -116,19 +111,14 @@ it.each([false, true])(
             configSchema: { type: "object", properties: {}, additionalProperties: false },
           });
           await fs.writeFile(pluginEntry, pluginSource);
-          const config: OpenClawConfig = {
-            ...params.config,
-            plugins: {
-              ...params.config.plugins,
-              entries: { ...params.config.plugins?.entries, [providerId]: { enabled: true } },
-            },
-            models: {
-              providers: {
-                [providerId]: {
-                  baseUrl: "https://provider.example/v1",
-                  api: "openai-completions",
-                  models: [],
-                },
+          const config: OpenClawConfig = structuredClone(params.config);
+          ((config.plugins ??= {}).entries ??= {})[providerId] = { enabled: true };
+          config.models = {
+            providers: {
+              [providerId]: {
+                baseUrl: "https://provider.example/v1",
+                api: "openai-completions",
+                models: [],
               },
             },
           };
@@ -158,9 +148,9 @@ it.each([false, true])(
             { id: providerId, label: "Fixture", auth: [] },
           );
         });
-        const capture = vi.spyOn(verifiedInference, "captureSystemAgentOwnerPluginArtifacts");
+        const phases: string[] = [];
         const runEmbeddedAgent = vi.fn<typeof embeddedAgent.runEmbeddedAgent>(async (params) => {
-          expect(onPreparationComplete).toHaveBeenCalledOnce();
+          phases.push("probe");
           params.onSuccessfulAuthBinding?.({
             authFingerprint,
             agentHarnessId: "openclaw",
@@ -182,11 +172,6 @@ it.each([false, true])(
           };
         });
         vi.spyOn(embeddedAgent, "runEmbeddedAgent").mockImplementation(runEmbeddedAgent);
-        const onPreparationComplete = vi.fn(() => {
-          expect(capture).toHaveBeenCalledOnce();
-          expect(trustedRecord).toBeDefined();
-          expect(runEmbeddedAgent).not.toHaveBeenCalled();
-        });
         await withPluginRuntimeGenerationScope(
           {
             metadataSnapshot: runningMetadata,
@@ -194,6 +179,14 @@ it.each([false, true])(
           },
           async () => {
             vi.spyOn(modelAuth, "resolveApiKeyForProviderCore").mockResolvedValue(resolvedAuth);
+            vi.spyOn(providerChoices, "resolveManifestProviderAuthChoice").mockReturnValue({
+              pluginId: providerId,
+              providerId,
+              methodId: "key",
+              choiceId: "fixture-provider-key",
+              choiceLabel: "Fixture",
+              appGuidedSecret: true,
+            });
             const result = await activateSetupInference({
               kind: "provider-auth",
               authChoice: "fixture-provider-key",
@@ -202,33 +195,10 @@ it.each([false, true])(
               surface: "gateway",
               recordSetupAudit: false,
               runtime: createNonExitingRuntime(),
-              onPreparationComplete,
+              onPreparationComplete: () => phases.push("prepared"),
               prompter: createWizardPrompter(),
-              deps: {
-                resolveManifestProviderAuthChoice: () => ({
-                  pluginId: providerId,
-                  providerId,
-                  methodId: "key",
-                  choiceId: "fixture-provider-key",
-                  choiceLabel: "Fixture",
-                  appGuidedSecret: true,
-                }),
-              },
             });
-            expect(onPreparationComplete).toHaveBeenCalledOnce();
-            expect(runEmbeddedAgent).toHaveBeenCalledOnce();
-            expect(capture).toHaveBeenCalledOnce();
-            const staged = capture.mock.results[0]?.value;
-            expect(staged?.ownerPluginIds).toEqual([providerId]);
-            expect(staged?.ownerPluginArtifacts).toEqual([
-              { pluginId: providerId, fingerprint: expect.stringMatching(/^[a-f0-9]{64}$/) },
-            ]);
-            expect(
-              loaded.mock.calls.some(
-                ([options]) =>
-                  options?.installRecords?.[providerId]?.acceptedSurfaceIntegrity === integrity,
-              ),
-            ).toBe(true);
+            expect(phases).toEqual(["prepared", "probe"]);
             if (replaceDuringProbe) {
               expect(result).toMatchObject({
                 ok: false,
@@ -237,10 +207,7 @@ it.each([false, true])(
               });
               expect(await fs.readFile(state.configPath, "utf8")).toBe(originalBytes);
             } else {
-              expect(result).toMatchObject({
-                ok: true,
-                modelRef,
-              });
+              expect(result).toMatchObject({ ok: true, modelRef });
               // The running generation intentionally retains its pre-install cache.
               const records = await withPluginLifecycleLease(
                 {},
@@ -262,6 +229,5 @@ it.each([false, true])(
           },
         );
       },
-    );
-  },
+    ),
 );

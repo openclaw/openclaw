@@ -4,7 +4,6 @@ import {
   resolveDefaultAgentDir,
 } from "openclaw/plugin-sdk/agent-harness-registration";
 import {
-  ensureAuthProfileStore,
   ensureAuthProfileStoreAsync,
   resolveAuthProfileOrder,
 } from "openclaw/plugin-sdk/provider-auth";
@@ -38,8 +37,8 @@ export const {
   resolveCodexAppServerAuthProfileId,
   resolveCodexAppServerAuthProfileIdForAgent,
   resolveCodexAppServerAuthProfileStore,
+  withCodexAppServerAuthProfileIdAtEffect,
 } = createCodexAuthProfileSelection({
-  ensureAuthProfileStore,
   ensureAuthProfileStoreAsync,
   resolveAuthProfileOrder,
 });

@@ -37,16 +37,8 @@ const hookIdentity = {
 function writerConfig(
   scopes: GatewayOperatorRoleDefinition["scopes"] = ["operator.write"],
 ): OpenClawConfig {
-  return {
-    gateway: {
-      roles: {
-        default: "writer",
-        definitions: {
-          writer: { agents: "*", scopes, sessions: { others: "write" } },
-        },
-      },
-    },
-  };
+  const writer = { agents: "*" as const, scopes, sessions: { others: "write" as const } };
+  return { gateway: { roles: { default: "writer", definitions: { writer } } } };
 }
 
 function fixture(scopes = ["operator.write"]) {
@@ -59,14 +51,15 @@ function fixture(scopes = ["operator.write"]) {
   ]);
   const scoped = <T>(run: () => Promise<T>, client = caller) =>
     withPluginRuntimeGatewayRequestScope({ client, context, isWebchatConnect: () => false }, run);
-  const trusted = (pluginId = "lobster", pluginOrigin: "bundled" | "config" = "bundled") =>
+  const trusted = (
+    pluginId = "lobster",
+    pluginOrigin: "bundled" | "config" = "bundled",
+    method = "plugin.approval.request",
+    params: Record<string, unknown> = { pluginId, ...requestParams },
+  ) =>
     scoped(() =>
       withPluginRuntimePluginScope({ pluginId, pluginOrigin }, () =>
-        dispatchTrustedPluginGatewayMethod(
-          "plugin.approval.request",
-          { pluginId, ...requestParams },
-          { scopes: ["operator.approvals"] },
-        ),
+        dispatchTrustedPluginGatewayMethod(method, params, { scopes: ["operator.approvals"] }),
       ),
     );
   const hookOptions = withInProcessAgentRuntimeIdentity(
@@ -85,17 +78,16 @@ function fixture(scopes = ["operator.write"]) {
 }
 
 describe("trusted plugin approval requests", () => {
-  it("respects the caller's write-only named role", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  it("respects the caller's write-only named role", () =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
       const f = fixture();
       const cfg = writerConfig();
       f.context.getRuntimeConfig = () => cfg;
       await expect(f.trusted()).resolves.toEqual(accepted);
-    });
-  });
+    }));
 
-  it("lets a write-only tool caller request review without allowing it to resolve review", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  it("lets a write-only tool caller request review without allowing it to resolve review", () =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
       const f = fixture();
       await expect(f.trusted()).resolves.toEqual(accepted);
       const client = f.request.mock.calls[0]?.[0].client;
@@ -103,22 +95,16 @@ describe("trusted plugin approval requests", () => {
       expect(client?.internal?.pluginApprovalRequestOwnerId).toBe("lobster");
       expect(client?.internal?.approvalRuntime).not.toBe(true);
       await expect(
-        f.scoped(() =>
-          withPluginRuntimePluginScope({ pluginId: "lobster", pluginOrigin: "bundled" }, () =>
-            dispatchTrustedPluginGatewayMethod(
-              "plugin.approval.resolve",
-              { id: "plugin:test", decision: "allow-once" },
-              { scopes: ["operator.approvals"] },
-            ),
-          ),
-        ),
+        f.trusted("lobster", "bundled", "plugin.approval.resolve", {
+          id: "plugin:test",
+          decision: "allow-once",
+        }),
       ).rejects.toThrow(missingScope);
       expect(f.resolve).not.toHaveBeenCalled();
-    });
-  });
+    }));
 
-  it("accepts a live signed hook owner without granting reviewer scope", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  it("accepts a live signed hook owner without granting reviewer scope", () =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
       const f = fixture();
       f.context.validateAgentRuntimeApprovalAuthority = (candidate) => candidate === hookIdentity;
       await expect(f.scoped(f.hook)).resolves.toEqual(accepted);
@@ -128,17 +114,16 @@ describe("trusted plugin approval requests", () => {
       expect(client?.internal?.approvalRuntime).not.toBe(true);
       f.context.validateAgentRuntimeApprovalAuthority = () => false;
       await expect(f.scoped(f.hook)).rejects.toThrow(missingScope);
-    });
-  });
+    }));
 
-  it("uses a retained write-only operator for a signed hook after the client scope ends", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  it("uses a retained write-only operator for a signed hook after the client scope ends", () =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
       const f = fixture();
       const authority = createAdmittedRunOperatorAuthority({
         profileId: f.caller.authenticatedUserProfile!.profileId,
         scopes: ["operator.write"],
         assertCurrent: () => undefined,
-        readCurrentRoleAssignment: () => "writer",
+        readCurrentRoleFacts: () => ({ assignedRole: "writer" }),
       });
       let roleScopes: GatewayOperatorRoleDefinition["scopes"] = ["operator.write"];
       const cfg = () => writerConfig(roleScopes);
@@ -166,20 +151,17 @@ describe("trusted plugin approval requests", () => {
       await expect(f.scoped(request, unrelatedReader)).rejects.toThrow(missingScope);
       roleScopes = ["operator.read"];
       await expect(request()).rejects.toThrow(/Your operator role changed/);
-    });
-  });
+    }));
 
-  it("does not offer the bridge to a read-only caller", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  it("does not offer the bridge to a read-only caller", () =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
       await expect(fixture(["operator.read"]).trusted()).rejects.toThrow(missingScope);
-    });
-  });
+    }));
 
-  it("does not offer the bridge to an untrusted plugin", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  it("does not offer the bridge to an untrusted plugin", () =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
       await expect(fixture().trusted("untrusted-probe", "config")).rejects.toThrow(
         /only available to bundled or trusted official plugins/,
       );
-    });
-  });
+    }));
 });

@@ -2,7 +2,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createApplicationTheme } from "./bootstrap-theme.ts";
-import { bindControlUiDocumentHead } from "./control-ui-document-head.ts";
+import { initializeControlUiDocumentHead } from "./control-ui-document-head.ts";
 import { applyControlUiPresentation } from "./control-ui-environment-presentation.runtime.ts";
 import { applyControlUiAccent, syncControlUiSystemChrome } from "./control-ui-presentation.ts";
 import { createGatewayStoreTestStore } from "./gateway-store.test-support.ts";
@@ -11,7 +11,7 @@ import { loadSettings, patchSettings, saveSettings } from "./settings.ts";
 afterEach(() => {
   applyControlUiAccent();
   applyControlUiPresentation({ environment: null });
-  bindControlUiDocumentHead({ themeColors: [], favicons: [] });
+  initializeControlUiDocumentHead();
   document.documentElement.removeAttribute("style");
   document.body.replaceChildren();
 });
@@ -25,7 +25,7 @@ describe("Control UI accent presentation", () => {
     const shell = document.body.appendChild(document.createElement("div"));
     const metas = ["light", "dark"].map((mode) => {
       const meta = document.createElement("meta");
-      meta.name = "theme-color";
+      Object.assign(meta, { id: `openclaw-theme-color-${mode}`, name: "theme-color" });
       meta.media = `(prefers-color-scheme: ${mode})`;
       return meta;
     });
@@ -33,7 +33,7 @@ describe("Control UI accent presentation", () => {
     unrelatedMeta.name = "theme-color";
     unrelatedMeta.content = "#123456";
     document.head.append(...metas, unrelatedMeta);
-    bindControlUiDocumentHead({ themeColors: metas, favicons: [] });
+    initializeControlUiDocumentHead();
     const palette = document.createElement("style");
     palette.textContent = ":root { --bg-content: #203040; }";
     document.head.append(palette);
@@ -51,11 +51,24 @@ describe("Control UI accent presentation", () => {
     };
     try {
       shell.className = "shell shell--chat";
-      syncControlUiSystemChrome();
+      syncControlUiSystemChrome(false, true);
       expectChrome("rgb(10, 20, 30)");
       reads.mockClear();
       for (let commit = 0; commit < 20; commit++) {
         shell.append(document.createElement("span"));
+        syncControlUiSystemChrome();
+      }
+      expect(reads).not.toHaveBeenCalled();
+
+      for (const property of [
+        "--shell-viewport-height",
+        "--shell-safe-area-bottom",
+        ...["assistant", "terminal", "browser", "link-reader", "desktop"].flatMap((owner) => [
+          `--oc-${owner}-reserve-bottom`,
+          `--oc-${owner}-reserve-right`,
+        ]),
+      ]) {
+        root.style.setProperty(property, "123px");
         syncControlUiSystemChrome();
       }
       expect(reads).not.toHaveBeenCalled();
@@ -102,7 +115,7 @@ describe("Control UI accent presentation", () => {
     }
   });
 
-  it("keeps document chat layout and browser chrome in sync across route changes and removal", () => {
+  it("uses the shell's committed chat layout across palette changes, routes, and removal", () => {
     const root = document.documentElement;
     const shell = document.body.appendChild(document.createElement("div"));
     root.style.setProperty("--bg", "rgb(10, 20, 30)");
@@ -113,7 +126,7 @@ describe("Control UI accent presentation", () => {
     );
     try {
       shell.className = "shell shell--chat";
-      syncControlUiSystemChrome();
+      syncControlUiSystemChrome(false, true);
       expect(root.classList.contains("control-ui-chat-shell")).toBe(true);
       expect(root.style.getPropertyValue("--control-ui-system-chrome-background")).toBe(
         "rgb(20, 30, 40)",
@@ -121,6 +134,8 @@ describe("Control UI accent presentation", () => {
 
       shell.className = "shell";
       syncControlUiSystemChrome();
+      expect(root.classList.contains("control-ui-chat-shell")).toBe(true);
+      syncControlUiSystemChrome(false, false);
       expect(root.classList.contains("control-ui-chat-shell")).toBe(false);
       expect(root.style.getPropertyValue("--control-ui-system-chrome-background")).toBe(
         "rgb(10, 20, 30)",
@@ -128,8 +143,10 @@ describe("Control UI accent presentation", () => {
 
       shell.className = "shell shell--chat";
       syncControlUiSystemChrome();
+      expect(root.classList.contains("control-ui-chat-shell")).toBe(false);
+      syncControlUiSystemChrome(false, true);
       shell.remove();
-      syncControlUiSystemChrome();
+      syncControlUiSystemChrome(false, false);
       expect(root.classList.contains("control-ui-chat-shell")).toBe(false);
     } finally {
       root.classList.remove("control-ui-chat-shell");

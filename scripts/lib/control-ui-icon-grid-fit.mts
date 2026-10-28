@@ -3,6 +3,7 @@ import path from "node:path";
 import { JSDOM, VirtualConsole } from "jsdom";
 import postcss, { type Declaration, type Root, type Rule } from "postcss";
 import selectorParser from "postcss-selector-parser";
+import { listDirectoryTreeStrictSync } from "../../src/infra/directory-walk.ts";
 import type { IconFixture } from "./control-ui-icon-fixtures.mts";
 
 type IconGridFinding = {
@@ -88,16 +89,23 @@ function geometryRules(root: Root): GeometryRule[] {
         if (parent.type === "rule") {
           contextSelectors = parent.selectors.flatMap((prefix) =>
             contextSelectors.map((child) => {
-              let nested = false;
-              const parsed = selectorParser((tree) =>
-                tree.walkNesting((node) => {
-                  nested = true;
-                  // The result is only printed and reparsed: print the parent
-                  // selector in place of `&`.
-                  node.value = prefix;
-                }),
-              ).processSync(child);
-              return nested ? parsed : prefix + " " + child;
+              const positions: number[] = [];
+              selectorParser()
+                .astSync(child)
+                .walkNesting((node) => {
+                  positions.push(node.sourceIndex);
+                });
+              // Replace only parsed nesting tokens, from the end so source offsets stay valid.
+              // Ampersands inside strings, escapes, or comments are not nesting tokens.
+              return positions.length
+                ? positions
+                    .toReversed()
+                    .reduce(
+                      (selector, index) =>
+                        selector.slice(0, index) + prefix + selector.slice(index + 1),
+                      child,
+                    )
+                : prefix + " " + child;
             }),
           );
         }
@@ -542,7 +550,7 @@ export function createIconStyleContext(rootDir: string) {
     const file = path.resolve(target);
     const otherRules: GeometryRule[] = [];
     const seen = new Set<string>();
-    for (const relative of fs.readdirSync(sourceRoot, { recursive: true }).map(String)) {
+    for (const { relativePath: relative } of listDirectoryTreeStrictSync(sourceRoot)) {
       if (!relative.endsWith(".css")) {
         continue;
       }

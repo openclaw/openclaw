@@ -35,22 +35,17 @@ suite.define(() => {
       await suite.withPage({ viewport: { width: 2400, height: 1000 } }, async ({ page }) => {
         const errors: string[] = [];
         page.on("pageerror", (error) => errors.push(error.message));
-        const rows = [
-          {
-            key: "agent:main:face-alpha",
-            kind: "direct",
-            label: "Alpha",
-            boardFace: sourceFace,
-            updatedAt: 20,
-          },
-          {
-            key: "agent:main:face-beta",
-            kind: "direct",
-            label: "Beta",
-            boardFace: targetFace,
-            updatedAt: 10,
-          },
-        ] satisfies [GatewaySessionRow, GatewaySessionRow];
+        const makeRow = (label: string, boardFace: "chat" | "dashboard", updatedAt: number) => ({
+          key: `agent:main:face-${label.toLowerCase()}`,
+          kind: "direct" as const,
+          label,
+          boardFace,
+          updatedAt,
+        });
+        const rows = [makeRow("Alpha", sourceFace, 20), makeRow("Beta", targetFace, 10)] satisfies [
+          GatewaySessionRow,
+          GatewaySessionRow,
+        ];
         await seedChatSettings(page, suite.server.baseUrl, {
           chatSplitLayout: splitColumns(rows, revisitChat ? 1 : 0),
           ...(legacy
@@ -106,7 +101,6 @@ suite.define(() => {
         } else {
           await selectChatLayoutAction(alpha, "Close pane");
         }
-        await expect.poll(() => page.url()).toContain("/main/face-beta");
         await expect
           .poll(() => beta.getAttribute("class"))
           .toContain("chat-pane-cache__pane--active");

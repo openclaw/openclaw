@@ -316,24 +316,21 @@ describe("LINE rich-message boundaries", () => {
   });
 
   it.each([
-    {
-      kind: "command",
-      action: { type: "command", command: "/status" },
-      expected: { type: "message", text: "/status" },
-    },
-    {
-      kind: "url",
-      action: { type: "url", url: "https://example.com/status" },
-      expected: { type: "uri", uri: "https://example.com/status" },
-    },
-    {
-      kind: "web-app",
-      action: { type: "web-app", url: "https://example.com/app" },
-      expected: { type: "uri", uri: "https://example.com/app" },
-    },
+    [
+      { type: "command", command: "/status" },
+      { type: "message", text: "/status" },
+    ],
+    [
+      { type: "url", url: "https://example.com/status" },
+      { type: "uri", uri: "https://example.com/status" },
+    ],
+    [
+      { type: "web-app", url: "https://example.com/app" },
+      { type: "uri", uri: "https://example.com/app" },
+    ],
   ] as const)(
-    "preserves 40-character Flex $kind labels while quick replies stay bounded",
-    async ({ action, expected }) => {
+    "preserves 40-character Flex %j labels while quick replies stay bounded",
+    async (action, expected) => {
       const label = "x".repeat(40);
       const result = await lineOutboundAdapter.renderPresentation?.({
         payload: { text: "Choose one" },

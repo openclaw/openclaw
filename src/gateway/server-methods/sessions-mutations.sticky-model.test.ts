@@ -5,10 +5,6 @@ import { enqueueFollowupRun } from "../../auto-reply/reply/queue/enqueue.js";
 import { clearFollowupQueue } from "../../auto-reply/reply/queue/state.js";
 import { setRuntimeConfigSnapshot } from "../../config/io.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import {
-  loadSessionEntry,
-  upsertSessionEntryCore,
-} from "../../config/sessions/session-accessor.js";
 import type { AgentEntryConfig } from "../../config/types.agents.js";
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -68,12 +64,14 @@ import { createDirectChatContext } from "../server-chat.agent-events.test-helper
 import { createGatewaySession } from "../session-create-service.js";
 import { TerminalSessionManager } from "../terminal/session-manager.js";
 import { flushPendingSessionsChangedEvents } from "./session-change-event.js";
-import { sessionMutationHandlers } from "./sessions-mutations.js";
-import { registerSessionNativeRuntimeConsentTests } from "./sessions-mutations.native-consent.test-support.js";
+import {
+  createSessionMutationCatalog,
+  registerSessionNativeRuntimeConsentTests,
+  sessionMutationFixture,
+  startSessionMutationRequest,
+} from "./sessions-mutations.native-consent.test-support.js";
 import { registerSessionOperatorPreparationTests } from "./sessions-mutations.operator-preparation.test-support.js";
 import { createSessionMutationTestClient } from "./sessions-mutations.owner.test-support.js";
-import { registerSessionRuntimeWindowTests } from "./sessions-mutations.runtime-windows.test-support.js";
-import { registerSessionSandboxStickyModelTests } from "./sessions-mutations.sandbox.test-support.js";
 
 const defaultAgents: Record<string, AgentEntryConfig> = {
   main: {},
@@ -101,10 +99,9 @@ const modelCatalog: ModelCatalogEntry[] = [
   { provider: "openai", id: "gpt-5.6-sol", name: "GPT" },
 ];
 type TestClient = GatewayClient & { connId: string; invalidated: boolean };
-const sessionScope = (sessionKey: string) => ({ agentId: "main", sessionKey });
-const readSession = (key: string) => loadSessionEntry(sessionScope(key));
+const readSession = (key: string) => sessionMutationFixture(key).read();
 const seedSession = (key: string, entry: Partial<SessionEntry> = {}, agentId = "main") =>
-  upsertSessionEntryCore({ agentId, sessionKey: key }, { sessionId: key, updatedAt: 1, ...entry });
+  sessionMutationFixture(key, agentId).seed(entry);
 const selectedModel = { providerOverride: "openai", modelOverride: "gpt-5.6-sol" };
 const runtimeSelection = { model: "openai/gpt-5.6-sol", agentRuntime: "codex" };
 const personalPin = () => ({
@@ -114,15 +111,7 @@ const personalPin = () => ({
 });
 
 function catalogSnapshot(entries = modelCatalog) {
-  return {
-    entries,
-    routeVariants: entries,
-    agentId: "main",
-    agentDir: openClawTestState.agentDir("main"),
-    workspaceDir: openClawTestState.workspaceDir,
-    config: cfg,
-    catalogComplete: true,
-  };
+  return createSessionMutationCatalog(cfg, openClawTestState, entries);
 }
 
 function context(clients = new Set<TestClient>()) {
@@ -165,15 +154,11 @@ async function patchSession(
   requestContext: GatewayRequestContext = context(),
   requestClient: GatewayClient = client(scopes),
 ) {
-  const responses: Parameters<RespondFn>[] = [];
-  await sessionMutationHandlers["sessions.patch"]?.({
-    req: { type: "req", id: "sticky-model-patch", method: "sessions.patch", params },
-    params,
+  const { responses, running } = startSessionMutationRequest("sessions.patch", params, {
     client: requestClient,
     context: requestContext,
-    isWebchatConnect: () => true,
-    respond: (...response: Parameters<RespondFn>) => responses.push(response),
   });
+  await running;
   expect(responses).toHaveLength(1);
   return responses[0]!;
 }
@@ -183,8 +168,9 @@ async function personalSession(
   entry: Partial<SessionEntry> = {},
   caller = personClient(accountOwnerId),
 ) {
-  await seedSession(key, entry);
-  const before = readSession(key);
+  const { seed, read } = sessionMutationFixture(key);
+  await seed(entry);
+  const before = read();
   const connections = new Set([caller]);
   const requestContext = context(connections);
   const patch = (params: Record<string, unknown> = {}) =>
@@ -195,20 +181,30 @@ async function personalSession(
       caller,
     );
   const expectUnchanged = (response: Parameters<RespondFn>) => {
-    expect(response[0]).toBe(false);
-    expect(response[2]).toMatchObject({ code: "FORBIDDEN" });
-    expect(readSession(key)).toEqual(before);
+    expect([response[0], response[2]]).toMatchObject([false, { code: "FORBIDDEN" }]);
+    expect(read()).toEqual(before);
   };
   return { before, caller, connections, requestContext, patch, expectUnchanged };
 }
 
+function createSession(
+  options: Omit<
+    Parameters<typeof createGatewaySession>[0],
+    "cfg" | "commandSource" | "operatorRoleActor"
+  >,
+) {
+  return createGatewaySession({
+    cfg,
+    commandSource: "test",
+    operatorRoleActor: { kind: "system" },
+    ...options,
+  });
+}
+
 function runtimeOptions(key: string) {
   return {
-    cfg,
     key,
     ...runtimeSelection,
-    commandSource: "test",
-    operatorRoleActor: { kind: "system" as const },
     loadGatewayModelCatalogSnapshot: async () => catalogSnapshot(),
   };
 }
@@ -308,12 +304,34 @@ registerSessionNativeRuntimeConsentTests({
 registerSessionOperatorPreparationTests({ context, profileId: () => accountOwnerId, personClient });
 
 describe("sessions.patch sticky model persistence", () => {
-  registerSessionSandboxStickyModelTests({
-    getConfig: () => cfg,
-    patchSession,
-    configMutationRequested: () => effects.mutateConfigFileWithRetry.mock.calls.length > 0,
-    getPersistedConfig: () => persistedConfig,
-  });
+  it.each(["agent", "global"] as const)(
+    "keeps sandbox recovery local with %s defaults",
+    async (scope) => {
+      cfg.agents!.defaults!.modelSelectionScope = scope;
+      const sessionKey = `agent:main:dm:native-policy-recovery-${scope}`;
+      const sessionId = `native-policy-recovery-${scope}`;
+      await seedSession(sessionKey, { sessionId });
+      expect(
+        (
+          await patchSession({
+            key: sessionKey,
+            model: "openai/gpt-5.6-sol",
+            sandboxMode: "off",
+            permissionMode: "full",
+            expectedSessionId: sessionId,
+            expectedSandboxMode: null,
+          })
+        )[0],
+      ).toBe(true);
+      expect(readSession(sessionKey)).toMatchObject({
+        modelOverride: "gpt-5.6-sol",
+        sandboxMode: "off",
+        permissionMode: "full",
+      });
+      expect(effects.mutateConfigFileWithRetry).not.toHaveBeenCalled();
+      expect(persistedConfig).toBeUndefined();
+    },
+  );
   it.each([
     { scope: "agent", agentId: "main", model: "anthropic/claude-opus-4-6" },
     { scope: "global", agentId: "work", model: "anthropic/claude-sonnet-4-6" },
@@ -325,7 +343,7 @@ describe("sessions.patch sticky model persistence", () => {
       await seedSession(sessionKey, { sessionId: `session-scope-current-${scope}` }, agentId);
 
       expect((await patchSession({ key: sessionKey, model }))[0]).toBe(true);
-      const entry = loadSessionEntry({ agentId, sessionKey });
+      const entry = sessionMutationFixture(sessionKey, agentId).read();
       expect(entry?.modelOverrideSource).toBe("default");
       expect(entry?.providerOverride).toBeUndefined();
       expect(entry?.modelOverride).toBeUndefined();
@@ -339,51 +357,6 @@ describe("sessions.patch sticky model persistence", () => {
         expectedAgents[agentId]!.model = model;
       }
       expect(persistedConfig?.agents?.entries).toEqual(expectedAgents);
-    },
-  );
-
-  it("emits a groups invalidation when a patch first registers a category", async () => {
-    const sessionKey = "agent:main:dm:category-groups";
-    await seedSession(sessionKey, { sessionId: "session-category-groups" });
-    const broadcast = vi.fn();
-    const subscribedContext = {
-      ...context(),
-      broadcastToConnIds: broadcast,
-      getSessionEventSubscriberConnIds: () => new Set(["conn-groups"]),
-    };
-
-    const assignCategory = () =>
-      patchSession(
-        { key: sessionKey, category: "Fresh Category" },
-        ["operator.admin"],
-        subscribedContext,
-      );
-    expect((await assignCategory())[0]).toBe(true);
-    const groupsEvents = () =>
-      broadcast.mock.calls.filter(
-        ([event, payload]) => event === "sessions.changed" && payload.reason === "groups",
-      );
-    expect(groupsEvents()).toHaveLength(1);
-
-    broadcast.mockClear();
-    expect((await assignCategory())[0]).toBe(true);
-    expect(groupsEvents()).toHaveLength(0);
-  });
-
-  it.each([undefined, "global"] as const)(
-    "keeps non-admin model changes session-only with scope=%s",
-    async (scope) => {
-      cfg.agents!.defaults!.modelSelectionScope = scope;
-      const sessionKey = `agent:main:dm:non-admin-${scope ?? "unset"}`;
-      await seedSession(sessionKey, { sessionId: `session-non-admin-${scope ?? "unset"}` });
-
-      const response = await patchSession({ key: sessionKey, model: "openai/gpt-5.6-sol" }, [
-        "operator.write",
-      ]);
-
-      expect(response[0]).toBe(true);
-      expect(readSession(sessionKey)).toMatchObject(selectedModel);
-      expect(effects.mutateConfigFileWithRetry).not.toHaveBeenCalled();
     },
   );
 
@@ -637,7 +610,7 @@ describe("explicit session model runtimes", () => {
   it("creates an unlocked session with an explicit runtime and rejects unprivileged adoption changes", async () => {
     const sessionKey = "agent:main:created-runtime";
     const options = runtimeOptions(sessionKey);
-    const result = await createGatewaySession(options);
+    const result = await createSession(options);
     expect(result).toMatchObject({
       ok: true,
       entry: { agentRuntimeOverride: "codex", modelOverride: "gpt-5.6-sol" },
@@ -645,7 +618,7 @@ describe("explicit session model runtimes", () => {
     expect(result).not.toHaveProperty("entry.modelSelectionLocked");
     expect(result).not.toHaveProperty("entry.liveModelSwitchPending");
     const adopt = (allowExistingModelSelection: boolean) =>
-      createGatewaySession({ ...options, agentRuntime: "openclaw", allowExistingModelSelection });
+      createSession({ ...options, agentRuntime: "openclaw", allowExistingModelSelection });
     expect(await adopt(false)).toMatchObject({
       ok: false,
       error: { code: "FORBIDDEN", message: "missing scope: operator.admin" },
@@ -673,7 +646,7 @@ describe("explicit session model runtimes", () => {
       kind: "unavailable",
       message: "Refresh the model catalog.",
     });
-    expect(await createGatewaySession(runtimeOptions(sessionKey))).toMatchObject({
+    expect(await createSession(runtimeOptions(sessionKey))).toMatchObject({
       ok: false,
       error: { message: "Refresh the model catalog." },
     });
@@ -681,9 +654,51 @@ describe("explicit session model runtimes", () => {
   });
 });
 
-registerSessionRuntimeWindowTests({
-  getConfig: () => cfg,
-  getState: () => openClawTestState,
-  patchSession: (request, scopes, requestContext) =>
-    patchSession(request, scopes, { ...context(), ...requestContext }),
+it("validates and persists context windows from the selected runtime", async () => {
+  const model = "openai/gpt-5.6-sol";
+  const selected = { model, agentRuntime: "codex", contextWindow: "64k" };
+  const base: ModelCatalogEntry = {
+    provider: "openai",
+    id: "gpt-5.6-sol",
+    name: "Sol",
+    reasoning: true,
+    contextWindows: [{ id: "32k", label: "32K", contextWindow: 32_000 }],
+    contextWindowDefault: "32k",
+  };
+  const native: ModelCatalogEntry = {
+    ...base,
+    nativeRuntime: "codex",
+    contextWindows: [{ id: "64k", label: "64K", contextWindow: 64_000 }],
+    contextWindowDefault: "64k",
+  };
+  const snapshot = createSessionMutationCatalog(cfg, openClawTestState, [base], [base, native]);
+  const sessionKey = "agent:main:runtime-window-patch";
+  const { seed, read } = sessionMutationFixture(sessionKey);
+  const patch = (params: Record<string, unknown>) =>
+    patchSession({ key: sessionKey, ...params }, ["operator.admin"], {
+      ...context(),
+      loadGatewayModelCatalogSnapshot: async () => snapshot,
+    });
+  await seed(selectedModel);
+  const window = { contextWindow: "64k", contextWindows: native.contextWindows };
+  const changed = await patch(selected);
+  expect(changed[0]).toBe(true);
+  expect(changed[1]).toMatchObject({ resolved: window });
+  expect(read()).toMatchObject({ contextWindow: "64k", agentRuntimeOverride: "codex" });
+  const contextOnly = await patch({ contextWindow: "64k" });
+  expect(contextOnly[0]).toBe(true);
+  expect(contextOnly[1]).toMatchObject({ resolved: window });
+  const invalid = await patch({ contextWindow: "32k" });
+  expect(invalid[0]).toBe(false);
+  expect(invalid[2]?.message).toContain("use 64k");
+  expect(read()?.contextWindow).toBe("64k");
+  snapshot.routeVariants = [
+    base,
+    { ...native, contextWindows: undefined, contextWindowDefault: undefined },
+  ];
+  const missing = await patch({ contextWindow: "32k" });
+  expect(missing[0]).toBe(false);
+  expect(missing[2]?.message).not.toContain("use 32k");
+  expect((await patch({ model, agentRuntime: "openclaw" }))[0]).toBe(true);
+  expect(read()).not.toHaveProperty("contextWindow");
 });

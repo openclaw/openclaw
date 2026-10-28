@@ -39,8 +39,8 @@ async function setHidden(
   expect((await f.call("sessions.setInvolvement", params, client)).ok).toBe(true);
 }
 
-it("includes a mentioned recipient without recording an authored contribution", async () => {
-  await mentionInbox.withMentionInbox(async (f) => {
+it("includes a mentioned recipient without recording an authored contribution", () =>
+  mentionInbox.withMentionInbox(async (f) => {
     const list = async (profileId = f.bob.id, involving = true) => {
       const entry = readEntry();
       expect(projectPublicSessionEntry(entry)).not.toHaveProperty("profileInvolvement");
@@ -98,11 +98,10 @@ it("includes a mentioned recipient without recording an authored contribution", 
     const forkScope = { ...sessionScope, sessionKey: "agent:main:fork" };
     replaceSessionEntrySync(forkScope, { ...previous, sessionId: "fork-generation" });
     expect(loadSessionEntry(forkScope)).not.toHaveProperty("profileInvolvement");
-  });
-});
+  }));
 
-it("preserves existing metadata, personal choices and replay watermarks across cold reopen", async () => {
-  await mentionInbox.withMentionInbox(async (f) => {
+it("preserves existing metadata, personal choices and replay watermarks across cold reopen", () =>
+  mentionInbox.withMentionInbox(async (f) => {
     const scopes = ["", "-shown", "-untouched"].map((suffix) => ({
       agentId: "main",
       sessionKey: `${SESSION_KEY}${suffix}`,
@@ -156,11 +155,10 @@ it("preserves existing metadata, personal choices and replay watermarks across c
     expect(fresh.slice(1)).toEqual(beforeClose.slice(1));
     await reopen();
     expect(entries()).toEqual(fresh);
-  });
-});
+  }));
 
-it("withholds a fresh Inbox alert when the involvement writer refuses a changed entry", async () => {
-  await mentionInbox.withMentionInbox(async (f) => {
+it("withholds a fresh Inbox alert when the involvement writer refuses a changed entry", () =>
+  mentionInbox.withMentionInbox(async (f) => {
     await f.post("existing");
     await involvementStore.updateSessionProfileInvolvementAsync(sessionScope, {
       expectedSessionId: SESSION_ID,
@@ -186,11 +184,10 @@ it("withholds a fresh Inbox alert when the involvement writer refuses a changed 
     } finally {
       changed.mockRestore();
     }
-  });
-});
+  }));
 
-it("rejects personal hide requests for another identity or stale/inaccessible sessions", async () => {
-  await mentionInbox.withMentionInbox(async (f) => {
+it("rejects personal hide requests for another identity or stale/inaccessible sessions", () =>
+  mentionInbox.withMentionInbox(async (f) => {
     const params = { key: SESSION_KEY, expectedSessionId: SESSION_ID, hidden: true };
     const deny = async (
       overrides: Partial<typeof params> & { profileId?: string } = {},
@@ -207,21 +204,19 @@ it("rejects personal hide requests for another identity or stale/inaccessible se
     await f.setSession({ incognito: true });
     await deny();
     expect(readEntry()).not.toHaveProperty("profileInvolvement");
-  });
-});
+  }));
 
-it("does not let a personal show choice change another viewer's involvement query", async () => {
-  await mentionInbox.withMentionInbox(async (f) => {
+it("does not let a personal show choice change another viewer's involvement query", () =>
+  mentionInbox.withMentionInbox(async (f) => {
     for (const hidden of [true, false, true]) {
       await setHidden(f, hidden);
       expect((await listInvolvement(f)).sessions).toHaveLength(hidden ? 0 : 1);
       expect((await listInvolvement(f, false)).sessions).toEqual([]);
     }
-  });
-});
+  }));
 
-it("keeps merged visibility separate from mention evidence when both profiles were mentioned", async () => {
-  await mentionInbox.withMentionInbox(async (f) => {
+it("keeps merged visibility separate from mention evidence when both profiles were mentioned", () =>
+  mentionInbox.withMentionInbox(async (f) => {
     const old = ensureProfileForEmail("previous@mentions.example.test");
     const oldClient = { ...identifiedClient(old.id, "Previous"), connId: "previous" };
     await f.post("old-mention", { recipientProfileIds: [old.id] });
@@ -234,5 +229,4 @@ it("keeps merged visibility separate from mention evidence when both profiles we
     expect((await listInvolvement(f)).sessions).toEqual([]);
     await f.post("new-mention");
     expect((await listInvolvement(f)).sessions).toHaveLength(1);
-  });
-});
+  }));

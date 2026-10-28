@@ -54,7 +54,6 @@ function recordedInstallIdentity(record: PluginInstallRecord | undefined) {
 export async function detectConfiguredPluginInstallHealthIssues(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
-  baselineRecords?: Record<string, PluginInstallRecord>;
 }): Promise<ConfiguredPluginInstallHealthIssue[]> {
   const env = params.env ?? process.env;
   const pluginIds = collectConfiguredPluginIds(params.cfg, env);
@@ -66,7 +65,6 @@ export async function detectConfiguredPluginInstallHealthIssues(params: {
     configuredPluginIds: pluginIds,
     configuredChannelIds: channelIds,
     blockedPluginIds,
-    baselineRecords: params.baselineRecords,
   });
   const {
     configuredPluginIdsWithStaleDescriptors: staleDescriptorPluginIds,

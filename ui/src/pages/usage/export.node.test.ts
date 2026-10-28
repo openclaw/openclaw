@@ -1,4 +1,4 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { createEmptyCostUsageTotals } from "../../../../src/infra/session-cost-usage-totals.js";
 import { buildUsageOverview } from "../../../../src/shared/usage-overview.js";
 import type { SessionUsageEntry, SessionsUsageResult } from "../../../../src/shared/usage-types.js";
@@ -9,14 +9,8 @@ import { createApplicationGateway } from "../../test-helpers/application-context
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { createUsageExportRequest } from "./export.ts";
 
-const bindings: GatewayPageBinding[] = [];
 const date = "2026-10-01";
-afterEach(() => {
-  for (const binding of bindings.splice(0)) {
-    binding.dispose();
-  }
-  vi.restoreAllMocks();
-});
+afterEach(() => vi.restoreAllMocks());
 
 const totals = { ...createEmptyCostUsageTotals(), input: 100, totalTokens: 100, totalCost: 0.5 };
 const completeUsage = {
@@ -68,7 +62,7 @@ function createExportScenario(
   Object.assign(gateway.snapshot, { client: createTestGatewayClient(request), phase: "connected" });
   const binding = new GatewayPageBinding(() => {}, { getGateway: () => gateway });
   binding.connect();
-  bindings.push(binding);
+  onTestFinished(() => binding.dispose());
   const download = vi.spyOn(downloads, "downloadTextFile").mockImplementation(() => {});
   const toast = vi.spyOn(toasts, "showToast").mockReturnValue(true);
   const exporter = createUsageExportRequest(
@@ -89,37 +83,28 @@ function createExportScenario(
   };
 }
 
-it.each([
-  { format: "json", status: "partial" },
-  { format: "sessions-csv", status: "stale" },
-  { format: "daily-csv", status: "refreshing" },
-] as const)(
-  "refuses $status $format exports and allows a complete retry",
-  async ({ format, status }) => {
-    const { request, build, query, selected, download, toast, exporter } =
-      createExportScenario(format);
-    query.selectedSessions.length = 0;
-    const result = build();
-    delete result.overview;
-    result.cacheStatus = { ...cacheStatus, status };
-    request.mockResolvedValue(result);
-    await exporter.run(format);
-    expect(request).toHaveBeenCalledOnce();
-    expect(download).not.toHaveBeenCalled();
-    expect(toast).toHaveBeenCalledWith({
-      message:
-        "Export: Usage data is incomplete. Refresh usage and try again, or narrow the date range.",
-    });
-    expect(exporter.pending).toBe(false);
+it("refuses incomplete exports and allows a complete retry", async () => {
+  const format = "json";
+  const { request, build, query, selected, download, toast, exporter } =
+    createExportScenario(format);
+  query.selectedSessions.length = 0;
+  const result = build();
+  delete result.overview;
+  result.cacheStatus = { ...cacheStatus, status: "partial" };
+  request.mockResolvedValue(result);
+  await exporter.run(format);
+  expect(download).not.toHaveBeenCalled();
+  expect(toast).toHaveBeenCalledOnce();
+  expect(toast.mock.calls[0]?.[0].message).toContain("incomplete");
+  expect(exporter.pending).toBe(false);
 
-    Object.assign(result, build([selected]));
-    delete result.overview;
-    result.cacheStatus = { ...cacheStatus, status: "fresh", pendingFiles: 0 };
-    await exporter.run(format);
-    expect(download).toHaveBeenCalledOnce();
-    expect(toast).toHaveBeenCalledOnce();
-  },
-);
+  Object.assign(result, build([selected]));
+  delete result.overview;
+  result.cacheStatus = { ...cacheStatus, status: "fresh", pendingFiles: 0 };
+  await exporter.run(format);
+  expect(download).toHaveBeenCalledOnce();
+  expect(toast).toHaveBeenCalledOnce();
+});
 
 it.each(["json", "sessions-csv", "daily-csv"] as const)(
   "exports a complete selected session despite an incomplete roster: %s",

@@ -1,5 +1,7 @@
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
+import { computeBackoff, sleepWithAbort, type BackoffPolicy } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { isTailscaleRouteOwnershipConflictError } from "../infra/tailscale-route-ownership-error.js";
 import { TailscaleServeDisabledError } from "../infra/tailscale-serve-disabled-error.js";
 import {
   claimTailscaleRoute,
@@ -10,6 +12,13 @@ import {
 import { resolveTailscalePublishedHost } from "../shared/tailscale-status.js";
 import type { GatewayTailscaleIngressEndpoint } from "./ingress-attribution.js";
 import { prepareTailscalePublishedOrigin } from "./tailscale-published-origin.js";
+
+const RECLAIM_BACKOFF: BackoffPolicy = {
+  initialMs: 1_000,
+  maxMs: 60_000,
+  factor: 2,
+  jitter: 0.2,
+};
 
 export async function startGatewayTailscaleExposure(params: {
   tailscaleMode: "off" | "serve" | "funnel";
@@ -28,7 +37,6 @@ export async function startGatewayTailscaleExposure(params: {
   }
   const backendTarget = params.backend.port;
   const effectiveMode = params.tailscaleMode;
-  let clearPublishedOrigin: (() => void) | undefined;
   if (params.tailscaleMode === "serve" && params.preserveFunnel === true) {
     let preservedFunnel: boolean;
     try {
@@ -50,64 +58,69 @@ export async function startGatewayTailscaleExposure(params: {
     }
   }
 
-  let claim: Awaited<ReturnType<typeof claimTailscaleRoute>> | undefined;
-  try {
-    claim = await claimTailscaleRoute(
-      params.tailscaleMode,
-      backendTarget,
-      params.port,
-      params.logTailscale.info,
-      params.signal,
-    );
-    const hostname = (
-      params.tailscaleMode === "serve" ? getTailnetHostnameAfterServe() : getTailnetHostname()
-    ).catch((error: unknown) => {
-      params.logTailscale.warn(
-        `Could not read the Tailscale hostname; managed portal ingress is unavailable: ${formatErrorMessage(error)}`,
+  const claimRoute = async (signal?: AbortSignal) => {
+    let claim: Awaited<ReturnType<typeof claimTailscaleRoute>> | undefined;
+    let clearPublishedOrigin: (() => void) | undefined;
+    try {
+      claim = await claimTailscaleRoute(
+        effectiveMode,
+        backendTarget,
+        params.port,
+        params.logTailscale.info,
+        signal,
       );
-      return null;
-    });
-    const host = await racePromiseWithAbortSignal(
-      hostname,
-      params.signal,
-      (signal) => signal.reason,
-    );
-    params.signal?.throwIfAborted();
-    if (!claim.isActive()) {
-      throw new Error(`Managed Tailscale ${params.tailscaleMode} claim exited during startup`);
-    }
-    if (host) {
-      const uiPath = params.controlUiBasePath ? `${params.controlUiBasePath}/` : "/";
-      const publicHost = resolveTailscalePublishedHost({
-        tailscaleMode: effectiveMode,
-        tailnetHost: host,
+      const hostname = (
+        params.tailscaleMode === "serve" ? getTailnetHostnameAfterServe() : getTailnetHostname()
+      ).catch((error: unknown) => {
+        params.logTailscale.warn(
+          `Could not read the Tailscale hostname; managed portal ingress is unavailable: ${formatErrorMessage(error)}`,
+        );
+        return null;
       });
+      const host = await racePromiseWithAbortSignal(hostname, signal, (aborted) => aborted.reason);
+      signal?.throwIfAborted();
+      if (!claim.isActive()) {
+        throw new Error(`Managed Tailscale ${params.tailscaleMode} claim exited during startup`);
+      }
+      const publicHost =
+        host &&
+        resolveTailscalePublishedHost({
+          tailscaleMode: effectiveMode,
+          tailnetHost: host,
+        });
       if (publicHost) {
         clearPublishedOrigin = prepareTailscalePublishedOrigin({
           origin: `https://${publicHost}`,
           mode: effectiveMode,
         });
-        params.logTailscale.info(
-          `${params.tailscaleMode} enabled: https://${publicHost}${uiPath} (WS via wss://${publicHost})`,
-        );
-      } else {
-        params.logTailscale.info(`${params.tailscaleMode} enabled`);
       }
-    } else {
-      params.logTailscale.info(`${params.tailscaleMode} enabled`);
-    }
-  } catch (err) {
-    clearPublishedOrigin?.();
-    try {
-      await claim?.stop();
-    } catch (cleanupError) {
-      throw new AggregateError(
-        [err, cleanupError],
-        "Tailscale exposure startup and cleanup failed",
-        { cause: cleanupError },
+      const uiPath = params.controlUiBasePath ? `${params.controlUiBasePath}/` : "/";
+      params.logTailscale.info(
+        publicHost
+          ? `${effectiveMode} enabled: https://${publicHost}${uiPath} (WS via wss://${publicHost})`
+          : `${effectiveMode} enabled`,
       );
+      return { claim, clearPublishedOrigin };
+    } catch (err) {
+      clearPublishedOrigin?.();
+      try {
+        await claim?.stop();
+      } catch (cleanupError) {
+        throw new AggregateError(
+          [err, cleanupError],
+          "Tailscale exposure startup and cleanup failed",
+          { cause: cleanupError },
+        );
+      }
+      signal?.throwIfAborted();
+      throw err;
     }
-    params.signal?.throwIfAborted();
+  };
+
+  let route: Awaited<ReturnType<typeof claimRoute>>;
+  try {
+    route = await claimRoute(params.signal);
+  } catch (err) {
     if (params.tailscaleMode === "serve" && err instanceof TailscaleServeDisabledError) {
       params.logTailscale.warn(
         "Tailscale Serve is not enabled on this tailnet. The authenticated local Gateway remains available on loopback; remote access is unavailable. Restore the intended tailnet Serve policy and restart the Gateway.",
@@ -118,19 +131,56 @@ export async function startGatewayTailscaleExposure(params: {
     throw err;
   }
 
-  let stopping = false;
-  void claim.exited.then(() => {
-    if (stopping) {
-      return;
+  // Startup retires after handoff; the returned cleanup owns resident recovery.
+  const recoveryAbort = new AbortController();
+  const recoverySignal = recoveryAbort.signal;
+  let recoveryFailure: AggregateError | undefined;
+  const recovery = (async () => {
+    while (!recoverySignal.aborted) {
+      await racePromiseWithAbortSignal(route.claim.exited, recoverySignal);
+      recoverySignal.throwIfAborted();
+      route.clearPublishedOrigin?.();
+      params.logTailscale.warn(
+        `${effectiveMode} route claim exited; recovering managed Tailscale ingress`,
+      );
+      for (let attempt = 1; ; attempt += 1) {
+        await sleepWithAbort(computeBackoff(RECLAIM_BACKOFF, attempt), recoverySignal, {
+          ref: false,
+        });
+        try {
+          route = await claimRoute(recoverySignal);
+          break;
+        } catch (error) {
+          if (
+            recoverySignal.aborted ||
+            error instanceof AggregateError ||
+            isTailscaleRouteOwnershipConflictError(error)
+          ) {
+            throw error;
+          }
+          params.logTailscale.warn(
+            `${effectiveMode} recovery failed; retrying: ${formatErrorMessage(error)}`,
+          );
+        }
+      }
     }
-    clearPublishedOrigin?.();
-    params.logTailscale.warn(
-      `${params.tailscaleMode} route claim exited; managed Tailscale ingress is unavailable until the Gateway restarts`,
-    );
+  })().catch((error: unknown) => {
+    if (error instanceof AggregateError) {
+      // Unconfirmed cleanup must remain visible to the shutdown owner.
+      recoveryFailure = error;
+    }
+    if (!recoverySignal.aborted || recoveryFailure) {
+      params.logTailscale.warn(`${effectiveMode} recovery stopped: ${formatErrorMessage(error)}`);
+    }
   });
   return async () => {
-    stopping = true;
-    clearPublishedOrigin?.();
-    await claim.stop();
+    recoveryAbort.abort();
+    route.clearPublishedOrigin?.();
+    await recovery;
+    route.clearPublishedOrigin?.();
+    await route.claim.stop();
+    if (recoveryFailure) {
+      throw recoveryFailure;
+    }
   };
 }

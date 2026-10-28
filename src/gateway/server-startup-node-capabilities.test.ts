@@ -1,5 +1,5 @@
 import { once } from "node:events";
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -9,164 +9,137 @@ import {
   stageActivePluginRegistry,
 } from "../plugins/runtime.js";
 import { withAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
-import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import { createGatewayKernel } from "./server-kernel.js";
 import type { GatewayServer } from "./server-public.js";
+import * as fixture from "./server-startup-state.test-support.js";
+import { gatewayConnect } from "./server/client-fixtures.test-support.js";
+import { gatewayTestTextTransport } from "./server/connection-transport.test-support.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { startClaimedGateway } from "./test-helpers.listener.js";
 
-describe("Gateway startup node capabilities", () => {
-  it("reconnects affected nodes when plugins attach after their handshake", async () => {
-    const state = await createOpenClawTestState({
-      label: "gateway-startup-node-capabilities",
-      layout: "home",
-      env: {
-        OPENCLAW_GATEWAY_PASSWORD: undefined,
-        OPENCLAW_GATEWAY_TOKEN: undefined,
-        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-        OPENCLAW_SKIP_CANVAS_HOST: "1",
-        OPENCLAW_SKIP_CHANNELS: "1",
-        OPENCLAW_SKIP_CRON: "1",
-        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-        OPENCLAW_SKIP_PROVIDERS: "1",
-        OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
-        VITEST: "1",
-      },
-    });
-    const previousRegistry = captureActivePluginRegistrySnapshot();
-    const registry = createEmptyPluginRegistry();
-    registry.httpRoutes.push({
-      pluginId: "files",
-      path: "/files",
-      match: "prefix",
-      auth: "gateway",
-      nodeCapability: { surface: "files" },
-      handler: async () => true,
-    });
-    const peerServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
-    const peerSockets: WebSocket[] = [];
-    onTestFinished(async () => {
-      for (const socket of [...peerSockets, ...peerServer.clients]) {
-        socket.terminate();
-      }
-      await new Promise<void>((resolve, reject) => {
-        peerServer.close((error) => (error ? reject(error) : resolve()));
-      });
-    });
-    await once(peerServer, "listening");
-    const address = peerServer.address();
-    if (!address || typeof address === "string") {
-      throw new Error("expected a loopback WebSocket listener");
-    }
-    const connectPeer = async (name: string, role: "node" | "operator", caps: string[]) => {
-      const accepted = new Promise<WebSocket>((resolve) => {
-        peerServer.once("connection", (socket) => resolve(socket));
-      });
-      const peer = new WebSocket(`ws://127.0.0.1:${address.port}`);
-      peerSockets.push(peer);
-      const closed = new Promise<{ code: number; reason: string }>((resolve) => {
-        peer.once("close", (code, reason) => resolve({ code, reason: reason.toString() }));
-      });
-      await once(peer, "open");
-      const socket = await accepted;
-      const client: GatewayWsClient = {
-        socket,
-        connId: name,
-        usesSharedGatewayAuth: false,
-        connect: {
-          minProtocol: PROTOCOL_VERSION,
-          maxProtocol: PROTOCOL_VERSION,
-          client: { id: "openclaw-macos", version: "test", platform: "darwin", mode: "node" },
-          role,
-          caps,
-        },
-        pluginNodeCapabilitySurfaces: {},
-      };
-      return { client, closed };
-    };
-    const affected = await connectPeer("affected", "node", ["files"]);
-    const unaffected = await connectPeer("unaffected", "node", ["camera"]);
-    const operator = await connectPeer("operator", "operator", ["files"]);
-    const peers = [affected, unaffected, operator];
-    let kernel: Awaited<ReturnType<typeof createGatewayKernel>> | undefined;
-    let server: GatewayServer | undefined;
-    let databaseReady = false;
-    const admission = vi
-      .spyOn(
-        await import("./server-agent-database-startup.js"),
-        "activateGatewayAgentDatabaseStartup",
-      )
-      .mockImplementation(({ preparationReady }) => {
-        void preparationReady.then(() => {
-          databaseReady = true;
-        });
-      });
-    const createKernel = createGatewayKernel;
-    const factory = vi
-      .spyOn(await import("./server-kernel.js"), "createGatewayKernel")
-      .mockImplementation(async (...args) => {
-        kernel = await createKernel(...args);
-        expect(kernel.workerPlacementRuntime).toBeDefined();
-        vi.spyOn(kernel.workerPlacementRuntime!, "startRuntime").mockImplementation(async () => {
-          await Promise.resolve();
-          expect(databaseReady).toBe(true);
-          return null;
-        });
-        for (const { client } of peers) {
-          kernel.clients.add(client);
-        }
-        return kernel;
-      });
-    const postAttach = vi
-      .spyOn(await import("./server-startup-post-attach.js"), "startGatewayPostAttachRuntime")
-      .mockImplementation(async (params) => {
-        expect(databaseReady).toBe(false);
-        await params.onStartupPluginsLoaded?.({ pluginRegistry: registry, gatewayMethods: [] });
-        await params.startWorkerEnvironmentRuntime?.();
-        return { stopGatewayUpdateCheck: async () => {}, startupSettled: Promise.resolve() };
-      });
-    try {
-      const token = "startup-node-capability-token";
-      const claim = await acquireTestPortBlock({ offsets: [0] });
-      server = await startClaimedGateway(claim, async () => {
-        await state.writeConfig({
-          gateway: {
-            auth: { mode: "token", token },
-            controlUi: { enabled: false },
-            port: claim.port,
-          },
-        });
-        state.applyEnv();
-        stageActivePluginRegistry(createEmptyPluginRegistry(), null, "default");
-        const { startGatewayServerCore } = await import("./server-start.js");
-        return await withAgentDatabaseStartupAdmission(() =>
-          startGatewayServerCore(claim.port, {
-            auth: { mode: "token", token },
-            bind: "loopback",
-            controlUiEnabled: false,
-            sidecarStartup: "defer",
-          }),
-        );
-      });
-      expect(affected.client.invalidated).toBe(true);
-      await expect(affected.closed).resolves.toEqual({
-        code: 1012,
-        reason: "node capabilities changed",
-      });
-      expect(unaffected.client.socket.readyState).toBe(WebSocket.OPEN);
-      expect(operator.client.socket.readyState).toBe(WebSocket.OPEN);
-    } finally {
-      kernel?.clients.clear();
-      try {
-        await server?.close();
-      } finally {
-        factory.mockRestore();
-        admission.mockRestore();
-        postAttach.mockRestore();
-        restoreActivePluginRegistrySnapshot(previousRegistry);
-        await state.cleanup();
-      }
-    }
+it("reconnects affected nodes when plugins attach after their handshake", async () => {
+  const state = await fixture.createGatewayStartupTestState("gateway-startup-node-capabilities");
+  const previousRegistry = captureActivePluginRegistrySnapshot();
+  const registry = createEmptyPluginRegistry();
+  registry.httpRoutes.push({
+    pluginId: "files",
+    path: "/files",
+    match: "prefix",
+    auth: "gateway",
+    nodeCapability: { surface: "files" },
+    handler: async () => true,
   });
+  const peerServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  const peerSockets: WebSocket[] = [];
+  onTestFinished(async () => {
+    for (const socket of [...peerSockets, ...peerServer.clients]) {
+      socket.terminate();
+    }
+    await new Promise<void>((resolve, reject) => {
+      peerServer.close((error) => (error ? reject(error) : resolve()));
+    });
+  });
+  await once(peerServer, "listening");
+  const address = peerServer.address();
+  if (!address || typeof address === "string") {
+    throw new Error("expected a loopback WebSocket listener");
+  }
+  const connectPeer = async (name: string, role: "node" | "operator", caps: string[]) => {
+    const accepted = new Promise<WebSocket>((resolve) => {
+      peerServer.once("connection", (socket) => resolve(socket));
+    });
+    const peer = new WebSocket(`ws://127.0.0.1:${address.port}`);
+    peerSockets.push(peer);
+    const closed = once(peer, "close").then(([code, reason]) => ({ code, reason: String(reason) }));
+    await once(peer, "open");
+    const socket = await accepted;
+    const client: GatewayWsClient = {
+      socket: gatewayTestTextTransport(socket),
+      connId: name,
+      usesSharedGatewayAuth: false,
+      connect: {
+        ...gatewayConnect(
+          undefined,
+          { id: "openclaw-macos", platform: "darwin", mode: "node" },
+          PROTOCOL_VERSION,
+          role,
+        ),
+        caps,
+      },
+      pluginNodeCapabilitySurfaces: {},
+    };
+    return { client, closed };
+  };
+  const affected = await connectPeer("affected", "node", ["files"]);
+  const unaffected = await connectPeer("unaffected", "node", ["camera"]);
+  const operator = await connectPeer("operator", "operator", ["files"]);
+  const peers = [affected, unaffected, operator];
+  let kernel: Awaited<ReturnType<typeof createGatewayKernel>> | undefined;
+  let server: GatewayServer | undefined = undefined;
+  await using cleanup = new AsyncDisposableStack();
+  cleanup.defer(() => state.cleanup());
+  cleanup.defer(() => restoreActivePluginRegistrySnapshot(previousRegistry));
+  cleanup.defer(() => {
+    vi.restoreAllMocks();
+  });
+  cleanup.defer(() => server?.close());
+  cleanup.defer(() => kernel?.clients.clear());
+  let databaseReady = false;
+  vi.spyOn(
+    await import("./server-agent-database-startup.js"),
+    "activateGatewayAgentDatabaseStartup",
+  ).mockImplementation(({ preparationReady }) => {
+    void preparationReady.then(() => {
+      databaseReady = true;
+    });
+  });
+  const createKernel = createGatewayKernel;
+  vi.spyOn(await import("./server-kernel.js"), "createGatewayKernel").mockImplementation(
+    async (...args) => {
+      kernel = await createKernel(...args);
+      vi.spyOn(kernel.workerPlacementRuntime!, "startRuntime").mockImplementation(async () => {
+        await Promise.resolve();
+        expect(databaseReady).toBe(true);
+        return null;
+      });
+      for (const { client } of peers) {
+        kernel.clients.add(client);
+      }
+      return kernel;
+    },
+  );
+  vi.spyOn(
+    await import("./server-startup-post-attach.js"),
+    "startGatewayPostAttachRuntime",
+  ).mockImplementation(async (params) => {
+    expect(databaseReady).toBe(false);
+    await params.onStartupPluginsLoaded?.({ pluginRegistry: registry, gatewayMethods: [] });
+    await params.startWorkerEnvironmentRuntime?.();
+    return {
+      stopGatewayUpdateCheck: async () => {},
+      startupSettled: Promise.resolve(),
+      subagentRecoverySettled: Promise.resolve(),
+    };
+  });
+  const token = "startup-node-capability-token";
+  const claim = await acquireTestPortBlock({ offsets: [0] });
+  server = await startClaimedGateway(claim, async () => {
+    await state.writeConfig({
+      gateway: fixture.gatewayStartupTestConfig(claim.port, token),
+    });
+    state.applyEnv();
+    stageActivePluginRegistry(createEmptyPluginRegistry(), null, "default");
+    const { startGatewayServerCore } = await import("./server-start.js");
+    return await withAgentDatabaseStartupAdmission(() =>
+      startGatewayServerCore(claim.port, fixture.gatewayStartupTestOptions(token)),
+    );
+  });
+  expect(affected.client.invalidated).toBe(true);
+  await expect(affected.closed).resolves.toEqual({
+    code: 1012,
+    reason: "node capabilities changed",
+  });
+  expect(unaffected.client.socket.readyState).toBe(WebSocket.OPEN);
+  expect(operator.client.socket.readyState).toBe(WebSocket.OPEN);
 });

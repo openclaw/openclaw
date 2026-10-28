@@ -2,6 +2,7 @@ import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/bro
 import { createAbortError, sleepWithAbort } from "@openclaw/retry";
 import type { BoundedSerialQueue } from "../../../../../src/shared/bounded-serial-queue.js";
 import { createDeferredCore } from "../../../../../src/shared/deferred.js";
+import { getOrCreateWeakOwnerMap } from "../../../../../src/shared/weak-owner-map.js";
 import {
   normalizeVoiceTranscriptText,
   VOICE_TRANSCRIPT_QUEUE_POLICY,
@@ -243,11 +244,7 @@ export function reserveClientVoiceSessionOwner(
   client: GatewayBrowserClient,
   sessionKey: string,
 ): ClientVoiceSessionOwner {
-  let counts = clientVoiceSessionOwnerCounts.get(client);
-  if (!counts) {
-    counts = new Map();
-    clientVoiceSessionOwnerCounts.set(client, counts);
-  }
+  const counts = getOrCreateWeakOwnerMap(clientVoiceSessionOwnerCounts, client);
   const sessionCount = counts.get(sessionKey) ?? 0;
   const clientCount = [...counts.values()].reduce((total, count) => total + count, 0);
   if (

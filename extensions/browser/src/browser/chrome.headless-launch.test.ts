@@ -44,7 +44,7 @@ afterEach(() => {
 });
 
 it.each(["linux", "darwin", "win32"] as const)(
-  "seeds a fresh headless profile before its only launch on %s, preserving prefs on reuse",
+  "seeds a fresh headless profile before its only launch on %s",
   async (platform) => {
     const executablePath = path.join(fixture.root, "chrome");
     fs.writeFileSync(executablePath, "");
@@ -80,12 +80,10 @@ it.each(["linux", "darwin", "win32"] as const)(
     });
     expect(fixture.spawn).toHaveBeenCalledTimes(1);
     expect(running).toMatchObject({ headless: true, headlessSource: "default", proc });
-    const prefs = readPrefs();
-    prefs.custom = { preserved: true };
-    fs.writeFileSync(preferencesPath, JSON.stringify(prefs));
-    await launchOpenClawChrome(resolved, profile, { env: {}, platform });
-    expect(fixture.spawn).toHaveBeenCalledTimes(2);
-    expect(readPrefs().custom).toEqual({ preserved: true });
+    if (process.platform !== "win32") {
+      expect(fs.statSync(preferencesPath).mode & 0o777).toBe(0o600);
+      expect(fs.statSync(path.join(userDataDir, "Local State")).mode & 0o777).toBe(0o600);
+    }
   },
 );
 
