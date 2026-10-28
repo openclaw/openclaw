@@ -1410,7 +1410,7 @@ var External = [
     /(^sessionKey$|^agentId$|^sessionId$|^goalId$|^operationId$|^issuedAtMs$)/u,
     /(^sessionKey$|^agentId$|^sessionId$|^reviewId$|^idempotencyKey$)/u,
     /(^targets$|^patch$)/u,
-    /(^key$|^expectedSidebarRoot$|^expectedCategory$|^expectedArchived$|^expectedSidebarAncestors$|^agentId$|^expectedSessionId$|^expectedLifecycleRevision$|^expectedSandboxMode$|^expectedPermissionMode$|^expectedNativeRuntimeConsent$)/u,
+    /(^key$|^expectedMarkedUnreadAt$|^expectedSidebarRoot$|^expectedCategory$|^expectedArchived$|^expectedSidebarAncestors$|^agentId$|^expectedSessionId$|^expectedLifecycleRevision$|^expectedSandboxMode$|^expectedPermissionMode$|^expectedNativeRuntimeConsent$)/u,
     /(^label$|^autoLabel$|^icon$|^color$|^category$|^boardFace$|^boardPresentation$|^statusNote$|^attention$|^ttlMinutes$|^archived$|^pinned$|^sidebarRoot$|^snoozedUntil$|^unread$|^contextWindow$|^thinkingLevel$|^cyberAccessProgram$|^fastMode$|^toolOverrides$|^verboseLevel$|^traceLevel$|^reasoningLevel$|^responseUsage$|^elevatedLevel$|^execHost$|^execSecurity$|^execAsk$|^execNode$|^permissionMode$|^communication$|^sandboxMode$|^nativeRuntimeConsent$|^model$|^agentRuntime$|^completionOwnerSessionKey$|^inheritedToolPolicyVersion$|^inheritedToolAllow$|^inheritedToolDeny$|^sendPolicy$|^groupActivation$)/u,
     /(^key$|^agentId$|^pluginId$|^namespace$|^value$|^unset$)/u,
     /(^key$|^agentId$|^reason$|^expectedSessionId$)/u,
@@ -16009,6 +16009,9 @@ var External = [
       (unique_1573, unique_1574) => External[795].test(unique_1573) || check_2(value[unique_1573]),
     ) &&
     check_6(value.key) &&
+    (value.expectedMarkedUnreadAt === void 0 ||
+      !("expectedMarkedUnreadAt" in value) ||
+      check_2358(value.expectedMarkedUnreadAt)) &&
     (value.expectedSidebarRoot === void 0 ||
       !("expectedSidebarRoot" in value) ||
       check_181(value.expectedSidebarRoot)) &&

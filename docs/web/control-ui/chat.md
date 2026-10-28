@@ -188,6 +188,28 @@ In the macOS Web experience and Tauri desktop app on macOS, Linux, and Windows, 
 Collapsing the panel leaves only expand-sidebar beside the rail, which keeps New session and search; the content header still starts with back/forward.
 Drag an empty area of the titlebar row to move the window; its buttons keep their normal actions.
 
+## Desktop message input
+
+Choose **Settings → Appearance → Chat → Send shortcut** to control how you submit
+a message from the chat composer on Windows, macOS, or Linux:
+
+| Send shortcut      | Submit a message                                | Add a line break     |
+| ------------------ | ----------------------------------------------- | -------------------- |
+| **Enter**          | Enter                                           | Shift+Enter          |
+| **Cmd/Ctrl+Enter** | Cmd+Enter on macOS; Ctrl+Enter on Windows/Linux | Enter or Shift+Enter |
+
+These shortcuts apply to an ordinary draft when no suggestion menu is handling
+the key. If the agent is already working, submission follows the conversation's
+follow-up mode. With **Enter** selected, Cmd/Ctrl+Enter can switch between queuing
+and steering for that message; see [Stop and abort](/web/control-ui/chat#stop-and-abort).
+
+When using a Chinese, Japanese, or Korean input method, Enter that confirms a
+composition stays with the input method instead of sending the draft. For example,
+type `zhongwen` with a Chinese Pinyin input method and confirm `中文`: the text
+should remain in the composer. Finish composing, then use the configured send
+shortcut or the send button to submit. Choose **Cmd/Ctrl+Enter** if you prefer
+plain Enter to add a line after composition has finished.
+
 ## Mobile message input
 
 On iPhone, iPad (including desktop mode), and Android, Return adds a line break;
@@ -439,9 +461,9 @@ These controls are sparse session overrides, like the model and thinking setting
 
 When `tools.web.search.enabled` is `false`, **Web search** stays off in Chat and New Session. The disabled control explains the global setting. If a session has an older enable override, selecting the control clears that override while search stays off. An explicit session disable remains saved.
 
-Choose **Media** in Chat or New Session to select existing images and videos together where the browser supports mixed selection. Image-only composers keep their existing image-only picker and reject video attachments; on iPhone and iPad Safari its label remains **Attach…** rather than **Photo**. Selecting media stages it in the draft; it does not send the message.
+Choose **Media** in Chat or New Session to select existing images and videos together where the browser supports mixed selection. On iPhone and iPad Safari, choose the single **Add attachment…** row instead; Safari’s native source menu offers library, camera, and file access. Image-only composers keep their image-only picker and reject video attachments. Selecting media stages it in the draft; it does not send the message.
 
-Camera and general-file behavior are unchanged: Android Chrome, Edge, Firefox, and Samsung Internet send **Camera** straight to the device capture input, without opening a web-camera preview first. Desktop browsers keep the preview, capture, and retake flow; iPhone and iPad Safari show **Media** beside the existing **Attach…** action, which retains native capture and general file access. Embedded native hosts keep their existing capture behavior. Canceling capture leaves the message draft unchanged.
+Camera and general-file behavior are unchanged: Android Chrome, Edge, Firefox, and Samsung Internet send **Camera** straight to the device capture input, without opening a web-camera preview first. Desktop browsers keep the preview, capture, and retake flow. iPhone and iPad Safari use their native source menu without a duplicate **Media** choice. Embedded native hosts keep their existing capture behavior. Canceling capture leaves the message draft unchanged.
 
 Video files selected in Chat or New Session show a small local frame preview with a play badge beside the filename. The slot keeps its size while loading. If the browser cannot decode the video promptly, the play icon remains. Removing the attachment releases its preview; generating the preview does not upload the video.
 
