@@ -65,7 +65,6 @@ declare module "@solidjs/web" {
       "openclaw-chat-tool-card": HTMLAttributes<HTMLElement>;
       "openclaw-chat-tool-icon": HTMLAttributes<HTMLElement>;
       "openclaw-chat-tool-reviews": HTMLAttributes<HTMLElement>;
-      "openclaw-chat-tool-outcome-summary": HTMLAttributes<HTMLElement>;
       "openclaw-chat-tool-review-outcome": HTMLAttributes<HTMLElement>;
       "openclaw-custodian-setup-card": HTMLAttributes<HTMLElement>;
       "openclaw-agent-memory-panel": HTMLAttributes<HTMLElement>;

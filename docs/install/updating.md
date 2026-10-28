@@ -510,7 +510,7 @@ schemas; follow [downgrade recovery](/reference/database-schemas/integrity-and-r
 before running either bridge release against that state.
 
 Back up the state first and use a [supported Node version](/install/node):
-Node 24.22.1+ on the 24.x line, or Node 26.12.1+. Keep the same owning account,
+Node 24.16.0+ on the 24.x line, or Node 26.1.0+. Node 24.22.1+/26.12.1+ is strongly recommended for security; older compatible releases warn without blocking the update. Keep the same owning account,
 installation prefix, profile, and state/configuration paths throughout.
 
 For an npm installation with an OpenClaw-managed Gateway service, run this

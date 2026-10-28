@@ -1,18 +1,9 @@
-import {
-  DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
-  GatewayProtocolRequestTimeoutError,
-} from "@openclaw/gateway-client/browser";
+import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { sleepWithAbort } from "@openclaw/retry";
 import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import { t } from "../../i18n/index.ts";
 import { visibleChatHistoryMessages } from "../../lib/chat/message-visibility.ts";
-import {
-  isAgentDatabaseInspectionPendingError,
-  resolveGatewayReadRetryDelayMs,
-} from "../../lib/gateway-availability.ts";
 import {
   isUiSelectedGlobalSessionKey,
   resolveUiSelectedSessionAgentId,
@@ -22,7 +13,7 @@ import {
   chatHistoryRequestParams,
   CHAT_HISTORY_TOOL_RESULT_MAX_CHARS,
 } from "./chat-history-request-params.ts";
-import { CHAT_HISTORY_RETRY_WINDOW_MS, isRetryableChatReadError } from "./chat-history-retry.ts";
+import { retryChatHistoryRead } from "./chat-history-retry.ts";
 import {
   type ChatHistoryResult,
   type ChatHistoryObservation,
@@ -203,23 +194,6 @@ export function requestSharedHistory(
         : undefined;
     const controller = new AbortController();
     const consumers = new Set([consumer]);
-    let lastRetryableError: unknown;
-    const deadlineAt = Date.now() + CHAT_HISTORY_RETRY_WINDOW_MS;
-    // Readers joining near the shared deadline may need Retry; one read owns one budget.
-    const timeout = setTimeout(() => {
-      controller.abort(
-        isAgentDatabaseInspectionPendingError(lastRetryableError)
-          ? lastRetryableError
-          : new GatewayProtocolRequestTimeoutError(
-              { method, timeoutMs: CHAT_HISTORY_RETRY_WINDOW_MS, requestSent: true },
-              t("chat.historyRequestTimedOut"),
-            ),
-      );
-    }, CHAT_HISTORY_RETRY_WINDOW_MS);
-    const shouldRetry = () =>
-      !controller.signal.aborted &&
-      Date.now() < deadlineAt &&
-      [...consumers].some((entry) => entry.isCurrent());
     const attempt = async () => {
       const initial = prepared;
       prepared = undefined;
@@ -276,30 +250,19 @@ export function requestSharedHistory(
       }
       return { ...response, observation, consumersAtIssue };
     };
-    const signal = controller.signal;
-    const promise = (async () => {
-      let attemptNumber = 0;
-      for (;;) {
-        try {
-          return await attempt();
-        } catch (error) {
-          if (!shouldRetry() || !isRetryableChatReadError(error, method)) {
-            throw error;
-          }
-          lastRetryableError = error;
-          for (const entry of consumers) {
-            if (entry.isCurrent()) {
-              entry.onRetry?.();
-            }
-          }
-          await sleepWithAbort(resolveGatewayReadRetryDelayMs(error, attemptNumber++), signal);
-          if (!shouldRetry()) {
-            throw error;
+    const promise = retryChatHistoryRead({
+      method,
+      controller,
+      isCurrent: () => [...consumers].some((entry) => entry.isCurrent()),
+      request: attempt,
+      onRetry: () => {
+        for (const entry of consumers) {
+          if (entry.isCurrent()) {
+            entry.onRetry?.();
           }
         }
-      }
-    })().finally(() => {
-      clearTimeout(timeout);
+      },
+    }).finally(() => {
       if (requests?.get(requestKey)?.promise === promise) {
         requests.delete(requestKey);
       }
@@ -403,21 +366,29 @@ async function requestOlderChatHistoryPage(
   sessionKey: string,
   requestAgentId: string | undefined,
   offset: number,
+  isCurrent: () => boolean,
   signal?: AbortSignal,
 ): Promise<ChatHistoryResult> {
   const result = attachHistoryActivity(
-    await client.request<ChatHistoryResult>(
-      "chat.history",
-      {
-        sessionKey,
-        toolResultMaxChars: CHAT_HISTORY_TOOL_RESULT_MAX_CHARS,
-        ...(requestAgentId ? { agentId: requestAgentId } : {}),
-        limit: CHAT_HISTORY_OLDER_PAGE_LIMIT,
-        maxBytes: CHAT_HISTORY_OLDER_PAGE_MAX_BYTES,
-        offset,
-      },
-      { signal },
-    ),
+    await retryChatHistoryRead({
+      method: "chat.history",
+      controller: new AbortController(),
+      signal,
+      isCurrent,
+      request: (readSignal) =>
+        client.request<ChatHistoryResult>(
+          "chat.history",
+          {
+            sessionKey,
+            toolResultMaxChars: CHAT_HISTORY_TOOL_RESULT_MAX_CHARS,
+            ...(requestAgentId ? { agentId: requestAgentId } : {}),
+            limit: CHAT_HISTORY_OLDER_PAGE_LIMIT,
+            maxBytes: CHAT_HISTORY_OLDER_PAGE_MAX_BYTES,
+            offset,
+          },
+          { signal: readSignal },
+        ),
+    }),
   );
   return {
     ...result,
@@ -450,6 +421,7 @@ export async function loadOlderChatHistoryPage(
     sessionKey,
     requestAgentId,
     offset,
+    () => acceptsHistoryResult(state, ownership),
     signal,
   );
   if (signal?.aborted || !acceptsHistoryResult(state, ownership)) {
@@ -477,29 +449,27 @@ export async function fetchStagedOlderHistoryPage(
   const client = state.client;
   const connectionEpoch = state.connectionEpoch;
   const sessionKey = state.sessionKey;
-  const historyVersion = chatHistoryRequests(state).historyVersion;
+  const version = chatHistoryRequests(state).historyVersion;
   const requestAgentId = isUiSelectedGlobalSessionKey(state, sessionKey)
     ? resolveUiSelectedSessionAgentId(state)
     : undefined;
+  const claim = {
+    client,
+    connectionEpoch,
+    sessionKey,
+    sessions: state.sessions,
+    version,
+    agentId: requestAgentId,
+  };
   const result = await requestOlderChatHistoryPage(
     client,
     sessionKey,
     requestAgentId,
     offset,
+    () => acceptsHistoryResult(state, claim),
     signal,
   );
-  return {
-    claim: {
-      client,
-      connectionEpoch,
-      sessionKey,
-      // Any later history request or reset voids this page even on the same cursor.
-      historyVersion,
-      ...(requestAgentId ? { agentId: requestAgentId } : {}),
-    },
-    requestedOffset: offset,
-    result,
-  };
+  return { claim, requestedOffset: offset, result };
 }
 
 /** A staged page is valid only for the exact connection, session, and the
@@ -512,13 +482,7 @@ export function isStagedOlderHistoryPageCurrent(
   const claim = staged.claim;
   const pagination = state.chatHistoryPagination;
   return (
-    state.client === claim.client &&
-    state.connected &&
-    state.connectionEpoch === claim.connectionEpoch &&
-    chatHistoryRequests(state).historyVersion === claim.historyVersion &&
-    state.sessionKey === claim.sessionKey &&
-    (!isUiSelectedGlobalSessionKey(state, claim.sessionKey) ||
-      resolveUiSelectedSessionAgentId(state) === claim.agentId) &&
+    acceptsHistoryResult(state, claim) &&
     pagination.hasMore &&
     pagination.nextOffset === staged.requestedOffset
   );

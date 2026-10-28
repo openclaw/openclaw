@@ -196,7 +196,7 @@ All successful results include `changed`: identical before/after input returns `
     - `fileBytes`
     - `fileFormat`
     - `fileQuality`
-    - `fileScale`
+    - `fileScale` (actual device scale used for PNG, including pixel-budget downscaling; configured scale for PDF)
     - `fileMaxWidth`
 
   </Accordion>

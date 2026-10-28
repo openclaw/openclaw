@@ -1,6 +1,7 @@
-import syncFs from "node:fs";
+import callbackFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { promisify } from "node:util";
 import { openRootFile, type RootFileOpenResult } from "../infra/boundary-file-read.js";
 import { FsSafeError, root as fsRoot } from "../infra/fs-safe.js";
 import { decodeUtf8Input } from "../infra/utf8-input.js";
@@ -16,7 +17,10 @@ import {
 import { toRelativeSandboxPath } from "./path-policy.js";
 import { isPathBoundaryEscapeError, markHostRootEscape } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
-import { resolveHostWorkspaceRoot } from "./workspace-write-scope.js";
+import { resolveHostWorkspaceRoot, resolveHostRootAsync } from "./workspace-write-scope.js";
+
+const readFileDescriptor = promisify(callbackFs.readFile);
+const closeFileDescriptor = promisify(callbackFs.close);
 
 export type SandboxApplyPatchConfig = {
   root: string;
@@ -144,7 +148,7 @@ export async function resolvePatchFileOps(options: ApplyPatchFileOptions): Promi
   const initialRoot = await fsRoot(containmentRoot, { assertBeforeMutation: assertCurrent });
   const roots = new Map([[path.resolve(containmentRoot), initialRoot]]);
   const resolveTarget = async (filePath: string) => {
-    const selectedRoot = resolveHostWorkspaceRoot(containmentRoot, filePath);
+    const selectedRoot = await resolveHostRootAsync(containmentRoot, filePath);
     const relative = toRelativeSandboxPath(selectedRoot, filePath);
     let root = roots.get(selectedRoot);
     if (!root) {
@@ -162,7 +166,7 @@ export async function resolvePatchFileOps(options: ApplyPatchFileOptions): Promi
   return withPatchMemoryWriteProvenance(options.memoryWriteProvenance, {
     readFile: (filePath) =>
       runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
-        const selectedRoot = resolveHostWorkspaceRoot(containmentRoot, filePath);
+        const selectedRoot = await resolveHostRootAsync(containmentRoot, filePath);
         const opened = await openRootFile({
           absolutePath: filePath,
           rootPath: selectedRoot,
@@ -172,9 +176,11 @@ export async function resolvePatchFileOps(options: ApplyPatchFileOptions): Promi
         assertBoundaryRead(opened, filePath);
         try {
           assertCurrent();
-          return decodeUtf8Input(syncFs.readFileSync(opened.fd), `File ${filePath}`);
+          const buffer = await readFileDescriptor(opened.fd);
+          assertCurrent();
+          return decodeUtf8Input(buffer, `File ${filePath}`);
         } finally {
-          syncFs.closeSync(opened.fd);
+          await closeFileDescriptor(opened.fd);
         }
       }),
     writeFile: async (filePath, content) => {

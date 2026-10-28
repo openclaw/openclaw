@@ -14,9 +14,9 @@ export const PAGE_BUDGET_CHARS = 2 * TEXT_PAGE_DEFAULT_CHARS;
 /** Top decile by authored-link degree within the current partition. */
 export const DEFAULT_HUB_PERCENTILE = 90;
 /** Below this many current pages one page spans several percentile points; no hubs. */
-export const HUB_MIN_PAGES = 20;
+const HUB_MIN_PAGES = 20;
 /** A hub links with at least this many distinct pages, whatever its percentile. */
-export const HUB_MIN_DEGREE = 10;
+const HUB_MIN_DEGREE = 10;
 const SECTIONS_REPORTED = 6;
 const CANDIDATES_REPORTED = 3;
 
@@ -153,9 +153,9 @@ export function linkGraph(records: readonly LoadedRecord[], current: LoadedRecor
   };
 }
 
-export type HubStatus = Static<typeof PageReport>["hub"];
+type HubStatus = Static<typeof PageReport>["hub"];
 /** Percentile rank by degree among current pages, with a vault-size and degree floor. */
-export function hubStatus(graph: LinkGraph, pageId: string, hubPercentile: number): HubStatus {
+function hubStatus(graph: LinkGraph, pageId: string, hubPercentile: number): HubStatus {
   const degree = graph.neighbours.get(pageId)?.size ?? 0,
     pages = graph.pages.size;
   let below = 0;
@@ -174,7 +174,7 @@ export function hubStatus(graph: LinkGraph, pageId: string, hubPercentile: numbe
   };
 }
 
-export const pageBudget = (hub: Pick<HubStatus, "hub">) =>
+const pageBudget = (hub: Pick<HubStatus, "hub">) =>
   hub.hub ? HUB_PAGE_BUDGET_CHARS : PAGE_BUDGET_CHARS;
 
 /** Current pages connected to a page by a body link or a typed relationship. */
@@ -194,7 +194,7 @@ export function connectedPages(graph: LinkGraph, pageId: string): LoadedRecord[]
 
 const clip = (value: string, max: number) => Array.from(value).slice(0, max).join("");
 /** Whole-word, case-insensitive mentions of a page's title or aliases of three characters or more. */
-export function pageMentions(body: string, page: LoadedRecord) {
+function pageMentions(body: string, page: LoadedRecord) {
   let count = 0;
   const names = [page.title, ...(page.metadata.aliases ?? [])].map((n) => n.trim());
   for (const name of new Set(names.filter((n) => n.length >= 3))) {

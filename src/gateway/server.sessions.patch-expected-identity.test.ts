@@ -1,6 +1,5 @@
 // Compare-and-swap session patches must reject reset replacements atomically.
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { createDeferred as createPluginDeferred } from "../../test/helpers/promise.js";
 import {
   loadSessionEntry,
   patchSessionEntryCore,
@@ -11,7 +10,8 @@ import { applySessionEntryCanonicalReplacements } from "../config/sessions/sessi
 import type { SessionEntry } from "../config/sessions/types.js";
 import { runSessionMutation } from "../sessions/session-controller.lifecycle.js";
 import { createDeferredCore as createDeferred } from "../shared/deferred.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
 import { embeddedRunMock, writeSessionStore } from "./test-helpers.js";
 import {
@@ -60,7 +60,8 @@ function expectNoPublication(context: ReturnType<typeof observingContext>) {
 
 afterEach(async () => {
   await disposeSessionReadContexts();
-  closeOpenClawStateDatabaseForTest();
+  await closeOpenClawAgentDatabasesAsync();
+  await closeStateDatabaseForTest();
 });
 
 test.each([undefined, "session-a"])(
@@ -474,8 +475,8 @@ describe("plugin session ownership", () => {
 
   test("sessions.patch rechecks plugin ownership after waiting for lifecycle admission", async () => {
     await seed();
-    const releaseMutation = createPluginDeferred();
-    const { promise: mutationStarted, resolve: markMutationStarted } = createPluginDeferred();
+    const releaseMutation = createDeferred();
+    const { promise: mutationStarted, resolve: markMutationStarted } = createDeferred();
     const mutation = runSessionMutation({
       scope: storePath,
       identities: [sessionKey, sessionId],
@@ -492,8 +493,7 @@ describe("plugin session ownership", () => {
 
     const [patched] = await Promise.all([pendingPatch, mutation]);
 
-    expect(patched.ok).toBe(false);
-    expect(patched.error?.message).toContain("did not create it");
+    expectDenied(patched, "patch", sessionKey);
     expect(readEntry()).toMatchObject({ pluginOwnerId: "other-plugin" });
     expect(readEntry()?.label).toBeUndefined();
   });

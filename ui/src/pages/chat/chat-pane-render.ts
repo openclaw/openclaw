@@ -442,6 +442,8 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         historyHasMore || this.history.loadingOlder
           ? {
               hasMore: historyHasMore,
+              error: this.history.olderError,
+              connected: state.connected,
               loading:
                 this.history.loadingOlder ||
                 (catalogKey ? this.history.catalogLoading : state.chatLoading),

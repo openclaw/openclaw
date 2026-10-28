@@ -1014,6 +1014,8 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/upgrade-survivor/missing-configured-plugin-migration.mjs!",
   // run.sh starts this persistent native peer as a separate process.
   "scripts/e2e/lib/upgrade-survivor/native-assignment-app-server.mjs!",
+  // native-plugin-ui.sh invokes fixture creation and packaged upgrade probes through Node.
+  "scripts/e2e/lib/upgrade-survivor/native-plugin-ui.mjs!",
   // package-activation-recovery.sh preloads this observer into the released updater.
   "scripts/e2e/lib/upgrade-survivor/package-activation-fault.mjs!",
   // run.sh preloads this fixture adapter through NODE_OPTIONS by path.

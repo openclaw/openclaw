@@ -222,8 +222,9 @@ export function createDiffsTool(params: {
           context: artifactContext,
         });
         let fileBytes: number;
+        let renderedScale: number;
         try {
-          await screenshotter.screenshotHtml({
+          renderedScale = await screenshotter.screenshotHtml({
             html,
             outputPath: artifactFile.filePath,
             theme,
@@ -259,7 +260,7 @@ export function createDiffsTool(params: {
             fileBytes,
             fileFormat: image.format,
             fileQuality: image.qualityPreset,
-            fileScale: image.scale,
+            fileScale: renderedScale,
             fileMaxWidth: image.maxWidth,
           },
         );
