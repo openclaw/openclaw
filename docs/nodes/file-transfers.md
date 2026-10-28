@@ -91,8 +91,7 @@ remain Gateway-owned; there is no separate remote Memory switch.
 
 These paths can differ. The Gateway path identifies the workspace binding;
 `remoteRoot` identifies the actual node directory. This setup does not copy an
-existing Gateway workspace. Before switching an existing agent, copy its needed
-workspace files to the node and keep a backup.
+existing Gateway workspace.
 
 #### Prepare and pair the node
 
@@ -102,8 +101,20 @@ is enabled by default; the examples enable it explicitly. If either host uses
 required plugins in the list.
 
 Create `/workspace` on the node and give the node service account read and write
-access. Use its resolved absolute path, with no symlink aliases. Merge this into
-the **node's** `openclaw.json`:
+access. Use its resolved absolute path, with no symlink aliases. Before enabling
+the Gateway mapping, populate this directory:
+
+- For an existing agent, copy its workspace files from the current host. Preserve
+  its instructions and Memory files, and keep a backup before switching hosts.
+- For a fresh agent, create `AGENTS.md` and the other documents needed by that
+  agent. Start from the templates in the [workspace file map](/concepts/agent-workspace#workspace-file-map)
+  and customize them for the agent. Do not overwrite existing documents.
+
+Confirm that `/workspace/AGENTS.md` exists and is readable and writable by the
+node service account. The Gateway does not create bootstrap documents after a
+remote workspace mapping is registered.
+
+Merge this into the **node's** `openclaw.json`:
 
 ```json5
 {
@@ -256,9 +267,17 @@ tools. Native Codex tools and other plugins retain their own permissions.
 
 #### Verify the setup
 
-Validate both configuration files with `openclaw config validate`, then reload
-or restart the affected services. Start a fresh session for the mapped agent.
-Check each boundary before using the setup for normal work:
+Validate both configuration files with `openclaw config validate`, then apply
+the Gateway configuration. After the command allowlist is active, reconnect the
+node: restart its installed service with `openclaw node restart`, or stop and
+run `openclaw node run` without `--pair` under the same account and state
+directory to reuse its saved connection. On the Gateway, inspect
+`openclaw nodes pending` and approve the updated command surface with
+`openclaw nodes approve <nodeRequestId>` if requested. A Gateway configuration
+reload alone cannot approve commands withheld during the earlier pairing.
+
+Start a fresh session for the mapped agent. Check each boundary before using the
+setup for normal work:
 
 1. On the Gateway, run `openclaw nodes describe --node <paired-node-id>`.
    Confirm that the node is connected and exposes all seven commands above.
