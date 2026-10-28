@@ -39,6 +39,7 @@ const repositoryScriptEntries = [
   "scripts/perf/anthropic-request-construction.ts!",
   "scripts/perf/auth-file-watch-events-measure.ts!",
   "scripts/perf/catalog-worker-churn-measure.mjs!",
+  "scripts/perf/code-mode-result-load-measure.ts!",
   "scripts/perf/completion-payload-bytes-measure.ts!",
   "scripts/perf/connect-profile-binding-measure.ts!",
   "scripts/perf/cron-reader-reuse-measure.ts!",

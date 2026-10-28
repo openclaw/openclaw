@@ -263,18 +263,21 @@ export async function runBridgeRequest(params: {
             value = params.results.save(values[0], params.runtime.hasNetworkContent());
           }
         } else if (params.request.method === "resultLoad") {
-          const loaded = sessionStore
-            ? await sessionStore.load(values[0])
-            : params.results.load(values[0]);
+          if (!sessionStore) {
+            const loaded = params.results.load(values[0]);
+            if (loaded.networkContent) {
+              params.runtime.observeNetworkContent(params.parentToolCallId);
+            }
+            // The guest decodes its own copy; keep the stored JSON intact on the host.
+            params.reply.settleJson(true, loaded.json);
+            return;
+          }
+          const loaded = await sessionStore.load(values[0]);
           if (loaded.networkContent) {
             params.runtime.observeNetworkContent(params.parentToolCallId);
           }
           // Session values need an envelope to preserve missing/undefined across the JSON bridge.
-          value = sessionStore
-            ? loaded.value === undefined
-              ? {}
-              : { value: loaded.value }
-            : loaded.value;
+          value = loaded.value === undefined ? {} : { value: loaded.value };
         } else if (sessionStore) {
           await sessionStore.delete(values[0]);
         } else {
