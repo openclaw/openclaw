@@ -24,16 +24,40 @@ struct StaleGatewayServiceReplacement {
         return await self.install()
     }
 
+    /// Replacing the service moves the Gateway to this build's version, so it follows the same
+    /// update policy as setup and post-update repair: extended-stable and channel install
+    /// policies keep the operator's Gateway.
+    nonisolated static func admits(
+        connectionMode: AppState.ConnectionMode,
+        isPaused: Bool,
+        launchAgentUsesManagedCLI: Bool,
+        gatewayUpdateChannel: String?,
+        installPolicy: String?,
+        launchAgentWriteDisabled: Bool) -> Bool
+    {
+        connectionMode == .local && !isPaused && CLIInstallPrompter.managedRepairGatesOpen(
+            launchAgentUsesManagedCLI: launchAgentUsesManagedCLI,
+            gatewayUpdateChannel: gatewayUpdateChannel,
+            installPolicy: installPolicy,
+            launchAgentWriteDisabled: launchAgentWriteDisabled)
+    }
+
     static func detect(bundle: Bundle = .main, profile: AppProfile = .current) async -> Self? {
         let app = AppStateStore.shared
         let runtimes = profile.stateDirectoryURL().appendingPathComponent("runtime", isDirectory: true)
-        guard app.connectionMode == .local, !app.isPaused,
-              !GatewayLaunchAgentManager.isLaunchAgentWriteDisabled(),
-              let buildID = bundle.infoDictionary?["OpenClawRuntimeBuildID"] as? String,
-              let previous = GatewayLaunchAgentManager.installedServiceCLI(),
+        guard let buildID = bundle.infoDictionary?["OpenClawRuntimeBuildID"] as? String,
+              let previous = GatewayLaunchAgentManager.installedServiceCLI()
+        else { return nil }
+        let appManaged = CLIInstallPrompter.launchAgentUsesManagedCLI(programArguments: previous.prefix + ["gateway"])
+        guard Self.admits(
+                  connectionMode: app.connectionMode,
+                  isPaused: app.isPaused,
+                  launchAgentUsesManagedCLI: appManaged,
+                  gatewayUpdateChannel: OpenClawConfigFile.gatewayUpdateChannel(),
+                  installPolicy: CLIInstallPolicy.storedPolicy(),
+                  launchAgentWriteDisabled: GatewayLaunchAgentManager.isLaunchAgentWriteDisabled()),
               GatewayLaunchAgentManager.bundledRuntimeReplacementError(
-                  appManaged: CLIInstallPrompter.launchAgentUsesManagedCLI(
-                      programArguments: previous.prefix + ["gateway"]),
+                  appManaged: appManaged,
                   installedRuntimePath: previous.prefix.first,
                   stateDirectory: profile.stateDirectoryURL()) == nil,
               // Ordinary launches stop here; only a stale service seeds this build early.

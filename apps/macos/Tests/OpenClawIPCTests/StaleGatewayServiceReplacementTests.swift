@@ -32,6 +32,23 @@ struct StaleGatewayServiceReplacementTests {
         #expect(recorder.steps == ["stop", "credentials", "restore"])
     }
 
+    @Test func `detection keeps operator-selected Gateway versions`() {
+        func admits(channel: String? = nil, policy: String? = nil) -> Bool {
+            StaleGatewayServiceReplacement.admits(
+                connectionMode: .local,
+                isPaused: false,
+                launchAgentUsesManagedCLI: true,
+                gatewayUpdateChannel: channel,
+                installPolicy: policy,
+                launchAgentWriteDisabled: false)
+        }
+        #expect(admits())
+        #expect(admits(channel: "beta", policy: "exact"))
+        #expect(!admits(channel: "extended-stable"))
+        #expect(!admits(policy: "beta"))
+        #expect(!admits(policy: "stable"))
+    }
+
     @Test func `a refused stop never runs credential preparation`() async throws {
         let recorder = Recorder()
         await #expect(throws: GatewayHostingError.self) {
