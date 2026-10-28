@@ -230,7 +230,17 @@ prepare the preserved live files again. This uses the existing retention window,
 without reference counts or a new durable reservation.
 
 A missing-pack load reconstructs the saved root from the projection or canonical
-copy. An intact pending-checkpoint result can also reconstruct the saved baseline
+copy. The repair snapshot traverses surviving packs reachable from that saved
+root, using their paths and directory membership only as selection hints. Normal
+inventory reads still require every pack. Recovery scans current file content;
+it does not substitute retained hashes for live bytes or search unrelated old
+packs. After the ordinary candidates, one additional canonical candidate includes
+paths from a completed projection scan. This retains accepted guest additions
+outside initial admission and the current host index, while preserving the
+ordinary canonical candidate when later guest names overlap unrelated host files.
+Every candidate must still reproduce the exact saved root before metadata
+replacement; partial scan results never supply candidate membership.
+An intact pending-checkpoint result can also reconstruct the saved baseline
 by reversing its authenticated delta in memory and verifying the saved tree digest.
 Neither filesystem is changed by reconstruction. If no candidate reproduces the
 saved digest, reconciliation reports both preserved paths and an inspection

@@ -1,9 +1,14 @@
 /**
- * Frozen Anthropic request construction with tools, cache control and a payload hook.
+ * Anthropic request construction with frozen history, a changing tail, tools and hooks.
  * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/anthropic-request-construction.ts
  *   --messages 40 --iterations 2000 [--allocation] [--baseline-dir /absolute/source-overlay]
  * Repeat with --messages 150. --mode build omits serialization; --mode serialize
- * reuses one prepared body. The default full mode runs both production owners.
+ * reuses one prepared body. Full mode changes the mutable tail and max_tokens each call.
+ * --retained measures real projection/fragment ownership and release (use --expose-gc).
+ * --images uses 48 messages with 12 frozen 64 KiB inline images (user + tool results),
+ * the real host image normalizer and existing serialization on both revisions.
+ * All non-build modes consume contiguous bytes, matching the guarded Blob body path.
+ * scenarioHashes must match across revisions: tool turns, moved cache boundaries, hook edits.
  * Run five alternating base/candidate arms per workload and instrumentation mode.
  * Acceptance: identical wireSha256, lower allocation/CPU per request, no controlled
  * material GC regression. Gate CPU/GC on untraced passes, allocation separately.
@@ -14,6 +19,7 @@ import { hash } from "node:crypto";
 import { Session, type HeapProfiler } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import path from "node:path";
+import { setImmediate } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import { GCProfiler } from "node:v8";
 import type { AnthropicOptions } from "../../packages/ai/src/provider-options.js";
@@ -26,6 +32,8 @@ const { values } = parseArgs({
     mode: { type: "string", default: "full" },
     iterations: { type: "string", default: "2000" },
     allocation: { type: "boolean", default: false },
+    retained: { type: "boolean", default: false },
+    images: { type: "boolean", default: false },
     "baseline-dir": { type: "string" },
   },
 });
@@ -34,7 +42,7 @@ assert(
   values.mode === "full" || values.mode === "build" || values.mode === "serialize",
   "--mode must be full, build or serialize",
 );
-const messageCount = Number(values.messages);
+const messageCount = values.images ? 48 : Number(values.messages);
 const iterations = parseStrictIntegerOption({
   raw: values.iterations,
   fallback: 2000,
@@ -50,11 +58,14 @@ const { buildAnthropicRequest, prepareAnthropicRequest } =
   await import("../../packages/ai/src/transports/anthropic-messages.js");
 const { transformTransportMessages } =
   await import("../../src/agents/transport-message-transform.js");
-const { freezeJsonSnapshot, isDeeplyFrozenPlainData } =
+const { freezeJsonSnapshot, isDeeplyFrozenPlainData, isPlainData } =
   await import("../../src/shared/immutable-data.js");
+const { normalizeAnthropicInlineContentBlocks } =
+  await import("../../src/media/anthropic-inline-images.js");
 configureAiTransportHost({
+  normalizeAnthropicInlineContentBlocks,
   transformTransportMessages,
-  immutableData: { freezeJsonSnapshot, isDeeplyFrozenPlainData },
+  immutableData: { freezeJsonSnapshot, isDeeplyFrozenPlainData, isPlainData },
 });
 const model: Model<"anthropic-messages"> = {
   id: "claude-sonnet-4-5",
@@ -63,7 +74,7 @@ const model: Model<"anthropic-messages"> = {
   api: "anthropic-messages",
   baseUrl: "https://api.anthropic.com",
   reasoning: true,
-  input: ["text"],
+  input: values.images ? ["text", "image"] : ["text"],
   contextWindow: 200000,
   maxTokens: 1024,
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -106,8 +117,26 @@ for (let index = 0; index < messageCount; index++) {
     });
   }
 }
-messages.forEach(freezeJsonSnapshot);
-const context: Context = {
+if (values.images) {
+  // Synthetic PNG headers exercise MIME sniffing without invoking a native image codec.
+  const bytes = Buffer.alloc(64 * 1024, 0xa7);
+  Buffer.from("89504e470d0a1a0a0000000d49484452", "hex").copy(bytes);
+  for (let index = 0; index < 36; index += 6) {
+    for (const offset of [0, 2]) {
+      const message = messages[index + offset]!;
+      assert(message.role === "toolResult" || message.role === "user");
+      assert(Array.isArray(message.content));
+      bytes.writeUInt32BE(index + offset, 32);
+      message.content.push({
+        type: "image",
+        data: bytes.toString("base64"),
+        mimeType: "image/png",
+      });
+    }
+  }
+}
+messages.slice(0, -1).forEach(freezeJsonSnapshot);
+let context: Context | undefined = {
   systemPrompt: "Synthetic system block. ".repeat(100),
   messages,
   tools: [
@@ -127,22 +156,193 @@ const options: AnthropicOptions = {
   thinkingEnabled: true,
   onPayload: () => undefined,
 };
-async function build() {
-  const built = await buildAnthropicRequest(model, context, options, "transport", false, false);
-  return (await prepareAnthropicRequest(built.params, model, options, "")).params;
+const serialize =
+  values["baseline-dir"] && !values.images
+    ? undefined
+    : (await import("../../packages/ai/src/transports/anthropic-request-body.js"))
+        .serializeAnthropicRequestBody;
+type Prepared = Awaited<ReturnType<typeof prepareAnthropicRequest>>;
+async function build(requestOptions = options): Promise<Prepared> {
+  assert(context);
+  const built = await buildAnthropicRequest(
+    model,
+    context,
+    requestOptions,
+    "transport",
+    false,
+    false,
+  );
+  return prepareAnthropicRequest(built.params, model, requestOptions, "");
 }
-const prepared = await build();
-const expectedWire = JSON.stringify(prepared);
-let last: typeof prepared | string = prepared;
-async function run() {
-  for (let index = 0; index < iterations; index++) {
-    const body = values.mode === "serialize" ? prepared : await build();
-    last = values.mode === "build" ? body : JSON.stringify({ ...body, stream: true });
+function changeTail(index: number): void {
+  const tail = messages.at(-1)!;
+  assert(tail.role === "user" || tail.role === "toolResult");
+  tail.content = [{ type: "text", text: `Changing tail ${index}: café 🦞` }];
+  options.maxTokens = 1000 + (index % 7);
+}
+const encoder = new TextEncoder();
+async function encode(prepared: Prepared): Promise<Uint8Array<ArrayBuffer>> {
+  const body = { ...prepared.params, stream: true as const };
+  const encoded = serialize ? serialize(body, prepared.messageSources) : JSON.stringify(body);
+  // This is the exact contiguous immutable-body copy performed by the fetch guard.
+  return encoded instanceof Blob
+    ? new Uint8Array(await encoded.arrayBuffer())
+    : encoder.encode(encoded);
+}
+async function collect(): Promise<void> {
+  for (let index = 0; index < 3; index++) {
+    await setImmediate();
+    globalThis.gc?.();
   }
 }
+if (values.retained) {
+  assert(globalThis.gc, "--retained requires --expose-gc");
+  assert(!values.allocation, "--retained and --allocation are separate passes");
+  changeTail(0);
+  const held: { prepared?: Prepared; bytes?: Uint8Array<ArrayBuffer> } = {
+    prepared: await build(),
+  };
+  assert(held.prepared);
+  // Conversion owners are already warm: the next delta is fragment retention.
+  await collect();
+  const beforeFragments = process.memoryUsage();
+  held.bytes = await encode(held.prepared);
+  assert.equal(
+    hash("sha256", held.bytes),
+    hash("sha256", JSON.stringify({ ...held.prepared.params, stream: true })),
+  );
+  const wireBytes = held.bytes.byteLength;
+  const wireSha256 = hash("sha256", held.bytes);
+  delete held.bytes;
+  await collect();
+  const withFragments = process.memoryUsage();
+  const sourceRefs = messages.slice(0, -1).map((message) => new WeakRef(message));
+  const projectionRefs = (held.prepared.messageSources ?? held.prepared.params.messages).map(
+    (message) => {
+      assert(typeof message === "object" && message !== null);
+      return new WeakRef(message);
+    },
+  );
+  delete held.prepared;
+  context = undefined;
+  messages.length = 0;
+  await collect();
+  const afterHistoryReleased = process.memoryUsage();
+  console.log(
+    JSON.stringify({
+      messages: messageCount,
+      retained: true,
+      baseline: Boolean(values["baseline-dir"]),
+      wireBytes,
+      wireSha256,
+      beforeFragments,
+      withFragments,
+      afterHistoryReleased,
+      sourceKeys: sourceRefs.length,
+      sourceKeysCollected: sourceRefs.filter((reference) => reference.deref() === undefined).length,
+      projectionKeys: projectionRefs.length,
+      projectionKeysCollected: projectionRefs.filter((reference) => reference.deref() === undefined)
+        .length,
+      hostLoad: loadavg(),
+    }),
+  );
+  process.exit(0);
+}
+async function scenarioProof() {
+  assert(context);
+  changeTail(0);
+  const scenarios: Array<{ name: string; bytes: number; sha256: string }> = [];
+  const record = async (name: string, requestOptions = options) => {
+    const prepared = await build(requestOptions);
+    const actual = await encode(prepared);
+    const expected = JSON.stringify({ ...prepared.params, stream: true });
+    assert.equal(hash("sha256", actual), hash("sha256", expected), name);
+    scenarios.push({ name, bytes: actual.byteLength, sha256: hash("sha256", actual) });
+  };
+  await record("initial");
+  const initialLength = messages.length;
+  messages.push(
+    freezeJsonSnapshot({
+      role: "assistant",
+      timestamp: initialLength,
+      provider: model.provider,
+      api: model.api,
+      model: model.id,
+      stopReason: "toolUse",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      content: [
+        { type: "toolCall", id: "boundary_call", name: "lookup", arguments: { query: "next" } },
+      ],
+    }),
+  );
+  await record("tool_call");
+  messages.push(
+    freezeJsonSnapshot({
+      role: "toolResult",
+      timestamp: initialLength + 1,
+      toolCallId: "boundary_call",
+      toolName: "lookup",
+      isError: false,
+      content: [{ type: "text", text: "Result 🦞" }],
+    }),
+  );
+  await record("tool_result");
+  messages.push({ role: "user", timestamp: initialLength + 2, content: "Move checkpoint" });
+  await record("cache_boundary_moved");
+  await record("hook_edit", {
+    ...options,
+    onPayload(payload) {
+      assert(payload && typeof payload === "object" && "messages" in payload);
+      const history = payload.messages;
+      assert(Array.isArray(history));
+      const first = history[0];
+      assert(first && typeof first === "object");
+      first.content = "Hook changed frozen history 🦞";
+    },
+  });
+  await record("hook_replace", {
+    ...options,
+    onPayload: () => ({
+      model: model.id,
+      messages: [{ role: "user", content: "Hook replacement" }],
+      max_tokens: 123,
+      stream: true,
+    }),
+  });
+  messages.length = initialLength;
+  return scenarios;
+}
+const scenarioHashes = await scenarioProof();
+changeTail(0);
+const prepared = await build();
+let lastPrepared = prepared;
+let last: Uint8Array<ArrayBuffer> | undefined;
+async function run() {
+  for (let index = 0; index < iterations; index++) {
+    if (values.mode !== "serialize") {
+      changeTail(index);
+    }
+    lastPrepared = values.mode === "serialize" ? prepared : await build();
+    last = values.mode === "build" ? undefined : await encode(lastPrepared);
+  }
+}
+async function verifyLast() {
+  const expectedWire = JSON.stringify({ ...lastPrepared.params, stream: true });
+  if (last) {
+    assert.equal(hash("sha256", last), hash("sha256", expectedWire));
+  }
+  return expectedWire;
+}
 await run();
-assert.equal(typeof last === "string" ? last : JSON.stringify(last), expectedWire);
-globalThis.gc?.();
+await verifyLast();
+await collect();
 const inspector = new Session();
 if (values.allocation) {
   inspector.connect();
@@ -178,15 +378,18 @@ if (values.allocation) {
     .map(([name, bytes]) => ({ name, bytesPerRequest: bytes / iterations }));
   inspector.disconnect();
 }
-assert.equal(typeof last === "string" ? last : JSON.stringify(last), expectedWire);
+const expectedWire = await verifyLast();
 const memoryBeforeFinalGc = process.memoryUsage();
 globalThis.gc?.();
 console.log(
   JSON.stringify({
     messages: messageCount,
     mode: values.mode,
+    images: values.images ? 12 : 0,
     allocation: values.allocation,
     iterations,
+    scenarioHashes,
+    contiguousOutputBytesPerRequest: values.mode === "build" ? 0 : last?.byteLength,
     wireBytes: Buffer.byteLength(expectedWire),
     wireSha256: hash("sha256", expectedWire),
     mainThreadCpuUsPerRequest: (cpu.user + cpu.system) / iterations,

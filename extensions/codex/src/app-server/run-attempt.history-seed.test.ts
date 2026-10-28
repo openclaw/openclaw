@@ -124,12 +124,27 @@ it.each([false, true])("prepares only fresh native history (engine: %s)", async 
     expect(tokenBudget).toBeGreaterThan(0);
     expect(tokenBudget).toBeLessThan(500_000);
     expect(harness.requests.some(({ method }) => method === "thread/start")).toBe(true);
-    return [userMessage("BOUNDED_SELECTED_HISTORY", 1)];
+    return [
+      userMessage("BOUNDED_SELECTED_HISTORY", 1),
+      {
+        ...assistantMessage("Saved unconfirmed draft.", 2),
+        provider: "openclaw",
+        model: "delivery-mirror",
+      },
+      {
+        ...assistantMessage("Confirmed recovery notice.", 3),
+        provider: "openclaw",
+        model: "automation-result",
+        display: false,
+      },
+    ];
   });
   params.hostCapabilities = { ...params.hostCapabilities, prepareBoundedSeed };
   const first = await runTurn(params, harness, "lazy-seed");
   expect(prepareBoundedSeed).toHaveBeenCalledOnce();
   expect(JSON.stringify(selectedItems(first))).toContain("BOUNDED_SELECTED_HISTORY");
+  expect(JSON.stringify(selectedItems(first)).split("Confirmed recovery notice.")).toHaveLength(2);
+  expect(JSON.stringify(first)).not.toContain("Saved unconfirmed draft.");
   assemble.mockResolvedValue({
     messages: [userMessage(original.repeat(1_000), 1)],
     estimatedTokens: 20_000,
@@ -250,6 +265,44 @@ it.each(["thread_bootstrap", "per_turn"] as const)(
     expect(
       selectedItems(await runTurn(params, harness, "repeat-rewrite", "thread-selected-2")),
     ).toEqual([]);
+  },
+);
+
+it.each(["thread_bootstrap", "per_turn"] as const)(
+  "keeps the acknowledged %s prefix when only a local mirror changes",
+  async (mode) => {
+    const { params, assemble } = seedParams(mode);
+    const initial = await assemble();
+    const notice = "Confirmed recovery notice.";
+    const confirmed = {
+      ...assistantMessage(notice, 2),
+      provider: "openclaw",
+      model: "automation-result",
+      display: false,
+    };
+    const local = {
+      ...assistantMessage("Saved unconfirmed draft.", 3),
+      provider: "openclaw",
+      model: "delivery-mirror",
+    };
+    assemble.mockResolvedValue({ ...initial, messages: [...initial.messages, confirmed] });
+    const harness = selectedHarness();
+    const first = await runTurn(params, harness, "confirmed");
+    expect(JSON.stringify(selectedItems(first)).split(notice)).toHaveLength(2);
+    const before = await readCodexAppServerBinding(params.sessionFile);
+    expect(before?.contextEngine?.projection?.fingerprint).toBeDefined();
+
+    assemble.mockResolvedValue({
+      ...initial,
+      messages: [...initial.messages, confirmed, local],
+    });
+    const next = await runTurn(params, harness, "local-mirror");
+    expect(selectedHistoryRequests(next)).toEqual([]);
+    expect(next.some(({ method }) => method === "thread/start")).toBe(false);
+    expect(JSON.stringify(next)).not.toContain("Saved unconfirmed draft.");
+    expect(
+      (await readCodexAppServerBinding(params.sessionFile))?.contextEngine?.projection,
+    ).toEqual(before?.contextEngine?.projection);
   },
 );
 

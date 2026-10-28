@@ -29,6 +29,9 @@
  * omit it to measure clock/runtime changes over unchanged materialized facts.
  * --yield-events gives each publication its own job, allowing weak samples to expire.
  * Both saved and current projection owners use the same native TypeScript loader.
+ * With --expose-gc, memoryAfterGc reports retained memory after the measured pass
+ * and a job boundary for weak samples. Collection precedes digest replay and is
+ * outside CPU/allocation measurement.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -430,6 +433,12 @@ if (values.allocations) {
   sampledBytes = sum(profile.head);
   inspector.disconnect();
 }
+let memoryAfterGc: NodeJS.MemoryUsage | undefined;
+if (global.gc) {
+  await setImmediate();
+  global.gc();
+  memoryAfterGc = process.memoryUsage();
+}
 // Hash in a separate replay so serialization and cryptography do not mask projection savings.
 for (const peer of peers) {
   peer.rows.clear();
@@ -469,6 +478,7 @@ console.log(
     hostLoadAfter: loadavg(),
     memoryBefore,
     memoryAfter,
+    memoryAfterGc,
   }),
 );
 for (const peer of peers) {

@@ -59,8 +59,22 @@ and the `android-store-release` environment. It is independent of
 for notification setup and scheduling behavior.
 
 Both operations fetch the selected commit's complete ancestry without fetching
-unrelated branches or tags. The release owner separately fetches current `main`
-for its ancestry check and each public phone/Wear source ref for release notes.
+unrelated branches, tags, or historical file contents. Git fetches historical file
+contents on demand when release notes read them. The release owner separately
+fetches current `main` for its ancestry check and each public phone/Wear source
+ref for release notes, retaining the same blobless filter.
+
+Compare read-only history acquisition against a base revision without building
+or uploading a release:
+
+```bash
+node --import ./scripts/tsx.mjs scripts/bench-android-release-history.mts \
+  --remote <repository-url> --source <main-sha> --base <base-revision> \
+  --baseline-ref <public-phone-ref> --baseline-ref <public-wear-ref>
+```
+
+This runs five serial pairs with fresh Git object stores, compares release-note
+inventories and selected evidence, and reports acquisition time and object bytes.
 
 1. Run the manual **Android Store Release** GitHub Action from `main` with its default `release` operation. The upload uses the `android-store-release` environment and freezes the commit selected at dispatch, even if `main` advances while the run is queued. The `internal` operation and daily schedule use the same release owner with the differences described below.
 2. The workflow derives the Gateway version from the root `package.json`, selects the Android revision from source refs and current public releases, and chooses the next sequential phone/Wear codes above the uploaded codes and pinned floor. It refuses a version regression, an exhausted revision or native code range, and uploaded new-format codes whose source refs are missing.

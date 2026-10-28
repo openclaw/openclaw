@@ -1533,7 +1533,7 @@ describe("Codex tool operator hints", () => {
       await writeFile(outside, "original\n");
       const tools = createOpenClawCodingTools({
         workspaceDir: root,
-        config: {},
+        config: { tools: { exec: { applyPatch: { workspaceOnly: true } } } },
         toolConstructionPlan: {
           includeBaseCodingTools: false,
           includeShellTools: true,

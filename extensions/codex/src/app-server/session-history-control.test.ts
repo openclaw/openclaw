@@ -1,13 +1,117 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { expect, it } from "vitest";
+import { buildCodexSelectedHistoryItems } from "./context-engine-history-items.js";
+import { projectContextEngineAssemblyForCodex } from "./context-engine-projection.js";
 import { setupSessionHistoryFixtures, settledFixture } from "./session-history.test-support.js";
 import {
   captureCodexSettledTurnFinalizationContext,
   CodexSettledTurnContext,
 } from "./settled-turn-context.js";
+import { assistantMessage } from "./test-support.js";
+import { projectBoundedCodexVisibleSessionHistory } from "./transcript-history-projection.js";
 
 const { writeSession, writeSqliteSession } = setupSessionHistoryFixtures();
+
+function recoveryNoticeHistory() {
+  const text = "Restart recovery stopped. Resume in WebChat.";
+  const saved = "Unconfirmed draft must stay out of model context.";
+  const local = {
+    ...assistantMessage(text, 1),
+    provider: "openclaw",
+    model: "delivery-mirror",
+    content: [
+      { type: "text" as const, text },
+      { type: "text" as const, text: `\nSaved reply (delivery unconfirmed):\n${saved}` },
+    ],
+  };
+  const confirmed = {
+    ...assistantMessage(text, 2),
+    provider: "openclaw",
+    model: "automation-result",
+    display: false,
+    openclawAutomation: {
+      kind: "recovery-notice",
+      noticeId: "notice",
+      localNotice: { entryId: "private-anchor" },
+    },
+  };
+  const messages: AgentMessage[] = [local, confirmed];
+  return { text, saved, messages };
+}
+
+it.each(["file", "sqlite"] as const)(
+  "replays a hidden confirmed notice without its local saved reply from %s",
+  async (storage) => {
+    const { text, saved, messages: prior } = recoveryNoticeHistory();
+    const { settledMessages } = settledFixture();
+    const messages = [...prior, ...settledMessages];
+    const sqlite = storage === "sqlite" ? await writeSqliteSession() : undefined;
+    if (sqlite) {
+      for (const message of messages) {
+        await sqlite.append(message);
+      }
+    }
+    const target = sqlite?.target ?? {
+      sessionFile: await writeSession(
+        messages.map((message, index) => ({
+          type: "message",
+          message,
+          id: `entry-${index}`,
+          parentId: index ? `entry-${index - 1}` : null,
+          timestamp: "2026-06-15T00:00:00.000Z",
+        })),
+      ),
+      sessionId: "codex-session",
+      sessionKey: "codex-session",
+    };
+    const captured = await captureCodexSettledTurnFinalizationContext({
+      ...target,
+      model: "gpt-5.6-luna",
+      settledMessages,
+      mirroredMessages: settledMessages,
+      turnId: "settled",
+    });
+    expect(captured).toBeInstanceOf(CodexSettledTurnContext);
+    const data = JSON.stringify(captured?.data);
+    expect(data.split(text)).toHaveLength(2);
+    expect(data).not.toContain(saved);
+    expect(data).not.toContain("private-anchor");
+    expect(data).not.toContain("localNotice");
+  },
+);
+
+it.each(["legacy", "selected", "import"] as const)(
+  "projects only the confirmed notice and normal assistant history through %s",
+  async (projection) => {
+    const { text, saved, messages } = recoveryNoticeHistory();
+    messages.push(assistantMessage("Ordinary assistant reply.", 3));
+    const projected =
+      projection === "legacy"
+        ? await projectContextEngineAssemblyForCodex({
+            assembledMessages: messages,
+            prompt: "Next",
+          })
+        : projection === "selected"
+          ? await buildCodexSelectedHistoryItems({ messages, tokenBudget: 1_000 })
+          : projectBoundedCodexVisibleSessionHistory(
+              messages.map((message, index) => ({
+                entryId: `entry-${index}`,
+                parentId: index ? `entry-${index - 1}` : null,
+                seq: index,
+                role: message.role,
+                message,
+              })),
+            );
+    const data = JSON.stringify(projected);
+    expect(data.split(text)).toHaveLength(2);
+    expect(data).toContain("Ordinary assistant reply.");
+    expect(data).not.toContain(saved);
+    expect(data).not.toContain("private-anchor");
+    expect(data).not.toContain("localNotice");
+  },
+);
+
 type CustomMessage = Extract<AgentMessage, { role: "custom" }>;
 function custom(
   customType: string,

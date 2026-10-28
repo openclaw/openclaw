@@ -19,4 +19,5 @@
 # OPENCLAW_DISABLE_GATEWAY_LOCAL_TERMINALS (#177855) controls Gateway-local terminals.
 # OPENCLAW_DEVICE_NAME_PREFIX was removed with unread Matrix device-health projections (#178345).
 # Retiring A2UI removes its four renderer build environment names.
-457
+# OPENCLAW_CONFIG_READONLY_NOTICE (#187015) lets the deployment explain where to edit Gateway configuration.
+458

@@ -1,6 +1,5 @@
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { withSessionEntriesFromStoresInWorker } from "../../config/sessions/session-entry-read-runtime.js";
-import { appendAssistantMessageToSessionTranscript } from "../../config/sessions/transcript.js";
 import { getGatewayRecoveryRuntime } from "../../gateway/server-recovery-runtime-context.js";
 import { findDeliveryIntentOwner } from "../../infra/outbound/delivery-queue-storage.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
@@ -17,11 +16,13 @@ const PENDING_DELIVERY_NOTICE =
 export async function deliverPendingDeliveryNotice(
   sessionKey: string,
   storePath: string,
+  agentId: string | undefined,
 ): Promise<void> {
+  const resolvedAgentId = agentId ?? resolveAgentIdFromSessionKey(sessionKey);
   const pending = await withSessionEntriesFromStoresInWorker(
     [
       {
-        agentId: resolveAgentIdFromSessionKey(sessionKey),
+        agentId: resolvedAgentId,
         storePath,
         sessionKeys: [sessionKey],
         projection: "full",
@@ -55,6 +56,14 @@ export async function deliverPendingDeliveryNotice(
           threadId: context.threadId,
           text: PENDING_DELIVERY_NOTICE,
           idempotencyKey,
+          generation: {
+            agentId: resolvedAgentId,
+            storePath,
+            sessionKey,
+            sessionId: entry.sessionId,
+            lifecycleRevision: entry.lifecycleRevision ?? null,
+          },
+          provenance: { kind: "recovery-notice", noticeId: idempotencyKey },
         })
         .catch(() => undefined);
       return { entry, notice, idempotencyKey, delivery };
@@ -76,24 +85,11 @@ export async function deliverPendingDeliveryNotice(
     }
     delivered = owner.status === "completed";
   }
-  if (
-    delivered &&
-    !(
-      await appendAssistantMessageToSessionTranscript({
-        sessionKey,
-        storePath,
-        expectedSessionId: entry.sessionId,
-        text: PENDING_DELIVERY_NOTICE,
-        idempotencyKey,
-      })
-    ).ok
-  ) {
-    return;
-  }
   await updateSessionEntry(
-    { sessionKey, storePath },
+    { agentId: resolvedAgentId, sessionKey, storePath },
     (current) =>
       current.sessionId === entry.sessionId &&
+      (current.lifecycleRevision ?? null) === (entry.lifecycleRevision ?? null) &&
       current.pendingDeliveryNotice?.intentId === notice.intentId &&
       current.pendingDeliveryNotice.state !== "acknowledged"
         ? {

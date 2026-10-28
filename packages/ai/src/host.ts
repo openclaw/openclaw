@@ -187,6 +187,7 @@ export interface AiTransportHost {
   inheritManagedTransport(source: Model, target: Model): Model;
   /** Host-owned deep-immutability proof; absent hosts simply convert each request. */
   immutableData?: {
+    isPlainData?(this: void, value: unknown): boolean;
     isDeeplyFrozenPlainData(value: unknown): boolean;
     freezeJsonSnapshot<T>(value: T): T;
   };

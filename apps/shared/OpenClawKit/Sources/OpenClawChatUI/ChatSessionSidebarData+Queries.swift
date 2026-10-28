@@ -36,7 +36,6 @@ struct ChatSidebarQueryState {
     var excluded = 0
     var didLoad = false
     var failedAppend = false
-    var refreshPending = false
 }
 
 extension OpenClawChatSessionSidebarData {
@@ -181,15 +180,13 @@ extension OpenClawChatSessionSidebarData {
     }
 
     public func invalidateQuery(clear: Bool = false) {
-        self.queryTask?.cancel()
-        self.queryTask = nil
+        self.refreshCoordinator.cancel()
         self.queryState?.generation += 1
         self.queryState?.loading = false
         self.queryState?.error = nil
         self.queryState?.indexing = false
         self.queryState?.excluded = 0
         self.queryState?.didLoad = false
-        self.queryState?.refreshPending = false
         if clear {
             self.queryState?.searchIDs = nil
             self.queryState?.metadataIDs = []
@@ -203,13 +200,9 @@ extension OpenClawChatSessionSidebarData {
     }
 
     public func scheduleLoad(debounce: Bool = false, coalescing: Bool = false) {
-        // ui/src/lib/sessions/event-refresh-coordinator.ts:18 retains one trailing invalidation.
-        if coalescing, self.isLoading {
-            self.queryState?.refreshPending = true
-            return
+        self.refreshCoordinator.scheduleLoad(isLoading: self.isLoading, coalescing: coalescing) { [weak self] in
+            await self?.load(debounce: debounce)
         }
-        self.queryTask?.cancel()
-        self.queryTask = Task { [weak self] in await self?.load(debounce: debounce) }
     }
 
     public func retry() async {
@@ -229,10 +222,7 @@ extension OpenClawChatSessionSidebarData {
         defer {
             if generation == self.queryState?.generation {
                 self.queryState?.loading = false
-                if self.queryState?.refreshPending == true {
-                    self.queryState?.refreshPending = false
-                    self.scheduleLoad()
-                }
+                self.refreshCoordinator.finishLoad()
             }
         }
         do {

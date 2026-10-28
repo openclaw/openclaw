@@ -67,15 +67,29 @@ export async function prepareDoctorMigrationBackups(params: {
       agentDatabaseTargets: databaseTargets,
       verifiedSnapshots,
       automaticRepair,
-      schemaPreparationPending:
-        Boolean(schemas.pendingMigrations?.length) ||
-        Boolean(schemas.agentRefusals?.length) ||
-        schemas.indeterminate.length > 0,
+      schemaPreparationPending: hasUnpreparedSchemas(schemas, backups.versionMigrations),
     }),
   );
   for (const message of [...heartbeatBackups.changes, ...heartbeatBackups.warnings]) {
     runtime.log(message);
   }
+}
+
+/**
+ * Report stores that canonical readers still cannot open. The version phase commits
+ * every migration it returns, so those stores are current and need no conservative
+ * full backup; refused, unreadable, or unmigrated stores still do.
+ */
+export function hasUnpreparedSchemas(
+  schemas: Pick<DoctorDatabasePreflight, "pendingMigrations" | "agentRefusals" | "indeterminate">,
+  committedVersionMigrations: readonly { path: string }[] | undefined,
+): boolean {
+  const committed = new Set(committedVersionMigrations?.map((migration) => migration.path));
+  return (
+    Boolean(schemas.pendingMigrations?.some((migration) => !committed.has(migration.path))) ||
+    Boolean(schemas.agentRefusals?.length) ||
+    schemas.indeterminate.length > 0
+  );
 }
 
 async function hasPendingHeartbeatMigration(

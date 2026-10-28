@@ -237,6 +237,12 @@ it.each(["projection", "canonical", "checkpoint"] as const)(
       );
       snapshot.row.checkpoint_json = JSON.stringify(scan);
     }
+    if (matching === "canonical") {
+      // A later guest name must not enroll unrelated canonical bytes or spoil
+      // an already matching canonical candidate.
+      await fs.writeFile(path.join(projection, "unaccepted.txt"), "guest addition");
+      await fs.writeFile(path.join(canonical, "unaccepted.txt"), "host-only bytes");
+    }
     const divergent = matching === "projection" ? canonical : projection;
     await fs.writeFile(path.join(divergent, "nested/file.txt"), "preserved live edit");
     const result = await executeLocalWorkspaceManifestRead(snapshot, {
@@ -274,16 +280,20 @@ it.each(["projection", "canonical", "checkpoint"] as const)(
   },
 );
 
-it("preserves divergent filesystems when neither can reconstruct the exact missing baseline", async () => {
-  const { projection, canonical, snapshot } = await repairFixture();
-  await fs.writeFile(path.join(projection, "nested/file.txt"), "guest edit");
-  await fs.writeFile(path.join(canonical, "nested/file.txt"), "host edit");
-  await expect(
-    executeLocalWorkspaceManifestRead(snapshot, {
-      kind: "repair",
-      canonicalRoot: canonical,
-    }),
-  ).rejects.toThrow("neither workspace matches the saved baseline");
-  expect(await fs.readFile(path.join(projection, "nested/file.txt"), "utf8")).toBe("guest edit");
-  expect(await fs.readFile(path.join(canonical, "nested/file.txt"), "utf8")).toBe("host edit");
-});
+it.each(["different", "identical"] as const)(
+  "preserves %s later edits when neither filesystem matches the exact missing baseline",
+  async (edits) => {
+    const { projection, canonical, snapshot } = await repairFixture();
+    await fs.writeFile(path.join(projection, "nested/file.txt"), "guest edit");
+    const hostEdit = edits === "identical" ? "guest edit" : "host edit";
+    await fs.writeFile(path.join(canonical, "nested/file.txt"), hostEdit);
+    await expect(
+      executeLocalWorkspaceManifestRead(snapshot, {
+        kind: "repair",
+        canonicalRoot: canonical,
+      }),
+    ).rejects.toThrow("neither workspace matches the saved baseline");
+    expect(await fs.readFile(path.join(projection, "nested/file.txt"), "utf8")).toBe("guest edit");
+    expect(await fs.readFile(path.join(canonical, "nested/file.txt"), "utf8")).toBe(hostEdit);
+  },
+);
