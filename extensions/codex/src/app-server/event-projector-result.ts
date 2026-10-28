@@ -106,6 +106,13 @@ export abstract class CodexTurnProjection {
   protected readonly usageProjection = new CodexUsageProjection();
   protected completedCompactionCount = 0;
 
+  /** Resolve copied generated images among confirmed sends before the result is built. */
+  prepareMediaDelivery(toolTelemetry: CodexAppServerToolTelemetry): Promise<void> {
+    return this.generatedMediaProjection.resolveCopiedMediaSources(
+      toolTelemetry.confirmedMediaDeliveries,
+    );
+  }
+
   /** Materialize terminal native-tool gaps while the durable checkpoint is still open. */
   prepareTerminalToolResultCheckpoint(
     toolTelemetry: CodexAppServerToolTelemetry,

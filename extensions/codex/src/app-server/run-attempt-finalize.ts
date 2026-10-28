@@ -131,6 +131,7 @@ export async function finalizeCodexAttempt(
       }
     }
     const steeringMessages = turnRuntime.steeringQueueRef.current?.getAcceptedMessages();
+    await activeProjector.prepareMediaDelivery(toolBridge.telemetry);
     const result = activeProjector.buildResult(toolBridge.telemetry, {
       yieldDetected: toolState.yieldDetected,
       readRetainedNativeCommands,

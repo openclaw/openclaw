@@ -355,6 +355,37 @@ describe("CodexAppServerEventProjector media projection", () => {
     },
   );
 
+  it.each(["identical", "same-size-different"] as const)(
+    "matches a confirmed send of a copied generated image by content: %s",
+    async (copy) => {
+      const params = await createParams();
+      const { projector, events } = await createProjection(params);
+      await events.completed(codexImage("generated-copy"));
+      const bytes = Buffer.from(tinyPngBase64, "base64");
+      if (copy === "same-size-different") {
+        bytes.writeUInt8(bytes.readUInt8(bytes.length - 1) ^ 0xff, bytes.length - 1);
+      }
+      const copyPath = path.join(params.workspaceDir, "out", "copy.png");
+      await fs.mkdir(path.dirname(copyPath), { recursive: true });
+      await fs.writeFile(copyPath, bytes);
+      const { bridge } = createMessageBridge(async () =>
+        messageResult({ messageDelivery: receipt() }),
+      );
+      await sendMedia(bridge, copyPath, "chat-source");
+      await events.complete();
+      await projector.prepareMediaDelivery(bridge.telemetry);
+      const result = events.result(bridge.telemetry);
+
+      const generatedUrl = result.toolMediaUrls?.[0];
+      expect(result.hostOwnedToolMediaUrls).toEqual([generatedUrl]);
+      const sentUrls = copy === "identical" ? [copyPath, generatedUrl] : [copyPath];
+      expect(result.messagingToolSentMediaUrls).toEqual(sentUrls);
+      expect(result.messagingToolSentTargets).toEqual([
+        expect.objectContaining({ provider: "telegram", to: "chat-source", mediaUrls: sentUrls }),
+      ]);
+    },
+  );
+
   it("keeps correct local image delivery evidence for a partial saved-path send", async () => {
     const params = await createParams();
     const { events } = await createProjection(params);
