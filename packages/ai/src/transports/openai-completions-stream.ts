@@ -78,7 +78,12 @@ function extractToolCallThoughtSignature(toolCall: unknown): string | undefined 
     readNonEmptyStringPreservingWhitespace(
       (tc.function as { thought_signature?: unknown } | undefined)?.thought_signature,
     ) ??
-    readNonEmptyStringPreservingWhitespace(tc.thought_signature)
+    readNonEmptyStringPreservingWhitespace(tc.thought_signature) ??
+    // LiteLLM proxies return Gemini signatures here.
+    readNonEmptyStringPreservingWhitespace(
+      (tc.provider_specific_fields as { thought_signature?: unknown } | undefined)
+        ?.thought_signature,
+    )
   );
 }
 

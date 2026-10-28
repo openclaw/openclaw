@@ -34,13 +34,14 @@ function injectToolCallThoughtSignatures(
   context: ProviderContext,
   model: OpenAIModeModel,
 ): void {
-  if (!isGoogleOpenAICompatModel(model)) {
-    return;
-  }
+  // Other compatible endpoints (for example LiteLLM in front of Gemini) receive back
+  // only the signatures they issued on this route, in the field they used.
+  const google = isGoogleOpenAICompatModel(model);
   const sigById = new Map<string, string>();
-  const fallbackSig = isGoogleGemini3ThinkingLevelModel(model.id)
-    ? GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP
-    : undefined;
+  const fallbackSig =
+    google && isGoogleGemini3ThinkingLevelModel(model.id)
+      ? GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP
+      : undefined;
   for (const msg of context.messages ?? []) {
     if (msg.role !== "assistant") {
       continue;
@@ -57,7 +58,8 @@ function injectToolCallThoughtSignatures(
       if (typeof id === "string" && typeof sig === "string" && sig.length > 0) {
         const isSameRoute =
           msg.api === model.api && msg.provider === model.provider && msg.model === model.id;
-        if (!isSameRoute && !fallbackSig) {
+        // Encrypted reasoning details (JSON) replay through reasoning_details instead.
+        if ((!isSameRoute && !fallbackSig) || (!google && sig.trimStart().startsWith("{"))) {
           continue;
         }
         sigById.set(id, isSameRoute ? sig : (fallbackSig ?? sig));
@@ -83,7 +85,12 @@ function injectToolCallThoughtSignatures(
       if (!sig) {
         continue;
       }
-      Object.assign(toolCall, { extra_content: { google: { thought_signature: sig } } });
+      Object.assign(
+        toolCall,
+        google
+          ? { extra_content: { google: { thought_signature: sig } } }
+          : { provider_specific_fields: { thought_signature: sig } },
+      );
     }
   }
 }
