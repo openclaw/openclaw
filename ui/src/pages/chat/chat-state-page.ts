@@ -252,15 +252,6 @@ export function createPageState(
     chatComposerFallbackByScope: {},
     chatSendingScopeKey: null,
     chatMessagesBySession,
-    cacheChatAvatarSource: (agentId: string, source: string | null): void => {
-      cacheChatAvatarSource(
-        chatMessagesBySession,
-        state,
-        { sessionKey: state.sessionKey },
-        agentId,
-        source,
-      );
-    },
     dispatchClientPresentation: (action: CommandClientPresentationAction) =>
       dispatchCommandClientPresentation(context, action),
     basePath: context.basePath,
@@ -296,6 +287,8 @@ export function createPageState(
     sessionWorkspaceState: undefined,
   }) as unknown as ChatPageHost;
 
+  state.cacheChatAvatarSource = (agentId, source) =>
+    cacheChatAvatarSource(chatMessagesBySession, state, state, agentId, source);
   state.resetToolStream = () => resetToolStream(state);
   state.resetChatInputHistoryNavigation = () => resetChatInputHistoryNavigation(state);
   state.scrollToBottom = (options) => {

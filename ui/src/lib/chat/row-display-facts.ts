@@ -1,5 +1,4 @@
 import { ARTIFACT_DOWNLOAD_PATH } from "../../../../packages/gateway-protocol/src/artifact-download.ts";
-import type { ChatSessionSnapshot } from "../../pages/chat/session-message-cache.ts";
 import * as json from "../snapshot-json.ts";
 import { readChatThreadMessageIdentity } from "./history-message-identity.ts";
 import { removePairingQrContent } from "./pairing-qr.ts";
@@ -62,6 +61,7 @@ export const avatarSourcesSchema = boundedRecord(
 );
 export type ChatRowDisplayFacts = json.SnapshotValue<typeof chatRowDisplaySchema>;
 export type ChatLinkDisplay = json.SnapshotValue<typeof linkSchema>;
+type RowDisplaySnapshot = { rowDisplay?: Record<string, ChatRowDisplayFacts> };
 
 export type ChatRowDisplay = {
   read: () => { scope: string; facts: ChatRowDisplayFacts | undefined } | undefined;
@@ -99,13 +99,13 @@ export function chatImageDisplayKey(
 
 /** Display facts cannot outlive the transcript window they describe. */
 export function projectChatRowDisplay(
-  snapshot: ChatSessionSnapshot,
+  snapshot: RowDisplaySnapshot & { messages: unknown[] },
   start = 0,
-): ChatSessionSnapshot["rowDisplay"] {
+): RowDisplaySnapshot["rowDisplay"] {
   if (!snapshot.rowDisplay) {
     return undefined;
   }
-  const rows: NonNullable<ChatSessionSnapshot["rowDisplay"]> = {};
+  const rows: NonNullable<RowDisplaySnapshot["rowDisplay"]> = {};
   for (const message of snapshot.messages.slice(Math.max(start, snapshot.messages.length - 80))) {
     const id = readChatThreadMessageIdentity(message)?.id;
     if (id && snapshot.rowDisplay[id] && removePairingQrContent(message) === message) {
@@ -117,7 +117,7 @@ export function projectChatRowDisplay(
     : rows;
 }
 
-export function chatThumbnailWeight(snapshot: Pick<ChatSessionSnapshot, "rowDisplay">) {
+export function chatThumbnailWeight(snapshot: RowDisplaySnapshot) {
   let count = 0;
   let bytes = 0;
   for (const row of Object.values(snapshot.rowDisplay ?? {})) {
@@ -131,7 +131,7 @@ export function chatThumbnailWeight(snapshot: Pick<ChatSessionSnapshot, "rowDisp
   return { count, bytes };
 }
 
-export function boundChatThumbnails<S extends Pick<ChatSessionSnapshot, "rowDisplay">>(
+export function boundChatThumbnails<S extends RowDisplaySnapshot>(
   snapshot: S,
   budget = { count: MAX_CHAT_THUMBNAILS, bytes: MAX_CHAT_THUMBNAIL_BYTES },
 ): S {

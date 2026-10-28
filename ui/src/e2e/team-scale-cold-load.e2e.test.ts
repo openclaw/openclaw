@@ -10,6 +10,7 @@ import {
 import { warmReloadProbe } from "../../../scripts/lib/control-ui-warm-reload-probe.ts";
 import { buildSandboxHostPath } from "../../../src/agents/sandbox-host.js";
 import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
+import type { ChatMessageCache } from "../pages/chat/session-message-cache.ts";
 import { CHAT_SNAPSHOT_PROJECTION_VERSION } from "../pages/chat/session-snapshot-record.ts";
 import {
   controlUiBundledSettingsStorageKey,
@@ -510,7 +511,7 @@ suite.define(() => {
           page.waitForResponse(
             (response) =>
               response.url().includes(path) &&
-              response.headers()["content-type"]?.startsWith("image/"),
+              response.headers()["content-type"]?.startsWith("image/") === true,
           ),
         );
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, fixture.selectedSessionKey));
@@ -525,7 +526,18 @@ suite.define(() => {
           await thread.locator('.markdown-github-item[data-link-reader-tone="positive"]').waitFor();
           await thread.locator('.chat-notice[data-chat-row-key^="archive:"]').waitFor();
           await page.waitForFunction(() => {
-            const thread = document.querySelector(".chat-pane-cache__pane--active .chat-thread");
+            const pane = document.querySelector(".chat-pane-cache__pane--active");
+            const thread = pane?.querySelector(".chat-thread");
+            const cache: ChatMessageCache | undefined = pane
+              ? Reflect.get(pane, "chatMessagesBySession")
+              : undefined;
+            const thumbnails = [...(cache?.values() ?? [])]
+              .flatMap(({ snapshot }) =>
+                Object.values(snapshot.rowDisplay ?? {}).flatMap((row) =>
+                  Object.values(row.images ?? {}),
+                ),
+              )
+              .filter((image) => image.thumbnail instanceof Blob);
             const images = [
               ...(thread?.querySelectorAll<HTMLImageElement>(".chat-image-frame img") ?? []),
             ];
@@ -535,6 +547,7 @@ suite.define(() => {
               ) ?? []),
             ];
             return (
+              thumbnails.length === 2 &&
               images.length === 2 &&
               images.every(
                 (image) =>
@@ -548,16 +561,31 @@ suite.define(() => {
           expect(await thread.locator(".chat-image-skeleton").count()).toBe(0);
         };
         await complete();
-        const warm = await page.evaluate(persistColdLoadWarmState, {
-          sessionKey: fixture.selectedSessionKey,
-          sidebarView: "sessions",
-          lateRowFacts: true,
+        for (const [index, response] of (await Promise.all(media)).entries()) {
+          expect(response.headers()["cache-control"]).toBe(
+            index === 0 ? "private, no-store" : "private, no-cache",
+          );
+          const bytes = (await response.body()).length;
+          expect(bytes).toBeGreaterThanOrEqual(32 * 1024);
+          expect(bytes).toBeLessThanOrEqual(96 * 1024);
+        }
+        await page.evaluate(async () => {
+          await Reflect.get(
+            document.querySelector(".chat-pane-cache__pane--active")!,
+            "sessionSnapshotStore",
+          ).flush();
         });
-        expect(warm.displayFacts).toMatchObject({ links: 2, imageDimensions: 2, thumbnails: 2 });
         const requests = http.requests.length;
         await page.reload();
         await gateway.waitForRequest("connect");
         await complete();
+        expect(
+          await thread
+            .locator(".chat-image-frame img")
+            .evaluateAll((images) =>
+              images.map((image) => image.getAttribute("src")?.startsWith("blob:")),
+            ),
+        ).toEqual([true, true]);
         expect(
           http.requests
             .slice(requests)

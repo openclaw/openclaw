@@ -309,9 +309,8 @@ export function ForwardedAvatar(props: {
 }) {
   const agent = createMemo<AgentsListResult["agents"][number] | undefined>(() =>
     props.agentId
-      ? (props.options.agents?.find((candidate) => candidate.id === props.agentId) ?? {
-          id: props.agentId,
-        })
+      ? (props.options.agents?.find((candidate) => candidate.id === props.agentId) ??
+        (props.options.senderAgentAvatars?.get(props.agentId) ? { id: props.agentId } : undefined))
       : undefined,
   );
   const avatar = createMemo(() => {
