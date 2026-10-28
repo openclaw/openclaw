@@ -145,6 +145,7 @@ suite.define(() => {
     });
     sandboxAssets = fixture.assets;
     await suite.withPage(createLocalNetworkControlUiContextOptions(), async ({ page }) => {
+      await page.setViewportSize({ width: 1719, height: 1179 });
       await page.route("**/__openclaw__/**", async (route) => {
         const asset = fixture.assets.get(new URL(route.request().url()).pathname);
         if (asset) {
@@ -392,12 +393,7 @@ suite.define(() => {
       expect(
         await page.evaluate(readStoredWarmState, { ...warmInput, includeDrafts: true }),
       ).toEqual({ ...baseline, drafts: 0 });
-      liveJobName = "Updated scheduled check 1";
-      // The reset document reloads an exact-key link independently of short-link discovery.
-      await page.evaluate(
-        (url) => history.replaceState(null, "", url),
-        controlUiSessionUrl(suite.server.baseUrl, fixture.selectedSessionKey),
-      );
+      liveJobName = "A refreshed scheduled check 1";
       await page.reload();
       await gateway.waitForRequest("connect");
       await details.getByText("Synthetic scheduled check 1", { exact: true }).waitFor();
@@ -429,6 +425,7 @@ suite.define(() => {
         expect(page.url()).toBe(chatUrl);
         expect(await gateway.getRequests(method)).toHaveLength(0);
       }
+      await page.mouse.move(0, 0);
       const retained = await details
         .locator(
           `${sectionSelector}, .task-progress-details__refresh, .chat-summary__automation-more`,
