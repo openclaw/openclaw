@@ -46,6 +46,89 @@ describe("msteams inbound facts", () => {
     expect(assembleMSTeamsInboundFacts(entry).rawBody).toBe(expected);
   });
 
+  it.each([true, false])("preserves current links with activity text=%s", async (hasText) => {
+    const body = "Log 20 minutes for Pat on Plane";
+    const url = "https://plane.example.test/team/browse/DEMO-9/";
+    const entry = await prepareMSTeamsDebounceEntry({
+      accountId: "default",
+      context: context({
+        type: "message",
+        ...(hasText ? { text: body } : {}),
+        attachments: [
+          {
+            contentType: "text/html",
+            content: `<p>Log 20 minutes for Pat on <a href="${url}">Plane</a></p>`,
+          },
+        ],
+      }),
+    });
+    expect(assembleMSTeamsInboundFacts(entry).rawBody).toBe(`${body}${hasText ? "\n" : " "}${url}`);
+  });
+
+  it.each([true, false])(
+    "isolates quoted tasks and mentions with activity text=%s",
+    async (hasText) => {
+      const entry = await prepareMSTeamsDebounceEntry({
+        accountId: "default",
+        context: context({
+          type: "message",
+          ...(hasText ? { text: "Use this task" } : {}),
+          attachments: [
+            {
+              contentType: "text/html",
+              content:
+                '<blockquote itemtype="http://schema.skype.com/Reply"><p itemprop="copy">Old <a href="https://example.test/OLD-1">task</a></p><blockquote><a href="https://example.test/OLD-2">nested</a></blockquote></blockquote><at><a href="https://example.test/person">Bot</a></at><p>Use <a href="https://example.test/NEW-3">this task</a></p>',
+            },
+          ],
+        }),
+      });
+      const facts = assembleMSTeamsInboundFacts(entry);
+      expect(facts.rawBody).toBe(`Use this task${hasText ? "\n" : " "}https://example.test/NEW-3`);
+      expect(facts.quoteInfo?.body).toBe("Old task");
+    },
+  );
+
+  it.each([true, false])(
+    "does not add unsafe anchor destinations with activity text=%s",
+    async (hasText) => {
+      const entry = await prepareMSTeamsDebounceEntry({
+        accountId: "default",
+        context: context({
+          type: "message",
+          ...(hasText ? { text: "one two three four five" } : {}),
+          attachments: [
+            {
+              contentType: "text/html",
+              content:
+                '<a href="javascript:alert(1)">one</a><a href="data:text/plain,secret">two</a><a href="file:///private/example">three</a><a href="https://user:pass@example.test/">four</a><a href="https://example.test/&#10;spoof">five</a>',
+            },
+          ],
+        }),
+      });
+      expect(entry.text).toBe("one two three four five");
+    },
+  );
+
+  it("adds multiple distinct links once, decodes href entities, and keeps text authoritative", async () => {
+    const entry = await prepareMSTeamsDebounceEntry({
+      accountId: "default",
+      context: context({
+        type: "message",
+        text: "Compare https://example.test/one with two and three",
+        attachments: [
+          {
+            contentType: "text/html",
+            content:
+              '<p>HTML-only noise <a href="https://example.test/one">one</a><a href="https://example.test/two?a=1&amp;b=2">two</a><a href="https://example.test/two?a=1&amp;b=2">duplicate</a><a href=https://example.test/three>three</a></p>',
+          },
+        ],
+      }),
+    });
+    expect(entry.text).toBe(
+      "Compare https://example.test/one with two and three\nhttps://example.test/two?a=1&b=2\nhttps://example.test/three",
+    );
+  });
+
   it("strips native mentions from card text when HTML has no visible text", async () => {
     const entry = await prepare({
       attachments: [{ contentType: "text/html", content: "<at>Bot</at>" }],

@@ -1,3 +1,4 @@
+import { decodeHtmlEntities } from "openclaw/plugin-sdk/html-entity-runtime";
 import { serializeMSTeamsAdaptiveCardActionValue } from "../adaptive-card-submit.js";
 import {
   resolveMSTeamsAdvertisedMedia,
@@ -19,22 +20,73 @@ import type { MSTeamsIngressLifecycle } from "../msteams-ingress.js";
 import type { MSTeamsTurnContext } from "../sdk-types.js";
 import { wasMSTeamsMessageSentWithPersistence } from "../sent-message-cache.js";
 
-function extractTextFromHtmlAttachments(attachments: MSTeamsAttachmentLike[]): string {
+// Quoted messages have their own provenance in quoteInfo; do not promote their
+// links into the current request. Track nesting and fail closed on an open quote.
+function stripQuotedHtml(html: string): string {
+  let depth = 0;
+  let offset = 0;
+  let result = "";
+  for (const match of html.matchAll(/<\/?blockquote\b[^>]*>/gi)) {
+    if (depth === 0) {
+      result += html.slice(offset, match.index);
+    }
+    depth = match[0].startsWith("</") ? Math.max(0, depth - 1) : depth + 1;
+    offset = match.index + match[0].length;
+  }
+  return result + (depth === 0 ? html.slice(offset) : "");
+}
+
+function extractHtmlTextAndLinks(attachments: MSTeamsAttachmentLike[]) {
+  let text = "";
+  const links = new Set<string>();
   for (const attachment of attachments) {
     const raw = extractHtmlFromAttachment(attachment);
     if (!raw) {
       continue;
     }
-    const text = htmlToPlainText(
-      raw
-        .replace(/<at[^>]*>.*?<\/at>/gis, " ")
-        .replace(/<a\b[^>]*href=["']([^"']+)["'][^>]*>(.*?)<\/a>/gis, "$2 $1"),
+    const html = stripQuotedHtml(raw).replace(/<at\b[^>]*>.*?<\/at>/gis, " ");
+    const withLinks = html.replace(
+      /<a\b([^>]*)>(.*?)<\/a>/gis,
+      (_anchor, attributes: string, label: string) => {
+        const href = [
+          ...attributes.matchAll(
+            /(?:^|\s)([^\s=/>]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g,
+          ),
+        ].find((attribute) => attribute[1].toLowerCase() === "href");
+        const encoded = href?.[2] ?? href?.[3] ?? href?.[4];
+        if (!encoded) {
+          return ` ${label} `;
+        }
+        const url = decodeHtmlEntities(encoded).trim();
+        if (
+          !/^https?:\/\//i.test(url) ||
+          /[\s<>"']/.test(url) ||
+          [...url].some(
+            (character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127,
+          )
+        ) {
+          return ` ${label} `;
+        }
+        try {
+          const parsed = new URL(url);
+          if (!parsed.hostname || parsed.username || parsed.password) {
+            return ` ${label} `;
+          }
+        } catch {
+          return ` ${label} `;
+        }
+        links.add(url);
+        return htmlToPlainText(label) === url ? ` ${label} ` : ` ${label} ${encoded} `;
+      },
     );
-    if (text) {
-      return text;
-    }
+    text ||= htmlToPlainText(withLinks);
   }
-  return "";
+  return { text, links };
+}
+
+function appendMissingLinks(text: string, links: Set<string>): string {
+  const missing = [...links].filter((url) => !text.includes(url));
+  return missing.length ? `${text}\n${missing.join("\n")}`.trim() : text;
 }
 
 export type MSTeamsDebounceEntry = Awaited<ReturnType<typeof prepareMSTeamsDebounceEntry>>;
@@ -49,10 +101,11 @@ export async function prepareMSTeamsDebounceEntry(params: {
     ? activity.attachments
     : [];
   const rawText = activity.text?.trim() ?? "";
+  const html = extractHtmlTextAndLinks(attachments);
   // HTML mentions are stripped before decoding so literally typed <at> tags survive.
   const text = rawText
-    ? stripMSTeamsMentionTags(rawText)
-    : extractTextFromHtmlAttachments(attachments) ||
+    ? appendMissingLinks(stripMSTeamsMentionTags(rawText), html.links)
+    : html.text ||
       stripMSTeamsMentionTags(serializeMSTeamsAdaptiveCardActionValue(activity.value) || "");
   const conversationId = normalizeMSTeamsConversationId(activity.conversation?.id ?? "");
   const replyToId = activity.replyToId;
