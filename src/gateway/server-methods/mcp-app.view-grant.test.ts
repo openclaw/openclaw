@@ -478,9 +478,8 @@ describe.each<Path>(["model-created", "extension-runtime"])(
   },
 );
 
-it("revalidates a cached App grant after HTTP transport preparation before writing", async ({
-  signal,
-}) => {
+// Both entry points run against the real session MCP runtime and HTTP transport.
+async function revalidatesCachedGrantOverHttp(path: Path, signal: AbortSignal) {
   const mcp = new Server(
     { name: "parts", version: "1" },
     { capabilities: { tools: {}, resources: {} } },
@@ -544,7 +543,7 @@ it("revalidates a cached App grant after HTTP transport preparation before writi
       cfg,
     });
     await runtime.getCatalog();
-    const viewId = await openView("model-created", { requesterId: "alice" });
+    const viewId = await openView(path, { requesterId: "alice" });
     await approvedCall(viewId, "allow-always");
     await expectUnprompted(call(viewId), "Cached grant prompted again");
     expect(toolCalls).toBe(2);
@@ -581,4 +580,9 @@ it("revalidates a cached App grant after HTTP transport preparation before writi
     await listener.claim.release();
     vi.unstubAllEnvs();
   }
-});
+}
+
+it.for<Path>(["model-created", "extension-runtime"])(
+  "revalidates a cached App grant after HTTP transport preparation before writing via %s",
+  (path, { signal }) => revalidatesCachedGrantOverHttp(path, signal),
+);
