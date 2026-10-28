@@ -2,7 +2,6 @@
 // Keep lane names, commands, image kind, timeout, resources, and release chunks
 // here. Planning and execution live in separate modules.
 import { fileURLToPath } from "node:url";
-import { retirementCuts } from "../e2e/lib/upgrade-survivor/installed-recovery-cases.mjs";
 import {
   UPDATE_FIRST_HOP_MISSING_LOAD_PATH_LANE,
   listRecordedFirstHopSourceVersions,
@@ -415,19 +414,6 @@ export const mainLanes: DockerE2eLane[] = [
     timeoutMs: 10 * 60 * 1000,
   }),
   upgradeSurvivorLane("upgrade-survivor", upgradeSurvivorCommand, 20 * 60 * 1000),
-  ...retirementCuts.map((cut) =>
-    npmLane(`package-installed-recovery-${cut}`, {
-      // Shared release jobs also export historical survivor settings. This cell
-      // owns an isolated current writer, so its mode must not inherit those values.
-      command: upgradeSurvivorScriptCommand(
-        `OPENCLAW_UPGRADE_SURVIVOR_SCENARIO=package-installed-recovery OPENCLAW_UPGRADE_SURVIVOR_INSTALLED_RECOVERY_CUT=${cut} OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=0 OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC= OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE=manual OPENCLAW_UPGRADE_SURVIVOR_ROOT_MANAGED_VPS=0 OPENCLAW_UPGRADE_SURVIVOR_LIVE_MODELS= OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI=0`,
-      ),
-      needsPackage: true,
-      stateScenario: "empty",
-      timeoutMs: 20 * 60 * 1000,
-      weight: 3,
-    }),
-  ),
   upgradeSurvivorLane("published-upgrade-survivor", publishedUpgradeSurvivorCommand, 2580 * 1000),
   // Explicit Docker/release regression; the per-PR cell still runs only one real update.
   lane("published-driver-lifecycle", {

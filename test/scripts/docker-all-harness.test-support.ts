@@ -7,10 +7,6 @@ export function copyDockerSchedulerHarness(root: string) {
   const upgradeSurvivorDir = path.join(scriptsDir, "e2e/lib/upgrade-survivor");
   mkdirSync(libDir, { recursive: true });
   mkdirSync(upgradeSurvivorDir, { recursive: true });
-  copyFileSync(
-    "scripts/e2e/lib/upgrade-survivor/installed-recovery-cases.mjs",
-    path.join(upgradeSurvivorDir, "installed-recovery-cases.mjs"),
-  );
   copyFileSync("package.json", path.join(root, "package.json"));
   copyFileSync("scripts/test-docker-all.mjs", path.join(scriptsDir, "test-docker-all.mjs"));
   copyFileSync("scripts/test-docker-all.mts", path.join(scriptsDir, "test-docker-all.mts"));

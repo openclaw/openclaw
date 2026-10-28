@@ -2193,7 +2193,6 @@
     "test:docker:published-driver-lifecycle": "node scripts/e2e/published-driver-lifecycle-docker.mjs",
     "test:docker:published-driver-scoped-restore": "env OPENCLAW_PUBLISHED_DRIVER_SCOPED_RESTORE=1 bash scripts/e2e/published-driver-update-docker.sh",
     "test:docker:published-driver-update": "bash scripts/e2e/published-driver-update-docker.sh",
-    "test:docker:package-installed-recovery": "node --import ./scripts/tsx.mjs scripts/run-with-env.mts OPENCLAW_DOCKER_ALL_LANES=package-installed-recovery -- node scripts/test-docker-all.mjs",
     "test:docker:published-upgrade-survivor": "node --import ./scripts/tsx.mjs scripts/run-with-env.mts OPENCLAW_DOCKER_ALL_LANES=published-upgrade-survivor -- node scripts/test-docker-all.mjs",
     "test:docker:qr": "bash scripts/e2e/qr-import-docker.sh",
     "test:ci-failed": "node --import ./scripts/tsx.mjs scripts/ci-failed-tests.mts",

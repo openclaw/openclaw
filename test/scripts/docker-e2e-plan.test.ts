@@ -455,9 +455,6 @@ describe("scripts/lib/docker-e2e-plan", () => {
     ]) {
       copyFileSync(join("scripts/lib", fileName), join(dirname(nestedModule), fileName));
     }
-    const cases = "scripts/e2e/lib/upgrade-survivor/installed-recovery-cases.mjs";
-    mkdirSync(dirname(join(tempRoot, ".release-harness", cases)), { recursive: true });
-    copyFileSync(cases, join(tempRoot, ".release-harness", cases));
 
     const laneJson = execFileSync(
       testNodeExecPath,

@@ -13,21 +13,17 @@ export const fileIdentity = (file) => {
   return `${stat.dev}:${stat.ino}`;
 };
 
-// Only the scheduler's setgid evidence tree shares reads with the host. The
-// private outer directory remains host-only; package/config modes are unrelated.
 export function installedRecoveryEvidenceMode(directory, isDirectory = false) {
   const parent = fs.lstatSync(directory);
   assert(parent.isDirectory(), "Evidence parent must be a physical directory");
-  const mode = parent.mode & 0o7777;
-  const shared = mode === 0o2770 || mode === 0o2750;
-  return shared ? (isDirectory ? 0o2750 : 0o640) : isDirectory ? 0o700 : 0o600;
+  return isDirectory ? 0o700 : 0o600;
 }
 
 export function openInstalledRecoveryEvidence(file) {
   const mode = installedRecoveryEvidenceMode(path.dirname(file));
   const fd = fs.openSync(file, "wx", mode);
   try {
-    fs.fchmodSync(fd, mode); // Creation umask must not remove the host's read access.
+    fs.fchmodSync(fd, mode); // Creation umask must not remove the owner's access.
     return fd;
   } catch (error) {
     fs.closeSync(fd);

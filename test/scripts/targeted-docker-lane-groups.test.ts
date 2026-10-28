@@ -1,6 +1,4 @@
 import { expect, it } from "vitest";
-import { installedRecoveryLaneNames } from "../../scripts/e2e/lib/upgrade-survivor/installed-recovery-cases.mjs";
-import { parseLaneSelection } from "../../scripts/lib/docker-e2e-plan.mts";
 import { planTargetedDockerLaneGroups } from "../../scripts/plan-targeted-docker-lane-groups.mjs";
 
 type Group = ReturnType<typeof planTargetedDockerLaneGroups>[number];
@@ -61,14 +59,6 @@ it("does not schedule a first-hop member twice beside its family", () => {
   const family = planGroups("update-first-hop-compat");
   expect(family.length).toBeGreaterThan(1);
   expect(planGroups(`${family[0]!.docker_lanes} update-first-hop-compat`)).toEqual(family);
-});
-
-it("plans all seven installed recovery cells once as separate unchanged-budget jobs", () => {
-  const mixed = `package-installed-recovery ${installedRecoveryLaneNames[0]}`;
-  expect(planGroups(mixed)).toEqual(
-    installedRecoveryLaneNames.map((lane) => ({ docker_lanes: lane, label: lane })),
-  );
-  expect(parseLaneSelection(mixed)).toEqual(installedRecoveryLaneNames);
 });
 
 it("shards published upgrade survivor by baseline while preserving surrounding lanes", () => {

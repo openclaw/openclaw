@@ -2251,245 +2251,6 @@ function failedUpdateContext(text, label) {
   }
 }
 
-function diagnosticSanitizer(redactSensitiveText, outcome) {
-  return function sanitize(text, label) {
-    if (text === null || text === undefined) {
-      return null;
-    }
-    if (typeof text !== "string" || Buffer.byteLength(text) > inputLimit) {
-      throw new Error();
-    }
-    let redacted = redactSensitiveText(text, { mode: "tools" });
-    if (outcome === "failed" && Buffer.byteLength(JSON.stringify(redacted)) > outputLimit) {
-      const context = failedUpdateContext(text, label);
-      if (context) {
-        // Keep execution order explicit; this is a diagnostic prelude, not reordered steps.
-        redacted = `${redactSensitiveText(context, { mode: "tools" })}\n\nCaptured update output (original order):\n${redacted}`;
-      }
-    }
-    // Keep the latest startup/native events after redacting the whole input.
-    const tail =
-      label === "missing-load-path/baseline-gateway.log" ||
-      label === "native-assignment-messages.jsonl";
-    const lines = redacted.split(/(?<=\n)/u);
-    if (tail) {
-      lines.reverse();
-    }
-    let result = "";
-    for (const line of lines) {
-      const next = tail ? line + result : result + line;
-      if (Buffer.byteLength(JSON.stringify(next)) > outputLimit) {
-        omissions[label] = "redacted output truncated at a complete line (16 KiB)";
-        break;
-      }
-      result = next;
-    }
-    return result;
-  };
-}
-
-// The scheduler survives its lane's process-group kill. Read only that attempt's
-// mounted evidence after the host group joins; do not infer container/child exit.
-export function publishInstalledRecoveryDiagnostics(
-  artifactRoot,
-  destination,
-  redactSensitiveText,
-  { cut, exitStatus, timedOut, packageSha256 },
-) {
-  if (
-    !retirementCuts.includes(cut) ||
-    typeof timedOut !== "boolean" ||
-    !/^[a-f0-9]{64}$/.test(packageSha256) ||
-    (timedOut && exitStatus === 0)
-  ) {
-    throw new Error();
-  }
-  const coordinates = phaseResult(
-    timedOut ? "installed-recovery-timeout" : "installed-recovery",
-    exitStatus,
-    null,
-  );
-  for (const label of Object.keys(omissions)) {
-    delete omissions[label];
-  }
-  const sanitize = diagnosticSanitizer(redactSensitiveText, "failed");
-  const report = {
-    ...coordinates,
-    outcome: exitStatus === 0 ? "passed" : "failed",
-    capturedAt: new Date().toISOString(),
-    host: { processGroupJoined: true, timedOut },
-    cut,
-    packageSha256,
-    installedRecovery: { availability: "unavailable" },
-    completedCuts: [],
-    commands: [],
-    nextUpdate: null,
-    omissions,
-  };
-  try {
-    const summary = JSON.parse(
-      readOwned(artifactRoot, "installed-recovery.json", "installed recovery"),
-    );
-    if (
-      !/^installed-recovery-[A-Za-z0-9]+$/.test(summary?.runDirectory) ||
-      JSON.stringify(summary.selectedCuts) !== JSON.stringify([cut]) ||
-      (summary.artifactSha256 !== undefined && summary.artifactSha256 !== packageSha256)
-    ) {
-      throw new Error();
-    }
-    report.installedRecovery = installedRecoveryProjection(
-      captureInstalledRecovery(artifactRoot, ownedPath(artifactRoot, summary.runDirectory)),
-      sanitize,
-    );
-    if (report.installedRecovery.availability !== "captured") {
-      throw new Error();
-    }
-    if (
-      report.installedRecovery.current?.cut !== undefined &&
-      report.installedRecovery.current.cut !== null &&
-      report.installedRecovery.current.cut !== cut
-    ) {
-      throw new Error();
-    }
-    const commands = summary.commands ?? [];
-    if (!Array.isArray(commands) || commands.length > 10) {
-      throw new Error();
-    }
-    report.commands = commands.map((value) => {
-      const command = installedRecoveryCurrent(value, sanitize);
-      if (
-        !command ||
-        command.state !== "completed" ||
-        (command.cut !== null && command.cut !== cut) ||
-        command.startedAt === undefined ||
-        command.elapsedMs === undefined
-      ) {
-        throw new Error();
-      }
-      return command;
-    });
-    const rows = summary.rows ?? [];
-    if (!Array.isArray(rows) || rows.length > 1) {
-      throw new Error();
-    }
-    const operationId = (value) => {
-      if (
-        typeof value !== "string" ||
-        !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(value)
-      ) {
-        throw new Error();
-      }
-      return value;
-    };
-    report.completedCuts = rows.map((row) => {
-      if (
-        row.cut !== cut ||
-        row.originalHelperRepairs !== 2 ||
-        typeof row.installedVersion !== "string" ||
-        row.installedVersion.length > 128 ||
-        typeof row.interruptedPhase !== "string" ||
-        !/^[a-z-]{1,40}$/.test(row.interruptedPhase)
-      ) {
-        throw new Error();
-      }
-      const projected = {
-        cut,
-        operationId: operationId(row.operationId),
-        installedVersion: sanitize(row.installedVersion, "installed recovery"),
-        interruptedPhase: row.interruptedPhase,
-        originalHelperRepairs: 2,
-      };
-      for (const field of [
-        "missingCli",
-        "originalWriterJoined",
-        "completedViaIndependentHelper",
-        "packagePreserved",
-        "launchersPreserved",
-        "fullConfigPreserved",
-      ]) {
-        if (row[field] !== true) {
-          throw new Error();
-        }
-        projected[field] = true;
-      }
-      return projected;
-    });
-    if (summary.nextUpdate !== undefined) {
-      const next = summary.nextUpdate;
-      if (
-        next.exitCode !== 0 ||
-        next.status !== "complete" ||
-        next.receiptPhase !== "anchor-retired" ||
-        typeof next.installedVersion !== "string" ||
-        next.installedVersion.length > 128 ||
-        report.completedCuts.some((row) => row.operationId === next.operationId)
-      ) {
-        throw new Error();
-      }
-      report.nextUpdate = {
-        exitCode: 0,
-        status: "complete",
-        receiptPhase: "anchor-retired",
-        operationId: operationId(next.operationId),
-        installedVersion: sanitize(next.installedVersion, "installed recovery"),
-      };
-    }
-    if (
-      exitStatus === 0 &&
-      (summary.status !== "passed" ||
-        summary.artifactSha256 !== packageSha256 ||
-        report.completedCuts.length !== 1 ||
-        !report.nextUpdate ||
-        report.installedRecovery.current?.name !== "next-update-status" ||
-        report.installedRecovery.current.state !== "completed" ||
-        report.installedRecovery.current.status !== 0)
-    ) {
-      throw new Error();
-    }
-    if (exitStatus === 0) {
-      const expected = [
-        "displacement",
-        "missing-status",
-        "repair",
-        "repeat-repair",
-        "retirement",
-        ...(cut.startsWith("helper-") ? [] : ["resume-retirement"]),
-        "completed-status",
-        "archive-completed",
-        "next-update",
-        "next-update-status",
-      ];
-      if (
-        JSON.stringify(report.commands.map((command) => command.name)) !==
-          JSON.stringify(expected) ||
-        report.commands.some(
-          (command) =>
-            (command.status === 0) !== !["displacement", "retirement"].includes(command.name),
-        )
-      ) {
-        throw new Error();
-      }
-    }
-  } catch {
-    if (exitStatus === 0) {
-      throw new Error("Installed recovery success receipt is incomplete");
-    }
-    report.installedRecovery = { availability: "unavailable" };
-    report.completedCuts = [];
-    report.commands = [];
-    report.nextUpdate = null;
-    omissions["installed recovery"] = reasons[3];
-  }
-  writeReport(
-    artifactRoot,
-    destination,
-    exitStatus === 0 ? "summary.json" : "failure.json",
-    report,
-    publicLimit,
-  );
-  return exitStatus === 0 ? undefined : { phase: coordinates.phase, exitStatus, signal: null };
-}
-
 export function publishDiagnostics(
   artifactRoot,
   destination,
@@ -2499,7 +2260,6 @@ export function publishDiagnostics(
   for (const label of Object.keys(omissions)) {
     delete omissions[label];
   }
-  const sanitize = diagnosticSanitizer(redactSensitiveText, outcome);
   if (outcome === "passed") {
     writeReport(
       artifactRoot,
@@ -2555,6 +2315,40 @@ export function publishDiagnostics(
     if (reasons.includes(snapshot.omissions?.[label])) {
       omissions[label] = snapshot.omissions[label];
     }
+  }
+  function sanitize(text, label) {
+    if (text === null || text === undefined) {
+      return null;
+    }
+    if (typeof text !== "string" || Buffer.byteLength(text) > inputLimit) {
+      throw new Error();
+    }
+    let redacted = redactSensitiveText(text, { mode: "tools" });
+    if (outcome === "failed" && Buffer.byteLength(JSON.stringify(redacted)) > outputLimit) {
+      const context = failedUpdateContext(text, label);
+      if (context) {
+        // Keep execution order explicit; this is a diagnostic prelude, not reordered steps.
+        redacted = `${redactSensitiveText(context, { mode: "tools" })}\n\nCaptured update output (original order):\n${redacted}`;
+      }
+    }
+    // Keep the latest startup/native events after redacting the whole input.
+    const tail =
+      label === "missing-load-path/baseline-gateway.log" ||
+      label === "native-assignment-messages.jsonl";
+    const lines = redacted.split(/(?<=\n)/u);
+    if (tail) {
+      lines.reverse();
+    }
+    let result = "";
+    for (const line of lines) {
+      const next = tail ? line + result : result + line;
+      if (Buffer.byteLength(JSON.stringify(next)) > outputLimit) {
+        omissions[label] = "redacted output truncated at a complete line (16 KiB)";
+        break;
+      }
+      result = next;
+    }
+    return result;
   }
   for (const name of logNames) {
     report.logs[name] = sanitize(snapshot.logs?.[name], name);

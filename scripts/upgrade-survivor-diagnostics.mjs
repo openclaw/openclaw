@@ -1,28 +1,16 @@
 // Host-only entrypoint: this file and app source are never mounted into the
 // package-under-test container. Keep the capture module dependency-light.
 import { writeSync } from "node:fs";
-import {
-  publishDiagnostics,
-  publishInstalledRecoveryDiagnostics,
-} from "./e2e/lib/upgrade-survivor/diagnostics.mjs";
+import { publishDiagnostics } from "./e2e/lib/upgrade-survivor/diagnostics.mjs";
 
 try {
-  const [mode, artifactRoot, destination, outcome = "failed", cut, timedOut, packageSha256] =
-    process.argv.slice(2);
-  if (mode !== "publish" && mode !== "installed-recovery") {
+  const [mode, artifactRoot, destination, outcome = "failed"] = process.argv.slice(2);
+  if (mode !== "publish") {
     throw new Error();
   }
   // The wrapper registers this harness's scripts/tsx.mjs before loading source.
   const { redactSensitiveText } = await import("../src/logging/redact.ts");
-  const failure =
-    mode === "installed-recovery"
-      ? publishInstalledRecoveryDiagnostics(artifactRoot, destination, redactSensitiveText, {
-          cut,
-          exitStatus: Number(outcome),
-          timedOut: timedOut === "true",
-          packageSha256,
-        })
-      : publishDiagnostics(artifactRoot, destination, redactSensitiveText, outcome);
+  const failure = publishDiagnostics(artifactRoot, destination, redactSensitiveText, outcome);
   // Use the host scheduler pipe, which is not forwarded into the container.
   // Wrapper cleanup and bounded log tails cannot clip this published receipt.
   if (failure && process.env.OPENCLAW_DOCKER_FAILURE_METADATA_FD === "3") {
