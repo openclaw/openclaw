@@ -563,11 +563,15 @@ export function SessionDiffMenu(props: SessionDiffMenuProps) {
               loadingValue: false,
             },
           );
+          const onCopyButtonRef = (button: HTMLButtonElement) => {
+            copyPathButton = button;
+          };
+          // Keep file content nodes mounted when late eligibility inserts Edit.
+          const fileEntries = menu.kind === "file" ? rawItems(menu, onCopyButtonRef, true) : null;
           const entries = createMemo((): MenuEntry[] => {
-            const onCopyButtonRef: (button: HTMLButtonElement) => void = (button) => {
-              copyPathButton = button;
-            };
-            const rawEntries = rawItems(menu, onCopyButtonRef, canEdit());
+            const rawEntries = fileEntries
+              ? fileEntries.filter((entry) => entry.id !== "edit" || canEdit())
+              : rawItems(menu, onCopyButtonRef, false);
             const desktop = "desktop" in menu && menu.desktop;
             if (!desktop && (!("mobile" in menu) || !menu.mobile)) {
               return rawEntries;
