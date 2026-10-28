@@ -851,7 +851,7 @@ extensions/workboard/src/cli.ts	1
 extensions/workboard/src/command.ts	1
 extensions/workboard/src/store-automation.ts	1
 extensions/workboard/src/store-core.ts	1
-extensions/workboard/src/store-normalizers.ts	4
+extensions/workboard/src/store-normalizers.ts	2
 extensions/workboard/src/tools.ts	8
 extensions/xai/image-generation-provider.ts	1
 extensions/xai/index.ts	2
