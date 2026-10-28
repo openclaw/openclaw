@@ -253,8 +253,18 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
     `);
   }
 
-  async function prepare(fail = false) {
-    await prepareSource(predecessor);
+  async function prepare(fail = false, provenance = true) {
+    // Build an honestly absent optional fragment, rather than dropping a sealed table.
+    await prepareSource(
+      provenance
+        ? predecessor
+        : {
+            ...predecessor,
+            postgresFragments: predecessor.postgresFragments?.filter(
+              ({ id }) => id !== "agent_provenance",
+            ),
+          },
+    );
     const registered = originalMigrations!.find((migration) => migration.version === target)!;
     stateEngineSchema.postgresMigrations = [
       {
@@ -295,7 +305,7 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
     }
   }
 
-  it.each([24, 25, 26, 27, 28, 31, 33, 34])(
+  it.each([24, 25, 26, 27, 28, 31, 33, 34, 35])(
     "backs up and restores the real version %s before the registered migration",
     async (sourceVersion) => {
       stateEngineSchema.postgresMigrations = originalMigrations;
@@ -353,6 +363,48 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
       expect(
         (await client.query(`SELECT schema_version FROM "${restored.namespace}".schema_meta`)).rows,
       ).toEqual([{ schema_version: String(sourceVersion) }]);
+    },
+  );
+
+  it.each([true, false])(
+    "migrates installed Template facts from v35 with optional provenance present: %s",
+    async (provenance) => {
+      await prepare(false, provenance);
+      await client.query(`
+        INSERT INTO "${namespace}".claw_package_refs VALUES (
+          'starter', 'skill', 'clawhub', '@fixture/claw', '0.1.1', 'sha256:claw',
+          'openclaw.clawPackageRef.v1', '@fixture/claw', 'complete', 'managed',
+          'claw-introduced', 0, NULL, NULL, NULL, NULL, NULL, NULL, 100, 200);
+        ${
+          provenance
+            ? `INSERT INTO "${namespace}".agent_provenance VALUES ('starter', 'claw', NULL, 100);`
+            : ""
+        }
+      `);
+      expect((await runDoctor()).warnings).toEqual([]);
+      expect(admit(stateEngineSchema)?.version).toBe(36);
+      expect(
+        (
+          await client.query(`SELECT schema_version, origin, package_integrity
+          FROM "${namespace}".template_package_refs`)
+        ).rows,
+      ).toEqual([
+        {
+          schema_version: "openclaw.templatePackageRef.v1",
+          origin: "template-introduced",
+          package_integrity: "sha256:claw",
+        },
+      ]);
+      if (provenance) {
+        expect(
+          (await client.query(`SELECT created_via FROM "${namespace}".agent_provenance`)).rows,
+        ).toEqual([{ created_via: "template" }]);
+      } else {
+        const table = `${namespace}.agent_provenance`;
+        expect((await client.query("SELECT to_regclass($1) AS relation", [table])).rows).toEqual([
+          { relation: null },
+        ]);
+      }
     },
   );
 

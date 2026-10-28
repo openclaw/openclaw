@@ -397,15 +397,15 @@ it.for([
       vi.spyOn(session, "prepareGatewayStartupSessions").mockImplementation(async (params) => {
         const databases = await prepare(params);
         if (params.agentIds?.has(agentId)) {
+          sessionPrepared = true;
           if (outcome === "recover") {
             const result = await runExec(process.execPath, ["-e", "console.log(process.ppid)"], {
               logOutput: false,
             });
             preparationParent = Number(result.stdout);
+            preparationEntered.resolve();
+            await preparationRelease.promise;
           }
-          sessionPrepared = true;
-          preparationEntered.resolve();
-          await preparationRelease.promise;
         }
         return databases;
       });
@@ -471,7 +471,7 @@ it.for([
         await assertOpenClawDatabasesReady({ env, operation: "gateway-startup", config: cfg });
         inspectionSettled = admission.pendingPreparation;
         waitForHealthyAgent = () =>
-          admission.waitForAgentPreparation(healthyAgentId, { env, signal });
+          admission.waitForAgentPreparation(healthyAgentId, { env, signal, forWrite: true });
         // Other Unix hosts exercise the broker context without pretending their OS is Linux.
         if (brokerExpected && !nativeBroker) {
           suppliedBroker = await spawnBroker.startGatewaySpawnBroker({
@@ -623,21 +623,6 @@ it.for([
         expect(inspectionAlive(preparationEnteredPath)).toBe(false);
         expect(fs.readFileSync(agentPath)).toEqual(agentBytes);
       } else if (outcome === "recover" || outcome === "superseded") {
-        fs.writeFileSync(releasePath, "resume");
-        await withinTest(
-          Promise.race([
-            preparationEntered.promise,
-            hostJournalRead.promise.then(() => expect(hostJournalReads).toBe(0)),
-          ]),
-          signal,
-        );
-        expect(sessionPrepared).toBe(true);
-        if (outcome === "recover") {
-          expect(preparationParent).toBe(brokerExpected ? brokerPid : process.pid);
-        }
-        expect(refusal()).toMatchObject({
-          code: "agent-database-inspection-pending",
-        });
         if (outcome === "recover") {
           chatClient = await connectWebchatClient({ port });
           gatewayReplyMock.mockImplementationOnce(async () => {
@@ -683,7 +668,7 @@ it.for([
             source,
           );
         }
-        preparationRelease.resolve();
+        fs.writeFileSync(releasePath, "resume");
         if (outcome === "superseded") {
           await vi.waitFor(
             () =>
@@ -693,8 +678,21 @@ it.for([
               }),
             { timeout: 10000 },
           );
+          expect(sessionPrepared).toBe(false);
           return;
         }
+        await withinTest(
+          Promise.race([
+            preparationEntered.promise,
+            hostJournalRead.promise.then(() => expect(hostJournalReads).toBe(0)),
+          ]),
+          signal,
+        );
+        expect(preparationParent).toBe(brokerExpected ? brokerPid : process.pid);
+        expect(refusal()).toMatchObject({
+          code: "agent-database-inspection-pending",
+        });
+        preparationRelease.resolve();
         await waitForRecovery();
         await withinTest(maintenanceCompleted.promise, signal);
         expect(
@@ -819,7 +817,8 @@ it("admits an unsealed fleet including reserved system agents while skipping an 
   for (const pathname of paths) {
     const database = new DatabaseSync(pathname);
     try {
-      database.exec("PRAGMA journal_mode=DELETE");
+      // Index repair retains late publication, after all native generations have opened.
+      database.exec("PRAGMA journal_mode=DELETE; DROP INDEX idx_agent_session_nodes_active");
     } finally {
       database.close();
     }

@@ -175,8 +175,9 @@ export function resolveRequestedSessionStoreTarget(
   cfg: OpenClawConfig,
   sessionKey: string,
   explicitAgentId?: string,
+  admission: "read" | "write" = "write",
 ): Result<{ sessionKey: string; agentId: string }, ErrorShape> {
-  const requested = resolveRequestedSessionAgentId(cfg, sessionKey, explicitAgentId);
+  const requested = resolveRequestedSessionAgentId(cfg, sessionKey, explicitAgentId, admission);
   if (!requested.ok) {
     return requested;
   }

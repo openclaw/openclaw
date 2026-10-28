@@ -17,7 +17,7 @@ import {
 import { toRelativeSandboxPath } from "./path-policy.js";
 import { isPathBoundaryEscapeError, markHostRootEscape } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
-import { resolveHostWorkspaceRoot } from "./workspace-write-scope.js";
+import { resolveHostWorkspaceRoot, resolveHostRootAsync } from "./workspace-write-scope.js";
 
 const readFileDescriptor = promisify(callbackFs.readFile);
 const closeFileDescriptor = promisify(callbackFs.close);
@@ -148,7 +148,7 @@ export async function resolvePatchFileOps(options: ApplyPatchFileOptions): Promi
   const initialRoot = await fsRoot(containmentRoot, { assertBeforeMutation: assertCurrent });
   const roots = new Map([[path.resolve(containmentRoot), initialRoot]]);
   const resolveTarget = async (filePath: string) => {
-    const selectedRoot = resolveHostWorkspaceRoot(containmentRoot, filePath);
+    const selectedRoot = await resolveHostRootAsync(containmentRoot, filePath);
     const relative = toRelativeSandboxPath(selectedRoot, filePath);
     let root = roots.get(selectedRoot);
     if (!root) {
@@ -166,7 +166,7 @@ export async function resolvePatchFileOps(options: ApplyPatchFileOptions): Promi
   return withPatchMemoryWriteProvenance(options.memoryWriteProvenance, {
     readFile: (filePath) =>
       runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
-        const selectedRoot = resolveHostWorkspaceRoot(containmentRoot, filePath);
+        const selectedRoot = await resolveHostRootAsync(containmentRoot, filePath);
         const opened = await openRootFile({
           absolutePath: filePath,
           rootPath: selectedRoot,

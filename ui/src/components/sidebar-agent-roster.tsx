@@ -14,8 +14,8 @@ import { projectOwner } from "../lib/reactive/projection.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
 import { showToast } from "../lib/toast.ts";
-import { clawCreatorAction } from "../pages/claws/creator-flow.ts";
-import { canCreateClawDraft } from "../pages/claws/draft-navigation.ts";
+import { templateCreatorAction } from "../pages/templates/creator-flow.ts";
+import { canCreateTemplateDraft } from "../pages/templates/draft-navigation.ts";
 import type { AppSidebarRenderHost } from "./app-sidebar-render.tsx";
 import { renderSessionListFrame } from "./app-sidebar-session-list-render.tsx";
 import type { SidebarVisibleSections } from "./app-sidebar-session-projection.ts";
@@ -200,11 +200,11 @@ export function SidebarAgentRoster(props: {
         class: "sidebar-customize-menu__item",
         icon: <Icon name="listTree" />,
       },
-      ...(canCreateClawDraft(context)
+      ...(canCreateTemplateDraft(context)
         ? [
             {
-              id: "create-claw",
-              label: t("clawsDraft.title"),
+              id: "create-template",
+              label: t("templatesDraft.title"),
               class: "sidebar-customize-menu__item",
               icon: <Icon name="share" />,
             },
@@ -238,8 +238,8 @@ export function SidebarAgentRoster(props: {
         context.agentSelection.setScope(card.id);
         host().onNavigate?.("sessions");
         break;
-      case "create-claw":
-        clawCreatorAction(context, card.id)?.();
+      case "create-template":
+        templateCreatorAction(context, card.id)?.();
         break;
       case "settings":
         context.navigate("agents", {

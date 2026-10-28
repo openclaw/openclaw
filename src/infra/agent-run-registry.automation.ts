@@ -24,6 +24,14 @@ export function readAutomationDisplayState(
   return "checking";
 }
 
+/** A meaningful recorded result is the scheduled run's authored outcome, like a visible reply. */
+export function hasMeaningfulAutomationResult(runId: string | undefined): boolean {
+  const invocations = runId ? getAgentRunContext(runId)?.cronRunsByJobId : undefined;
+  return [...(invocations?.values() ?? [])].some(
+    (invocation) => invocation.result !== undefined && invocation.result.outcome !== "no_change",
+  );
+}
+
 /** Records the latest next-check proposal on the matching live cron run. */
 export function recordCronNextCheckProposal(runId: string, jobId: string, delayMs: number): void {
   const context = getAgentRunContext(runId);

@@ -84,7 +84,7 @@ wait for it to exit, and rerun the same command.
 #### Role templates
 
 `--role` works in interactive and non-interactive creation, including `--json`.
-Bundled roles are [Claw sources](/cli/claws): each role directory contains a
+Bundled roles are [Template sources](/cli/templates): each role directory contains a
 `CLAW.md` manifest with identity and `SOUL.md` content, plus its operating
 program in `workspace/AGENTS.md`. Available roles:
 
@@ -111,9 +111,9 @@ unfinished bootstrap cannot adopt a role. OpenClaw checks completion before
 adding role files; rejected adoption leaves workspace files and agent config
 unchanged. Complete its bootstrap or choose a new workspace.
 
-With Claws enabled, the equivalent source path is
-`openclaw claws add docs/reference/templates/roles/<role>` from a source
-checkout. Follow the [Claw preview and consent flow](/cli/claws#inspect-and-preview)
+With Templates enabled, the equivalent source path is
+`openclaw templates add docs/reference/templates/roles/<role>` from a source
+checkout. Follow the [Template preview and consent flow](/cli/templates#inspect-and-preview)
 to add it. Use `agents team create` to wire the agents into a team.
 
 ### `agents team create`
@@ -145,8 +145,8 @@ The coordinator's `subagents.allowAgents` names the three specialist ids and
 `delegationMode` is `"prefer"`. Specialists receive `subagents.allowAgents: []`
 and instructions to return results without further delegation. This does not
 change global delegation defaults or tool policy. See [Team preset](/concepts/multi-agent#team-preset).
-Delegation remains team wiring in config; the role Claws will carry these
-settings once the separate Claw profile support lands.
+Delegation remains team wiring in config; the role Templates will carry these
+settings once the separate Template profile support lands.
 
 The coordinator is an explicit chat target. If
 `agents.defaults.systemAgent.agentId` is unset, team creation sets it to the

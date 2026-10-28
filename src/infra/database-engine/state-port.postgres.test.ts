@@ -26,6 +26,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 describe.skipIf(!connection)("shared-state database port", () => {
   const client = new Client({ connectionString: connection });
   const namespaces = new Set<string>();
+  const rows = async (sql: string, values?: unknown[]) => (await client.query(sql, values)).rows;
   beforeAll(() => client.connect());
   afterAll(async () => {
     for (const namespace of namespaces) {
@@ -81,29 +82,26 @@ describe.skipIf(!connection)("shared-state database port", () => {
       assertCurrent() {},
     });
     expect(staged).toEqual({ tables: before.tables, allocations: before.allocations });
-    const plannerRows = async (schema: string) =>
-      (
-        await client.query(
-          `SELECT c.reltuples FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+    const plannerRows = (schema: string) =>
+      rows(
+        `SELECT c.reltuples FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
            WHERE n.nspname = $1 AND c.relname = 'user_profiles'`,
-          [schema],
-        )
-      ).rows;
+        [schema],
+      );
     expect(await plannerRows(namespace)).toEqual([{ reltuples: 1 }]);
-    expect((await client.query(`SELECT sequence FROM "${namespace}".audit_events`)).rows).toEqual([
+    expect(await rows(`SELECT sequence FROM "${namespace}".audit_events`)).toEqual([
       { sequence: "9007199254740993" },
     ]);
     expect(Object.keys(staged.tables)).toHaveLength(135);
-    expect(
-      (await client.query(`SELECT display_name, avatar FROM "${namespace}".user_profiles`)).rows,
-    ).toEqual([{ display_name: "Café 🦞", avatar: Buffer.from([0, 255, 128]) }]);
-    expect(
-      (await client.query(`SELECT value FROM "${namespace}".secret_store_entries`)).rows,
-    ).toEqual([{ value: "retained" }]);
-    expect(
-      (await client.query(`SELECT count(*) AS count FROM "${namespace}".state_leases`)).rows[0]
-        .count,
-    ).toBe("1");
+    expect(await rows(`SELECT display_name, avatar FROM "${namespace}".user_profiles`)).toEqual([
+      { display_name: "Café 🦞", avatar: Buffer.from([0, 255, 128]) },
+    ]);
+    expect(await rows(`SELECT value FROM "${namespace}".secret_store_entries`)).toEqual([
+      { value: "retained" },
+    ]);
+    expect((await rows(`SELECT count(*) AS count FROM "${namespace}".state_leases`))[0].count).toBe(
+      "1",
+    );
     {
       using destination = openNodeSqliteDatabase(path.join(directory, "roundtrip.sqlite"));
       expect(
@@ -171,25 +169,18 @@ describe.skipIf(!connection)("shared-state database port", () => {
         createHash("sha256").update(fs.readFileSync(restoredPath)).digest("hex"),
       );
       expect(
-        (
-          await client.query(
-            `SELECT display_name, avatar FROM "${restored.namespace}".user_profiles`,
-          )
-        ).rows,
+        await rows(`SELECT display_name, avatar FROM "${restored.namespace}".user_profiles`),
       ).toEqual([{ display_name: "Café 🦞", avatar: Buffer.from([0, 255, 128]) }]);
+      expect(await rows(`SELECT value FROM "${restored.namespace}".secret_store_entries`)).toEqual([
+        { value: "retained" },
+      ]);
       expect(
-        (await client.query(`SELECT value FROM "${restored.namespace}".secret_store_entries`)).rows,
-      ).toEqual([{ value: "retained" }]);
-      expect(
-        (await client.query(`SELECT count(*) AS count FROM "${restored.namespace}".state_leases`))
-          .rows,
+        await rows(`SELECT count(*) AS count FROM "${restored.namespace}".state_leases`),
       ).toEqual([{ count: profile === "exact" ? "1" : "0" }]);
       expect(
-        (
-          await client.query(
-            `SELECT entry_key FROM "${restored.namespace}".plugin_blob_entries ORDER BY entry_key`,
-          )
-        ).rows,
+        await rows(
+          `SELECT entry_key FROM "${restored.namespace}".plugin_blob_entries ORDER BY entry_key`,
+        ),
       ).toEqual(
         profile === "exact"
           ? [{ entry_key: "durable" }, { entry_key: "ttl" }]
@@ -198,11 +189,9 @@ describe.skipIf(!connection)("shared-state database port", () => {
       expect(fs.readFileSync(anchorPath)).toEqual(anchorBytes);
     }
     expect(
-      (
-        await client.query(
-          `INSERT INTO "${namespace}".audit_events (event_id, source_id, source_sequence, occurred_at, kind, action, status, actor_type, actor_id) VALUES ('next', 'next', 3, 1, 'test', 'test', 'ok', 'test', 'test') RETURNING sequence`,
-        )
-      ).rows,
+      await rows(
+        `INSERT INTO "${namespace}".audit_events (event_id, source_id, source_sequence, occurred_at, kind, action, status, actor_type, actor_id) VALUES ('next', 'next', 3, 1, 'test', 'test', 'ok', 'test', 'test') RETURNING sequence`,
+      ),
     ).toEqual([{ sequence: "9007199254741000" }]);
     await client.query(`DROP INDEX "${namespace}".idx_state_leases_owner`);
     await expect(
@@ -231,12 +220,10 @@ describe.skipIf(!connection)("shared-state database port", () => {
       assertCurrent() {},
     });
     expect(
-      (
-        await client.query(
-          "SELECT tablename FROM pg_tables WHERE schemaname = $1 AND tablename IN ('agent_deletion_journal', 'user_profiles')",
-          [namespace],
-        )
-      ).rows,
+      await rows(
+        "SELECT tablename FROM pg_tables WHERE schemaname = $1 AND tablename IN ('agent_deletion_journal', 'user_profiles')",
+        [namespace],
+      ),
     ).toEqual([]);
     using destination = openNodeSqliteDatabase(":memory:");
     await materializeDatabasePort({
