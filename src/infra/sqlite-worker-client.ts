@@ -97,10 +97,29 @@ export function createSqliteWorkerClient<Operations extends SqliteWorkerOperatio
     sealed: owner.isDraining(),
     isAvailable: owner.isAvailable,
     scopes: new Set(),
+    lastUsedAt: Date.now(),
+    markUsed: () => {
+      client.lastUsedAt = Date.now();
+    },
+    isIdle: () => !closed && !client.sealed && client.scopes.size === 0 && pending.size === 0,
+    // Broker-owned release path: seal the client and close it as a reclamation, which
+    // drops the actor reference and lets the lifecycle close the native connection.
+    retire: () => {
+      if (closed || client.sealed || client.scopes.size || pending.size) {
+        return undefined;
+      }
+      reclaiming = true;
+      try {
+        return store.close();
+      } finally {
+        reclaiming = false;
+      }
+    },
     execute: (command, options, scope) => {
       if (scope ? !scope.active : client.sealed || owner.isDraining()) {
         return Promise.reject(new SqliteWorkerError("SQLite worker store is closed", "closed"));
       }
+      client.markUsed();
       if (options.signal?.aborted) {
         return Promise.reject(
           toErrorObject(options.signal.reason, "SQLite worker operation canceled"),

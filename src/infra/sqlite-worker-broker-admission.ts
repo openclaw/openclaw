@@ -71,6 +71,33 @@ export function reserveSqliteWorkerClient(
   return reserved;
 }
 
+/**
+ * Select the idle store clients a sweep may retire.
+ *
+ * Idle clients past the retain limit are released first; a forced sweep releases every
+ * idle client so the store cap stays a concurrency ceiling instead of a retention limit.
+ */
+export function selectIdleSqliteWorkerClients(
+  stores: Iterable<StoreClient>,
+  options: { retainLimit: number; idleTtlMs: number; now: number; force: boolean },
+): StoreClient[] {
+  const clients = [...stores];
+  const selected: StoreClient[] = [];
+  for (const client of clients) {
+    if (!options.force && clients.length - selected.length <= options.retainLimit) {
+      break;
+    }
+    if (!client.isIdle()) {
+      continue;
+    }
+    if (!options.force && options.now - client.lastUsedAt < options.idleTtlMs) {
+      continue;
+    }
+    selected.push(client);
+  }
+  return selected;
+}
+
 export function findReusableSqliteWorkerClient(
   stores: Iterable<StoreClient>,
   databasePath: string,

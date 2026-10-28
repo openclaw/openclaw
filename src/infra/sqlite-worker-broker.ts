@@ -14,6 +14,7 @@ import {
   captureSqliteWorkerAdmissionPaths,
   findUnclaimedSharedStateActors,
   findReusableSqliteWorkerClient,
+  selectIdleSqliteWorkerClients,
   closeUnclaimedSharedStateActors,
   prepareSqliteWorkerDatabaseAdmission,
   reclaimSqliteWorkerClient,
@@ -62,10 +63,15 @@ import type { SqliteWorkerAdmissionFactory } from "./sqlite-worker-operation-adm
 import type { SqliteWorkerOperationSettlement } from "./sqlite-worker-operation-settlement.js";
 import type { SqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
 import { sqliteWorkerRequestBytes } from "./sqlite-worker-state-context.js";
+import {
+  resolveSqliteWorkerStoreCap,
+  resolveSqliteWorkerStoreIdleSweepMs,
+  resolveSqliteWorkerStoreIdleTtlMs,
+  resolveSqliteWorkerStoreRetainLimit,
+} from "./sqlite-worker-store-limits.js";
 import { resolveSqliteBrokerWorkerCount } from "./worker-pool-sizing.js";
 import { trackWorkerRequest, type WorkerRequestObservation } from "./worker-request-diagnostics.js";
 
-const MAX_STORES = 64;
 const MAX_QUEUED_COMMAND_BYTES = 64 * 1024 * 1024;
 export const SQLITE_WORKER_MAX_REQUESTS_PER_WORKER = 128;
 const SQLITE_WORKER_MAX_QUEUED_BYTES = 256 * 1024 * 1024;
@@ -86,6 +92,18 @@ export class SqliteWorkerBroker {
   private readonly clients = new Set<object>();
   private readonly stores = new Map<object, StoreClient>();
   private readonly operations = new Set<Promise<void>>();
+  private readonly maxStores = resolveSqliteWorkerStoreCap();
+  private readonly sqliteWorkerIdleSweepTimer: ReturnType<typeof setInterval> = (() => {
+    const timer = setInterval(() => {
+      try {
+        this.sweepIdleStoreClients();
+      } catch {
+        // An idle sweep failure must never take the broker down.
+      }
+    }, resolveSqliteWorkerStoreIdleSweepMs());
+    (timer as { unref?: () => void }).unref?.();
+    return timer;
+  })();
   private readonly lifecycle = createSqliteWorkerLifecycle({
     explicitSqliteCloseReleasesNativeResources: this.explicitSqliteCloseReleasesNativeResources,
     actors: this.actors,
@@ -106,7 +124,7 @@ export class SqliteWorkerBroker {
     maxQueuedBytes: SQLITE_WORKER_MAX_QUEUED_BYTES,
     maxQueuedInputBytes: MAX_QUEUED_COMMAND_BYTES,
     maxMessageBytes: SQLITE_WORKER_MAX_MESSAGE_BYTES,
-    maxPendingOpens: MAX_STORES,
+    maxPendingOpens: this.maxStores,
   });
   private draining?: Promise<void>;
 
@@ -115,6 +133,31 @@ export class SqliteWorkerBroker {
     retention: SqliteWorkerInputRetention = "stream",
   ): SqliteWorkerInputPreparation {
     return this.inputAdmission.reserveInputPreparation(inputBytes, retention);
+  }
+
+  /**
+   * Retire store clients that went idle so retained state tracks concurrency, not uptime.
+   * The release path is client.retireIdle()/client.retire() -> owner.release(true) ->
+   * stores.delete/clients.delete + lifecycle.closeActor, which frees the native connection
+   * and its page cache.
+   */
+  sweepIdleStoreClients(force = false): number {
+    const selected = selectIdleSqliteWorkerClients(this.stores.values(), {
+      retainLimit: resolveSqliteWorkerStoreRetainLimit(),
+      idleTtlMs: resolveSqliteWorkerStoreIdleTtlMs(),
+      now: Date.now(),
+      force,
+    });
+    let retired = 0;
+    for (const client of selected) {
+      const pending = client.retireIdle?.() ?? client.retire?.();
+      if (!pending) {
+        continue;
+      }
+      retired += 1;
+      void pending.catch(() => undefined);
+    }
+    return retired;
   }
 
   open<Operations extends SqliteWorkerOperations>(
@@ -135,7 +178,7 @@ export class SqliteWorkerBroker {
     let reserved: boolean;
     let snapshot: PreparedSqliteWorkerOpen;
     try {
-      reserved = reserveSqliteWorkerClient(this.clients, this.stores.values(), MAX_STORES, client);
+      reserved = reserveSqliteWorkerClient(this.clients, this.stores.values(), this.maxStores, client);
       snapshot = captureSqliteWorkerOpen(options, stateContext, assertCurrent, custody);
       const generation = options.runtimeGeneration;
       generation?.retain(this, async () => {
@@ -158,7 +201,7 @@ export class SqliteWorkerBroker {
               snapshot,
               this.stores.values(),
               () =>
-                reserveSqliteWorkerClient(this.clients, this.stores.values(), MAX_STORES, client),
+                reserveSqliteWorkerClient(this.clients, this.stores.values(), this.maxStores, client),
               () => this.draining !== undefined,
             );
           }
@@ -254,7 +297,7 @@ export class SqliteWorkerBroker {
     } else {
       const slot = await this.lifecycle.acquireSlot(
         options,
-        { maxWorkers: this.maxWorkers, maxStores: MAX_STORES },
+        { maxWorkers: this.maxWorkers, maxStores: this.maxStores },
         (replySlot) => this.createReplyOwner(replySlot),
       );
       try {
@@ -367,11 +410,14 @@ export class SqliteWorkerBroker {
     }
     const releasePaths = retainSqliteWorkerAdmissionPathReferences(owned, admittedPaths);
     let referenceReleased = false;
+    const brokerClient: { current?: StoreClient } = {};
     const { store, client: storeClient } = createSqliteWorkerClient<Operations>({
       actor: owned,
       isDraining: () => this.draining !== undefined,
       isAvailable: () => !owned.slot.failed && !owned.cleanupState && !owned.retirementRequested,
-      retireIdle: options.retireIdle,
+      // The broker owns retirement when the opener does not provide one: an idle client
+      // must release its retained state instead of pinning it for the process lifetime.
+      retireIdle: options.retireIdle ?? (() => brokerClient.current?.retire?.()),
       dispatch: (payload, signal, scope, assertCurrent, createAdmission, requestClass) =>
         this.enqueue(
           owned.slot,
@@ -418,6 +464,7 @@ export class SqliteWorkerBroker {
         }
       },
     });
+    brokerClient.current = storeClient;
     this.stores.set(store, storeClient);
     return store;
   }
@@ -704,6 +751,7 @@ export class SqliteWorkerBroker {
   }
 
   close(): Promise<void> {
+    clearInterval(this.sqliteWorkerIdleSweepTimer);
     this.draining ??= this.lifecycle
       .closeHost({
         inputAdmission: this.inputAdmission,

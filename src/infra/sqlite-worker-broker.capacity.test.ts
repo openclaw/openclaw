@@ -11,9 +11,11 @@ import {
   captureSqliteWorkerOpen,
   reclaimSqliteWorkerClient,
   reserveSqliteWorkerClient,
+  selectIdleSqliteWorkerClients,
 } from "./sqlite-worker-broker-admission.js";
 import * as workerLifecycle from "./sqlite-worker-broker-lifecycle.js";
 import { SqliteWorkerBroker } from "./sqlite-worker-broker.js";
+import { resolveSqliteWorkerStoreCap } from "./sqlite-worker-store-limits.js";
 import { createSqliteWorkerClient } from "./sqlite-worker-client.js";
 import { createSqliteWorkerClientActor } from "./sqlite-worker-client.test-support.js";
 import {
@@ -23,6 +25,7 @@ import {
 } from "./sqlite-worker-fixture.test-support.js";
 import { SqliteWorkerInputAdmission } from "./sqlite-worker-input-admission.js";
 import type { FixtureOperations } from "./sqlite-worker-store.test-support.js";
+import type { StoreClient } from "./sqlite-worker-broker.types.js";
 
 function inputAdmission() {
   return new SqliteWorkerInputAdmission({
@@ -254,5 +257,72 @@ it("joins host drainage during reclamation without cycling through open admissio
     await draining;
   } finally {
     await broker.close();
+  }
+});
+
+it("selects idle store clients past the retain limit", () => {
+  const now = 1_700_000_000_000;
+  const idle = {
+    isIdle: () => true,
+    lastUsedAt: now - 60_000,
+  } as unknown as StoreClient;
+  const busy = {
+    isIdle: () => false,
+    lastUsedAt: now,
+  } as unknown as StoreClient;
+  const selected = selectIdleSqliteWorkerClients([busy, idle], {
+    retainLimit: 0,
+    idleTtlMs: 30_000,
+    now,
+    force: false,
+  });
+  expect(selected).toEqual([idle]);
+});
+
+it("keeps a recently used client out of the idle sweep", () => {
+  const now = 1_700_000_000_000;
+  const fresh = {
+    isIdle: () => true,
+    lastUsedAt: now - 1_000,
+  } as unknown as StoreClient;
+  const selected = selectIdleSqliteWorkerClients([fresh], {
+    retainLimit: 0,
+    idleTtlMs: 30_000,
+    now,
+    force: false,
+  });
+  expect(selected).toEqual([]);
+});
+
+it("selects every idle client when the sweep is forced", () => {
+  const now = 1_700_000_000_000;
+  const idle = {
+    isIdle: () => true,
+    lastUsedAt: now,
+  } as unknown as StoreClient;
+  const selected = selectIdleSqliteWorkerClients([idle], {
+    retainLimit: 64,
+    idleTtlMs: 30_000,
+    now,
+    force: true,
+  });
+  expect(selected).toEqual([idle]);
+});
+
+it("reads the store cap from the environment", () => {
+  const previous = process.env.OPENCLAW_SQLITE_WORKER_MAX_STORES;
+  try {
+    process.env.OPENCLAW_SQLITE_WORKER_MAX_STORES = "192";
+    expect(resolveSqliteWorkerStoreCap()).toBe(192);
+    process.env.OPENCLAW_SQLITE_WORKER_MAX_STORES = "not-a-number";
+    expect(resolveSqliteWorkerStoreCap()).toBe(64);
+    process.env.OPENCLAW_SQLITE_WORKER_MAX_STORES = "0";
+    expect(resolveSqliteWorkerStoreCap()).toBe(64);
+  } finally {
+    if (previous === undefined) {
+      delete process.env.OPENCLAW_SQLITE_WORKER_MAX_STORES;
+    } else {
+      process.env.OPENCLAW_SQLITE_WORKER_MAX_STORES = previous;
+    }
   }
 });
