@@ -550,6 +550,11 @@ export async function readUpdateRecoveryBackups(): Promise<UpdateRecoveryBackupR
       }
       const directory = path.join(store, captureId);
       const entry = await lstatIfExists(directory, "ENOENT");
+      // Finder drops this metadata file into any directory the user opens. It is
+      // never a capture, so it must not shadow the retained recovery evidence.
+      if (entry?.isFile() && captureId === ".DS_Store") {
+        continue;
+      }
       // Doctor's schema archives share this root but are not recovery captures.
       if (entry?.isFile() && /^agent-schema-.+\.tar\.gz$/u.test(captureId)) {
         continue;

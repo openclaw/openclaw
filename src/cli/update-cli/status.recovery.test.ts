@@ -253,6 +253,32 @@ it.each([
     });
   }
 });
+it("ignores Finder metadata while retaining valid and incomplete sets", async () => {
+  const c = await capture();
+  await terminal(c, "committed");
+  const directory = path.join(path.dirname(c.directory), secondId);
+  await fs.mkdir(directory);
+  const metadataPath = path.join(path.dirname(c.directory), ".DS_Store");
+  await fs.writeFile(metadataPath, "");
+
+  await updateStatus({ json: true });
+  expect(result()).not.toHaveProperty("recoverySetsError");
+  expect(result().recoverySets).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ runId: c.manifest.runId, status: "stale" }),
+      expect.objectContaining({ directory, status: "incomplete" }),
+    ]),
+  );
+  expect(result().recoverySets).toHaveLength(2);
+
+  mocks.log.mockClear();
+  await updateStatus({});
+  expect(printed()).toContain(c.manifestPath);
+  expect(printed()).toContain(directory);
+  expect(printed()).not.toContain("Update recovery sets unavailable");
+  expect(await text(c.manifestPath)).toBe(c.raw);
+  expect(await fs.readFile(metadataPath)).toEqual(Buffer.alloc(0));
+});
 it("refuses baseline reuse after an interrupted linked seal", async () => {
   const c = await capture();
   const partial = `${c.manifestPath}.partial`;
