@@ -257,14 +257,25 @@ suite.define(() => {
               expect(bounds!.x, columnLabel).toBeCloseTo(frame!.x, 0);
               expect(bounds!.width, columnLabel).toBeCloseTo(frame!.width, 0);
             };
+            const expectComposer = async (phase: string) => {
+              const frame = (await transcript.boundingBox())!;
+              const bounds = (await pane.locator(".agent-chat__composer-shell").boundingBox())!;
+              const columnLabel = `${label}: ${phase}`;
+              // The transcript reserves pin space while sharing the composer's usable center.
+              expect(frame.x, columnLabel).toBeGreaterThanOrEqual(bounds.x);
+              expect(frame.x + frame.width, columnLabel).toBeLessThanOrEqual(
+                bounds.x + bounds.width,
+              );
+              expect(frame.x + frame.width / 2, columnLabel).toBeCloseTo(
+                bounds.x + bounds.width / 2,
+                0,
+              );
+            };
             for (const direction of ["ltr", "rtl"]) {
               await page.evaluate((dir) => {
                 document.documentElement.dir = dir;
               }, direction);
-              await expectColumn(
-                pane.locator(".agent-chat__composer-shell"),
-                `${direction} composer`,
-              );
+              await expectComposer(`${direction} composer`);
               const frame = await transcript.boundingBox();
               const directionLabel = `${label} (${direction})`;
               expect(frame!.x, directionLabel).toBeGreaterThanOrEqual(safeAreaLeft + 16);
@@ -365,7 +376,7 @@ suite.define(() => {
               await expect
                 .poll(() => thread.evaluate((element) => element.scrollTop), { message: label })
                 .toBeGreaterThan(0);
-              await expectColumn(pane.locator(".agent-chat__composer-shell"), "scrolled composer");
+              await expectComposer("scrolled composer");
             }
           }
         },
@@ -570,7 +581,9 @@ suite.define(() => {
               return bounds.top + bounds.height / 2;
             };
             const buttons = [...footer.querySelectorAll(".chat-group-footer-actions button")];
+            const name = footer.querySelector<HTMLElement>(".chat-sender-name")!;
             return {
+              nameOverflow: name.scrollWidth - name.clientWidth,
               time: centerY(footer.querySelector(".chat-group-timestamp")!),
               icons: [...footer.querySelectorAll(".chat-group-footer-actions button svg")].map(
                 centerY,
@@ -586,6 +599,7 @@ suite.define(() => {
             };
           });
           expect((await group.boundingBox())?.height).toBe(restingHeight);
+          expect(alignment.nameOverflow).toBeLessThanOrEqual(1);
           expect(alignment.icons.length).toBeGreaterThan(0);
           for (const center of alignment.icons) {
             expect(Math.abs(center - alignment.time)).toBeLessThanOrEqual(1);
