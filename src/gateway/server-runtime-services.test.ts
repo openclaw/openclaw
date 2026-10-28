@@ -124,10 +124,11 @@ describe("server-runtime-services", () => {
   });
 
   it.each(["session recovery", "session retry"] as const)(
-    "gives standalone scheduled %s its owning Gateway context and broker",
+    "gives scheduled produced %s its owning Gateway context and broker",
     async (kind) => {
       const broker = await createBroker();
-      vi.useFakeTimers();
+      const clock = createGatewaySchedulerClock();
+      const scheduler = createTestGatewayScheduler(clock.clock);
       const gatewayContext = {
         terminalSessions: {},
         resolveGatewayContext: () => gatewayContext,
@@ -154,12 +155,11 @@ describe("server-runtime-services", () => {
       }
       const { services } = runWithSpawnBroker(broker, () =>
         withPluginRuntimeGatewayRequestScope({ client: { id: "retired-request" } } as never, () =>
-          activateScheduledServicesForTest({ resolveGatewayContext }),
+          activateScheduledServicesForTest({ resolveGatewayContext, scheduler }),
         ),
       );
       try {
-        await vi.advanceTimersByTimeAsync(1_250);
-        await vi.dynamicImportSettled();
+        await clock.advanceBy(1_250);
         if (kind === "session retry") {
           const runtime = hoisted.startSessionDeliveryRuntime.mock.calls[0]?.[0];
           assert(runtime, "Expected the session delivery runtime to start");
@@ -168,15 +168,15 @@ describe("server-runtime-services", () => {
               id: "scheduled-retry",
               kind: "agentTurn",
               sessionKey: "agent:main:scheduled-retry",
-              message: "Retry the synthetic turn",
               messageId: "scheduled-retry-message",
+              expectedMediaUrls: ["https://example.com/scheduled-retry.png"],
               enqueuedAt: 1,
               retryCount: 1,
             },
             { queueContext: runtime.queueContext },
           );
         }
-        await waitForFast(() => expect(observed).toBe(gatewayContext));
+        expect(observed).toBe(gatewayContext);
         expect(observedClient).toBeUndefined();
         expect(observedBroker).toBe(broker);
         expect(hasGatewayContextOwner(admittedOwner, resolveGatewayContext)).toBe(true);

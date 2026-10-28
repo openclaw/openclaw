@@ -1814,6 +1814,7 @@ src/sessions/model-selection-error.ts
 src/sessions/session-chat-type-shared.ts
 src/sessions/session-controller.cleanup-context.ts
 src/sessions/session-controller.owner-context.ts
+src/sessions/session-controller.target.ts
 src/sessions/session-diff-parser.ts
 src/sessions/session-diff-revisions.ts
 src/sessions/session-diff.runtime.ts

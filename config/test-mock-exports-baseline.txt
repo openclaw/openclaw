@@ -5201,7 +5201,6 @@
 ["src/gateway/session-companion-ask.test.ts","../agents/sessions/session-manager-write-admission.js","d8c2ff9de97b134299360c7d527d073c8e97ae1bd83949dd5edc59de5acd6217",1]
 ["src/gateway/session-companion-ask.test.ts","../agents/simple-completion-runtime.js","4462698f6981b83969a3d389ded99482f46f588694e2ed3333889ab927c1559d",1]
 ["src/gateway/session-companion-runtime.test.ts","../agents/embedded-agent-runner/run-loop.js","1c31391f66923887275fb03a0cd7efa093d3ccb7aa062659702de1ab24525ebf",1]
-["src/gateway/session-delivery-clock-jump.integration.test.ts","./server-idle-task.js","81084ffc2dc87eeab4edc258008fb76595040685b7f6767359ba0d92423b8af1",1]
 ["src/gateway/session-end-transcript-reader.test.ts","./session-transcript-readers.js","e298bde5075fb35bb799c7133e41eb1a00f1a29a3c664b07d55f0f6e12776b37",1]
 ["src/gateway/session-kill-http.test.ts","../agents/subagents/registry/subagent-control.js","4a65eef1e3b580195cf30791d5aae75765a485479621f26c1f5cc4952a44dd97",1]
 ["src/gateway/session-lifecycle-persistence-owner.test.ts","../infra/agent-run-registry.js","fd2374360e9560a0bb3c2f0bac84bcc0cdd6a21c9e426f64cf44aedadc8f953a",1]
