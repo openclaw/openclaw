@@ -84,15 +84,11 @@ export async function modelsAuthListCommand(
         : {}),
       ...(cooldownUntil ? { cooldownUntil } : {}),
       ...(disabledUntil ? { disabledUntil } : {}),
-      ...(cooldownUntil && usage?.cooldownReason
-        ? { cooldownReason: usage.cooldownReason }
-        : {}),
+      ...(cooldownUntil && usage?.cooldownReason ? { cooldownReason: usage.cooldownReason } : {}),
       ...(cooldownUntil && usage?.cooldownClassification
         ? { cooldownClassification: usage.cooldownClassification }
         : {}),
-      ...(disabledUntil && usage?.disabledReason
-        ? { disabledReason: usage.disabledReason }
-        : {}),
+      ...(disabledUntil && usage?.disabledReason ? { disabledReason: usage.disabledReason } : {}),
       ...(recoveryHint ? { recoveryHint } : {}),
     });
   }
