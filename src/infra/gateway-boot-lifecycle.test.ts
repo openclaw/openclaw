@@ -272,6 +272,33 @@ describe("gateway crash-loop breaker", () => {
   );
 
   it.each([
+    ["Kubernetes", { KUBERNETES_SERVICE_HOST: "10.96.0.1", KUBERNETES_SERVICE_PORT: "443" }],
+    ["external supervisor", { OPENCLAW_SUPERVISOR_MODE: "external" }],
+  ] as const)(
+    "records repeated SIGTERM stops without a competing-supervisor warning under %s",
+    async (owner, platformEnv) => {
+      const lifecycle = createLifecycleDb();
+      Object.assign(lifecycle.env, platformEnv);
+      const lines: string[] = [];
+      const capture = (...args: unknown[]) => lines.push(args.map(String).join(" "));
+      setLoggerOverride({ level: "silent", consoleLevel: "info", consoleStyle: "json" });
+      loggingState.rawConsole = { log: capture, info: capture, warn: capture, error: capture };
+      const reason = "stop (SIGTERM)";
+      const nowMs = 1_000_000;
+      insertBootRows(lifecycle, [
+        completedBoot("first-pod", 1, nowMs - 200_000, "clean_stop", { reason }),
+        completedBoot("second-pod", 2, nowMs - 100_000, "clean_stop", { reason }),
+      ]);
+      const bootId = (await lifecycle.begin(nowMs - 1_000)).id;
+      await lifecycle.complete(bootId, "clean_stop", nowMs, { reason });
+      const output = lines.join("\n");
+      expect(output).toContain(`stopped after SIGTERM 3 times in 5 min (${owner} manages this Gateway)`);
+      expect(output).not.toContain("another supervisor");
+      expect(output).not.toContain('"level":"warn"');
+    },
+  );
+
+  it.each([
     [
       "startup_failed",
       "gateway.maintenance_required",

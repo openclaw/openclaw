@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { performance } from "node:perf_hooks";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { isGatewayStateProcessOwnerRetiredError } from "../../infra/gateway-state-owner-errors.js";
 import {
   consumeGatewaySuspendHandoff,
   type GatewaySuspendHandoffOwner,
@@ -187,7 +188,8 @@ export function createGatewayRunSignals(params: {
     }
     // Transfer this in-memory authority before even the reversible signal fence.
     let suspendHandoff: ReturnType<typeof consumeGatewaySuspendHandoff> | undefined;
-    if (!params.isShuttingDown()) {
+    const duringShutdown = params.isShuttingDown();
+    if (!duringShutdown) {
       try {
         suspendHandoff = consumeGatewaySuspendHandoff(params.getExternalRestartOwner());
       } catch (error) {
@@ -208,7 +210,15 @@ export function createGatewayRunSignals(params: {
         );
       },
       (err, acceptedAtMs) => {
-        gatewayLog.error(`failed to handle SIGTERM: ${String(err)}`);
+        if (duringShutdown && isGatewayStateProcessOwnerRetiredError(err)) {
+          // A closing iteration (e.g. an in-process restart) already released
+          // state; no restart intent can be read, and stopping is the outcome.
+          gatewayLog.info(
+            "received SIGTERM after shutdown released Gateway state; stopping without a restart intent",
+          );
+        } else {
+          gatewayLog.error(`failed to handle SIGTERM: ${String(err)}`);
+        }
         request("stop", "SIGTERM", undefined, undefined, undefined, {
           acceptedAtMs,
           suspendHandoff,
