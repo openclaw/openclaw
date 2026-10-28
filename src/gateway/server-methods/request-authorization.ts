@@ -418,7 +418,10 @@ export async function authorizeGatewayRequestPreDispatch(params: {
                   return false;
                 }
                 const waiting = agents.flatMap((agentId) => {
-                  const wait = startup.waitForAgentPreparation(agentId, { signal: waitSignal });
+                  const wait = startup.waitForAgentPreparation(agentId, {
+                    signal: waitSignal,
+                    forWrite: false,
+                  });
                   return wait ? [wait] : [];
                 });
                 waited = waiting.length > 0;

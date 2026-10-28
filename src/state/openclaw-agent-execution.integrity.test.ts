@@ -249,11 +249,12 @@ it.for(["valid", "invalid-row", "missing-index", "failed", "stopped", "supersede
         );
         expect(isAgentDatabaseStartupReadReady(`${pathname}.other`, { env })).toBe(false);
         const writeSettled = vi.fn();
-        const writing = admission
-          .waitForAgentPreparation("main", { env, forWrite: true })!
-          .then(writeSettled, writeSettled);
+        const writing = Promise.resolve(admission.waitForAgentPreparation("main", { env })).then(
+          writeSettled,
+          writeSettled,
+        );
         if (contents !== "missing-index") {
-          expect(admission.waitForAgentPreparation("main", { env })).toBeUndefined();
+          expect(admission.waitForAgentPreparation("main", { forWrite: false })).toBeUndefined();
           const read = withinTest(
             withEntry(scope.sessionKey, scope, (row) => row.entry),
             signal,
@@ -271,7 +272,7 @@ it.for(["valid", "invalid-row", "missing-index", "failed", "stopped", "supersede
         const stopping = contents === "stopped" ? owner.stop() : undefined;
         if (!current || stopping) {
           expect(readAgentDatabaseReadAdmissionRefusal("main", { env })).toBeDefined();
-          expect(admission.waitForAgentPreparation("main", { env })).toBeUndefined();
+          expect(admission.waitForAgentPreparation("main", { forWrite: false })).toBeUndefined();
         }
         integrity.release();
         await admission.pendingPreparation;

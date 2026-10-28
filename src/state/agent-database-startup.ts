@@ -253,7 +253,8 @@ class AgentDatabaseStartupAdmission {
     }
     const signal = options.signal ? AbortSignal.any([this.signal, options.signal]) : this.signal;
     if (!options.forWrite) {
-      return pending.readReady && racePromiseWithAbortSignal(pending.readReady, signal);
+      const readiness = options.forWrite === false ? pending.readReady : pending.completion;
+      return readiness && racePromiseWithAbortSignal(readiness, signal);
     }
     // Allow five minutes for slow-host startup, plus a minute per queued inspection batch.
     const timeoutMs =
