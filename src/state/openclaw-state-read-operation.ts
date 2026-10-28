@@ -199,6 +199,14 @@ export function startOpenClawStateReadOperation(
     if ("error" in read) {
       throw read.error;
     }
+    // A settled read that still owns its scope must hold live authority: a revoked
+    // database admission has to surface as an error instead of a stale reply.
+    // Draining operations stay exempt because close() aborts the internal
+    // controller before joining retirement, and an already-selected read keeps
+    // settling through that shutdown.
+    if (!controller.signal.aborted) {
+      authority.assertCurrent();
+    }
     if (admitted === true) {
       borrowed?.observe();
     }

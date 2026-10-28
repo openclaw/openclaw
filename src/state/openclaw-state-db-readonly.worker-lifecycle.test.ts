@@ -88,9 +88,13 @@ vi.mock("../infra/sqlite-readonly-location-cleanup.js", async (importOriginal) =
   retainSnapshotTempDirectory: () => () => {},
 }));
 
-import { createOpenClawDatabaseMaintenanceScope as createMaintenance } from "./openclaw-state-db-async-lifecycle.js";
+import {
+  createOpenClawDatabaseMaintenanceScope as createMaintenance,
+  isStateDatabaseReadAdmissionInvalidatedError,
+} from "./openclaw-state-db-async-lifecycle.js";
 import {
   captureOpenClawStateDatabaseReadAdmission as captureReadAdmission,
+  clearOpenClawStateDatabaseOpenFailure,
   closeOpenClawStateDatabaseByPathAsync as closePath,
 } from "./openclaw-state-db-cache.js";
 import {
@@ -298,6 +302,19 @@ it("retries transport stop and settles the already-selected query", async () => 
   expect(await observed).toEqual({
     value: { ok: true, type: "backup.runs", sourceAdmitted: true, runs: [] },
   });
+});
+
+it("rejects a settled read whose database admission was cleared before delivery", async () => {
+  const { started, finish } = startPendingRead();
+  const observed = settle(preserveArtifacts(read));
+  await started.promise;
+  clearOpenClawStateDatabaseOpenFailure(options.path);
+  finish();
+  const result = await observed;
+  expect("error" in result && isStateDatabaseReadAdmissionInvalidatedError(result.error)).toBe(
+    true,
+  );
+  expect(mock.cleanup).toHaveBeenCalledOnce();
 });
 
 it("joins maintenance reads and retries their transport before closing scoped handles", async () => {
