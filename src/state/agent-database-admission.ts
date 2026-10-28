@@ -8,6 +8,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { runWithSqliteDatabaseAdmissionTurn } from "../infra/sqlite-database-admission-turn.js";
 import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
 import {
   formatAgentDatabaseCorruptionRepairHint,
@@ -51,6 +52,10 @@ export function createAgentDatabaseAdmissionErrorShape(
 
 // Refusals are public protocol objects. Keep inspection causes private to the admission owner.
 const refusalCauses = new WeakMap<AgentDatabaseAdmissionRefusal, unknown>();
+const readAdmissions = new WeakMap<
+  AgentDatabaseAdmissionRefusal,
+  { key: string; paths: readonly string[]; assertCurrent: () => void }
+>();
 
 const refusalsByState = new Map<
   string,
@@ -87,6 +92,7 @@ export function listAgentDatabaseStartupFtsRepairs(): string[] {
 const preparation = new AsyncLocalStorage<{
   refusal: AgentDatabaseAdmissionRefusal;
   key: string;
+  access: "read" | "write";
   active: boolean;
   assertCurrent: () => void;
 }>();
@@ -292,14 +298,108 @@ export function readAgentDatabaseAdmissionRefusal(
   );
 }
 
+/** Read readiness never releases writable admission or certifies unchecked database pages. */
+export function readAgentDatabaseReadAdmissionRefusal(
+  agentId: string,
+  options: AdmissionOptions = {},
+): AgentDatabaseAdmissionRefusal | undefined {
+  const refusal = readSelectedAgentDatabaseAdmissionRefusal(
+    stateKey(options),
+    normalizeAgentId(agentId),
+    agentId,
+    "read",
+  );
+  const admitted = refusal && readAdmissions.get(refusal);
+  if (
+    refusal?.code === "agent-database-inspection-pending" &&
+    admitted?.key === stateKey(options)
+  ) {
+    try {
+      admitted.assertCurrent();
+      return undefined;
+    } catch {
+      // A retired owner or changed configuration must not retain read access.
+    }
+  }
+  return refusal;
+}
+
+/** The startup owner publishes only inspected schemas, and revokes them when its work settles. */
+export function publishPendingAgentDatabaseReadAdmission(
+  refusal: AgentDatabaseAdmissionRefusal,
+  options: AdmissionOptions & { paths: readonly string[]; assertCurrent: () => void },
+): () => void {
+  options.assertCurrent();
+  const key = stateKey(options);
+  if (
+    refusal.code !== "agent-database-inspection-pending" ||
+    refusalsByState.get(key)?.refusals.get(refusal.agentId) !== refusal
+  ) {
+    throw new Error(`Agent database admission changed before read preparation: ${refusal.agentId}`);
+  }
+  const admission = { key, paths: options.paths, assertCurrent: options.assertCurrent };
+  readAdmissions.set(refusal, admission);
+  return () => {
+    if (readAdmissions.get(refusal) === admission) {
+      readAdmissions.delete(refusal);
+    }
+  };
+}
+
+/** Only an exact inspected physical path may bypass its pending writable preparation. */
+export function isAgentDatabaseStartupReadReady(
+  pathname: string,
+  options: AdmissionOptions = {},
+): boolean {
+  for (const refusal of refusalsByState.get(stateKey(options))?.refusals.values() ?? []) {
+    if (
+      readAdmissions.get(refusal)?.paths.includes(pathname) &&
+      !readAgentDatabaseReadAdmissionRefusal(refusal.agentId, options)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Inspected files can serve snapshots while their writable integrity scan holds its turn. */
+export function runWithAgentDatabaseReadAdmissionTurn<T>(
+  paths: readonly string[],
+  operation: () => Promise<T>,
+  families: readonly string[] = [],
+  signal?: AbortSignal,
+  options: AdmissionOptions = {},
+): Promise<T> {
+  // Unknown siblings and first creation retain their family ordering and native checks.
+  const pendingPaths = refusalsByState.get(stateKey(options))?.refusals.size
+    ? paths.filter((pathname) => !isAgentDatabaseStartupReadReady(pathname, options))
+    : paths;
+  return runWithSqliteDatabaseAdmissionTurn(pendingPaths, operation, families, signal);
+}
+
+export function assertAgentDatabaseReadAdmitted(
+  agentId: string,
+  options: AdmissionOptions = {},
+): void {
+  const refusal = readAgentDatabaseReadAdmissionRefusal(agentId, options);
+  if (refusal) {
+    throw new AgentDatabaseAdmissionError(refusal);
+  }
+}
+
 function readSelectedAgentDatabaseAdmissionRefusal(
   key: string,
   agentId: string,
   requestedAgentId: string,
+  access: "read" | "write" = "write",
 ): AgentDatabaseAdmissionRefusal | undefined {
   const refusal = refusalsByState.get(key)?.refusals.get(agentId);
   const scope = preparation.getStore();
   if (scope && scope.key === key && scope.refusal.agentId === agentId) {
+    // Publication listeners inherit this scope; none may borrow writable admission.
+    if (scope.access === "read" && (access === "write" || !scope.active)) {
+      return refusal;
+    }
     if (!scope.active) {
       throw new Error(`Agent database preparation has ended: ${requestedAgentId}`);
     }
@@ -317,6 +417,25 @@ export async function preparePendingAgentDatabase(
   options: AdmissionOptions & { assertCurrent: () => void },
   run: () => Promise<void>,
 ): Promise<void> {
+  await withPendingAgentDatabasePreparation(refusal, options, "write", run);
+  sessionChanges.emit({ all: true, scope: { agentId: refusal.agentId, topology: true } });
+}
+
+/** Early publication and its descendants can inspect secrets/models, never write the database. */
+export async function preparePendingAgentDatabaseRead(
+  refusal: AgentDatabaseAdmissionRefusal,
+  options: AdmissionOptions & { assertCurrent: () => void },
+  run: () => Promise<void>,
+): Promise<void> {
+  await withPendingAgentDatabasePreparation(refusal, options, "read", run);
+}
+
+async function withPendingAgentDatabasePreparation(
+  refusal: AgentDatabaseAdmissionRefusal,
+  options: AdmissionOptions & { assertCurrent: () => void },
+  access: "read" | "write",
+  run: () => Promise<void>,
+): Promise<void> {
   const key = stateKey(options);
   const assertCurrent = () => {
     options.assertCurrent();
@@ -328,18 +447,19 @@ export async function preparePendingAgentDatabase(
     }
   };
   assertCurrent();
-  const scope = { key, refusal, assertCurrent, active: true };
+  const scope = { key, refusal, assertCurrent, access, active: true };
   try {
     await preparation.run(scope, run);
     scope.assertCurrent();
-    const current = refusalsByState.get(key)!;
-    const refusals = new Map(current.refusals);
-    refusals.delete(refusal.agentId);
-    current.refusals = refusals;
+    if (access === "write") {
+      const current = refusalsByState.get(key)!;
+      const refusals = new Map(current.refusals);
+      refusals.delete(refusal.agentId);
+      current.refusals = refusals;
+    }
   } finally {
     scope.active = false;
   }
-  sessionChanges.emit({ all: true, scope: { agentId: refusal.agentId, topology: true } });
 }
 
 export function failPendingAgentDatabase(

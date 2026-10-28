@@ -160,6 +160,13 @@ export function isDirectSessionReadMethod(method: string): boolean {
   return DIRECT_SESSION_READ_METHODS.has(method);
 }
 
+/** Subscription registration reads session state without writing the agent database. */
+export function sessionMethodDatabaseAdmission(method: string): "read" | "write" {
+  return isDirectSessionReadMethod(method) || method === "sessions.messages.subscribe"
+    ? "read"
+    : "write";
+}
+
 export function sessionMutationTargetFields(method: string): readonly SessionMutationTargetField[] {
   const policy = SESSION_TARGET_POLICY_BY_METHOD.get(method);
   return policy?.readOnly ? [] : (policy?.fields ?? []);

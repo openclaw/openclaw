@@ -1,6 +1,6 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { fork } from "node:child_process";
 import fs from "node:fs";
-import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -9,6 +9,13 @@ import { withinTest } from "../../test/helpers/promise.js";
 import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createChannelIngressQueue } from "../channels/message/ingress-queue.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import { resolveRequestedSessionAgentId } from "../gateway/session-request-agent.js";
+import { withGatewaySessionEntry as withEntry } from "../gateway/session-utils-store.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import {
@@ -16,13 +23,15 @@ import {
   readSqliteDatabaseIntegrityVerification,
   readSqliteDatabaseCleanClose,
 } from "../infra/sqlite-database-admission.js";
-import {
-  createSqliteWorkerOperationAdmission,
-  type SqliteWorkerAdmissionRequest,
-} from "../infra/sqlite-worker-operation-admission.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import * as sqliteWorkerStore from "../infra/sqlite-worker-store.js";
-import { assertAgentDatabaseAdmitted } from "./agent-database-admission.js";
+import {
+  assertAgentDatabaseAdmitted,
+  captureAgentDatabaseAdmission,
+  isAgentDatabaseStartupReadReady,
+  readAgentDatabaseReadAdmissionRefusal,
+} from "./agent-database-admission.js";
+import { withAgentDatabaseStartupAdmission } from "./agent-database-startup.js";
 import { stateNativeProcessEntrypoints } from "./native-process-runtime.test-support.js";
 import { retainAgentDatabase } from "./openclaw-agent-db-borrower.js";
 import {
@@ -48,23 +57,25 @@ import {
   closeOpenClawAgentDatabasesForTest,
   closeOpenClawAgentDatabaseByPath as closeAgent,
   openOpenClawAgentDatabase as openAgent,
-  type OpenClawAgentDatabase,
 } from "./openclaw-agent-db.js";
 import { removeAgentIntegrityMetadataForTest } from "./openclaw-agent-db.test-support.js";
-import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-admission-contract.js";
-import { AgentDatabaseExecutionLifetime } from "./openclaw-agent-execution-authority.js";
 import type { AgentDatabaseExecutionScope } from "./openclaw-agent-execution-contract.js";
-import { createAgentDatabaseNativeGeneration } from "./openclaw-agent-execution-native.js";
+import {
+  createNativeIntegrityGeneration as nativeGeneration,
+  createNativeIntegritySource as sourceFor,
+} from "./openclaw-agent-execution-native.test-support.js";
 import {
   captureOpenClawAgentDatabaseExecution as capture,
   getPendingOpenClawAgentDatabasePreparation,
+  prepareOpenClawAgentDatabaseExecution,
 } from "./openclaw-agent-execution.js";
+import { assertOpenClawDatabasesReady } from "./openclaw-database-preflight.js";
+import { withOpenClawStateDatabaseReadSnapshot } from "./openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "./openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext as workerContext } from "./openclaw-state-worker-context.js";
 import * as stateWorkerStore from "./openclaw-state-worker-store.js";
 
@@ -131,6 +142,8 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
+    clearRuntimeConfigSnapshot();
+    vi.unstubAllEnvs();
     cleanup();
   }),
 );
@@ -144,12 +157,6 @@ const initialized = (scope: AgentDatabaseExecutionScope, sessionId: string, agen
     type: "session.transcript.initialize",
     input: { sessionKey: `agent:${agentId}:${sessionId}`, sessionId },
   });
-
-function dormantBorrowers(prefix: string) {
-  const options = { agentId: "main", env: makeEnv(prefix) };
-  closeAgent(openAgent(options).path);
-  return { rejected: capture(options), retained: capture(options) };
-}
 
 function holdIntegrity(pathname: string) {
   const gate = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 2));
@@ -167,84 +174,130 @@ function holdIntegrity(pathname: string) {
   };
 }
 
-// Direct native fixtures hold their generation until their explicit close.
-function nativeGeneration(
-  database: Pick<OpenClawAgentDatabase, "agentId" | "path">,
-  context: ReturnType<typeof workerContext>,
-  assertCurrent = () => context.admission.assertCurrent(),
-  assertCleanup = assertCurrent,
-) {
-  const generation = createAgentDatabaseNativeGeneration(
-    database.agentId,
-    database.path,
-    context,
-    new AgentDatabaseExecutionLifetime().state,
-    assertCurrent,
-    assertCleanup,
-    undefined,
-    () => {},
-    () => {},
-  );
-  return Object.assign(generation, { source: sourceFor(assertCurrent) });
-}
-
-function sourceFor(
-  assertCurrent: () => void,
-  beforeGrant?: (request: SqliteWorkerAdmissionRequest) => void,
-): AgentDatabaseRequestExecutionSource {
-  return {
-    assertCurrent,
-    createAdmission: (binding) => () => ({
-      nativeLocations: binding.nativeLocations,
-      admission: createSqliteWorkerOperationAdmission((request, grant) => {
-        binding.authorize(request);
-        assertCurrent();
-        beforeGrant?.(request);
-        if (!grant()) {
-          throw new Error("Native integrity fixture lost its retained admission");
-        }
-      }, binding.attachment),
-    }),
-  };
-}
-
-it("keeps retained borrowers after a caller is refused before native promotion", async () => {
-  const { rejected: initiator, retained } = dormantBorrowers("agent-pre-promotion-");
-  const refusal = new Error("Caller revoked before native promotion");
-  let current = true;
-  const source = sourceFor(() => {
-    if (!current) {
-      throw refusal;
+it.for(["valid", "invalid-row", "missing-index", "failed", "stopped", "superseded"] as const)(
+  "serves inspected startup snapshots while native integrity is held (%s)",
+  async (contents, { signal }) => {
+    const env = makeEnv("startup-early-read-");
+    vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
+    const config = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(config);
+    const scope = { agentId: "main", env, sessionKey: "agent:main:retained" };
+    const entry = await replaceSessionEntry(scope, { sessionId: "retained", updatedAt: 1 });
+    const pathname = openAgent(scope).path;
+    await closeOpenClawAgentDatabasesAsync();
+    closeOpenClawAgentDatabasesForTest();
+    {
+      using db = openNodeSqliteDatabase(pathname);
+      db.exec("UPDATE session_key_contract SET canonical_ready=NULL");
+      if (contents === "invalid-row") {
+        db.exec("UPDATE session_nodes SET parent_session_key='main'");
+      } else if (contents === "missing-index") {
+        db.exec("DROP INDEX idx_agent_session_nodes_active");
+      }
     }
-  });
-  const runOperation = sqliteWorkerStore.runSqliteWorkerStoreOperation;
-  const preparation = vi
-    .spyOn(sqliteWorkerStore, "runSqliteWorkerStoreOperation")
-    .mockImplementationOnce((...args) => {
-      // The lazy native owner exists, but its first write promotion has not entered.
-      current = false;
-      preparation.mockRestore();
-      return runOperation(...args);
+    invalidateValidation(pathname);
+    revokeSqliteDatabaseAdmissionsForPath(pathname);
+    await withAgentDatabaseStartupAdmission(async (admission) => {
+      await withOpenClawStateDatabaseReadSnapshot(
+        () => assertOpenClawDatabasesReady({ env, config, operation: "gateway-startup" }),
+        { env },
+      );
+      const owner = admission.adopt();
+      const integrity = holdIntegrity(pathname);
+      let current = true;
+      const assertWrite = captureAgentDatabaseAdmission("main", { env });
+      let publicationWrite = assertWrite;
+      const phases: string[] = [];
+      try {
+        admission.activate({
+          isCurrent: () => current,
+          preparationReady: Promise.resolve(),
+          captureReadAdmission: ({ assertCurrent }) => assertCurrent,
+          openAgent: ({ assertCurrent, signal: openingSignal }) => {
+            phases.push("open");
+            return prepareOpenClawAgentDatabaseExecution(scope, assertCurrent, openingSignal);
+          },
+          migrateAgent: async () => {
+            phases.push("migration");
+            if (contents === "failed") {
+              throw new Error("synthetic preparation failure");
+            }
+          },
+          publishAgent: async () => {
+            if (contents !== "missing-index") {
+              expect(readAgentDatabaseReadAdmissionRefusal("main", { env })).toBeUndefined();
+              expect(assertWrite).toThrow("startup inspection");
+              const publicationContext = AsyncLocalStorage.snapshot();
+              publicationWrite = () => publicationContext(assertWrite);
+              await Promise.resolve().then(() =>
+                expect(publicationWrite).toThrow("startup inspection"),
+              );
+            }
+            phases.push("publication");
+          },
+        });
+        await withinTest(integrity.entered(), signal);
+        const resolved = resolveRequestedSessionAgentId(config, scope.sessionKey, "main", "read");
+        expect(resolved).toMatchObject(
+          contents === "missing-index"
+            ? { ok: false, error: { code: "UNAVAILABLE" } }
+            : { ok: true, agentId: "main" },
+        );
+        expect(publicationWrite).toThrow("startup inspection");
+        expect(isAgentDatabaseStartupReadReady(pathname, { env })).toBe(
+          contents !== "missing-index",
+        );
+        expect(isAgentDatabaseStartupReadReady(`${pathname}.other`, { env })).toBe(false);
+        const writeSettled = vi.fn();
+        const writing = admission
+          .waitForAgentPreparation("main", { env, forWrite: true })!
+          .then(writeSettled, writeSettled);
+        if (contents !== "missing-index") {
+          expect(admission.waitForAgentPreparation("main", { env })).toBeUndefined();
+          const read = withinTest(
+            withEntry(scope.sessionKey, scope, (row) => row.entry),
+            signal,
+          );
+          if (contents === "invalid-row") {
+            await expect(read).rejects.toThrow("invalid persisted session row requires repair");
+          } else {
+            await expect(read).resolves.toEqual(entry);
+          }
+        }
+        expect(writeSettled).not.toHaveBeenCalled();
+        if (contents === "superseded") {
+          current = false;
+        }
+        const stopping = contents === "stopped" ? owner.stop() : undefined;
+        if (!current || stopping) {
+          expect(readAgentDatabaseReadAdmissionRefusal("main", { env })).toBeDefined();
+          expect(admission.waitForAgentPreparation("main", { env })).toBeUndefined();
+        }
+        integrity.release();
+        await admission.pendingPreparation;
+        await stopping;
+        await writing;
+        expect(writeSettled).toHaveBeenCalledTimes(1);
+        expect(isAgentDatabaseStartupReadReady(pathname, { env })).toBe(false);
+        expect(Boolean(readAgentDatabaseReadAdmissionRefusal("main", { env }))).toBe(
+          ["failed", "stopped", "superseded"].includes(contents),
+        );
+        expect(phases).toEqual(
+          contents === "missing-index"
+            ? ["open", "migration", "publication"]
+            : ["stopped", "superseded"].includes(contents)
+              ? ["publication", "open"]
+              : ["publication", "open", "migration"],
+        );
+      } finally {
+        integrity.release();
+        await owner.stop();
+      }
     });
-  const operation = vi.fn(async () => "not admitted");
-  try {
-    await expect(initiator.runExisting(source, operation)).rejects.toBe(refusal);
-    expect(current).toBe(false);
-    expect(operation).not.toHaveBeenCalled();
-    expect(() => retained.assertCurrent()).not.toThrow();
-    await expect(
-      retained.runExisting(
-        sourceFor(() => {}),
-        (scope) => initialized(scope, "retained"),
-      ),
-    ).resolves.toMatchObject({ kind: "session-transcript-initialized" });
-  } finally {
-    preparation.mockRestore();
-    await Promise.all([initiator.release(), retained.release()]);
-  }
-});
+  },
+);
 
-it.for(["revoked", "aborted"] as const)(
+it.for(["before-promotion", "revoked", "aborted"] as const)(
   "keeps shared integrity preparation alive after its initiating caller is %s",
   async (cancellation, { signal }) => {
     const env = makeEnv("agent-stale-shared-");
@@ -277,6 +330,17 @@ it.for(["revoked", "aborted"] as const)(
     const initiatingOperation = vi.fn((scope: AgentDatabaseExecutionScope) =>
       initialized(scope, "initiator"),
     );
+    const runOperation = sqliteWorkerStore.runSqliteWorkerStoreOperation;
+    const promotion =
+      cancellation === "before-promotion"
+        ? vi
+            .spyOn(sqliteWorkerStore, "runSqliteWorkerStoreOperation")
+            .mockImplementationOnce((...args) => {
+              initiatingCallerCurrent = false;
+              promotion?.mockRestore();
+              return runOperation(...args);
+            })
+        : undefined;
     const initiating =
       cancellation === "aborted"
         ? initiator.prepare(initiatingSource, controller.signal)
@@ -284,7 +348,13 @@ it.for(["revoked", "aborted"] as const)(
     void initiating.catch(() => {});
     let peers: Promise<unknown>[] = [];
     try {
-      await withinTest(integrity.entered(), signal);
+      if (cancellation === "before-promotion") {
+        await expect(initiating).rejects.toBe(refused);
+        expect(initiatingCallerCurrent).toBe(false);
+        expect(() => borrowers[1]!.assertCurrent()).not.toThrow();
+      } else {
+        await withinTest(integrity.entered(), signal);
+      }
       if (cancellation === "aborted") {
         controller.abort(refused);
         await expect(initiating).rejects.toBe(refused);
@@ -308,6 +378,7 @@ it.for(["revoked", "aborted"] as const)(
       });
       void Promise.allSettled(peers);
     } finally {
+      promotion?.mockRestore();
       integrity.release();
     }
     try {
@@ -349,85 +420,59 @@ it.for(["revoked", "aborted"] as const)(
   },
 );
 
-it.for(["warm", "cold"] as const)(
-  "admits durable channel messages while agent integrity is pending (%s shared writer)",
-  async (sharedWriter, { signal }) => {
-    const env = makeEnv("agent-ingress-isolation-");
-    const ready = openAgent({ agentId: "ready", env });
-    const preparing = openAgent({ agentId: "preparing", env });
-    const context = workerContext({ env });
-    const readyGeneration = nativeGeneration(ready, context);
-    const preparingGeneration = nativeGeneration(preparing, context);
-    const { source } = readyGeneration;
+it.for(["warm", "cold", "peer"] as const)(
+  "serves shared ingress and prepares peers while agent integrity is held (%s)",
+  async (workload, { signal }) => {
+    const env = makeEnv("agent-preparation-isolation-");
+    const databases = ["slow", "ready", "next"].map((agentId) => openAgent({ agentId, env }));
+    const integrity = holdIntegrity(databases[0]!.path);
+    invalidateValidation(databases[0]!.path);
+    const executions = databases.map((database) =>
+      capture({ agentId: database.agentId, path: database.path, env }),
+    );
+    const source = sourceFor(() => {});
     const queue = createChannelIngressQueue<{ text: string }>({
       channelId: "synthetic",
       stateDir: env.OPENCLAW_STATE_DIR,
     });
-    const integrity = holdIntegrity(preparing.path);
-    invalidateValidation(preparing.path);
-    let preparation: Promise<unknown> | undefined;
+    const pending: Promise<void>[] = [];
+    let slowPrepared = false;
     try {
-      // Occupy both ordinary slots on the old implementation before opening the slow agent.
-      if (sharedWriter === "warm") {
+      // Warm ingress and the ready agent occupy both ordinary slots before the slow open.
+      if (workload === "warm") {
         await queue.enqueue("before", { text: "before preparation" });
       }
-      await readyGeneration.run(source, async () => {});
-      preparation = preparingGeneration.run(source, async () => {});
-      void preparation.catch(() => {});
+      if (workload !== "peer") {
+        await executions[1]!.prepare(source);
+      }
+      const preparing = executions[0]!.prepare(source).then(() => {
+        slowPrepared = true;
+      });
+      pending.push(preparing);
+      void preparing.catch(() => {});
       await withinTest(integrity.entered(), signal);
-
-      await withinTest(queue.enqueue("during", { text: "during preparation" }), signal);
-      expect(Atomics.load(integrity.gate, 0)).toBe(1);
-      expect((await queue.listPending()).map((event) => event.id)).toEqual(
-        sharedWriter === "warm" ? ["before", "during"] : ["during"],
-      );
+      if (workload === "peer") {
+        for (const execution of executions.slice(1)) {
+          const preparingPeer = execution.prepare(source);
+          pending.push(preparingPeer);
+          await withinTest(preparingPeer, signal);
+        }
+      } else {
+        await withinTest(queue.enqueue("during", { text: "during preparation" }), signal);
+        expect((await queue.listPending()).map((event) => event.id)).toEqual(
+          workload === "warm" ? ["before", "during"] : ["during"],
+        );
+      }
+      expect(slowPrepared).toBe(false);
     } finally {
       integrity.release();
-      await preparation;
-      await preparingGeneration.close();
-      await readyGeneration.close();
+      await Promise.allSettled(pending);
+      await Promise.all(executions.map((execution) => execution.release()));
     }
+    expect(slowPrepared).toBe(true);
   },
+  30_000,
 );
-
-it("prepares another agent on the free carrier while integrity holds its peer", async ({
-  signal,
-}) => {
-  const env = makeEnv("agent-preparation-isolation-");
-  const databases = ["slow", "ready", "next"].map((agentId) => openAgent({ agentId, env }));
-  const slow = databases[0]!;
-  const integrity = holdIntegrity(slow.path);
-  invalidateValidation(slow.path);
-  const executions = databases.map((database) =>
-    capture({ agentId: database.agentId, path: database.path, env }),
-  );
-  const source = sourceFor(() => {});
-  const pending: Promise<void>[] = [];
-  let slowPrepared = false;
-  try {
-    const preparing = executions[0]!.prepare(source).then(() => {
-      slowPrepared = true;
-    });
-    pending.push(preparing);
-    void preparing.catch(() => {});
-    await withinTest(integrity.entered(), signal);
-
-    const ready = executions[1]!.prepare(source);
-    pending.push(ready);
-    await withinTest(ready, signal);
-    const next = executions[2]!.prepare(source);
-    pending.push(next);
-    await withinTest(next, signal);
-
-    expect(Atomics.load(integrity.gate, 0)).toBe(1);
-    expect(slowPrepared).toBe(false);
-  } finally {
-    integrity.release();
-    await Promise.allSettled(pending);
-    await Promise.all(executions.map((execution) => execution.release()));
-  }
-  expect(slowPrepared).toBe(true);
-}, 30_000);
 
 it.each(["confirmed close", "native exit"] as const)(
   "uses native close evidence before recovering an agent lease (%s)",
@@ -442,13 +487,12 @@ it.each(["confirmed close", "native exit"] as const)(
     const hostLeases = leases();
     expect(hostLeases).toHaveLength(1);
     const generation = nativeGeneration(database, workerContext({ env }));
-    const { source } = generation;
     const workers: Worker[] = [];
     const observeWorker = (worker: Worker) => workers.push(worker);
     const cleanup = vi.spyOn(stateWorkerStore, "openOpenClawStateWorkerCleanupStore");
     process.on("worker", observeWorker);
     try {
-      await expect(generation.run(source, async () => "opened")).resolves.toBe("opened");
+      await expect(generation.run(generation.source, async () => "opened")).resolves.toBe("opened");
       expect(leases()).toHaveLength(2);
       const validation = getValidation(database);
       assert(validation, "native generation must publish validation before retirement");
@@ -478,98 +522,77 @@ it.each(["confirmed close", "native exit"] as const)(
   },
 );
 
-it("retires every borrower when native open refusal retains admission cleanup failure", async () => {
-  const { rejected, retained } = dormantBorrowers("agent-open-cleanup-");
-  const refusal = new Error("Physical owner refused native agent open");
-  const cleanupError = new Error("Physical owner cleanup failed after granting open");
-  let nativeCurrent = true;
-  let domainOpenRequests = 0;
-  const source = sourceFor(() => {});
-  const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-  const fault = vi
-    .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-    .mockImplementation((admit, attachment) => {
-      if (!isRecord(attachment) || attachment.kind !== "agent-execution") {
-        return createAdmission(admit, attachment);
+it.each(["cleanup", "protocol"] as const)(
+  "retires every borrower when native opening fails (%s)",
+  async (failure) => {
+    const options = { agentId: "main", env: makeEnv("agent-open-failure-") };
+    closeAgent(openAgent(options).path);
+    const [rejected, retained] = [capture(options), capture(options)] as const;
+    const refusal = new Error("Physical owner refused native agent open");
+    const cleanupError = new Error("Physical owner cleanup failed after granting open");
+    let nativeCurrent = true;
+    let domainOpenRequests = 0;
+    const source = sourceFor(() => {});
+    const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
+    const fault = vi
+      .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
+      .mockImplementation((admit, attachment) => {
+        if (!isRecord(attachment) || attachment.kind !== "agent-execution") {
+          return createAdmission(admit, attachment);
+        }
+        if (failure === "protocol") {
+          const admission = createAdmission(admit, attachment);
+          admission.port.postMessage(
+            { kind: "native-settlement", settlement: { kind: "invalid" } },
+            [],
+          );
+          admission.service();
+          return admission;
+        }
+        return createAdmission((request, grant) => {
+          if (!nativeCurrent) {
+            throw refusal;
+          }
+          if (request.stage === "open") {
+            domainOpenRequests += 1;
+          }
+          admit(request, grant);
+          if (request.stage === "open" && domainOpenRequests === 1) {
+            // Factory entry is granted, but the native open must still admit its physical owner.
+            nativeCurrent = false;
+            throw cleanupError;
+          }
+        }, attachment);
+      });
+    const operation = vi.fn(async () => "not admitted");
+    try {
+      const opening = rejected.runExisting(source, operation);
+      if (failure === "cleanup") {
+        await expect(opening).rejects.toBeInstanceOf(AggregateError);
+        await expect(opening).rejects.toMatchObject({
+          cause: refusal,
+          errors: [refusal, { errors: [cleanupError] }],
+        });
+        expect(domainOpenRequests).toBe(1);
+      } else {
+        await expect(opening).rejects.toThrow("SQLite worker native settlement is invalid");
       }
-      return createAdmission((request, grant) => {
-        if (!nativeCurrent) {
-          throw refusal;
-        }
-        if (request.stage === "open") {
-          domainOpenRequests += 1;
-        }
-        admit(request, grant);
-        if (request.stage === "open" && domainOpenRequests === 1) {
-          // The broker granted factory entry; the factory must still admit its native open.
-          nativeCurrent = false;
-          throw cleanupError;
-        }
-      }, attachment);
-    });
-  try {
-    const opening = rejected.runExisting(source, async () => "not admitted");
-    await expect(opening).rejects.toBeInstanceOf(AggregateError);
-    await expect(opening).rejects.toMatchObject({
-      cause: refusal,
-      errors: [refusal, { errors: [cleanupError] }],
-    });
-    // Physical-owner refusal precedes the second domain admission.
-    expect(domainOpenRequests).toBe(1);
-    nativeCurrent = true;
-    expect(() => retained.assertCurrent()).toThrow("Agent database execution admission is closed");
-    await expect(retained.runExisting(source, async () => "not admitted")).rejects.toThrow(
-      "Agent database execution admission is closed",
-    );
-  } finally {
-    fault.mockRestore();
-    nativeCurrent = true;
-    const released = await Promise.allSettled([rejected.release(), retained.release()]);
-    await closeOpenClawAgentDatabasesAsync();
-    expect(released).toEqual([
-      { status: "fulfilled", value: undefined },
-      { status: "fulfilled", value: undefined },
-    ]);
-  }
-});
-
-it("retires every borrower when native opening reports a protocol failure", async () => {
-  const { rejected, retained } = dormantBorrowers("agent-open-protocol-");
-  const source = sourceFor(() => {});
-  const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-  const fault = vi
-    .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-    .mockImplementation((admit, attachment) => {
-      const admission = createAdmission(admit, attachment);
-      if (isRecord(attachment) && attachment.kind === "agent-execution") {
-        admission.port.postMessage(
-          { kind: "native-settlement", settlement: { kind: "invalid" } },
-          [],
-        );
-        admission.service();
-      }
-      return admission;
-    });
-  const operation = vi.fn(async () => "not admitted");
-  try {
-    await expect(rejected.runExisting(source, operation)).rejects.toThrow(
-      "SQLite worker native settlement is invalid",
-    );
-    expect(operation).not.toHaveBeenCalled();
-    expect(() => retained.assertCurrent()).toThrow("Agent database execution admission is closed");
-    await expect(retained.runExisting(source, operation)).rejects.toThrow(
-      "Agent database execution admission is closed",
-    );
-    expect(operation).not.toHaveBeenCalled();
-  } finally {
-    fault.mockRestore();
-    const released = await Promise.allSettled([rejected.release(), retained.release()]);
-    expect(released).toEqual([
-      { status: "fulfilled", value: undefined },
-      { status: "fulfilled", value: undefined },
-    ]);
-  }
-});
+      nativeCurrent = true;
+      expect(() => retained.assertCurrent()).toThrow(
+        "Agent database execution admission is closed",
+      );
+      await expect(retained.runExisting(source, operation)).rejects.toThrow(
+        "Agent database execution admission is closed",
+      );
+      expect(operation).not.toHaveBeenCalled();
+    } finally {
+      fault.mockRestore();
+      nativeCurrent = true;
+      await Promise.all([rejected.release(), retained.release()]);
+      await closeOpenClawAgentDatabasesAsync();
+    }
+  },
+);
 
 it.each(["settled", "pending"] as const)(
   "prepares missing storage after an existing-only miss (%s)",
@@ -593,204 +616,165 @@ it.each(["settled", "pending"] as const)(
   },
 );
 
-it("opens an unconfigured external store without reconstructing unknown deletion history", async () => {
-  const env = { OPENCLAW_STATE_DIR: tempDirs.make("agent-worker-missing-history-") };
-  const external = tempDirs.make("agent-worker-external-history-");
-  const pathname = path.join(external, "retained.sqlite");
-  const retained = openAgent({
-    agentId: "main",
-    path: pathname,
-    env: { OPENCLAW_STATE_DIR: tempDirs.make("agent-worker-fixture-owner-") },
-  });
-  retained.db.exec("INSERT INTO auth_profile_state VALUES ('preserved', '{\"ok\":true}', 1)");
-  closeAgent(pathname);
-  const bytes = fs.readFileSync(pathname);
-  const generation = nativeGeneration(retained, workerContext({ env }));
-  const { source } = generation;
-  const opening = await Promise.allSettled([generation.run(source, async () => "opened")]);
-  const closing = await Promise.allSettled([generation.close()]);
-  expect(opening).toEqual([{ status: "fulfilled", value: "opened" }]);
-  expect(closing).toEqual([{ status: "fulfilled", value: undefined }]);
-  expect(fs.readFileSync(pathname)).toEqual(bytes);
-  expect(fs.readdirSync(external).toSorted()).toEqual(["retained.sqlite", "retained.sqlite.seal"]);
-  using shared = openNodeSqliteDatabase(resolveOpenClawStateSqlitePath(env), { readOnly: true });
-  expect(
-    shared.prepare("SELECT name FROM sqlite_schema WHERE name = 'agent_deletion_journal'").get(),
-  ).toBeUndefined();
-});
-
 it.each([
-  "verified",
-  "two-leases",
-  "two-leases-missing-metadata",
-  "two-leases-stale",
-  "two-leases-unknown-owner",
-  "two-leases-unclean",
-  "prepared-existing",
-  "invalidated",
-  "failed",
-  "revoked-before-grant",
-  "revoked-after-verification-admission",
-  "missing-metadata",
-  "closed-host",
-  "closed-host-blocked",
-  "closed-host-blocked-last",
-  "closed-host-revoked",
-  "closed-host-replaced",
-  "closed-host-no-receipt",
-  "closed-host-no-receipt-rollback",
-] as const)("native execution borrows only current host integrity proof (%s)", async (proof) => {
-  const env = makeEnv("agent-native-integrity-");
-  const database = openAgent({ agentId: "main", env });
-  expect(getValidation(database)).toBeDefined();
-  const verifiedAt = readSqliteDatabaseIntegrityVerification(database.path)?.verifiedAt;
-  expect(verifiedAt).toBeDefined();
-  counter.path = database.path;
-  counter.checks = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 2);
-  const context = workerContext({ env });
-  const closedHost = proof.startsWith("closed-host");
-  const missingReceipt = proof.startsWith("closed-host-no-receipt");
-  const siblingLease =
-    (closedHost && !missingReceipt && proof !== "closed-host-blocked-last") ||
-    proof.startsWith("two-leases")
-      ? claimOpenClawAgentDatabaseLease({ agentId: database.agentId, path: database.path, env })
-      : undefined;
-  if (proof === "two-leases") {
-    expect(readSqliteDatabaseCleanClose(database.path)).toBe(false);
-  }
-  if (proof === "two-leases-missing-metadata") {
-    removeAgentIntegrityMetadataForTest(database.path);
-  }
-  if (proof === "two-leases-stale" || proof === "two-leases-unknown-owner") {
-    openOpenClawStateDatabase({ env })
-      .db.prepare("UPDATE agent_database_leases SET owner_start_time = ? WHERE lease_id = ?")
-      .run(proof === "two-leases-stale" ? -1 : null, siblingLease!);
-  } else if (proof === "two-leases-unclean") {
-    releaseOpenClawAgentDatabaseLease(siblingLease!, { env });
-  }
-  const claim: OpenClawAgentDatabaseClaim | undefined = closedHost
-    ? undefined
-    : createOpenClawAgentDatabaseClaim(database, retainAgentDatabase(database.db));
-  if (proof === "closed-host-blocked" || proof === "closed-host-blocked-last") {
-    database.db.exec("INSERT INTO auth_profile_state VALUES ('checkpoint', '{}', 1)");
-    const reader = openNodeSqliteDatabase(database.path, { readOnly: true });
-    try {
-      reader.exec("BEGIN");
-      reader
-        .prepare("SELECT state_json FROM auth_profile_state WHERE state_key='checkpoint'")
-        .get();
-      database.db.exec("UPDATE auth_profile_state SET updated_at=2 WHERE state_key='checkpoint'");
-      closeCachedOpenClawAgentDatabase(database);
-      expect(database.db.isOpen).toBe(false);
+  ["verified", 0],
+  ["two-leases", 0],
+  ["two-leases-missing-metadata", 0],
+  ["two-leases-stale", 1],
+  ["two-leases-unknown-owner", 0],
+  ["two-leases-unclean", 1],
+  ["prepared-existing", 0],
+  ["invalidated", 1],
+  ["failed", 0],
+  ["revoked-before-grant", 1],
+  ["revoked-after-verification-admission", 1],
+  ["missing-metadata", 1],
+  ["closed-host", 0],
+  ["closed-host-blocked", 0],
+  ["closed-host-blocked-last", 0],
+  ["closed-host-revoked", 1],
+  ["closed-host-replaced", 1],
+  ["closed-host-no-receipt", 1],
+  ["closed-host-no-receipt-rollback", 1],
+] as const)(
+  "native execution borrows only current host integrity proof (%s)",
+  async (proof, expectedChecks) => {
+    const env = makeEnv("agent-native-integrity-");
+    const database = openAgent({ agentId: "main", env });
+    expect(getValidation(database)).toBeDefined();
+    const verifiedAt = readSqliteDatabaseIntegrityVerification(database.path)?.verifiedAt;
+    expect(verifiedAt).toBeDefined();
+    counter.path = database.path;
+    counter.checks = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 2);
+    const context = workerContext({ env });
+    const closedHost = proof.startsWith("closed-host");
+    const missingReceipt = proof.startsWith("closed-host-no-receipt");
+    const siblingLease =
+      (closedHost && !missingReceipt && proof !== "closed-host-blocked-last") ||
+      proof.startsWith("two-leases")
+        ? claimOpenClawAgentDatabaseLease({ agentId: database.agentId, path: database.path, env })
+        : undefined;
+    if (proof === "two-leases") {
       expect(readSqliteDatabaseCleanClose(database.path)).toBe(false);
-    } finally {
-      reader.close();
     }
-  } else if (closedHost) {
-    closeAgent(database.path);
-  }
-  if (missingReceipt) {
-    clearOpenClawAgentDatabaseValidationCache(database.path);
-    revokeSqliteDatabaseAdmissionsForPath(database.path);
-    if (proof === "closed-host-no-receipt-rollback") {
-      using writer = openNodeSqliteDatabase(database.path);
-      writer.exec("PRAGMA journal_mode=DELETE");
+    if (proof === "two-leases-missing-metadata") {
+      removeAgentIntegrityMetadataForTest(database.path);
     }
-  }
-  const assertCurrent = () => {
-    claim?.assertCurrent();
-    context.admission.assertCurrent();
-  };
-  let revokedBeforeGrant = false;
-  let revokedAfterVerificationAdmission = false;
-  const source = sourceFor(assertCurrent, (request) => {
-    if (
-      request.stage !== "prepare" ||
-      typeof request.facts !== "object" ||
-      request.facts === null ||
-      !("kind" in request.facts)
-    ) {
-      return;
+    if (proof === "two-leases-stale" || proof === "two-leases-unknown-owner") {
+      openOpenClawStateDatabase({ env })
+        .db.prepare("UPDATE agent_database_leases SET owner_start_time = ? WHERE lease_id = ?")
+        .run(proof === "two-leases-stale" ? -1 : null, siblingLease!);
+    } else if (proof === "two-leases-unclean") {
+      releaseOpenClawAgentDatabaseLease(siblingLease!, { env });
     }
-    if (proof === "revoked-before-grant" && request.facts.kind === "shared-owner") {
-      // Revoke the already-sent proof while the native opener still awaits its grant.
-      invalidateValidation(database.path);
-      revokedBeforeGrant = true;
+    const claim: OpenClawAgentDatabaseClaim | undefined = closedHost
+      ? undefined
+      : createOpenClawAgentDatabaseClaim(database, retainAgentDatabase(database.db));
+    if (proof === "closed-host-blocked" || proof === "closed-host-blocked-last") {
+      database.db.exec("INSERT INTO auth_profile_state VALUES ('checkpoint', '{}', 1)");
+      const reader = openNodeSqliteDatabase(database.path, { readOnly: true });
+      try {
+        reader.exec("BEGIN");
+        reader
+          .prepare("SELECT state_json FROM auth_profile_state WHERE state_key='checkpoint'")
+          .get();
+        database.db.exec("UPDATE auth_profile_state SET updated_at=2 WHERE state_key='checkpoint'");
+        closeCachedOpenClawAgentDatabase(database);
+        expect(database.db.isOpen).toBe(false);
+        expect(readSqliteDatabaseCleanClose(database.path)).toBe(false);
+      } finally {
+        reader.close();
+      }
+    } else if (closedHost) {
+      closeAgent(database.path);
     }
-    if (
-      proof === "revoked-after-verification-admission" &&
-      request.facts.kind === "agent-validation-start"
-    ) {
-      invalidateValidation(database.path);
-      revokedAfterVerificationAdmission = true;
-    }
-  });
-  const generation = nativeGeneration(database, context, assertCurrent);
-  if (
-    proof === "invalidated" ||
-    proof === "closed-host-revoked" ||
-    proof === "revoked-after-verification-admission"
-  ) {
-    invalidateValidation(database.path);
-  } else if (proof === "closed-host-replaced") {
-    fs.copyFileSync(database.path, `${database.path}.replacement`);
-    fs.renameSync(`${database.path}.replacement`, database.path);
-  } else if (proof === "failed") {
-    recordOpenClawAgentDatabaseOpenFailure(database.path, new Error("Synthetic host failure"));
-  } else if (proof === "missing-metadata") {
-    invalidateValidation(database.path);
-    revokeSqliteDatabaseAdmissionsForPath(database.path);
-  }
-  try {
-    if (proof === "revoked-after-verification-admission") {
-      const operation = vi.fn(async () => "not admitted");
-      await expect(generation.run(source, operation)).rejects.toThrow(
-        "Agent schema admission changed before publication",
-      );
-      expect(revokedAfterVerificationAdmission).toBe(true);
-      expect(checks()).toEqual([1, 1]);
-      expect(operation).not.toHaveBeenCalled();
-      return;
-    }
-    if (proof === "failed") {
-      await expect(generation.run(source, async () => "opened")).rejects.toThrow(
-        "OpenClaw agent database claim is no longer current",
-      );
-      expect(getValidation(database)).toBeUndefined();
-      expect(checks()).toEqual([0, 0]);
-      return;
-    }
-    await expect(
-      generation.run(source, async () => "opened", undefined, proof === "prepared-existing"),
-    ).resolves.toBe("opened");
-    expect(checks()).toEqual(
-      proof === "verified" ||
-        proof === "prepared-existing" ||
-        proof === "closed-host" ||
-        proof === "closed-host-blocked" ||
-        proof === "closed-host-blocked-last" ||
-        proof === "two-leases" ||
-        proof === "two-leases-unknown-owner" ||
-        proof === "two-leases-missing-metadata"
-        ? [0, 0]
-        : [1, 1],
-    );
-    expect(revokedBeforeGrant).toBe(proof === "revoked-before-grant");
-  } finally {
-    try {
-      await generation.close();
-    } finally {
-      claim?.release();
-      if (siblingLease) {
-        releaseOpenClawAgentDatabaseLease(siblingLease, { env }, "read-only");
+    if (missingReceipt) {
+      clearOpenClawAgentDatabaseValidationCache(database.path);
+      revokeSqliteDatabaseAdmissionsForPath(database.path);
+      if (proof === "closed-host-no-receipt-rollback") {
+        using writer = openNodeSqliteDatabase(database.path);
+        writer.exec("PRAGMA journal_mode=DELETE");
       }
     }
-  }
-  if (proof === "closed-host-blocked-last") {
-    expect(readSqliteDatabaseCleanClose(database.path)).toBe(true);
-    expect(readSqliteDatabaseIntegrityVerification(database.path)?.verifiedAt).toBe(verifiedAt);
-  }
-});
+    const assertCurrent = () => {
+      claim?.assertCurrent();
+      context.admission.assertCurrent();
+    };
+    let revokedBeforeGrant = false;
+    let revokedAfterVerificationAdmission = false;
+    const source = sourceFor(assertCurrent, (request) => {
+      if (
+        request.stage !== "prepare" ||
+        typeof request.facts !== "object" ||
+        request.facts === null ||
+        !("kind" in request.facts)
+      ) {
+        return;
+      }
+      if (proof === "revoked-before-grant" && request.facts.kind === "shared-owner") {
+        // Revoke the already-sent proof while the native opener still awaits its grant.
+        invalidateValidation(database.path);
+        revokedBeforeGrant = true;
+      }
+      if (
+        proof === "revoked-after-verification-admission" &&
+        request.facts.kind === "agent-validation-start"
+      ) {
+        invalidateValidation(database.path);
+        revokedAfterVerificationAdmission = true;
+      }
+    });
+    const generation = nativeGeneration(database, context, assertCurrent);
+    if (
+      proof === "invalidated" ||
+      proof === "closed-host-revoked" ||
+      proof === "revoked-after-verification-admission"
+    ) {
+      invalidateValidation(database.path);
+    } else if (proof === "closed-host-replaced") {
+      fs.copyFileSync(database.path, `${database.path}.replacement`);
+      fs.renameSync(`${database.path}.replacement`, database.path);
+    } else if (proof === "failed") {
+      recordOpenClawAgentDatabaseOpenFailure(database.path, new Error("Synthetic host failure"));
+    } else if (proof === "missing-metadata") {
+      invalidateValidation(database.path);
+      revokeSqliteDatabaseAdmissionsForPath(database.path);
+    }
+    const operation = vi.fn(async () => "opened");
+    try {
+      if (proof === "failed" || proof === "revoked-after-verification-admission") {
+        await expect(generation.run(source, operation)).rejects.toThrow(
+          proof === "failed"
+            ? "OpenClaw agent database claim is no longer current"
+            : "Agent schema admission changed before publication",
+        );
+        expect(operation).not.toHaveBeenCalled();
+        expect(
+          proof === "failed" ? getValidation(database) : revokedAfterVerificationAdmission,
+        ).toBe(proof === "failed" ? undefined : true);
+        return;
+      }
+      await expect(
+        generation.run(source, operation, undefined, proof === "prepared-existing"),
+      ).resolves.toBe("opened");
+      expect(revokedBeforeGrant).toBe(proof === "revoked-before-grant");
+    } finally {
+      try {
+        await generation.close();
+        expect(checks()).toEqual([expectedChecks, expectedChecks]);
+      } finally {
+        claim?.release();
+        if (siblingLease) {
+          releaseOpenClawAgentDatabaseLease(siblingLease, { env }, "read-only");
+        }
+      }
+    }
+    if (proof === "closed-host-blocked-last") {
+      expect(readSqliteDatabaseCleanClose(database.path)).toBe(true);
+      expect(readSqliteDatabaseIntegrityVerification(database.path)?.verifiedAt).toBe(verifiedAt);
+    }
+  },
+);
 
 it.runIf(process.platform === "linux")(
   "fully verifies killed owners before writing, regardless of WAL state or lease provenance",

@@ -25,6 +25,7 @@ import {
   createAgentDatabaseAdmissionErrorShape,
   listAgentDatabaseAdmissionRefusals,
   readAgentDatabaseAdmissionRefusal,
+  readAgentDatabaseReadAdmissionRefusal,
 } from "../../state/agent-database-admission.js";
 import type { InternalAgentTurnDispatchOptions } from "../agent-turn/internal-facade.types.js";
 import type { ExpectedProfileBinding } from "../expected-profile.js";
@@ -71,6 +72,9 @@ const startupReadMethods = new Set([
   "sessions.resolve",
   "sessions.describe",
   "models.list",
+  "chat.metadata",
+  "board.get",
+  "sessions.messages.subscribe",
 ]);
 
 function startupWriteAgents(
@@ -126,7 +130,12 @@ function startupReadAgents(method: string, requestParams: unknown, cfg: OpenClaw
   const targets = resolveDirectSessionTargets(method, requestParams);
   if (targets.length > 0) {
     return targets.flatMap((target) => {
-      const resolved = resolveRequestedSessionAgentId(cfg, target.sessionKey, target.agentId);
+      const resolved = resolveRequestedSessionAgentId(
+        cfg,
+        target.sessionKey,
+        target.agentId,
+        "read",
+      );
       return resolved.ok
         ? [resolved.agentId]
         : refusals
@@ -311,7 +320,8 @@ export async function authorizeGatewayRequestPreDispatch(params: {
       params.context.agentDatabaseStartup?.hasPendingAgents &&
       params.methodRegistry.getScope(params.method) !== "operator.read" &&
       !params.methodRegistry.isObservation(params.method) &&
-      !isDirectSessionReadMethod(params.method)
+      !isDirectSessionReadMethod(params.method) &&
+      !startupReadMethods.has(params.method)
     ) {
       const waitSignal = AbortSignal.any(
         [params.signal, params.client?.connectionSignal, getAsyncWorkSignal()].filter(
@@ -372,7 +382,7 @@ export async function authorizeGatewayRequestPreDispatch(params: {
           const agents =
             previous?.agents ?? startupReadAgents(params.method, params.requestParams, cfg);
           const physicalRefusal = agents
-            .map((agentId) => readAgentDatabaseAdmissionRefusal(agentId))
+            .map((agentId) => readAgentDatabaseReadAdmissionRefusal(agentId))
             .find(Boolean);
           if (physicalRefusal) {
             return { error: createAgentDatabaseAdmissionErrorShape(physicalRefusal) };
