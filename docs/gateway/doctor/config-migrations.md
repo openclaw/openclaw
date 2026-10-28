@@ -594,9 +594,9 @@ runs the same migration. Repeating Doctor leaves the normalized row and its IDs
 unchanged. Published SDK and operator input normalization remain available at
 the input boundary.
 
-## Claw provenance schema
+## Template provenance schema
 
-Claw update plans and resume previews require the current provenance columns.
+Template provenance inspection requires the current provenance columns.
 Older SQLite databases that lack bootstrap or extension provenance columns now
 stop with `openclaw doctor --fix` guidance. Read-only planning leaves those
 databases unchanged instead of projecting absent columns as empty values.

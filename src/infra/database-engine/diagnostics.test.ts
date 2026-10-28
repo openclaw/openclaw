@@ -5,7 +5,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import { withLegacyStateHeadLayout } from "../../state/openclaw-state-db-schema-v26-layout.js";
-import { addPreCutoverClientCredentialTablesForTest } from "../../state/openclaw-state-schema.test-support.js";
+import {
+  addPreCutoverClientCredentialTablesForTest,
+  restorePreTemplateStateIdentifiersForTest,
+} from "../../state/openclaw-state-schema.test-support.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { inspectDatabaseStore, type DatabaseStoreInspection } from "./diagnostics.js";
 import { writePortAnchor } from "./port-backup.test-support.js";
@@ -53,6 +56,7 @@ async function stateStore(version: number) {
     db.exec(version === 25 ? withLegacyStateHeadLayout(schema.sqlite) : schema.sqlite);
   }
   if (version === 25) {
+    restorePreTemplateStateIdentifiersForTest(db);
     addPreCutoverClientCredentialTablesForTest(db);
   }
   db.exec(`PRAGMA user_version = ${version};

@@ -241,8 +241,8 @@ export type ManagedPluginInstallOptions = Omit<
   | "requireCapabilityConsent"
   | "requireClawHubTrust"
 > & {
-  /** The enclosing Claw coordinator owns its package lease and adoption record. */
-  clawManaged?: boolean;
+  /** The enclosing Template coordinator owns its package lease and adoption record. */
+  templateManaged?: boolean;
   snapshot?: ConfigSnapshotForInstallPersist;
   signal?: AbortSignal;
   confirmInstall?: (warning?: string) => Promise<boolean>;
