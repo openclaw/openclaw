@@ -9,6 +9,7 @@ import {
   AuditMigrationFixture,
   buildAuditScrubbedContent,
   configAuditRecord,
+  failArchiveHardening,
   failAuditMove,
   systemAuditEvent,
   writeAuditRestoreJournal,
@@ -23,6 +24,9 @@ describe("Doctor legacy audit skips", () => {
     ["checkpointless whitespace", "checkpointless raw archive begins with ambiguous whitespace"],
     ["checkpoint capacity", "durable raw-archive checkpoint capacity is exhausted"],
     ["hard links unavailable", "filesystem rejects native no-replace rename and hard links"],
+    ["missing companion, empty", "sanitized companion is missing"],
+    ["missing companion, imported", "sanitized companion is missing"],
+    ["missing companion, moved file", "sanitized companion is missing"],
   ])("continues later repairs after %s and preserves recovery inputs", async (shape, warning) => {
     await withOpenClawTestState({ label: "audit-skip" }, async (state) => {
       const cfg = { plugins: { enabled: false } };
@@ -50,6 +54,26 @@ describe("Doctor legacy audit skips", () => {
         );
         await audit.writeJsonLines(audit.config.source, [record]);
         preservedPath = audit.config.source;
+      } else if (shape.startsWith("missing companion")) {
+        await audit.writeJsonLines(audit.config.source, [record]);
+        expect((await audit.migrate()).warnings).toEqual([]);
+        if (shape.endsWith("imported")) {
+          await audit.appendJsonLines(audit.config.raw, [record]);
+          const failure = failArchiveHardening(audit, audit.config.sanitized, "interrupted import");
+          expect((await audit.migrate()).warnings.join("\n")).toContain("interrupted import");
+          failure.mockRestore();
+        } else if (shape.endsWith("moved file")) {
+          // Same bytes and mtime under a new file identity, as after a volume remount or copy.
+          const bytes = await fs.readFile(audit.config.raw);
+          const { atime, mtime } = await fs.stat(audit.config.raw);
+          await fs.rm(audit.config.raw);
+          await fs.writeFile(audit.config.raw, bytes);
+          await fs.utimes(audit.config.raw, atime, mtime);
+        } else {
+          // Revisit unchanged content after a backup restore changes file metadata.
+          await fs.utimes(audit.config.raw, 1, 1);
+        }
+        await fs.rm(audit.config.sanitized);
       } else {
         await audit.writeJsonLines(audit.config.source, [record]);
         preservedPath = audit.config.source;
@@ -57,7 +81,9 @@ describe("Doctor legacy audit skips", () => {
       }
       const sourceBytes = await fs.readFile(preservedPath);
       const sanitizedBytes =
-        shape === "hard links unavailable" ? undefined : await fs.readFile(audit.config.sanitized);
+        shape === "hard links unavailable" || shape.startsWith("missing companion")
+          ? undefined
+          : await fs.readFile(audit.config.sanitized);
       const execPath = await state.writeJson("exec-approvals.json", {
         version: 1,
         defaults: { security: "allowlist", ask: "on-miss" },
