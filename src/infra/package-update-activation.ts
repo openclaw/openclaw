@@ -564,7 +564,7 @@ export async function settlePendingPackageActivation(
   );
 }
 
-type SettlementFence = { assertCurrent(): void };
+type SettlementFence = { assertCurrent: () => void };
 
 /** Repair's claim already excludes other executors; a fresh admission would meet
  * that claim, or the cancelled custody it replaced, and refuse. */
