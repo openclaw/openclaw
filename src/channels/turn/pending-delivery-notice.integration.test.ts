@@ -117,9 +117,11 @@ describe("pending delivery notice end to end", () => {
     const secondary = { agentId: "secondary", sessionKey: "global", storePath };
     await replaceSessionEntry(secondary, { ...entry()!, sessionId: "secondary-global" });
     const runDispatch = vi.fn(async () => {
-      expect(sendRecoveryNotice).toHaveBeenCalledExactlyOnceWith(
+      expect(appendAssistantMessageToSessionTranscript).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({
-          generation: { ...secondary, sessionId: "secondary-global", lifecycleRevision: null },
+          ...secondary,
+          expectedSessionId: "secondary-global",
+          expectedLifecycleRevision: null,
         }),
       );
       expect(loadSessionEntry(secondary)?.pendingDeliveryNotice?.state).toBe("acknowledged");

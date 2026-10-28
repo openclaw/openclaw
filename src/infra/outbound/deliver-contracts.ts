@@ -281,8 +281,6 @@ export type DeliverOutboundPayloadsParams = DeliverOutboundPayloadsCoreParams & 
 export type InternalDeliverOutboundPayloadsParams = DeliverOutboundPayloadsParams & {
   /** Host-captured session generation retained independently by this delivery intent. */
   sessionGeneration?: SessionDeliveryGeneration;
-  /** History custody only: recovery already owns its dispatch-generation lease. Never persisted twice. */
-  transcriptGeneration?: SessionDeliveryGeneration;
   conversationDeliveryTarget?: ConversationDeliveryTarget;
   deliveryQueueStateContext?: DeliveryQueueStateContext;
 };

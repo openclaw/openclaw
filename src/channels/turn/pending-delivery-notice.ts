@@ -17,11 +17,13 @@ const PENDING_DELIVERY_NOTICE =
 export async function deliverPendingDeliveryNotice(
   sessionKey: string,
   storePath: string,
+  agentId?: string,
 ): Promise<void> {
+  const resolvedAgentId = agentId ?? resolveAgentIdFromSessionKey(sessionKey);
   const pending = await withSessionEntriesFromStoresInWorker(
     [
       {
-        agentId: resolveAgentIdFromSessionKey(sessionKey),
+        agentId: resolvedAgentId,
         storePath,
         sessionKeys: [sessionKey],
         projection: "full",
@@ -80,9 +82,11 @@ export async function deliverPendingDeliveryNotice(
     delivered &&
     !(
       await appendAssistantMessageToSessionTranscript({
+        agentId: resolvedAgentId,
         sessionKey,
         storePath,
         expectedSessionId: entry.sessionId,
+        expectedLifecycleRevision: entry.lifecycleRevision ?? null,
         text: PENDING_DELIVERY_NOTICE,
         idempotencyKey,
       })
@@ -91,9 +95,10 @@ export async function deliverPendingDeliveryNotice(
     return;
   }
   await updateSessionEntry(
-    { sessionKey, storePath },
+    { agentId: resolvedAgentId, sessionKey, storePath },
     (current) =>
       current.sessionId === entry.sessionId &&
+      (current.lifecycleRevision ?? null) === (entry.lifecycleRevision ?? null) &&
       current.pendingDeliveryNotice?.intentId === notice.intentId &&
       current.pendingDeliveryNotice.state !== "acknowledged"
         ? {
