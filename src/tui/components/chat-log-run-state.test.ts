@@ -17,6 +17,53 @@ describe("ChatLog run state", () => {
       chatLog.addSystem(`Retained notice ${index}.`);
     }
   }
+  // A delayed peer prompt must anchor before the earliest surviving reply of its run,
+  // whether the earlier replies are retained or have been pruned away.
+  it.each([
+    { capacity: 20, previousReply: "retained" },
+    { capacity: 40, previousReply: "retained" },
+    { capacity: 20, previousReply: "pruned" },
+    { capacity: 40, previousReply: "pruned" },
+  ])(
+    "anchors every $previousReply final reply at capacity $capacity",
+    ({ capacity, previousReply }) => {
+      chatLog = new ChatLog(capacity);
+
+      chatLog.finalizeAssistant("Previous completed reply.", "run-replaced");
+      if (previousReply === "pruned") {
+        for (let index = 0; index < capacity - 1; index += 1) {
+          chatLog.addSystem(`Retained notice ${index}.`);
+        }
+      }
+      chatLog.finalizeAssistant("Replacement completed reply.", "run-replaced");
+      const prompt = {
+        messageId: "replacement-user",
+        runId: "run-replaced",
+      };
+      chatLog.addLiveUser("Delayed replacement prompt.", prompt);
+      chatLog.addLiveUser("Delayed replacement prompt.", prompt);
+
+      const rendered = normalizeTestText(chatLog.render(120).join("\n"));
+      expect(rendered.split("Delayed replacement prompt.")).toHaveLength(2);
+      expect(rendered.split("Replacement completed reply.")).toHaveLength(2);
+      if (previousReply === "pruned") {
+        expect(chatLog.children).toHaveLength(capacity);
+        expect(rendered).not.toContain("Previous completed reply.");
+      } else {
+        expect(chatLog.children).toHaveLength(3);
+        expect(rendered.split("Previous completed reply.")).toHaveLength(2);
+        expect(rendered.indexOf("Delayed replacement prompt.")).toBeLessThan(
+          rendered.indexOf("Previous completed reply."),
+        );
+        expect(rendered.indexOf("Previous completed reply.")).toBeLessThan(
+          rendered.indexOf("Replacement completed reply."),
+        );
+      }
+      expect(rendered.indexOf("Delayed replacement prompt.")).toBeLessThan(
+        rendered.indexOf("Replacement completed reply."),
+      );
+    },
+  );
   it("keeps revised snapshots scoped to their own concurrent assistant run", () => {
     chatLog.updateAssistant("Obsolete first", "run-first");
     chatLog.updateAssistant("Preserved second", "run-second");
