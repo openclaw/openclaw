@@ -131,6 +131,13 @@
         <div class="stats-grid report-stats"><article class="stat-card"><div class="stat-heading"><span>Giá vốn hàng đã giao</span></div><div class="stat-value" id="report-cost">0 ₫</div></article><article class="stat-card"><div class="stat-heading"><span>Lợi nhuận gộp ước tính</span></div><div class="stat-value" id="report-profit">0 ₫</div></article><article class="stat-card"><div class="stat-heading"><span>Giá trị tồn kho theo giá vốn</span></div><div class="stat-value" id="report-stock">0 ₫</div></article></div>
         <p class="muted">Báo cáo dùng dữ liệu demo trên trình duyệt. Lợi nhuận chưa trừ chi phí vận hành, thuế và các khoản phát sinh khác.</p>
       </section>
+      <section class="panel extra-panel ai-panel" id="ai-assistant">
+        <div class="panel-heading"><div><p class="eyebrow">OPENCLAW AI</p><h2>Trợ lý AI ShopMini</h2><p class="muted">Ghi nhận bán hàng, thêm sản phẩm và hỗ trợ tư vấn khách hàng.</p></div><span class="ai-status"><span class="status-dot"></span> Qua máy chủ riêng</span></div>
+        <div class="ai-mode-switch" role="group" aria-label="Chọn chế độ trợ lý"><button type="button" class="ai-mode active" data-ai-mode="manage">Quản lý bán hàng</button><button type="button" class="ai-mode" data-ai-mode="customer">Tư vấn khách hàng</button></div>
+        <div class="ai-chat-log" id="ai-chat-log" aria-live="polite"><div class="ai-message assistant"><strong>ShopMini AI</strong><p>Xin chào! Nhập “Tôi vừa bán 2 Bình giữ nhiệt cho Minh Anh” hoặc chuyển sang chế độ tư vấn để hỏi về sản phẩm.</p></div></div>
+        <form id="ai-chat-form" class="ai-chat-form"><label class="sr-only" for="ai-chat-input">Tin nhắn cho trợ lý AI</label><textarea id="ai-chat-input" rows="2" maxlength="1200" placeholder="Nhập tin nhắn cho trợ lý AI..." required></textarea><button class="button button-primary" id="ai-send" type="submit">Gửi tin nhắn</button></form>
+        <p class="ai-disclaimer">Chế độ quản lý chỉ ghi nhận khi AI xác định đủ thông tin. Dữ liệu hiện lưu trên trình duyệt này, chưa đồng bộ giữa các thiết bị.</p>
+      </section>
       <footer class="app-footer"><span>ShopMini <span class="footer-dot">•</span> Dự án demo học tập</span><span>Chưa dùng cho dữ liệu kinh doanh thật</span></footer>
     </main>
   </div>
