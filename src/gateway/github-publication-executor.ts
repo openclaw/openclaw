@@ -48,9 +48,9 @@ import {
 } from "./github-publication-pull-requests.js";
 import { projectGitHubPublicationResult } from "./github-publication-receipt.js";
 import {
-  readKnownGitHubPublicationPullRequestUrls as readKnownPullRequestUrls,
   reconcileGitHubPublication,
   prepareGitHubPublicationWorkspaceRecovery,
+  type GitHubPublicationRecoveryResult,
 } from "./github-publication-recovery.js";
 import type { GitHubPublicationRequesterPolicyV2 } from "./github-publication-requester.js";
 import {
@@ -67,7 +67,7 @@ type PublicationRow = GitHubPublicationExecutionRow;
 
 export async function executeGitHubPublication<Row extends PublicationRow>(params: {
   initial: Row;
-  recoveryResult?: SessionGitHubPublicationResult;
+  recoveryResult?: GitHubPublicationRecoveryResult;
   identity?: GitHubPublicationIdentityOwner;
   requester?: () => GitHubPublicationRequesterPolicyV2;
   target?: { pushRepository: string; repository: string; baseBranch: string };
@@ -336,7 +336,6 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
         host: githubHost,
         headCommit,
         marker: pullRequestMarker,
-        readKnownPullRequestUrls: markerPresent ? () => readKnownPullRequestUrls(row) : undefined,
         refreshIdentity,
         recordObserved: async (url) => {
           await params.recordEffect?.("pull_request", { url });
@@ -471,12 +470,13 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
     ) {
       throw new GitHubPublicationCreditChangedError();
     }
+    const messageLines = currentMessage.split(/\r?\n/u);
     if (
       existingPullRequest &&
       remoteHead === headCommit &&
       currentTree === workspaceTree &&
-      (markerPresent || sourceIndexTree === workspaceTree) &&
-      currentMessage.split(/\r?\n/u).some((line) => line.startsWith(`${PUBLICATION_MARKER}: `))
+      sourceIndexTree === workspaceTree &&
+      messageLines.some((line) => line.startsWith(`${PUBLICATION_MARKER}: `))
     ) {
       // Text in prose or an earlier paragraph is not Git co-author credit.
       // Parse the pinned commit before deciding its attributed tree can be reused.
@@ -486,10 +486,10 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
         command,
       });
       assertAction();
-      if (markerPresent || content.trailers.every((trailer) => trailers.includes(trailer))) {
-        // The PR already accepted this request or attributed tree. Settle before
-        // revisiting the index, preserving edits saved after a lost confirmation.
-        // First publication and missing credit still use the request-owned marker below.
+      if (content.trailers.every((trailer) => trailers.includes(trailer))) {
+        // The owned open PR already exposes this exact attributed tree. A new request
+        // needs a receipt, not a new commit marker or index transaction. First publication
+        // and missing contributor credit still use the request-owned recovery marker below.
         return await completePublished(existingPullRequest, headCommit);
       }
     }

@@ -130,33 +130,32 @@ function parseGitHubPublicationPullRequests(raw: string) {
   });
 }
 
-export async function findGitHubPublicationPullRequest(
-  params: GitHubPublicationPullRequestLookup & {
-    headCommit: string;
-    readKnownPullRequestUrls?: () => Promise<readonly string[]>;
-    recordObserved?: (url: string) => void | Promise<void>;
-  },
-): Promise<string | undefined> {
-  const { identity, candidates } = await loadGitHubPublicationPullRequests(params);
-  const exact = candidates.filter(
+function matchingGitHubPublicationHeads(
+  params: GitHubPublicationPullRequestLookup & { headCommit: string },
+  lookup: Awaited<ReturnType<typeof loadGitHubPublicationPullRequests>>,
+) {
+  return lookup.candidates.filter(
     (candidate) =>
-      (params.pullRequest || candidate.userId === identity.account.accountId) &&
+      (params.pullRequest || candidate.userId === lookup.identity.account.accountId) &&
       candidate.headSha === params.headCommit &&
       candidate.headRef === params.branch &&
       candidate.baseRef === params.baseBranch,
   );
-  let found =
+}
+
+export async function findGitHubPublicationPullRequest(
+  params: GitHubPublicationPullRequestLookup & {
+    headCommit: string;
+    recordObserved?: (url: string) => void | Promise<void>;
+  },
+): Promise<string | undefined> {
+  const { identity, candidates } = await loadGitHubPublicationPullRequests(params);
+  const exact = matchingGitHubPublicationHeads(params, { identity, candidates });
+  const found =
     exact.find((candidate) => candidate.state === "open") ??
     exact.find(
       (candidate) => candidate.state === "closed" && candidate.body.includes(params.marker),
     );
-  if (!found && params.readKnownPullRequestUrls && exact.length > 0) {
-    // A continued PR keeps its original body marker. Its retained receipt and exact
-    // accepted head can settle a retried update even when the PR has since closed.
-    const known = await params.readKnownPullRequestUrls();
-    params.assertCurrent();
-    found = exact.find((candidate) => known.includes(candidate.url));
-  }
   if (found) {
     await params.recordObserved?.(found.url);
     if (found.state === "closed" && found.body.includes(params.marker)) {
@@ -199,10 +198,22 @@ export async function reconcileGitHubPublicationPullRequest(
     workspaceTree: string;
     parentCommit: string;
     pushOnly?: "observed" | "dispatched";
+    beforeRetry?: boolean;
     knownPullRequestUrls: readonly string[];
     recordPushObserved?: (headCommit: string) => void | Promise<void>;
   },
 ): Promise<string | undefined> {
+  const observed = params.beforeRetry ? await loadGitHubPublicationPullRequests(params) : undefined;
+  if (
+    observed &&
+    !matchingGitHubPublicationHeads(params, observed).some(
+      (candidate) => candidate.state === "open" || !candidate.body.includes(params.marker),
+    )
+  ) {
+    // A prepared commit need not have reached GitHub. A missing match, a closed
+    // first-publication PR or a foreign owner stays with the existing retry guards.
+    return undefined;
+  }
   const { raw } = await readGitHubPublicationApi(
     params,
     `repos/${params.pushRepository}/git/commits/${params.headCommit}`,
@@ -257,7 +268,8 @@ export async function reconcileGitHubPublicationPullRequest(
     }
     return comparison.sha === params.headCommit;
   };
-  const { identity: lookupIdentity, candidates } = await loadGitHubPublicationPullRequests(params);
+  const { identity: lookupIdentity, candidates } =
+    observed ?? (await loadGitHubPublicationPullRequests(params));
   let unrelated = false;
   for (const candidate of candidates) {
     if (

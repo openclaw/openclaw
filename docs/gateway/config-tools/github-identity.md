@@ -324,8 +324,9 @@ During cooldown, publication status includes the remaining wait and the latest f
 During publication, an accepted PR response still completes its owned receipt if the requesting connection closes or publication permission ends. A successful local branch update likewise finishes its matching index transaction while the execution retains workspace ownership. This settlement does not authorize another push or PR creation; unconfirmed outcomes retain their existing recovery or personal-confirmation requirements.
 
 If an update reached an existing PR before that PR closed, recovery recognizes
-the accepted commit and the original publication receipt. It settles the same
-request against that PR without reopening it or creating a replacement. A
+the accepted commit and the original publication receipt, including after its
+branch is deleted or the accepted tree is merged. It settles the same request
+against that PR without reopening it or creating a replacement. A
 recovered publication result records the accepted update; it does not mean the
 PR is still open. Inspect its current state before making a new, explicit
 publication request for further work.

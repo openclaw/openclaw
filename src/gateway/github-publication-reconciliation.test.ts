@@ -235,8 +235,11 @@ it.each([
   { backend: "local", mode: "interrupted" },
   { backend: "local", mode: "interrupted-authorized" },
   { backend: "local", mode: "interrupted-authorized-edits" },
+  { backend: "local", mode: "interrupted-authorized-deleted" },
+  { backend: "local", mode: "interrupted-authorized-merged" },
   { backend: "repository", mode: "paged" },
   { backend: "repository", mode: "interrupted" },
+  { backend: "repository", mode: "interrupted-authorized" },
 ] as const)(
   "reconciles a $mode $backend update when recovering its accepted publication",
   async ({ backend, mode }) => {
@@ -248,6 +251,8 @@ it.each([
       state: "closed",
       body: `<!-- openclaw-publication:earlier-closed-${index} -->`,
     }));
+    let branchDeleted = false;
+    let acceptedMergeCommit: string | undefined;
     let pushed = false,
       readbackAvailable = false,
       recoveryLookup = false,
@@ -256,6 +261,16 @@ it.each([
     const hostScans = vi.spyOn(sqliteQueries, "iterateSqliteQuerySync");
     let recoveryScanStart = 0;
     mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
+      if (branchDeleted && argv.includes("ls-remote")) {
+        return commandResult("");
+      }
+      if (
+        acceptedMergeCommit &&
+        readbackAvailable &&
+        argv.includes("repos/openclaw/openclaw/git/ref/heads/main")
+      ) {
+        return commandResult(JSON.stringify({ ref: "refs/heads/main", sha: acceptedMergeCommit }));
+      }
       if (argv.includes("state=all")) {
         recoveryLookup ||= pushed;
         if (mode === "paged") {
@@ -281,8 +296,11 @@ it.each([
           await f.revoke();
         }
         pushed = true;
+        branchDeleted = false;
         recoveryScanStart = hostScans.mock.calls.length;
-        acceptedWrites = [...f.externalWrites];
+        if (!readbackAvailable) {
+          acceptedWrites = [...f.externalWrites];
+        }
       }
       return isPullCreation(argv) && readbackAvailable
         ? commandResult(JSON.stringify({ html_url: first.url.replace(/\d+$/u, "125201") }))
@@ -335,9 +353,37 @@ it.each([
       // Closing the known PR cannot undo an accepted update.
       pullRequest.state = "closed";
       if (mode.startsWith("interrupted-authorized")) {
-        const { cwd, git } = f.local!;
+        if (!f.local) {
+          readbackAvailable = true;
+          const restarted = f.restart();
+          await restarted.resumeSessionRequests();
+          expect(f.externalWrites).toEqual(acceptedWrites);
+          expect(await restarted.readAsync(requestId)).toMatchObject(
+            published(first.url, pullRequest.headSha),
+          );
+          expect(await restarted.readAsync(first.requestId)).toEqual(first);
+          return;
+        }
+        const { cwd, git } = f.local;
+        const acceptedHead = pullRequest.headSha;
+        branchDeleted = mode === "interrupted-authorized-deleted";
+        if (mode === "interrupted-authorized-merged") {
+          acceptedMergeCommit = await git(
+            "commit-tree",
+            await git("rev-parse", `${pullRequest.headSha}^{tree}`),
+            "-p",
+            await git("rev-parse", "main"),
+            "-p",
+            pullRequest.headSha,
+            "-m",
+            "Accepted PR merge",
+          );
+        }
         const laterEdits = mode === "interrupted-authorized-edits";
         if (laterEdits) {
+          await fs.writeFile(path.join(cwd, "artifact.txt"), "committed later work\n");
+          await git("add", "artifact.txt");
+          await git("commit", "-m", "Later saved work");
           await fs.writeFile(path.join(cwd, "artifact.txt"), "staged later work\n");
           await git("add", "artifact.txt");
           await fs.writeFile(path.join(cwd, "artifact.txt"), "saved later work\n");
@@ -369,7 +415,8 @@ it.each([
         expect(await git("show", "HEAD:artifact.txt")).toBe(
           laterEdits ? "saved later work" : "accepted second publication",
         );
-        expect(pullRequest).toMatchObject({ state: "closed", headSha: saved[0] });
+        expect(await git("merge-base", saved[0], "HEAD")).toBe(saved[0]);
+        expect(pullRequest).toMatchObject({ state: "closed", headSha: acceptedHead });
         return;
       }
       await f.revoke();
