@@ -125,10 +125,16 @@ describe("createCliJsonlStreamingParser events", () => {
         }
         expect(starts).toEqual([]);
         expect(progress.length).toBeGreaterThan(0);
-        expect(progress.at(-1)).toEqual({ toolCallId: "call-1", name: name.toLowerCase(), diff });
+        expect(progress.at(-1)).toEqual({
+          toolCallId: "call-1",
+          name: name.toLowerCase(),
+          inputChars: json.length,
+          diff,
+        });
         expect(
           progress.every(
-            (delta) => Object.keys(delta).toSorted().join(",") === "diff,name,toolCallId",
+            (delta) =>
+              Object.keys(delta).toSorted().join(",") === "diff,inputChars,name,toolCallId",
           ),
         ).toBe(true);
         push({ type: "content_block_stop", index: 0 });
@@ -158,7 +164,12 @@ describe("createCliJsonlStreamingParser events", () => {
       vi.setSystemTime(1_249);
       delta("three\\n");
       expect(progress).toEqual([
-        { toolCallId: "fragmented", name: "write", diff: { added: 1, removed: 0 } },
+        {
+          toolCallId: "fragmented",
+          name: "write",
+          inputChars: '{"content":"one\\n'.length,
+          diff: { added: 1, removed: 0 },
+        },
       ]);
       expect(starts).toEqual([]);
       vi.setSystemTime(1_250);
@@ -184,6 +195,7 @@ describe("createCliJsonlStreamingParser events", () => {
       expect(progress.at(-1)).toEqual({
         toolCallId: "fresh",
         name: "write",
+        inputChars: '{"content":"fresh\\n"}'.length,
         diff: { added: 1, removed: 0 },
       });
       push(claudeBlockStop(0));
@@ -207,6 +219,8 @@ describe("createCliJsonlStreamingParser events", () => {
   });
 
   it("stops counting oversized streamed input without truncating complete execution arguments", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
     const { parser, progress, starts } = toolProgressHarness();
     const args = { content: `${"x".repeat(1024 * 1024)}\n` };
     const input = JSON.stringify(args);
@@ -217,9 +231,21 @@ describe("createCliJsonlStreamingParser events", () => {
       ),
       claudeBlockStop(0),
     ];
-    parser.push(joinJsonlFrames(...events) + "\n");
-    parser.finish();
-    expect(progress).toEqual([]);
+    try {
+      parser.push(joinJsonlFrames(...events) + "\n");
+      parser.finish();
+    } finally {
+      vi.useRealTimers();
+    }
+    // Only the first chunk lands outside the throttle window: it reports length, no lines yet.
+    expect(progress).toEqual([
+      {
+        toolCallId: "large",
+        name: "write",
+        inputChars: 512 * 1024,
+        diff: { added: 0, removed: 0 },
+      },
+    ]);
     expect(starts).toEqual([toolStart("large", "Write", args)]);
   });
 

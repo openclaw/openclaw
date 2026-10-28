@@ -210,15 +210,16 @@ describe("cli tool result events", () => {
       handlers.emitCliToolInputDelta({
         toolCallId: "write",
         name: "write",
+        inputChars: 42,
         diff: { added: 2, removed: 0 },
       });
       handlers.finalizeParsedTools();
       expect(context.params.onExecutionPhase).not.toHaveBeenCalled();
       expect(tracking.handleCliToolUseStart).not.toHaveBeenCalled();
       expect(handlers.hasObservedCliActivity()).toBe(true);
-      expect(events.map(({ stream, data }) => [stream, data.phase, data.diff])).toEqual(
-        executionMode ? [] : [["tool", "input_delta", { added: 2, removed: 0 }]],
-      );
+      expect(
+        events.map(({ stream, data }) => [stream, data.phase, data.inputChars, data.diff]),
+      ).toEqual(executionMode ? [] : [["tool", "input_delta", 42, { added: 2, removed: 0 }]]);
     },
   );
 

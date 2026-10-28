@@ -324,7 +324,11 @@ describe("createChatRunState", () => {
 
     preamble(1, "p-1", "Inspecting");
     tool(2, "start", "active", { name: "read", args: { path: "a" } });
-    tool(3, "input_delta", "active", { name: "edit", diff: { added: 3, removed: 1 } });
+    tool(3, "input_delta", "active", {
+      name: "edit",
+      inputChars: 512,
+      diff: { added: 3, removed: 1 },
+    });
     tool(4, "update", "active", { name: "read", partialResult: "halfway" });
     review(5, "review-1", "in_progress");
     review(6, "review-1", "approved");
@@ -337,7 +341,16 @@ describe("createChatRunState", () => {
 
     expect(events()?.map(({ seq, stream, data }) => [seq, stream, data])).toMatchObject([
       [2, "tool", { phase: "start", toolCallId: "active" }],
-      [3, "tool", { phase: "input_delta", toolCallId: "active", diff: { added: 3, removed: 1 } }],
+      [
+        3,
+        "tool",
+        {
+          phase: "input_delta",
+          toolCallId: "active",
+          inputChars: 512,
+          diff: { added: 3, removed: 1 },
+        },
+      ],
       [4, "tool", { phase: "update", toolCallId: "active" }],
       [
         6,
