@@ -84,6 +84,45 @@ async function walkPages(
   return { ids, emptyPages };
 }
 
+it("keeps every source fragment when a one-message tail is followed by older history", async () => {
+  await withHistoryState(async () => {
+    const segment = (id: string, text: string, phase: string) => ({
+      type: "text",
+      text,
+      textSignature: JSON.stringify({ v: 1, id, phase }),
+    });
+    const { read } = await seedHistory([
+      { role: "user", content: "Earlier question" },
+      {
+        role: "assistant",
+        content: [
+          segment("fragment-a", "Commentary A", "commentary"),
+          segment("fragment-b", "Commentary B", "commentary"),
+          segment("final", "Final answer", "final_answer"),
+        ],
+      },
+    ]);
+    const tail = await read({ limit: 1 });
+    expect(tail.nextOffset).toBe(1);
+    const older = await read({ offset: tail.nextOffset, limit: 1 });
+    expect(tail.messages).toMatchObject([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Commentary A" }],
+        openclawStreamFallback: { itemId: "fragment-a" },
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Commentary B" }],
+        openclawStreamFallback: { itemId: "fragment-b" },
+      },
+      { role: "assistant", content: [{ type: "text", text: "Final answer" }] },
+    ]);
+    expect(older.messages).toMatchObject([{ role: "user", content: "Earlier question" }]);
+    expect(older.hasMore).toBe(false);
+  });
+});
+
 it("walks both sides of a byte-limited anchor without gaps and rejects replaced transcripts", async () => {
   await withHistoryState(async () => {
     const { read, send } = await seedHistory(
