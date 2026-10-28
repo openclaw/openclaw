@@ -368,6 +368,7 @@ export async function runActiveReplySteer(
       ),
       steeringMode: "all",
       isInboundUserMessage,
+      allowPendingUserInputAnswer: steeringAuthority.allowPendingUserInputAnswer,
       terminalReplyExpectation: followupRun.run.terminalReplyExpectation,
       toolAuthorityFingerprint: steeringAuthority.toolAuthorityFingerprint,
       ...(steeringAuthority.collaborativeCaller

@@ -67,7 +67,10 @@ import {
   withReplyToolAuthorityCohort,
   type CapturedReplyToolAuthoritySession,
 } from "./reply-tool-authority-cohort.js";
-import { projectReplyToolAuthorityInput } from "./reply-tool-authority-inbound.js";
+import {
+  isSameReplyToolAuthorityConversation,
+  projectReplyToolAuthorityInput,
+} from "./reply-tool-authority-inbound.js";
 import {
   captureMemoryReplyToolAuthoritySession,
   prepareMemoryReplyToolAuthorityCaller,
@@ -572,6 +575,20 @@ export function prepareReplyToolAuthority(
         ? incomingProfile
         : undefined;
     const sameRequesterProfile = matchingProfile !== undefined;
+    // Linked identity permits guidance across scopes, not automatic question
+    // answers or image cancellation under the incumbent's question authority.
+    const allowPendingUserInputAnswer: false | undefined =
+      matchingProfile &&
+      caller &&
+      "kind" in caller &&
+      (!isSameReplyToolAuthorityConversation(snapshot, caller.caller) ||
+        requesterPrincipalKey !==
+          resolveRequesterPrincipalKey({
+            ...caller.caller,
+            messageChannel: caller.caller.originatingChannel,
+          }))
+        ? false
+        : undefined;
     const assertCurrent = () => {
       assertActive();
       assertOpen();
@@ -585,6 +602,7 @@ export function prepareReplyToolAuthority(
     return {
       assertCurrent,
       sameRequesterProfile,
+      allowPendingUserInputAnswer,
       joinObservation: capturedJoinObservation,
       prepare: async () => {
         const projected = projectInput(caller, sameRequesterProfile);

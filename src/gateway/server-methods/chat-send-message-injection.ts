@@ -285,6 +285,7 @@ export function createChatSendMessageInjectionStarter(params: {
           inboundAudio: hasInboundAudio(ctx),
           steeringMode: "all",
           isInboundUserMessage: true,
+          allowPendingUserInputAnswer: preparedJoin?.allowPendingUserInputAnswer,
           allowCollaborativeSteering:
             cfg.messages?.queue?.allowCollaborativeSteering === true &&
             (!ctx.InputProvenance || ctx.InputProvenance.kind === "external_user"),

@@ -179,6 +179,7 @@ export type ReplyToolAuthorityCallerBinding = {
   assertCurrent(): void;
   /** Classify identity before preparing compatibility, while retaining the selected live owner. */
   sameRequesterProfile?: boolean;
+  allowPendingUserInputAnswer?: false;
   joinObservation?: ReplyMessageJoinObservation;
   prepare(): Promise<PreparedQuestionCallerRead | undefined>;
 };
@@ -280,6 +281,7 @@ export function captureReplyToolAuthorityCallerBinding(
   return {
     assertCurrent: () => selected.assertCurrent(),
     sameRequesterProfile: selected.sameRequesterProfile,
+    allowPendingUserInputAnswer: selected.allowPendingUserInputAnswer,
     joinObservation: selected.joinObservation,
     prepare: async () => {
       selected.assertCurrent();

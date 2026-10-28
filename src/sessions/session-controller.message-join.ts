@@ -111,6 +111,7 @@ export async function prepareReplyMessageContinuation(params: {
     return {
       kind: "prepared" as const,
       fingerprint,
+      allowPendingUserInputAnswer: selected.allowPendingUserInputAnswer,
       read: () => {
         assertCurrent();
         return fingerprint;
@@ -174,6 +175,7 @@ export async function prepareReplyMessageJoin(params: {
         automaticFallbackRoute: undefined,
         pendingInputAuthorityFingerprint: undefined,
         collaborativeCaller: undefined,
+        allowPendingUserInputAnswer: joined.allowPendingUserInputAnswer,
         prepareCurrent: joined.prepareCurrent,
       };
     }
@@ -208,6 +210,7 @@ export async function prepareReplyMessageJoin(params: {
     automaticFallbackRoute: legacy.automaticFallbackRoute,
     pendingInputAuthorityFingerprint: legacy.pendingInputAuthorityFingerprint,
     collaborativeCaller: legacy.collaborativeCaller,
+    allowPendingUserInputAnswer: undefined,
     prepareCurrent: async () => {
       legacy.toolAuthority.read();
     },

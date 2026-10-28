@@ -276,7 +276,7 @@ export function resolveInboundConversationToolPolicy(params: {
 }
 
 /** Session sharing alone does not establish that two inputs belong to the same conversation. */
-function isSameReplyToolAuthorityConversation(
+export function isSameReplyToolAuthorityConversation(
   snapshot: ReplyToolAuthorityInput,
   caller: Pick<
     ReplyToolAuthorityOverlay,
