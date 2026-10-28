@@ -190,6 +190,37 @@ test.each(["adopted", "incognito"] as const)(
   },
 );
 
+test("sessions.create records prepared title provenance only for a new generated display name", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const client = { client: { connect: { scopes: ["operator.admin"] } } as never };
+  const generated = await directSessionReq<{ key: string }>(
+    "sessions.create",
+    { agentId: "main", displayName: "Prepared title", displayNameSource: "generated" },
+    client,
+  );
+  expect(generated.ok, JSON.stringify(generated.error)).toBe(true);
+  expect(
+    loadSessionEntry({ agentId: "main", sessionKey: generated.payload!.key, storePath })
+      ?.titleRefinement,
+  ).toMatchObject({
+    sessionId: expect.any(String),
+    generatedName: "Prepared title",
+    taskMessagesSinceTitle: 0,
+    skipNextMessage: true,
+  });
+
+  const explicit = await directSessionReq<{ key: string }>(
+    "sessions.create",
+    { agentId: "main", displayName: "Operator title" },
+    client,
+  );
+  expect(explicit.ok, JSON.stringify(explicit.error)).toBe(true);
+  expect(
+    loadSessionEntry({ agentId: "main", sessionKey: explicit.payload!.key, storePath })
+      ?.titleRefinement,
+  ).toBeUndefined();
+});
+
 test("successful naming survives setup failure and is shared with discussion open and retry", async () => {
   const naming = createDeferredCore<string>();
   titleMocks.generate.mockReturnValue(naming.promise);

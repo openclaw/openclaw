@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { normalizeInternalTurnContext } from "../../auto-reply/internal-turn-source.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
 import { emitSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
@@ -639,7 +640,10 @@ export async function recordInboundSessionMeta(
               scope: "session-entry",
             })
         : undefined,
-      fallbackEntry: input.createIfMissing === false ? undefined : mergeSessionEntry(undefined, {}),
+      fallbackEntry:
+        input.createIfMissing === false
+          ? undefined
+          : mergeSessionEntry(undefined, { lifecycleRevision: randomUUID() }),
     },
   );
 }

@@ -22,16 +22,10 @@ import {
 } from "openclaw/plugin-sdk/interactive-runtime";
 import type { MessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
-import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveTelegramAccountOwnerAgentId } from "./account-owner.js";
+import { createTelegramActionGate, resolveTelegramPollActionGateState } from "./accounts.js";
+import { normalizeTelegramActionName } from "./action-names.js";
 import {
-  createTelegramActionGate,
-  resolveDefaultTelegramAccountId,
-  resolveTelegramPollActionGateState,
-} from "./accounts.js";
-import { TELEGRAM_MESSAGE_ACTION_MAP } from "./action-names.js";
-import {
+  normalizeTelegramDeliveryPin,
   readTelegramChatId,
   readTelegramForumTopicIconColor,
   readTelegramPositiveIntegerParam,
@@ -39,6 +33,7 @@ import {
   readTelegramSendMediaUrls,
   readTelegramThreadId,
 } from "./action-params.js";
+import { resolveActionTopicNameCacheScope } from "./action-topic-name-scope.js";
 import {
   appendTelegramDroppedControlFallback,
   buildTelegramControlDegradation,
@@ -85,36 +80,10 @@ const TELEGRAM_DEFAULT_REACTIONS = TELEGRAM_SUPPORTED_REACTION_EMOJI_LIST.map((e
   type: "emoji" as const,
   emoji,
 }));
-const TELEGRAM_ACTION_ALIASES = {
-  ...TELEGRAM_MESSAGE_ACTION_MAP,
-  createForumTopic: "createForumTopic",
-  deleteMessage: "deleteMessage",
-  editForumTopic: "editForumTopic",
-  editMessage: "editMessage",
-  searchSticker: "searchSticker",
-  sendMessage: "sendMessage",
-  sendSticker: "sendSticker",
-  stickerCacheStats: "stickerCacheStats",
-} as const;
 
-type TelegramActionName = (typeof TELEGRAM_ACTION_ALIASES)[keyof typeof TELEGRAM_ACTION_ALIASES];
 type ConversationReadInvocationOrigin = NonNullable<
   ChannelMessageActionContext["conversationReadOrigin"]
 >;
-function normalizeTelegramActionName(action: string): TelegramActionName {
-  const normalized = TELEGRAM_ACTION_ALIASES[action as keyof typeof TELEGRAM_ACTION_ALIASES];
-  if (!normalized) {
-    throw new Error(`Unsupported Telegram action: ${action}`);
-  }
-  return normalized;
-}
-
-function resolveActionTopicNameCacheScope(cfg: OpenClawConfig, accountId?: string | null): string {
-  const resolvedAccountId = accountId ?? resolveDefaultTelegramAccountId(cfg);
-  return resolveStorePath(cfg.session?.store, {
-    agentId: resolveTelegramAccountOwnerAgentId({ cfg, accountId: resolvedAccountId }),
-  });
-}
 
 function formatTelegramDeliveryTarget(to: string, messageThreadId?: number | null): string {
   const parsed = parseTelegramTarget(to);
@@ -127,23 +96,6 @@ function formatTelegramDeliveryTarget(to: string, messageThreadId?: number | nul
     return to;
   }
   return `${parsed.chatId}:topic:${topicId}`;
-}
-
-function normalizeTelegramDeliveryPin(params: Record<string, unknown>) {
-  const delivery = asOptionalRecord(params.delivery);
-  const pin = delivery ? delivery.pin : params.pin === true ? true : undefined;
-  if (pin === true) {
-    return { enabled: true } as const;
-  }
-  const raw = asOptionalRecord(pin);
-  if (raw?.enabled !== true) {
-    return undefined;
-  }
-  return {
-    enabled: true,
-    ...(raw.notify === true ? { notify: true } : {}),
-    ...(raw.required === true ? { required: true } : {}),
-  } as const;
 }
 
 export async function handleTelegramAction(
@@ -781,7 +733,7 @@ export async function handleTelegramAction(
           result.chatId,
           result.messageThreadId,
           patch,
-          resolveActionTopicNameCacheScope(cfg, accountId),
+          resolveActionTopicNameCacheScope(cfg, accountId, result.chatId),
         ).catch(() => {});
       }
     }

@@ -9,6 +9,8 @@ import { publicChannelTurn, type PublicReplyParams } from "./reply-options.js";
  */
 export { resolveChunkMode } from "../auto-reply/chunk.js";
 export { generateConversationLabel } from "../auto-reply/reply/conversation-label-generator.js";
+export { resolveSessionTitleSource } from "../sessions/session-title-source.js";
+export { resetTitlePrompt } from "../sessions/session-title-refinement-state.js";
 export { finalizeInboundContextForSdk as finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 export type { CommandTurnContext } from "../auto-reply/command-turn-context.js";
 

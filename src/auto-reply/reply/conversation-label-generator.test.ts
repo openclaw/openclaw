@@ -354,11 +354,32 @@ describe("generateConversationLabelWithFallback", () => {
     ]);
   });
 
-  it("utilityOnly returns null without inference when the utility model resolves onto the primary", async () => {
+  it("speculation skips inference when the utility model resolves onto the primary", async () => {
     await expect(
-      fallback({ utilityModelRef: params.regularModelRef, utilityOnly: true }),
+      fallback({ utilityModelRef: params.regularModelRef, mode: "speculative" }),
     ).resolves.toBeNull();
     expect(runIsolatedCompletion).not.toHaveBeenCalled();
+  });
+
+  it("speculation without a utility model skips inference", async () => {
+    const { utilityModelRef: _utilityModelRef, ...noUtilityParams } = params;
+    await expect(
+      generateConversationLabelWithFallback({ ...noUtilityParams, mode: "speculative" }),
+    ).resolves.toBeNull();
+    expect(runIsolatedCompletion).not.toHaveBeenCalled();
+  });
+
+  it("refinement uses primary when no utility model is configured (4305281869)", async () => {
+    const { utilityModelRef: _utilityModelRef, ...noUtilityParams } = params;
+    runIsolatedCompletion.mockResolvedValueOnce({ text: "Invoice help" });
+    await expect(
+      generateConversationLabelWithFallback({
+        ...noUtilityParams,
+        mode: "refinement",
+      }),
+    ).resolves.toBe("Invoice help");
+    expect(runIsolatedCompletion).toHaveBeenCalledTimes(1);
+    expect(runIsolatedCompletion.mock.calls[0]?.[0]?.model).toBe("gpt-main");
   });
 
   it("uses the regular candidate directly when no utility model exists", async () => {

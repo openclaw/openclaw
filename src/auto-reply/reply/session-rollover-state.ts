@@ -10,11 +10,35 @@ import { preserveCreationStamp } from "../../config/sessions/session-entry-prove
 import { selectSessionModelOverride } from "../../config/sessions/session-entry-selection.js";
 import type { InternalSessionEntry, SessionEntry } from "../../config/sessions/types.js";
 import { isAcpSessionKey, isSubagentSessionKey } from "../../routing/session-key.js";
+import { resetTitleRefinementState } from "../../sessions/session-title-refinement-state.js";
+
+/** Explicit base overrides and ordinary rollover share the same reset-mode decision. */
+export function resolveReplySessionPreservedState(params: {
+  baseEntry: InternalSessionEntry | undefined;
+  entry: InternalSessionEntry | undefined;
+  sessionKey: string;
+  sessionId: string;
+  resetTrigger: string | undefined;
+}): Partial<InternalSessionEntry> | undefined {
+  if (params.baseEntry) {
+    return selectSessionModelOverride(params.baseEntry);
+  }
+  return params.entry
+    ? resolveReplySessionRolloverState(
+        params.entry,
+        params.sessionKey,
+        params.resetTrigger === "/new" ? "new" : "reset",
+        params.sessionId,
+      )
+    : undefined;
+}
 
 /** Builds the durable session fields retained across a reply-session rollover. */
 export function resolveReplySessionRolloverState(
-  entry: SessionEntry,
+  entry: InternalSessionEntry,
   sessionKey: string,
+  resetMode: "reset" | "new" = "reset",
+  sessionId = entry.sessionId,
 ): Partial<InternalSessionEntry> {
   const preservedSelection = resolveResetPreservedSelection({ entry });
   // Stable ACP rows predate durable creation stamps. Preserve their restrictions
@@ -39,6 +63,7 @@ export function resolveReplySessionRolloverState(
     label: entry.label,
     autoLabel: entry.autoLabel,
     displayName: entry.displayName,
+    titleRefinement: resetTitleRefinementState(entry.titleRefinement, sessionId, resetMode),
     category: entry.category,
     sidebarRoot: entry.sidebarRoot,
     deviceFolder: entry.deviceFolder ? { ...entry.deviceFolder } : undefined,

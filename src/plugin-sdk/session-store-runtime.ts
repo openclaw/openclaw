@@ -73,6 +73,7 @@ import {
 import type { SessionTranscriptEvent } from "./session-transcript-runtime.js";
 export {
   getSessionEntryAsync,
+  getSessionTitleLifecycleAsync,
   getSessionEntryByIdAsync,
 } from "./session-store-runtime-internal.js";
 export { SessionStoreAgentIdRequiredError } from "../config/sessions/paths.js";

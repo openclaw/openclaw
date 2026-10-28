@@ -722,6 +722,8 @@ export type InternalSessionEntryCore = SessionEntryCore & {
   /** Original requester facts retained by the exact host-admitted restart source claim. */
   restartRecoveryRequesterSource?: import("../../agents/requester-run-recovery-source.js").RestartRecoveryRequesterSource;
   mainRestartRecovery?: MainRestartRecoveryState;
+  /** Bounded one-time automatic title refinement progress; keyed to the owning sessionId. */
+  titleRefinement?: import("../../sessions/session-title-refinement-state.js").SessionTitleRefinementState;
 };
 
 export interface InternalSessionEntry extends InternalSessionEntryCore {}

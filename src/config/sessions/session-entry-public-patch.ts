@@ -31,6 +31,10 @@ function generationValidPrivateFieldsForSameSession(
     ...(existingEntry.transcriptByteCompactionLatch
       ? { transcriptByteCompactionLatch: existingEntry.transcriptByteCompactionLatch }
       : {}),
+    // A plugin/sessions upsert projects away titleRefinement (private field);
+    // a same-generation upsert must not silently drop refinement state or the
+    // bounded refinement loses its count and armed marker (Codex 4304147107).
+    ...(existingEntry.titleRefinement ? { titleRefinement: existingEntry.titleRefinement } : {}),
     ...(existingEntry.sessionDiffBaselineCapture
       ? { sessionDiffBaselineCapture: existingEntry.sessionDiffBaselineCapture }
       : {}),

@@ -5,6 +5,7 @@ import {
   normalizeSessionColorValue,
   normalizeSessionIconValue,
 } from "../../../packages/gateway-protocol/src/session-agent-status.js";
+import { normalizeSessionTitleRefinementState } from "../../sessions/session-title-refinement-state.js";
 import { SessionStoreMigrationRequiredError } from "./migration-required.js";
 import { hasLegacySessionEntryState } from "./session-entry-state-format.js";
 import { assertSupportedSessionStoreEntry } from "./supported-session-store.js";
@@ -52,7 +53,7 @@ export function projectCanonicalSessionEntryShape(
     sessionFile: _retiredSessionFile,
     transcriptPath: _retiredTranscriptPath,
     conversationLink: _retiredConversationLink,
-    titleRefinement: _retiredTitleRefinement,
+    titleRefinement: titleRefinementInput,
     owner: _projectedOwner,
     participants: _projectedParticipants,
     participantCount: _projectedParticipantCount,
@@ -118,7 +119,11 @@ export function projectCanonicalSessionEntryShape(
     delete canonicalValue.snoozedUntil;
     delete canonicalValue.snoozedAt;
   }
-  return canonicalValue as unknown as SessionEntry;
+  const titleRefinement = normalizeSessionTitleRefinementState(titleRefinementInput);
+  return {
+    ...canonicalValue,
+    ...(titleRefinement ? { titleRefinement } : {}),
+  } as unknown as SessionEntry;
 }
 
 /** Removes the runtime-only skill catalog without mutating the live session snapshot. */

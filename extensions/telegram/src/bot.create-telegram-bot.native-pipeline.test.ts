@@ -11,7 +11,7 @@ import {
   resolveStorePath,
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
+import { createRequireRecord, withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { assert, expect, it, vi } from "vitest";
 import { runWithTelegramSpooledReplayUpdate } from "./bot-processing-outcome.js";
 import {
@@ -419,11 +419,29 @@ it.each([
   },
 );
 
-it("labels an enabled first DM topic but not an established session with bounded Unicode input", async () => {
+it("labels an enabled first DM topic but not an established session with bounded Unicode input", async ({
+  signal,
+}) => {
   const bounded = "a".repeat(499);
   const generated = vi
     .spyOn(replyRuntime, "generateConversationLabel")
     .mockResolvedValue("Invoice review");
+  // The controlled reply resolver substitutes for the engine, including its
+  // durable lifecycle admission before background title work can be authorized.
+  harness.replySpy.mockImplementation(async (context) => {
+    assert(context.SessionKey, "Expected the topic session key");
+    await upsertSessionEntry({
+      storePath: resolveStorePath(undefined, { agentId: "main" }),
+      sessionKey: context.SessionKey,
+      entry: {
+        sessionId: "delivered-dm-topic",
+        lifecycleRevision: "first-topic-turn",
+        updatedAt: Date.now(),
+        systemSent: true,
+      },
+    });
+    return { text: "Test response" };
+  });
   const renamed = createDeferred<void>();
   apiCalls.mockImplementation((method) => {
     if (method === "editForumTopic") {
@@ -447,7 +465,7 @@ it("labels an enabled first DM topic but not an established session with bounded
       true,
     );
     await handleMessage(bot, 2700, topicMessage(`${bounded}\u{1F600}tail`));
-    await renamed.promise;
+    await withinTest(renamed.promise, signal);
     expect(generated.mock.calls[0]?.[0].userMessage).toBe(bounded);
     expect(apiPayloads("editForumTopic")).toEqual([
       expect.objectContaining({
@@ -458,12 +476,9 @@ it("labels an enabled first DM topic but not an established session with bounded
     ]);
     const sessionKey = harness.replySpy.mock.calls[0]?.[0].SessionKey;
     assert(sessionKey, "Expected the first topic turn to reach the model");
-    // The controlled model substitutes for the engine that persists first-turn completion.
-    await upsertSessionEntry({
-      storePath: resolveStorePath(undefined, { agentId: "main" }),
-      sessionKey,
-      entry: { sessionId: "delivered-dm-topic", updatedAt: Date.now(), systemSent: true },
-    });
+    expect(
+      getSessionEntry({ storePath: resolveStorePath(undefined, { agentId: "main" }), sessionKey }),
+    ).toMatchObject({ lifecycleRevision: "first-topic-turn", systemSent: true });
     await handleMessage(bot, 2701, topicMessage("Continue the same topic"));
     expect(generated).toHaveBeenCalledTimes(1);
     expect(apiPayloads("sendMessage")).toHaveLength(2);

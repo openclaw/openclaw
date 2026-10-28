@@ -22,6 +22,7 @@ export async function resolveTelegramForumTopicMetadata(params: {
       threadId,
       {
         name: creation.name,
+        isNameImplicit: creation.is_name_implicit === true,
         creatorUserId,
         iconColor: creation.icon_color,
         iconCustomEmojiId: creation.icon_custom_emoji_id,

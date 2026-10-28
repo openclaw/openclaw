@@ -1,14 +1,30 @@
-import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
-import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
+import { resolveAgentDir, resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/agent-runtime";
+import {
+  formatMediaPlaceholderText,
+  isChannelPartialDeliveryError,
+} from "openclaw/plugin-sdk/channel-inbound";
+import { captureAsyncWorkTracker } from "openclaw/plugin-sdk/concurrency-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   generateConversationLabel as generateTopicLabel,
   resolveChunkMode,
+  resolveSessionTitleSource,
+  resetTitlePrompt,
 } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { createSubsystemLogger, danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import {
+  getSessionTitleLifecycleAsync,
+  resolveStorePath,
+} from "openclaw/plugin-sdk/session-store-runtime";
+import { prepareSkillCommandsForWorkspace } from "openclaw/plugin-sdk/skill-commands-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { resolveAutoTopicLabelConfig } from "./auto-topic-label-config.js";
+import { resolveTelegramAccountOwnerAgentId } from "./account-owner.js";
+import {
+  normalizeGeneratedTopicLabel,
+  resolveAutoTopicLabelConfig,
+  resolveAutoTopicLabelRefineConfig,
+} from "./auto-topic-label-config.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
 import { resolveDispatchTelegramContext } from "./bot-message-dispatch-context.js";
 import {
@@ -38,6 +54,17 @@ import {
 import { resolveTelegramRichMessages, resolveTelegramTableMode } from "./rich-messages-config.js";
 import { cacheSticker, describeStickerImage } from "./sticker-cache.js";
 import { resolveStickerVisionSupport } from "./sticker-vision.js";
+import {
+  prepareTopicLabelTurn,
+  finishInitialTopicLabel,
+  maybeRefineTopicLabel,
+} from "./topic-label-refinement.js";
+import {
+  resolveTelegramDirectTopicNameCacheScope,
+  getTopicName,
+  isTopicNameImplicit,
+  updateTopicName,
+} from "./topic-name-cache.js";
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
 const silentReplyDispatchLogger = createSubsystemLogger("telegram/silent-reply-dispatch");
@@ -116,9 +143,200 @@ async function prepareTelegramSticker(params: {
   logVerbose(`telegram: cached sticker description for ${sticker.fileUniqueId}`);
 }
 
+async function scheduleDmTopicLabel(params: {
+  bot: DispatchTelegramMessageParams["bot"];
+  cfg: DispatchTelegramMessageParams["cfg"];
+  context: TelegramMessageContext;
+  telegramCfg: DispatchTelegramMessageParams["telegramCfg"];
+  userMessage: string;
+  accountAbortSignal?: AbortSignal;
+}) {
+  const { context } = params;
+  const isDmTopic =
+    !context.isGroup && context.threadSpec.scope === "dm" && context.threadSpec.id != null;
+  if (!isDmTopic) {
+    return;
+  }
+  const directAutoTopicLabel =
+    context.groupConfig && "autoTopicLabel" in context.groupConfig
+      ? context.groupConfig.autoTopicLabel
+      : undefined;
+  const topicThreadId = context.threadSpec.id!;
+  const assertAccountCurrent = () => {
+    if (params.accountAbortSignal?.aborted) {
+      throw new Error("telegram account stopped; refinement cancelled");
+    }
+  };
+  const sessionKey = context.ctxPayload.SessionKey;
+  if (!sessionKey) {
+    return;
+  }
+  const storePath = resolveStorePath(params.cfg.session?.store, { agentId: context.route.agentId });
+  const readLifecycle = () =>
+    getSessionTitleLifecycleAsync({ storePath, sessionKey, agentId: context.route.agentId });
+  const lifecycle = await readLifecycle();
+  if (!lifecycle?.lifecycleRevision || lifecycle.explicitLabel?.trim()) {
+    return;
+  }
+  const assertLifecycleCurrent = async () => {
+    const current = await readLifecycle();
+    if (
+      current?.explicitLabel?.trim() ||
+      current?.sessionId !== lifecycle.sessionId ||
+      current?.lifecycleRevision !== lifecycle.lifecycleRevision
+    ) {
+      throw new Error("telegram title lifecycle changed");
+    }
+    assertAccountCurrent();
+  };
+  const skillCommands = params.userMessage.trim().startsWith("/")
+    ? await prepareSkillCommandsForWorkspace(
+        {
+          cfg: params.cfg,
+          agentId: context.route.agentId,
+          sessionKey,
+          workspaceDir: resolveAgentWorkspaceDir(params.cfg, context.route.agentId),
+        },
+        assertAccountCurrent,
+      )
+    : [];
+  const userMessage = resolveSessionTitleSource(params.userMessage, skillCommands);
+  if (!userMessage) {
+    return;
+  }
+  const autoTopicConfig = resolveAutoTopicLabelConfig(
+    directAutoTopicLabel,
+    params.telegramCfg.autoTopicLabel,
+  );
+  if (!autoTopicConfig) {
+    return;
+  }
+  const refineCfg = resolveAutoTopicLabelRefineConfig({
+    directConfig: directAutoTopicLabel,
+    accountConfig: params.telegramCfg.autoTopicLabel,
+  });
+  const cacheScope = resolveTelegramDirectTopicNameCacheScope(
+    resolveStorePath(params.cfg.session?.store, {
+      agentId: resolveTelegramAccountOwnerAgentId({
+        cfg: params.cfg,
+        accountId: context.route.accountId,
+      }),
+    }),
+    context.route.accountId,
+  );
+  const previousName = await getTopicName(context.chatId, topicThreadId, cacheScope);
+  await assertLifecycleCurrent();
+  const decision = await prepareTopicLabelTurn({
+    botId: params.bot.botInfo?.id,
+    accountId: context.route.accountId,
+    chatId: context.chatId,
+    threadId: topicThreadId,
+    lifecycleRevision: lifecycle.lifecycleRevision,
+    currentName: previousName,
+    isNameImplicit:
+      previousName !== undefined &&
+      (await isTopicNameImplicit(context.chatId, topicThreadId, cacheScope)),
+  });
+  if (decision === "skip") {
+    return;
+  }
+  if (decision === "refine") {
+    if (refineCfg.enabled) {
+      await maybeRefineTopicLabel({
+        botId: params.bot.botInfo?.id,
+        accountId: context.route.accountId,
+        bot: params.bot,
+        assertServiceCurrent: assertAccountCurrent,
+        assertLifecycleCurrent,
+        lifecycleRevision: lifecycle.lifecycleRevision,
+        cfg: params.cfg,
+        agentId: context.route.agentId,
+        chatId: context.chatId,
+        threadId: topicThreadId,
+        userMessage,
+        afterMessages: refineCfg.afterMessages,
+        logVerbose,
+      });
+    }
+    return;
+  }
+  await (async () => {
+    try {
+      assertAccountCurrent();
+      const label = normalizeGeneratedTopicLabel(
+        await generateTopicLabel({
+          userMessage,
+          prompt: previousName
+            ? resetTitlePrompt(lifecycle.resetMode ?? "reset", previousName)
+            : autoTopicConfig.prompt,
+          maxLength: 128,
+          cfg: params.cfg,
+          agentId: context.route.agentId,
+          agentDir: resolveAgentDir(params.cfg, context.route.agentId),
+          assertCurrent: assertAccountCurrent,
+        }),
+      );
+      if (!label) {
+        logVerbose("auto-topic-label: LLM returned empty label");
+        return;
+      }
+      logVerbose(`auto-topic-label: generated label (len=${label.length})`);
+      const applyInitialLabel = async () => {
+        const currentName = await getTopicName(context.chatId, topicThreadId, cacheScope);
+        if (currentName !== previousName) {
+          throw new Error("telegram title changed during generation");
+        }
+        await assertLifecycleCurrent();
+        assertAccountCurrent();
+        if (label !== previousName) {
+          await params.bot.api.editForumTopic(context.chatId, topicThreadId, { name: label });
+        }
+        // Cache the automatic label so the refinement's manual-rename guard can
+        // observe later human renames of DM topics (Codex 4302875124).
+        await updateTopicName(
+          context.chatId,
+          topicThreadId,
+          { name: label },
+          resolveTelegramDirectTopicNameCacheScope(
+            resolveStorePath(params.cfg.session?.store, {
+              agentId: resolveTelegramAccountOwnerAgentId({
+                cfg: params.cfg,
+                accountId: context.route.accountId,
+              }),
+            }),
+            context.route.accountId,
+          ),
+        ).catch(() => {});
+        logVerbose(`auto-topic-label: renamed topic ${context.chatId}/${topicThreadId}`);
+      };
+      await finishInitialTopicLabel({
+        botId: params.bot.botInfo?.id,
+        accountId: context.route.accountId,
+        bot: params.bot,
+        assertServiceCurrent: assertAccountCurrent,
+        assertLifecycleCurrent,
+        lifecycleRevision: lifecycle.lifecycleRevision,
+        cfg: params.cfg,
+        agentId: context.route.agentId,
+        chatId: context.chatId,
+        threadId: topicThreadId,
+        afterMessages: refineCfg.enabled ? refineCfg.afterMessages : Number.POSITIVE_INFINITY,
+        logVerbose,
+        label,
+        applyInitialLabel,
+      });
+    } catch (err) {
+      logVerbose(`auto-topic-label: failed: ${String(err)}`);
+    }
+  })();
+}
+
 export const dispatchTelegramMessage = async (
   dispatchParams: DispatchTelegramMessageParams,
 ): Promise<TelegramDispatchResult> => {
+  // Retain naming under the existing ingress owner, before the foreground turn
+  // enters nested scopes. This captures work ownership, never authorization.
+  const trackTopicLabelWork = captureAsyncWorkTracker();
   const {
     context,
     bot,
@@ -129,6 +347,7 @@ export const dispatchTelegramMessage = async (
     retryDispatchErrors = false,
     suppressFailureFallback = false,
     turnAdoptionLifecycle,
+    opts,
   } = dispatchParams;
   const dispatchStartedAt = Date.now();
   const dispatchContext = await resolveDispatchTelegramContext({ context });
@@ -267,27 +486,8 @@ export const dispatchTelegramMessage = async (
     hadErrorReplyFailureOrSkip: false,
   };
 
-  let isFirstTurnInSession = false;
   let turnDispatched: boolean | undefined;
-  const isDmTopic =
-    !dispatchContext.isGroup &&
-    dispatchContext.threadSpec.scope === "dm" &&
-    dispatchContext.threadSpec.id != null;
   await prepareTelegramSticker({ cfg, context: dispatchContext });
-  if (isDmTopic) {
-    try {
-      const sessionKey = dispatchContext.ctxPayload.SessionKey;
-      if (sessionKey) {
-        isFirstTurnInSession = !(
-          await loadFreshSessionEntry(dispatchContext.route.agentId, sessionKey)
-        ).entry?.systemSent;
-      } else {
-        logVerbose("auto-topic-label: SessionKey is absent, skipping first-turn detection");
-      }
-    } catch (err) {
-      logVerbose(`auto-topic-label: session store error: ${String(err)}`);
-    }
-  }
   loadFreshSessionEntry.clear();
   // Media hydration and other pre-dispatch work can outlive the durable
   // ingress watchdog. Never enter the reply pipeline after that owner has
@@ -424,52 +624,20 @@ export const dispatchTelegramMessage = async (
     return { kind: "completed" };
   }
 
-  const scheduleDmTopicLabel = () => {
-    if (!isDmTopic || !isFirstTurnInSession) {
-      return;
-    }
-    const userMessage = truncateUtf16Safe(
-      dispatchContext.ctxPayload.RawBody ?? dispatchContext.ctxPayload.Body ?? "",
-      500,
-    );
-    if (!userMessage.trim()) {
-      return;
-    }
-    const directAutoTopicLabel =
-      dispatchContext.groupConfig && "autoTopicLabel" in dispatchContext.groupConfig
-        ? dispatchContext.groupConfig.autoTopicLabel
-        : undefined;
-    const autoTopicConfig = resolveAutoTopicLabelConfig(
-      directAutoTopicLabel,
-      telegramCfg.autoTopicLabel,
-    );
-    if (!autoTopicConfig) {
-      return;
-    }
-    const topicThreadId = dispatchContext.threadSpec.id!;
-    void (async () => {
-      try {
-        const label = await generateTopicLabel({
-          userMessage,
-          prompt: autoTopicConfig.prompt,
-          maxLength: 128,
-          cfg,
-          agentId: dispatchContext.route.agentId,
-          agentDir: resolveAgentDir(cfg, dispatchContext.route.agentId),
-        });
-        if (!label) {
-          logVerbose("auto-topic-label: LLM returned empty label");
-          return;
-        }
-        logVerbose(`auto-topic-label: generated label (len=${label.length})`);
-        await bot.api.editForumTopic(dispatchContext.chatId, topicThreadId, { name: label });
-        logVerbose(`auto-topic-label: renamed topic ${dispatchContext.chatId}/${topicThreadId}`);
-      } catch (err) {
-        logVerbose(`auto-topic-label: failed: ${String(err)}`);
-      }
-    })();
-  };
-  scheduleDmTopicLabel();
+  void trackTopicLabelWork(() =>
+    scheduleDmTopicLabel({
+      bot,
+      cfg,
+      context: dispatchContext,
+      telegramCfg,
+      userMessage: truncateUtf16Safe(
+        (dispatchContext.ctxPayload.RawBody ?? dispatchContext.ctxPayload.Body ?? "").trim() ||
+          formatMediaPlaceholderText(dispatchContext.ctxPayload.media ?? []),
+        500,
+      ),
+      ...(opts.accountAbortSignal ? { accountAbortSignal: opts.accountAbortSignal } : {}),
+    }),
+  ).catch((error: unknown) => logVerbose(`auto-topic-label: failed: ${String(error)}`));
   if (statusReactionController) {
     finalizeStatusInBackground(
       turn.agentRunFailed ||

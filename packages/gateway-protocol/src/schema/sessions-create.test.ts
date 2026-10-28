@@ -6,6 +6,22 @@ import {
 } from "../index.js";
 
 describe("sessions.create schema", () => {
+  it("accepts generated presentation provenance but rejects unknown title authorities", () => {
+    expect(
+      validateSessionsCreateParams({
+        agentId: "main",
+        displayName: "Prepared title",
+        displayNameSource: "generated",
+      }),
+    ).toBe(true);
+    expect(
+      validateSessionsCreateParams({
+        agentId: "main",
+        displayName: "Prepared title",
+        displayNameSource: "operator",
+      }),
+    ).toBe(false);
+  });
   it("accepts only the dock presentation surface without accepting creator attribution", () => {
     expect(validateSessionsCreateParams({ surface: "plugin-dock" })).toBe(true);
     for (const surface of ["operator", "spawn", "internal", "plugin", "", null]) {

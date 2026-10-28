@@ -8,6 +8,7 @@ import { captureEnv } from "openclaw/plugin-sdk/test-env";
 import { awaitGateBeforeSettlement, withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { handleTelegramAction } from "./action-runtime.js";
 import { telegramPlugin } from "./channel.js";
 import {
   isTelegramMessageCacheSourceMessage,
@@ -21,6 +22,7 @@ import {
   resetTelegramMessageCacheForTest,
 } from "./runtime.test-support.js";
 import { useTelegramHttpFixture } from "./send.telegram-http.test-support.js";
+import { getTopicName, resolveTelegramDirectTopicNameCacheScope } from "./topic-name-cache.js";
 
 describe("Telegram registered action authority and input contracts", () => {
   const fixture = useTelegramHttpFixture();
@@ -72,6 +74,36 @@ describe("Telegram registered action authority and input contracts", () => {
     env.restore();
     await state.cleanup();
   });
+
+  it.each([
+    { action: "topic-edit", chatId: -1001, direct: false },
+    { action: "topic-edit", chatId: 123, direct: true },
+    { action: "topic-create", chatId: -1001, direct: false },
+    { action: "topic-create", chatId: 123, direct: true },
+  ] as const)(
+    "keeps $action metadata readable in its inbound scope (direct: $direct)",
+    async ({ action, chatId, direct }) => {
+      cfg.agents = { entries: { main: {} } };
+      cfg.channels!.telegram!.actions = { createForumTopic: true, editForumTopic: true };
+      fixture.responseFor = (method) =>
+        method === "getChat"
+          ? { id: chatId, type: direct ? "private" : "supergroup", is_forum: true }
+          : method === "createForumTopic"
+            ? { message_thread_id: 77, name: "Chosen topic" }
+            : undefined;
+      await expect(
+        invoke(action, { to: "@topic_cache_fixture", threadId: 77, name: "Chosen topic" }),
+      ).resolves.toMatchObject({ details: { ok: true } });
+      const bareScope = resolveStorePath(cfg.session?.store, { agentId: "main" });
+      const directScope = resolveTelegramDirectTopicNameCacheScope(bareScope, "default");
+      expect(await getTopicName(chatId, 77, direct ? directScope : bareScope)).toBe("Chosen topic");
+      if (direct) {
+        // A direct lookup imports legacy bare-path entries, so also prove the
+        // action did not write there. Forum reads never import account scope.
+        expect(await getTopicName(chatId, 77, bareScope)).toBeUndefined();
+      }
+    },
+  );
 
   it.for([
     {
@@ -472,6 +504,16 @@ describe("Telegram registered action authority and input contracts", () => {
     async ({ action, params, error }) => {
       cfg.channels!.telegram!.actions = { sticker: true };
       await expect(invoke(action, params)).rejects.toThrow(error);
+      expect(requests).toEqual([]);
+    },
+  );
+
+  it.each(["__proto__", "constructor", "toString"])(
+    "rejects inherited object keys as action names before network delivery: %s",
+    async (action) => {
+      await expect(handleTelegramAction({ action }, cfg)).rejects.toThrow(
+        `Unsupported Telegram action: ${action}`,
+      );
       expect(requests).toEqual([]);
     },
   );

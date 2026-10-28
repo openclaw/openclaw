@@ -9,6 +9,7 @@ import {
 import * as lifecycleReads from "../../config/sessions/lifecycle-read.js";
 import {
   loadSessionEntry,
+  recordInboundSessionMeta,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { listSessionPendingInputs } from "../../config/sessions/session-accessor.pending-inputs.js";
@@ -17,6 +18,7 @@ import {
   acquireSessionInputActor,
   bindUserTurnInputActor,
 } from "../../config/sessions/session-input-actor.js";
+import { getSessionTitleLifecycleAsync } from "../../plugin-sdk/session-store-runtime-internal.js";
 import {
   releaseSessionControllerClaim,
   retireSessionControllerInput,
@@ -93,6 +95,79 @@ export function registerSessionInitializationAdmissionTests({
     storePath: await makeStorePath(`openclaw-${name}-`, "main"),
     sessionKey,
   });
+  it("initializes a stable naming lifecycle for an inbound-created Telegram topic", async () => {
+    const scope = await makeScope("inbound-topic-lifecycle", "agent:main:main:thread:42001:77");
+    const ctx = {
+      ...telegramTurn(scope.sessionKey, "Plan home lighting", "telegram:42001"),
+      MessageThreadId: "77",
+      ThreadLabel: "New Chat",
+    };
+    const inbound = await recordInboundSessionMeta({ ...scope, ctx });
+    assert(inbound, "Inbound metadata must persist the topic before reply initialization");
+    expect(inbound.lifecycleRevision).toEqual(expect.any(String));
+    const result = await initSessionState({
+      ctx,
+      cfg: { session: { store: scope.storePath, reset: { mode: "idle", idleMinutes: 999 } } },
+    });
+    const lifecycle = await getSessionTitleLifecycleAsync(scope);
+    expect(lifecycle?.sessionId).toBe(inbound.sessionId);
+    expect(lifecycle?.lifecycleRevision).toEqual(expect.any(String));
+    expect(lifecycle?.lifecycleRevision).not.toBe("");
+    expect(result.sessionEntry.lifecycleRevision).toBe(lifecycle?.lifecycleRevision);
+    await initSessionState({
+      ctx: { ...ctx, Body: "/model", RawBody: "/model", CommandBody: "/model" },
+      cfg: { session: { store: scope.storePath, reset: { mode: "idle", idleMinutes: 999 } } },
+    });
+    expect(await getSessionTitleLifecycleAsync(scope)).toEqual(lifecycle);
+  });
+  it.each([
+    { name: "newline", trigger: "/steer", command: "/steer\n", resets: true },
+
+    { name: "non-boundary suffix", trigger: "/steer", command: "/steering ", resets: false },
+
+    { name: "no-argument alias with payload", trigger: "/id", command: "/id ", resets: true },
+  ])(
+    "matches configured reset trigger boundaries with $name",
+    async ({ trigger, command, resets }) => {
+      const storePath = await makeStorePath("openclaw-configured-reset-boundary-");
+      const sessionKey = "agent:main:telegram:dm:reset-boundary";
+      const sessionId = "existing-reset-boundary-session";
+      await writeSessionStoreFast(storePath, {
+        [sessionKey]: {
+          sessionId,
+          lifecycleRevision: "before",
+          updatedAt: Date.now(),
+          systemSent: true,
+        },
+      });
+      const previous = loadSessionEntry({ storePath, sessionKey });
+      assert(previous, "seeded session");
+      const payload = "new task\nkeep this complete instruction";
+      const body = `${command}${payload}`;
+
+      const result = await initSessionState({
+        ctx: {
+          RawBody: body,
+          ChatType: "direct",
+          SessionKey: sessionKey,
+        },
+        cfg: { session: { store: storePath, resetTriggers: [trigger] } },
+        commandAuthorized: true,
+      });
+
+      expect(result.resetTriggered).toBe(resets);
+      expect(result.isNewSession).toBe(resets);
+      expect(result.sessionId).toBe(sessionId);
+      if (resets) {
+        expect(result.sessionEntry.lifecycleRevision).not.toBe(previous.lifecycleRevision);
+        expect(result.bodyStripped).toBe(payload);
+      } else {
+        expect(result.sessionEntry.lifecycleRevision).toBe(previous.lifecycleRevision);
+        expect(result.bodyStripped).toBeUndefined();
+      }
+      expect(result.sessionCtx.agentText).toBe(resets ? payload : body);
+    },
+  );
   const seed = (scope: Scope, sessionId: string, lifecycleRevision: string) =>
     upsertSessionEntryCore(scope, {
       sessionId,

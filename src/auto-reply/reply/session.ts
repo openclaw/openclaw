@@ -35,7 +35,6 @@ import {
 import { sessionEntryForkedFromParent } from "../../config/sessions/session-entry-lineage.js";
 import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
-import { selectSessionModelOverride } from "../../config/sessions/session-entry-selection.js";
 import { normalizeStoreSessionKey } from "../../config/sessions/store-entry.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import { runExclusiveSessionStoreWrite } from "../../config/sessions/store-writer.js";
@@ -149,7 +148,7 @@ import { resolveAuthorizedSessionResetCommand } from "./session-reset-command.js
 import { runReplySessionRolloverMutation } from "./session-rollover-mutation.js";
 import {
   resolveReplySessionFreshness,
-  resolveReplySessionRolloverState,
+  resolveReplySessionPreservedState,
 } from "./session-rollover-state.js";
 import { withoutThreadDelivery } from "./session-route-reset.js";
 
@@ -566,16 +565,16 @@ async function initSessionStateAttemptLocked(
       : (entry?.sessionId ?? crypto.randomUUID()));
   // Explicit and implicit resets preserve user selections; automatic fallback
   // overrides are filtered by resolveResetPreservedSelection.
-  const preservedState: Partial<SessionEntry> | undefined = baseEntry
-    ? selectSessionModelOverride(baseEntry)
-    : entry
-      ? resolveReplySessionRolloverState(entry, sessionKey)
-      : undefined;
+  const preservedState = resolveReplySessionPreservedState({
+    baseEntry,
+    entry,
+    sessionKey,
+    sessionId,
+    resetTrigger: matchedResetTriggerLower,
+  });
   // Repository attachments retain their implicit-only rollover policy.
-  if (isNewSession && !resetTriggered && entry && preservedState) {
-    if (entry.repositoryWorkspaceId) {
-      preservedState.repositoryWorkspaceId = entry.repositoryWorkspaceId;
-    }
+  if (isNewSession && !resetTriggered && entry?.repositoryWorkspaceId && preservedState) {
+    preservedState.repositoryWorkspaceId = entry.repositoryWorkspaceId;
   }
 
   const usageFamilyKey = previousSessionEntry

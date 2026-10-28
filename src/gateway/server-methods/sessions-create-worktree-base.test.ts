@@ -305,6 +305,7 @@ test("sessions.create recovers a failed worktree in the same session with an exp
     await sessionTitleRequests.get({ ...target, sessionId: beforeTitle.sessionId });
     const failed = loadSessionEntry(target)!;
     expect(failed.displayName).toMatch(/^[a-z]+-[a-z]+$/);
+
     expect(failed.updatedAt).toBeGreaterThanOrEqual(beforeTitle.updatedAt);
     expect(failed).toMatchObject({
       status: "failed",

@@ -57,6 +57,37 @@ describe("canonical session numeric metadata", () => {
     expect((entry?.spawnDepth ?? 0) + 1).toBe(3);
   });
 
+  it("retains current naming lifecycle through canonical persistence without adopting retired state", () => {
+    const titleRefinement = {
+      sessionId: "session",
+      generatedName: "Release planning",
+      taskMessagesSinceTitle: 0,
+      refinementDone: false,
+      lifecycleRevision: "reset-2",
+      resetMode: "reset",
+      skipNextMessage: true,
+    };
+    const entry = {
+      sessionId: "session",
+      updatedAt: 1,
+      titleRefinement,
+      extension: { untouched: true },
+    };
+    expect(
+      parseCanonicalSqliteSessionEntry({
+        current_session_id: "session",
+        entry_json: JSON.stringify(entry),
+      }),
+    ).toEqual(entry);
+    expect(admitCanonicalSessionEntry(entry)).toEqual(entry);
+    expect(
+      admitCanonicalSessionEntry({
+        ...entry,
+        titleRefinement: { ...titleRefinement, taskMessagesSinceTitle: -1 },
+      }),
+    ).not.toHaveProperty("titleRefinement");
+  });
+
   it("preserves zero, fractional numeric metadata, and optional field presence", () => {
     const projected = admitCanonicalSessionEntry({
       sessionId: "session",

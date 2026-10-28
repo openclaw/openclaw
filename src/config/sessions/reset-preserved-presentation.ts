@@ -1,7 +1,12 @@
-import type { SessionEntry } from "./types.js";
+import { resetTitleRefinementState } from "../../sessions/session-title-refinement-state.js";
+import type { InternalSessionEntry } from "./types.js";
 
 /** A logical conversation keeps its organization and display choices across reset. */
-export function preserveResetSessionPresentation(entry: SessionEntry | undefined) {
+export function preserveResetSessionPresentation(
+  entry: InternalSessionEntry | undefined,
+  mode: "reset" | "new" = "reset",
+  sessionId = entry?.sessionId ?? "",
+) {
   return {
     label: entry?.label,
     autoLabel: entry?.autoLabel,
@@ -11,6 +16,7 @@ export function preserveResetSessionPresentation(entry: SessionEntry | undefined
     boardPresentation: entry?.boardPresentation,
     visibility: entry?.visibility,
     displayName: entry?.displayName,
+    titleRefinement: resetTitleRefinementState(entry?.titleRefinement, sessionId, mode),
     pinnedAt: entry?.pinnedAt,
     sidebarRoot: entry?.sidebarRoot,
   };

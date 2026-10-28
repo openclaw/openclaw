@@ -740,7 +740,6 @@ extensions/talk-voice/index.ts	1
 extensions/teams-meetings/src/transports/teams-meetings-urls.ts	1
 extensions/telegram/src/account-selection.ts	1
 extensions/telegram/src/account-throttler.ts	2
-extensions/telegram/src/action-runtime.ts	1
 extensions/telegram/src/api-fetch.ts	1
 extensions/telegram/src/approval-handler.runtime.ts	2
 extensions/telegram/src/bot-core.ts	1

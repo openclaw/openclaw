@@ -9,16 +9,26 @@ const WORKTREE_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
  */
 export type NewSessionVisibility = "normal" | "draft" | "incognito";
 export type DraftSessionCreateOverrides = Partial<
-  Pick<SessionCreateParams, "message" | "attachments" | "displayName">
-> & { mentions?: readonly HumanMention[]; visibility?: NewSessionVisibility };
+  Pick<SessionCreateParams, "message" | "attachments" | "displayName" | "displayNameSource">
+> & {
+  mentions?: readonly HumanMention[];
+  visibility?: NewSessionVisibility;
+  preparedTitle?: string;
+};
 export type DraftSessionCreateSelection = Partial<
   Pick<
     SessionCreateParams,
-    "attachments" | "permissionMode" | "catalogId" | "category" | "displayName"
+    | "attachments"
+    | "permissionMode"
+    | "catalogId"
+    | "category"
+    | "displayName"
+    | "displayNameSource"
   >
 > & {
   message: string;
   mentions?: readonly HumanMention[];
+  preparedTitle?: string;
   visibility: NewSessionVisibility;
   toolOverrides?: SessionCreateParams["toolOverrides"] | null;
 };

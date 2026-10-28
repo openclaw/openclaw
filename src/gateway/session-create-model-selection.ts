@@ -38,6 +38,25 @@ import type {
 } from "./session-create-service.types.js";
 import { resolveSessionWorkerPlacementContext } from "./session-worker-placement-context.js";
 
+/** Catalog-created sessions persist model and runtime as one locked selection. */
+export function projectSessionCreateCatalogSelection(
+  model: ModelRef | undefined,
+  agentRuntime: SessionEntry["agentRuntimeOverride"],
+  pluginOwnerId: string | undefined,
+): Partial<SessionEntry> {
+  return model && agentRuntime
+    ? {
+        providerOverride: model.provider,
+        modelOverride: model.model,
+        modelOverrideSource: "user",
+        modelOverrideRouteResolution: "resolved",
+        agentRuntimeOverride: agentRuntime,
+        modelSelectionLocked: true,
+        pluginOwnerId,
+      }
+    : {};
+}
+
 /** Creation and adoption retain the settings mutation owner's native permission guard. */
 export async function prepareSessionCreateRuntimeSelection(params: {
   request: Pick<

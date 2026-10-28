@@ -1821,6 +1821,7 @@ src/sessions/session-key-utils.ts
 src/sessions/session-row-changes.ts
 src/sessions/session-state-events.ambient-read.ts
 src/sessions/session-state-events.prune.ts
+src/sessions/session-title-refinement-state.ts
 src/sessions/session-title-source.ts
 src/sessions/session-upstream-links-publication.ts
 src/sessions/session-upstream-links.kernel.ts

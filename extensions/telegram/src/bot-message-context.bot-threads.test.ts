@@ -113,7 +113,6 @@ describe("Telegram bot-created topic mention policy", () => {
     });
     expect(apiCalls).toHaveBeenCalledWith("getFile", expect.anything());
   });
-
   it.each([
     { name: "omitted", setting: undefined, topic: undefined, otherBot: false, admitted: false },
     { name: "another bot", setting: false, topic: undefined, otherBot: true, admitted: false },

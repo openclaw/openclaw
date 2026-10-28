@@ -26,6 +26,7 @@ export const SESSION_ENTRY_PRIVATE_CLEAR_PATCH = {
   priorWorkspace: undefined,
   sessionDiffBaselineCapture: undefined,
   transcriptByteCompactionLatch: undefined,
+  titleRefinement: undefined,
 } satisfies Partial<InternalSessionEntry>;
 
 const PRIVATE_SESSION_ENTRY_KEYS = [
@@ -45,6 +46,7 @@ const PRIVATE_SESSION_ENTRY_KEYS = [
   "priorWorkspace",
   "sessionDiffBaselineCapture",
   "transcriptByteCompactionLatch",
+  "titleRefinement",
 ] as const satisfies readonly (keyof InternalSessionEntry)[];
 
 function stripPrivateSessionEntryFields(

@@ -50,8 +50,8 @@ type ConversationLabelFallbackParams = ConversationLabelParams & {
   regularModelRef: string;
   preferredProfile?: string;
   normalizeLabel?: (label: string) => string | null;
-  /** Speculative callers use only the utility chain, without regular-model recovery. */
-  utilityOnly?: boolean;
+  /** Speculation excludes primary; refinement permits it only as the utility or when unconfigured. */
+  mode?: "speculative" | "refinement";
 };
 
 function resolvePositiveInteger(value: number | undefined, fallback: number): number {
@@ -283,12 +283,15 @@ export async function generateConversationLabelWithFallback(
       : candidate;
   }
   const utilityAttempts = utilityAttempt ? [utilityAttempt] : [];
+  // Refinement uses the utility chain, including an explicit primary selection.
+  // With no utility configured it uses primary, but never appends primary as
+  // recovery for a failed utility chain. Speculation avoids primary entirely.
+  const regularAllowed =
+    !params.mode || (params.mode === "refinement" && utilityAttempts.length === 0);
   return await runLabelAttempts({
     ...params,
     agentId,
-    // Utility-only callers pre-claim the regular selection so a utility ref that
-    // resolves onto the primary model is skipped instead of spending on it.
-    attempts: params.utilityOnly ? utilityAttempts : [...utilityAttempts, regularAttempt],
-    ...(params.utilityOnly ? { skipAttempts: [regularAttempt] } : {}),
+    attempts: regularAllowed ? [...utilityAttempts, regularAttempt] : utilityAttempts,
+    ...(params.mode === "speculative" ? { skipAttempts: [regularAttempt] } : {}),
   });
 }

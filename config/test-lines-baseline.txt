@@ -3,4 +3,8 @@
 # Add 8,000 bounded lines (~0.127%); this is reserve, not a combined-repair estimate.
 # Counting, branch-delta handling and all test/CI requirements stay unchanged.
 # Future increases require separate justification; no automatic budget growth.
-6310000
+# Telegram/WebUI title lifecycle coverage adds 2,509 lines against frozen d307b217.
+# Its 285-line remaining reserve covers part; add exactly the measured 2,224 deficit.
+# Against upstream 90d6cf56, total grows by 832 to 6,313,056; PR delta stays +2,509.
+# Set the exact synthetic total; no extra reserve or counting exception.
+6313056

@@ -6,6 +6,7 @@ export const databaseWorkerExtensionTestRoots = [
 ];
 
 export const databaseWorkerExtensionTestFiles = [
+  "extensions/telegram/src/bot-message-dispatch.topic-label-implicit.test.ts",
   "extensions/alibaba/video-generation-provider.test.ts",
   "extensions/mcp-events/src/service.test.ts",
   "extensions/codex/src/conversation-binding.test.ts",
@@ -495,6 +496,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/telegram/src/bot.create-telegram-bot.history.test.ts",
   "extensions/telegram/src/bot.create-telegram-bot.test.ts",
   "extensions/telegram/src/bot.media.stickers-and-fragments.test.ts",
+  "extensions/telegram/src/bot-message-dispatch.topic-label-recovery.test.ts",
   "extensions/telegram/src/bot.test.ts",
   "extensions/telegram/src/channel.gateway.test.ts",
   "extensions/telegram/src/message-cache.retained.test.ts",
