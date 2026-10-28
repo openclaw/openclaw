@@ -11,7 +11,6 @@ import {
 } from "./defaults.js";
 import { normalizeExecSafeBinProfilesInConfig } from "./normalize-exec-safe-bin.js";
 import { captureConfigResolutionFactsThroughRewrite } from "./resolution-facts.js";
-import { applySecurityPresetDefaults } from "./security-presets.js";
 import { normalizeTalkConfig } from "./talk.js";
 import type { OpenClawConfig, ResolvedSourceConfig, RuntimeConfig } from "./types.js";
 
@@ -41,7 +40,7 @@ export function materializeRuntimeConfig(
   } = {},
 ): RuntimeConfig {
   const carryResolutionFacts = captureConfigResolutionFactsThroughRewrite(config);
-  let next = applyMessageDefaults(applySecurityPresetDefaults(config));
+  let next = applyMessageDefaults(config);
   next = applySessionDefaults(next);
   next = applyAgentDefaults(next);
   next = applyContextPruningDefaults(next, options);

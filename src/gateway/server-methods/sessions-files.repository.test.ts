@@ -408,77 +408,85 @@ it.each(["reset", "archive", "lifecycle revision"])(
   },
 );
 
-it("keeps stopped inspection limited to verified changed artifacts", async () => {
-  const changedPaths = ["changed.txt", "oversized.txt", "second.txt"];
-  const oversizedBytes = Buffer.alloc(8 * 1024 * 1024 + 1, 97);
-  const base = await capture();
-  writeFile("changed.txt", "retained first\n");
-  writeFile("second.txt", "retained second\n");
-  writeFile("oversized.txt", oversizedBytes);
-  await publishCheckpoint(base, await capture());
-  active = false;
-  const originalGitRead = worktreeGit.runGitBuffered;
-  using hostReads = vi.spyOn(worktreeGit, "runGitBuffered");
-  const list = await files.ok("list");
-  expect(list.browser.entries.map((entry: { path: string }) => entry.path)).toEqual(changedPaths);
-  const retained = await files.ok("get", "second.txt");
-  expect(retained.file.content).toBe("retained second\n");
-  expect(retained.file.hash).toBeUndefined();
-  expect(retained.root).toBeUndefined();
-  const blobsRead = () => hostReads.mock.calls.filter(([, args]) => args[1] === "--batch").length;
-  using connection = createSessionFileDownloadClient();
-  const download = await files.ok("download", "oversized.txt", undefined, connection);
-  const fetched = await connection.fetch(download.url);
-  expect(fetched.response.statusCode).toBe(200);
-  expect(Buffer.from(fetched.body as Uint8Array).equals(oversizedBytes)).toBe(true);
-  await files.error("download", "README", undefined, connection);
-  await files.error("download", "../changed.txt", undefined, connection);
-  const beforeOversized = blobsRead();
-  expect(beforeOversized).toBeGreaterThan(0);
-  expect(await files.error("get", "oversized.txt")).toEqual({
-    code: "INVALID_REQUEST",
-    message: "session file is too large to preview",
-    details: {
-      type: "session_file_too_large",
-      path: "oversized.txt",
-      maxPreviewBytes: WORKSPACE_PREVIEW_MAX_BYTES,
-      size: oversizedBytes.length,
-    },
-  });
-  expect(blobsRead()).toBe(beforeOversized);
-  await expect(files.request("get", "README")).rejects.toThrow("not a retained changed artifact");
-  const diff = await loadSessionDiff({ sessionKey }, context as never);
-  expect(diff.unavailableReason).toBe("workspace_stopped");
-  expect(diff.files.map((file) => file.path)).toEqual(changedPaths);
-  expect(run).not.toHaveBeenCalled();
-  expect(mocks.workspace).not.toHaveBeenCalled();
+it.each(["second-München.txt", "second-Mu\u0308nchen.txt"])(
+  "keeps stopped inspection limited to verified changed artifacts (%s)",
+  async (storedName) => {
+    const changedPaths = ["changed.txt", "oversized.txt", storedName];
+    const oversizedBytes = Buffer.alloc(8 * 1024 * 1024 + 1, 97);
+    const base = await capture();
+    writeFile("changed.txt", "retained first\n");
+    writeFile(storedName, "retained second\n");
+    writeFile("oversized.txt", oversizedBytes);
+    await publishCheckpoint(base, await capture());
+    active = false;
+    const originalGitRead = worktreeGit.runGitBuffered;
+    using hostReads = vi.spyOn(worktreeGit, "runGitBuffered");
+    const list = await files.ok("list");
+    expect(list.browser.entries.map((entry: { path: string }) => entry.path)).toEqual(changedPaths);
+    const search = storedName.normalize(storedName === storedName.normalize("NFC") ? "NFD" : "NFC");
+    const found = await files.ok("list", { search });
+    expect(found.browser.entries.map((entry: { path: string }) => entry.path)).toEqual([
+      storedName,
+    ]);
+    const retained = await files.ok("get", storedName);
+    expect(retained.file.content).toBe("retained second\n");
+    expect(retained.file.hash).toBeUndefined();
+    expect(retained.root).toBeUndefined();
+    const blobsRead = () => hostReads.mock.calls.filter(([, args]) => args[1] === "--batch").length;
+    using connection = createSessionFileDownloadClient();
+    const download = await files.ok("download", "oversized.txt", undefined, connection);
+    const fetched = await connection.fetch(download.url);
+    expect(fetched.response.statusCode).toBe(200);
+    expect(Buffer.from(fetched.body as Uint8Array).equals(oversizedBytes)).toBe(true);
+    await files.error("download", "README", undefined, connection);
+    await files.error("download", "../changed.txt", undefined, connection);
+    const beforeOversized = blobsRead();
+    expect(beforeOversized).toBeGreaterThan(0);
+    expect(await files.error("get", "oversized.txt")).toEqual({
+      code: "INVALID_REQUEST",
+      message: "session file is too large to preview",
+      details: {
+        type: "session_file_too_large",
+        path: "oversized.txt",
+        maxPreviewBytes: WORKSPACE_PREVIEW_MAX_BYTES,
+        size: oversizedBytes.length,
+      },
+    });
+    expect(blobsRead()).toBe(beforeOversized);
+    await expect(files.request("get", "README")).rejects.toThrow("not a retained changed artifact");
+    const diff = await loadSessionDiff({ sessionKey }, context as never);
+    expect(diff.unavailableReason).toBe("workspace_stopped");
+    expect(diff.files.map((file) => file.path)).toEqual(changedPaths);
+    expect(run).not.toHaveBeenCalled();
+    expect(mocks.workspace).not.toHaveBeenCalled();
 
-  hostReads.mockImplementation(async (...args) => {
-    const result = await originalGitRead(...args);
-    if (args[1][1] !== "--batch") {
+    hostReads.mockImplementation(async (...args) => {
+      const result = await originalGitRead(...args);
+      if (args[1][1] !== "--batch") {
+        return result;
+      }
+      const stdout = Buffer.from(result.stdout);
+      const contentStart = stdout.indexOf(0x0a) + 1;
+      stdout[contentStart] = stdout[contentStart]! ^ 0xff;
+      return { ...result, stdout };
+    });
+    await expect(files.request("get", storedName)).rejects.toThrow(
+      "staged result payload is invalid",
+    );
+    hostReads.mockImplementation(async (...args) => {
+      const result = await originalGitRead(...args);
+      if (args[1][1] === "--batch") {
+        lifecycleRevision = `${lifecycleRevision}-next`;
+        await persistSessionEntry();
+      }
       return result;
-    }
-    const stdout = Buffer.from(result.stdout);
-    const contentStart = stdout.indexOf(0x0a) + 1;
-    stdout[contentStart] = stdout[contentStart]! ^ 0xff;
-    return { ...result, stdout };
-  });
-  await expect(files.request("get", "second.txt")).rejects.toThrow(
-    "staged result payload is invalid",
-  );
-  hostReads.mockImplementation(async (...args) => {
-    const result = await originalGitRead(...args);
-    if (args[1][1] === "--batch") {
-      lifecycleRevision = `${lifecycleRevision}-next`;
-      await persistSessionEntry();
-    }
-    return result;
-  });
-  expect(await files.error("get", "second.txt")).toEqual({
-    code: "FORBIDDEN",
-    message: "Session workspace changed during file access",
-  });
-});
+    });
+    expect(await files.error("get", storedName)).toEqual({
+      code: "FORBIDDEN",
+      message: "Session workspace changed during file access",
+    });
+  },
+);
 
 it.each(["symlink", "hardlink"])(
   "does not expose an outside %s through remote preview or diff",

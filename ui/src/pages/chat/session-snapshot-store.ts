@@ -170,7 +170,7 @@ const metadataFields = {
 };
 const metadataSchema = json.object({ ...metadataFields, weight: nonnegative }, true);
 type SessionSnapshotMetadata = json.SnapshotValue<typeof metadataSchema>;
-type PreparedSnapshotRecord = NonNullable<ReturnType<typeof createSnapshotRecord>>;
+type PreparedSnapshotRecord = NonNullable<Awaited<ReturnType<typeof createSnapshotRecord>>>;
 type PendingSessionState = {
   savedAt: number;
   snapshot: ChatSessionSnapshot;
@@ -556,7 +556,7 @@ export class SessionSnapshotStore implements ChatCacheObserver {
         let weight = 0;
         for (const [sessionKey, state] of pending) {
           pending.delete(sessionKey);
-          const record = createSnapshotRecord(sessionKey, state);
+          const record = await createSnapshotRecord(sessionKey, state);
           if (!record) {
             // Rejection publishes invalidation, which awaits accepted DB writes.
             // Keep it outside writeChain so a connected store cannot await itself.
@@ -622,6 +622,12 @@ export class SessionSnapshotStore implements ChatCacheObserver {
   }
 
   async whenIdle(): Promise<void> {
+    await this.draining;
+    await this.whenWritesIdle();
+  }
+
+  // Invalidation can run during preparation, so it waits only for admitted writes.
+  async whenWritesIdle(): Promise<void> {
     let accepted: Promise<void>;
     do {
       accepted = this.writeChain;
@@ -693,7 +699,7 @@ subscribeSnapshotInvalidation(async (invalidation) => {
       store.clearMemory();
     }
   }
-  await Promise.all([...activeStores].map((store) => store.whenIdle()));
+  await Promise.all([...activeStores].map((store) => store.whenWritesIdle()));
 });
 
 function flushActiveStores(): void {

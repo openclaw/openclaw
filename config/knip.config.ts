@@ -889,10 +889,12 @@ const repositoryScriptEntries = [
   "scripts/perf/connect-tail-measure.ts!",
   "scripts/perf/device-token-snapshot-measure.ts!",
   "scripts/perf/paired-row-encoding-measure.ts!",
+  "scripts/perf/patch-file-read-measure.ts!",
   "scripts/perf/session-patch-projection-measure.ts!",
   "scripts/perf/session-actor-writer-append-measure.ts!",
   "scripts/perf/session-cost-usage-cold-read.ts!",
   "scripts/perf/worker-warm-floor-measure.mjs!",
+  "scripts/perf/workspace-root-measure.ts!",
   "scripts/perf/worktree-branches-measure.ts!",
   // connect-tail-measure.ts loads this diagnostics preload through --gateway-preload.
   "scripts/perf/connect-tail-preload.mjs!",
@@ -1014,6 +1016,8 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/upgrade-survivor/missing-configured-plugin-migration.mjs!",
   // run.sh starts this persistent native peer as a separate process.
   "scripts/e2e/lib/upgrade-survivor/native-assignment-app-server.mjs!",
+  // native-plugin-ui.sh invokes fixture creation and packaged upgrade probes through Node.
+  "scripts/e2e/lib/upgrade-survivor/native-plugin-ui.mjs!",
   // package-activation-recovery.sh preloads this observer into the released updater.
   "scripts/e2e/lib/upgrade-survivor/package-activation-fault.mjs!",
   // run.sh preloads this fixture adapter through NODE_OPTIONS by path.
@@ -1156,8 +1160,8 @@ const repositoryScriptEntries = [
   "scripts/write-unified-entry-dts.ts!",
   "security/opengrep/check-rule-metadata.mjs!",
   "security/opengrep/compile-rules.mjs!",
-  // create-claw/SKILL.md invokes this CLI bridge for skills and plugin inventory.
-  "skills/create-claw/scripts/cli.mjs!",
+  // create-template/SKILL.md invokes this CLI bridge for skills and plugin inventory.
+  "skills/create-template/scripts/cli.mjs!",
   "skills/meme-maker/scripts/meme.mjs!",
 ] as const;
 

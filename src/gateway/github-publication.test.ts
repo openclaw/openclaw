@@ -26,6 +26,7 @@ import {
   WORKSPACE_TREE,
   commandCalls,
   commandResult,
+  overrideCommands as overrideSharedCommands,
   commands,
   createSystemGitHubPublicationRequesterFixture,
   createTestGitHubPublicationCoordinator as createGitHubPublicationCoordinator,
@@ -80,14 +81,13 @@ function overrideCommands(
   ) => ReturnType<typeof commandResult> | undefined,
   record = false,
 ) {
-  const fallback = mocks.runCommand.getMockImplementation()!;
-  mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
-    const result = reply(argv.join(" "), argv, options?.input);
+  overrideSharedCommands((argv, input) => {
+    const result = reply(argv.join(" "), argv, input);
     if (result && record) {
       commands.push(argv);
-      commandCalls.push({ argv, input: options?.input });
+      commandCalls.push({ argv, input });
     }
-    return result ?? (await fallback(argv, options));
+    return result;
   });
 }
 

@@ -68,7 +68,7 @@ const readBindingApprovals = {
 } as const;
 
 const readProvenance = {
-  type: "claws.install-schema-versions",
+  type: "templates.install-schema-versions",
   input: { artifactPreservingReadOnly: true },
 } as const;
 const readApprovals = (captured: ReturnType<typeof context>) =>

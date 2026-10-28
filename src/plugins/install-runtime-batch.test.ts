@@ -3,7 +3,6 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { runClawPluginBatch } from "../claws/plugin-runtime.js";
 import * as configIO from "../config/io.factory.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import {
@@ -14,6 +13,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import * as leaseAcquisition from "../state/openclaw-state-lease-acquisition.js";
+import { runTemplatePluginBatch } from "../templates/plugin-runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { observeMainThreadReads } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { commitPluginInstallRecordsWithConfig } from "./install-record-commit.js";
@@ -337,7 +337,7 @@ it("refuses publication when authority is revoked during the real index read", a
 it("holds the original batch lease until preparation settles before calling the runtime", async () => {
   const { env, reload } = await preparationFixture();
   const gate = holdIndexRead();
-  const operation = runClawPluginBatch(
+  const operation = runTemplatePluginBatch(
     {
       env,
       reloadPlugins: reload,

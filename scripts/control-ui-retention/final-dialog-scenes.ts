@@ -274,7 +274,7 @@ const clawReview = {
   ],
   scope: clawScope,
 };
-const clawConfig = { gateway: { controlUi: { experimental: { claws: true } } } };
+const clawConfig = { gateway: { controlUi: { experimental: { templates: true } } } };
 
 async function openCardDetails(page: Page) {
   const target = page.locator(".workboard-card").filter({ hasText: card.title });
@@ -283,7 +283,7 @@ async function openCardDetails(page: Page) {
 }
 
 // Production recipes: pages/plugins/{plugin-skills,plugin-overview,plugins-runtime},
-// pages/claws/creator-review, e2e/device-token-reconnect, pages/workboard/workboard.
+// pages/templates/creator-review, e2e/device-token-reconnect, pages/workboard/workboard.
 // Pairing, Goal, and memory fixtures follow their scoped owner tests and real UI actions.
 export const finalDialogScenes: Scene[] = [
   {
@@ -350,29 +350,29 @@ export const finalDialogScenes: Scene[] = [
   {
     ...chat,
     id: "dialog-claw-review",
-    label: "Claw creator package review",
+    label: "Template creator package review",
     scenario: {
       featureMethods: [
         ...baseScenario.featureMethods!,
-        "claws.drafts.create",
-        "claws.drafts.read",
-        "claws.drafts.review",
-        "claws.drafts.publish",
+        "templates.drafts.create",
+        "templates.drafts.read",
+        "templates.drafts.review",
+        "templates.drafts.publish",
       ],
       methodResponses: {
         "config.get": {
           config: clawConfig,
           sourceConfig: clawConfig,
           raw: JSON.stringify(clawConfig),
-          hash: "claws-review-config",
+          hash: "templates-review-config",
           valid: true,
           issues: [],
         },
-        "claws.drafts.read": {
+        "templates.drafts.read": {
           content: JSON.stringify({ name: "release-brief", scope: clawScope }),
           revision: clawReview.revision,
         },
-        "claws.drafts.review": clawReview,
+        "templates.drafts.review": clawReview,
       },
     },
     prepare: async (page) => {
@@ -380,14 +380,14 @@ export const finalDialogScenes: Scene[] = [
       // so the outer census does not wait for a route that intentionally redirects.
       await page.evaluate(
         (id) =>
-          window.openclawControlUi!.navigate("claws", {
-            pathname: "/claws",
+          window.openclawControlUi!.navigate("templates", {
+            pathname: "/templates",
             search: `?draft=${id}&agent=main`,
             hash: "",
           }),
         draftId,
       );
-      const dialog = page.getByRole("dialog", { name: "Review your Claw", exact: true });
+      const dialog = page.getByRole("dialog", { name: "Review your Template", exact: true });
       await dialog.waitFor();
       await expect
         .poll(() => dialog.getByLabel("Name", { exact: true }).inputValue())

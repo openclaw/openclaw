@@ -43,7 +43,7 @@ export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
     }
     const projection = requireSessionRowProjection(context);
     const queries = (cfg: Parameters<typeof resolveRequestedSessionAgentId>[0]) => {
-      const agent = resolveRequestedSessionAgentId(cfg, key, params.agentId);
+      const agent = resolveRequestedSessionAgentId(cfg, key, params.agentId, "read");
       const denied = authorizeIncognitoSessionTarget({
         client: client ?? null,
         sessionKey: key,
@@ -53,7 +53,12 @@ export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
     };
     const selected = await withReadySessionRows(projection, queries, (read) => {
       sessionMutationAuthorization?.assertCurrent();
-      const requestedAgent = resolveRequestedSessionAgentId(read.state.cfg, key, params.agentId);
+      const requestedAgent = resolveRequestedSessionAgentId(
+        read.state.cfg,
+        key,
+        params.agentId,
+        "read",
+      );
       if (!requestedAgent.ok) {
         respond(false, undefined, requestedAgent.error);
         return undefined;
@@ -222,6 +227,7 @@ export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
         context.getRuntimeConfig(),
         key,
         normalizeOptionalString(p.agentId),
+        "read",
       );
     const queries = () => {
       const requested = requestedAgent();

@@ -160,6 +160,16 @@ export function isDirectSessionReadMethod(method: string): boolean {
   return DIRECT_SESSION_READ_METHODS.has(method);
 }
 
+/** Read admission is separate from whether direct keys wholly bound authorization. */
+export function sessionMethodDatabaseAdmission(method: string): "read" | "write" {
+  return isDirectSessionReadMethod(method) ||
+    method === "sessions.messages.subscribe" ||
+    method === "sessions.resolve" ||
+    method === "chat.metadata"
+    ? "read"
+    : "write";
+}
+
 export function sessionMutationTargetFields(method: string): readonly SessionMutationTargetField[] {
   const policy = SESSION_TARGET_POLICY_BY_METHOD.get(method);
   return policy?.readOnly ? [] : (policy?.fields ?? []);

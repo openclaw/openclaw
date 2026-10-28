@@ -476,7 +476,12 @@ export async function forkSession(
     agentId,
   };
   if (
-    !requireSessionMutationAccess(deps, scope, { method: "sessions.create", params: createParams })
+    !requireSessionMutationAccess(deps, scope, {
+      method: "sessions.create",
+      params: createParams,
+      sessionScope: true,
+      session,
+    })
   ) {
     return;
   }

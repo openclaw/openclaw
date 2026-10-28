@@ -68,6 +68,7 @@ export async function resolveChatMetadataReadParams(
       cfg,
       params.sessionKey,
       normalizeOptionalString(params.agentId),
+      "read",
     );
     if (!requested.ok) {
       respond(false, undefined, requested.error);

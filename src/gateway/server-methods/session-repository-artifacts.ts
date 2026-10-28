@@ -72,10 +72,14 @@ export async function listRepositoryArtifacts(
     return { gitCheckout: true, files };
   }
   const entries = new Map<string, SessionFileBrowserEntry>();
-  const query = request.search?.trim().toLowerCase();
+  const query = request.search?.trim().toLowerCase().normalize("NFC");
   const prefix = folder ? `${folder}/` : "";
   for (const [filePath, entry] of changed) {
-    if (query ? !filePath.toLowerCase().includes(query) : !filePath.startsWith(prefix)) {
+    if (
+      query
+        ? !filePath.toLowerCase().normalize("NFC").includes(query)
+        : !filePath.startsWith(prefix)
+    ) {
       continue;
     }
     const remainder = filePath.slice(prefix.length);

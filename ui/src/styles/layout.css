@@ -540,8 +540,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   width: 68%;
 }
 
-.settings-sidebar__group,
-.sidebar-online__list {
+.settings-sidebar__group {
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -2038,9 +2037,22 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   }
 }
 
+/* Share the counter track so missing or shorter counts never move person actions. */
+.sidebar-online__list {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) 24px max-content;
+  align-content: start;
+  gap: 2px 8px;
+}
+
+.sidebar-online__list > .sidebar-session-empty-hint {
+  grid-column: 1 / -1;
+}
+
 .sidebar-online__row {
   display: grid;
-  grid-template-columns: 20px minmax(0, 1fr) auto;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
   align-items: center;
   column-gap: 8px;
   min-width: 0;
@@ -2048,9 +2060,8 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   border-radius: var(--radius-md);
 }
 
-/* The menu shares the name track, not a permanently reserved action column. */
 .sidebar-online__menu {
-  grid-area: 1 / 2;
+  grid-area: 1 / 3;
   justify-self: end;
   z-index: 1;
   opacity: 0;
@@ -2063,11 +2074,6 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   pointer-events: auto;
 }
 
-.sidebar-online__row:is(:hover, :focus-within):has(.sidebar-online__menu)
-  .sidebar-online__person-name {
-  padding-inline-end: 28px;
-}
-
 .sidebar-online__menu-trigger.oc-menu-trigger {
   display: grid;
   place-items: center;
@@ -2077,8 +2083,12 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   padding: 0;
   border: 0;
   border-radius: var(--radius-sm);
-  background: var(--bg-hover);
+  background: transparent;
   color: var(--muted);
+}
+
+.sidebar-online__menu-trigger.oc-menu-trigger:is(:hover, :focus-visible, [aria-expanded="true"]) {
+  background: var(--bg-hover);
 }
 
 .sidebar-online__menu-trigger svg {
@@ -2104,13 +2114,17 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
     pointer-events: auto;
   }
 
-  .sidebar-online__row:has(.sidebar-online__menu) .sidebar-online__person-name {
-    padding-inline-end: 36px;
+  .sidebar-online__list {
+    grid-template-columns: max-content minmax(0, 1fr) 32px max-content;
   }
 
   .sidebar-online__menu-trigger.oc-menu-trigger {
     width: 32px;
     height: 40px;
+  }
+
+  .sidebar-online__menu-trigger svg {
+    display: block;
   }
 }
 
@@ -2150,6 +2164,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 
 .sidebar-online__avatar {
   position: relative;
+  grid-column: 1;
   align-self: center;
   display: flex;
   align-items: center;
@@ -2186,6 +2201,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 
 .sidebar-online__person-name {
   display: block;
+  grid-column: 2;
   min-width: 0;
   overflow: hidden;
   color: var(--text-strong);
@@ -2203,6 +2219,8 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 /* Keep the group intrinsic and right-anchored; hover changes paint, not spacing. */
 .sidebar-online__counts {
   display: inline-flex;
+  grid-column: 4;
+  justify-self: end;
   align-items: baseline;
   gap: 10px;
   padding: 0 6px;
@@ -2272,6 +2290,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 
 @media (hover: none), (pointer: coarse) {
   .sidebar-online__person {
+    align-items: center;
     min-height: 44px;
   }
 }

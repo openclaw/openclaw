@@ -52,7 +52,7 @@ describe("prepared core tool policy", () => {
       }),
     ).toMatchObject({
       applyPatchEnabled,
-      applyPatchWorkspaceOnly: true,
+      applyPatchWorkspaceOnly: false,
       imageSanitization: { maxDimensionPx: 800 },
       modelContextWindowTokens: 32000,
       modelHasVision: false,
