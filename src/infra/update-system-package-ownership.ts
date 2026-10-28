@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { isUtf8 } from "node:buffer";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -78,15 +79,25 @@ export type SystemPackageOwnershipInspection = ReturnType<
   typeof createSystemPackageOwnershipInspection
 >;
 
-// Share unavailable backends across update phases, but refresh successful
-// inventories before effects so newly package-owned files remain protected.
-const packageQueries = new Map<string, Promise<string[] | null>>();
-const warnedQueries = new WeakSet<Promise<string[] | null>>();
+const ownershipRuns = new AsyncLocalStorage<{
+  packageQueries: Map<string, Promise<string[] | null>>;
+  warnedQueries: WeakSet<Promise<string[] | null>>;
+}>();
+
+/** Share unavailable backends only until this update operation settles. */
+export function withSystemPackageOwnershipRun<T>(run: () => Promise<T>): Promise<T> {
+  return ownershipRuns.run({ packageQueries: new Map(), warnedQueries: new WeakSet() }, run);
+}
 
 function readPackageFiles(
   owner: NonNullable<ReturnType<typeof packageOwner>>,
   timeoutMs: number,
+  run: ReturnType<typeof ownershipRuns.getStore>,
 ): Promise<string[] | null> {
+  if (!run) {
+    return queryPackageFiles(owner, timeoutMs);
+  }
+  const { packageQueries } = run;
   const key = JSON.stringify([owner.manager, process.env.PATH]);
   return getOrCreatePromise(packageQueries, key, async () => {
     const files = await queryPackageFiles(owner, timeoutMs);
@@ -142,6 +153,7 @@ export function createSystemPackageOwnershipInspection(
     onWarning?: (message: string) => void;
   } = {},
 ) {
+  const run = ownershipRuns.getStore();
   const owner = packageOwner();
   let files: Promise<string[] | null> | undefined;
   let unavailable = false;
@@ -210,7 +222,7 @@ export function createSystemPackageOwnershipInspection(
     const inventory = await read(
       "database",
       `${owner.manager} query`,
-      () => (files ??= readPackageFiles(owner, budget)),
+      () => (files ??= readPackageFiles(owner, budget, run)),
     );
     if (inventory === null) {
       return;
@@ -255,11 +267,11 @@ export function createSystemPackageOwnershipInspection(
         return;
       }
       unavailable = true;
-      if (files && warnedQueries.has(files)) {
+      if (files && run?.warnedQueries.has(files)) {
         return;
       }
       if (files) {
-        warnedQueries.add(files);
+        run?.warnedQueries.add(files);
       }
       const warn = options.onWarning ?? ((message: string) => log.warn(message));
       warn(`${error.message} Continuing without verified system-package ownership.`);

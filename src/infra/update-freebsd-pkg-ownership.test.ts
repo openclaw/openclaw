@@ -6,17 +6,15 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as exec from "../process/exec.js";
 import { pkgQueryResult as result } from "./update-freebsd-pkg-ownership.test-support.js";
 import { UpdatePreMutationError } from "./update-pre-mutation-error.js";
-import { createSystemPackageOwnershipInspection } from "./update-system-package-ownership.js";
+import {
+  createSystemPackageOwnershipInspection,
+  withSystemPackageOwnershipRun as runUpdate,
+} from "./update-system-package-ownership.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
-let inspectionId = 0;
-beforeEach(() => {
-  vi.spyOn(process, "platform", "get").mockReturnValue("freebsd");
-  vi.stubEnv("PATH", `${process.env.PATH}${path.delimiter}/fixture/inspection-${++inspectionId}`);
-});
+beforeEach(() => vi.spyOn(process, "platform", "get").mockReturnValue("freebsd"));
 afterEach(() => {
   vi.restoreAllMocks();
-  vi.unstubAllEnvs();
   vi.useRealTimers();
 });
 function fixture(inventory = "", timeout = 100) {
@@ -56,13 +54,19 @@ it.each(["ENOENT", "EACCES", "timeout"])("reuses %s failures", async (code) => {
       }),
     );
     const inspect = () => createSystemPackageOwnershipInspection(100, { onWarning });
-    await Promise.all(Array.from({ length: 5 }, () => inspect().assertUnowned("/fixture/root")));
-    await inspect().assertEntryUnowned("/fixture/later");
+    const phase = () => inspect().assertUnowned("/fixture/root");
+    await runUpdate(async () => {
+      await Promise.all(Array.from({ length: 5 }, phase));
+      await inspect().assertEntryUnowned("/fixture/later");
+    });
     expect(query).toHaveBeenCalledOnce();
     expect(onWarning).toHaveBeenCalledTimes(code === "ENOENT" ? 0 : 1);
     if (code !== "ENOENT") {
       expectWarning(onWarning, "Continuing without verified system-package ownership");
     }
+    query.mockResolvedValue(result("/fixture/root/package.json\n"));
+    await expect(runUpdate(phase)).rejects.toMatchObject({ owned: true });
+    expect(query).toHaveBeenCalledTimes(2);
   }
 });
 it("retains the pre-mutation error contract for a positive linux owner", async () => {
@@ -77,38 +81,35 @@ it("retains the pre-mutation error contract for a positive linux owner", async (
   });
   expect(onWarning).not.toHaveBeenCalled();
 });
-it.each(["directory", "file", "root"] as const)(
-  "resolves package ownership through a %s alias",
-  async (kind) => {
-    const base = dirs.make("pkg-alias-");
-    const root = path.join(base, "root");
-    const alias = path.join(base, "alias");
-    await fs.mkdir(root, { recursive: true });
-    let candidate = root;
-    let registered: string;
-    if (kind === "directory") {
-      await fs.symlink(root, alias, "dir");
-      registered = path.join(alias, "package.json");
-    } else if (kind === "file") {
-      await fs.writeFile(path.join(root, "openclaw.mjs"), "fixture");
-      await fs.symlink(path.join(root, "openclaw.mjs"), alias);
-      registered = alias;
-    } else {
-      const indirect = path.join(base, "indirect");
-      await fs.mkdir(indirect);
-      await fs.symlink(root, path.join(indirect, "openclaw"), "dir");
-      await fs.symlink(indirect, alias, "dir");
-      candidate = path.join(alias, "openclaw");
-      registered = path.join(indirect, "openclaw");
-    }
-    const pending = fixture(registered + "\n", 1000).inspect(candidate);
-    if (kind === "file") {
-      await pending;
-    } else {
-      await expect(pending).rejects.toMatchObject({ reason: "pkg-owned-install" });
-    }
-  },
-);
+it.each(["directory", "file", "root"] as const)("resolves %s ownership aliases", async (kind) => {
+  const base = dirs.make("pkg-alias-");
+  const root = path.join(base, "root");
+  const alias = path.join(base, "alias");
+  await fs.mkdir(root, { recursive: true });
+  let candidate = root;
+  let registered: string;
+  if (kind === "directory") {
+    await fs.symlink(root, alias, "dir");
+    registered = path.join(alias, "package.json");
+  } else if (kind === "file") {
+    await fs.writeFile(path.join(root, "openclaw.mjs"), "fixture");
+    await fs.symlink(path.join(root, "openclaw.mjs"), alias);
+    registered = alias;
+  } else {
+    const indirect = path.join(base, "indirect");
+    await fs.mkdir(indirect);
+    await fs.symlink(root, path.join(indirect, "openclaw"), "dir");
+    await fs.symlink(indirect, alias, "dir");
+    candidate = path.join(alias, "openclaw");
+    registered = path.join(indirect, "openclaw");
+  }
+  const pending = fixture(registered + "\n", 1000).inspect(candidate);
+  if (kind === "file") {
+    await pending;
+  } else {
+    await expect(pending).rejects.toMatchObject({ reason: "pkg-owned-install" });
+  }
+});
 it("warns after lstat failure without private details", async () => {
   const { inspect, onWarning } = fixture("/registered/file\n");
   vi.spyOn(fs, "lstat").mockRejectedValue(
@@ -131,41 +132,40 @@ it("does not continue an ancestor walk or reset the snapshot after a late ENOENT
   expectWarning(onWarning, "exhausted its shared 100 ms budget");
   expect([query, lookup, canonical].map((spy) => spy.mock.calls.length)).toEqual([1, 1, 0]);
 });
-it.each(["query", "path"] as const)(
-  "warns when %s work synchronously consumes the deadline",
-  async (stage) => {
-    const { inspect, query, onWarning } = fixture();
-    const now = Date.now();
-    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
-    query.mockImplementation(async () => {
-      if (stage === "query") {
-        clock.mockReturnValue(now + 101);
-      }
-      return result();
-    });
-    const lookup = vi.spyOn(fs, "lstat").mockImplementation(async () => {
+it.each(["query", "path"] as const)("warns after the synchronous %s deadline", async (stage) => {
+  const { inspect, query, onWarning } = fixture();
+  const now = Date.now();
+  const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+  query.mockImplementation(async () => {
+    if (stage === "query") {
       clock.mockReturnValue(now + 101);
-      throw Object.assign(new Error("missing"), { code: "ENOENT" });
-    });
-    const canonical = vi.spyOn(fs, "realpath");
-    await inspectTwice(inspect);
-    expectWarning(onWarning, "exhausted its shared 100 ms budget");
-    // Observe any rejection orphaned by deadline admission.
-    await nextEventLoopTurn();
-    expect([query, lookup, canonical].map((spy) => spy.mock.calls.length)).toEqual([
-      1,
-      stage === "query" ? 0 : 1,
-      0,
-    ]);
-  },
-);
+    }
+    return result();
+  });
+  const lookup = vi.spyOn(fs, "lstat").mockImplementation(async () => {
+    clock.mockReturnValue(now + 101);
+    throw Object.assign(new Error("missing"), { code: "ENOENT" });
+  });
+  const canonical = vi.spyOn(fs, "realpath");
+  await inspectTwice(inspect);
+  expectWarning(onWarning, "exhausted its shared 100 ms budget");
+  // Observe any rejection orphaned by deadline admission.
+  await nextEventLoopTurn();
+  expect([query, lookup, canonical].map((spy) => spy.mock.calls.length)).toEqual([
+    1,
+    stage === "query" ? 0 : 1,
+    0,
+  ]);
+});
 it("caps the inspection independently of a long installation timeout", async () => {
   const { query, onWarning } = fixture("", 20 * 60_000);
   query.mockImplementation(() => new Promise<never>(() => {}));
   vi.useFakeTimers();
   const inspect = () => createSystemPackageOwnershipInspection(20 * 60_000, { onWarning });
-  const pending = Array.from({ length: 5 }, () => inspect().assertUnowned("/fixture/root"));
-  await Promise.all([...pending, vi.advanceTimersByTimeAsync(30_000)]);
+  await runUpdate(async () => {
+    const pending = Array.from({ length: 5 }, () => inspect().assertUnowned("/fixture/root"));
+    await Promise.all([...pending, vi.advanceTimersByTimeAsync(30_000)]);
+  });
   expectWarning(onWarning, "exhausted its shared 30000 ms budget during pkg query");
   expect(query.mock.calls[0]?.[1]?.timeoutMs).toBe(30_000);
 });

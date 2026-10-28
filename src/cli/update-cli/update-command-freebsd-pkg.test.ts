@@ -65,7 +65,6 @@ async function withPackageRoots(
     await withEnvAsync(
       {
         HOME: base,
-        PATH: `${process.env.PATH}${path.delimiter}${base}`,
         OPENCLAW_HOME: undefined,
         OPENCLAW_PROFILE: undefined,
         OPENCLAW_STATE_DIR: undefined,

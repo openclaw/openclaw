@@ -47,7 +47,8 @@ backup.
 
 System-package ownership inspection treats missing package-manager executables as
 inapplicable without warning. Unavailable backend results are reused across update
-phases in the same process and command search path; other query failures warn once.
+phases of one update run and command search path; other query failures warn once
+per run. The next update always probes again, including in a long-lived Gateway.
 Successful inventories stay fresh before installation effects to protect files
 claimed by a system package manager. This behavior requires the updated updater.
 
