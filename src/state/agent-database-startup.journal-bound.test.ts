@@ -192,6 +192,25 @@ it.each(["openAgent", "migrateAgent"] as const)(
   },
 );
 
+it("recovers a lock that only carries the state write diagnostic", async () => {
+  // The state write path reports contention as a generic error code and keeps
+  // the SQLite result code in the message, so no structured property marks it.
+  const run = vi
+    .fn()
+    .mockRejectedValueOnce(
+      Object.assign(
+        new Error(
+          "SQLite transaction lock wait failed async=false busyTimeoutMs=0 database=/state/openclaw.sqlite operation=state.write code=ERR_SQLITE_ERROR elapsedMs=0 failureKind=lock-contention sqliteErrcode=5 step=begin",
+        ),
+        { code: "ERR_SQLITE_ERROR" },
+      ),
+    )
+    .mockResolvedValue(undefined);
+  await prepareAgents(1, { migrateAgent: run });
+  expectAdmission(["agent-0"], [], 3);
+  expect(run).toHaveBeenCalledTimes(2);
+});
+
 it.each(["deletion", "replacement"] as const)(
   "refuses %s before retrying a locked migration",
   async (change) => {

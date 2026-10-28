@@ -3,11 +3,13 @@ import path from "node:path";
 import { afterEach, aroundEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import * as sessionStores from "../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as workerRequests from "../infra/worker-request-diagnostics.js";
 import {
+  AgentDatabaseAdmissionError,
   createAgentDatabaseInspectionRefusal,
   preparePendingAgentDatabase,
   recordAgentDatabaseAdmissions,
@@ -230,6 +232,42 @@ describe("runSessionRegistryMaintenance", () => {
       expect(loadSessionEntry(main)).toBeDefined();
     },
   );
+
+  it("keeps maintaining the other stores when one agent store is refused", async () => {
+    await configure({
+      agents: { ownership: "explicit", entries: { failing: {}, healthy: {} } },
+    });
+    const healthy = await writeStaleCronSession("healthy");
+    const failing = await writeStaleCronSession("failing");
+    const maintainStore = sessionStores.runSessionRegistryMaintenanceForStore;
+    vi.spyOn(sessionStores, "runSessionRegistryMaintenanceForStore").mockImplementation(
+      async (input) => {
+        if (input.agentId === "failing") {
+          throw new AgentDatabaseAdmissionError(
+            createAgentDatabaseInspectionRefusal({
+              agentId: "failing",
+              paths: [],
+              reason: "database is locked",
+              cause: Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" }),
+            }),
+          );
+        }
+        return maintainStore(input);
+      },
+    );
+
+    const summary = await maintain();
+
+    expect(summary.failedStores).toBe(1);
+    expect(summary.stores).toContainEqual({
+      agentId: "failing",
+      storePath: failing.storePath,
+      skippedReason: "agent-store-failed",
+      warning: expect.stringContaining("database is locked"),
+    });
+    expect(loadSessionEntry(healthy)).toBeUndefined();
+    expect(loadSessionEntry(failing)).toBeDefined();
+  });
 
   it("keeps a corrupt store terminal", async () => {
     const retiredStorePath = path.join(state.sessionsDir("retired"), "sessions.json");
