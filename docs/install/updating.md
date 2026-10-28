@@ -66,6 +66,16 @@ keeps the Gateway's process-exit deadline active so a managed update can reach i
 existing stop-failure recovery instead of waiting indefinitely. These repairs must
 be present in the old Gateway being stopped, not only in the update candidate.
 
+On Linux, update workers verify their driver's ancestry through kernel procfs
+identities when the native process helper cannot load, including older-glibc
+hosts. The candidate worker must contain this fix. The inherited run ID alone
+never grants continuation: driver liveness, birth identity, and parent birth
+ordering remain required. If both native inspection and procfs are unavailable,
+Doctor records `ancestry-unverified`; restore readable `/proc/<pid>/stat` or a
+compatible process helper, wait for the recorded driver to exit, then run
+`openclaw update repair`. Doctor reports the native load failure and runtime
+glibc version when available.
+
 When artifact-preserving SQLite inspection exhausts its stabilization attempts,
 update failures retain the final consistency reason code and attempt count in
 `openclaw update status` and the prepared failure report. The candidate worker
