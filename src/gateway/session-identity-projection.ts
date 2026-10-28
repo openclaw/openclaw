@@ -21,12 +21,14 @@ import type {
 } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { looksLikeAvatarPath } from "../shared/avatar-policy.js";
+import { isAvatarDataUrl, isAvatarHttpUrl, looksLikeAvatarPath } from "../shared/avatar-policy.js";
 import { SESSIONS_LIST_OWNER_LIMIT } from "../shared/session-list-limits.js";
 import type { SessionOwnerFacetIdentity } from "../shared/session-types.js";
 import { sortAndLimitBy } from "../shared/sort-and-limit.js";
 import { resolveUserProfileReference } from "../state/user-profile-list.js";
 import type { UserProfileIdentity } from "../state/user-profiles.types.js";
+import { prepareGatewayAvatarDataUrl } from "./assistant-avatar-cache.js";
+import { gatewayAssistantAvatarUrl } from "./assistant-avatar.js";
 import { buildControlUiResourcePath } from "./control-ui-contract.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import {
@@ -117,6 +119,25 @@ export function resolveSessionProfileId(
   return profiles.get(id)?.profileId ?? id;
 }
 
+/** Session rows share the agent-list URL contract: remote sources stay external; data URLs get a revision. */
+function projectAgentAvatarUrl(
+  cfg: OpenClawConfig,
+  agentId: string,
+  avatar: string,
+): { avatarUrl?: string } {
+  if (isAvatarHttpUrl(avatar)) {
+    return { avatarUrl: avatar };
+  }
+  const basePath = normalizeControlUiBasePath(cfg.gateway?.controlUi?.basePath);
+  if (isAvatarDataUrl(avatar)) {
+    const image = prepareGatewayAvatarDataUrl(cfg, agentId, avatar);
+    return image ? { avatarUrl: gatewayAssistantAvatarUrl({ image }, basePath, agentId) } : {};
+  }
+  return looksLikeAvatarPath(avatar)
+    ? { avatarUrl: buildControlUiResourcePath("agentAvatar", basePath, agentId) }
+    : {};
+}
+
 export function projectSessionParticipant(
   identity: SessionParticipantIdentity,
   profiles: Map<string, SessionActorProfileIdentity | undefined>,
@@ -129,15 +150,7 @@ export function projectSessionParticipant(
     return {
       identity,
       ...(label ? { label } : {}),
-      ...(avatar && looksLikeAvatarPath(avatar)
-        ? {
-            avatarUrl: buildControlUiResourcePath(
-              "agentAvatar",
-              normalizeControlUiBasePath(cfg.gateway?.controlUi?.basePath),
-              identity.id,
-            ),
-          }
-        : {}),
+      ...(avatar ? projectAgentAvatarUrl(cfg, identity.id, avatar) : {}),
     };
   }
   if (identity.type !== "profile") {
