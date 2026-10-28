@@ -35,7 +35,9 @@ const suite = createControlUiE2eSuite({
   name: "Team-scale cold-load fixture",
   startServer: async () => {
     const root = inject("controlUiE2eBuildRoot");
-    if (!root) throw new Error("Team reload proof requires the shared production UI build");
+    if (!root) {
+      throw new Error("Team reload proof requires the shared production UI build");
+    }
     return (http = await startControlUiBenchGatewayServer(root));
   },
 });
@@ -483,11 +485,15 @@ suite.define(() => {
         };
       }
       if (pathname === "/__openclaw__/assistant-media") {
-        if (url.searchParams.get("source") !== facts.cacheableImageSource) return undefined;
-        if (url.searchParams.get("meta") === "1")
+        if (url.searchParams.get("source") !== facts.cacheableImageSource) {
+          return undefined;
+        }
+        if (url.searchParams.get("meta") === "1") {
           return { body: JSON.stringify(facts.metadata), contentType: "application/json" };
-        if (url.searchParams.get("mediaTicket") !== facts.metadata.mediaTicket)
+        }
+        if (url.searchParams.get("mediaTicket") !== facts.metadata.mediaTicket) {
           return { body: "Ticket required", contentType: "text/plain", status: 403 };
+        }
       }
       return fixture.assets.get(pathname);
     });
@@ -527,7 +533,7 @@ suite.define(() => {
           await thread.locator('.chat-notice[data-chat-row-key^="archive:"]').waitFor();
           await page.waitForFunction(() => {
             const pane = document.querySelector(".chat-pane-cache__pane--active");
-            const thread = pane?.querySelector(".chat-thread");
+            const threadElement = pane?.querySelector(".chat-thread");
             const cache: ChatMessageCache | undefined = pane
               ? Reflect.get(pane, "chatMessagesBySession")
               : undefined;
@@ -539,10 +545,10 @@ suite.define(() => {
               )
               .filter((image) => image.thumbnail instanceof Blob);
             const images = [
-              ...(thread?.querySelectorAll<HTMLImageElement>(".chat-image-frame img") ?? []),
+              ...(threadElement?.querySelectorAll<HTMLImageElement>(".chat-image-frame img") ?? []),
             ];
             const avatars = [
-              ...(thread?.querySelectorAll<HTMLImageElement>(
+              ...(threadElement?.querySelectorAll<HTMLImageElement>(
                 "img.chat-avatar.assistant, .chat-avatar.assistant img, .identity-avatar--agent img",
               ) ?? []),
             ];
@@ -605,8 +611,9 @@ suite.define(() => {
           heightDelta: 0,
           maximumHeightChange: 0,
         });
-        for (const kind of ["links", "images", "notices", "avatars"])
+        for (const kind of ["links", "images", "notices", "avatars"]) {
           expect(proof.firstFrame[kind].length).toBeGreaterThan(0);
+        }
       },
     );
   });
