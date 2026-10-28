@@ -521,7 +521,7 @@ describe("TelegramPollingSession", () => {
         const abort = new AbortController();
         const backoff = createDeferred<void>();
         const setStatus = vi.fn();
-        using _now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+        using now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
         sleepWithAbortMock.mockImplementationOnce(() => backoff.promise);
         createTelegramBotMock.mockImplementation(() => {
           if (phase === "bot creation") {
@@ -552,7 +552,7 @@ describe("TelegramPollingSession", () => {
             mode: "polling",
             connected: false,
             lifecycle: "recovering",
-            lastDisconnect: { at: 1_000_000 },
+            lastDisconnect: { at: now() },
           });
           expect(createWorker).toHaveBeenCalledTimes(phase === "worker exit" ? 1 : 0);
         } finally {
