@@ -93,6 +93,11 @@ export function createChatModelSearchView(
       rows[0]?.row.key
     );
   });
+  // A highlight move changes only its old and new rows, including offscreen choices.
+  const highlightedRows = createProjection<Record<string, true | undefined>>(() => {
+    const key = highlighted();
+    return key === undefined ? {} : { [key]: true };
+  });
   const rowStates = createProjection<Record<string, ReturnType<ChatModelSearchView["row"]>>>(() => {
     const states: Record<string, ReturnType<ChatModelSearchView["row"]>> = {};
     const lists = new Map<string | undefined, string[]>();
@@ -122,6 +127,7 @@ export function createChatModelSearchView(
     selectable,
     reveal,
     highlighted,
+    isHighlighted: (key: string) => highlightedRows[key] === true,
     highlight,
     providerOpen,
     moreOpen: (provider: string) => disclosure.groups[provider]?.more ?? false,

@@ -129,6 +129,8 @@ export type CliBackendExecutionMode = "agent" | "side-question";
 /** Exact backend-native plus canonical OpenClaw tool surface for one CLI run. */
 export type CliBackendToolAvailability = {
   native: readonly string[];
+  /** Read-only native discovery of the already-authorized catalog; grants no execution authority. */
+  discovery?: readonly string[];
   /** Canonical OpenClaw tool names served through the host-isolated transport. */
   openClaw: readonly string[];
 };
@@ -210,7 +212,12 @@ export type CliBackendMessageInjection = {
    * Ask the host to prepare current authority and invoke the synchronous native write.
    * Resolve only after the runtime acknowledges consumption, not after the write.
    */
-  queueMessage(text: string, withCurrent: (submit: () => void) => Promise<void>): Promise<void>;
+  queueMessage(
+    text: string,
+    withCurrent: (submit: () => void) => Promise<void>,
+    /** Per-input attribution and private context; never inherit the initial turn's. */
+    options?: Pick<CliBackendExecuteContext, "promptOrigin" | "promptContext">,
+  ): Promise<void>;
 };
 
 /** Graceful end of the admitted turn without retiring its reusable native session. */
@@ -235,6 +242,12 @@ export type CliBackendExecuteContext = {
   env: Record<string, string>;
   prompt: string;
   promptContext?: CliBackendPromptContext;
+  /**
+   * `host`: OpenClaw generated or forwarded this input, rather than a person
+   * typing it in this session. Apply the native non-user input marker when available.
+   * Canonical transcript provenance owns its visibility and sender attribution.
+   */
+  promptOrigin?: "host";
   modelId: string;
   systemPrompt: string;
   sessionId?: string;
@@ -526,6 +539,8 @@ type CliBackendPluginBase = {
    * Core rejects other names before grant/capture and excludes node/tool-disabled runs.
    */
   projectNativeToolAuthority?: (nativeTools: readonly string[]) => readonly string[];
+  /** Native tool that only discovers schemas from the authorized MCP catalog. */
+  nativeToolSearch?: string;
   /**
    * Operator-selected native tools kept on OpenClaw-mediated agent turns, which
    * otherwise expose no native tools. Core applies the same list to ordinary and

@@ -20,6 +20,11 @@ import type { GatewayBroadcastOpts } from "./server-broadcast-types.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import {
+  createTestProjection,
+  holdForeground,
+  seedRow,
+} from "./session-row-projection.read-fixture.test-support.js";
+import {
   createSessionViewerPresenceDeclarations,
   type SessionViewerPresenceDeclarations,
 } from "./session-viewer-presence.js";
@@ -29,6 +34,7 @@ const mocks = vi.hoisted(() => ({
   preparePairing: vi.fn(),
   profiles: vi.fn(),
   sessions: vi.fn(),
+  readCapabilityEntry: vi.fn(),
   subscriptions: vi.fn(),
   hasSubscriptions: vi.fn(),
   sender: vi.fn(),
@@ -150,8 +156,29 @@ function pairedOperator(deviceId: string, scopes = ["operator.read"], revokedAtM
   return { deviceId, roles: ["operator"], approvedScopes: scopes, tokens: { operator } };
 }
 
-function createDelivery(getRuntimeConfig: () => OpenClawConfig = () => ({})) {
-  return createEventWebPushDelivery(getRuntimeConfig);
+function createDelivery(
+  getRuntimeConfig: () => OpenClawConfig = () => ({}),
+  getSessionRowProjection: Parameters<typeof createEventWebPushDelivery>[2] = () => ({
+    readCapabilityEntry: mocks.readCapabilityEntry,
+  }),
+) {
+  return createEventWebPushDelivery(getRuntimeConfig, undefined, getSessionRowProjection);
+}
+
+function setCompletionSession() {
+  mocks.sessions.mockResolvedValue({
+    prepareRead: () => undefined,
+    readCurrent: () => ({
+      target: {
+        agentId: "research",
+        storePath: "/sessions/research.sqlite",
+        canonicalKey: "agent:research:thread.1",
+        entry: { sessionId: "session-1" },
+      },
+      membership: new Set<string>(),
+    }),
+    release: () => {},
+  });
 }
 
 function finishAgent(delivery = createDelivery(), data: object = {}, opts?: GatewayBroadcastOpts) {
@@ -229,6 +256,7 @@ async function expectPayload(payload: object) {
 describe("event Web Push classification", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.readCapabilityEntry.mockReset();
     setSubscriptions(makeSubscription("browser-device"));
     mocks.hasSubscriptions.mockResolvedValue(true);
     setPaired(pairedOperator("browser-device"));
@@ -262,11 +290,8 @@ describe("event Web Push classification", () => {
     const avatar = `data:image/png;base64,${encodePngRgba(pixels, 64, 64).toString("base64")}`;
     const cfg: OpenClawConfig = { agents: { entries: { research: { identity: { avatar } } } } };
 
-    finishAgent(
-      createDelivery(() => cfg),
-      {},
-      researchContext,
-    );
+    const delivery = createDelivery(() => cfg);
+    finishAgent(delivery, {}, researchContext);
     await vi.waitFor(() => expect(mocks.send).toHaveBeenCalledTimes(2), { timeout: 3_000 });
     const payloadFor = (subscription: BoundWebPushSubscription) =>
       mocks.send.mock.calls.find(([call]) => call.subscriptions[0] === subscription)?.[0].payload;
@@ -278,6 +303,190 @@ describe("event Web Push classification", () => {
     ).toEqual({ width: 32, height: 32 });
     expect(payloadFor(privateTarget)).not.toHaveProperty("icon");
   });
+
+  it.each([
+    { detail: "identified", label: "Deployment review", expected: "Deployment review" },
+    { detail: "detailed", label: "Deployment review", expected: "Deployment review" },
+    { detail: "private", label: "Deployment review", expected: null },
+    { detail: "identified", label: undefined, expected: "research" },
+    { detail: "identified", label: "x".repeat(81), expected: "x".repeat(80) },
+  ] as const)(
+    "uses only authorized explicit completion labels ($detail, $label)",
+    async ({ detail, label, expected }) => {
+      const subscription = makeSubscription("browser-device");
+      subscription.devicePreferences.detailLevel = detail;
+      setSubscriptions(subscription);
+      setCompletionSession();
+      mocks.readCapabilityEntry.mockReturnValue({
+        entry: {
+          sessionId: "session-1",
+          label,
+          displayName: "Generated title",
+          subject: "Content",
+        },
+      });
+      finishAgent(
+        undefined,
+        { label: "Untrusted label", message: { content: "Synthetic message" } },
+        { agentId: "research", sessionKeys: ["agent:research:thread.1"] },
+      );
+      await expectPayload({
+        body:
+          expected === null
+            ? "An agent completed its response."
+            : `${expected}: An agent completed its response.`,
+      });
+      if (detail === "private") {
+        expect(mocks.readCapabilityEntry).not.toHaveBeenCalled();
+      } else {
+        expect(mocks.readCapabilityEntry).toHaveBeenCalledWith({
+          agentId: "research",
+          storePath: "/sessions/research.sqlite",
+          key: "agent:research:thread.1",
+        });
+      }
+    },
+  );
+
+  it.each([
+    { sessionKeys: [] },
+    { sessionKeys: ["agent:research:thread.1", "agent:research:thread.2"] },
+  ])(
+    "does not choose a label without exactly one authoritative session: %j",
+    async ({ sessionKeys }) => {
+      setCompletionSession();
+      mocks.readCapabilityEntry.mockReturnValue({
+        entry: { sessionId: "session-1", label: "Deployment review" },
+      });
+      finishAgent(
+        undefined,
+        { sessionKey: "agent:research:thread.1" },
+        { agentId: "research", sessionKeys },
+      );
+      await expectPayload({ body: "research: An agent completed its response." });
+      expect(mocks.readCapabilityEntry).not.toHaveBeenCalled();
+    },
+  );
+
+  it("reads completion labels from resident metadata across renames and replacements", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const profiles = await vi.importActual<typeof import("../state/user-profile-list.js")>(
+        "../state/user-profile-list.js",
+      );
+      mocks.profiles.mockImplementation(profiles.prepareUserProfileCatalog);
+      const query = { agentId: "main", key: "agent:main:completion-label" };
+      const entry = { sessionId: "completion-label", updatedAt: 1, label: "Deployment review" };
+      seedRow(query, entry);
+      using _ = holdForeground();
+      using projection = await createTestProjection({
+        cfg: { agents: { entries: { main: {} } } },
+        modelCatalog: [],
+      });
+      await projection.ensureMaterialized();
+      const captured = projection.capture(query);
+      expect(captured).toBeDefined();
+      const storePath = captured!.storeTarget.storePath;
+      const residentQuery = { ...query, storePath };
+      expect(projection.readCapabilityEntry(residentQuery)?.entry?.label).toBe(entry.label);
+      mocks.sessions.mockResolvedValue({
+        prepareRead: () => undefined,
+        readCurrent: () => ({
+          target: {
+            ...query,
+            storePath,
+            canonicalKey: query.key,
+            entry: { sessionId: entry.sessionId },
+          },
+          membership: new Set<string>(),
+        }),
+        release: () => {},
+      });
+      const identified = makeSubscription("browser-device");
+      const detailed = makeSubscription("phone-device");
+      detailed.devicePreferences.detailLevel = "detailed";
+      const privateTarget = makeSubscription("tablet-device");
+      privateTarget.devicePreferences.detailLevel = "private";
+      setSubscriptions(identified, detailed, privateTarget);
+      setPaired(
+        pairedOperator("browser-device"),
+        pairedOperator("phone-device"),
+        pairedOperator("tablet-device"),
+      );
+      const delivery = createDelivery(undefined, () => projection);
+      const scope = { agentId: query.agentId, sessionKeys: [query.key] };
+      finishAgent(delivery, {}, scope);
+      await vi.waitFor(() => expect(mocks.send).toHaveBeenCalledTimes(2));
+      expectSend({
+        payload: expect.objectContaining({
+          body: "Deployment review: An agent completed its response.",
+        }),
+      });
+      expectSend({
+        payload: expect.objectContaining({ body: "An agent completed its response." }),
+      });
+      seedRow(query, { ...entry, updatedAt: 2, label: "Renamed session" });
+      expect(projection.readCapabilityEntry(residentQuery)?.entry?.label).toBe("Renamed session");
+      finishAgent(delivery, { runId: "run-2" }, scope);
+      await vi.waitFor(() => expect(mocks.send).toHaveBeenCalledTimes(4));
+      expectSend({
+        payload: expect.objectContaining({
+          body: "Renamed session: An agent completed its response.",
+        }),
+      });
+      seedRow(query, {
+        sessionId: "replacement-session",
+        updatedAt: 3,
+        label: "Replacement label",
+      });
+      expect(projection.readCapabilityEntry(residentQuery)?.entry?.sessionId).toBe(
+        "replacement-session",
+      );
+      finishAgent(delivery, { runId: "run-3" }, scope);
+      await vi.waitFor(() => expect(mocks.send).toHaveBeenCalledTimes(6));
+      expect(mocks.send.mock.calls[4]?.[0].payload.body).toBe(
+        "main: An agent completed its response.",
+      );
+    });
+  });
+
+  it("never obtains resident metadata for a private-only completion", async () => {
+    setCompletionSession();
+    const subscription = makeSubscription("browser-device");
+    subscription.devicePreferences.detailLevel = "private";
+    setSubscriptions(subscription);
+    const getSessionRowProjection = vi.fn(() => {
+      throw new Error("private metadata read");
+    });
+    finishAgent(
+      createDelivery(undefined, getSessionRowProjection),
+      {},
+      {
+        agentId: "research",
+        sessionKeys: ["agent:research:thread.1"],
+      },
+    );
+    await expectPayload({ body: "An agent completed its response." });
+    expect(getSessionRowProjection).not.toHaveBeenCalled();
+  });
+
+  it("does not deliver label metadata when the existing access check denies a reader", async () => {
+    setCompletionSession();
+    mocks.canReceive.mockReturnValue(false);
+    finishAgent(undefined, {}, { agentId: "research", sessionKeys: ["agent:research:thread.1"] });
+    await authorityCompleted.promise;
+    expect(mocks.send).not.toHaveBeenCalled();
+    expect(mocks.readCapabilityEntry).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, { entry: { sessionId: "replacement-session", label: "Replacement label" } }])(
+    "falls back when resident metadata is unavailable or replaced: %j",
+    async (metadata) => {
+      setCompletionSession();
+      mocks.readCapabilityEntry.mockReturnValue(metadata);
+      finishAgent(undefined, {}, { agentId: "research", sessionKeys: ["agent:research:thread.1"] });
+      await expectPayload({ body: "research: An agent completed its response." });
+    },
+  );
 
   it("drops a prepared avatar when identity changes during recipient preparation", async () => {
     const avatar = `data:image/png;base64,${encodePngRgba(Buffer.from([255, 150, 0, 255]), 1, 1).toString("base64")}`;

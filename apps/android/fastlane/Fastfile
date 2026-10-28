@@ -390,8 +390,8 @@ def play_release_artifact_paths(version)
   end
 end
 
-def build_release_artifacts!
-  sh(["bun", File.join(android_root, "scripts", "build-release-artifacts.ts")].shelljoin)
+def build_release_artifacts!(artifact: "all")
+  sh(["bun", File.join(android_root, "scripts", "build-release-artifacts.ts"), "--artifact", artifact].shelljoin)
 end
 
 def capture_android_screenshots!
@@ -642,7 +642,7 @@ platform :android do
       ENV["SUPPLY_UPLOAD_METADATA"] = "1"
       ENV["SUPPLY_UPLOAD_SCREENSHOTS"] = "1"
     end
-    build_release_artifacts!
+    build_release_artifacts!(artifact: "store")
     upload_play_store_build!(version_metadata, upload_metadata: !internal, upload_screenshots: !internal)
     UI.success("Uploaded Android Play build to #{play_track}: version=#{version_metadata[:version]} code=#{version_metadata[:version_code]}")
     UI.important("Production promotion remains manual in Google Play Console.")

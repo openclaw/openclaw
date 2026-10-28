@@ -130,6 +130,8 @@ export type SessionDiffProps = {
   openFile: ((path: string) => void | Promise<SessionWorkspacePreview | undefined>) | null;
   revealFile: ((path: string) => void) | null;
   openFileView?: ((path: string, view: SessionDiffFileView) => void) | null;
+  /** Check the current file owner without selecting or modifying a preview. */
+  canEditFile?: ((path: string) => Promise<boolean>) | null;
   onOpenMobilePage?: ((page: SessionDiffMobilePageRequest, source: HTMLElement) => void) | null;
 };
 
@@ -249,6 +251,7 @@ type SessionDiffSidebarContent = {
   requestUncommitted?: () => void | (() => void);
   onResult?: SessionDiffProps["onResult"];
   loadFileText?: SessionDiffFileTextLoader;
+  canEditFile?: SessionDiffProps["canEditFile"];
   openFile?: (path: string) => void | Promise<SessionWorkspacePreview | undefined>;
   /** Native host/reader inputs, memoized by the caller for this retained content. */
   presentation?: Pick<

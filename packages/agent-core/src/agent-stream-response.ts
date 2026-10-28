@@ -1,4 +1,5 @@
 import { isResponsesOutputLimitToolCallError } from "@openclaw/ai/diagnostics";
+import { prepareSystemPrompt } from "@openclaw/ai/internal/shared";
 import {
   createEmptyTransportUsage,
   replaceCompactionReplayOwnerContent,
@@ -45,6 +46,7 @@ export type AgentEventSink = (event: AgentEvent) => Promise<void> | void;
 export type AsyncToolBatchScheduling = {
   waitForPrevious: () => Promise<void>;
   onParallelStarted: () => void;
+  onTerminalLoop: () => void;
   hasUnobservedAsyncToolResults: boolean;
 };
 
@@ -192,8 +194,13 @@ export async function streamAgentResponse(
   const llmMessages = await convertMessages(sourceMessages);
   let requestPrefix: string | undefined;
 
+  context.preparedSystemPrompt = prepareSystemPrompt(
+    context.systemPrompt,
+    context.preparedSystemPrompt,
+  );
   const llmContext: Context = {
     systemPrompt: context.systemPrompt,
+    preparedSystemPrompt: context.preparedSystemPrompt,
     messages: llmMessages,
     tools: context.tools,
   };
@@ -210,9 +217,16 @@ export async function streamAgentResponse(
     : executionAbort.signal;
   const modelAbort = new AbortController();
   const requestSignal = AbortSignal.any([executionSignal, modelAbort.signal]);
+  let repeatedToolErrorTerminated = false;
+  const onTerminalLoop = () => {
+    // Stop sampling before ordered publication waits for already-started effects.
+    repeatedToolErrorTerminated = true;
+    modelAbort.abort(new Error("Tool batch terminated"));
+  };
   const abortFailedResponse = (message?: AssistantMessage) => {
     if (
       message &&
+      !repeatedToolErrorTerminated &&
       (message.stopReason === "error" || message.stopReason === "aborted") &&
       message.errorCode !== REPETITIVE_OUTPUT_ERROR_CODE &&
       !isResponsesOutputLimitToolCallError(message)
@@ -282,13 +296,25 @@ export async function streamAgentResponse(
     });
     const execution = previousAdmission
       .then(async () => {
-        const batch = await executeAsyncTools(message, calls, executionSignal, emitToolEvent, {
+        // Later queued batches complete as unstarted calls without cancelling active work.
+        let batchSignal = executionSignal;
+        if (repeatedToolErrorTerminated) {
+          batchSignal = AbortSignal.abort(new Error("Tool-loop recovery ended"));
+          // Suppressed batches skip admission and its lifecycle publication barrier.
+          // Sampling already stopped; keep their synthetic results behind earlier work.
+          await previousExecutions;
+        }
+        const batch = await executeAsyncTools(message, calls, batchSignal, emitToolEvent, {
           waitForPrevious: () => previousExecutions,
           onParallelStarted: releaseAdmission,
+          onTerminalLoop,
           hasUnobservedAsyncToolResults,
         });
         batches.push(batch);
-        if (batch.fatal || batch.terminateRun) {
+        if (
+          batch.fatal ||
+          (batch.terminateRun && batch.intervention?.detector !== "repeated_tool_error")
+        ) {
           executionAbort.abort(batch.fatal?.error ?? new Error("Tool batch terminated"));
         }
       })

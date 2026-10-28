@@ -142,6 +142,7 @@ export type RunCliAgentParams = Pick<
   /** Exact native plus canonical OpenClaw surface for a selectable CLI backend. */
   cliToolAvailability?: {
     native: string[];
+    discovery?: readonly string[];
     openClaw: string[];
   };
   /** Caller-owned authority for credential use; cancellation alone is not authorization. */
@@ -249,7 +250,11 @@ export type PreparedCliRunContext = {
   contextWindowInfo?: ContextWindowInfo;
   systemPrompt: string;
   systemPromptReport: SessionSystemPromptReport;
-  claudeSkillsPluginArgs: string[];
+  /** Native skill plugin launch args and its Skill command map, for usage receipts. */
+  claudeSkillsPlugin: Pick<
+    import("./claude-skills-plugin.js").ClaudeCliSkillsPlugin,
+    "args" | "skillCommands"
+  >;
   /** Host-held, policy-selected personal Workshop tool for the paired-node adapter. */
   nodeSkillWorkshop?: import("../tools/common.js").AnyAgentTool;
   openClawHistoryPrompt?: string;

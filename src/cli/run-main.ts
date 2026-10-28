@@ -986,10 +986,9 @@ async function runCliWithPreparedOutputMode(
       return;
     }
     unregisterProxySignalExitBarrier = registerSignalExitBarrier(stopStartedProxy);
-    const shutdown = (exitCode: number) => exitAfterSignalExitBarriers(exitCode);
     proxySignalHandlers = [
-      ["SIGTERM", () => shutdown(143)],
-      ["SIGINT", () => shutdown(130)],
+      ["SIGTERM", () => exitAfterSignalExitBarriers(143, "SIGTERM")],
+      ["SIGINT", () => exitAfterSignalExitBarriers(130, "SIGINT")],
       ["exit", killStartedProxy],
     ];
     for (const [signal, handler] of proxySignalHandlers) {

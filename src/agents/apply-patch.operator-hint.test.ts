@@ -53,6 +53,7 @@ it.each(["config", "session", undefined, "invalid patch"] as const)(
     const tool = createApplyPatchTool({
       cwd: root,
       root,
+      workspaceOnly: true,
       containmentSource: source === "invalid patch" ? "config" : source,
     });
     const error = await captureFailure(
@@ -124,7 +125,11 @@ it.runIf(process.platform !== "win32")(
     await fs.writeFile(path.join(outside, "note.md"), "original\n");
     const link = path.join(root, "link");
     await fs.symlink(outside, link, "dir");
-    const tool = createApplyPatchTool({ cwd: root, containmentSource: "config" });
+    const tool = createApplyPatchTool({
+      cwd: root,
+      workspaceOnly: true,
+      containmentSource: "config",
+    });
     const update = (target: string) =>
       `*** Begin Patch\n*** Update File: ${target}\n@@\n-original\n+changed\n*** End Patch`;
     const escaped = await captureFailure(tool, update("link/note.md"));
@@ -152,6 +157,7 @@ it.runIf(process.platform !== "win32").each(["delete", "provenance read"] as con
     const clearAfterDelete = vi.fn();
     const tool = createApplyPatchTool({
       cwd: root,
+      workspaceOnly: true,
       containmentSource: "config",
       memoryWriteProvenance: {
         classifies: async () => {

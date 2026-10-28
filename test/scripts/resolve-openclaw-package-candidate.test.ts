@@ -281,21 +281,17 @@ describe("resolve-openclaw-package-candidate", () => {
     expect(() => validateOpenClawPackageSpec("openclaw@alpha")).toThrow(
       "Alpha releases are retired;",
     );
-    expect(() => validateOpenClawPackageSpec("@evil/openclaw@1.0.0")).toThrow(
-      "package_spec must be openclaw@beta",
-    );
-    expect(() => validateOpenClawPackageSpec("openclaw@canary")).toThrow(
-      "package_spec must be openclaw@beta",
-    );
-    expect(() => validateOpenClawPackageSpec("openclaw@2026.04.27")).toThrow(
-      "package_spec must be openclaw@beta",
-    );
-    expect(() => validateOpenClawPackageSpec("openclaw@npm:other-package")).toThrow(
-      "package_spec must be openclaw@beta",
-    );
-    expect(() => validateOpenClawPackageSpec("openclaw@file:../other-package.tgz")).toThrow(
-      "package_spec must be openclaw@beta",
-    );
+    for (const spec of [
+      "@evil/openclaw@1.0.0",
+      "openclaw@canary",
+      "openclaw@2026.04.27",
+      "openclaw@npm:other-package",
+      "openclaw@file:../other-package.tgz",
+    ]) {
+      expect(() => validateOpenClawPackageSpec(spec), spec).toThrow(
+        "package_spec must be openclaw@beta",
+      );
+    }
   });
 
   it("parses optional empty workflow inputs without rejecting the command line", () => {
@@ -514,178 +510,98 @@ printf '[{"filename":"openclaw-%s.tgz"}]\\n' "$version"
     ).rejects.toThrow(/produced more than \d+ captured stdout chars/u);
   });
 
-  it("kills timed-out package runner process groups", async ({ signal, onTestFinished }) => {
-    if (process.platform === "win32") {
-      return;
-    }
-
-    const dir = autoTempDirs.make("openclaw-package-runner-timeout-");
-    const childPidPath = path.join(dir, "child.pid");
-    const childScript = [
-      fixtureReceiptClientSource(receipts.endpoint),
-      "process.on('SIGTERM', () => {});",
-      "setInterval(() => {}, 1000);",
-      "import fs from 'node:fs';",
-      `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
-      `sendReceipt(${JSON.stringify(childPidPath)}, 'ready');`,
-    ].join("\n");
-    const parentScript = [
-      "const { spawn } = require('node:child_process');",
-      `spawn(process.execPath, ['--input-type=module', '-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
-      "setInterval(() => {}, 1000);",
-    ].join("\n");
-    let command!: ReturnType<typeof runCommandForTest>;
-    const releaseAndWait = startProcessWatchdogFixture(() =>
-      expect(
-        (command = runCommandForTest(process.execPath, ["-e", parentScript], {
-          killAfterMs: 25,
-          timeoutMs: 500,
-        })),
-      ).rejects.toThrow(/timed out after 500ms/u),
-    );
-    const killSpy = vi.spyOn(process, "kill");
-    let childPid: number | undefined;
-    let cleanupPending: Promise<void> | undefined;
-    const cleanup = () =>
-      (cleanupPending ??= (async () => {
-        try {
-          await releaseAndWait();
-        } finally {
-          killSpy.mockRestore();
-          if (childPid !== undefined) {
-            killPidIfAlive(childPid);
-            await waitForFixtureExit(childPid, signal);
+  it.for([
+    {
+      name: "kills timed-out package runner process groups",
+      kind: "forced",
+      timeoutMs: 500,
+      killAfterMs: 25,
+      cleanupDelayMs: 0,
+    },
+    {
+      name: "clamps oversized package runner kill grace before scheduling",
+      kind: "grace",
+      timeoutMs: 500,
+      killAfterMs: Number.MAX_SAFE_INTEGER,
+      cleanupDelayMs: 75,
+    },
+    {
+      name: "rejects timed-out package runner commands when descendants exit cleanly",
+      kind: "clean",
+      timeoutMs: 250,
+      killAfterMs: 250,
+      cleanupDelayMs: 25,
+    },
+  ])(
+    "$name",
+    async ({ kind, timeoutMs, killAfterMs, cleanupDelayMs }, { signal, onTestFinished }) => {
+      if (process.platform === "win32") {
+        return;
+      }
+      const dir = autoTempDirs.make(`openclaw-package-runner-${kind}-`);
+      const childPidPath = path.join(dir, "child.pid");
+      const cleanupPath = path.join(dir, "child.cleanup");
+      const childScript = [
+        fixtureReceiptClientSource(receipts.endpoint),
+        "import fs from 'node:fs';",
+        kind === "forced"
+          ? "process.on('SIGTERM', () => {});"
+          : `process.on('SIGTERM', () => { setTimeout(() => { fs.writeFileSync(${JSON.stringify(cleanupPath)}, 'clean'); process.exit(0); }, ${cleanupDelayMs}); });`,
+        "setInterval(() => {}, 1000);",
+        `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
+        `sendReceipt(${JSON.stringify(childPidPath)}, 'ready');`,
+      ].join("\n");
+      const parentScript = [
+        "const { spawn } = require('node:child_process');",
+        ...(kind === "clean" ? ["process.on('SIGTERM', () => process.exit(0));"] : []),
+        `spawn(process.execPath, ['--input-type=module', '-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
+        "setInterval(() => {}, 1000);",
+      ].join("\n");
+      const args =
+        kind === "grace" ? ["--input-type=module", "-e", childScript] : ["-e", parentScript];
+      let command!: ReturnType<typeof runCommandForTest>;
+      const releaseAndWait = startProcessWatchdogFixture(() =>
+        expect(
+          (command = runCommandForTest(process.execPath, args, { killAfterMs, timeoutMs })),
+        ).rejects.toThrow(new RegExp(`timed out after ${timeoutMs}ms`, "u")),
+      );
+      const killSpy = kind === "forced" ? vi.spyOn(process, "kill") : undefined;
+      let childPid: number | undefined;
+      let cleanupPending: Promise<void> | undefined;
+      const cleanup = () =>
+        (cleanupPending ??= (async () => {
+          try {
+            await releaseAndWait();
+          } finally {
+            killSpy?.mockRestore();
+            if (childPid !== undefined) {
+              killPidIfAlive(childPid);
+              await waitForFixtureExit(childPid, signal);
+            }
           }
+        })());
+      onTestFinished(cleanup);
+      try {
+        childPid = await withinTest(fixturePidBeforeSettlement(childPidPath, command), signal);
+        if (kind === "forced") {
+          expect(isProcessAlive(childPid)).toBe(true);
         }
-      })());
-    onTestFinished(cleanup);
-    try {
-      childPid = await withinTest(fixturePidBeforeSettlement(childPidPath, command), signal);
-      expect(isProcessAlive(childPid)).toBe(true);
-      await withinTest(releaseAndWait(), signal);
-      expect(killSpy).toHaveBeenCalledWith(expect.any(Number), "SIGKILL");
-      await waitForFixtureExit(childPid, signal);
-    } finally {
-      await cleanup();
-    }
-  });
-
-  it("clamps oversized package runner kill grace before scheduling", async ({
-    signal,
-    onTestFinished,
-  }) => {
-    if (process.platform === "win32") {
-      return;
-    }
-
-    const dir = autoTempDirs.make("openclaw-package-runner-grace-");
-    const childPidPath = path.join(dir, "child.pid");
-    const cleanupPath = path.join(dir, "child.cleanup");
-    const childScript = [
-      fixtureReceiptClientSource(receipts.endpoint),
-      "import fs from 'node:fs';",
-      "process.on('SIGTERM', () => {",
-      `  setTimeout(() => { fs.writeFileSync(${JSON.stringify(cleanupPath)}, 'clean'); process.exit(0); }, 75);`,
-      "});",
-      "setInterval(() => {}, 1000);",
-      `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
-      `sendReceipt(${JSON.stringify(childPidPath)}, 'ready');`,
-    ].join("\n");
-    let command!: ReturnType<typeof runCommandForTest>;
-    const releaseAndWait = startProcessWatchdogFixture(() =>
-      expect(
-        (command = runCommandForTest(process.execPath, ["--input-type=module", "-e", childScript], {
-          killAfterMs: Number.MAX_SAFE_INTEGER,
-          timeoutMs: 500,
-        })),
-      ).rejects.toThrow(/timed out after 500ms/u),
-    );
-    let childPid: number | undefined;
-    let cleanupPending: Promise<void> | undefined;
-    const cleanup = () =>
-      (cleanupPending ??= (async () => {
-        try {
-          await releaseAndWait();
-        } finally {
-          if (childPid !== undefined) {
-            killPidIfAlive(childPid);
-            await waitForFixtureExit(childPid, signal);
-          }
+        await withinTest(releaseAndWait(), signal);
+        if (kind === "forced") {
+          expect(killSpy).toHaveBeenCalledWith(expect.any(Number), "SIGKILL");
+        } else {
+          expect(readFileSync(cleanupPath, "utf8")).toBe("clean");
         }
-      })());
-    onTestFinished(cleanup);
-    try {
-      childPid = await withinTest(fixturePidBeforeSettlement(childPidPath, command), signal);
-      await withinTest(releaseAndWait(), signal);
-      expect(readFileSync(cleanupPath, "utf8")).toBe("clean");
-      expect(isProcessAlive(childPid)).toBe(false);
-    } finally {
-      await cleanup();
-    }
-  });
-
-  it("rejects timed-out package runner commands when descendants exit cleanly", async ({
-    signal,
-    onTestFinished,
-  }) => {
-    if (process.platform === "win32") {
-      return;
-    }
-
-    const dir = autoTempDirs.make("openclaw-package-runner-timeout-clean-");
-    const childPidPath = path.join(dir, "child.pid");
-    const cleanupPath = path.join(dir, "child.cleanup");
-    const childScript = [
-      fixtureReceiptClientSource(receipts.endpoint),
-      "import fs from 'node:fs';",
-      "process.on('SIGTERM', () => {",
-      "  setTimeout(() => {",
-      `    fs.writeFileSync(${JSON.stringify(cleanupPath)}, 'clean');`,
-      "    process.exit(0);",
-      "  }, 25);",
-      "});",
-      "setInterval(() => {}, 1000);",
-      `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
-      `sendReceipt(${JSON.stringify(childPidPath)}, 'ready');`,
-    ].join("\n");
-    const parentScript = [
-      "const { spawn } = require('node:child_process');",
-      "process.on('SIGTERM', () => process.exit(0));",
-      `spawn(process.execPath, ['--input-type=module', '-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
-      "setInterval(() => {}, 1000);",
-    ].join("\n");
-    let command!: ReturnType<typeof runCommandForTest>;
-    const releaseAndWait = startProcessWatchdogFixture(() =>
-      expect(
-        (command = runCommandForTest(process.execPath, ["-e", parentScript], {
-          killAfterMs: 250,
-          timeoutMs: 250,
-        })),
-      ).rejects.toThrow(/timed out after 250ms/u),
-    );
-    let childPid: number | undefined;
-    let cleanupPending: Promise<void> | undefined;
-    const cleanup = () =>
-      (cleanupPending ??= (async () => {
-        try {
-          await releaseAndWait();
-        } finally {
-          if (childPid !== undefined) {
-            killPidIfAlive(childPid);
-            await waitForFixtureExit(childPid, signal);
-          }
+        if (kind === "grace") {
+          expect(isProcessAlive(childPid)).toBe(false);
+        } else {
+          await waitForFixtureExit(childPid, signal);
         }
-      })());
-    onTestFinished(cleanup);
-    try {
-      childPid = await withinTest(fixturePidBeforeSettlement(childPidPath, command), signal);
-      await withinTest(releaseAndWait(), signal);
-      expect(readFileSync(cleanupPath, "utf8")).toBe("clean");
-      await waitForFixtureExit(childPid, signal);
-    } finally {
-      await cleanup();
-    }
-  });
+      } finally {
+        await cleanup();
+      }
+    },
+  );
 
   it("forwards external termination to package runner process groups", async ({
     signal,
@@ -835,39 +751,32 @@ printf '[{"filename":"openclaw-%s.tgz"}]\\n' "$version"
   it("rejects loose trusted package source port values", async () => {
     const dir = autoTempDirs.make("openclaw-trusted-package-source-");
     const policy = path.join(dir, "trusted-sources.json");
+    const ports = [
+      ["exponent", "1e3"],
+      ["fractional", 443.5],
+      ["hex", "0x1bb"],
+    ] as const;
     await writeFile(
       policy,
       JSON.stringify({
         schemaVersion: 1,
-        sources: {
-          exponent: {
-            hosts: ["packages.example"],
-            pathPrefixes: ["/openclaw/"],
-            ports: ["1e3"],
-          },
-          fractional: {
-            hosts: ["packages.example"],
-            pathPrefixes: ["/openclaw/"],
-            ports: [443.5],
-          },
-          hex: {
-            hosts: ["packages.example"],
-            pathPrefixes: ["/openclaw/"],
-            ports: ["0x1bb"],
-          },
-        },
+        sources: Object.fromEntries(
+          ports.map(([name, port]) => [
+            name,
+            {
+              hosts: ["packages.example"],
+              pathPrefixes: ["/openclaw/"],
+              ports: [port],
+            },
+          ]),
+        ),
       }),
     );
-
-    await expect(loadTrustedPackageSource("exponent", policy)).rejects.toThrow(
-      "trusted package source exponent has invalid ports",
-    );
-    await expect(loadTrustedPackageSource("fractional", policy)).rejects.toThrow(
-      "trusted package source fractional has invalid ports",
-    );
-    await expect(loadTrustedPackageSource("hex", policy)).rejects.toThrow(
-      "trusted package source hex has invalid ports",
-    );
+    for (const [name] of ports) {
+      await expect(loadTrustedPackageSource(name, policy)).rejects.toThrow(
+        `trusted package source ${name} has invalid ports`,
+      );
+    }
   });
 
   it("rejects unsafe package_url downloads before requesting private targets", async () => {
@@ -1284,19 +1193,12 @@ printf '[{"filename":"openclaw-%s.tgz"}]\\n' "$version"
   });
 
   it("validates the normalized artifact source SHA before registry preparation", async () => {
-    const dir = autoTempDirs.make("openclaw-artifact-registry-source-");
-    const artifactDir = path.join(dir, "artifact");
-    const binDir = path.join(dir, "bin");
-    const gitLog = path.join(dir, "git.log");
     const sourceSha = "66ce632b9b7c5c7fdd3e66c739687d51638ad6e2";
-    await mkdir(artifactDir);
-    await mkdir(binDir);
-    await createPackageTarball(artifactDir, { commit: sourceSha });
-    await writeFile(
-      path.join(artifactDir, "package-candidate.json"),
-      JSON.stringify({ packageSourceSha: sourceSha.toUpperCase() }),
-    );
-    const fakeGit = path.join(binDir, "git");
+    const fixture = await createArtifactFixture("openclaw-artifact-registry-source-", {
+      buildInfo: { commit: sourceSha },
+      packageSourceSha: sourceSha.toUpperCase(),
+    });
+    const fakeGit = path.join(fixture.binDir, "git");
     await writeFile(
       fakeGit,
       `#!/bin/sh
@@ -1312,33 +1214,27 @@ esac
     );
     await chmod(fakeGit, 0o755);
 
-    const previousPath = process.env.PATH;
-    process.env.FAKE_GIT_LOG = gitLog;
     process.env.FAKE_SOURCE_SHA = sourceSha;
-    process.env.PATH = `${binDir}:${previousPath}`;
     try {
-      await expect(
-        main([
-          "--source",
-          "artifact",
-          "--artifact-dir",
-          artifactDir,
-          "--output-dir",
-          path.join(dir, "output"),
-          "--plugin-registry-output-dir",
-          path.join(dir, "registry"),
-          "--required-plugin-packages-json",
-          '["@openclaw/codex"]',
-        ]),
-      ).rejects.toThrow(
-        `package_ref ${sourceSha} resolved to ${sourceSha}, which is not reachable from an OpenClaw branch or release tag`,
-      );
+      await withArtifactFixtureCommands(fixture, async () => {
+        await expect(
+          main([
+            ...fixture.args,
+            "--output-dir",
+            path.join(fixture.dir, "output"),
+            "--plugin-registry-output-dir",
+            fixture.registryDir,
+            "--required-plugin-packages-json",
+            '["@openclaw/codex"]',
+          ]),
+        ).rejects.toThrow(
+          `package_ref ${sourceSha} resolved to ${sourceSha}, which is not reachable from an OpenClaw branch or release tag`,
+        );
+      });
     } finally {
-      process.env.PATH = previousPath;
-      delete process.env.FAKE_GIT_LOG;
       delete process.env.FAKE_SOURCE_SHA;
     }
-    await expect(readFile(gitLog, "utf8")).resolves.toContain(
+    await expect(readFile(fixture.gitLog, "utf8")).resolves.toContain(
       `rev-parse --verify ${sourceSha}^{commit}`,
     );
   });

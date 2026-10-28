@@ -25,6 +25,7 @@ import {
   readRows,
 } from "./openclaw-state-db-fixtures.test-support.js";
 import { withLegacyLocalWorkspaceManifests } from "./openclaw-state-db-schema-v31-workspace-manifests.js";
+import { withLegacyLocalWorkspaceCas } from "./openclaw-state-db-schema-v35-workspace-cas.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -37,6 +38,7 @@ import { STATE_SCHEMA_13_TO_12_DOWNGRADE_SQL } from "./openclaw-state-schema-v13
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 import {
   addPreCutoverClientCredentialTablesForTest,
+  restorePreTemplateStateIdentifiersForTest,
   withStateMigrationBackupForTest,
 } from "./openclaw-state-schema.test-support.js";
 import { assertSqliteMigrationScopePreserved } from "./sqlite-migration-scope.test-support.js";
@@ -57,6 +59,7 @@ beforeAll(async () => {
   templatePath = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } }).path;
   await closeOpenClawStateDatabaseAsync();
   using legacy = openRawDatabase(templatePath);
+  restorePreTemplateStateIdentifiersForTest(legacy);
   addPreCutoverClientCredentialTablesForTest(legacy);
   legacy.exec(STATE_SCHEMA_13_TO_12_DOWNGRADE_SQL);
 });
@@ -165,6 +168,7 @@ it("repairs fractional trace timestamps while captured doctor migration advances
   closeOpenClawStateDatabaseForTest();
 
   const legacy = openRawDatabase(databasePath);
+  restorePreTemplateStateIdentifiersForTest(legacy);
   addPreCutoverClientCredentialTablesForTest(legacy);
   const strictCreateSql = (
     legacy
@@ -289,8 +293,18 @@ it.each([false, true])(
   "upgrades workspace storage while preserving pending recovery bytes (unused: %s)",
   async (absent) => {
     const { options, pathname, before } = predecessor(absent);
+    const migratedProjection = {
+      ...before,
+      checkpoint_json: null,
+      tree_root_digest: null,
+      source_paths_digest: null,
+      canonical_fingerprints: null,
+      projection_fingerprints: null,
+    };
     expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([
       { kind: "local-workspace-manifests-v31", path: pathname },
+      { kind: "local-workspace-cas-v35", path: pathname },
+      { kind: "template-names-v36", path: pathname },
     ]);
     await withStateMigrationBackupForTest(options, async () => {
       using witness = openRawDatabase(pathname);
@@ -301,6 +315,8 @@ it.each([false, true])(
           "config_machine_state",
           "local_workspace_projections",
           "local_workspace_manifest_nodes",
+          "local_workspace_tree_packs",
+          "local_workspace_source_path_sets",
           "sqlite_stat1",
           "sqlite_stat4",
         ],
@@ -315,10 +331,15 @@ it.each([false, true])(
       ).toEqual(
         absent
           ? []
-          : [{ name: "local_workspace_manifest_nodes" }, { name: "local_workspace_projections" }],
+          : [
+              { name: "local_workspace_manifest_nodes" },
+              { name: "local_workspace_projections" },
+              { name: "local_workspace_source_path_sets" },
+              { name: "local_workspace_tree_packs" },
+            ],
       );
       if (!absent) {
-        expect(projection(database.db)).toEqual({ ...before, checkpoint_json: null });
+        expect(projection(database.db)).toEqual(migratedProjection);
         expectRows(database.db, "SELECT * FROM local_workspace_manifest_nodes", []);
         // Converted baselines may retain their root without the old full document.
         database.db.exec(`SAVEPOINT converted_baseline;
@@ -330,7 +351,7 @@ it.each([false, true])(
       const reopened = openOpenClawStateDatabase(options);
       expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([]);
       if (!absent) {
-        expect(projection(reopened.db)).toEqual({ ...before, checkpoint_json: null });
+        expect(projection(reopened.db)).toEqual(migratedProjection);
       }
     });
   },
@@ -356,7 +377,14 @@ it("rolls back interrupted workspace schema acceptance and retries with the orig
   }
   await withStateMigrationBackupForTest(options, () => {
     const database = openOpenClawStateDatabase(options);
-    expect(projection(database.db)).toEqual({ ...before, checkpoint_json: null });
+    expect(projection(database.db)).toEqual({
+      ...before,
+      checkpoint_json: null,
+      tree_root_digest: null,
+      source_paths_digest: null,
+      canonical_fingerprints: null,
+      projection_fingerprints: null,
+    });
     expectVersion(database.db);
   });
 });
@@ -499,3 +527,69 @@ it("rejects an explicit preflight path with sidecars without touching it", async
   });
   deepStrictEqual(snapshotSourceFamily(databasePath), before);
 });
+
+it.each([33, 34])(
+  "prepares schema 35 from v%s with DDL only, retaining online conversion inputs",
+  async (previousVersion) => {
+    const env = { OPENCLAW_STATE_DIR: tempDirs.make("workspace-cas-migration-") };
+    const pathname = resolveOpenClawStateSqlitePath(env);
+    const options = { env, path: pathname };
+    fs.mkdirSync(path.dirname(pathname), { recursive: true });
+    let before: Record<string, unknown> | undefined;
+    const nodeJson = '{"treeRef":"retained-root","canonicalIdentity":"retained-stat"}';
+    {
+      using source = openRawDatabase(pathname);
+      source.exec(withLegacyLocalWorkspaceCas(OPENCLAW_STATE_SCHEMA_SQL));
+      source.exec(`PRAGMA user_version = ${previousVersion};
+      INSERT INTO schema_meta (meta_key, role, schema_version, created_at, updated_at)
+        VALUES ('primary', 'global', ${previousVersion}, 1, 1);
+      INSERT INTO local_workspace_projections
+        (worktree_id, agent_id, session_key, session_id, projection_path, base_commit,
+          source_paths_json, baseline_ref, checkpoint_json, pending_ref, pending_target,
+          revision, created_at_ms)
+        VALUES ('workspace', 'main', 'agent:main:workspace', 'session', '/synthetic/projection',
+          'base', '["source.txt"]', 'retained-root', '{"pending":"checkpoint"}',
+          'refs/openclaw/results/pending', 'canonical', 7, 1);`);
+      source
+        .prepare("INSERT INTO local_workspace_manifest_nodes VALUES (?, ?, ?)")
+        .run("workspace", "source.txt", nodeJson);
+      before = source.prepare("SELECT * FROM local_workspace_projections").get();
+    }
+    expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([
+      { kind: "local-workspace-cas-v35", path: pathname },
+      { kind: "template-names-v36", path: pathname },
+    ]);
+    await withStateMigrationBackupForTest(options, async () => {
+      using witness = openRawDatabase(pathname);
+      const database = await assertSqliteMigrationScopePreserved(
+        witness,
+        [
+          "schema_meta",
+          "config_machine_state",
+          "local_workspace_projections",
+          "local_workspace_tree_packs",
+          "local_workspace_source_path_sets",
+        ],
+        () => openOpenClawStateDatabase(options),
+      );
+      expect(database.db.prepare("SELECT * FROM local_workspace_projections").get()).toEqual({
+        ...before,
+        tree_root_digest: null,
+        source_paths_digest: null,
+        canonical_fingerprints: null,
+        projection_fingerprints: null,
+      });
+      expect(
+        database.db.prepare("SELECT node_json FROM local_workspace_manifest_nodes").all(),
+      ).toEqual([{ node_json: nodeJson }]);
+      for (const table of ["local_workspace_tree_packs", "local_workspace_source_path_sets"]) {
+        expect(database.db.prepare(`SELECT count(*) AS count FROM ${table}`).get()).toEqual({
+          count: 0,
+        });
+      }
+      expect(database.db.prepare("PRAGMA user_version").get()).toEqual({
+        user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+      });
+    });
+  },
+);

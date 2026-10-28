@@ -287,8 +287,16 @@ it("shares producer envelopes across matching authority and divergent baselines"
       let rowEncodings = 0;
       let envelopeEncodings = 0;
       let sharingKeyEncodings = 0;
+      let ancestorFieldEncodings = 0;
       const encoding = vi.spyOn(JSON, "stringify").mockImplementation((...args) => {
         const value: unknown = args[0];
+        if (
+          isRecord(value) &&
+          Object.keys(value).length === 1 &&
+          (Object.hasOwn(value, "ancestorSessions") || Object.hasOwn(value, "ancestorSessionRefs"))
+        ) {
+          ancestorFieldEncodings++;
+        }
         if (
           Array.isArray(value) &&
           value.length === 10 &&
@@ -384,6 +392,8 @@ it("shares producer envelopes across matching authority and divergent baselines"
       expect(rowEncodings).toBeLessThanOrEqual(16);
       // Two wire capabilities per group, plus one legacy envelope per authority.
       expect(envelopeEncodings).toBeLessThanOrEqual(10);
+      // Empty ancestor fields are constant across divergent connection histories.
+      expect(ancestorFieldEncodings).toBe(0);
     } finally {
       detach();
       await connection.mentionInbox.dispose();
@@ -392,7 +402,7 @@ it("shares producer envelopes across matching authority and divergent baselines"
   });
 });
 
-it("prepares model presentation once per audience at growing fanout", async () => {
+it("shares model presentation and full-row encodings across audience delivery histories", async () => {
   using _ = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
   await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
     const cfg = rolePolicyConfig();
@@ -418,22 +428,49 @@ it("prepares model presentation once per audience at growing fanout", async () =
       bootId: "fanout",
       cfg,
     });
-    const detach = connection.attachSessionRowProjection(projection);
+    let detach = connection.attachSessionRowProjection(projection);
     using modelPreparations = vi.spyOn(modelPresentation, "prepareOperatorModelPresentation");
     try {
-      for (const count of [1, 4, 16, 65]) {
+      for (const [count, deltas] of [
+        [1, false],
+        [4, false],
+        [16, false],
+        [65, false],
+        [65, true],
+      ] as const) {
         const peers = Array.from({ length: count }, (_entry, i) => {
           const peer = createSessionRowEventPeer(profile, `fanout-${count}-${i}`, 1);
-          peer.client.connect.caps = i % 2 ? ["ultrafast"] : [];
+          peer.client.connect.caps = [
+            ...(i % 2 ? ["ultrafast"] : []),
+            ...(deltas ? ["session-row-deltas"] : []),
+          ];
           connection.clients.add(peer.client);
           connection.sessionEventSubscribers.subscribe(peer.client.connId);
           return peer;
         });
+        if (deltas) {
+          for (const [index, peer] of peers.entries()) {
+            for (let prior = 0; prior <= index % 4; prior++) {
+              connection.broadcastToConnIds(
+                "sessions.changed",
+                { sessionKey: key, agentId: "main" },
+                new Set([peer.client.connId]),
+              );
+            }
+            peer.send.mockClear();
+          }
+          detach();
+          detach = connection.attachSessionRowProjection(projection);
+        }
         modelPreparations.mockClear();
         const stringify = JSON.stringify;
         let nestedKeyEncodings = 0;
+        let fullRowTraversals = 0;
         const encoding = vi.spyOn(JSON, "stringify").mockImplementation((...args) => {
           const value: unknown = args[0];
+          if (isRecord(value) && isRecord(value.full) && value.full.key === key) {
+            fullRowTraversals++;
+          }
           if (
             Array.isArray(value) &&
             value.length === 3 &&
@@ -455,11 +492,19 @@ it("prepares model presentation once per audience at growing fanout", async () =
         }
         expect.soft(modelPreparations).toHaveBeenCalledTimes(Math.min(count, 2));
         expect.soft(nestedKeyEncodings).toBe(0);
+        // History-specific wrappers must reuse the immutable row encoding.
+        expect.soft(fullRowTraversals).toBe(0);
         for (const [i, peer] of peers.entries()) {
           expect(peer.send).toHaveBeenCalledOnce();
           const frame = peer.send.mock.lastCall![0];
-          expect(frame).toBe(peers[i % 2]!.send.mock.lastCall![0]);
-          const row = JSON.parse(frame).payload.session;
+          if (!deltas) {
+            expect(frame).toBe(peers[i % 2]!.send.mock.lastCall![0]);
+          }
+          const session = JSON.parse(frame).payload.session;
+          if (deltas) {
+            expect(session.version).toBe(2 + (i % 4));
+          }
+          const row = deltas ? session.full : session;
           expect(row).toMatchObject({
             key,
             sharingRole: "viewer",

@@ -24,6 +24,8 @@ import {
 import { OpenClawStateDatabaseSchemaMigrationRequiredError } from "./openclaw-state-db-schema-migration-required.js";
 import { FOLDED_SINGLETON_STATE_TABLES_V12 } from "./openclaw-state-db-schema-v12-foldin.js";
 import { STATE_CURSOR_TABLES_V22 } from "./openclaw-state-db-schema-v22-columns.js";
+import { needsPublicationDraftMigration } from "./openclaw-state-db-schema-v28-publication.js";
+import { TEMPLATE_STATE_TABLE_RENAMES } from "./openclaw-state-db-schema-v36-template-names.js";
 import { readStateSchemaContentVersion } from "./openclaw-state-db-schema-version.js";
 import * as sessionWatchMigration from "./openclaw-state-db-session-watch-migration.js";
 import {
@@ -96,6 +98,12 @@ export const STATE_SCHEMA_MIGRATION_READ_TABLES: Record<StateMigrationKind, read
     "local_workspace_projections",
     "local_workspace_manifest_nodes",
   ],
+  "local-workspace-cas-v35": [
+    "local_workspace_projections",
+    "local_workspace_tree_packs",
+    "local_workspace_source_path_sets",
+  ],
+  "template-names-v36": [...TEMPLATE_STATE_TABLE_RENAMES.flat(), "agent_provenance"],
   "operator-approvals-system-agent": ["operator_approvals"],
   "session-watch-cursor-provenance-v4": ["session_watch_cursors"],
   // STRICT migration can rebuild every ordinary table in the canonical schema.
@@ -472,7 +480,7 @@ export function detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(
   if (userVersion < 27) {
     migrations.push({ kind: "state-write-indexes-v27", path: pathname });
   }
-  if (userVersion < 28) {
+  if (userVersion < 28 || needsPublicationDraftMigration(db)) {
     migrations.push({ kind: "github-publication-draft-v28", path: pathname });
   }
   if (userVersion < CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION) {
@@ -483,6 +491,12 @@ export function detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(
   }
   if (userVersion < 31) {
     migrations.push({ kind: "local-workspace-manifests-v31", path: pathname });
+  }
+  if (userVersion < 35) {
+    migrations.push({ kind: "local-workspace-cas-v35", path: pathname });
+  }
+  if (userVersion < 36) {
+    migrations.push({ kind: "template-names-v36", path: pathname });
   }
   if (!hasCanonicalAuditEventsSchema(db)) {
     migrations.push({ kind: "audit-events-v2", path: pathname });

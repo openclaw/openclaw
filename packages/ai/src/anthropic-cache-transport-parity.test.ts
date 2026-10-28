@@ -1,14 +1,26 @@
+import { hash } from "node:crypto";
 import type { Context } from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
+import { transformTransportMessages } from "../../../src/agents/transport-message-transform.js";
+import {
+  freezeJsonSnapshot,
+  isDeeplyFrozenPlainData,
+  isPlainData,
+} from "../../../src/shared/immutable-data.js";
+import { configureAiTransportHost, getAiTransportHost } from "./host.js";
+import type { AnthropicOptions } from "./provider-options.js";
 import {
   anthropicModel,
   assistantMessage,
   captureAnthropicRequest,
   context,
+  createAnthropicResponse,
+  anthropicEvents,
   registerParityHostLifecycle,
   textBlock,
 } from "./provider-transport-parity.test-support.js";
+import { createAnthropicMessagesTransportStreamFn } from "./transports/anthropic-transport-stream.js";
 import { createZeroUsage } from "./usage.test-support.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./utils/system-prompt-cache-boundary.js";
 
@@ -229,4 +241,199 @@ describe("Anthropic cache checkpoint transport parity", () => {
       }
     },
   );
+});
+
+describe("Anthropic immutable request bytes", () => {
+  registerParityHostLifecycle();
+  const model = { ...anthropicModel, id: "claude-sonnet-4-5", reasoning: false };
+
+  async function send(
+    messages: Context["messages"],
+    hook?: AnthropicOptions["onPayload"],
+    admitPlainData = true,
+  ) {
+    let wire = "";
+    let encodedBody: RequestInit["body"];
+    let payload: unknown;
+    const response = createAnthropicResponse(anthropicEvents);
+    configureAiTransportHost({
+      ...getAiTransportHost(),
+      transformTransportMessages,
+      immutableData: {
+        freezeJsonSnapshot,
+        isDeeplyFrozenPlainData,
+        ...(admitPlainData ? { isPlainData } : {}),
+      },
+      buildModelFetch: () => async (input, init) => {
+        encodedBody = init?.body;
+        wire = await new Request(input, init).text();
+        return response;
+      },
+    });
+    const stream = await createAnthropicMessagesTransportStreamFn()(
+      model,
+      { ...context, messages },
+      {
+        apiKey: "synthetic-request-key",
+        cacheRetention: "long",
+        onPayload: async (value, target) => {
+          const replacement = await hook?.(value, target);
+          payload = replacement === undefined ? value : replacement;
+          return replacement;
+        },
+      },
+    );
+    expect((await stream.result()).stopReason).toBe("stop");
+    return { wire, encodedBody, payload };
+  }
+
+  it("reuses frozen history bytes with an observer hook and preserves moving cache checkpoints", async () => {
+    let messages: Context["messages"] = [
+      { role: "user", content: 'Frozen "history" 🦞', timestamp: 0 },
+    ];
+    for (let turn = 0; turn < 3; turn++) {
+      messages = turn === 0 ? messages : appendToolTurn(messages, turn);
+      const latestAssistant = messages.at(-2);
+      if (latestAssistant?.role === "assistant") {
+        const call = latestAssistant.content.find((block) => block.type === "toolCall");
+        if (call?.type === "toolCall") {
+          call.arguments.values = Object.assign(["x"], { slice: 0, constructor: 0 });
+        }
+      }
+      messages.forEach(freezeJsonSnapshot);
+      const first = await send(messages);
+      expect(hash("sha256", first.wire)).toBe(hash("sha256", JSON.stringify(first.payload)));
+      const stringify = JSON.stringify;
+      let wholePayloadEncodes = 0;
+      let assistantEncodes = 0;
+      const spy = vi.spyOn(JSON, "stringify").mockImplementation((value, replacer, space) => {
+        if (isRecord(value) && value.model === model.id && Array.isArray(value.messages)) {
+          wholePayloadEncodes++;
+        }
+        if (isRecord(value) && value.role === "assistant") {
+          assistantEncodes++;
+        }
+        return stringify(value, replacer, space);
+      });
+      let repeated: Awaited<ReturnType<typeof send>>;
+      try {
+        repeated = await send(messages);
+      } finally {
+        spy.mockRestore();
+      }
+      expect(wholePayloadEncodes).toBe(0);
+      expect(first.encodedBody).toBeInstanceOf(Blob);
+      expect(repeated.wire).toBe(first.wire);
+      expect(markerPaths(JSON.parse(repeated.wire))).toContain(`messages[${turn * 2}].content[0]`);
+      if (turn > 0) {
+        expect(assistantEncodes).toBe(0);
+        expect(repeated.wire).toContain('"values":["x"]');
+      }
+    }
+    const tail = { role: "user" as const, content: "First tail", timestamp: 10 };
+    const firstTail = await send([...messages, tail]);
+    tail.content = "Changed tail";
+    const changedTail = await send([...messages, tail]);
+    expect(changedTail.wire).toContain("Changed tail");
+    expect(changedTail.wire).not.toBe(firstTail.wire);
+    expect(changedTail.wire).toBe(JSON.stringify(changedTail.payload));
+  });
+
+  it.each(["nested edit", "replacement", "opaque JSON"] as const)(
+    "fully serializes a hook's %s without retaining edited bytes",
+    async (kind) => {
+      const messages = appendToolTurn([{ role: "user", content: "Original", timestamp: 0 }], 1);
+      messages.forEach(freezeJsonSnapshot);
+      const original = await send(messages);
+      const calls: string[] = [];
+      const edit: AnthropicOptions["onPayload"] = (value) => {
+        if (!isRecord(value) || !Array.isArray(value.messages)) {
+          throw new Error("Expected hook-editable messages");
+        }
+        if (kind === "replacement") {
+          return { ...value, max_tokens: 123, metadata: { user_id: "replacement" } };
+        }
+        if (kind === "opaque JSON") {
+          value.metadata = {
+            value: [
+              {
+                toJSON: (key: string) => {
+                  calls.push(key);
+                  return "opaque";
+                },
+              },
+            ],
+            get label() {
+              calls.push("get label");
+              return "accessor";
+            },
+          };
+          return undefined;
+        }
+        const first = value.messages[0];
+        if (!isRecord(first) || !Array.isArray(first.content) || !isRecord(first.content[0])) {
+          throw new Error("Expected the first cache-marked text block");
+        }
+        first.content[0].text = "Hook edit";
+        const assistant = value.messages[1];
+        if (!isRecord(assistant) || !Array.isArray(assistant.content)) {
+          throw new Error("Expected editable tool input");
+        }
+        const call = assistant.content.find(
+          (block) => isRecord(block) && block.type === "tool_use",
+        );
+        if (!isRecord(call) || !isRecord(call.input)) {
+          throw new Error("Expected tool input");
+        }
+        call.input.query = "Edited query";
+        return undefined;
+      };
+      const stringify = vi.spyOn(JSON, "stringify");
+      let wholePayloadEncodes = 0;
+      const edited = await send(messages, edit).finally(() => {
+        wholePayloadEncodes = stringify.mock.calls.filter(
+          ([value]) => isRecord(value) && value.model === model.id && Array.isArray(value.messages),
+        ).length;
+        stringify.mockRestore();
+      });
+      expect(wholePayloadEncodes).toBe(1);
+      expect(typeof edited.encodedBody).toBe("string");
+      const decoded: unknown = JSON.parse(edited.wire);
+      if (kind === "opaque JSON") {
+        expect(calls).toEqual(["0", "get label"]);
+        expect(decoded).toMatchObject({ metadata: { value: ["opaque"], label: "accessor" } });
+      } else {
+        expect(edited.wire).toBe(JSON.stringify(edited.payload));
+        expect(decoded).toMatchObject(
+          kind === "replacement"
+            ? { max_tokens: 123, metadata: { user_id: "replacement" } }
+            : {
+                messages: [
+                  { content: [{ text: "Hook edit" }] },
+                  { content: [{ input: { query: "Edited query" } }] },
+                  {},
+                ],
+              },
+        );
+      }
+      expect((await send(messages)).wire).toBe(original.wire);
+    },
+  );
+
+  it("keeps hooks editable for embedding hosts without plain-data admission", async () => {
+    const messages: Context["messages"] = [{ role: "user", content: "Original", timestamp: 0 }];
+    messages.forEach(freezeJsonSnapshot);
+    const result = await send(
+      messages,
+      (value) => {
+        if (!isRecord(value)) {
+          throw new Error("Expected payload");
+        }
+        value.messages = [{ role: "user", content: "Embedding edit" }];
+      },
+      false,
+    );
+    expect(typeof result.encodedBody).toBe("string");
+    expect(result.wire).toContain("Embedding edit");
+  });
 });

@@ -466,15 +466,11 @@ describe("worker placement result recovery", () => {
       expect(restartedHarness.log).not.toContain("placement:failed");
       if (preserved) {
         expect(restartedHarness.environments.destroy).not.toHaveBeenCalled();
-        if (sameGatewayInstance) {
-          expect(restartedHarness.environments.stopTunnel).not.toHaveBeenCalled();
-        } else {
-          expect(restartedHarness.environments.stopTunnel).toHaveBeenCalledOnce();
-          expect(restartedHarness.environments.stopTunnel).toHaveBeenCalledWith(
-            active.environmentId,
-            active.activeOwnerEpoch,
-          );
-        }
+        expect(restartedHarness.environments.stopTunnel).toHaveBeenCalledOnce();
+        expect(restartedHarness.environments.stopTunnel).toHaveBeenCalledWith(
+          active.environmentId,
+          active.activeOwnerEpoch,
+        );
         expect(restartedHarness.placements.current()).toMatchObject({
           environmentId: active.environmentId,
           activeOwnerEpoch: active.activeOwnerEpoch,

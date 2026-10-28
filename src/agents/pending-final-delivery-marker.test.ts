@@ -6,7 +6,6 @@ import {
   advancePendingFinalDeliveryCompletion,
   persistPendingFinalDeliveryMarker,
 } from "./pending-final-delivery-marker.js";
-import { capturePendingFinalRecoverySource } from "./pending-final-recovery-source.js";
 
 const state = vi.hoisted(() => ({ applySessionEntryReplacements: vi.fn() }));
 
@@ -30,7 +29,6 @@ it.each(["matching", "wrong-intent", "wrong-delivery", "wrong-predecessor"])(
     ];
 
     const result = await persistPendingFinalDeliveryMarker({
-      admittedRecoverySource: capturePendingFinalRecoverySource(entry),
       agentId: "main",
       deliver: true,
       sessionStore: { main: entry },
@@ -44,7 +42,8 @@ it.each(["matching", "wrong-intent", "wrong-delivery", "wrong-predecessor"])(
     });
 
     const marker = result.sessionEntry?.pendingFinalDelivery;
-    expect(marker).toMatchObject({ kind: "replayable", text: "first\n\nsecond" });
+    expect(marker).toMatchObject({ kind: "transport-only" });
+    expect(marker).not.toHaveProperty("text");
     expect(marker?.deliveries).toEqual([{ id: expect.any(String), state: "prepared" }]);
     const deliveryId = marker?.deliveries?.[0]?.id;
     expect(

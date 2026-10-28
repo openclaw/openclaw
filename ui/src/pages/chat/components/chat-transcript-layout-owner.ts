@@ -1,3 +1,12 @@
+import type { Virtualizer } from "@tanstack/virtual-core";
+import { CONTROL_UI_BUILD_INFO } from "../../../build-info.ts";
+import { i18n } from "../../../i18n/index.ts";
+import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
+import { getExpandedToolCards, getExpandedUserMessages } from "../chat-thread.ts";
+import type { ChatWidgetLayout } from "../session-message-cache.ts";
+import type { ChatThreadProps } from "./chat-thread-interactions.ts";
+import { measureTranscriptRow } from "./chat-transcript-geometry.ts";
+import { createTranscriptMemo } from "./chat-transcript-memo.ts";
 import {
   publishTranscriptScroll,
   readTranscriptViewport,
@@ -7,6 +16,9 @@ export type ComposerActivityLayout = {
   strip: HTMLElement;
   pills: ReadonlySet<HTMLElement>;
 };
+
+type TranscriptRowGeometry = { key: string; revision?: string };
+const projectedRows = createTranscriptMemo<readonly TranscriptRowGeometry[]>();
 
 /** Match ResizeObserver's fractional border box without pane transition transforms. */
 export function unscaledBorderBox(element: HTMLElement, style = getComputedStyle(element)) {
@@ -27,6 +39,147 @@ export function unscaledBorderBox(element: HTMLElement, style = getComputedStyle
 
 /** The native scroll range changes only at these viewport and content writes. */
 export class TranscriptLayoutOwner {
+  ready = false;
+  private rowGeometry: readonly TranscriptRowGeometry[] = [];
+  rowLayout?: ChatWidgetLayout;
+  private rowPresentation = "";
+  rowWidth = 0;
+  paneWidth = 0;
+  rowGutter = 0;
+  private cancelRowWrite: (() => void) | null = null;
+
+  get rows(): readonly TranscriptRowGeometry[] {
+    return this.rowGeometry;
+  }
+
+  set rows(rows: readonly TranscriptRowGeometry[]) {
+    // Geometry survives rendered bodies; structural types alone do not discard payloads.
+    this.rowGeometry = projectedRows(rows, [], () =>
+      rows.map(({ key, revision }) => ({ key, revision })),
+    );
+  }
+
+  configureRows(props: ChatThreadProps, avatarPlacement: string, transient: boolean): void {
+    this.ready = !props.loading;
+    // Expanded and filtered rows are transient; the snapshot cannot restore them.
+    this.rowLayout = transient ? undefined : props.widgetLayout;
+    const theme = props.applicationContext?.theme;
+    const font = theme?.settings;
+    const presentation = JSON.stringify([
+      CONTROL_UI_BUILD_INFO.buildId,
+      avatarPlacement,
+      props.chatBubbleMode,
+      i18n.getLocale(),
+      font?.fontChat,
+      font?.fontUi,
+      font?.terminalFontFamily,
+      font?.textScale,
+      font?.chatMessageMaxWidth,
+      theme?.resolvedMode,
+      font?.theme,
+      font?.customTheme,
+      props.showThinking,
+      props.showToolCalls,
+      props.persistCommentary,
+      typeof window === "undefined" ? 1 : window.devicePixelRatio,
+      ...getExpandedToolCards(props.sessionKey),
+      ...getExpandedUserMessages(props.sessionKey),
+    ]);
+    this.rowPresentation = `${presentation.length}:${fnv1aUtf16(presentation)}`;
+  }
+
+  private rowLayoutKey(index: number, width = this.rowWidth): string | undefined {
+    const row = this.rows[index];
+    return width > 0 && this.paneWidth > 0 && row?.revision
+      ? `row:v1:${width}:${this.paneWidth}:${window.innerHeight}:${this.rowGutter}:${this.rowPresentation}:${row.revision}:${JSON.stringify(row.key)}`
+      : undefined;
+  }
+
+  readonly rowMinimum = (index: number): number => {
+    const key = this.rowLayoutKey(index);
+    return key ? (this.rowLayout?.read(key) ?? 0) : 0;
+  };
+
+  restoreRows(
+    instance: Virtualizer<HTMLDivElement, HTMLElement>,
+    width: number,
+    paneWidth: number,
+    gutter: number,
+  ): void {
+    this.rowWidth = width;
+    this.paneWidth = paneWidth;
+    this.rowGutter = gutter;
+    const heights = this.rowLayout?.readRows();
+    if (!heights) {
+      return;
+    }
+    this.rows.forEach((row, index) => {
+      const key = this.rowLayoutKey(index);
+      const minimum = key ? (heights[key] ?? 0) : 0;
+      if (minimum > (instance.itemSizeCache.get(row.key) ?? 0)) {
+        instance.resizeItem(index, minimum);
+      }
+    });
+  }
+
+  readonly measureRow: typeof measureTranscriptRow = (element, entry, instance) => {
+    const size = measureTranscriptRow(element, entry, instance);
+    return Math.max(size, this.rowMinimum(instance.indexFromElement(element)));
+  };
+
+  persistRows(instance: Virtualizer<HTMLDivElement, HTMLElement>, positionPending: boolean): void {
+    if (positionPending || !this.ready || this.cancelRowWrite || !this.rowLayout) {
+      return;
+    }
+    let idle: number | undefined;
+    const cancel = () =>
+      idle === undefined ? cancelAnimationFrame(frame) : globalThis.cancelIdleCallback(idle);
+    const write = () => {
+      // A retired callback must not write or clear a replacement task after reconnect.
+      if (this.cancelRowWrite !== cancel) {
+        return;
+      }
+      this.cancelRowWrite = null;
+      if (!this.viewport?.isConnected || !this.ready || instance.scrollElement !== this.viewport) {
+        return;
+      }
+      this.rowLayout?.writeRows(
+        Object.fromEntries(
+          [...instance.elementsCache].flatMap(([id, element]) => {
+            if (!element.isConnected) {
+              return [];
+            }
+            const key = this.rowLayoutKey(instance.indexFromElement(element));
+            const size = instance.itemSizeCache.get(id) ?? 0;
+            // Local disclosure state is not restored on reload.
+            if (
+              !key ||
+              !(size > 0 && size <= 8000) ||
+              element.matches(
+                ":has(details[open], .chat-tool-card__raw-toggle[aria-expanded='true'], .code-block-wrapper:is(.is-expanded, .is-wrapped, .is-json-raw))",
+              )
+            ) {
+              return [];
+            }
+            return [[key, size]];
+          }),
+        ),
+      );
+    };
+    // The reveal owner admits this work; reuse measured sizes after paint.
+    let frame = requestAnimationFrame(() => {
+      if (this.cancelRowWrite !== cancel) {
+        return;
+      }
+      if (globalThis.requestIdleCallback) {
+        idle = globalThis.requestIdleCallback(write);
+      } else {
+        frame = requestAnimationFrame(write);
+      }
+    });
+    this.cancelRowWrite = cancel;
+  }
+
   private viewport: HTMLDivElement | null = null;
   private observers: ResizeObserver[] = [];
   private composerFloat: HTMLElement | null = null;
@@ -92,6 +245,7 @@ export class TranscriptLayoutOwner {
       observer.observe(slot, { box });
       return observer;
     });
+    this.sync();
   }
 
   sync(size?: ResizeObserverSize, refreshActivity = false): void {
@@ -255,6 +409,9 @@ export class TranscriptLayoutOwner {
   }
 
   disconnect(): void {
+    const cancel = this.cancelRowWrite;
+    this.cancelRowWrite = null;
+    cancel?.();
     for (const observer of this.observers) {
       observer.disconnect();
     }

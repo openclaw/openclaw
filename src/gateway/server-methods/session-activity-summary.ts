@@ -112,8 +112,7 @@ export const sessionActivitySummaryHandlers: GatewayRequestHandlers = {
             !selected.entry ||
             selected.entry.sessionId !== target.entry.sessionId ||
             selected.entry.lifecycleRevision !== target.entry.lifecycleRevision ||
-            (hasOperatorBoundary(client, currentCfg) &&
-              sharing.entryFilter?.(target.canonicalKey, target.entry) === false)
+            (hasOperatorBoundary(client, currentCfg) && !sharing.canReadTarget(target))
           ) {
             respondError(respond, ErrorCodes.INVALID_REQUEST, "Session is unavailable.");
             return;
@@ -163,9 +162,7 @@ export const sessionActivitySummaryHandlers: GatewayRequestHandlers = {
             : errorShape(ErrorCodes.INVALID_REQUEST, "Session is unavailable.");
           if (
             error ||
-            (target &&
-              hasOperatorBoundary(client, currentCfg) &&
-              sharing.entryFilter?.(target.canonicalKey, target.entry) === false)
+            (target && hasOperatorBoundary(client, currentCfg) && !sharing.canReadTarget(target))
           ) {
             respond(
               false,

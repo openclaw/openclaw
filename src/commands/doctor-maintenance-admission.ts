@@ -1,5 +1,6 @@
 import { UPDATE_RUN_ID_ENV } from "../infra/update-control-plane-sentinel.js";
 import { DoctorMaintenanceRefusalError } from "../infra/update-doctor-result.js";
+import { createUpdateFailureFact } from "../infra/update-failure-facts.js";
 import { inspectUpdateRepairDriverAdmission } from "../infra/update-run-activity.js";
 import { recordUpdateRunRepairContinuation } from "../infra/update-run-ledger.js";
 import { createUpdateRunAdmissionReader } from "../infra/update-run-reader.js";
@@ -25,10 +26,23 @@ export function resolveDoctorUpdateAdmission(
     const admission = inspectUpdateRepairDriverAdmission(runs, inheritedRunId);
     if (admission.kind === "conflict") {
       if (admission.reason === "ancestry-unverified") {
-        throw new DoctorMaintenanceRefusalError(admission.message, {
-          kind: "deferred",
-          reason: "admission-unavailable",
-        });
+        throw new DoctorMaintenanceRefusalError(
+          admission.message,
+          { kind: "deferred", reason: "admission-unavailable" },
+          {
+            failureFacts: [
+              createUpdateFailureFact(
+                {
+                  check: "update-driver-ancestry",
+                  code: admission.reason,
+                  message:
+                    "Process ancestry unavailable. Restore procfs visibility or install a compatible proc-safe helper. After the recorded driver exits, run openclaw update repair.",
+                },
+                env,
+              ),
+            ],
+          },
+        );
       }
       throw new Error(admission.message);
     }

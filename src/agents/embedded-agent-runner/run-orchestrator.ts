@@ -37,17 +37,14 @@ import { createStageTimingTracker } from "../../shared/stage-timing.js";
 import { resolveUserPath } from "../../utils.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import { sanitizeAgentRunTerminalReply } from "../agent-run-terminal-reply.js";
-import {
-  resolveAgentDir,
-  resolveAgentWorkspaceDir,
-  resolveModelFallbackAvailability,
-} from "../agent-scope.js";
+import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agent-scope.js";
 import { createAssistantErrorTranscript } from "../assistant-error-transcript.js";
 import {
   runBestEffortCallback,
   serializeAgentEventCallback,
 } from "../embedded-agent-subscribe.callback.js";
 import { resolveLegacyInheritedAuthDir } from "../legacy-inherited-auth-dir.js";
+import { resolveModelFallbackAvailability } from "../model-selection-config.js";
 import {
   getPreparedModelRuntimePluginGeneration,
   runOutsidePreparedModelRuntimePluginGenerationScope,
@@ -347,6 +344,7 @@ async function runEmbeddedAgentForSession(
             ...(!isolatedReadOnly
               ? {
                   retainIdleRunOwner,
+                  ...(refreshed ? { waitForReplacementPublication: true } : {}),
                   ...(params.pluginGeneration ? { pluginGeneration: params.pluginGeneration } : {}),
                 }
               : {}),
@@ -676,6 +674,9 @@ async function runEmbeddedAgentForSession(
             }
             // A refresh must join the old generation's tracked cleanup before reacquisition.
             await generationCleanup;
+            // The logical turn's engine came from the old generation; release it so a reload
+            // can drain it. The next attempt's begin rebinds it from the published generation.
+            await continuation.contextEngineLogicalTurnLease?.handOver();
             // The old attempt has persisted results and released its tools. Reuse admission,
             // but acquire fresh plugin owners before continuing the same task from its transcript.
             params = continuation;

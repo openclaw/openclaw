@@ -57,7 +57,8 @@ beforeEach(async () => {
   settleCleanup = observeCompanionCleanup();
 });
 
-const target = { agentId: "main", sessionKey: "agent:main:main" };
+const target = { agentId: "main", sessionKey: "agent:main:main", ownerId: "profile:alice" };
+const shared = { ownerId: "shared" };
 const answer = "Evidence says the build is green.";
 type Companion = ReturnType<typeof createSessionCompanion>;
 function readyContext(text: string | null = "seed question", sessionId = "session-1") {
@@ -316,11 +317,31 @@ it("discards an answer when the backing session identity changes", async () => {
   expect(harness.readContext).toHaveBeenCalledTimes(2);
 });
 
+it("keeps each requester's thread private and clears only the caller's thread", async () => {
+  const harness = createHarness();
+  const alice = target;
+  const bob = { ...target, ownerId: "profile:bob" };
+  await harness.ask("Alice?");
+  await harness.service.ask({ ...bob, question: "Bob?", connId: "conn-bob" });
+
+  expectSaved(harness.service, "Alice?");
+  expect(harness.service.state(bob).exchanges).toEqual([savedExchange("Bob?")]);
+  expectHistory(harness.seededHistory[1], "seed question");
+  expect(JSON.stringify(harness.seededHistory[1])).not.toContain("Alice?");
+
+  harness.service.reset(bob);
+  expect(harness.service.state(bob).exchanges).toEqual([]);
+  expectSaved(harness.service, "Alice?");
+
+  notifyGatewaySessionReset(alice.sessionKey, alice.agentId);
+  expectEmpty(harness.service);
+});
+
 it("deletion preserves qualified ownership despite a different publisher agent", async () => {
   const sessionKey = "agent:work:selected";
   const harness = createHarness();
-  const selected = { agentId: "work", sessionKey };
-  const other = { agentId: "main", sessionKey: "global" };
+  const selected = { agentId: "work", sessionKey, ownerId: "profile:alice" };
+  const other = { agentId: "main", sessionKey: "global", ownerId: "profile:alice" };
   const databaseIdentity = Symbol("session-companion-database");
   await harness.service.ask({ ...selected, question: "Work?", connId: "conn-work" });
   await harness.service.ask({ ...other, question: "Main?", connId: "conn-main" });
@@ -456,7 +477,11 @@ it("keeps the RPC source and busy slot through timed-out execution cleanup, then
   const respond = vi.fn();
   const pending = Promise.resolve(
     sessionCompanionHandlers["sessions.companion.ask"]!({
-      params: { ...target, question: "Will this time out?" },
+      params: {
+        agentId: target.agentId,
+        sessionKey: target.sessionKey,
+        question: "Will this time out?",
+      },
       client: { connId: "conn-1" },
       context: { sessionCompanion: harness.service, getRuntimeConfig: () => cfg },
       respond,
@@ -476,7 +501,8 @@ it("keeps the RPC source and busy slot through timed-out execution cleanup, then
     // A deadline cancels execution, but must not retire its source facts before settlement.
     expect(() => run.preparedRunAdmission?.assertSourceCurrent()).not.toThrow();
     expect(respond).not.toHaveBeenCalled();
-    await expectFailure(harness.ask("Too early?"), "busy");
+    // An unauthenticated RPC client owns the shared thread.
+    await expectFailure(harness.ask("Too early?", shared), "busy");
     finish.resolve();
     await pending;
     expect(respond).toHaveBeenCalledExactlyOnceWith(
@@ -490,10 +516,12 @@ it("keeps the RPC source and busy slot through timed-out execution cleanup, then
       }),
     );
     expect(loadExactSessionEntry(internalTarget)).toBeUndefined();
-    expectEmpty(harness.service);
+    expect(harness.service.state({ ...target, ...shared }).exchanges).toEqual([]);
     vi.useRealTimers();
-    await expectAnswer(harness.ask("Retry?"));
-    expectSaved(harness.service, "Retry?");
+    await expectAnswer(harness.ask("Retry?", shared));
+    expect(harness.service.state({ ...target, ...shared }).exchanges).toEqual([
+      savedExchange("Retry?"),
+    ]);
   } finally {
     finish.resolve();
     await pending;

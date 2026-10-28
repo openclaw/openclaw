@@ -258,6 +258,7 @@ scripts/lib/vitest-worker-descriptor.mts
 scripts/lib/vitest-worker-run.mts
 scripts/lib/tooling-dependencies.mjs
 scripts/lib/watch-pr-ci-rollup.mts
+scripts/lib/watch-pr-ci-run.mts
 scripts/lib/windows-taskkill.mjs
 scripts/pnpm-runner.mts
 scripts/pr-crabbox-gate-publisher.mjs
@@ -502,8 +503,8 @@ src/channels/plugins/setup-contract.ts
 src/channels/registry-lookup.ts
 src/channels/registry-normalize.ts
 src/channels/registry.ts
-src/claws/add-state-worker-contract.ts
-src/claws/provenance-secondary-references.ts
+src/templates/add-state-worker-contract.ts
+src/templates/provenance-secondary-references.ts
 src/cli/command-format.ts
 src/cli/daemon-cli/restart-health.types.ts
 src/cli/parse-bytes.ts
@@ -710,6 +711,7 @@ src/config/sessions/migration-required.ts
 src/config/sessions/model-override-provenance.ts
 src/config/sessions/paths.ts
 src/config/sessions/session-accessor.sqlite-entry-inventory.ts
+src/config/sessions/session-accessor.sqlite-entry-equality.ts
 src/config/sessions/session-accessor.sqlite-conversation-publication.ts
 src/config/sessions/session-accessor.sqlite-owner-projection.ts
 src/config/sessions/session-accessor.sqlite-scope-helpers.ts
@@ -718,6 +720,7 @@ src/config/sessions/session-canonical-key-error.ts
 src/config/sessions/session-canonical-key.ts
 src/config/sessions/session-canonical-row.ts
 src/config/sessions/session-cold-storage-state.ts
+src/config/sessions/session-transcript-cold-error.ts
 src/config/sessions/session-entry-codec.ts
 src/config/sessions/session-entry-write-policy.ts
 src/config/sessions/session-entry-cohort.worker.ts
@@ -742,6 +745,7 @@ src/config/sessions/session-row-facts.types.ts
 src/config/sessions/session-skill-snapshot-intern.ts
 src/state/artifact-preserving-state-reads.ts
 src/state/incognito-session-error.ts
+src/config/sessions/session-model-context-entry.ts
 src/config/sessions/session-model-context-projection.ts
 src/config/sessions/session-model-context-navigation.ts
 src/config/sessions/session-model-context-pages.ts
@@ -871,6 +875,7 @@ src/gateway/model-account-connect-errors.ts
 src/gateway/operator-scopes.ts
 src/gateway/security-path.ts
 src/gateway/server-methods/workspace-fs.ts
+src/gateway/worker-environments/local-workspace-fingerprints.ts
 src/gateway/worker-environments/placement-authority-owner.ts
 src/gateway/worker-environments/placement-inventory-changed-error.ts
 src/gateway/worker-environments/placement-read-authority.ts
@@ -1236,6 +1241,7 @@ src/infra/sqlite-schema-lifetime.ts
 src/infra/sqlite-schema-mutation.ts
 src/infra/sqlite-schema-scope.ts
 src/infra/sqlite-schema-sql.ts
+src/infra/sqlite-snapshot-diagnostics.ts
 src/infra/sqlite-snapshot-file.ts
 src/infra/sqlite-snapshot-policy.ts
 src/infra/sqlite-snapshot-retirement.ts
@@ -1386,6 +1392,7 @@ src/logging/diagnostic-cpu-profile.ts
 src/logging/diagnostic-heap-profile.ts
 src/logging/diagnostic-profile.ts
 src/logging/diagnostic-support-key-check.ts
+src/logging/diagnostic-support-causes.ts
 src/logging/diagnostic-support-redaction.ts
 src/logging/diagnostic-worker-gc-profile.ts
 src/logging/env-log-level.ts
@@ -1577,7 +1584,6 @@ src/plugins/official-external-plugin-catalog-hosted.ts
 src/plugins/official-external-plugin-catalog-snapshot-store.ts
 src/plugins/official-external-plugin-catalog-source.ts
 src/plugins/official-external-plugin-catalog.ts
-src/plugins/official-external-provider-endpoints.ts
 src/plugins/package-compat.ts
 src/plugins/package-entry-resolution.ts
 src/plugins/package-entrypoints.ts
@@ -1597,7 +1603,6 @@ src/plugins/plugin-generation-file-capture.ts
 src/plugins/plugin-generation-receipt.ts
 src/plugins/plugin-generation-source-lookup.ts
 src/plugins/plugin-install-default-choice.ts
-src/plugins/plugin-instance-argument-views.ts
 src/plugins/plugin-instance-background.ts
 src/plugins/legacy-sdk-resource-host.ts
 src/plugins/provider-claude-thinking.ts
@@ -1616,6 +1621,7 @@ src/plugins/plugin-instance-scope.ts
 src/plugins/plugin-instance-settlement.ts
 src/plugins/plugin-instance-bindings.ts
 src/plugins/plugin-instance.ts
+src/plugins/plugin-replacement-watchers.ts
 src/plugins/plugin-lifecycle-trace.ts
 src/plugins/plugin-manifest-id-normalizer.ts
 src/plugins/plugin-metadata-contributions.ts
@@ -1629,7 +1635,6 @@ src/plugins/plugin-metadata-snapshot-required.ts
 src/plugins/plugin-metadata-snapshot.runtime.ts
 src/plugins/plugin-metadata-snapshot.ts
 src/plugins/plugin-metadata-state-worker.ts
-src/plugins/plugin-metadata-live-read.worker.ts
 src/plugins/plugin-metadata-state.read.worker.ts
 src/plugins/plugin-metadata-state.kernel.ts
 src/plugins/plugin-module-loader-cache.ts
@@ -1655,6 +1660,7 @@ src/plugins/plugin-return-value.ts
 src/plugins/plugin-tool-execution.ts
 src/plugins/plugin-runtime-artifact-identity.ts
 src/plugins/plugin-runtime-artifact-resolution.ts
+src/plugins/plugin-runtime-artifact-binding.ts
 src/plugins/plugin-runtime-artifact-selection.ts
 src/plugins/plugin-safety-inspected-files.ts
 src/plugins/plugin-scope.ts
@@ -1808,6 +1814,7 @@ src/sessions/model-selection-error.ts
 src/sessions/session-chat-type-shared.ts
 src/sessions/session-controller.cleanup-context.ts
 src/sessions/session-controller.owner-context.ts
+src/sessions/session-controller.target.ts
 src/sessions/session-diff-parser.ts
 src/sessions/session-diff-revisions.ts
 src/sessions/session-diff.runtime.ts
@@ -1888,7 +1895,6 @@ src/state/agent-deletion-journal-recovery.ts
 src/state/agent-deletion-journal-status.ts
 src/state/agent-deletion-journal.read.ts
 src/state/agent-deletion-journal.ts
-src/state/agent-input-recovery-context.ts
 src/state/agent-provenance.kernel.ts
 src/state/agent-provenance-publication.ts
 src/state/agent-provenance.schema.ts
@@ -1980,6 +1986,7 @@ src/state/openclaw-agent-session-snapshots-schema.ts
 src/state/openclaw-agent-session-transcript-archive-schema.ts
 src/state/openclaw-agent-standing-intents-schema.ts
 src/state/openclaw-agent-storage-schema.ts
+src/state/openclaw-agent-text-search-migration.ts
 src/state/openclaw-agent-trajectory-storage-migration.ts
 src/state/openclaw-agent-transcript-fts-schema-source.ts
 src/state/openclaw-agent-transcript-fts-schema.ts
@@ -2046,6 +2053,8 @@ src/state/openclaw-state-db-schema-v12-foldin.ts
 src/state/openclaw-state-db-schema-v13-widerow.ts
 src/state/openclaw-state-db-schema-v21-columns.ts
 src/state/openclaw-state-db-schema-v31-workspace-manifests.ts
+src/state/openclaw-state-db-schema-v35-workspace-cas.ts
+src/state/openclaw-state-db-schema-v36-template-names.ts
 src/state/openclaw-state-db-schema-v22-columns.ts
 src/state/openclaw-state-db-schema-v24-indexes.ts
 src/state/openclaw-state-db-schema-v26-layout.ts
@@ -2267,7 +2276,6 @@ src/config/sessions/session-participant-identity.ts
 src/config/sessions/session-participant-prepared-read.ts
 packages/agent-core/src/harness/session/session.ts
 packages/ai/src/transports/provider-compaction-checkpoint.ts
-src/config/sessions/restart-recovery-state.ts
 src/config/sessions/session-accessor.sqlite-delete-snapshot.ts
 src/config/sessions/session-accessor.sqlite-export-slices.ts
 src/config/sessions/session-accessor.sqlite-entry-cache-projection.ts
@@ -2418,6 +2426,7 @@ packages/gateway-protocol/src/schema/sessions-sharing-constants.ts
 packages/gateway-protocol/src/schema/sessions-sharing-values.ts
 packages/gateway-protocol/src/schema/setup-inference.ts
 packages/gateway-protocol/src/schema/skill-detail.ts
+packages/gateway-protocol/src/schema/skill-workshop-drafts.ts
 packages/gateway-protocol/src/schema/skills-search.ts
 packages/gateway-protocol/src/schema/tab-icon.ts
 packages/gateway-protocol/src/schema/ui-appearance-preferences.ts
@@ -2466,7 +2475,6 @@ src/agents/failover/signal-details.ts
 src/agents/failover/user-copy.ts
 src/agents/harness/errors.ts
 src/agents/live-model-errors.ts
-src/agents/main-session-recovery/main-session-recovery-clear.ts
 src/agents/sandbox-host.ts
 src/agents/sandbox-widget-scroll-bridge.ts
 src/agents/sessions/session-manager-append-codec.ts
@@ -2494,7 +2502,6 @@ src/config/sessions/conversation-route-fingerprint.ts
 src/config/sessions/goals-operation-policy.ts
 src/config/sessions/goals-transitions.ts
 src/config/sessions/provider-review-store.ts
-src/config/sessions/restart-recovery-receipt-state.ts
 src/config/sessions/session-accessor.sqlite-normalize.ts
 src/config/sessions/session-accessor.sqlite-parent-fork.ts
 src/config/sessions/session-accessor.sqlite-replacement-worker.ts
@@ -2502,7 +2509,6 @@ src/config/sessions/session-accessor.sqlite-visible-cursor.ts
 src/config/sessions/session-actor-memory-closed-turn.ts
 src/config/sessions/session-actor-memory-collaboration-state.ts
 src/config/sessions/session-actor-memory-collaboration.ts
-src/config/sessions/session-actor-memory-completion.ts
 src/config/sessions/session-actor-memory-conversation-contract.ts
 src/config/sessions/session-actor-memory-conversation-delivery.ts
 src/config/sessions/session-actor-memory-conversation.ts
@@ -2529,7 +2535,7 @@ src/config/sessions/session-actor-memory-owner.ts
 src/config/sessions/session-actor-memory-pending.ts
 src/config/sessions/session-actor-memory-publication.ts
 src/config/sessions/session-actor-memory-reactions.ts
-src/config/sessions/session-actor-memory-recovery.ts
+src/config/sessions/session-actor-memory-registry.ts
 src/config/sessions/session-actor-memory-reports.ts
 src/config/sessions/session-actor-memory-search.ts
 src/config/sessions/session-actor-memory-side-effects-contract.ts
@@ -2550,6 +2556,7 @@ src/config/sessions/session-actor-phase.ts
 src/config/sessions/session-actor-receipt.ts
 src/config/sessions/session-actor-read-error.ts
 src/config/sessions/session-actor-reducers.ts
+src/config/sessions/session-actor-storage-acquisition.ts
 src/config/sessions/session-actor-storage-binding.ts
 src/config/sessions/session-bounded-context-selection.ts
 src/config/sessions/session-cache-ttl-prefix-values.ts
@@ -2562,7 +2569,6 @@ src/config/sessions/session-entry-public-patch.ts
 src/config/sessions/session-entry-read-facts.ts
 src/config/sessions/session-entry-selection.ts
 src/config/sessions/session-entry-usage.ts
-src/config/sessions/session-harness-completion-input.ts
 src/config/sessions/session-history-visibility.ts
 src/config/sessions/session-memory-targets-policy.ts
 src/config/sessions/session-message-cut-content.ts
@@ -2670,6 +2676,7 @@ src/config/sessions/session-lifecycle-worker-publication.ts
 src/config/sessions/session-native-binding.ts
 src/plugin-state/plugin-state-publication.ts
 src/config/sessions/transcript-recent-text.ts
+src/state/startup-metadata-live-read.worker.ts
 src/state/state-domain-publication.ts
 src/state/user-model-account-authority.ts
 src/state/user-model-account-id.ts
@@ -2702,7 +2709,6 @@ src/shared/tool-approval-reviews.ts
 src/agents/agent-lifecycle-parent-state.ts
 src/agents/agent-run-terminal-error.ts
 src/agents/agent-run-terminal-outcome.ts
-src/agents/main-session-recovery/main-session-recovery-lifecycle.ts
 src/agents/run-termination.ts
 src/config/sessions/session-run-lifecycle-projection.ts
 src/shared/agent-liveness.ts
@@ -2717,7 +2723,6 @@ src/agents/agent-bundle-mcp-runtime-shared.ts
 src/infra/client-credential-migration-data.ts
 src/infra/client-credential-migration.ts
 src/infra/client-credential-native-bootstrap.ts
-src/infra/client-credential-native-tokens.ts
 src/infra/client-credential-operations.ts
 src/infra/client-credential-paths.ts
 src/infra/client-credential-readiness.ts
@@ -2766,3 +2771,10 @@ src/process/spawn-broker/worker.ts
 src/state/openclaw-agent-schema-inspection.worker.ts
 src/state/openclaw-state-ownership.worker.ts
 src/infra/schema-migration-diagnostics.ts
+src/canvas/wrap.ts
+src/plugin-sdk/widget-html.ts
+src/shared/html-escape.ts
+src/shared/widget-media.ts
+src/gateway/worker-environments/local-workspace-cas.ts
+src/gateway/worker-environments/local-workspace-cas.kernel.ts
+src/gateway/worker-environments/local-workspace-gc.ts

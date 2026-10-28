@@ -1458,7 +1458,8 @@ extension GatewayChannelActor {
             let code = response.error?.code
             let msg = response.error?.message
             let details = gatewayErrorDetails(response.error)
-            throw GatewayResponseError(method: method, code: code, message: msg, details: details)
+            throw GatewayResponseError(
+                method: method, code: code, message: msg, details: details, retryable: response.error?.retryable)
         }
         if let payload = response.payload {
             // Encode back to JSON with Swift's encoder to preserve types and avoid ObjC bridging exceptions.

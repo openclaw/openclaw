@@ -10,6 +10,14 @@ describe("cli json stdout contract", () => {
     { context: "ordinary fresh home", env: {}, reason: "never-asked" },
     { context: "automated fresh home", env: { CI: "1" }, reason: "automated-environment" },
     {
+      context: "automation with an explicit production endpoint",
+      env: {
+        CI: "1",
+        OPENCLAW_TELEMETRY_ENDPOINT: "https://telemetry.openclaw.ai/api/latest-version",
+      },
+      reason: "automated-environment",
+    },
+    {
       context: "automation with an explicit endpoint",
       env: {
         CI: "1",
@@ -65,6 +73,7 @@ describe("cli json stdout contract", () => {
             const payload = JSON.parse(result.stdout);
             expect(payload).toEqual({
               featureStatsEnabled: false,
+              installationCountEnabled: reason !== "automated-environment",
               reason,
               endpoint,
               lastPingAt: null,
@@ -83,6 +92,10 @@ describe("cli json stdout contract", () => {
             const lines = report.trimEnd().split("\n");
             expect(lines).toEqual([
               "Feature stats: disabled",
+              "Installation counting: " +
+                (reason === "automated-environment"
+                  ? "disabled"
+                  : "eligible after a fresh receiver capability"),
               `Reason: ${reason === "automated-environment" ? "disabled in an automated environment (CI is set)" : "consent has not been requested"}`,
               `Endpoint: ${endpoint}`,
               "Last ping: never",

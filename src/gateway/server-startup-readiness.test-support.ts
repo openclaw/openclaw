@@ -16,11 +16,9 @@ import type { ReadinessChecker } from "./server/readiness.js";
 type PostAttachParams = Parameters<typeof startGatewayPostAttachRuntime>[0];
 
 export function createStartupMethodUnlocker(unavailableGatewayMethods: Set<string>) {
-  return (options?: { keepChatSendUnavailable?: boolean }) => {
+  return () => {
     for (const method of STARTUP_UNAVAILABLE_GATEWAY_METHODS) {
-      if (method !== "chat.send" || !options?.keepChatSendUnavailable) {
-        unavailableGatewayMethods.delete(method);
-      }
+      unavailableGatewayMethods.delete(method);
     }
   };
 }

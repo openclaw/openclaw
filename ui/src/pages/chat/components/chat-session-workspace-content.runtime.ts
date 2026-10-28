@@ -430,7 +430,15 @@ async function readSessionFileReference(
   const read = async (actionPath: string) => {
     try {
       const result = await state.sessions.getFile(sessionKey, actionPath, options);
-      return result ? { result, actionPath } : null;
+      // A preview can resolve an execution-path alias; actions keep its returned file and source.
+      return result
+        ? {
+            result,
+            actionPath: result.file?.workspacePath
+              ? workspaceBrowserFilePath(result.root, result.file.workspacePath)
+              : actionPath,
+          }
+        : null;
     } catch (error) {
       const details = error instanceof GatewayRequestError ? error.details : null;
       if (

@@ -8,7 +8,6 @@ import { clearRuntimeConfigSnapshot, readRuntimeConfig } from "../config/runtime
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { MediaUnderstandingModelConfig } from "../config/types.tools.js";
 import { writeChannelPairingStateSnapshot } from "../pairing/pairing-store-sqlite.test-helpers.js";
-import type { PluginCapabilityConsentHandler } from "../plugins/capability-consent.js";
 import { buildPluginCapabilityConsentReview } from "../plugins/capability-summary.js";
 import { loadPluginRegistryHandle } from "../plugins/loader.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -23,6 +22,9 @@ import {
 import { createDoctorPrompter } from "./doctor-prompter.js";
 
 type TerminalNote = (message: string, title?: string) => void;
+type RepairParams = Parameters<
+  typeof import("./doctor/repair-sequencing.js").runDoctorRepairSequence
+>[0];
 
 const terminalNoteMock = vi.hoisted(() => vi.fn<TerminalNote>());
 const callGatewayMock = vi.hoisted(() => vi.fn());
@@ -273,15 +275,15 @@ describe("doctor config flow", () => {
 
   afterEach(() => clearRuntimeConfigSnapshot());
 
-  it.each([false, true])(
-    "preserves explicit collaborative steering %s without a repair",
+  it.each([undefined, false, true])(
+    "does not pin or overwrite collaborative steering %s during repair",
     async (value) => {
       const config: OpenClawConfig = {
         agents: { entries: { main: {} } },
         gateway: { mode: "local" },
         messages: {
           responsePrefix: "keep-prefix",
-          queue: { allowCollaborativeSteering: value, cap: 8 },
+          queue: value === undefined ? { cap: 8 } : { allowCollaborativeSteering: value, cap: 8 },
         },
       };
 
@@ -452,15 +454,13 @@ describe("doctor config flow", () => {
       config: {},
     });
     let acknowledgment: unknown = "not reviewed";
-    runDoctorRepairSequenceMock.mockImplementation(
-      async (params: { state: unknown; onCapabilityConsent?: PluginCapabilityConsentHandler }) => {
-        acknowledgment = await expectDefined(
-          params.onCapabilityConsent,
-          "doctor capability handler",
-        )(review);
-        return repairResult(params.state);
-      },
-    );
+    runDoctorRepairSequenceMock.mockImplementation(async (params: RepairParams) => {
+      acknowledgment = await expectDefined(
+        params.onCapabilityConsent,
+        "doctor capability handler",
+      )(review);
+      return repairResult(params.state);
+    });
     const prompter = createDoctorPrompter({
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
       options: { repair: true, yes: true, nonInteractive: true },
@@ -489,19 +489,13 @@ describe("doctor config flow", () => {
   });
 
   it("does not refresh gateway before writing a config-only auth repair", async () => {
-    runDoctorRepairSequenceMock.mockImplementation(
-      async (params: {
-        state: { cfg: Record<string, unknown>; candidate: Record<string, unknown> };
-      }) => {
-        const repaired = { ...params.state.candidate, auth: { order: {} } };
-        return repairResult(
-          { ...params.state, cfg: repaired, candidate: repaired, pendingChanges: true },
-          {
-            changeNotes: ["Removed a stale configured auth order."],
-          },
-        );
-      },
-    );
+    runDoctorRepairSequenceMock.mockImplementation(async ({ state }: RepairParams) => {
+      const repaired = { ...state.candidate, auth: { order: {} } };
+      return repairResult(
+        { ...state, cfg: repaired, candidate: repaired, pendingChanges: true },
+        { changeNotes: ["Removed a stale configured auth order."] },
+      );
+    });
 
     await using result = await runConfig({
       config: { auth: { order: { anthropic: ["anthropic:missing"] } } },
@@ -529,12 +523,10 @@ describe("doctor config flow", () => {
     async (withReporter) => {
       const warning = "Could not verify imported auth profiles; originals retained.";
       const reportFindings = vi.fn();
-      runDoctorRepairSequenceMock.mockImplementation(
-        async (params: { state: unknown; reportFindings?: typeof reportFindings }) => {
-          params.reportFindings?.([], [warning]);
-          return repairResult(params.state, { warningNotes: [warning], displayWarningNotes: [] });
-        },
-      );
+      runDoctorRepairSequenceMock.mockImplementation(async (params: RepairParams) => {
+        params.reportFindings?.([], [warning]);
+        return repairResult(params.state, { warningNotes: [warning], displayWarningNotes: [] });
+      });
       await using result = await runConfig(
         { config: {}, repair: true },
         withReporter ? { reportFindings } : {},
@@ -618,24 +610,17 @@ describe("doctor config flow", () => {
   });
 
   it("warns when internal hook entries include unsupported loader keys", async () => {
-    const doctorWarnings = await collectDoctorWarnings({
-      hooks: {
-        internal: {
-          entries: {
-            "custom-hook": {
-              enabled: true,
-              handler: "./hooks/custom.ts",
-              extraDirs: ["./hooks"],
-              env: { OPENCLAW_CUSTOM_HOOK: "1" },
-            },
-            "valid-hook": { enabled: true, paths: ["./tracked"] },
-            "null-hook": null,
-          },
-        },
+    const entries = {
+      "custom-hook": {
+        enabled: true,
+        handler: "./hooks/custom.ts",
+        extraDirs: ["./hooks"],
+        env: { OPENCLAW_CUSTOM_HOOK: "1" },
       },
-    });
-
-    const warning = doctorWarnings.join("\n");
+      "valid-hook": { enabled: true, paths: ["./tracked"] },
+      "null-hook": null,
+    };
+    const warning = (await collectDoctorWarnings({ hooks: { internal: { entries } } })).join("\n");
     expect(warning).toContain("hooks.internal.entries.custom-hook:");
     expect(warning).toContain(
       "unsupported loader keys handler, extraDirs will not load hook modules",

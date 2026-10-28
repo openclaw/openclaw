@@ -1,82 +1,49 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
 import {
-  hasRegisteredSessionPendingInputOwner,
+  listLiveSessionPendingInputIds,
+  preserveSessionQueuedInputOwnersForRestart,
   type SessionPendingInputPage,
   type SessionPendingInput,
 } from "./session-accessor.sqlite-pending-inputs.js";
-import { withSessionEntryWorker } from "./session-accessor.sqlite-replacement-worker.js";
 import { prepareSqliteScope } from "./session-accessor.sqlite-scope.js";
 import { hasSessionActorEmptyPendingInputHistory } from "./session-actor-replica.js";
-import {
-  captureSessionActorStorageOwner,
-  withSessionActorStorage,
-  type SessionActorStorageBinding,
-} from "./session-actor-storage-binding.js";
+import { withSessionActorStorage } from "./session-actor-storage-acquisition.js";
+import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import type {
-  PendingInputCustodyCandidate,
   PendingInputHistoryQuery,
-  PendingInputHistoryReceipt,
   PendingInputHistorySnapshot,
 } from "./session-pending-input-history.types.js";
 import { projectSessionPendingInput } from "./session-pending-input-value.js";
 import { captureSessionStoreReadTarget } from "./session-store-read-target.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
-import {
-  settleSessionWorkerReceipt,
-  type SessionWorkerReceiptAdmission,
-} from "./session-worker-receipt.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
 type Scope = SessionAccessScope & { agentId: string; sessionId: string };
 
-function owns(path: string, row: PendingInputCustodyCandidate, currentSessionId?: string) {
-  return row.session_id === currentSessionId && hasRegisteredSessionPendingInputOwner(path, row);
-}
-
-function applyReceipt(snapshot: PendingInputHistorySnapshot, receipt: PendingInputHistoryReceipt) {
-  const interrupted = new Set(receipt.ids);
-  for (const row of snapshot.rows) {
-    if (interrupted.has(row.input_id)) {
-      row.state = "interrupted";
-    }
-  }
-  return snapshot;
-}
-
-async function readMemoryPendingInputHistory(
-  binding: SessionActorStorageBinding,
-  query: PendingInputHistoryQuery,
-): Promise<PendingInputHistorySnapshot> {
-  const storage = binding.actor.storage!;
-  const snapshot = await storage.read(
-    { type: "session.pendingInput.history", input: query },
-    binding.authority,
+/** Capture live queue custody now; preserve it only after the session marker commits. */
+export async function captureSessionQueuedInputsForRestart(scope: Scope) {
+  const captured = captureSessionStoreReadTarget(
+    scope,
+    "Queued shutdown inputs changed their database owner",
   );
-  const ids = snapshot.rows.filter((row) => row.state === "queued").map((row) => row.input_id);
-  if (!ids.length) {
-    return snapshot;
-  }
-  const outcome = await storage.mutate(
-    {
-      type: "session.pendingInput.interruptHistory",
-      input: { sessionKey: query.sessionKey, sessionId: query.sessionId, ids },
-    },
-    {
-      ...binding.authority,
-      isPendingInputProtected: (candidate, currentSessionId) =>
-        owns(binding.path, candidate, currentSessionId),
-    },
+  const resolved = await prepareSqliteScope(scope);
+  const physical = captured.resolve(resolved);
+  physical.assertCurrent();
+  const queuedInputIds = listLiveSessionPendingInputIds(
+    physical.identity.canonicalPath,
+    resolved.sessionKey,
+    scope.sessionId,
+    true,
   );
-  if (outcome.kind === "rolled-back") {
-    throw Object.assign(new Error(outcome.error.message), { name: outcome.error.name });
-  }
-  if (outcome.failure) {
-    throw Object.assign(new Error(outcome.failure.message), { name: outcome.failure.name });
-  }
-  return applyReceipt(snapshot, outcome.value);
+  return {
+    queuedInputIds,
+    preserve: () => {
+      physical.assertCurrent();
+      preserveSessionQueuedInputOwnersForRestart(queuedInputIds);
+    },
+  };
 }
 
 async function readPendingInputRows(
@@ -84,6 +51,10 @@ async function readPendingInputRows(
   options: Omit<PendingInputHistoryQuery, "sessionKey" | "sessionId">,
   onRead?: (snapshot: PendingInputHistorySnapshot) => void,
 ): Promise<PendingInputHistorySnapshot> {
+  const currentWindow = (snapshot: PendingInputHistorySnapshot): PendingInputHistorySnapshot =>
+    snapshot.rows.length > 0 && snapshot.currentSessionId !== scope.sessionId
+      ? { rows: [], total: 0 }
+      : snapshot;
   const authority = { assertCurrent() {}, authorize() {} };
   const memory = captureSessionActorStorageOwner(scope, authority);
   if (memory) {
@@ -99,16 +70,28 @@ async function readPendingInputRows(
             ...options,
             sessionKey: binding.actor.target.sessionKey,
             sessionId: scope.sessionId,
+            liveInputIds: listLiveSessionPendingInputIds(
+              binding.path,
+              binding.actor.target.sessionKey,
+              scope.sessionId,
+            ),
           };
           if (onRead) {
-            const snapshot = binding.actor.storage!.readCurrent(
-              { type: "session.pendingInput.history", input: query },
-              binding.authority,
+            const snapshot = currentWindow(
+              binding.actor.storage!.readCurrent(
+                { type: "session.pendingInput.history", input: query },
+                binding.authority,
+              ),
             );
             onRead(snapshot);
             return snapshot;
           }
-          return readMemoryPendingInputHistory(binding, query);
+          return binding.actor
+            .storage!.read(
+              { type: "session.pendingInput.history", input: query },
+              binding.authority,
+            )
+            .then(currentWindow);
         },
       )) ?? { rows: [], total: 0 }
     );
@@ -117,7 +100,6 @@ async function readPendingInputRows(
     ...scope,
     env: captureSessionTranscriptStorageEnvironment(scope.env ?? process.env),
   };
-  const query = { ...options, sessionKey: scope.sessionKey, sessionId: scope.sessionId };
   const target = captureSessionStoreReadTarget(
     captured,
     "Pending input history changed its captured database owner",
@@ -128,13 +110,25 @@ async function readPendingInputRows(
     identity,
     source: readSource,
     assertReadCurrent,
-    assertCurrent,
   } = target.resolve(resolved);
+  const query = {
+    ...options,
+    sessionKey: resolved.sessionKey,
+    sessionId: scope.sessionId,
+    liveInputIds: listLiveSessionPendingInputIds(
+      identity.canonicalPath,
+      resolved.sessionKey,
+      scope.sessionId,
+    ),
+  };
   if (!identity.key.startsWith("file:")) {
     return { rows: [], total: 0 };
   }
   assertReadCurrent();
-  if (hasSessionActorEmptyPendingInputHistory(identity, resolved.sessionKey, query.sessionId)) {
+  if (
+    !query.queuedInputIds &&
+    hasSessionActorEmptyPendingInputHistory(identity, resolved.sessionKey, query.sessionId)
+  ) {
     return { rows: [], total: 0 };
   }
   return withSessionHistoryWorkerDatabase(databaseOptions, async (owner) => {
@@ -149,11 +143,13 @@ async function readPendingInputRows(
           const assertNative = captureSessionEntryNativeMutationWitness([
             { ...databaseOptions, env: captured.env },
           ]);
-          const snapshot = await owner.readPendingInputHistory({
-            query: { ...query, sessionKey: resolved.sessionKey },
-            env: captured.env,
-            source: readSource,
-          });
+          const snapshot = currentWindow(
+            await owner.readPendingInputHistory({
+              query: { ...query, sessionKey: resolved.sessionKey },
+              env: captured.env,
+              source: readSource,
+            }),
+          );
           assertReadCurrent();
           owner.assertCurrent();
           assertOwner();
@@ -170,64 +166,7 @@ async function readPendingInputRows(
       source: readSource,
     });
     assertReadCurrent();
-    const unownedIds = () =>
-      snapshot.rows
-        .filter(
-          (row) =>
-            row.state === "queued" &&
-            (row.session_id !== snapshot.currentSessionId ||
-              !hasRegisteredSessionPendingInputOwner(identity.canonicalPath, {
-                input_id: row.input_id,
-                session_key: row.session_key,
-                session_id: row.session_id,
-              })),
-        )
-        .map((row) => row.input_id);
-    if (!unownedIds().length) {
-      return snapshot;
-    }
-    let admitted: SessionWorkerReceiptAdmission | undefined;
-    return withSessionEntryWorker(
-      databaseOptions,
-      readSource.databaseIdentity,
-      () => {
-        assertCurrent();
-        owner.assertCurrent();
-      },
-      async (execution, source) => {
-        // Staging publishes owners inside this same physical writer FIFO.
-        const ids = unownedIds();
-        if (!ids.length) {
-          return snapshot;
-        }
-        const result = await execution.runExisting(source, (worker) =>
-          settleSessionWorkerReceipt(
-            () =>
-              worker.execute({
-                type: "session.pendingInputs.interruptHistory",
-                input: { sessionKey: resolved.sessionKey, sessionId: captured.sessionId, ids },
-              }),
-            () => admitted,
-            (receipt) => {
-              if (isRecord(receipt) && receipt.kind === "pending-input-history-interrupted") {
-                // SAFETY: This admission retains only this exact kernel's committed receipt.
-                return applyReceipt(snapshot, receipt as PendingInputHistoryReceipt);
-              }
-              return undefined;
-            },
-            "Pending input history has no confirmed native completion and receipt",
-          ),
-        );
-        assertCurrent();
-        if (!result) {
-          throw new Error("Pending input history lost its existing database");
-        }
-        return result;
-      },
-      (admission, retained) => {
-        admitted = { admission, retained };
-      },
-    );
+    return currentWindow(snapshot);
   });
 }
 
@@ -243,21 +182,19 @@ export async function listSessionPendingInputs(
   };
 }
 
-/** Select replay candidates in the worker; the delivery owner still validates their authority. */
-export async function readSessionSendRecoveryPage(
+/** Called only for a session explicitly marked by graceful shutdown. */
+export async function readSessionQueuedInputPage(
   scope: Scope,
-  options: { before?: number } = {},
-): Promise<Omit<SessionPendingInputPage, "total">> {
-  const { rows, nextBefore } = await readPendingInputRows(scope, {
+  options: { queuedInputIds: readonly string[]; before?: number },
+) {
+  if (options.queuedInputIds.length === 0) {
+    return { rows: [], total: 0 };
+  }
+  return readPendingInputRows(scope, {
     ...options,
     limit: 20,
     includeTotal: false,
-    sessionSendRecovery: true,
   });
-  return {
-    items: rows.toReversed().map(projectSessionPendingInput),
-    ...(nextBefore !== undefined ? { nextBefore } : {}),
-  };
 }
 
 /** Prompt context needs only the bounded page, never the full retained-input count. */

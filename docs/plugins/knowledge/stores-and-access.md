@@ -3,6 +3,7 @@ summary: "Knowledge stores, storage layout, partitions, caller authority, and ca
 read_when:
   - You are sharing a Knowledge store between agents
   - You need to know which caller can read or write which Knowledge records
+  - You want a group chat to use an agent's private knowledge
   - You are backing up or inspecting Knowledge storage on disk
 title: "Knowledge stores and access"
 sidebarTitle: "Stores and access"
@@ -32,7 +33,7 @@ or a named shared store assigned in configuration.
 }
 ```
 
-- `stores` is the only per-agent setting. An agent in no named store uses its own
+- `stores` sets each agent's store. An agent in no named store uses its own
   isolated store.
 - An agent listed in two named stores is unavailable until the duplicate is
   removed. Knowledge never resolves it by first match.
@@ -70,6 +71,48 @@ When an agent shares its isolated store, that store becomes the named store. If
 that agent later chooses its own store, it gets a new empty store. There is no
 hidden private copy.
 
+The same page also lists **Conversation access** for the viewed agent; see
+[Conversation access](#conversation-access).
+
+## Conversation access
+
+By default, a group or channel conversation reads and saves only its own
+conversation partition. An owner can grant one conversation access to its
+agent's private partition from **Settings → Stores & sharing → Conversation
+access** (requires `operator.admin`, and the agent within the operator's role):
+
+- **Can read** reads the private partition and cannot save. Saves fail with an
+  error, and save guidance is left out of the conversation's prompt.
+- **Can read and save** reads and saves the private partition, like an
+  owner-direct turn.
+
+Grants are keyed by conversation session key:
+
+- Thread, topic, and other sessions whose key extends a granted key with `:`
+  inherit its grant. The most specific grant wins. Spawned children already
+  share their root conversation's audience.
+- Read grants also include the
+  [Knowledge index](/plugins/knowledge/memory-provider#knowledge-index) and
+  automatic recall candidates.
+- Read-and-save grants also allow approving automatic recall with
+  `knowledge_recall`.
+- There is no save-only grant. Saves run against the private partition, and
+  their results would reveal existing private records to a conversation that
+  cannot read them.
+- Saves from a granted conversation are recorded in history with the writing
+  agent, like any other save.
+- Grants are Knowledge state kept in `registry.sqlite`, not configuration.
+  A change applies immediately without a reload. A revoked or narrowed grant
+  fails in-flight work at its next authority check and returns the
+  conversation to its own partition.
+- The page lists the viewed agent's group and channel conversations to choose
+  from. Grants that match no known session are marked **No known
+  conversation**. Knowledge decides access from the host-minted audience's
+  session key, never from session rows.
+
+Removing access stops future reads and saves. It cannot remove what the
+conversation already retrieved.
+
 ## Storage layout
 
 Knowledge keeps all state under the Gateway state directory (`~/.openclaw` by
@@ -77,7 +120,7 @@ default, or `$OPENCLAW_STATE_DIR`):
 
 ```text
 <state dir>/knowledge/
-  registry.sqlite             # store identities, bindings, assignment journal, maintenance schedule
+  registry.sqlite             # store identities, bindings, assignment journal, conversation grants, maintenance schedule
   registry.id                 # sentinel: a missing or emptied registry needs recovery
   stores/<vaultId>/
     state.sqlite              # journal, history, search index, Git queue, Recent projection
@@ -152,9 +195,10 @@ keeps each revision's author.
 | Caller                                             | Required trusted evidence                                                                                                                                           | Scope                                                                                         |
 | -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
 | Control UI or operator RPC                         | Authenticated connection, host `operator.read` (or write/admin), `operatorRead: true`, the agent within the caller's role, and `operator.admin` on a shared Gateway | Private partition of the default agent's store, or of an agent selected in the Knowledge page |
-| Operator changing assignments                      | `operator.admin`                                                                                                                                                    | Store membership only; never knowledge edits                                                  |
+| Operator changing assignments or grants            | `operator.admin`, and the grant's agent within the caller's role                                                                                                    | Store membership and conversation grants only; never knowledge edits                          |
 | Agent, owner-private audience                      | Host-minted `owner-private` memory audience and current invocation guard                                                                                            | Private partition of that agent's store                                                       |
 | Agent, conversation audience                       | Host-minted `conversation` memory audience with its session key and UUID, and invocation guard                                                                      | That session's conversation partition in the agent's store                                    |
+| Agent, conversation audience with an owner grant   | The conversation audience above, and an owner grant covering its session key                                                                                        | Private partition of the agent's store for the granted reads or saves; otherwise as above     |
 | Spawned child                                      | Root audience validated and delegated by the host                                                                                                                   | Same partition as the originating root                                                        |
 | Missing or stale audience, sandboxed provider call | Insufficient authority                                                                                                                                              | Denied                                                                                        |
 
@@ -165,11 +209,13 @@ owner-private audience.
 
 OpenClaw resolves direct-owner, conversation, and spawn inheritance and supplies
 the resulting audience. Knowledge does not read session entries, inspect chat
-metadata, or reconstruct spawn lineage. It re-checks the audience before and
-after asynchronous work.
+metadata, or reconstruct spawn lineage. It matches owner grants against the
+audience's session key and re-checks the audience and grants before and after
+asynchronous work.
 
-Agent writes use the same scope mapping as reads. Operator read access cannot
-save. Cross-conversation recall, background host access, and operator browsing
+Agent writes use the same scope mapping as reads, except that a read-only grant
+refuses them. Operator
+read access cannot save. Cross-conversation recall, background host access, and operator browsing
 of conversation partitions are not exposed.
 
 ## Runtime
@@ -178,6 +224,9 @@ Each physical store has one runtime: a storage worker thread, one serialized
 operation lane, a filesystem watcher, and a Git queue. Every agent using the
 store shares it. Vault scans, evidence checks, SQLite, and Git run in the
 worker, off the Gateway main thread. Authorization stays on the main thread.
+Evidence verification caches retain verdicts while file stamps remain unchanged;
+artifact buffers and decoded text are released after the operation, including
+when a citation fails validation.
 
 Exact reads re-read files and record external edits, renames, and deletions on
 the next query. Pending or conflicted accepted publications block ordinary reads

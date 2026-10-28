@@ -98,14 +98,30 @@ it.each([false, true])(
         database.db.exec("ANALYZE");
       }
       const prepare = database.db.prepare.bind(database.db);
-      const statements: StatementSync[] = [];
+      const statements = new Map<StatementSync, string>();
       const spy = vi.spyOn(database.db, "prepare").mockImplementation((query) => {
         const statement = prepare(query);
         if (
           query.includes('"transcript_event_identities"') &&
           statement.columns().some(({ name }) => name === "navigation_valid")
         ) {
-          statements.push(statement);
+          statements.set(statement, statement.expandedSQL);
+          const observe = <Method extends "all" | "get" | "iterate">(
+            observed: Pick<StatementSync, Method | "expandedSQL">,
+            method: Method,
+          ) => {
+            observed[method] = new Proxy(observed[method], {
+              apply(invoke, receiver: StatementSync, args) {
+                const result = Reflect.apply(invoke, receiver, args);
+                // Capture bindings before the executor releases the statement.
+                statements.set(statement, observed.expandedSQL);
+                return result;
+              },
+            });
+          };
+          for (const method of ["all", "get", "iterate"] as const) {
+            observe(statement, method);
+          }
         }
         return statement;
       });
@@ -115,8 +131,8 @@ it.each([false, true])(
           anchorIds: [anchor.id],
           entries: [marker],
         });
-        expect(statements).toHaveLength(1);
-        const plan = prepare(`EXPLAIN QUERY PLAN ${statements[0]!.expandedSQL}`).all();
+        expect(statements.size).toBe(1);
+        const plan = prepare(`EXPLAIN QUERY PLAN ${statements.values().next().value!}`).all();
         const drivingSearch = plan.find(
           ({ detail }) => typeof detail === "string" && detail.startsWith("SEARCH "),
         )?.detail;

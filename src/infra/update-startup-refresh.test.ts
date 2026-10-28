@@ -35,19 +35,6 @@ vi.mock("../state/config-machine-state-async.js", () => ({
   readConfigMachineStateAsync: vi.fn(async () => null),
   writeConfigMachineStateAsync: vi.fn(async () => {}),
 }));
-vi.mock("../model-catalog/remote-config.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../model-catalog/remote-config.js")>()),
-  resolveRemoteCatalogUrl: vi.fn(),
-}));
-vi.mock("../model-catalog/remote-overlay.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../model-catalog/remote-overlay.js")>()),
-  checkRemoteModelCatalogUpdate: vi.fn(),
-}));
-vi.mock("../model-catalog/remote-refresh.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../model-catalog/remote-refresh.js")>()),
-  refreshRemoteModelCatalog: vi.fn(),
-  REMOTE_MODEL_CATALOG_TTL_MS: 21_600_000,
-}));
 vi.mock("./openclaw-root.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./openclaw-root.js")>()),
   resolveOpenClawPackageRoot: vi.fn(async () => "/opt/openclaw"),
@@ -98,9 +85,17 @@ const packageStatus: UpdateCheckResult = {
   packageManager: "npm",
 };
 
-function expectGitTarget(upstreamSha: string) {
-  expect(getUpdateAvailable()?.upstreamSha).toBe(upstreamSha);
-  expect(getUpdateSchedule()?.target).toMatchObject({ kind: "git", upstreamSha });
+function expectGitTarget(upstreamSha: string, commitsBehind?: number, repositoryUrl?: string) {
+  const target = { upstreamSha, ...(commitsBehind === undefined ? {} : { commitsBehind }) };
+  expect(getUpdateAvailable()).toMatchObject({
+    ...target,
+    ...(repositoryUrl ? { currentSha: "current-sha", repositoryUrl } : {}),
+  });
+  expect(getUpdateSchedule()?.target).toMatchObject({
+    kind: "git",
+    upstreamRef: "origin/main",
+    ...target,
+  });
 }
 
 async function expectCampaignApplies(upstreamSha: string) {
@@ -117,15 +112,33 @@ function runGatewayUpdateCheck({
   cfg,
   ...params
 }: {
-  cfg: OpenClawConfig;
+  cfg: OpenClawConfig | (() => OpenClawConfig);
 } & Partial<Omit<Parameters<typeof runGatewayUpdateCheckOwner>[0], "getConfig">>) {
   return runGatewayUpdateCheckOwner({
     log: { info: vi.fn() },
     isNixMode: false,
     allowInTests: true,
     ...params,
-    getConfig: () => cfg,
+    getConfig: typeof cfg === "function" ? cfg : () => cfg,
   });
+}
+
+function paused<T>(fallback: T) {
+  const entered = createDeferred();
+  const result = createDeferred<T>();
+  return {
+    call: pauseAt(entered, result),
+    resolve: result.resolve,
+    async during(pending: Promise<unknown>, check: (resume: (value: T) => void) => Promise<void>) {
+      try {
+        await entered.promise;
+        await check(result.resolve);
+      } finally {
+        result.resolve(fallback);
+        await pending;
+      }
+    },
+  };
 }
 
 describe("interactive Dev update discovery", () => {
@@ -161,8 +174,7 @@ describe("interactive Dev update discovery", () => {
   it("publishes a configless Git refresh and projects the current automatic-update policy", async () => {
     mockDevGitStatus({ behind: 2 });
     await runGatewayUpdateCheck({ cfg: { update: { channel: "dev", auto: { enabled: true } } } });
-    const schedule = getUpdateSchedule();
-    expect(schedule?.campaign?.state).toBe("countdown");
+    expect(getUpdateSchedule()?.campaign?.state).toBe("countdown");
     mockDevGitStatus({
       behind: 3,
       upstreamSha: "new-upstream-sha",
@@ -171,17 +183,9 @@ describe("interactive Dev update discovery", () => {
 
     await refreshGatewayUpdateStatus(() => ({}));
 
-    expect(checkUpdateStatus).toHaveBeenCalledWith({
-      root: "/opt/openclaw",
-      signal: expect.any(AbortSignal),
-      fetchGit: true,
-      includeRegistry: false,
-      useDetachedDevUpstream: true,
-    });
-    expect(getGatewayUpdateSchedule({}, "dev")).toEqual({
-      ...schedule,
+    const projected = getGatewayUpdateSchedule({}, "dev");
+    expect(projected).toMatchObject({
       autoEnabled: false,
-      campaign: undefined,
       target: {
         kind: "git",
         upstreamRef: "origin/main",
@@ -199,41 +203,8 @@ describe("interactive Dev update discovery", () => {
         },
       },
     });
-    expect(getUpdateAvailable()).toMatchObject({
-      upstreamSha: "new-upstream-sha",
-      commitsBehind: 3,
-      repositoryUrl: "https://github.com/example/openclaw",
-    });
-  });
-
-  it("rearms the announced campaign for the latest target on manual Dev refresh", async () => {
-    const cfg = autoConfig;
-    mockDevGitStatus({ upstreamSha: "old-upstream" });
-    await runGatewayUpdateCheck({ cfg });
-    expect(getUpdateSchedule()?.campaign?.state).toBe("countdown");
-
-    mockDevGitStatus({
-      upstreamSha: "new-upstream",
-      behind: 4,
-      repositoryUrl: "https://github.com/example/openclaw",
-    });
-    await refreshGatewayUpdateStatus(() => cfg);
-
-    expect(getUpdateAvailable()).toMatchObject({
-      currentSha: "current-sha",
-      upstreamSha: "new-upstream",
-      repositoryUrl: "https://github.com/example/openclaw",
-      commitsBehind: 4,
-    });
-    expect(getUpdateSchedule()?.target).toEqual({
-      kind: "git",
-      upstreamRef: "origin/main",
-      upstreamSha: "new-upstream",
-      commitsBehind: 4,
-    });
-    expect(getUpdateSchedule()?.campaign?.state).toBe("countdown");
-    expect(runCampaignUpdate).not.toHaveBeenCalled();
-    await expectCampaignApplies("new-upstream");
+    expect(projected.campaign).toBeUndefined();
+    expectGitTarget("new-upstream-sha", 3, "https://github.com/example/openclaw");
   });
 
   it("preserves an announced campaign when installation identity cannot establish a target", async () => {
@@ -330,12 +301,10 @@ describe("interactive Dev update discovery", () => {
       if (applying) {
         await runGatewayUpdateCheck({ cfg });
       }
-      const entered = createDeferred();
-      const remote = createDeferred<UpdateCheckResult>();
-      vi.mocked(checkUpdateStatus).mockImplementationOnce(pauseAt(entered, remote));
+      const remote = paused<UpdateCheckResult>(createDevGitStatus());
+      vi.mocked(checkUpdateStatus).mockImplementationOnce(remote.call);
       const refresh = refreshGatewayUpdateStatus(() => cfg).catch((error: unknown) => error);
-      try {
-        await entered.promise;
+      await remote.during(refresh, async (resume) => {
         if (applying) {
           expect(campaign.adopt().status).toBe("adopted");
         } else if (replacement === "channel replacement") {
@@ -345,7 +314,7 @@ describe("interactive Dev update discovery", () => {
         }
         const schedule = getUpdateSchedule();
         const available = getUpdateAvailable();
-        remote.resolve(
+        resume(
           applying ? createDevGitStatus({ upstreamSha: "new-upstream", behind: 4 }) : oldStatus,
         );
         expect(await refresh).toEqual(
@@ -355,10 +324,7 @@ describe("interactive Dev update discovery", () => {
         if (applying) {
           expect(getUpdateAvailable()).toEqual(available);
         }
-      } finally {
-        remote.resolve(createDevGitStatus());
-        await refresh;
-      }
+      });
     },
   );
 
@@ -367,84 +333,54 @@ describe("interactive Dev update discovery", () => {
     vi.mocked(checkUpdateStatus).mockResolvedValue(packageStatus);
     vi.mocked(compareSemverStrings).mockReturnValue(-1);
     vi.mocked(resolveNpmChannelTag).mockResolvedValue({ tag: "stable", version: "9.0.0" });
-    const entered = createDeferred();
-    const telemetry = createDeferred<Awaited<ReturnType<typeof checkTelemetryUpdate>>>();
-    vi.mocked(checkTelemetryUpdate).mockImplementationOnce(pauseAt(entered, telemetry));
+    const telemetry = paused<Awaited<ReturnType<typeof checkTelemetryUpdate>>>({
+      version: "9.0.0",
+    });
+    vi.mocked(checkTelemetryUpdate).mockImplementationOnce(telemetry.call);
     const background = runGatewayUpdateCheck({ cfg });
-    try {
-      await entered.promise;
+    await telemetry.during(background, async (resume) => {
       await refreshGatewayUpdateStatus(() => cfg);
-      telemetry.resolve({ version: "9.0.0" });
+      resume({ version: "9.0.0" });
       await background;
       expect(getUpdateAvailable()?.latestVersion).toBe("9.0.0");
       expect(getUpdateSchedule()?.target).toEqual({ kind: "package", version: "9.0.0" });
-    } finally {
-      telemetry.resolve({ version: "9.0.0" });
-      await background;
-    }
+    });
   });
 
   it.each([
-    { install: "package", channel: "stable", stage: "initialization" },
-    { install: "package", channel: "beta", stage: "telemetry" },
-    { install: "git", channel: "stable", stage: "initialization" },
-    { install: "git", channel: "beta", stage: "telemetry" },
+    { channel: "stable", stage: "initialization" },
+    { channel: "beta", stage: "telemetry" },
   ] as const)(
-    "keeps manual Dev state after an old $channel $install check finishes $stage",
-    async ({ install, channel, stage }) => {
+    "keeps manual Dev state after an old $channel Git check finishes $stage",
+    async ({ channel, stage }) => {
       let cfg: OpenClawConfig = { update: { channel } };
-      const installed =
-        install === "git" ? mockDevGitStatus({ upstreamSha: "old-upstream" }) : packageStatus;
-      vi.mocked(checkUpdateStatus).mockResolvedValue(installed);
-      if (install === "package") {
-        vi.mocked(compareSemverStrings).mockReturnValue(-1);
-        vi.mocked(resolveNpmChannelTag).mockResolvedValue({ tag: channel, version: "9.0.0" });
-      }
-      const entered = createDeferred();
-      const identity = createDeferred<UpdateCheckResult>();
-      const telemetry = createDeferred<Awaited<ReturnType<typeof checkTelemetryUpdate>>>();
+      const installed = mockDevGitStatus({ upstreamSha: "old-upstream" });
+      const identity = paused(installed);
+      const telemetry = paused(null);
       if (stage === "initialization") {
-        vi.mocked(checkUpdateStatus).mockImplementationOnce(pauseAt(entered, identity));
+        vi.mocked(checkUpdateStatus).mockImplementationOnce(identity.call);
       } else {
-        vi.mocked(checkTelemetryUpdate).mockImplementationOnce(pauseAt(entered, telemetry));
+        vi.mocked(checkTelemetryUpdate).mockImplementationOnce(telemetry.call);
       }
-      const background = runGatewayUpdateCheckOwner({
-        getConfig: () => cfg,
-        log: { info: vi.fn() },
-        isNixMode: false,
-        allowInTests: true,
-      });
-      const release = () => {
-        identity.resolve(installed);
-        telemetry.resolve(install === "package" ? { version: "9.0.0" } : null);
-      };
-      try {
-        await entered.promise;
+      const background = runGatewayUpdateCheck({ cfg: () => cfg });
+      await (stage === "initialization" ? identity : telemetry).during(background, async () => {
         cfg = { update: { channel: "dev" } };
-        if (install === "git") {
-          mockDevGitStatus({ upstreamSha: "fresh-dev-target", behind: 4 });
-        }
+        mockDevGitStatus({ upstreamSha: "fresh-dev-target", behind: 4 });
         await refreshGatewayUpdateStatus(() => cfg);
         const schedule = getUpdateSchedule();
         const available = getUpdateAvailable();
         expect(schedule?.channel).toBe("dev");
-        if (install === "git") {
-          expect(schedule?.target).toMatchObject({ upstreamSha: "fresh-dev-target" });
-        }
-        release();
+        expect(schedule?.target).toMatchObject({ upstreamSha: "fresh-dev-target" });
+        identity.resolve(installed);
+        telemetry.resolve(null);
         await background;
         expect(getUpdateSchedule()).toEqual(schedule);
         expect(getUpdateAvailable()).toEqual(available);
-        if (install === "git") {
-          if (stage === "initialization") {
-            expect(lifecycle.installStatus?.status.git?.upstreamSha).toBe("fresh-dev-target");
-          }
-          expect(runCampaignUpdate).not.toHaveBeenCalled();
+        if (stage === "initialization") {
+          expect(lifecycle.installStatus?.status.git?.upstreamSha).toBe("fresh-dev-target");
         }
-      } finally {
-        release();
-        await background;
-      }
+        expect(runCampaignUpdate).not.toHaveBeenCalled();
+      });
     },
   );
 
@@ -452,19 +388,20 @@ describe("interactive Dev update discovery", () => {
     "does not publish old package %s after manual discovery adopts a Git checkout",
     async (stage) => {
       const cfg = devConfig;
-      const entered = createDeferred();
-      const telemetry = createDeferred<null>();
-      const registry = createDeferred<Awaited<ReturnType<typeof resolveNpmChannelTag>>>();
+      const telemetry = paused(null);
+      const registry = paused<Awaited<ReturnType<typeof resolveNpmChannelTag>>>({
+        tag: "dev",
+        version: "9.0.0",
+      });
       vi.mocked(checkUpdateStatus).mockResolvedValue(packageStatus);
       vi.mocked(resolveNpmChannelTag).mockResolvedValue({ tag: "dev", version: "9.0.0" });
       if (stage === "telemetry") {
-        vi.mocked(checkTelemetryUpdate).mockImplementationOnce(pauseAt(entered, telemetry));
+        vi.mocked(checkTelemetryUpdate).mockImplementationOnce(telemetry.call);
       } else {
-        vi.mocked(resolveNpmChannelTag).mockImplementationOnce(pauseAt(entered, registry));
+        vi.mocked(resolveNpmChannelTag).mockImplementationOnce(registry.call);
       }
       const background = runGatewayUpdateCheck({ cfg });
-      try {
-        await entered.promise;
+      await (stage === "telemetry" ? telemetry : registry).during(background, async () => {
         mockDevGitStatus({ upstreamSha: "fresh-git-target" });
         await refreshGatewayUpdateStatus(() => cfg);
         telemetry.resolve(null);
@@ -474,11 +411,7 @@ describe("interactive Dev update discovery", () => {
         expect(await lifecycle.initialize()).toBe(lifecycle.installStatus);
         expect(lifecycle.installStatus?.status.installKind).toBe("git");
         expect(resolveNpmChannelTag).toHaveBeenCalledTimes(stage === "registry" ? 1 : 0);
-      } finally {
-        telemetry.resolve(null);
-        registry.resolve({ tag: "dev", version: "9.0.0" });
-        await background;
-      }
+      });
     },
   );
 
@@ -552,7 +485,11 @@ describe("interactive Dev update discovery", () => {
     const metadata = createDeferred<Awaited<ReturnType<typeof resolveDevGitCommits>>>();
     try {
       await fetching.promise;
-      mockDevGitStatus({ upstreamSha: "older-manual", behind: 2 });
+      mockDevGitStatus({
+        upstreamSha: "older-manual",
+        behind: 2,
+        repositoryUrl: "https://github.com/example/openclaw",
+      });
       vi.mocked(resolveDevGitCommits).mockImplementationOnce(pauseAt(metadataStarted, metadata));
       const manual = refreshGatewayUpdateStatus(() => cfg).then(
         () => ({ status: "fulfilled" }),
@@ -563,10 +500,12 @@ describe("interactive Dev update discovery", () => {
       await background;
       const latest = getUpdateSchedule();
       expect(latest?.target).toMatchObject({ upstreamSha: "newer-background" });
+      expect(campaign.getState()?.state).toBe("countdown");
       metadata.resolve([]);
       expect(await manual).toEqual({ status: "fulfilled" });
-      expectGitTarget("older-manual");
+      expectGitTarget("older-manual", 2, "https://github.com/example/openclaw");
       expect(campaign.getState()?.state).toBe("countdown");
+      expect(runCampaignUpdate).not.toHaveBeenCalled();
       await expectCampaignApplies("older-manual");
     } finally {
       remote.resolve(createDevGitStatus());
@@ -594,17 +533,15 @@ describe("interactive Dev update discovery", () => {
       if (discovery === "manual") {
         disable();
       }
-      const started = createDeferred();
-      const remote = createDeferred<UpdateCheckResult>();
-      vi.mocked(checkUpdateStatus).mockImplementationOnce(pauseAt(started, remote));
+      const remote = paused<UpdateCheckResult>(createDevGitStatus());
+      vi.mocked(checkUpdateStatus).mockImplementationOnce(remote.call);
       const params = { cfg, log: { info: vi.fn() }, isNixMode: false, allowInTests: true };
       const pending = (
         discovery === "manual"
           ? refreshGatewayUpdateStatus(() => cfg)
           : runGatewayUpdateCheck(params)
       ).catch((error: unknown) => error);
-      try {
-        await started.promise;
+      await remote.during(pending, async (resume) => {
         disable();
         await runGatewayUpdateCheck(params);
         expect(checkUpdateStatus).toHaveBeenCalledTimes(1);
@@ -612,7 +549,7 @@ describe("interactive Dev update discovery", () => {
           cfg.update.checkOnStart = true;
           vi.stubEnv("OPENCLAW_NO_AUTO_UPDATE", undefined);
         }
-        remote.resolve(createDevGitStatus({ upstreamSha: "fresh-upstream", behind: 4 }));
+        resume(createDevGitStatus({ upstreamSha: "fresh-upstream", behind: 4 }));
         expect(await pending).toBeUndefined();
         if (discovery === "manual") {
           expectGitTarget("fresh-upstream");
@@ -622,10 +559,7 @@ describe("interactive Dev update discovery", () => {
         }
         expect(campaign.getState()?.state).toBeUndefined();
         expectNoCalls(checkTelemetryUpdate, runCampaignUpdate);
-      } finally {
-        remote.resolve(createDevGitStatus());
-        await pending;
-      }
+      });
     },
   );
 

@@ -3,7 +3,7 @@ import { requireGitCommandOutput } from "../../infra/git-exec.js";
 import { gitFilesystemEnvironmentRevision } from "../../infra/git-worker-context.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { WorktreeRepositoryError } from "./errors.js";
-import { findGitCheckoutRoot, insideGitCheckout, runGit } from "./git.js";
+import { findGitCheckoutRoot, runGit } from "./git.js";
 import { resolveCheckoutRootFromRealPath } from "./repository-paths.js";
 import type { ManagedWorktreeBranch, ManagedWorktreeBranchesResult } from "./types.js";
 
@@ -90,15 +90,13 @@ export async function readRepositoryBranches(
     requested = await fs.realpath(repoRoot).catch(() => {
       throw new Error(`repository does not exist: ${repoRoot}`);
     });
-    if (options.includeRepositoryStatus) {
-      if (!(await fs.stat(requested)).isDirectory()) {
-        return { branches: [], repositoryStatus: "unavailable" };
-      }
-      if (!insideGitCheckout(requested)) {
-        return { branches: [], repositoryStatus: "not_git" };
-      }
+    if (options.includeRepositoryStatus && !(await fs.stat(requested)).isDirectory()) {
+      return { branches: [], repositoryStatus: "unavailable" };
     }
     const candidate = findGitCheckoutRoot(requested);
+    if (options.includeRepositoryStatus && !candidate) {
+      return { branches: [], repositoryStatus: "not_git" };
+    }
     const cached = candidate ? branchInventories.get(candidate) : undefined;
     if (candidate && environment !== undefined) {
       if (

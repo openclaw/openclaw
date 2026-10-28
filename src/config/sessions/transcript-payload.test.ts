@@ -4,6 +4,7 @@ import { sql } from "kysely";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { jsonValid } from "../../infra/database-engine/json-values.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import * as nodeSqlite from "../../infra/node-sqlite.js";
@@ -117,6 +118,31 @@ function compressedRecord(bytes: Uint8Array, rawBytes = bytes.byteLength): Paylo
 }
 
 describe("transcript payload storage boundary", () => {
+  it("prepares UTF-8 frames without decoding a duplicate event string", () => {
+    using database = openNodeSqliteDatabase(":memory:");
+    admitSqliteSchema(database);
+    const original = JSON.stringify({
+      type: "message",
+      message: { role: "assistant", content: "café 雪 🦞 \ufeff ".repeat(512) },
+    });
+    const decode = vi.spyOn(TextDecoder.prototype, "decode");
+    let prepared: TranscriptPayloadRecord;
+    try {
+      prepared = prepareTranscriptPayload(database, original);
+      expect(decode).not.toHaveBeenCalled();
+    } finally {
+      decode.mockRestore();
+    }
+    expect(prepared.event_zstd).not.toBeNull();
+    expect(readTranscriptPayload(prepared)).toBe(original);
+    for (const surrogate of ["\ud800", "\udfff"]) {
+      const malformed = `{"type":"custom","data":"${"x".repeat(2048)}${surrogate}"}`;
+      const identity = prepareTranscriptPayload(database, malformed);
+      expect(identity.event_json).toBe(malformed);
+      expect(identity.event_zstd).toBeNull();
+    }
+  });
+
   it("reads legacy predicates lazily and uses the next payload write without JSON work", () => {
     using database = openNodeSqliteDatabase(":memory:");
     createTable(database);
@@ -448,75 +474,72 @@ describe("transcript payload storage boundary", () => {
     }
   });
 
-  it.each(['"message":{"timestamp":1}'])(
-    "projects selected payloads once with native role semantics: %s",
-    (envelope) => {
-      const database = openNodeSqliteDatabase(":memory:");
-      const decompress = vi.spyOn(resolveZstdCodec()!, "decompress");
-      try {
-        createTable(database);
-        const fields =
-          ',"content":[{"type":"text","text":"visible"}],"details":{"receipt":true},"__openclaw":{"upstreamUserText":"private"},"providerReplay":{"type":"checkpoint","data":"opaque"}';
-        const original = `{"type":"message","data":"${"payload ".repeat(1024)}",${envelope.replaceAll("}", `${fields}}`)}}`;
-        const prepared = prepareTranscriptPayload(database, original);
-        expect(prepared.event_zstd !== null).toBe(
-          !envelope.includes("scalar") && !envelope.includes("42"),
-        );
-        insert(database, 0, {
-          event_json: original,
-          event_zstd: null,
-          event_utf8_bytes: null,
-          navigation_json: null,
-        });
-        insert(database, 1, prepared);
-        const db = getNodeSqliteKysely<PayloadDatabase>(database);
-        for (const omitCheckpoint of [0, 1]) {
-          for (const omission of [undefined, sql.val("body omitted")]) {
-            const native = executeSqliteQueryTakeFirstSync(
+  it("projects selected payloads once with native role semantics", () => {
+    const envelope = '"message":{"timestamp":1}';
+    const database = openNodeSqliteDatabase(":memory:");
+    const decompress = vi.spyOn(resolveZstdCodec()!, "decompress");
+    try {
+      createTable(database);
+      const fields =
+        ',"content":[{"type":"text","text":"visible"}],"details":{"receipt":true},"__openclaw":{"upstreamUserText":"private"},"providerReplay":{"type":"checkpoint","data":"opaque"}';
+      const original = `{"type":"message","data":"${"payload ".repeat(1024)}",${envelope.replaceAll("}", `${fields}}`)}}`;
+      const prepared = prepareTranscriptPayload(database, original);
+      expect(prepared.event_zstd).not.toBeNull();
+      insert(database, 0, {
+        event_json: original,
+        event_zstd: null,
+        event_utf8_bytes: null,
+        navigation_json: null,
+      });
+      insert(database, 1, prepared);
+      const db = getNodeSqliteKysely<PayloadDatabase>(database);
+      for (const omitCheckpoint of [0, 1]) {
+        for (const omission of [undefined, sql.val("body omitted")]) {
+          const native = executeSqliteQueryTakeFirstSync(
+            database,
+            db
+              .selectFrom("transcript_events")
+              .select(
+                projectModelContextEventSql(
+                  database,
+                  nativeFixtureEvent,
+                  sql.val(omitCheckpoint),
+                  omission,
+                ).as("event"),
+              )
+              .where("seq", "=", 0),
+          );
+          for (const seq of [0, 1]) {
+            decompress.mockClear();
+            const stored = executeSqliteQueryTakeFirstSync(
               database,
               db
                 .selectFrom("transcript_events")
-                .select(
+                .select((eb) =>
                   projectModelContextEventSql(
                     database,
-                    nativeFixtureEvent,
-                    sql.val(omitCheckpoint),
+                    transcriptEventJsonSql(database),
+                    eb.val(omitCheckpoint),
                     omission,
+                    eb.fn("json_extract", [
+                      transcriptEventNavigationSql(database),
+                      eb.val("$.message.role"),
+                    ]),
+                    jsonValid(database, sql`coalesce(event_json, '{}')`),
                   ).as("event"),
                 )
-                .where("seq", "=", 0),
+                .where("seq", "=", seq),
             );
-            for (const seq of [0, 1]) {
-              decompress.mockClear();
-              const stored = executeSqliteQueryTakeFirstSync(
-                database,
-                db
-                  .selectFrom("transcript_events")
-                  .select((eb) =>
-                    projectModelContextEventSql(
-                      database,
-                      transcriptEventJsonSql(database),
-                      eb.val(omitCheckpoint),
-                      omission,
-                      eb.fn("json_extract", [
-                        transcriptEventNavigationSql(database),
-                        eb.val("$.message.role"),
-                      ]),
-                    ).as("event"),
-                  )
-                  .where("seq", "=", seq),
-              );
-              expect(stored).toEqual(native);
-              expect(decompress).toHaveBeenCalledTimes(seq === 1 && prepared.event_zstd ? 1 : 0);
-            }
+            expect(stored).toEqual(native);
+            expect(decompress).toHaveBeenCalledTimes(seq === 1 && prepared.event_zstd ? 1 : 0);
           }
         }
-      } finally {
-        decompress.mockRestore();
-        database.close();
       }
-    },
-  );
+    } finally {
+      decompress.mockRestore();
+      database.close();
+    }
+  });
 
   it("bounds retained backing storage across small payload decompressions", () => {
     const original = Buffer.from(`{"type":"custom","data":"${"x".repeat(2048)}雪🦞"}`);

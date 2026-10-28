@@ -311,10 +311,8 @@ it("lifecycle cleanup joins terminal controller disposal before completing", asy
 });
 
 function observeExecutionJoin(entry: RpcSourceRef, selected: () => void) {
-  const settlement = entry.input.settlement;
-  const completion = settlement.promise;
   let state: "pending" | "fulfilled" | "rejected" = "pending";
-  void completion.then(
+  void entry.input.settlement.promise.then(
     () => {
       state = "fulfilled";
     },

@@ -56,6 +56,7 @@ export async function mutateSubagentRunForKill(
     cancellationControl: SubagentCancellationControl;
     /** A requester-wide Stop or reset, or a cascade below a cancelled root: nothing is owed. */
     suppressTaskDelivery?: boolean;
+    onCancelled?: (entry: SubagentRunRecord) => void;
     exactRunSelection?: boolean;
     commands?: ReturnType<typeof captureSubagentCommands>;
     beforeSessionKill?: () => boolean | Promise<boolean>;
@@ -138,6 +139,10 @@ export async function mutateSubagentRunForKill(
         initial.requesterSettleWake !== undefined &&
         initial.execution.status === "terminal" &&
         initial.pauseReason !== "sessions_yield";
+      if (continuationRetired) {
+        // Retirement can remove the row before the caller joins cancellation.
+        params.onCancelled?.(initial);
+      }
     }
     if (
       currentEntry()?.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
@@ -384,7 +389,6 @@ export async function mutateSubagentRunForKill(
       }
       if (
         beforeInterruption.swarmLaunchPending !== true &&
-        beforeInterruption.execution.restartRecovery === undefined &&
         !resolveSubagentKillTargetState(beforeInterruption)
       ) {
         // Active completion must see cancellation before admission interruption.
@@ -478,7 +482,6 @@ export async function mutateSubagentRunForKill(
         !acceptance.callerFailure &&
         params.beforeSessionKill &&
         afterInterruption?.swarmLaunchPending === true &&
-        afterInterruption.execution.restartRecovery === undefined &&
         !resolveSubagentKillTargetState(afterInterruption) &&
         isCurrent()
       ) {

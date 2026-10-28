@@ -29,12 +29,10 @@ import type { PluginJsonValue as SessionPluginJsonValue } from "../../plugins/ho
 import type { SessionBoardFace } from "../../shared/session-types.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { TtsAutoMode } from "../types.tts.js";
-import type { MainRestartRecoveryState } from "./main-session-recovery.types.js";
 import type {
   PendingDeliveryNoticeState,
   PendingFinalDeliveryState,
 } from "./pending-final-delivery-types.js";
-import type { SessionRestartRecoveryState } from "./restart-recovery-types.js";
 import type {
   SessionCreatedActor,
   SessionActor,
@@ -229,21 +227,6 @@ type SessionPluginNextTurnInjection = {
   metadata?: SessionPluginJsonValue;
 };
 
-type SubagentRecoveryState = {
-  /** Consecutive accepted automatic orphan-recovery resumes in the rapid re-wedge window. */
-  automaticAttempts?: number;
-  /** Timestamp (ms) of the latest accepted automatic orphan-recovery resume. */
-  lastAttemptAt?: number;
-  /** Registry run id that triggered the latest automatic orphan-recovery resume. */
-  lastRunId?: string;
-  /** Visible execution retained while the recovered run uses an internal transcript. */
-  sessionLifecycleRunId?: string;
-  /** Timestamp (ms) when automatic recovery was tombstoned for this session. */
-  wedgedAt?: number;
-  /** Human-readable reason automatic recovery was tombstoned. */
-  wedgedReason?: string;
-};
-
 type LaneExecutionState =
   | "active"
   | "draining"
@@ -276,13 +259,7 @@ export type {
   SessionGoalStatus,
 } from "../../../packages/gateway-protocol/src/schema/sessions-goal.js";
 
-export type RestartRecoveryRun = {
-  runId: string;
-  lifecycleGeneration: string;
-};
-
-type SessionEntryCore = SessionRestartRecoveryState &
-  SessionEntryProvenance &
+type SessionEntryCore = SessionEntryProvenance &
   Pick<SessionRow, "permissionMode" | "sandboxMode" | "nativeRuntimeConsent" | "sessionRoot"> & {
     /** Collaboration mode. Missing legacy values are equivalent to "shared". */
     visibility?: NonNullable<SessionRow["visibility"]>;
@@ -436,12 +413,6 @@ type SessionEntryCore = SessionRestartRecoveryState &
     };
     systemSent?: boolean;
     abortedLastRun?: boolean;
-    /** Interrupted run generations whose late lifecycle events must be ignored. */
-    restartRecoveryRuns?: RestartRecoveryRun[];
-    /** Keeps automatic restart recovery limited to replay-safe tools until the run terminates. */
-    restartRecoveryForceSafeTools?: true;
-    /** Durable guard state for automatic subagent orphan recovery. */
-    subagentRecovery?: SubagentRecoveryState;
     /** Quota cascade protection and state-aware failover status. */
     quotaSuspension?: QuotaSuspension;
     /** Core-owned durable goal state for this thread/session. */
@@ -669,8 +640,6 @@ export type SessionProfileInvolvement = {
 };
 
 export type InternalSessionEntryCore = SessionEntryCore & {
-  /** One refinement attempt for a generated Dashboard name, scoped to this session. */
-  titleRefinement?: { sessionId: string; generatedName: string; remainingMessages: number };
   /** Original unbound files, private to this conversation's adopted workspace. */
   priorWorkspace?: {
     worktreeId: string;
@@ -703,27 +672,8 @@ export type InternalSessionEntryCore = SessionEntryCore & {
   };
   /** Private per-generation ownership for the pre-runtime checkout baseline capture. */
   sessionDiffBaselineCapture?: import("./session-diff-baseline-capture.js").SessionDiffBaselineCapture;
-  /** Original host-admitted operator basis, owned by the exact restart source claim. */
-  restartRecoveryOperatorSource?: import("../../gateway/operator-run-recovery-source.codec.js").RestartRecoveryOperatorSource;
-  /** Unhanded exec completion obligations; no command arguments or output. */
-  pendingExecNotifications?: Record<
-    string,
-    {
-      processSessionId: string;
-      sessionId: string;
-      lifecycleRevision?: string;
-      incarnation: string;
-      startedAt: number;
-      label: string;
-      policy: Pick<
-        import("../../auto-reply/reply/session-event-contract.js").SessionEventTarget,
-        "settings" | "deliver" | "deliveryContext" | "chatType"
-      > & { toolsAllow?: readonly string[][] };
-    }
-  >;
-  /** Original requester facts retained by the exact host-admitted restart source claim. */
-  restartRecoveryRequesterSource?: import("../../agents/requester-run-recovery-source.js").RestartRecoveryRequesterSource;
-  mainRestartRecovery?: MainRestartRecoveryState;
+  /** Written only by committed graceful shutdown, consumed by the next startup. */
+  resumeAfterRestart?: { queuedInputIds: string[]; hadBackgroundExec?: true };
 };
 
 export interface InternalSessionEntry extends InternalSessionEntryCore {}

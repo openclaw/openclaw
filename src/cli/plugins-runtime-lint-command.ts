@@ -1,5 +1,5 @@
 import path from "node:path";
-import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { sanitizeTerminalText, terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { collectInstalledRuntimePackageGraph } from "../plugins/installed-package-runtime-graph.js";
 import {
   formatPluginRuntimeCompatibilityWarning,
@@ -43,7 +43,7 @@ export async function runPluginsRuntimeLintCommand(opts: PluginsRuntimeLintOptio
   }
   for (const warning of report.warnings) {
     defaultRuntime.log(
-      `Runtime compatibility warning: ${formatPluginRuntimeCompatibilityWarning(warning)}`,
+      terminalText`Runtime compatibility warning: ${formatPluginRuntimeCompatibilityWarning(warning)}`,
     );
   }
   defaultRuntime.log(

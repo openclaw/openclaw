@@ -238,7 +238,8 @@ it.each([
   ["exec", { title: "Inspect", code: "return null" }, "start", "Inspect…"],
   ["web_search", { query: "new plugin APIs" }, "start", 'for "new plugin APIs"…'],
   ["lookup_record", { query: "release notes" }, "start", "release notes…"],
-  ["exec", { title: "Inspect source", code: "return null" }, "result", "Outcome unknown"],
+  ["exec", { title: "Inspect source", code: "return null" }, "result", "Inspect source"],
+  ["exec", {}, "result", "Exec"],
   ["session_status", {}, "result", "1 other operation"],
 ] as const)("renders accessible %s activity", async (name, args, phase, expected) => {
   const activity = projectAgentToolActivity({
@@ -389,9 +390,7 @@ it("uses the newest group's live card label without inheriting an earlier failur
   expect(label()).toBe("in /repo/src/a.ts…");
 
   await renderActivityFixture(groups, { ...opts, runActive: false });
-  expect(activitySummary.textContent?.replace(/\s+/gu, " ").trim()).toBe(
-    "1 read · 1 edit 1 failed",
-  );
+  expect(activitySummary.textContent?.replace(/\s+/gu, " ").trim()).toBe("1 read · 1 edit");
 });
 
 it.each(["failed", "blocked"] as const)(
@@ -403,7 +402,13 @@ it.each(["failed", "blocked"] as const)(
     await renderActivityFixture([nested], liveOptions);
     expect(label()).toBe("Build the snake game");
     expect(vi.getTimerCount()).toBe(0);
-    expect(query("summary")?.textContent).toContain("1 " + status);
+    // A reviewer's block is a decision worth surfacing; a failed attempt mid-run is not.
+    const summary = query("summary")?.textContent;
+    if (status === "blocked") {
+      expect(summary).toContain("1 blocked");
+    } else {
+      expect(summary).not.toContain("failed");
+    }
   },
 );
 

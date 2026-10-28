@@ -58,7 +58,7 @@ export function ChatPaneMobileComposition(props: {
   // The destination's first visit mounts its content under this retained header owner.
   const retainPage = (render: () => Element) => {
     const opened = createMemo<boolean>(
-      (previous) => previous === true || host()?.destination.page?.render === page,
+      (previous) => previous === true || activePageRender() === page,
     );
     const content = (
       <Show when={opened()}>
@@ -117,6 +117,7 @@ export function ChatPaneMobileComposition(props: {
     export: "ChatSessionAccessMobile",
   });
   const host = () => props.header.detailsControl?.mobileHost;
+  const activePageRender = createMemo(() => host()?.destination.page?.render);
   const mobile = () => Boolean(props.header.mergedChrome && host());
   const compactActions = createMediaQuery("(max-width: 349px)");
   const panePresented = usePanePresentation(() => props.header.presented);
@@ -385,8 +386,10 @@ export function ChatPaneMobileComposition(props: {
   // Desktop View keeps only session-pane closure; panel controls belong to their frames.
   const desktopViewActions = () =>
     layoutModel().actions.filter((action) => action.id === "close-pane");
-  const desktopSessionActions = (): HeaderMenuSessionAction[] => [
-    ...(props.header.sessionMenuAction?.sessionActions ?? []),
+  const desktopSessionActions = (
+    native = props.header.sessionMenuAction?.sessionActions ?? [],
+  ): HeaderMenuSessionAction[] => [
+    ...native,
     ...(!props.header.mergedChrome
       ? layoutModel().actions.flatMap((action) =>
           action.id === "open-split-view" && action.kind !== "status" ? [action] : [],
@@ -427,7 +430,7 @@ export function ChatPaneMobileComposition(props: {
         ]
       : [],
   );
-  const nativeActions = createMemo((): HeaderMenuSessionAction[] => [
+  const nativeActions = (native: HeaderMenuSessionAction[]): HeaderMenuSessionAction[] => [
     ...compactHeaderActions(),
     ...(clearSideChat() ? [clearSideChat()!] : []),
     ...(props.header.runAction
@@ -440,7 +443,7 @@ export function ChatPaneMobileComposition(props: {
           },
         ]
       : []),
-    ...(props.header.sessionMenuAction?.sessionActions ?? []),
+    ...native,
     ...(machine()?.showPlacementMenu
       ? [
           {
@@ -477,7 +480,7 @@ export function ChatPaneMobileComposition(props: {
           },
         ]
       : []),
-  ]);
+  ];
   const adaptMenuPage = (page: HeaderSessionMenuPage): MobileHostDestination => ({
     area: "details",
     transient: true,
@@ -527,12 +530,12 @@ export function ChatPaneMobileComposition(props: {
           ref={elementRef(registerActionsMenu)}
           {...sessionMenuAction()}
           paneTitle={sessionMenuAction() ? undefined : props.header.title}
-          sessionActions={
+          composeSessionActions={(native) =>
             mobile()
               ? sessionCommandsAvailable()
-                ? nativeActions()
+                ? nativeActions(native)
                 : compactHeaderActions()
-              : desktopSessionActions()
+              : desktopSessionActions(native)
           }
           viewActions={mobile() ? layoutActions() : desktopViewActions()}
           viewContent={
@@ -553,7 +556,8 @@ export function ChatPaneMobileComposition(props: {
             } else if (!mobile() && action.kind === "split-below" && props.header.onSplitDown) {
               props.header.onSplitDown(props.header.paneId);
             } else {
-              sessionMenuAction()?.onAction(action);
+              const handler = sessionMenuAction()?.onAction;
+              return handler ? handler(action) : false;
             }
           }}
           mobile={mobile() || sessionMenuAction()?.mobile}

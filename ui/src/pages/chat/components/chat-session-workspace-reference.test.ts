@@ -71,7 +71,7 @@ describe("session workspace file reference resolution", () => {
         {
           sessionKey: target.sessionKey,
           agentId: "other",
-          path: target.path,
+          path: "/original-workspace/reports/report.pdf",
           messageEntryId: target.messageEntryId,
         },
         expect.any(AbortSignal),
@@ -114,11 +114,19 @@ describe("session workspace file reference resolution", () => {
       search: false,
       content: "# Readme",
     },
+    {
+      label:
+        "uses the returned workspace file for actions after opening a sandbox-absolute reference",
+      inputPath: "/sandbox/src/readme.md",
+      returnedPath: "src/readme.md",
+      search: false,
+      content: "# Readme",
+    },
   ])("$label", async ({ inputPath, returnedPath, search, content }) => {
     const requestPath = `/workspace/${returnedPath}`;
     const name = returnedPath.split("/").at(-1)!;
     const getFile = vi.fn<SessionWorkspaceHost["sessions"]["getFile"]>(async (sessionKey, path) => {
-      if (path !== requestPath) {
+      if (path !== requestPath && (search || path !== inputPath)) {
         throw new GatewayRequestError({
           code: "INVALID_REQUEST",
           message: "session file not found",
@@ -180,22 +188,26 @@ describe("session workspace file reference resolution", () => {
     } else {
       expect(listFiles).not.toHaveBeenCalled();
     }
-    expect(getFile).toHaveBeenLastCalledWith("agent:main:current", requestPath, {
-      agentId: "main",
-    });
+    expect(getFile).toHaveBeenLastCalledWith(
+      "agent:main:current",
+      search ? requestPath : inputPath,
+      {
+        agentId: "main",
+      },
+    );
     if (sidebarContent.kind !== "file" || !sidebarContent.edit) {
       throw new Error("expected editable resolved file content");
     }
     expect(sidebarContent.path).toBe(returnedPath);
-    expect(sidebarContent.sessionFileSource).toEqual({
-      sessionKey: "agent:main:current",
-      agentId: "main",
-      path: requestPath,
-    });
     await sidebarContent.edit.save({ content: "# Updated", expectedHash: "hash" });
     expect(setFile).toHaveBeenLastCalledWith("agent:main:current", requestPath, "# Updated", {
       agentId: "main",
       expectedHash: "hash",
+    });
+    expect(sidebarContent.sessionFileSource).toEqual({
+      sessionKey: "agent:main:current",
+      agentId: "main",
+      path: requestPath,
     });
     await sidebarContent.download?.(new AbortController().signal);
     expect(downloadSessionFile).toHaveBeenLastCalledWith(

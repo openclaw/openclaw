@@ -4,9 +4,7 @@ import { withCoreCanvasNodeCapability } from "../canvas/constants.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { adoptPluginHttpRouteHandoffs } from "../plugins/http-registry.js";
-import { isGatewayWorkAdmissionClosed } from "../process/gateway-work-admission.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "./agent-runtime-approval-authority.js";
-import { restartRunningChannelAccounts, type ThawRestartTarget } from "./channel-thaw-restart.js";
 import type { ExecApprovalManager } from "./exec-approval-manager.js";
 import { revokeAttachGrantsForSession } from "./mcp-grant-store.js";
 import { ADMIN_SCOPE } from "./method-scopes.js";
@@ -83,7 +81,6 @@ export async function startGatewayCoreRuntime(input: {
     nodeSendToAllSubscribed,
     refreshGatewayHealthSnapshotWithRuntime,
     dedupe,
-    restartRecoveryCandidates,
     chatRunState,
     removeChatRun,
     agentRunSeq,
@@ -142,7 +139,6 @@ export async function startGatewayCoreRuntime(input: {
   ) => {
     void nodeSendToSession(sessionKey, event, payload, opts);
   };
-  let pendingThawRestartTargets: readonly ThawRestartTarget[] | undefined;
   let earlyRuntimePromise: Promise<GatewayEarlyRuntime> | undefined;
   const startEarlyRuntime = (): Promise<GatewayEarlyRuntime> =>
     (earlyRuntimePromise ??= startupTrace
@@ -170,34 +166,12 @@ export async function startGatewayCoreRuntime(input: {
               getPresenceVersion,
               getHealthVersion,
               refreshGatewayHealthSnapshot: refreshGatewayHealthSnapshotWithRuntime,
-              restartRunningChannels: async (
-                mode,
-                shouldContinue = () => !isGatewayWorkAdmissionClosed(),
-              ) => {
-                // A new timing gap must resnapshot every running account even while
-                // older failures remain pending. A retry before the first attempted
-                // pass has no target list yet, so it also needs that fresh snapshot.
-                const selection =
-                  mode === "new-thaw" || pendingThawRestartTargets === undefined
-                    ? { kind: "new-thaw" as const, pendingTargets: pendingThawRestartTargets }
-                    : { kind: "deferred-retry" as const, targets: pendingThawRestartTargets };
-                const failedTargets = await restartRunningChannelAccounts(
-                  channelManager,
-                  {
-                    shouldContinue,
-                    onError: (message) => logHealth.error(message),
-                  },
-                  selection,
-                );
-                pendingThawRestartTargets = failedTargets.length > 0 ? failedTargets : undefined;
-                return failedTargets.length === 0;
-              },
+              channelManager,
               refreshPresence: runtime.publishPresence,
               resetEventLoopHealth: readinessEventLoopHealth.reset,
               logHealth,
               clients,
               dedupe,
-              restartRecoveryCandidates,
               chatRunState,
               removeChatRun,
               agentRunSeq,
@@ -242,7 +216,6 @@ export async function startGatewayCoreRuntime(input: {
       toolEventRecipients,
       sessionEventSubscribers,
       sessionMessageSubscribers,
-      restartRecoveryCandidates,
       refreshConnectedUserProfiles: () =>
         runtime.resolvePluginGatewayContext()?.refreshConnectedUserProfile?.(),
     }),

@@ -32,7 +32,7 @@ import { readGitHubPublicationRequest } from "./github-publication-store.worker.
 import {
   createRealPublicationWorkspace,
   createTestGitHubPublicationCoordinator,
-  githubPublicationTestMocks,
+  overrideCommands,
   persistPublicationTestSession,
   root,
 } from "./github-publication.test-support.js";
@@ -46,8 +46,6 @@ import {
 } from "./worker-environments/placement-dispatch-test-fixtures.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import { seedAttachedPlacementEnvironment } from "./worker-environments/placement-test-fixtures.js";
-
-const mocks = githubPublicationTestMocks();
 
 type Backend = "local" | "repository";
 type Coordinator = ReturnType<typeof createTestGitHubPublicationCoordinator>;
@@ -210,15 +208,13 @@ async function createRequesterPolicySources(
   const database = openOpenClawStateDatabase();
   const publishedTitles: string[] = [];
   const externalWrites: string[] = [];
-  const transport = mocks.runCommand.getMockImplementation()!;
-  mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
+  overrideCommands((argv, input) => {
     if (argv.includes("push") || argv.includes("POST") || argv.includes("graphql")) {
       externalWrites.push(argv.join(" "));
     }
     if (argv.includes("POST") && argv.some((arg) => arg.endsWith("/pulls"))) {
-      publishedTitles.push(JSON.parse(options!.input!).title);
+      publishedTitles.push(JSON.parse(input!).title);
     }
-    return await transport(argv, options);
   });
   return {
     config,
@@ -253,6 +249,7 @@ export async function createRequesterPublicationFixture(
   repositoryOptions: {
     requestedRef?: Parameters<typeof createRepositoryPublicationFixture>[1];
     baseFiles?: Record<string, string>;
+    initialCheckpoint?: boolean;
   } = {},
 ) {
   const repository =
@@ -262,6 +259,7 @@ export async function createRequesterPublicationFixture(
           repositoryOptions.requestedRef,
           session,
           repositoryOptions.baseFiles,
+          repositoryOptions.initialCheckpoint,
         )
       : undefined;
   await persistPublicationTestSession(session.sessionKey);

@@ -12,7 +12,7 @@ const suite = createControlUiE2eSuite({
 
 const targets = [
   { pathname: "/usage", routeId: "usage" },
-  { pathname: "/claws", routeId: "claws" },
+  { pathname: "/templates", routeId: "templates" },
 ] as const;
 
 suite.define(() => {
@@ -23,13 +23,13 @@ suite.define(() => {
         suite.withPage(
           { ...createControlUiE2eContextOptions(), viewport: { width, height: 900 } },
           async ({ page }) => {
-            const config = { gateway: { controlUi: { experimental: { claws: true } } } };
+            const config = { gateway: { controlUi: { experimental: { templates: true } } } };
             await installMockGateway(page, {
               methodResponses: {
                 "config.get": {
                   config,
                   sourceConfig: config,
-                  hash: "settings-exit-claws-config",
+                  hash: "settings-exit-templates-config",
                   valid: true,
                   issues: [],
                 },

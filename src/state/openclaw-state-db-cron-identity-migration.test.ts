@@ -3,6 +3,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import {
   CRON_DEFAULT_STORE_IDENTITY_SCHEMA_VERSION,
   migrateCronDefaultStoreIdentity,
@@ -141,7 +142,9 @@ it("preserves an upgraded partition and receipt bytes across a stopped state-dir
   expect(reopened.db.prepare("SELECT content, revision FROM cron_job_scratch").get()).toMatchObject(
     { content: null, revision: 7 },
   );
-  expect(reopened.db.prepare("PRAGMA user_version").get()).toMatchObject({ user_version: 34 });
+  expect(reopened.db.prepare("PRAGMA user_version").get()).toMatchObject({
+    user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+  });
 });
 
 it.each([32, 33])(
@@ -157,7 +160,9 @@ it.each([32, 33])(
     expect(readCronStorePartitionInventoryInDatabase(migrated.db)).toMatchObject([
       { storeKey: fixture.storeKey, jobs: 1 },
     ]);
-    expect(migrated.db.prepare("PRAGMA user_version").get()).toMatchObject({ user_version: 34 });
+    expect(migrated.db.prepare("PRAGMA user_version").get()).toMatchObject({
+      user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+    });
   },
 );
 

@@ -6,14 +6,18 @@ const swimlane =
   "swimlane-beta LR\n  subgraph Gateway\n    Admit[Admit]\n  end\n  subgraph Runtime\n    Execute[Execute]\n  end\n  Admit --> Execute";
 const sandbox = "iframe[sandbox='allow-scripts'][srcdoc]";
 
-function parseTranslate(element: Element): { x: number; y: number } {
-  const match = /^translate\(([-\d.]+), ([-\d.]+)\)$/u.exec(
-    element.getAttribute("transform") ?? "",
+function diagramNode(root: Element, label: string): Element {
+  const text = Array.from(root.querySelectorAll("text")).find((node) =>
+    node.textContent?.includes(label),
   );
-  if (!match) {
-    throw new Error("Expected a translated Mermaid element.");
+  let node = text?.parentElement;
+  while (node && node !== root) {
+    if (node.querySelector(":scope > rect, :scope > circle, :scope > ellipse, :scope > polygon")) {
+      return node;
+    }
+    node = node.parentElement;
   }
-  return { x: Number(match[1]), y: Number(match[2]) };
+  throw new Error(`Missing diagram node: ${label}`);
 }
 
 afterAll(() => {
@@ -35,11 +39,15 @@ G --> S`;
   expect(root.textContent).toContain("Gateway:");
   expect(root.textContent).toContain("lifecycle");
   expect(root.textContent).toContain("Commands");
-  expect(root.querySelector("[marker-start]")).not.toBeNull();
-  expect(root.querySelector("[marker-end]")).not.toBeNull();
+  // Pele draws arrowheads as passive paths rather than SVG marker references.
+  const bidirectional = Array.from(root.querySelectorAll("g")).find(
+    (group) => group.querySelectorAll(":scope > path").length === 3,
+  );
+  expect(bidirectional).toBeDefined();
+  expect(bidirectional!.querySelectorAll(':scope > path:not([fill="none"])')).toHaveLength(2);
   document.body.append(root);
   try {
-    const gateway = root.querySelector('g[id*="-flowchart-G-"]')!;
+    const gateway = diagramNode(root, "Gateway:");
     const box = gateway.querySelector("rect")!.getBoundingClientRect();
     const label = gateway.querySelector("text")!.getBoundingClientRect();
     expect(box.height).toBeGreaterThan(0);
@@ -73,6 +81,50 @@ G --> S`;
   }
 });
 
+it.each([
+  [
+    "architecture-beta\nservice gateway(server)[Gateway]\nservice runtime(server)[Runtime]\ngateway:R -- L:runtime",
+    "Gateway",
+  ],
+  ['pie title Requests\n"Approved" : 70\n"Rejected" : 30', "Approved"],
+  ["erDiagram\nREQUEST ||--o{ RESULT : produces", "REQUEST"],
+  ["stateDiagram-v2\n[*] --> Ready\nReady --> Running\nRunning --> [*]", "Running"],
+])("preserves diagram content for %s", async (source, label) => {
+  const root = await renderSvg(source);
+  expect(root.textContent).toContain(label);
+  expect(root.querySelector("path,rect,line,polygon")).not.toBeNull();
+});
+
+it("keeps wide proportional-font labels inside their nodes", async () => {
+  const label = "WWWWWWWWWWWWWWWWWWWW";
+  const root = await renderSvg(`flowchart LR\nA["${label}"]`);
+  document.body.append(root);
+  try {
+    const node = diagramNode(root, label);
+    const shape = node.querySelector("rect")!.getBoundingClientRect();
+    const text = node.querySelector("text")!.getBoundingClientRect();
+    expect(text.width).toBeGreaterThan(0);
+    expect(text.left).toBeGreaterThanOrEqual(shape.left);
+    expect(text.right).toBeLessThanOrEqual(shape.right);
+    expect(text.top).toBeGreaterThanOrEqual(shape.top);
+    expect(text.bottom).toBeLessThanOrEqual(shape.bottom);
+  } finally {
+    root.remove();
+  }
+});
+
+it("preserves quoted host font stacks in the standalone SVG", async () => {
+  const family = '"Instrument Sans", Arial, Helvetica, "Segoe UI", Roboto, sans-serif';
+  const root = parsePassiveSvg(
+    await renderMermaidSvg("flowchart LR\nA[Quoted font] --> B[Ready]", {
+      ...theme,
+      fontFamily: family,
+    }),
+  );
+  expect(root.querySelector("text")?.getAttribute("font-family")).toBe(family);
+  expect(root.querySelector("text")?.getAttribute("font-size")).toBe("14px");
+});
+
 it("keeps concurrent diagram themes independent in the warm renderer", async () => {
   const secondTheme = { ...theme, background: "#ffffff", foreground: "#202020", darkMode: false };
   const results = await Promise.all([
@@ -94,22 +146,34 @@ it("preserves diagram-specific mindmap and swimlane layouts", async () => {
     "mindmap\n  root((OpenClaw))\n    Gateway\n      Admission\n    Runtime\n      Execution",
   );
   const lanes = await renderSvg(swimlane);
-  const mindmapNodes = Array.from(
-    mindmap.querySelectorAll<SVGGElement>('[id*="-node_"][transform]'),
-  );
-  const root = mindmapNodes.find((node) => node.id.endsWith("-node_0"));
-  expect(root).toBeDefined();
-  const rootY = parseTranslate(root!).y;
-  const childY = mindmapNodes.filter((node) => node !== root).map((node) => parseTranslate(node).y);
-  expect(childY.some((y) => y < rootY)).toBe(true);
-  expect(childY.some((y) => y > rootY)).toBe(true);
-
-  expect(lanes.querySelector('[id$="-Gateway"]')).not.toBeNull();
-  expect(lanes.querySelector('[id$="-Runtime"]')).not.toBeNull();
-  const admit = parseTranslate(lanes.querySelector('[id*="-flowchart-Admit-"]')!);
-  const execute = parseTranslate(lanes.querySelector('[id*="-flowchart-Execute-"]')!);
-  expect(admit.x).toBe(execute.x);
-  expect(admit.y).not.toBe(execute.y);
+  document.body.append(mindmap, lanes);
+  try {
+    const center = (node: Element) => {
+      const bounds = node.getBoundingClientRect();
+      return { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
+    };
+    const origin = center(diagramNode(mindmap, "OpenClaw"));
+    const children = ["Gateway", "Runtime"].map((label) => center(diagramNode(mindmap, label)));
+    // Balanced branches may run horizontally or vertically, but must straddle the root.
+    expect(
+      (children.some((point) => point.x < origin.x) &&
+        children.some((point) => point.x > origin.x)) ||
+        (children.some((point) => point.y < origin.y) &&
+          children.some((point) => point.y > origin.y)),
+    ).toBe(true);
+    const gateway = diagramNode(lanes, "Gateway").getBoundingClientRect();
+    const runtime = diagramNode(lanes, "Runtime").getBoundingClientRect();
+    const admit = diagramNode(lanes, "Admit").getBoundingClientRect();
+    const execute = diagramNode(lanes, "Execute").getBoundingClientRect();
+    expect(gateway.bottom).toBeLessThanOrEqual(runtime.top);
+    expect(admit.top).toBeGreaterThanOrEqual(gateway.top);
+    expect(admit.bottom).toBeLessThanOrEqual(gateway.bottom);
+    expect(execute.top).toBeGreaterThanOrEqual(runtime.top);
+    expect(execute.bottom).toBeLessThanOrEqual(runtime.bottom);
+  } finally {
+    mindmap.remove();
+    lanes.remove();
+  }
 });
 
 it("enforces host source and edge limits despite source configuration, then recovers", async () => {
@@ -121,21 +185,14 @@ it("enforces host source and edge limits despite source configuration, then reco
   expect(recovered.textContent).toContain("Recovered");
 });
 
-it("preserves Unicode at the sandbox error boundary", async () => {
-  const prefix = "No diagram type detected matching given configuration for text: ";
-  const source = `${"x".repeat(935)}😀`;
-
-  await expect(renderMermaidSvg(source, theme)).rejects.toMatchObject({
-    message: `${prefix}${"x".repeat(935)}`,
-  });
-});
-
-it("blocks image decoding inside Mermaid before the SVG reaches the host", async () => {
+it("keeps source-provided image data out of the passive result", async () => {
   const image = btoa(
     '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10"/></svg>',
   );
   const source = `flowchart LR\nA@{ img: "data:image/svg+xml;base64,${image}", label: "Image" }`;
-  await expect(renderMermaidSvg(source, theme)).rejects.toThrow();
+  const svg = await renderMermaidSvg(source, theme);
+  expect(parsePassiveSvg(svg).textContent).toContain("Image");
+  expect(svg).not.toContain("data:image");
 });
 
 it("keeps source links and CSS inside the sandbox and preserves safe diagram styles", async () => {

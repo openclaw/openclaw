@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import * as bundledDiscovery from "./bundled-discovery-state.js";
 import { createPluginRecord } from "./loader-records.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { markPluginRegistryActive, markPluginRegistryRetired } from "./registry-lifecycle.js";
@@ -274,6 +275,32 @@ describe("configured worker provider maintenance", () => {
       prepare(harness);
       await harness.run();
       expect(maintain).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ["bundled", true, (h: ReturnType<typeof createHarness>) => h],
+    ["external", false, (h) => (h.owner.origin = "global")],
+    ["globally disabled", false, (h) => (h.config.plugins!.enabled = false)],
+    ["denylisted", false, (h) => (h.config.plugins!.deny = [h.owner.id])],
+    [
+      "explicitly disabled",
+      false,
+      (h) => (h.config.plugins!.entries = { [h.owner.id]: { enabled: false } }),
+    ],
+  ] satisfies [string, boolean, (h: ReturnType<typeof createHarness>) => unknown][])(
+    "preserves bundled compatibility policy for an %s owner",
+    async (_kind, allowed, prepare) => {
+      const harness = createHarness();
+      harness.config.plugins = { allow: ["another-owner"] };
+      const maintain = vi.fn(async () => {});
+      harness.addProvider("cloud-a", maintain);
+      prepare(harness);
+      await vi.spyOn(bundledDiscovery, "readBundledDiscoveryModeMemoized").withImplementation(
+        () => "compat",
+        () => harness.run(),
+      );
+      expect(maintain).toHaveBeenCalledTimes(allowed ? 1 : 0);
     },
   );
 

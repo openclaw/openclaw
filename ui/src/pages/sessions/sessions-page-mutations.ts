@@ -32,10 +32,7 @@ import { resolveUiSessionRowAgentId } from "../../lib/sessions/session-key.ts";
 import { formatPreservedWorktreesNotice } from "../../lib/sessions/worktree-preservation.ts";
 import { runControlUiPluginAction } from "../../plugins/control-ui-actions.ts";
 import { sessionAgentId, sessionPathAgentId } from "./agent-scope.ts";
-import {
-  createSessionsMutationRunner,
-  type SessionsPageMutationResult,
-} from "./mutation-runner.ts";
+import type { SessionsPageMutationResult } from "./mutation-runner.ts";
 import type { SessionsPageRequestScope } from "./request-scope.ts";
 import { settleSelectedSession, type SessionDeleteRow } from "./selection.ts";
 import type { SessionsPageState } from "./sessions-page-state.types.ts";
@@ -67,18 +64,37 @@ export function createSessionsPageMutations(host: SessionsPageMutationHost) {
     refresh: refreshSessionList,
     listOptions: sessionListOptions,
   } = host;
-  const sessionMutations = createSessionsMutationRunner({
-    isCurrent: isRequestScopeCurrent,
-    started: () => {
+  let pending = false;
+  const sessionMutations = {
+    get pending() {
+      return pending;
+    },
+    retire() {
+      pending = false;
+    },
+    async run(
+      scope: SessionsPageRequestScope,
+      mutate: () => Promise<SessionsPageMutationResult | void>,
+    ): Promise<SessionsPageMutationResult | void> {
       state.error = null;
-    },
-    settled: (outcome) => {
-      host.reconcile();
-      if (outcome && typeof outcome === "object") {
-        state.error = outcome.error;
+      pending = true;
+      let outcome: SessionsPageMutationResult | void = undefined;
+      try {
+        outcome = await mutate();
+      } catch (error) {
+        outcome = { status: "failed", error };
+      } finally {
+        if (isRequestScopeCurrent(scope)) {
+          pending = false;
+          host.reconcile();
+          if (outcome && typeof outcome === "object") {
+            state.error = outcome.error;
+          }
+        }
       }
+      return isRequestScopeCurrent(scope) ? outcome : "stale";
     },
-  });
+  };
 
   function publishRequestError(
     scope: SessionsPageRequestScope,
@@ -464,7 +480,14 @@ export function createSessionsPageMutations(host: SessionsPageMutationHost) {
       ...(fromLastCompleted ? { forkFrom: "last-completed" as const } : {}),
       ...(agentId ? { agentId } : {}),
     };
-    if (mutationAccessError(scope, { method: "sessions.create", params: createParams })) {
+    if (
+      mutationAccessError(scope, {
+        method: "sessions.create",
+        params: createParams,
+        sessionScope: true,
+        session: state.result?.sessions.find((row) => row.key === key),
+      })
+    ) {
       return;
     }
     state.error = null;

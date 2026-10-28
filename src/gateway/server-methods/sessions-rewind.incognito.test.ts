@@ -5,10 +5,8 @@ import {
   observeHostDataSql,
 } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
-import {
-  captureSessionActorStorageOwner,
-  withSessionActorStorage,
-} from "../../config/sessions/session-actor-storage-binding.js";
+import { withSessionActorStorage } from "../../config/sessions/session-actor-storage-acquisition.js";
+import { captureSessionActorStorageOwner } from "../../config/sessions/session-actor-storage-binding.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { invokeHandler } from "./sessions-rewind.handler.test-support.js";
 import {

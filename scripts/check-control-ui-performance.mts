@@ -33,7 +33,7 @@ const CONTROL_UI_GZIP_BUILD_VARIANCE_BYTES = 64;
 const CONTROL_UI_STARTUP_CSS_GZIP_TARGET_BYTES = 45 * KIB;
 // Immediate Home and diagnostic frames approved in #147574, including shared header styles.
 const CONTROL_UI_CSS_GZIP_GROWTH_BYTES = 1.5 * KIB;
-const MERMAID_RENDERER_GZIP_BYTES = 960 * KIB;
+const MERMAID_RENDERER_GZIP_BYTES = 256 * KIB;
 const CONTROL_UI_LOCALE_GZIP_BYTES = 300 * KIB;
 
 // Small, explicit headroom over the optimized baseline. Budget changes should
@@ -60,16 +60,20 @@ const controlUiPerformanceBudgets = {
   // Keep 45 KiB advisory: tiny integrated changes must not exhaust the budget.
   // The fixed 50 KiB ceiling bounds accumulation of small changes.
   startupCssGzipBytes: 50 * KIB,
-  // Fewer boot requests save 15,022 B across Chat JS/CSS. The consolidated
-  // Chat chunk measures 463,077 B; the cap retains 25,328 B headroom.
-  largestJsGzipBytes: 488_405,
+  // Early connection evaluation cuts startup to 89,868 B and Chat to 19 requests.
+  // The shared application chunk measures 545,946 B; retain 25,328 B headroom.
+  largestJsGzipBytes: 571_274,
   // Route consolidation saves 4,189 B total CSS gzip while merging always-loaded
   // sheets. Approved 2026-10-22: 57,154 B plus the prior 53,400 / 52,337 headroom.
   largestCssGzipBytes: 58_315,
-  // CLS reservation costs 266 B gzip over main while all measured reloads stay <=0.02.
-  // The campaign permits this measured win; retain only 64 B of build variance.
-  totalCssGzipBytes: 307_769,
-  totalCssRawBytes: 1_597_441,
+  // Lazy automation feed: 308,234 B CSS for 8.35% faster remote readiness,
+  // one fewer request and 9,859 fewer encoded bytes. Retain 64 B build variance.
+  // The lazily loaded Sections editor measures 308,462 B (#186229); Vyctor Brzezowski
+  // approved the increase on 2026-10-28. Retain 64 B build variance.
+  totalCssGzipBytes: 308_526,
+  // Logs windowing adds 38 B raw / 11 B gzip for 17% lower first-render task CPU
+  // and 42% lower filter task CPU at 4x. Measured raw total plus 64 B variance.
+  totalCssRawBytes: 1_597_676,
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
 

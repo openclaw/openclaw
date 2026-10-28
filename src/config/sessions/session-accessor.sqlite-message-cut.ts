@@ -36,10 +36,8 @@ import type {
   SessionMessageCutMutationParams,
   SessionMessageCutMutationResult,
 } from "./session-accessor.types.js";
-import {
-  captureSessionActorStorageOwner,
-  withSessionActorStorage,
-} from "./session-actor-storage-binding.js";
+import { withSessionActorStorage } from "./session-actor-storage-acquisition.js";
+import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
 import { planSessionMessageCut } from "./session-message-cut-plan.js";
 import type {
@@ -130,6 +128,7 @@ export async function mutateSqliteSessionAtMessage(
     targetKey,
   };
   const memoryScope = { ...params, sessionKey: sourceKey };
+  let forkVisibility: SessionEntry["visibility"];
   const assertCurrent = () => {
     params.commitGuard?.();
     preconditions?.assertUpstreamCurrent?.();
@@ -166,6 +165,9 @@ export async function mutateSqliteSessionAtMessage(
                   try {
                     memory.authority.assertCurrent();
                     assertResetCurrent();
+                    if (mode === "fork") {
+                      preconditions?.assertForkVisibilityAllowed?.(forkVisibility);
+                    }
                   } catch (error) {
                     authorityError = error;
                     throw error;
@@ -174,6 +176,10 @@ export async function mutateSqliteSessionAtMessage(
               },
               {
                 beforeCommit(receipt) {
+                  if (mode === "fork" && receipt.value.status === "created") {
+                    // The actor rechecks authority after this observer's await, before install.
+                    forkVisibility = receipt.value.entry.visibility;
+                  }
                   const entry = receipt.changes.find((change) => change.sessionKey === sourceKey)
                     ?.before?.entry;
                   if (capture && receipt.value.status === "created" && entry) {
@@ -331,6 +337,9 @@ function mutatePreparedSqliteSessionAtMessage(
             intent,
             { sourceRepositoryWorkspaceId: preconditions?.sourceRepositoryWorkspaceId },
           );
+          if (intent.mode === "fork" && mutationResult.status === "created") {
+            preconditions?.assertForkVisibilityAllowed?.(mutationResult.entry.visibility);
+          }
           const currentIdentity = readSessionIdentitySnapshot(database, identityKeys);
           const publishIdentity = prepareSessionIdentityPublication(
             database,

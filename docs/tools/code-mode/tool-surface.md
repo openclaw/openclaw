@@ -37,20 +37,20 @@ Model-facing input:
 
 ```typescript
 type CodeModeExecInput = {
-  title: string;
+  title?: string;
   code: string;
-  restartSafe?: boolean;
   awaitResults?: boolean;
 };
 ```
 
 Rules:
 
-- Every new cell requires a nonblank `title` of at most 120 characters. Use a
-  short purpose, usually 3–7 words, such as "Inspect the dependency graph".
+- `title` is optional. When provided, it must be nonblank and at most 120
+  characters. Use a short purpose, usually 3–7 words, such as "Inspect the dependency graph".
   Describe intended work without claiming success or including secrets. The
-  Control UI displays this title on the execution row. Nested tools retain their
-  own summaries; `wait` needs no title and resumes activity under the original cell.
+  Control UI displays this title on the execution row, or "run JavaScript" when
+  omitted. Nested tools retain their own summaries; `wait` needs no title and
+  resumes activity under the original cell.
 - `code` is the required model-facing JavaScript field and must be non-empty.
 - `command` is accepted as an exec-compatible alias for hook policies and
   trusted rewrites (the normal OpenClaw shell exec tool also uses a `command`
@@ -65,19 +65,10 @@ Rules:
 - The retired `language` and `typecheck` fields are rejected with `invalid_input`.
   Tool arguments are validated when each call reaches its normal execution owner;
   Code Mode does not typecheck the whole program before execution.
-- Do not set `restartSafe` on a new `exec`. Set it to `true` only when OpenClaw
-  explicitly requests replay after a gateway restart, and never for `write`,
-  `edit`, `exec`, or any mutation. Every catalog call must be explicitly
-  replay-safe. OpenClaw rejects unmarked catalog tools and namespace
-  surfaces that are not proven replay-safe. A generic exec surface is not
-  replay-safe merely because one command appears read-only; use audited read,
-  grep, or find tools.
-  Suspended results are marked replay-safe so
-  [restart recovery](/gateway/restart-recovery) can reconstruct an interrupted
-  turn from its transcript instead of restoring the process-local continuation.
-  Recovery remains limited to audited read-only core tools and explicitly
-  replay-safe plugin tools. `store` and `load` are unavailable in `restartSafe`
-  cells. Leave the field omitted for ordinary calls.
+- A Gateway restart ends the process-local Code Mode continuation. The resumed
+  root session inspects the transcript and current state before running a new cell;
+  it does not reconstruct or replay an unfinished cell. See
+  [Restart recovery](/gateway/restart-recovery).
 - `exec` rejects `import`, `require`, dynamic import, and module-loader
   patterns.
 - `exec` never exposes the normal shell `exec` implementation recursively.

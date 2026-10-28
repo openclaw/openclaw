@@ -3,6 +3,7 @@ import { resolveCloudProfileIconData } from "../../components/provider-icon-data
 import { Icon } from "../../components/solid/icon.tsx";
 import type { PopoverHandle } from "../../components/solid/popover.tsx";
 import { CloudProfileIcon } from "../../components/solid/provider-icon.tsx";
+import { warmWhenIdle } from "../../lib/idle-warmup.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { SessionPicker } from "./picker.tsx";
 import type { NewSessionPlaceControlsOptions } from "./target-controls.ts";
@@ -12,6 +13,7 @@ import type { resolveWhereChip } from "./where-chip.ts";
 const WherePickerContent = lazy(() => import("./where-picker-content.tsx"), {
   export: "WherePickerContent",
 });
+warmWhenIdle(WherePickerContent.preload);
 
 export type WhereChipProps = {
   params: NewSessionPlaceControlsOptions;

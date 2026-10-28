@@ -56,12 +56,10 @@ import {
   readTranscriptStatsFromDatabase,
 } from "./session-accessor.sqlite-transcript-stats.js";
 import { readSessionActorTransactionState } from "./session-actor-transaction.js";
-import {
-  readHotSessionTranscriptSnapshot,
-  SessionTranscriptColdError,
-} from "./session-cold-storage-state.js";
+import { readHotSessionTranscriptSnapshot } from "./session-cold-storage-state.js";
 import type { SessionTranscriptReadSnapshot } from "./session-history-read.types.js";
 import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
+import { SessionTranscriptColdError } from "./session-transcript-cold-error.js";
 import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
 import { SessionTranscriptStorageUnavailableError } from "./session-transcript-projection-error.js";
 import { assertTranscriptEventReadBudget } from "./session-transcript-read-bytes.js";
@@ -71,6 +69,7 @@ import {
   runWithSessionTranscriptReadFence,
 } from "./session-transcript-read-fence.js";
 import {
+  readTranscriptPayload,
   transcriptEventJsonSql,
   transcriptEventNavigationSql,
   transcriptEventResetNavigationSql,
@@ -485,13 +484,13 @@ export function readTranscriptEventAtSeqInTransaction(
     database.db,
     getSessionKysely(database.db)
       .selectFrom("transcript_events")
-      .select([transcriptEventJsonSql(database.db).as("event_json"), "seq"])
+      .select(["event_json", "event_zstd", "event_utf8_bytes", "seq"])
       .where("session_id", "=", sessionId)
       .where("seq", "=", seq),
   );
   return row
     ? {
-        event: JSON.parse(row.event_json) as TranscriptEvent,
+        event: JSON.parse(readTranscriptPayload(row)) as TranscriptEvent,
         seq: sqliteNumber(row.seq),
       }
     : undefined;
@@ -572,17 +571,16 @@ export function readTranscriptEventRows(
   sessionId: string,
 ): SqliteTranscriptSnapshotRow[] {
   return readHotSessionTranscriptSnapshot(database, sessionId, "raw rows", () => {
-    const db = getSessionKysely(database.db);
     const rows = executeSqliteQuerySync(
       database.db,
-      db
+      getSessionKysely(database.db)
         .selectFrom("transcript_events")
-        .select([transcriptEventJsonSql(database.db).as("event_json"), "seq"])
+        .select(["event_json", "event_zstd", "event_utf8_bytes", "seq"])
         .where("session_id", "=", sessionId)
         .orderBy("seq", "asc"),
     ).rows;
     return rows.map((row) => ({
-      eventJson: row.event_json,
+      eventJson: readTranscriptPayload(row),
       seq: sqliteNumber(row.seq),
     }));
   });
@@ -594,18 +592,17 @@ export function readTranscriptStorageRows(
   sessionId: string,
 ): SqliteTranscriptStorageRow[] {
   return readHotSessionTranscriptSnapshot(database, sessionId, "storage rows", () => {
-    const db = getSessionKysely(database.db);
     const rows = executeSqliteQuerySync(
       database.db,
-      db
+      getSessionKysely(database.db)
         .selectFrom("transcript_events")
-        .select(["created_at", transcriptEventJsonSql(database.db).as("event_json"), "seq"])
+        .select(["created_at", "event_json", "event_zstd", "event_utf8_bytes", "seq"])
         .where("session_id", "=", sessionId)
         .orderBy("seq", "asc"),
     ).rows;
     return rows.map((row) => ({
       createdAt: sqliteNumber(row.created_at),
-      eventJson: row.event_json,
+      eventJson: readTranscriptPayload(row),
       seq: sqliteNumber(row.seq),
     }));
   });

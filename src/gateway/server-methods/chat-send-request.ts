@@ -15,8 +15,6 @@ import type {
   ChatSendParamsSchema,
   QueueMode,
 } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
-import type { createOperatorInputRecoverySource } from "../../agents/operator-run-recovery-source.js";
-import { hasCommandSyntax } from "../../auto-reply/command-detection.js";
 import { isAbortRequestText } from "../../auto-reply/reply/abort-primitives.js";
 import { isBtwRequestText } from "../../auto-reply/reply/btw-command.js";
 import {
@@ -25,7 +23,6 @@ import {
   type AttachedChatWorkContext,
 } from "../../chat/work-context.js";
 import type { SessionGoalOperation } from "../../config/sessions/goals-operations.js";
-import type { SessionRestartResume } from "../../config/sessions/restart-resume.js";
 import { loadChatRequestIdentityKeyAsync } from "../../infra/device-identity-async.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import {
@@ -42,9 +39,9 @@ import {
   isOperatorUiClient,
 } from "../../utils/message-channel.js";
 import type { ChatAttachment } from "../chat-attachments.js";
-import { readChatInputRecoveryAdmission } from "../chat-input-recovery-source.js";
 import { sanitizeChatSendMessageInput } from "../chat-input-sanitize.js";
 import { hasGatewayAdminScope } from "../operator-scopes.js";
+import { readQueuedChatInputAdmission } from "../queued-chat-input-admission.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import { normalizeChatHumanMentions } from "./chat-human-mentions.js";
 import {
@@ -66,7 +63,6 @@ type ChatSendRequestParams = Omit<
 };
 
 export type NormalizedChatSendRequest = {
-  restartResume?: SessionRestartResume;
   providerReviewAcknowledgment?: ProviderReviewAcknowledgment;
   goalOperation?: SessionGoalOperation & { action: "start" | "resume" };
   chatSendReceivedAtMs: number;
@@ -100,7 +96,6 @@ export function normalizeChatSendRequest(params: {
   client: GatewayRequestHandlerOptions["client"];
   trustedSystemInput?: boolean;
   goalResume?: SessionGoalOperation & { action: "resume" };
-  restartResume?: SessionRestartResume;
   providerReviewAcknowledgment?: ProviderReviewAcknowledgment;
 }): NormalizeChatSendRequestResult | Promise<NormalizeChatSendRequestResult> {
   const chatSendReceivedAtMs = performance.now();
@@ -108,7 +103,7 @@ export function normalizeChatSendRequest(params: {
   const client = params.client;
   const recoveredInput =
     typeof params.params.idempotencyKey === "string"
-      ? readChatInputRecoveryAdmission(params.params.idempotencyKey)
+      ? readQueuedChatInputAdmission(params.params.idempotencyKey)
       : undefined;
   const clientInfo = client?.connect?.client;
   const supportsTaskSuggestions =
@@ -212,10 +207,7 @@ export function normalizeChatSendRequest(params: {
 
   const hasGoalOperation = params.goalResume !== undefined || p.intent !== undefined;
   const commandInterpretationSuppressed =
-    suppressCommandInterpretation ||
-    recoveredInput?.suppressCommandInterpretation === true ||
-    hasGoalOperation ||
-    providerReview !== undefined;
+    suppressCommandInterpretation || hasGoalOperation || providerReview !== undefined;
   // This text comes from the current provider review, not a browser-supplied command.
   const inboundMessage = p.intent || providerReview ? p.message : sanitizedMessageResult.message;
   const systemInputProvenance = params.goalResume
@@ -312,7 +304,6 @@ export function normalizeChatSendRequest(params: {
       ? { providerReviewAcknowledgment: params.providerReviewAcknowledgment }
       : {}),
     ...(params.goalResume ? { goalOperation: params.goalResume } : {}),
-    ...(params.restartResume ? { restartResume: params.restartResume } : {}),
     explicitOrigin: explicitOriginResult.value,
     inboundMessage: modelMessage,
     ...(workContext ? { workContext } : {}),
@@ -359,47 +350,4 @@ export function normalizeChatSendRequest(params: {
     }
     return { ok: true as const, value: request };
   });
-}
-
-/** Keep only execution options; approved text and media live in the input itself. */
-export function createChatInputRecovery(params: {
-  request: NormalizedChatSendRequest;
-  source: ReturnType<typeof createOperatorInputRecoverySource>;
-}) {
-  const { request, source } = params;
-  // Process-local capabilities cannot be re-created after restart.
-  if (
-    !source ||
-    request.toolBindings ||
-    request.providerReviewAcknowledgment ||
-    request.goalOperation ||
-    request.turnKind !== "main" ||
-    (request.systemInputProvenance && request.systemInputProvenance.kind !== "external_user")
-  ) {
-    return undefined;
-  }
-  const p = request.p;
-  return {
-    version: 1 as const,
-    source,
-    clientInfo: request.clientInfo,
-    suppressCommandInterpretation:
-      request.suppressCommandInterpretation || !hasCommandSyntax(request.inboundMessage),
-    request: {
-      ...(request.reconnectResumeRequested ? { __controlUiReconnectResume: true } : {}),
-      thinking: p.thinking,
-      fastMode: p.fastMode,
-      fastAutoOnSeconds: p.fastAutoOnSeconds,
-      timeoutMs: p.timeoutMs,
-      deliver: p.deliver,
-      queueMode: p.queueMode,
-      replyToId: p.replyToId,
-      originatingChannel: p.originatingChannel,
-      originatingTo: p.originatingTo,
-      originatingAccountId: p.originatingAccountId,
-      originatingThreadId: p.originatingThreadId,
-      systemInputProvenance: request.systemInputProvenance,
-      systemProvenanceReceipt: request.systemProvenanceReceipt,
-    },
-  };
 }

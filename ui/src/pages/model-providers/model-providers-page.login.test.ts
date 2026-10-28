@@ -768,7 +768,10 @@ describe("Models provider login", () => {
     ).toBe(true);
     expect(profiles[0]?.textContent).toContain("External CLI account");
     expect(profiles[1]?.textContent).toContain("Saved browser account");
-    expect(profiles[1]?.textContent).toContain("Expiring");
+    expect(profiles[1]?.textContent).toContain("Credentials configured");
+    expect(profiles[1]?.textContent).toContain(
+      "Access-token expiry alone does not mean you need to sign in again.",
+    );
     expect(dialog.textContent).not.toContain("other-provider@example.invalid");
     expect(request.mock.calls.some(([method]) => method === "models.authLogin")).toBe(false);
     const originalRequest = request.getMockImplementation()!;

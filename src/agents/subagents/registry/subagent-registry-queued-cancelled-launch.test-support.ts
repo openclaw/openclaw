@@ -41,7 +41,6 @@ export function registerQueuedCancelledLaunchCases() {
         killReconciliation: captured.killReconciliation,
         completion: { resultText: "manual kill", capturedAt: 123 },
         collectorCompletion: { status: "killed", structured: { answer: 42 } },
-        queuedLaunch: undefined,
       });
       expect(f.scope.canCleanupSession()).toBe(true);
       const writes = f.writes;

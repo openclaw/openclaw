@@ -199,6 +199,8 @@ suite.define(() => {
       await person.hover();
       const card = activityCard(page);
       await card.waitFor({ state: "visible" });
+      // Presence reorders the row; keep focus in the card while its activity changes.
+      await link(card, "View activity").focus();
       await expectText(card.locator(".person-activity-card__status"), "Idle");
       await expectText(card, "Online for");
       await expectText(card, "Last interaction");
@@ -316,7 +318,7 @@ suite.define(() => {
         await person.waitFor({ state: "visible" });
         await expectCount(card, 0);
         await expectCount(row.locator("a, button"), 2);
-        await expectCount(row.getByRole("button", { name: "Pin", exact: true }), 1);
+        await expectCount(row.getByRole("button", { name: "Actions for Alice", exact: true }), 1);
         await person.hover();
         await card.waitFor({ state: "visible" });
         await expectText(card, "Reported time zone: Europe/Paris");

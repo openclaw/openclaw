@@ -80,7 +80,12 @@ export function insertYamlOcPath(
       throw new OcPathEditError("unresolved");
     }
     guardSentinel(marker.key, `${formatOcPath(parentPath)}/${formatInsertionMarker(marker)}`);
-    if (cloned.hasIn([...segments, marker.key])) {
+    // Match the same key spelling used by path resolution, including native scalar keys.
+    if (
+      parent.items.some(
+        (pair) => String(isScalar(pair.key) ? pair.key.value : pair.key) === marker.key,
+      )
+    ) {
       throw new OcPathEditError("unresolved");
     }
     cloned.setIn([...segments, marker.key], newValue);

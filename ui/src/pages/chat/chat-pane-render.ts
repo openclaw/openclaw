@@ -13,7 +13,6 @@ import {
   resolveChatPaneObserverRunId,
 } from "../../lib/observer-digest.ts";
 import { hasSessionPresenceViewers } from "../../lib/presence-users.ts";
-import { readSessionMethodScopeAccess } from "../../lib/session-method-access.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/navigation.ts";
 import { resolveUiConfiguredMainKey } from "../../lib/sessions/session-key.ts";
@@ -69,6 +68,8 @@ registerChatSessionEnglish();
 const emptyTranscriptItems: [] = [];
 
 export class ChatPaneRuntime extends ChatPaneLayoutRender {
+  private readonly widgetLayout = createChatWidgetLayout();
+
   render(
     readProviderReview?: () => ChatProviderReviewOwner | undefined,
     readRealtimeTalkConversation?: ChatProps["readRealtimeTalkConversation"],
@@ -82,7 +83,8 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
     const providerPaused = Boolean(selectedSession?.providerReview);
     const childRoster = this.projectChildRoster(this.resolveChatReadTarget());
     const progressPresentation = this.progressCardPresentation;
-    const selectedSessionArchived = this.isCurrentSessionArchived(state);
+    const cachedSession = this.cachedSessionStatePending() ? this.cachedSessionState() : undefined;
+    const selectedSessionArchived = cachedSession?.archived ?? this.isCurrentSessionArchived(state);
     const mutationAccess = readChatPaneMutationAccess(
       this.context.gateway.snapshot,
       state.sessionKey,
@@ -120,6 +122,9 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       this.context.runtimeConfig.state,
     );
     const currentAgentId = resolveChatAgentId(state);
+    this.composerCapabilities?.synchronize(state, currentAgentId);
+    const sessionScope = scopedAgentParamsForSession(state, state.sessionKey);
+    const widgetTarget = { sessionKey: state.sessionKey, ...sessionScope };
     const catalogKey = parseCatalogSessionKey(state.sessionKey);
     const catalog = catalogKey !== null;
     const selectedAgent = this.context.agents.state.agentsList?.agents.find(
@@ -150,7 +155,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       catalog,
       listLoading: state.sessionsLoading,
       sessionKey: `${currentAgentId ?? ""}\0${state.sessionKey}`,
-      session: selectedSession,
+      session: cachedSession ?? selectedSession,
     });
     const gatewaySnapshot = this.context.gateway.snapshot;
     const mainKey = resolveUiConfiguredMainKey({
@@ -161,7 +166,6 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       selectedSession,
       placementStartup !== null,
     );
-    const restartRecoveryTombstoned = selectedSession?.restartRecoveryStatus === "tombstoned";
     const multiIdentity = this.hasMultipleIdentities();
     const catalogReason = this.catalogComposerReason(catalogKey);
     const catalogDisabledReason = catalogReason?.text ?? null;
@@ -263,30 +267,21 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
     const sessionDisabledBanner = this.sessionDisabledBanner({
       catalogDisabledReason,
       modelSetupRequired,
-      restartRecoveryTombstoned,
       selectedSessionArchived,
       selectedSessionId: selectedSession?.sessionId?.trim() || undefined,
       selectedSession,
       sessionKey: state.sessionKey,
       unarchiveAccess: mutationAccess.unarchive,
+      cached: cachedSession?.unarchiveAllowed === true,
     });
     const initialHistoryUnavailable = !catalogKey && isInitialChatHistoryUnavailable(state);
     const presence = this.presence.snapshot;
     const composerSessionKey = state.sessionKey;
-    const composerConnected = state.connected;
     const catalogCanContinue = this.history.catalogSession?.canContinue === true;
     const composerPendingReason = state.connected ? null : pendingReason;
     const auth = gatewaySnapshot.hello?.auth ?? null;
     const hasWriteScope = hasOperatorWriteAccess(auth);
-    const composerAccess =
-      hasWriteScope ||
-      (!catalog &&
-        readSessionMethodScopeAccess(auth, {
-          method: "chat.send",
-          requiredScope: "operator.write",
-          sessionScope: true,
-          session: selectedSession,
-        }).allowed);
+    const composerAccess = hasWriteScope || (!catalog && mutationAccess.composeScope.allowed);
     const suggestionViewer =
       multiIdentity &&
       !selectedSessionArchived &&
@@ -306,13 +301,8 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       sessionDisabledBanner?.kind !== "composer-replacement" &&
       (catalog
         ? catalogCanContinue
-        : !disabledReason &&
-          !(
-            selectedSessionArchived ||
-            selectedSession?.restartRecoveryStatus === "tombstoned" ||
-            placementComposer.blocksSend
-          ));
-    const canWriteProgressCard = composerConnected && !sessionParticipationBlocked && hasWriteScope;
+        : !disabledReason && !(selectedSessionArchived || placementComposer.blocksSend));
+    const canWriteProgressCard = state.connected && !sessionParticipationBlocked && hasWriteScope;
     const typingEnabled =
       multiIdentity &&
       hasWriteScope &&
@@ -384,18 +374,14 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       showThinking: state.settings.chatShowThinking,
       showToolCalls: state.settings.chatShowToolCalls,
       persistCommentary: state.settings.chatPersistCommentary !== false,
-      // Recovery can temporarily withhold the first turn after history loaded empty.
-      // Keep its pane loading until startup can display the retained message again.
+      // A locally created session can still be preparing its first input.
       loading: catalogKey
         ? this.history.catalogLoading
         : (!state.connected && !state.currentSessionId) ||
           state.chatLoading ||
           (!runActive && pendingReason !== null && placementStartup === null),
       routeLoadingSkeleton: this.routeLoadingSkeleton && initialHistoryUnavailable,
-      sending:
-        state.chatSending ||
-        this.sessionCreation.recovering ||
-        this.collaboration.addOperation !== undefined,
+      sending: state.chatSending || this.collaboration.addOperation !== undefined,
       placementStartup: placementStartup ?? placementComposer.startup,
       guestWelcome: this.context.guestWelcome,
       onRetrySessionPlacementStartup: placementStartup?.retryable
@@ -408,11 +394,6 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       runActive,
       runStatus: state.chatRunStatus,
       startupStatus: activeChatRunStartupStatus(state.chatRunStartup),
-      awaitingActivity:
-        state.chatRunStartup == null &&
-        !(state.chatRunId
-          ? state.knownAgentRunIds.has(state.chatRunId)
-          : selectedSession?.activeRunIds?.some((runId) => state.knownAgentRunIds.has(runId))),
       environmentStartStatus:
         placement?.state === "provisioning" ? placement.startStatus : undefined,
       waitingApproval: state.waitingApprovalStatuses.size > 0,
@@ -450,6 +431,8 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         historyHasMore || this.history.loadingOlder
           ? {
               hasMore: historyHasMore,
+              error: this.history.olderError,
+              connected: state.connected,
               loading:
                 this.history.loadingOlder ||
                 (catalogKey ? this.history.catalogLoading : state.chatLoading),
@@ -516,7 +499,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         state.settings = patchSettings({ composerHoldToRecord: enabled });
       },
       onOpenTalkSettings: () => this.context.navigate("talk"),
-      onOpenDictationSettings: () => this.context.navigate("model-setup"),
+      onOpenDictationSettings: () => this.context.navigate("talk"),
       suggestionComposer: suggestionViewer,
       typingActors: multiIdentity ? this.collaboration.typingViews : [],
       typingOverflow: multiIdentity ? this.collaboration.typingOverflow : undefined,
@@ -525,8 +508,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         : undefined,
       ...composerAvailability,
       disabledReasonAction: catalogReason?.action,
-      modelSetupRequired:
-        modelSetupRequired && !selectedSessionArchived && !restartRecoveryTombstoned,
+      modelSetupRequired: modelSetupRequired && !selectedSessionArchived,
       onModelSetup: () => this.context.navigate("model-setup"),
       error: providerPaused ? null : state.lastError,
       diskSpace: placementComposer.diskSpace,
@@ -547,7 +529,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       toolOverrides: selectedSession?.toolOverrides,
       capabilityMenu: catalogKey
         ? undefined
-        : this.composerCapabilities.props(this.context, state, selectedSession, currentAgentId),
+        : this.composerCapabilityMenu(state, selectedSession, currentAgentId),
       ...childRoster,
       sessionHost: {
         assistantAgentId: state.assistantAgentId,
@@ -652,15 +634,12 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       onRewindMessage: selectedSessionArchived ? undefined : sessionActionCallbacks.onRewindMessage,
       agentsList: state.agentsList,
       currentAgentId,
-      fullMessageAgentId: scopedAgentParamsForSession(state, state.sessionKey).agentId,
+      fullMessageAgentId: sessionScope.agentId,
       loadFullAssistantMessage: createSidebarFullMessageLoader(state, this.context.gateway),
       onSessionSelect: (next) => this.onPaneSessionChange?.(this.paneId, next),
       canvasPluginSurfaceUrl: state.canvasPluginSurfaceUrl,
       boardProvider: board.provider,
-      widgetLayout: createChatWidgetLayout(state.chatMessagesBySession, state, {
-        sessionKey: state.sessionKey,
-        ...scopedAgentParamsForSession(state, state.sessionKey),
-      }),
+      widgetLayout: this.widgetLayout(state.chatMessagesBySession, state, widgetTarget),
       onOpenSidebar: state.handleOpenSidebar,
       onRequestOpenImage: state.beginImageOpen,
       onOpenImage: state.handleOpenImage,
@@ -682,11 +661,13 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
     };
     return {
       providerReviewSource: { state, canWrite: canWriteProgressCard && !selectedSessionArchived },
-      capabilityDialogs: catalogKey
-        ? undefined
-        : {
-            read: () => this.composerCapabilities.dialogView(this.context, state, selectedSession),
-          },
+      capabilityDialogs:
+        catalogKey || !this.composerCapabilities
+          ? undefined
+          : {
+              read: () =>
+                this.composerCapabilities!.dialogView(this.context, state, selectedSession),
+            },
       layout: this.renderChatPaneLayout({
         state,
         selectedSession,
@@ -698,6 +679,8 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         detailsActions: {
           ...this.captureProgressCardActions(canWriteProgressCard),
           progressCardRefresh: detailsProgressRefresh,
+          // Hydrated cards precede both hello and composer action readiness.
+          progressCardRefreshReserved: !state.connected || canWriteProgressCard,
         },
         observerDigest,
         observerRunId,

@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { deserialize } from "node:v8";
+import { zstdDecompressSync } from "node:zlib";
 import { ownedWorkerBytes } from "../../infra/worker-transfer-bytes.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import {
@@ -76,6 +78,16 @@ export async function executeWorkspaceManifestComputation(
   assertBeforeMutation?: () => void,
 ): Promise<WorkspaceManifestComputationResult> {
   switch (command.type) {
+    case "workspace.manifest.local": {
+      const { executeLocalWorkspaceManifestRead } =
+        await import("./local-workspace-manifest-scan.js");
+      const bytes = command.input.snapshot;
+      // SAFETY: The state reader captures both arguments from the admitted request.
+      const args = deserialize(zstdDecompressSync(bytes)) as Parameters<
+        typeof executeLocalWorkspaceManifestRead
+      >;
+      return await executeLocalWorkspaceManifestRead(...args);
+    }
     case "workspace.manifest.base-refresh": {
       const { readActualWorkspaceManifestImpl } = await import("./workspace-actual-manifest.js");
       const input = command.input;
@@ -257,8 +269,16 @@ export async function executeWorkspaceManifestComputation(
     case "workspace.manifest.pair": {
       const baseRaw = decodeUtf8(command.input.baseRaw);
       const currentRaw = decodeUtf8(command.input.currentRaw);
-      const base = parseWorkerWorkspaceManifest(baseRaw, command.input.baseRef);
-      const current = parseWorkerWorkspaceManifest(currentRaw, command.input.currentRef);
+      const base = parseWorkerWorkspaceManifest(
+        baseRaw,
+        command.input.baseRef,
+        command.input.buildCacheInputs,
+      );
+      const current = parseWorkerWorkspaceManifest(
+        currentRaw,
+        command.input.currentRef,
+        command.input.buildCacheInputs,
+      );
       const compared = parseChangedWorkspaceResult(base, current);
       return { base, current, ...compared, paths: compared.entries.map((entry) => entry.path) };
     }

@@ -1,4 +1,3 @@
-import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { configureExecutionIdentityAdmissionSink } from "../audit/execution-identity-admission.js";
@@ -29,6 +28,7 @@ import {
 } from "../sessions/input-provenance.js";
 import { captureSessionTarget } from "../sessions/session-controller.lifecycle.js";
 import { getRpcSourceIdentity } from "../sessions/session-controller.rpc-sources.js";
+import { rpcSourcesByRunId } from "../sessions/session-controller.storage.js";
 import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -578,7 +578,11 @@ describe("startGatewayEventSubscriptions", () => {
     agentEventHandlerMocks.create.mockReturnValue(Object.assign(vi.fn(), { dispose: vi.fn() }));
     unsubs = startGatewayEventSubscriptions(params);
 
-    emit({ phase: "start", startedAt: 1_000 });
+    {
+      using scan = vi.spyOn(rpcSourcesByRunId, Symbol.iterator);
+      emit({ phase: "start", startedAt: 1_000 });
+      expect(scan).not.toHaveBeenCalled();
+    }
     transitions.push({ state: "Start-normalized", lifecycle: readLifecycleState(entry) });
     await waitForFast(() => expect(agentEventHandlerMocks.create).toHaveBeenCalledOnce());
 
@@ -698,17 +702,6 @@ describe("startGatewayEventSubscriptions", () => {
           "Terminal ownership settled before its held dispatch was released",
         );
         expect(firstSettled).toBe(false);
-        const recovery = {
-          storePath: expectDefined(entry.input.target, "Expected captured fixture target")
-            .storeScope,
-          agentId: getRpcSourceIdentity(entry).agentId,
-          runId,
-          sessionKey,
-          sessionId: getRpcSourceIdentity(entry).sessionId,
-          lifecycleGeneration: getAgentEventLifecycleGeneration(),
-          observedAt: 2_000,
-        };
-        params.restartRecoveryCandidates.set(runId, recovery);
         let current = entry;
         if (change !== "newer write") {
           expect(rpcSourceTesting.deleteExpected(runId, entry)).toBe(true);
@@ -718,7 +711,6 @@ describe("startGatewayEventSubscriptions", () => {
         }
         if (change !== "removed") {
           emitTerminal(3_000);
-          params.restartRecoveryCandidates.set(runId, { ...recovery, observedAt: 3_000 });
         }
         if (change === "retired replacement") {
           expect(rpcSourceTesting.deleteExpected(runId, current)).toBe(true);
@@ -751,14 +743,11 @@ describe("startGatewayEventSubscriptions", () => {
             await expect(waitForChatAbortTerminalPersistence(entry)).rejects.toBe(failure);
           }
         }
-        if (change === "removed") {
-          expect(params.restartRecoveryCandidates.get(runId)).toEqual(recovery);
-        } else {
+        if (change !== "removed") {
           expect(rpcSourceTesting.get(runId)).toBe(
             change === "retired replacement" ? undefined : current,
           );
           expect(readLifecycleState(current)).toEqual(currentState);
-          expect(params.restartRecoveryCandidates.get(runId)?.observedAt).toBe(3_000);
         }
         if (change === "newer write") {
           successor.resolve();

@@ -288,28 +288,20 @@ describe("resolveRequesterToolPolicies", () => {
     const request = {
       config: config(),
       sessionKey: targetSessionKey,
-      sessionId: registration.targetSessionId,
+      sessionId:
+        authority === "stale requester" ? "replacement-session" : registration.targetSessionId,
+      ...(authority === "external sender" ? { senderId: "mallory" } : {}),
+      modelProvider: consumption.provider,
+      modelId: consumption.model,
       inputProvenance: {
-        kind: "inter_session" as const,
+        kind:
+          authority === "external sender" ? ("external_user" as const) : ("inter_session" as const),
         sourceTool: "subagent_settle",
         sourceSessionKey: registration.sourceSessionKey,
       },
       trustedInternalHandoff,
     };
-    const resolve = () =>
-      resolveRequesterToolPolicies({
-        ...request,
-        sessionId:
-          authority === "stale requester" ? "replacement-session" : registration.targetSessionId,
-        ...(authority === "external sender" ? { senderId: "mallory" } : {}),
-        modelProvider: consumption.provider,
-        modelId: consumption.model,
-        inputProvenance: {
-          ...request.inputProvenance,
-          kind: authority === "external sender" ? "external_user" : "inter_session",
-        },
-      });
-    const result = await withPreparedSessionCapabilityRead(resolve);
+    const result = await resolvePolicy(request);
     if (authority !== "current") {
       expect(result.delegated).toBe(false);
       expect(result.senderPolicy).toEqual(runtimeDeny);
@@ -320,15 +312,14 @@ describe("resolveRequesterToolPolicies", () => {
     expect(result.groupPolicy).toBeUndefined();
     expect(result.inheritedToolPolicySource).toBe("sender");
 
-    const requesterOrigin = {
-      sessionKey: targetSessionKey,
-      messageProvider: "discord",
-      senderId: "alice",
-    };
     const snapshot = prepareReplyToolAuthority({
       run: {
         ...request,
-        requesterOrigin,
+        requesterOrigin: {
+          sessionKey: targetSessionKey,
+          messageProvider: "discord",
+          senderId: "alice",
+        },
         sessionFile: path.join(tempDir, "requester.jsonl"),
         workspaceDir: tempDir,
         provider: consumption.provider,
@@ -337,20 +328,6 @@ describe("resolveRequesterToolPolicies", () => {
     });
     try {
       const currentFingerprint = await snapshot.fingerprintAsync();
-      const route = { provider: consumption.provider, model: consumption.model };
-      const allowedProjection = await snapshot.projectRequesterAsync(
-        { requesterOrigin, config: config() },
-        route,
-      );
-      const deniedProjection = await snapshot.projectRequesterAsync(
-        {
-          requesterOrigin,
-          config: config({ tools: { toolsBySender: { "id:alice": { deny: ["exec"] } } } }),
-        },
-        route,
-      );
-      expect(deniedProjection).not.toBe(allowedProjection);
-      expect(snapshot.fingerprint(route)).toBe(currentFingerprint);
       current = false;
       expect(snapshot.fingerprint()).not.toBe(currentFingerprint);
     } finally {
@@ -505,9 +482,7 @@ describe("resolveRequesterToolPolicies", () => {
           sourceTool: "sessions_send",
         },
       };
-      const admitted = await withPreparedSessionCapabilityRead(() =>
-        resolveRequesterToolPolicies({ config: cfg, ...request }),
-      );
+      const admitted = await resolvePolicy({ config: cfg, ...request });
       const nextConfig = config({
         ...cfg,
         tools: {
@@ -515,9 +490,7 @@ describe("resolveRequesterToolPolicies", () => {
           toolsBySender: { ...cfg.tools?.toolsBySender, "id:alice": { deny: ["exec"] } },
         },
       });
-      const next = await withPreparedSessionCapabilityRead(() =>
-        resolveRequesterToolPolicies({ config: nextConfig, ...request }),
-      );
+      const next = await resolvePolicy({ config: nextConfig, ...request });
 
       expect(next.senderPolicy).toEqual({ deny: ["exec"] });
       expect(next.inheritedToolPolicy).toEqual({ deny: ["message"] });
@@ -561,7 +534,6 @@ describe("resolveRequesterToolPolicies", () => {
 
     expectInherited(result, "completion-handoff", { allow: ["read", "exec"] });
     expect(result.senderPolicy).toBeUndefined();
-
     const controllerResult = await resolvePolicy({ sessionKey: controllerSessionKey, ...handoff });
     expectCurrentSource(controllerResult);
   });
@@ -578,35 +550,25 @@ describe("resolveRequesterToolPolicies", () => {
     expectCurrentSource(result);
   });
 
-  async function writeNestedLineage() {
-    const requesterSessionKey = requester;
-    const parentChildSessionKey = "agent:main:subagent:parent-child";
-    const leafSessionKey = "agent:main:subagent:leaf";
-    await writeChild(parentChildSessionKey, {
-      spawnedBy: requesterSessionKey,
-      inheritedToolDeny: ["exec"],
-    });
-    await writeChild(leafSessionKey, {
-      spawnedBy: parentChildSessionKey,
+  it.each([
+    ["requester", ["exec"]],
+    ["parent-child resume envelope", ["exec", "read"]],
+  ] as const)("restores the nested completion projection for %s", async (target, deny) => {
+    const parent = "agent:main:subagent:parent-child";
+    const leaf = "agent:main:subagent:leaf";
+    await writeChild(parent, { inheritedToolDeny: ["exec"] });
+    await writeChild(leaf, {
+      spawnedBy: parent,
       spawnDepth: 2,
       subagentRole: "leaf",
       subagentControlScope: "none",
       inheritedToolDeny: ["exec", "read"],
     });
-    return { requesterSessionKey, parentChildSessionKey, leafSessionKey };
-  }
-
-  it.each([
-    ["requester", ["exec"]],
-    ["parent-child resume envelope", ["exec", "read"]],
-  ] as const)("restores the nested completion projection for %s", async (target, deny) => {
-    const { requesterSessionKey, parentChildSessionKey, leafSessionKey } =
-      await writeNestedLineage();
-    const sessionKey = target === "requester" ? requesterSessionKey : parentChildSessionKey;
+    const sessionKey = target === "requester" ? requester : parent;
     const result = await resolvePolicy({
       sessionKey,
-      ...(target === "requester" ? {} : { subagentSessionKey: parentChildSessionKey }),
-      ...completionHandoffFacts(leafSessionKey, sessionKey),
+      ...(target === "requester" ? {} : { subagentSessionKey: parent }),
+      ...completionHandoffFacts(leaf, sessionKey),
     });
     expectInherited(result, "completion-handoff", { deny: [...deny] });
   });

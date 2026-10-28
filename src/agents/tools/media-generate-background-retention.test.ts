@@ -140,10 +140,12 @@ it.each([
   await withOpenClawTestState({ prefix: "media-retention-" }, async (state) => {
     const { scope } = await requester(state);
     vi.useFakeTimers({ toFake: ["Date"] });
+    const realPerformanceNow = performance.now.bind(performance);
+    let performanceClockSkewMs = 0;
     const enqueue = vi
       .spyOn(sessionDelivery, "enqueueClaimedSessionDelivery")
       .mockImplementation(async () => {
-        vi.setSystemTime(Date.now() + 120_001);
+        performanceClockSkewMs += 120_001;
         throw new Error("synthetic queue admission refused");
       });
     const append = transcript.appendAssistantMessageToSessionTranscript;
@@ -178,6 +180,9 @@ it.each([
     if (requesterState === "current") {
       await cleanupSessionStateForTest({ stateDir: state.stateDir });
     }
+    vi.spyOn(performance, "now").mockImplementation(
+      () => realPerformanceNow() + performanceClockSkewMs,
+    );
     const creationSql = requesterState === "current" ? observeMainThreadSql() : undefined;
     let handle;
     try {
@@ -223,6 +228,7 @@ it.each([
     if (requesterState === "current") {
       await complete();
     }
+    vi.restoreAllMocks();
     resetGeneratedMediaTaskActivityForTests();
     await cleanupSessionStateForTest({ stateDir: state.stateDir });
     const events = await loadTranscriptEvents({ ...scope, sessionId });

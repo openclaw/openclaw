@@ -2,12 +2,7 @@ import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
-import {
-  createOperatorInputRecoverySource,
-  createRestartRecoveryOperatorSource,
-} from "../../agents/operator-run-recovery-source.js";
 import { captureRequesterOrigin } from "../../agents/requester-origin.js";
-import { createRestartRecoveryRequesterSource } from "../../agents/requester-run-recovery-source.js";
 import { resolveSessionSubmittedModelRef } from "../../agents/session-model-ref.js";
 import type { InternalGetReplyOptions } from "../../auto-reply/reply/get-reply.types.js";
 import { normalizeMessageClientSources } from "../../chat/message-client-source.js";
@@ -18,7 +13,10 @@ import {
   prepareSessionSourceAuthority,
   type SessionSourceAssertion,
 } from "../../config/sessions/session-source-authority.js";
-import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
+import {
+  measureDiagnosticsTimelineSpan,
+  observeDiagnosticsTimelinePhases,
+} from "../../infra/diagnostics-timeline.js";
 import { isProgressCardRefreshInputProvenance } from "../../sessions/input-provenance.js";
 import { getRpcSourceIdentity } from "../../sessions/session-controller.rpc-sources.js";
 import {
@@ -32,24 +30,21 @@ import type {
   UserTurnOriginalInputCommit,
 } from "../../sessions/user-turn-transcript.types.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
-import {
-  INTERNAL_MESSAGE_CHANNEL,
-  isBrowserOperatorUiClient,
-} from "../../utils/message-channel.js";
-import { readChatInputRecoveryAdmission } from "../chat-input-recovery-source.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import type { MentionInbox } from "../mention-inbox.types.js";
 import { hasGatewayAdminScope } from "../operator-scopes.js";
+import { readQueuedChatInputAdmission } from "../queued-chat-input-admission.js";
+import { deriveGatewaySessionLifecycleSnapshot } from "../session-lifecycle-projection.js";
 import { captureWorkerTurnInputSource } from "../worker-environments/worker-turn-transcript-target.js";
 import { formatForLog } from "../ws-log.js";
-import { buildRestartSafeChatTranscriptState } from "./chat-restart-recovery.js";
 import type { AdmittedChatSend } from "./chat-send-admission.js";
+import type { createChatSendGoalCommitGuard } from "./chat-send-goal-admission.js";
 import {
   resolveChatSendReplyContext,
   type ChatSendReplyContextFields,
 } from "./chat-send-reply-context.js";
-import { createChatInputRecovery, type NormalizedChatSendRequest } from "./chat-send-request.js";
+import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
-import type { createChatSendGoalCommitGuard } from "./chat-send-work-admission.js";
 import { gatewayClientSenderFields } from "./gateway-client-identity.js";
 import type { GatewayClient } from "./shared-types.js";
 
@@ -77,6 +72,7 @@ type GatewayChatUserTurnController = {
 
 export function createGatewayChatUserTurnController(params: {
   admission: AdmittedChatSend;
+  commitInitialInput?: boolean;
   isDirectExternalUser?: boolean;
   client: GatewayClient | null;
   request: NormalizedChatSendRequest;
@@ -90,6 +86,7 @@ export function createGatewayChatUserTurnController(params: {
   onMessagePersisted?: () => void;
 }): GatewayChatUserTurnController {
   const { admission, request, session } = params;
+  const recoveredInput = readQueuedChatInputAdmission(session.clientRunId);
   const entry = session.entry;
   const originProvider = entry?.modelOverrideFallbackOriginProvider;
   const originModel = entry?.modelOverrideFallbackOriginModel;
@@ -109,7 +106,9 @@ export function createGatewayChatUserTurnController(params: {
     request.goalOperation?.action === "resume"
       ? undefined
       : gatewayClientSenderFields(params.client).sender;
-  const senderProfileId = params.client?.authenticatedUserProfile?.profileId;
+  const senderProfileId = recoveredInput
+    ? recoveredInput.requesterProfile?.id
+    : params.client?.authenticatedUserProfile?.profileId;
   const toolCaller = params.client?.internal?.agentToolCaller;
   const requesterOrigin = captureRequesterOrigin({
     requesterOrigin: toolCaller?.requesterOrigin,
@@ -124,23 +123,8 @@ export function createGatewayChatUserTurnController(params: {
   });
   const mentionInbox = params.mentionInbox;
   const sourceId = buildRunUserTurnIdempotencyKey(session.clientRunId);
-  const recoveredInput = readChatInputRecoveryAdmission(session.clientRunId);
   const selectedMentions =
     recoveredInput?.target.message["__openclaw"]?.humanMentions ?? request.mentions;
-  const recoveryEntry = admission.admittedSessionEntry ?? admission.initialSessionEntry;
-  const recovery =
-    recoveredInput || admission.restartSafeAdmission || !recoveryEntry
-      ? undefined
-      : createChatInputRecovery({
-          request,
-          source: createOperatorInputRecoverySource({
-            authority: admission.operatorAuthority,
-            entry: recoveryEntry,
-            agentId: session.agentId,
-            sessionKey: session.sessionKey,
-            sourceRunId: session.clientRunId,
-          }),
-        });
   const sourceClients =
     !params.client?.internal?.syntheticClient &&
     (!request.systemInputProvenance || request.systemInputProvenance.kind === "external_user")
@@ -148,9 +132,7 @@ export function createGatewayChatUserTurnController(params: {
       : [];
   const baseInput: UserTurnInput = {
     ...params.transcript,
-    ...(request.goalOperation?.action === "resume" || request.restartResume
-      ? { display: false }
-      : {}),
+    ...(request.goalOperation?.action === "resume" ? { display: false } : {}),
     text: request.rawMessage,
     requesterOrigin,
     ...(request.workContext ? { workContext: request.workContext } : {}),
@@ -161,11 +143,9 @@ export function createGatewayChatUserTurnController(params: {
     ...(sender ? { sender } : {}),
     ...(sourceClients.length ? { transport: { clients: sourceClients } } : {}),
     ...(hasGatewayAdminScope(params.client) ? { senderIsOwner: true } : {}),
-    ...(request.systemInputProvenance
-      ? { provenance: request.systemInputProvenance }
-      : admission.restartSafeAdmission && params.isDirectExternalUser
-        ? { provenance: { kind: "external_user" } as const }
-        : {}),
+    provenance:
+      request.systemInputProvenance ??
+      (params.client?.internal?.syntheticClient ? undefined : { kind: "external_user" }),
   };
   const replyContextFieldsPromise = request.p.replyToId
     ? resolveChatSendReplyContext({
@@ -247,7 +227,10 @@ export function createGatewayChatUserTurnController(params: {
         }
       : {}),
     input: baseInput,
-    resolveInput: () => inputPromise,
+    resolveInput: async () => {
+      using _ = observeDiagnosticsTimelinePhases("persist.resolveInput");
+      return await inputPromise;
+    },
     target: () => {
       // Retain only the current binding; transcript writers recheck it at commit.
       const target = session.sessionTarget;
@@ -263,38 +246,17 @@ export function createGatewayChatUserTurnController(params: {
         config: session.cfg,
       };
     },
-    ...(admission.restartSafeAdmission
-      ? buildRestartSafeChatTranscriptState({
-          admission: admission.restartSafeAdmission,
-          clientRunId: session.clientRunId,
-          startedAt: params.startedAt,
-          ...(!progressRefresh ? { lastInteractionAt: params.startedAt } : {}),
-          sourceIngress: isBrowserOperatorUiClient(request.clientInfo) ? "control-ui" : "internal",
-          requesterSource: admission.restartSafeAdmission.retryExpectedState
-            ? undefined
-            : createRestartRecoveryRequesterSource({
-                requesterOrigin,
-                entry: admission.admittedSessionEntry ?? admission.initialSessionEntry!,
-                agentId: session.agentId,
-                sessionKey: session.sessionKey,
-                sourceRunId: session.clientRunId,
-              }),
-          operatorSource: admission.restartSafeAdmission.retryExpectedState
-            ? undefined
-            : createRestartRecoveryOperatorSource({
-                authority: admission.operatorAuthority,
-                entry: admission.admittedSessionEntry ?? admission.initialSessionEntry!,
-                agentId: session.agentId,
-                sessionKey: session.sessionKey,
-                sourceRunId: session.clientRunId,
-                // Goal Resume is an authenticated operator action even though its
-                // hidden transcript input is marked as an internal system message.
-                inputProvenance:
-                  request.goalOperation?.action === "resume"
-                    ? undefined
-                    : request.systemInputProvenance,
-              }),
-        })
+    ...(admission.localInputAdmission || params.commitInitialInput
+      ? {
+          sessionLifecyclePatch: {
+            ...deriveGatewaySessionLifecycleSnapshot({
+              event: { runId: session.clientRunId, ts: params.startedAt, data: { phase: "start" } },
+            }),
+            lifecycleRunId: session.clientRunId,
+            lastRunId: undefined,
+            ...(!progressRefresh ? { lastInteractionAt: params.startedAt } : {}),
+          },
+        }
       : {}),
     errorContext: "gateway chat user turn transcript",
     assertOriginalInputCommit: composeSessionSourceAssertion([
@@ -311,6 +273,9 @@ export function createGatewayChatUserTurnController(params: {
         const userMessage: PersistedUserTurnMessage = next;
         const metadata = { ...asOptionalRecord(Reflect.get(next, "__openclaw")) };
         delete metadata.chatRequestIdentity;
+        delete metadata.suppressCommandInterpretation;
+        delete metadata.chatSendDelivery;
+        delete metadata.chatSendRuntime;
         delete metadata.modelSelection;
         const visibleHumanInput =
           !params.client?.internal?.syntheticClient &&
@@ -323,8 +288,34 @@ export function createGatewayChatUserTurnController(params: {
           ...(contextFreeCommand ? { excludeFromContext: true } : {}),
           __openclaw: {
             ...metadata,
-            ...(recovery ? { chatInputRecovery: recovery } : {}),
             ...(request.requestIdentity ? { chatRequestIdentity: request.requestIdentity } : {}),
+            ...(request.suppressCommandInterpretation
+              ? { suppressCommandInterpretation: true }
+              : {}),
+            ...(request.p.deliver !== undefined || request.explicitOrigin
+              ? {
+                  chatSendDelivery: {
+                    deliver: request.p.deliver,
+                    originatingChannel: request.p.originatingChannel,
+                    originatingTo: request.p.originatingTo,
+                    originatingAccountId: request.p.originatingAccountId,
+                    originatingThreadId: request.p.originatingThreadId,
+                  },
+                }
+              : {}),
+            ...(request.p.thinking !== undefined ||
+            request.p.fastMode !== undefined ||
+            request.p.fastAutoOnSeconds !== undefined ||
+            request.p.timeoutMs !== undefined
+              ? {
+                  chatSendRuntime: {
+                    thinking: request.p.thinking,
+                    fastMode: request.p.fastMode,
+                    fastAutoOnSeconds: request.p.fastAutoOnSeconds,
+                    timeoutMs: request.p.timeoutMs,
+                  },
+                }
+              : {}),
             ...(visibleHumanInput ? { modelSelection } : {}),
             ...(contextFreeCommand ? { contextFreeCommand: true } : {}),
           },
@@ -403,6 +394,7 @@ export function createGatewayChatUserTurnController(params: {
         attributes: admission.chatSendTraceAttributes,
       },
     );
+    using _ = observeDiagnosticsTimelinePhases("persist.mentionPublication");
     await mentionCommit;
     return persisted;
   };
@@ -416,9 +408,8 @@ export function createGatewayChatUserTurnController(params: {
     replyContextFieldsPromise,
     getSessionInitializationOptions: () => ({
       requestedSessionId: session.requestedSessionId,
-      resumeRequestedSession: request.reconnectResumeRequested || Boolean(request.restartResume),
-      ...(request.restartResume ? { pinExpectedExistingSession: true } : {}),
-      ...(admission.restartSafeAdmission || admission.workerGoalAdmission
+      resumeRequestedSession: request.reconnectResumeRequested,
+      ...(admission.localInputAdmission || admission.workerGoalAdmission
         ? {
             expectedExistingSessionId: admission.admittedSessionId,
             pinExpectedExistingSession: true,

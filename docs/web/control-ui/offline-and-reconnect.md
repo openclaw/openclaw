@@ -1,4 +1,5 @@
 ---
+doc-schema-version: 1
 summary: "What the Control UI keeps when the Gateway connection drops, and how it recovers"
 read_when:
   - The Control UI shows Reconnecting or drops messages
@@ -13,6 +14,19 @@ Returning to a suspended tab or regaining network connectivity can recover a
 stale connection. These signals do not retry a connection that requires a page
 reload, corrected credentials, or a new pairing request. Follow the displayed
 recovery instructions; automatic document refresh remains available after an update.
+
+While a visible tab is connecting or reconnecting, it checks same-origin Gateway
+reachability at randomized intervals. A fresh response can resume a retry sooner
+or replace an opening attempt stuck for at least eight seconds, even when airplane
+Wi-Fi never reports an offline/online change. Young opening attempts and opened
+sockets keep their normal handshake. Announced startup, restart, suspension, and
+busy-Gateway waits keep their existing retry pacing; hidden tabs do not poll.
+Expected reachability failures do not trigger sign-in recovery notifications.
+
+An unanswered send starts a liveness check after about five seconds. Any inbound
+frame proves the connection is alive; otherwise, ten more seconds without a
+response moves the UI into reconnecting so queued input can recover. Idle
+connections keep their longer heartbeat window.
 
 If an update or rollback leaves a tab using an incompatible connection protocol,
 the Control UI stops reconnecting and reloads the document served by the same
@@ -97,6 +111,10 @@ identity. A one-time bootstrap credential is never retained for offline admissio
 a successful pairing can use the reusable device grant already issued and stored
 by the browser client.
 
+The cached agent roster supplies the conversation's agent name and text avatar
+on the first render, including when the offline shell cannot fetch bootstrap
+config. Reconnecting keeps the displayed identity until a live refresh replaces it.
+
 The retained identity is for local display and storage, not permission to call
 the Gateway. Reading, drafting, and queuing input remain available offline;
 sending and synchronization wait for the Gateway to revalidate the account.
@@ -121,7 +139,13 @@ cached transcript opens at its latest messages without an initial scroll animati
 It retains participant and completed-work timing information and the last task
 progress card for display while connecting; live Gateway results replace those
 cached facts in place. Cached progress does not authorize offline actions. The
-first chat request uses the saved cursor if the cached transcript is ready when
+header also retains its last three viewer avatars and overflow count for that
+conversation while connecting. The reconnect indicator describes connection
+state; the full live presence roster replaces these last-known viewers when it
+arrives. The identity-only hello does not clear them. The header retains the
+sharing control's displayed mode and geometry while connecting, without enabling
+its menu or membership actions until live authority is available.
+The first chat request uses the saved cursor if the cached transcript is ready when
 the live message subscription finishes connecting. Otherwise, the live read and
 cache restoration run in parallel. Agent switches and stale asynchronous reads
 retain their own identity checks. When the cached conversation also has the exact
@@ -138,8 +162,11 @@ discovery; the Gateway revalidates the established session after connecting.
 Unique display-name links use the same cached route resolution, including the
 `/dashboard` namespace. Missing or ambiguous names still wait for the Gateway.
 
-Exact conversation links also wait for the scoped cached roster before presenting
-their header. Dashboard layouts restore before the pane renders, and embedded
+Exact conversation links can restore their scoped transcript without waiting for
+the sidebar roster or the socket to open. A prepared snapshot supplies the header,
+transcript, and composer in the first pane frame. The existing header connection
+indicator remains visible until live history and route confirmation finish; cached
+content stays visible while those checks run. Dashboard layouts restore before the pane renders, and embedded
 HTML widgets restore their last board metadata from the same scoped conversation
 cache and start loading the isolated sandbox while connecting. Document requests
 still require the current Gateway connection and overlap the live board refresh.
@@ -256,6 +283,17 @@ and respect unsaved-work protection.
 The current route and stored drafts survive the reload. If browser storage is unavailable
 or reload protection blocks recovery, reload the tab after saving your work;
 do not clear site data while drafts or queued messages still need recovery.
+Unsent highlighted-text comments in Side chat also restore after a Gateway restart
+or page reload, including their quoted text and source anchors. They use the same
+Gateway- and account-scoped browser draft storage, not shared session history.
+Editing or removing a comment updates that saved draft; sending the Side chat
+question or clearing Side chat retires its unsent comments. Incognito comments
+remain memory-only. Clearing browser site data removes saved comments too.
+While a Side chat comment autosave is pending, the composer shows **Saving…**.
+Automatic and in-app reloads are blocked, and a browser reload or close warns
+before discarding that unsaved input. Wait for saving to finish before refreshing;
+a forced exit can still discard a write that has not committed. Storage failures
+keep the comment available in memory with the existing browser-storage warning.
 
 If a view or stylesheet download fails during a network interruption, the open
 page keeps checking reachability with a backoff capped at 15 seconds. Coming
@@ -490,23 +528,25 @@ one history notice offers **Retry**, which reloads the conversation and restores
 its live subscription, including approval updates. Permission and other terminal
 failures remain visible rather than being silently retried.
 
-After a Gateway restart, eligible accepted chat inputs resume on the server in
-order within each session, even while this browser is closed. Automatic recovery
-requires the original session and current operator access, and is limited to
-inputs accepted in the past 24 hours. Cancelled inputs never resume. Inputs that
-cannot resume stay visibly interrupted for review. The browser keeps the original
-submission ID when retrying, so reconnect cannot duplicate a recovered input.
-It does not resend interrupted inputs automatically: the server owns recovery order.
-If a saved input remains interrupted, copy it and send again to continue.
+After a graceful Gateway restart, each marked running root conversation receives
+one standard resume input. Accepted user messages captured in that shutdown's
+marker follow it in FIFO order, even while this browser is closed. Each sender must still
+have current authority; an unavailable or revoked sender gets an ordinary failed
+send that can be resent. New input uses normal steering and queue rules while the
+resumed run works.
+
+A crash or forced kill does not resume work automatically. Stored conversations
+remain available for a new message. Legacy interrupted or ownerless queued inputs
+are inert and do not produce restart banners, pending counts, or history notices.
+The browser preserves submission IDs when reconciling uncertain sends.
 
 When the Gateway acknowledges a send, including a duplicate submission, the
 Control UI marks it sent. The browser keeps any payload needed to display
 server-held input until consumption or cancellation is confirmed.
 Confirmed server custody does not block later browser-queued
-chat sends, including when the accepted input is too old for automatic recovery.
+chat sends.
 Local commands such as `/compact` and `/reset` in the same browser outbox wait
-for live accepted work. An interrupted input without a live owner remains
-available for explicit recovery and does not block later commands. An independent
+for live accepted work. Legacy interrupted input without a live owner is inert and does not block later commands. An independent
 authorized reset from another client can cancel pending work, as with other session resets.
 If the Gateway is holding that input for a later turn, it appears in the queue
 above the composer. Removing that row withdraws the exact queued message without
@@ -519,11 +559,6 @@ Stopping a turn or an unsuccessful send can still leave a cancelled prompt with
 recovery guidance; those actions do not remove the prompt.
 Incognito chats keep their existing cancellation behavior: Remove cancels queued
 work, but the cancelled-message notice remains until the private session ends.
-
-If automatic restart recovery is interrupted or cancelled before the agent resumes,
-the **System · restart recovery** notice shows that outcome and asks you to send a
-message to continue. It does not mean the agent resumed. Messages forwarded from
-other sessions keep their own delivery status next to each message.
 
 Acknowledging a duplicate submission retires its pending browser copy even when
 the original message is outside the latest history page. Reconnect does not need
@@ -593,8 +628,9 @@ restarts. This also covers attachments, commands sent through `chat.send`, and
 per-message overrides. Reusing a recorded key with different content is rejected.
 The guarantee applies while that submission record remains in the same session;
 it does not restore deleted sessions or resume interrupted agent work.
-The Gateway's separate interrupted-input recovery still resumes eligible accepted
-work after rechecking its current authority.
+Queued input captured in the graceful-shutdown marker follows the session's resume
+input under each sender's current authority. A crash does not trigger queued-input
+reconstruction; later graceful restarts do not adopt those older rows.
 
 **Discard** stays available while a message is pending. It removes only this
 browser's outbox copy, not work the Gateway already accepted. It does not undo or

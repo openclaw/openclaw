@@ -97,6 +97,8 @@ export type DurableComposerDraft = {
   modelSelection?: DurableDraftModelSelection;
   attachments: DurableComposerDraftAttachment[];
   questionDrafts?: DurableQuestionDraft[];
+  /** Context-only comments have no uploaded file payload. */
+  selectionAnnotations?: ChatSelectionAnnotation[];
 };
 
 export type ChatComposerDraftRetry = {
@@ -217,7 +219,6 @@ export type ChatItem =
       kind: "message";
       key: string;
       message: unknown;
-      duplicateCount?: number;
       /** A distinct input remains a presentation boundary before execution starts. */
       startsTurn?: true;
     }
@@ -228,11 +229,12 @@ export type ChatItem =
       timestamp: number;
       icon?: IconName;
       label?: string;
+      modelChange?: { from: string; to: string };
       startsTurn?: true;
       boundaryId?: string;
       tone?: "danger";
       /** Informational source-owned event eligible for timeline folding. */
-      systemEvent?: "info" | "delivery-warning";
+      systemEvent?: "info";
       /** Collapse the body behind a disclosure; the label line stays visible. */
       collapsedBody?: true;
       showTimestamp?: true;
@@ -244,8 +246,8 @@ export type ChatItem =
       /** Total identical failures represented by the latest display notice. */
       repeatCount?: number;
       permissionMissing?: NodePermissionRequest;
-      /** Retained input that ended interrupted or cancelled and may be dismissed. */
-      retiredPendingInput?: { id: string; status: "interrupted" | "cancelled"; preview: string };
+      /** Retained cancelled input that may be dismissed. */
+      retiredPendingInput?: { id: string; preview: string };
     }
   | {
       kind: "divider";
@@ -372,7 +374,14 @@ export type MessageGroup = {
   messages: Array<{
     message: unknown;
     key: string;
-    duplicateCount?: number;
+    /** Source row for actions when presentation splits a mixed envelope. */
+    actionKey?: string;
+    /** Original envelope supplies copy/reply/reaction/full-message actions. */
+    actionMessage?: unknown;
+    /** Only the last visible part of a split envelope owns its source footer. */
+    presentationOwnsFooter?: boolean;
+    /** Only the last split part publishes the original terminal status. */
+    presentationOwnsTerminalStatus?: boolean;
     replyTarget?: NormalizedMessage["replyTarget"];
     /** Rendered reply content, excluding assistant thinking tags. */
     hasVisibleContent: boolean;
@@ -530,6 +539,7 @@ export type ToolCardOutcome =
   | "failed"
   | "blocked"
   | "skipped"
+  | "unrecorded"
   | "unknown";
 
 export type ChatGoalMutationAction = { goalId: string } & (

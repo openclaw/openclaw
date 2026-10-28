@@ -174,9 +174,12 @@ suite.define(() => {
 
       const longPrompt = Array.from({ length: 14 }, (_, index) => `line ${index + 1}`).join("\n");
       await message.fill(longPrompt);
+      // Classic scrollbars retain their gutter at the cap to prevent draft-height oscillation.
+      await expect
+        .poll(() => message.evaluate((element) => getComputedStyle(element).overflowY))
+        .toBe("scroll");
       const capped = await message.evaluate((element) => ({
         clientHeight: element.clientHeight,
-        overflowY: getComputedStyle(element).overflowY,
         scrollHeight: element.scrollHeight,
       }));
       const [expandedIdentityBox, expandedTriggersBox, expandedComposerBox] = await Promise.all([
@@ -185,7 +188,6 @@ suite.define(() => {
         composer.boundingBox(),
       ]);
       expect(capped.clientHeight).toBeLessThan(capped.scrollHeight);
-      expect(capped.overflowY).toBe("auto");
       // Browser subpixel rounding may shift stable blocks by a pixel; larger movement is visible.
       for (const [before, after] of [
         [identityBox, expandedIdentityBox],
@@ -721,6 +723,9 @@ suite.define(() => {
         await page.getByRole("button", { name: "Retry queued message" }).click();
         const retry = await gateway.waitForRequest("chat.send");
         expect(retry.params).toMatchObject({ sessionKey, message, attachments: [pngAttachment] });
+        const retriedTurn = page.locator(".chat-group.user", { hasText: message });
+        await pollCount(retriedTurn.locator(".chat-send-status")).toBe(0);
+        await retriedTurn.locator("time.chat-group-timestamp").waitFor();
         expect(await gateway.getRequests("sessions.create")).toHaveLength(quota ? 1 : 0);
       });
     },

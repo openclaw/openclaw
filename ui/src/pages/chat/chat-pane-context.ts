@@ -17,7 +17,6 @@ import {
   type QuestionPrompt,
 } from "../../app/question-prompt.ts";
 import { loadSettings } from "../../app/settings.ts";
-import { readPresenceEntries } from "../../app/user-profile.ts";
 import type { SessionPlacementPresentation } from "../../components/session-placement-move-dialog.tsx";
 import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
 import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
@@ -31,9 +30,10 @@ import {
   uiConversationMatches,
 } from "../../lib/sessions/session-key.ts";
 import { isTerminalAvailable } from "../../lib/terminal-availability.ts";
-import { invalidateChatAvatarCache } from "./chat-avatar.ts";
+import { cachedChatAssistantIdentity, invalidateChatAvatarCache } from "./chat-avatar.ts";
 import {
   getChatHistoryLoadState,
+  isChatHistoryLoading,
   synchronizeInitialChatSnapshotConnection,
 } from "./chat-history-state.ts";
 import { syncSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
@@ -126,7 +126,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     super.dispose();
   }
 
-  protected async changeHeaderPlacement(
+  async changeHeaderPlacement(
     row: GatewaySessionRow,
     mode: "move" | "recover" | "reclaim",
     presentation?: SessionPlacementPresentation,
@@ -310,11 +310,11 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     if (clientChanged) {
       this.replaceStagedAttachmentGatewayOwner(snapshot.client);
     }
-    if (snapshot.phase !== "connected") {
-      this.presence.update(undefined);
-    } else if (clientChanged || !wasConnected) {
-      const presence = readPresenceEntries(snapshot.hello?.snapshot);
-      this.presence.update(presence ? { presence } : undefined);
+    // A pane can mount after the full roster arrived; hello itself is self-only.
+    if (snapshot.phase !== "connected" || clientChanged) {
+      const presence =
+        snapshot.phase === "connected" ? this.context.gateway.readPresence?.() : undefined;
+      this.presence.update(presence === undefined ? undefined : { presence });
     }
     const rename = this.headerPresentation.renameSession;
     const draftOwnerChanged = state.client !== snapshot.client || pairingOwnerChanged;
@@ -351,7 +351,11 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     if (sourceChanged || metadataOwnerChanged) {
       retireChatMetadataRequests(state, { keepPresentation: !metadataOwnerChanged });
     }
+    if (draftOwnerChanged || reactionOwnerChanged) {
+      this.sessionCompanionThreads.retire();
+    }
     if (sourceChanged) {
+      this.retireTranscriptReads(true);
       this.retireDetailsOutputs();
       this.resetSessionReadAcknowledgements();
       this.headerPresentation.continueInTerminalDialog = null;
@@ -381,7 +385,6 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       this.sessionDiscussionPanels.clear();
       this.sessionParticipationTracker.reset();
       if (state.client !== snapshot.client) {
-        this.sessionCompanionThreads.retire();
         // Local run identities belong to the previous client, even if the new
         // Gateway uses the same session key. Never bind its offline Stop to them.
         reconcileChatRunLifecycle(state, {
@@ -448,7 +451,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     if (!state.connected && (wasConnected || sourceChanged)) {
       // The first client can arrive after startup is already waiting for it.
       // Preserve that loading intent; repeated disconnected snapshots stay no-ops.
-      state.chatLoading = getChatHistoryLoadState(state).phase === "pending-connection";
+      state.chatLoading = isChatHistoryLoading(getChatHistoryLoadState(state));
     }
     const resumedHistory =
       !wasConnected && state.connected ? resumePendingChatHistoryLoad(state) : undefined;
@@ -515,12 +518,21 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
         return;
       }
     }
-    // Keep the session-specific identity loaded by agent.identity.get across
-    // ordinary gateway snapshots. Reset to the configured fallback only when
-    // the logical connection changes; the startup path refreshes the identity
-    // for the active session afterward.
-    if (sourceChanged) {
-      state.assistantName = this.context.config.current.assistantIdentity.name;
+    // Transport edges retain the displayed identity; only a new owner replaces it.
+    if (draftOwnerChanged || reactionOwnerChanged) {
+      const identity = cachedChatAssistantIdentity(
+        {
+          sessionKey: state.sessionKey,
+          assistantAgentId: state.assistantAgentId,
+          hello: state.hello,
+          agentsList: reactionOwnerChanged ? null : this.context.agents.state.agentsList,
+        },
+        reactionOwnerChanged ? undefined : this.context,
+      );
+      state.assistantName = identity.name;
+      state.assistantAvatar = identity.avatar;
+      state.assistantAvatarStatus = identity.avatarStatus ?? null;
+      state.assistantAvatarReason = identity.avatarReason ?? null;
     }
     if (snapshot.phase !== "connected") {
       if (wasConnected) {

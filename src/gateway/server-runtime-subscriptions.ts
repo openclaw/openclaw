@@ -1,5 +1,4 @@
 // Gateway event subscription wiring for agent, heartbeat, transcript, and lifecycle broadcasts.
-import { resolveAgentRunLifecycleTerminalFacts } from "@openclaw/normalization-core/agent-run-terminal-outcome";
 import { isAgentLifecycleYieldedWaiting } from "../agents/agent-lifecycle-parent-state.js";
 import { isDefinitiveRunLifecycle } from "../agents/agent-run-terminal-outcome.js";
 import { onBackgroundProcessesChanged } from "../agents/bash-process-registry.js";
@@ -36,7 +35,7 @@ import {
   runWithRetainedGatewayRootWork,
 } from "../process/gateway-work-admission.js";
 import {
-  listRpcSourceEntries,
+  getRpcSourceForGateway,
   getRpcSourceIdentity,
   getRpcSourceLifecycleGeneration,
   type RpcSourceRef,
@@ -79,17 +78,11 @@ import {
   resolveSessionEventAgentScope,
 } from "./session-request-agent.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
-import { captureGatewayScopeMatcher } from "./session-runtime-scope.js";
 
 /** Register gateway runtime event subscriptions and return unsubscribe handles. */
 export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionParams) {
-  const matchesGateway = captureGatewayScopeMatcher(params.resolveGatewayContext);
-  const getScopedRpcSource = (runId: string): RpcSourceRef | undefined => {
-    const matches = listRpcSourceEntries().filter(
-      ([candidateRunId, source]) => candidateRunId === runId && matchesGateway(source.input),
-    );
-    return matches.length === 1 ? matches[0]?.[1] : undefined;
-  };
+  const getScopedRpcSource = (runId: string) =>
+    getRpcSourceForGateway(runId, params.resolveGatewayContext);
   // Collection changes gate new work; the writer retains accepted work and maintenance.
   const auditRecorder = createAuditEventRecorder({
     getConfig: getRuntimeConfig,
@@ -193,7 +186,6 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
     trackTrackedRunTerminalPersistence,
   } = createGatewayTerminalTracking({
     getScopedRpcSource,
-    restartRecoveryCandidates: params.restartRecoveryCandidates,
   });
   const getSessionKeyModule = createLazyRuntimeModule(() => import("./server-session-key.js"));
   // Lazy-load heavy chat modules only after the first agent event reaches the gateway.
@@ -270,11 +262,14 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
             clearTrackedActiveRun,
             settleTrackedTerminal,
             trackTrackedRunTerminalPersistence,
-            isChatSendRunActive: (runId) => {
+            delegateChatError: (runId) => {
               const entry = getScopedRpcSource(runId);
-              // This callback identifies the terminal-response owner, not the
-              // sessions.list activity projection. Retain it while the source settles.
-              return entry !== undefined && entry.adapter.kind !== "agent";
+              if (!entry || entry.adapter.kind === "agent") {
+                return false;
+              }
+              // Source dispatch owns this response while native terminal persistence settles.
+              entry.adapter.chatErrorDispatchOwned = true;
+              return true;
             },
             resolveActiveLifecycleGenerationForRun: (runId) => {
               const entry = getScopedRpcSource(runId);
@@ -397,10 +392,6 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
         }
       }
       if (terminal) {
-        const outcome = resolveAgentRunLifecycleTerminalFacts({
-          phase: lifecyclePhase === "error" ? "error" : "end",
-          data: evt.data,
-        });
         const trackedEntry = candidateRunIds
           .map((candidateRunId) => getScopedRpcSource(candidateRunId))
           .find((entry) => entry !== undefined);
@@ -466,11 +457,7 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
           const tracked = trackTrackedRunTerminalPersistence({
             runId: evt.runId,
             clientRunId,
-            sessionId: evt.sessionId,
             persistence,
-            // Persisted interruption still needs its shutdown recovery cycle.
-            preserveRestartRecovery:
-              outcome.reason === "cancelled" && outcome.stopReason === "restart",
           });
           if (!tracked) {
             void persistence.catch((error: unknown) => {

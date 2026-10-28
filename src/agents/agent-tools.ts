@@ -77,7 +77,6 @@ import { resolveLocalModelLeanPreserveToolNames } from "./local-model-lean.js";
 import { createMemoryWriteProvenanceObserver } from "./memory-write-provenance.js";
 import { resolveSessionToolListingClientCaps } from "./openclaw-tools.client-caps.js";
 import { filterToolsByClientCaps } from "./openclaw-tools.js";
-import { filterRequesterYieldTools } from "./openclaw-tools.requester-yield.js";
 import { applySwarmCollectorToolContract } from "./openclaw-tools.swarm.js";
 import { prepareCoreToolPolicy } from "./prepared-tool-surface.js";
 import { resolveSandboxFileIdentity } from "./sandbox/file-mutation-identity.js";
@@ -317,6 +316,9 @@ function* assembleOpenClawCodingTools(
           },
           processDefaults: {
             scopeKey,
+            sessionKey: executionSessionKey,
+            agentId: executionAgentId,
+            sessionStore: options?.config?.session?.store,
           },
           recordToolPrepStage: options?.recordToolPrepStage,
         })
@@ -329,7 +331,6 @@ function* assembleOpenClawCodingTools(
     sandboxed: Boolean(sandbox),
     runId: options?.runId,
     cronSelfRemoveOnlyJobId,
-    automationReadOnly: options?.forceRestartSafeTools === true,
   });
   const { sessionPortalTarget, cronCreatorAuthorityResolver } = sessionToolAccess;
   // An ingress turn without a self scope gets no automations tool.
@@ -436,7 +437,6 @@ function* assembleOpenClawCodingTools(
           ringZeroTools,
           yield {
             ...pluginToolOptions,
-            forceRestartSafeTools: options?.forceRestartSafeTools,
             cronSandboxContext: sandbox,
             sessionPortalTarget,
             sandboxSessionRenameOnly: capabilityProfile.policy.sandboxSessionRenameOnly,
@@ -642,7 +642,7 @@ function* assembleOpenClawCodingTools(
   };
   const finalizedTools = finalizeAgentTools({
     ...options,
-    tools: filterRequesterYieldTools(authorizedTools, executionSessionKey),
+    tools: authorizedTools,
     wrapBeforeToolCallHook: preparedTools
       ? (tool) =>
           options?.wrapBeforeToolCallHook !== false &&

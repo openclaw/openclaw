@@ -9,6 +9,7 @@ import {
   requireGitCommandOutput,
 } from "../../infra/git-exec.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
+import { pathEntryExists } from "../../infra/path-existence.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
@@ -254,7 +255,7 @@ export async function withWorktreeBasePreparation<T>(
           ownsAttempt = true;
           const started: RemoteDefaultAttempt = {
             pending: timeWorktreePreparationPhase("baseRefresh", () =>
-              prepareDefaultBase(repository.repoRoot, options),
+              prepareDefaultBase(repository, options),
             ).then(async (base) => {
               // Immutable commits share hydration across refreshes while the Git worker lives.
               const preparationKey = base.commit;
@@ -359,12 +360,54 @@ export async function withWorktreeBasePreparation<T>(
   }
 }
 
+async function hasOriginDestination(
+  { repoRoot, commonDir }: { repoRoot: string; commonDir: string },
+  options: NonNullable<Parameters<typeof runGit>[2]>,
+): Promise<boolean> {
+  // Options such as inherited origin.prune enumerate a remote without giving it a destination.
+  // Presence preserves explicit empty URLs and helper configuration for Git's existing errors.
+  const configured = await runGit(
+    repoRoot,
+    ["config", "--name-only", "--get-regexp", "^remote\\.origin\\.(url|pushurl|vcs)$"],
+    options,
+  );
+  if (configured.cleanup === "uncertain") {
+    throw new CommandProcessCleanupError();
+  }
+  if (configured.termination !== "exit" || configured.code !== 1) {
+    requireGitCommandOutput("git config origin destination", configured);
+    return true;
+  }
+  const destination = await runGit(repoRoot, ["ls-remote", "--get-url", "origin"], options);
+  if (destination.cleanup === "uncertain") {
+    throw new CommandProcessCleanupError();
+  }
+  const resolved = requireGitCommandOutput("git ls-remote --get-url origin", destination);
+  // This command performs no network access. Git still owns legacy records and URL rewrites.
+  if (resolved !== "origin\n" && resolved !== "origin\r\n") {
+    return true;
+  }
+  // Git also accepts a relative path named origin. Keep existing or malformed legacy
+  // destinations on the remote path even when Git resolves their operand to origin.
+  for (const target of [
+    path.join(repoRoot, "origin"),
+    path.join(commonDir, "remotes", "origin"),
+    path.join(commonDir, "branches", "origin"),
+  ]) {
+    if (await pathEntryExists(target)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 async function prepareDefaultBase(
-  repoRoot: string,
+  repository: { repoRoot: string; commonDir: string },
   options: NonNullable<Parameters<typeof runGit>[2]>,
 ): Promise<ResolvedWorktreeBase & { branch?: string }> {
+  const { repoRoot } = repository;
   const remotes = await requireGit(repoRoot, ["remote"], options);
-  if (remotes.split("\n").includes("origin")) {
+  if (remotes.split("\n").includes("origin") && (await hasOriginDestination(repository, options))) {
     return await fetchRemoteDefault(repoRoot, options);
   }
   const primary = (await listGitWorktrees(repoRoot, options))[0]?.path ?? repoRoot;

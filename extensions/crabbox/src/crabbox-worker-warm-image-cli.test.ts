@@ -6,6 +6,7 @@ import {
   captureOperation,
   expectText,
   warmImage,
+  warmAllocation,
   warmRecord,
 } from "./crabbox-warm-scenarios.test-support.js";
 import { registerCrabboxWarmImageCommands } from "./crabbox-worker-warm-image-cli.js";
@@ -91,7 +92,17 @@ it("rejects unacknowledged or changed legacy allocation selectors", async () => 
 });
 
 it("recovers only the exact selected capture without clearing retained images or retirement", async () => {
-  const record = pendingCapture();
+  const original = pendingCapture();
+  const record = {
+    ...original,
+    previous: warmImage("chk_previous"),
+    operation: { ...original.operation, leaseId: "cbx_capture_source" },
+    allocations: {
+      cbx_capture_source: warmAllocation(),
+      cbx_other: warmAllocation({ kind: "checkpoint", checkpointId: "chk_last_good" }),
+    },
+  };
+  openWarmImageStore().register("profile", record);
   await expect(runCli("--acknowledge-provider-cleanup")).rejects.toThrow("requires --recover");
   expect(openWarmImageStore().lookup("profile")).toEqual(record);
   openWarmImageStore().register("other", retiring);
@@ -99,7 +110,11 @@ it("recovers only the exact selected capture without clearing retained images or
   await recover(SELECTOR, "--json");
 
   expect(JSON.parse(output).recoveredCapture).toBe(SELECTOR);
-  expect(openWarmImageStore().lookup("profile")).toEqual({ ...record, operation: undefined });
+  expect(openWarmImageStore().lookup("profile")).toEqual({
+    ...record,
+    operation: undefined,
+    allocations: { cbx_other: record.allocations.cbx_other },
+  });
   expect(openWarmImageStore().lookup("other")).toEqual(retiring);
   const replacement = {
     ...record,

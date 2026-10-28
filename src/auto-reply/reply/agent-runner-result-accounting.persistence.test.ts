@@ -8,7 +8,6 @@ import type { SessionEntry } from "../../config/sessions.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import { drainSessionStoreWriterQueuesForTest } from "../../config/sessions/store-writer-state.test-support.js";
-import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { createReplyOperation, type ReplyOperation } from "../../sessions/session-controller.js";
 import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db-disposal.js";
 import {
@@ -31,8 +30,6 @@ import { finalizeReplyAgentRun } from "./agent-runner-result.js";
 import { createFollowupRunner } from "./followup-runner.js";
 import * as followupExecution from "./followup-turn-execution.js";
 import * as followupAdmission from "./reply-agent-turn-preparation.js";
-import { createReplyRestartRecoveryClaimController } from "./restart-recovery-claim.js";
-import { createReplyRecoveryActorFixture } from "./restart-recovery-claim.test-support.js";
 import { incrementCompactionCount } from "./session-updates.js";
 import { createMockTypingController } from "./test-helpers.js";
 
@@ -76,41 +73,6 @@ async function createFixture(
 }
 
 type Fixture = Awaited<ReturnType<typeof createFixture>>;
-function createRecoveryFixture(
-  { context, sessionId, turn }: Fixture,
-  admissionRunId: string,
-  lane: "ordinary" | "followup" = "ordinary",
-) {
-  const scope = { agentId: "main", storePath, sessionKey: context.sessionKey! };
-  const getSessionId = () => sessionId;
-  const actor = createReplyRecoveryActorFixture({
-    ...scope,
-    getSessionId,
-    operation: lane === "followup" ? turn.operation : context.replyOperation,
-  });
-  return Object.assign(actor, {
-    controller: createReplyRestartRecoveryClaimController({
-      ...scope,
-      getEntry: () => (lane === "followup" ? turn.session.current() : context.activeSessionEntry),
-      setEntry(next) {
-        if (lane === "followup") {
-          turn.session.publish(next);
-        } else {
-          context.activeSessionEntry = next;
-          context.activeSessionStore![context.sessionKey!] = next;
-        }
-      },
-      acquireSessionActor: () => actor.acquireSessionActor(),
-      admissionRunId,
-      executionRunId: lane === "followup" ? turn.runId : context.runId,
-      lifecycleGeneration: getAgentEventLifecycleGeneration(),
-      getSessionId,
-      isRestartAbort: () => false,
-      resolveDeliveryContext: () => undefined,
-    }),
-  });
-}
-
 function setTerminalReply(
   { context }: Fixture,
   kind: "NO_REPLY" | "empty" | "hook_block",
@@ -163,18 +125,9 @@ it.each(["before-accounting", "during-payload-preparation"] as const)(
   },
 );
 
-it("retains an accepted rejected followup's recovery claim until source delivery settles", async () => {
+it("delivers an accepted rejected followup through its source", async () => {
   const fixture = await createFixture();
   const { context, turn } = fixture;
-  const entry = await fixture.patch({
-    restartRecoveryDeliveryRunId: "accepted-followup",
-    restartRecoveryDeliverySourceRunId: "accepted-source",
-  });
-  turn.session.publish(entry);
-  await using actor = createRecoveryFixture(fixture, "accepted-followup", "followup");
-  const recovery = actor.controller;
-  await recovery.admitUserTurn();
-  turn.restartRecovery = recovery;
   let deliveryEntry: SessionEntry | undefined;
   const deliver = vi.fn(async () => {
     deliveryEntry = fixture.read();
@@ -208,15 +161,7 @@ it("retains an accepted rejected followup's recovery claim until source delivery
         completion: expect.objectContaining({ kind: "failed" }),
       }),
     );
-    expect(deliveryEntry).toMatchObject({
-      restartRecoveryDeliveryRunId: "accepted-followup",
-      restartRecoveryDeliverySourceRunId: "accepted-source",
-    });
     expect(deliveryEntry?.pendingFinalDelivery).toBeUndefined();
-    expect(deliveryEntry?.restartRecoveryTerminalRunIds ?? []).not.toContain("accepted-source");
-    const settledEntry = fixture.read();
-    expect(settledEntry?.restartRecoveryDeliveryRunId).toBeUndefined();
-    expect(settledEntry?.restartRecoveryTerminalRunIds).toContain("accepted-source");
   } finally {
     admission.mockRestore();
     execution.mockRestore();
@@ -314,20 +259,11 @@ it("completes against the settled writer when the caller still has its pre-run e
 });
 
 it.each(["success", "publication-failure", "rollback"] as const)(
-  "settles restart claim cleanup with final accounting after %s",
+  "settles final accounting and delivery custody after %s",
   async (outcome) => {
     const fixture = await createFixture();
     const { context } = fixture;
     const sessionKey = context.sessionKey!;
-    const entry = await fixture.patch({
-      restartRecoveryDeliveryRunId: "recovery-run",
-      restartRecoveryDeliverySourceRunId: "source-turn",
-    });
-    context.activeSessionEntry = entry;
-    context.activeSessionStore![sessionKey] = entry;
-    await using actor = createRecoveryFixture(fixture, "recovery-run");
-    const controller = actor.controller;
-    await controller.admitUserTurn();
     const settled = await fixture.patch({
       status: "done" as const,
       endedAt: 1_000,
@@ -335,7 +271,6 @@ it.each(["success", "publication-failure", "rollback"] as const)(
     });
     context.activeSessionEntry = settled;
     context.activeSessionStore![sessionKey] = settled;
-    context.prepareRestartClaimCleanup = controller.prepareCompletionCleanup;
     fixture.setMeta({ usage: turnUsage });
     const before = fixture.read();
     if (outcome === "publication-failure") {
@@ -356,7 +291,6 @@ it.each(["success", "publication-failure", "rollback"] as const)(
       updatedAt: 1_000,
       ...persistedTurnUsage,
       pendingFinalDelivery: { text: "done", deliveries: [{ state: "prepared" }] },
-      restartRecoveryTerminalRunIds: ["source-turn"],
     };
     try {
       if (outcome === "success") {
@@ -372,21 +306,12 @@ it.each(["success", "publication-failure", "rollback"] as const)(
         expect(fixture.read()).toEqual(before);
       } else {
         expect(fixture.read()).toMatchObject(expected);
-        expect(fixture.read()?.restartRecoveryDeliveryRunId).toBeUndefined();
       }
-      const commandsBeforeCleanup = observer.commands.length;
-      await controller.clear();
-      if (outcome !== "rollback") {
-        expect(observer.commands).toHaveLength(commandsBeforeCleanup);
-      }
-      expect(fixture.read()?.restartRecoveryDeliveryRunId).toBeUndefined();
       if (outcome === "success") {
         context.replyOperation.complete();
-        await actor.release();
         await disposeOpenClawAgentDatabaseByPath(storePath);
         openOpenClawAgentDatabase({ agentId: "main", path: storePath });
         expect(fixture.read()).toMatchObject(expected);
-        expect(fixture.read()?.restartRecoveryDeliveryRunId).toBeUndefined();
       }
     } finally {
       observer.restore();

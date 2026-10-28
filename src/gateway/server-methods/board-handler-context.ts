@@ -30,9 +30,15 @@ export function resolveBoardSession(
   params: { sessionKey: string; agentId?: string | undefined },
   context: Parameters<GatewayRequestHandlers[string]>[0]["context"],
   respond: Parameters<GatewayRequestHandlers[string]>[0]["respond"],
+  admission: "read" | "write" = "write",
 ): Required<BoardSessionTarget> | undefined {
   const cfg = context.getRuntimeConfig();
-  const requested = resolveRequestedSessionStoreTarget(cfg, params.sessionKey, params.agentId);
+  const requested = resolveRequestedSessionStoreTarget(
+    cfg,
+    params.sessionKey,
+    params.agentId,
+    admission,
+  );
   if (!requested.ok) {
     respond(false, undefined, requested.error);
     return undefined;

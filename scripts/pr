@@ -6,13 +6,13 @@ fi
 
 set -euo pipefail
 
-# Install creator cleanup before even the Git preflight or argument validation.
+# Retain on early failure until independent helper provenance is established.
 # Physical paths keep helper argv aligned with Node's canonical module URLs.
 script_self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/$(basename "${BASH_SOURCE[0]}")"
 script_parent_dir="$(dirname "$script_self")"
 if [ -n "${OPENCLAW_PR_ANCHOR_REPO_ROOT:-}" ] &&
   [ "${OPENCLAW_PR_ANCHOR_CREATOR_PID:-}" = "$$" ] && [ "${OPENCLAW_PR_ANCHOR_FD:-}" = 9 ]; then
-  trap 'node "$script_parent_dir/pr-lib/materialized-anchor.mjs" retire "$script_self" || true' EXIT
+  trap 'echo "Warning: retaining PR anchor before bootstrap helper qualification." >&2' EXIT
   trap 'exit 129' HUP
   trap 'exit 130' INT
   trap 'exit 131' QUIT
@@ -20,7 +20,7 @@ if [ -n "${OPENCLAW_PR_ANCHOR_REPO_ROOT:-}" ] &&
 fi
 
 # This bootstrap stays inline: no local helper is trusted before code selection.
-pr_git() { "${OPENCLAW_PR_GIT:-${GIT_EXEC:-git}}" "$@"; }
+pr_git() { "${GIT_EXEC:-${OPENCLAW_PR_GIT:-git}}" "$@"; }
 pr_run_bounded() (
   set +e
   # Separate jobs let the deadline reap a hung launcher and its children.
@@ -48,22 +48,30 @@ if [ -z "$GIT_EXEC" ] || ! pr_run_bounded "$GIT_EXEC" --version >/dev/null 2>&1;
 fi
 export GIT_EXEC
 export OPENCLAW_PR_GIT="$GIT_EXEC"
-
-# Older trusted wrappers use bare Git before reaching a newer supervisor.
-# Keep this Git-only adapter across exec; OS temp reaping owns its lifetime.
-# Matching inodes let reentry reuse it.
-pr_path_git=$(type -P git 2>/dev/null || true)
-case "$pr_path_git" in /*|"") ;; *) pr_path_git="$PWD/$pr_path_git" ;; esac
-if [ -z "$pr_path_git" ] || [ ! "$pr_path_git" -ef "$GIT_EXEC" ]; then
-  pr_git_path_dir=$(mktemp -d "${TMPDIR:-/tmp}/openclaw-pr-git.XXXXXX")
-  if ! ln -s "$GIT_EXEC" "$pr_git_path_dir/git"; then
+# Bind before adding any alias: a selected guard may discover its backend on
+# PATH. Keep this self-contained across legacy handoff and later PATH changes.
+# No checkout helper is trusted yet; OS temp reaping owns this bootstrap adapter.
+pr_bind_git_invocation() {
+  # Current-wrapper recovery uses only explicit Git reads and exact-OID CAS.
+  # It must not depend on the optional Node/temp-backed PATH context.
+  [ "$requested_subcommand" != lock-recover ] || return 0
+  local pr_git_path_dir
+  pr_git_path_dir=$(mktemp -d "${TMPDIR:-/tmp}/openclaw-pr-git.XXXXXX") || return 1
+  pr_git_path_dir=$(cd "$pr_git_path_dir" && pwd -P) || return 1
+  if ! node --input-type=module - "$pr_git_path_dir/git" "$GIT_EXEC" <<'EOF_GIT_INVOCATION'
+import { writeFileSync } from "node:fs";
+const quote = value => `'${value.replaceAll("'", "'\\''")}'`;
+const path = process.env.PATH;
+writeFileSync(process.argv[2], `#!/bin/sh\n${path === undefined ? "unset PATH" : `PATH=${quote(path)}\nexport PATH`}\nexec ${quote(process.argv[3])} "$@"\n`, { flag: "wx", mode: 0o700 });
+EOF_GIT_INVOCATION
+  then
     rm -rf "$pr_git_path_dir"
-    exit 1
+    return 1
   fi
-  pr_git_path_dir=$(cd "$pr_git_path_dir" && pwd -P)
-  export PATH="$pr_git_path_dir:$PATH"
-fi
-unset pr_path_git pr_git_path_dir
+  export GIT_EXEC="$pr_git_path_dir/git"
+  export OPENCLAW_PR_GIT="$GIT_EXEC"
+  export PATH="$pr_git_path_dir${PATH+:$PATH}"
+}
 
 # This wrapper parses GitHub CLI JSON. Caller shells may force ANSI color globally.
 export NO_COLOR=1
@@ -155,8 +163,8 @@ pr_read_current_workflow_request "$@" || {
 pr_batch_wrapper_git() {
   node --input-type=module - "$GIT_EXEC" "$@" <<'EOF_WRAPPER_GIT'
 import { spawnSync } from "node:child_process";
-import { fstatSync, lstatSync, readSync, realpathSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { fstatSync, lstatSync, readFileSync, readSync, realpathSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 const [binary, operation, repository, revision, ...paths] = process.argv.slice(2);
 function git(directory, args, input) {
@@ -168,10 +176,7 @@ function git(directory, args, input) {
   return result.stdout;
 }
 const oid = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/;
-try {
-  if (operation.startsWith("workflow-")) {
-    if (!/^[1-9][0-9]*$/.test(revision)) throw new Error("Invalid workflow PR");
-    const ref = `refs/openclaw/pr-workflow-bindings/${revision}`;
+function repositoryContext() {
     const run = args => git(repository, args).toString("utf8").trim();
     const owner = realpathSync(run(["rev-parse", "--path-format=absolute", "--git-common-dir"]));
     const remote = run(["remote", "get-url", "origin"]);
@@ -184,6 +189,14 @@ try {
       : scp ? JSON.stringify(["scp", scp[1] ?? "", scp[2].toLowerCase(), scp[3]])
       : realpathSync(resolve(repository, remote));
     if (!identity || url && (url.username && url.protocol !== "ssh:" || url.password)) throw new Error("Invalid repository identity");
+    return { owner, identity };
+}
+try {
+  if (operation.startsWith("workflow-")) {
+    if (!/^[1-9][0-9]*$/.test(revision)) throw new Error("Invalid workflow PR");
+    const ref = `refs/openclaw/pr-workflow-bindings/${revision}`;
+    const run = args => git(repository, args).toString("utf8").trim();
+    const { owner, identity } = repositoryContext();
     const read = () => {
       const symbolic = spawnSync(binary, ["-C", repository, "symbolic-ref", "--quiet", ref], { stdio: "ignore" });
       if (symbolic.error || symbolic.signal || symbolic.status !== 1) throw new Error("Invalid symbolic workflow binding");
@@ -337,6 +350,56 @@ try {
       requireSource(current.source, paths[1]);
       run(["update-ref", "--no-deref", "-d", ref, current.oid]);
     } else throw new Error("Unknown workflow operation");
+  } else if (operation === "bootstrap-source") {
+    const run = args => git(repository, args).toString("utf8").trim();
+    const { owner, identity } = repositoryContext();
+    if (dirname(owner) !== realpathSync(repository) || run(["rev-parse", "--is-bare-repository"]) !== "false") {
+      throw new Error("Bootstrap requires the canonical common owner");
+    }
+    const anchor = "refs/remotes/origin/main";
+    const symbolic = spawnSync(binary, ["-C", repository, "symbolic-ref", "--quiet", anchor], { stdio: "ignore" });
+    if (symbolic.error || symbolic.signal || symbolic.status !== 1) throw new Error("Invalid bootstrap main anchor");
+    let record;
+    if (revision) {
+      const stat = lstatSync(revision);
+      for (const directory of [dirname(revision), dirname(dirname(revision))]) {
+        const current = lstatSync(directory);
+        if (!current.isDirectory() || current.uid !== process.getuid() ||
+            (current.mode & 0o7777) !== 0o700 || realpathSync(directory) !== resolve(directory)) {
+          throw new Error("Invalid bootstrap provenance directory");
+        }
+      }
+      if (!stat.isFile() || stat.uid !== process.getuid() || (stat.mode & 0o777) !== 0o400 ||
+          stat.size < 1 || stat.size > 4096 || realpathSync(revision) !== resolve(revision)) {
+        throw new Error("Invalid bootstrap provenance file");
+      }
+      record = JSON.parse(readFileSync(revision, "utf8"));
+    } else {
+      record = { version: 1, owner, repository: identity, source: run(["rev-parse", "--verify", `${anchor}^{commit}`]) };
+    }
+    if (JSON.stringify(Object.keys(record).sort()) !== JSON.stringify(["owner", "repository", "source", "version"]) ||
+        record.version !== 1 || record.owner !== owner || record.repository !== identity || !oid.test(record.source) ||
+        run(["cat-file", "-t", record.source]) !== "commit") throw new Error("Bootstrap provenance changed");
+    // The record freezes an independently main-qualified source; it cannot
+    // promote an invoking worktree's clean but unmerged HEAD into authority.
+    run(["merge-base", "--is-ancestor", record.source, anchor]);
+    if (paths[0]) run(["merge-base", "--is-ancestor", paths[0], record.source]);
+    process.stdout.write(`${record.source}\t${JSON.stringify(record)}`);
+  } else if (operation === "bootstrap-owner") {
+    const current = lstatSync(revision, { bigint: true });
+    const held = fstatSync(9, { bigint: true });
+    if (!current.isDirectory() || realpathSync(revision) !== resolve(revision) ||
+        !revision.split("/").at(-1).startsWith(`openclaw-pr-anchor-v3.${paths[0]}.`) ||
+        current.uid !== BigInt(process.getuid()) || (current.mode & 0o7777n) !== 0o700n ||
+        ["dev", "ino", "uid", "mode"].some(key => current[key] !== held[key])) {
+      throw new Error("Bootstrap creation descriptor differs");
+    }
+  } else if (operation === "bootstrap-disjoint") {
+    const rows = git(repository, ["ls-tree", "-r", "-z", "--full-tree", revision, "--", ...paths]).toString("utf8").split("\0");
+    if (rows.some(row => {
+      const name = row.slice(row.indexOf("\t") + 1);
+      return name === ".pr-bootstrap" || name.startsWith(".pr-bootstrap/");
+    })) throw new Error("Selected source overlaps the reserved bootstrap directory");
   } else if (operation === "differences") {
     const queries = paths.flatMap(path => [`HEAD:${path}`, `${revision}:${path}`]);
     const rows = git(repository, ["cat-file", "--batch-check=%(objectname)"], queries.join("\n") + "\n")
@@ -388,7 +451,7 @@ try {
     throw new Error("Unknown wrapper Git operation");
   }
 } catch (error) {
-  if (operation.startsWith("workflow-")) console.error(error.message);
+  if (operation.startsWith("workflow-") || operation.startsWith("bootstrap-")) console.error(error.message);
   process.exitCode = 1;
 }
 EOF_WRAPPER_GIT
@@ -528,20 +591,83 @@ admit_pr_workflow_binding() {
   unset OPENCLAW_PR_WORKFLOW_CONTEXT
 }
 
+# Parent helpers are a separate trust decision from the retained workflow.
+# Their immutable source record and bytes share the created anchor's FD9 lifetime.
+pr_bootstrap_anchor="" pr_bootstrap_root="" pr_bootstrap_revision=""
+pr_bootstrap_components=(scripts/pr scripts/pr-lib/wrapper-components.txt
+  scripts/pr-lib/cache-lifetime.mjs scripts/pr-lib/materialized-anchor.mjs
+  scripts/pr-lib/git-invocation.mjs scripts/pr-lib/materialize-dependencies.mjs
+  scripts/pr-lib/dependency-inputs.json scripts/windows-cmd-helpers.mjs)
+
+pr_verify_bootstrap() {
+  local selection revision record
+  [ -n "$pr_bootstrap_root" ] || return 1
+  selection=$(pr_batch_wrapper_git bootstrap-source "$canonical_repo_root" \
+    "$pr_bootstrap_root/source.json" "${PR_WORKFLOW_SOURCE_REVISION:-}") || return 1
+  IFS=$'\t' read -r revision record <<< "$selection"
+  [ -z "$pr_bootstrap_revision" ] || [ "$revision" = "$pr_bootstrap_revision" ] || return 1
+  pr_batch_wrapper_git verify "$canonical_repo_root" "$revision" "$pr_bootstrap_root" \
+    "${pr_bootstrap_components[@]}" || return 1
+  pr_bootstrap_revision="$revision"
+}
+
+pr_prepare_bootstrap() {
+  local anchor selection record revision
+  anchor=$(cd -P -- "$1" && pwd -P) || return 1
+  [ -z "$pr_bootstrap_anchor" ] || [ "$pr_bootstrap_anchor" = "$anchor" ] || return 1
+  pr_bootstrap_anchor="$anchor"
+  pr_bootstrap_root="$anchor/.pr-bootstrap"
+  if [ ! -e "$pr_bootstrap_root" ] && [ ! -L "$pr_bootstrap_root" ]; then
+    selection=$(pr_batch_wrapper_git bootstrap-source "$canonical_repo_root" "" "${2:-${PR_WORKFLOW_SOURCE_REVISION:-}}") || {
+      echo "Bootstrap authority unavailable; retaining $anchor without executing caller helpers." >&2
+      return 1
+    }
+    IFS=$'\t' read -r revision record <<< "$selection"
+    pr_batch_wrapper_git bootstrap-owner "$canonical_repo_root" "$anchor" "$$" || return 1
+    mkdir -m 700 "$pr_bootstrap_root" || return 1
+    # Fixed component paths never use the caller's inventory. A missing new
+    # helper on trusted main refuses before any import; verification rejects links.
+    if ! pr_git -C "$canonical_repo_root" archive "$revision" -- \
+      "${pr_bootstrap_components[@]}" > "$pr_bootstrap_root/source.tar" ||
+      ! tar -xf "$pr_bootstrap_root/source.tar" -C "$pr_bootstrap_root"; then
+      echo "Bootstrap closure unavailable; retaining $anchor without executing caller helpers." >&2
+      return 1
+    fi
+    rm "$pr_bootstrap_root/source.tar"
+    printf '%s' "$record" > "$pr_bootstrap_root/source.json" || return 1
+    chmod 400 "$pr_bootstrap_root/source.json" || return 1
+    pr_bootstrap_revision="$revision"
+  fi
+  pr_verify_bootstrap || {
+    echo "Bootstrap helper qualification failed; retaining $anchor." >&2
+    return 1
+  }
+}
+
+pr_retire_created_anchor() {
+  # Extraction can replace files even when it fails. Never reuse an earlier
+  # verification result or import an invoking-worktree cleanup helper here.
+  if [ "$pr_bootstrap_anchor" != "$1" ] || ! pr_verify_bootstrap; then
+    echo "Warning: retaining PR anchor whose bootstrap helpers cannot be authenticated: $1" >&2
+    return 1
+  fi
+  node "$pr_bootstrap_root/scripts/pr-lib/materialized-anchor.mjs" retire-created "$1"
+}
+
 # Keep dependency sourcing independent of wrapper selection. In particular, an
 # older anchor still supplies its own package/version policy to this bootstrap.
 pr_materialize_dependencies() {
   # Location discovery uses only Git and Node built-ins, before dependency repair.
   [ "$requested_subcommand" != workspace ] || return 0
-  node --input-type=module - "$1" "$canonical_repo_root" "$2" "${3:-${PR_WORKFLOW_SOURCE_REVISION:-}}" <<'EOF_TOOLING'
+  pr_verify_bootstrap || { echo "Refusing unauthenticated parent dependency helpers." >&2; return 1; }
+  node --input-type=module - "$1" "$canonical_repo_root" "$2" "${3:-${PR_WORKFLOW_SOURCE_REVISION:-}}" "$pr_bootstrap_root/scripts/pr-lib/cache-lifetime.mjs" <<'EOF_TOOLING'
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync,
-  readlinkSync, realpathSync, renameSync, rmSync, symlinkSync, utimesSync,
+  readlinkSync, realpathSync, rmSync,
 } from "node:fs";
-import { homedir } from "node:os";
-import { delimiter, dirname, join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 function repository(url, root) {
   if (/^(?:\.?\.?\/|\/)/.test(url)) return realpathSync(resolve(root, url));
@@ -550,42 +676,41 @@ function repository(url, root) {
   return `${parsed.hostname.toLowerCase()}/${parsed.pathname.replace(/^\/|\/$/g, "").replace(/\.git$/, "").toLowerCase()}`;
 }
 
-function sweep(cache, current) {
-  const entries = readdirSync(cache)
-    .filter((name) => /^(?:[a-f0-9]{64}|install-[0-9]+-[A-Za-z0-9]+)$/.test(name))
-    .map((name) => {
-      const path = join(cache, name);
-      return { name, path, stat: lstatSync(path, { throwIfNoEntry: false }) };
-    })
-    .filter(({ stat }) => stat)
-    .sort((a, b) => b.stat.mtimeMs - a.stat.mtimeMs);
-  let retained = 0;
-  for (const { name, path, stat } of entries) {
-    if (path === current || !stat?.isDirectory() || stat.uid !== process.getuid?.() ||
-        (stat.mode & 0o777) !== 0o700) continue;
-    // Creator PIDs survive the wrapper/supervisor exec chain. PID reuse only
-    // delays collection; a live consumer must never lose its pinned packages.
-    const users = join(path, ".pr-users");
-    const pids = existsSync(users) ? readdirSync(users) : [];
-    if (name.startsWith("install-")) pids.push(name.split("-")[1]);
-    if (pids.some((pid) => {
-      if (!/^[1-9][0-9]*$/.test(pid)) return true;
-      try { process.kill(Number(pid), 0); return true; }
-      catch (error) { return error.code !== "ESRCH"; }
-    })) continue;
-    if (!name.startsWith("install-") && existsSync(join(path, ".pr-complete"))) {
-      // Adjacent main heads get a small reuse window; live and current installs
-      // do not consume it. Age alone cannot bound one new tree per landing.
-      if (retained++ < 4) continue;
-    } else if (stat.mtimeMs >= Date.now() - 86_400_000) {
-      continue;
+const { claimCreatedAnchor, collectUnusedDependencyCaches, dependencyCacheRoot, holdDependencyCache, publishDependencyCache, privateDependencyDonor, withDependencyCacheLock } = await import((await import("node:url")).pathToFileURL(process.argv[6]));
+const { bindGitInvocation } = await import((await import("node:url")).pathToFileURL(join(dirname(process.argv[6]), "git-invocation.mjs")));
+
+function dependencyKey(rows, tree, audit) {
+  let identity = tree;
+  if (audit && audit.runtime.platform === process.platform && audit.runtime.arch === process.arch &&
+      audit.runtime.modules === process.versions.modules) {
+    const names = rows.map((row) => row.slice(row.indexOf("\t") + 1));
+    const codeInputs = [...audit.files, ...audit.directories];
+    const inputs = rows.filter((row, index) => {
+      const name = names[index];
+      return audit.files.includes(name) ||
+        name === "pnpm-lock.yaml" || name.startsWith("patches/") ||
+        /(?:^|\/)(?:package\.json|\.npmrc|\.pnpmfile\.[cm]js|pnpm-workspace\.yaml)$/.test(name) ||
+        (name.endsWith("/tsconfig.json") && codeInputs.some((input) =>
+          input.startsWith(name.slice(0, -"tsconfig.json".length)))) ||
+        (audit.directories.some((directory) => name.startsWith(`${directory}/`)) &&
+          /\.(?:ts|mts|mjs|js|json)$/.test(name) && !/\.(?:test|spec)\./.test(name));
+    });
+    // Changed executable inputs may read new source paths. Keep the original
+    // full-tree contract until their read set (including dependency hooks) is audited.
+    const digest = createHash("sha256").update(inputs.join("\0")).digest("hex");
+    if (digest === audit.auditSha256 && !names.some((name) => name.startsWith("dist/"))) {
+      identity = [inputs, audit.presence.map((path) =>
+        names.some((name) => name === path || name.startsWith(`${path}/`)))];
     }
-    rmSync(path, { recursive: true, force: true });
   }
+  return createHash("sha256").update(JSON.stringify([
+    identity, process.platform, process.arch, process.versions.modules,
+  ])).digest("hex");
 }
 
 function materializeDependencies(owner, canonicalPath, destination, revision) {
   const canonical = realpathSync(canonicalPath);
+  destination = resolve(destination);
   const gitBinary = process.env.OPENCLAW_PR_GIT;
   const git = (root, args) => execFileSync(gitBinary, ["-C", root, ...args], {
     encoding: "utf8", timeout: 300_000, maxBuffer: 32 * 1024 * 1024,
@@ -623,7 +748,20 @@ function materializeDependencies(owner, canonicalPath, destination, revision) {
     if (result.status !== 0 && !drift) throw new Error(`Dependency materialization failed in ${target}.`);
     return result.status === 0;
   };
-  if (materialize(root, destination)) return;
+  const preflight = (installed) => {
+    try { return privateDependencyDonor(installed, destination); }
+    catch (error) {
+      throw new Error(`Dependency materialization failed in ${destination}: ${error.message}`, { cause: error });
+    }
+  };
+  // Supervised reentry inherits pins, not the creator's FD9. Let the selected
+  // helper validate those pins before considering any external private donor.
+  if (existsSync(destination)) {
+    preflight(dirname(destination));
+    if (materialize(dirname(destination), destination)) return;
+  }
+  const privateDonor = preflight(root);
+  if (!privateDonor && materialize(root, destination)) return;
 
   // The wrapper has already authenticated this source and verified its extracted
   // inventory. Recheck ancestry and manifest identity before executing install hooks.
@@ -637,16 +775,16 @@ function materializeDependencies(owner, canonicalPath, destination, revision) {
     }
   }
   const tree = git(canonical, ["rev-parse", `${revision}^{tree}`]);
-  // Full source includes every workspace, patch, and lifecycle input. Keying by
-  // its tree deliberately trades some reuse for an exact frozen install contract.
-  const key = createHash("sha256").update(JSON.stringify([
-    tree, process.platform, process.arch, process.versions.modules,
-  ])).digest("hex");
-  const cache = join(homedir(), ".cache", "openclaw", "pr-dependencies");
-  mkdirSync(cache, { recursive: true, mode: 0o700 });
+  const sourceRows = git(canonical, ["ls-tree", "-r", "-z", revision]).split("\0").filter(Boolean);
+  const auditPath = join(dirname(owner), "dependency-inputs.json");
+  // Older retained wrappers without a read-set audit keep full-tree isolation.
+  const audit = existsSync(auditPath) ? JSON.parse(readFileSync(auditPath, "utf8")) : null;
+  const key = dependencyKey(sourceRows, tree, audit);
+  const cache = dependencyCacheRoot();
   const entry = join(cache, key);
-  const complete = join(entry, ".pr-complete");
-  if (!existsSync(complete)) {
+  const anchor = claimCreatedAnchor(dirname(destination), process.ppid);
+  const use = (lock) => holdDependencyCache(lock, entry, anchor);
+  if (!withDependencyCacheLock(cache, use)) {
     const stage = mkdtempSync(join(cache, `install-${process.ppid}-`));
     try {
       const archive = join(stage, ".pr-source.tar");
@@ -655,7 +793,7 @@ function materializeDependencies(owner, canonicalPath, destination, revision) {
       rmSync(archive);
       // Verify archive bytes, including symlinks, before any package lifecycle runs.
       const sourcePaths = new Set();
-      for (const row of git(canonical, ["ls-tree", "-r", "-z", revision]).split("\0").filter(Boolean)) {
+      for (const row of sourceRows) {
         const match = /^(100644|100755|120000) blob ([a-f0-9]{40})\t([^\0]+)$/.exec(row);
         if (!match) throw new Error("Unsupported frozen install source entry.");
         const [, mode, oid, name] = match;
@@ -680,9 +818,8 @@ function materializeDependencies(owner, canonicalPath, destination, revision) {
       verifyInventory(stage);
       console.error(`Installing frozen scripts/pr dependencies for ${revision}.`);
       const bin = join(stage, ".pr-bin");
-      mkdirSync(bin);
-      symlinkSync(gitBinary, join(bin, "git"));
-      const installEnv = { ...process.env, PATH: `${bin}${delimiter}${process.env.PATH ?? ""}` };
+      mkdirSync(bin, { mode: 0o700 });
+      const { env: installEnv } = bindGitInvocation(bin, gitBinary);
       // Lifecycle Git calls must not inherit a hook's checkout or index ownership.
       for (const name of ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_PREFIX", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES"]) delete installEnv[name];
       const installed = spawnSync("pnpm", ["-C", stage, "install", "--frozen-lockfile", "--prefer-offline"], {
@@ -696,22 +833,19 @@ function materializeDependencies(owner, canonicalPath, destination, revision) {
         throw new Error("Frozen dependency installation failed.");
       }
       rmSync(check, { recursive: true });
-      mkdirSync(join(stage, ".pr-complete"));
-      try { renameSync(stage, entry); }
-      catch (error) {
-        if (!["EEXIST", "ENOTEMPTY"].includes(error.code) || !existsSync(complete)) throw error;
-      }
+      withDependencyCacheLock(cache, (lock) => publishDependencyCache(lock, stage, entry, anchor));
     } finally {
       rmSync(stage, { recursive: true, force: true });
     }
   }
-  mkdirSync(join(entry, ".pr-users", String(process.ppid)), { recursive: true });
-  const now = new Date();
-  utimesSync(entry, now, now);
+  // The durable hold protects the installation while projection runs; a child
+  // helper must never keep the global metadata mutex across process execution.
   if (!materialize(entry, destination)) throw new Error("Cached dependencies do not match the trust anchor.");
   console.error(`Using frozen scripts/pr dependency installation: ${entry}`);
-  try { sweep(cache, entry); }
-  catch { console.error("Warning: unable to sweep stale scripts/pr dependency installations."); }
+  try {
+    const retired = withDependencyCacheLock(cache, (lock) => collectUnusedDependencyCaches(lock, entry));
+    for (const path of retired) rmSync(path, { recursive: true });
+  } catch (error) { console.error(`Warning: retaining PR dependency cache entries: ${error.message}`); }
 }
 
 try {
@@ -737,12 +871,20 @@ pr_wrapper_components=(scripts/pr scripts/pr-lib)
 # re-selection: the running bytes ARE the anchor, and the temp copy has no git
 # context of its own to select against.
 if [ -n "${OPENCLAW_PR_ANCHOR_REPO_ROOT:-}" ]; then
+  case "$(basename "$(dirname "$script_parent_dir")")" in
+    openclaw-pr-anchor-v3.*) ;;
+    *) echo "Legacy PR anchor cannot acquire versioned lifetime holds; use the current qualified wrapper." >&2; exit 1 ;;
+  esac
   if ! pr_git -C "$OPENCLAW_PR_ANCHOR_REPO_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     echo "OPENCLAW_PR_ANCHOR_REPO_ROOT is not a git work tree: $OPENCLAW_PR_ANCHOR_REPO_ROOT" >&2
     exit 1
   fi
   canonical_repo_root="$OPENCLAW_PR_ANCHOR_REPO_ROOT"
   pr_read_workflow_binding "$@"
+  pr_prepare_bootstrap "$script_parent_dir/.." || exit 1
+  if [ "${OPENCLAW_PR_ANCHOR_CREATOR_PID:-}" = "$$" ] && [ "${OPENCLAW_PR_ANCHOR_FD:-}" = 9 ]; then
+    trap 'pr_retire_created_anchor "$pr_bootstrap_anchor" || true' EXIT
+  fi
   # Older parents pin only their own dependency set. The anchored child owns
   # completing its installation before any loader, supervisor, or lock starts.
   pr_materialize_dependencies "$script_parent_dir/pr-lib/materialize-dependencies.mjs" \
@@ -770,6 +912,7 @@ elif common_git_dir=$(pr_git -C "$script_parent_dir" rev-parse --path-format=abs
     if [ "$script_self" != "$canonical_self" ] && [ -z "$PR_WORKFLOW_PR" ] && [ -n "$linked_wrapper_revision" ] &&
       [ "$linked_wrapper_revision" = "$canonical_wrapper_revision" ] &&
       pr_git -C "$canonical_repo_root" diff --quiet HEAD -- "${pr_wrapper_components[@]/#/:(top)}"; then
+      pr_bind_git_invocation || exit 1
       exec "$canonical_self" "$@"
     fi
     # The canonical checkout can be parked on another branch or carry local
@@ -836,6 +979,7 @@ elif common_git_dir=$(pr_git -C "$script_parent_dir" rev-parse --path-format=abs
           pr_git -C "$canonical_repo_root" diff --quiet HEAD -- "${anchor_components[@]/#/:(top)}"; then
           hold_pr_workflow_selection "$anchor_commit" "$canonical_repo_root" || exit 1
           echo "scripts/pr wrapper in this worktree $wrapper_route_reason; running the canonical checkout's wrapper (matches the $anchor_description trust anchor): $canonical_repo_root" >&2
+          pr_bind_git_invocation || exit 1
           exec "$canonical_self" "$@"
         fi
         # The canonical checkout cannot supply trusted code and dependency context.
@@ -849,15 +993,26 @@ elif common_git_dir=$(pr_git -C "$script_parent_dir" rev-parse --path-format=abs
         # paths intact in the materialized tree.
         anchor_git_root=$(pr_git -C "$script_parent_dir" rev-parse --show-toplevel 2>/dev/null || true)
         if [ -n "$anchor_wrapper_revision" ] && [ -n "$anchor_git_root" ] &&
-          anchor_exec_dir=$(mktemp -d "${TMPDIR:-/tmp}/openclaw-pr-anchor.$$.XXXXXX" 2>/dev/null); then
+          anchor_exec_dir=$(mktemp -d "${TMPDIR:-/tmp}/openclaw-pr-anchor-v3.$$.XXXXXX" 2>/dev/null); then
+          # TMPDIR may contain symlinked ancestors. Bind every later hold and
+          # retirement to the physical directory before opening its descriptor.
+          anchor_exec_physical=$(cd -P -- "$anchor_exec_dir" && pwd -P) || {
+            echo "Unable to resolve the created PR anchor; retaining $anchor_exec_dir." >&2
+            exit 1
+          }
+          anchor_exec_dir="$anchor_exec_physical"
           # Hold the directory we created across exec, not an environment pathname.
           # FD 9 is reserved for the supervisor; bootstrap children are awaited.
-          trap 'rm -rf "$anchor_exec_dir"' EXIT
+          trap 'echo "Warning: retaining PR anchor before bootstrap helper qualification: $anchor_exec_dir" >&2' EXIT
           trap 'exit 129' HUP
           trap 'exit 130' INT
           trap 'exit 131' QUIT
           trap 'exit 143' TERM
           exec 9< "$anchor_exec_dir"
+          pr_prepare_bootstrap "$anchor_exec_dir" "$anchor_commit" || exit 1
+          trap 'pr_retire_created_anchor "$anchor_exec_dir" || true' EXIT
+          pr_batch_wrapper_git bootstrap-disjoint "$anchor_git_root" "$anchor_commit" \
+            "${anchor_components[@]}" || exit 1
           anchor_extraction_valid=0
           # BSD tar can stop at the end marker before Git finishes writing padding,
           # causing SIGPIPE under pipefail. Require producer completion before reading.
@@ -874,6 +1029,9 @@ elif common_git_dir=$(pr_git -C "$script_parent_dir" rev-parse --path-format=abs
               anchor_extraction_valid=1
             fi
           fi
+          # A selected archive must not replace the separately authenticated
+          # parent closure, including on a partial/failed extraction.
+          pr_verify_bootstrap || { echo "Bootstrap changed during selected extraction; retaining $anchor_exec_dir." >&2; exit 1; }
           if [ "$anchor_extraction_valid" = "1" ] &&
             grep -q "OPENCLAW_PR_ANCHOR_REPO_ROOT" "$anchor_exec_dir/scripts/pr" 2>/dev/null; then
             # Only third-party tooling comes from the selected installed tree.
@@ -883,7 +1041,7 @@ elif common_git_dir=$(pr_git -C "$script_parent_dir" rev-parse --path-format=abs
             # Older anchors still rely on their parent to prepare dependencies.
             # Keep that bootstrap in this caller, using the extracted manifest.
             if [ ! -f "$anchor_dependency_owner" ]; then
-              anchor_dependency_owner="$script_parent_dir/pr-lib/materialize-dependencies.mjs"
+              anchor_dependency_owner="$pr_bootstrap_root/scripts/pr-lib/materialize-dependencies.mjs"
             fi
             if ! pr_materialize_dependencies "$anchor_dependency_owner" "$anchor_exec_dir/node_modules" "$anchor_commit"
             then
@@ -891,9 +1049,10 @@ elif common_git_dir=$(pr_git -C "$script_parent_dir" rev-parse --path-format=abs
             fi
             # Bash re-reads this copy: successful exec hands cleanup to the
             # same creator PID, in anchored bash or its drained supervisor.
-            # Older anchors without that handoff are reclaimed by the stale sweep.
+            # Unknown/older cleanup owners retain their anchor and its dependency holds.
             hold_pr_workflow_selection "$anchor_commit" "$anchor_exec_dir" || exit 1
             echo "scripts/pr wrapper in this worktree $wrapper_route_reason; running wrapper code materialized from the $anchor_reference trust anchor at revision $(pr_git -C "$script_parent_dir" rev-parse --short "$anchor_commit")." >&2
+            pr_bind_git_invocation || exit 1
             # Bash 3.2 clears traps even when exec fails; errexit must be off
             # until we reinstall cleanup on the failure-only continuation.
             shopt -s execfail
@@ -901,11 +1060,11 @@ elif common_git_dir=$(pr_git -C "$script_parent_dir" rev-parse --path-format=abs
             OPENCLAW_PR_ANCHOR_REPO_ROOT="$canonical_repo_root" \
               OPENCLAW_PR_ANCHOR_CREATOR_PID="$$" OPENCLAW_PR_ANCHOR_FD=9 \
               exec "$anchor_exec_dir/scripts/pr" "$@"
-            trap 'rm -rf "$anchor_exec_dir"' EXIT
+            trap 'pr_retire_created_anchor "$anchor_exec_dir" || true' EXIT
             echo "Unable to execute the materialized scripts/pr wrapper." >&2
             exit 1
           fi
-          rm -rf "$anchor_exec_dir"
+          pr_retire_created_anchor "$anchor_exec_dir"
           trap - EXIT HUP INT QUIT TERM
           exec 9<&-
         fi
@@ -996,7 +1155,7 @@ if [ "${1-}" = "gc" ] || is_locked_pr_command "${1-}"; then
     set +e
     exec node "$script_parent_dir/pr-lib/process-group-runner.mjs" "$canonical_repo_root" "$script_self" "$@"
     if [ "${OPENCLAW_PR_ANCHOR_CREATOR_PID:-}" = "$$" ] && [ "${OPENCLAW_PR_ANCHOR_FD:-}" = 9 ]; then
-      trap 'node "$script_parent_dir/pr-lib/materialized-anchor.mjs" retire "$script_self" || true' EXIT
+      trap 'pr_retire_created_anchor "$pr_bootstrap_anchor" || true' EXIT
     fi
     echo "Unable to execute the scripts/pr supervisor." >&2
     exit 1
@@ -1315,6 +1474,9 @@ main() {
   esac
 
   require_cmds
+  # Report missing normal tools before optional adapter prerequisites. Verified
+  # handoffs bind earlier because older wrappers can dispatch bare Git directly.
+  pr_bind_git_invocation || return 1
 
   case "$cmd" in
     review-validate-artifacts) review_artifact_preflight "${1-}" || return 1 ;;

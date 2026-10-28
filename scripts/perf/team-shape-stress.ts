@@ -2,6 +2,7 @@
  * Reusable isolated dist-Gateway stress campaign. Usage and metric caveats:
  * scripts/perf/team-shape-stress.md. Run with node --import ./scripts/tsx.mjs.
  * This controller never connects to an existing Gateway or builds either revision.
+ * --auth-availability-storm seeds a shared synthetic profile and alternates primary HTTP 429/success.
  */
 import { createHash } from "node:crypto";
 import {
@@ -34,6 +35,7 @@ const headlineMetrics = new Set([
   "sampledSurvivorMiBPerSecond",
   "gcSecondsPerMinute",
   "eventLoopP99Ms",
+  "eventLoopP999Ms",
   "sessionsListP99Ms",
   "rssMiB",
   "heapMiB",
@@ -55,6 +57,7 @@ export function parseStressOptions(args: string[]) {
       clients: { type: "string", default: "65" },
       runs: { type: "string", default: "4" },
       sessions: { type: "string", default: "10800" },
+      agents: { type: "string", default: "4" },
       plugins: { type: "string", default: "40" },
       seed: { type: "string", default: "1711" },
       now: { type: "string", default: String(Date.now()) },
@@ -70,7 +73,9 @@ export function parseStressOptions(args: string[]) {
       "operator-model-policy": { type: "boolean" },
       "gateway-preload": { type: "string" },
       "worker-heap-snapshot": { type: "boolean" },
+      "knowledge-worker-heap": { type: "boolean" },
       "worktree-tool-churn": { type: "boolean" },
+      "auth-availability-storm": { type: "boolean" },
       port: { type: "string" },
       help: { type: "boolean" },
     },
@@ -118,6 +123,7 @@ export function parseStressOptions(args: string[]) {
     clients: integer("clients", 4),
     runs: integer("runs", 1),
     sessions: integer("sessions", 100),
+    agents: integer("agents", 1),
     plugins,
     seed: integer("seed", 0),
     now: integer("now", 1),
@@ -132,7 +138,9 @@ export function parseStressOptions(args: string[]) {
     operatorModelPolicy: values["operator-model-policy"] ?? false,
     gatewayPreload: values["gateway-preload"] ? path.resolve(values["gateway-preload"]) : undefined,
     workerHeapSnapshot: values["worker-heap-snapshot"] ?? false,
+    knowledgeWorkerHeap: values["knowledge-worker-heap"] ?? false,
     worktreeToolChurn: values["worktree-tool-churn"] ?? false,
+    authAvailabilityStorm: values["auth-availability-storm"] ?? false,
     port,
     help: values.help,
   };
@@ -186,11 +194,11 @@ async function main() {
   if (options.help) {
     console.log(`Usage: node --import ./scripts/tsx.mjs scripts/perf/team-shape-stress.ts
   --base <built-repo> --candidate <built-repo> --output <new-dir>
-  [--minutes 10 --pairs 2 --clients 65 --runs 4 --sessions 10800 --plugins 40]
+  [--minutes 10 --pairs 2 --clients 65 --runs 4 --sessions 10800 --agents 4 --plugins 40]
   [--mode both|timing|allocation|retention --poll-ms 25000 --list-weight 16 --round-ms 60000 --churn-ms 6000]
   [--warmup-ms 60000 --seed 1711 --transcript-mib 128]
   [--aa-pairs 0: insert a baseline/baseline control after each of the first N pairs]
-  [--operator-model-policy]
+  [--operator-model-policy --auth-availability-storm]
   --smoke-seconds 30 is setup proof only, never performance evidence.
 Timing and allocation are separate fresh-fixture passes. Pairs run AB then BA.
 Without --base, run candidate once per mode. See team-shape-stress.md.`);
@@ -260,6 +268,7 @@ Without --base, run candidate once per mode. See team-shape-stress.md.`);
             "./scripts/tsx.mjs",
             "scripts/perf/team-shape-stress.ts",
             "--fixture-only",
+            ...(options.authAvailabilityStorm ? ["--auth-availability-storm"] : []),
             "--output",
             state,
             "--port",
@@ -270,6 +279,8 @@ Without --base, run candidate once per mode. See team-shape-stress.md.`);
             String(options.now),
             "--sessions",
             String(options.sessions),
+            "--agents",
+            String(options.agents),
             "--transcript-mib",
             String(options.transcriptMiB),
           ],
@@ -292,10 +303,12 @@ Without --base, run candidate once per mode. See team-shape-stress.md.`);
             "--scenario",
             "memory-soak",
             "--team-stress",
+            ...(options.knowledgeWorkerHeap ? ["--knowledge-worker-heap"] : []),
             ...(options.gatewayPreload ? ["--gateway-preload", options.gatewayPreload] : []),
             "--mixed-rpc",
             "--stress-tools",
             "--stress-subagents",
+            ...(options.authAvailabilityStorm ? ["--auth-availability-storm"] : []),
             ...(options.worktreeToolChurn ? ["--worktree-tool-churn"] : []),
             ...(options.operatorModelPolicy ? ["--operator-model-policy"] : []),
             "--clients",
@@ -389,5 +402,10 @@ Without --base, run candidate once per mode. See team-shape-stress.md.`);
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  await main();
+  if (process.argv.includes("--restart-chaos")) {
+    const { runRestartStress } = await import("./team-shape-restart-stress.ts");
+    await runRestartStress(process.argv.slice(2));
+  } else {
+    await main();
+  }
 }

@@ -9,6 +9,7 @@ import {
 import type { VaultAccess } from "./access.js";
 import { pluginFilesLocation } from "./plugin-files.js";
 import type { StoreConfig } from "./real-vault.js";
+import { KnowledgeRestartError } from "./restart-error.js";
 import type { StorageOperations } from "./storage-host.js";
 import { AUTHORITY_REVOKED, type HostMessage, type WorkerMessage } from "./storage-protocol.js";
 
@@ -27,6 +28,7 @@ const SDK_MODULES = [
   "openclaw/plugin-sdk/feature-contract",
   "openclaw/plugin-sdk/routing",
   "openclaw/plugin-sdk/sqlite-worker-runtime",
+  "openclaw/plugin-sdk/text-utility-runtime",
 ];
 // Resolve through whatever resolver the host installed for this plugin module.
 export function sdkUrls(): Record<string, string> {
@@ -84,12 +86,18 @@ export class StorageClient {
       );
     });
   }
-  /** Stop the worker. Outstanding calls fail; the next call starts a new worker. */
-  close() {
+  /** Stop the worker and resolve once it has exited. Outstanding calls fail;
+   * the next call starts a new worker. */
+  async close() {
     const worker = this.worker;
     this.worker = undefined;
-    this.fail(new Error("Knowledge storage stopped; retry the original request."));
-    void worker?.terminate();
+    this.fail(
+      new KnowledgeRestartError(
+        "storage-stopped",
+        "Knowledge storage stopped; retry the original request.",
+      ),
+    );
+    await worker?.terminate();
   }
   private start(): Worker {
     if (this.worker) {

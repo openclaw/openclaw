@@ -1,10 +1,11 @@
 /* @vitest-environment jsdom */
 
 import { createSignal, flush } from "solid-js";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { pt_BR } from "../../i18n/locales/pt-BR.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { installLogsViewport } from "./logs-layout.test-support.ts";
 import { LogsView, type LogsProps } from "./view.tsx";
 
 const raw = '{"level":"info","message":"matched line"}';
@@ -15,7 +16,7 @@ function createProps(overrides: Partial<LogsProps> = {}): LogsProps {
     refreshDisabled: false,
     status: { error: null, hasLoaded: false, stale: false, awaitingGateway: false },
     file: null,
-    entries: [{ raw, level: "info" }],
+    entries: [{ id: 0, raw, level: "info" }],
     filterText: "",
     levelFilters: { trace: true, debug: true, info: true, warn: true, error: true, fatal: true },
     autoFollow: true,
@@ -26,9 +27,15 @@ function createProps(overrides: Partial<LogsProps> = {}): LogsProps {
     onRefresh: vi.fn(),
     onExport: vi.fn(),
     onScroll: vi.fn(),
+    onStreamRef: (element) => {
+      // jsdom has no native scrolling; browser scenarios cover reader positioning.
+      element.scrollTo = () => undefined;
+    },
     ...overrides,
   };
 }
+
+beforeEach(installLogsViewport);
 
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -42,6 +49,7 @@ it("formats only new rows until the locale or effective timezone changes", async
   const props = createProps({
     status: { error: null, hasLoaded: true, stale: false, awaitingGateway: false },
     entries: allTimes.map((time, index) => ({
+      id: index,
       time,
       raw: "log entry",
       message: index === 0 ? "keep initial" : "other entry",
@@ -93,7 +101,10 @@ it("formats only new rows until the locale or effective timezone changes", async
   }
 
   const appendedTime = "2026-09-22T18:10:00Z";
-  setEntries((rows) => [...rows, { time: appendedTime, raw: "keep appended" }]);
+  setEntries((rows) => [
+    ...rows,
+    { id: allTimes.length, time: appendedTime, raw: "keep appended" },
+  ]);
   expectTimes([...allTimes, appendedTime], "en", 1);
 
   filterInput.value = "keep";
@@ -102,7 +113,7 @@ it("formats only new rows until the locale or effective timezone changes", async
 
   timeZone = "America/Los_Angeles";
   const nextTime = "2026-09-22T20:00:00Z";
-  setEntries((rows) => [...rows, { time: nextTime, raw: "keep next" }]);
+  setEntries((rows) => [...rows, { id: allTimes.length + 1, time: nextTime, raw: "keep next" }]);
   expectTimes([validTimes[0], appendedTime, nextTime], "en");
 
   timeZone = "Asia/Tokyo";

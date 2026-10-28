@@ -1,3 +1,5 @@
+// install-scope-snapshot clones a fresh snapshot after each import; install-scope-receive
+// also installs that clone into a retained receiver. Neither models worker scheduling.
 // Exact owner publication proof over synthetic records; no native SQLite or Gateway claims.
 // install-scope-reference follows each scope import with a reference-only install, using
 // 40 databases with 1,000 session/context keys. Example (also use allocation or counts):
@@ -11,6 +13,7 @@ import { stripTypeScriptTypes } from "node:module";
 import { loadavg, tmpdir } from "node:os";
 import path from "node:path";
 import { performance, PerformanceObserver } from "node:perf_hooks";
+import { mock } from "node:test";
 import { setImmediate as yieldTurn, setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { getEnvironmentData } from "node:worker_threads";
@@ -27,10 +30,19 @@ const [
 ] = process.argv.slice(2);
 assert(
   sourceRoot && ownerFile,
-  "usage: node --expose-gc SCRIPT SOURCE_ROOT OWNER_FILE LABEL [timing|allocation|counts] [OPERATIONS] [WARMUP] [TOUCHED] [release|install|install-scope|install-scope-reference]",
+  "usage: node --expose-gc SCRIPT SOURCE_ROOT OWNER_FILE LABEL [timing|allocation|counts] [OPERATIONS] [WARMUP] [TOUCHED] [release|install|install-scope|install-scope-reference|install-scope-snapshot|install-scope-receive]",
 );
 assert(["timing", "allocation", "counts"].includes(mode));
-assert(["release", "install", "install-scope", "install-scope-reference"].includes(operation));
+assert(
+  [
+    "release",
+    "install",
+    "install-scope",
+    "install-scope-reference",
+    "install-scope-snapshot",
+    "install-scope-receive",
+  ].includes(operation),
+);
 assert(globalThis.gc, "--expose-gc required for cleanup outside measurement");
 const operations = Number(count);
 const warmup = Number(warmupCount);
@@ -69,10 +81,12 @@ writeFileSync(moduleFile, code);
 const { SqliteDatabaseAdmissionRegistry, SqliteDatabaseGenerationSlot } = await import(
   pathToFileURL(moduleFile).href
 );
+// Base/candidate source capsules may use the old flat Map or the bucket wire format.
+const wireScopes = (scopes) => (source.includes("type AdmissionSnapshot =") ? [scopes] : scopes);
 const databaseCount = 40;
-const scopesPerDatabase = operation === "install-scope-reference" ? 1000 : 3000;
+const scopesPerDatabase = operation.startsWith("install-scope-") ? 1000 : 3000;
 const scopeKey = (name) =>
-  operation === "install-scope-reference"
+  operation.startsWith("install-scope-")
     ? JSON.stringify(["session", name, "model-context"])
     : name;
 const worker = 100;
@@ -101,7 +115,7 @@ function fixture() {
         state: new Int32Array(new SharedArrayBuffer(12)),
       });
     }
-    registry.install([record]);
+    registry.install([{ ...record, writeScopes: wireScopes(record.writeScopes) }]);
     records.push(registry.records.get(record.identity));
   }
   return { registry, records };
@@ -121,6 +135,11 @@ for (const touched of scenarios) {
   const targets = records.slice(0, touched);
   const refs = new SharedArrayBuffer(8);
   let installedScopes = 0;
+  let materializedEntries = 0;
+  const receiver = new SqliteDatabaseAdmissionRegistry();
+  if (operation === "install-scope-receive") {
+    receiver.install(structuredClone(registry.capture()));
+  }
   const run = () => {
     Atomics.store(new Int32Array(refs), 0, 1);
     if (operation === "release") {
@@ -139,9 +158,30 @@ for (const touched of scenarios) {
             state: new Int32Array(new SharedArrayBuffer(12)),
           });
         }
-        return { ...record, facts: new Map(), writeScopes, references: new Map([[worker, refs]]) };
+        return {
+          ...record,
+          facts: new Map(),
+          writeScopes: wireScopes(writeScopes),
+          references: new Map([[worker, refs]]),
+        };
       });
       registry.install(incoming);
+      if (operation === "install-scope-snapshot" || operation === "install-scope-receive") {
+        const snapshot = registry.capture(undefined, { admissions: incoming });
+        const writes = mode === "counts" ? mock.method(Map.prototype, "set") : undefined;
+        let cloned;
+        try {
+          cloned = structuredClone(snapshot);
+        } finally {
+          if (writes) {
+            materializedEntries += writes.mock.callCount();
+            writes.mock.restore();
+          }
+        }
+        if (operation === "install-scope-receive") {
+          receiver.install(cloned);
+        }
+      }
       if (operation === "install-scope-reference") {
         registry.install(
           targets.map((record) => {
@@ -149,7 +189,7 @@ for (const touched of scenarios) {
             return {
               ...record,
               facts: new Map(),
-              writeScopes: new Map(),
+              writeScopes: wireScopes(new Map()),
               references: new Map([[worker + 1, refs]]),
             };
           }),
@@ -160,6 +200,7 @@ for (const touched of scenarios) {
   for (let i = 0; i < warmup; i++) {
     run();
   }
+  materializedEntries = 0;
   let visits = 0;
   let publications = 0;
   if (mode === "counts") {
@@ -243,7 +284,11 @@ for (const touched of scenarios) {
   if (operation.startsWith("install-scope") && touched > 0) {
     assert(
       snapshot.some((record) =>
-        record.writeScopes.has(scopeKey(`installed-${installedScopes - 1}`)),
+        Array.isArray(record.writeScopes)
+          ? record.writeScopes.some((bucket) =>
+              bucket.has(scopeKey(`installed-${installedScopes - 1}`)),
+            )
+          : record.writeScopes.has(scopeKey(`installed-${installedScopes - 1}`)),
       ),
     );
   }
@@ -251,6 +296,7 @@ for (const touched of scenarios) {
   results.push({
     touched,
     operations,
+    materializedEntries: mode === "counts" ? materializedEntries : undefined,
     scopeVisits: mode === "counts" ? visits : undefined,
     publications: mode === "counts" ? publications : undefined,
     elapsedMs,
