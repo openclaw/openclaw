@@ -12,7 +12,7 @@ import {
 } from "./chat-display-projection.core.js";
 import {
   dropPreSessionStartAnnouncePairs,
-  isHeartbeatHistoryTurnBoundaryMessage,
+  isProjectedHistoryTurnBoundaryMessage,
 } from "./chat-display-projection.history.js";
 import { attachChatHistoryReplyMessages } from "./chat-history-reply-messages.js";
 import { prepareChatHistoryResponsePage } from "./chat-history-response-page.js";
@@ -162,7 +162,7 @@ export async function readChatHistoryPageKernel(
         ...(options.deferProfileDisplay
           ? {}
           : { resolveCurrentUserProfileDisplay: options.resolveCurrentUserProfileDisplay }),
-        turnBoundaryPending: isHeartbeatHistoryTurnBoundaryMessage(overreadContextMessage),
+        turnBoundaryPending: isProjectedHistoryTurnBoundaryMessage(overreadContextMessage),
       });
     const projection = project(localMessages);
     let projected = projection.messages;
