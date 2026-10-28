@@ -545,7 +545,7 @@ suite.define(() => {
                   Object.values(row.images ?? {}),
                 ),
               )
-              .filter((image) => image.thumbnail instanceof Blob);
+              .flatMap((image) => (image.thumbnail instanceof Blob ? [image.thumbnail.size] : []));
             const images = [
               ...(threadElement?.querySelectorAll<HTMLImageElement>(".chat-image-frame img") ?? []),
             ];
@@ -556,6 +556,7 @@ suite.define(() => {
             ];
             return (
               thumbnails.length === 2 &&
+              thumbnails.every((bytes) => bytes >= 32 * 1024 && bytes <= 96 * 1024) &&
               images.length === 2 &&
               images.every(
                 (image) =>
@@ -573,9 +574,6 @@ suite.define(() => {
           expect(response.headers()["cache-control"]).toBe(
             index === 0 ? "private, no-store" : "private, no-cache",
           );
-          const bytes = (await response.body()).length;
-          expect(bytes).toBeGreaterThanOrEqual(32 * 1024);
-          expect(bytes).toBeLessThanOrEqual(96 * 1024);
         }
         await page.evaluate(async () => {
           await Reflect.get(
