@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { materializeErrorStack } from "openclaw/plugin-sdk/error-runtime";
 import { resolveGlobalMap, resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { XCostLimits } from "./cost-limits.js";
@@ -101,6 +102,7 @@ function createSpendOwner(runtime: SpendRuntime, accountId: string, getLimits: (
           failure = new Error("X spend accounting unavailable; paid requests paused", {
             cause: error,
           });
+          materializeErrorStack(failure);
           notify();
         }
         throw error;
@@ -336,6 +338,7 @@ function createSpendOwner(runtime: SpendRuntime, accountId: string, getLimits: (
     },
     async close() {
       failure = new Error("X spend owner closed; pending reservations retained for recovery");
+      materializeErrorStack(failure);
       await tail;
     },
   };

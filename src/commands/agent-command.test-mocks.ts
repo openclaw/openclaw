@@ -1,4 +1,4 @@
-// Agent command test mocks replace logging and runtime-heavy modules shared by agent command suites.
+// Agent command test mocks replace runtime-heavy modules shared by agent command suites.
 import { vi } from "vitest";
 import { getAgentHarnessPluginMocks } from "./agent-command-state.test-mocks.js";
 
@@ -19,24 +19,6 @@ vi.mock("../agents/runtime-plugins.js", async () => {
       const registry = createEmptyPluginRegistry();
       return { registry, primaryRegistry: registry };
     },
-  };
-});
-
-vi.mock("../logging/subsystem.js", () => {
-  const createMockLogger = () => ({
-    subsystem: "test",
-    isEnabled: vi.fn(() => true),
-    trace: vi.fn(),
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-    debug: vi.fn(),
-    fatal: vi.fn(),
-    raw: vi.fn(),
-    child: vi.fn(() => createMockLogger()),
-  });
-  return {
-    createSubsystemLogger: vi.fn(() => createMockLogger()),
   };
 });
 

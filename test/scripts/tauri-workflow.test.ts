@@ -15,6 +15,17 @@ const windowsBuild = buildStep(windowsJob.steps);
 const override = (step: Step) =>
   JSON.parse(step.run!.match(/--config (['"])(.+)\1/)![2]!.replaceAll('\\"', '"'));
 
+it("stops Windows boundary checks when the Node fixtures fail", () => {
+  const boundary = windowsJob.steps.find(
+    (step: Step) => step.name === "Verify Windows runtime, installer, and desktop boundaries",
+  );
+  expect(boundary.run.trim().split("\n")).toEqual([
+    "node --test ../scripts/test-stage-runtime.mjs ../scripts/test-stage-package.mjs",
+    "if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }",
+    "cargo +stable test --locked --bin openclaw-desktop",
+  ]);
+});
+
 it("keeps Node without workspace dependencies for the macOS Cargo tests", () => {
   const job = workflow.jobs["test-macos"];
   expect(setupStep("test-macos").with).toMatchObject({

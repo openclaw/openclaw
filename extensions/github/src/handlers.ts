@@ -84,8 +84,7 @@ async function handleGitHubRequest(
   if (
     !parsed ||
     (sessionHost && (typeof params.sessionKey !== "string" || !params.sessionKey.trim())) ||
-    (method === "github.preview" &&
-      (parsed.target.kind === "commit" || parsed.section !== undefined))
+    (method === "github.preview" && parsed.section !== undefined)
   ) {
     respond(
       false,

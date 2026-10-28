@@ -43,11 +43,18 @@ async function withSession<T>(
 }
 
 const stateOptions = () => ({ env: sharedState.env });
+function readCredit(
+  scope: ReturnType<typeof sessionScope>,
+  overrides: Partial<Parameters<typeof resolveGitCoauthorAttribution>[0]> = {},
+) {
+  return resolveGitCoauthorAttribution({ ...scope, config: {}, ...overrides });
+}
 function setCredit(profileId: string, value: unknown) {
   return setUserPreferences(profileId, { [GIT_COAUTHOR_PREFERENCE_KEY]: value }, stateOptions());
 }
 
-function linkedProfile(email: string, accountId: number, login: string) {
+function linkedProfile(login: string, accountId: number) {
+  const email = `${login}@example.test`;
   const options = stateOptions();
   const profile = ensureProfileForEmail(email, options);
   syncGitHubIdentity(
@@ -82,20 +89,20 @@ it("does not export unrelated shared-main participants into a Discord task's com
   await withSession("main", async (scope) => {
     await upsertSessionEntryCore(scope, { sessionId: "shared-discord-credit", updatedAt: 1 });
     const profiles = [
-      { email: "task-requester@example.test", accountId: 9101, login: "task-requester" },
-      { email: "unrelated-a@example.test", accountId: 9102, login: "unrelated-a" },
-      { email: "unrelated-b@example.test", accountId: 9103, login: "unrelated-b" },
-    ].map(({ email, accountId, login }) => linkedProfile(email, accountId, login));
-    for (const profile of profiles.slice(1)) {
+      [9101, "task-requester"],
+      [9102, "unrelated-a"],
+      [9103, "unrelated-b"],
+    ] as const;
+    const linked = profiles.map(([id, login]) => linkedProfile(login, id));
+    for (const profile of linked.slice(1)) {
       participant(scope, profile, 1);
     }
-    const attribution = await resolveGitCoauthorAttribution({
-      ...scope,
+    const attribution = await readCredit(scope, {
       config: { session: { groupScope: "main" } },
-      requesterProfileId: profiles[0]!.id,
+      requesterProfileId: linked[0]!.id,
     });
     expect(attribution).toMatchObject(expectedCredit([9101, "task-requester"]));
-    expect(await resolveGitCoauthorAttribution({ ...scope, config: {} })).toBeUndefined();
+    expect(await readCredit(scope)).toBeUndefined();
   });
 });
 it("resolves credit from the configured templated session store", async () => {
@@ -107,19 +114,16 @@ it("resolves credit from the configured templated session store", async () => {
     const entry = { sessionId: "custom-store-credit", updatedAt: 1 };
     await upsertSessionEntryCore(scope, entry);
     await upsertSessionEntryCore({ ...scope, storePath }, entry);
-    const profile = linkedProfile("ada@example.test", 20, "ada");
+    const profile = linkedProfile("ada", 20);
     participant({ ...scope, storePath }, profile, 1);
 
     expect(
-      await resolveGitCoauthorAttribution({
-        ...scope,
+      await readCredit(scope, {
         config,
         storePath: state.statePath("agents", "main", "agent", "openclaw-agent.sqlite"),
       }),
     ).toBeUndefined();
-    expect(await resolveGitCoauthorAttribution({ ...scope, config })).toEqual(
-      expectedCredit([20, "ada"]),
-    );
+    expect(await readCredit(scope, { config })).toEqual(expectedCredit([20, "ada"]));
   });
 });
 
@@ -137,7 +141,7 @@ it("derives exact bounded trailers only from canonical profile-backed humans", a
       ["defaulted", 35, undefined, 206, 0],
       ["malformed", 45, "yes", 207, 0],
     ] as const) {
-      const profile = linkedProfile(`${login}@example.test`, accountId, login);
+      const profile = linkedProfile(login, accountId);
       if (credit !== undefined) {
         expect(setCredit(profile.id, credit)).toMatchObject({ ok: true });
       }
@@ -146,10 +150,10 @@ it("derives exact bounded trailers only from canonical profile-backed humans", a
         participant(scope, profile, 400);
       }
     }
-    const current = linkedProfile("current@example.test", 15, "current");
+    const current = linkedProfile("current", 15);
     expect(setCredit(current.id, true)).toMatchObject({ ok: true });
     participant(scope, ensureProfileForEmail("unlinked@example.test", stateOptions()), 208);
-    const legacy = ensureProfileForEmail("legacy@example.test", { env: state.env });
+    const legacy = ensureProfileForEmail("legacy@example.test", stateOptions());
     openOpenClawStateDatabase({ env: state.env })
       .db.prepare(
         "INSERT INTO user_profile_identities (provider, subject, profile_id, canonical_login, created_at) VALUES (?, ?, ?, ?, ?)",
@@ -173,8 +177,7 @@ it("derives exact bounded trailers only from canonical profile-backed humans", a
     });
 
     const read = (email: string, excludeAccountId?: number) =>
-      resolveGitCoauthorAttribution({
-        ...scope,
+      readCredit(scope, {
         config: {
           tools: {
             github: {
@@ -207,8 +210,8 @@ it("combines historical profile contributions under one verified GitHub account"
   await withSession("merged-coauthors", async (scope, state) => {
     await upsertSessionEntryCore(scope, { sessionId: "merged-coauthors", updatedAt: 1 });
     const oldProfile = ensureProfileForEmail("old@example.test", { env: state.env });
-    const mergedProfile = linkedProfile("merged@example.test", 20, "merged");
-    const otherProfile = linkedProfile("other@example.test", 10, "other");
+    const mergedProfile = linkedProfile("merged", 20);
+    const otherProfile = linkedProfile("other", 10);
     setCredit(mergedProfile.id, true);
     setCredit(otherProfile.id, true);
     for (const [profile, promptedAt] of [
@@ -234,19 +237,15 @@ it("combines historical profile contributions under one verified GitHub account"
       .run(oldProfile.id);
     linkEmail("old@example.test", mergedProfile.id, { env: state.env });
 
-    expect(await resolveGitCoauthorAttribution({ ...scope, config: {} })).toMatchObject(
-      expectedCredit([10, "other"], [20, "merged"]),
-    );
+    expect(await readCredit(scope)).toMatchObject(expectedCredit([10, "other"], [20, "merged"]));
   });
 });
 
 it("uses current identity and consent for inherited credit without counting it twice", async () => {
   await withSession("delegated-credit", async (scope, state) => {
-    const original = ensureProfileForEmail("delegation-original@example.test", {
-      env: state.env,
-    });
-    const current = linkedProfile("delegation-current@example.test", 901, "current-contributor");
-    const later = linkedProfile("delegation-later@example.test", 902, "later-contributor");
+    const original = ensureProfileForEmail("delegation-original@example.test", stateOptions());
+    const current = linkedProfile("current-contributor", 901);
+    const later = linkedProfile("later-contributor", 902);
     await upsertSessionEntryCore(scope, {
       sessionId: "delegated-credit",
       updatedAt: 1,
@@ -255,7 +254,7 @@ it("uses current identity and consent for inherited credit without counting it t
     });
     participant(scope, current, 1);
     linkEmail("delegation-original@example.test", current.id, { env: state.env });
-    const read = () => resolveGitCoauthorAttribution({ ...scope, config: {} });
+    const read = () => readCredit(scope);
 
     expect(await read()).toEqual(
       expectedCredit([901, "current-contributor"], [902, "later-contributor"]),
@@ -264,8 +263,6 @@ it("uses current identity and consent for inherited credit without counting it t
     expect((await read())?.logins).toEqual(["current-contributor"]);
     setCredit(later.id, true);
     expect((await read())?.logins).toEqual(["current-contributor", "later-contributor"]);
-    expect(
-      await resolveGitCoauthorAttribution({ ...scope, config: {}, sessionId: "replaced-child" }),
-    ).toBeUndefined();
+    expect(await readCredit(scope, { sessionId: "replaced-child" })).toBeUndefined();
   });
 });

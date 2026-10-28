@@ -1,4 +1,5 @@
 import { isResponsesOutputLimitToolCallError } from "@openclaw/ai/diagnostics";
+import { prepareSystemPrompt } from "@openclaw/ai/internal/shared";
 import {
   createEmptyTransportUsage,
   replaceCompactionReplayOwnerContent,
@@ -24,7 +25,9 @@ import {
   runAgentCoreStream,
 } from "./runtime-deps.js";
 import { createStreamSteering } from "./stream-steering.js";
-import { normalizeCoreContextMessages } from "./turn-interruption.js";
+import { mergeToolExecutionFailure } from "./tool-batch-completion.js";
+import type { FinalizedToolCallOutcome } from "./tool-call-outcome.js";
+import { resolveAgentAssistantTurnId } from "./tool-execution-context.js";
 import { withToolResultContentSource } from "./turn-taint.js";
 import type {
   AgentContext,
@@ -43,6 +46,7 @@ export type AgentEventSink = (event: AgentEvent) => Promise<void> | void;
 export type AsyncToolBatchScheduling = {
   waitForPrevious: () => Promise<void>;
   onParallelStarted: () => void;
+  onTerminalLoop: () => void;
   hasUnobservedAsyncToolResults: boolean;
 };
 
@@ -55,19 +59,6 @@ export type ExecutedToolCallBatch = {
   intervention?: ToolLoopIntervention;
   fatal?: { error: unknown };
 };
-
-function resolveAssistantMessageUpdate(
-  event: Extract<AssistantMessageEvent, { contentIndex: number }>,
-  currentMessage: AssistantMessage,
-): AssistantMessage {
-  if ("partial" in event && event.partial) {
-    return event.partial;
-  }
-  if (event.type !== "text_delta") {
-    return currentMessage;
-  }
-  return appendTextDeltaToAssistantMessage(currentMessage, event.contentIndex, event.delta);
-}
 
 function removeNonExecutableToolCalls(message: AssistantMessage): AssistantMessage {
   if (message.stopReason === "toolUse") {
@@ -93,6 +84,38 @@ function ensureToolTurnIdentity(message: AssistantMessage): AssistantMessage {
   }
   // message_end persists this local identity before any tool can execute.
   return { ...message, turnId: uuidv7() };
+}
+
+export function emitToolExecutionStart(
+  batch: { emit: AgentEventSink },
+  toolCall: AgentToolCall,
+  hideFromChannelProgress: boolean,
+): ReturnType<AgentEventSink> {
+  return batch.emit({
+    type: "tool_execution_start",
+    toolCallId: toolCall.id,
+    toolName: toolCall.name,
+    args: toolCall.arguments,
+    ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
+  });
+}
+
+export async function emitToolExecutionEnd(
+  finalized: FinalizedToolCallOutcome,
+  batch: { emit: AgentEventSink; assistantMessage: AssistantMessage },
+): Promise<void> {
+  const assistantTurnId = resolveAgentAssistantTurnId(batch.assistantMessage);
+  await batch.emit({
+    type: "tool_execution_end",
+    toolCallId: finalized.toolCall.id,
+    ...(assistantTurnId ? { assistantTurnId } : {}),
+    toolName: finalized.toolCall.name,
+    result: finalized.result,
+    isError: finalized.isError,
+    executionStarted: finalized.executionStarted,
+    ...(finalized.errorKind ? { errorKind: finalized.errorKind } : {}),
+    ...(finalized.hideFromChannelProgress === true ? { hideFromChannelProgress: true } : {}),
+  });
 }
 
 export async function emitToolResultMessage(
@@ -152,13 +175,32 @@ export async function streamAgentResponse(
     const transformed = config.transformContext
       ? await config.transformContext(messages, projectionSignal)
       : messages;
-    return config.convertToLlm(normalizeCoreContextMessages(transformed));
+    return config.convertToLlm(
+      transformed.map<AgentMessage>((message) => {
+        if (message.role !== "custom" || message.customType !== "openclaw:turn-aborted") {
+          return message;
+        }
+        return {
+          role: "user",
+          content:
+            typeof message.content === "string"
+              ? [{ type: "text", text: message.content }]
+              : message.content,
+          timestamp: message.timestamp,
+        };
+      }),
+    );
   };
   const llmMessages = await convertMessages(sourceMessages);
   let requestPrefix: string | undefined;
 
+  context.preparedSystemPrompt = prepareSystemPrompt(
+    context.systemPrompt,
+    context.preparedSystemPrompt,
+  );
   const llmContext: Context = {
     systemPrompt: context.systemPrompt,
+    preparedSystemPrompt: context.preparedSystemPrompt,
     messages: llmMessages,
     tools: context.tools,
   };
@@ -175,9 +217,16 @@ export async function streamAgentResponse(
     : executionAbort.signal;
   const modelAbort = new AbortController();
   const requestSignal = AbortSignal.any([executionSignal, modelAbort.signal]);
+  let repeatedToolErrorTerminated = false;
+  const onTerminalLoop = () => {
+    // Stop sampling before ordered publication waits for already-started effects.
+    repeatedToolErrorTerminated = true;
+    modelAbort.abort(new Error("Tool batch terminated"));
+  };
   const abortFailedResponse = (message?: AssistantMessage) => {
     if (
       message &&
+      !repeatedToolErrorTerminated &&
       (message.stopReason === "error" || message.stopReason === "aborted") &&
       message.errorCode !== REPETITIVE_OUTPUT_ERROR_CODE &&
       !isResponsesOutputLimitToolCallError(message)
@@ -247,23 +296,36 @@ export async function streamAgentResponse(
     });
     const execution = previousAdmission
       .then(async () => {
-        const batch = await executeAsyncTools(message, calls, executionSignal, emitToolEvent, {
+        // Later queued batches complete as unstarted calls without cancelling active work.
+        let batchSignal = executionSignal;
+        if (repeatedToolErrorTerminated) {
+          batchSignal = AbortSignal.abort(new Error("Tool-loop recovery ended"));
+          // Suppressed batches skip admission and its lifecycle publication barrier.
+          // Sampling already stopped; keep their synthetic results behind earlier work.
+          await previousExecutions;
+        }
+        const batch = await executeAsyncTools(message, calls, batchSignal, emitToolEvent, {
           waitForPrevious: () => previousExecutions,
           onParallelStarted: releaseAdmission,
+          onTerminalLoop,
           hasUnobservedAsyncToolResults,
         });
         batches.push(batch);
-        if (batch.fatal || batch.terminateRun) {
+        if (
+          batch.fatal ||
+          (batch.terminateRun && batch.intervention?.detector !== "repeated_tool_error")
+        ) {
           executionAbort.abort(batch.fatal?.error ?? new Error("Tool batch terminated"));
         }
       })
       .catch((error: unknown) => {
-        executionFailure ??= { error };
+        executionFailure = mergeToolExecutionFailure(executionFailure, error);
         executionAbort.abort(error);
       })
       .finally(releaseAdmission);
     executions = Promise.all([previousExecutions, execution]).then(() => {});
   };
+  let responseFailure: ExecutedToolCallBatch["fatal"];
   try {
     const stream = streamFunction(config.model, llmContext, {
       ...config,
@@ -308,6 +370,26 @@ export async function streamAgentResponse(
           await emit({ type: "message_end", message });
         };
 
+        function projectEvent(
+          event: Extract<AssistantMessageEvent, { contentIndex: number }>,
+          fragment: AssistantMessage,
+          completedToolCall: boolean,
+        ) {
+          // Keep completion events isolated: their original fields govern admission after emit.
+          if (
+            committedContentCount === 0 &&
+            !completedToolCall &&
+            (!("partial" in event) || event.partial === fragment)
+          ) {
+            return event;
+          }
+          const projected = { ...event, contentIndex: event.contentIndex - committedContentCount };
+          if ("partial" in event) {
+            projected.partial = fragment;
+          }
+          return projected;
+        }
+
         for await (const event of response) {
           switch (event.type) {
             case "start": {
@@ -330,15 +412,24 @@ export async function streamAgentResponse(
             case "toolcall_end":
               if (partialMessage) {
                 // Only updates assembled here prove appends; provider snapshots can correct text.
-                const priorBlock = partialMessage.content[event.contentIndex];
-                const append =
-                  repetitionGuard && event.type === "text_delta" && event.partial === undefined
-                    ? {
-                        offset: priorBlock?.type === "text" ? priorBlock.text.length : 0,
-                        delta: event.delta,
-                      }
-                    : undefined;
-                const message = resolveAssistantMessageUpdate(event, partialMessage);
+                let append: { offset: number; delta: string } | undefined;
+                if (repetitionGuard && event.type === "text_delta" && event.partial === undefined) {
+                  const priorBlock = partialMessage.content[event.contentIndex];
+                  append = {
+                    offset: priorBlock?.type === "text" ? priorBlock.text.length : 0,
+                    delta: event.delta,
+                  };
+                }
+                let message: AssistantMessage = partialMessage;
+                if ("partial" in event && event.partial) {
+                  message = event.partial;
+                } else if (event.type === "text_delta") {
+                  message = appendTextDeltaToAssistantMessage(
+                    partialMessage,
+                    event.contentIndex,
+                    event.delta,
+                  );
+                }
                 partialMessage = message;
                 if (event.contentIndex < committedContentCount) {
                   break;
@@ -361,41 +452,40 @@ export async function streamAgentResponse(
                 } else {
                   context.messages[partialIndex] = fragment;
                 }
-                const fragmentEvent = {
-                  ...event,
-                  contentIndex: event.contentIndex - committedContentCount,
-                  ...("partial" in event ? { partial: fragment } : {}),
-                };
+                const completedToolCall = event.type === "toolcall_end";
+                const fragmentEvent = projectEvent(event, fragment, completedToolCall);
                 await emit({
                   type: "message_update",
                   assistantMessageEvent: fragmentEvent,
-                  message: { ...fragment },
+                  // Partial-free text already has a fresh envelope; providers still own snapshots.
+                  message:
+                    event.type === "text_delta" && !event.partial
+                      ? Object.freeze(fragment)
+                      : { ...fragment },
                 });
                 if (
-                  event.type === "toolcall_end" &&
+                  completedToolCall &&
                   event.toolCall.async &&
                   !executedIds.has(event.toolCall.id) &&
                   message.content
                     .slice(committedContentCount, event.contentIndex)
                     .every((item) => item.type !== "toolCall" || item.async === true)
                 ) {
-                  const prefix = prepareAssistantMessage(
-                    ensureToolTurnIdentity({
-                      // Persistence takes ownership and freezes nested values. Detach the
-                      // completed prefix from the provider's still-mutable stream, after
-                      // replay checkpoints have been reindexed using original block identity.
-                      ...structuredClone(
-                        replaceCompactionReplayOwnerContent(
-                          message,
-                          message.content.slice(committedContentCount, event.contentIndex + 1),
-                        ),
-                      ),
-                      ...(streamedTurnId ? { turnId: streamedTurnId } : {}),
-                      stopReason: "toolUse",
-                      // Usage belongs to the terminal fragment, once per provider response.
-                      usage: createEmptyTransportUsage(),
-                    }),
+                  // Persistence takes ownership and freezes nested values. Detach the
+                  // completed prefix after reindexing checkpoints using original block identity.
+                  let prefix = structuredClone(
+                    replaceCompactionReplayOwnerContent(
+                      message,
+                      message.content.slice(committedContentCount, event.contentIndex + 1),
+                    ),
                   );
+                  if (streamedTurnId) {
+                    prefix.turnId = streamedTurnId;
+                  }
+                  prefix.stopReason = "toolUse";
+                  // Usage belongs to the terminal fragment, once per provider response.
+                  prefix.usage = createEmptyTransportUsage();
+                  prefix = prepareAssistantMessage(ensureToolTurnIdentity(prefix));
                   streamedTurnId ??= prefix.turnId;
                   // Await transcript persistence before admitting side effects. The model
                   // may keep sampling, but every executed call has a durable owner.
@@ -477,9 +567,37 @@ export async function streamAgentResponse(
       },
       runtime,
     );
+  } catch (error) {
+    responseFailure = { error };
+    throw error;
   } finally {
     executionAbort.abort(new Error("Model response closed"));
     await executions;
-    await steering.finish();
+    if (executionFailure) {
+      responseFailure = mergeToolExecutionFailure(responseFailure, executionFailure.error);
+    }
+    if (responseFailure) {
+      for (const batch of batches) {
+        if (batch.fatal) {
+          responseFailure = mergeToolExecutionFailure(responseFailure, batch.fatal.error);
+        }
+      }
+    }
+    try {
+      await steering.finish();
+    } catch (error) {
+      if (!responseFailure) {
+        for (const batch of batches) {
+          if (batch.fatal) {
+            responseFailure = mergeToolExecutionFailure(responseFailure, batch.fatal.error);
+          }
+        }
+      }
+      responseFailure = mergeToolExecutionFailure(responseFailure, error);
+    }
+    if (responseFailure) {
+      // oxlint-disable-next-line eslint/no-unsafe-finally -- Rethrow the primary and drained failures together.
+      throw responseFailure.error;
+    }
   }
 }

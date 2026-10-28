@@ -1,6 +1,12 @@
 import type { GatewayControlUiPluginWidgetKind } from "../../../api/gateway.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerBoardDocumentEnglish } from "../../../i18n/locales/en-board-document.ts";
+import { registerSessionProgressEnglish } from "../../../i18n/locales/en-session-progress.ts";
 import type { BoardWidget } from "../types.ts";
+
+registerBoardDocumentEnglish();
+
+registerSessionProgressEnglish();
 
 /**
  * Core widget metadata stays independent of the lazy renderers. Preview-safe widgets consume

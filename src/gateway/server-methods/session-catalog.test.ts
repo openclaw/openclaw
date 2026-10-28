@@ -11,6 +11,7 @@ import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
+import { gatewayConnect } from "../server/client-fixtures.test-support.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import {
   catalogHost,
@@ -40,6 +41,24 @@ const { default: sessionSharePlugin } = await loadBundledPluginFacade<{
 
 function useCatalogs(...catalogs: ReturnType<typeof provider>[]) {
   hoisted.activeRegistry.sessionCatalogs = catalogs.map((catalog) => ({ provider: catalog }));
+}
+const listCatalogs = (params: unknown = {}, config: Record<string, unknown> = {}) =>
+  call("sessions.catalog.list", params, config);
+function expectCreateCapability(respond: unknown) {
+  expectCatalog(respond, {
+    capabilities: expect.objectContaining({ createSession: { model: createTarget.model } }),
+  });
+}
+function expectInvalidRequest(respond: unknown, message: string) {
+  expect(respond).toHaveBeenCalledWith(false, undefined, {
+    code: ErrorCodes.INVALID_REQUEST,
+    message,
+  });
+}
+function hostEvent(sessions: unknown[]) {
+  return expect.objectContaining({
+    catalog: expect.objectContaining({ hosts: [expect.objectContaining({ sessions })] }),
+  });
 }
 const noActions = { continueSession: false, archive: false };
 const createTarget = { model: "anthropic/claude-opus-4-8", agentRuntime: "claude-cli" };
@@ -93,7 +112,7 @@ describe("session catalog Gateway methods", () => {
         return [];
       });
       useCatalogs(provider("local", { list }));
-      const pending = call("sessions.catalog.list", {});
+      const pending = listCatalogs();
       try {
         expect(list).not.toHaveBeenCalled();
         expect(asyncExec).toHaveBeenCalledOnce();
@@ -133,12 +152,7 @@ describe("session catalog Gateway methods", () => {
       const config = {};
       const expected = {
         catalogs: [
-          {
-            id: "alpha",
-            label: "ALPHA",
-            capabilities: noActions,
-            hosts: [],
-          },
+          { id: "alpha", label: "ALPHA", capabilities: noActions, hosts: [] },
           {
             id: "zeta",
             label: "ZETA",
@@ -167,7 +181,7 @@ describe("session catalog Gateway methods", () => {
           params: { metadataOnly: true, progressId: "metadata-progress" },
           context,
           respond: metadata,
-          client: { connId: "metadata-client" },
+          client: { connId: "metadata-client", connect: gatewayConnect([]) },
         } as never);
       await readMetadata();
       expect(list).not.toHaveBeenCalled();
@@ -176,7 +190,7 @@ describe("session catalog Gateway methods", () => {
       expect(broadcastToConnIds).not.toHaveBeenCalled();
       expect(metadata).toHaveBeenCalledWith(true, expected);
 
-      const full = await call("sessions.catalog.list", {}, config);
+      const full = await listCatalogs({}, config);
       expect(list).toHaveBeenCalledOnce();
       expect(createListOperation).toHaveBeenCalledOnce();
       expectCatalogs(full, [
@@ -202,28 +216,19 @@ describe("session catalog Gateway methods", () => {
     useCatalogs(first, provider("beta"));
     const config = { agents: { ownership: "explicit", entries: { main: {} } } };
     const params = { agentId: "main", catalogId: "alpha", metadataOnly: true };
-    const selected = await call("sessions.catalog.list", params, config);
+    const selected = await listCatalogs(params, config);
     expectCatalog(selected, { id: "alpha", label: "ALPHA", hosts: [] });
 
     useCatalogs(provider("alpha", { label: "New label" }));
-    const refreshed = await call("sessions.catalog.list", params, config);
+    const refreshed = await listCatalogs(params, config);
     expectCatalog(refreshed, { id: "alpha", label: "New label", hosts: [] });
 
-    const unknownAgent = await call(
-      "sessions.catalog.list",
-      { ...params, agentId: "missing" },
-      config,
+    expectInvalidRequest(
+      await listCatalogs({ ...params, agentId: "missing" }, config),
+      'unknown agent id "missing"',
     );
-    expect(unknownAgent).toHaveBeenCalledWith(false, undefined, {
-      code: ErrorCodes.INVALID_REQUEST,
-      message: 'unknown agent id "missing"',
-    });
     useCatalogs();
-    const retired = await call("sessions.catalog.list", params, config);
-    expect(retired).toHaveBeenCalledWith(false, undefined, {
-      code: ErrorCodes.INVALID_REQUEST,
-      message: "unknown session catalog: alpha",
-    });
+    expectInvalidRequest(await listCatalogs(params, config), "unknown session catalog: alpha");
     expect(first.list).not.toHaveBeenCalled();
   });
 
@@ -237,12 +242,7 @@ describe("session catalog Gateway methods", () => {
     const continueSession = vi.fn(async () => ({ sessionKey: "agent:beta:continued" }));
     const archive = vi.fn(async () => ({ ok: true as const }));
     useCatalogs(provider("codex", { list, read, continueSession, archive }));
-    const config = {
-      agents: {
-        ownership: "explicit",
-        entries: { alpha: {}, beta: {} },
-      },
-    };
+    const config = { agents: { ownership: "explicit", entries: { alpha: {}, beta: {} } } };
     const locator = {
       catalogId: "codex",
       hostId: "gateway:local",
@@ -250,7 +250,7 @@ describe("session catalog Gateway methods", () => {
       agentId: "beta",
     };
 
-    await call("sessions.catalog.list", { catalogId: "codex", agentId: "beta" }, config);
+    await listCatalogs({ catalogId: "codex", agentId: "beta" }, config);
     await call("sessions.catalog.read", locator, config);
     await call("sessions.catalog.continue", locator, config);
     await call("sessions.catalog.archive", { ...locator, confirmNoOtherRunner: true }, config);
@@ -275,8 +275,8 @@ describe("session catalog Gateway methods", () => {
     const config = {};
 
     await Promise.all([
-      call("sessions.catalog.list", { hostIds: ["host-a", "host-b"] }, config),
-      call("sessions.catalog.list", { hostIds: ["host-b", "host-a"] }, config),
+      listCatalogs({ hostIds: ["host-a", "host-b"] }, config),
+      listCatalogs({ hostIds: ["host-b", "host-a"] }, config),
     ]);
 
     expect(list).toHaveBeenCalledTimes(2);
@@ -316,7 +316,7 @@ describe("session catalog Gateway methods", () => {
       "sessions.catalog.list",
       { progressId: "progress-creator" },
       {},
-      { connId: "requester", connect: {} },
+      { connId: "requester", connect: gatewayConnect([]) },
       { broadcastToConnIds },
     );
     const projectedSessions = [
@@ -334,11 +334,7 @@ describe("session catalog Gateway methods", () => {
 
     expect(broadcastToConnIds).toHaveBeenCalledWith(
       "sessions.catalog.host",
-      expect.objectContaining({
-        catalog: expect.objectContaining({
-          hosts: [expect.objectContaining({ sessions: projectedSessions })],
-        }),
-      }),
+      hostEvent(projectedSessions),
       new Set(["requester"]),
       { dropIfSlow: true },
     );
@@ -370,13 +366,13 @@ describe("session catalog Gateway methods", () => {
       });
     useCatalogs(catalogUsingNodes("zeta"), catalogUsingNodes("alpha"));
 
-    await call("sessions.catalog.list", {});
+    await listCatalogs();
 
     expect(dispatchNodeList).toHaveBeenCalledOnce();
   });
 
   it("rejects host cursors without a catalog selector", async () => {
-    const respond = await call("sessions.catalog.list", {
+    const respond = await listCatalogs({
       cursors: { "gateway:local": "next" },
     });
 
@@ -396,26 +392,21 @@ describe("session catalog Gateway methods", () => {
     useCreationTarget(resolveCreateSession);
     const config = {};
 
-    const respond = await call("sessions.catalog.list", {}, config);
+    const respond = await listCatalogs({}, config);
 
     expectCatalog(respond, {
       id: "claude",
       capabilities: {
         ...noActions,
-        createSession: { model: "anthropic/claude-opus-4-8" },
+        createSession: { model: createTarget.model },
       },
     });
 
     createSession = undefined;
-    const cached = await call("sessions.catalog.list", {}, config);
-    expectCatalog(cached, {
-      capabilities: expect.objectContaining({
-        createSession: { model: "anthropic/claude-opus-4-8" },
-      }),
-    });
+    expectCreateCapability(await listCatalogs({}, config));
     expect(resolveCreateSession).toHaveBeenCalledOnce();
 
-    const refreshed = await call("sessions.catalog.list", {}, {});
+    const refreshed = await listCatalogs();
     expectCatalog(refreshed, {
       id: "claude",
       capabilities: noActions,
@@ -436,17 +427,9 @@ describe("session catalog Gateway methods", () => {
     const config = {};
 
     try {
-      const unavailable = await call("sessions.catalog.list", {}, config);
-      expectCatalog(unavailable, {
-        capabilities: noActions,
-      });
+      expectCatalog(await listCatalogs({}, config), { capabilities: noActions });
       now += 3_001;
-      const recovered = await call("sessions.catalog.list", {}, config);
-      expectCatalog(recovered, {
-        capabilities: expect.objectContaining({
-          createSession: { model: "anthropic/claude-opus-4-8" },
-        }),
-      });
+      expectCreateCapability(await listCatalogs({}, config));
       expect(resolveCreateSession).toHaveBeenCalledTimes(2);
     } finally {
       nowSpy.mockRestore();
@@ -459,20 +442,15 @@ describe("session catalog Gateway methods", () => {
     );
     useCreationTarget(resolveCreateSession);
 
-    const available = await call(
-      "sessions.catalog.list",
-      {
-        agentId: "research",
-        catalogId: "claude",
-        metadataOnly: true,
-      },
+    const available = await listCatalogs(
+      { agentId: "research", catalogId: "claude", metadataOnly: true },
       { agents: { entries: { main: {}, research: {} } } },
     );
     expect(resolveCreateSession).toHaveBeenCalledWith({ agentId: "research" });
     expectCatalog(available, {
       capabilities: {
         ...noActions,
-        createSession: { model: "anthropic/claude-opus-4-8" },
+        createSession: { model: createTarget.model },
       },
     });
   });
@@ -482,11 +460,7 @@ describe("session catalog Gateway methods", () => {
 
     expect(resolveRegisteredCatalogCreateTarget("claude", "research", {})).toEqual({
       ok: true,
-      target: {
-        model: "anthropic/claude-opus-4-8",
-        agentRuntime: "claude-cli",
-        pluginOwnerId: "anthropic",
-      },
+      target: { ...createTarget, pluginOwnerId: "anthropic" },
     });
     expect(resolveRegisteredCatalogCreateTarget("missing", "research", {})).toEqual({
       ok: false,
@@ -519,7 +493,7 @@ describe("session catalog Gateway methods", () => {
       "sessions.catalog.continue",
       { catalogId: "remote", hostId: "node:devbox", threadId: "thread-1" },
       {},
-      { connect: { scopes: ["operator.write", "operator.admin"] } },
+      { connect: gatewayConnect(["operator.write", "operator.admin"]) },
     );
 
     expect(continueSession).toHaveBeenCalledWith({
@@ -607,7 +581,7 @@ it("keeps a delayed source off the catalog RPC path", async () => {
   hoisted.hasMultipleSessionSharingIdentities.mockReturnValue(true);
   const clients = Array.from({ length: 6 }, (_, index) => ({
     connId: `viewer-${index}`,
-    connect: { scopes: ["operator.admin"] },
+    connect: gatewayConnect(["operator.admin"]),
   }));
   const broadcasts = clients.map(() => vi.fn());
   const request = (
@@ -649,43 +623,35 @@ it("keeps a delayed source off the catalog RPC path", async () => {
       expectCatalogHost(pendingCall.respond, {
         hostId: "node:source",
         sessions: [],
-        error: expect.objectContaining({ code: "CATALOG_LOADING" }),
+        pending: true,
       });
+      const catalog = pendingCall.respond.mock.calls[0]?.[1]?.catalogs[0];
+      expect(catalog).not.toHaveProperty("error");
+      expect(catalog?.hosts[0]).not.toHaveProperty("error");
     }
-    expectCatalogHost(metadata.respond, {
-      error: expect.objectContaining({ code: "CATALOG_LOADING" }),
-    });
+    expect(metadata.respond).not.toHaveBeenCalled();
     clients[5]!.connect.scopes = ["operator.read"];
     await vi.advanceTimersByTimeAsync(sourceDelayMs - 49);
     source.resolve();
     await vi.advanceTimersByTimeAsync(0);
     await done;
     await metadata.completion;
+    expectCatalog(metadata.respond, { pending: true, hosts: [] });
+    const metadataCatalog = metadata.respond.mock.calls[0]?.[1]?.catalogs[0];
+    expect(metadataCatalog).not.toHaveProperty("error");
     for (const [index, broadcast] of broadcasts.entries()) {
       expect(broadcast).toHaveBeenLastCalledWith(
         "sessions.catalog.host",
-        expect.objectContaining({
-          catalog: expect.objectContaining({
-            hosts: [
-              expect.objectContaining({
-                sessions: index === 5 ? [] : [expect.objectContaining(row)],
-              }),
-            ],
-          }),
-        }),
+        hostEvent(index === 5 ? [] : [expect.objectContaining(row)]),
         new Set([clients[index]!.connId]),
         { dropIfSlow: true },
       );
     }
-    for (let index = 0; index < 6; index++) {
-      const warm = request();
-      await warm.completion;
-      expectCatalogHost(warm.respond, { sessions: [expect.objectContaining(row)] });
-    }
-    expect(invokeNode).toHaveBeenCalledTimes(1);
-    const current = request(progressiveQuery, clients[0], broadcasts[0]);
+    const current = request();
+    await vi.advanceTimersByTimeAsync(0);
     await current.completion;
     expect(current.respond.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]?.sessions).toEqual([row]);
+    expect(invokeNode).toHaveBeenCalledTimes(2);
     invokeNode
       .mockRejectedValueOnce(new Error("Paired node did not respond"))
       .mockImplementation(async () => {
@@ -693,7 +659,7 @@ it("keeps a delayed source off the catalog RPC path", async () => {
         throw new Error("Paired node did not respond");
       });
     await vi.advanceTimersByTimeAsync(60_005);
-    expect(invokeNode).toHaveBeenCalledTimes(3);
+    expect(invokeNode).toHaveBeenCalledTimes(4);
     const refreshing = request(progressiveQuery, clients[0], broadcasts[0]);
     await refreshing.completion;
     expect(refreshing.respond.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]).toMatchObject({
@@ -708,6 +674,9 @@ it("keeps a delayed source off the catalog RPC path", async () => {
     for (const errorCode of ["NODE_INVOKE_FAILED", "NODE_OFFLINE"]) {
       connected = errorCode !== "NODE_OFFLINE";
       const expired = request();
+      if (connected) {
+        await vi.advanceTimersByTimeAsync(0);
+      }
       await expired.completion;
       expectCatalogHost(expired.respond, {
         sessions: [],

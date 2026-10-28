@@ -75,6 +75,12 @@ Gateway config reload watches the active config file path (resolved from profile
 - Default bind mode: `loopback`. Inside a detected container environment the effective default is `auto` (resolves to `0.0.0.0` for port-forwarding), unless Tailscale serve/funnel is active, which always forces `loopback`.
 - Auth is required by default. Shared-secret setups use `gateway.auth.token` / `gateway.auth.password` (or `OPENCLAW_GATEWAY_TOKEN` / `OPENCLAW_GATEWAY_PASSWORD`), and non-loopback reverse-proxy setups can use `gateway.auth.mode: "trusted-proxy"`.
 
+Worker startup recovery retries transient SQLite locks during tool recovery and
+workspace-journal pruning, logging each retry. Workspace recovery must finish
+before worker placements start. If the lock persists through five attempts,
+startup stops with guidance to run `openclaw doctor` or
+`openclaw gateway status --deep`; it does not bypass workspace rollback safety.
+
 ### Module compile cache
 
 The Gateway main thread runs without Node's on-disk module compile cache. Node
@@ -184,7 +190,7 @@ What to expect:
 
 Checklist per instance:
 
-- Unique `gateway.port`
+- Unique `gateway.port`, with base ports at least 120 apart to avoid derived-port overlap
 - Unique `OPENCLAW_CONFIG_PATH`
 - Unique `OPENCLAW_STATE_DIR`
 - Unique `agents.defaults.workspace`
@@ -193,7 +199,7 @@ Example:
 
 ```bash
 OPENCLAW_CONFIG_PATH=~/.openclaw/a.json OPENCLAW_STATE_DIR=~/.openclaw-a openclaw gateway --port 19001
-OPENCLAW_CONFIG_PATH=~/.openclaw/b.json OPENCLAW_STATE_DIR=~/.openclaw-b openclaw gateway --port 19002
+OPENCLAW_CONFIG_PATH=~/.openclaw/b.json OPENCLAW_STATE_DIR=~/.openclaw-b openclaw gateway --port 19121
 ```
 
 Detailed setup: [/gateway/multiple-gateways](/gateway/multiple-gateways).

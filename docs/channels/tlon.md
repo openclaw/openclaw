@@ -69,6 +69,8 @@ DM the bot or @ mention it in a group channel.
 
 OpenClaw persists accepted Tlon DM and group-chat events before agent dispatch. Pending or retryable turns survive a Gateway restart, and work remains serialized per group channel or direct peer. Stable Urbit message IDs also suppress a redelivered event while its queue record or retained completion record exists.
 
+If the connection stops delivering data or heartbeats for about 60 seconds, OpenClaw reconnects to the same Eyre channel so unacknowledged events can replay. Time spent handling a received event does not count toward this idle timeout.
+
 Delivery is at least once across the queue-to-agent boundary: a crash during handoff can replay a turn. Agent actions that produce external side effects should therefore avoid duplicating those effects on retries where practical.
 
 ## Private/LAN ships
@@ -211,14 +213,16 @@ approval and DM the owner:
 
 The owner replies in DM to act on a request:
 
-| Owner reply                  | Effect                                               |
-| ---------------------------- | ---------------------------------------------------- |
-| `approve` / `deny` / `block` | Acts on the most recent pending approval             |
-| `approve <id>` / `deny <id>` | Acts on a specific approval by id                    |
-| `block`                      | Also blocks the ship natively so it cannot reconnect |
-| `unblock ~ship`              | Reverses a native block                              |
-| `blocked`                    | Lists currently blocked ships                        |
-| `pending`                    | Lists pending approval requests                      |
+| Owner reply                                 | Effect                                                             |
+| ------------------------------------------- | ------------------------------------------------------------------ |
+| `approve` / `deny` / `block`                | Acts only when exactly one request is pending; otherwise lists IDs |
+| `approve <id>` / `deny <id>` / `block <id>` | Acts on a specific pending approval                                |
+| `unblock ~ship`                             | Reverses a native block                                            |
+| `blocked`                                   | Lists currently blocked ships                                      |
+| `pending`                                   | Lists pending approval requests                                    |
+
+Bare decisions keep the single-request workflow concise. When multiple requests are pending, the
+owner must include an ID so a newly queued request cannot change which request receives the action.
 
 Without `ownerShip` configured, unauthorized DMs and channel mentions are just dropped and logged;
 there is no approval prompt.
@@ -308,6 +312,11 @@ size check or download fails the send instead of embedding an unchecked URL.
 Upload failures after a successful bounded download can still use the original URL.
 Without a configured cap, the existing link fallback remains available even when
 the image cannot be downloaded within that ceiling.
+
+Outbound image uploads preserve the downloaded filename, including names supplied
+by `Content-Disposition`. If no filename is available, Tlon uses the source URL
+basename or a generated name. Custom-S3 public URLs encode object-key path segments
+so filename characters such as `#` and `?` remain part of the object name.
 
 | Feature         | Status                                        |
 | --------------- | --------------------------------------------- |

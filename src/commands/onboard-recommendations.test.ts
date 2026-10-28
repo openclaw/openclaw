@@ -12,6 +12,7 @@ import {
   onboardRecommendationsCommand,
   refreshOnboardRecommendationsCommand,
 } from "./onboard-recommendations.js";
+import { createTestRuntime as makeRuntime } from "./test-runtime-config-helpers.js";
 
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();
@@ -30,14 +31,6 @@ vi.mock("../state/onboarding-recommendations.js", async (importOriginal) => {
     createOnboardingRecommendationsStore: vi.fn(actual.createOnboardingRecommendationsStore),
   };
 });
-
-function makeRuntime(): RuntimeEnv {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn(),
-  };
-}
 
 function chatMatch(): OnboardingRecommendationsRecord["matches"][number] {
   return {
@@ -130,12 +123,22 @@ describe("onboard recommendations command", () => {
     vi.mocked(createOnboardingRecommendationsStore).mockReset();
   });
 
-  it("returns an empty JSON list after the offer was answered", async () => {
-    vi.mocked(store.read).mockResolvedValue(createOffer({ acceptedAt: 2, updatedAt: 2 }));
-
+  it.each([
+    ["answered", createOffer({ acceptedAt: 2, updatedAt: 2 }), false],
+    ["legacy bare ClawHub id", createOffer({ matches: [notesMatch("notes")] }), true],
+    ["unsafe install identifier", createOffer({ matches: [notesMatch("skill;curl-evil")] }), false],
+  ] as const)("omits %s offers from bootstrap JSON", async (_name, offer, cleared) => {
+    vi.mocked(store.read).mockResolvedValue(offer);
+    if (cleared) {
+      vi.mocked(store.clearPending).mockResolvedValue(true);
+    }
     await onboardRecommendationsCommand({ json: true }, runtime);
-
     expect(runtime.log).toHaveBeenCalledWith("[]");
+    if (cleared) {
+      expect(store.clearPending).toHaveBeenCalledWith({
+        expected: expect.objectContaining({ inventoryHash: "hash", updatedAt: 1 }),
+      });
+    }
   });
 
   it("acknowledges a pending offer", async () => {
@@ -190,18 +193,6 @@ describe("onboard recommendations command", () => {
     expect(runtime.log).not.toHaveBeenCalled();
   });
 
-  it("clears pending bootstrap offers with legacy bare ClawHub ids", async () => {
-    vi.mocked(store.read).mockResolvedValue(createOffer({ matches: [notesMatch("notes")] }));
-    vi.mocked(store.clearPending).mockResolvedValue(true);
-
-    await onboardRecommendationsCommand({ json: true }, runtime);
-
-    expect(store.clearPending).toHaveBeenCalledWith({
-      expected: expect.objectContaining({ inventoryHash: "hash", updatedAt: 1 }),
-    });
-    expect(runtime.log).toHaveBeenCalledWith("[]");
-  });
-
   it("clears a stored offer for the next onboarding scan", async () => {
     vi.mocked(store.clear).mockResolvedValue(true);
 
@@ -211,16 +202,6 @@ describe("onboard recommendations command", () => {
     expect(runtime.log).toHaveBeenCalledWith(
       "Onboarding recommendations cleared. The next onboarding run will rescan.",
     );
-  });
-
-  it("drops unsafe install identifiers from the bootstrap payload", async () => {
-    vi.mocked(store.read).mockResolvedValue(
-      createOffer({ matches: [notesMatch("skill;curl-evil")] }),
-    );
-
-    await onboardRecommendationsCommand({ json: true }, runtime);
-
-    expect(runtime.log).toHaveBeenCalledWith("[]");
   });
 
   it("deduplicates shared candidates and keeps the recommended tier", async () => {

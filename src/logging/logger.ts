@@ -57,11 +57,6 @@ type ResolvedRuntimeSettings = ResolvedSettings & { rolling: boolean };
 export type LoggerResolvedSettings = ResolvedSettings;
 type TsLogRecord = Record<string, unknown>;
 
-type DiagnosticLogCode = {
-  line?: number;
-  functionName?: string;
-};
-
 const MAX_DIAGNOSTIC_LOG_BINDINGS_JSON_CHARS = 8 * 1024;
 const MAX_DIAGNOSTIC_LOG_MESSAGE_CHARS = 4 * 1024;
 
@@ -361,7 +356,10 @@ function buildDiagnosticLogRecord(logObj: TsLogRecord) {
   addDiagnosticLogAttributesFrom(attributes, attributeState, bindings);
   addDiagnosticLogAttributesFrom(attributes, attributeState, structuredBindings);
 
-  const code: DiagnosticLogCode = {};
+  const code: {
+    line?: number;
+    functionName?: string;
+  } = {};
   if (meta?.path?.fileLine) {
     const line = Number(meta.path.fileLine);
     if (Number.isFinite(line)) {

@@ -607,6 +607,16 @@ it("keeps view revisions private and retracts a now-hidden session", () =>
     expect(f.broadcast.mock.calls.some((call) => call[2].has("bob-one"))).toBe(false);
     await f.post();
     const visible = await read(f.inbox, f.bobClient);
+    const response = await read(f.inbox, f.bobClient);
+    response.items[0]!.senderLabel = "Caller-owned label";
+    response.items.length = 0;
+    response.revision++;
+    expect(await read(f.inbox, f.bobClient)).toEqual(visible);
+    f.broadcast.mockClear();
+    setDisplayName(f.carol.id, "Carol Updated");
+    await Promise.resolve();
+    expect(await read(f.inbox, f.bobClient)).toEqual(visible);
+    expect(f.broadcast).not.toHaveBeenCalled();
     await f.setSession({ displayName: "Updated design review" });
     expect((await f.items())[0]?.sessionTitle).toBe("Updated design review");
     await f.setSession({ visibility: "draft" });

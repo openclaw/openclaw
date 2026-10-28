@@ -2,7 +2,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { resolveSandboxConfigForAgent } from "../../agents/sandbox/config.js";
+import * as engine from "../../agents/sandbox/container-engine.js";
+import * as sourceNamespace from "../../agents/sandbox/docker-mount-source.js";
 import { hashTextSha256 } from "../../agents/sandbox/hash.js";
+import { mockStoppedWorkspaceContainer } from "../../agents/sandbox/mount-plan.test-helpers.js";
+import { removeRegistryEntry } from "../../agents/sandbox/registry.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import { resolveSandboxWorkspaceLayoutPaths } from "../../agents/sandbox/shared.js";
 import { resolveSubagentSessionAttachmentRootDir } from "../../agents/subagents/subagent-attachment-paths.js";
@@ -73,34 +77,28 @@ it("keeps real guest file requests in their session's private sandbox", async ()
         sessionRoot: state.workspaceDir,
       };
       await save(key, entry);
-      const sessionLayout = (sessionKey: string) =>
-        resolveSandboxWorkspaceLayoutPaths({
-          cfg: resolveSandboxConfigForAgent(cfg, "main"),
-          rawSessionKey: key,
-          agentId: "main",
-          isolationSubject: { kind: "session", sessionKey },
-          workspaceDir: state.workspaceDir,
-        });
-      const layoutFor = (selected: InternalSessionEntry) => {
-        const runtime = resolveSandboxRuntimeStatus({
-          cfg,
-          agentId: "main",
-          sessionKey: key,
-          preparedSessionEntry: selected,
-        });
+      const layoutFor = (sessionKey: string, selected?: InternalSessionEntry) => {
+        const runtime =
+          selected &&
+          resolveSandboxRuntimeStatus({
+            cfg,
+            agentId: "main",
+            sessionKey: key,
+            preparedSessionEntry: selected,
+          });
         const sandbox = resolveSandboxConfigForAgent(cfg, "main");
         return resolveSandboxWorkspaceLayoutPaths({
-          cfg: runtime.sandboxRequired
+          cfg: runtime?.sandboxRequired
             ? { ...sandbox, scope: "agent", workspaceAccess: runtime.workspaceAccess }
             : sandbox,
           rawSessionKey: key,
           agentId: "main",
-          isolationSubject: runtime.isolationSubject,
+          isolationSubject: runtime?.isolationSubject ?? { kind: "session", sessionKey },
           workspaceDir: state.workspaceDir,
         });
       };
-      const layout = layoutFor(entry);
-      const foreign = layoutFor({
+      const layout = layoutFor(key, entry);
+      const foreign = layoutFor(key, {
         ...entry,
         createdActor: createdBy(viewer),
       });
@@ -122,12 +120,11 @@ it("keeps real guest file requests in their session's private sandbox", async ()
         });
         return respond.mock.calls.map(([ok, payload, error]) => ({ ok, payload, error }));
       };
-      const expectSuccess = (calls: Awaited<ReturnType<typeof request>>) => {
+      const ok = async (...args: Parameters<typeof request>) => {
+        const calls = await request(...args);
         expect(calls[0]?.error).toBeUndefined();
         return expectOkPayload(calls);
       };
-      const ok = async (...args: Parameters<typeof request>) =>
-        expectSuccess(await request(...args));
       const error = async (...args: Parameters<typeof request>) =>
         expectError(await request(...args));
       const expectContent = async (
@@ -209,7 +206,99 @@ it("keeps real guest file requests in their session's private sandbox", async ()
         await expect(request("download", { path: "host-hardlink.txt" })).rejects.toThrow(
           "hardlinked path not allowed",
         );
-        await fs.unlink(path.join(layout.workspaceDir, "host-hardlink.txt"));
+        // Absolute references keep the same reader and bytes, but require real namespace backing.
+        {
+          const sandboxConfig = cfg.agents!.defaults!.sandbox!;
+          sandboxConfig.docker = { workdir: "/task/work" };
+          using commands = vi
+            .spyOn(engine, "execContainer")
+            .mockRejectedValue(new Error("No runtime"));
+          using _ = vi.spyOn(sourceNamespace, "resolveDockerSourceNamespace");
+          const mounts: Array<{ Type: string; Source: string; Destination: string; RW: boolean }> =
+            [];
+          const alias = "/task/work/guest.txt";
+          await error("get", { path: alias });
+          expect(commands).not.toHaveBeenCalled();
+          await mockStoppedWorkspaceContainer(layout.workspaceDir, "/task/work", mounts);
+          const relative = await ok("get", { path: "guest.txt" });
+          expect((await ok("get", { path: alias })).file).toMatchObject({
+            content: "guest work",
+            hash: relative.file.hash,
+            workspacePath: "guest.txt",
+          });
+          await expectContent(path.join(layout.workspaceDir, "guest.txt"), "guest work");
+          const absoluteDownload = await ok("download", { path: alias });
+          const downloaded = await openSessionFileDownload(owner, absoluteDownload.url);
+          expect(downloaded.status).toBe(200);
+          expect(await downloaded.text()).toBe("guest work");
+          const absoluteAssets = await ok("assets", {
+            path: "/task/work/index.html",
+            refs: ["style.css"],
+          });
+          expect(absoluteAssets.assets).toEqual([
+            {
+              ref: "style.css",
+              mimeType: "text/css",
+              content: Buffer.from("body { color: blue; }").toString("base64"),
+            },
+          ]);
+          for (const denied of [
+            "/task/work/../host-only.txt",
+            "/task/work/host-link.txt",
+            "/task/work/host-hardlink.txt",
+            "/foreign/guest.txt",
+          ]) {
+            await error("get", { path: denied });
+          }
+          await fs.unlink(path.join(layout.workspaceDir, "host-hardlink.txt"));
+          mounts.push({ Type: "bind", Source: hostFile, Destination: alias, RW: true });
+          await error("get", { path: alias });
+          await expectContent("guest.txt", "guest work");
+          mounts.length = 0;
+          sandboxConfig.workspaceAccess = "ro";
+          mounts.push({
+            Type: "bind",
+            Source: state.workspaceDir,
+            Destination: "/agent",
+            RW: false,
+          });
+          await expectContent("/agent/host-only.txt", "host private bytes");
+          await error("get", { path: alias });
+          sandboxConfig.workspaceAccess = "none";
+          mounts.length = 0;
+          await expectContent(alias, "guest work", viewer);
+          const inspect = commands.getMockImplementation();
+          if (!inspect) {
+            throw new Error("Expected the container inspection fixture");
+          }
+          const beforeRevocation = commands.mock.calls.length;
+          commands.mockImplementationOnce(async (...args) => {
+            const result = await inspect(...args);
+            await upsertSessionEntryCore(
+              { agentId: "main", sessionKey: key },
+              { visibility: "draft" },
+            );
+            return result;
+          });
+          try {
+            await error("get", { path: alias }, viewer);
+            expect(commands.mock.calls).toHaveLength(beforeRevocation + 1);
+          } finally {
+            await upsertSessionEntryCore(
+              { agentId: "main", sessionKey: key },
+              { visibility: "shared" },
+            );
+          }
+          const renamed = await ok("download", { path: alias });
+          sandboxConfig.docker.workdir = "/other";
+          expect((await openSessionFileDownload(owner, renamed.url)).status).toBe(404);
+          sandboxConfig.docker.workdir = "/task/work";
+          const retired = await ok("download", { path: alias });
+          await removeRegistryEntry("media-fixture");
+          expect((await openSessionFileDownload(owner, retired.url)).status).toBe(404);
+          await expectContent("guest.txt", "guest work");
+          sandboxConfig.docker = undefined;
+        }
         const externalRepo = await initializeManagedWorktreeTestRepository(
           state.path("external-diff-source"),
         );
@@ -243,7 +332,7 @@ it("keeps real guest file requests in their session's private sandbox", async ()
           childSessionKey: key,
         });
         await fs.mkdir(attachmentRoot, { recursive: true });
-        const childLayout = sessionLayout(key);
+        const childLayout = layoutFor(key);
         await fs.mkdir(childLayout.workspaceDir, { recursive: true });
         await write(childLayout.workspaceDir, "child.txt", "child work");
         await expectContent("child.txt", "child work");
@@ -261,7 +350,7 @@ it("keeps real guest file requests in their session's private sandbox", async ()
           skillsSnapshot: { prompt: "", skills: [], librarySelections },
         };
         await save(key, libraryEntry);
-        const libraryLayout = sessionLayout(
+        const libraryLayout = layoutFor(
           `${key}:skills:${hashTextSha256(JSON.stringify(librarySelections))}`,
         );
         await fs.mkdir(libraryLayout.workspaceDir, { recursive: true });

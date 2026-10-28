@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 294961,
-  "reason": "Startup leaf icons, update classification, and lazy English: matched b5b24cf15c2 build 310773 to 294961 B gzip with 7 JS and 1 CSS request.",
-  "updatedAt": "2026-10-23"
+  "startupJsGzipBytes": 90195,
+  "reason": "Early transport overlaps cold boot without delaying cached reloads; final current-main build measures 90,195 B gzip in 3 startup requests.",
+  "updatedAt": "2026-10-27"
 }

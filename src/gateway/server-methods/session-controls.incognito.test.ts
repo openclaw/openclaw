@@ -161,7 +161,6 @@ afterEach(async () => {
   ingress.mockClear();
   resetSystemEventsForTest();
   vi.restoreAllMocks();
-  clearRuntimeConfigSnapshot();
 });
 afterAll(async () => {
   memorySessionActorOwners.reset();
@@ -170,11 +169,8 @@ afterAll(async () => {
   vi.unstubAllEnvs();
 });
 
-async function processWake(
-  options: GatewayRequestHandlerOptions,
-  sessionKey: string,
-  text: string,
-) {
+async function processWake(sessionKey: string, text: string) {
+  const options = request("system-event", { text, sessionKey, wake: true });
   const original = loadSessionEntry({ sessionKey });
   assert(original);
   model.mockImplementationOnce(async (params) => {
@@ -314,14 +310,9 @@ it("routes actor system wakes and parent approval audiences without host SQL", a
     { sessionKey: child },
     actorEntry("child", { parentSessionKey: parent }),
   );
-  const options = request("system-event", {
-    text: "Synthetic wake",
-    sessionKey: child,
-    wake: true,
-  });
   const host = observeHostDataSql();
   try {
-    await processWake(options, child, "Synthetic wake");
+    await processWake(child, "Synthetic wake");
     expect(await resolveApprovalSessionAudienceWithFallback(child, "main")).toEqual([
       child,
       parent,
@@ -361,19 +352,16 @@ it("rejects a replaced actor source during approval lineage preparation", async 
   await expect(pending).rejects.toThrow(/session|current/i);
 });
 
-it.each(["agent:native:dashboard:incognito-native-controls"])(
-  "preserves unbound wake %s without allocating another owner",
-  async (sessionKey) => {
-    await replaceSessionEntry(
-      { agentId: "native", sessionKey },
-      { sessionId: sessionKey, updatedAt: Date.now() },
-    );
-    const before = memorySessionActorOwners.list();
-    const options = request("system-event", { text: "Native wake", sessionKey, wake: true });
-    await processWake(options, sessionKey, "Native wake");
-    expect(memorySessionActorOwners.list()).toEqual(before);
-  },
-);
+it("preserves an unbound native wake without allocating another owner", async () => {
+  const sessionKey = "agent:native:dashboard:incognito-native-controls";
+  await replaceSessionEntry(
+    { agentId: "native", sessionKey },
+    { sessionId: sessionKey, updatedAt: Date.now() },
+  );
+  const before = memorySessionActorOwners.list();
+  await processWake(sessionKey, "Native wake");
+  expect(memorySessionActorOwners.list()).toEqual(before);
+});
 
 it("joins accepted actor node work, preserves changed session settings, and canonicalizes subscriptions without host SQL", async () => {
   const sessionKey = "agent:main:dashboard:incognito-node-event";

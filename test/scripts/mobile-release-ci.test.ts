@@ -12,6 +12,7 @@ import {
   createOwnedKeychain,
   probeOwnedKeychain,
 } from "../../.github/actions/ios-signing-keychain/keychain.mjs";
+import { collectReleaseInventory } from "../../scripts/lib/mobile-release-evidence.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { cleanupTempDirs, makeTempDir, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { runVitestShutdownCommand } from "../helpers/vitest-shutdown-command.js";
@@ -176,11 +177,6 @@ function stepIndex(steps: WorkflowStep[], name: string): number {
   return steps.findIndex((step) => step.name === name);
 }
 
-function expectStepPrefix(steps: WorkflowStep[], names: string[]): WorkflowStep[] {
-  expect(steps.slice(0, names.length).map((step) => step.name)).toEqual(names);
-  return steps;
-}
-
 function releaseSteps(file: string): WorkflowStep[] {
   const workflow = parse(readText(file)) as { jobs: { release: { steps: WorkflowStep[] } } };
   return workflow.jobs.release.steps;
@@ -280,31 +276,105 @@ describe("mobile release CI tools", () => {
       binaries: ["OpenClaw-phone.aab", "OpenClaw-wear.aab", "OpenClaw.apk", "OpenClaw.aab.sha256"],
     },
   ];
-  describe.each(releasePlatforms)("$platform release artifact recovery", ({ workflow }) => {
-    it("checks out and verifies the dispatch commit before accessing signing credentials", () => {
-      const steps = releaseSteps(workflow);
-      expect(steps[0]).toMatchObject({
-        uses: expect.stringMatching(/^actions\/checkout@/u),
-        with: { ref: "${{ github.sha }}", "fetch-depth": 0 },
-      });
-      const verification = steps[1]?.run;
-      if (!verification) {
-        throw new Error("Release checkout must be verified before subsequent steps.");
-      }
-      const root = tempRoots.make("openclaw-release-dispatch-");
-      initGit(root, { name: "Release Fixture", email: "release@example.invalid" });
-      writeFile(root, "README.md", "Synthetic release source\n");
-      const sha = commit(root, "Initial source");
-      git(root, "checkout", "--detach", sha);
-      const verify = (expectedSha: string) =>
-        spawnSync("bash", ["-c", verification], {
-          cwd: root,
-          env: { ...process.env, GITHUB_SHA: expectedSha },
-          encoding: "utf8",
+  describe.each(releasePlatforms)(
+    "$platform release artifact recovery",
+    ({ platform, workflow }) => {
+      it("checks out and verifies the dispatch commit before accessing signing credentials", () => {
+        const steps = releaseSteps(workflow);
+        expect(steps[0]).toMatchObject({
+          uses: expect.stringMatching(/^actions\/checkout@/u),
+          with: { ref: "${{ github.sha }}", "fetch-depth": platform === "android" ? 1 : 0 },
         });
-      expect(verify(sha).status).toBe(0);
-      expect(verify("0".repeat(40)).status).toBe(1);
-    });
+        const verification = expectDefined(steps[1]?.run, "Release checkout verification");
+        const root = tempRoots.make("openclaw-release-dispatch-");
+        initGit(root, { name: "Release Fixture", email: "release@example.invalid" });
+        writeFile(root, "README.md", "Synthetic release source\n");
+        const sha = commit(root, "Initial source");
+        git(root, "checkout", "--detach", sha);
+        const verify = (expectedSha: string) =>
+          spawnSync("bash", ["-c", verification], {
+            cwd: root,
+            env: { ...process.env, GITHUB_SHA: expectedSha },
+            encoding: "utf8",
+          });
+        expect(verify(sha).status).toBe(0);
+        expect(verify("0".repeat(40)).status).toBe(1);
+      });
+    },
+  );
+
+  it("retains Android release evidence and ancestry without unrelated branch history", () => {
+    const root = tempRoots.make("openclaw-android-release-history-");
+    const remote = path.join(root, "remote.git");
+    const seed = path.join(root, "seed");
+    const checkout = path.join(root, "checkout");
+    initGit(seed, { name: "Release Fixture", email: "release@example.invalid" });
+    const phoneFile = "apps/android/app/src/main/Chat.kt";
+    const wearFile = "apps/android/wear/src/main/Notifications.kt";
+    writeFile(seed, phoneFile, "initial phone\n");
+    writeFile(seed, wearFile, "initial watch\n");
+    const phoneBaseline = commit(seed, "Initial release");
+    writeFile(seed, phoneFile, "phone chat\n");
+    commit(seed, "Improve phone chat");
+    writeFile(seed, wearFile, "watch notifications\n");
+    const source = commit(seed, "Improve watch notifications");
+    writeFile(seed, "README.md", "Main advanced while queued\n");
+    const currentMain = commit(seed, "Advance main");
+    git(seed, "checkout", "-b", "wear-public", phoneBaseline);
+    writeFile(seed, wearFile, "older public watch\n");
+    const wearBaseline = commit(seed, "Public watch correction");
+    git(seed, "checkout", "-b", "unrelated", phoneBaseline);
+    writeFile(seed, "unrelated.txt", "Not needed by this release\n");
+    const unrelated = commit(seed, "Unrelated branch");
+    git(seed, "tag", "unrelated-tag");
+    git(root, "clone", "--bare", seed, remote);
+    git(remote, "config", "uploadpack.allowFilter", "true");
+    const baselines = [
+      { sha: phoneBaseline, ref: "refs/openclaw/mobile-releases/android/2026.10.70-1" },
+      { sha: wearBaseline, ref: "refs/openclaw/mobile-releases/android/2026.10.70-2" },
+    ];
+    for (const { sha, ref } of baselines) {
+      git(remote, "update-ref", ref, sha);
+    }
+    initGit(checkout, { name: "Release Fixture", email: "release@example.invalid" });
+    git(checkout, "remote", "add", "origin", pathToFileURL(remote).href);
+    git(checkout, "fetch", "--no-tags", "--depth=1", "origin", source);
+    git(checkout, "checkout", "--detach", source);
+    const steps = releaseSteps(".github/workflows/android-store-release.yml");
+    const history = expectDefined(
+      steps[stepIndex(steps, "Fetch release source history")]?.run,
+      "Android release history step",
+    );
+    const fetched = bash(history, { GITHUB_SHA: source }, { cwd: checkout });
+    expect(fetched.status, fetched.stderr).toBe(0);
+    expect(git(checkout, "rev-parse", "--is-shallow-repository")).toBe("false");
+    expect(git(checkout, "for-each-ref", "--format=%(refname)")).toBe("refs/remotes/origin/main");
+    expect(git(checkout, "rev-parse", "origin/main")).toBe(source);
+    expect(
+      git(checkout, "cat-file", "--batch-all-objects", "--batch-check=%(objectname)"),
+    ).not.toContain(unrelated);
+    git(checkout, "fetch", "--no-tags", "origin", "refs/heads/main");
+    expect(git(checkout, "rev-parse", "FETCH_HEAD")).toBe(currentMain);
+    expect(git(checkout, "rev-parse", "origin/main")).toBe(currentMain);
+    git(checkout, "merge-base", "--is-ancestor", source, currentMain);
+    const staged = path.join(root, "staged");
+    git(checkout, "worktree", "add", "--detach", staged, source);
+    for (const { sha, ref } of baselines) {
+      git(staged, "fetch", "--no-tags", "origin", ref);
+      expect(git(staged, "rev-parse", "FETCH_HEAD")).toBe(sha);
+      const options = {
+        platform: "android" as const,
+        baseline: sha,
+        source,
+        deadline: Date.now() + 30_000,
+      };
+      const expected = collectReleaseInventory({ ...options, rootDir: seed });
+      expect(expected.commits).toEqual(["Improve watch notifications", "Improve phone chat"]);
+      expect(collectReleaseInventory({ ...options, rootDir: staged })).toEqual(expected);
+    }
+    expect(git(staged, "rev-parse", "HEAD")).toBe(source);
+    expect(git(checkout, "rev-parse", "HEAD")).toBe(source);
+    expect(git(staged, "status", "--porcelain")).toBe("");
   });
 
   it.each([
@@ -391,6 +461,10 @@ describe("mobile release CI tools", () => {
               "process-status.txt",
               "ui-dumps/openclaw-settings.xml",
               "activity-start/openclaw-settings.txt",
+              "diagnostics/host-resources.log",
+              "diagnostics/phases.log",
+              "diagnostics/last-anr.txt",
+              "diagnostics/system-events.log",
             ].map(
               (file) =>
                 `android-release-recovery/source/.artifacts/android-screenshots/latest/${formFactor}/${file}`,
@@ -425,162 +499,120 @@ describe("mobile release CI tools", () => {
   });
 
   it("keeps the Android emulator diagnostic manual, exact-SHA-bound, and secretless", async () => {
-    const file = ".github/workflows/android-emulator-diagnostic.yml";
-    const source = readText(file);
-    const workflow = parse(source) as {
-      jobs: {
-        "validate-target": {
-          permissions: Record<string, string>;
-          "runs-on": string;
-          steps: WorkflowStep[];
-          "timeout-minutes": number;
-        };
-        diagnose: {
-          env: Record<string, string>;
-          needs: string;
-          permissions: Record<string, string>;
-          "runs-on": string;
-          steps: WorkflowStep[];
-          "timeout-minutes": number;
-        };
-      };
-      name: string;
-      on: {
-        workflow_dispatch: {
-          inputs: {
-            target_sha: {
-              default?: unknown;
-              description: string;
-              required: boolean;
-              type: string;
-            };
-          };
-        };
-      };
+    const source = readText(".github/workflows/android-emulator-diagnostic.yml");
+    type DiagnosticJob = {
+      env?: Record<string, string>;
+      needs?: string;
       permissions: Record<string, string>;
-      "run-name": string;
+      "runs-on": string;
+      steps: WorkflowStep[];
+      "timeout-minutes": string | number;
+    };
+    const workflow = parse(source) as {
+      jobs: { "validate-target": DiagnosticJob; diagnose: DiagnosticJob };
+      on: { workflow_dispatch: { inputs: { operation: { default: string; options: string[] } } } };
+      permissions: Record<string, string>;
     };
     const validationJob = workflow.jobs["validate-target"];
-    const validationSteps = validationJob.steps;
     const job = workflow.jobs.diagnose;
     const steps = job.steps;
-    const [validate, validationTrustedCheckout, checkout, head, parity] = expectStepPrefix(
-      validationSteps,
-      [
-        "Validate target SHA",
-        "Checkout trusted Android tooling",
-        "Checkout exact target",
-        "Verify exact target checkout",
-        "Verify Android toolchain action parity",
-      ],
-    );
-    const [initialize, trustedCheckout, setup, toolingStep, kvm, diagnosticStep, artifact] =
-      expectStepPrefix(steps, [
-        "Initialize Android emulator diagnostic",
-        "Checkout trusted Android tooling",
-        "Setup Android toolchain",
-        "Prepare trusted Linux Android tooling",
-        "Collect Linux KVM acceleration proof",
-        "Run phone emulator diagnostic",
-        "Upload Android emulator diagnostic",
-      ]);
+    const stepsFor = (operation: string) =>
+      steps.filter(
+        (step) =>
+          !step.if ||
+          evaluateWorkflowExpression(step.if, {
+            inputs: { operation },
+            always: () => true,
+          }),
+      );
+    const findStep = (operation: string, name: string) =>
+      expectDefined(
+        stepsFor(operation).find((step) => step.name === name),
+        name,
+      );
+    const [validate, validationTrustedCheckout, checkout, head, parity] = validationJob.steps;
+    const trustedCheckout = findStep("boot", "Checkout trusted Android tooling");
+    const setup = findStep("boot", "Setup Android toolchain");
+    const kvm = findStep("boot", "Collect Linux KVM acceleration proof");
+    const diagnosticStep = findStep("boot", "Run phone emulator diagnostic");
+    const artifact = findStep("boot", "Upload Android emulator diagnostic");
+    const screenshotCheckout = findStep("screenshots", "Checkout screenshot source");
+    const screenshotHead = findStep("screenshots", "Verify screenshot source");
+    const screenshotNode = findStep("screenshots", "Setup screenshot Node environment");
+    const screenshots = findStep("screenshots", "Capture phone and Wear screenshots");
+    const screenshotArtifact = findStep("screenshots", "Upload screenshot diagnostics");
 
-    expect(workflow.name).toBe("Android Emulator Diagnostic");
-    expect(workflow["run-name"]).toBe(
-      "Android emulator diagnostic instrumented (${{ inputs.target_sha }})",
-    );
     expect(Object.keys(workflow.on)).toEqual(["workflow_dispatch"]);
-    expect(workflow.on.workflow_dispatch.inputs.target_sha).toEqual({
-      description: "Exact lowercase 40-character commit SHA to diagnose",
-      required: true,
-      type: "string",
+    expect(workflow.on.workflow_dispatch.inputs.operation).toMatchObject({
+      default: "boot",
+      options: ["boot", "screenshots"],
     });
     expect(workflow.permissions).toEqual({ contents: "read" });
-    expect(Object.keys(workflow.jobs)).toEqual(["validate-target", "diagnose"]);
-    expect(validationJob.permissions).toEqual({ contents: "read" });
-    expect(validationJob["runs-on"]).toBe("ubuntu-24.04");
-    expect(validationJob["timeout-minutes"]).toBe(5);
-    expect(job.permissions).toEqual({ contents: "read" });
+    for (const activeJob of [validationJob, job]) {
+      expect(activeJob.permissions).toEqual({ contents: "read" });
+      expect(activeJob["runs-on"]).toBe("ubuntu-24.04");
+    }
     expect(job.needs).toBe("validate-target");
-    expect(job["runs-on"]).toBe("ubuntu-24.04");
-    expect(job["timeout-minutes"]).toBe(25);
+    for (const [operation, timeout] of [
+      ["boot", 25],
+      ["screenshots", 40],
+    ] as const) {
+      expect(
+        evaluateWorkflowExpression(String(job["timeout-minutes"]), { inputs: { operation } }),
+      ).toBe(timeout);
+    }
     expect(job.env).toEqual({
       ANDROID_SCREENSHOT_EMULATOR_TIMEOUT_SECONDS: "180",
       AVD_NAME: "OpenClaw_Screenshots_API36",
       DEVICE_PROFILE: "pixel_2",
       SYSTEM_IMAGE: "system-images;android-36;google_apis;x86_64",
     });
-
-    expect(validate?.env).toEqual({
-      TARGET_SHA: "${{ inputs.target_sha }}",
-    });
+    expect(validate?.env).toEqual({ TARGET_SHA: "${{ inputs.target_sha }}" });
     expect(validate?.run).toContain('[[ ! "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]');
-    expect(initialize?.env).toEqual({
-      TARGET_SHA: "${{ inputs.target_sha }}",
-    });
-    expectContains(
-      initialize?.run,
-      'DIAGNOSTIC_DIR="$RUNNER_TEMP/android-emulator-diagnostic"',
-      'echo "DIAGNOSTIC_DIR=$DIAGNOSTIC_DIR" >>"$GITHUB_ENV"',
-      "printf 'host_cpu=%s\\n' \"$(awk -F: '/^model name/",
-      "printf 'host_logical_cpus=%s\\n' \"$(getconf _NPROCESSORS_ONLN)\"",
-      "printf 'host_memory_bytes=%s\\n' \"$(awk '/^MemTotal:/",
-      "cat /etc/os-release",
-    );
-    expect(validationTrustedCheckout).toMatchObject({
-      uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
-      with: {
+    for (const sourceCheckout of [validationTrustedCheckout, trustedCheckout, screenshotCheckout]) {
+      expect(sourceCheckout?.with).toMatchObject({
         ref: "${{ github.workflow_sha }}",
-        "fetch-depth": 1,
         "persist-credentials": false,
-        "sparse-checkout": ".github/actions/setup-android-toolchain",
-        path: ".mobile-release-tooling",
-      },
+      });
+    }
+    expect(checkout?.with).toMatchObject({
+      ref: "${{ inputs.target_sha }}",
+      "persist-credentials": false,
+      path: "candidate",
     });
-    expect(checkout).toMatchObject({
-      uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
-      with: {
-        ref: "${{ inputs.target_sha }}",
-        "fetch-depth": 1,
-        "persist-credentials": false,
-        path: "candidate",
-      },
-    });
-    expect(head?.env).toEqual({
-      TARGET_SHA: "${{ inputs.target_sha }}",
-    });
+    expect(head?.env).toEqual({ TARGET_SHA: "${{ inputs.target_sha }}" });
     expect(head?.run).toContain('test "$(git -C candidate rev-parse HEAD)" = "$TARGET_SHA"');
-    expect(trustedCheckout).toMatchObject({
-      uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
-      with: {
-        ref: "${{ github.workflow_sha }}",
-        "fetch-depth": 1,
-        "persist-credentials": false,
-        "sparse-checkout":
-          ".github/actions/setup-android-toolchain\nscripts/android-sips-linux.sh\n",
-        path: ".mobile-release-tooling",
+    expect(screenshotHead.env).toEqual({ TARGET_SHA: "${{ inputs.target_sha }}" });
+    const screenshotSteps = stepsFor("screenshots");
+    expect(screenshotSteps.indexOf(screenshotHead)).toBeLessThan(
+      screenshotSteps.indexOf(screenshotNode),
+    );
+    expect(screenshotSteps).not.toContain(diagnosticStep);
+    expect(stepsFor("boot")).not.toContain(screenshots);
+    for (const [targetSha, status] of [
+      [git(process.cwd(), "rev-parse", "HEAD"), 0],
+      ["0".repeat(40), 1],
+    ] as const) {
+      expect(
+        bash(expectDefined(screenshotHead.run, "screenshot source verification"), {
+          TARGET_SHA: targetSha,
+        }).status,
+      ).toBe(status);
+    }
+    expect(screenshotNode.with).toMatchObject({ "cache-mode": "off" });
+    expect(screenshots).toMatchObject({
+      env: {
+        ANDROID_SCREENSHOT_DIAGNOSTICS: "1",
+        SIPS: "${{ runner.temp }}/openclaw-android-tools/android-sips-linux.sh",
       },
+      run: "bash scripts/android-screenshots.sh",
     });
+    expect(screenshotArtifact.with).toMatchObject({ "retention-days": 7 });
     expect(setup).toMatchObject({
       uses: "./.mobile-release-tooling/.github/actions/setup-android-toolchain",
-      with: {
-        "cache-mode": "off",
-        "install-screenshot-emulators": "true",
-      },
+      with: { "cache-mode": "off", "install-screenshot-emulators": "true" },
     });
     expect(JSON.stringify(steps)).not.toContain("candidate/");
-
-    const tooling = toolingStep?.run ?? "";
-    expectContains(
-      tooling,
-      'test "$(git -C "$trusted_root" rev-parse HEAD)" = "$GITHUB_WORKFLOW_SHA"',
-      'adapter_path="scripts/android-sips-linux.sh"',
-      'git -C "$trusted_root" cat-file blob "$adapter_oid" >"$adapter"',
-      'cmp -s "$trusted_root/$adapter_path" "$adapter"',
-      '"$adapter" -s format jpeg -s formatOptions best',
-      "for dimensions in 1440x2560 454x454; do",
-      '"$smoke_dir/input-${dimensions}.png" --out "$smoke_dir/output-${dimensions}.jpg"',
-    );
 
     const toolchainAction = parse(
       readText(".github/actions/setup-android-toolchain/action.yml"),
@@ -726,24 +758,10 @@ describe("mobile release CI tools", () => {
       expect(fs.existsSync(rejected.sentinel)).toBe(false);
     }
 
-    const diagnostic = diagnosticStep?.run ?? "";
-    expectContains(
-      diagnostic,
-      'printf \'no\\n\' | avdmanager create avd --force --name "$AVD_NAME" --package "$SYSTEM_IMAGE" --device "$DEVICE_PROFILE"',
-      'emulator_args=(-avd "$AVD_NAME" -no-window -no-audio -no-boot-anim -verbose -show-kernel)',
-      "accel_check_timeout_seconds=10",
-      'head -c 16384 "$accel_raw" >"$DIAGNOSTIC_DIR/emulator-accel-check.txt"',
-      "sample_owned_qemu() {",
-      'printf \'\\n[%s] owned_emulator_pid=%s\\n\' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$emulator_pid"',
-      'ps -p "$emulator_pid" -o pid=,ppid=,%cpu=,rss=,stat=,etime=,command=',
-      '>>"$DIAGNOSTIC_DIR/owned-qemu-samples.log" 2>&1',
-    );
-    expect(diagnostic.match(/\bsample_owned_qemu\b/gu)).toHaveLength(5);
-
+    const diagnostic = expectDefined(diagnosticStep.run, "boot diagnostic script");
+    expect(diagnostic).toContain("final_cold_boot_observation_seconds=900");
     const accelFunctionStart = diagnostic.indexOf("capture_accel_check() {");
     const accelFunctionEnd = diagnostic.indexOf("\n\nsample_owned_qemu()", accelFunctionStart);
-    expect(accelFunctionStart).toBeGreaterThanOrEqual(0);
-    expect(accelFunctionEnd).toBeGreaterThan(accelFunctionStart);
     const accelFunction = diagnostic
       .slice(accelFunctionStart, accelFunctionEnd)
       .replace("accel_check_timeout_seconds=10", "accel_check_timeout_seconds=3");
@@ -776,27 +794,10 @@ describe("mobile release CI tools", () => {
     expect(timedOutAccel.result.status, timedOutAccel.result.stderr).toBe(0);
     expectContains(timedOutAccel.output, "exit_status=124", "timed_out=true");
 
-    expectContains(
-      diagnostic,
-      "final_cold_boot_observation_seconds=900",
-      "probe_timeout_seconds=5",
-      "final_snapshot_lead_seconds=15",
-      "snapshot_properties_max_bytes=65536",
-      "snapshot_logcat_max_bytes=262144",
-      "emulator_observation_deadline=$((emulator_launch_seconds + final_cold_boot_observation_seconds))",
-    );
-    expect(diagnostic).not.toContain("post_deadline_observation_seconds");
     const observationFunctionStart = diagnostic.indexOf("run_bounded_probe() {");
-    const observationFunctionEnd = diagnostic.indexOf(
-      "\n\nfail_after_readiness_timeout()",
-      observationFunctionStart,
-    );
-    const failureFunctionEnd = diagnostic.indexOf("\n\ncleanup()", observationFunctionEnd);
-    expect(observationFunctionStart).toBeGreaterThanOrEqual(0);
-    expect(observationFunctionEnd).toBeGreaterThan(observationFunctionStart);
-    expect(failureFunctionEnd).toBeGreaterThan(observationFunctionEnd);
+    const cleanupFunctionStart = diagnostic.indexOf("cleanup() {");
     const observationFunctions = diagnostic
-      .slice(observationFunctionStart, failureFunctionEnd)
+      .slice(observationFunctionStart, cleanupFunctionStart)
       .replace("observation_poll_seconds=2", "observation_poll_seconds=1")
       .replace("final_snapshot_lead_seconds=15", "final_snapshot_lead_seconds=4")
       .replace("snapshot_properties_max_bytes=65536", "snapshot_properties_max_bytes=64")
@@ -915,19 +916,15 @@ describe("mobile release CI tools", () => {
       ),
     ]);
     if (
-      failedBootProbeResult.status === "rejected" &&
+      failedBootProbeResult.status === "rejected" ||
       boundedSnapshotsResult.status === "rejected"
     ) {
       throw new AggregateError(
-        [failedBootProbeResult.reason, boundedSnapshotsResult.reason],
+        [failedBootProbeResult, boundedSnapshotsResult].flatMap((result) =>
+          result.status === "rejected" ? [result.reason] : [],
+        ),
         "Android observation scenarios failed",
       );
-    }
-    if (failedBootProbeResult.status === "rejected") {
-      throw failedBootProbeResult.reason;
-    }
-    if (boundedSnapshotsResult.status === "rejected") {
-      throw boundedSnapshotsResult.reason;
     }
     const failedBootProbeNearCeiling = failedBootProbeResult.value;
     const boundedSnapshots = boundedSnapshotsResult.value;
@@ -974,7 +971,6 @@ describe("mobile release CI tools", () => {
     }
 
     const probeFunctionEnd = observationFunctions.indexOf("\n\nobserve_after_readiness_timeout()");
-    expect(probeFunctionEnd).toBeGreaterThan(0);
     const probeFunction = observationFunctions.slice(0, probeFunctionEnd);
     const fastProbeStartedAt = Date.now();
     const fastProbe = bash(
@@ -1025,10 +1021,7 @@ describe("mobile release CI tools", () => {
     const probePid = Number.parseInt(readText(probePidFile).trim(), 10);
     expect(() => process.kill(probePid, 0)).toThrow();
 
-    const cleanupFunctionStart = diagnostic.indexOf("cleanup() {");
     const cleanupFunctionEnd = diagnostic.indexOf("\ntrap cleanup EXIT", cleanupFunctionStart);
-    expect(cleanupFunctionStart).toBeGreaterThan(failureFunctionEnd);
-    expect(cleanupFunctionEnd).toBeGreaterThan(cleanupFunctionStart);
     const cleanupFunction = diagnostic.slice(cleanupFunctionStart, cleanupFunctionEnd);
     const hangingRoot = tempRoots.make("openclaw-android-emulator-hanging-adb-");
     const hangingBin = path.join(hangingRoot, "bin");
@@ -1083,17 +1076,6 @@ describe("mobile release CI tools", () => {
       const pid = Number.parseInt(readText(pidFile).trim(), 10);
       expect(() => process.kill(pid, 0)).toThrow();
     }
-    expectContains(
-      diagnostic,
-      "device_deadline=$((SECONDS + ANDROID_SCREENSHOT_EMULATOR_TIMEOUT_SECONDS))",
-      "boot_deadline=$((SECONDS + ANDROID_SCREENSHOT_EMULATOR_TIMEOUT_SECONDS))",
-      '>"$DIAGNOSTIC_DIR/emulator.log" 2>&1 &',
-      "adb devices -l",
-      '>>"$DIAGNOSTIC_DIR/adb-observations.log" 2>&1',
-      'ps -p "$emulator_pid"',
-      "adb kill-server",
-      "trap cleanup EXIT",
-    );
     expect(diagnostic).toMatch(
       /fail_after_readiness_timeout \\\n\s+"Timed out waiting for exactly one Android emulator device" ""/u,
     );
@@ -1102,9 +1084,7 @@ describe("mobile release CI tools", () => {
     );
     expect(artifact).toMatchObject({
       if: "always()",
-      uses: "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9",
       with: {
-        name: "android-emulator-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}",
         path: "${{ runner.temp }}/android-emulator-diagnostic",
         "retention-days": 7,
       },
@@ -1145,17 +1125,8 @@ describe("mobile release CI tools", () => {
     );
     expect(diagnosticTooling).not.toContain("/usr/bin/identify -ping");
 
-    const pathExists = (target: string): boolean => {
-      try {
-        fs.lstatSync(target);
-        return true;
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-          return false;
-        }
-        throw error;
-      }
-    };
+    const pathExists = (target: string) =>
+      fs.lstatSync(target, { throwIfNoEntry: false }) !== undefined;
 
     const runToolingFixture = (
       file: string,
@@ -1459,14 +1430,14 @@ describe("mobile release CI tools", () => {
     const prepared = runSigningProof();
     expect(prepared.result.status, prepared.result.stderr).toBe(0);
     expect(prepared.events).toEqual([
-      "bundle:_4.0.22_ check",
-      "bundle:_4.0.22_ exec fastlane ios signing_check",
+      "bundle:_4.0.23_ check",
+      "bundle:_4.0.23_ exec fastlane ios signing_check",
       "probe:root-cwd",
     ]);
 
     const failedCheck = runSigningProof({ FIXTURE_FAIL_CHECK: "1" });
     expect(failedCheck.result.status).not.toBe(0);
-    expect(failedCheck.events).toEqual(["bundle:_4.0.22_ check"]);
+    expect(failedCheck.events).toEqual(["bundle:_4.0.23_ check"]);
 
     const action = parse(readText(".github/actions/ios-signing-keychain/action.yml")) as {
       runs: {

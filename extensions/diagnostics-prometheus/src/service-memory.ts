@@ -110,17 +110,65 @@ export function recordMemorySample(
       labels,
       message.messages,
     );
-    store.counterValue(
-      "openclaw_worker_message_payload_bytes_total",
-      "Known worker payload bytes, excluding transport framing and unmeasured object graphs.",
-      labels,
-      message.payloadBytes,
-    );
+    for (const [requestClass, bytes] of Object.entries(
+      message.payloadBytesByRequestClass ?? {
+        [message.kind === "sqlite_request" || message.kind === "sqlite_reply" ? "other" : ""]:
+          message.payloadBytes,
+      },
+    )) {
+      store.counterValue(
+        "openclaw_worker_message_payload_bytes_total",
+        "Known worker payload bytes, excluding transport framing and unmeasured object graphs.",
+        requestClass ? { ...labels, request_class: requestClass } : labels,
+        bytes,
+      );
+    }
     store.counterValue(
       "openclaw_worker_message_unmeasured_total",
       "Worker messages without a known payload size; these do not contribute to payload bytes.",
       labels,
       message.unmeasuredMessages,
+    );
+  }
+  for (const selection of memory.sessionRowSelections?.selections ?? []) {
+    const labels = { kind: selection.kind, task: selection.task };
+    store.counterValue(
+      "openclaw_session_row_selections_total",
+      "Successful resident session-row selections by query shape and enclosing task.",
+      labels,
+      selection.calls,
+    );
+    store.counterValue(
+      "openclaw_session_row_selection_rows_total",
+      "Resident session rows returned by selections, before federation and visibility filtering.",
+      labels,
+      selection.rows,
+    );
+  }
+  if (memory.sessionRowSelections) {
+    for (const partition of memory.sessionRowSelections.partitions) {
+      for (const outcome of ["hits", "misses"] as const) {
+        store.counterValue(
+          "openclaw_session_row_partition_cache_total",
+          "Retained session-list partition lookups by outcome and enclosing selection task.",
+          { task: partition.task, outcome: outcome === "hits" ? "hit" : "miss" },
+          partition[outcome],
+        );
+      }
+    }
+    for (const revision of memory.sessionRowSelections.partitionRevisions) {
+      store.counterValue(
+        "openclaw_session_row_partition_revisions_total",
+        "Session-list partition revisions by synchronous internal change scope; excludes initial partitions.",
+        { reason: revision.reason },
+        revision.changes,
+      );
+    }
+    store.counterValue(
+      "openclaw_session_row_selection_resets_total",
+      "Broad session-row selection invalidations, including topology replacement and disposal.",
+      {},
+      memory.sessionRowSelections.resets,
     );
   }
   for (const worker of memory.workerLifecycle ?? []) {

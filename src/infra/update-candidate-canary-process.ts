@@ -8,7 +8,8 @@ import {
 } from "../logging/diagnostic-support-redaction.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { signalProcessTree } from "../process/kill-tree.js";
-import { resolveRuntimeArgs } from "./runtime-worker-url.js";
+import { resolveRuntimeArgs, resolveRuntimeWorkerArgv } from "./runtime-worker-url.js";
+import type { UpdateCanaryTarget } from "./update-candidate-canary-commands.js";
 import { UPDATE_CANARY_PROGRESS_PREFIX } from "./update-candidate-canary-progress.js";
 import { createUpdateFailureFact, type UpdateFailureFact } from "./update-failure-facts.js";
 import { warnOnUpdateCleanupFailure } from "./update-maintenance.js";
@@ -16,7 +17,7 @@ import { UPDATE_CANDIDATE_STARTUP_FAILURES } from "./update-preflight-details.js
 import type { UpdateStepResult } from "./update-step-result.js";
 
 export function launchCanary(params: {
-  entry: string;
+  target: UpdateCanaryTarget;
   args: string[];
   root: string;
   env: NodeJS.ProcessEnv;
@@ -29,15 +30,18 @@ export function launchCanary(params: {
   hidesLine?: (line: string) => boolean;
   onStdout?: (stdout: string) => void;
 }) {
-  const { entry, args, env, capture } = params;
+  const { target, args, env, capture } = params;
   params.assertCurrent?.();
   const runtime = params.nodeRunner ?? process.execPath;
-  const invocation = resolveOpenClawCliInvocation({
-    execPath: runtime,
-    execArgv: resolveRuntimeArgs(runtime),
-    entryPath: entry,
-    args,
-  });
+  const invocation =
+    target.kind === "worker"
+      ? { command: runtime, args: [...resolveRuntimeWorkerArgv(target.url, runtime), ...args] }
+      : resolveOpenClawCliInvocation({
+          execPath: runtime,
+          execArgv: resolveRuntimeArgs(runtime),
+          entryPath: target.entryPath,
+          args,
+        });
   const child = spawn(invocation.command, invocation.args, {
     cwd: params.root,
     env,

@@ -141,16 +141,15 @@ it.each(["rejected renewal", "timed-out registration"])(
     expect(mocks.runCommandWithTimeout).toHaveBeenCalledTimes(3);
     if (failure === "timed-out registration") {
       expect(mocks.log.error).toHaveBeenCalledTimes(3);
-      for (const [message] of mocks.log.error.mock.calls) {
-        expect(message.length).toBeLessThan(2000);
-        expect(message).toContain("gog gmail watch start failed");
-        expect(message).toContain("registration stdout tail");
-        expect(message).toContain("registration stderr tail");
-        expect(message).toContain("termination=timeout");
-        expect(message).toContain("code=124");
-        expect(message).toContain("signal=SIGTERM");
-        expect(message).not.toContain("\u001b");
-      }
+      const [message] = mocks.log.error.mock.calls[0]!;
+      expect(message.length).toBeLessThan(2000);
+      expect(message).toContain("gog gmail watch start failed");
+      expect(message).toContain("termination=timeout");
+      expect(message).toContain("code=124");
+      expect(message).toContain("signal=SIGTERM");
+      expect(message).toContain("registration stdout tail");
+      expect(message).toContain("registration stderr tail");
+      expect(message).not.toContain("\u001b");
     }
   },
 );

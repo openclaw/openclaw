@@ -1,6 +1,6 @@
 import type { ChatPendingInputsPage } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import { createInitializationContext } from "./chat-application-context.test-support.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
-import { createInitializationContext } from "./chat-pane.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { createPageState } from "./chat-state-page.ts";
 

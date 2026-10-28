@@ -56,6 +56,8 @@ export function createPluginRecord(params: {
   syntheticAuthRefs?: string[];
   channelIds?: readonly string[];
   providerIds?: readonly string[];
+  declaredContextEngineIds?: readonly string[];
+  turnHandover?: boolean;
   configSchema: boolean;
   contracts?: PluginManifestContracts;
   dashboard?: PluginManifestDashboard;
@@ -97,6 +99,8 @@ export function createPluginRecord(params: {
     providerIds: [...(params.providerIds ?? [])],
     ...createManifestProviderIdLists(params.contracts),
     contextEngineIds: [],
+    declaredContextEngineIds: params.declaredContextEngineIds,
+    ...(params.turnHandover ? { turnHandover: true } : {}),
     agentHarnessIds: [],
     cliCommands: [],
     services: [],

@@ -158,7 +158,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
   },
   ...["create", "validate", "build", "dev"].map((subcommand): CliCommandCatalogEntry => ({
-    commandPath: ["claws", subcommand],
+    commandPath: ["templates", subcommand],
     exact: true,
     policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
   })),
@@ -558,6 +558,11 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     exact: true,
     policy: PASSIVE_STARTUP_POLICY,
     route: { id: "plugins-list" },
+  },
+  {
+    commandPath: ["plugins", "lint"],
+    exact: true,
+    policy: PASSIVE_STARTUP_POLICY,
   },
   // Authoring commands operate on a target package, not operator config, and a
   // scaffolded plugin build can run through an older CLI; the startup guard

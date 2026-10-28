@@ -3,7 +3,7 @@ import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link
 import { openExternalUrlSafe } from "../lib/open-external-url.ts";
 import { COMMUNITY_DISCORD_URL, OFFICIAL_SUPPORT_URL } from "../lib/product-links.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import { renderSidebarMenuAction } from "./app-sidebar-nav-menus.tsx";
+import { renderSidebarMenuAction } from "./app-sidebar-dropdown.tsx";
 import type { IconName } from "./icon-data.ts";
 import { Icon } from "./solid/icon.tsx";
 import type { MenuItem } from "./solid/menu.tsx";

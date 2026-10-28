@@ -1,4 +1,8 @@
 import { normalizeResolvedPricing } from "@openclaw/llm-core";
+import {
+  findNormalizedProviderValue,
+  normalizeProviderId,
+} from "@openclaw/model-catalog-core/provider-id";
 import { normalizeConfiguredProviderCatalogModelId } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord as readModelParams } from "@openclaw/normalization-core/record-coerce";
@@ -24,7 +28,6 @@ import {
   resolveCatalogOwnedModelCompat,
 } from "../model-compat-catalog.js";
 import { modelKey, normalizeStaticProviderModelId } from "../model-ref-shared.js";
-import { findNormalizedProviderValue, normalizeProviderId } from "../model-selection.js";
 import {
   resolveBuiltInModelSuppressionFromManifest,
   shouldUnconditionallySuppress,

@@ -1,5 +1,4 @@
 /** Validate guest JavaScript before execution. */
-import { Script } from "node:vm";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { parseCodeModeScriptSyntax } from "./code-mode-script-syntax.js";
 import { ToolInputError } from "./tool-input-error.js";
@@ -26,11 +25,7 @@ const LEADING_SOURCE_COMMENTS =
   /^(?:(?:\/\/[^\r\n]*(?:\r?\n|$)|\/\*[\s\S]*?\*\/|#[^\r\n]*(?:\r?\n|$))[\t \r\n]*)+/u;
 
 function parsesAsGuestJavaScript(source: string, declaration = ""): boolean {
-  try {
-    return new Script(`(async () => {\n${declaration}${source}\n})`) instanceof Script;
-  } catch {
-    return false;
-  }
+  return parseCodeModeScriptSyntax(`${declaration}${source}`).ok;
 }
 
 function stripShellEnvAssignments(source: string): string {

@@ -36,6 +36,7 @@ import {
   type Manager,
   REQUEST,
   SESSION_TARGET,
+  startInference,
   terminalFrames,
   waitForFast,
 } from "./inference.test-support.js";
@@ -62,19 +63,6 @@ function expectRejected(result: PromiseSettledResult<unknown>, failure: Error) {
   expect(result.reason).toBe(failure);
 }
 
-function startInference(
-  instance: Manager,
-  overrides: Partial<Parameters<Manager["start"]>[0]> = {},
-) {
-  return instance.start({
-    identity: IDENTITY,
-    request: REQUEST,
-    sessionTarget: SESSION_TARGET,
-    sink: overrides.sink ?? createSink().sink,
-    ...overrides,
-  });
-}
-
 function expectCancelled(sink: ReturnType<typeof createSink>) {
   const frames = terminalFrames(sink.frames);
   expect(frames).toHaveLength(1);
@@ -82,6 +70,25 @@ function expectCancelled(sink: ReturnType<typeof createSink>) {
 }
 
 describe("worker inference manager", () => {
+  it("retains exact physical execution after its cancellation acknowledgment", async () => {
+    const { instance, provider } = await pendingInference();
+    const captured = instance.captureSessionCancellation(REQUEST.sessionId, REQUEST.runId);
+    let physicallySettled = false;
+    void captured.settled.then(() => {
+      physicallySettled = true;
+    });
+    try {
+      expect(captured.executing).toBe(true);
+      expect(await captured.cancel()).toEqual([REQUEST.runId]);
+      expect(physicallySettled).toBe(false);
+      provider.resolve(DONE);
+      await captured.settled;
+      expect(physicallySettled).toBe(true);
+    } finally {
+      provider.resolve(DONE);
+      await instance.stop();
+    }
+  });
   it.each([
     { failureKind: "authority-refused", invalidUsage: false },
     { failureKind: "authority-refused", invalidUsage: true },

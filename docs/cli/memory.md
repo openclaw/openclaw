@@ -42,7 +42,8 @@ dreaming consolidation sidecar:
   index. `--json` returns
   `[{"agentId","provider","health","memoryCore":"consolidation-sidecar"}]`.
   `--deep`, `--index`, and `--fix` exit with code 1 because they inspect
-  Memory Core's own index.
+  Memory Core's own index. With `--json`, these refusals return the standard
+  [CLI JSON failure envelope](/cli#json-failures).
 - `memory search` exits with code 1 and names the slot owner instead of
   searching the sidecar index.
 - `index`, `reset`, `forget`, `promote`, and the REM commands keep working on
@@ -151,8 +152,20 @@ indexes before result limits are applied. Ordinary synchronization removes their
 stale index records without `--force` or re-embedding unchanged conversations.
 Historical transcripts without a recognizable helper identity remain eligible.
 
+When a memory file changes, indexing can reuse unchanged chunks from the published
+index of that same file and source, even when their line numbers shift or the
+embedding cache is disabled. Reuse requires matching provider settings, model, input
+format, and vector dimensions; conflicting published vectors are embedded again
+unless the cache already holds a valid match. This does not remove existing cache
+rows or change cache retention.
+
 Full rebuilds wait for temporary database cleanup before reporting completion.
+Searches remain available against the published index while a rebuild finishes.
 File removal runs asynchronously so cleanup does not block the Gateway event loop.
+On `SIGINT` or `SIGTERM`, the CLI reports the signal and waits for admitted work
+and cleanup before exiting (130 or 143 respectively). An admitted rebuild can
+finish during shutdown; an incomplete or failed rebuild never replaces the
+published index.
 SQLite background rebuilds retain completed work when foreground activity interrupts
 indexing. The next sync resumes the rebuild, incorporating source changes before
 publishing the complete index. Closing the memory owner or restarting the Gateway

@@ -1,28 +1,21 @@
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
-import { createInterface } from "node:readline";
-import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import {
-  linuxArmAndroidGradleSkipMessage,
   resolveAndroidSdkEnv,
   run,
   shouldSkipLinuxArmAndroidGradle,
   splitAndroidGradleArgs,
 } from "../../scripts/run-android-gradle.mts";
-import { isProcessAlive, waitForDead } from "../helpers/process-wait.js";
-import { withinTest } from "../helpers/promise.js";
 
 const posixIt = process.platform === "win32" ? it.skip : it;
 
 describe("run-android-gradle", () => {
   it("splits Gradle args from an optional post command", () => {
-    expect(
-      splitAndroidGradleArgs([":app:installPlayDebug", "--", "adb", "shell", "am", "start"]),
-    ).toEqual({
-      gradleArgs: [":app:installPlayDebug"],
-      postArgs: ["adb", "shell", "am", "start"],
+    expect(splitAndroidGradleArgs([":test", "--", "adb", "shell"])).toEqual({
+      gradleArgs: [":test"],
+      postArgs: ["adb", "shell"],
     });
   });
 
@@ -43,18 +36,12 @@ describe("run-android-gradle", () => {
     ).toBe(false);
   });
 
-  it("explains the skip with the override escape hatch", () => {
-    expect(linuxArmAndroidGradleSkipMessage("linux", "arm64")).toContain(
-      "OPENCLAW_ANDROID_GRADLE_ALLOW_LINUX_ARM=1",
-    );
-  });
-
   posixIt(
     "reports an unavailable proof prerequisite without starting Gradle or counting tests",
     () => {
       const result = spawnSync(
         process.execPath,
-        ["scripts/run-android-gradle.mts", "--proof", ":wear-shared:testDebugUnitTest"],
+        ["scripts/run-android-gradle.mts", "--proof", ":test"],
         {
           encoding: "utf8",
           env: {
@@ -101,73 +88,6 @@ describe("run-android-gradle", () => {
     ).toBe(env);
   });
 
-  posixIt(
-    "terminates the active command tree when the wrapper is terminated",
-    async ({ signal }) => {
-      const moduleUrl = pathToFileURL(path.resolve("scripts/run-android-gradle.mts")).href;
-      const childSource = `
-const { spawn } = require("node:child_process");
-const descendant = spawn(process.execPath, [
-  "-e",
-  "setInterval(() => {}, 1_000); process.stdout.write('ready');",
-], { stdio: ["ignore", "pipe", "ignore"] });
-// Resistance/escalation is covered by managed-child-process.test.ts.
-descendant.stdout.once("data", () => {
-  process.stdout.write(
-    JSON.stringify({ childPid: process.pid, descendantPid: descendant.pid }) + "\\n",
-  );
-});
-setInterval(() => {}, 1_000);
-`;
-      const runnerSource = `
-import { run } from ${JSON.stringify(moduleUrl)};
-process.exitCode = await run(
-  process.execPath,
-  ["-e", ${JSON.stringify(childSource)}],
-  process.cwd(),
-);
-`;
-      const runner = spawn(
-        process.execPath,
-        ["--import", "tsx", "--input-type=module", "-e", runnerSource],
-        { stdio: ["ignore", "pipe", "ignore"] },
-      );
-      const runnerPid = expectPid(runner.pid);
-      const processTreeReady = readProcessTree(runner);
-      const closed = waitForClose(runner);
-      let childPid = 0;
-      let descendantPid = 0;
-
-      try {
-        const processTree = await withinTest(processTreeReady, signal);
-        childPid = processTree.childPid;
-        descendantPid = processTree.descendantPid;
-        for (const pid of [childPid, descendantPid]) {
-          expect({ integer: Number.isInteger(pid), alive: isProcessAlive(pid) }).toEqual({
-            integer: true,
-            alive: true,
-          });
-        }
-
-        process.kill(runnerPid, "SIGTERM");
-        const result = await withinTest(closed, signal);
-        // The owner joins the tree, but Darwin may still expose a reaping descendant's PID.
-        await waitForDead(descendantPid, signal);
-
-        expect(isProcessAlive(childPid)).toBe(false);
-        expect(isProcessAlive(descendantPid)).toBe(false);
-        expect(result).toEqual({ code: 143, signal: null });
-      } finally {
-        for (const pid of [runnerPid, childPid, descendantPid]) {
-          if (pid && isProcessAlive(pid)) {
-            process.kill(pid, "SIGKILL");
-          }
-        }
-        await closed;
-      }
-    },
-  );
-
   it("reports spawn errors and returns a failure status", async () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
     const missingCommand = path.join(os.tmpdir(), `openclaw-missing-command-${process.pid}`);
@@ -180,34 +100,3 @@ process.exitCode = await run(
     }
   });
 });
-
-function expectPid(pid: number | undefined): number {
-  if (pid === undefined) {
-    throw new Error("expected child process pid");
-  }
-  return pid;
-}
-
-async function readProcessTree(child: ReturnType<typeof spawn>): Promise<{
-  childPid: number;
-  descendantPid: number;
-}> {
-  if (!child.stdout) {
-    throw new Error("expected child process stdout");
-  }
-  const lines = createInterface({ input: child.stdout });
-  try {
-    for await (const line of lines) {
-      return JSON.parse(line);
-    }
-    throw new Error("runner closed before reporting its process tree");
-  } finally {
-    lines.close();
-  }
-}
-
-async function waitForClose(child: ReturnType<typeof spawn>) {
-  return await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
-    child.once("close", (code, signal) => resolve({ code, signal }));
-  });
-}

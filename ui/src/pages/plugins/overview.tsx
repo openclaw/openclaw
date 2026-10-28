@@ -17,9 +17,45 @@ import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { formatCompactCount } from "./catalog-results.tsx";
 import { renderPluginAuthor, renderPluginOfficialBadge } from "./plugin-card.tsx";
 import { renderPluginRowMessage } from "./plugin-row-message.tsx";
-import { renderPluginSecurityAudit } from "./security-audit.tsx";
 
 registerEnglishCatalog(registerPluginManagementEnglish);
+
+function securityTone(status: string): "pass" | "warning" | "danger" | "unknown" {
+  if (/^(?:clean|pass|safe|benign|cleared)$/iu.test(status)) {
+    return "pass";
+  }
+  if (/^(?:suspicious|warning|review)$/iu.test(status)) {
+    return "warning";
+  }
+  if (/^(?:blocked|danger|fail|malicious)$/iu.test(status)) {
+    return "danger";
+  }
+  return "unknown";
+}
+
+function renderPluginSecurityAudit(status: string, auditUrl: string | null | undefined) {
+  const tone = securityTone(status);
+  const bars = { pass: 3, warning: 2, danger: 1, unknown: 0 }[tone];
+  return (
+    <a
+      class={["plugin-catalog-detail__security", `plugin-catalog-detail__security--${tone}`]}
+      href={auditUrl ?? undefined}
+      target="_blank"
+      rel="noopener noreferrer"
+    >
+      <h2>
+        {t("pluginsPage.detailSecurity")}
+        <span title={t("pluginsPage.detailSecurityAudit")}>{<Icon name="info" />}</span>
+      </h2>
+      <div class="plugin-catalog-detail__security-score">
+        <strong>{tone === "pass" ? "Clean" : tone === "warning" ? "Review" : status}</strong>
+        <For each={[0, 1, 2]}>
+          {(index) => <span class={{ "is-filled": index < bars }} aria-hidden="true" />}
+        </For>
+      </div>
+    </a>
+  );
+}
 
 export function renderPluginCompatibilityNotices(
   notices: PluginCatalogItem["compatibilityNotices"],

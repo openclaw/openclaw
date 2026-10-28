@@ -11,9 +11,8 @@ import { subagentRuns } from "../agents/subagents/registry/subagent-registry-mem
 import { subscribeSubagentRunChanges } from "../agents/subagents/registry/subagent-registry-publication.js";
 import { registerSubagentRun } from "../agents/subagents/registry/subagent-registry.js";
 import { resetSubagentRegistryForTests } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
-import { createZeroUsageFixture } from "../agents/test-helpers/usage-fixtures.js";
+import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
-import type { AssistantMessage } from "../llm/types.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { tryBeginGatewayRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
@@ -231,15 +230,12 @@ export async function createRegisteredCompletionPair(context: GatewayRequestCont
           run.commandEntered.resolve();
           await run.releaseModel.promise;
           command.abortSignal?.throwIfAborted();
-          const message: AssistantMessage & { __openclaw: { runId: string } } = {
-            role: "assistant",
-            content: [{ type: "text", text: run.result }],
-            api: "openai-responses",
-            provider: "openai",
-            model: "synthetic-completion",
-            usage: createZeroUsageFixture(),
-            stopReason: "stop",
-            timestamp: Date.now(),
+          const message = {
+            ...makeAgentAssistantMessage({
+              content: [{ type: "text", text: run.result }],
+              model: "synthetic-completion",
+              timestamp: Date.now(),
+            }),
             __openclaw: { runId: run.runId },
           };
           SessionManager.open(childScope).appendMessage(message);

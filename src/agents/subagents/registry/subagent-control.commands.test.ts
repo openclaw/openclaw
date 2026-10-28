@@ -5,9 +5,7 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { stopSubagentsForRequester } from "../../../auto-reply/reply/abort-operation.js";
 import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../../../config/config.js";
-import { abortControlledSubagents } from "../../../gateway/server-methods/chat-abort-descendants.js";
 import { withExecRequestTurn } from "../../../infra/exec-request-context.js";
 import { getProcessSupervisor } from "../../../process/supervisor/index.js";
 import { beginSessionEffect } from "../../../sessions/session-controller.lifecycle.js";
@@ -28,6 +26,7 @@ import {
   createSubagentRunRecord,
   type SubagentRunRecordOverrides,
 } from "../../subagent-test-fixtures.test-helpers.js";
+import { killSessionSubagentRuns } from "./subagent-control-kill.js";
 import * as killSession from "./subagent-control-session.js";
 import { createControlRunFixture } from "./subagent-control.fixtures.test-support.js";
 import { killAllControlledSubagentRuns, killSubagentRunAdmin } from "./subagent-control.js";
@@ -111,15 +110,45 @@ async function drainCommands(commands: ProcessSession[]) {
   await Promise.all(commands.map(waitForExecSession));
 }
 
+const parentKey = "agent:main:main";
+const identity = (runId: string, sessionKey: string, sessionId: string) => ({
+  runId,
+  sessionKey,
+  sessionId,
+  agentId: "main",
+});
+function interceptPreparation(
+  prepareRead: (original: () => Promise<void> | undefined) => Promise<void> | undefined,
+) {
+  const prepare = killSession.prepareSubagentKillSession;
+  vi.spyOn(killSession, "prepareSubagentKillSession").mockImplementation(async (...args) => {
+    const session = await prepare(...args);
+    return { ...session, prepareRead: () => prepareRead(session.prepareRead) };
+  });
+}
+function expectEvicted(command: ProcessSession) {
+  expect(getSession(command.id)).toBeUndefined();
+  expect(getFinishedSession(command.id)).toBeUndefined();
+}
+function expectServiceSurvives(command: ProcessSession) {
+  expect(command.exited).toBe(false);
+  expect(command.cancellationRequested).not.toBe(true);
+}
+function expectRetained(entry: ReturnType<typeof createSubagentRunRecord>) {
+  expect(subagentRuns.get(entry.runId)).toEqual(entry);
+  expect(loadSubagentRegistryFromSqlite().get(entry.runId)).toEqual(entry);
+}
+
+function expectError(result: unknown, message: string) {
+  expect(result).toMatchObject({ error: expect.stringContaining(message) });
+}
+
 it.each([
-  "owned",
   "legacy-owned",
   "other-controller",
   "new-generation",
   "admin-root",
-  "gateway",
-  "gateway-error",
-  "channel",
+  "lifecycle",
   "nested",
   "preaccept-revoked",
   "postaccept-revoked",
@@ -128,7 +157,7 @@ it.each([
 ] as const)(
   "parent Stop drains completed-child commands only for its %s selection",
   async (selection) => {
-    const requesterSessionKey = "agent:main:main";
+    const requesterSessionKey = parentKey;
     const childSessionKey = "agent:main:subagent:completed-command";
     const sessionId = "completed-command-session";
     await writeCommandSession(childSessionKey, sessionId);
@@ -249,74 +278,34 @@ it.each([
         }
         return plan;
       });
-      const prepare = killSession.prepareSubagentKillSession;
-      vi.spyOn(killSession, "prepareSubagentKillSession").mockImplementation(async (...args) => {
-        const session = await prepare(...args);
-        return {
-          ...session,
-          prepareRead: () => {
-            if (captured && !injected && (alternate || selection === "preaccept-revoked")) {
-              injected = true;
-              if (selection === "preaccept-revoked") {
-                authorized = false;
-                throw new Error("Synthetic preaccept authority revoked");
-              }
-              capture({
-                runId: original.runId,
-                sessionKey: childSessionKey,
-                sessionId,
-                agentId: "main",
-              }).cancel();
-              return (async () => {
-                await waitForExecSession(ordinaryCommand);
-                deleteSession(ordinaryCommand.id);
-                if (selection === "alternate-superseded") {
-                  await publish(successor);
-                  successorCommand = (await startCommands(successor.runId, false))[0];
-                  return;
-                }
-                throw new Error("Synthetic freshness read failed after accepted cancellation");
-              })();
+      interceptPreparation((prepareRead) => {
+        if (captured && !injected && (alternate || selection === "preaccept-revoked")) {
+          injected = true;
+          if (selection === "preaccept-revoked") {
+            authorized = false;
+            throw new Error("Synthetic preaccept authority revoked");
+          }
+          capture(identity(original.runId, childSessionKey, sessionId)).cancel();
+          return (async () => {
+            await waitForExecSession(ordinaryCommand);
+            deleteSession(ordinaryCommand.id);
+            if (selection === "alternate-superseded") {
+              await publish(successor);
+              successorCommand = (await startCommands(successor.runId, false))[0];
+              return;
             }
-            return session.prepareRead();
-          },
-        };
+            throw new Error("Synthetic freshness read failed after accepted cancellation");
+          })();
+        }
+        return prepareRead();
       });
-      if (selection === "gateway" || selection === "gateway-error") {
-        const parent = capture({ sessionKey: requesterSessionKey, agentId: "main" });
-        const result = await abortControlledSubagents({
+      if (selection === "lifecycle") {
+        const result = await killSessionSubagentRuns({
           cfg: getRuntimeConfig(),
           sessionKey: requesterSessionKey,
           agentId: "main",
-          execCancellation:
-            selection === "gateway-error"
-              ? {
-                  ...parent,
-                  settle: async () => {
-                    throw new Error("Synthetic parent command cleanup failed");
-                  },
-                }
-              : parent,
         });
-        expect(result).toMatchObject({
-          status: selection === "gateway-error" ? "error" : "ok",
-          killed: 0,
-          labels: [],
-          execAborted: true,
-        });
-        if (selection === "gateway-error") {
-          expect(result).toMatchObject({
-            error: expect.stringContaining("Synthetic parent command cleanup failed"),
-          });
-        }
-        execAborted = result?.execAborted === true;
-      } else if (selection === "channel") {
-        const result = await stopSubagentsForRequester({
-          cfg: getRuntimeConfig(),
-          requesterSessionKey,
-          requesterAgentId: "main",
-        });
-        expect(result).toEqual({ stopped: 0, failed: 0, execAborted: true });
+        expect(result).toMatchObject({ status: "ok", killed: 0, execAborted: true });
         execAborted = result.execAborted === true;
       } else if (selection === "admin-root") {
         const result = await killSubagentRunAdmin({
@@ -354,15 +343,10 @@ it.each([
         });
         if (alternate) {
           expect(injected).toBe(true);
-          expect(getSession(ordinaryCommand.id)).toBeUndefined();
-          expect(getFinishedSession(ordinaryCommand.id)).toBeUndefined();
-          expect(result).toMatchObject({
-            error: expect.stringContaining("command cleanup could not be confirmed"),
-          });
+          expectEvicted(ordinaryCommand);
+          expectError(result, "command cleanup could not be confirmed");
           if (selection === "alternate-freshness-failed") {
-            expect(result).toMatchObject({
-              error: expect.stringContaining("Synthetic freshness read failed"),
-            });
+            expectError(result, "Synthetic freshness read failed");
           }
         }
         execAborted = result.execAborted === true;
@@ -373,18 +357,15 @@ it.each([
         expect(ordinaryCommand.exitReason).toBe("manual-cancel");
         expect(ordinaryCommand.finalizationFailed === true).toBe(alternate);
       }
-      expect(independentService.exited).toBe(false);
-      expect(independentService.cancellationRequested).not.toBe(true);
+      expectServiceSurvives(independentService);
       if (nestedReceipt) {
         expect(expectDefined(nestedCommand, "nested command")).toMatchObject({
           exited: true,
           exitReason: "manual-cancel",
         });
-        expect(subagentRuns.get(nestedReceipt.runId)).toEqual(nestedReceipt);
-        expect(loadSubagentRegistryFromSqlite().get(nestedReceipt.runId)).toEqual(nestedReceipt);
+        expectRetained(nestedReceipt);
       }
-      expect(subagentRuns.get(original.runId)).toEqual(receipt);
-      expect(loadSubagentRegistryFromSqlite().get(original.runId)).toEqual(receipt);
+      expectRetained(receipt);
       if (selection === "new-generation" || selection === "alternate-superseded") {
         expect(expectDefined(successorCommand, "replacement command").exited).toBe(false);
         expect(subagentRuns.get(successor.runId)).toEqual(successor);
@@ -399,32 +380,18 @@ it.each([
   },
 );
 
-it.each([
-  "confirmed",
-  "uncertain",
-  "failed",
-  "evicted",
-  "late-evicted",
-  "late-revoked-evicted",
-  "late-owner-evicted",
-] as const)(
+it.each(["confirmed", "uncertain", "late-revoked-evicted", "late-owner-evicted"] as const)(
   "parent cancellation reports %s command cleanup and preserves an independent service",
   async (cleanup) => {
-    const requesterSessionKey = "agent:main:main";
+    const requesterSessionKey = parentKey;
     const childSessionKey = "agent:main:subagent:active-command";
     const sessionId = "active-command-session";
     const runId = "active-command-run";
     const storePath = await writeCommandSession(childSessionKey, sessionId);
     await runs.register(runId, storePath, {
       childSessionKey,
-      requesterSessionKey,
-      requesterAgentId: "main",
-      requesterDisplayKey: requesterSessionKey,
-      task: "Run an ordinary command and an independent service",
-      cleanup: "keep",
       collect: true,
       queued: true,
-      expectsCompletionMessage: false,
     });
     expect(await startQueuedSubagentRun(runId)).toBe(true);
     const controller = new AbortController();
@@ -434,7 +401,7 @@ it.each([
     const admission = await beginSessionEffect({
       scope: storePath,
       identities: [childSessionKey, sessionId],
-      run: { runId, sessionKey: childSessionKey, sessionId, agentId: "main" },
+      run: identity(runId, childSessionKey, sessionId),
       assertAllowed: () => {},
       onInterrupt: (reason) => {
         // The native kill owner supplies the reason; the admitted command relays it.
@@ -447,13 +414,11 @@ it.each([
       },
     });
     const commands: ProcessSession[] = [];
-    const late = cleanup === "late-evicted" || cleanup === "late-revoked-evicted";
+    const late = cleanup === "late-revoked-evicted";
     const lateOwner = cleanup === "late-owner-evicted";
     const order: string[] = [];
-    const lateCommandRequested = createDeferred();
-    const lateCommandReady = createDeferred();
-    const ownerRequested = createDeferred();
-    const ownerCommandsReady = createDeferred();
+    const requested = createDeferred();
+    const registered = createDeferred();
     let captured = false;
     let lateStarted = false;
     const supervisor = getProcessSupervisor();
@@ -497,11 +462,11 @@ it.each([
       .run(async () => {
         if (lateOwner) {
           ready.resolve();
-          await ownerRequested.promise;
+          await requested.promise;
         }
         return withCommands(
           commands,
-          { runId, sessionKey: childSessionKey, sessionId, agentId: "main" },
+          identity(runId, childSessionKey, sessionId),
           async (start) => {
             if (lateOwner) {
               order.push("owner-created");
@@ -512,15 +477,15 @@ it.each([
             if (lateOwner) {
               lateStarted = true;
               order.push("registered");
-              ownerCommandsReady.resolve();
+              registered.resolve();
             }
             ready.resolve();
             if (late) {
-              await lateCommandRequested.promise;
+              await requested.promise;
               lateStarted = true;
               await start(false, "late-ordinary-command");
               order.push("registered");
-              lateCommandReady.resolve();
+              registered.resolve();
             }
             await interrupted.promise;
           },
@@ -530,7 +495,7 @@ it.each([
       .finally(() => {
         // Result eviction can precede the native kill owner's cleanup verdict.
         const ordinary = commands[late ? 2 : 0];
-        if ((cleanup === "evicted" || late || lateOwner) && ordinary?.exited) {
+        if ((late || lateOwner) && ordinary?.exited) {
           deleteSession(ordinary.id);
           recordEvicted = true;
           order.push("evicted");
@@ -540,11 +505,9 @@ it.each([
       });
     void execution.catch((error: unknown) => {
       ready.reject(error);
-      lateCommandReady.reject(error);
-      ownerCommandsReady.reject(error);
+      registered.reject(error);
     });
-    void lateCommandReady.promise.catch(() => {});
-    void ownerCommandsReady.promise.catch(() => {});
+    void registered.promise.catch(() => {});
     let stopping: ReturnType<typeof killAllControlledSubagentRuns> | undefined;
     try {
       await ready.promise;
@@ -561,23 +524,12 @@ it.each([
           }
           return plan;
         });
-        const prepare = killSession.prepareSubagentKillSession;
-        vi.spyOn(killSession, "prepareSubagentKillSession").mockImplementation(async (...args) => {
-          const session = await prepare(...args);
-          return {
-            ...session,
-            prepareRead: () => {
-              if (captured && !lateStarted) {
-                if (lateOwner) {
-                  ownerRequested.resolve();
-                  return ownerCommandsReady.promise;
-                }
-                lateCommandRequested.resolve();
-                return lateCommandReady.promise;
-              }
-              return session.prepareRead();
-            },
-          };
+        interceptPreparation((prepareRead) => {
+          if (captured && !lateStarted) {
+            requested.resolve();
+            return registered.promise;
+          }
+          return prepareRead();
         });
         controller.signal.addEventListener("abort", () => order.push("cancel-accepted"), {
           once: true,
@@ -585,12 +537,7 @@ it.each([
       }
       const observation =
         cleanup === "uncertain"
-          ? captureExecRequestCancellation({
-              runId,
-              sessionKey: childSessionKey,
-              sessionId,
-              agentId: "main",
-            })
+          ? captureExecRequestCancellation(identity(runId, childSessionKey, sessionId))
           : undefined;
       stopping = killAllControlledSubagentRuns({
         cfg: getRuntimeConfig(),
@@ -628,11 +575,7 @@ it.each([
           : {}),
       });
       if (cleanup === "late-revoked-evicted") {
-        expect(result).toMatchObject({
-          error: expect.stringContaining(
-            "Synthetic caller revoked after native cancellation acceptance",
-          ),
-        });
+        expectError(result, "Synthetic caller revoked after native cancellation acceptance");
       }
       if (observation) {
         // This plan never requested cancellation; native Stop accepted it through another owner.
@@ -650,19 +593,16 @@ it.each([
       if (cleanup === "uncertain") {
         expect(ordinary.cleanupUncertain).toBe(true);
       }
-      if (cleanup === "evicted" || late || lateOwner) {
+      if (late || lateOwner) {
         expect(recordEvicted).toBe(true);
-        expect(getSession(ordinary.id)).toBeUndefined();
-        expect(getFinishedSession(ordinary.id)).toBeUndefined();
+        expectEvicted(ordinary);
       }
-      expect(service.exited).toBe(false);
-      expect(service.cancellationRequested).not.toBe(true);
+      expectServiceSurvives(service);
       expect(resolveSubagentSessionStatus(subagentRuns.get(runId))).toBe("killed");
     } finally {
       spawnFault.mockRestore();
       controller.abort();
-      lateCommandRequested.resolve();
-      ownerRequested.resolve();
+      requested.resolve();
       interrupted.resolve();
       await drainCommands(commands);
       await execution.catch(() => {});

@@ -1,7 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo } from "solid-js";
 import { showToast } from "../lib/toast.ts";
-import { SidebarDropdown } from "./app-sidebar-nav-menus.tsx";
+import { SidebarDropdown } from "./app-sidebar-dropdown.tsx";
 import { iconData, type IconName } from "./icon-data.ts";
 import type { SidebarMenusOwner } from "./sidebar-menus-types.ts";
 import type { SidebarMenus } from "./sidebar-menus.tsx";

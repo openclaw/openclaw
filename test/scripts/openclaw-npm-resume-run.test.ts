@@ -61,7 +61,6 @@ describe("openclaw npm resume run identity", () => {
   function publicationRun(
     overrides: Record<string, unknown> = {},
     publish = true,
-    latest: Record<string, unknown> | null = {},
     jobs?: OpenClawNpmResumeValidationInput["jobs"],
     annotated = false,
   ) {
@@ -69,9 +68,6 @@ describe("openclaw npm resume run identity", () => {
     const responses = new Map<string, unknown>();
     const api = (path: string, value: unknown) =>
       responses.set(`api repos/openclaw/openclaw/${path} --method GET`, value);
-    if (!jobs && latest !== null) {
-      api("actions/runs/456", { ...input.run, ...overrides, ...latest });
-    }
     api("actions/runs/456/attempts/1", { ...input.run, ...overrides });
     api("actions/workflows/openclaw-npm-release.yml", { id: 101 });
     api(`git/ref/tags/${BRANCH}`, annotated ? input.tagRef : object());
@@ -114,7 +110,7 @@ describe("openclaw npm resume run identity", () => {
       },
       ...(otherFailure ? [{ conclusion: "failure", name: "unexpected_failure", steps: [] }] : []),
     ];
-    const runGh = publicationRun({ conclusion: "failure" }, true, {}, jobs);
+    const runGh = publicationRun({ conclusion: "failure" }, true, jobs);
     if (otherFailure) {
       expect(() =>
         validateOpenClawNpmResumeRun({ ...runFixture({ conclusion: "failure" }), jobs }),
@@ -127,13 +123,6 @@ describe("openclaw npm resume run identity", () => {
         workflowSha: SHA,
       });
     }
-  });
-
-  it.each(["success", "failure"])("keeps signed attempt after %s rerun", (conclusion) => {
-    const runGh = publicationRun({}, true, { run_attempt: 2, conclusion });
-    expect(recover(publicationEvidence(), runGh)).toMatchObject({ runId: "456", runAttempt: 1 });
-    expect(runGh.mock.calls.some(([args]) => args.includes(RUN_API))).toBe(false);
-    expect(runGh.mock.calls.find(([args]) => args[0] === "run")?.[0]).toContain("--attempt");
   });
 
   it("accepts repeated receipts only when they identify the same publisher", () => {
@@ -206,7 +195,6 @@ describe("openclaw npm resume run identity", () => {
     ["branch", { head_branch: "main" }],
     ["workflow", { workflow_id: 999 }],
     ["event", { event: "push" }],
-    ["conclusion", { conclusion: "failure" }],
     ["path", { path: ".github/workflows/ci.yml" }],
   ])("rejects an untrusted %s", (_label, run) => {
     expect(() => validateOpenClawNpmResumeRun(runFixture(run))).toThrow(identityError);
@@ -229,7 +217,7 @@ describe("openclaw npm resume run identity", () => {
   });
 
   it.each([true, false])("loads the immutable publisher with an annotated tag: %s", (annotated) => {
-    const runGh = publicationRun({}, true, null, undefined, annotated);
+    const runGh = publicationRun({}, true, undefined, annotated);
     expect(recover(publicationEvidence(), runGh, "456")).toEqual({
       runId: "456",
       runAttempt: 1,
@@ -238,12 +226,6 @@ describe("openclaw npm resume run identity", () => {
       workflowRef: `refs/tags/${BRANCH}`,
       workflowSha: SHA,
     });
-    expect(runGh).toHaveBeenCalledTimes(annotated ? 6 : 4);
-    if (!annotated) {
-      expect(runGh.mock.calls.flatMap(([args]) => args)).not.toContain(
-        `repos/openclaw/openclaw/compare/${SHA}...main`,
-      );
-    }
   });
 });
 

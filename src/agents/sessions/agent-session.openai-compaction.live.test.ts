@@ -13,6 +13,7 @@ import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agen
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import { runEmbeddedAgent } from "../embedded-agent-runner.js";
 import { useLiveTestRuntimeConfig } from "../live-test-helpers.js";
+import { cleanupLiveSessions } from "./agent-session-live-cleanup.test-support.js";
 import { createResourceLoader } from "./agent-session-loop-resource-loader.test-support.js";
 import { AgentSession } from "./agent-session.js";
 import { AuthStorage } from "./auth-storage.js";
@@ -160,14 +161,7 @@ async function createLiveSession() {
 }
 
 afterEach(async () => {
-  for (const session of sessions.splice(0)) {
-    session.dispose();
-  }
-  await Promise.all(
-    tempRoots.splice(0).map(async (root) => {
-      await rm(root, { recursive: true, force: true });
-    }),
-  );
+  await cleanupLiveSessions(sessions, tempRoots);
 });
 
 describeLive("OpenAI AgentSession repeated compaction live", () => {

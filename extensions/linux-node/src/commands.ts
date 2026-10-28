@@ -56,18 +56,7 @@ function isLocationDisabledOutput(output: string): boolean {
   return /Geolocation disabled|disallowed, no agent|AccessDenied|not authorized/iu.test(output);
 }
 
-function parseLocationOutput(
-  output: string,
-  maxAgeMs?: number,
-): {
-  lat: number;
-  lon: number;
-  accuracyMeters: number;
-  altitudeMeters?: number;
-  speedMps?: number;
-  headingDeg?: number;
-  timestamp: string;
-} | null {
+function parseLocationOutput(output: string, maxAgeMs?: number) {
   const blocks = output.split(/\nNew location:\s*\n/gu);
   for (const block of blocks.toReversed()) {
     const latitude = /Latitude:\s*([-+\d.]+)/u.exec(block)?.[1];

@@ -30,6 +30,7 @@ import { loadTranscriptEventsSync } from "./session-accessor.sqlite-read.js";
 import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import * as workerReaders from "./session-transcript-worker-readers.js";
+import { promptReport } from "./system-prompt-report.test-support.js";
 import type { SessionEntry } from "./types.js";
 
 let state: OpenClawTestState;
@@ -123,14 +124,7 @@ it("hydrates only old scoped candidates while protecting out-of-scope history re
   const snapshots = {
     sessionDiffBaseline: { version: 1, sessionId, root: "/synthetic", files: [] },
     skillsSnapshot: { prompt: "saved prompt".repeat(1024), skills: [] },
-    systemPromptReport: {
-      source: "run",
-      generatedAt: 1,
-      systemPrompt: { chars: 1, projectContextChars: 0, nonProjectContextChars: 1 },
-      injectedWorkspaceFiles: [],
-      skills: { promptChars: 0, entries: [] },
-      tools: { listChars: 0, schemaChars: 0, entries: [] },
-    },
+    systemPromptReport: promptReport(1, 1, 0),
   } satisfies Partial<SessionEntry>;
   const survivorReferences = {
     previousSessionId: "protected-previous",
@@ -304,7 +298,10 @@ it("leaves a missing lifecycle store absent", async () => {
   expect(fs.existsSync(databasePath)).toBe(false);
 });
 
-it("keeps orphan plans across page boundaries and protects retained references", () => {
+it("pages orphan marker reads while protecting fresh and retained history", () => {
+  const freshSessionId = "history-000";
+  const unrelatedSessionId = "history-001";
+  const marker = "artifact%_plan-marker";
   const ids = Array.from(
     { length: 129 },
     (_, index) => `history-${String(index).padStart(3, "0")}`,
@@ -319,17 +316,55 @@ it("keeps orphan plans across page boundaries and protects retained references",
     );
     for (const id of ids) {
       window.run(id, sessionKey);
-      transcript.run(id, JSON.stringify(event));
+      transcript.run(
+        id,
+        JSON.stringify({
+          ...event,
+          runId: id === unrelatedSessionId ? "artifactXXplan-marker" : marker,
+        }),
+      );
     }
   }, options);
-  const plan = artifactPlanning.planSessionLifecycleArtifactCleanup(database, {
-    ...planInput(),
-    sessionKeySegmentPrefix: "unrelated-",
-    nowMs: Date.now(),
-  });
-  expect(database.db.isTransaction).toBe(false);
-  expect(plan.entries).toEqual([]);
-  expect(plan.deletePlans.map((item) => item.sessionId)).toEqual(
-    ids.filter((id) => id !== ids.at(-2)),
+  const reads = trackSqliteStatementExecutions(
+    requireNativeSqliteDatabase(database.db),
+    ["transcriptSelection"],
+    (sql) =>
+      sql.includes('from "transcript_events"') &&
+      (sql.includes('max("created_at")') || sql.includes(' as "event_json"'))
+        ? "transcriptSelection"
+        : null,
   );
+  const nowMs = Date.now();
+  const plan = () =>
+    artifactPlanning.planSessionLifecycleArtifactCleanup(database, {
+      ...planInput(),
+      transcriptContentMarker: marker,
+      sessionKeySegmentPrefix: "unrelated-",
+      orphanTranscriptMinAgeMs: 300_000,
+      nowMs,
+    });
+  try {
+    const first = plan();
+    expect(database.db.isTransaction).toBe(false);
+    expect(first.entries).toEqual([]);
+    expect(first.deletePlans.map((item) => item.sessionId)).toEqual(
+      ids.filter((id) => id !== unrelatedSessionId && id !== ids.at(-2)),
+    );
+    expect(reads.counts.transcriptSelection).toBe(2);
+
+    // A later event must invalidate eligibility even when its payload has no marker.
+    runOpenClawAgentWriteTransaction((transaction) => {
+      transaction.db
+        .prepare(
+          "INSERT INTO transcript_events (session_id, seq, event_json, created_at) VALUES (?, 1, ?, ?)",
+        )
+        .run(freshSessionId, JSON.stringify({ type: "metadata" }), nowMs);
+    }, options);
+    expect(plan().deletePlans.map((item) => item.sessionId)).toEqual(
+      ids.filter((id) => id !== freshSessionId && id !== unrelatedSessionId && id !== ids.at(-2)),
+    );
+    expect(reads.counts.transcriptSelection).toBe(4);
+  } finally {
+    reads.restore();
+  }
 });

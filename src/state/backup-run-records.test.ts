@@ -396,9 +396,9 @@ describe("backup run records", () => {
       code: "ENOENT",
     });
     const formatTimeAgo = (ageMs: number) => `${ageMs / 3_600_000}h ago`;
-    const statusValue = (freshness: BackupRunFreshness, now: number) =>
-      buildBackupStatusValue({ freshness, now, formatTimeAgo });
-    expect(statusValue({}, 10)).toBe("none recorded");
+    const statusValue = (freshness: BackupRunFreshness) =>
+      buildBackupStatusValue({ freshness, formatTimeAgo });
+    expect(statusValue({})).toBe("none recorded");
     const failed: BackupRunRecord = {
       id: "failed",
       createdAt: 1,
@@ -406,9 +406,8 @@ describe("backup run records", () => {
       status: "failed",
       kind: "archive",
     };
-    expect(statusValue({ latest: failed }, 3 * 24 * 3_600_000 + 1)).toBe(
-      "last attempt failed 72h ago (archive)",
-    );
+    vi.spyOn(Date, "now").mockReturnValueOnce(3 * 24 * 3_600_000 + 1);
+    expect(statusValue({ latest: failed })).toBe("last attempt failed 72h ago (archive)");
     await checkHint(env, "No successful backup is recorded.");
 
     runOpenClawStateWriteTransaction(() => undefined, { env });
@@ -427,7 +426,7 @@ describe("backup run records", () => {
     });
     const pushFailed = await readBackupRunFreshness(env);
     expect(pushFailed.latest?.error).toBe("x".repeat(1_199));
-    expect(statusValue(pushFailed, 3_600_002)).toBe("last ok 1h ago (git, push failing)");
     await checkHint(env, /configured Git remote.*\/backups\/git/su, 3_600_002);
+    expect(statusValue(pushFailed)).toBe("last ok 1h ago (git, push failing)");
   });
 });

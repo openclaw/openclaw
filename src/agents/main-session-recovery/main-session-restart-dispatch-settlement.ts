@@ -7,6 +7,8 @@ import {
   GatewayOperatorRecoveryAuthorizationError,
   GatewayOperatorRecoveryOwnershipError,
 } from "../../infra/restart-recovery-errors.js";
+import { captureSessionControllerSourceStopAcknowledgment } from "../../sessions/session-controller.mailbox-source.js";
+import type { SessionControllerInput } from "../../sessions/session-controller.mailbox.js";
 import { buildMainSessionRecoverySettlementPatch } from "./main-session-recovery-clear.js";
 import type { MainSessionRecoveryReservation } from "./main-session-recovery-state.js";
 import {
@@ -15,7 +17,10 @@ import {
 } from "./main-session-recovery-store.js";
 import type { RestartRecoveryTerminalStatus } from "./main-session-restart-dispatch-start.js";
 import type { ResumeMainSessionParams } from "./main-session-restart-dispatch.types.js";
-import { finishDelegatedRestartRecovery } from "./main-session-restart-recovery-failure.js";
+import {
+  finishDelegatedRestartRecovery,
+  settleTerminalPendingFinalRecovery,
+} from "./main-session-restart-recovery-failure.js";
 
 export async function rollbackRestartRecoveryReservation(
   params: MainSessionRecoveryStoreTarget & {
@@ -28,6 +33,43 @@ export async function rollbackRestartRecoveryReservation(
     requireWriteSuccess: true,
     target: params,
   });
+}
+
+/** Join an accepted pre-start cancellation before restoring its durable recovery claim. */
+export async function reconcileAcceptedRestartRecoveryCancellation(params: {
+  controllerInput?: SessionControllerInput;
+  dispatchAccepted: boolean;
+  executionStarted: boolean;
+  preStartAbortAttempted: boolean;
+  preStartAbortConfirmed: boolean;
+  repairAcceptedRecovery: () => Promise<void>;
+  shouldContinue?: () => boolean;
+}): Promise<boolean> {
+  const current = () => params.shouldContinue?.() !== false;
+  const unconfirmedStartTimeout =
+    params.dispatchAccepted &&
+    !params.executionStarted &&
+    params.preStartAbortAttempted &&
+    !params.preStartAbortConfirmed &&
+    current();
+  if (
+    !params.executionStarted &&
+    params.controllerInput?.custody.rpcAdopted === true &&
+    params.controllerInput.abortSignal.aborted &&
+    current()
+  ) {
+    // Source adoption can precede dispatch acceptance; Stop owns this terminal publication.
+    await captureSessionControllerSourceStopAcknowledgment(params.controllerInput);
+  }
+  if (
+    params.dispatchAccepted &&
+    !params.executionStarted &&
+    (!params.preStartAbortAttempted || params.preStartAbortConfirmed) &&
+    current()
+  ) {
+    await params.repairAcceptedRecovery();
+  }
+  return unconfirmedStartTimeout;
 }
 
 /** A definitive pre-admission denial settles locally without dropping other recovery custody. */
@@ -90,11 +132,35 @@ async function settleRestartRecoveryDispatch(params: {
   expectedRecoveryRunId: string;
   expectedRecoverySourceRunId?: string;
   expectedSessionId: string;
+  pendingFinalDelivery?: SessionEntry["pendingFinalDelivery"];
+  sessionKey: string;
   sessionKeys: readonly string[];
   shouldContinue?: () => boolean;
   storePath: string;
   terminalStatus?: RestartRecoveryTerminalStatus;
 }): Promise<void> {
+  if (
+    params.terminalStatus &&
+    params.terminalStatus !== "ok" &&
+    (await settleTerminalPendingFinalRecovery({
+      ...params,
+      runId: params.expectedRecoveryRunId,
+      pendingFinalDelivery: params.pendingFinalDelivery,
+      status:
+        params.terminalStatus === "cancelled"
+          ? "killed"
+          : params.terminalStatus === "timeout"
+            ? "timeout"
+            : "failed",
+      assertCurrent: () => {
+        if (params.shouldContinue?.() === false) {
+          throw new Error("Restart recovery settlement is no longer current.");
+        }
+      },
+    }))
+  ) {
+    return;
+  }
   await applySessionEntryReplacements({
     agentId: params.agentId,
     sessionKeys: params.sessionKeys,
@@ -185,7 +251,6 @@ export async function settleAcceptedRestartRecovery(
   params: Parameters<typeof settleRestartRecoveryDispatch>[0] & {
     lifecycleGeneration: string;
     reservation?: MainSessionRecoveryReservation;
-    sessionKey: string;
   },
 ): Promise<boolean> {
   const admission = await commitMainSessionRecovery({

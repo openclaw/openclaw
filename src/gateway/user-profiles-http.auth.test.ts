@@ -1,6 +1,7 @@
 import { createServer, IncomingMessage, ServerResponse, type Server } from "node:http";
 import { Socket } from "node:net";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { listenLoopback } from "../../test/helpers/gateway-integration-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveControlUiAuthCandidates } from "../../ui/src/app/control-ui-auth.ts";
 import { setAvatarGatewayOrigin } from "../../ui/src/lib/identity-avatar-context.ts";
@@ -76,14 +77,7 @@ describe("personal avatar HTTP authentication", () => {
         }
       });
     });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("expected an HTTP listener");
-    }
-    origin = "http://127.0.0.1:" + address.port;
+    origin = await listenLoopback(server);
   });
 
   afterAll(async () => {

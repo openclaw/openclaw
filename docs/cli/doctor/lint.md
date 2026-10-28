@@ -103,6 +103,15 @@ Explicit lint exit codes:
 
 When the updater runs lint, warning-severity findings below its error threshold are retained in a separate JSON `warnings` array. They do not change the lint exit code. The updater records these advisories in its run history, including intentional open channel policies, so they remain available in `openclaw update status`. Ordinary standalone lint keeps the selected output threshold.
 
+Agent stores held after deletion-journal reconstruction appear under
+`core/doctor/agent-deletion-journal`, with the store path, an `errorCode`, and a
+`fixHint`. The existing `core/doctor/state-schema` check reads these holds and
+missing or unreadable history from its shared-state snapshot; lint does not repeat
+Doctor's database discovery or reconstruction. Run `openclaw doctor --fix` to restore verified configured stores after
+backups; stores whose ownership cannot be verified remain preserved with explicit
+restoration guidance. Dead-holder database leases are reclaimable during repair
+and do not by themselves require adopting or deleting an agent.
+
 If a caller cancels state-lease acquisition before an inspection starts, Doctor records
 an informational diagnostic with `errorCode: OPENCLAW_STATE_LEASE_ABORTED`, the elapsed
 time, and the caller's signal as its cause. Below the selected threshold, this diagnostic
@@ -170,9 +179,18 @@ serving configuration. Validate plugin-provided servers or agent-local auth prof
 from an authenticated serving-agent turn so refreshed credentials persist with their
 owner. Non-OAuth MCP schema checks still run.
 
+Workboard tool schema discovery does not open its durable store. Inspecting schemas
+leaves Workboard data and PostgreSQL namespaces unchanged, including when the
+private inspection state has no Workboard engine anchor.
+
 ## Post-upgrade mode
 
 `openclaw doctor --post-upgrade` runs plugin compatibility checks for chaining after a build or upgrade. Findings go to stdout; exit code is 1 if any finding has `level: "error"`. Add `--json` for a machine-readable envelope (`{ probesRun, findings }`), suitable for CI, the community `fork-upgrade` skill, and other post-upgrade smoke tooling. If the installed plugin index is missing or malformed, JSON mode still emits the envelope with a `plugin.index_unavailable` error finding.
+
+Standalone builds validate compiled plugin entries against the running image's
+module inventory. Those entries do not need a second copy on disk. Plugin package
+boundaries still apply, and entries outside the image must have their runtime
+files installed.
 
 The checks also warn with `plugin.version_drift` when an enabled official plugin
 in the installed index belongs to a different release cohort than the upgraded

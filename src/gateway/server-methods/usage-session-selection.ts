@@ -231,6 +231,8 @@ export async function selectUsageSessions(params: {
   startMs: number;
   endMs: number;
   visibilityFilter?: (key: string, entry: SessionEntry) => boolean;
+  /** Overview reads judge freshness in the cache worker, without transcript statistics. */
+  statistics?: false;
 }): Promise<UsageSessionSelection[]> {
   const {
     config,
@@ -287,6 +289,7 @@ export async function selectUsageSessions(params: {
           ...(effectiveAgentId ? { agentId: effectiveAgentId } : {}),
           startMs,
           endMs,
+          statistics: params.statistics,
         })
       : [];
   const discoveredByIdentity = new Map(

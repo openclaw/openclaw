@@ -2,14 +2,12 @@ import { assertSecretOwnerAvailable } from "openclaw/plugin-sdk/channel-secret-o
 import type { ResolvedIrcAccount } from "./accounts.js";
 import type { IrcClientOptions } from "./client.js";
 
-type IrcConnectOverrides = Omit<
-  Partial<IrcClientOptions>,
-  "host" | "port" | "tls" | "nick" | "username" | "realname" | "password" | "nickserv"
->;
-
 export function buildIrcConnectOptions(
   account: ResolvedIrcAccount,
-  overrides: IrcConnectOverrides = {},
+  overrides: Omit<
+    Partial<IrcClientOptions>,
+    "host" | "port" | "tls" | "nick" | "username" | "realname" | "password" | "nickserv"
+  > = {},
 ): IrcClientOptions {
   assertSecretOwnerAvailable("account", `irc:${account.accountId}`);
   if (account.tokenStatus === "configured_unavailable") {

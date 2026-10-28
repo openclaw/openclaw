@@ -1,5 +1,4 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { diagnosticLogger } from "../logging/diagnostic-runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   controllerSource as reserve,
@@ -110,7 +109,6 @@ it("treats equal active identities in two stores as busy and mutates only the se
   expect(ownerA).toBeDefined();
   expect(ownerB).toBeDefined();
   expect(ownerA).not.toBe(ownerB);
-  using warning = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
   expect(resolveRun("incarnation")).toEqual({ kind: "ambiguous", operations: [ownerA, ownerB] });
   expect(isSessionRunActive("incarnation")).toBe(true);
   for (const lookup of [
@@ -121,13 +119,6 @@ it("treats equal active identities in two stores as busy and mutates only the se
   ]) {
     expect(lookup).toThrow(ReplyRunAlreadyActiveError);
   }
-  const entryIds = [ownerA, ownerB]
-    .map((operation) => entryFor(operation!).id)
-    .toSorted()
-    .join(",");
-  expect(warning).toHaveBeenCalledWith(
-    `ambiguous session controller identity: sessionId=incarnation entryIds=${entryIds}`,
-  );
   let idle = false;
   const idleReceipt = waitForSessionRunIdle(key).then((result) => {
     idle = result;

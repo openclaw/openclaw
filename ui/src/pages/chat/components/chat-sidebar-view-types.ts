@@ -1,7 +1,7 @@
 import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
 import type { MarkdownFileLinkTarget } from "../../../components/markdown-file-links.ts";
 import type { SessionLinkTarget } from "../../../components/markdown-session-links.ts";
-import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
+import type { EmbedSandboxMode } from "../../../lib/chat/canvas-embed-policy.ts";
 import type { SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import type { createSessionWorkspaceProps } from "./chat-session-workspace.ts";
 import type {

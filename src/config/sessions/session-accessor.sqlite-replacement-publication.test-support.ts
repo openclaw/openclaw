@@ -13,30 +13,22 @@ export function getReplacementPublicationDelivery() {
 
 vi.mock("../../state/openclaw-agent-execution.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../state/openclaw-agent-execution.js")>();
-  const withDelivery = (
-    owned: ReturnType<typeof actual.captureOpenClawAgentDatabaseExecution>,
-  ): typeof owned => {
-    return {
-      ...owned,
-      get fileIdentity() {
-        return owned.fileIdentity;
-      },
-      runExisting: (source, operation, options) =>
-        owned.runExisting(
-          source,
-          (scope) =>
-            operation({
-              execute: async (command, commandOptions) => {
-                const result = await scope.execute(command, commandOptions);
-                if (command.type === "session.entries.replace") {
-                  await delivery.afterResult?.(result);
-                }
-                return result;
-              },
-            }),
-          options,
-        ),
-      release: async () => {
+  const { decorateSessionExecutionCaptures } =
+    await import("./session-execution-delivery.test-support.js");
+  return {
+    ...actual,
+    ...decorateSessionExecutionCaptures(
+      actual,
+      (scope) => ({
+        execute: async (command, commandOptions) => {
+          const result = await scope.execute(command, commandOptions);
+          if (command.type === "session.entries.replace") {
+            await delivery.afterResult?.(result);
+          }
+          return result;
+        },
+      }),
+      async (owned) => {
         await owned.release();
         const afterRelease = delivery.afterRelease;
         delivery.afterRelease = undefined;
@@ -45,16 +37,7 @@ vi.mock("../../state/openclaw-agent-execution.js", async (importOriginal) => {
           throw delivery.releaseFailure;
         }
       },
-    };
-  };
-  return {
-    ...actual,
-    captureOpenClawAgentDatabaseExecution: (
-      ...args: Parameters<typeof actual.captureOpenClawAgentDatabaseExecution>
-    ) => withDelivery(actual.captureOpenClawAgentDatabaseExecution(...args)),
-    captureOpenClawAgentDatabasePreparationExecution: (
-      ...args: Parameters<typeof actual.captureOpenClawAgentDatabasePreparationExecution>
-    ) => withDelivery(actual.captureOpenClawAgentDatabasePreparationExecution(...args)),
+    ),
   };
 });
 

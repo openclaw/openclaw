@@ -2,7 +2,7 @@ import { projectChatFields } from "./chat-field-projection.ts";
 import type {
   HumanMentionAccess,
   HumanMentionRead,
-} from "./components/chat-composer-mention-menu.tsx";
+} from "./components/chat-composer-mention-menu-state.ts";
 
 export type ChatMobilePeopleMentions = {
   readonly status: "idle" | "loading" | "ready" | "unavailable" | "error" | "insert-rejected";

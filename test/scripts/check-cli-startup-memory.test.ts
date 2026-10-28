@@ -70,9 +70,18 @@ function runStartupMemoryCheckWithHelpSamples(
   tempRoot = tempRoots.make("openclaw-startup-memory-test-"),
 ) {
   let sampleIndex = 0;
-  return runCheck(reportArgs(tempRoot), {
+  const homes = new Set<string>();
+  const result = runCheck(reportArgs(tempRoot), {
     platform: "linux",
-    spawnSync: () => {
+    spawnSync: (_command: string, args: string[], options: { env: Record<string, string> }) => {
+      expect(args[0]).toMatch(/bench-entry\.mjs$/u);
+      expect(args[1]).not.toBe("openclaw.mjs");
+      const home = options.env.HOME;
+      if (!home) {
+        throw new Error("benchmark HOME was not set");
+      }
+      expect(homes.has(home)).toBe(false);
+      homes.add(home);
       const caseIndex = Math.floor(sampleIndex / testing.sampleCount);
       const caseSampleIndex = sampleIndex % testing.sampleCount;
       sampleIndex += 1;
@@ -80,6 +89,9 @@ function runStartupMemoryCheckWithHelpSamples(
       return successSpawn(rssMb);
     },
   });
+  expect(homes.size).toBe(probeCount);
+  expect(result!.skipped).toBe(false);
+  return result;
 }
 
 function captureReportRun(
@@ -202,15 +214,12 @@ describe("check-cli-startup-memory", () => {
   });
 
   it("rejects missing startup memory artifact paths", () => {
-    for (const args of [
-      ["--json"],
-      ["--json", "--summary"],
-      ["--json", "-h"],
-      ["--summary"],
-      ["--summary", "--json"],
-      ["--summary", "-h"],
-    ]) {
-      expect(() => testing.parseArgs(args)).toThrow(/--(?:json|summary) requires a path/u);
+    for (const flag of ["--json", "--summary"]) {
+      for (const next of [[], ["-h"]]) {
+        expect(() => testing.parseArgs([flag, ...next])).toThrow(
+          /--(?:json|summary) requires a path/u,
+        );
+      }
     }
   });
 
@@ -499,40 +508,5 @@ describe("check-cli-startup-memory", () => {
         spawnSync: () => successSpawn(0),
       }),
     ).toThrow("--help did not report max RSS");
-  });
-
-  it("passes the generated RSS hook as a Node import URL", () => {
-    if (process.platform !== "darwin" && process.platform !== "linux") {
-      return;
-    }
-
-    const tempRoot = tempRoots.make("openclaw-startup-memory-test-");
-    const seenArgs: string[][] = [];
-    const seenHomes: string[] = [];
-
-    const result = runCheck(reportArgs(tempRoot), {
-      platform: "linux",
-      spawnSync: (_command: string, args: string[], options: { env: Record<string, string> }) => {
-        seenArgs.push(args);
-        const home = options.env.HOME;
-        if (!home) {
-          throw new Error("benchmark HOME was not set");
-        }
-        seenHomes.push(home);
-        return { error: null, ...successSpawn() };
-      },
-    });
-
-    expect(result!.skipped).toBe(false);
-    expect(seenArgs).toHaveLength(probeCount);
-    expect(new Set(seenHomes).size).toBe(seenArgs.length);
-    for (const args of seenArgs) {
-      // The bench entry runs the launcher in-process instead of preloading an
-      // --import hook, which would disable the dist ESM resolve fast path and
-      // measure a non-default resolution configuration.
-      expect(args[0]).toMatch(/bench-entry\.mjs$/u);
-      expect(args[0]).not.toBe("--import");
-      expect(args[1]).not.toBe("openclaw.mjs");
-    }
   });
 });

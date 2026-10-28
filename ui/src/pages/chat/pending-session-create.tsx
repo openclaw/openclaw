@@ -88,7 +88,6 @@ function PendingSessionCreateContent(
     const startup = readDeletedSessionStartup(context, props.sessionKey);
     const failed = startup?.phase === "failed";
     const cancelled = startup?.phase === "cancelled";
-    const checking = startup?.action === "check-delivery";
     const submitting = !failed && !cancelled;
     const turn = startup?.initialTurn;
     const errorAction =
@@ -100,7 +99,7 @@ function PendingSessionCreateContent(
             }
           : startup.retryable
             ? {
-                label: t(checking ? "chat.queue.checkDelivery" : "common.retry"),
+                label: t("common.retry"),
                 onClick: () => context.placementStartup.retry(startup.sessionKey),
               }
             : undefined
@@ -173,10 +172,7 @@ function PendingSessionCreateContent(
       } satisfies ChatPaneHeaderProps,
       body: {
         inChat: true,
-        error: failed
-          ? (startup.error ??
-            t(checking ? "chat.queue.checkDeliveryHelp" : "newSession.createFailed"))
-          : null,
+        error: failed ? (startup.error ?? t("newSession.createFailed")) : null,
         errorAction: errorAction
           ? {
               ...errorAction,
@@ -191,7 +187,7 @@ function PendingSessionCreateContent(
           ? { label: startup.error ?? t("newSession.placementCancelled") }
           : failed
             ? {
-                label: t(checking ? "chat.queue.deliveryUnconfirmed" : "chat.queue.notSent"),
+                label: t("chat.queue.notSent"),
               }
             : undefined,
         renderDraft: () => (

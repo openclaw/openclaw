@@ -76,6 +76,7 @@ export function createInternalTestClient(
 
 export function attachRestMock(client: Client, rest: RestMock) {
   const mock = {
+    options: client.rest.options,
     get: vi.fn(async () => undefined),
     post: vi.fn(async () => undefined),
     patch: vi.fn(async () => undefined),

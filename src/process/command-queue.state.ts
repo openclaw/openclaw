@@ -183,15 +183,16 @@ export function removeLaneQueueEntry(queue: LaneQueue, entry: QueueEntry): boole
  * the same lanes, counters, and draining flag in production builds.
  */
 const COMMAND_QUEUE_STATE_KEY = Symbol.for("openclaw.commandQueueState");
+const queueState = resolveGlobalSingleton(COMMAND_QUEUE_STATE_KEY, () => ({
+  lanes: new Map<string, LaneState>(),
+  nextTaskId: 1,
+  nextQueueSequence: 1,
+  laneGroups: new Map<string, LaneGroupState>(),
+  laneGroupByLane: new Map<string, string>(),
+}));
 
 export function getQueueState() {
-  return resolveGlobalSingleton(COMMAND_QUEUE_STATE_KEY, () => ({
-    lanes: new Map<string, LaneState>(),
-    nextTaskId: 1,
-    nextQueueSequence: 1,
-    laneGroups: new Map<string, LaneGroupState>(),
-    laneGroupByLane: new Map<string, string>(),
-  }));
+  return queueState;
 }
 
 export function normalizeLane(lane: string): string {

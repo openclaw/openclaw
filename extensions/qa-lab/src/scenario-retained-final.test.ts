@@ -1,7 +1,10 @@
 import { createServer } from "node:http";
+import { buffer } from "node:stream/consumers";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { injectQaBusInboundMessage, type QaBusOutboundMessageInput } from "../../qa-channel/api.js";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import { closeQaHttpServer, dispatchQaHttpRequest, startQaBusServer } from "./bus-server.js";
 import { readQaScenarioById } from "./scenario-catalog.js";
 import { createScenarioChannel, dispatchScenarioFinal } from "./scenario-channel.test-support.js";
@@ -20,6 +23,13 @@ async function startRetainedFinalScenario(fault: FinalFault = {}) {
   const scenario = readQaScenarioById("qa-channel-failed-tool-terminal-finalization");
   if (!scenario.execution.flow) {
     throw new Error("expected retained-final scenario flow");
+  }
+  const step = scenario.execution.flow.steps[0]!;
+  const providerChecks = step.actions.findIndex(
+    (action) => isRecord(action) && action.set === "scenarioRequests",
+  );
+  if (providerChecks < 0) {
+    throw new Error("expected delivery checks before provider observations");
   }
   const config = scenario.execution.config ?? {};
   const expectedReply = String(config.expectedReply);
@@ -41,7 +51,7 @@ async function startRetainedFinalScenario(fault: FinalFault = {}) {
   // Hold the real bus deletion/response gap independently from the final send.
   const proxy = createServer((req, res) => {
     dispatchQaHttpRequest(res, async () => {
-      let body = Buffer.concat(await Array.fromAsync(req)).toString();
+      let body = (await buffer(req)).toString();
       const finalSend = req.url === "/v1/outbound/message" && ++outboundRequests > 1;
       if (finalSend) {
         finalStarted.resolve();
@@ -72,14 +82,7 @@ async function startRetainedFinalScenario(fault: FinalFault = {}) {
       res.end(text);
     });
   });
-  await new Promise<void>((resolve) => {
-    proxy.listen(0, "127.0.0.1", resolve);
-  });
-  const address = proxy.address();
-  if (!address || typeof address === "string") {
-    throw new Error("expected loopback proxy address");
-  }
-  const baseUrl = `http://127.0.0.1:${address.port}`;
+  const baseUrl = `http://127.0.0.1:${await listenOnLoopback(proxy)}`;
   vi.mocked(runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher).mockImplementation(
     async ({ ctx, dispatcherOptions, replyOptions }) => {
       if (ctx.CommandTurn?.kind === "native") {
@@ -116,33 +119,14 @@ async function startRetainedFinalScenario(fault: FinalFault = {}) {
       timeoutMs,
       intervalMs,
     );
-  const requests = [
-    {
-      allInputText: config.promptSnippet,
-      plannedToolName: "read",
-      plannedWireToolName: "exec",
-      plannedToolCallId: "failed-exec",
-    },
-    {
-      allInputText: config.promptSnippet,
-      toolOutputCallId: "failed-exec",
-      body: {
-        input: [
-          {
-            type: "function_call",
-            name: "exec",
-            call_id: "failed-exec",
-            arguments: 'await tools.read({path:"qa-failed-terminal-missing-file.txt"})',
-          },
-          { type: "function_call_output", call_id: "failed-exec", output: "ENOENT" },
-        ],
-        tools: [{ name: "exec" }, { name: "wait" }],
-      },
-    },
-  ];
   const result = runScenarioFlow({
     scenarioTitle: scenario.title,
-    flow: scenario.execution.flow,
+    // This suite owns real channel delivery; mock-server tests own provider observations.
+    flow: {
+      steps: [
+        { ...step, actions: step.actions.slice(0, providerChecks), detailsExpr: "reply.text" },
+      ],
+    },
     vars,
     api: {
       scenario,
@@ -158,21 +142,7 @@ async function startRetainedFinalScenario(fault: FinalFault = {}) {
       waitForGatewayHealthy: () => gatewayReady,
       waitForQaChannelReady: () => gatewayReady,
       waitForCondition,
-      fetchJson: async (url: string) => {
-        if (url.endsWith("/debug/request-cursor")) {
-          return { cursor: 0 };
-        }
-        // On old YAML this forces its verdict into the empty retained interval.
-        if (!previewOnly) {
-          await deleteStarted.promise;
-        }
-        return requests;
-      },
-      readSessionTranscriptSummary: async () => ({
-        assistantToolCallCounts: { exec: 1 },
-        completedToolCallCounts: { exec: 1 },
-        successfulToolCallCounts: {},
-      }),
+      fetchJson: async () => ({ cursor: 0 }),
       runScenario: runQaSuiteScenarioSteps,
     },
   });
@@ -193,12 +163,13 @@ async function startRetainedFinalScenario(fault: FinalFault = {}) {
     releaseDelete: () => releaseDelete.resolve(),
     finalStarted: finalStarted.promise,
     releaseFinal: () => releaseFinal.resolve(),
+    async expectPending() {
+      expect(state.getAcknowledgedPollCursor("default")).toBe(0);
+      nextCheck = createDeferred<void>();
+      expect(await Promise.race([nextCheck.promise, result])).toBeUndefined();
+    },
     expireDeadline: () => {
       deadlineExpired = true;
-    },
-    async probePending() {
-      nextCheck = createDeferred<void>();
-      return await Promise.race([nextCheck.promise.then(() => undefined), result]);
     },
     async sendControl() {
       await injectQaBusInboundMessage({
@@ -239,12 +210,10 @@ describe("failed-tool scenario retained final", () => {
     expect(
       harness.state.getSnapshot().messages.filter((m) => m.direction === "outbound" && !m.deleted),
     ).toEqual([]);
-    expect(harness.acknowledgedCursor()).toBe(0);
-    expect(await harness.probePending()).toBeUndefined();
+    await harness.expectPending();
     harness.releaseDelete();
     await harness.finalStarted;
-    expect(harness.acknowledgedCursor()).toBe(0);
-    expect(await harness.probePending()).toBeUndefined();
+    await harness.expectPending();
     harness.releaseFinal();
     expect(await harness.result).toMatchObject({ status: "pass" });
     expect(harness.acknowledgedCursor()).toBeGreaterThanOrEqual(Number(harness.vars.inboundCursor));
@@ -298,8 +267,7 @@ describe("failed-tool scenario retained final", () => {
     harness.startFinal();
     await harness.deleteStarted;
     await harness.sendControl();
-    expect(harness.acknowledgedCursor()).toBe(0);
-    expect(await harness.probePending()).toBeUndefined();
+    await harness.expectPending();
     harness.expireDeadline();
     expect(await harness.result).toMatchObject({
       status: "fail",

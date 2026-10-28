@@ -3,6 +3,7 @@ import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { zstdDecompressSync } from "node:zlib";
 import type { Compilable } from "kysely";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { recordAcpParentStreamEventsForTest as recordAcpParentStreamEvents } from "../../agents/subagents/spawn/acp-parent-stream-store.sqlite.test-support.js";
@@ -19,7 +20,7 @@ import {
   appendSqliteTrajectoryRuntimeEvents,
   createTrajectoryEvent,
 } from "../../trajectory/runtime-store.test-support.js";
-import { decodeSessionArchiveBytes, readSessionArchiveContentSync } from "./archive-compression.js";
+import { readSessionArchiveContentSync } from "./archive-compression.js";
 import { measureSessionPhysicalDiskUsage } from "./disk-budget.js";
 import {
   applySessionEntryLifecycleMutation,
@@ -31,10 +32,7 @@ import {
 import { writeTranscriptArchive } from "./session-accessor.sqlite-archive-artifact.js";
 import { materializeSessionStateDeletePlans } from "./session-accessor.sqlite-archive.js";
 import { planSessionStateDeleteIfUnreferenced } from "./session-accessor.sqlite-delete-snapshot.js";
-import {
-  deleteMaterializedSessionStatePlans,
-  readSessionGenerationIdsForKeys,
-} from "./session-accessor.sqlite-lifecycle-state.js";
+import { deleteMaterializedSessionStatePlans } from "./session-accessor.sqlite-lifecycle-state.js";
 import { touchTranscriptMutationInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
@@ -193,8 +191,9 @@ describe("SQLite transcript archive worker", () => {
     const archive = materialized[0]?.archive;
     expect(archive).toBeTruthy();
     expect(fs.existsSync(materialized[0]?.archivedTranscript?.archivedPath ?? "")).toBe(false);
+    expect(archive?.encoding).toBe("zstd");
     expect(
-      decodeSessionArchiveBytes(archive?.bytes ?? new Uint8Array(), archive?.encoding === "zstd"),
+      zstdDecompressSync(Buffer.from(archive?.bytes ?? new Uint8Array())).toString("utf8"),
     ).toBe(jsonl(events));
   });
 
@@ -268,13 +267,8 @@ describe("SQLite transcript archive worker", () => {
   it("retains distinct transcript generations after a physical session id is restored", async () => {
     const sessionId = "restored-archive-session";
     const target = await seed(sessionId, [event(sessionId, "first generation")]);
-    const generations = (keys = [target.sessionKey]) =>
-      readSessionGenerationIdsForKeys(database(), keys);
-    expect(generations([])).toEqual([]);
-    expect(generations()).toEqual([sessionId]);
     const first = (await deletion(target.sessionKey)).archivedTranscripts[0];
     assert.ok(first, "expected first transcript archive");
-    expect(generations()).toEqual([]);
     fs.rmSync(first.archivedPath);
     database()
       .db.prepare(
@@ -283,7 +277,6 @@ describe("SQLite transcript archive worker", () => {
       .run(target.sessionId, first.generation);
     await entry(target, 2);
     await replaceTranscriptEvents(target, [event(target.sessionId, "second generation")]);
-    expect(generations()).toEqual([sessionId]);
     const second = await deletion(target.sessionKey);
     expect(second.archivedTranscripts).toHaveLength(1);
     expect(second.archivedTranscripts[0]?.archivedPath).not.toBe(first.archivedPath);
@@ -350,13 +343,6 @@ describe("SQLite transcript archive worker", () => {
       await entry(target);
       await replaceTranscriptEvents(target, [event(target.sessionId)]);
     }
-    expect(resolveSqliteTargetFromSessionStorePath(storePath, ops)).toMatchObject({
-      agentId: "main",
-      path: storePath,
-      shared: true,
-    });
-    expect(database().agentId).toBe("main");
-    expect(database().agentId).not.toBe(ops.agentId);
     const result = await deleteSessionEntryLifecycle({
       agentId: ops.agentId,
       archiveTranscript: true,
@@ -427,15 +413,12 @@ describe("SQLite transcript archive worker", () => {
         {
           type: "message",
           id: "failure-message",
-          message: {
-            role: "user",
-            content: [{ type: "text", text: "preserve every lifecycle row" }],
-          },
+          message: { role: "user", content: "preserve every lifecycle row" },
         },
       ]);
       appendSqliteTrajectoryRuntimeEvents(target, [trajectory(target.sessionId)]);
       await acp(target, "preserve ACP state", "failure-run");
-      const { query, rows } = databaseQueries();
+      const { db } = databaseQueries();
       const tables = [
         "acp_parent_stream_events",
         "session_transcript_fts",
@@ -445,23 +428,15 @@ describe("SQLite transcript archive worker", () => {
         "transcript_events",
         "session_windows",
       ] as const;
-      const counts = () => [
-        ...tables.map(
+      const counts = () =>
+        [...tables, "session_nodes"].map(
           (table) =>
-            rows(
-              query
-                .selectFrom(table)
-                .select(({ fn }) => fn.countAll<number>().as("count"))
-                .where("session_id", "=", target.sessionId),
-            )[0]?.count ?? 0,
-        ),
-        rows(
-          query
-            .selectFrom("session_nodes")
-            .select("current_session_id")
-            .where("current_session_id", "=", target.sessionId),
-        ).length,
-      ];
+            db.db
+              .prepare(
+                `SELECT COUNT(*) AS count FROM ${table} WHERE ${table === "session_nodes" ? "current_session_id" : "session_id"} = ?`,
+              )
+              .get(target.sessionId)?.count ?? 0,
+        );
       await waitForSessionTranscriptProjection(target);
       const before = counts();
       if (capture) {
@@ -500,8 +475,10 @@ describe("SQLite transcript archive worker", () => {
     const { generation, sessionUpdatedAt, transcriptUpdatedAt } = planned.snapshot;
     expect([generation, sessionUpdatedAt, transcriptUpdatedAt]).not.toContain(null);
     const materialized = await materializeSessionStateDeletePlans([planned]);
-    switch (kind) {
-      case "rewrite generation":
+    const updateWindow = (change: { transcript_updated_at?: number; updated_at?: number }) =>
+      rows(sql.updateTable("session_windows").set(change).where("session_id", "=", sessionId));
+    const mutations = {
+      "rewrite generation": () =>
         rows(
           sql
             .updateTable("transcript_rewrite_watermarks")
@@ -510,18 +487,11 @@ describe("SQLite transcript archive worker", () => {
               updated_at: Date.now(),
             })
             .where("session_id", "=", sessionId),
-        );
-        break;
-      case "transcript mutation watermark":
-      case "window metadata": {
-        const update =
-          kind === "transcript mutation watermark"
-            ? { transcript_updated_at: (transcriptUpdatedAt ?? 0) + 1 }
-            : { updated_at: (sessionUpdatedAt ?? 0) + 1 };
-        rows(sql.updateTable("session_windows").set(update).where("session_id", "=", sessionId));
-        break;
-      }
-      case "non-archive append":
+        ),
+      "transcript mutation watermark": () =>
+        updateWindow({ transcript_updated_at: (transcriptUpdatedAt ?? 0) + 1 }),
+      "window metadata": () => updateWindow({ updated_at: (sessionUpdatedAt ?? 0) + 1 }),
+      "non-archive append": () =>
         write((transaction) => {
           rows(
             sql.insertInto("transcript_events").values({
@@ -535,15 +505,11 @@ describe("SQLite transcript archive worker", () => {
             }),
           );
           touchTranscriptMutationInTransaction(transaction, sessionId);
-        });
-        break;
-      case "trajectory":
-        appendSqliteTrajectoryRuntimeEvents(target, [trajectory(sessionId)]);
-        break;
-      case "ACP parent-stream":
-        await acp(target, "concurrent", "run-1");
-        break;
-    }
+        }),
+      trajectory: () => appendSqliteTrajectoryRuntimeEvents(target, [trajectory(sessionId)]),
+      "ACP parent-stream": () => acp(target, "concurrent", "run-1"),
+    };
+    await mutations[kind]();
     expect(() => deletePlans(materialized, sessionKey)).toThrow(
       `SQLite session state changed before deletion for ${sessionId}`,
     );

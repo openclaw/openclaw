@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import { setImmediate as setImmediatePromise } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import type WebSocket from "ws";
 import { createInfoWarnErrorLogger } from "../../test/helpers/mock-logger.js";
@@ -16,6 +15,7 @@ import { loadCronStore, saveCronStore } from "../cron/store.js";
 import { resolveCronJobsStorePathFromConfigAsync } from "../cron/store/paths.js";
 import type { CronJobCreate } from "../cron/types.js";
 import type { GuardedFetchOptions } from "../infra/net/fetch-guard.js";
+import { getGatewayContextResolver } from "../plugins/runtime/gateway-context-binding.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
@@ -25,6 +25,7 @@ import {
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
 import { getGatewayProcessInstanceId } from "./process-instance.js";
+import type { GatewayCronState } from "./server-cron-contract.js";
 import {
   cleanupCronTestRun,
   expectEnqueuedRunPayload,
@@ -33,9 +34,11 @@ import {
   runCronJobAndWaitForFinished,
   waitForCronEvent,
 } from "./server-cron.events.test-support.js";
-import type { GatewayCronState } from "./server-cron.js";
 import { registerCronRepairCases } from "./server.cron-repair.cases.js";
-import { expectCronJobIdFromResponse } from "./server.cron.assertions.test-support.js";
+import {
+  expectCronJobIdFromResponse,
+  expectCronRows as rows,
+} from "./server.cron.assertions.test-support.js";
 import {
   agentCommandMock,
   connectOk,
@@ -140,20 +143,6 @@ type DirectCronResponse = {
   payload?: unknown;
   error?: { code?: string; message?: string; details?: unknown };
 };
-
-function rows(response: DirectCronResponse, key: "entries" | "jobs" = "entries") {
-  expect(response.ok).toBe(true);
-  const payload = response.payload;
-  if (!isRecord(payload) || !Array.isArray(payload[key])) {
-    throw new Error(`expected cron ${key}`);
-  }
-  return payload[key].map((row: unknown) => {
-    if (!isRecord(row)) {
-      throw new Error(`expected a cron ${key} row`);
-    }
-    return row;
-  });
-}
 
 async function createDirectCronState(params?: {
   broadcast?: CronBroadcast;
@@ -307,6 +296,19 @@ function getWebhookCall(index: number) {
     method: request.init?.method,
     headers: new Headers(request.init?.headers),
     body,
+  };
+}
+
+function holdIsolatedRun() {
+  const entered = createDeferred();
+  const result = createDeferred<{ status: "ok"; summary: string }>();
+  cronIsolatedRun.mockImplementationOnce(() => {
+    entered.resolve();
+    return result.promise;
+  });
+  return {
+    entered: entered.promise,
+    finish: (summary: string) => result.resolve({ status: "ok", summary }),
   };
 }
 
@@ -704,12 +706,7 @@ describe("gateway server cron", () => {
   });
 
   test("cron.run waitTimeoutMs returns the finished run, or only its runId when the wait ends first", async () => {
-    const runnerEntered = createDeferred();
-    const slowResult = createDeferred<{ status: "ok"; summary: string }>();
-    cronIsolatedRun.mockImplementationOnce(() => {
-      runnerEntered.resolve();
-      return slowResult.promise;
-    });
+    const held = holdIsolatedRun();
     const { request, add, waitForJob } = await startCronClient();
     const jobId = await add("waited job", {
       sessionTarget: "isolated",
@@ -725,9 +722,9 @@ describe("gateway server cron", () => {
       runId: expect.any(String),
       processInstanceId: getGatewayProcessInstanceId(),
     });
-    await runnerEntered.promise;
+    await held.entered;
     const slowFinished = waitForJob(jobId);
-    slowResult.resolve({ status: "ok", summary: "late report" });
+    held.finish("late report");
     await slowFinished;
 
     cronIsolatedRun.mockResolvedValueOnce({ status: "ok", summary: "waited report" });
@@ -740,14 +737,15 @@ describe("gateway server cron", () => {
   });
 
   test("returns already-running without starting background work", async () => {
-    const runnerEntered = createDeferred();
-    const runResult = createDeferred<{ status: "ok"; summary: string }>();
-    cronIsolatedRun.mockImplementationOnce(() => {
-      runnerEntered.resolve();
-      return runResult.promise;
-    });
+    const held = holdIsolatedRun();
 
     const { request, add, waitForJob } = await startCronClient();
+
+    // Minimal Gateway startup skips cron recovery; finish it before the timed requests.
+    const { getGatewayRecoveryRuntime } = await import("./server-recovery-runtime-context.js");
+    const runtime = expectDefined(getGatewayRecoveryRuntime(), "Gateway runtime");
+    const resolveContext = expectDefined(getGatewayContextResolver(runtime), "Gateway context");
+    await expectDefined(resolveContext(), "Gateway context").cron.start();
 
     const jobId = await add("busy job", {
       sessionTarget: "isolated",
@@ -758,7 +756,7 @@ describe("gateway server cron", () => {
     const firstRunRes = await request("cron.run", { id: jobId, mode: "force" }, 1_000);
     expect(firstRunRes.ok).toBe(true);
     expectEnqueuedRunPayload(firstRunRes.payload);
-    await Promise.all([startedRun, runnerEntered.promise]);
+    await Promise.all([startedRun, held.entered]);
     expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
 
     const secondRunRes = await request("cron.run", { id: jobId, mode: "force" }, 1_000);
@@ -772,7 +770,7 @@ describe("gateway server cron", () => {
     expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
 
     const finishedRun = waitForJob(jobId);
-    runResult.resolve({ status: "ok", summary: "busy done" });
+    held.finish("busy done");
     await finishedRun;
   });
 
@@ -805,7 +803,9 @@ describe("gateway server cron", () => {
     });
 
     const notifyRuns = await request("cron.runs", { id: notifyJobId, limit: 10 });
-    expect(rows(notifyRuns).at(-1)).toMatchObject({ deliveryStatus: "delivered" });
+    expect(rows(notifyRuns).at(-1)).toMatchObject({
+      deliveryStatus: "delivered",
+    });
 
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
 
@@ -870,7 +870,13 @@ describe("gateway server cron", () => {
   }, 45_000);
 
   test("persists settled failure-alert outcomes for cron get and list", async () => {
+    // Delivery persistence is independent of cold fallback-session creation and runtime preparation.
+    testState.sessionStorePath = path.join(caseDir, "sessions.json");
+    await writeSessionStore({
+      entries: { main: { sessionId: "cron-failure-alert-session", updatedAt: Date.now() } },
+    });
     const { request, add, run } = await startCronClient();
+    await prepareGatewayReplyRuntimeForTest({ force: true });
 
     const expectOutcome = async (jobId: string, expected: Record<string, unknown>) => {
       await vi.waitFor(async () => {
@@ -897,40 +903,31 @@ describe("gateway server cron", () => {
       return jobId;
     };
 
-    const deliveredJobId = await runFailureAlert("delivered failure alert", {
-      mode: "webhook",
-      to: "https://example.invalid/delivered-failure-alert",
-    });
-    await expectOutcome(deliveredJobId, {
-      lastFailureNotificationDelivered: true,
-      lastFailureNotificationDeliveryStatus: "delivered",
-    });
-
-    fetchWithSsrFGuardMock.mockRejectedValueOnce(new Error("alert transport rejected"));
-    const failedJobId = await runFailureAlert("failed failure alert", {
-      mode: "webhook",
-      to: "https://example.invalid/failed-failure-alert",
-    });
-    await expectOutcome(failedJobId, {
-      lastFailureNotificationDelivered: false,
-      lastFailureNotificationDeliveryStatus: "not-delivered",
-      lastFailureNotificationDeliveryError: expect.stringContaining("alert transport rejected"),
-    });
-
-    sendCronAnnouncePayloadStrictMock.mockImplementationOnce(async (params) => {
-      params.onDeliveryAttempt?.(false);
-      return { status: "suppressed", reason: "adapter_returned_no_send" };
-    });
-    const unreachedJobId = await runFailureAlert("unreached failure alert", {
-      mode: "announce",
-      channel: "telegram",
-      to: "123",
-    });
-    await expectOutcome(unreachedJobId, {
-      lastFailureNotificationDelivered: false,
-      lastFailureNotificationDeliveryStatus: "not-delivered",
-      lastFailureNotificationDeliveryError: expect.stringContaining("adapter_returned_no_send"),
-    });
+    for (const outcome of ["delivered", "failed", "unreached"] as const) {
+      const error = outcome === "failed" ? "alert transport rejected" : "adapter_returned_no_send";
+      if (outcome === "failed") {
+        fetchWithSsrFGuardMock.mockRejectedValueOnce(new Error(error));
+      } else if (outcome === "unreached") {
+        sendCronAnnouncePayloadStrictMock.mockImplementationOnce(async (params) => {
+          params.onDeliveryAttempt?.(false);
+          return { status: "suppressed", reason: "adapter_returned_no_send" };
+        });
+      }
+      const jobId = await runFailureAlert(
+        `${outcome} failure alert`,
+        outcome === "unreached"
+          ? { mode: "announce", channel: "telegram", to: "123" }
+          : { mode: "webhook", to: `https://example.invalid/${outcome}-failure-alert` },
+      );
+      await expectOutcome(jobId, {
+        lastFailureNotificationDelivered: outcome === "delivered",
+        lastFailureNotificationDeliveryStatus:
+          outcome === "delivered" ? "delivered" : "not-delivered",
+        ...(outcome === "delivered"
+          ? {}
+          : { lastFailureNotificationDeliveryError: expect.stringContaining(error) }),
+      });
+    }
     await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
   }, 45_000);
   test("rejects malformed cron payload and trigger scripts before persistence", async () => {

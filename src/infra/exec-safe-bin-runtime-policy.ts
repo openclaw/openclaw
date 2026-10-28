@@ -106,12 +106,7 @@ export function resolveExecSafeBinRuntimePolicy(params: {
   unprofiledInterpreterSafeBins: string[];
 } {
   const safeBins = resolveSafeBins(params.local?.safeBins ?? params.global?.safeBins);
-  const safeBinProfiles = resolveSafeBinProfiles(
-    resolveMergedSafeBinProfileFixtures({
-      global: params.global,
-      local: params.local,
-    }),
-  );
+  const safeBinProfiles = resolveSafeBinProfiles(resolveMergedSafeBinProfileFixtures(params));
   const unprofiledSafeBins = Array.from(safeBins)
     .filter((entry) => !safeBinProfiles[entry])
     .toSorted();

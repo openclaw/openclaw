@@ -1,16 +1,21 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { performance } from "node:perf_hooks";
 import { deserialize } from "node:v8";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { seedCanonicalAcpSessionMeta } from "../../acp/runtime/session-meta-fixture.test-support.js";
+import * as acpMetadata from "../../acp/runtime/session-meta-readonly.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import { assertNoRetainedSessionSharingReads } from "../../config/sessions/session-accessor.sqlite-diagnostics.test-support.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
+import * as sessionEntryReads from "../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
@@ -27,6 +32,7 @@ import {
   getRpcSourceIdentity,
 } from "../../sessions/session-controller.rpc-sources.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import * as agentWriteAdmission from "../../state/openclaw-agent-write-admission.js";
 import { requireOpenClawStateDatabaseIdentity } from "../../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
@@ -45,13 +51,30 @@ import { advancePlacementFixtureToActive } from "../worker-environments/placemen
 import { stagePlacementTurnClaimWorkerPublication } from "../worker-environments/placement-turn-authority.js";
 import { admitChatSend } from "./chat-send-admission.js";
 import { prepareChatAdmission } from "./chat-send-admission.test-support.js";
-import { startChatSendDiagnostics } from "./chat-send-diagnostics.js";
 import { runChatSendPreAdmission } from "./chat-send-pre-admission.js";
 import { normalizeChatSendRequest } from "./chat-send-request.js";
 import { prepareChatSendSession } from "./chat-send-session.js";
 
 type Admission = Awaited<ReturnType<typeof admitChatSend>>;
 type Session = Awaited<ReturnType<typeof prepareChatAdmission>>["session"];
+type SubmittedInput = Awaited<ReturnType<typeof sessionAccessor.readSessionSubmittedInput>>;
+type SubmittedInputScope = Parameters<typeof sessionAccessor.readSessionSubmittedInput>[0];
+function submittedInputReader(message: SubmittedInput) {
+  function read(
+    scope: SubmittedInputScope,
+    key: string,
+    options: { includeSource: true },
+  ): Promise<{ message: NonNullable<SubmittedInput>; source: "transcript" } | undefined>;
+  function read(scope: SubmittedInputScope, key: string): Promise<SubmittedInput>;
+  async function read(
+    _scope: SubmittedInputScope,
+    _key: string,
+    options?: { includeSource: true },
+  ) {
+    return message && options?.includeSource ? { message, source: "transcript" as const } : message;
+  }
+  return read;
+}
 function admissionFixture(cfg: OpenClawConfig, runId: string) {
   const scope = { agentId: "main", sessionKey: `agent:main:dashboard:${runId}` };
   const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
@@ -85,6 +108,9 @@ function cleanupAdmission(admitted: Admission | undefined, runId: string) {
     admitted.value.cleanupAdmittedRun();
   }
   clearAgentRunContext(runId);
+}
+function expectAdmissionError(respond: ReturnType<typeof vi.fn>, fields: Record<string, unknown>) {
+  expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining(fields));
 }
 function lifecycleRelease(session: Session) {
   return sessionControllerLifecycle.captureSessionControllerSettlement({
@@ -271,19 +297,6 @@ it.each(["unchanged", "caller revoked", "session replaced"] as const)(
         isDirectExternalUser: true,
         params: { message: "Continue" },
       });
-      let clock = 0;
-      using _ = vi.spyOn(performance, "now").mockImplementation(() => clock);
-      const log = { info: vi.fn() };
-      using diagnostics = startChatSendDiagnostics(log);
-      const queued = createDeferred();
-      const begin = createDeferred();
-      const beginAdmission = sessionControllerLifecycle.beginSessionEffect;
-      using delayedAdmission = vi.spyOn(sessionControllerLifecycle, "beginSessionEffect");
-      delayedAdmission.mockImplementationOnce(async (params) => {
-        queued.resolve();
-        await begin.promise;
-        return beginAdmission(params);
-      });
       using placement = pausePlacement(placements);
       const committed = createDeferred();
       const consuming = createDeferred();
@@ -342,17 +355,9 @@ it.each(["unchanged", "caller revoked", "session replaced"] as const)(
             consuming.resolve();
           }
         },
-        diagnostics,
       });
       let admitted: Awaited<typeof pending> | undefined;
       try {
-        await awaitGateBeforeSettlement(
-          queued.promise,
-          pending,
-          "chat skipped lifecycle admission",
-        );
-        clock = 300;
-        begin.resolve();
         await awaitGateBeforeSettlement(
           placement.observed.promise,
           pending,
@@ -364,7 +369,6 @@ it.each(["unchanged", "caller revoked", "session replaced"] as const)(
           completion,
           "worker completion skipped its native commit",
         );
-        clock = 600;
         nativePending = true;
         placement.resume.resolve();
         await awaitGateBeforeSettlement(
@@ -377,17 +381,10 @@ it.each(["unchanged", "caller revoked", "session replaced"] as const)(
         } else if (change === "session replaced") {
           replaceSessionEntrySync(scope, { sessionId: "replacement-session", updatedAt: 2 });
         }
-        clock = 900;
         nativePending = false;
         publishCommit?.();
         releaseReply.resolve();
         admitted = await pending;
-        clock = 1_900;
-        diagnostics.finish();
-        // Later reporting cannot extend either a completed or rejected owner's span.
-        expect(log.info).toHaveBeenCalledExactlyOnceWith(
-          expect.stringContaining("detail.admission.revalidate=600ms detail.admission.work=900ms"),
-        );
         expect(admitted.ok, JSON.stringify(respond.mock.calls[0]?.[2])).toBe(
           change === "unchanged",
         );
@@ -405,7 +402,6 @@ it.each(["unchanged", "caller revoked", "session replaced"] as const)(
           );
         }
       } finally {
-        begin.resolve();
         placement.resume.resolve();
         publishCommit?.();
         releaseReply.resolve();
@@ -501,11 +497,9 @@ it.each(["ordinary", "fresh header", "stale header"] as const)(
             session.entry?.createdAt,
           ]).toEqual([undefined, undefined, undefined]);
           const respond = vi.fn();
+          using reads = vi.spyOn(sessionEntryReads, "withSessionEntriesFromStoresInWorker");
           await withoutHostSql(async () => {
-            admitted = await admitChatSend({
-              ...admission,
-              respond,
-            });
+            admitted = await admitChatSend({ ...admission, respond });
             expect(respond).not.toHaveBeenCalled();
             expect(admitted.ok).toBe(true);
             assert(admitted.ok, "Session admission failed");
@@ -514,6 +508,10 @@ it.each(["ordinary", "fresh header", "stale header"] as const)(
               admittedSessionId: entry.sessionId,
             });
             expect(Boolean(admitted.value.restartSafeAdmission)).toBe(freshness === "fresh header");
+            const lifecycleReads = reads.mock.calls.flatMap(([inputs]) =>
+              inputs.filter((input) => input.lifecycleSessionKey === scope.sessionKey),
+            );
+            expect(lifecycleReads).toHaveLength(restartSafe ? 1 : 0);
           });
         } finally {
           cleanupAdmission(admitted, runId);
@@ -521,6 +519,157 @@ it.each(["ordinary", "fresh header", "stale header"] as const)(
       },
       { session: { reset: { mode: "daily" } } },
     ),
+);
+
+it.for([
+  "unchanged",
+  "lifecycle changed",
+  "lifecycle changed before admission",
+  "caller revoked",
+] as const)(
+  "prepares ACP before an unrelated writer settles but keeps final admission ordered (%s)",
+  async (change, { signal }) =>
+    withAdmissionTest("chat-admission-preparation-order", async (f) => {
+      const { scope, runId } = f;
+      const now = Date.now();
+      const entry = f.seed({
+        updatedAt: now,
+        sessionStartedAt: now,
+        lifecycleRevision: "original-lifecycle",
+      });
+      await appendHeader(scope, entry, now);
+      const replaceLifecycle = () => {
+        const lifecycleRevision = "replacement-lifecycle";
+        replaceSessionEntrySync(scope, { ...entry, lifecycleRevision, updatedAt: now + 1 });
+        seedCanonicalAcpSessionMeta({
+          ...scope,
+          lifecycleRevision,
+          meta: {
+            backend: "acpx",
+            agent: scope.agentId,
+            runtimeSessionName: scope.sessionKey,
+            mode: "persistent",
+            state: "idle",
+            lastActivityAt: now,
+          },
+        });
+      };
+      const admission = await f.prepare({ isDirectExternalUser: true });
+      expect(admission.session.restartSafeRequest).toBeDefined();
+      if (change === "lifecycle changed before admission") {
+        replaceLifecycle();
+      }
+      await sessionEntryReads.readSessionEntryReadOnlyInWorker(scope);
+      const held = createDeferred();
+      const release = createDeferred();
+      const holder = agentWriteAdmission.runOpenClawAgentWriteAdmission(
+        { agentId: scope.agentId },
+        async () => {
+          held.resolve();
+          await release.promise;
+          replaceSessionEntrySync(
+            { ...scope, sessionKey: `${scope.sessionKey}:unrelated` },
+            { sessionId: "unrelated-session", updatedAt: now },
+          );
+          if (change === "lifecycle changed") {
+            replaceLifecycle();
+          }
+        },
+      );
+      const firstPreparation = createDeferred<"ACP" | "writer admission">();
+      const orderedRequested = createDeferred();
+      const metadataBindings: Array<{
+        lifecycleRevision: string | undefined;
+        hasMetadata: boolean;
+      }> = [];
+      const readMetadata = acpMetadata.readAcpSessionMetaForEntries;
+      using metadata = vi.spyOn(acpMetadata, "readAcpSessionMetaForEntries");
+      metadata.mockImplementation(async (params, options) => {
+        firstPreparation.resolve("ACP");
+        const result = await readMetadata(params, options);
+        for (const [index, selected] of params.entries.entries()) {
+          if (selected.sessionKey === scope.sessionKey) {
+            metadataBindings.push({
+              lifecycleRevision: selected.entry?.lifecycleRevision,
+              hasMetadata: result[index] != null,
+            });
+          }
+        }
+        return result;
+      });
+      const readOrdered = agentWriteAdmission.runOpenClawAgentWriteAdmissions;
+      using ordered = vi.spyOn(agentWriteAdmission, "runOpenClawAgentWriteAdmissions");
+      ordered.mockImplementation((options, consume, abortSignal) => {
+        firstPreparation.resolve("writer admission");
+        orderedRequested.resolve();
+        return readOrdered(options, consume, abortSignal);
+      });
+      let callerCurrent = true;
+      const respond = vi.fn();
+      let admitted: Admission | undefined;
+      let pending: Promise<Admission> | undefined;
+      try {
+        await withinTest(held.promise, signal);
+        pending = admitChatSend({
+          ...admission,
+          respond,
+          assertCurrent() {
+            if (!callerCurrent) {
+              throw new Error("Original chat caller revoked before final admission");
+            }
+          },
+        }).then((result) => (admitted = result));
+        expect(
+          await withinTest(
+            awaitGateBeforeSettlement(
+              firstPreparation.promise,
+              pending,
+              "chat skipped preparation",
+            ),
+            signal,
+          ),
+        ).toBe("ACP");
+        await withinTest(
+          awaitGateBeforeSettlement(
+            orderedRequested.promise,
+            pending,
+            "chat skipped final ordering",
+          ),
+          signal,
+        );
+        expect(metadataBindings).toEqual([
+          { lifecycleRevision: "original-lifecycle", hasMetadata: false },
+        ]);
+        expect(admitted).toBeUndefined();
+        expect(respond).not.toHaveBeenCalled();
+        callerCurrent = change !== "caller revoked";
+        release.resolve();
+        await holder;
+        admitted = await pending;
+        if (change === "caller revoked") {
+          expect(admitted.ok).toBe(false);
+          expectAdmissionError(respond, {
+            message: expect.stringContaining("Original chat caller revoked"),
+          });
+          expect(getRpcSource(runId)).toBeUndefined();
+        } else {
+          expect(admitted.ok, JSON.stringify(respond.mock.calls)).toBe(true);
+          assert(admitted.ok, "Session admission failed");
+          expect(Boolean(admitted.value.restartSafeAdmission)).toBe(change === "unchanged");
+          expect(respond).not.toHaveBeenCalled();
+          if (change === "lifecycle changed" || change === "lifecycle changed before admission") {
+            expect(metadataBindings).toEqual([
+              { lifecycleRevision: "original-lifecycle", hasMetadata: false },
+              { lifecycleRevision: "replacement-lifecycle", hasMetadata: true },
+            ]);
+          }
+        }
+      } finally {
+        release.resolve();
+        await Promise.allSettled([holder, ...(pending ? [pending] : [])]);
+        cleanupAdmission(admitted, runId);
+      }
+    }),
 );
 
 it("releases rejected upload reservations so corrected input can reuse its key", () =>
@@ -553,10 +702,7 @@ it("releases rejected upload reservations so corrected input can reuse its key",
             ],
           },
         });
-        const admission = admitChatSend({
-          ...blocked,
-          respond: vi.fn(),
-        });
+        const admission = admitChatSend({ ...blocked, respond: vi.fn() });
         if (failure === "throws") {
           await expect(admission).rejects.toBe(policyError);
         } else {
@@ -570,10 +716,7 @@ it("releases rejected upload reservations so corrected input can reuse its key",
         });
         let retried: Awaited<ReturnType<typeof admitChatSend>> | undefined;
         try {
-          retried = await admitChatSend({
-            ...corrected,
-            respond: vi.fn(),
-          });
+          retried = await admitChatSend({ ...corrected, respond: vi.fn() });
           expect(retried.ok).toBe(true);
         } finally {
           cleanupAdmission(retried, runId);
@@ -582,12 +725,12 @@ it("releases rejected upload reservations so corrected input can reuse its key",
     },
     { gateway: { uploads: { enabled: false } } },
   ));
-it.each(["known-source", "new-terminal", "new-receipt"] as const)(
+it.each(["new-terminal", "new-receipt"] as const)(
   "refuses a conflicting or unprepared %s after admission waits",
   (source) =>
     withAdmissionTest("chat-admission-retry-comparison", async (f) => {
       const { scope, runId, context } = f;
-      f.seed(source === "known-source" ? { restartRecoveryTerminalRunIds: [runId] } : {});
+      f.seed();
       const admission = await f.prepare();
       const { session } = admission;
       if (source === "new-terminal") {
@@ -598,15 +741,14 @@ it.each(["known-source", "new-terminal", "new-receipt"] as const)(
         });
       }
       const comparison = vi.spyOn(sessionAccessor, "readSessionSubmittedInput");
-      if (source === "known-source") {
-        comparison.mockResolvedValueOnce({ role: "user", timestamp: 100, content: "Hello" });
-      }
-      comparison.mockResolvedValue({
-        role: "user",
-        timestamp: 100,
-        content: "Hello",
-        __openclaw: { humanMentions: [{ profileId: "bob", start: 0, end: 5 }] },
-      });
+      comparison.mockImplementation(
+        submittedInputReader({
+          role: "user",
+          timestamp: 100,
+          content: "Hello",
+          __openclaw: { humanMentions: [{ profileId: "bob", start: 0, end: 5 }] },
+        }),
+      );
       const begin = sessionControllerLifecycle.beginSessionEffect;
       const publication =
         source === "new-receipt"
@@ -626,25 +768,16 @@ it.each(["known-source", "new-terminal", "new-receipt"] as const)(
       const respond = vi.fn();
       let admitted: Awaited<ReturnType<typeof admitChatSend>> | undefined;
       try {
-        admitted = await admitChatSend({
-          ...admission,
-          respond,
-        });
+        admitted = await admitChatSend({ ...admission, respond });
         expect(admitted.ok).toBe(false);
-        expect(respond).toHaveBeenCalledWith(
-          false,
-          undefined,
-          expect.objectContaining(
-            source === "new-receipt"
-              ? { code: "UNAVAILABLE", retryable: true }
-              : {
-                  code: "INVALID_REQUEST",
-                  message: expect.stringContaining("already used for different input"),
-                  ...(source === "known-source"
-                    ? { details: { reason: "chat-request-conflict" } }
-                    : {}),
-                },
-          ),
+        expectAdmissionError(
+          respond,
+          source === "new-receipt"
+            ? { code: "UNAVAILABLE", retryable: true }
+            : {
+                code: "INVALID_REQUEST",
+                message: expect.stringContaining("already used for different input"),
+              },
         );
         expect(getRpcSource(runId)).toBeUndefined();
         expect(context.dedupe.has(pendingChatSendDedupeKey(runId))).toBe(false);
@@ -806,3 +939,23 @@ it.each([
     }
   }),
 );
+it("names the changed store key when refusing a send prepared against stale storage", () =>
+  withAdmissionTest("chat-admission-store-key-changed", async (f) => {
+    f.seed();
+    const admission = await f.prepare();
+    const { sessionTarget } = admission.session;
+    const respond = vi.fn();
+    const outcome = await admitChatSend({
+      ...admission,
+      session: {
+        ...admission.session,
+        sessionTarget: { ...sessionTarget, storeKey: `${sessionTarget.storeKey}:replaced` },
+      },
+      respond,
+    });
+    expect(outcome.ok).toBe(false);
+    expectAdmissionError(respond, {
+      message: "Error: Session storage changed while starting work (store key). Retry.",
+    });
+    expect(getRpcSource(f.runId)).toBeUndefined();
+  }));

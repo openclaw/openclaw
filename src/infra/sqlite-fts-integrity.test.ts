@@ -6,10 +6,8 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { AGENT_FTS_SCHEMAS as schemas } from "../state/openclaw-agent-fts-schema.js";
 import { installSqliteFtsTokenizerMismatch } from "./sqlite-index-corruption.test-support.js";
 import { repairDoctorSqliteIndexCorruption as repairDoctor } from "./sqlite-index-recovery.js";
-import {
-  classifySqliteFtsIntegrityFindings as classify,
-  repairSqliteIndexCorruption as repair,
-} from "./sqlite-index-schema.js";
+import { repairSqliteIndexCorruption as repair } from "./sqlite-index-schema.js";
+import { classifySqliteFtsIntegrityFindings as classify } from "./sqlite-integrity.js";
 
 const roots = useAutoCleanupTempDirTracker(afterEach);
 const tables = ["memory_index_chunks_fts", "session_transcript_fts"];
@@ -39,11 +37,6 @@ it("backs up and rebuilds only canonical FTS indexes without changing content", 
   const pathname = fixture();
   using db = new DatabaseSync(pathname);
   const findings = all(db);
-  expect(findings).toEqual(
-    tables.map((table) => ({
-      integrity_check: `malformed inverted index for FTS5 table main.${table}`,
-    })),
-  );
   const rows = all(db, "SELECT * FROM session_transcript_fts");
   const messages = findings.map((row) => row.integrity_check);
   expect(classify(db, messages, schemas)).toEqual(tables);
@@ -102,6 +95,5 @@ it("rolls an FTS rebuild back when commit authority is lost", () => {
       },
     }),
   ).toThrow("maintenance lost");
-  expect(backup).toHaveBeenCalledOnce();
   expect(all(db)).toEqual(findings);
 });

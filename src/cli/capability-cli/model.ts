@@ -88,23 +88,6 @@ async function buildModelProviders(cfg: OpenClawConfig, agentId: string) {
   return [...grouped.values()].toSorted((a, b) => a.provider.localeCompare(b.provider));
 }
 
-async function runModelAuthStatus(agent: string) {
-  const captured: string[] = [];
-  const { modelsStatusCommand } = await import("../../commands/models/list.status-command.js");
-  await modelsStatusCommand(
-    { json: true, agent },
-    {
-      log: (...args) => captured.push(args.join(" ")),
-      error: defaultRuntime.error,
-      exit: (code) => {
-        throw new Error(`exit ${code}`);
-      },
-    },
-  );
-  const raw = captured.find((line) => line.trim().startsWith("{"));
-  return raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
-}
-
 async function runModelAuthLogout(provider: string, agent: string) {
   const { captureRuntimeConfigAsyncReader } = await import("../../config/config.js");
   const { resolveAgentDir } = await import("../../agents/agent-scope.js");
@@ -198,6 +181,7 @@ export function registerModelCapabilityCommands(capability: Command): void {
         const { captureRuntimeConfigAsyncReader } = await import("../../config/config.js");
         const { canonicalizeCaseOnlyCatalogModelRef } =
           await import("../../agents/model-selection.js");
+        const { hasObservedModelUsage, normalizeUsage } = await import("../../agents/usage.js");
         const explicitModelOverride = requireProviderModelOverride(requestedModel);
         const cfg =
           transport === "local"
@@ -354,12 +338,18 @@ export function registerModelCapabilityCommands(capability: Command): void {
                       `Model run ${result.stopReason === "aborted" ? "aborted" : "failed"} ${target}`,
                     );
                   }
+                  const normalizedUsage = normalizeUsage(result.usage);
+                  const usage = hasObservedModelUsage(normalizedUsage)
+                    ? normalizedUsage
+                    : undefined;
                   return {
                     ok: true,
                     capability: "model.run",
                     transport: "local" as const,
                     provider: prepared.selection.provider,
                     model: prepared.selection.modelId,
+                    usage,
+                    lastCallUsage: usage,
                     attempts: [],
                     ...inputs,
                     outputs: [
@@ -433,13 +423,21 @@ export function registerModelCapabilityCommands(capability: Command): void {
               `Gateway model run ${response.status}.`,
           );
         }
+        const agentMeta = response.result?.meta?.agentMeta;
         return {
           ok: true,
           capability: "model.run",
           transport: "gateway" as const,
-          provider: response?.result?.meta?.agentMeta?.provider,
-          model: response?.result?.meta?.agentMeta?.model,
-          attempts: response?.result?.meta?.agentMeta?.fallbackAttempts ?? [],
+          provider: agentMeta?.provider,
+          model: agentMeta?.model,
+          usage:
+            agentMeta?.usage?.costStatus !== undefined || hasObservedModelUsage(agentMeta?.usage)
+              ? agentMeta?.usage
+              : undefined,
+          lastCallUsage: hasObservedModelUsage(agentMeta?.lastCallUsage)
+            ? agentMeta.lastCallUsage
+            : undefined,
+          attempts: agentMeta?.fallbackAttempts ?? [],
           outputs: (response?.result?.payloads ?? []).map((payload) => ({
             text: payload.text,
             mediaUrl: payload.mediaUrl,
@@ -558,9 +556,22 @@ export function registerModelCapabilityCommands(capability: Command): void {
     .option("--json", "Output JSON", false)
     .action((opts, command) =>
       runCapabilityCommand(opts.json, undefined, async () => {
-        return runModelAuthStatus(
-          await resolveModelAuthAgent(command, opts.agent, "infer model auth status"),
+        const agent = await resolveModelAuthAgent(command, opts.agent, "infer model auth status");
+        const captured: string[] = [];
+        const { modelsStatusCommand } =
+          await import("../../commands/models/list.status-command.js");
+        await modelsStatusCommand(
+          { json: true, agent },
+          {
+            log: (...args) => captured.push(args.join(" ")),
+            error: defaultRuntime.error,
+            exit: (code) => {
+              throw new Error(`exit ${code}`);
+            },
+          },
         );
+        const raw = captured.find((line) => line.trim().startsWith("{"));
+        return raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
       }),
     );
 }

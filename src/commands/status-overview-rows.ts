@@ -20,6 +20,7 @@ import { formatTokenCount } from "../utils/token-format.js";
 import { VERSION } from "../version.js";
 import { buildBackupStatusValue } from "./backup-health.js";
 import type { HealthSummary } from "./health.js";
+import { formatRecoveryDiskUsage } from "./recovery-disk-usage.js";
 import { buildStatusOverviewSurfaceRows } from "./status-all/format.js";
 import { buildStatusDatabaseStoreRows } from "./status-database-engines.js";
 import type { StatusOverviewSurface } from "./status-overview-surface.ts";
@@ -278,6 +279,14 @@ export function buildStatusCommandOverviewRows(params: {
           ]
         : []),
       ...buildStatusDatabaseStoreRows(params.surface.databaseEngines),
+      ...(params.surface.recoveryCopies
+        ? [
+            {
+              Item: "Recovery copies (local)",
+              Value: formatRecoveryDiskUsage(params.surface.recoveryCopies),
+            },
+          ]
+        : []),
       { Item: "Telemetry", Value: telemetryValue },
       { Item: "Memory", Value: memoryValue },
       {
@@ -369,6 +378,14 @@ export function buildStatusAllOverviewRows(params: {
           ]
         : []),
       ...buildStatusDatabaseStoreRows(params.surface.databaseEngines),
+      ...(params.surface.recoveryCopies
+        ? [
+            {
+              Item: "Recovery copies (local)",
+              Value: formatRecoveryDiskUsage(params.surface.recoveryCopies),
+            },
+          ]
+        : []),
       {
         Item: "Secrets",
         Value:

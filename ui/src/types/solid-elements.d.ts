@@ -65,7 +65,6 @@ declare module "@solidjs/web" {
       "openclaw-chat-tool-card": HTMLAttributes<HTMLElement>;
       "openclaw-chat-tool-icon": HTMLAttributes<HTMLElement>;
       "openclaw-chat-tool-reviews": HTMLAttributes<HTMLElement>;
-      "openclaw-chat-tool-outcome-summary": HTMLAttributes<HTMLElement>;
       "openclaw-chat-tool-review-outcome": HTMLAttributes<HTMLElement>;
       "openclaw-custodian-setup-card": HTMLAttributes<HTMLElement>;
       "openclaw-agent-memory-panel": HTMLAttributes<HTMLElement>;
@@ -95,17 +94,16 @@ declare module "@solidjs/web" {
       "openclaw-memory-settings": HTMLAttributes<HTMLElement>;
       "openclaw-memory-memories": HTMLAttributes<HTMLElement>;
       "openclaw-modal-actions": HTMLAttributes<HTMLElement>;
-      "openclaw-claws-explore": HTMLAttributes<HTMLElement> & {
+      "openclaw-templates-explore": HTMLAttributes<HTMLElement> & {
         "prop:onSelect"?: (
-          entry: import("../pages/agents-home/claws-catalog-client.ts").ClawCatalogEntry,
+          entry: import("../pages/agents-home/templates-catalog-client.ts").TemplateCatalogEntry,
         ) => void;
       };
-      "openclaw-claws-catalog-dialog": HTMLAttributes<HTMLElement>;
+      "openclaw-templates-catalog-dialog": HTMLAttributes<HTMLElement>;
       "openclaw-github-identity": HTMLAttributes<HTMLElement>;
       "openclaw-chat-permission-card": HTMLAttributes<HTMLElement>;
       "openclaw-chat-run-failure-notice": HTMLAttributes<HTMLElement>;
       "openclaw-chat-retry-status": HTMLAttributes<HTMLElement>;
-      "openclaw-chat-child-attention": HTMLAttributes<HTMLElement>;
       "openclaw-session-diff-menu": HTMLAttributes<HTMLElement>;
       "openclaw-mcp-servers-card": HTMLAttributes<HTMLElement>;
       "openclaw-mcp-app-catalog": HTMLAttributes<HTMLElement> & { surface?: string };

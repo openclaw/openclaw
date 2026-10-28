@@ -95,10 +95,7 @@ export function createMcpOAuthRefreshBoundary(
           signal.throwIfAborted();
           dispatched = true;
           const response = await fetchFn(url, { ...init, signal });
-          const bytes = await readResponseWithLimit(response, 262_144, {
-            signal,
-            timeoutMs: 30_000,
-          });
+          const bytes = await readResponseWithLimit(response, 262_144, { signal });
           const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
           const payload: unknown = JSON.parse(text);
           if (!response.ok || readOAuthRefreshErrorReason(payload)) {

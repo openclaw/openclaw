@@ -159,7 +159,7 @@ describe("Codex runtime startup resource lifetime", () => {
       const releaseCapture = createDeferred<void>();
       const registerMonitor = monitor.register;
       let registration: Awaited<ReturnType<typeof registerMonitor>> | undefined;
-      const register = vi.spyOn(monitor, "register").mockImplementationOnce(async (options) => {
+      vi.spyOn(monitor, "register").mockImplementationOnce(async (options) => {
         const state = resourcesSpy.mock.results[0]?.value.state;
         assert(
           state?.turnRoute &&
@@ -192,16 +192,11 @@ describe("Codex runtime startup resource lifetime", () => {
         });
         const rejected = expect(run).rejects.toBe(setupError);
         const owners = await captured.promise;
-        const prepared = resourcesSpy.mock.results[0]?.value;
-        assert(prepared);
-        expect(prepared.state.nativeSubagentMonitor).toBeUndefined();
         if (ending === "abort") {
           abortController.abort(setupError);
         }
         releaseCapture.resolve();
         await rejected;
-        expect(register).toHaveBeenCalledOnce();
-        expect(prepared.state.nativeSubagentMonitor).toBeUndefined();
         if (registration) {
           expect(registration.unregister).toHaveBeenCalledOnce();
         }

@@ -289,14 +289,12 @@ async function resolveUpdateInstallOwnership(
 export async function resolveUpdateInstallIdentity(params: {
   root: string | null;
   timeoutMs?: number;
-  signal?: AbortSignal;
 }): Promise<UpdateInstallIdentity> {
   const { root, ...options } = params;
   const identity = await resolveUpdateInstallOwnership(root, options);
   const { installKind } = identity;
   const git =
     installKind === "git" && root ? await readGitUpdateIdentity(root, options) : undefined;
-  options.signal?.throwIfAborted();
   return { ...identity, git };
 }
 

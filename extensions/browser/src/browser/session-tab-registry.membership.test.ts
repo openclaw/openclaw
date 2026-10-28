@@ -20,7 +20,6 @@ import {
   installSessionTabRegistrySqliteHarness,
 } from "./session-tab-registry.sqlite.test-harness.js";
 import {
-  type DurableRecord,
   type RegistryModule,
   durableOwnership as ownership,
 } from "./session-tab-registry.sqlite.test-helpers.js";
@@ -98,6 +97,7 @@ describe("session tab membership and lifecycle", () => {
       profileAliases: ["requested"],
       now: 1_000,
     });
+    const ownRecord = openStore().entries()[0]?.value;
     for (const profile of ["resolved", "other"]) {
       await track(`opaque-${profile}`, `NATIVE-${profile}`, {
         sessionKey: "agent:main:other",
@@ -133,18 +133,12 @@ describe("session tab membership and lifecycle", () => {
     expect(aliasesBefore.every(Boolean)).toBe(true);
     const volatileBefore = structuredClone(volatileTabsBySession());
     openStore().register("invalid-record", { version: 999 });
-    openStore().register("wrong-storage-key", {
-      version: 1,
-      sessionKey: identity.sessionKey,
-      nativeTargetId: "NATIVE-WRONG-KEY",
-      profile: "resolved",
-      profileAliases: ["requested"],
-      profileFingerprint: "test-profile-fingerprint",
-      browserInstanceFingerprint: "test-browser-instance-fingerprint",
-      interactionTargetKind: "native",
-      trackedAt: 1_000,
-      lastUsedAt: 1_000,
-    } satisfies DurableRecord);
+    openStore().register(
+      "wrong-storage-key",
+      Object.assign({}, ownRecord, {
+        nativeTargetId: "NATIVE-WRONG-KEY",
+      }),
+    );
     const before = openStore().entries();
     const ownedTabs = [
       { targetId: "NATIVE-OWN", tabId: "t1" },
@@ -503,11 +497,7 @@ describe("session tab membership and lifecycle", () => {
         status: "unavailable",
         reason: "target-lookup-failed",
       });
-      await expect(
-        close({
-          now: 2_000,
-        }),
-      ).resolves.toBe(0);
+      await expect(close({ now: 2_000 })).resolves.toBe(0);
       expect(openStore().entries()[0]?.value).toMatchObject({
         nativeTargetId: "NATIVE-PENDING",
         cleanupKind: "lifecycle",

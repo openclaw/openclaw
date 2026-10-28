@@ -16,7 +16,7 @@ import { readUserProfileAliasesNative } from "../../state/user-profile-list.nati
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
 import {
   publishSessionEntryCacheParticipantUpdate,
-  trackSessionEntryCacheWrite,
+  prepareSessionEntryCacheWrite,
 } from "./session-accessor.sqlite-entry-cache.js";
 import {
   getSessionKysely,
@@ -122,19 +122,8 @@ function recordSessionParticipantWithAliasRead(
         ).find((row) => aliases.has(row.actor_id));
       }
     }
-    if (!existing) {
-      const count = participants
-        ? participants.length
-        : (executeSqliteQueryTakeFirstSync(
-            database.db,
-            kysely
-              .selectFrom("session_participants")
-              .select((eb) => eb.fn.countAll<number>().as("count"))
-              .where("session_key", "=", resolved.sessionKey),
-          )?.count ?? 0);
-      if (count >= MAX_SESSION_PARTICIPANTS) {
-        return { value: "capped", projectionChanged: false };
-      }
+    if (!existing && participants && participants.length >= MAX_SESSION_PARTICIPANTS) {
+      return { value: "capped", projectionChanged: false };
     }
     const aggregate = mergeParticipantAggregate(
       existing,
@@ -145,26 +134,52 @@ function recordSessionParticipantWithAliasRead(
       },
       "sum",
     );
-    const writeGeneration = trackSessionEntryCacheWrite(database, () =>
-      withSqliteDatabaseWriteScope(database.db, [resolved.sessionKey], () =>
-        executeSqliteQuerySync(
-          database.db,
-          kysely
-            .insertInto("session_participants")
-            .values({
-              session_key: resolved.sessionKey,
-              identity_namespace: namespace,
-              actor_id: existing?.actor_id ?? actorId,
-              ...aggregate,
-            })
-            .onConflict((conflict) =>
-              conflict
-                .columns(["session_key", "identity_namespace", "actor_id"])
-                .doUpdateSet(aggregate),
-            ),
+    let values = kysely.selectNoFrom((eb) => [
+      eb.val(resolved.sessionKey).as("session_key"),
+      eb.val(namespace).as("identity_namespace"),
+      eb.val(existing?.actor_id ?? actorId).as("actor_id"),
+      eb.val(aggregate.contribution_count).as("contribution_count"),
+      eb.val(aggregate.first_prompted_at).as("first_prompted_at"),
+      eb.val(aggregate.last_prompted_at).as("last_prompted_at"),
+    ]);
+    if (!existing && !participants) {
+      values = values.where((eb) =>
+        eb(
+          eb
+            .selectFrom("session_participants")
+            .select((select) => select.fn.countAll<number>().as("count"))
+            .where("session_key", "=", resolved.sessionKey),
+          "<",
+          MAX_SESSION_PARTICIPANTS,
         ),
+      );
+    }
+    const completeCacheWrite = prepareSessionEntryCacheWrite(database);
+    const result = withSqliteDatabaseWriteScope(database.db, [resolved.sessionKey], () =>
+      executeSqliteQuerySync(
+        database.db,
+        kysely
+          .insertInto("session_participants")
+          .columns([
+            "session_key",
+            "identity_namespace",
+            "actor_id",
+            "contribution_count",
+            "first_prompted_at",
+            "last_prompted_at",
+          ])
+          .expression(values)
+          .onConflict((conflict) =>
+            conflict
+              .columns(["session_key", "identity_namespace", "actor_id"])
+              .doUpdateSet(aggregate),
+          ),
       ),
     );
+    if (result.numAffectedRows === 0n) {
+      return { value: "capped", projectionChanged: false };
+    }
+    const writeGeneration = completeCacheWrite();
     const projectionChanged =
       !existing ||
       existing.actor_id !== actorId ||

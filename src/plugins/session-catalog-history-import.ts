@@ -5,6 +5,7 @@ import type {
   SessionsCatalogReadResult,
 } from "../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import { makeZeroUsageSnapshot } from "../agents/usage.js";
+import { catalogDisplayFacts, catalogItemTextPrefix } from "../chat/session-catalog-display.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentMessage } from "../plugin-sdk/agent-core.js";
 import { withSessionTranscriptWrite } from "../plugin-sdk/session-transcript-runtime.js";
@@ -26,14 +27,18 @@ type SessionCatalogHistory = {
 // Claude and Codex transcript reads reject pages above 50 items; stay within every provider's cap.
 const SESSION_CATALOG_HISTORY_IMPORT_PAGE_LIMIT = 50;
 
+type ImportedCatalogMessage = Extract<AgentMessage, { role: "user" | "assistant" }> & {
+  __openclaw: Record<string, unknown>;
+};
+
 function importedSessionCatalogMessage(params: {
   catalogId: string;
   item: SessionCatalogTranscriptItem;
   fallbackTimestamp: number;
-}): AgentMessage | undefined {
+}): ImportedCatalogMessage | undefined {
   const timestamp = parseDateStringTimestampMs(params.item.timestamp) ?? params.fallbackTimestamp;
-  const importedText = params.item.text?.trim();
-  if (!importedText && params.item.type === "reasoning") {
+  const importedText = params.item.text?.trim() ? params.item.text : undefined;
+  if (!importedText && params.item.type === "reasoning" && !params.item.truncated) {
     return undefined;
   }
   const text = importedText || "[Unsupported catalog transcript item]";
@@ -44,25 +49,21 @@ function importedSessionCatalogMessage(params: {
       role: "user",
       content: text,
       timestamp,
-      __openclaw: { mirrorOrigin: `${params.catalogId}-catalog-import` },
-    } as AgentMessage;
+      __openclaw: {
+        mirrorOrigin: `${params.catalogId}-catalog-import`,
+        catalogDisplay: catalogDisplayFacts(params.item),
+      },
+    };
   }
-  const prefix =
-    params.item.type === "reasoning"
-      ? "Thinking\n\n"
-      : params.item.type === "toolCall"
-        ? "Tool call\n\n"
-        : params.item.type === "toolResult"
-          ? "Tool result\n\n"
-          : params.item.type === "other"
-            ? "Other\n\n"
-            : "";
-  return sessionCatalogAssistantMessage(
-    `${prefix}${text}`,
-    timestamp,
-    params.catalogId,
-    params.item.model ?? "native-history",
-  );
+  return {
+    ...sessionCatalogAssistantMessage(
+      `${catalogItemTextPrefix(params.item.type)}${text}`,
+      timestamp,
+      params.catalogId,
+      params.item.model ?? "native-history",
+    ),
+    __openclaw: { catalogDisplay: catalogDisplayFacts(params.item) },
+  };
 }
 
 function sessionCatalogAssistantMessage(
@@ -70,7 +71,7 @@ function sessionCatalogAssistantMessage(
   timestamp: number,
   provider: string,
   model: string,
-): AgentMessage {
+): Extract<AgentMessage, { role: "assistant" }> {
   return {
     role: "assistant",
     content: [{ type: "text", text }],
@@ -142,8 +143,20 @@ export async function readBoundedSessionCatalogHistory(params: {
     // source order for persistence; timestamps do not define transcript order.
     for (const [index, item] of page.items.entries()) {
       const { raw: _raw, ...importableItem } = item;
-      const itemBytes = Buffer.byteLength(JSON.stringify(importableItem), "utf8");
       const remainingBytes = params.limits.maxBytes - bytes;
+      let itemBytes = Buffer.byteLength(JSON.stringify(importableItem), "utf8");
+      if (itemBytes > remainingBytes && importableItem.toolDetails !== undefined) {
+        delete importableItem.toolDetails;
+        importableItem.truncated = true;
+        itemBytes = Buffer.byteLength(JSON.stringify(importableItem), "utf8");
+        complete = false;
+      }
+      if (itemBytes > remainingBytes && importableItem.toolInput !== undefined) {
+        delete importableItem.toolInput;
+        importableItem.toolInputOmitted = true;
+        itemBytes = Buffer.byteLength(JSON.stringify(importableItem), "utf8");
+        complete = false;
+      }
       if (items.length > 0 && itemBytes > remainingBytes) {
         return result(false);
       }
@@ -310,17 +323,20 @@ export async function preserveSessionCatalogHistory(params: {
               catalogId: params.catalogId,
               item: {
                 ...item,
+                // Normalize wrapper separators without trimming the recorded body.
                 text: wrapExternalContent(
-                  item.text?.trim() || "[Unsupported catalog transcript item]",
+                  item.text?.trim() ? item.text : "[Unsupported catalog transcript item]",
                   {
                     source: "unknown",
                     includeWarning: false,
                   },
-                ),
+                ).trim(),
               },
               fallbackTimestamp: fallbackTimestamp + index + 1,
             });
-            return wrapped ? { ...wrapped, idempotencyKey } : message;
+            return wrapped
+              ? { ...wrapped, __openclaw: imported["__openclaw"], idempotencyKey }
+              : message;
           },
           source: params.commitGuard,
         },

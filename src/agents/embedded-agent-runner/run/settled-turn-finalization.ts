@@ -7,7 +7,10 @@ import {
 import type { SessionTranscriptWriterFence } from "../../../config/sessions/transcript-write-context.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
-import { classifyAgentRunTerminalOutcome } from "../../agent-run-terminal-outcome.js";
+import {
+  buildAgentRunTerminalOutcome,
+  classifyAgentRunTerminalOutcome,
+} from "../../agent-run-terminal-outcome.js";
 import { runAgentHarnessSettledTurnFinalization } from "../../harness/selection.js";
 import type { AgentHarness } from "../../harness/types.js";
 import { observeReplyDelivery, resolveReplyExpectation } from "../../reply-completion.js";
@@ -281,7 +284,11 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
     return preserveInitial("failed");
   }
 
-  // Only an actual recovery replaces a failed or timed-out turn's terminal ownership.
+  const recoveredOutputLimit =
+    finalizerAnswered &&
+    finalizationOutcome === "answered" &&
+    initial.terminalState.outcome.stopReason === "length";
+  // A summary recovers the reply, but cannot complete work interrupted by an output limit.
   const completion =
     finalizationOutcome !== "answered" && preserveOriginalTerminal
       ? initial
@@ -293,10 +300,16 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
             finalizationOutcome !== "answered"
               ? initial.terminalState
               : {
-                  outcome: resolveEmbeddedRunAttemptTerminalOutcome({
-                    attempt,
-                    assistant: attempt.currentAttemptAssistant,
-                  }),
+                  outcome: recoveredOutputLimit
+                    ? buildAgentRunTerminalOutcome({
+                        ...initial.terminalState.outcome,
+                        status: "error",
+                        error: CUT_OFF_SUMMARY_NOTICE_TEXT,
+                      })
+                    : resolveEmbeddedRunAttemptTerminalOutcome({
+                        attempt,
+                        assistant: attempt.currentAttemptAssistant,
+                      }),
                   signalOwnedInterruption: false,
                 },
           attemptCompactionCount: 0,
@@ -357,7 +370,9 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
     // Recovery owns the selected terminal only after delivery observation and
     // authority checks; failed or cancelled summaries retain the original facts.
     assertFinalizationActive();
-    runParams.onAttemptTerminalReplaced?.();
+    if (!recoveredOutputLimit) {
+      runParams.onAttemptTerminalReplaced?.();
+    }
   }
   return {
     ...completion,

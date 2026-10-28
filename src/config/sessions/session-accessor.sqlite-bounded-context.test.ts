@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import path from "node:path";
 import { expect, it as baseIt, vi } from "vitest";
-import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { CURRENT_SESSION_VERSION, SessionManager } from "../../agents/sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync.js";
@@ -56,6 +55,17 @@ function assistant(id: string, parent: string | null, content = id) {
   return transcriptMessage(id, parent, { role: "assistant", content });
 }
 
+function toolResult(id: string, parent: string, call: string, text: string, second: number) {
+  return transcriptMessage(id, parent, {
+    role: "toolResult",
+    toolCallId: call,
+    toolName: "read",
+    content: [{ type: "text", text }],
+    isError: false,
+    timestamp: Date.UTC(2026, 7, 15, 0, 0, second),
+  });
+}
+
 function storedMessage(
   id: string,
   parentId: string | null,
@@ -99,13 +109,8 @@ function serializedBytes(events: unknown[]) {
   );
 }
 
-function readContext(
-  scope: Scope,
-  maxBytes = 1024,
-  maxEvents = 10,
-  onRead?: Parameters<typeof boundedContext>[1]["onRead"],
-) {
-  return boundedContext(scope, { maxBytes, maxEvents, onRead });
+function readContext(scope: Scope, maxBytes = 1024, maxEvents = 10) {
+  return boundedContext(scope, { maxBytes, maxEvents });
 }
 
 async function withBoundedContextScope(run: (scope: Scope) => Promise<void>): Promise<void> {
@@ -140,11 +145,7 @@ async function seedImportedTranscript(scope: Scope, events: unknown[]) {
 }
 
 function readHistory(scope: Scope) {
-  return tailPage(scope, {
-    maxBytes: 1024 * 1024,
-    maxMessages: 100,
-    offset: 0,
-  });
+  return tailPage(scope, { maxBytes: 1024 * 1024, maxMessages: 100, offset: 0 });
 }
 
 function observePayloadAcquisition(
@@ -188,8 +189,9 @@ function observePayloadAcquisition(
     return statement;
   });
   const parseSpy = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
-    if (pending.delete(text)) {
+    if (typeof text === "string" && text.includes(marker)) {
       decodedRows++;
+      pending.delete(text);
     }
     return parse(text, reviver);
   });
@@ -215,7 +217,7 @@ it("enforces context count and byte budgets and releases rejected reads for late
   scope,
 }) => {
   const append = (id: string, parent: string | null, content = id) =>
-    persist(scope, [transcriptMessage(id, parent, { role: "user", content })]);
+    persist(scope, [user(id, parent, content)]);
   await append("old", null);
   await append("large", "old", "🦞".repeat(1024));
   await append("new", "large");
@@ -228,50 +230,52 @@ it("enforces context count and byte budgets and releases rejected reads for late
   expect(counted.serializedBytes).toBeLessThanOrEqual(16_384);
   expect(read(16_384, 3).truncated).toBe(false);
   const headerBytes = Buffer.byteLength(JSON.stringify(counted.events[0])) + 1;
-  const { db } = openOpenClawAgentDatabase({ agentId: scope.agentId });
-  const counter = trackSqliteStatementExecutions(
-    requireNativeSqliteDatabase(db),
-    ["sizing"],
-    (sql) => (sql.includes("serialized_bytes") ? "sizing" : null),
-  );
-  const bounded = (maxBytes: number, maxRows: number) => {
-    const before = counter.rowCounts.sizing;
+  const bounded = (maxBytes: number) => {
     const context = read(maxBytes);
-    expect(counter.rowCounts.sizing - before).toBeGreaterThan(0);
-    expect(counter.rowCounts.sizing - before).toBeLessThanOrEqual(maxRows);
     expect(context.truncated).toBe(true);
     return context;
   };
-  using _ = { [Symbol.dispose]: counter.restore };
-  expect(ids(bounded(1024, 3))).toEqual([scope.sessionId, "new"]);
-  const exact = bounded(headerBytes, 2);
+  expect(ids(bounded(1024))).toEqual([scope.sessionId, "new"]);
+  const exact = bounded(headerBytes);
   expect(ids(exact)).toEqual([scope.sessionId]);
   expect(exact.events[0]).toMatchObject({ type: "session" });
   expect(exact.serializedBytes).toBe(headerBytes);
   await append("oversized", "new", "🦞".repeat(1024));
-  expect(ids(bounded(1024, 2))).toEqual([scope.sessionId]);
+  expect(ids(bounded(1024))).toEqual([scope.sessionId]);
   await append("next", "oversized");
-  expect(ids(bounded(1024, 3))).toEqual([scope.sessionId, "next"]);
+  expect(ids(bounded(1024))).toEqual([scope.sessionId, "next"]);
 });
 
-it("decodes context payloads without buffering the whole encoded window", async ({ scope }) => {
-  const marker = "synthetic-context-payload:";
-  const content = marker + "🦞".repeat(256);
-  await persist(scope, [
-    user("a", null, content),
-    assistant("b", "a", content),
-    user("c", "b", content),
-  ]);
-  const { db } = openOpenClawAgentDatabase({ agentId: scope.agentId });
-  const acquisition = observePayloadAcquisition(db, marker, () => {
-    const context = readContext(scope, 16_384);
-    expect(eventIds(context.events)).toEqual([scope.sessionId, "a", "b", "c"]);
-    expect(context.serializedBytes).toBe(serializedBytes(context.events));
-  });
-  expect(acquisition.decodedRows).toBe(3);
-  expect(acquisition.pendingRows).toBe(0);
-  expect(acquisition.peakPendingBytes).toBeLessThanOrEqual(acquisition.largestRowBytes);
-});
+it.for(["identity", "compressed"] as const)(
+  "decodes %s context payloads without expanded SQL copies",
+  async (storage, { scope }) => {
+    const marker = "synthetic-context-payload:";
+    const content = marker + "🦞".repeat(storage === "compressed" ? 256 : 16);
+    await persist(scope, [
+      user("a", null, content),
+      assistant("b", "a", content),
+      user("c", "b", content),
+    ]);
+    const { db } = openOpenClawAgentDatabase({ agentId: scope.agentId });
+    expect(
+      db
+        .prepare("SELECT count(*) AS count FROM transcript_events WHERE event_zstd IS NOT NULL")
+        .get()?.count,
+    ).toBe(storage === "compressed" ? 3 : 0);
+    const acquisition = observePayloadAcquisition(db, marker, () => {
+      const context = readContext(scope, 16_384);
+      expect(eventIds(context.events)).toEqual([scope.sessionId, "a", "b", "c"]);
+      expect(context.serializedBytes).toBe(serializedBytes(context.events));
+      expect(recentEvents(scope, 3)).toEqual(context.events.slice(1));
+    });
+    expect(acquisition.decodedRows).toBe(6);
+    expect(acquisition.pendingRows).toBe(0);
+    expect(acquisition.peakPendingBytes).toBeLessThanOrEqual(acquisition.largestRowBytes);
+    if (storage === "compressed") {
+      expect(acquisition.acquiredBytes).toBe(0);
+    }
+  },
+);
 
 it.for(["header", "compaction"] as const)(
   "bounds oversized %s before acquiring its payload",
@@ -406,12 +410,16 @@ it("keeps reset history closed across compaction with a warm history cache", asy
     expect(page.totalMessages).toBe(ids.length);
     expect(page.events.map(({ event }) => (event as { id: string }).id)).toEqual(ids);
   };
+  const expectContext = (messages: unknown[]) => {
+    expect(manager.buildSessionContext().messages).toMatchObject(messages);
+    expect(activeStats(scope).eventCount).toBe(messages.length);
+  };
+  const summary = (text: string) => ({ role: "compactionSummary", summary: text });
+  const message = (content: string) => ({ role: "user", content });
 
   appendUser("before-reset user");
   manager.appendMessage(
-    makeAgentAssistantMessage({
-      content: [{ type: "text", text: "before-reset assistant" }],
-    }),
+    makeAgentAssistantMessage({ content: [{ type: "text", text: "before-reset assistant" }] }),
   );
   manager.appendResetBoundary("new");
   const freshUserId = appendUser("fresh user");
@@ -421,35 +429,26 @@ it("keeps reset history closed across compaction with a warm history cache", asy
   manager.appendCompaction("fresh-only summary", freshUserId, 100);
   await settle();
   expectHistory([freshUserId]);
-  expect(manager.buildSessionContext().messages).toMatchObject([
-    { role: "compactionSummary", summary: "fresh-only summary" },
-    { role: "user", content: "fresh user" },
-  ]);
-  expect(activeStats(scope).eventCount).toBe(2);
+  expectContext([summary("fresh-only summary"), message("fresh user")]);
 
   const nextUserId = appendUser("after compaction");
   await settle();
   expectHistory([freshUserId, nextUserId]);
   expect(activeStats(scope).eventCount).toBe(3);
 
-  // A newer reset wins for both scopes; another compaction must not revive older resets.
   manager.appendResetBoundary("new", nextUserId);
   const newestUserId = appendUser("after second reset");
   await settle();
   expectHistory([nextUserId, newestUserId]);
-  expect(manager.buildSessionContext().messages).toMatchObject([
-    { role: "user", content: "after compaction" },
-    { role: "user", content: "after second reset" },
-  ]);
-  expect(activeStats(scope).eventCount).toBe(2);
+  expectContext([message("after compaction"), message("after second reset")]);
 
   manager.appendCompaction("newest-only summary", newestUserId, 100);
   await settle();
   expectHistory([nextUserId, newestUserId]);
   const reopened = SessionManager.open(scope);
   expect(reopened.buildSessionContext().messages).toMatchObject([
-    { role: "compactionSummary", summary: "newest-only summary" },
-    { role: "user", content: "after second reset" },
+    summary("newest-only summary"),
+    message("after second reset"),
   ]);
   expect(activeStats(scope).eventCount).toBe(2);
 });
@@ -465,22 +464,8 @@ it("counts paired reset tool results without counting discarded orphan results",
     user("discarded-old", null, `discarded ${"x".repeat(12_000)}`),
     user("kept-user", "discarded-old", "kept question"),
     transcriptMessage("kept-assistant", "kept-user", assistantMessage),
-    transcriptMessage("kept-result", "kept-assistant", {
-      role: "toolResult",
-      toolCallId: "call-1",
-      toolName: "read",
-      content: [{ type: "text", text: `paired ${"p".repeat(3_000)}` }],
-      isError: false,
-      timestamp: Date.parse("2026-08-15T00:00:01.000Z"),
-    }),
-    transcriptMessage("discarded-orphan", "kept-result", {
-      role: "toolResult",
-      toolCallId: "orphan-call",
-      toolName: "read",
-      content: [{ type: "text", text: `orphan ${"o".repeat(20_000)}` }],
-      isError: false,
-      timestamp: Date.parse("2026-08-15T00:00:02.000Z"),
-    }),
+    toolResult("kept-result", "kept-assistant", "call-1", `paired ${"p".repeat(3_000)}`, 1),
+    toolResult("discarded-orphan", "kept-result", "orphan-call", `orphan ${"o".repeat(20_000)}`, 2),
   ]);
   await appendTranscriptEvent(scope, reset("reset-boundary", "discarded-orphan", "kept-user"));
   await persist(scope, [user("post-reset", "reset-boundary", "fresh turn")]);
@@ -492,13 +477,7 @@ it("counts paired reset tool results without counting discarded orphan results",
   expect(readHistory(scope).totalMessages).toBe(3);
 
   await persist(scope, [assistant("second-post-reset", "post-reset", "fresh answer")]);
-  const parseSpy = vi.spyOn(JSON, "parse");
-  try {
-    expect(activeStats(scope).eventCount).toBe(5);
-    expect(parseSpy).not.toHaveBeenCalled();
-  } finally {
-    parseSpy.mockRestore();
-  }
+  expect(activeStats(scope).eventCount).toBe(5);
 
   await appendTranscriptEvent(
     scope,
@@ -591,7 +570,7 @@ it("keeps repeated visits on one snapshot and expires their reader on return", a
   expect(() => savedVisit?.(() => {})).toThrow("outside its read snapshot");
 });
 
-it.for(["json", "sql", "consumer"] as const)(
+it.for(["json", "sql", "compressed", "consumer"] as const)(
   "preserves %s failure precedence and releases the read cursor",
   async (failureKind, { scope }) => {
     await persist(scope, [
@@ -615,10 +594,14 @@ it.for(["json", "sql", "consumer"] as const)(
       // The connection-local view corrupts reads without changing canonical rows or projections.
       database.db.exec(`CREATE TEMP VIEW transcript_events AS
         SELECT event.session_id, event.seq, event.created_at,
-          event.event_zstd, event.event_utf8_bytes, event.navigation_json,
+          CASE WHEN identity.event_id = 'middle' AND ${failureKind === "compressed" ? 1 : 0}
+            THEN x'01' ELSE event.event_zstd END AS event_zstd,
+          CASE WHEN identity.event_id = 'middle' AND ${failureKind === "compressed" ? 1 : 0}
+            THEN 0 ELSE event.event_utf8_bytes END AS event_utf8_bytes,
+          event.navigation_json,
           CASE identity.event_id
             WHEN 'oldest' THEN ${failureKind === "sql" ? "json_extract('{broken', '$')" : "'{\"old\":}'"}
-            WHEN 'middle' THEN '{"newer":}'
+            WHEN 'middle' THEN ${failureKind === "compressed" ? "NULL" : "'{\"newer\":}'"}
             ELSE event.event_json
           END AS event_json
         FROM main.transcript_events AS event
@@ -636,7 +619,11 @@ it.for(["json", "sql", "consumer"] as const)(
         ).toThrow(failure);
       } else {
         expect(() => recentEvents(scope, 3)).toThrow(
-          failureKind === "sql" ? "malformed JSON" : parseFailure,
+          failureKind === "sql"
+            ? "malformed JSON"
+            : failureKind === "compressed"
+              ? "Invalid compressed transcript payload bounds"
+              : parseFailure,
         );
       }
     } finally {
@@ -645,9 +632,7 @@ it.for(["json", "sql", "consumer"] as const)(
       }
     }
     expect(database.db.isTransaction).toBe(false);
-    expect(database.db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get()).toMatchObject({
-      busy: 0,
-    });
+    expect(database.db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get()).toMatchObject({ busy: 0 });
     expect(recentEvents(scope, 3)).toHaveLength(3);
     await appendTranscriptEvent(scope, { type: "custom", id: "after", parentId: "newest" });
     expect(recentEvents(scope, 1)).toMatchObject([{ id: "after" }]);

@@ -51,22 +51,6 @@ function normalizeCodeMode(
   throw new Error("--code-mode must be one of direct, auto, code.");
 }
 
-function normalizeTimeoutSeconds(value: string | undefined): string {
-  const raw = value ?? String(AGENT_EXEC_DEFAULT_TIMEOUT_SECONDS);
-  if (parseStrictNonNegativeInteger(raw) === undefined) {
-    throw new Error("--timeout must be a non-negative integer in seconds.");
-  }
-  return raw;
-}
-
-function normalizeFallbacks(model: string | undefined, values: string[] | undefined): string[] {
-  const fallbacks = (values ?? []).map((value) => value.trim()).filter(Boolean);
-  if (fallbacks.length > 0 && !model?.trim()) {
-    throw new Error("--fallback requires --model so the primary model is explicit.");
-  }
-  return fallbacks;
-}
-
 async function requireDirectory(value: string, label: string): Promise<string> {
   const resolved = path.resolve(value);
   let stat;
@@ -79,19 +63,6 @@ async function requireDirectory(value: string, label: string): Promise<string> {
     throw new Error(`${label} is not a directory: ${resolved}`);
   }
   return resolved;
-}
-
-function setAgentExecEnvironment(params: { stateDir: string; cwd: string }): () => void {
-  const previous = {
-    OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
-    OPENCLAW_CONFIG_PATH: process.env.OPENCLAW_CONFIG_PATH,
-    OPENCLAW_WORKSPACE_DIR: process.env.OPENCLAW_WORKSPACE_DIR,
-  };
-  // The published runtime snapshot owns config while state/workspace paths are redirected.
-  process.env.OPENCLAW_STATE_DIR = params.stateDir;
-  delete process.env.OPENCLAW_CONFIG_PATH;
-  process.env.OPENCLAW_WORKSPACE_DIR = params.cwd;
-  return () => applyProcessEnvKeys(Object.keys(previous), previous);
 }
 
 function formatActiveGatewayExecRefusal(identity: GatewayLockIdentity): string {
@@ -211,8 +182,14 @@ export async function agentExecCommand(
       ? await import("../plugins/install-root-context.js")
       : undefined;
     const pluginInstallRoots = pluginInstallContext?.resolvePluginInstallRoots();
-    const timeout = normalizeTimeoutSeconds(opts.timeout);
-    const fallbacks = normalizeFallbacks(opts.model, opts.fallback);
+    const timeout = opts.timeout ?? String(AGENT_EXEC_DEFAULT_TIMEOUT_SECONDS);
+    if (parseStrictNonNegativeInteger(timeout) === undefined) {
+      throw new Error("--timeout must be a non-negative integer in seconds.");
+    }
+    const fallbacks = (opts.fallback ?? []).map((value) => value.trim()).filter(Boolean);
+    if (fallbacks.length > 0 && !opts.model?.trim()) {
+      throw new Error("--fallback requires --model so the primary model is explicit.");
+    }
     const { resolveAgentDir, resolveAmbientOwnerAgentId } =
       await import("../agents/agent-scope-config.js");
     // Credentials follow the inherited agentDir, which runConfig strips for isolation.
@@ -242,7 +219,16 @@ export async function agentExecCommand(
     const storedAuthAgentDir = resolveAgentDir(baseConfig, execAgentId);
     runtimePaths = await import("../config/paths.js");
     const storedAuthStateDir = runtimePaths.resolveStateDir();
-    restoreEnvironment = setAgentExecEnvironment({ stateDir, cwd });
+    const previous = {
+      OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
+      OPENCLAW_CONFIG_PATH: process.env.OPENCLAW_CONFIG_PATH,
+      OPENCLAW_WORKSPACE_DIR: process.env.OPENCLAW_WORKSPACE_DIR,
+    };
+    // The published runtime snapshot owns config while state/workspace paths are redirected.
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    delete process.env.OPENCLAW_CONFIG_PATH;
+    process.env.OPENCLAW_WORKSPACE_DIR = cwd;
+    restoreEnvironment = () => applyProcessEnvKeys(Object.keys(previous), previous);
     runtimePaths.pinRuntimePaths();
     if (temporaryStateDir) {
       const { createOpenClawDatabaseMaintenanceScope } =
@@ -293,6 +279,7 @@ export async function agentExecCommand(
           cleanupBundleMcpOnRunEnd: true,
           cleanupCliLiveSessionOnRunEnd: true,
           oneShotCliRun: true,
+          operatorDirectRoot: true,
           abortSignal,
           onModelFallbackExhausted: () => {
             fallbackExhausted = true;

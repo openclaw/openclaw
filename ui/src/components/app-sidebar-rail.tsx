@@ -8,15 +8,11 @@ import {
   normalizeSidebarEntries,
   parseSidebarEntry,
   serializeSidebarEntry,
-  SIDEBAR_NAV_ROUTES,
   titleForRoute,
   type SidebarZoneEntry,
 } from "../app-navigation.ts";
 import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
-import {
-  beginNativeWindowDrag,
-  beginNativeWindowDragFromTopInset,
-} from "../app/native-window-drag.ts";
+import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
 import { KEYBOARD_SHORTCUT_COMBOS } from "../lib/keyboard-shortcut-contract.ts";
 import { handleContextMenuEvent } from "../lib/keyboard-shortcuts.ts";
 import { handleNavigationClick } from "../lib/navigation-click.ts";
@@ -28,15 +24,11 @@ import {
   renderSidebarAgentCard,
   renderAppSidebarFooterBar,
   renderAppSidebarPluginTab,
-  renderAppSidebarPageEntry,
   type AppSidebarRenderHost,
 } from "./app-sidebar-render.tsx";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
-import { McpAppCatalog } from "./mcp-app-catalog.tsx";
 import { personActivityLink, personActivityRouting } from "./person-activity-link.ts";
 import { SessionIconGraphic } from "./session-icon-glyph-solid.tsx";
-import { SidebarCollapseToggle } from "./sidebar-collapse-toggle.tsx";
-import { restoreSnapshotSession } from "./sidebar-snapshot-model.ts";
 import { Icon } from "./solid/icon.tsx";
 import { ShortcutHint } from "./solid/kbd.tsx";
 import { renderNewSessionLink as NewSessionLink } from "./solid/new-session-link.tsx";
@@ -471,100 +463,5 @@ function RailSessionGlyph(props: { session: SidebarRecentSession; label: string 
       }
       badge={props.session.unread ? renderSessionUnreadBadge() : undefined}
     />
-  );
-}
-
-/** Pages is the accessible destination catalog, not another favorites list. */
-export function renderSidebarPages(host: AppSidebarRenderHost): JSX.Element {
-  const zone = createMemo(() => host.reconciledSidebarZone());
-  const dashboards = () => host.navigationCatalog.dashboards;
-  const dashboardRows = createMemo(() =>
-    host.sidebarSnapshot
-      ? host.sidebarSnapshot.pages
-          .filter((row) => !row.archived)
-          .map((row) => restoreSnapshotSession(row, host.getRouteSessionKey()))
-      : (dashboards()?.result?.sessions ?? []).map((row) =>
-          host.getSessionNavigationState().toSidebarSession(row),
-        ),
-  );
-  const rows = createMemo(() => {
-    const result = new Map(zone().sessionRows);
-    for (const row of dashboardRows()) {
-      result.set(row.key, row);
-    }
-    return result;
-  });
-  const entries = createMemo(() => {
-    const result = SIDEBAR_NAV_ROUTES.filter((route) => host.sidebarMenus.isRouteEnabled(route))
-      .toSorted((left, right) => titleForRoute(left).localeCompare(titleForRoute(right)))
-      .map((route) => serializeSidebarEntry({ type: "route", route }));
-    for (const key of new Set([
-      ...zone().pluginTabs.keys(),
-      ...host.pluginNavigation().map((entry) => entry.key),
-    ])) {
-      result.push(serializeSidebarEntry({ type: "plugin", key }));
-    }
-    for (const row of dashboardRows()) {
-      result.push(serializeSidebarEntry({ type: "session", key: row.key }));
-    }
-    return result;
-  });
-  return (
-    <nav
-      class="sidebar-pages"
-      aria-label={t("nav.pages")}
-      onDragOver={(event) => host.sessionOrganizer.handleSessionListDragOver(event)}
-      onDrop={(event) => host.sessionOrganizer.handleSessionListDrop(event)}
-    >
-      <div class="sidebar-pages__heading sidebar-panel-header" onMouseDown={beginNativeWindowDrag}>
-        <span>{t("nav.pages")}</span>
-        <SidebarCollapseToggle onToggle={() => host.onToggleSidebar?.()} />
-      </div>
-      <McpAppCatalog surface="sidebar" />
-      <For each={entries()}>
-        {(key) => {
-          // Allocate once per entry; the rendered link owns its reactive fields.
-          const content = renderAppSidebarPageEntry(
-            host,
-            parseSidebarEntry(key)!,
-            rows,
-            () => zone().pluginTabs,
-          );
-          return (
-            <div class="sidebar-pages__entry">
-              {content}
-              <button
-                type="button"
-                class={[
-                  "sidebar-pages__pin",
-                  { "sidebar-pages__pin--pinned": host.sidebarEntries.includes(key) },
-                ]}
-                disabled={Boolean(host.sidebarSnapshot)}
-                aria-label={t(host.sidebarEntries.includes(key) ? "nav.unpin" : "nav.pin")}
-                onClick={() => {
-                  if (host.sidebarEntries.includes(key)) {
-                    host.sessionOrganizer.removeSidebarEntry(key);
-                  } else {
-                    host.sessionOrganizer.writeSidebarEntryAt(key, undefined, undefined);
-                  }
-                }}
-              >
-                <Icon name="pin" />
-              </button>
-            </div>
-          );
-        }}
-      </For>
-      <Show when={dashboards()?.error}>{(error) => <span role="alert">{error()}</span>}</Show>
-      <Show when={dashboards()?.result?.hasMore}>
-        <button
-          type="button"
-          class="btn btn--sm"
-          onClick={() => host.navigationCatalog.loadMoreDashboards()}
-        >
-          {t("chat.selectors.loadMoreSessions")}
-        </button>
-      </Show>
-    </nav>
   );
 }

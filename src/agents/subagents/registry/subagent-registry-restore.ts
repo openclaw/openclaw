@@ -16,7 +16,10 @@ import {
   GatewayDrainingError,
 } from "../../../process/gateway-work-admission.js";
 import { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
+import { getAsyncWorkSignal } from "../../../shared/async-work-scope.js";
+import { createDeferredCore } from "../../../shared/deferred.js";
 import { createLazyRuntimeModule } from "../../../shared/lazy-runtime.js";
+import type { AgentRecoveryProgress } from "../../../state/agent-database-preparation-recovery.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { decodeRequesterOrigin } from "../../requester-origin.js";
 import { reserveRestoredSubagentControllerSources } from "../announce/subagent-announce-controller-source.js";
@@ -29,6 +32,7 @@ import {
   resolveSubagentChildAuthority,
   warnLegacySubagentAuthority,
 } from "./subagent-child-owner-match.js";
+import { retainRestoredCompletionReservation } from "./subagent-controller-inputs.js";
 import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
 import { callSubagentRegistryGateway } from "./subagent-registry-deps.js";
 import {
@@ -42,7 +46,6 @@ import {
 } from "./subagent-registry-persistence.js";
 import type { createSubagentRegistryPublicApi } from "./subagent-registry-public-api.js";
 import { getLatestSubagentRunForChild } from "./subagent-registry-queries.js";
-import { isRetiredSubagentSessionOwner } from "./subagent-registry-restart-recovery-helpers.js";
 import { restoreSubagentRunMetadata } from "./subagent-registry-restore-metadata.js";
 import { createRestoredRequesterActivator } from "./subagent-registry-restore-requester.js";
 import type { SubagentLaunchManager } from "./subagent-registry-run-launch.js";
@@ -107,7 +110,7 @@ export function createSubagentRegistryRestorer(config: {
   let activationRequested = false;
   let activated = false;
   let restoreInFlight: Promise<void> | undefined;
-  let activationInFlight: Promise<void> | undefined;
+  let activationInFlight: AgentRecoveryProgress | undefined;
   // A later explicit restore must reconcile rows merged before an earlier failure.
   let restoredRowsPending = false;
   const requesterActivator = createRestoredRequesterActivator({
@@ -123,17 +126,24 @@ export function createSubagentRegistryRestorer(config: {
     restoredRowsPending = false;
     restoreState = "succeeded";
     if (activationRequested) {
-      await activateRestoredRuns();
+      await activateRestoredRuns().settled;
     }
   }
 
-  function activateRestoredRuns(startupTrace?: GatewayStartupTrace): Promise<void> {
+  function activateRestoredRuns(startupTrace?: GatewayStartupTrace): AgentRecoveryProgress {
     if (activationInFlight) {
       return activationInFlight;
     }
-    const operation = activateRestoredRunsOnce(startupTrace);
+    let operation: AgentRecoveryProgress;
+    try {
+      operation = activateRestoredRunsOnce(startupTrace);
+    } catch (error) {
+      const failed = createDeferredCore();
+      failed.reject(error);
+      operation = { initial: failed.promise, pending: new Map(), settled: failed.promise };
+    }
     activationInFlight = operation;
-    void operation.then(clearActivation, clearActivation);
+    void operation.settled.then(clearActivation, clearActivation);
     function clearActivation() {
       if (activationInFlight === operation) {
         activationInFlight = undefined;
@@ -142,10 +152,11 @@ export function createSubagentRegistryRestorer(config: {
     return operation;
   }
 
-  async function activateRestoredRunsOnce(startupTrace?: GatewayStartupTrace) {
+  function activateRestoredRunsOnce(startupTrace?: GatewayStartupTrace): AgentRecoveryProgress {
     activationRequested = true;
     if (restoreState !== "succeeded" || !getGatewayContextResolver()?.()) {
-      return;
+      const settled = Promise.resolve();
+      return { initial: settled, pending: new Map(), settled };
     }
     const stateContext = captureOpenClawStateWorkerContext();
     const resolver = getGatewayContextResolver();
@@ -156,24 +167,27 @@ export function createSubagentRegistryRestorer(config: {
         throw new Error("Restored requester transfer lost its Gateway owner");
       }
     };
-    const { resumeNeeded, failures } = await requesterActivator.activate({
+    const progress = requesterActivator.activate({
       cfg: getRuntimeConfig(),
       stateContext,
       assertCurrent,
       startupTrace,
       alreadyActivated: activated,
     });
-    assertCurrent();
-    // Keep the periodic sweep behind restore while healthy groups recover above.
-    if (resumeNeeded && runs.size > 0) {
-      startSweeper();
-    }
-    scheduleSweep();
-    if (failures.length > 0) {
-      throw failures[0];
-    }
-    activated = true;
-    requesterActivator.reset();
+    const settled = progress.settled.then(({ resumeNeeded, failures }) => {
+      assertCurrent();
+      // Keep the periodic sweep behind restore while healthy groups recover above.
+      if (resumeNeeded && runs.size > 0) {
+        startSweeper();
+      }
+      scheduleSweep();
+      if (failures.length > 0) {
+        throw failures[0];
+      }
+      activated = true;
+      requesterActivator.reset();
+    });
+    return { ...progress, settled };
   }
 
   async function resumeRestoredRuns(
@@ -200,16 +214,8 @@ export function createSubagentRegistryRestorer(config: {
     try {
       for (const snapshot of capturedRuns) {
         const runId = snapshot.runId;
-        const selected = getCurrentSubagentRunOwner(runs, snapshot);
-        // Recovery and cancellation prepare their own session reads.
-        if (
-          !selected ||
-          selected.runId !== runId ||
-          resolveSubagentChildAuthority(selected).status === "mismatch" ||
-          selected.execution.restartRecovery ||
-          selected.killIntent ||
-          selected.killReconciliation
-        ) {
+        const selected = retainRestoredCompletionReservation(runs, snapshot)?.entry;
+        if (!selected) {
           continue;
         }
         assertReadCurrent();
@@ -228,18 +234,11 @@ export function createSubagentRegistryRestorer(config: {
           }
         }
         assertReadCurrent();
-        const entry = getCurrentSubagentRunOwner(runs, snapshot);
-        if (!entry || entry.runId !== runId) {
+        const retained = retainRestoredCompletionReservation(runs, snapshot, sessionEntry);
+        if (!retained) {
           continue;
         }
-        // Restart recovery and accepted cancellation own their rows independently.
-        if (entry.execution.restartRecovery || entry.killIntent || entry.killReconciliation) {
-          continue;
-        }
-        const authority = resolveSubagentChildAuthority(entry, sessionEntry);
-        if (authority.status === "mismatch") {
-          continue;
-        }
+        const { entry, authority } = retained;
         if (entry.collect && entry.execution.status === "queued") {
           const { childSessionIdentity: cleanupSessionEntry, queuedLaunch: launch } = entry;
           if (!launch || authority.status === "legacy-unverified") {
@@ -358,6 +357,20 @@ export function createSubagentRegistryRestorer(config: {
                   }
                 };
                 assertLaunchCurrent();
+                const signal = getAsyncWorkSignal();
+                try {
+                  await gatewayContext.inputRecovery?.waitForAgentInputRecovery(
+                    authority.childAgentId,
+                    { signal },
+                  );
+                } catch (error) {
+                  // Scheduler closure retires this attempt, not its durable queued work.
+                  if (signal?.aborted) {
+                    return;
+                  }
+                  throw error;
+                }
+                assertLaunchCurrent();
                 const request = bindInProcessSessionRun(
                   {
                     ...applySubagentLaunchAuthorization(launch.request, launch.authorization),
@@ -473,14 +486,6 @@ export function createSubagentRegistryRestorer(config: {
               }
             },
           );
-          continue;
-        }
-        // Orphan recovery owns aborted sessions and exact still-running retired
-        // executions. Completed sessions must resume normal settlement and delivery.
-        if (
-          sessionEntry?.abortedLastRun === true ||
-          isRetiredSubagentSessionOwner(entry, sessionEntry)
-        ) {
           continue;
         }
         resumeRun(runId);

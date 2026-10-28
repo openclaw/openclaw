@@ -19,6 +19,8 @@ export const FIRST_USE_STATE_TABLES = [
   "user_background_images",
   "local_workspace_projections",
   "local_workspace_manifest_nodes",
+  "local_workspace_tree_packs",
+  "local_workspace_source_path_sets",
   "update_runs",
   "session_repository_workspaces",
   "github_repository_publication_requests",
@@ -165,6 +167,9 @@ export const STATE_SCHEMA_MIGRATION_DESCRIPTIONS = {
     "Heartbeat monitors → ordinary automation timing and delivery policy fence",
   "local-workspace-manifests-v31":
     "local workspace baselines → per-path manifests and recoverable checkpoint deltas",
+  "local-workspace-cas-v35":
+    "local workspace baselines → shared immutable trees and compact scan fingerprints",
+  "template-names-v36": "starter installs and provenance → canonical Template storage names",
   "operator-approvals-system-agent": "operator approvals → OpenClaw system changes",
   "session-watch-cursor-provenance-v4": "session watch cursors → provenance column",
   "strict-tables-v3": "tables → SQLite STRICT typing",

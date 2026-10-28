@@ -8,11 +8,11 @@ import { projectSource } from "../../../lib/reactive/projection.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { rememberLiveTerminalRun } from "../terminal-message-identity.ts";
+import { readAsyncQuestions } from "./chat-async-question-content.ts";
 import { AsyncQuestionSummary } from "./chat-async-question-summary.tsx";
 import {
   createAsyncQuestionPresentation,
   createAsyncQuestionPanelProps as panelProps,
-  readAsyncQuestions,
   subscribeAsyncQuestionState,
 } from "./chat-async-question.ts";
 import type {
@@ -53,6 +53,10 @@ function historicalQuestion(
   ],
 ) {
   return { role: "assistant", openclawAsyncDelivery: { itemId, questions } };
+}
+
+function persisted<T>(message: T, id: string, seq: number, replyToId?: string) {
+  return { ...message, __openclaw: { id, seq, replyToId } };
 }
 
 function question(itemId = "question-1", runId?: string) {
@@ -395,11 +399,7 @@ it("reconsiders reminders when a message-less terminal settles a published parti
   expectPending(messages, 0);
 });
 
-const historicalAnswer = {
-  role: "user",
-  content: "> Which audience?\n\nEveryone",
-  __openclaw: { id: "saved-answer", seq: 2 },
-};
+const historicalAnswer = persisted(user("> Which audience?\n\nEveryone"), "saved-answer", 2);
 function historyPresentation(
   messages: unknown[],
   connectionEpoch = 1,
@@ -549,7 +549,7 @@ it("projects answer delivery from the outbox, retries its payload, and waits for
   container.querySelector<HTMLButtonElement>("button")!.click();
   expect(retry).toHaveBeenCalledExactlyOnceWith("answer-row");
   expect(state.transcriptRenderContext.onAsyncQuestionSubmit).not.toHaveBeenCalled();
-  showDelivery("unconfirmed", "Delivery unconfirmed");
+  showDelivery("failed", "Answer not sent");
   const retainedRetry = container.querySelector<HTMLButtonElement>("button")!;
   state.asyncQuestionScope = "another-context";
   retainedRetry.click();
@@ -569,26 +569,12 @@ it("projects answer delivery from the outbox, retries its payload, and waits for
 it.each(["old", "new"])(
   "uses canonical reply identity for the %s repeated-title question",
   (target) => {
-    const old = {
-      ...historicalQuestion("old"),
-      runId: "old-run",
-      __openclaw: { id: "old-source", seq: 1 },
-    };
-    const newest = {
-      ...historicalQuestion("new"),
-      runId: "new-run",
-      __openclaw: { id: "new-source", seq: 3 },
-    };
-    const answer = {
-      ...historicalAnswer,
-      __openclaw: { id: "saved-answer", seq: 5, replyToId: `${target}-source` },
-    };
     const presentation = historyPresentation([
-      old,
+      persisted({ ...historicalQuestion("old"), runId: "old-run" }, "old-source", 1),
       terminal("old-run"),
-      newest,
+      persisted({ ...historicalQuestion("new"), runId: "new-run" }, "new-source", 3),
       terminal("new-run"),
-      answer,
+      persisted(historicalAnswer, "saved-answer", 5, `${target}-source`),
     ]);
     expect([...presentation.resolved.keys()]).toEqual([target]);
     expect(presentation.resolved.get(target)?.answers.get("0")?.selected).toEqual(
@@ -602,12 +588,12 @@ it.each(["old", "new"])(
 );
 
 it("does not use quoted text to override a canonical reply to an unrelated message", () => {
-  const promptMessage = { ...historicalQuestion(), __openclaw: { id: "question-source", seq: 1 } };
-  const answer = {
-    ...historicalAnswer,
-    __openclaw: { id: "answer", seq: 2, replyToId: "unrelated-source" },
-  };
-  expect(historyPresentation([promptMessage, answer]).pending).toHaveLength(1);
+  expect(
+    historyPresentation([
+      persisted(historicalQuestion(), "question-source", 1),
+      persisted(historicalAnswer, "answer", 2, "unrelated-source"),
+    ]).pending,
+  ).toHaveLength(1);
 });
 
 it.each([

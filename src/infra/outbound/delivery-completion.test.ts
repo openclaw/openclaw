@@ -173,9 +173,11 @@ describe("pending-final delivery completion", () => {
       return actor;
     });
     await expect(settle("delivered", ["prepared"])).rejects.toSatisfy((error: unknown) => {
-      expect(
-        renderAssistantRequestFailureCopy({ storageFailure: classifyGatewayStorageFailure(error) }),
-      ).toContain("disk is full. Free up space");
+      const storageOutcome = classifyGatewayStorageFailure(error);
+      expect(storageOutcome).toBe("session_actor_reconciliation");
+      expect(renderAssistantRequestFailureCopy({ storageFailure: storageOutcome })).toMatch(
+        /check.*history.*before trying again/i,
+      );
       return hasSqliteWorkerOutcomeUnknown(error);
     });
     expect(read()).toEqual(before);

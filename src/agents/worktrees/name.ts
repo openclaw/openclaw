@@ -1,8 +1,8 @@
 const WORKTREE_NAME_MAX_LENGTH = 64;
-const NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
+export const WORKTREE_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
 export function validateName(name: string): string {
-  if (!NAME_PATTERN.test(name)) {
+  if (!WORKTREE_NAME_PATTERN.test(name)) {
     throw new Error("worktree name must match [a-z0-9][a-z0-9-]{0,63}");
   }
   return name;

@@ -1,15 +1,5 @@
 import type { GhosttyTerminalController } from "@openclaw/libterminal/browser";
 
-type TerminalControllerSlot = {
-  controller: GhosttyTerminalController;
-  host: HTMLDivElement;
-};
-
-type TerminalControllerFactory = (
-  parent: HTMLElement,
-  options?: { readOnly?: boolean },
-) => Promise<GhosttyTerminalController>;
-
 const terminalOutputEncoder = new TextEncoder();
 
 function activeElementFor(host: HTMLElement): Element | null {
@@ -40,8 +30,14 @@ export function disposeTerminalController(
 
 /** Replays recovery output into a hidden replacement, then atomically swaps it in. */
 export async function replaceTerminalController(
-  target: TerminalControllerSlot,
-  createController: TerminalControllerFactory,
+  target: {
+    controller: GhosttyTerminalController;
+    host: HTMLDivElement;
+  },
+  createController: (
+    parent: HTMLElement,
+    options?: { readOnly?: boolean },
+  ) => Promise<GhosttyTerminalController>,
   replay: string,
   signal: AbortSignal,
 ): Promise<boolean> {

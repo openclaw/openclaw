@@ -5,6 +5,7 @@ import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { composedParent } from "../lib/navigation-click.ts";
 import {
   isGitHubHost,
+  isGitHubCommitUrl,
   isGitHubPublicPageUrl,
   matchGitHubItemUrl,
 } from "./github-link-eligibility.ts";
@@ -71,6 +72,7 @@ export function isPreviewAnchor(anchor: HTMLAnchorElement): boolean {
     url &&
     isGitHubHost(url.hostname) &&
     !matchGitHubItemUrl(url) &&
+    !isGitHubCommitUrl(url) &&
     !isGitHubPublicPageUrl(url)
   ) {
     return false;

@@ -7,6 +7,7 @@ import {
   requireRegisteredProvider,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it } from "vitest";
+import { makeUserMessage } from "../test-support/message-fixtures.test-support.js";
 import plugin from "./index.js";
 import { normalizeOpenRouterApiModelId } from "./models.js";
 
@@ -187,13 +188,7 @@ describeLive("openrouter plugin live", () => {
     const stream = await wrapped(
       model,
       {
-        messages: [
-          {
-            role: "user",
-            content: "Reply with exactly OK.",
-            timestamp: Date.now(),
-          },
-        ],
+        messages: [makeUserMessage("Reply with exactly OK.", Date.now())],
       },
       { apiKey: OPENROUTER_API_KEY, maxTokens: 16 },
     );

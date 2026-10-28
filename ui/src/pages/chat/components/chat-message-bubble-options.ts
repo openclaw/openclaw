@@ -2,8 +2,8 @@ import type { JSX } from "@solidjs/web";
 import type { ToolCallGroup } from "../../../../../src/chat/tool-call-grouping.js";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
 import type { BoardProvider } from "../../../lib/board/provider.ts";
+import type { EmbedSandboxMode } from "../../../lib/chat/canvas-embed-policy.ts";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
-import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import type { PresentationValue } from "../../../lib/presentation.ts";
 import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
 import type { LinkFaviconFetcher } from "../link-favicon-cache.ts";
@@ -22,6 +22,8 @@ export type ActivityOperationProps = {
 };
 
 export type MessageRenderOptions = {
+  /** Links a handoff's child sessions; absent where this pane cannot open sessions. */
+  handoffSessionLinks?: import("../chat-subagent-wait.ts").HandoffSessionLinks;
   onOpenReply?: (replyToId: string) => void;
   replyNavigationId?: string | null;
   sessionKey?: string;
@@ -32,6 +34,8 @@ export type MessageRenderOptions = {
   runActive?: boolean;
   asyncQuestions?: AsyncQuestionPresentation;
   mediaOwner?: object;
+  /** Saved transcript text can render before live resource admission. */
+  mediaReadAllowed?: boolean;
   canvasPluginSurfaceUrl?: string | null;
   resourceBasePath?: string;
   mediaPolicyKey?: string;
@@ -54,11 +58,12 @@ export type MessageRenderOptions = {
 
 export type GroupedMessageOptions = MessageRenderOptions & {
   isStreaming: boolean;
+  /** Split envelopes publish their terminal tail once. */
+  ownsTerminalStatus?: boolean;
   isForwarded?: boolean;
   /** Search reveals matching transcript text inside disclosures. */
   searchResult?: boolean;
   transcriptVisible?: PresentationValue;
-  duplicateCount?: number;
   showReasoning: boolean;
   bubbleMode?: boolean;
   /** First visible message of the containing group/frame; null means none. */

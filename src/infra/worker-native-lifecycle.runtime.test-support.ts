@@ -16,12 +16,6 @@ export const nativeWorkerResourceEntrypoint = {
   distWorkerPath: "infra/worker-native-lifecycle.resource.test-support.js",
 } as const;
 
-function assertNativeWorkerFields(actual: object, expected: object): void {
-  for (const [key, value] of Object.entries(expected)) {
-    assert.deepEqual(Reflect.get(actual, key), value, key);
-  }
-}
-
 export function assertNativeWorkerDiagnosticMatches(
   actual: unknown,
   expected: unknown,
@@ -237,7 +231,8 @@ export async function runNativeResourceLifecycle(
     permit();
     service("native resource close", () => retry.read().status !== "pending", retry);
     assert.deepEqual(retry.read(), { status: "fulfilled", value: undefined });
-    assertNativeWorkerFields(facts, { constructions: 1, childClosed: true });
+    assert.equal(facts.constructions, 1);
+    assert.equal(facts.childClosed, true);
     assert.equal(exited, true);
     assert.equal(target.threadId, -1);
     await idleBrokerProof?.assertRetired(facts.brokerPid);

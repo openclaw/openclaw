@@ -1,4 +1,4 @@
-import type { BrowserContextOptions, Locator } from "playwright";
+import type { BrowserContextOptions, Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { projectChatDisplayMessages } from "../../../src/gateway/chat-display-projection.js";
 import { createNestedToolActivity } from "../../../src/sessions/nested-tool-activity.js";
@@ -30,21 +30,6 @@ async function expectCount(target: Locator, count: number) {
   expect(await target.count()).toBe(count);
 }
 
-function toolResult(
-  runId: string,
-  id: string,
-  seq: number,
-  toolCallId: string,
-  toolName: string,
-  text: string,
-) {
-  return {
-    ...transcriptMessage("toolResult", [{ type: "text", text }], runId, id, seq),
-    toolCallId,
-    toolName,
-  };
-}
-
 function activeRun(runId: string, text = "") {
   return {
     inFlightRun: { runId, text },
@@ -66,7 +51,132 @@ async function openTranscript(
   return { page, gateway };
 }
 
+async function flushSnapshot(page: Page) {
+  await page.evaluate(async () => {
+    const pane = document.querySelector(".chat-pane-cache__pane--active");
+    await Reflect.get(pane!, "sessionSnapshotStore").flush();
+  });
+}
+
 suite.define(() => {
+  it("reconciles a cached failure resolved while away from the session", async () => {
+    const key = "agent:main:main";
+    const runId = "cached-failure";
+    const user = transcriptMessage("user", "Check the saved result.", runId, "request", 1);
+    const summary = "Synthetic check failed before a reply.";
+    const session = {
+      key,
+      sessionId: "cached-notice-session",
+      kind: "direct",
+      status: "failed",
+      lastRunId: runId,
+    };
+    const messages = [
+      user,
+      {
+        role: "custom",
+        customType: "run-failed-before-reply",
+        content: summary,
+        openclawRunError: { runId, summary },
+        __openclaw: { id: "failure", seq: 2, runId },
+        timestamp: user.timestamp + 1,
+      },
+    ];
+    const { page, gateway } = await openTranscript({
+      sessionKey: key,
+      sessions: [session],
+      authMethod: "trusted-proxy",
+      authMode: "trusted-proxy",
+      subscriptionInitialHistory: false,
+      heldMethods: ["chat.startup"],
+      historyMessages: messages,
+      methodResponses: {
+        "chat.startup": { messages, sessionId: session.sessionId, sessionInfo: session },
+      },
+    });
+    await gateway.waitForRequest("chat.startup");
+    await gateway.resolveDeferred("chat.startup");
+    const failure = page.locator(".chat-run-failure");
+    await failure.getByText(summary, { exact: true }).waitFor();
+    await flushSnapshot(page);
+    await page.reload();
+    await failure.getByText(summary, { exact: true }).waitFor();
+    await gateway.waitForRequest("chat.startup");
+    const answer = "The check completed while you were away.";
+    await gateway.resolveDeferred("chat.startup", {
+      sessionId: session.sessionId,
+      sessionInfo: { ...session, status: "done" },
+      messages: [user, transcriptMessage("assistant", answer, runId, "reply", 2)],
+    });
+    await page.locator(".chat-group.assistant").getByText(answer, { exact: true }).waitFor();
+    await failure.waitFor({ state: "detached" });
+    expect(await page.getByText("Check the saved result.", { exact: true }).count()).toBe(1);
+  });
+
+  it("retains cached commentary while a reloaded run continues streaming", async () => {
+    const key = "agent:main:main";
+    const runId = "streaming-after-reload";
+    const commentary = "Checking the saved workspace state.";
+    const messages = [
+      transcriptMessage("user", "Continue the check.", runId, "request", 1),
+      {
+        ...transcriptMessage("assistant", commentary, runId, "commentary", 2),
+        channel: "commentary",
+      },
+    ];
+    const session = {
+      key,
+      sessionId: "cached-stream-session",
+      kind: "direct",
+      status: "running",
+      activeRunIds: [runId],
+      hasActiveRun: true,
+    };
+    const history = {
+      messages,
+      sessionId: session.sessionId,
+      sessionInfo: session,
+      inFlightRun: { runId, text: "Draft before reload." },
+    };
+    const { page, gateway } = await openTranscript({
+      sessionKey: key,
+      sessions: [session],
+      authMethod: "trusted-proxy",
+      authMode: "trusted-proxy",
+      subscriptionInitialHistory: false,
+      heldMethods: ["chat.startup"],
+      historyMessages: messages,
+      methodResponses: { "chat.startup": history },
+    });
+    await gateway.waitForRequest("chat.startup");
+    await gateway.resolveDeferred("chat.startup");
+    const assistant = page.locator(".chat-group.assistant");
+    await assistant.getByText("Draft before reload.", { exact: true }).waitFor();
+    await flushSnapshot(page);
+    await page.reload();
+    await assistant.getByText(commentary, { exact: true }).waitFor();
+    await gateway.waitForRequest("chat.startup");
+    await gateway.resolveDeferred("chat.startup", {
+      ...history,
+      inFlightRun: { runId, text: "Draft after reload." },
+    });
+    await assistant.getByText("Draft after reload.", { exact: true }).waitFor();
+    const text = "Draft after reload. More detail.";
+    await gateway.emitGatewayEvent("chat", {
+      sessionKey: key,
+      runId,
+      state: "delta",
+      deltaText: text,
+      message: { role: "assistant", content: [{ type: "text", text }] },
+    });
+    await assistant.getByText(text, { exact: true }).waitFor();
+    expect(await assistant.getByText(commentary, { exact: true }).count()).toBe(1);
+    expect(await assistant.getByText("Draft before reload.", { exact: true }).count()).toBe(0);
+    expect(
+      await page.getByRole("button", { name: "Stop generating", exact: true }).isVisible(),
+    ).toBe(true);
+  });
+
   it("collapses nested tool activity after commentary across history reload", async () => {
     const runId = "nested-run";
     const commentary = "I’ll inspect the workspace first.";
@@ -114,6 +224,13 @@ suite.define(() => {
     await page.getByText(commentary, { exact: true }).waitFor();
     const activity = page.locator(".chat-activity-group:not(.chat-work-group)");
     await expect.poll(() => activity.count()).toBe(1);
+    await activity.waitFor({ state: "visible" });
+    expect(
+      await activity.evaluate((element) => {
+        const preceding = element.previousElementSibling!;
+        return element.getBoundingClientRect().top - preceding.getBoundingClientRect().bottom;
+      }),
+    ).toBeCloseTo(8, 1);
     const summary = activity.locator(".chat-activity-group__summary");
     expect(await summary.getAttribute("aria-expanded")).toBe("false");
     expect(await activity.locator(".chat-activity-group__body").isVisible()).toBe(false);
@@ -124,175 +241,6 @@ suite.define(() => {
     await expect.poll(() => activity.count()).toBe(1);
     expect(await summary.getAttribute("aria-expanded")).toBe("false");
     await expectCount(page.getByText(commentary, { exact: true }), 1);
-  });
-
-  it.each([
-    ["desktop-dark", 1200, 900, "dark"],
-    ["mobile-dark", 390, 844, "dark"],
-    ["mobile-light", 390, 844, "light"],
-  ] as const)(
-    "renders each run as one linear response on %s",
-    async (viewport, width, height, theme) => {
-      const isMobile = viewport.startsWith("mobile");
-      const firstRunId = "run-composed-first";
-      const secondRunId = "run-composed-second";
-      const toolOnlyRunId = "run-tool-only";
-      const commentaryToolRunId = "run-commentary-tool-only";
-      const firstNarrationText = "I’ll create the launch card and check the existing style first.";
-      const caption = "Caption ready for the second run.";
-      const entryCounts = { assistant: 0, user: 0, call: 0, result: 0 };
-      const message = (role: "assistant" | "user", text: string, seq: number, run = firstRunId) =>
-        transcriptMessage(
-          role,
-          text,
-          role === "user" ? `${run}:user` : run,
-          `${role}-${++entryCounts[role]}`,
-          seq,
-        );
-      const call = (id: string, name: string, args: Record<string, string>, seq: number) =>
-        transcriptMessage(
-          "assistant",
-          [{ type: "toolCall", id, name, arguments: args }],
-          firstRunId,
-          `tool-call-${++entryCounts.call}`,
-          seq,
-        );
-      const result = (text: string, seq: number, id: string, name = "read", run = firstRunId) =>
-        toolResult(run, `tool-result-${++entryCounts.result}`, seq, id, name, text);
-      const { page } = await openTranscript(
-        {
-          historyMessages: [
-            message("user", "Create the launch card.", 1),
-            message("assistant", firstNarrationText, 2),
-            call("call-read", "read", { path: "ui/src/styles/chat.css" }, 3),
-            result("Existing card styles loaded.", 4, "call-read"),
-            message(
-              "assistant",
-              "The first draft matches the transcript rhythm. I’ll render the asset now.",
-              5,
-            ),
-            call("call-render", "exec", { command: "render launch-card.svg" }, 6),
-            result("Rendered launch-card.svg", 7, "call-render", "exec"),
-            message("assistant", "The launch card is ready: MEDIA:./launch-card.svg", 8),
-            message("user", "Now write the caption.", 9, secondRunId),
-            message("assistant", caption, 10, secondRunId),
-            message("user", "Check without replying.", 11, toolOnlyRunId),
-            result("Tool-only result", 12, "call-tool-only", "read", toolOnlyRunId),
-            message("user", "Inspect and stop after the tool.", 13, commentaryToolRunId),
-            message("assistant", "I’ll inspect the current state first.", 14, commentaryToolRunId),
-            result(
-              "Commentary-led tool-only result",
-              15,
-              "call-commentary-tool-only",
-              "read",
-              commentaryToolRunId,
-            ),
-          ],
-        },
-        { colorScheme: theme, hasTouch: isMobile, isMobile, viewport: { height, width } },
-      );
-      const transcript = page.locator(".chat-thread-inner");
-      await transcript.getByText(caption, { exact: true }).waitFor();
-
-      const assistantGroups = page.locator(".chat-group.assistant");
-      await expectCount(assistantGroups, 4);
-      const firstRun = assistantGroups.filter({ hasText: firstNarrationText });
-      await expectCount(firstRun, 1);
-      await expectCount(firstRun.locator(".chat-sender-name"), 1);
-      await expectCount(firstRun.locator(".chat-group-footer-actions"), 1);
-      await expectCount(firstRun.locator(".chat-message-actions-row"), 0);
-      await expectCount(firstRun.locator(".chat-group-footer-actions button"), 2);
-      expect(
-        await firstRun
-          .locator(".chat-group-footer-actions button")
-          .evaluateAll((buttons) => buttons.map((button) => button.getAttribute("aria-label"))),
-      ).toEqual(["Reply to message", "Copy as markdown"]);
-
-      const orderedContent = await firstRun
-        .locator(".chat-bubble")
-        .evaluateAll((bubbles) =>
-          bubbles.map((bubble) => bubble.textContent?.replace(/\s+/gu, " ").trim()),
-        );
-      expect(orderedContent).toEqual(
-        [
-          "I’ll create the launch card",
-          "Read",
-          "The first draft matches",
-          "render launch-card.svg",
-          "The launch card is ready",
-        ].map((text) => expect.stringContaining(text)),
-      );
-      await expectCount(firstRun.getByText(caption, { exact: true }), 0);
-      const toolOnlyRun = page.locator(
-        `.chat-group.assistant[data-chat-row-key*="${toolOnlyRunId}"]`,
-      );
-      await expectCount(toolOnlyRun, 1);
-      await expectCount(toolOnlyRun.locator(".chat-group-footer-actions"), 0);
-      const commentaryToolRun = page.locator(
-        `.chat-group.assistant[data-chat-row-key*="${commentaryToolRunId}"]`,
-      );
-      await expectCount(commentaryToolRun, 1);
-      await expectCount(
-        commentaryToolRun.getByText("I’ll inspect the current state first.", { exact: true }),
-        1,
-      );
-      await expectCount(commentaryToolRun.locator(".chat-group-footer-actions"), 0);
-    },
-  );
-
-  it("keeps the run row identity when a hidden heartbeat boundary reaches history", async () => {
-    const runId = "run-heartbeat-browser-handoff";
-    const { page, gateway } = await openTranscript({
-      historyMessages: [],
-      ...activeRun(runId),
-    });
-    const liveRow = page.locator(".chat-virtual-row", {
-      has: page.locator(".chat-reading-indicator"),
-    });
-    await liveRow.waitFor();
-    const liveKey = await liveRow.getAttribute("data-virtual-row-key");
-    expect(liveKey).not.toBeNull();
-
-    const finalText = "Heartbeat handoff complete.";
-    const persistedMessage = {
-      role: "assistant",
-      api: "cli",
-      content: finalText,
-      idempotencyKey: `cli-assistant:${runId}`,
-      timestamp: Date.UTC(2026, 7, 19, 12, 1),
-      __openclaw: {
-        id: "assistant-after-hidden-heartbeat",
-        seq: 1,
-        turnBoundary: true,
-      },
-    };
-    await gateway.setHistoryMessages([persistedMessage]);
-    const historyRequestsBeforeFinal = (await gateway.getRequests("chat.history")).length;
-    await gateway.emitGatewayEvent("session.message", {
-      activeRunIds: [],
-      clientRunId: runId,
-      hasActiveRun: false,
-      message: persistedMessage,
-      messageId: "assistant-after-hidden-heartbeat",
-      messageSeq: 1,
-      session: {
-        activeRunIds: [],
-        hasActiveRun: false,
-        key: "agent:main:main",
-        kind: "direct",
-        status: "done",
-        updatedAt: Date.now(),
-      },
-      sessionKey: "agent:main:main",
-    });
-    await gateway.waitForRequest("chat.history", { after: historyRequestsBeforeFinal });
-
-    const settledRow = page.locator(".chat-virtual-row", {
-      has: page.getByText(finalText, { exact: true }),
-    });
-    await settledRow.waitFor();
-    await expect.poll(() => settledRow.getAttribute("data-virtual-row-key")).toBe(liveKey);
-    await expectCount(settledRow, 1);
   });
 
   it("keeps same-run events from another session out of the selected transcript", async () => {

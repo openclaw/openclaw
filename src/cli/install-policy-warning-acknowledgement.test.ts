@@ -1,16 +1,11 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { resolveInstallPolicyWarningAcknowledgementCliOptions as resolveOptions } from "./install-policy-warning-acknowledgement.ts";
+import { createCliTtyMock } from "./test-runtime-capture.js";
 
 const promptText = vi.hoisted(() => vi.fn());
 // mock-isolation: Supply explicit acknowledgement answers without an interactive terminal prompt.
 vi.mock("./prompt.js", () => ({ promptText }));
-const streams = [process.stdin, process.stdout];
-const originalTtys = streams.map((stream) => Object.getOwnPropertyDescriptor(stream, "isTTY"));
-function setTty(value: boolean) {
-  for (const stream of streams) {
-    Object.defineProperty(stream, "isTTY", { value, configurable: true });
-  }
-}
+const { set: setTty, restore: restoreTty } = createCliTtyMock();
 const warning = (targetName = "demo") => ({
   targetName,
   targetType: "plugin" as const,
@@ -19,14 +14,7 @@ const warning = (targetName = "demo") => ({
 });
 afterEach(() => {
   promptText.mockReset();
-  streams.forEach((stream, index) => {
-    const descriptor = originalTtys[index];
-    if (descriptor) {
-      Object.defineProperty(stream, "isTTY", descriptor);
-    } else {
-      Reflect.deleteProperty(stream, "isTTY");
-    }
-  });
+  restoreTty();
 });
 
 it.each([

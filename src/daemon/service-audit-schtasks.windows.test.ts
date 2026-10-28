@@ -4,6 +4,7 @@ import { escapeXml } from "../shared/xml.js";
 import { buildScheduledTaskXml } from "./schtasks-xml.js";
 import { auditGatewayServiceConfig } from "./service-audit.js";
 import { fixture, native } from "./service-definition-backup.test-support.js";
+import { nativeExit } from "./systemd-exec.test-support.js";
 
 type Fixture = Awaited<ReturnType<typeof fixture>>;
 function expectOnlyDrift(
@@ -109,12 +110,7 @@ it.each([
   const xml = taskXml(f)
     .replace("<UserId>operator</UserId>", `<UserId>${account}</UserId>`)
     .replace("<UserId>operator</UserId>", `<UserId>${expectedSid}</UserId>`);
-  const identity = {
-    code: 0,
-    stdout: `${expectedSid}\n`,
-    stderr: "",
-    termination: "exit" as const,
-  };
+  const identity = nativeExit(`${expectedSid}\n`);
   native.identity.mockResolvedValueOnce(identity).mockResolvedValue({
     ...identity,
     code: sid ? 0 : 1,

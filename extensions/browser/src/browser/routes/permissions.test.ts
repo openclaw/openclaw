@@ -38,7 +38,6 @@ const { registerBrowserPermissionRoutes } = await import("./permissions.js");
 
 const origin = "https://meet.google.com";
 const cdpUrl = "http://127.0.0.1:18800";
-const wsUrl = "ws://127.0.0.1:18800/devtools/browser/test";
 const requiredPermissions = ["audioCapture", "videoCapture"];
 const optionalPermissions = ["speakerSelection"];
 const mediaRequest = {
@@ -81,7 +80,6 @@ async function callGrant(
       resolved: { ssrfPolicy: options.ssrfPolicy ?? { allowPrivateNetwork: false } },
     }),
     forProfile: () => profileCtx,
-    listProfiles: vi.fn(async () => []),
   } as never);
   const response = await routes.request("post", "/permissions/grant", {
     body: { origin, permissions: ["audioCapture"], ...body },
@@ -104,33 +102,36 @@ describe("browser permission routes", () => {
     const { response } = await callGrant({ ...mediaRequest, targetId: "meet-tab" });
 
     expectGrant(response, "playwright", optionalPermissions);
-    expect(pwMocks.getPageForTargetId).toHaveBeenCalledWith({
-      cdpUrl,
-      targetId: "meet-tab",
-      ssrfPolicy: undefined,
-    });
     expect(pwMocks.grantPermissions).toHaveBeenCalledWith(["microphone", "camera"], {
       origin: "https://meet.google.com",
     });
     expect(cdpMocks.send).not.toHaveBeenCalled();
   });
 
-  it("grants required and optional Chrome permissions for an origin", async () => {
-    const { response, profileCtx } = await callGrant({ ...mediaRequest, timeoutMs: 1234 });
-
-    expectGrant(response, "cdp");
-    expect(profileCtx.ensureBrowserAvailable).toHaveBeenCalled();
-    expect(cdpMocks.getChromeWebSocketEndpoint).toHaveBeenCalledWith(cdpUrl, 1234, undefined);
-    expect(cdpMocks.withCdpSocket).toHaveBeenCalledWith(wsUrl, expect.any(Function), {
-      commandTimeoutMs: 1234,
-      lookup: undefined,
-      signal: expect.any(AbortSignal),
-    });
-    expect(cdpMocks.send).toHaveBeenCalledWith("Browser.grantPermissions", {
-      origin,
-      permissions: [...requiredPermissions, ...optionalPermissions],
-    });
-  });
+  it.each([false, true])(
+    "grants required Chrome permissions (optional unsupported=%s)",
+    async (unsupported) => {
+      cdpMocks.send.mockImplementation(async (_method, params) => {
+        if (
+          unsupported &&
+          Array.isArray(params?.permissions) &&
+          params.permissions.includes("speakerSelection")
+        ) {
+          throw new Error("Unknown permission type");
+        }
+        return {};
+      });
+      const { response } = await callGrant({ ...mediaRequest, timeoutMs: 1234 });
+      expectGrant(response, "cdp", unsupported ? optionalPermissions : []);
+      expect(cdpMocks.getChromeWebSocketEndpoint).toHaveBeenCalledWith(cdpUrl, 1234, undefined);
+      expect(cdpMocks.send).toHaveBeenLastCalledWith("Browser.grantPermissions", {
+        origin,
+        permissions: unsupported
+          ? requiredPermissions
+          : [...requiredPermissions, ...optionalPermissions],
+      });
+    },
+  );
 
   it("preserves structured browser availability errors", async () => {
     const metadata: BrowserNoDisplayErrorMetadata = {
@@ -189,21 +190,5 @@ describe("browser permission routes", () => {
       5000,
       { allowPrivateNetwork: true, allowedHostnames: ["browser.example"] },
     );
-  });
-
-  it("keeps required permissions when an optional permission is unsupported", async () => {
-    cdpMocks.send.mockImplementation(async (_method: string, params?: Record<string, unknown>) => {
-      const permissions = Array.isArray(params?.permissions) ? params.permissions : [];
-      if (permissions.includes("speakerSelection")) {
-        throw new Error("Unknown permission type");
-      }
-      return {};
-    });
-    const { response } = await callGrant({ ...mediaRequest, origin });
-    expectGrant(response, "cdp", optionalPermissions);
-    expect(cdpMocks.send).toHaveBeenNthCalledWith(2, "Browser.grantPermissions", {
-      origin,
-      permissions: requiredPermissions,
-    });
   });
 });

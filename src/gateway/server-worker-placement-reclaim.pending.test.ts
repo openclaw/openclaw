@@ -6,8 +6,7 @@ import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import * as lifecycle from "../sessions/session-controller.lifecycle.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { createGatewayWorkerPlacementReclaimBarriers } from "./server-worker-placement-reclaim.js";
-import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
-import { resolveCanonicalSessionEntryFromStoreKeys } from "./session-utils-store.js";
+import { sessionRuntime } from "./server-worker-placement-reclaim.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => closeOpenClawAgentDatabasesForTest());
@@ -41,15 +40,8 @@ it.each([
         waitForTurnClaimRelease: vi.fn(),
       },
       loadSessionRuntime: async () => ({
-        managedWorktrees: {
-          findLiveByOwner: async () => workspace,
-        },
-        resolveGatewaySessionStoreTargetInWorker: (params) =>
-          resolveGatewaySessionStoreTargetInWorker({
-            ...params,
-            cfg: { ...params.cfg, session: { ...params.cfg.session, store: scope } },
-          }),
-        resolveCanonicalSessionEntryFromStoreKeys,
+        ...sessionRuntime(scope),
+        managedWorktrees: { findLiveByOwner: async () => workspace },
       }),
       cancelSessionWork: cancel,
       revokeSessionAuthority: vi.fn(),

@@ -8,12 +8,12 @@ import {
   type WatchEntry,
   type WatchScope,
 } from "openclaw/plugin-sdk/file-access-runtime";
-import { classifyMemoryMultimodalPath } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import {
+  classifyMemoryMultimodalPath,
   matchesExtraMemoryPathEntry,
   normalizeExtraMemoryPathEntries,
-  type MemoryWorkspaceWatchRequest,
-} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+} from "openclaw/plugin-sdk/memory-core-host-engine-fs";
+import type { MemoryWorkspaceWatchRequest } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import type { MemoryWatchFile } from "./watch-settle.js";
 
 type Settings = MemoryWorkspaceWatchRequest["settings"];

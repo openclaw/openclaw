@@ -294,7 +294,16 @@ export async function buildDynamicTools(
     const allTools = await createCodexHostToolSurface(
       params,
       options,
-      { cwd: input.effectiveCwd ?? input.effectiveWorkspace },
+      {
+        cwd: input.effectiveCwd ?? input.effectiveWorkspace,
+        nativeLocalExecution:
+          input.nativeToolSurfaceEnabled === true &&
+          nativeExecutionPolicy.nativeToolSurfaceAllowed &&
+          nativeExecutionPolicy.effectiveExecHost === "gateway" &&
+          !nativeExecutionPolicy.sandboxed
+            ? true
+            : undefined,
+      },
       input.resolveCronCreatorToolAuthority,
     );
     toolBuildStages.mark("create-openclaw-coding-tools");

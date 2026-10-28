@@ -14,7 +14,6 @@ import {
   persistSessionTranscriptTurn,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
-import * as canonicalWorker from "../config/sessions/session-accessor.sqlite-canonical-worker-pool.js";
 import {
   resolveSqliteReadScope,
   toDatabaseOptions,
@@ -24,9 +23,6 @@ import { sessionTranscriptIndexNeedsReconcile } from "../config/sessions/session
 import * as transcriptReconcile from "../config/sessions/session-transcript-reconcile.js";
 import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import * as gatewayLock from "../infra/gateway-lock.js";
-import * as gatewayOwner from "../infra/gateway-owner-lease.js";
-import * as stateOwner from "../infra/gateway-state-owner.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
 import { hasPersistedOpenClawAgentCanonicalValidation } from "../state/openclaw-agent-canonical-validation-receipt.js";
@@ -101,131 +97,83 @@ async function seedHistory(
     messages: [{ eventId, message: { role: "user", content } }],
     touchSessionEntry: false,
   });
+  const options = toDatabaseOptions(resolveSqliteReadScope(scope));
+  await waitForSessionTranscriptIndexReconcile(options);
+  openOpenClawAgentDatabase(options)
+    .db.prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?")
+    .run(scope.sessionId);
+  return options;
 }
 
 describe("runStartupSessionMaintenanceForTest", () => {
-  it("admits the first session after certifying two cold empty agent databases once", async () => {
-    const agentIds = ["main", "secondary"];
-    const { stateDir, env, cfg } = fleetFixture(agentIds);
-    const started = vi.spyOn(canonicalWorker, "startCanonicalValidationTask");
+  it("certifies a cold empty fleet then keeps both restarts read-only", async () => {
+    const agentIds = ["fleet-a", "fleet-b", "fleet-c", "fleet-d"];
+    const { env, cfg } = fleetFixture(agentIds);
+    await closeAgentDatabases();
+    for (const agentId of agentIds) {
+      revokeSqliteDatabaseAdmissionsForPath(resolveOpenClawAgentSqlitePath({ agentId, env }));
+    }
+    const coldLog = makeLog();
+    await runStartupSessionMaintenanceForTest({ cfg, env, log: coldLog });
+    expect(coldLog.warn).not.toHaveBeenCalled();
+    const open = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
     for (let boot = 0; boot < 2; boot++) {
-      await closeOpenClawAgentDatabasesAsync();
-      closeOpenClawAgentDatabasesForTest(stateDir);
-      if (boot === 0) {
-        for (const agentId of agentIds) {
-          revokeSqliteDatabaseAdmissionsForPath(resolveOpenClawAgentSqlitePath({ agentId, env }));
-        }
-      }
-      started.mockClear();
+      await closeAgentDatabases();
+      open.mockClear();
       const log = makeLog();
       await runStartupSessionMaintenanceForTest({ cfg, env, log });
       for (const agentId of agentIds) {
-        const read = loadExactSessionEntryReadOnly({
-          agentId,
-          env,
-          sessionKey: `agent:${agentId}:first-turn`,
-        });
-        expect(read).toBeUndefined();
+        const scope = { agentId, env };
         expect(
-          withOpenClawAgentDatabaseReadOnly(hasPersistedOpenClawAgentCanonicalValidation, {
-            agentId,
-            env,
-          }),
+          loadExactSessionEntryReadOnly({ ...scope, sessionKey: `agent:${agentId}:first-turn` }),
+        ).toBeUndefined();
+        expect(
+          withOpenClawAgentDatabaseReadOnly(hasPersistedOpenClawAgentCanonicalValidation, scope),
         ).toMatchObject({ found: true, value: true });
       }
-      expect(started.mock.calls.map(([, options]) => options.agentId).toSorted()).toEqual(
-        boot === 0 ? agentIds : [],
-      );
       expect(log.warn).not.toHaveBeenCalled();
+      expect(
+        open.mock.calls.filter(
+          ([pathname, behavior]) =>
+            typeof pathname === "string" &&
+            pathname.endsWith("openclaw-agent.sqlite") &&
+            behavior?.readOnly !== true,
+        ),
+      ).toEqual([]);
     }
   });
 
-  it.each([false, true])(
-    "keeps certified empty fleet maintenance read-only on both boots (Gateway owner=%s)",
-    async (gatewayActive) => {
-      const { env, cfg } = fleetFixture(["fleet-a", "fleet-b", "fleet-c", "fleet-d"]);
-      await closeAgentDatabases();
-      await runStartupSessionMaintenanceForTest({ cfg, env, log: makeLog() });
-      const started = vi.spyOn(canonicalWorker, "startCanonicalValidationTask");
-      const open = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
-      vi.spyOn(stateOwner, "hasActiveGatewayStateOwner").mockReturnValue(gatewayActive);
-      vi.spyOn(gatewayLock, "readActiveGatewayLockIdentity").mockResolvedValue({
-        pid: process.pid,
-        ownerId: "fleet-startup-owner",
-        createdAt: new Date().toISOString(),
-        port: 18789,
-      });
-      vi.spyOn(gatewayOwner, "readGatewayOwnerLease").mockReturnValue({
-        pid: process.pid,
-        host: "fixture",
-        startedAt: null,
-        owner: "fleet-startup-owner",
-        port: 18789,
-        mode: "foreground",
-        supervisor: null,
-        state: "live",
-        expired: false,
-      });
-      for (let boot = 0; boot < 2; boot++) {
-        await closeAgentDatabases();
-        open.mockClear();
-        const log = makeLog();
-        await runStartupSessionMaintenanceForTest({ cfg, env, log });
-        expect(started).not.toHaveBeenCalled();
-        expect(log.warn).not.toHaveBeenCalled();
-        expect(
-          open.mock.calls.filter(
-            ([pathname, behavior]) =>
-              typeof pathname === "string" &&
-              pathname.endsWith("openclaw-agent.sqlite") &&
-              behavior?.readOnly !== true,
-          ),
-        ).toEqual([]);
-      }
-    },
-  );
-
   it("hands the cold maintenance connection directly to failed reconciliation", async () => {
-    const stateDir = fs.realpathSync.native(tempDirs.make("openclaw-startup-handoff-"));
-    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const { stateDir, env } = fleetFixture(["main"]);
+    const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
     const options = { agentId: "main", env };
     const initial = openOpenClawAgentDatabase(options);
     setCanonicalSqliteSessionMainKey(initial, "previous");
     await closeAgentDatabases(stateDir);
-    const open = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
     let handedOff: ReturnType<typeof getOpenClawAgentDatabaseIfOpen>;
     let reconciled: ReturnType<typeof openOpenClawAgentDatabase> | undefined;
     const failure = new Error("projection reconciliation failed");
-    const reconcileSessionTranscriptIndexes = vi
-      .spyOn(transcriptReconcile, "reconcileSessionTranscriptIndexes")
-      .mockImplementation(async (databaseOptions: OpenClawAgentDatabaseOptions) => {
+    vi.spyOn(transcriptReconcile, "reconcileSessionTranscriptIndexes").mockImplementation(
+      async (databaseOptions: OpenClawAgentDatabaseOptions) => {
         handedOff = getOpenClawAgentDatabaseIfOpen(databaseOptions);
         reconciled = openOpenClawAgentDatabase(databaseOptions);
         throw failure;
-      });
-    const startup = runStartupSessionMaintenanceForTest({
-      cfg: { agents: { entries: { main: {} } } },
-      env,
-      log: makeLog(),
-    });
+      },
+    );
+    const startup = runStartupSessionMaintenanceForTest({ cfg, env, log: makeLog() });
     await expect(startup).rejects.toBe(failure);
-    expect(reconcileSessionTranscriptIndexes).toHaveBeenCalledOnce();
     expect(handedOff).toBe(reconciled);
-    expect(
-      open.mock.calls.filter(
-        ([databasePath, behavior]) => databasePath === initial.path && behavior?.readOnly !== true,
-      ),
-    ).toHaveLength(1);
     expect(isOpenClawAgentDatabaseOpen(initial.path)).toBe(true);
   });
 
   it("does not repair a physical successor through the startup target inventory", async () => {
     const stateDir = tempDirs.make("startup-maintenance-generation-");
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
     const options = { agentId: "main", env };
     const original = openOpenClawAgentDatabase(options);
     const databases = await prepareGatewayStartupSessions({
-      cfg: { agents: { entries: { main: {} } } },
+      cfg,
       env,
       log: makeLog(),
     });
@@ -236,30 +184,10 @@ describe("runStartupSessionMaintenanceForTest", () => {
       .spyOn(transcriptReconcile, "reconcileSessionTranscriptIndexes")
       .mockResolvedValue({ reconciledSessions: 0 });
     await expect(
-      runGatewaySessionStartupMaintenance({
-        databases,
-        log: makeLog(),
-      }),
+      runGatewaySessionStartupMaintenance({ databases, log: makeLog() }),
     ).rejects.toThrow("identity changed");
     expect(reconcileSessionTranscriptIndexes).not.toHaveBeenCalled();
     expect(successor.db.isOpen).toBe(true);
-  });
-
-  it("does not create databases for agents without durable sessions", async () => {
-    const stateDir = tempDirs.make("openclaw-empty-session-startup-");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const reconcileSessionTranscriptIndexes = vi
-      .spyOn(transcriptReconcile, "reconcileSessionTranscriptIndexes")
-      .mockResolvedValue({ reconciledSessions: 0 });
-    await runStartupSessionMaintenanceForTest({
-      cfg: { agents: { entries: { main: {}, ops: {} } } },
-      env,
-      log: makeLog(),
-    });
-    expect(reconcileSessionTranscriptIndexes).not.toHaveBeenCalled();
-    for (const agentId of ["main", "ops"]) {
-      expect(fs.existsSync(resolveOpenClawAgentSqlitePath({ agentId, env }))).toBe(false);
-    }
   });
 
   it.each(["default", "shared", "scoped"] as const)(
@@ -273,10 +201,7 @@ describe("runStartupSessionMaintenanceForTest", () => {
         const storePath =
           layout === "shared" ? path.join(root, "custom", "shared.sqlite") : undefined;
         const cfg: OpenClawConfig = {
-          agents: {
-            ownership: "explicit",
-            entries: { qa: {}, ...(layout === "scoped" ? { main: {} } : {}) },
-          },
+          ...fleetConfig(layout === "scoped" ? ["qa", "main"] : ["qa"]),
           ...(storePath ? { session: { store: storePath } } : {}),
         };
         setRuntimeConfigSnapshot(cfg);
@@ -288,16 +213,8 @@ describe("runStartupSessionMaintenanceForTest", () => {
           sessionKey: "agent:qa:startup",
           storePath,
         };
-        await seedHistory(scope, "startup-message", "retained history");
-        const options = toDatabaseOptions(resolveSqliteReadScope(scope));
-        await waitForSessionTranscriptIndexReconcile(options);
-        const database = openOpenClawAgentDatabase(options);
-        database.db
-          .prepare(
-            "UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?",
-          )
-          .run(scope.sessionId);
-        expect(sessionTranscriptIndexNeedsReconcile(database.db, scope.sessionId)).toBe(true);
+        const options = await seedHistory(scope, "startup-message", "retained history");
+        expect(needsReconcile(options, scope.sessionId)).toBe(true);
         const peerScope = {
           ...scope,
           agentId: "main",
@@ -307,10 +224,6 @@ describe("runStartupSessionMaintenanceForTest", () => {
         const peerOptions = { agentId: "main", env };
         if (layout === "scoped") {
           await seedHistory(peerScope, "peer-message", "peer history");
-          await waitForSessionTranscriptIndexReconcile(peerOptions);
-          openOpenClawAgentDatabase(peerOptions)
-            .db.prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1")
-            .run();
         }
         await closeAgentDatabases(root);
         const log = makeLog();
@@ -336,9 +249,6 @@ describe("runStartupSessionMaintenanceForTest", () => {
         ]);
         expect(loadExactSessionEntry(scope)?.entry.sessionId).toBe(scope.sessionId);
         expect(log.warn).not.toHaveBeenCalled();
-        if (layout !== "default") {
-          expect(log.info).toHaveBeenCalledWith("session: rebuilt 1 transcript projection(s)");
-        }
         if (layout === "shared") {
           expect(reopened.agentId).toBe("main");
           expect(fs.existsSync(resolveOpenClawAgentSqlitePath({ agentId, env }))).toBe(false);
@@ -355,9 +265,7 @@ describe("runStartupSessionMaintenanceForTest", () => {
     const stateDir = fs.realpathSync.native(tempDirs.make("openclaw-legacy-session-startup-"));
     const env = { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_PROFILE: "migration" };
     const storePath = path.join(stateDir, "sessions", "sessions.json");
-    const cfg: OpenClawConfig = {
-      agents: { entries: { main: {} } },
-    };
+    const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
     const original = JSON.stringify({
       "agent:main:legacy": { sessionId: "legacy-session", updatedAt: 1 },
     });

@@ -2,6 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
+import { createEnteredGate as createGate } from "../../entered-gate.test-support.js";
 import type { SubagentRegistrationScope } from "../registry/subagent-registry.types.js";
 import {
   loadSubagentSpawnModuleForTest,
@@ -17,19 +18,6 @@ let PluginRegistryInspectionResources: typeof import("../../../plugins/registry-
 let retireInspectionInstances: typeof import("../../../plugins/registry-inspection.test-support.js").retireInspectionInstances;
 let withPluginRuntimeRegistryScope: typeof import("../../../plugins/runtime/gateway-request-scope.js").withPluginRuntimeRegistryScope;
 let AsyncWorkScope: typeof import("../../../shared/async-work-scope.js").AsyncWorkScope;
-
-function createGate() {
-  const entered = createDeferred();
-  const release = createDeferred();
-  return {
-    entered: entered.promise,
-    release: release.resolve,
-    wait: async () => {
-      entered.resolve();
-      await release.promise;
-    },
-  };
-}
 
 function createEngineFixture(
   options: {

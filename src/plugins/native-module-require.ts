@@ -5,6 +5,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { hasErrnoCode } from "../infra/errno.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { escapeRegExp } from "../shared/regexp.js";
 import { PLUGIN_SOURCE_CAPTURE_PREFIX } from "./plugin-source-capture-path.js";
 
 /** Bun's native plugin resolver remains the owner even when Node hooks are available. */
@@ -55,6 +56,7 @@ type BunPluginImportKind =
   | "entry-point-run"
   | "entry-point-build";
 export type BunPluginRuntime = {
+  main: string;
   resolveSync?: (specifier: string, parent: string) => string;
   Transpiler: new (options: {
     loader: "jsx" | "tsx";
@@ -75,7 +77,7 @@ export type BunPluginRuntime = {
           path: string;
           importer: string;
           kind?: BunPluginImportKind;
-        }) => { path: string; namespace: "file" } | undefined,
+        }) => { path: string; namespace: string } | undefined,
       ): void;
       onLoad(
         options: { filter: RegExp; namespace: "file" },
@@ -159,16 +161,15 @@ function installCapturedPluginModuleResolver(bun: BunPluginRuntime | undefined):
     bun.plugin({
       name: "openclaw-plugin-source-capture",
       setup(builder) {
-        builder.onResolve(
-          { filter: /.*/, namespace: "file" },
-          ({ path: request, importer, kind }) => {
-            const target = resolveCapturedPluginModule((owner) =>
-              owner.prepare(request, importer, kind),
-            );
-            // Package selection stays native; owners redirect only captured physical source paths.
-            return target ? { path: target, namespace: "file" } : undefined;
-          },
-        );
+        // Compiled Bun refuses hooks whose filter includes its immutable entrypoint.
+        const filter = new RegExp(`^(?!${escapeRegExp(bun.main)}(?![\\s\\S]))`);
+        builder.onResolve({ filter, namespace: "file" }, ({ path: request, importer, kind }) => {
+          const target = resolveCapturedPluginModule((owner) =>
+            owner.prepare(request, importer, kind),
+          );
+          // Package selection stays native; owners redirect only captured physical source paths.
+          return target ? { path: target, namespace: "file" } : undefined;
+        });
       },
     });
     return;
@@ -430,30 +431,5 @@ function withNativeRequireAliases<T>(
   } finally {
     moduleWithResolver["_resolveFilename"] = originalResolveFilename;
     esmHooks?.deregister();
-  }
-}
-
-/** Read the nearest package type for native ESM retention decisions. */
-export function isNativeEsmPackage(source: string): boolean {
-  let directory = path.dirname(source);
-  while (true) {
-    const manifest = path.join(directory, "package.json");
-    if (fs.existsSync(manifest)) {
-      try {
-        const parsed: unknown = JSON.parse(fs.readFileSync(manifest, "utf8"));
-        return (
-          typeof parsed === "object" &&
-          parsed !== null &&
-          Object.getOwnPropertyDescriptor(parsed, "type")?.value === "module"
-        );
-      } catch {
-        return false;
-      }
-    }
-    const parent = path.dirname(directory);
-    if (parent === directory) {
-      return false;
-    }
-    directory = parent;
   }
 }

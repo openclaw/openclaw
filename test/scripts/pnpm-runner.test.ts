@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import {
@@ -38,28 +38,19 @@ let fixturesRoot: string;
 
 beforeAll(() => {
   fixturesRoot = tempDirs.make("pnpm-runner-");
-  const writeLauncher = (relativePath: string, source: string | Buffer, mode?: number) => {
+  const launchers = {
+    "js/pnpm.cjs": "console.log('pnpm');\n",
+    "shell/pnpm": '#!/bin/sh\nprintf "%s\\n" "$@"\n',
+    "parent/pnpm": "#!/usr/bin/env node\n",
+    "corepack/corepack": "#!/bin/sh\nexit 0\n",
+    "windows/corepack.cmd": "@exit /b 0\r\n",
+    "empty-path/cwd/pnpm": "#!/bin/sh\nprintf '%s\n' 'cwd' \"$@\"\nexit 7\n",
+    "empty-path/corepack-only/corepack": "#!/bin/sh\nprintf '%s\n' 'corepack' \"$@\"\nexit 9\n",
+  };
+  for (const [relativePath, source] of Object.entries(launchers)) {
     const file = path.join(fixturesRoot, relativePath);
     mkdirSync(path.dirname(file), { recursive: true });
-    writeFileSync(file, source);
-    if (mode !== undefined) {
-      chmodSync(file, mode);
-    }
-  };
-  writeLauncher("js/pnpm.cjs", "console.log('pnpm');\n");
-  writeLauncher("shell/pnpm", '#!/bin/sh\nprintf "%s\\n" "$@"\n', 0o755);
-  writeLauncher("parent/pnpm", "#!/usr/bin/env node\n", 0o755);
-  writeLauncher("corepack/corepack", "#!/bin/sh\nexit 0\n", 0o755);
-  writeLauncher("windows/corepack.cmd", "@exit /b 0\r\n");
-  for (const [file, marker, exitCode] of [
-    ["cwd/pnpm", "cwd", 7],
-    ["corepack-only/corepack", "corepack", 9],
-  ] as const) {
-    writeLauncher(
-      `empty-path/${file}`,
-      `#!/bin/sh\nprintf '%s\n' '${marker}' "$@"\nexit ${exitCode}\n`,
-      0o755,
-    );
+    writeFileSync(file, source, { mode: 0o755 });
   }
 });
 

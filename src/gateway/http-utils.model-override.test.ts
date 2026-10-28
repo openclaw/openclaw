@@ -18,6 +18,7 @@ vi.mock("./server-model-catalog.js", () => ({
   loadGatewayModelCatalog: (...args: unknown[]) => loadGatewayModelCatalogMock(...args),
 }));
 
+import { modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import { resolveOpenAiCompatModelOverride } from "./http-utils.js";
 
 type Defaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
@@ -48,16 +49,7 @@ it("keeps provider-wildcard grants separate from a colliding default provider", 
     {
       api: "openai-completions",
       baseUrl: "https://fixture.invalid/v1",
-      models: [
-        {
-          id: "Reader",
-          name: "Reader",
-          reasoning: false,
-          input: ["text"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          maxTokens: 4096,
-        },
-      ],
+      models: [modelDefinition("Reader", { reasoning: false, maxTokens: 4096 })],
     },
   );
   loadGatewayModelCatalogMock.mockResolvedValue([

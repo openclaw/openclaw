@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import type { AgentsListResult } from "../api/types.ts";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
+import { polledAttribute, polledCount, polledVisible } from "./chat-presentation.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { captureSidebarUiProof } from "./sidebar-customization.test-support.ts";
 import { chooseSidebarOwner } from "./sidebar-session-menu.test-support.ts";
@@ -53,11 +54,13 @@ suite.define(() => {
           ".sidebar-agent-card__main, .sidebar-workspace-header__main",
         );
         await switcher.waitFor();
+        const ownerTitle = sidebar.locator("#sidebar-session-owner-title");
+        const groups = sidebar.locator("[data-agent-group]");
+        const sessionTab = sidebar.locator('[data-navigation-view="sessions"]');
+        const shellClass = () => polledAttribute(page.locator(".shell"), "class");
         await chooseSidebarOwner(page, "owner:profile-riley");
         await sidebar.getByText("No active sessions match this filter", { exact: true }).waitFor();
-        expect(await sidebar.locator("#sidebar-session-owner-title").textContent()).toContain(
-          "My sessions",
-        );
+        expect(await ownerTitle.textContent()).toContain("My sessions");
         await captureSidebarUiProof(suite, page, "empty-my-sessions.png");
         for (const panel of ["sessions", "pages", "online", "pages"] as const) {
           const tab = sidebar.locator(`[data-navigation-view="${panel}"]`);
@@ -66,43 +69,29 @@ suite.define(() => {
           }
           if (panel === "pages") {
             await tab.click();
-            await expect
-              .poll(() => page.locator(".shell").getAttribute("class"))
-              .toContain("shell--nav-collapsed");
+            await shellClass().toContain("shell--nav-collapsed");
           }
           await switcher.click();
           await page.getByRole("menuitem", { name: "Show all", exact: true }).click();
           await waitForControlUiRoute(page, { routeId: "sessions", pathname: "/sessions" });
-          await expect
-            .poll(() => page.locator(".shell").getAttribute("class"))
-            .not.toContain("shell--nav-collapsed");
-          await expect
-            .poll(() =>
-              sidebar.locator('[data-navigation-view="sessions"]').getAttribute("aria-pressed"),
-            )
-            .toBe("true");
+          await shellClass().not.toContain("shell--nav-collapsed");
+          await polledAttribute(sessionTab, "aria-pressed").toBe("true");
           await expect
             .poll(() =>
-              sidebar
-                .locator("[data-agent-group]")
-                .evaluateAll((groups) =>
-                  groups.map((group) => group.getAttribute("data-agent-group")),
-                ),
+              groups.evaluateAll((items) =>
+                items.map((group) => group.getAttribute("data-agent-group")),
+              ),
             )
             .toEqual(["main", "research"]);
-          await expect
-            .poll(() => sidebar.locator("[data-agent-group]").first().isVisible())
-            .toBe(true);
-          expect(await sidebar.locator("#sidebar-session-owner-title").textContent()).toContain(
-            "My sessions",
-          );
+          await polledVisible(groups.first()).toBe(true);
+          expect(await ownerTitle.textContent()).toContain("My sessions");
           if (panel === "sessions") {
             await captureSidebarUiProof(suite, page, "all-agents-empty-my-sessions.png");
           }
         }
         await page.reload();
         await waitForControlUiRoute(page, { routeId: "sessions", pathname: "/sessions" });
-        await expect.poll(() => sidebar.locator("[data-agent-group]").count()).toBe(2);
+        await polledCount(groups).toBe(2);
       },
     );
   });

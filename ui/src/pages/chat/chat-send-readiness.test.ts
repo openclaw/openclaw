@@ -9,10 +9,16 @@ import {
   createTestSessionCapability,
   sessionsResult,
 } from "../../lib/sessions/session-capability.test-support.ts";
+import { sessionListResult } from "../../test-helpers/chat-model.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { loadChatHistory } from "./chat-history.ts";
-import { findChatSendPayload, makeChatHost, makeRequestMock } from "./chat-host.test-support.ts";
+import {
+  findChatSendPayload,
+  makeChatHost,
+  makeRequestMock,
+  requireRecord,
+} from "./chat-host.test-support.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { enqueueChatMessage, keepVolatileQueuedMessage } from "./chat-queue.ts";
 import {
@@ -38,6 +44,52 @@ function cachedTranscript(sessionId: string, displayedLeafEntryId: string): Chat
 }
 
 useChatSendBrowserFixture();
+
+it("admits consecutive drafts synchronously and delivers them in order without clearing a newer draft", async () => {
+  const sessionKey = "agent:main:main";
+  const sessionId = "consecutive-drafts-session";
+  const host = makeChatHost({
+    sessionKey,
+    currentSessionId: sessionId,
+    chatMessage: "First submitted draft",
+    requestHandlers: {
+      "chat.send": { status: "ok", messageSeq: 1 },
+      "chat.history": {
+        messages: [],
+        sessionInfo: {
+          key: sessionKey,
+          sessionId,
+          kind: "direct",
+          updatedAt: 1,
+          hasActiveRun: false,
+          status: "done",
+        },
+      },
+    },
+  });
+  const first = handleSendChat(host);
+  expect(host.chatMessage).toBe("");
+  host.chatMessage = "Second submitted draft";
+  const second = handleSendChat(host);
+  expect(host.chatMessage).toBe("");
+  expect(host.chatQueue.map((item) => item.text)).toEqual([
+    "First submitted draft",
+    "Second submitted draft",
+  ]);
+  host.chatMessage = "Newer unsent draft";
+
+  await Promise.all([first, second]);
+
+  await vi.waitFor(() => {
+    expect(
+      host.request.mock.calls
+        .filter(([method]) => method === "chat.send")
+        .map(([, params]) => requireRecord(params, "chat.send parameters").message),
+    ).toEqual(["First submitted draft", "Second submitted draft"]);
+    expect(host.chatQueue).toEqual([]);
+  });
+  expect(host.chatMessage).toBe("Newer unsent draft");
+});
 
 it.each(
   [
@@ -253,7 +305,13 @@ it.each(
         expect(host.chatRunLifecycleGeneration).toBe(runGeneration);
         expect(host.chatStream).toBe("The current answer is still streaming.");
         expect(host.chatQueue.map((item) => item.id)).toEqual(queuedIds);
-        expect(listStoredChatOutboxes(host)).toEqual(capturedOutboxes);
+        const expectedOutboxes = structuredClone(capturedOutboxes);
+        for (const outbox of expectedOutboxes) {
+          for (const item of outbox.queue) {
+            item.sessionId = "current-session";
+          }
+        }
+        expect(listStoredChatOutboxes(host)).toEqual(expectedOutboxes);
         return;
       }
       if (mainKeyChanged) {
@@ -734,16 +792,14 @@ it.each([false, true])(
     expect(payload).toMatchObject({
       sessionKey,
       message: "Keep this second message",
+      sessionId: "current-session",
     });
     if (switchPane) {
-      expect(payload).not.toHaveProperty("sessionId");
       expect(host.request).toHaveBeenCalledWith(
         "chat.history",
         expect.objectContaining({ sessionKey }),
         { timeoutMs: 30_000 },
       );
-    } else {
-      expect(payload.sessionId).toBe("current-session");
     }
     expect(payload).not.toHaveProperty("expectedLeafEntryId", "cached-leaf");
     expect(host.chatQueue).toEqual([]);
@@ -759,22 +815,16 @@ it.each(["steer", "interrupt", "queue"] as const)(
     const host = makeChatHost({
       sessionKey,
       chatMessage: message,
-      sessionsResult: {
-        ts: 1,
-        path: "",
-        count: 1,
-        defaults: { modelProvider: null, model: null, contextTokens: null },
-        sessions: [
-          {
-            key: sessionKey,
-            sessionId: "current-session",
-            hasActiveRun: false,
-            status: "done",
-            kind: "direct",
-            updatedAt: 1,
-          },
-        ],
-      },
+      sessionsResult: sessionListResult(1, [
+        {
+          key: sessionKey,
+          sessionId: "current-session",
+          hasActiveRun: false,
+          status: "done",
+          kind: "direct",
+          updatedAt: 1,
+        },
+      ]),
       requestHandlers: {
         "chat.startup": () => history.promise,
         "chat.send": { status: "started", messageSeq: 1 },

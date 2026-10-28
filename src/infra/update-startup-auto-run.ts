@@ -200,6 +200,9 @@ export async function runAutoUpdateCommand(
       }
     } else {
       // A joined helper owns another run; it cannot complete this campaign's admission.
+      await recordUpdateRunPhase(params.runId, "requested", {
+        origin: { nextAction: started.message },
+      });
       await finishUpdateRun(params.runId, {
         status: "skipped",
         reason: "managed-service-handoff-already-running",

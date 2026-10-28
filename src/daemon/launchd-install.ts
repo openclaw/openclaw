@@ -110,16 +110,6 @@ export async function stageLaunchAgent(
   return { plistPath };
 }
 
-async function snapshotLaunchAgentLoadedState(serviceTarget: string): Promise<boolean> {
-  const probe = await probeLaunchAgentState(serviceTarget);
-  if (probe.state === "unknown") {
-    throw new Error(
-      `launchctl print could not determine whether ${serviceTarget} is loaded: ${probe.detail ?? "unknown error"}`,
-    );
-  }
-  return probe.state !== "not-loaded";
-}
-
 async function bootoutLaunchAgent(serviceTarget: string): Promise<void> {
   assertGatewayServiceUpdateCurrent();
   const result = await execLaunchctl(["bootout", serviceTarget]);
@@ -150,7 +140,13 @@ export async function installLaunchAgent(
         const wasEnabled = args.preserveAutoStart
           ? await isLaunchAgentEnabled({ env: args.env })
           : undefined;
-        const wasLoaded = await snapshotLaunchAgentLoadedState(serviceTarget);
+        const probe = await probeLaunchAgentState(serviceTarget);
+        if (probe.state === "unknown") {
+          throw new Error(
+            `launchctl print could not determine whether ${serviceTarget} is loaded: ${probe.detail ?? "unknown error"}`,
+          );
+        }
+        const wasLoaded = probe.state !== "not-loaded";
         const wasRestorable = wasLoaded && previous !== null;
         if (wasLoaded && !wasRestorable) {
           args.warn?.(

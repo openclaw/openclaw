@@ -21,17 +21,13 @@ import type {
   ReplyToolAuthorityOverlay,
   ReplyToolAuthorityRequester,
 } from "../../sessions/session-controller.contracts.js";
-import { isSameReplyExecutionSelection } from "../../sessions/session-controller.execution-selection.js";
 import { readSessionInputProfileId } from "../../sessions/session-participant-input.js";
 import { internalSessionConversationId } from "../../utils/message-channel-constants.js";
 import { normalizeMessageChannel } from "../../utils/message-channel-core.js";
 import { getRequesterProfile } from "../requester-profile.js";
 import { shouldUseFromAsSenderFallback } from "../sender-identity.js";
 import type { RuntimeMsgContext } from "../templating.js";
-import {
-  MessageInjectionPolicyMismatchError,
-  MessageInjectionRequesterMismatchError,
-} from "./message-injection-authority.js";
+import { MessageInjectionRequesterMismatchError } from "./message-injection-authority.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import type { ReplyToolAuthorityInput } from "./reply-tool-authority.types.js";
 
@@ -39,27 +35,13 @@ import type { ReplyToolAuthorityInput } from "./reply-tool-authority.types.js";
 export function projectReplyToolAuthorityInput(
   snapshot: ReplyToolAuthorityInput,
   caller: ReplyToolAuthorityCaller | undefined,
+  requesterPrincipalKey: string | undefined,
 ): ReplyToolAuthorityInput {
   const continuation = caller && "kind" in caller ? caller : undefined;
   const participant: ReplyToolAuthorityOverlay | ReplyToolAuthorityRequester | undefined =
     caller && "kind" in caller
       ? { ...caller.caller, traceAuthorized: snapshot.run.traceAuthorized === true }
       : caller;
-  if (
-    continuation &&
-    (!snapshot.executionSelection ||
-      !isSameReplyExecutionSelection(snapshot.executionSelection, continuation.executionSelection))
-  ) {
-    throw new MessageInjectionPolicyMismatchError(
-      "execution-settings-changed",
-      "The execution settings changed before steering",
-    );
-  }
-  const requesterPrincipalKey = resolveRequesterPrincipalKey({
-    ...snapshot.run,
-    messageChannel: snapshot.originatingChannel,
-    operatorAuthority: snapshot.operatorAuthority,
-  });
   const incomingRequester =
     participant && !("requesterOrigin" in participant) && participant.allowCollaborativeSteering
       ? resolveRequesterPrincipalKey({
@@ -101,6 +83,11 @@ export function projectReplyToolAuthorityInput(
         }))
   ) {
     throw new MessageInjectionRequesterMismatchError();
+  }
+  if (continuation && isSameReplyToolAuthorityConversation(snapshot, continuation.caller)) {
+    // Guidance continues this execution; it does not grant a new set of tools or destinations.
+    // The caller binding still checks both live authorities and the incumbent policy.
+    return snapshot;
   }
   return continuation
     ? {
@@ -289,7 +276,15 @@ export function resolveInboundConversationToolPolicy(params: {
 /** Session sharing alone does not establish that two inputs belong to the same conversation. */
 function isSameReplyToolAuthorityConversation(
   snapshot: ReplyToolAuthorityInput,
-  caller: ReplyToolAuthorityOverlay,
+  caller: Pick<
+    ReplyToolAuthorityOverlay,
+    | "messageProvider"
+    | "originatingChannel"
+    | "conversationId"
+    | "sessionKey"
+    | "agentAccountId"
+    | "messageThreadId"
+  >,
 ): boolean {
   const execution = snapshot.run;
   const channel = normalizeMessageChannel(execution.messageProvider ?? snapshot.originatingChannel);

@@ -29,6 +29,15 @@ command reads governed declarations and `policy.jsonc` from that agent's
 workspace. A sole-agent or retained legacy-owner configuration still resolves
 without the flag; OpenClaw never selects an arbitrary first agent.
 
+`policy check`, `policy compare`, and `policy watch` emit JSON when `--json` is
+set or stdout is piped. Command-owned failures after option parsing emit `ok: false` and
+`error: { type: "cli_error", message: "..." }` on stdout, preserve the diagnostic
+on stderr, and exit with `2`. `watch` emits one JSON object per line, including
+failures after any earlier reports.
+
+Human-readable reports sanitize terminal and bidirectional controls in data values;
+embedded line breaks are shown as escapes. JSON output retains the original values.
+
 Compare an operator policy file against an authored baseline:
 
 ```bash

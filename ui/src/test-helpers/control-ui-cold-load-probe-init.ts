@@ -30,6 +30,7 @@ export type ColdLoadProbeInput = {
   ownerProbes?: boolean;
   sidebarCounters?: boolean;
   latencyMs: number;
+  downloadKbps?: number;
   methodLatencyMs?: Record<string, number>;
   sidebarQueryLatencyMs?: Record<string, number>;
   omitHelloSelfPresence?: boolean;
@@ -53,6 +54,41 @@ export type ColdLoadProbeInput = {
     messages: unknown[];
     inFlightRun: { runId: string; text: string; startedAt: number; events: unknown[] };
   };
+};
+
+export type ColdLoadRpcRecord = {
+  method: string;
+  requestBytes: number;
+  responseBytes: number;
+  ms: number;
+  requestMs: number;
+  responseMs: number;
+  responseOk?: boolean;
+  initialHistoryOk?: boolean;
+  dispatchMs?: number;
+  responseAtMs?: number;
+  abandoned?: true;
+  params: unknown;
+  stack: string | undefined;
+};
+
+export type ColdLoadSocketClose = {
+  socketId: number;
+  atMs: number;
+  code: number;
+  reason: string;
+  wasClean: boolean;
+};
+
+export type ColdLoadEventHeader = {
+  socketId: number;
+  event: string;
+  seq: number | null;
+  queuedAtMs: number;
+  eligibleAtMs: number;
+  deliveredAtMs?: number;
+  deliveryOrder?: number;
+  socketStateAtDelivery?: number;
 };
 
 type LiveDeliveryOrigin = {

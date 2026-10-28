@@ -31,20 +31,22 @@ export function normalizeDiscordHandleKey(raw: string): string | null {
   return handle.toLowerCase();
 }
 
-function ensureAccountCache(accountId?: string | null): Map<string, string> {
+function ensureAccountCache(accountId?: string | null): Map<string, string | null> {
   const cacheKey = normalizeAccountId(accountId);
   const existing = discordDirectoryCacheState.handlesByAccount.get(cacheKey);
   if (existing) {
     return existing;
   }
-  const created = new Map<string, string>();
+  const created = new Map<string, string | null>();
   discordDirectoryCacheState.handlesByAccount.set(cacheKey, created);
   return created;
 }
 
-function setCacheEntry(cache: Map<string, string>, key: string, userId: string): void {
+function setCacheEntry(cache: Map<string, string | null>, key: string, userId: string): void {
+  const previous = cache.get(key);
   cache.delete(key);
-  cache.set(key, userId);
+  // Keep observed collisions unresolved until eviction; configured aliases still take precedence.
+  cache.set(key, previous === undefined || previous === userId ? userId : null);
   pruneMapToMaxSize(cache, DISCORD_DIRECTORY_CACHE_MAX_ENTRIES);
 }
 
@@ -88,13 +90,5 @@ export function resolveDiscordDirectoryUserId(params: {
   if (!handle) {
     return undefined;
   }
-  const direct = cache.get(handle);
-  if (direct) {
-    return direct;
-  }
-  const withoutDiscriminator = handle.replace(DISCORD_DISCRIMINATOR_SUFFIX, "");
-  if (!withoutDiscriminator || withoutDiscriminator === handle) {
-    return undefined;
-  }
-  return cache.get(withoutDiscriminator);
+  return cache.get(handle) ?? undefined;
 }

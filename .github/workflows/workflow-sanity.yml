@@ -190,7 +190,7 @@ jobs:
 
       - name: Install pre-commit
         if: steps.scope.outputs.changed == 'true'
-        run: python -m pip install --disable-pip-version-check pre-commit==4.6.2
+        run: python -m pip install --disable-pip-version-check pre-commit==4.7.0
 
       - name: Install ShellCheck
         if: steps.scope.outputs.changed == 'true'
@@ -211,7 +211,7 @@ jobs:
         if: steps.scope.outputs.changed == 'true'
         uses: actions/setup-go@90ad2b35f69faf97585ad74d28fa006d2739b7af # v7.0.0 + post-release fixes
         with:
-          go-version: "1.27.2"
+          go-version: "1.27.3"
           cache: false
 
       - name: Install actionlint

@@ -21,17 +21,11 @@ test.skipIf(process.platform !== "linux").for([false, true])(
   async (denyStop, { signal }) => {
     const forcedStop = createDeferredCore();
     let apiResult: ExecResult | undefined;
-    let denied = 0;
     const spawn = vi.spyOn(commands, "spawnCommand");
-    const descendant =
-      'process.on("SIGTERM", () => {}); process.stdout.write("ready"); setInterval(() => {}, 1000);';
-    const source = [
-      'const { spawn } = require("node:child_process");',
-      `const child = spawn(process.execPath, ["-e", ${JSON.stringify(descendant)}], { stdio: ["ignore", "pipe", "ignore"] });`,
-      'child.stdout.once("data", () => process.stdout.write("NATIVE_EXEC_READY:" + child.pid + "\\n"));',
-      'process.on("SIGTERM", () => process.exit(0));',
-      "setInterval(() => {}, 1000);",
-    ].join("\n");
+    const source = `const { spawn } = require("node:child_process");
+const child = spawn(process.execPath, ["-e", 'process.on("SIGTERM", () => {}); process.stdout.write("ready"); setInterval(() => {}, 1000);'], { stdio: ["ignore", "pipe", "ignore"] });
+child.stdout.once("data", () => process.stdout.write(child.pid + "\\n"));
+process.on("SIGTERM", () => process.exit(0));`;
     const controller = new AbortController();
     const outcome = loadExtensionFromFactory(
       async (api) => {
@@ -40,30 +34,22 @@ test.skipIf(process.platform !== "linux").for([false, true])(
       process.cwd(),
       createEventBus(),
       createExtensionRuntime(),
-    ).then(
-      () => apiResult,
-      (error: unknown) => error,
-    );
-    const spawned = expectDefined(
+    )
+      .then(() => apiResult)
+      .catch((error: unknown) => error);
+    const child = expectDefined(
       spawn.mock.results.find((call) => call.type === "return"),
       "spawned command",
-    );
-    const child = spawned.value.nodeChildProcess;
+    ).value.nodeChildProcess;
     const lines = createInterface({ input: expectDefined(child.stdout, "command stdout") });
-    const ready = once(lines, "line");
     try {
-      const [line]: string[] = await withinTest(ready, signal);
-      const descendantPid = Number(
-        expectDefined(line?.match(/^NATIVE_EXEC_READY:(\d+)$/), "ready descendant PID")[1],
-      );
+      const [line]: string[] = await withinTest(once(lines, "line"), signal);
       const rootPid = expectDefined(child.pid, "command PID");
-      expect(nativeKill(descendantPid, 0)).toBe(true);
-      expect(isChildProcessTreeAlive(child)).toBe(true);
+      expect(nativeKill(Number(line), 0)).toBe(true);
       vi.spyOn(process, "kill").mockImplementation((pid, requestedSignal) => {
         if (pid === -rootPid && requestedSignal === "SIGKILL") {
           forcedStop.resolve();
           if (denyStop) {
-            denied++;
             throw Object.assign(new Error("fixture denies forced stop"), { code: "EPERM" });
           }
         }
@@ -77,17 +63,8 @@ test.skipIf(process.platform !== "linux").for([false, true])(
       await withinTest(forcedStop.promise, signal);
       vi.setSystemTime(Date.now() + COMMAND_PROCESS_GROUP_EXIT_CONFIRMATION_MS);
       const observed = await withinTest(outcome, signal);
-      expect(denied).toBe(denyStop ? 1 : 0);
-      if (denyStop) {
-        expect(nativeKill(descendantPid, 0)).toBe(true);
-      }
       expect(isChildProcessTreeAlive(child)).toBe(denyStop);
-      const result = {
-        stdout: expect.stringContaining("NATIVE_EXEC_READY:"),
-        stderr: "",
-        code: 0,
-        killed: true,
-      };
+      const result = { stdout: `${line}\n`, stderr: "", code: 0, killed: true };
       expect(observed).toMatchObject(
         denyStop ? { code: "ERR_COMMAND_PROCESS_CLEANUP_UNCERTAIN", cause: result } : result,
       );

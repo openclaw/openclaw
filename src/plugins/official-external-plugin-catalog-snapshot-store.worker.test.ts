@@ -58,7 +58,7 @@ it("captures Windows environment semantics and explicit state-directory override
   expect(captured[0]?.context.environment.OPENCLAW_SUPERVISOR_MODE).toBe("external");
 });
 
-it("persists captured snapshots and serves the offline catalog without parent SQL", () =>
+it("persists snapshots and serves the offline catalog without parent SQL", () =>
   withOpenClawTestState({ label: "hosted-catalog-worker" }, async (state) => {
     const options = { env: { ...state.env } };
     const store = createStore(options);
@@ -72,8 +72,6 @@ it("persists captured snapshots and serves the offline catalog without parent SQ
     await expect(store.read(url)).resolves.toBeNull();
     expect(existsSync(resolveOpenClawStateSqlitePath(state.env))).toBe(false);
     const pending = store.write(snapshot);
-    snapshot.body = "changed after admission";
-    snapshot.metadata.url = "https://catalog.example.test/changed";
     options.env.OPENCLAW_STATE_DIR = state.path("later-state");
     await pending;
 

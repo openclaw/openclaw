@@ -9,13 +9,11 @@ import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.j
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import * as metadata from "../../plugins/current-plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
-import { captureReplyExecutionSelection } from "../../sessions/session-controller.execution-selection.js";
 import { createReplyOperation } from "../../sessions/session-controller.js";
 import * as registryState from "../../sessions/session-controller.state.js";
 import { createCommandTurnContext } from "../command-turn-context.js";
 import { bindReplyFallbackSteeringRoute } from "./agent-runner-fallback-authority.js";
 import { runReplyAgent } from "./agent-runner-run.js";
-import { createReplyParams } from "./agent-runner-steer-adoption.test-support.js";
 import { parseInlineSessionDirectives } from "./directive-handling.parse.js";
 import * as followupRunner from "./followup-runner.js";
 import { createPersonalToolScreenDispatcher } from "./personal-tool-turn.test-support.js";
@@ -28,10 +26,10 @@ import {
 } from "./reply-operation-run-state.js";
 import { resolveReplySteeringIntent } from "./reply-steering-intent.js";
 import * as toolAuthority from "./reply-tool-authority.js";
-import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
+import { prepareReplyRunToolAuthority, prepareReplyToolAuthority } from "./reply-tool-authority.js";
 import { createQueueTestRun } from "./reply-tool-authority.test-support.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
-import { createMockTypingController } from "./test-helpers.js";
+import { createMockTypingController, createReplyParams } from "./test-helpers.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -249,7 +247,8 @@ describe("ordinary steering into automatic model fallback", () => {
     run.run.sessionKey = key;
     run.run.sessionId = `fallback-${scenario}`;
     const modelConfig = {
-      primary: "openai/gpt-test",
+      // A strict pin differs from the primary; a remembered default still permits fallback.
+      primary: scenario.endsWith("pinned-selection") ? "openai/other-primary" : "openai/gpt-test",
       fallbacks: scenario === "policy-fallback" ? undefined : ["test-alias/test-model"],
     };
     run.run.config = {
@@ -296,17 +295,9 @@ describe("ordinary steering into automatic model fallback", () => {
         gatewayUiCommandTarget: { connId: "alice-tab", profileId: "alice" },
       });
     }
-    const snapshot = prepareReplyToolAuthority({
-      ...run,
-      ...(sameProfile
-        ? {
-            executionSelection: captureReplyExecutionSelection({
-              run: run.run,
-              sessionEntry: undefined,
-            }),
-          }
-        : {}),
-    });
+    const snapshot = sameProfile
+      ? prepareReplyRunToolAuthority(run, undefined)
+      : prepareReplyToolAuthority(run);
     await operation.bindToolAuthoritySnapshotAsync(
       scenario === "same-profile-legacy-snapshot"
         ? {
@@ -497,7 +488,11 @@ describe("ordinary steering into automatic model fallback", () => {
       await incoming;
       expect(resultState.admission).toEqual(
         crossProfile && run.run.config.messages?.queue?.allowCollaborativeSteering !== true
-          ? { status: "skipped", reason: "collaborative-steering-disabled" }
+          ? {
+              status: "accepted",
+              mode: "followup",
+              reason: "collaborative-steering-disabled",
+            }
           : {
               status: "accepted",
               mode: shouldSteer ? "steer" : "followup",
@@ -508,7 +503,7 @@ describe("ordinary steering into automatic model fallback", () => {
       );
       expect(delivered).toEqual(shouldSteer ? [run.prompt] : []);
       if (crossProfile && run.run.config.messages?.queue?.allowCollaborativeSteering !== true) {
-        expect(getFollowupQueueDepth(key)).toBe(0);
+        expect(getFollowupQueueDepth(key)).toBe(1);
       }
       expect(operation.requesterPrincipalKey).toBe(requesterPrincipalKey);
       expect(operation.toolAuthorityFingerprint).toBe(toolAuthorityFingerprint);

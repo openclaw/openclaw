@@ -11,15 +11,7 @@ import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 
 type ShellEnvModule = typeof import("./shell-env.js");
 
-let clearShellEnvAppliedKeys: ShellEnvModule["clearShellEnvAppliedKeys"];
-let getShellEnvAppliedKeys: ShellEnvModule["getShellEnvAppliedKeys"];
-let getShellPathFromLoginShell: ShellEnvModule["getShellPathFromLoginShell"];
-let prepareShellPathFromLoginShell: ShellEnvModule["prepareShellPathFromLoginShell"];
-let loadShellEnvFallback: ShellEnvModule["loadShellEnvFallback"];
-let resolveExecutableFromUserShellPath: ShellEnvModule["resolveExecutableFromUserShellPath"];
-let resolveShellEnvFallbackTimeoutMs: ShellEnvModule["resolveShellEnvFallbackTimeoutMs"];
-let shouldDeferShellEnvFallback: ShellEnvModule["shouldDeferShellEnvFallback"];
-let shouldEnableShellEnvFallback: ShellEnvModule["shouldEnableShellEnvFallback"];
+let api: ShellEnvModule;
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const hostPlatform = process.platform;
@@ -32,17 +24,7 @@ beforeEach(async () => {
   });
   vi.doMock("node:child_process", () => ({ ...childProcess, execFileSync: syncExec }));
   vi.resetModules();
-  ({
-    clearShellEnvAppliedKeys,
-    getShellEnvAppliedKeys,
-    getShellPathFromLoginShell,
-    prepareShellPathFromLoginShell,
-    loadShellEnvFallback,
-    resolveExecutableFromUserShellPath,
-    resolveShellEnvFallbackTimeoutMs,
-    shouldDeferShellEnvFallback,
-    shouldEnableShellEnvFallback,
-  } = await import("./shell-env.js"));
+  api = await import("./shell-env.js");
 });
 
 afterEach(() => {
@@ -75,16 +57,16 @@ describe("async login-shell PATH preparation", () => {
       child = Object.assign(new ChildProcess(), { stdin: null, stdout, stderr, stdio, kill });
       return child;
     });
-    const sync = vi.fn<typeof childProcess.execFileSync>(() => {
-      throw new Error("unexpected synchronous probe");
-    });
-    vi.doMock("node:child_process", () => ({ ...childProcess, spawn: exec, execFileSync: sync }));
+    vi.doMock("node:child_process", () => ({
+      ...childProcess,
+      spawn: exec,
+      execFileSync: syncExec,
+    }));
     vi.resetModules();
-    ({ prepareShellPathFromLoginShell, getShellPathFromLoginShell } =
-      await import("./shell-env.js"));
+    api = await import("./shell-env.js");
     return {
       exec,
-      sync,
+      sync: syncExec,
       kill,
       get child() {
         return child;
@@ -102,13 +84,13 @@ describe("async login-shell PATH preparation", () => {
 
   async function expectProbeRetry(
     probe: Awaited<ReturnType<typeof holdProbe>>,
-    options: Parameters<typeof prepareShellPathFromLoginShell>[0],
+    options: Parameters<typeof api.prepareShellPathFromLoginShell>[0],
   ) {
-    const retry = prepareShellPathFromLoginShell(options);
+    const retry = api.prepareShellPathFromLoginShell(options);
     expect(probe.exec).toHaveBeenCalledTimes(2);
     probe.finish(null);
     await expect(retry).resolves.toBe("/shell/bin");
-    expect(getShellPathFromLoginShell(options)).toBe("/shell/bin");
+    expect(api.getShellPathFromLoginShell(options)).toBe("/shell/bin");
     expect(probe.sync).not.toHaveBeenCalled();
   }
 
@@ -117,15 +99,15 @@ describe("async login-shell PATH preparation", () => {
     const options = {
       env: { PATH: "/daemon/bin", SHELL: "relative-shell" },
     };
-    const first = prepareShellPathFromLoginShell(options);
-    const second = prepareShellPathFromLoginShell(options);
+    const first = api.prepareShellPathFromLoginShell(options);
+    const second = api.prepareShellPathFromLoginShell(options);
     expect(second).toBe(first);
     expect(probe.exec).toHaveBeenCalledOnce();
     expect(probe.exec.mock.calls[0]?.[0]).toBe("/bin/sh");
     probe.finish(null, "startup banner\n\0PATH= /shell/bin \0BAD\0");
     await expect(first).resolves.toBe("/shell/bin");
-    expect(getShellPathFromLoginShell(options)).toBe("/shell/bin");
-    await expect(prepareShellPathFromLoginShell(options)).resolves.toBe("/shell/bin");
+    expect(api.getShellPathFromLoginShell(options)).toBe("/shell/bin");
+    await expect(api.prepareShellPathFromLoginShell(options)).resolves.toBe("/shell/bin");
     expect(probe.sync).not.toHaveBeenCalled();
     expect(probe.exec).toHaveBeenCalledOnce();
   });
@@ -133,17 +115,12 @@ describe("async login-shell PATH preparation", () => {
   it("preserves a synchronous result published during preparation", async () => {
     const probe = await holdProbe();
     const options = { env: {} };
-    const pending = prepareShellPathFromLoginShell(options);
+    const pending = api.prepareShellPathFromLoginShell(options);
     probe.sync.mockReturnValue(Buffer.from("\0PATH=/sync/bin\0"));
-    expect(getShellPathFromLoginShell(options)).toBe("/sync/bin");
-    expect(probe.exec.mock.calls[0]).toEqual(probe.sync.mock.calls[0]);
-    expect(probe.exec.mock.calls[0]?.[2]).toMatchObject({
-      detached: true,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    expect(api.getShellPathFromLoginShell(options)).toBe("/sync/bin");
     probe.finish(null);
     await expect(pending).resolves.toBe("/sync/bin");
-    expect(getShellPathFromLoginShell(options)).toBe("/sync/bin");
+    expect(api.getShellPathFromLoginShell(options)).toBe("/sync/bin");
   });
 
   it.each(["spawn error", "timeout", "stdout overflow", "combined output overflow"])(
@@ -151,7 +128,7 @@ describe("async login-shell PATH preparation", () => {
     async (failure) => {
       const probe = await holdProbe();
       const options = { env: {} };
-      const pending = prepareShellPathFromLoginShell(options);
+      const pending = api.prepareShellPathFromLoginShell(options);
       let error: Error | null = null;
       if (failure === "spawn error") {
         error = new Error("ENOENT");
@@ -185,19 +162,19 @@ describe("async login-shell PATH preparation", () => {
     if (mode === "async") {
       const probe = await holdProbe();
       const options = { env: {} };
-      const pending = prepareShellPathFromLoginShell(options);
+      const pending = api.prepareShellPathFromLoginShell(options);
       if (calls > 0) {
         probe.finish(null, output);
       }
       await expect(pending).resolves.toBeNull();
-      expect(getShellPathFromLoginShell(options)).toBeNull();
+      expect(api.getShellPathFromLoginShell(options)).toBeNull();
       expect(probe.exec).toHaveBeenCalledTimes(calls);
       expect(probe.sync).not.toHaveBeenCalled();
     } else {
       const exec = syncExec.mockReturnValue(Buffer.from(output));
       const options = { env: {} };
-      expect(getShellPathFromLoginShell(options)).toBeNull();
-      expect(getShellPathFromLoginShell(options)).toBeNull();
+      expect(api.getShellPathFromLoginShell(options)).toBeNull();
+      expect(api.getShellPathFromLoginShell(options)).toBeNull();
       expect(exec).toHaveBeenCalledTimes(calls);
     }
   });
@@ -213,7 +190,7 @@ describe("async login-shell PATH preparation", () => {
       }));
       const probe = await holdProbe();
       const options = { env: {}, timeoutMs: 10 };
-      const pending = prepareShellPathFromLoginShell(options);
+      const pending = api.prepareShellPathFromLoginShell(options);
       Object.defineProperty(probe.child, "pid", { value: 12345 });
       if (exited) {
         await vi.advanceTimersByTimeAsync(4);
@@ -244,17 +221,7 @@ describe("async login-shell PATH preparation", () => {
       ZDOTDIR: "/ignored-zdotdir",
       BASH_ENV: "/ignored-bash-env",
     };
-    const first = prepareShellPathFromLoginShell({ env, timeoutMs: 123 });
-    expect(probe.exec).toHaveBeenCalledWith(
-      "/bin/bash",
-      ["-l", "-c", "printf '\\0'; env -0"],
-      expect.objectContaining({
-        encoding: "buffer",
-        timeout: 123,
-        maxBuffer: 2 * 1024 * 1024,
-        windowsHide: true,
-      }),
-    );
+    const first = api.prepareShellPathFromLoginShell({ env, timeoutMs: 123 });
     const options = probe.exec.mock.calls[0]?.[2];
     expect(options?.env?.HOME).toBe(os.homedir());
     expect(options?.env?.ZDOTDIR).toBeUndefined();
@@ -262,7 +229,7 @@ describe("async login-shell PATH preparation", () => {
     const finishFirst = probe.finish;
     // Settle the first child before checking a different key; its promise remains in flight.
     finishFirst(null);
-    const second = prepareShellPathFromLoginShell({
+    const second = api.prepareShellPathFromLoginShell({
       env,
       timeoutMs: Number.MAX_SAFE_INTEGER,
     });
@@ -286,33 +253,20 @@ describe("shell env fallback", () => {
     return Buffer.from(`\0${output}`);
   }
 
-  function runShellEnvFallback(params: Partial<Parameters<typeof loadShellEnvFallback>[0]>) {
-    return loadShellEnvFallback({
+  function runShellEnvFallback(params: Partial<Parameters<typeof api.loadShellEnvFallback>[0]>) {
+    return api.loadShellEnvFallback({
       env: {},
       expectedKeys: ["OPENAI_API_KEY"],
       ...params,
     });
   }
 
-  function makeUnsafeStartupEnv(): NodeJS.ProcessEnv {
-    return {
-      SHELL: "/bin/bash",
-      HOME: "/tmp/evil-home",
-      ZDOTDIR: "/tmp/evil-zdotdir",
-      BASH_ENV: "/tmp/evil-bash-env",
-      PS4: "$(touch /tmp/pwned)",
-    };
-  }
-
   function expectSanitizedStartupEnv(receivedEnv: NodeJS.ProcessEnv | undefined) {
-    if (receivedEnv === undefined) {
-      throw new Error("expected sanitized startup env");
+    expect(receivedEnv).toBeDefined();
+    for (const key of ["BASH_ENV", "PS4", "ZDOTDIR", "SHELL"]) {
+      expect(receivedEnv?.[key]).toBeUndefined();
     }
-    expect(receivedEnv.BASH_ENV).toBeUndefined();
-    expect(receivedEnv.PS4).toBeUndefined();
-    expect(receivedEnv.ZDOTDIR).toBeUndefined();
-    expect(receivedEnv.SHELL).toBeUndefined();
-    expect(receivedEnv.HOME).toBe(os.homedir());
+    expect(receivedEnv?.HOME).toBe(os.homedir());
   }
 
   function withEtcShells(shells: string[], fn: () => void) {
@@ -338,8 +292,8 @@ describe("shell env fallback", () => {
   ] as const)("parses the opt-in %s flag", (key, disabled, enabled) => {
     const parse =
       key === "OPENCLAW_LOAD_SHELL_ENV"
-        ? shouldEnableShellEnvFallback
-        : shouldDeferShellEnvFallback;
+        ? api.shouldEnableShellEnvFallback
+        : api.shouldDeferShellEnvFallback;
     expect(parse({})).toBe(false);
     expect(parse({ [key]: disabled })).toBe(false);
     expect(parse({ [key]: enabled })).toBe(true);
@@ -354,7 +308,7 @@ describe("shell env fallback", () => {
       [String(Number.MAX_SAFE_INTEGER), MAX_TIMER_TIMEOUT_MS],
     ] as const) {
       expect(
-        resolveShellEnvFallbackTimeoutMs(
+        api.resolveShellEnvFallbackTimeoutMs(
           raw === undefined ? {} : { OPENCLAW_SHELL_ENV_TIMEOUT_MS: raw },
         ),
       ).toBe(expected);
@@ -408,7 +362,7 @@ describe("shell env fallback", () => {
     const read = (env: NodeJS.ProcessEnv) =>
       mode === "environment"
         ? runShellEnvFallback({ env, logger })
-        : getShellPathFromLoginShell({ env });
+        : api.getShellPathFromLoginShell({ env });
     expect(read({})).toEqual(mode === "environment" ? [] : null);
     for (let i = 0; i < 2; i += 1) {
       const env: NodeJS.ProcessEnv = {};
@@ -427,21 +381,25 @@ describe("shell env fallback", () => {
     }
   });
 
-  it("tracks last applied keys across success, skip, and failure paths", () => {
+  it("tracks and selectively clears applied keys across success, skip, and failure", () => {
     const successEnv: NodeJS.ProcessEnv = {};
     const exec = syncExec.mockImplementation(() =>
-      framedShellEnv("OPENAI_API_KEY=from-shell\0DISCORD_BOT_TOKEN=\0EXTRA=ignored\0"),
+      framedShellEnv(
+        "OPENAI_API_KEY=from-shell\0ANTHROPIC_API_KEY=anthropic-shell\0DISCORD_BOT_TOKEN=\0EXTRA=ignored\0",
+      ),
     );
     expect(
       runShellEnvFallback({
         env: successEnv,
-        expectedKeys: ["OPENAI_API_KEY", "DISCORD_BOT_TOKEN"],
+        expectedKeys: ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "DISCORD_BOT_TOKEN"],
       }),
-    ).toEqual(["OPENAI_API_KEY"]);
-    expect(getShellEnvAppliedKeys()).toEqual(["OPENAI_API_KEY"]);
+    ).toEqual(["OPENAI_API_KEY", "ANTHROPIC_API_KEY"]);
+    expect(api.getShellEnvAppliedKeys()).toEqual(["OPENAI_API_KEY", "ANTHROPIC_API_KEY"]);
+    api.clearShellEnvAppliedKeys(["OPENAI_API_KEY"]);
+    expect(api.getShellEnvAppliedKeys()).toEqual(["ANTHROPIC_API_KEY"]);
 
     expect(runShellEnvFallback({ env: successEnv })).toEqual([]);
-    expect(getShellEnvAppliedKeys()).toStrictEqual([]);
+    expect(api.getShellEnvAppliedKeys()).toStrictEqual([]);
 
     exec.mockImplementation(() => {
       throw new Error("boom");
@@ -452,22 +410,9 @@ describe("shell env fallback", () => {
         logger: { warn: vi.fn() },
       }),
     ).toEqual([]);
-    expect(getShellEnvAppliedKeys()).toStrictEqual([]);
+    expect(api.getShellEnvAppliedKeys()).toStrictEqual([]);
     expect(exec).toHaveBeenCalledTimes(2);
     expect(exec.mock.calls[1]?.[2]?.timeout).toBe(1);
-  });
-
-  it("clears only discarded shell-applied keys", () => {
-    syncExec.mockReturnValue(
-      framedShellEnv("OPENAI_API_KEY=openai-shell\0ANTHROPIC_API_KEY=anthropic-shell\0"),
-    );
-    runShellEnvFallback({
-      expectedKeys: ["OPENAI_API_KEY", "ANTHROPIC_API_KEY"],
-    });
-
-    clearShellEnvAppliedKeys(["OPENAI_API_KEY"]);
-
-    expect(getShellEnvAppliedKeys()).toEqual(["ANTHROPIC_API_KEY"]);
   });
 
   it.each(["relative", "unregistered", "registered"])(
@@ -514,23 +459,26 @@ describe("shell env fallback", () => {
   });
 
   it.each(["environment", "PATH"])("sanitizes %s startup and caps its exec timeout", (mode) => {
-    const env = makeUnsafeStartupEnv();
-    let receivedEnv: NodeJS.ProcessEnv | undefined;
-    let receivedTimeout: number | undefined;
-    const exec = syncExec.mockImplementation((_shell, _args, options) => {
-      receivedEnv = options?.env;
-      receivedTimeout = options?.timeout;
-      return framedShellEnv("OPENAI_API_KEY=from-shell\0PATH=/usr/local/bin:/usr/bin\0HOME=/tmp\0");
-    });
+    const env = {
+      SHELL: "/bin/bash",
+      HOME: "/tmp/evil-home",
+      ZDOTDIR: "/tmp/evil-zdotdir",
+      BASH_ENV: "/tmp/evil-bash-env",
+      PS4: "$(touch /tmp/pwned)",
+    };
+    const exec = syncExec.mockReturnValue(
+      framedShellEnv("OPENAI_API_KEY=from-shell\0PATH=/usr/local/bin:/usr/bin\0HOME=/tmp\0"),
+    );
     const timeoutMs = Number.MAX_SAFE_INTEGER;
     if (mode === "environment") {
       expect(runShellEnvFallback({ env, timeoutMs })).toEqual(["OPENAI_API_KEY"]);
     } else {
-      expect(getShellPathFromLoginShell({ env, timeoutMs })).toBe("/usr/local/bin:/usr/bin");
+      expect(api.getShellPathFromLoginShell({ env, timeoutMs })).toBe("/usr/local/bin:/usr/bin");
     }
     expect(exec).toHaveBeenCalledTimes(1);
-    expectSanitizedStartupEnv(receivedEnv);
-    expect(receivedTimeout).toBe(MAX_TIMER_TIMEOUT_MS);
+    const options = exec.mock.calls[0]?.[2];
+    expectSanitizedStartupEnv(options?.env);
+    expect(options?.timeout).toBe(MAX_TIMER_TIMEOUT_MS);
   });
 
   it("uses interactive Bash login startup before nounset reads PS1", () => {
@@ -571,7 +519,7 @@ describe("shell env fallback", () => {
       try {
         withEtcShells([shell], () => {
           expect(
-            loadShellEnvFallback({
+            api.loadShellEnvFallback({
               env,
               expectedKeys: ["OPENCLAW_PROBE_PID", "OPENCLAW_PROBE_SID"],
             }),
@@ -593,7 +541,7 @@ describe("shell env fallback", () => {
 
     withEtcShells([shell], () => {
       expect(runShellEnvFallback({ env })).toEqual(["OPENAI_API_KEY"]);
-      expect(getShellPathFromLoginShell({ env })).toBe("/usr/local/bin:/usr/bin");
+      expect(api.getShellPathFromLoginShell({ env })).toBe("/usr/local/bin:/usr/bin");
     });
 
     expect(exec).toHaveBeenCalledTimes(2);
@@ -625,7 +573,7 @@ describe("shell env fallback", () => {
       fs.writeFileSync(expectedExecutable, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
     }
     const exec = syncExec.mockReturnValue(framedShellEnv(`PATH=${shellBin}\0`));
-    const result = resolveExecutableFromUserShellPath(executable, {
+    const result = api.resolveExecutableFromUserShellPath(executable, {
       env: { PATH: daemonBin, SHELL: "/bin/sh" },
       strategy,
     });

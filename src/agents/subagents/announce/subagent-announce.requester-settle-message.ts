@@ -1,15 +1,17 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
 import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
 } from "../../../utils/message-channel.js";
 import { wrapPromptDataBlock } from "../../sanitize-for-prompt.js";
 import {
+  buildSubagentPrivateCompletionInstruction,
   SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION,
-  SUBAGENT_PRIVATE_COMPLETION_INSTRUCTION,
 } from "../completion/subagent-completion-instructions.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import { isSubagentObligationRetired } from "../registry/subagent-requester-settle-identity.js";
+import { getSubagentTerminalReplySummary } from "../registry/subagent-run-payload-facts.js";
 import {
   buildSubagentRestartRecoveryRoster,
   SUBAGENT_RESTART_RECOVERY_INSTRUCTION,
@@ -30,6 +32,7 @@ export function buildRequesterSettleWakeMessage(params: {
   children: readonly SubagentRunRecord[];
   recoveryChildren: readonly SubagentRunRecord[];
   completionChannel?: string;
+  requesterOrigin: DeliveryContext | undefined;
   retainedMessage?: string;
   retryMissingResult: boolean;
 }): string {
@@ -62,7 +65,7 @@ export function buildRequesterSettleWakeMessage(params: {
   const routeNotices = [
     ...new Set(
       params.children.flatMap((entry) => {
-        const reply = entry.completion?.terminalReply;
+        const reply = getSubagentTerminalReplySummary(entry);
         return needsRequesterSettleFindings(entry) &&
           reply?.disposition === "visible" &&
           reply.modelRouteChange
@@ -90,7 +93,7 @@ export function buildRequesterSettleWakeMessage(params: {
       ? [`[Subagent Context] ${SUBAGENT_RESTART_RECOVERY_INSTRUCTION}`, recoveryRoster]
       : []),
     params.parentOnly
-      ? `[Subagent Context] ${SUBAGENT_PRIVATE_COMPLETION_INSTRUCTION}`
+      ? `[Subagent Context] ${buildSubagentPrivateCompletionInstruction(params.requesterOrigin)}`
       : params.yieldedFinalDeliverable
         ? "[Subagent Context] Child results are internal input. Answer the original conversation under its normal reply rules: if replies there must go through the message tool, send your answer with it. Continue any unfinished work, and avoid repeating an update already delivered."
         : params.requireVisibleReply

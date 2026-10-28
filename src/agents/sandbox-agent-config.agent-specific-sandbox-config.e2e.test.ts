@@ -88,7 +88,9 @@ function inspectCreatedDockerMounts(containerName: string | undefined) {
 }
 
 async function spawnDockerProcess(commandAndArgs: string[]) {
-  const [command = "", ...args] = commandAndArgs;
+  const [command = "", ...rawArgs] = commandAndArgs;
+  // Local Docker contexts pin subsequent commands to the captured daemon.
+  const args = rawArgs[0] === "--host" ? rawArgs.slice(2) : rawArgs;
   spawnCalls.push({
     command,
     args,
@@ -100,10 +102,22 @@ async function spawnDockerProcess(commandAndArgs: string[]) {
     command === "docker" &&
     args[0] === "inspect" &&
     args[1] === "-f" &&
-    args[2] === "{{.State.Running}}";
+    args[2] ===
+      '{{.Id}}\n{{.State.Running}}\n{{.HostConfig.ReadonlyRootfs}}\n{{ index .Config.Labels "openclaw.configHash" }}';
   const code = command === "docker" && !shouldFailContainerInspect ? 0 : 1;
   let stdout = "";
-  if (command === "docker" && args[0] === "create") {
+  if (command === "docker" && args[0] === "context" && args[1] === "inspect") {
+    stdout = JSON.stringify({ Host: "unix:///fixture-docker.sock", SkipTLSVerify: false });
+  } else if (command === "docker" && args[0] === "info") {
+    stdout = "fixture-daemon";
+  } else if (command === "docker" && args[0] === "inspect" && args[2] === "{{json .State}}") {
+    stdout = JSON.stringify({
+      Running: true,
+      Paused: false,
+      Pid: 123,
+      StartedAt: "2026-01-01T00:00:00.000Z",
+    });
+  } else if (command === "docker" && args[0] === "create") {
     stdout = inspectCreatedDockerMounts(args[args.indexOf("--name") + 1]).containerId;
   } else if (command === "docker" && args[0] === "inspect" && args[2] === "{{.Id}}") {
     stdout = inspectCreatedDockerMounts(args[3]).containerId;
@@ -177,14 +191,9 @@ async function resolveContext(config: OpenClawConfig, sessionKey: string, worksp
 }
 
 function expectDockerSetupCommand(command: string) {
-  const matched = spawnCalls.some(
-    (call) =>
-      call.command === "docker" &&
-      call.args[0] === "exec" &&
-      call.args.includes("-lc") &&
-      call.args.includes(command),
-  );
-  expect(matched, `expected docker setup command; calls=${JSON.stringify(spawnCalls)}`).toBe(true);
+  expect(
+    spawnCalls.filter((call) => call.command === "docker" && call.args[0] === "exec"),
+  ).toContainEqual({ command: "docker", args: expect.arrayContaining(["-lc", command]) });
 }
 
 function sandboxConfig(
@@ -291,23 +300,13 @@ describe("Agent-specific sandbox config", () => {
   });
 
   it("enforces required allowlist tools in default and explicit sandbox configs", () => {
-    for (const scenario of [
-      {
-        cfg: sandboxConfig(),
-        expected: ["session_status", "view_image"],
-      },
-      {
-        cfg: {
-          tools: { sandbox: { tools: { allow: ["bash", "read"], deny: [] } } },
-          ...sandboxConfig(),
-        } satisfies OpenClawConfig,
-        expected: ["view_image"],
-      },
-    ]) {
-      const sandbox = resolveSandboxConfigForAgent(scenario.cfg, "main");
-      for (const tool of scenario.expected) {
-        expect(sandbox.tools.allow).toContain(tool);
-      }
-    }
+    expect(resolveSandboxConfigForAgent(sandboxConfig(), "main").tools.allow).toEqual(
+      expect.arrayContaining(["session_status", "view_image"]),
+    );
+    const cfg = {
+      ...sandboxConfig(),
+      tools: { sandbox: { tools: { allow: ["bash", "read"], deny: [] } } },
+    } satisfies OpenClawConfig;
+    expect(resolveSandboxConfigForAgent(cfg, "main").tools.allow).toContain("view_image");
   });
 });

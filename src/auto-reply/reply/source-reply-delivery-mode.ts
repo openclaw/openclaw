@@ -98,6 +98,10 @@ export function resolveSourceReplyExpectation(params: {
   cfg: OpenClawConfig;
   scheduledAutomation?: boolean;
 }): ReplyExpectation {
+  // Scheduling permits silence even when the saved session has an internal source.
+  if (params.scheduledAutomation) {
+    return "optional";
+  }
   const commandExpectation = resolveCommandReplyExpectation({
     cfg: params.cfg,
     sessionKey: params.ctx.SessionKey,
@@ -110,7 +114,6 @@ export function resolveSourceReplyExpectation(params: {
   if (
     isSyntheticSourceReplyTurn({
       inputProvenance: params.ctx.InputProvenance,
-      scheduledAutomation: params.scheduledAutomation,
     })
   ) {
     return "optional";
@@ -184,7 +187,10 @@ export function resolveSourceReplyVisibilityPolicy(params: {
       inputProvenance: params.ctx.InputProvenance,
       scheduledAutomation: params.scheduledAutomation,
     }) &&
-    (params.requested !== undefined || isExplicitCommandTurnContext(params.ctx, params.cfg));
+    // Channel room-event requests force tool-only delivery for that turn, but
+    // must not split the session-stable CLI policy hash against mentioned turns.
+    (isExplicitCommandTurnContext(params.ctx, params.cfg) ||
+      (params.requested !== undefined && params.ctx.InboundEventKind !== "room_event"));
   const sessionStableSourceReplyDeliveryMode = hasStableTurnOverride
     ? sourceReplyDeliveryMode
     : resolveSourceReplyDeliveryMode({

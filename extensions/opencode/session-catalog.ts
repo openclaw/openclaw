@@ -209,14 +209,14 @@ async function queryOpenCodeSessions(query: string, count: number): Promise<unkn
   }
   const sessions: unknown[] = [];
   let cursor: string | undefined;
-  const deadline = Date.now() + CLI_TIMEOUT_MS;
+  const deadline = performance.now() + CLI_TIMEOUT_MS;
   while (sessions.length < count) {
     const limit = Math.max(OPENCODE_SESSION_CATALOG_MAX_PAGE_LIMIT, count - sessions.length);
     const parsed: unknown = JSON.parse(
       await runOpenCodeApi(
         "session.list",
         [`limit=${limit}`, ...(cursor ? [`cursor=${cursor}`] : ["order=desc", "parentID=null"])],
-        deadline - Date.now(),
+        deadline - performance.now(),
       ),
     );
     if (!isRecord(parsed) || !Array.isArray(parsed.data) || parsed.data.length > limit) {
@@ -420,10 +420,10 @@ export async function requireLocalOpenCodeSession(
   return session;
 }
 
-function jsonText(value: unknown, maxLength = 20_000): string | undefined {
+function jsonText(value: unknown): string | undefined {
   try {
     const text = JSON.stringify(value);
-    return text.length > maxLength ? `${truncateUtf16Safe(text, maxLength)}…` : text;
+    return text.length > 20_000 ? `${truncateUtf16Safe(text, 20_000)}…` : text;
   } catch {
     return undefined;
   }

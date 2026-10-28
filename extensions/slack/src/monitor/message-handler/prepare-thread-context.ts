@@ -153,14 +153,16 @@ export async function resolveSlackThreadContextData(params: {
   const shouldLoadInitialThreadHistory =
     shouldSeedInitialThreadContext || params.forceInitialHistory === true;
 
+  const readThreadContextData = () => ({
+    threadStarterBody,
+    threadHistoryBody,
+    shouldSeedInitialThreadContext,
+    threadLabel,
+    threadStarterMedia,
+  });
+
   if (!params.isThreadReply || !params.threadTs) {
-    return {
-      threadStarterBody,
-      threadHistoryBody,
-      shouldSeedInitialThreadContext,
-      threadLabel,
-      threadStarterMedia,
-    };
+    return readThreadContextData();
   }
 
   const starter = params.threadStarter;
@@ -273,13 +275,7 @@ export async function resolveSlackThreadContextData(params: {
       },
     });
     if (historyOmitted) {
-      return {
-        threadStarterBody,
-        threadHistoryBody,
-        shouldSeedInitialThreadContext,
-        threadLabel,
-        threadStarterMedia,
-      };
+      return readThreadContextData();
     }
 
     const enrichedStarter =
@@ -379,11 +375,5 @@ export async function resolveSlackThreadContextData(params: {
     }
   }
 
-  return {
-    threadStarterBody,
-    threadHistoryBody,
-    shouldSeedInitialThreadContext,
-    threadLabel,
-    threadStarterMedia,
-  };
+  return readThreadContextData();
 }

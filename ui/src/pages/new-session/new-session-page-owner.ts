@@ -224,7 +224,6 @@ export class NewSessionPageOwner {
           context.theme,
           context.agents,
           context.agentIdentity,
-          context.sessions,
           context.placementStartup,
           context.runtimeConfig,
           context.config,
@@ -470,6 +469,7 @@ export class NewSessionPageOwner {
         agentsList: this.context?.agents.state.agentsList ?? null,
         hello: gateway?.hello ?? null,
       },
+      operatorAuth: gateway?.hello?.auth ?? null,
       onDraftChange: (next) => this.setMessageFromUser(next),
       onSend: () => void this.submit(),
       onOpenSession: (sessionKey) => {

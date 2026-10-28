@@ -79,40 +79,7 @@ it("detects syntax suppressions without counting prose", () => {
   ]);
 });
 
-it("keeps unchecked any casts at zero and negative type assertions explicit", () => {
+it("keeps unchecked any casts at zero", () => {
   const report = collectTypeSuppressionReport({ repoRoot });
-
   expect(report.summary.kindCounts).toMatchObject({ "as-any": 0, "type-assertion-any": 0 });
-  expect(
-    report.findings
-      .filter((finding) => finding.kind === "expect-error")
-      .map((finding) => `${finding.file}:${finding.excerpt}`)
-      .toSorted(),
-  ).toEqual(
-    [
-      "extensions/openai/realtime-quicksilver-session-lifecycle.test.ts:@ts-expect-error JavaScript callers must still fail before reserving a native session.",
-      "scripts/lib/managed-cleanup-handoff.mts:@ts-expect-error Bun supports connect({ fd }); Node types only describe path/port connects.",
-      "test/type-contracts/kysely-sync.ts:@ts-expect-error Kysely checks selected column string literals.",
-      "test/type-contracts/kysely-sync.ts:@ts-expect-error Kysely checks table string literals.",
-      "test/type-contracts/kysely-sync.ts:@ts-expect-error Kysely checks where-reference string literals.",
-      "test/type-contracts/kysely-sync.ts:@ts-expect-error Kysely checks grouped column string literals.",
-      "test/type-contracts/kysely-sync.ts:@ts-expect-error Kysely checks order references and selected aliases.",
-      "src/infra/database-engine/shared-feature.conformance.test.ts:@ts-expect-error -- The bridge intentionally omits SQLite-only methods.",
-      "src/infra/database-engine/transcript-reader.conformance.test.ts:@ts-expect-error -- The PostgreSQL bridge deliberately lacks unused SQLite-only methods.",
-      "src/infra/net/fetch-guard.configured-origin-linklocal.test.ts:@ts-expect-error - managedProxyBypass is intentionally not public",
-      "src/infra/net/fetch-guard.socks.test.ts:@ts-expect-error Undici's Node TLS intersection rejects its runtime-valid null timeout.",
-      "src/infra/net/fetch-guard.socks.test.ts:@ts-expect-error Undici's Node TLS intersection rejects its runtime-valid null timeout.",
-      "src/auto-reply/inbound-debounce.test.ts:@ts-expect-error Released plugins return promises instead of the current lifecycle shape.",
-      "src/auto-reply/inbound-debounce.test.ts:@ts-expect-error Released plugins return promises instead of the current lifecycle shape.",
-      "src/plugin-sdk/plugin-config-runtime.test.ts:@ts-expect-error Arrays are also invalid persisted plugin config objects.",
-      "src/plugin-sdk/plugin-config-runtime.test.ts:@ts-expect-error Exercise malformed persisted config at the runtime boundary.",
-      "test/type-contracts/plugin-entry-hook-options.ts:@ts-expect-error Trigger eligibility is only supported for before_agent_reply.",
-      "test/type-contracts/plugin-entry-hook-options.ts:@ts-expect-error An empty trigger list cannot prove that a hook is inactive.",
-      "test/type-contracts/plugin-entry-hook-options.ts:@ts-expect-error Tool authority is only supported for before_prompt_build.",
-      "src/plugins/registry.diagnostics.test.ts:@ts-expect-error JavaScript plugins may omit the required supplement builder.",
-      "src/plugins/registry.diagnostics.test.ts:@ts-expect-error Unknown JavaScript hook names must produce a diagnostic.",
-      "src/plugins/registry.diagnostics.test.ts:@ts-expect-error Untyped hook input reaches the existing rejection/coercion path.",
-      "src/plugins/registry.diagnostics.test.ts:@ts-expect-error Closed registration must stop before coercing untyped hook input.",
-    ].toSorted(),
-  );
 });

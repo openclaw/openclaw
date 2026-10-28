@@ -3,7 +3,6 @@ import {
   resolveApiKeyForProvider,
   resolveDefaultAgentDir,
 } from "openclaw/plugin-sdk/agent-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
@@ -25,8 +24,6 @@ import {
   DEFAULT_LIVE_VIDEO_MODELS,
   canRunBufferBackedImageToVideoLiveLane,
   canRunBufferBackedVideoToVideoLiveLane,
-  encodePngRgba,
-  fillPixel,
   normalizeVideoGenerationDuration,
   parseCsvFilter,
   parseProviderModelMap,
@@ -56,7 +53,11 @@ import openrouterPlugin from "./openrouter/index.js";
 import pixversePlugin from "./pixverse/index.js";
 import qwenPlugin from "./qwen/index.js";
 import runwayPlugin from "./runway/index.js";
-import { maybeLoadShellEnvForGenerationProviders } from "./test-support/generation-live-test-helpers.js";
+import {
+  createReferencePng,
+  maybeLoadShellEnvForGenerationProviders,
+  withPluginsEnabled,
+} from "./test-support/generation-live-test-helpers.js";
 import togetherPlugin from "./together/index.js";
 import vydraPlugin from "./vydra/index.js";
 import xaiPlugin from "./xai/index.js";
@@ -162,44 +163,13 @@ function readPositiveIntegerEnv(raw: string | undefined, fallback: number): numb
   return Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
-function withPluginsEnabled(cfg: OpenClawConfig): OpenClawConfig {
-  return {
-    ...cfg,
-    plugins: {
-      ...cfg.plugins,
-      enabled: true,
-    },
-  };
-}
-
 function createEditReferencePng(): Buffer {
-  const width = 384;
-  const height = 384;
-  const buf = Buffer.alloc(width * height * 4, 255);
-
-  for (let y = 0; y < height; y += 1) {
-    for (let x = 0; x < width; x += 1) {
-      fillPixel(buf, x, y, width, 238, 247, 255, 255);
+  return createReferencePng(384, 384, (x, y) => {
+    if (x >= 96 && x < 288 && y >= 96 && y < 288) {
+      return [255, 255, 255, 255];
     }
-  }
-
-  const outerInsetX = Math.max(1, Math.floor(width / 8));
-  const outerInsetY = Math.max(1, Math.floor(height / 8));
-  for (let y = outerInsetY; y < height - outerInsetY; y += 1) {
-    for (let x = outerInsetX; x < width - outerInsetX; x += 1) {
-      fillPixel(buf, x, y, width, 76, 154, 255, 255);
-    }
-  }
-
-  const innerInsetX = Math.max(1, Math.floor(width / 4));
-  const innerInsetY = Math.max(1, Math.floor(height / 4));
-  for (let y = innerInsetY; y < height - innerInsetY; y += 1) {
-    for (let x = innerInsetX; x < width - innerInsetX; x += 1) {
-      fillPixel(buf, x, y, width, 255, 255, 255, 255);
-    }
-  }
-
-  return encodePngRgba(buf, width, height);
+    return x >= 48 && x < 336 && y >= 48 && y < 336 ? [76, 154, 255, 255] : [238, 247, 255, 255];
+  });
 }
 
 function resolveProviderModelForLiveTest(providerId: string, modelRef: string): string {

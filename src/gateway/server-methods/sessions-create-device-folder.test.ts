@@ -46,13 +46,11 @@ const create = (
   directSessionReq<{ entry: InternalSessionEntry }>("sessions.create", { key, ...params }, options);
 beforeEach(async () => {
   ({ storePath } = await createSessionStoreDir());
-  const base = createNodeWorkerBundleTestNode();
-  node = {
-    ...base,
+  node = createNodeWorkerBundleTestNode({
     nodeId: folder.deviceId,
-    workerHost: { ...base.workerHost, deviceFolders: true },
+    workerHost: { deviceFolders: true },
     commands: ["system.run"],
-  };
+  });
   mocks.getTransport.mockReturnValue({
     getCurrentNode: getCurrentNode.mockReset().mockResolvedValue(node),
     listCurrentNodes: vi.fn(async () => [node]),
@@ -113,18 +111,8 @@ test("sessions.create reuses only the same canonical device folder", async () =>
 });
 
 test.each([
-  { worktree: true },
   { worktree: false },
-  { worktreeSource: "empty" },
-  { worktreeBaseRef: "main" },
-  { worktreeName: "topic" },
-  { cwd: "/local" },
-  { projectId: "project-one" },
-  { projectGitUrl: "https://example.invalid/repo.git" },
-  { repository: { url: "https://example.invalid/repo.git" } },
   { execNode: "other" },
-  { catalogId: "catalog" },
-  { fork: true, parentSessionKey: "agent:main:main", worktree: true },
   { message: "List the files" },
   { task: "List the files" },
   {

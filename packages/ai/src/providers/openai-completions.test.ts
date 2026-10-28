@@ -63,6 +63,7 @@ vi.mock("openai", () => {
 
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { makeUserMessage } from "../../../../test/helpers/user-message.js";
+import { collectEventTypes } from "../transports/openai-stream-cases.test-support.js";
 import { createZeroUsage } from "../usage.test-support.js";
 import {
   streamOpenAICompletions,
@@ -138,10 +139,7 @@ async function collect(
   options: OpenAICompletionsOptions = {},
 ) {
   const stream = request(requestModel, context, options);
-  const eventTypes: string[] = [];
-  for await (const event of stream) {
-    eventTypes.push(event.type);
-  }
+  const eventTypes = await collectEventTypes(stream);
   return { result: await stream.result(), eventTypes };
 }
 
@@ -358,18 +356,20 @@ describe("OpenAI-compatible completions params", () => {
     ).toEqual(["alpha_tool", "zeta_tool"]);
   });
 
-  it("uses Z.AI max_tokens and disables thinking by default", async () => {
+  it.each([false, true])("uses Z.AI max_tokens with explicit off mapping=%s", async (mappedOff) => {
     const stream = streamOpenAICompletions(
       {
         ...createModel(32_000),
         provider: "zai",
         baseUrl: "https://api.z.ai/api/paas/v4",
         reasoning: true,
+        thinkingLevelMap: mappedOff ? { off: "none" } : undefined,
       },
       context,
       {
         apiKey: "sk-test",
         maxTokens: 1_024,
+        ...(mappedOff ? { reasoningEffort: "off" as const } : {}),
       },
     );
 

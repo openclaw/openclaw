@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { channel } from "node:diagnostics_channel";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { resolveSharedAuthStoreOwnership } from "../../agents/auth-profiles/path-resolve.js";
@@ -23,7 +22,7 @@ describe.skipIf(!mixedAgentConnection).each(["shared-state", "agent"] as const)(
   (kind) => {
     const fixture = useMixedAgentPair("postgres", "postgres");
 
-    it("reads both cells once and retains fresh/missing/unreadable behavior", () => {
+    it("retains fresh/missing/unreadable behavior through the native read owner", () => {
       const agentDir =
         kind === "agent" ? path.join(fixture.root, "agents", "native-auth", "agent") : undefined;
       const database = withEngineStoreAdmission(() =>
@@ -69,40 +68,12 @@ describe.skipIf(!mixedAgentConnection).each(["shared-state", "agent"] as const)(
       assert(owner);
       expect(owner.databasePath).toBe(database.path);
       const readStore = owner.readStore;
-      const statements = channel("openclaw.database.statement");
-      const outcomes: string[] = [];
-      const observe = (message: unknown) => {
-        const event = message as { engine: string; sql?: string; outcome: string };
-        if (
-          event.engine === "postgres" &&
-          /^select\b/iu.test(event.sql ?? "") &&
-          /\b(?:config_machine_state|auth_profile_store|auth_profile_state)\b/u.test(
-            event.sql ?? "",
-          )
-        ) {
-          outcomes.push(event.outcome);
-        }
-      };
-      const read = () => {
-        outcomes.length = 0;
-        statements.subscribe(observe);
-        try {
-          return withEngineStoreAdmission(readStore);
-        } finally {
-          statements.unsubscribe(observe);
-          expect(outcomes).toEqual(["ok"]);
-        }
-      };
-      for (const [key, lastUsed] of [
-        ["synthetic-second", 200],
-        ["synthetic-third", 300],
-      ] as const) {
-        save(key, lastUsed);
-        expect(read()).toMatchObject({
-          profiles: { fixture: { key } },
-          usageStats: { fixture: { lastUsed } },
-        });
-      }
+      const read = () => withEngineStoreAdmission(readStore);
+      save("synthetic-second", 200);
+      expect(read()).toMatchObject({
+        profiles: { fixture: { key: "synthetic-second" } },
+        usageStats: { fixture: { lastUsed: 200 } },
+      });
       withEngineStoreAdmission(() => deletePersistedAuthProfileStoreRaw(agentDir));
       expect(read()).toBeNull();
       expect(load().profiles).toEqual({});

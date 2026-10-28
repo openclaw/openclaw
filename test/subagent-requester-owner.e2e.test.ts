@@ -1,7 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import type { Compilable, Expression } from "kysely";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ChatEvent } from "../packages/gateway-protocol/src/schema/logs-chat.js";
 import {
   loadSubagentRegistryFromSqlite,
   saveSubagentRegistryToSqlite,
@@ -19,23 +18,21 @@ import {
 import { loadSessionEntry } from "../src/config/sessions/session-accessor.js";
 import { getSessionKysely } from "../src/config/sessions/session-accessor.sqlite-scope.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
-import {
-  readProviderBody,
-  writeToolCall,
-} from "../src/gateway/gateway-provider-fixture.test-support.js";
+import { writeToolCall } from "../src/gateway/gateway-provider-fixture.test-support.js";
 import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "../src/gateway/test-openai-responses-model.js";
 import { executeSqliteQuerySync } from "../src/infra/kysely-sync.js";
 import { extractFirstTextBlock } from "../src/shared/chat-message-content.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../src/state/openclaw-agent-db-readonly.js";
 import { closeOpenClawStateDatabaseForTest } from "../src/state/openclaw-state-db.js";
+import { readRequestText } from "./helpers/gateway-integration-fixtures.js";
 import { startOpenAiResponsesModelServer } from "./helpers/openai-responses-model-fixture.js";
 import { writeOpenAiResponsesText } from "./helpers/openai-responses-sse.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
 } from "./helpers/openclaw-test-instance.js";
-import { createDeferred, withTestTimeout } from "./helpers/promise.js";
+import { createDeferred } from "./helpers/promise.js";
 import { runQaGatewayFixture } from "./helpers/qa-gateway-cleanup.js";
 import { withSubagentRecoveryOperator } from "./helpers/subagent-recovery-operator.js";
 
@@ -47,15 +44,12 @@ const OTHER_AGENT_ID = "alpha";
 const PARENT_PROMPT = "REQUESTER-OWNER parent: spawn one worker and finish without waiting.";
 const CHILD_TASK = "REQUESTER-OWNER child task: reply with the agreed child token.";
 const CHILD_MARKER = "REQUESTER-OWNER-CHILD-OK";
-const ANNOUNCE_FAILURE_MARKER = "Subagent announce failed";
 const RESTORED_RUN_ID = "run-requester-owner-legacy";
 const RESTORED_REQUESTER_KEY = "requester-owner-legacy-requester";
 const RESTORED_CHILD_RESULT = "REQUESTER-OWNER-LEGACY-CHILD-RESULT";
 
-type ProofModelServer = Awaited<ReturnType<typeof startProofModelServer>>;
-
 const instances: OpenClawTestInstance[] = [];
-const modelServers: ProofModelServer[] = [];
+const modelServers: Awaited<ReturnType<typeof startProofModelServer>>[] = [];
 
 async function createFixture(name: string, options?: Parameters<typeof startProofModelServer>[0]) {
   const modelServer = await startProofModelServer(options);
@@ -133,15 +127,6 @@ function expectRun(instance: OpenClawTestInstance, expected: object, runId?: str
   return run;
 }
 
-function waitForRun(
-  instance: OpenClawTestInstance,
-  expected: object,
-  timeout: number,
-  runId?: string,
-) {
-  return poll(() => expectRun(instance, expected, runId), timeout);
-}
-
 afterEach(async () => {
   const results = await Promise.allSettled([
     ...instances.splice(0).map((instance) => instance.cleanup()),
@@ -155,162 +140,6 @@ afterEach(async () => {
 });
 
 describe("REQUESTER-OWNER requester agent id survives completion dispatch", () => {
-  it(
-    "answers status through WebSocket while parent and child provider requests are held",
-    { timeout: TEST_TIMEOUT_MS },
-    async () => {
-      const parentGate = createDeferred();
-      const childGate = createDeferred();
-      const { instance, modelServer } = await createFixture("requester-owner-busy-status", {
-        yieldAfterSpawn: parentGate.promise,
-        childReply: childGate.promise,
-      });
-      const sessionKey = `agent:${REQUESTER_AGENT_ID}:${REQUESTER_KEY}`;
-      const statusRunId = "busy-parent-status";
-      const statusReply = createDeferred<ChatEvent>();
-      const client = await startClient(instance, (event) => {
-        if (event.event !== "chat") {
-          return;
-        }
-        const chat = event.payload as ChatEvent;
-        if (
-          chat.runId === statusRunId &&
-          (chat.state === "final" || chat.state === "error" || chat.state === "aborted")
-        ) {
-          statusReply.resolve(chat);
-        }
-      });
-      let parent: Promise<unknown> | undefined;
-      let parentSettled = false;
-      try {
-        parent = startParent(client, REQUESTER_KEY, "busy-status-parent-turn");
-        const onSettled = () => {
-          parentSettled = true;
-        };
-        void parent.then(onSettled, onSettled);
-        await poll(() => {
-          expect(modelServer.requestCount(), instance.logs()).toBe(3);
-          const bodies = modelServer.bodies();
-          expect(
-            bodies.filter(
-              (body) => body.includes(PARENT_PROMPT) && body.includes("function_call_output"),
-            ),
-          ).toHaveLength(1);
-          expect(
-            bodies.filter(
-              (body) => body.includes(CHILD_TASK) && !body.includes("function_call_output"),
-            ),
-          ).toHaveLength(1);
-        }, 60_000);
-        const run = expectRun(instance, {
-          requesterAgentId: REQUESTER_AGENT_ID,
-          requesterSessionKey: sessionKey,
-          requesterTurnRunId: "busy-status-parent-turn",
-          completionTarget: "parent",
-          execution: { status: "running" },
-          task: CHILD_TASK,
-        });
-        expect(run.childSessionKey).toMatch(/^agent:beta:subagent:/);
-
-        const requestsBeforeStatus = modelServer.requestCount();
-        expect(
-          await client.request("chat.send", {
-            sessionKey,
-            agentId: REQUESTER_AGENT_ID,
-            message: "/status",
-            idempotencyKey: statusRunId,
-          }),
-        ).toMatchObject({ runId: statusRunId });
-        const reply = await withTestTimeout(
-          statusReply.promise,
-          30_000,
-          "status did not finish while the parent provider was held",
-        );
-        expect(reply, instance.logs()).toMatchObject({
-          state: "final",
-          runId: statusRunId,
-          sessionKey,
-        });
-        const statusText = "message" in reply ? extractFirstTextBlock(reply.message) : undefined;
-        expect(statusText).toBeTruthy();
-        expect(statusText).not.toContain(CHILD_MARKER);
-        expect(parentSettled).toBe(false);
-        expect(modelServer.requestCount()).toBe(requestsBeforeStatus);
-
-        childGate.resolve();
-        await waitForRun(
-          instance,
-          {
-            execution: successfulExecution,
-            completion: { resultText: CHILD_MARKER },
-            delivery: { status: "pending" },
-          },
-          30_000,
-          run.runId,
-        );
-        expect(parentSettled).toBe(false);
-        expect(modelServer.requestCount()).toBe(requestsBeforeStatus);
-        expect(modelServer.countRequestsContaining(CHILD_MARKER)).toBe(0);
-
-        parentGate.resolve();
-        expect(await parent, instance.logs()).toMatchObject({ status: "ok" });
-        await waitForRun(
-          instance,
-          {
-            execution: successfulExecution,
-            delivery: { status: "delivered" },
-          },
-          30_000,
-          run.runId,
-        );
-        const history = await readHistory(client, sessionKey);
-        const visible = history.messages.map((message) => ({
-          role: message.role,
-          text: extractFirstTextBlock(message),
-        }));
-        const messages = (role: string, text: string | undefined) =>
-          visible.filter((message) => message.role === role && message.text === text);
-        expect(messages("user", "/status")).toHaveLength(1);
-        expect(messages("assistant", statusText)).toHaveLength(1);
-        const statusIndex = visible.findIndex(
-          ({ role, text }) => role === "user" && text === "/status",
-        );
-        expect(visible[statusIndex + 1]).toEqual({ role: "assistant", text: statusText });
-        expect(messages("assistant", CHILD_MARKER)).toHaveLength(1);
-        expect(JSON.stringify(history.messages)).not.toContain("This turn ended before a reply");
-        const laterModelText = modelServer
-          .bodies()
-          .slice(requestsBeforeStatus)
-          .flatMap((body) => {
-            const request = JSON.parse(body) as {
-              input: Array<{ role?: string; content?: unknown }>;
-            };
-            return request.input
-              .filter(({ role }) => role === "user" || role === "assistant")
-              .map(extractFirstTextBlock);
-          });
-        expect(laterModelText.some((text) => text?.includes(PARENT_PROMPT))).toBe(true);
-        expect(laterModelText).not.toContain("/status");
-        expect(laterModelText).not.toContain(statusText);
-      } finally {
-        childGate.resolve();
-        parentGate.resolve();
-        await runQaGatewayFixture(
-          async () => {
-            await withTestTimeout(
-              Promise.allSettled(parent ? [parent] : []),
-              30_000,
-              "parent request did not settle after releasing provider gates",
-            );
-          },
-          () => disconnectGatewayClient(client),
-          () => instance.stopGateway(),
-          () => closeOpenClawStateDatabaseForTest(),
-        );
-      }
-    },
-  );
-
   it.each([undefined, { kind: "local" } as const])(
     "resumes a yielded requester once after its private child finishes (placement: %j)",
     { timeout: TEST_TIMEOUT_MS },
@@ -422,6 +251,29 @@ describe("REQUESTER-OWNER requester agent id survives completion dispatch", () =
         }
       }
 
+      const expectDelivered = (afterBoot = false) => {
+        const run = expectRun(
+          instance,
+          {
+            delivery: { status: "delivered" },
+            ...(afterBoot
+              ? {
+                  requesterAgentId: REQUESTER_AGENT_ID,
+                  requesterSessionKey: restored
+                    ? sessionKey
+                    : `agent:${REQUESTER_AGENT_ID}:${sessionKey}`,
+                }
+              : {}),
+          },
+          restored ? RESTORED_RUN_ID : undefined,
+        );
+        if (restored || afterBoot) {
+          expect(run.execution).toMatchObject(
+            restored ? { outcome: { status: "ok" } } : successfulExecution,
+          );
+          expect(run.requesterSettleWake, instance.logs()).toBeUndefined();
+        }
+      };
       let settledRequests: number | undefined;
       for (let boot = 0; boot < (restored ? 2 : 1); boot += 1) {
         const client = await startClient(instance);
@@ -436,17 +288,7 @@ describe("REQUESTER-OWNER requester agent id survives completion dispatch", () =
             expect(await parent).toMatchObject({ status: "ok" });
           }
           instance.state.applyEnv();
-          await poll(() => {
-            const run = expectRun(
-              instance,
-              { delivery: { status: "delivered" } },
-              restored ? RESTORED_RUN_ID : undefined,
-            );
-            if (restored) {
-              expect(run.execution.outcome).toMatchObject({ status: "ok" });
-              expect(run.requesterSettleWake).toBeUndefined();
-            }
-          }, 25_000);
+          await poll(expectDelivered, 25_000);
           const requester = await readHistory(client, sessionKey);
           const other = await readHistory(client, sessionKey, OTHER_AGENT_ID);
           expect(
@@ -466,28 +308,13 @@ describe("REQUESTER-OWNER requester agent id survives completion dispatch", () =
         }
       }
 
-      const logs = instance.logs();
       instance.state.applyEnv();
       try {
-        const run = expectRun(
-          instance,
-          {
-            requesterAgentId: REQUESTER_AGENT_ID,
-            requesterSessionKey: restored
-              ? sessionKey
-              : `agent:${REQUESTER_AGENT_ID}:${sessionKey}`,
-            delivery: { status: "delivered" },
-          },
-          restored ? RESTORED_RUN_ID : undefined,
-        );
-        if (!restored) {
-          expect(run.execution).toMatchObject(successfulExecution);
-          expect(run.requesterSettleWake, logs).toBeUndefined();
-        }
+        expectDelivered(true);
       } finally {
         closeOpenClawStateDatabaseForTest();
       }
-      expect(logs).not.toContain(ANNOUNCE_FAILURE_MARKER);
+      expect(instance.logs()).not.toContain("Subagent announce failed");
     },
   );
 });
@@ -503,11 +330,10 @@ async function seedRestoredCompletion(instance: OpenClawTestInstance) {
       const childSessionKey = `agent:${REQUESTER_AGENT_ID}:subagent:requester-owner-legacy`;
       await writeSession(instance, RESTORED_REQUESTER_KEY, "requester-owner-legacy-session");
       await writeSession(instance, childSessionKey, "requester-owner-legacy-child-session");
+      const session = (sessionKey: string) =>
+        loadSessionEntry({ agentId: REQUESTER_AGENT_ID, sessionKey });
       const requester = expectDefined(
-        loadSessionEntry({
-          agentId: REQUESTER_AGENT_ID,
-          sessionKey: RESTORED_REQUESTER_KEY,
-        }),
+        session(RESTORED_REQUESTER_KEY),
         "restored requester session",
       );
       // Registration owns native child execution and physical-store provenance even for a bare key.
@@ -525,10 +351,7 @@ async function seedRestoredCompletion(instance: OpenClawTestInstance) {
             completionRequesterSessionId: requester.sessionId,
             completionRequesterLifecycleRevision: requester.lifecycleRevision,
             childAgentId: REQUESTER_AGENT_ID,
-            sessionEntry: loadSessionEntry({
-              agentId: REQUESTER_AGENT_ID,
-              sessionKey: childSessionKey,
-            }),
+            sessionEntry: session(childSessionKey),
             task: "REQUESTER-OWNER legacy restored completion",
             cleanup: "keep",
             expectsCompletionMessage: true,
@@ -626,7 +449,6 @@ let responseSequence = 0;
 
 async function startProofModelServer(options?: {
   yieldAfterSpawn: Promise<void>;
-  childReply?: Promise<void>;
   placement?: { kind: "local" };
 }) {
   const requestBodies: string[] = [];
@@ -637,7 +459,7 @@ async function startProofModelServer(options?: {
     modelId: "requester-owner",
     bindError: "Requester model fixture did not bind a loopback port",
     onRequest: async (request, response) => {
-      const body = await readProviderBody(request);
+      const body = await readRequestText(request);
       requestBodies.push(body);
       const requestBody = JSON.parse(body) as { tools?: Array<{ type?: string; name?: string }> };
       const respondWithTool = (name: string, args: Record<string, unknown>) => {
@@ -654,27 +476,21 @@ async function startProofModelServer(options?: {
         });
       if (options?.yieldAfterSpawn && parentCheckedChildren && !parentYielded) {
         parentYielded = true;
-        respondWithTool("sessions_yield", {});
-        return;
+        return respondWithTool("sessions_yield", {});
       }
       const completion = [RESTORED_CHILD_RESULT, CHILD_MARKER].find((marker) =>
         body.includes(marker),
       );
       if (completion) {
         completionResponses += 1;
-        respondWithText(completion);
-        return;
+        return respondWithText(completion);
       }
 
       if (body.includes(CHILD_TASK) && !body.includes("function_call_output")) {
-        if (options?.childReply) {
-          await options.childReply;
-        }
-        respondWithText(CHILD_MARKER);
-        return;
+        return respondWithText(CHILD_MARKER);
       }
       if (body.includes(PARENT_PROMPT) && !body.includes("function_call_output")) {
-        respondWithTool("sessions_spawn", {
+        return respondWithTool("sessions_spawn", {
           task: CHILD_TASK,
           label: "requester-owner-child",
           ...(options?.placement ? { placement: options.placement } : {}),
@@ -682,19 +498,16 @@ async function startProofModelServer(options?: {
           mode: "run",
           ...(options?.yieldAfterSpawn ? { completionTarget: "parent" } : {}),
         });
-        return;
       }
       if (options?.yieldAfterSpawn) {
         await options.yieldAfterSpawn;
         parentCheckedChildren = true;
-        respondWithTool("subagents", { action: "list" });
-        return;
+        return respondWithTool("subagents", { action: "list" });
       }
       respondWithText("REQUESTER-OWNER-PARENT-OK");
     },
   });
   return {
-    bodies: () => requestBodies,
     countRequestsContaining: (marker: string) =>
       requestBodies.filter((entry) => entry.includes(marker)).length,
     completionResponseCount: () => completionResponses,

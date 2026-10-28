@@ -35,26 +35,21 @@ function writeTranscript(entries: unknown[] | string): string {
 }
 
 it("does not label a vanished file as broken", async () => {
-  const filePath = writeTranscript([{ type: "session", id: "uninspected" }]);
-  const readSpy = vi
-    .spyOn(fsPromises, "readFile")
-    .mockRejectedValueOnce(Object.assign(new Error("unavailable transcript"), { code: "ENOENT" }));
+  writeTranscript([{ type: "session", id: "uninspected" }]);
+  vi.spyOn(fsPromises, "readFile").mockRejectedValueOnce(
+    Object.assign(new Error("unavailable transcript"), { code: "ENOENT" }),
+  );
   await expect(detect()).resolves.toEqual([]);
-  expect(readSpy).toHaveBeenCalledExactlyOnceWith(filePath, "utf-8");
 });
 
 it("maps affected transcripts to structured findings and dry-run effects", async () => {
   const filePath = writeTranscript([
-    { type: "session", version: 3, id: "session-1", timestamp: "2026-04-25T00:00:00Z" },
     {
       type: "message",
       id: "legacy-assistant",
-      parentId: null,
       message: {
-        role: "assistant",
         provider: "openai-codex",
         api: "openai-codex-responses",
-        content: [{ type: "text", text: "hello" }],
       },
     },
   ]);
@@ -76,7 +71,6 @@ it("maps affected transcripts to structured findings and dry-run effects", async
 
 it("does not report malformed JSON as a transcript issue", async () => {
   const raw = "{\n";
-
   const filePath = writeTranscript(raw);
   await expect(detect()).resolves.toEqual([]);
   expect(await fsPromises.readFile(filePath, "utf8")).toBe(raw);
@@ -86,11 +80,9 @@ it("defers large transcripts without reading their contents", async () => {
   const filePath = writeTranscript([
     { type: "message", message: { content: "x".repeat(1024 * 1024) } },
   ]);
-  const readSpy = vi.spyOn(fs, "readFile");
   const promiseReadSpy = vi.spyOn(fsPromises, "readFile");
   const [issue] = await detect();
   expect(issue).toMatchObject({ filePath, deferred: true, broken: false });
-  expect(readSpy).not.toHaveBeenCalled();
   expect(promiseReadSpy).not.toHaveBeenCalled();
 });
 

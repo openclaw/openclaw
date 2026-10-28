@@ -114,25 +114,17 @@ describe("exec approvals policy helpers", () => {
     });
   });
 
-  it("treats unavailable request decisions as optional approvals only", () => {
-    expect(
-      execApprovals.normalizeExecApprovalUnavailableDecisions([
-        "allow-once",
-        "deny",
-        "allow-always",
-        "bad",
-      ]),
-    ).toEqual(["allow-always"]);
-    for (const [ask, unavailableDecisions] of [
-      ["on-miss", ["allow-always"]],
-      ["on-miss", ["allow-once", "deny", "allow-always", "bad"]],
-      ["always", ["allow-always"]],
-    ] as const) {
+  it.each([
+    ["on-miss", ["allow-once", "deny", "allow-always", "bad"]],
+    ["always", ["allow-always"]],
+  ] as const)(
+    "treats unavailable request decisions as optional approvals only (%s)",
+    (ask, unavailableDecisions) => {
       expect(
         execApprovals.resolveExecApprovalRequestAllowedDecisions({ ask, unavailableDecisions }),
       ).toEqual(["allow-once", "deny"]);
-    }
-  });
+    },
+  );
 
   it("derives unavailable optional decisions from effective approval policy", () => {
     expect(execApprovals.resolveExecApprovalUnavailableDecisions({ ask: "on-miss" })).toEqual([]);

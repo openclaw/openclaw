@@ -1,6 +1,7 @@
-import { EventEmitter, once } from "node:events";
-import { createServer, type Server, type Socket } from "node:net";
+import { EventEmitter } from "node:events";
+import { createServer, type Socket } from "node:net";
 import { authenticate } from "mailauth";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenClawPluginServiceContextV2 } from "openclaw/plugin-sdk/plugin-entry";
 import {
   createGatewaySchedulerClock,
@@ -9,6 +10,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-api";
 import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import { afterEach, vi } from "vitest";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import { resolveImapConfig, type ImapAccountConfig } from "./config.js";
 import { createImapAuthResult, createImapTestRuntime } from "./imap-test-support.js";
 import type { ImapCursor } from "./state.js";
@@ -19,7 +21,7 @@ vi.mock("mailauth", async (importOriginal) => {
   return { ...actual, authenticate: vi.fn(actual.authenticate) };
 });
 
-type MailFixture = { uid: number; raw: string; reportedSize?: number };
+type MailFixture = { uid: number; raw: string; reportedSize?: number; internalDate?: Date };
 
 export class ScriptedImapServer {
   readonly sockets = new Set<Socket>();
@@ -34,24 +36,12 @@ export class ScriptedImapServer {
   sequenceUidOverride: number | undefined;
   fetchGate: Promise<void> | undefined;
   fetchedBodies = 0;
-  private readonly server: Server;
+  private readonly server = createServer((socket) => this.accept(socket));
   private readonly commandEvents = new EventEmitter();
 
-  constructor(private readonly supportsIdle = true) {
-    this.server = createServer((socket) => {
-      this.accept(socket);
-    });
-  }
+  constructor(private readonly supportsIdle = true) {}
 
-  async listen(): Promise<number> {
-    this.server.listen(0, "127.0.0.1");
-    await once(this.server, "listening");
-    const address = this.server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("scripted IMAP server did not bind a TCP port");
-    }
-    return address.port;
-  }
+  listen = () => listenOnLoopback(this.server);
 
   async waitForCommand(match: (command: string) => boolean): Promise<string> {
     const command = this.commands.find(match);
@@ -165,7 +155,7 @@ export class ScriptedImapServer {
               if (wantsBody && mail.uid > 1) {
                 this.fetchedBodies++;
               }
-              const date = new Date()
+              const date = (mail.internalDate ?? new Date())
                 .toUTCString()
                 .slice(5)
                 .replace(/ /u, "-")
@@ -229,11 +219,7 @@ export async function startWatcher(
   server.rejectAuthentication = options.rejectAuthentication ?? false;
   server.omitUidNext = options.omitUidNext ?? false;
   activeServers.push(server);
-  server.messages.push(
-    ...(options.messages ?? [
-      { uid: 1, raw: "From: trusted@example.com\r\nSubject: Existing\r\n\r\nExisting email" },
-    ]),
-  );
+  server.messages.push(...(options.messages ?? existingMail([1])));
   options.configureServer?.(server);
   const port = await server.listen();
   const account = resolveImapConfig({
@@ -270,14 +256,8 @@ export async function startWatcher(
     withTimeout(waitForAccountCursor("inbox", { uidValidity, lastSeenUid }), timeoutMs, {
       message: `IMAP inbox cursor did not reach UIDVALIDITY ${uidValidity}, UID ${lastSeenUid}`,
     });
-  let resolveStartup!: () => void;
-  const startup = new Promise<void>((resolve) => {
-    resolveStartup = resolve;
-  });
-  let resolveFailure!: (error: unknown) => void;
-  const connectionFailure = new Promise<unknown>((resolve) => {
-    resolveFailure = resolve;
-  });
+  const { promise: startup, resolve: resolveStartup } = createDeferred<void>();
+  const { promise: connectionFailure, resolve: resolveFailure } = createDeferred<unknown>();
   const context: OpenClawPluginServiceContextV2 = {
     scheduler: createTestPluginServiceScheduler(
       options.clock ? createTestGatewayScheduler(options.clock.clock) : undefined,
@@ -325,7 +305,7 @@ export async function startWatcher(
     state,
     context,
     authenticator,
-    dispatchHookAgentTurn,
+    dispatch: dispatchHookAgentTurn,
     waitForCursor,
     startup,
     connectionFailure,

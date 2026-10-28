@@ -1,8 +1,10 @@
 import type { ProgressCard, ProgressCardStep, SessionRunStatus } from "@openclaw/gateway-protocol";
-import { createMemo, createSignal, For, Show, useContext, type Accessor } from "solid-js";
+import { createMemo, For, Show, useContext, type Accessor } from "solid-js";
+import { formatUiExternalText } from "../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import { createInterval } from "../lib/reactive/timers.ts";
+import { readVisibleTime } from "../lib/reactive/visible-clock.ts";
+import type { SessionProgressCardRuntime } from "../lib/session-progress-runtime.ts";
 import { ContentPresentation } from "../lib/solid/presentation.ts";
 import {
   progressCardPresentation,
@@ -19,15 +21,11 @@ export function CardActivity(props: {
   hideTooltip?: boolean;
 }) {
   const presented = useContext(ContentPresentation);
-  const [revision, setRevision] = createSignal(0);
-  createInterval(
-    () => setRevision((value) => value + 1),
-    () => (presented() ? 30_000 : undefined),
-  );
   const timestamp = () => props.view().activityTimestamp;
   const label = createMemo(() => {
-    revision();
-    presented();
+    if (presented()) {
+      readVisibleTime(30_000);
+    }
     return t(props.view().activityKey, { time: formatRelativeTimestamp(timestamp()) });
   });
   const count = () => {
@@ -140,5 +138,86 @@ function Step(props: {
       </span>
       <span class="session-progress-card__step-text">{props.step.step}</span>
     </li>
+  );
+}
+
+export function ProgressRuntime(props: {
+  runtime?: SessionProgressCardRuntime;
+  hasActiveRun?: boolean;
+  sessionStatus?: SessionRunStatus;
+  terminalOutcome?: "failed" | "stopped";
+}) {
+  const unavailable = () => props.runtime?.connected === false || props.runtime?.known === false;
+  const label = createMemo(() => {
+    const runtime = props.runtime;
+    if (!runtime) {
+      return "";
+    }
+    if (runtime.connected === false) {
+      return t("sessionProgressCard.runtime.offline");
+    }
+    if (runtime.known === false) {
+      return t("sessionProgressCard.runtime.unknown");
+    }
+    const parts = runtime.children
+      ? (["running", "queued", "waiting", "failed", "stopped"] as const).flatMap((state) =>
+          runtime.children?.[state]
+            ? [
+                t(`sessionProgressCard.runtime.${state}`, {
+                  count: String(runtime.children[state]),
+                }),
+              ]
+            : [],
+        )
+      : [];
+    if (parts.length) {
+      return [
+        props.terminalOutcome ? t(`sessionProgressCard.outcome.${props.terminalOutcome}`) : "",
+        t("sessionProgressCard.runtime.children", { activity: parts.join(" · ") }),
+      ]
+        .filter(Boolean)
+        .join(" · ");
+    }
+    if (runtime.hasActiveSubagentRun) {
+      return t("sessionProgressCard.runtime.delegated");
+    }
+    if (props.terminalOutcome) {
+      return t(`sessionProgressCard.outcome.${props.terminalOutcome}`);
+    }
+    if (props.sessionStatus === "queued") {
+      return t("sessionProgressCard.runtime.queuedSelf");
+    }
+    return t(
+      props.hasActiveRun && props.sessionStatus !== "done"
+        ? "sessionProgressCard.runtime.working"
+        : "sessionProgressCard.runtime.idle",
+    );
+  });
+  const detail = () =>
+    unavailable()
+      ? ""
+      : formatUiExternalText(
+          props.terminalOutcome === "failed"
+            ? props.runtime?.lastRunError
+            : props.runtime?.children?.failed
+              ? props.runtime.childError
+              : undefined,
+        ).slice(0, 240);
+  return (
+    <Show when={props.runtime}>
+      <span
+        class="session-progress-card__runtime"
+        role="status"
+        data-error={String(
+          !unavailable() &&
+            (props.terminalOutcome === "failed" || Boolean(props.runtime?.children?.failed)),
+        )}
+      >
+        <span>{label()}</span>
+        <Show when={detail()}>
+          {(value) => <span class="session-progress-card__runtime-detail">{value()}</span>}
+        </Show>
+      </span>
+    </Show>
   );
 }

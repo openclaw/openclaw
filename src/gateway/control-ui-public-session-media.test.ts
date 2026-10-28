@@ -151,11 +151,11 @@ describe("public session media", () => {
       resolveWidgetToken.mockResolvedValue({ locator, docId: document.id });
       const query = "widget=v1.widget";
       expect((await request({ query })).res.statusCode).toBe(404);
-      await createCanvasDocument({
-        id: document.id,
+      const marked = await createCanvasDocument({
         html: "<p>Private chart</p>",
         cspSandbox: "scripts",
       });
+      resolveWidgetToken.mockResolvedValue({ locator, docId: marked.id });
       readWidget.mockResolvedValue(false);
       expect((await request({ query })).res.statusCode).toBe(404);
       readWidget.mockResolvedValue(true);

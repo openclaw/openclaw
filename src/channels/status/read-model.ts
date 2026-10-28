@@ -1,16 +1,11 @@
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import {
   CREDENTIAL_STATUS_KEYS,
   hasConfiguredUnavailableCredentialStatus,
 } from "../account-snapshot-fields.js";
 import type { ChannelAccountSnapshot } from "../plugins/types.public.js";
-
-export type RuntimeChannelStatusPayload = {
-  channelAccounts?: unknown;
-};
 
 type RuntimeChannelAccount = Record<string, unknown>;
 
@@ -85,38 +80,4 @@ export function markConfiguredUnavailableCredentialStatusesAvailable(
     }
   }
   return record;
-}
-
-/** Merges local and runtime accounts into display rows with source metadata. */
-export async function resolveChannelAccountStatusRows(params: {
-  localAccountIds: string[];
-  runtimeAccounts: ChannelAccountSnapshot[];
-  resolveLocalSnapshot: (accountId: string) => Promise<ChannelAccountSnapshot>;
-}): Promise<
-  Array<{
-    accountId: string;
-    snapshot: ChannelAccountSnapshot;
-    source: "gateway" | "config";
-  }>
-> {
-  const mergedAccountIds = uniqueStrings([
-    ...params.localAccountIds,
-    ...params.runtimeAccounts.map((account) => account.accountId),
-  ]);
-  const rows: Array<{
-    accountId: string;
-    snapshot: ChannelAccountSnapshot;
-    source: "gateway" | "config";
-  }> = [];
-  for (const accountId of mergedAccountIds) {
-    const runtimeSnapshot = params.runtimeAccounts.find(
-      (account) => account.accountId === accountId,
-    );
-    rows.push({
-      accountId,
-      snapshot: runtimeSnapshot ?? (await params.resolveLocalSnapshot(accountId)),
-      source: runtimeSnapshot ? "gateway" : "config",
-    });
-  }
-  return rows;
 }

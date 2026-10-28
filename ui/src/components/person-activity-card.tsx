@@ -1,3 +1,4 @@
+import "../styles/person-activity-card.css";
 import { render, spread } from "@solidjs/web";
 import { createMemo, createSignal, Errored, For, Loading, runWithOwner, Show } from "solid-js";
 import type { GatewaySessionRow } from "../api/types.ts";

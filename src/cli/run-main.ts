@@ -986,10 +986,9 @@ async function runCliWithPreparedOutputMode(
       return;
     }
     unregisterProxySignalExitBarrier = registerSignalExitBarrier(stopStartedProxy);
-    const shutdown = (exitCode: number) => exitAfterSignalExitBarriers(exitCode);
     proxySignalHandlers = [
-      ["SIGTERM", () => shutdown(143)],
-      ["SIGINT", () => shutdown(130)],
+      ["SIGTERM", () => exitAfterSignalExitBarriers(143, "SIGTERM")],
+      ["SIGINT", () => exitAfterSignalExitBarriers(130, "SIGINT")],
       ["exit", killStartedProxy],
     ];
     for (const [signal, handler] of proxySignalHandlers) {
@@ -1220,23 +1219,13 @@ async function runCliWithPreparedOutputMode(
     try {
       const [
         { buildProgram },
-        { formatUncaughtError },
-        { formatCliFailureLines, formatCliJsonFailure },
-        { runFatalErrorHooks },
-        {
-          installUnhandledRejectionHandler,
-          isBenignUncaughtExceptionError,
-          isUncaughtExceptionHandled,
-        },
-        { defaultRuntime, restoreRuntimeTerminalState },
+        { handleCliUncaughtException },
+        { installUnhandledRejectionHandler },
       ] = await startupTrace.measure("core-imports", () =>
         Promise.all([
           import("./program/build-program.js"),
-          import("../infra/errors.js"),
           import("./failure-output.js"),
-          import("../infra/fatal-error-hooks.js"),
           import("../infra/unhandled-rejections.js"),
-          import("../runtime.js"),
         ]),
       );
       const program = await startupTrace.measure("build-program", () =>
@@ -1249,31 +1238,7 @@ async function runCliWithPreparedOutputMode(
       }
 
       process.on("uncaughtException", (error) => {
-        if (isUncaughtExceptionHandled(error)) {
-          return;
-        }
-        if (isBenignUncaughtExceptionError(error)) {
-          console.warn(
-            "[openclaw] Non-fatal uncaught exception (continuing):",
-            formatUncaughtError(error),
-          );
-          return;
-        }
-        if (isJsonOutputModeActive(normalizedArgv)) {
-          defaultRuntime.writeJson(formatCliJsonFailure(error));
-        }
-        for (const line of formatCliFailureLines({
-          title: "OpenClaw hit an unexpected runtime error.",
-          error,
-          argv: normalizedArgv,
-        })) {
-          console.error(line);
-        }
-        for (const message of runFatalErrorHooks({ reason: "uncaught_exception", error })) {
-          console.error("[openclaw]", message);
-        }
-        restoreRuntimeTerminalState("uncaught exception");
-        exitAfterSignalExitBarriers(1, "uncaught exception");
+        handleCliUncaughtException(error, normalizedArgv);
       });
 
       const invocation = resolveCliArgvInvocation(parseArgv);

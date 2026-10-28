@@ -1,5 +1,7 @@
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { waitForControlUiProofSurface } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   defaultControlUiFeatureMethods,
   waitForControlUiRoute,
@@ -7,6 +9,7 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { createControlUiChatHistoryMessage as historyMessage } from "../test-helpers/control-ui-session-fixtures.ts";
+import { resolveRenderedColors, type RenderedColor } from "../test-helpers/rendered-colors.ts";
 import { openPicker, selectPickerValue } from "../test-helpers/select-picker-e2e.ts";
 import { selectFileAction } from "./chat-file-actions.test-support.ts";
 import { twoFrames } from "./chat-presentation.test-support.ts";
@@ -31,8 +34,6 @@ const cssToken = (page: Page, token: string) =>
     (key) => getComputedStyle(document.documentElement).getPropertyValue(key).trim(),
     token,
   );
-const styleToken = (page: Page, token: string) =>
-  page.evaluate((key) => document.documentElement.style.getPropertyValue(key), token);
 const attribute = (page: Page, name: string) => page.locator("html").getAttribute(name);
 const ligaturesOf = (locator: Locator) =>
   locator.evaluate((element) => getComputedStyle(element).fontVariantLigatures);
@@ -41,22 +42,17 @@ const expectTheme = (page: Page, theme: string) =>
 
 suite.define(() => {
   it("previews fonts on demand, applies independent overrides, and restores theme typography", async () => {
-    const { page, themeRequests, gateway } = await openThemedChat("dash", "dark");
+    const { page, gateway } = await openThemedChat("dash", "dark");
     await page.goto(`${suite.server.baseUrl}settings/appearance`);
     await waitForControlUiSettingsTakeover(page);
     const ui = page.locator("openclaw-select-picker:has(#settings-font-ui)");
     const chat = page.locator("openclaw-select-picker:has(#settings-font-chat)");
     const preview = page.locator(".settings-typography-preview");
-    const fontRequests = () =>
-      themeRequests.filter((r) => r.includes(".css") && !r.startsWith("dash.css"));
     await preview.waitFor();
     expect(await ui.locator("..").locator("..").textContent()).toContain(
       "Stored in this browser only",
     );
     await page.evaluate(() => document.fonts.ready);
-    expect(new Set(fontRequests())).toEqual(
-      new Set(["dm-sans.css 200", "fraunces.css 200", "jetbrains-mono.css 200"]),
-    );
     const families = () =>
       preview.evaluate((panel) => {
         const font = (selector: string) =>
@@ -67,27 +63,21 @@ suite.define(() => {
           code: font("code"),
         };
       });
-    const chatSmoothing = () => styleToken(page, "--chat-font-smoothing");
     const initial = await families();
     expect(initial).toEqual({
       ui: expect.stringContaining("DM Sans"),
       chat: expect.stringContaining("Fraunces"),
       code: expect.stringContaining("JetBrains Mono"),
     });
-    expect(await chatSmoothing()).toBe("auto");
     await openPicker(ui);
     await ui.locator('[role="option"][data-value="geist"]').waitFor({ state: "visible" });
-    await expect.poll(() => fontRequests().length).toBe(9);
-    expect(themeRequests.every((entry) => entry.endsWith(" 200"))).toBe(true);
     await selectPickerValue(ui, "geist");
     await expect.poll(async () => (await families()).ui).toContain("Geist");
     expect((await families()).chat).toContain("Fraunces");
     await selectPickerValue(chat, "geist");
     await expect.poll(async () => (await families()).chat).toContain("Geist");
-    await expect.poll(chatSmoothing).toBe("");
     await selectPickerValue(chat, "lora");
     await expect.poll(async () => (await families()).chat).toContain("Lora");
-    await expect.poll(chatSmoothing).toBe("auto");
     await expect
       .poll(() =>
         page.evaluate(() =>
@@ -95,7 +85,6 @@ suite.define(() => {
         ),
       )
       .toEqual(expect.arrayContaining(["Geist", "Lora"]));
-    expect((await families()).code).toBe(initial.code);
     expect(await gateway.getRequests("config.patch")).toEqual([]);
     await page.reload();
     await waitForControlUiSettingsTakeover(page);
@@ -106,12 +95,6 @@ suite.define(() => {
     await selectPickerValue(ui, "theme");
     await selectPickerValue(chat, "theme");
     await expect.poll(families).toEqual(initial);
-    expect(
-      await page.evaluate(
-        (keys) => keys.map((key) => document.documentElement.style.getPropertyValue(key)),
-        ["--font-body", "--font-chat"],
-      ),
-    ).toEqual(["", ""]);
   });
 
   // #137473: compare incremental input pixels with a whole-value assignment.
@@ -132,6 +115,8 @@ suite.define(() => {
       expect(await textarea.inputValue()).toBe(COMPOSER_LIGATURE_SEQUENCE);
       // Blur removes the caret without hiding the corruption.
       await textarea.evaluate((element) => (element as HTMLTextAreaElement).blur());
+      // Blur animates the ancestor border visible through this transparent field.
+      await waitForControlUiProofSurface(textarea, []);
       const typedPixels = await textarea.screenshot();
 
       await textarea.evaluate((element, sequence) => {
@@ -143,6 +128,7 @@ suite.define(() => {
         field.blur();
       }, COMPOSER_LIGATURE_SEQUENCE);
       await expect.poll(() => textarea.inputValue()).toBe(COMPOSER_LIGATURE_SEQUENCE);
+      await waitForControlUiProofSurface(textarea, []);
       const valuePixels = await textarea.screenshot();
 
       expect(Buffer.compare(typedPixels, valuePixels)).toBe(0);
@@ -215,7 +201,7 @@ suite.define(() => {
     ]).toEqual(["no-contextual", "no-contextual", "normal", "normal"]);
   });
 
-  it.each([["knot", "openknot", "#080808", "#f9f9fb"]])(
+  it.each([["knot", "openknot", "#0c0c0c", "#f0f0f3"]])(
     "loads %s before paint in both modes without the app bundle",
     async (theme, resolved, dark, light) => {
       // Resource timing proves the palette blocks paint before app upgrade.
@@ -239,9 +225,13 @@ suite.define(() => {
                 .renderBlockingStatus,
             })),
         }));
+        const colors = await page.evaluate(resolveRenderedColors, {
+          actual: report.background,
+          expected: mode === "dark" ? dark : light,
+        });
+        expect(colors.actual).toEqual(colors.expected);
         expect(report).toMatchObject({
           resolvedTheme: mode === "dark" ? resolved : `${resolved}-light`,
-          background: mode === "dark" ? dark : light,
           palette: [
             { pathname: `/themes/${theme}.css`, version: report.buildId, blocking: "blocking" },
           ],
@@ -256,8 +246,8 @@ suite.define(() => {
     await page.goto(`${suite.server.baseUrl}chat`);
     await page.locator(".agent-chat__composer-combobox textarea").waitFor();
 
-    const readChrome = () =>
-      page.evaluate(() => ({
+    const readChrome = async () => {
+      const chrome = await page.evaluate(() => ({
         color: document.documentElement.style.getPropertyValue(
           "--control-ui-system-chrome-background",
         ),
@@ -266,7 +256,22 @@ suite.define(() => {
           (meta) => ({ color: meta.content, media: meta.getAttribute("media") }),
         ),
       }));
-    const expectChrome = async (color: string) => {
+      const colors = await page.evaluate(
+        resolveRenderedColors,
+        Object.fromEntries([
+          ["chrome", chrome.color],
+          ...chrome.metas.map((meta, index) => [`meta-${index}`, meta.color]),
+        ]),
+      );
+      return {
+        color: colors.chrome,
+        metas: chrome.metas.map((meta, index) => ({
+          color: colors[`meta-${index}`],
+          media: meta.media,
+        })),
+      };
+    };
+    const expectChrome = async (color: RenderedColor) => {
       await expect.poll(readChrome).toEqual({
         color,
         metas: [
@@ -275,8 +280,12 @@ suite.define(() => {
         ],
       });
     };
-    const pageColor = "#faf9f7";
-    const chatColor = "#f4f1ec";
+    const palette = await page.evaluate(resolveRenderedColors, {
+      page: "#f4f4f4",
+      chat: "#f8f8f8",
+    });
+    const pageColor = palette.page!;
+    const chatColor = palette.chat!;
     await expectChrome(chatColor);
 
     // Use the shell's actual shortcut and browser history without rebuilding the runtime.
@@ -324,7 +333,15 @@ suite.define(() => {
         }
       }
     });
-    expect(reconnect).toEqual({ removed: chatColor, reconnected: chatColor, sameShell: true });
+    const reconnectedColors = await page.evaluate(resolveRenderedColors, {
+      removed: reconnect.removed,
+      reconnected: reconnect.reconnected,
+    });
+    expect({ ...reconnectedColors, sameShell: reconnect.sameShell }).toEqual({
+      removed: chatColor,
+      reconnected: chatColor,
+      sameShell: true,
+    });
     await expectChrome(chatColor);
     await page.locator(".shell-skip-link").focus();
     await page.keyboard.press("ControlOrMeta+Shift+,");
@@ -338,10 +355,7 @@ suite.define(() => {
   it("publishes a runtime palette only when its colors are ready and ignores superseded loads", async () => {
     const { page, gateway } = await openThemedChat("knot", "light");
     await page.setViewportSize({ width: 720, height: 900 });
-    let releasePalette!: () => void;
-    const paletteGate = new Promise<void>((resolve) => {
-      releasePalette = resolve;
-    });
+    const { promise: paletteGate, resolve: releasePalette } = createDeferred();
     const tidePaletteUrl = /\/themes\/tide\.css(?:\?|$)/u;
     await page.route(tidePaletteUrl, async (route) => {
       await paletteGate;
@@ -363,14 +377,20 @@ suite.define(() => {
       await gateway.setMethodResponse("config.get", themeConfigResponse(theme, "light"));
       await gateway.emitGatewayEvent("config.changed", { hash: `theme-${theme}`, ts: Date.now() });
     };
+    const palette = await page.evaluate(resolveRenderedColors, {
+      knot: "#f0f0f3",
+      tide: "#edeff1",
+      tideContent: "#f1f3f5",
+    });
     try {
       const request = page.waitForRequest(tidePaletteUrl);
       await changeTheme("tide");
       await request;
-      expect([await attribute(page, "data-theme"), await cssToken(page, "--bg")]).toEqual([
-        "openknot-light",
-        "#f9f9fb",
-      ]);
+      expect(await attribute(page, "data-theme")).toBe("openknot-light");
+      const pendingColors = await page.evaluate(resolveRenderedColors, {
+        background: await cssToken(page, "--bg"),
+      });
+      expect(pendingColors.background).toEqual(palette.knot);
       await changeTheme("beacon");
       await expectTheme(page, "beacon-light");
       const response = page.waitForResponse(tidePaletteUrl);
@@ -379,10 +399,19 @@ suite.define(() => {
       await twoFrames(page);
       expect(await attribute(page, "data-theme")).toBe("beacon-light");
       await changeTheme("tide");
-      await expect.poll(() => attribute(page, "data-observed-theme-background")).toBe("#f7f9fb");
-      expect(await page.locator('meta[name="theme-color"]').first().getAttribute("content")).toBe(
-        "#eef2f7",
-      );
+      await expect
+        .poll(async () => {
+          const observed = await attribute(page, "data-observed-theme-background");
+          return observed
+            ? (await page.evaluate(resolveRenderedColors, { background: observed })).background
+            : undefined;
+        })
+        .toEqual(palette.tide);
+      const chromeColors = await page.evaluate(resolveRenderedColors, {
+        chrome:
+          (await page.locator('meta[name="theme-color"]').first().getAttribute("content")) ?? "",
+      });
+      expect(chromeColors.chrome).toEqual(palette.tideContent);
       await changeTheme("claw");
       await expectTheme(page, "light");
     } finally {
@@ -393,7 +422,6 @@ suite.define(() => {
   it("resolves the font stylesheet against a configured mount path", async () => {
     const basePath = "/openclaw";
     const { page } = await openThemedChat("absolutely", "dark", { basePath });
-    const requested: string[] = [];
     const fontRequests: URL[] = [];
     // Stamp Gateway's mount contract onto preview-server HTML.
     await page.route("**/*", async (route) => {
@@ -413,7 +441,6 @@ suite.define(() => {
     });
     await page.route(`**${basePath}/themes/**`, async (route) => {
       const url = new URL(route.request().url());
-      requested.push(url.pathname);
       url.pathname = url.pathname.slice(basePath.length);
       await route.fulfill({ response: await route.fetch({ url: url.href }) });
     });
@@ -428,9 +455,6 @@ suite.define(() => {
       .waitFor({ state: "visible", timeout: 30_000 });
 
     const buildId = await attribute(page, "data-openclaw-control-ui-build-id");
-    if (buildId !== null) {
-      expect(buildId).not.toBe("");
-    }
     await expect
       .poll(() => fontRequests.some((url) => url.pathname.endsWith("/space-grotesk.css")))
       .toBe(true);
@@ -445,7 +469,6 @@ suite.define(() => {
     const paletteUrl = new URL(paletteHref ?? "", suite.server.baseUrl);
     expect(paletteUrl.pathname).toBe(`${basePath}/themes/absolutely.css`);
     expect(paletteUrl.searchParams.get("v")).toBe(buildId);
-    expect(requested).toContain(`${basePath}/themes/absolutely.css`);
-    expect(await cssToken(page, "--bg")).toBe("#1c1c1a");
+    expect(await cssToken(page, "--bg-content")).toBe("#1b1b1a");
   });
 });

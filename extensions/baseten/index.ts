@@ -12,6 +12,7 @@ import {
   streamWithPayloadPatch,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { buildBasetenDecisionProvider } from "./decision-provider.js";
 import {
   BASETEN_BASE_URL,
   projectBasetenLiveModels,
@@ -118,6 +119,9 @@ export default defineSingleProviderPluginEntry({
   name: "Baseten Provider",
   description: "Official Baseten Model APIs provider plugin",
   manifest,
+  register(api) {
+    api.registerDecisionProvider(buildBasetenDecisionProvider());
+  },
   provider: {
     label: "Baseten",
     docsPath: "/providers/baseten",

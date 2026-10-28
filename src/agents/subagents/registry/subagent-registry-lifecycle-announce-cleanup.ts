@@ -1,3 +1,4 @@
+import { materializeErrorStack } from "../../../infra/error-graph-internal.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
 import { isSystemEventStoreCurrent } from "../../../infra/system-event-ownership.js";
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
@@ -175,7 +176,7 @@ export const startSubagentAnnounceCleanupFlow = (
     return false;
   }
   const { cleanupGeneration, stateContext } = attempt;
-  const runCleanup = (run: () => Promise<void>) =>
+  const runCleanup = (run: (releasePreparation: () => void) => Promise<void>) =>
     runDetachedCleanupAttempt(context, entry, attempt, run);
   const assertPersistenceCurrent = () => {
     assertSubagentRegistryWriteSourceCurrent(stateContext);
@@ -547,7 +548,7 @@ export const startSubagentAnnounceCleanupFlow = (
     // fails closed instead of widening authority to another live Gateway.
     resolveGatewayContext: getGatewayContextResolver(entry),
   };
-  runCleanup(async () => {
+  runCleanup(async (releasePreparation) => {
     assertCurrent();
     let announceOutcome: SubagentAnnounceFlowOutcome = "retryable";
     const deadline = new AbortController();
@@ -559,14 +560,18 @@ export const startSubagentAnnounceCleanupFlow = (
         ? ANNOUNCE_COMPLETION_HARD_EXPIRY_MS
         : ANNOUNCE_EXPIRY_MS;
     const remainingMs = resolveAnnounceDeliveryDeadline(entry, now, expiryMs) - now;
-    const abortDelivery = () => deadline.abort(new Error("subagent announce delivery expired"));
+    const abortDelivery = () => {
+      const reason = new Error("subagent announce delivery expired");
+      materializeErrorStack(reason);
+      deadline.abort(reason);
+    };
     // Accepted handoffs can wait behind a busy parent without spending their
     // execution timeout, but the lifecycle's delivery window still bounds that wait.
     if (remainingMs <= 0) {
       abortDelivery();
     } else {
       deadlineTimer = setTimeout(abortDelivery, remainingMs);
-      deadlineTimer.unref?.();
+      deadlineTimer.unref();
     }
     try {
       if (entry.expectsCompletionMessage === true && !requesterOwnsCompletion()) {
@@ -583,8 +588,12 @@ export const startSubagentAnnounceCleanupFlow = (
           childAgentId: entry.childAgentId,
           childSessionIdentity: entry.childSessionIdentity,
           signal: deadline.signal,
+          onAccepted: releasePreparation,
           // Delivery expiry bounds admission; the requester owns its execution budget.
-          onExecutionStarted: () => clearTimeout(deadlineTimer),
+          onExecutionStarted: () => {
+            releasePreparation();
+            clearTimeout(deadlineTimer);
+          },
         }),
       );
     } catch (error) {

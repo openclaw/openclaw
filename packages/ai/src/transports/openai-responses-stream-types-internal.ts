@@ -14,14 +14,6 @@ import type { OpenAIResponsesReasoningReplayMetadata } from "./openai-responses-
 type ResponsesTextContentPart =
   | ResponseOutputMessage["content"][number]
   | AzureResponsesTextContentPart;
-type ResponsesContentPartAddedEvent = Extract<
-  ResponseStreamEvent,
-  { type: "response.content_part.added" }
->;
-type ResponsesOutputItemDoneEvent = Extract<
-  ResponseStreamEvent,
-  { type: "response.output_item.done" }
->;
 
 export type CompletedResponse = Extract<
   ResponseStreamEvent,
@@ -34,10 +26,10 @@ export type ResponsesStreamOutputMessage = Omit<ResponseOutputMessage, "content"
 
 export type OpenAIResponsesStreamEvent =
   | ResponseStreamEvent
-  | (Omit<ResponsesContentPartAddedEvent, "part"> & {
+  | (Omit<Extract<ResponseStreamEvent, { type: "response.content_part.added" }>, "part"> & {
       part: Extract<ResponsesTextContentPart, { type: "text" }>;
     })
-  | (Omit<ResponsesOutputItemDoneEvent, "item"> & {
+  | (Omit<Extract<ResponseStreamEvent, { type: "response.output_item.done" }>, "item"> & {
       item: ResponsesStreamOutputMessage;
     })
   | AzureResponsesTextDeltaEvent;

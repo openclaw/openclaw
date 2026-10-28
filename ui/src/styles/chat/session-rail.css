@@ -79,7 +79,8 @@ openclaw-chat-session-rail {
 .chat-session-rail__exchange > .chat-group {
   --chat-avatar-column: 0px;
   --chat-avatar-gap: 0px;
-  margin-inline: 0;
+  --chat-group-inset-start: 0px;
+  --chat-group-inset-end: 0px;
 }
 
 .chat-session-rail__exchange > .chat-group.user {
@@ -106,4 +107,8 @@ openclaw-chat-session-rail {
 .chat-session-rail__prompt {
   min-width: 0;
   flex: 1 1 auto;
+}
+
+.chat-session-rail__thread:has(> openclaw-panel-empty-state) {
+  padding: 0;
 }

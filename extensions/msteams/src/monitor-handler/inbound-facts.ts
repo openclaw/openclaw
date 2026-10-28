@@ -126,7 +126,6 @@ export function assembleMSTeamsInboundFacts(entry: MSTeamsDebounceEntry) {
     advertisedMedia,
     quoteInfo: extractMSTeamsQuoteInfo(entry.attachments),
     htmlSummary: summarizeMSTeamsHtmlAttachments(entry.attachments),
-    rawConversationId,
     conversationId,
     conversationMessageId,
     conversationType,

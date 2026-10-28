@@ -14,7 +14,11 @@ import {
   type SystemdManagerSnapshotFixture,
 } from "./service.test-helpers.js";
 import { stageSystemdService } from "./systemd-install.js";
-import { readSystemdServiceExecStart, resolveSystemdUnitPath } from "./systemd-service-files.js";
+import {
+  readSystemdServiceExecStart,
+  resolveSystemdEnvironmentFilePath,
+  resolveSystemdUnitPath,
+} from "./systemd-service-files.js";
 import { buildSystemdUnit } from "./systemd-unit.js";
 
 vi.mock("./exec-file.js", () => ({ execFileUtf8: vi.fn() }));
@@ -33,6 +37,80 @@ beforeEach(() => {
   vi.mocked(execFileUtf8).mockReset();
 });
 afterEach(() => vi.restoreAllMocks());
+
+it.skipIf(process.platform === "win32").each(["api_key", "token"] as const)(
+  "delivers %s auth-profile credentials through the owner-only env file across reinstall",
+  async (type) => {
+    const home = await fs.realpath(tempDirs.make("systemd-auth-profile-secret-"));
+    const stateDir = path.join(home, "state");
+    const env = { HOME: home, OPENCLAW_STATE_DIR: stateDir };
+    const key = "OPENCLAW_CUSTOM_PROVIDER_CREDENTIAL";
+    const value = "synthetic-provider-credential";
+    const wrapperPath = path.join(home, "openclaw-wrapper");
+    await fs.writeFile(wrapperPath, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    const authStore = {
+      version: 1,
+      profiles: {
+        "custom:default": {
+          type,
+          provider: "custom",
+          ...(type === "api_key"
+            ? { keyRef: { source: "env" as const, provider: "default", id: key } }
+            : { tokenRef: { source: "env" as const, provider: "default", id: key } }),
+        },
+      },
+    };
+    const unitPath = resolveSystemdUnitPath(env);
+    const envFilePath = resolveSystemdEnvironmentFilePath({ stateDir });
+    const programArguments = [wrapperPath, "gateway", "--port", "18789"];
+    await fs.mkdir(path.dirname(unitPath), { recursive: true, mode: 0o755 });
+    await fs.mkdir(stateDir, { mode: 0o700 });
+    await fs.writeFile(
+      unitPath,
+      buildSystemdUnit({ programArguments, environment: { ...env, [key]: value } }),
+      { mode: 0o644 },
+    );
+    mockSystemdManagerSnapshot({
+      programArguments,
+      fragmentPath: unitPath,
+      environment: [`${key}=${value}`],
+      environmentFiles: [],
+    });
+    let installed: Awaited<ReturnType<typeof readSystemdServiceExecStart>> = null;
+    for (const callerEnvironment of [{ ...env, [key]: value }, env]) {
+      const plan = await buildGatewayInstallPlan({
+        env: callerEnvironment,
+        port: 18789,
+        runtime: "node",
+        runtimePath: "/usr/bin/node",
+        platform: "linux",
+        wrapperPath,
+        authStore,
+        existingEnvironment: installed?.environment,
+        existingEnvironmentValueSources: installed?.environmentValueSources,
+      });
+      expect(plan.environmentValueSources?.[key]).toBe("file");
+      await stageSystemdService({ env, stdout: new PassThrough(), ...plan });
+      const unit = await fs.readFile(unitPath, "utf8");
+      expect(unit).not.toContain(`${key}=`);
+      expect(unit).not.toContain(value);
+      expect(await fs.readFile(`${unitPath}.bak`, "utf8")).not.toContain(value);
+      expect(unit).toContain(`EnvironmentFile=-${envFilePath}`);
+      expect((await fs.stat(envFilePath)).mode & 0o777).toBe(0o600);
+      mockSystemdManagerSnapshot({
+        programArguments: plan.programArguments,
+        fragmentPath: unitPath,
+        environment: Object.entries(plan.environment).flatMap(([name, entry]) =>
+          entry === undefined || name === key ? [] : [`${name}=${entry}`],
+        ),
+        environmentFiles: [[envFilePath, false]],
+      });
+      installed = expectDefined(await readSystemdServiceExecStart(env), "installed service");
+      expect(installed.environment?.[key]).toBe(value);
+      expect(installed.environmentValueSources?.[key]).toBe("file");
+    }
+  },
+);
 
 function mockSystemdManagerSnapshot(
   snapshot: SystemdManagerSnapshotFixture & { fragmentPath: string },

@@ -71,6 +71,17 @@ describe("sticker image-model selection", () => {
     await expect(describeStickerImage(fixture)).resolves.toBe("Described by openai/image-b");
   });
 
+  it("makes no description request when image understanding is disabled", async () => {
+    const fixture = createFixture({
+      model: { primary: "openai/image-a" },
+      imageModel: { primary: "openai/image-b" },
+    });
+    fixture.cfg.tools = { media: { image: { enabled: false } } };
+
+    await expect(describeStickerImage(fixture)).resolves.toBeNull();
+    expect(describeImage).not.toHaveBeenCalled();
+  });
+
   it("does not substitute another sticker model when the selected primary fails", async () => {
     const fixture = createFixture({
       model: { primary: "openai/image-a" },

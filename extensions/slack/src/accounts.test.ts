@@ -11,6 +11,14 @@ import {
 
 type SlackConfig = NonNullable<OpenClawConfig["channels"]>["slack"];
 const slackConfig = (slack: SlackConfig): OpenClawConfig => ({ channels: { slack } });
+const workCredentials = { botToken: "xoxb-work", appToken: "xapp-work" };
+const defaultCredentials = { botToken: "xoxb-default", appToken: "xapp-default" };
+const noCredentials = {
+  botToken: undefined,
+  botTokenSource: "none",
+  appToken: undefined,
+  appTokenSource: "none",
+};
 
 function resolveAccount(slack: Parameters<typeof slackConfig>[0], accountId = "default") {
   return resolveSlackAccount({ cfg: slackConfig(slack), accountId });
@@ -21,9 +29,8 @@ afterEach(() => vi.unstubAllEnvs());
 describe("resolveSlackAccount allowFrom precedence", () => {
   it("keeps the implicit default account when named accounts are added to top-level credentials", () => {
     const cfg = slackConfig({
-      botToken: "xoxb-default",
-      appToken: "xapp-default",
-      accounts: { work: { enabled: false, botToken: "xoxb-work", appToken: "xapp-work" } },
+      ...defaultCredentials,
+      accounts: { work: { enabled: false, ...workCredentials } },
     });
 
     expect(listSlackAccountIds(cfg)).toEqual(["default", "work"]);
@@ -32,19 +39,19 @@ describe("resolveSlackAccount allowFrom precedence", () => {
   });
 
   it("merges canonical account streaming over top-level defaults field-by-field", () => {
+    const streaming = {
+      mode: "progress" as const,
+      nativeTransport: true,
+      preview: { toolProgress: true, commandText: "raw" as const },
+      progress: { label: "Shelling", commandText: "status" as const },
+      block: { enabled: true, coalesce: { minChars: 40, maxChars: 80, idleMs: 250 } },
+    };
     const resolved = resolveAccount(
       {
-        streaming: {
-          mode: "progress",
-          nativeTransport: true,
-          preview: { toolProgress: true, commandText: "raw" },
-          progress: { label: "Shelling", commandText: "status" },
-          block: { enabled: true, coalesce: { minChars: 40, maxChars: 80, idleMs: 250 } },
-        },
+        streaming,
         accounts: {
           work: {
-            botToken: "xoxb-work",
-            appToken: "xapp-work",
+            ...workCredentials,
             streaming: {
               progress: { nativeTaskCards: true },
               block: { coalesce: { idleMs: 500 } },
@@ -56,9 +63,7 @@ describe("resolveSlackAccount allowFrom precedence", () => {
     );
 
     expect(resolved.config.streaming).toEqual({
-      mode: "progress",
-      nativeTransport: true,
-      preview: { toolProgress: true, commandText: "raw" },
+      ...streaming,
       progress: { label: "Shelling", commandText: "status", nativeTaskCards: true },
       block: { enabled: true, coalesce: { minChars: 40, maxChars: 80, idleMs: 500 } },
     });
@@ -69,11 +74,10 @@ describe("resolveSlackAccount allowFrom precedence", () => {
       {
         accounts: {
           default: {
-            botToken: "xoxb-default",
-            appToken: "xapp-default",
+            ...defaultCredentials,
             allowFrom: ["default"],
           },
-          work: { botToken: "xoxb-work", appToken: "xapp-work" },
+          work: workCredentials,
         },
       },
       "work",
@@ -88,8 +92,7 @@ describe("resolveSlackAccount allowFrom precedence", () => {
       allowFrom: ["root"],
       accounts: {
         Work: {
-          botToken: "xoxb-work",
-          appToken: "xapp-work",
+          ...workCredentials,
           dmPolicy: "allowlist",
           allowFrom: ["U123"],
         },
@@ -117,10 +120,7 @@ describe("resolveSlackAccount active secret surfaces", () => {
     });
 
     expect(resolved).toMatchObject({
-      botToken: undefined,
-      botTokenSource: "none",
-      appToken: undefined,
-      appTokenSource: "none",
+      ...noCredentials,
       userToken: undefined,
       userTokenSource: "none",
       accountId: "default",
@@ -146,11 +146,6 @@ describe("resolveSlackAccount active secret surfaces", () => {
     vi.stubEnv("SLACK_APP_TOKEN", "xapp-env-app");
     const resolved = resolveAccount({ accounts: { default: { enabled: false } } });
 
-    expect(resolved).toMatchObject({
-      botToken: undefined,
-      botTokenSource: "none",
-      appToken: undefined,
-      appTokenSource: "none",
-    });
+    expect(resolved).toMatchObject(noCredentials);
   });
 });

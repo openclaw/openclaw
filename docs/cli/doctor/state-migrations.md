@@ -14,6 +14,10 @@ and plugin inventory remain unchanged. If either changes or migrations remain
 unresolved, Doctor scans again without repeating preflight's detection notices
 or warnings.
 
+When an agent schema needs an upgrade, Doctor defers legacy session-entry
+inspection until its stopped-writer schema repair finishes. This applies to
+PostgreSQL as well as SQLite.
+
 Legacy text imports require valid UTF-8. If a source contains malformed bytes,
 Doctor warns and skips that source instead of storing replacement characters.
 Independent migrations continue. The original bytes remain in the source or its
@@ -28,6 +32,11 @@ headers. Already imported events succeed without duplication; a verified missing
 suffix can be appended. Matching stores finish archival with the original bytes
 preserved. Genuine content conflicts retain the affected store and its originals;
 Doctor displays the blocking finding and records archive validation as failed.
+
+Retained session recovery prepares archive mappings once per verification phase,
+including when the legacy index is already archived. Source files are still
+rechecked after asynchronous verification. Interrupted-run manifests remain
+available as recovery evidence; you do not need to delete them before retrying.
 
 Session-key repair treats paths that resolve to the same physical database as one
 store, including case variants on case-insensitive filesystems. For example, an
@@ -224,11 +233,15 @@ records remain read-only inventory. After the candidate is installed, the real
 Doctor runs the normal import and archival against the operator's state.
 
 Skill Workshop proposals were removed. Doctor exports each pending or
-quarantined proposal draft, with its support files, to
-`<state-dir>/agents/<agentId>/agent/workshop-skills/.archive/.retired-proposals/<proposal-id>/`,
-then drops the proposal tables. Exported drafts are not live skills; to keep
-one, ask the agent to save it with `/learn` so it goes through the normal
-validated, versioned Workshop write.
+quarantined proposal draft, with its support files, to the Workshop
+[drafts](/tools/skill-workshop#drafts) directory
+`<state-dir>/agents/<agentId>/agent/workshop-skills/.drafts/<proposal-id>/`,
+then drops the proposal tables. Drafts are not live skills; review them with
+`/learn drafts`, which saves the ones worth keeping through the normal
+validated, versioned Workshop write. Drafts that an earlier Doctor exported to
+`workshop-skills/.archive/.retired-proposals/` move to `.drafts/` on the next
+run. An existing draft with the same id is never overwritten: Doctor keeps that
+export where it is and warns, so you can compare the two and delete one.
 
 Doctor keeps the proposal tables and files, with a recoverable warning, when no
 configured agent owns a proposal, it cannot export a draft, or it finds a
@@ -290,8 +303,13 @@ the maintenance holds in the existing migration tables. It leaves valid in-fligh
 deletions with their lifecycle owner. For regular agents, quarantine retains a
 safe deletion tombstone until explicit restoration; it never resurrects a deleted
 agent merely by archiving malformed cleanup details. Recovery preserves held
-stores; it does not migrate or retire them. Runtime admission remains separate
-from Doctor's repair holds. Review the paths and use the
+stores. After missing-table reconstruction, Doctor automatically restores a
+configured agent's matching database after verifying its ownership metadata,
+absence of a deletion record, and a rollback backup of the database and shared
+recovery records. An intervening OpenClaw upgrade does not disqualify the store.
+Quarantined deletion records and unconfigured or mismatched stores still require
+explicit restoration. Runtime admission remains separate from Doctor's repair
+holds. Review the paths and use the
 noninteractive `openclaw agents add` command printed by Doctor to restore the
 intended agent, or `openclaw agents delete` to confirm deletion. An unconfigured
 agent must be restored before deletion. For a custom database filename, restore
@@ -482,7 +500,15 @@ migration documentation; migrated files or archives may remain in their new
 locations. Undeclared third-party resources remain unknown: ask the plugin
 maintainer to declare them before relying on recovery coverage.
 
-Standalone Doctor keeps its existing best-effort pre-repair capture behavior.
+Standalone Doctor keeps its best-effort pre-repair capture boundary. It reuses
+its newest sealed standalone copy only when the retained payloads and the complete
+current config, database, and declared plugin-resource inventory match exactly.
+Changed or unverifiable sources take a fresh copy; an incomplete comparison never
+counts as verified equality. Healthy schema bookkeeping and plugin repair planning
+leave unchanged state untouched, so consecutive healthy repair runs can reuse one
+copy. `--full-integrity-check` still takes a fresh capture.
+This does not turn repair discovery into a read-only pass: a Doctor invocation can
+still take a copy even when it ultimately reports no repairs.
 Candidate validation uses disposable rehearsal state and defers plugins whose
 declared migration data is outside that rehearsal; it does not create a manual
 recovery copy for those disposable checks.

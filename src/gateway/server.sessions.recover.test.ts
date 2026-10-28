@@ -29,6 +29,7 @@ import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../state/user-
 import { useUserProfileCatalogForTest } from "../test-utils/user-profile-catalog.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import { createGatewayWorkerPlacementReclaimBarriers } from "./server-worker-placement-reclaim.js";
+import { gatewayConnect, gatewayProfile } from "./server/client-fixtures.test-support.js";
 import { recoverGatewaySession } from "./session-recovery-service.js";
 import { resolveSessionMutationAuthorizationAsync } from "./session-sharing-authorization-async.js";
 import { SessionMutationAuthorizationChangedError } from "./session-sharing.js";
@@ -570,7 +571,7 @@ test("sessions.recover preserves device-folder affinity before launching its suc
   expect(fixture.source()?.deviceFolder).toEqual(deviceFolder);
 });
 
-test("sessions.recover rolls over one tombstone and returns its continuation outcome", async () => {
+test("concurrent sessions.recover requests share one successor and accepted continuation", async () => {
   testState.sessionConfig = { dmScope: "main", scope: "per-sender" };
   const inherited: Parameters<typeof sessionStoreEntry>[1] = {
     agentHarnessId: "codex",
@@ -625,7 +626,7 @@ test("sessions.recover rolls over one tombstone and returns its continuation out
     payload: {
       key: successorKey,
       sessionId: successorSessionId,
-      continuation: { status: "started" },
+      continuation: { status: "started", runId: recovered.payload?.continuation.runId },
     },
   };
   expect(concurrentRetry, JSON.stringify(concurrentRetry)).toMatchObject(expectedRetry);
@@ -698,21 +699,14 @@ test.each([
         ...(systemActor && identity !== "owner"
           ? { internal: { operatorRoleActor: { kind: "system" as const } } }
           : {}),
-        connect: {
-          minProtocol: 3,
-          maxProtocol: 3,
-          client: { id: "test" as const, mode: "test" as const, platform: "test", version: "test" },
-          role: "operator",
-          scopes: ["operator.write"],
-        },
+        connect: gatewayConnect(["operator.write"], { id: "test", mode: "test" }, 3),
         ...(recovering
           ? {
-              authenticatedUserProfile: {
-                profileId: recovering.id,
-                displayName: recovering.displayName,
-                hasAvatar: false,
-                updatedAt: recovering.updatedAt,
-              },
+              authenticatedUserProfile: gatewayProfile(
+                recovering.id,
+                recovering.displayName,
+                recovering.updatedAt,
+              ),
             }
           : {}),
       },
@@ -773,12 +767,7 @@ test("sessions.recover cannot create a successor on an agent excluded by the cal
   const cfg = roleConfig("guest", "view", ["guest-only"]);
   const client = {
     connect: { role: "operator", scopes: ["operator.write"] },
-    authenticatedUserProfile: {
-      profileId: profile.id,
-      displayName: profile.displayName,
-      hasAvatar: false,
-      updatedAt: profile.updatedAt,
-    },
+    authenticatedUserProfile: gatewayProfile(profile.id, profile.displayName, profile.updatedAt),
   } as never;
 
   const recovered = await fixture.recover({ client, context: { getRuntimeConfig: () => cfg } });
@@ -808,12 +797,7 @@ test("sessions.recover revalidates participation at the recovery writer commit",
   });
   const client = {
     authenticatedUserId: "member@example.com",
-    authenticatedUserProfile: {
-      profileId: "member",
-      displayName: "Member",
-      hasAvatar: false,
-      updatedAt: 1,
-    },
+    authenticatedUserProfile: gatewayProfile("member", "Member"),
     connect: { role: "operator", scopes: ["operator.write"] },
   } as never;
   // Use an already-registered single-key mutation to isolate handler/writer propagation from

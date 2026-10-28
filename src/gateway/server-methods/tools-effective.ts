@@ -1,7 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
-  errorShape,
   validateToolsEffectiveParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
@@ -16,13 +15,11 @@ import {
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
 import { prepareConversationCapabilityProfile } from "../../agents/conversation-capability-profile.js";
-import {
-  buildConversationToolPolicyPipelineSteps,
-  resolveConversationToolPolicies,
-} from "../../agents/conversation-tool-policy-pipeline.js";
+import { resolveConversationToolPolicies } from "../../agents/conversation-tool-policy-pipeline.js";
 import { applyFinalEffectiveToolPolicy } from "../../agents/embedded-agent-runner/effective-tool-policy.js";
 import { getRegisteredAgentHarness } from "../../agents/harness/registry.js";
 import { readToolAllowlistIntersection } from "../../agents/tool-policy-shared.js";
+import type { ToolPolicyLike } from "../../agents/tool-policy.js";
 import { buildEffectiveToolInventoryGroups } from "../../agents/tools-effective-inventory-groups.js";
 import { buildEffectiveToolInventory } from "../../agents/tools-effective-inventory-shared.js";
 import {
@@ -53,6 +50,7 @@ import { getConnectedNodePluginToolsVersion } from "../node-plugin-tool-snapshot
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { withGatewaySessionEntryReadOnly } from "../session-utils-read-lifetime.js";
 import { resolveSessionModelRef, type GatewaySessionEntryRead } from "../session-utils.js";
+import { respondError } from "./response.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { defineValidatedGatewayHandler } from "./validation.js";
@@ -109,12 +107,10 @@ function buildToolsEffectiveCacheKey(context: TrustedToolsEffectiveContext): str
     replyToMode: optionalCacheString(context.replyToMode),
     webSearchEnabled: context.toolOverrides?.webSearch !== false,
     // Prepared session ceilings can change without a config or session-id change.
-    policy: buildConversationToolPolicyPipelineSteps({
-      capabilityProfile: context.capabilityProfile,
-      policies: resolveConversationToolPolicies({ capabilityProfile: context.capabilityProfile }),
-      includeRuntimeToolPolicy: true,
-    }).map(
-      ({ policy }) =>
+    policy: Object.values<ToolPolicyLike | undefined>(
+      resolveConversationToolPolicies({ capabilityProfile: context.capabilityProfile }),
+    ).map(
+      (policy) =>
         policy && {
           allow: policy.allow && (readToolAllowlistIntersection(policy.allow) ?? policy.allow),
           deny: policy.deny,
@@ -470,10 +466,10 @@ async function resolveTrustedToolsEffectiveContext(
   // The effective tools request is read-only but security-sensitive. Derive
   // routing/account/model context from the persisted session, not client params.
   if (!loaded.entry) {
-    params.respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, `unknown session key "${params.sessionKey}"`),
+    respondError(
+      params.respond,
+      ErrorCodes.INVALID_REQUEST,
+      `unknown session key "${params.sessionKey}"`,
     );
     return null;
   }
@@ -485,13 +481,10 @@ async function resolveTrustedToolsEffectiveContext(
     ...(params.requestedAgentId ? { agentId: params.requestedAgentId } : {}),
   });
   if (params.requestedAgentId && params.requestedAgentId !== sessionAgentId) {
-    params.respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        `agent id "${params.requestedAgentId}" does not match session agent "${sessionAgentId}"`,
-      ),
+    respondError(
+      params.respond,
+      ErrorCodes.INVALID_REQUEST,
+      `agent id "${params.requestedAgentId}" does not match session agent "${sessionAgentId}"`,
     );
     return null;
   }
@@ -565,11 +558,7 @@ export const toolsEffectiveHandlers: GatewayRequestHandlers = {
       const knownAgents = listAgentIds(cfg);
       const requestedAgentId = normalizeOptionalString(params.agentId);
       if (requestedAgentId && !knownAgents.includes(requestedAgentId)) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, `unknown agent id "${requestedAgentId}"`),
-        );
+        respondError(respond, ErrorCodes.INVALID_REQUEST, `unknown agent id "${requestedAgentId}"`);
         return;
       }
       const sessionOwner = resolveRequestedSessionAgentId(cfg, params.sessionKey, requestedAgentId);
@@ -629,11 +618,7 @@ export const toolsEffectiveHandlers: GatewayRequestHandlers = {
           );
         }
       } catch (err) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, `tools.effective failed: ${String(err)}`),
-        );
+        respondError(respond, ErrorCodes.UNAVAILABLE, `tools.effective failed: ${String(err)}`);
       }
     },
   ),

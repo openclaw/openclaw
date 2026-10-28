@@ -41,7 +41,6 @@ import { createStubChildAdapter } from "../../process/supervisor/supervisor.test
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
-import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
 import { hashCliImageTurnEntryId } from "../cli-image-turn-correlation.js";
 import { buildEmbeddedRunPayloads } from "../embedded-agent-runner/run/payloads.js";
 import { findCliTerminalStopError } from "../failover-error.js";
@@ -55,8 +54,9 @@ import {
   supervisorSpawnMock,
   wrapPreparedCliRunWithTestAdmission,
 } from "./execute.test-support.js";
+import { createPreparedCliContext } from "./prepared-context.test-support.js";
 import { prepareCliRunTerminalReply } from "./terminal-reply.js";
-import { captureCliRunStartTime, type PreparedCliRunContext } from "./types.js";
+import type { PreparedCliRunContext } from "./types.js";
 const executePreparedCliRun = wrapPreparedCliRunWithTestAdmission(executePreparedCliRunImpl);
 vi.mock("../../process/supervisor/adapters/child.js", () => ({ createChildAdapter: vi.fn() }));
 type ProcessSupervisor = ReturnType<typeof getProcessSupervisor>;
@@ -213,44 +213,17 @@ function buildPreparedCliRunContext(params: {
     input: "stdin" as const,
     serialize: true,
   };
-  return {
-    params: {
-      admittedRunContext: createTestAdmittedRunContext(runId),
-      agentId: "main",
-      sessionId: "session-1",
-      sessionKey: "agent:main:main",
-      sessionFile: "/tmp/session.jsonl",
-      workspaceDir: "/tmp",
-      prompt: "hi",
-      provider,
-      model: "model",
-      timeoutMs: 1_000,
-      runId,
+  return createPreparedCliContext(
+    { provider, model: "model", runId, agentId: "main", sessionKey: "agent:main:main" },
+    { id: provider, config: backend, bundleMcp: false, parseJsonlEvent: params.parseJsonlEvent },
+    {
+      preparedBackend: {
+        backend,
+        env: {},
+        ...(params.beforeExecution ? { beforeExecution: params.beforeExecution } : {}),
+      },
     },
-    ...captureCliRunStartTime(),
-    workspaceDir: "/tmp",
-    backendResolved: {
-      id: provider,
-      config: backend,
-      bundleMcp: false,
-      parseJsonlEvent: params.parseJsonlEvent,
-    },
-    executionTarget: { kind: "process" },
-    preparedBackend: {
-      backend,
-      env: {},
-      ...(params.beforeExecution ? { beforeExecution: params.beforeExecution } : {}),
-    },
-    reusableCliSession: { mode: "none" },
-    hadSessionFile: false,
-    contextEngineConfig: {},
-    modelId: "model",
-    normalizedModel: "model",
-    systemPrompt: "system",
-    systemPromptReport: {} as PreparedCliRunContext["systemPromptReport"],
-    claudeSkillsPluginArgs: [],
-    authEpochVersion: 2,
-  };
+  );
 }
 
 function claudeJsonlContext() {
@@ -810,47 +783,63 @@ it("surfaces a Claude hook-stopped terminal result from JSON output", async () =
   });
 });
 
-it("preserves the terminal failure through fork persistence errors", async () => {
-  const stdout = jsonl({
-    type: "result",
-    subtype: "error_max_turns",
-    session_id: "fork-successor",
-    terminal_reason: "max_turns",
-    errors: ["Reached maximum number of turns (1)"],
-  });
-  mockOutput([stdout], { exitCode: 1 }, true);
-  const persistenceError = new Error("fork successor persistence failed");
-  persistenceError.name = "TimeoutError";
-  const persistCliSessionForkSuccessor = vi.fn().mockRejectedValue(persistenceError);
-  const restoreCliSessionFork = vi.fn().mockResolvedValue(undefined);
-  const context = buildPreparedCliRunContext({
-    output: "jsonl",
-    provider: "claude-cli",
-    runId: "run-fork-primary-failure",
-  });
-  context.preparedBackend.backend.resumeArgs = ["--resume", "{sessionId}"];
-  context.preparedBackend.backend.forkArg = "--fork-session";
-  context.params.forkCliSessionOnResume = true;
-  const admission = prepareSystemAgentRunAdmission({}, context.params.runId, "main", "fork-test");
-  onTestFinished(admission.close);
-  context.params.admittedRunContext = await admission.admit("embedded");
-  context.params.claimCliSessionFork = vi.fn().mockResolvedValue(true);
-  context.params.persistCliSessionForkSuccessor = persistCliSessionForkSuccessor;
-  context.params.restoreCliSessionFork = restoreCliSessionFork;
-  const failure = await executePreparedCliRun(context, "fork-source").catch(
-    (error: unknown) => error,
-  );
-  expect(failure).toBeInstanceOf(AggregateError);
-  expect((failure as AggregateError).errors).toEqual([
-    expect.objectContaining({ code: "cli_max_turns" }),
-    persistenceError,
-  ]);
-  expect(findCliTerminalStopError(failure)).toMatchObject({ code: "cli_max_turns" });
-  expect(resolveAgentRunErrorLifecycleFields(failure, undefined)).toEqual({});
-  expect((failure as AggregateError).cause).toBe((failure as AggregateError).errors[0]);
-  expect(persistCliSessionForkSuccessor).toHaveBeenCalledWith("fork-successor");
-  expect(restoreCliSessionFork).toHaveBeenCalledTimes(1);
-});
+it.each([false, true])(
+  "preserves the terminal failure through fork persistence errors (restore fails: %s)",
+  async (restoreFails) => {
+    const stdout = jsonl({
+      type: "result",
+      subtype: "error_max_turns",
+      session_id: "fork-successor",
+      terminal_reason: "max_turns",
+      errors: ["Reached maximum number of turns (1)"],
+    });
+    mockOutput([stdout], { exitCode: 1 }, true);
+    const persistenceError = new Error("fork successor persistence failed");
+    persistenceError.name = "TimeoutError";
+    const persistCliSessionForkSuccessor = vi.fn().mockRejectedValue(persistenceError);
+    const restoreError = new Error("fork restoration lost its session ownership");
+    const restoreCliSessionFork = restoreFails
+      ? vi.fn().mockRejectedValue(restoreError)
+      : vi.fn().mockResolvedValue(undefined);
+    const context = buildPreparedCliRunContext({
+      output: "jsonl",
+      provider: "claude-cli",
+      runId: "run-fork-primary-failure",
+    });
+    context.preparedBackend.backend.resumeArgs = ["--resume", "{sessionId}"];
+    context.preparedBackend.backend.forkArg = "--fork-session";
+    context.params.forkCliSessionOnResume = true;
+    const admission = prepareSystemAgentRunAdmission({}, context.params.runId, "main", "fork-test");
+    onTestFinished(admission.close);
+    context.params.admittedRunContext = await admission.admit("embedded");
+    context.params.claimCliSessionFork = vi.fn().mockResolvedValue(true);
+    context.params.persistCliSessionForkSuccessor = persistCliSessionForkSuccessor;
+    context.params.restoreCliSessionFork = restoreCliSessionFork;
+    const failure = await executePreparedCliRun(context, "fork-source").catch(
+      (error: unknown) => error,
+    );
+    expect(failure).toBeInstanceOf(AggregateError);
+    const persistenceFailure = restoreFails ? (failure as AggregateError).errors[0] : failure;
+    if (restoreFails) {
+      expect((failure as AggregateError).errors).toEqual([persistenceFailure, restoreError]);
+      expect((failure as AggregateError).cause).toBe(persistenceFailure);
+    }
+    expect((persistenceFailure as AggregateError).errors).toEqual([
+      expect.objectContaining({ code: "cli_max_turns" }),
+      persistenceError,
+    ]);
+    expect(findCliTerminalStopError(failure)).toMatchObject({ code: "cli_max_turns" });
+    expect(resolveAgentRunErrorLifecycleFields(failure, undefined)).toEqual({});
+    expect((persistenceFailure as AggregateError).cause).toBe(
+      (persistenceFailure as AggregateError).errors[0],
+    );
+    expect((failure as AggregateError).message).toContain(
+      "CLI turn failed and its fork successor could not be persisted",
+    );
+    expect(persistCliSessionForkSuccessor).toHaveBeenCalledWith("fork-successor");
+    expect(restoreCliSessionFork).toHaveBeenCalledTimes(1);
+  },
+);
 
 it("composes plugin-owned JSONL parsing into the production executor", async () => {
   const agentEvents = captureAgentEvents();

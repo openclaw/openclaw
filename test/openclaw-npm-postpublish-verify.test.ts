@@ -4,6 +4,7 @@ import fs from "node:fs";
 import { dirname, join } from "node:path";
 import { build } from "tsdown";
 import { expect, it, vi } from "vitest";
+import { collectPackageDistImportErrors } from "../scripts/lib/package-dist-imports.mjs";
 import { createRuntimeDependencyOwnershipBuildPlugin } from "../scripts/lib/runtime-dependency-ownership-build-plugin.mts";
 import {
   collectInstalledContextEngineRuntimeErrors as contextErrors,
@@ -20,15 +21,12 @@ import {
   rewriteRootRuntimeImportsToStableAliases,
   writeStableRootRuntimeAliases,
 } from "../scripts/runtime-postbuild.mts";
+import { resolveNodeBootstrapRuntimeChunks } from "../src/gateway/worker-environments/node-bootstrap-runtime-chunks.js";
+import { collectPackageDistInventory } from "../src/infra/package-dist-inventory.js";
 import { RUNTIME_DEPENDENCY_OWNERSHIP_RELATIVE_PATH } from "../src/infra/runtime-dependency-ownership.js";
-import {
-  resolveRuntimeWorkerArgv,
-  resolveRuntimeWorkerUrl,
-} from "../src/infra/runtime-worker-url.js";
 import { WORKER_BUNDLE_ENTRY_PATH } from "../src/shared/worker-bundle-hash.js";
 import { withEnv } from "../src/test-utils/env.js";
 import { createScriptTestHarness } from "./scripts/test-helpers.js";
-import { toolingTsEntrypoints } from "./scripts/tooling-ts-runtime.test-support.js";
 
 const { createTempDir } = createScriptTestHarness();
 const makeInstalledPackageRoot = (manifest?: unknown) => {
@@ -55,6 +53,23 @@ function expectDependencyErrors(root: string, ...fragments: string[]) {
   expect(dependencyErrors(root)).toEqual(fragments.map((part) => expect.stringContaining(part)));
 }
 
+function probeVerifier(packageRoot: string, exportName: string, timeout = 3000) {
+  const result = spawnSync(
+    process.execPath,
+    [
+      "--import",
+      "./scripts/tsx.mjs",
+      "--input-type=module",
+      "-e",
+      `import { ${exportName} as verify } from "./scripts/openclaw-npm-postpublish-verify.ts"; console.log(JSON.stringify(verify(process.argv[1]))); process.exit(0);`,
+      packageRoot,
+    ],
+    { encoding: "utf8", timeout },
+  );
+  expect([result.error, result.status], result.stderr).toEqual([undefined, 0]);
+  return JSON.parse(result.stdout);
+}
+
 it("keeps trusted release verification independent from target app dependencies", () => {
   const source = fs.readFileSync("scripts/openclaw-npm-postpublish-verify.ts", "utf8");
 
@@ -62,24 +77,19 @@ it("keeps trusted release verification independent from target app dependencies"
   expect(source).not.toContain('from "../src/infra/errors.ts"');
 });
 
-it("uses exact legacy source manifests for published chunk ownership", () => {
+it.each(["legacy", "current", "mismatched"])("verifies %s source manifests", (kind) => {
   const sourceRoot = makeInstalledPackageRoot({ name: "openclaw", version: "2026.8.34" });
-
-  for (const allowLegacyGeneratedOwnership of [true, false]) {
-    if (!allowLegacyGeneratedOwnership) {
-      writeInstalledFile(sourceRoot, "scripts/lib/runtime-dependency-ownership-build-plugin.mts");
-    }
+  if (kind === "current") {
+    writeInstalledFile(sourceRoot, "scripts/lib/runtime-dependency-ownership-build-plugin.mts");
+  }
+  if (kind === "mismatched") {
+    expect(() => verifySource(sourceRoot, "2026.9.7")).toThrow("source checkout version mismatch");
+  } else {
     expect(verifySource(sourceRoot, "2026.8.34")).toEqual({
       additionalCompanionManifestRoots: [join(sourceRoot, "extensions")],
-      allowLegacyGeneratedOwnership,
+      allowLegacyGeneratedOwnership: kind === "legacy",
     });
   }
-});
-
-it("rejects source manifests from another release", () => {
-  const sourceRoot = makeInstalledPackageRoot({ name: "openclaw", version: "2026.9.7" });
-
-  expect(() => verifySource(sourceRoot, "2026.8.34")).toThrow("source checkout version mismatch");
 });
 
 const packageName = "openclaw";
@@ -87,6 +97,7 @@ const version = "2026.3.23";
 const publishSha = "a".repeat(40);
 const publishRef = `refs/tags/release-publish/${publishSha.slice(0, 12)}-123`;
 const integrity = `sha512-${Buffer.from("registry integrity", "utf8").toString("base64")}`;
+type ProvenanceOptions = Parameters<typeof verifyNpmProvenanceAttestation>[0];
 const buildProvenancePayload = (
   releaseVersion: string,
   workflowRef: string,
@@ -132,13 +143,9 @@ const releaseIdentity = (ref: string) => ({
   certificateIdentityURI: `https://github.com/openclaw/openclaw/.github/workflows/openclaw-npm-release.yml@${ref}`,
 });
 const makeBundleVerifier = () =>
-  vi.fn<NonNullable<Parameters<typeof verifyNpmProvenanceAttestation>[0]["verifyBundle"]>>(
-    async () => undefined,
-  );
+  vi.fn<NonNullable<ProvenanceOptions["verifyBundle"]>>(async () => undefined);
 
-function verifyProvenance(
-  overrides: Partial<Parameters<typeof verifyNpmProvenanceAttestation>[0]> = {},
-) {
+function verifyProvenance(overrides: Partial<ProvenanceOptions> = {}) {
   return expect(
     verifyNpmProvenanceAttestation({
       packageName,
@@ -199,7 +206,7 @@ it("derives attested release-publish tooling only after the trusted-source check
   const attestations = attestationsFor(buildProvenancePayload(version, publishRef, publishSha));
   const verifyBundle = makeBundleVerifier();
   const verifyDerivedWorkflow = vi.fn();
-  const verify = (overrides: Partial<Parameters<typeof verifyNpmProvenanceAttestation>[0]> = {}) =>
+  const verify = (overrides: Partial<ProvenanceOptions> = {}) =>
     verifyProvenance({ attestations, verifyBundle, verifyDerivedWorkflow, ...overrides });
 
   await verify().resolves.toBeUndefined();
@@ -320,24 +327,10 @@ it("rejects an oversized worker before the full verifier reads its contents", ()
 
 it("verifies every bundled manifest when the build filter exists before module initialization", () => {
   const packageRoot = makeInstalledPackageRoot();
-  const moduleUrl = resolveRuntimeWorkerUrl(toolingTsEntrypoints.npmPostpublish);
-  const program = [
-    `import { collectInstalledBundledExtensionManifestErrors } from ${JSON.stringify(moduleUrl.href)};`,
-    `process.stdout.write(JSON.stringify(collectInstalledBundledExtensionManifestErrors(${JSON.stringify(packageRoot)})));`,
-  ].join("\n");
-  const argv = resolveRuntimeWorkerArgv(moduleUrl).slice(0, -1);
-  argv.push("--input-type=module", "--eval", program);
-  const probe = withEnv({ OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "ollama" }, () =>
-    spawnSync(process.execPath, argv, {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      env: process.env,
-      timeout: 30_000,
-    }),
+  const errors = withEnv({ OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "ollama" }, () =>
+    probeVerifier(packageRoot, "collectInstalledBundledExtensionManifestErrors", 30_000),
   );
-
-  expect([probe.error, probe.status], probe.stderr).toEqual([undefined, 0]);
-  expect(JSON.parse(probe.stdout)).toEqual(
+  expect(errors).toEqual(
     expect.arrayContaining(
       ["ollama", "lmstudio"].flatMap((id) => [
         `installed bundled extension manifest missing: ${join(packageRoot, "dist/extensions", id, "package.json")}.`,
@@ -399,20 +392,7 @@ it("finishes vendor call graphs while retaining root dependency checks", () => {
     `${calls.join("\n")}\nrequire("root-runtime");`,
   );
   // A subprocess deadline is necessary because the original synchronous graph scan never yields.
-  const result = spawnSync(
-    process.execPath,
-    [
-      "--import",
-      "./scripts/tsx.mjs",
-      "--input-type=module",
-      "-e",
-      'import { collectInstalledRootDependencyManifestErrors } from "./scripts/openclaw-npm-postpublish-verify.ts"; console.log(JSON.stringify(collectInstalledRootDependencyManifestErrors(process.argv[1]))); process.exit(0);',
-      packageRoot,
-    ],
-    { encoding: "utf8", timeout: 3000 },
-  );
-  expect([result.error, result.status]).toEqual([undefined, 0]);
-  expect(JSON.parse(result.stdout)).toEqual([
+  expect(probeVerifier(packageRoot, "collectInstalledRootDependencyManifestErrors")).toEqual([
     "installed package root is missing declared runtime dependency 'root-runtime' for dist importers: vendor.js. Add it to package.json dependencies/optionalDependencies.",
   ]);
 });
@@ -434,18 +414,7 @@ function makeCompanionImportFixture(params: {
   return packageRoot;
 }
 
-it("accepts Bun built-in modules without npm dependency declarations", () => {
-  const packageRoot = makeInstalledPackageRoot({ dependencies: {} });
-  writeInstalledFile(
-    packageRoot,
-    "dist/bun-sqlite-library.js",
-    'import { Database } from "bun:sqlite";\nconst { dlopen } = require("bun:ffi");\nexport { Database, dlopen };\n',
-  );
-
-  expect(dependencyErrors(packageRoot)).toStrictEqual([]);
-});
-
-const companionSource = 'const voice = require("@discordjs/voice");\nexport { voice };\n';
+const companionSource = 'require("@discordjs/voice");';
 const discordManifest = {
   name: "@openclaw/discord",
   dependencies: { "@discordjs/voice": "0.19.2" },
@@ -458,14 +427,9 @@ const companionOwnership = (extensions = ["discord"]) => ({
     },
   },
 });
-const legacyCompanionSource = [
-  'import { createRequire } from "node:module";',
-  "//#region extensions/discord/src/voice/sdk-runtime.ts",
-  'const voice = createRequire(import.meta.url)("@discordjs/voice");',
-  "//#endregion",
-  "export { voice };",
-  "",
-].join("\n");
+const pluginRegion = (source: string) =>
+  `//#region extensions/discord/src/voice/sdk-runtime.ts\n${source}\n//#endregion`;
+const legacyCompanionSource = `import { createRequire } from "node:module";\n${pluginRegion('createRequire(import.meta.url)("@discordjs/voice");')}`;
 function makeLegacyFixture(source = legacyCompanionSource, fileName?: string) {
   const packageRoot = makeCompanionImportFixture({ source, fileName });
   const trustedManifestRoot = join(packageRoot, "trusted-extensions");
@@ -478,23 +442,16 @@ function makeLegacyFixture(source = legacyCompanionSource, fileName?: string) {
 
 it("uses generated region ownership only when the compatibility gate is enabled", () => {
   const { packageRoot, legacyErrors } = makeLegacyFixture();
-  const missingDependency =
-    "installed package root is missing declared runtime dependency '@discordjs/voice' for dist importers: companion-runtime.js. Add it to package.json dependencies/optionalDependencies.";
-
-  expect(dependencyErrors(packageRoot)).toEqual([missingDependency]);
+  expectDependencyErrors(packageRoot, "@discordjs/voice");
   expect(legacyErrors()).toStrictEqual([]);
 });
 
 it("preserves plugin ownership through hoisted static imports", () => {
   const { packageRoot, legacyErrors } = makeLegacyFixture();
-  fs.writeFileSync(
-    join(packageRoot, "dist/plugin-runtime.js"),
-    [
-      'import "./companion-runtime.js";',
-      "//#region extensions/discord/src/runtime.ts",
-      "export const enabled = true;",
-      "//#endregion",
-    ].join("\n"),
+  writeInstalledFile(
+    packageRoot,
+    "dist/plugin-runtime.js",
+    `import "./companion-runtime.js";\n${pluginRegion("export const enabled = true;")}`,
   );
   expect(legacyErrors()).toEqual([]);
   writePackageFile(packageRoot, "package.json", { main: "dist/root.js" });
@@ -511,33 +468,33 @@ it("keeps legacy directory entrypoints root-owned", () => {
 });
 
 it("rejects legacy ownership for a loader used outside its plugin region", () => {
-  const source = [
-    'import { createRequire } from "node:module";',
-    "//#region extensions/discord/src/runtime.ts",
-    "const load = createRequire(import.meta.url);",
-    'const voice = load("@discordjs/voice");',
-    "//#endregion",
-    'load("@discordjs/voice");',
-  ].join("\n");
+  const source = `import { createRequire } from "node:module";\n${pluginRegion('const load = createRequire(import.meta.url); load("@discordjs/voice");')}\nload("@discordjs/voice");`;
   const { legacyErrors } = makeLegacyFixture(source);
   expect(legacyErrors()).toEqual([expect.stringContaining("@discordjs/voice")]);
 });
 
-it("does not authorize changed chunk bytes", () => {
-  const packageRoot = makeCompanionImportFixture({
-    ownership: companionOwnership(),
-    source: `${companionSource}export const changed = true;\n`,
-  });
-
-  expectDependencyErrors(packageRoot, "companion-runtime.js");
-});
-
-it("rejects malformed emitted ownership metadata", () => {
-  const packageRoot = makeCompanionImportFixture({
-    ownership: companionOwnership(["discord", "discord"]),
-  });
-
-  expectDependencyErrors(packageRoot, "installed package runtime dependency ownership is invalid");
+it.each<[string, Parameters<typeof makeCompanionImportFixture>[0], string[]]>([
+  ["Bun built-ins", { source: 'import "bun:sqlite"; require("bun:ffi");' }, []],
+  [
+    "optional A2UI",
+    {
+      fileName: "canvas-host/a2ui/a2ui.bundle.js",
+      source: 'import("@a2ui/markdown-it").catch(() => null);',
+    },
+    [],
+  ],
+  [
+    "changed bytes",
+    { ownership: companionOwnership(), source: `${companionSource}export const changed = true;` },
+    ["companion-runtime.js"],
+  ],
+  [
+    "malformed ownership",
+    { ownership: companionOwnership(["discord", "discord"]) },
+    ["installed package runtime dependency ownership is invalid"],
+  ],
+])("checks dependency ownership for %s", (_name, fixture, errors) => {
+  expectDependencyErrors(makeCompanionImportFixture(fixture), ...errors);
 });
 
 it.each([
@@ -660,12 +617,6 @@ it("preserves ownership through real postbuild runtime rewrites and forwarding a
   rewriteRootRuntimeImportsToStableAliases({ rootDir: root });
   writeStableRootRuntimeAliases({ rootDir: root });
 
-  const dist = join(root, "dist");
-  const sharedChunk = fs.readdirSync(dist).find((name) => /^shared\.runtime-.*\.m?js$/u.test(name));
-  expect(sharedChunk).toBeDefined();
-  expect(fs.readFileSync(join(dist, sharedChunk!), "utf8")).toContain('"./downstream.runtime.js"');
-  expect(fs.existsSync(join(dist, "shared.runtime.js"))).toBe(true);
-  expect(fs.existsSync(join(dist, "downstream.runtime.js"))).toBe(true);
   expectDependencyErrors(root);
 });
 
@@ -703,3 +654,49 @@ it("rejects a root-shared chunk even when a plugin owns the same dependency", as
   const root = await buildInstalledFixture('export { value } from "./shared.js";');
   expectDependencyErrors(root, "missing declared runtime dependency 'fixture-runtime'");
 });
+
+it.each([false, true])(
+  "omits private SDK test workers from the built node distribution (QA: %s)",
+  async (qa) => {
+    const root = await buildInstalledFixture(
+      "export const ready = true;",
+      {
+        "test/helpers/sqlite-worker-fault.ts": `
+        export const marker = "qa-only";
+        export const faultWorker = () => new URL("./sqlite-worker-fault.worker.mjs", import.meta.url);
+      `,
+        "src/plugin-sdk/sqlite-runtime-testing.ts":
+          'export { marker, faultWorker } from "../../test/helpers/sqlite-worker-fault.ts";',
+        "src/plugin-sdk/test-state.ts":
+          'export { faultWorker } from "../../test/helpers/sqlite-worker-fault.ts";',
+        "extensions/qa-lab/index.js":
+          'export { marker } from "../../src/plugin-sdk/sqlite-runtime-testing.ts";',
+      },
+      {
+        "plugin-sdk/sqlite-runtime-testing": "src/plugin-sdk/sqlite-runtime-testing.ts",
+        "plugin-sdk/test-state": "src/plugin-sdk/test-state.ts",
+        ...(qa ? { "extensions/qa-lab/index": "extensions/qa-lab/index.js" } : {}),
+      },
+    );
+    const manifest = {
+      files: [
+        "dist/",
+        "!dist/extensions/qa-lab/**",
+        "!dist/plugin-sdk/sqlite-runtime-testing.*",
+        "!dist/plugin-sdk/test-state.*",
+      ],
+    };
+    const { files } = await resolveNodeBootstrapRuntimeChunks(
+      root,
+      await collectPackageDistInventory(root, { packageManifest: manifest }),
+      manifest.files,
+    );
+    expect(files).toEqual(expect.arrayContaining([expect.stringMatching(/^dist\/root\.m?js$/u)]));
+    expect(
+      collectPackageDistImportErrors({
+        files,
+        readText: (file) => fs.readFileSync(join(root, file), "utf8"),
+      }),
+    ).toEqual([]);
+  },
+);

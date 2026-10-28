@@ -1,12 +1,7 @@
 import { createMemo } from "@solidjs/signals";
 import type { JSX } from "@solidjs/web";
 import { McpServersCard } from "../../components/mcp-servers-card.tsx";
-import {
-  LearnMoreLink,
-  SettingsPage,
-  SettingsRow,
-  SettingsValue,
-} from "../../components/solid/settings-ui.tsx";
+import { SettingsPage, SettingsRow, SettingsValue } from "../../components/solid/settings-ui.tsx";
 import { registerMcpEnglish } from "../../i18n/locales/en-mcp.ts";
 import { summarizeMcpServers } from "../../lib/config/mcp-servers.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
@@ -22,14 +17,6 @@ export type McpViewProps = {
   /** Embedded schema editor; it owns autosave status and the restart banner. */
   editor: JSX.Element;
 };
-
-export function McpIntro() {
-  return (
-    <>
-      {t("mcpPage.intro")} <LearnMoreLink url={MCP_DOCS_URL} />
-    </>
-  );
-}
 
 export function Mcp(props: McpViewProps) {
   const rows = createMemo(() => summarizeMcpServers(props.configObject) ?? []);

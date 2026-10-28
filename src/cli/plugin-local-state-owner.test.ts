@@ -27,6 +27,7 @@ import type { OpenClawPluginApi } from "../plugins/plugin-api.types.js";
 import type { OpenClawPluginCliRegistrar } from "../plugins/plugin-registration.types.js";
 import type { MemoryPluginRuntime } from "../plugins/registry-contribution-types.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
+import { writeFixtureJsonSync } from "./cli-fixtures.test-support.js";
 
 const fixture = vi.hoisted(() => ({
   external: false,
@@ -555,21 +556,18 @@ describe("synthetic plugin commands respect the local state owner", () => {
   it("routes configured memory search and options without local database credentials", async () => {
     await occupyState();
     vi.stubEnv("MISSING_ROUTED_CLI_DATABASE_DSN", undefined);
-    fs.writeFileSync(
-      path.join(root, "openclaw.json"),
-      JSON.stringify({
-        database: {
-          engine: "postgres",
-          postgres: {
-            connection: {
-              source: "env",
-              provider: "default",
-              id: "MISSING_ROUTED_CLI_DATABASE_DSN",
-            },
+    writeFixtureJsonSync(path.join(root, "openclaw.json"), {
+      database: {
+        engine: "postgres",
+        postgres: {
+          connection: {
+            source: "env",
+            provider: "default",
+            id: "MISSING_ROUTED_CLI_DATABASE_DSN",
           },
         },
-      }),
-    );
+      },
+    });
     const hits = [
       {
         path: "memory/fact.md",

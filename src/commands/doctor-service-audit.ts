@@ -7,15 +7,21 @@ import {
   type ServiceConfigIssue,
 } from "../daemon/service-audit.js";
 import { SERVICE_PROXY_ENV_KEYS } from "../daemon/service-env.js";
-import type { GatewayServiceLayoutSummary } from "../daemon/service-layout.js";
+import {
+  gatewayServiceCommandMatchesRoot,
+  type GatewayServiceLayoutSummary,
+} from "../daemon/service-layout.js";
 import { normalizeServiceEnvKey } from "../daemon/service-managed-env.js";
 import {
   hasGatewayServiceEnvironmentOverride,
+  hasGatewayServiceLauncherOverride,
+  resolveManagedGatewayServiceCommand,
   type GatewayServiceCommandConfig,
   type GatewayServiceInstallArgs,
 } from "../daemon/service-types.js";
 import type { HealthFinding } from "../flows/health-checks.js";
 import type { RuntimeEnv } from "../runtime.js";
+import type { GatewayInstallPlan } from "./daemon-install-plan.shared.js";
 
 export function formatServiceConfigIssues(issues: ServiceConfigIssue[]): string[] {
   return issues.map(({ message, detail }) => `- ${message}${detail ? ` (${detail})` : ""}`);
@@ -162,7 +168,46 @@ export function isServiceDefinitionOnlyRepair(audit: ServiceConfigAudit): boolea
   return audit.issues.every((issue) => policyCodes.has(issue.code));
 }
 
-export function isOperatorOwnedEnvironmentIssue(
+/** The install plan retains pins/wrappers; only a changed, owned Node runtime is repairable. */
+export async function canRepairRuntime(
+  audit: ServiceConfigAudit,
+  command: GatewayServiceCommandConfig,
+  plan: GatewayInstallPlan,
+  layout: GatewayServiceLayoutSummary | undefined,
+  platform: NodeJS.Platform,
+): Promise<boolean> {
+  const runtimeCodes: ReadonlySet<string> = new Set([
+    SERVICE_AUDIT_CODES.gatewayRuntimeNode,
+    SERVICE_AUDIT_CODES.gatewayRuntimeNodeVersionManager,
+    SERVICE_AUDIT_CODES.gatewayRuntimeNodeSystemMissing,
+    SERVICE_AUDIT_CODES.gatewayPathMissing,
+    SERVICE_AUDIT_CODES.gatewayPathMissingDirs,
+    SERVICE_AUDIT_CODES.gatewayPathNonMinimal,
+  ]);
+  return (
+    !layout?.entrypointSourceCheckout &&
+    !hasGatewayServiceLauncherOverride(command) &&
+    plan.runtime === "node" &&
+    plan.programArguments[0] !==
+      resolveManagedGatewayServiceCommand(command)?.programArguments[0] &&
+    audit.issues.some((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayRuntimeNode) &&
+    audit.issues.every((issue) => runtimeCodes.has(issue.code)) &&
+    !audit.definitionDriftError &&
+    !audit.definitionDrift?.some(
+      (finding) =>
+        finding.kind === "unknown-edit" &&
+        !(
+          platform === "linux" &&
+          finding.sourcePath &&
+          finding.sourcePath !== command.sourcePath &&
+          command.definitionPaths?.includes(finding.sourcePath)
+        ),
+    ) &&
+    (await gatewayServiceCommandMatchesRoot(layout?.packageRootReal, command)) === true
+  );
+}
+
+export function isOperatorOwnedServiceIssue(
   issue: { code: string; environmentKeys?: readonly string[] },
   command: GatewayServiceCommandConfig,
   environmentValueSources: GatewayServiceInstallArgs["environmentValueSources"],
@@ -170,6 +215,8 @@ export function isOperatorOwnedEnvironmentIssue(
   const hasOverride = (keys: readonly string[]) =>
     hasGatewayServiceEnvironmentOverride(command, keys, { environmentValueSources });
   switch (issue.code) {
+    case SERVICE_AUDIT_CODES.gatewayRuntimeNode:
+      return hasGatewayServiceLauncherOverride(command);
     case SERVICE_AUDIT_CODES.gatewayPathMissing:
     case SERVICE_AUDIT_CODES.gatewayPathMissingDirs:
     case SERVICE_AUDIT_CODES.gatewayPathNonMinimal:

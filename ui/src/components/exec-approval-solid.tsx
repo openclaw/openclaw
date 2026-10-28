@@ -1,16 +1,22 @@
 // Control UI modal presents approvals after an explicit operator action.
-import { For, createSignal, onSettled } from "solid-js";
-import { compactApprovalCommand } from "../app/approval-presentation.ts";
+import { For, Show, createMemo, createSignal, onSettled } from "solid-js";
+import type { GatewaySessionRow } from "../api/types.ts";
 import type { ExecApprovalDecision, ExecApprovalRequest } from "../app/exec-approval.ts";
 import {
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
 } from "../lib/keyboard-shortcut-contract.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
-import { ApprovalCountdown, approvalRemainingLabel } from "./approval-countdown.tsx";
+import {
+  ApprovalCountdown,
+  approvalRemainingLabel,
+  readApprovalTime,
+} from "./approval-countdown.tsx";
 import {
   approvalTitle,
+  ApprovalAgentAvatar,
   ExecApprovalCard,
   resolveApprovalDecisions,
 } from "./exec-approval-card-solid.tsx";
@@ -22,6 +28,9 @@ export type ExecApprovalProps = {
   connected: boolean;
   canGrant: boolean;
   errors: ReadonlyMap<string, string>;
+  nodeNames?: ReadonlyMap<string, string>;
+  sessions?: readonly GatewaySessionRow[];
+  currentSessionKey?: string;
   onDecision: (approvalId: string, decision: ExecApprovalDecision) => void | Promise<void>;
 };
 
@@ -34,13 +43,15 @@ function renderApprovalQueueList(params: {
   if (others.length === 0) {
     return undefined;
   }
+  const label = t("execApproval.morePending", { count: String(others.length) });
   return (
-    <div class="exec-approval-list" aria-label={t("execApproval.otherPending")}>
-      <div class="exec-approval-list__heading">{t("execApproval.otherPending")}</div>
+    <div class="exec-approval-list" aria-label={label}>
+      <div class="exec-approval-list__heading">{label}</div>
       <For each={others}>
         {(entry) => {
-          const command = compactApprovalCommand(entry.request.command);
-          const agent = entry.request.agentId?.trim() || "—";
+          const command = entry.request.command;
+          const agentId = entry.request.agentId?.trim();
+          const agent = agentId || "—";
           return (
             <button
               class="exec-approval-list__item"
@@ -48,14 +59,18 @@ function renderApprovalQueueList(params: {
               aria-label={t("execApproval.reviewRequest", { agent, command })}
               onClick={() => params.onSelect(entry.id)}
             >
-              <span class="exec-approval-list__agent">{agent}</span>
-              <span class="exec-approval-list__command mono">{command}</span>
-              <ApprovalCountdown
-                class="exec-approval-list__expiry"
-                aria-hidden="true"
-                expiresAtMs={entry.expiresAtMs}
-                compact={true}
-              />
+              <Show
+                when={agentId}
+                fallback={<span class="exec-approval-list__agent" aria-hidden="true" />}
+              >
+                {(id) => <ApprovalAgentAvatar agentId={id()} class="exec-approval-list__agent" />}
+              </Show>
+              <span class="exec-approval-list__command mono" title={command}>
+                {command}
+              </span>
+              <span class="exec-approval-list__expiry" aria-hidden="true">
+                <ApprovalCountdown expiresAtMs={entry.expiresAtMs} compact={true} />
+              </span>
             </button>
           );
         }}
@@ -110,6 +125,12 @@ export const ExecApproval = defineSolidBridge<{ props?: ExecApprovalProps }, Met
       (previous) => queue().length > 0 && (previous ?? false),
     );
     const active = () => queue().find((entry) => entry.id === selectedApprovalId()) ?? queue()[0];
+    const sourceSession = createMemo(() => {
+      const key = active()?.sourceSessionKey ?? active()?.request.sessionKey;
+      return key
+        ? bridgeProps.props?.sessions?.find((row) => areUiSessionKeysEquivalent(row.key, key))
+        : undefined;
+    });
     let decide: ExecApprovalProps["onDecision"] | undefined;
     let deciding = () => false;
     controls.set(host, {
@@ -159,7 +180,10 @@ export const ExecApproval = defineSolidBridge<{ props?: ExecApprovalProps }, Met
         {explicitlyOpen() && active() && bridgeProps.props ? (
           <openclaw-modal-dialog
             label={approvalTitle(active()!)}
-            description={approvalRemainingLabel(active()!.expiresAtMs, Date.now())}
+            description={approvalRemainingLabel(
+              active()!.expiresAtMs,
+              readApprovalTime(active()!.expiresAtMs),
+            )}
             onKeyDown={handleKeydown}
             onModal-cancel={handleCancel}
           >
@@ -167,6 +191,11 @@ export const ExecApproval = defineSolidBridge<{ props?: ExecApprovalProps }, Met
               <ExecApprovalCard
                 props={{
                   approval: active()!,
+                  sourceSession: sourceSession(),
+                  currentSessionKey: bridgeProps.props!.currentSessionKey,
+                  nodeDisplayName: bridgeProps.props!.nodeNames?.get(
+                    active()!.request.nodeId ?? "",
+                  ),
                   busy: bridgeProps.props!.busy,
                   connected: bridgeProps.props!.connected,
                   canGrant: bridgeProps.props!.canGrant,

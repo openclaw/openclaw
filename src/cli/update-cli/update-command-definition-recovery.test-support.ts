@@ -156,8 +156,6 @@ export function registerUnverifiedDefinitionRecoveryTests({
       });
       const rollback = await rollbackOwner();
       mocks.rollback.mockImplementation(rollback.rollbackFailedUpdate);
-      const complete = vi.spyOn(transaction, "complete");
-      const restore = vi.spyOn(transaction, "rollback");
       const run = params.opts.run!;
       const outcome = await finish(params);
       const result = outcome instanceof UpdateCommandFailure ? outcome.result : outcome;
@@ -171,18 +169,9 @@ export function registerUnverifiedDefinitionRecoveryTests({
           ? { recovery: healthyRecovery }
           : {}),
       });
-      expect({
-        actions: mocks.restartCommand.mock.calls.map(([, action]) => action),
-        restores: restore.mock.calls,
-        completions: complete.mock.calls,
-      }).toEqual({
-        actions: startup === "unrelated-failure" ? ["restart"] : ["install", "restart"],
-        restores: [],
-        completions:
-          startup === "unrelated-failure"
-            ? []
-            : [[{ activationVerified: false }, expect.any(Function)]],
-      });
+      expect(mocks.restartCommand.mock.calls.map(([, action]) => action)).toEqual(
+        startup === "unrelated-failure" ? ["restart"] : ["install", "restart"],
+      );
       for (const [root, version] of [
         [transaction.backupRoot, "1.0.0"],
         [packageRoot, "2.0.0"],

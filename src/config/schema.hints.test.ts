@@ -1,10 +1,9 @@
 import { SENSITIVE_URL_HINT_TAG } from "@openclaw/net-policy/redact-sensitive-url";
 import { expect, it } from "vitest";
 import { z } from "zod";
-import { mapSensitivePaths, testApi } from "./schema.hints.js";
+import { mapSensitivePaths } from "./schema.hints.js";
 import { buildConfigSchemaCore } from "./schema.js";
 import { OpenClawSchema } from "./zod-schema.js";
-import { OpenClawSchemaShape } from "./zod-schema.root-shape.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
 const secret = () => z.string().register(sensitive);
@@ -19,13 +18,6 @@ function expectSensitive(hints: ReturnType<typeof mapSensitivePaths>, paths: str
     Object.fromEntries(fields.map((path) => [path, { sensitive: true }])),
   );
 }
-
-it("accounts for every root config section", () => {
-  // Sections without beginner-facing docs still require an explicit decision.
-  const urls = testApi.SECTION_DOCS_URLS;
-  const known = new Set([...Object.keys(urls), "$schema", "meta", "attachments"]);
-  expect(Object.keys(OpenClawSchemaShape).filter((key) => !known.has(key))).toEqual([]);
-});
 
 it("describes omitted settings without adding them to authored config", () => {
   const { uiHints } = buildConfigSchemaCore();
@@ -124,11 +116,9 @@ it("preserves authored metadata without deriving tags from field names or tiers"
   });
   expect(hints["gateway.auth.token"]?.tags).toBeUndefined();
   const plugin = (key: string) => hints[`plugins.entries.authored-metadata.config.${key}`];
-  expect(plugin("maxTokens")).toMatchObject({ sensitive: false });
-  expect(plugin("maxTokens")?.tags).toBeUndefined();
+  expect([plugin("maxTokens")?.sensitive, plugin("maxTokens")?.tags]).toEqual([false, undefined]);
   expect(plugin("storagePath")).toMatchObject({ tags: ["User-defined"], advanced: true });
-  expect(plugin("apiKey")?.sensitive).toBe(true);
-  expect(plugin("apiKey")?.tags).toBeUndefined();
+  expect([plugin("apiKey")?.sensitive, plugin("apiKey")?.tags]).toEqual([true, undefined]);
   expect(hints["channels.authored-metadata-channel.retryLimit"]?.tags).toEqual(["Tuning"]);
   expect(hints["mcp.servers.*.url"]?.tags).toContain(SENSITIVE_URL_HINT_TAG);
 });

@@ -92,6 +92,13 @@ async function buildOAuthDoctorReport(
   const accessToken = options.accessToken?.trim() || config.oauth.accessToken;
   const expiresAt = parseOptionalNumber(options.expiresAt) ?? config.oauth.expiresAt;
   const checks: MeetingSetupCheck[] = [];
+  const recordFailure = (id: MeetingSetupCheck["id"], error: unknown) => {
+    checks.push({
+      id,
+      ok: false,
+      message: sanitizeOAuthErrorMessage(error),
+    });
+  };
 
   const hasRefreshConfig = Boolean(clientId && refreshToken);
   const hasAccessConfig = Boolean(accessToken);
@@ -134,11 +141,7 @@ async function buildOAuthDoctorReport(
         : "Cached access token is still valid",
     });
   } catch (error) {
-    checks.push({
-      id: "oauth-token",
-      ok: false,
-      message: sanitizeOAuthErrorMessage(error),
-    });
+    recordFailure("oauth-token", error);
     return { ok: false, configured: true, checks };
   }
 
@@ -161,11 +164,7 @@ async function buildOAuthDoctorReport(
       });
       report.meetingUri = space.meetingUri;
     } catch (error) {
-      checks.push({
-        id: "meet-spaces-get",
-        ok: false,
-        message: sanitizeOAuthErrorMessage(error),
-      });
+      recordFailure("meet-spaces-get", error);
     }
   }
 
@@ -180,11 +179,7 @@ async function buildOAuthDoctorReport(
       report.createdSpace = created.space.name;
       report.meetingUri = created.meetingUri;
     } catch (error) {
-      checks.push({
-        id: "meet-spaces-create",
-        ok: false,
-        message: sanitizeOAuthErrorMessage(error),
-      });
+      recordFailure("meet-spaces-create", error);
     }
   }
 

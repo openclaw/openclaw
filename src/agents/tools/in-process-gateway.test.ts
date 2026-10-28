@@ -74,20 +74,14 @@ function asCaller<T>(identity: Partial<Caller>, run: () => Promise<T>) {
   return withGatewayToolCallerIdentity({ ...mainCaller, ...identity }, run);
 }
 function gatewayBinding() {
-  const admitted = { gateway: "admitted" } as unknown as GatewayRequestContext;
-  const replacement = { gateway: "replacement" } as unknown as GatewayRequestContext;
+  const admitted = {} as GatewayRequestContext;
   let current = admitted;
   return {
     admitted,
-    replacement,
-    restore: () => {
-      current = admitted;
-    },
     replace: () => {
-      current = replacement;
+      current = {} as GatewayRequestContext;
     },
     resolve: () => current,
-    run: <T>(run: () => Promise<T>) => asCaller({ gatewayContextResolver: () => current }, run),
   };
 }
 type Request = Parameters<typeof callAgentToolGatewayRequest>[0];
@@ -96,13 +90,6 @@ const callRequest = (
   params: Request["params"] = {},
   options: Omit<Request, "method" | "params"> = {},
 ) => callAgentToolGatewayRequest({ method, params, ...options });
-const syntheticOptions = {
-  forceSyntheticClient: true,
-  operatorRoleActor: { kind: "system" },
-  resolveGatewayContext: expect.any(Function),
-  syntheticScopeMode: "minimum",
-  syntheticScopes: ["operator.write"],
-};
 function expectNoTransport() {
   expect(mocks.callGateway).not.toHaveBeenCalled();
   expect(mocks.callGatewayTool).not.toHaveBeenCalled();
@@ -136,16 +123,31 @@ describe("trusted in-process Gateway session creation", () => {
     actor: { type: "agent" as const, id: "main" },
     requesterSessionKey: "agent:main:main",
   };
-  beforeEach(() => {
-    mocks.dispatch.mockResolvedValue({ key: "agent:main:dashboard:child" });
-    mocks.callGateway.mockResolvedValue({ status: "ok" });
-    mocks.callGatewayTool.mockResolvedValue({ key: "agent:main:dashboard:child" });
-  });
   const createSession = (
     params: Parameters<typeof callInProcessGatewayToolWithCreation>[1] = { agentId: "main" },
     provenance: Parameters<typeof callInProcessGatewayToolWithCreation>[2] = creation,
     options?: Parameters<typeof callInProcessGatewayToolWithCreation>[3],
   ) => callInProcessGatewayToolWithCreation("sessions.create", params, provenance, options);
+
+  it.each([
+    { origin: { delegatedCreatorProfileId: "linked-human" }, expected: "linked-human" },
+    {
+      origin: { delegatedCreatorProfileId: null, operatorProfileId: "selected-human" },
+      expected: undefined,
+    },
+    { origin: { senderId: "claimed-profile", messageProvider: "x" }, expected: undefined },
+  ])(
+    "uses only the host causal requester for default task ownership: $expected",
+    async ({ origin, expected }) => {
+      await asCaller({ requesterOrigin: { sessionKey: mainCaller.sessionKey, ...origin } }, () =>
+        createSession(),
+      );
+      expect(mocks.dispatch.mock.calls[0]?.[2].sessionCreation).toEqual({
+        ...creation,
+        ...(expected ? { requesterProfileId: expected } : {}),
+      });
+    },
+  );
 
   const subagentResume = {
     caller: { ...mainCaller, assertCurrent: vi.fn() },
@@ -231,29 +233,28 @@ describe("trusted in-process Gateway session creation", () => {
   it("uses an explicitly bound Gateway when worker creation has no ambient request scope", async () => {
     mocks.hasContext = false;
     const admitted = {} as GatewayRequestContext;
-    const resolveGatewayContext = () => admitted;
     const sessionMutationCommitGuard = vi.fn();
     const workerCreation = {
       ...creation,
       requesterSessionKey: "agent:main:dashboard:worker",
       inheritedToolPolicy: { version: 1 as const, allow: ["sessions_spawn"], deny: [] },
     };
-
-    await createSession(undefined, workerCreation, {
-      resolveGatewayContext,
+    const options = {
+      resolveGatewayContext: () => admitted,
       sessionMutationCommitGuard,
+      signal: new AbortController().signal,
+      timeoutMs: 2_000,
+    };
+    mocks.dispatch.mockResolvedValueOnce({ key: "agent:main:worker" });
+    await expect(createSession(undefined, workerCreation, options)).resolves.toEqual({
+      key: "agent:main:worker",
     });
-
-    expectDispatch(
-      "sessions.create",
-      { agentId: "main" },
-      expect.objectContaining({
-        resolveGatewayContext: expect.any(Function),
-        sessionMutationCommitGuard: expect.any(Function),
-        sessionCreation: workerCreation,
-      }),
-    );
     const dispatchedOptions = mocks.dispatch.mock.calls[0]?.[2];
+    expect(dispatchedOptions).toMatchObject({
+      signal: options.signal,
+      timeoutMs: options.timeoutMs,
+    });
+    expect(dispatchedOptions.sessionCreation).toEqual(workerCreation);
     expect(dispatchedOptions.resolveGatewayContext()).toBe(admitted);
     expect(() => dispatchedOptions.sessionMutationCommitGuard()).not.toThrow();
     expect(sessionMutationCommitGuard).toHaveBeenCalledOnce();
@@ -267,13 +268,6 @@ describe("trusted in-process Gateway session creation", () => {
 
   it("carries visible-spawn policy and its timeout through signed fallback dispatch", async () => {
     mocks.hasContext = false;
-    const inheritedToolPolicy = {
-      version: 1 as const,
-      allow: ["read", "sessions_spawn"],
-      deny: ["exec"],
-    };
-    const resolvedModel = { provider: "custom", model: "middle" };
-    const spawnModelAutoSelection = { model: "custom/middle", hasFallbackOrigin: true };
     const params = {
       agentId: "main",
       parentSessionKey: "agent:main:main",
@@ -283,9 +277,13 @@ describe("trusted in-process Gateway session creation", () => {
     const spawnContext = {
       requesterSenderIsOwner: true,
       completionOwnerSessionKey: "agent:main:discord:direct:alice",
-      inheritedToolPolicy,
-      resolvedModel,
-      spawnModelAutoSelection,
+      inheritedToolPolicy: {
+        version: 1 as const,
+        allow: ["read", "sessions_spawn"],
+        deny: ["exec"],
+      },
+      resolvedModel: { provider: "custom", model: "middle" },
+      spawnModelAutoSelection: { model: "custom/middle", hasFallbackOrigin: true },
     };
     mocks.callGatewayTool.mockImplementationOnce(async () => {
       expect(getGatewaySessionSpawnContext()).toEqual(spawnContext);
@@ -302,80 +300,7 @@ describe("trusted in-process Gateway session creation", () => {
     expect(getGatewaySessionSpawnContext()).toBeUndefined();
   });
 
-  it("keeps session creation on the admitted Gateway through async settlement", async () => {
-    const gateway = gatewayBinding();
-    const params = { agentId: "main", label: "worker" };
-    const controller = new AbortController();
-    mocks.dispatch.mockImplementationOnce(async (_method, _params, options) => {
-      expect(options.resolveGatewayContext()).toBe(gateway.admitted);
-      expect(options).toEqual({
-        ...syntheticOptions,
-        sessionCreation: creation,
-        signal: controller.signal,
-        timeoutMs: 2_000,
-      });
-      return { key: "agent:main:worker" };
-    });
-
-    await expect(
-      gateway.run(() =>
-        createSession(params, creation, {
-          signal: controller.signal,
-          timeoutMs: 2_000,
-        }),
-      ),
-    ).resolves.toEqual({ key: "agent:main:worker" });
-    expect(mocks.dispatch).toHaveBeenLastCalledWith("sessions.create", params, expect.any(Object));
-
-    const dispatchesBeforeReplacement = mocks.dispatch.mock.calls.length;
-    await expect(
-      gateway.run(async () => {
-        gateway.replace();
-        return await createSession(params);
-      }),
-    ).rejects.toThrow("Gateway instance unavailable for sessions.create");
-    expect(mocks.dispatch).toHaveBeenCalledTimes(dispatchesBeforeReplacement);
-    expect(mocks.callGatewayTool).not.toHaveBeenCalled();
-
-    for (const settlement of ["resolve", "reject"] as const) {
-      gateway.restore();
-      const pendingDispatch = createDeferred<{ key: string }>();
-      mocks.dispatch.mockImplementationOnce(async (_method, _params, options) => {
-        expect(options.resolveGatewayContext()).toBe(gateway.admitted);
-        return await pendingDispatch.promise;
-      });
-
-      const expectedDispatchCount = mocks.dispatch.mock.calls.length + 1;
-      const creationCall = gateway.run(() => createSession(params));
-      await vi.waitFor(() => expect(mocks.dispatch).toHaveBeenCalledTimes(expectedDispatchCount));
-      gateway.replace();
-      if (settlement === "resolve") {
-        pendingDispatch.resolve({ key: "agent:main:worker" });
-      } else {
-        pendingDispatch.reject(new Error("inner dispatch failed"));
-      }
-      await expect(creationCall).rejects.toThrow(
-        "Gateway instance unavailable for sessions.create",
-      );
-    }
-  });
-
-  it("retains the generic helper's admitted binding and transport fallback", async () => {
-    const gateway = gatewayBinding();
-    mocks.dispatch.mockImplementationOnce(async (_method, _params, options) => ({
-      selected: options?.resolveGatewayContext?.() ?? gateway.replacement,
-    }));
-
-    const listSessions = () => callInProcessGatewayTool("sessions.list", {});
-    await expect(gateway.run(listSessions)).resolves.toEqual({ selected: gateway.admitted });
-
-    await expect(
-      gateway.run(async () => {
-        gateway.replace();
-        return await listSessions();
-      }),
-    ).rejects.toThrow("Gateway instance unavailable for sessions.list");
-
+  it("retains the generic helper's transport fallback", async () => {
     mocks.hasContext = false;
     const signal = new AbortController().signal;
     await callInProcessGatewayTool("sessions.list", { limit: 5 }, { timeoutMs: 120_000, signal });
@@ -411,36 +336,23 @@ describe("trusted in-process Gateway session creation", () => {
 });
 
 describe("request-shaped in-process Gateway dispatch", () => {
-  beforeEach(() => {
-    mocks.dispatch.mockResolvedValue({ runId: "run-1" });
-    mocks.callGateway.mockResolvedValue({ runId: "run-1" });
-  });
-
   it("marks only an owner-bound plugin approval request for host admission", async () => {
     const identity = {
       ...runtimeIdentity,
       sessionKey: "agent:main:main",
       approvalOwnerPluginId: "registered-hook",
     } as const;
-    const request = withAgentToolGatewayRuntimeIdentity(
-      { method: "plugin.approval.request", params: { title: "Review action" } },
-      identity,
-    );
-    await callAgentToolGatewayRequest(request);
+    const request = (method: string) =>
+      callAgentToolGatewayRequest(
+        withAgentToolGatewayRuntimeIdentity({ method, params: {} }, identity),
+      );
+    await request("plugin.approval.request");
 
     const requestOptions = mocks.dispatch.mock.calls[0]?.[2];
     expect(requestOptions).toMatchObject({ allowHostPluginApprovalRequest: true });
     expect(readInProcessAgentRuntimeIdentity(requestOptions)).toBe(identity);
 
-    await callAgentToolGatewayRequest(
-      withAgentToolGatewayRuntimeIdentity(
-        {
-          method: "plugin.approval.resolve",
-          params: { id: "plugin:test", decision: "allow-once" },
-        },
-        identity,
-      ),
-    );
+    await request("plugin.approval.resolve");
     expect(mocks.dispatch.mock.calls[1]?.[2]).not.toHaveProperty("allowHostPluginApprovalRequest");
   });
 
@@ -451,26 +363,23 @@ describe("request-shaped in-process Gateway dispatch", () => {
   ] as const)(
     "preserves request options and maps timeout %s to %s",
     async (timeoutMs, expected) => {
-      const controller = new AbortController();
-      const onAccepted = vi.fn();
-      const agentToolCaller = {
-        agentId: "main",
-        sessionKey: "agent:main:discord:direct:colin",
-      };
-
       const params = { sessionKey: "agent:main:worker", message: "run" };
       const options = {
-        agentToolCaller,
+        agentToolCaller: mainCaller,
         replyExpectation: "optional" as const,
         expectFinal: true,
-        onAccepted,
-        signal: controller.signal,
+        onAccepted: vi.fn(),
+        signal: new AbortController().signal,
       };
       await callRequest("agent", { ...params }, { ...options, timeoutMs });
 
       expectDispatch("agent", params, {
-        ...syntheticOptions,
         ...options,
+        forceSyntheticClient: true,
+        operatorRoleActor: { kind: "system" },
+        resolveGatewayContext: expect.any(Function),
+        syntheticScopeMode: "minimum",
+        syntheticScopes: ["operator.write"],
         ...(expected === undefined ? {} : { timeoutMs: expected }),
       });
       expect(mocks.callGateway).not.toHaveBeenCalled();
@@ -480,21 +389,20 @@ describe("request-shaped in-process Gateway dispatch", () => {
   it.each([false, true])(
     "allows closed-caller abort cleanup only on the original Gateway (replaced=%s)",
     async (replaced) => {
-      const context = {} as GatewayRequestContext;
-      let currentGateway = context;
+      const gateway = gatewayBinding();
       let currentCaller = true;
       let cancelled = false;
       const controller = new AbortController();
       const params = { turnId: replaced ? "turn-1" : "owned-turn" };
       mocks.dispatch.mockImplementation(async (method, _params, options) => {
         if (method === "conversations.turn.cancel") {
-          expect(options.resolveGatewayContext()).toBe(context);
+          expect(options.resolveGatewayContext()).toBe(gateway.admitted);
           expect(readInProcessAgentRuntimeIdentity(options)).toBeUndefined();
           cancelled = true;
           return { ok: true };
         }
         if (replaced) {
-          currentGateway = {} as GatewayRequestContext;
+          gateway.replace();
         } else {
           currentCaller = false;
           controller.abort();
@@ -508,7 +416,7 @@ describe("request-shaped in-process Gateway dispatch", () => {
           ...(!replaced
             ? { receiptAuthority: () => currentCaller, approvalSignals: [controller.signal] }
             : {}),
-          gatewayContextResolver: () => currentGateway,
+          gatewayContextResolver: gateway.resolve,
         },
         () =>
           callRequest("conversations.turn", params, {
@@ -533,17 +441,34 @@ describe("request-shaped in-process Gateway dispatch", () => {
     },
   );
 
-  it("keeps a captured multi-request operation on its original Gateway", async () => {
-    const gateway = gatewayBinding();
-    const request = bindAgentToolGatewayRequest({ resolveGatewayContext: gateway.resolve });
-    await request({ method: "question.get", params: { id: "question-1" } });
-    gateway.replace();
-    await expect(
-      request({ method: "question.resolve", params: { id: "question-1" } }),
-    ).rejects.toThrow("Gateway instance unavailable");
-    expect(mocks.dispatch).toHaveBeenCalledOnce();
-    expect(mocks.callGateway).not.toHaveBeenCalled();
-  });
+  it.each(["dispatch", "resolve", "reject"] as const)(
+    "keeps an operation on its admitted Gateway through %s",
+    async (boundary) => {
+      const gateway = gatewayBinding();
+      const request = bindAgentToolGatewayRequest({ resolveGatewayContext: gateway.resolve });
+      const settled = createDeferred();
+      mocks.dispatch.mockImplementationOnce(async (_method, _params, options) => {
+        expect(options.resolveGatewayContext()).toBe(gateway.admitted);
+        return await settled.promise;
+      });
+      if (boundary === "dispatch") {
+        gateway.replace();
+      }
+      const pending = request({ method: "question.resolve", params: { id: "question-1" } });
+      if (boundary !== "dispatch") {
+        await vi.waitFor(() => expect(mocks.dispatch).toHaveBeenCalledOnce());
+        gateway.replace();
+        if (boundary === "resolve") {
+          settled.resolve();
+        } else {
+          settled.reject(new Error("inner dispatch failed"));
+        }
+      }
+      await expect(pending).rejects.toThrow("Gateway instance unavailable");
+      expect(mocks.dispatch).toHaveBeenCalledTimes(boundary === "dispatch" ? 0 : 1);
+      expectNoTransport();
+    },
+  );
 
   it("retains local-embedded transport for hosted-only operation bindings", async () => {
     const context = { localEmbedded: true } as GatewayRequestContext;

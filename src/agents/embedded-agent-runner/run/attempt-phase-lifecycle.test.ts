@@ -7,10 +7,13 @@ import {
   upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
-import { createDeferredCore } from "../../../shared/deferred.js";
 import { runOpenClawAgentWorkerWrite } from "../../../state/openclaw-agent-write-admission.js";
 import { useSessionStoreTempDirs } from "../../../test-utils/session-state-cleanup.js";
+import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import { FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE } from "../../bootstrap-files.js";
+import { createEnteredGate } from "../../entered-gate.test-support.js";
+import * as contextEngineLifecycle from "../../harness/context-engine-lifecycle.js";
+import { createContextEngine } from "../../harness/context-engine-lifecycle.test-support.js";
 import { awaitAgentHarnessAgentEndHook } from "../../harness/lifecycle-hook-helpers.js";
 import { installSessionToolResultGuard } from "../../session-tool-result-guard.js";
 import { SessionManager } from "../../sessions/session-manager.js";
@@ -101,6 +104,7 @@ function streamInput(messages: unknown[] = [], currentAttemptAssistant?: unknown
     }),
     markTimedOutDuringCompaction: () => {},
     getRunAbortDeadlineAtMs: () => runAbortDeadlineAtMs,
+    onRunAbortDeadlineChanged: () => () => {},
     runAbortSignal: new AbortController().signal,
     isProbeSession: true,
     abortable: async (promise) => await promise,
@@ -157,6 +161,7 @@ function prompt(transcriptLeafId: string | null = null) {
 
 function finalizationInput(preparedState: ReturnType<typeof prepared>) {
   return {
+    runAbortController: new AbortController(),
     agentDir: "/tmp/agent",
     resolveActiveContextEnginePluginId: () => undefined,
     setup: { effectiveWorkspace: "/tmp/workspace", sessionAgentId: "main" },
@@ -180,6 +185,152 @@ describe("embedded attempt phase lifecycle state", () => {
     hoisted.shouldWaitForCompletionRequiredAsyncTasks.mockReset().mockReturnValue(false);
     hoisted.waitForCompletionRequiredAsyncTasks.mockReset();
   });
+
+  it.each(["afterTurn", "ingestBatch", "ingest", "candidate"] as const)(
+    "preserves the legacy attempt fields read during %s finalization",
+    async (mode) => {
+      const admission = prepareSystemAgentRunAdmission({}, `projection-${mode}`, "main", "test");
+      const admittedRunContext = await admission.admit("embedded");
+      const { input, sessionManager: initialManager } = streamInput();
+      let sessionManager: SessionManager = initialManager;
+      const attempt = {
+        ...input.attempt,
+        admittedRunContext,
+        // Prepared admission is deliberately absent from EmbeddedRunAttemptParams;
+        // include it as an extra legacy-spread fact to detect future consumer reads.
+        preparedRunAdmission: admission,
+        operation: "settled-tool-finalization" as const,
+        config: {},
+        sessionTarget: { agentId: "main", sessionId: "session-1", sessionKey: "agent:main:main" },
+        modelContextWindow: 200_000,
+        contextTokenBudget: 180_000,
+        requestedModelId: "requested-model",
+        fallbackReason: "synthetic fallback",
+        degradedReason: "synthetic degradation",
+        sandboxSessionKey: "agent:main:sandbox",
+        sandboxAgentId: "sandbox-owner",
+        messageChannel: "telegram",
+        messageProvider: "telegram",
+        currentChannelId: "synthetic-channel",
+        currentThreadTs: "synthetic-thread",
+        trigger: "cron" as const,
+        inputProvenance: { kind: "external_user" as const },
+      };
+      const effects: unknown[] = [];
+      if (mode === "candidate") {
+        const { dir, target } = await seedSession("session-1", "agent:main:main");
+        const message = { role: "user" as const, content: "hello", timestamp: 1 };
+        const persisted = await appendTranscriptMessage(target, { cwd: dir, message, now: 1 });
+        if (!persisted?.anchor) {
+          throw new Error("expected persisted admission anchor");
+        }
+        const recorder = createUserTurnTranscriptRecorder({
+          message,
+          target: async () => undefined,
+        });
+        recorder.markRuntimePersisted(message, persisted.anchor);
+        sessionManager = SessionManager.open(target, dir);
+        await sessionManager.appendMessageAsync(
+          makeAgentAssistantMessage({ content: [{ type: "text", text: "done" }], timestamp: 2 }),
+        );
+        attempt.sessionTarget = target;
+        attempt.userTurnTranscriptRecorder = recorder;
+        attempt.onContextEngineTurnCandidate = (facts) => {
+          effects.push(facts);
+        };
+      }
+      const engine = createContextEngine({
+        afterTurn:
+          mode === "afterTurn"
+            ? async (params) => {
+                effects.push(params);
+              }
+            : undefined,
+        ingestBatch:
+          mode === "ingestBatch"
+            ? async (params) => {
+                effects.push(params);
+                return { ingestedCount: params.messages.length };
+              }
+            : undefined,
+        ingest: async (params) => {
+          effects.push(params);
+          return { ingested: true };
+        },
+      });
+      const finalize = contextEngineLifecycle.finalizeHarnessContextEngineTurn;
+      const spy = vi
+        .spyOn(contextEngineLifecycle, "finalizeHarnessContextEngineTurn")
+        .mockImplementation(async (params) => {
+          type Read = { key: PropertyKey; present: boolean; value: unknown };
+          const observe = (target: typeof params, reads: Read[]) =>
+            new Proxy(target, {
+              get(object, key, receiver) {
+                const value: unknown = Reflect.get(object, key, receiver);
+                reads.push({ key, present: Object.hasOwn(object, key), value });
+                return value;
+              },
+            });
+          const legacyReads: Read[] = [];
+          const projectedReads: Read[] = [];
+          // Reconstruct main's spread at the real callee boundary. Explicit caller
+          // overrides retain their precedence; nested consumers see the same Proxy.
+          const legacyOverrides = {
+            abortSignal: params.abortSignal,
+            contextEngine: params.contextEngine,
+            promptError: params.promptError,
+            aborted: params.aborted,
+            yieldAborted: params.yieldAborted,
+            sessionIdUsed: params.sessionIdUsed,
+            messagesSnapshot: params.messagesSnapshot,
+            prePromptMessageCount: params.prePromptMessageCount,
+            tokenBudget: params.tokenBudget,
+            turnCandidate: params.turnCandidate,
+            runtimeContext: params.runtimeContext,
+            contextEngineHostSupport: params.contextEngineHostSupport,
+            providerId: params.providerId,
+            runMaintenance: params.runMaintenance,
+            sessionManager: params.sessionManager,
+            warn: params.warn,
+          };
+          const legacyResult = await finalize(
+            observe({ ...attempt, ...legacyOverrides }, legacyReads),
+          );
+          const legacyEffects = effects.splice(0);
+          expect(legacyEffects).toHaveLength(1);
+          const result = await finalize(observe(params, projectedReads));
+          expect(projectedReads).toEqual(legacyReads);
+          expect(effects.splice(0)).toEqual(legacyEffects);
+          expect(result).toEqual(legacyResult);
+          for (const { key, value } of projectedReads) {
+            if (Object.hasOwn(attempt, key) && !Object.hasOwn(legacyOverrides, key)) {
+              expect(value).toBe(Reflect.get(attempt, key));
+            }
+          }
+          expect(params.admittedRunContext).toBe(admittedRunContext);
+          return result;
+        });
+      try {
+        await completeEmbeddedAttemptAfterTurn(
+          {
+            ...finalizationInput(prepared(sessionManager, false)),
+            attempt,
+            activeContextEngine: engine,
+          } as never,
+          settled("session-1", {
+            messagesSnapshot: [
+              makeAgentAssistantMessage({ content: [{ type: "text", text: "done" }] }),
+            ],
+          }) as never,
+          prompt(),
+        );
+        expect(spy).toHaveBeenCalledOnce();
+      } finally {
+        spy.mockRestore();
+        admission.close();
+      }
+    },
+  );
 
   it("re-reads compaction timeout state after the retry wait", async () => {
     let timedOut = false;
@@ -296,27 +447,31 @@ describe("embedded attempt phase lifecycle state", () => {
       }));
       const onContextEngineTurnCandidate = vi.fn();
       const config = {};
+      const enumerateAttempt = vi.fn(Reflect.ownKeys);
       await completeEmbeddedAttemptAfterTurn(
         {
           ...finalizationInput(prepared(sessionManager)),
-          attempt: {
-            runId: "run-1",
-            sessionId: target.sessionId,
-            sessionKey: target.sessionKey,
-            sessionTarget: target,
-            sessionFile: target.sessionKey,
-            provider: "test",
-            modelId: "model",
-            model: { api: "openai-responses", contextWindow: 120_000 },
-            modelContextWindow: 200_000,
-            contextTokenBudget: 180_000,
-            workspaceDir: dir,
-            cwd: dir,
-            authProfileId: "profile-1",
-            config,
-            userTurnTranscriptRecorder: recorder,
-            onContextEngineTurnCandidate,
-          } as never,
+          attempt: new Proxy(
+            {
+              runId: "run-1",
+              sessionId: target.sessionId,
+              sessionKey: target.sessionKey,
+              sessionTarget: target,
+              sessionFile: target.sessionKey,
+              provider: "test",
+              modelId: "model",
+              model: { api: "openai-responses", contextWindow: 120_000 },
+              modelContextWindow: 200_000,
+              contextTokenBudget: 180_000,
+              workspaceDir: dir,
+              cwd: dir,
+              authProfileId: "profile-1",
+              config,
+              userTurnTranscriptRecorder: recorder,
+              onContextEngineTurnCandidate,
+            },
+            { ownKeys: enumerateAttempt },
+          ) as never,
           activeContextEngine: {
             info: { id: "test", name: "Test" },
             assemble: vi.fn(),
@@ -333,6 +488,8 @@ describe("embedded attempt phase lifecycle state", () => {
         prompt(),
       );
 
+      // Only foreground prompt projection still copies the full attempt.
+      expect(enumerateAttempt).toHaveBeenCalledOnce();
       if (boundary === "complete") {
         expect(onContextEngineTurnCandidate).toHaveBeenCalledWith(
           expect.objectContaining({
@@ -387,6 +544,118 @@ describe("embedded attempt phase lifecycle state", () => {
       expect([afterTurn.mock.calls, maintain.mock.calls]).toEqual([[], []]);
     },
   );
+
+  it.each([
+    ["stacked markers", true],
+    ["custom leaf", false],
+    ["marker after custom leaf", false],
+    ["parentless marker", false],
+    ["missing parent", false],
+    ["no leaf", false],
+    ["real manager marker", true],
+  ] as const)("records terminal candidates with %s", async (scenario, allowed) => {
+    const { dir, target } = await seedSession("candidate-tail");
+    const userMessage = { role: "user" as const, content: "hello", timestamp: 1 };
+    const persisted = await appendTranscriptMessage(target, {
+      cwd: dir,
+      eventId: "user-1",
+      message: userMessage,
+      now: 1,
+    });
+    if (!persisted?.anchor) {
+      throw new Error("expected persisted admission");
+    }
+    const recorder = createUserTurnTranscriptRecorder({
+      message: userMessage,
+      target: async () => undefined,
+    });
+    recorder.markRuntimePersisted(userMessage, persisted.anchor);
+    const sessionManager = SessionManager.open(target, dir);
+    const terminalId = await sessionManager.appendMessageAsync(
+      makeAgentAssistantMessage({ content: [{ type: "text", text: "done" }], timestamp: 2 }),
+    );
+    if (!terminalId) {
+      throw new Error("expected persisted terminal id");
+    }
+    const base = sessionManager.getEntry(terminalId);
+    const terminal = readActiveTranscriptEntryAnchor({ ...persisted.anchor, entryId: terminalId });
+    if (!base || !terminal) {
+      throw new Error("expected persisted terminal");
+    }
+    type Entry = NonNullable<ReturnType<SessionManager["getEntry"]>>;
+    const marker = {
+      id: "marker-1",
+      parentId: base.id,
+      type: "custom" as const,
+      timestamp: new Date(2).toISOString(),
+      customType: "openclaw.cache-ttl",
+    };
+    const snapshot = {
+      ...marker,
+      id: "snapshot-1",
+      parentId: marker.id,
+      customType: "projection-snapshot",
+    };
+    const secondMarker = { ...marker, id: "marker-2", parentId: marker.id };
+    const trailing = { ...marker, id: "trailing", parentId: snapshot.id };
+    const tails = new Map<string, { entries: Entry[]; leafId: string | null }>([
+      ["stacked markers", { entries: [base, marker, secondMarker], leafId: secondMarker.id }],
+      ["custom leaf", { entries: [base, marker, snapshot], leafId: snapshot.id }],
+      [
+        "marker after custom leaf",
+        { entries: [base, marker, snapshot, trailing], leafId: trailing.id },
+      ],
+      ["parentless marker", { entries: [{ ...marker, parentId: null }], leafId: marker.id }],
+      ["missing parent", { entries: [marker], leafId: marker.id }],
+      ["no leaf", { entries: [], leafId: null }],
+    ]);
+    const tail = tails.get(scenario);
+    const reads: { mockRestore(): void }[] = [];
+    if (tail) {
+      const entries = new Map(tail.entries.map((entry) => [entry.id, entry]));
+      reads.push(vi.spyOn(sessionManager, "getLeafId").mockReturnValue(tail.leafId));
+      reads.push(vi.spyOn(sessionManager, "getEntry").mockImplementation((id) => entries.get(id)));
+    } else {
+      await sessionManager.appendCustomEntryAsync("openclaw.cache-ttl", {});
+    }
+    const onContextEngineTurnCandidate = vi.fn();
+    try {
+      await completeEmbeddedAttemptAfterTurn(
+        {
+          ...finalizationInput(prepared(sessionManager, false)),
+          attempt: {
+            runId: "candidate-tail",
+            sessionId: target.sessionId,
+            sessionKey: target.sessionKey,
+            sessionTarget: target,
+            sessionFile: target.sessionKey,
+            provider: "test",
+            modelId: "model",
+            contextTokenBudget: 180_000,
+            userTurnTranscriptRecorder: recorder,
+            onContextEngineTurnCandidate,
+          },
+          activeContextEngine: { info: { id: "test", name: "Test" } },
+        } as never,
+        settled(target.sessionId) as never,
+        prompt(),
+      );
+      if (allowed) {
+        expect(onContextEngineTurnCandidate).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            boundary: { admission: recorder.getAdmissionReceipt(), terminal },
+          }),
+        );
+      } else {
+        expect(onContextEngineTurnCandidate).not.toHaveBeenCalled();
+      }
+      expect(hoisted.runAgentEndSideEffects).toHaveBeenCalledOnce();
+    } finally {
+      for (const read of reads) {
+        read.mockRestore();
+      }
+    }
+  });
 
   it("preserves cron job identity in agent_end after failure", async () => {
     const promptError = new Error("provider failed");
@@ -527,19 +796,15 @@ describe("embedded attempt phase lifecycle state", () => {
       runId: "after-turn",
       sessionId: target.sessionId,
     });
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
+    const writerGate = createEnteredGate();
     const heldWriter = runOpenClawAgentWorkerWrite(
       { agentId: target.agentId, path: target.storePath },
-      async () => {
-        entered.resolve();
-        await release.promise;
-      },
+      writerGate.wait,
     );
     let afterTurn: Promise<void> | undefined;
     let completed = false;
     try {
-      await entered.promise;
+      await writerGate.entered;
       afterTurn = completeEmbeddedAttemptAfterTurn(
         {
           ...finalizationInput(prepared(sessionManager, scenario !== "completion not requested")),
@@ -583,7 +848,7 @@ describe("embedded attempt phase lifecycle state", () => {
       if (scenario === "abort while queued") {
         executionState.terminal = { kind: "aborted", source: "external" };
       }
-      release.resolve();
+      writerGate.release();
       await heldWriter;
       await afterTurn;
       const entries = SessionManager.open(target, dir).getEntries();
@@ -600,7 +865,7 @@ describe("embedded attempt phase lifecycle state", () => {
         );
       }
     } finally {
-      release.resolve();
+      writerGate.release();
       await Promise.allSettled([heldWriter, afterTurn]);
       await lifecycle.dispose();
     }

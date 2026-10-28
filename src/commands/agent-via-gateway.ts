@@ -1,6 +1,4 @@
 // Gateway-first agent CLI implementation with explicit --local embedded execution.
-import fs from "node:fs/promises";
-import { TextDecoder } from "node:util";
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
@@ -45,7 +43,6 @@ import {
 import { isGatewaySecretRefUnavailableError } from "../gateway/credentials.js";
 import { assertGatewayCliMessageContext } from "../gateway/operator-cli-message-input.js";
 import { READ_SCOPE } from "../gateway/operator-scopes.js";
-import { readFileDescriptorBounded } from "../infra/boundary-file-read.js";
 import {
   acquireEmbeddedStateLock,
   createEmbeddedStateSignalBridge,
@@ -69,6 +66,7 @@ import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { normalizeMessageChannel } from "../utils/message-channel-normalize.js";
 import { sleep } from "../utils/sleep.js";
 import { resolveAgentGatewayIdentity } from "./agent-gateway-identity.js";
+import { readAgentMessageFile } from "./agent-message-input.js";
 
 type AgentGatewayResult = {
   payloads?: Array<{
@@ -162,7 +160,6 @@ const AGENT_CLI_SIGNAL_EXIT_CODES: Record<AgentCliSignal, number> = {
   SIGINT: 130,
   SIGTERM: 143,
 };
-const MESSAGE_FILE_DECODER = new TextDecoder("utf-8", { fatal: true });
 
 type EmbeddedAgentCommandOpts = Parameters<typeof import("./agent.js").agentCommand>[0];
 
@@ -260,54 +257,6 @@ function missingAgentMessageError(): Error {
   return new Error(
     `Missing message. Use ${formatCliCommand('openclaw agent --message "..." --agent <id>')} or ${formatCliCommand("openclaw agent --message-file <path> --agent <id>")}.`,
   );
-}
-
-function formatMessageFileReadFailure(messageFile: string, err: unknown): string {
-  const code =
-    typeof (err as { code?: unknown })?.code === "string" ? (err as { code: string }).code : "";
-  if (code === "ENOENT") {
-    return `Message file not found: ${messageFile}`;
-  }
-  if (code === "EISDIR") {
-    return `Message file is a directory: ${messageFile}`;
-  }
-  const message = err instanceof Error ? err.message : String(err);
-  return `Unable to read message file ${messageFile}: ${message}`;
-}
-
-// Agent messages are prompt text; a 4 MiB cap gives generous headroom for
-// long system prompts while preventing a symlink/huge-file path from OOMing
-// the CLI before dispatch.
-const AGENT_MESSAGE_FILE_MAX_BYTES = 4 * 1024 * 1024;
-
-async function readAgentMessageFile(messageFile: string): Promise<string> {
-  // Open the original path so the kernel preserves symlink and procfs magic-link
-  // behavior (notably piped /dev/stdin), then inspect that exact descriptor.
-  let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
-  let buffer: Buffer;
-  try {
-    handle = await fs.open(messageFile, "r");
-    const stat = await handle.stat();
-    if (stat.isDirectory()) {
-      // Keep the legacy fs.readFile directory UX.
-      throw Object.assign(new Error("Message file is a directory"), { code: "EISDIR" });
-    }
-    // Regular files fail fast. Streams report size 0, so the descriptor reader
-    // enforces the same limit byte-by-byte while preserving FIFO behavior.
-    if (stat.isFile() && stat.size > AGENT_MESSAGE_FILE_MAX_BYTES) {
-      throw new Error(`File exceeds ${AGENT_MESSAGE_FILE_MAX_BYTES} bytes: ${messageFile}`);
-    }
-    buffer = await readFileDescriptorBounded(handle.fd, AGENT_MESSAGE_FILE_MAX_BYTES);
-  } catch (err) {
-    throw new Error(formatMessageFileReadFailure(messageFile, err), { cause: err });
-  } finally {
-    await handle?.close().catch(() => undefined);
-  }
-  try {
-    return MESSAGE_FILE_DECODER.decode(buffer).replace(/^\uFEFF/, "");
-  } catch {
-    throw new Error(`Message file must be valid UTF-8: ${messageFile}`);
-  }
 }
 
 function parseTimeoutSeconds(opts: { cfg: OpenClawConfig; timeout?: string }) {
@@ -537,55 +486,6 @@ function isConfirmedChatAbortResponseForRun(value: unknown, runId: string): bool
   return Array.isArray(response.runIds) && response.runIds.includes(runId);
 }
 
-async function abortAcceptedGatewayAgentRunWithRetries(params: {
-  runId: string | undefined;
-  sessionKey: string | undefined;
-  agentId?: string;
-  signal: AgentCliSignal | undefined;
-  runtime: RuntimeEnv;
-  request: GatewayAbortRequest;
-  logFailure?: boolean;
-}): Promise<boolean> {
-  for (const [attempt, retryDelayMs] of [...GATEWAY_ABORT_RETRY_DELAYS_MS, 0].entries()) {
-    const isFinalAttempt = attempt === GATEWAY_ABORT_RETRY_DELAYS_MS.length;
-    const logFailure = params.logFailure !== false && isFinalAttempt;
-    if (params.signal && params.runId && params.sessionKey) {
-      try {
-        const response = await params.request(
-          "chat.abort",
-          {
-            sessionKey: params.sessionKey,
-            runId: params.runId,
-            ...(params.agentId ? { agentId: params.agentId } : {}),
-          },
-          { timeoutMs: GATEWAY_ABORT_REQUEST_TIMEOUT_MS },
-        );
-        if (isConfirmedChatAbortResponseForRun(response, params.runId)) {
-          return true;
-        }
-        if (logFailure) {
-          params.runtime.error?.(
-            `Interrupted by ${params.signal}; Gateway run ${params.runId} was not confirmed aborted.`,
-          );
-        }
-      } catch (err) {
-        if (logFailure) {
-          params.runtime.error?.(
-            `Interrupted by ${params.signal}; failed to abort Gateway run ${params.runId}: ${String(
-              err,
-            )}`,
-          );
-        }
-      }
-    }
-    if (isFinalAttempt) {
-      return false;
-    }
-    await sleep(retryDelayMs);
-  }
-  return false;
-}
-
 function exitForReceivedSignal(signal: AgentCliSignal | undefined, runtime: RuntimeEnv): boolean {
   if (!signal) {
     return false;
@@ -725,16 +625,53 @@ async function agentViaGatewayCommand(
   let activeConnectionAbortAttempted = false;
   let activeConnectionAbortSucceeded = false;
   let response: GatewayAgentResponse | undefined;
-  const abortGatewayRun = (request: GatewayAbortRequest, logFailure = true) =>
-    abortAcceptedGatewayAgentRunWithRetries({
-      runId: runContext.accepted?.runId ?? idempotencyKey,
-      sessionKey: runContext.accepted?.sessionKey ?? abortSessionKey,
-      agentId: runContext.accepted?.agentId,
-      signal: signalBridge.getReceivedSignal(),
-      runtime,
-      request,
-      logFailure,
-    });
+  const abortGatewayRun = async (
+    request: GatewayAbortRequest,
+    shouldLogFailure = true,
+  ): Promise<boolean> => {
+    const abortRunId = runContext.accepted?.runId ?? idempotencyKey;
+    const abortSessionKeyForRun = runContext.accepted?.sessionKey ?? abortSessionKey;
+    const abortAgentId = runContext.accepted?.agentId;
+    const abortSignal = signalBridge.getReceivedSignal();
+    for (const [attempt, retryDelayMs] of [...GATEWAY_ABORT_RETRY_DELAYS_MS, 0].entries()) {
+      const isFinalAttempt = attempt === GATEWAY_ABORT_RETRY_DELAYS_MS.length;
+      const logFailure = shouldLogFailure && isFinalAttempt;
+      if (abortSignal && abortRunId && abortSessionKeyForRun) {
+        try {
+          const abortResponse = await request(
+            "chat.abort",
+            {
+              sessionKey: abortSessionKeyForRun,
+              runId: abortRunId,
+              ...(abortAgentId ? { agentId: abortAgentId } : {}),
+            },
+            { timeoutMs: GATEWAY_ABORT_REQUEST_TIMEOUT_MS },
+          );
+          if (isConfirmedChatAbortResponseForRun(abortResponse, abortRunId)) {
+            return true;
+          }
+          if (logFailure) {
+            runtime.error?.(
+              `Interrupted by ${abortSignal}; Gateway run ${abortRunId} was not confirmed aborted.`,
+            );
+          }
+        } catch (err) {
+          if (logFailure) {
+            runtime.error?.(
+              `Interrupted by ${abortSignal}; failed to abort Gateway run ${abortRunId}: ${String(
+                err,
+              )}`,
+            );
+          }
+        }
+      }
+      if (isFinalAttempt) {
+        return false;
+      }
+      await sleep(retryDelayMs);
+    }
+    return false;
+  };
   const dispatchGatewayAgentCall = async (activeCfg: OpenClawConfig) =>
     await withProgress(
       {
@@ -949,10 +886,8 @@ export async function agentCliCommand(opts: AgentCliOpts, runtime: RuntimeEnv) {
     throw new Error("--message-file must not be empty.");
   }
   const message = messageFile ? await readAgentMessageFile(messageFile) : (opts.message ?? "");
-  if (!message.trim()) {
-    throw messageFile
-      ? new Error(`Message file is empty: ${messageFile}`)
-      : missingAgentMessageError();
+  if (!messageFile && !message.trim()) {
+    throw missingAgentMessageError();
   }
   // `/compact` cannot run as a plain CLI agent turn: the slash-command handler
   // rejects CLI-originated senders, so the message would fall through to a

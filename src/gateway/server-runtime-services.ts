@@ -1,6 +1,7 @@
 // Starts delayed maintenance, cron, recovery, and pricing refresh work.
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { CronStoreSelectionRequiredError } from "../cron/store/selection-error.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { outboundDeliveryNotifications } from "../infra/delivery-queue-cache.js";
 import {
@@ -31,8 +32,8 @@ import {
   createScheduledGatewayRunner,
   fenceScheduledGatewayContextResolver,
 } from "./scheduled-run-gateway-context.js";
+import type { GatewayCronState } from "./server-cron-contract.js";
 import type { GatewayCronReconciliation } from "./server-cron-reconciled.js";
-import type { GatewayCronState } from "./server-cron.js";
 import { scheduleGatewayIdleTask } from "./server-idle-task.js";
 import {
   clearGatewayMaintenanceHandles,
@@ -42,10 +43,7 @@ import type { GatewayContextResolver } from "./server-methods/types.js";
 import type { GatewayRuntimeServiceLogger } from "./server-runtime-service-shared.js";
 import { measureStartup } from "./server-startup-trace.js";
 export { scheduleGatewayIdleTask, type GatewayIdleTaskHandle } from "./server-idle-task.js";
-export {
-  startGatewayChannelHealthMonitor,
-  type GatewayChannelManager,
-} from "./server-runtime-startup-services.js";
+export { startGatewayChannelHealthMonitor } from "./server-runtime-startup-services.js";
 
 type StartupMaintenanceParams = Parameters<
   typeof import("./server-startup-plugins.js").runGatewayPostReadyStartupMaintenance
@@ -79,6 +77,9 @@ export function startGatewayCronWithLogging(params: {
         await reconciliation.complete();
       } catch (err) {
         params.logCron.error(`failed to start: ${String(err)}`);
+        if (err instanceof CronStoreSelectionRequiredError) {
+          return;
+        }
         // Recovery callbacks must run before this independent root releases its
         // admission fence; restart and suspension cannot race past this point.
         params.onStartError?.(err);

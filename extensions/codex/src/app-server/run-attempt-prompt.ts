@@ -32,7 +32,6 @@ import { estimateCodexAppServerProjectedTurnTokens } from "./run-attempt-lifecyc
 import { prependCurrentInboundContext } from "./run-attempt-state.js";
 import { rotateOversizedCodexAppServerStartupBinding } from "./startup-binding.js";
 import { resolveCodexProjectionStartupBinding } from "./thread-restricted-resume.js";
-import { hasCodexMirrorOrigin } from "./transcript-mirror-attestation.js";
 import {
   buildCodexHistoryProvenancePrefix,
   buildCodexParentLocalInstructions,
@@ -483,6 +482,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     binding: NonNullable<typeof mutable.startupBinding>,
   ) => {
     const cutoff = Date.parse(binding.historyCoveredThrough ?? "");
+    const nativeThreadPrefix = `codex-app-server:${binding.threadId}:`;
     const newerVisibleMessages = historyState.messages.filter((message) => {
       if (
         message.role !== "user" &&
@@ -502,10 +502,11 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
         !(
           "idempotencyKey" in message &&
           typeof message.idempotencyKey === "string" &&
-          message.idempotencyKey.startsWith("codex-app-server:")
+          message.idempotencyKey.startsWith(nativeThreadPrefix)
         ) &&
-        !hasCodexMirrorOrigin(message) &&
-        !mirrorIdentity?.startsWith("codex-app-server:") &&
+        // Origin alone does not imply coverage: temporary threads and host-admitted
+        // user rows belong in the unseen delta. Unqualified rows rely on the cutoff.
+        !mirrorIdentity?.startsWith(nativeThreadPrefix) &&
         Number.isFinite(timestamp) &&
         timestamp > (Number.isFinite(cutoff) ? cutoff : 0)
       );

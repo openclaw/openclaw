@@ -6,7 +6,6 @@ import ai.openclaw.app.chat.ChatController
 import ai.openclaw.app.chat.ChatSessionDeletion
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.ChatSessionPatch
-import ai.openclaw.app.chat.SESSION_LIST_FETCH_LIMIT
 import ai.openclaw.app.chat.selectChatAgentSessionKey
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewayHelloSummary
@@ -17,13 +16,19 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.job
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -39,6 +44,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import org.robolectric.util.ReflectionHelpers
+import java.util.Collections
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
@@ -61,6 +67,307 @@ class NodeRuntimeAgentSelectionTest {
     } finally {
       closeNodeRuntimeTestFixture(runtime)
     }
+  }
+
+  @OptIn(ExperimentalCoroutinesApi::class)
+  @Test
+  fun legacyHintsPreserveActiveCatalogsAndCatchUpAtBoundedCadence() =
+    runTest {
+      val runtime = createConnectedRuntime()
+      val originalScope = ReflectionHelpers.getField<CoroutineScope>(runtime, "scope")
+      val originalChatScope = ReflectionHelpers.getField<CoroutineScope>(runtime.chat, "scope")
+      val virtualScope = CoroutineScope(StandardTestDispatcher(testScheduler))
+      val firstResponse = CompletableDeferred<String>()
+      val laterResponse = CompletableDeferred<String>()
+      val reads = mutableMapOf<String, Int>()
+      var revision = 0
+      try {
+        ReflectionHelpers.setField(runtime, "scope", virtualScope)
+        ReflectionHelpers.setField(runtime.chat, "scope", virtualScope)
+        ReflectionHelpers.setField(runtime, "gatewayAdvertisedCapabilities", setOf("session-scoped-model-catalog"))
+        val request: suspend (String, String?) -> String = { method, paramsJson ->
+          when (method) {
+            "models.list" -> {
+              val params = Json.parseToJsonElement(paramsJson.orEmpty()).jsonObject
+              val owner =
+                if ("sessionKey" in params) {
+                  "chat"
+                } else if ("view" in params) {
+                  "provider"
+                } else {
+                  "general"
+                }
+              val count = (reads[owner] ?: 0) + 1
+              reads[owner] = count
+              if (count == 1) firstResponse.await() else laterResponse.await()
+            }
+
+            "chat.metadata" -> {
+              """{"commands":[{"name":"command-$revision","textAliases":["/command-$revision"]}]}"""
+            }
+
+            "models.authStatus" -> {
+              """{"providers":[{"provider":"credential-$revision","status":"ok","profiles":[]}]}"""
+            }
+
+            else -> {
+              "{}"
+            }
+          }
+        }
+        runtime.gatewayDataRequestOverrideForTests = { _, method, params -> request(method, params) }
+        installChatGateway(runtime, request)
+        runtime.chat.prepareMainSessionKey("agent:main:main")
+        runtime.refreshModelCatalog()
+        runtime.refreshProviderModels()
+        runtime.chat.handleGatewayEvent("health", null)
+        runCurrent()
+        assertEquals(mapOf("general" to 1, "provider" to 1, "chat" to 1), reads)
+
+        repeat(65) {
+          publishMetadataChange(runtime)
+          advanceTimeBy(500)
+          runCurrent()
+        }
+        firstResponse.complete("""{"models":[{"id":"current","name":"Current","provider":"fixture"}]}""")
+        runCurrent()
+        assertEquals("Legacy observations cannot discard the active general catalog", listOf("current"), runtime.modelCatalog.value.map { it.id })
+        assertEquals("Legacy observations cannot discard the active provider catalog", listOf("current"), runtime.providerModelCatalog.value.map { it.id })
+        assertEquals(
+          "Legacy observations cannot discard the active chat catalog",
+          listOf("current"),
+          runtime.chat.modelCatalog.value
+            .map { it.id },
+        )
+        assertEquals("Reads longer than the cadence must still join, not multiply", mapOf("general" to 1, "provider" to 1, "chat" to 1), reads)
+
+        // The final hint still needs a read after the old one settles, even if publication stops.
+        revision = 1
+        laterResponse.complete("""{"models":[{"id":"current","name":"Current","provider":"fixture","available":false}]}""")
+        advanceTimeBy(30_000)
+        runCurrent()
+        assertEquals(mapOf("general" to 2, "provider" to 2, "chat" to 2), reads)
+        assertEquals(
+          false,
+          runtime.chat.modelCatalog.value
+            .single()
+            .available,
+        )
+        assertEquals(
+          listOf("command-1"),
+          runtime.chat.commands.value
+            .map { it.name },
+        )
+        assertEquals(listOf("credential-1"), runtime.modelAuthProviders.value.map { it.id })
+      } finally {
+        firstResponse.complete("""{"models":[]}""")
+        laterResponse.complete("""{"models":[]}""")
+        virtualScope.cancel()
+        runCurrent()
+        ReflectionHelpers.setField(runtime, "scope", originalScope)
+        ReflectionHelpers.setField(runtime.chat, "scope", originalChatScope)
+        closeNodeRuntimeTestFixture(runtime)
+      }
+    }
+
+  @OptIn(ExperimentalCoroutinesApi::class)
+  @Test
+  fun continuousLegacyHintsCannotDelayChangesOrThrottleExplicitRefreshes() =
+    runTest {
+      val runtime = createConnectedRuntime()
+      val originalScope = ReflectionHelpers.getField<CoroutineScope>(runtime, "scope")
+      val virtualScope = CoroutineScope(StandardTestDispatcher(testScheduler))
+      var reads = 0
+      var revision = 0
+      try {
+        ReflectionHelpers.setField(runtime, "scope", virtualScope)
+        runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
+          when (method) {
+            "models.list" -> {
+              reads += 1
+              """{"models":[{"id":"current","name":"Revision $revision","provider":"fixture"}]}"""
+            }
+
+            "models.authStatus" -> {
+              """{"providers":[]}"""
+            }
+
+            else -> {
+              "{}"
+            }
+          }
+        }
+        publishMetadataChange(runtime)
+        runCurrent()
+        assertEquals(2, reads)
+        revision = 1
+        repeat(60) {
+          advanceTimeBy(500)
+          publishMetadataChange(runtime)
+          runCurrent()
+        }
+        assertEquals("Continuous hints admit one batch each fixed window", 4, reads)
+        assertEquals(
+          "Revision 1",
+          runtime.providerModelCatalog.value
+            .single()
+            .name,
+        )
+
+        for (payload in listOf(
+          """{"modelCatalogChanged":true}""",
+          """{"modelCatalogChanged":false,"authChanged":true}""",
+          """{"modelCatalogChanged":false,"modelSelectionChanged":true}""",
+        )) {
+          val before = reads
+          publishMetadataChange(runtime, payload)
+          runCurrent()
+          assertEquals("Semantic invalidations bypass the legacy cadence", before + 2, reads)
+        }
+        val beforeManual = reads
+        runtime.refreshModelCatalog()
+        runtime.refreshProviderModels(refresh = true)
+        runCurrent()
+        assertEquals(beforeManual + 2, reads)
+
+        // Pending old-agent observations cannot become an extra read of the new agent.
+        publishMetadataChange(runtime)
+        runtime.selectChatAgent("beta")
+        runCurrent()
+        val afterSwitch = reads
+        advanceTimeBy(30_000)
+        runCurrent()
+        assertEquals(afterSwitch, reads)
+
+        // Coalescing must not let a later other-agent hint overwrite the relevant pending one.
+        publishMetadataChange(runtime, """{"agentId":"beta"}""")
+        runCurrent()
+        val beforeCatchUp = reads
+        revision = 2
+        publishMetadataChange(runtime, """{"agentId":"beta"}""")
+        publishMetadataChange(runtime, """{"agentId":"other"}""")
+        advanceTimeBy(30_000)
+        runCurrent()
+        assertEquals(beforeCatchUp + 2, reads)
+        assertEquals(
+          "Revision 2",
+          runtime.providerModelCatalog.value
+            .single()
+            .name,
+        )
+
+        publishMetadataChange(runtime)
+        val session = ReflectionHelpers.getField<GatewaySession>(runtime, "operatorSession")
+        ReflectionHelpers.getField<(String) -> Unit>(session, "onDisconnected")("Gateway closed")
+        runCurrent()
+        val afterDisconnect = reads
+        advanceTimeBy(30_000)
+        runCurrent()
+        assertEquals("Disconnect retires the old Gateway's pending hint", afterDisconnect, reads)
+      } finally {
+        virtualScope.cancel()
+        runCurrent()
+        ReflectionHelpers.setField(runtime, "scope", originalScope)
+        closeNodeRuntimeTestFixture(runtime)
+      }
+    }
+
+  @OptIn(ExperimentalCoroutinesApi::class)
+  @Test
+  fun generalCatalogStatusRecoversFailedReadWithoutSupersedingRecovery() =
+    runTest {
+      val runtime = createConnectedRuntime()
+      val originalScope = ReflectionHelpers.getField<CoroutineScope>(runtime, "scope")
+      val virtualScope = CoroutineScope(StandardTestDispatcher(testScheduler))
+      val recovered = CompletableDeferred<String>()
+      var reads = 0
+      val status = """{"modelCatalogChanged":false,"modelCatalogStatusChanged":true,"authChanged":false,"commandsChanged":false}"""
+      try {
+        ReflectionHelpers.setField(runtime, "scope", virtualScope)
+        runtime.gatewayDataRequestOverrideForTests = { _, method, params ->
+          if (method == "models.list" && !params.orEmpty().contains("view")) {
+            reads += 1
+            if (reads == 1) error("catalog transport timed out")
+            recovered.await()
+          } else {
+            "{}"
+          }
+        }
+        runtime.refreshModelCatalog()
+        runCurrent()
+        assertTrue(runtime.modelCatalog.value.isEmpty())
+        publishMetadataChange(runtime, status)
+        runCurrent()
+        assertEquals("Unchanged provider settlement must recover a failed general read", 2, reads)
+        repeat(20) { publishMetadataChange(runtime, status) }
+        runCurrent()
+        assertEquals("Status observations join the active general recovery", 2, reads)
+        recovered.complete("""{"models":[{"id":"current","name":"Current","provider":"fixture"}]}""")
+        runCurrent()
+        assertEquals(listOf("current"), runtime.modelCatalog.value.map { it.id })
+        repeat(20) { publishMetadataChange(runtime, status) }
+        runCurrent()
+        assertEquals("A clean response absorbs settlement without polling", 2, reads)
+      } finally {
+        recovered.complete("""{"models":[]}""")
+        virtualScope.cancel()
+        runCurrent()
+        ReflectionHelpers.setField(runtime, "scope", originalScope)
+        closeNodeRuntimeTestFixture(runtime)
+      }
+    }
+
+  @OptIn(ExperimentalCoroutinesApi::class)
+  @Test
+  fun generalCatalogPendingResponseRetainsOneStatusCatchUp() =
+    runTest {
+      val runtime = createConnectedRuntime()
+      val originalScope = ReflectionHelpers.getField<CoroutineScope>(runtime, "scope")
+      val virtualScope = CoroutineScope(StandardTestDispatcher(testScheduler))
+      val initial = CompletableDeferred<String>()
+      var reads = 0
+      val status = """{"modelCatalogChanged":false,"modelCatalogStatusChanged":true,"authChanged":false,"commandsChanged":false}"""
+      try {
+        ReflectionHelpers.setField(runtime, "scope", virtualScope)
+        runtime.gatewayDataRequestOverrideForTests = { _, method, params ->
+          if (method == "models.list" && !params.orEmpty().contains("view")) {
+            reads += 1
+            if (reads == 1) initial.await() else """{"models":[{"id":"current","name":"Current","provider":"fixture"}]}"""
+          } else {
+            "{}"
+          }
+        }
+        runtime.refreshModelCatalog()
+        runCurrent()
+        repeat(20) { publishMetadataChange(runtime, status) }
+        runCurrent()
+        assertEquals(1, reads)
+        initial.complete("""{"models":[{"id":"current","name":"Current","provider":"fixture"}],"pendingProviders":["fixture"]}""")
+        runCurrent()
+        assertEquals("A pending response keeps one settlement catch-up", 2, reads)
+        assertEquals(listOf("current"), runtime.modelCatalog.value.map { it.id })
+        repeat(20) { publishMetadataChange(runtime, status) }
+        runCurrent()
+        assertEquals(2, reads)
+      } finally {
+        initial.complete("""{"models":[]}""")
+        virtualScope.cancel()
+        runCurrent()
+        ReflectionHelpers.setField(runtime, "scope", originalScope)
+        closeNodeRuntimeTestFixture(runtime)
+      }
+    }
+
+  private fun publishMetadataChange(
+    runtime: NodeRuntime,
+    payload: String = "{}",
+  ) {
+    ReflectionHelpers.callInstanceMethod<Unit>(
+      runtime,
+      "handleGatewayEvent",
+      ReflectionHelpers.ClassParameter.from(String::class.java, "chat.metadata.changed"),
+      ReflectionHelpers.ClassParameter.from(String::class.java, payload),
+    )
   }
 
   @Test
@@ -118,6 +425,59 @@ class NodeRuntimeAgentSelectionTest {
       } finally {
         closeNodeRuntimeTestFixture(runtime)
         catalogJobs.close()
+      }
+    }
+
+  @Test
+  fun catalogStatusRecoveryClearsProviderWarningWithoutChangingRows() =
+    runBlocking {
+      val runtime = createConnectedRuntime()
+      val originalScope = ReflectionHelpers.getField<CoroutineScope>(runtime, "scope")
+      var failTransport = false
+      var catalogReads = 0
+      try {
+        ReflectionHelpers.setField(runtime, "scope", CoroutineScope(originalScope.coroutineContext + Dispatchers.Unconfined))
+        runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
+          when (method) {
+            "models.list" -> {
+              catalogReads += 1
+              if (failTransport) error("catalog transport timed out")
+              """{"models":[{"id":"unchanged","name":"Unchanged","provider":"fixture"}]}"""
+            }
+
+            "models.authStatus" -> {
+              """{"providers":[]}"""
+            }
+
+            else -> {
+              error("Unexpected status-recovery request: $method")
+            }
+          }
+        }
+        runtime.refreshProviderModels()
+        assertEquals(listOf("unchanged"), runtime.providerModelCatalog.value.map { it.id })
+        assertEquals(1, catalogReads)
+        failTransport = true
+        runtime.refreshProviderModels(refresh = true)
+        assertFalse("The failed discovery read must remain visible", runtime.providerModelCatalogErrorText.value.isNullOrBlank())
+        assertEquals(2, catalogReads)
+
+        // The server's unchanged discovery can finish after the app-side read failed.
+        failTransport = false
+        ReflectionHelpers.callInstanceMethod<Unit>(
+          runtime,
+          "handleGatewayEvent",
+          ReflectionHelpers.ClassParameter.from(String::class.java, "chat.metadata.changed"),
+          ReflectionHelpers.ClassParameter.from(String::class.java, """{"modelCatalogChanged":false,"modelCatalogStatusChanged":true,"authChanged":false,"commandsChanged":false}"""),
+        )
+
+        assertEquals("Successful status recovery must clear the retained provider warning", null, runtime.providerModelCatalogErrorText.value)
+        assertEquals(listOf("unchanged"), runtime.providerModelCatalog.value.map { it.id })
+        assertEquals("Status recovery needs only its provider-config read", 3, catalogReads)
+        assertFalse(runtime.providerModelCatalogRefreshing.value)
+      } finally {
+        ReflectionHelpers.setField(runtime, "scope", originalScope)
+        closeNodeRuntimeTestFixture(runtime)
       }
     }
 
@@ -598,6 +958,185 @@ class NodeRuntimeAgentSelectionTest {
     }
 
   @Test
+  fun coldStartUsesAnAllowedAgentBeforePatchingTheGatewayDefault() =
+    runBlocking {
+      val runtime = createConnectedRuntime()
+      val releaseRoster = CompletableDeferred<Unit>()
+      val history = CompletableDeferred<String?>()
+      val requests = Collections.synchronizedList(mutableListOf<Pair<String, String?>>())
+      val observations = Collections.synchronizedList(mutableListOf<String>())
+      val phase = AtomicReference("installing-fixture")
+      val operatorSession = ReflectionHelpers.getField<GatewaySession>(runtime, "operatorSession")
+
+      fun diagnosticState(): String =
+        "phase=${phase.get()} thread=${Thread.currentThread().name} " +
+          "operatorConnected=${ReflectionHelpers.getField<Boolean>(runtime, "operatorConnected")} " +
+          "transportReady=${operatorSession.isReady()} " +
+          "main=${runtime.mainSessionKey.value} chat=${runtime.chat.sessionKey.value}"
+
+      try {
+        val refreshes = answerAgentList(runtime, "agent-b", beforeAnswer = { releaseRoster.await() })
+        installChatGateway(runtime, requestGateway = { method, params ->
+          observations += "${diagnosticState()} method=$method params=$params"
+          requests += method to params
+          when (method) {
+            "sessions.describe" -> {
+              """{"session":null}"""
+            }
+
+            "chat.history" -> {
+              history.complete(params)
+              """{"sessionId":"allowed-session","messages":[]}"""
+            }
+
+            else -> {
+              "{}"
+            }
+          }
+        })
+        phase.set("reconnect-callbacks")
+        reconnectOperator(runtime, mainSessionKey = "agent:agent-a:main")
+        phase.set("awaiting-roster-request")
+        val refresh = withTimeout(2_000) { refreshes.receive() }
+        phase.set("roster-held")
+        assertTrue("Chat must wait for the allowed roster", requests.isEmpty())
+
+        phase.set("roster-released")
+        releaseRoster.complete(Unit)
+        withTimeout(2_000) { refresh.join() }
+        phase.set("roster-settled")
+        assertTrue(withTimeout(2_000) { history.await() }.orEmpty().contains("agent:agent-b:"))
+        assertEquals("agent-b", resolveAgentIdFromMainSessionKey(runtime.mainSessionKey.value))
+        assertEquals(runtime.mainSessionKey.value, runtime.chat.sessionKey.value)
+        synchronized(requests) {
+          assertFalse(requests.any { (_, params) -> params.orEmpty().contains("agent:agent-a:") })
+        }
+      } catch (error: Throwable) {
+        println("COLD_START_DIAGNOSTIC ${diagnosticState()} requests=$requests observations=$observations")
+        throw error
+      } finally {
+        releaseRoster.complete(Unit)
+        closeNodeRuntimeTestFixture(runtime)
+      }
+    }
+
+  @Test
+  fun initialDiscoveryCompletesWithoutReplacingANewerConversationSelection() =
+    runBlocking {
+      val runtime = createConnectedRuntime()
+      val releaseRoster = CompletableDeferred<Unit>()
+      val conversation = "agent:agent-b:notification"
+      try {
+        val refreshes = answerAgentList(runtime, "agent-b", beforeAnswer = { releaseRoster.await() })
+        reconnectOperator(runtime)
+        val refresh = withTimeout(2_000) { refreshes.receive() }
+        runtime.switchChatSession(conversation, "agent-b")
+
+        releaseRoster.complete(Unit)
+        withTimeout(2_000) { refresh.join() }
+        assertTrue(runtime.gatewayConnectionDisplay.value.isConnected)
+        assertEquals(conversation, runtime.chat.sessionKey.value)
+        assertEquals("agent-b", resolveAgentIdFromMainSessionKey(runtime.mainSessionKey.value))
+      } finally {
+        releaseRoster.complete(Unit)
+        closeNodeRuntimeTestFixture(runtime)
+      }
+    }
+
+  @Test
+  fun failedDiscoveryRetryInitializesChatEvenWhenTheMainKeyIsUnchanged() =
+    runBlocking {
+      val runtime = createConnectedRuntime()
+      val attempts = AtomicInteger()
+      val history = CompletableDeferred<String?>()
+      try {
+        val refreshes =
+          answerAgentList(runtime, "main", beforeAnswer = {
+            if (attempts.incrementAndGet() == 1) error("Synthetic discovery failure")
+          })
+        installChatGateway(runtime, requestGateway = { method, params ->
+          when (method) {
+            "sessions.describe" -> {
+              """{"session":null}"""
+            }
+
+            "chat.history" -> {
+              history.complete(params)
+              """{"sessionId":"recovered-session","messages":[]}"""
+            }
+
+            else -> {
+              "{}"
+            }
+          }
+        })
+        val originalKey = runtime.mainSessionKey.value
+        reconnectOperator(runtime)
+        awaitAgentRefresh(refreshes)
+        assertFalse(runtime.gatewayConnectionDisplay.value.isConnected)
+        assertTrue(
+          runtime.gatewayConnectionDisplay.value.statusText
+            .contains("Retry"),
+        )
+        assertFalse(history.isCompleted)
+
+        runtime.refreshAgents()
+        awaitAgentRefresh(refreshes)
+        assertEquals(originalKey, runtime.mainSessionKey.value)
+        assertTrue(withTimeout(2_000) { history.await() }.orEmpty().contains(originalKey))
+        assertTrue(runtime.gatewayConnectionDisplay.value.isConnected)
+        assertEquals(2, attempts.get())
+      } finally {
+        closeNodeRuntimeTestFixture(runtime)
+      }
+    }
+
+  @Test
+  fun disconnectCancelsPendingAgentDiscoveryWithoutPublishingConnected() =
+    runBlocking {
+      val runtime = createConnectedRuntime()
+      val releaseRoster = CompletableDeferred<Unit>()
+      try {
+        val refreshes = answerAgentList(runtime, "agent-b", beforeAnswer = { releaseRoster.await() })
+        reconnectOperator(runtime)
+        val refresh = withTimeout(2_000) { refreshes.receive() }
+        val session = ReflectionHelpers.getField<GatewaySession>(runtime, "operatorSession")
+        ReflectionHelpers.getField<(String) -> Unit>(session, "onDisconnected")("Gateway closed")
+        releaseRoster.complete(Unit)
+        withTimeout(2_000) { refresh.join() }
+
+        assertFalse(runtime.gatewayConnectionDisplay.value.isConnected)
+        assertFalse(ReflectionHelpers.getField(runtime, "operatorConnected"))
+        assertTrue(runtime.gatewayAgents.value.isEmpty())
+      } finally {
+        releaseRoster.complete(Unit)
+        closeNodeRuntimeTestFixture(runtime)
+      }
+    }
+
+  @Test
+  fun emptyAllowedRosterLeavesChatUnavailable() =
+    runBlocking {
+      val runtime = createConnectedRuntime()
+      try {
+        val refreshes = answerAgentList(runtime)
+        reconnectOperator(runtime, mainSessionKey = "agent:excluded:main")
+        awaitAgentRefresh(refreshes)
+
+        assertTrue(runtime.gatewayAgents.value.isEmpty())
+        assertFalse(runtime.gatewayConnectionDisplay.value.isConnected)
+        assertEquals("No agents available for this role", runtime.gatewayConnectionDisplay.value.statusText)
+        assertFalse(runtime.chat.healthOk.value)
+        assertFalse(
+          runtime.chat.sessionKey.value
+            .contains("excluded"),
+        )
+      } finally {
+        closeNodeRuntimeTestFixture(runtime)
+      }
+    }
+
+  @Test
   fun switchingGatewayRetiresThePreviousAgentChoice() =
     runBlocking {
       val runtime = createConnectedRuntime()
@@ -999,8 +1538,6 @@ class NodeRuntimeAgentSelectionTest {
                 emptyList()
               }
             val page = rows.take(limit)
-            // Bootstrap also lists sessions; only the 200-row selection lookup owns this rendezvous.
-            if (limit == SESSION_LIST_FETCH_LIMIT) lookupStarted.get()?.complete(currentCoroutineContext().job)
             page.joinToString(
               prefix = """{"sessions":[""",
               postfix = """],"totalCount":${rows.size},"hasMore":${page.size < rows.size}}""",
@@ -1084,7 +1621,12 @@ class NodeRuntimeAgentSelectionTest {
           }
         }
       }
-      installChatGateway(runtime, requestGateway, requestLeaseGeneration = leaseGeneration::get)
+      installChatGateway(
+        runtime,
+        requestGateway,
+        requestLeaseGeneration = leaseGeneration::get,
+        onBoundSessionList = { lookupStarted.get()?.complete(currentCoroutineContext().job) },
+      )
 
       suspend fun selectAgentAndWait(
         agentId: String,
@@ -1466,7 +2008,6 @@ class NodeRuntimeAgentSelectionTest {
           }
 
           "sessions.list" -> {
-            if (request["limit"] == JsonPrimitive(SESSION_LIST_FETCH_LIMIT)) lookupJobs.send(currentCoroutineContext().job)
             val rows = if (request["agentId"]?.jsonPrimitive?.content == "scout") sessions.get() else emptyList()
             rows.joinToString(prefix = """{"sessions":[""", postfix = "]}") { row ->
               """{"key":"${row.key}","sessionId":"session-${row.key}","agentId":"scout","updatedAt":${row.updatedAtMs},"archived":false}"""
@@ -1490,7 +2031,7 @@ class NodeRuntimeAgentSelectionTest {
           }
         }
       }
-      installChatGateway(runtime, requestGateway)
+      installChatGateway(runtime, requestGateway, onBoundSessionList = { lookupJobs.send(currentCoroutineContext().job) })
 
       runtime.selectChatAgent("scout")
       withTimeout(5_000) { lookupJobs.receive().join() }
@@ -1538,8 +2079,10 @@ class NodeRuntimeAgentSelectionTest {
     runtime: NodeRuntime,
     requestGateway: suspend (String, String?) -> String,
     requestLeaseGeneration: () -> Int = { 0 },
+    onBoundSessionList: suspend () -> Unit = {},
   ) {
     val requestGatewayForGateway: suspend (String, String, String?) -> String = { _, method, params ->
+      if (method == "sessions.list") onBoundSessionList()
       requestGateway(method, params)
     }
     val chat = ReflectionHelpers.getField<ChatController>(runtime, "chat")
@@ -1571,8 +2114,8 @@ class NodeRuntimeAgentSelectionTest {
       ReflectionHelpers.getField<suspend (String, String, String?) -> String>(chat, "requestGatewayForGateway")
     val request: suspend (String, String, String?) -> String = { gatewayId, method, paramsJson ->
       val params = if (method == "sessions.list") Json.parseToJsonElement(paramsJson.orEmpty()) as JsonObject else null
-      // Hold the candidate lookup, not the smaller bootstrap list needed by session creation.
-      if (params != null && params["limit"] == JsonPrimitive(SESSION_LIST_FETCH_LIMIT)) {
+      // Candidate lookups use this bound request path; drawer bootstrap uses requestGateway.
+      if (params != null) {
         onLookup((params["agentId"] as JsonPrimitive).content)
       } else {
         requestGatewayForGateway(gatewayId, method, paramsJson)
@@ -1622,6 +2165,7 @@ class NodeRuntimeAgentSelectionTest {
     runtime: NodeRuntime,
     disconnectCallbacks: Int = 1,
     capabilities: Set<String>? = null,
+    mainSessionKey: String = "agent:main:main",
   ) {
     val session = ReflectionHelpers.getField<GatewaySession>(runtime, "operatorSession")
     val onDisconnected = ReflectionHelpers.getField<(String) -> Unit>(session, "onDisconnected")
@@ -1631,7 +2175,7 @@ class NodeRuntimeAgentSelectionTest {
         serverName = "Test gateway",
         remoteAddress = "127.0.0.1:18789",
         serverVersion = null,
-        mainSessionKey = "agent:main:main",
+        mainSessionKey = mainSessionKey,
         updateAvailable = null,
         authScopes = listOf("operator.read"),
         capabilities = capabilities,

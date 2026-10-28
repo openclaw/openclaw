@@ -1,9 +1,16 @@
-name: PostgreSQL Weekly Qualification
+name: PostgreSQL Scheduled Qualification
 
 on:
   schedule:
+    - cron: "17 7 * * *"
     - cron: "43 6 * * 1"
   workflow_dispatch:
+    inputs:
+      versions:
+        description: PostgreSQL versions to qualify
+        type: choice
+        default: all
+        options: [all, pg16, pg17, pg18]
 
 permissions:
   contents: read
@@ -23,13 +30,8 @@ jobs:
       fail-fast: false
       max-parallel: 3
       matrix:
-        version: [pg16, pg18]
+        version: ${{ fromJSON(github.event_name == 'workflow_dispatch' && (inputs.versions == 'all' && '["pg16","pg17","pg18"]' || format('["{0}"]', inputs.versions)) || github.event.schedule == '17 7 * * *' && '["pg17"]' || '["pg16","pg18"]') }}
         shard: [1/3, 2/3, 3/3]
-        include:
-          - version: pg16
-            image: pgvector/pgvector:pg16@sha256:7b822b0aac60967beb1ea5e576b8602c94c300a157d187f385ae3e0da199b90a
-          - version: pg18
-            image: pgvector/pgvector:pg18@sha256:2358fcba361ed2233a5ed81b5fe4ca779ccb304120ce531a3bf51c0ed7e2bc11
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -43,5 +45,8 @@ jobs:
       - name: Run PostgreSQL conformance
         uses: ./.github/actions/postgres-conformance
         with:
-          image: ${{ matrix.image }}
+          image: >-
+            ${{ matrix.version == 'pg16' && 'pgvector/pgvector:pg16@sha256:7b822b0aac60967beb1ea5e576b8602c94c300a157d187f385ae3e0da199b90a'
+                || matrix.version == 'pg17' && 'pgvector/pgvector:pg17@sha256:ac08538c6f8b9904c33c8224c5e5706dbe760aca29db1d096972b4052c22a75d'
+                || 'pgvector/pgvector:pg18@sha256:2358fcba361ed2233a5ed81b5fe4ca779ccb304120ce531a3bf51c0ed7e2bc11' }}
           shard: ${{ matrix.shard }}

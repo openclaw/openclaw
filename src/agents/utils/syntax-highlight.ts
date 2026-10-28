@@ -99,20 +99,6 @@ function getActiveFormatter(
   return theme.default;
 }
 
-function isSpanOpenTagStart(html: string, index: number): boolean {
-  if (!html.startsWith("<span", index)) {
-    return false;
-  }
-  const nextChar = html[index + "<span".length];
-  return (
-    nextChar === ">" ||
-    nextChar === " " ||
-    nextChar === "\t" ||
-    nextChar === "\n" ||
-    nextChar === "\r"
-  );
-}
-
 /** Renders highlight.js span HTML into themed plain text. */
 function renderHighlightedHtml(html: string, theme: HighlightTheme): string {
   let output = "";
@@ -131,7 +117,15 @@ function renderHighlightedHtml(html: string, theme: HighlightTheme): string {
 
   let index = 0;
   while (index < html.length) {
-    if (isSpanOpenTagStart(html, index)) {
+    const nextChar = html[index + "<span".length];
+    if (
+      html.startsWith("<span", index) &&
+      (nextChar === ">" ||
+        nextChar === " " ||
+        nextChar === "\t" ||
+        nextChar === "\n" ||
+        nextChar === "\r")
+    ) {
       const tagEndIndex = html.indexOf(">", index + 5);
       if (tagEndIndex !== -1) {
         // Scope stack mirrors nested highlight.js spans so inner scopes override outer ones.

@@ -18,23 +18,6 @@ export function createSessionsRosterReadiness(state: {
     void state.roster.catch(() => undefined);
   }
 
-  function settle(error: string | null) {
-    if (pending) {
-      const completion = pending;
-      pending = undefined;
-      settledError = error;
-      if (error) {
-        completion.reject(new Error(error));
-      } else {
-        completion.resolve(null);
-      }
-    } else if (error !== settledError) {
-      settledError = error;
-      state.roster = error ? Promise.reject(new Error(error)) : null;
-      void state.roster?.catch(() => undefined);
-    }
-  }
-
   function dispose() {
     pending?.resolve(null);
     pending = undefined;
@@ -57,8 +40,19 @@ export function createSessionsRosterReadiness(state: {
       state.loading = loading;
       if (loading) {
         begin();
-      } else {
-        settle(error);
+      } else if (pending) {
+        const completion = pending;
+        pending = undefined;
+        settledError = error;
+        if (error) {
+          completion.reject(new Error(error));
+        } else {
+          completion.resolve(null);
+        }
+      } else if (error !== settledError) {
+        settledError = error;
+        state.roster = error ? Promise.reject(new Error(error)) : null;
+        void state.roster?.catch(() => undefined);
       }
     },
     retire,

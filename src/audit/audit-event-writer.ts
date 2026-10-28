@@ -23,6 +23,7 @@ import type { ExecutionIdentityAdmissionWork } from "./execution-identity-admiss
 
 const MAX_PENDING_AUDIT_EVENTS = 4_096;
 const MAX_AUDIT_BATCH_SIZE = 32;
+const AUDIT_BATCH_DELAY_MS = 5;
 const MAX_CONSECUTIVE_UNKNOWN_OUTCOMES = 3;
 const AUDIT_MAINTENANCE_INTERVAL_MS = 60 * 60_000;
 const AUDIT_RETRY_DELAY_MS = 25;
@@ -68,6 +69,7 @@ export function createAuditEventWriter(options: {
   let shutdownExpired = false;
   let maintenancePending = true;
   let scheduled: ReturnType<typeof setImmediate> | undefined;
+  let batchTimer: ReturnType<typeof setTimeout> | undefined;
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
   let retryAttempt = 0;
   let retryDelayMs = 0;
@@ -171,7 +173,7 @@ export function createAuditEventWriter(options: {
     resolveStop = undefined;
     finish?.();
   };
-  const schedule = () => {
+  const schedule = (delayMs = 0) => {
     if (draining || shutdownExpired) {
       return;
     }
@@ -187,11 +189,26 @@ export function createAuditEventWriter(options: {
       }
       return;
     }
-    scheduled = setImmediate(() => {
-      void drainOne();
-    });
-    if (!stopped) {
-      scheduled.unref?.();
+    if (batchTimer) {
+      if (delayMs > 0) {
+        return;
+      }
+      clearTimeout(batchTimer);
+      batchTimer = undefined;
+    }
+    if (delayMs > 0) {
+      batchTimer = setTimeout(() => {
+        batchTimer = undefined;
+        void drainOne();
+      }, delayMs);
+      batchTimer.unref?.();
+    } else {
+      scheduled = setImmediate(() => {
+        void drainOne();
+      });
+      if (!stopped) {
+        scheduled.unref?.();
+      }
     }
   };
   const scheduleRetry = () => {
@@ -263,7 +280,12 @@ export function createAuditEventWriter(options: {
       } else if (retry) {
         scheduleRetry();
       } else if (queue.length > 0 || maintenancePending) {
-        schedule();
+        const coalesce =
+          !stopped &&
+          !maintenancePending &&
+          queue.length > 1 &&
+          queue.length < MAX_AUDIT_BATCH_SIZE;
+        schedule(coalesce ? AUDIT_BATCH_DELAY_MS : 0);
       } else if (stopped) {
         finishStop();
       }
@@ -296,7 +318,9 @@ export function createAuditEventWriter(options: {
       // Preserve the former Worker boundary's clone and prototype-stripping contract.
       queue.push(structuredClone(boundedMessage));
       pendingRows += rows;
-      schedule();
+      if (!batchTimer || queue.length >= MAX_AUDIT_BATCH_SIZE) {
+        schedule();
+      }
       return true;
     } catch (error) {
       if (message.type !== "record-event" && message.type !== "record-run") {
@@ -338,6 +362,10 @@ export function createAuditEventWriter(options: {
           if (scheduled) {
             clearImmediate(scheduled);
             scheduled = undefined;
+          }
+          if (batchTimer) {
+            clearTimeout(batchTimer);
+            batchTimer = undefined;
           }
           if (retryTimer) {
             clearTimeout(retryTimer);

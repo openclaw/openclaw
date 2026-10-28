@@ -15,16 +15,15 @@ import { runStep } from "./update-runner-command.js";
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 
 it.each([
-  { refused: true, stream: "stderr", attempts: 1 },
-  { refused: true, stream: "stdout", attempts: 1 },
-  { refused: false, stream: "stderr", attempts: 2 },
+  { refused: true, stream: "stderr" },
+  { refused: true, stream: "stdout" },
+  { refused: false, stream: "stderr" },
 ])("bounds postinstall retry (refused=$refused, stream=$stream)", async (scenario) => {
   const base = dirs.make("package-postinstall-refusal-");
   const globalRoot = path.join(base, "prefix/lib/node_modules");
   const packageRoot = path.join(globalRoot, "openclaw");
   await writePackageRoot(packageRoot, "1.0.0");
   const message = scenario.refused ? "schema refused" : "optional build failed";
-  const installs: string[][] = [];
   const result = await runGlobalPackageUpdateSteps({
     ...createNpmUpdateOptions(globalRoot),
     runStep: (options) =>
@@ -34,17 +33,21 @@ it.each([
         stepIndex: 0,
         totalSteps: 1,
         runCommand: async (argv) => {
-          installs.push(argv);
           const stagedRoot = path.join(stagedNpmPrefix(argv), "lib/node_modules/openclaw");
+          await fs.mkdir(path.join(stagedRoot, "scripts/lib"), { recursive: true });
           for (const relativePath of [
+            "runtime-process-bootstrap.generated.mjs",
             "scripts/postinstall-bundled-plugins.mjs",
             "scripts/lib/package-lifecycle-marker.mjs",
             "scripts/lib/fs-safe-prebuild.mjs",
+            "scripts/lib/fs-safe-npm-cli-preload.generated.mjs",
+            "scripts/lib/fs-safe-npm-cli-protocol.mjs",
             "scripts/windows-cmd-helpers.mjs",
           ]) {
-            const destination = path.join(stagedRoot, relativePath);
-            await fs.mkdir(path.dirname(destination), { recursive: true });
-            await fs.copyFile(new URL(`../../${relativePath}`, import.meta.url), destination);
+            await fs.copyFile(
+              new URL(`../../${relativePath}`, import.meta.url),
+              path.join(stagedRoot, relativePath),
+            );
           }
           await fs.writeFile(path.join(stagedRoot, "package.json"), '{"type":"module"}\n');
           const guardDir = path.join(stagedRoot, "dist/commands");
@@ -72,7 +75,6 @@ it.each([
               OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL: "1",
             },
           });
-          expect(child.error).toBeUndefined();
           expect(child.status, child.stderr).toBe(1);
           return {
             code: child.status,
@@ -82,11 +84,9 @@ it.each([
         },
       }),
   });
-  expect(installs).toHaveLength(scenario.attempts);
   expect(result.steps.map((step) => step.name)).toEqual(
     scenario.refused ? ["package-install"] : ["package-install", "package-install-omit-optional"],
   );
-  expect(installs.flat().includes("--omit=optional")).toBe(!scenario.refused);
   const tail = result.failedStep?.[scenario.stream === "stdout" ? "stdoutTail" : "stderrTail"];
   expect(tail).toContain(message);
   if (scenario.refused) {

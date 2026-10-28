@@ -23,9 +23,6 @@ class ControlledWorker extends EventEmitter {
 const options: DiscordAudioWorkerOptions = {
   guildId: "guild",
   channelId: "voice",
-  group: "test",
-  selfDeaf: false,
-  selfMute: false,
   connectTimeoutMs: 30_000,
   reconnectGraceMs: 15_000,
   captureSilenceGraceMs: 2_000,
@@ -46,7 +43,7 @@ function fixture(sendPayload = vi.fn(() => true)) {
   const destroy = vi.fn();
   const audio = new DiscordAudioTransport(options, () => ({ sendPayload, destroy }));
   owned.push({ audio, worker });
-  return { audio, worker, destroy, sendPayload };
+  return { audio, worker, destroy };
 }
 async function readyFixture(sendPayload?: Parameters<typeof fixture>[0]) {
   const result = fixture(sendPayload);
@@ -54,15 +51,15 @@ async function readyFixture(sendPayload?: Parameters<typeof fixture>[0]) {
   await result.audio.ready;
   return result;
 }
-function frame(id: number, pcm: number[], packet: number[], epoch: bigint): DiscordAudioEvent {
+function frame(id: number, value = 0): DiscordAudioEvent {
   return {
     type: "capture-frame",
     id,
     frame: {
-      pcm: new Uint8Array(pcm),
-      packet: new Uint8Array(packet),
+      pcm: Uint8Array.of(value, 0),
+      packet: Uint8Array.of(1),
       receivedAt: 1,
-      recordingEpoch: epoch,
+      recordingEpoch: 1n,
     },
   };
 }
@@ -142,7 +139,7 @@ describe("Discord audio worker control boundary", () => {
     });
     expect(capture.destroyed).toBe(true);
     expect(errors).toHaveBeenCalledOnce();
-    worker.emit("message", frame(capture.id, [0, 0, 0, 0], [0], 0n));
+    worker.emit("message", frame(capture.id));
     expect(capture.readableLength).toBe(0);
     expect(
       worker.postMessage.mock.calls.filter(([command]) => command.type === "stop"),
@@ -166,7 +163,7 @@ describe("Discord audio worker control boundary", () => {
     expect(destroy).toHaveBeenCalledOnce();
     expect(capture.destroyed).toBe(false);
     worker.emit("message", { type: "capture-finalized", id: capture.id });
-    worker.emit("message", frame(capture.id, [7, 0], [1], 1n));
+    worker.emit("message", frame(capture.id, 7));
     worker.emit("message", { type: "capture-end", id: capture.id });
     worker.emit("message", { type: "stopped" });
     worker.emit("exit", 0);

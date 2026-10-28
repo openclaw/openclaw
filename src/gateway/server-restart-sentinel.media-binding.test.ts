@@ -223,7 +223,7 @@ describe("original requester media handoff", () => {
         await expect(drain(id)).resolves.toBeNull();
         await expect(drain(id)).resolves.toBeNull();
         expect(dispatch).toHaveBeenCalledOnce();
-        expect(dispatch.mock.calls[0]?.[2]?.controllerInput).toBeDefined();
+        expect(dispatch.mock.calls[0]?.[1]?.controllerInput).toBeDefined();
         expect(send).not.toHaveBeenCalled();
         expect(await pending()).toEqual([]);
       } finally {
@@ -231,45 +231,34 @@ describe("original requester media handoff", () => {
       }
     }));
 
-  it.each(["originating turn", "attempt-marker admission"] as const)(
-    "keeps media queued while the %s owns requester work",
-    (ownerTiming) =>
-      withMediaSession(async ({ wake, acquire, pending, dispatch, drain }) => {
-        let owner: Awaited<ReturnType<typeof beginSessionEffect>> | undefined;
-        const markAttempt = queue.markSessionDeliveryAttemptStarted;
-        if (ownerTiming === "attempt-marker admission") {
-          vi.spyOn(queue, "markSessionDeliveryAttemptStarted").mockImplementationOnce(
-            async (...args) => {
-              owner = await acquire();
-              return markAttempt(...args);
-            },
-          );
-        } else {
+  it("keeps media queued when requester work starts at attempt-marker admission", () =>
+    withMediaSession(async ({ wake, acquire, pending, dispatch, drain }) => {
+      let owner: Awaited<ReturnType<typeof beginSessionEffect>> | undefined;
+      const markAttempt = queue.markSessionDeliveryAttemptStarted;
+      vi.spyOn(queue, "markSessionDeliveryAttemptStarted").mockImplementationOnce(
+        async (...args) => {
           owner = await acquire();
-        }
-        const complete = async () => {
-          expect(await wake()).toEqual({ status: "queued" });
-          const [entry] = await pending();
-          assert(entry, "Expected queued media completion");
-          await drain(entry.id);
-          const [queued] = await pending();
-          expect(queued).toMatchObject({ id: entry.id, retryCount: 0 });
-          expect(queued?.deliveryStartedAt).toBeUndefined();
-          expect(dispatch).not.toHaveBeenCalled();
-          return entry.id;
-        };
-        let entryId: string;
-        try {
-          // Scheduling may inherit the originating turn's async admission context.
-          entryId = await (owner ? owner.run(complete) : complete());
-        } finally {
-          owner?.release();
-        }
+          return markAttempt(...args);
+        },
+      );
+      let entryId: string;
+      try {
+        expect(await wake()).toEqual({ status: "queued" });
+        const [entry] = await pending();
+        assert(entry, "Expected queued media completion");
+        entryId = entry.id;
         await drain(entryId);
-        expect(dispatch).toHaveBeenCalledOnce();
-        expect(await pending()).toEqual([]);
-      }),
-  );
+        const [queued] = await pending();
+        expect(queued).toMatchObject({ id: entryId, retryCount: 0 });
+        expect(queued?.deliveryStartedAt).toBeUndefined();
+        expect(dispatch).not.toHaveBeenCalled();
+      } finally {
+        owner?.release();
+      }
+      await drain(entryId);
+      expect(dispatch).toHaveBeenCalledOnce();
+      expect(await pending()).toEqual([]);
+    }));
 
   it.each([
     "current",
@@ -329,7 +318,7 @@ describe("original requester media handoff", () => {
           await mutate();
         }
         if (change === "store-during-dispatch") {
-          dispatch.mockImplementationOnce(async (_method, _params, options) => {
+          dispatch.mockImplementationOnce(async (_params, options) => {
             await mutate();
             options?.assertAdmissionCurrent?.();
             throw new Error("retired requester was allowed through Gateway admission");
@@ -340,7 +329,7 @@ describe("original requester media handoff", () => {
         if (change === "current") {
           // Outbound custody carries the requester so a replay cannot outlive it.
           expect(send.mock.calls[0]?.[3]).toEqual(fixture.binding);
-          expect(dispatch.mock.calls[0]?.[1]).toMatchObject({
+          expect(dispatch.mock.calls[0]?.[0]).toMatchObject({
             agentId: "main",
             sessionKey: scope.sessionKey,
             expectedExistingSessionId: "original-requester",
@@ -367,9 +356,17 @@ describe("original requester media handoff", () => {
       const exhausted = mode === "exhaust";
       vi.useFakeTimers({ toFake: exhausted ? ["Date"] : ["setTimeout", "clearTimeout", "Date"] });
       const startedAt = Date.now();
+      const realPerformanceNow = performance.now.bind(performance);
+      let performanceClockSkewMs = 0;
+      if (exhausted) {
+        vi.spyOn(performance, "now").mockImplementation(
+          () => realPerformanceNow() + performanceClockSkewMs,
+        );
+      }
       enqueue[exhausted ? "mockImplementation" : "mockImplementationOnce"](async () => {
         if (exhausted) {
           vi.setSystemTime(startedAt + 120_001);
+          performanceClockSkewMs += 120_001;
         }
         firstRefused.resolve();
         throw new Error(exhausted ? "queue remains unavailable" : "temporary queue write refusal");
@@ -443,6 +440,11 @@ describe("queued media completion past the handoff deadline", () => {
         const originalOwner = await f.acquire();
         const startedAt = Date.now();
         vi.useFakeTimers({ toFake: ["Date"] });
+        const realPerformanceNow = performance.now.bind(performance);
+        let performanceClockSkewMs = 0;
+        vi.spyOn(performance, "now").mockImplementation(
+          () => realPerformanceNow() + performanceClockSkewMs,
+        );
         const observedQueuedRetry = createDeferredCore();
         let scheduledCount = 0;
         let queueId: string | undefined;
@@ -452,6 +454,7 @@ describe("queued media completion past the handoff deadline", () => {
           queueId = id;
           await f.drain(id);
           vi.setSystemTime(startedAt + 120_001);
+          performanceClockSkewMs = 120_001;
           if (++scheduledCount > 1) {
             observedQueuedRetry.resolve();
           }

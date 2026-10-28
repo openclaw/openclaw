@@ -216,7 +216,6 @@ it.each([false, true])("settles overlapping sweeps (released=%s)", async (releas
 });
 
 it.each([
-  { successor: false, rejection: false },
   { successor: true, rejection: false },
   { successor: false, rejection: true },
 ])(

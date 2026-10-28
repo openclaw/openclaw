@@ -63,15 +63,10 @@ export function normalizeReplyPayloadOutcome(
   };
   const applyChannelTransforms = opts.applyChannelTransforms ?? true;
   const hasContent = (text: string | undefined) =>
-    hasReplyPayloadContent(
-      {
-        ...payload,
-        text,
-      },
-      {
-        trimText: true,
-      },
-    );
+    hasReplyPayloadContent({
+      ...payload,
+      text,
+    });
   const trimmed = normalizeOptionalString(payload.text) ?? "";
   const hasSpeechContent = hasReplyPayloadSpeechContent(payload);
   if (!hasContent(trimmed) && !hasSpeechContent) {

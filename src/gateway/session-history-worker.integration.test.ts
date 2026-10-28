@@ -16,7 +16,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { readTranscriptDisplayDelta } from "../config/sessions/session-accessor.sqlite-history-events.test-support.js";
-import { readActiveTranscriptEntryAnchor } from "../config/sessions/session-accessor.sqlite-transcript-anchor.js";
+import { readActiveTranscriptEntryAnchor } from "../config/sessions/session-accessor.sqlite-transcript-admitted-read.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { readSessionColdTranscript } from "../config/sessions/session-cold-storage-state.js";
 import { runSessionColdStorageMaintenance } from "../config/sessions/session-cold-storage.js";
@@ -123,10 +123,7 @@ it("reads oversized native history without caller-thread JSON.parse and survives
     };
     try {
       // Load the native importer before the large read; this is not a fresh parse-only isolate.
-      expect((await read()).messages.map(readChatHistoryMessageId)).toEqual([
-        "canonical",
-        "warm-native",
-      ]);
+      expectMessageIds((await read()).messages, ["canonical", "warm-native"]);
       expect(isSessionHistoryWorkerCold()).toBe(false);
       await fs.writeFile(nativePath, "");
       for (const [uuid, role, mib, second] of [
@@ -145,44 +142,35 @@ it("reads oversized native history without caller-thread JSON.parse and survives
       const originalSource = await sourceDigest(nativePath);
       const parse = JSON.parse;
       const largeCallerParses: number[] = [];
-      const parseSpy = vi.spyOn(JSON, "parse").mockImplementation((source, reviver) => {
+      using _ = vi.spyOn(JSON, "parse").mockImplementation((source, reviver) => {
         if (typeof source === "string" && source.length > 1024 * 1024) {
           largeCallerParses.push(source.length);
         }
         return parse(source, reviver);
       });
-      try {
-        const page = await read();
-        expect(page.messages.map(readChatHistoryMessageId)).toEqual([
-          "canonical",
-          "native-2m",
-          "native-34m",
-          "native-after",
-        ]);
-        const placeholder =
-          "[Claude CLI history record omitted from context because it exceeded 1 MiB.]";
-        expect(page.messages).toMatchObject([
-          canonical,
-          { role: "user", content: placeholder, __openclaw: { externalId: "native-2m" } },
-          { role: "assistant", content: placeholder, __openclaw: { externalId: "native-34m" } },
-          { role: "user", content: "External history continues" },
-        ]);
-        expect(Buffer.byteLength(JSON.stringify(page.messages))).toBeLessThan(4096);
-        expect(largeCallerParses).toEqual([]);
-        const ordinary = await read(true);
-        expect(ordinary.messages).toMatchObject([canonical]);
-        expect(ordinary.messages.map(readChatHistoryMessageId)).toEqual(["canonical"]);
+      const page = await read();
+      expectMessageIds(page.messages, ["canonical", "native-2m", "native-34m", "native-after"]);
+      const placeholder =
+        "[Claude CLI history record omitted from context because it exceeded 1 MiB.]";
+      expect(page.messages).toMatchObject([
+        canonical,
+        { role: "user", content: placeholder, __openclaw: { externalId: "native-2m" } },
+        { role: "assistant", content: placeholder, __openclaw: { externalId: "native-34m" } },
+        { role: "user", content: "External history continues" },
+      ]);
+      expect(Buffer.byteLength(JSON.stringify(page.messages))).toBeLessThan(4096);
+      expect(largeCallerParses).toEqual([]);
+      const ordinary = await read(true);
+      expect(ordinary.messages).toMatchObject([canonical]);
+      expectMessageIds(ordinary.messages, ["canonical"]);
 
-        await close();
-        expect(isSessionHistoryWorkerCold()).toBe(true);
-        const reopened = await read(true);
-        expect(reopened.messages.map(readChatHistoryMessageId)).toEqual(["canonical"]);
-        expect(reopened.messages).toMatchObject([canonical]);
-        expect(largeCallerParses).toEqual([]);
-        expect(await sourceDigest(nativePath)).toBe(originalSource);
-      } finally {
-        parseSpy.mockRestore();
-      }
+      await close();
+      expect(isSessionHistoryWorkerCold()).toBe(true);
+      const reopened = await read(true);
+      expectMessageIds(reopened.messages, ["canonical"]);
+      expect(reopened.messages).toMatchObject([canonical]);
+      expect(largeCallerParses).toEqual([]);
+      expect(await sourceDigest(nativePath)).toBe(originalSource);
     } finally {
       await close();
     }

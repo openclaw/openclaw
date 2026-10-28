@@ -50,6 +50,7 @@ export async function dispatchRestartRecoveryUntilStarted(params: {
   executionSource?: GatewayInstanceAgentDispatchOptions["executionSource"];
   prepareDispatchCurrent?: () => Promise<void>;
   onSettled?: () => void;
+  onRecoveryInputTransferred?: () => void;
 }): Promise<RestartRecoveryDispatchStartOutcome> {
   let dispatchAccepted = false;
   let executionStarted = false;
@@ -114,7 +115,7 @@ export async function dispatchRestartRecoveryUntilStarted(params: {
   };
   const scheduleObservation = (delayMs: number) => {
     executionStartTimer = setTimeout(observeExecutionStart, delayMs);
-    executionStartTimer.unref?.();
+    executionStartTimer.unref();
   };
   scheduleObservation(RESTART_RECOVERY_START_OBSERVATION_MS);
   let dispatchPromise: Promise<RestartRecoveryDispatchResult>;
@@ -130,6 +131,7 @@ export async function dispatchRestartRecoveryUntilStarted(params: {
         assertAdmissionCurrent: params.assertAdmissionCurrent,
         executionSource: params.executionSource,
         prepareDispatchCurrent: params.prepareDispatchCurrent,
+        onRecoveryInputTransferred: params.onRecoveryInputTransferred,
         onAccepted: () => {
           dispatchAccepted = true;
         },

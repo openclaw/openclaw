@@ -3,6 +3,7 @@ import { TuiMainScreen, type TUI } from "@earendil-works/pi-tui";
 import { vi } from "vitest";
 import { ChatLog } from "./components/chat-log.js";
 import type { TuiBackend } from "./tui-backend.js";
+import { makeTuiState } from "./tui-event-test-support.js";
 import { createSessionActions } from "./tui-session-actions.js";
 import type { TuiStateAccess } from "./tui-types.js";
 
@@ -94,29 +95,8 @@ export function makeTui(overrides: Partial<TUI> = {}): TUI {
   return Object.assign(tui, { requestRender: vi.fn(), ...overrides });
 }
 
-export const createBaseState = (overrides: Partial<TuiStateAccess> = {}): TuiStateAccess => ({
-  agentDefaultId: "main",
-  sessionMainKey: "agent:main:main",
-  sessionScope: "global",
-  agents: [],
-  currentAgentId: "main",
-  currentSessionKey: "agent:main:main",
-  currentSessionId: null,
-  activeChatRunId: null,
-  pendingSubmit: null,
-  historyLoaded: false,
-  sessionInfo: {},
-  initialSessionApplied: true,
-  isConnected: true,
-  autoMessageSent: false,
-  toolsExpanded: false,
-  showThinking: false,
-  connectionStatus: "connected",
-  activityStatus: "idle",
-  statusTimeout: null,
-  lastCtrlCAt: 0,
-  ...overrides,
-});
+export const createBaseState = (overrides: Partial<TuiStateAccess> = {}): TuiStateAccess =>
+  makeTuiState({ currentSessionId: null, historyLoaded: false, sessionInfo: {}, ...overrides });
 
 export const createTestSessionActions = (
   overrides: Partial<Parameters<typeof createSessionActions>[0]>,

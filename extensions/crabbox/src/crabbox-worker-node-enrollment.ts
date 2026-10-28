@@ -54,7 +54,10 @@ function createCrabboxNodeSetup(params: {
   target?: CrabboxOperatingSystem;
 }): { command: string; forwardedEnv: Record<string, string> } {
   const { enrollment, leaseId } = params;
-  const { token, linuxToolchainSetup, ...nodeBootstrap } = params.nodeBootstrap;
+  const { token, linuxToolchainSetup, installLock, ...nodeBootstrap } = params.nodeBootstrap;
+  const lockArtifact = installLock
+    ? (({ token: _token, ...artifact }) => artifact)(installLock)
+    : undefined;
   const workerBundle = params.workerBundle
     ? (({ token: _token, ...artifact }) => artifact)(params.workerBundle)
     : undefined;
@@ -78,9 +81,11 @@ const http = require("node:http");
 const https = require("node:https");
 const { spawn, spawnSync } = require("node:child_process");
 const { once } = require("node:events");
+const { performance } = require("node:perf_hooks");
 const { setTimeout: delay } = require("node:timers/promises");
 const bootstrap = ${JSON.stringify(nodeBootstrap)};
 const workerBundle = ${JSON.stringify(workerBundle)};
+const installLock = ${JSON.stringify(lockArtifact)};
 const leaseId = ${JSON.stringify(leaseId)};
 const displayName = ${JSON.stringify(enrollment?.displayName)};
 const mode = ${JSON.stringify(enrollment?.mode)};
@@ -92,9 +97,13 @@ delete process.env.${CLOUD_BOOTSTRAP_TOKEN_ENV};
 delete process.env.${CLOUD_SETUP_CODE_ENV};
 if (process.platform !== "win32") process.umask(0o077);
 let phase;
+let phaseStarted = performance.now();
 const failureMessage = (artifact, failedPhase, code, origin) => "Cloud worker " + artifact + " " + failedPhase + " failed" + (code ? " (" + code + ")" : "") + (origin ? " from " + origin : "");
 const setPhase = (next) => {
   if (phase === next) return;
+  const now = performance.now();
+  if (phase) console.error("CRABBOX_TIMING:openclaw-bootstrap-" + phase.toLowerCase().replaceAll(" ", "-") + ":" + Math.round(now - phaseStarted));
+  phaseStarted = now;
   phase = next;
   console.error("CRABBOX_PHASE:openclaw-bootstrap-" + next.toLowerCase().replaceAll(" ", "-"));
 };
@@ -296,7 +305,7 @@ setPhase("preparation");
       await verifyArchive(fs.createReadStream(archive), artifact);
     } finally { response.destroy(); }
   };
-  const downloadArchive = async (artifact, token, archive, reportPhase = setPhase) => {
+  const downloadArchive = async (artifact, token, archive, reportPhase = setPhase, optional = false) => {
     let downloadPhase;
     let origin;
     const downloadArtifact = artifact === workerBundle ? "archive" : "node bootstrap";
@@ -343,6 +352,7 @@ setPhase("preparation");
         }
       }
     } catch (error) {
+      if (optional) throw error;
       if (!downloadAbort.signal.aborted) {
         downloadAbort.abort(Object.assign(new Error(failureMessage(downloadArtifact, downloadPhase || phase, error.code, origin) + ": " + error.message, { cause: error }), { code: error.code, downloadPhase, downloadArtifact }));
       }
@@ -395,7 +405,7 @@ setPhase("preparation");
   } else {
   const stage = fs.mkdtempSync(path.join(runtimeRoot, "node-bootstrap-"));
   try {
-    const archive = path.join(stage, "openclaw.tgz");
+    const archive = path.join(stage, "node-runtime.tgz");
     const downloadedWorker = workerBundle ? path.join(stage, "worker.tgz") : undefined;
     const installDir = existingRuntime ? runtimeDir : path.join(stage, "runtime");
     const overlap = downloadedWorker && !existingRuntime;
@@ -405,50 +415,78 @@ setPhase("preparation");
         if (existingRuntime) return;
         await downloadArchive(bootstrap, tokens.nodeBootstrap, archive);
         downloadAbort.signal.throwIfAborted();
-        setPhase(overlap ? "installation and worker download" : "installation");
         fs.mkdirSync(installDir, directoryOptions);
-        // npm 12 requires a project policy even when ignore-scripts is false.
-        // Trust only the verified artifact; dependency script policy stays unchanged.
-        fs.writeFileSync(path.join(installDir, "package.json"), JSON.stringify({ private: true, allowScripts: { ["file:" + archive]: true } }), { mode: 0o600 });
+        let locked = false;
+        const warnUnlocked = (reason) => console.error("CRABBOX_WARNING:openclaw-bootstrap-unlocked-install:" + reason);
+        if (installLock) {
+          try {
+            setPhase("lock download");
+            await downloadArchive(installLock, tokens.installLock, path.join(installDir, "package-lock.json"), () => {}, true);
+            locked = true;
+          } catch (error) {
+            downloadAbort.signal.throwIfAborted();
+            warnUnlocked("lock download failed " + (error.code || error.statusCode || "integrity or transport error"));
+          }
+        } else warnUnlocked("lock unavailable from Gateway");
+        const writeProject = () => fs.writeFileSync(path.join(installDir, "package.json"), JSON.stringify({
+          private: true,
+          // npm 12 trusts only this verified package; dependency script policy stays unchanged.
+          allowScripts: { ["file:" + archive]: true },
+          ...(locked ? { dependencies: { openclaw: "file:../node-runtime.tgz" } } : {}),
+        }), { mode: 0o600 });
+        writeProject();
+        setPhase(overlap ? "installation and worker download" : "installation");
         const logPath = path.join(stage, "install.log");
-        const log = fs.openSync(logPath, "w", 0o600);
-        let installed;
-        try {
-          const npmCli = path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js");
-          if (process.platform === "win32" && !fs.existsSync(npmCli)) throw new Error("Cloud worker requires npm beside node.exe; update the Crabbox Windows bootstrap image and reprovision the worker");
-          installed = await new Promise((resolve) => {
-            const child = spawn(process.platform === "win32" ? process.execPath : "npm", [...(process.platform === "win32" ? [npmCli] : []), "install", "--prefix", installDir, "--omit=dev", "--no-save", "--package-lock=false", "--no-audit", "--no-fund", "--ignore-scripts=false", archive], { cwd: stage, env: nodeEnv, detached: process.platform !== "win32", windowsHide: true, stdio: ["ignore", log, log] });
-            let error;
-            const stopInstall = () => {
-              if (!child.pid) return;
-              // Kill the owned npm group, including lifecycle scripts, then join close below.
-              try {
-                if (process.platform === "win32") {
-                  const stopped = spawnSync("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], { env: nodeEnv, windowsHide: true, stdio: "ignore", timeout: 10000 });
-                  if (stopped.error) error = stopped.error;
-                } else process.kill(-child.pid, "SIGKILL");
-              } catch (cause) { if (cause.code !== "ESRCH") error = cause; }
-            };
-            const timeout = setTimeout(() => {
-              error = new Error("Cloud worker bootstrap package installation timed out");
-              stopInstall();
-            }, 600000);
-            const cancelInstall = () => downloadAbort.abort(new Error("Cloud worker bootstrap installation cancelled"));
-            process.once("SIGTERM", cancelInstall);
-            process.once("SIGINT", cancelInstall);
-            child.once("error", (cause) => { error = cause; });
-            child.once("close", (status, signal) => {
-              clearTimeout(timeout);
-              process.removeListener("SIGTERM", cancelInstall);
-              process.removeListener("SIGINT", cancelInstall);
-              downloadAbort.signal.removeEventListener("abort", stopInstall);
-              resolve({ status, signal, error });
+        const runInstall = async () => {
+          const log = fs.openSync(logPath, "w", 0o600);
+          try {
+            const npmCli = path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js");
+            if (process.platform === "win32" && !fs.existsSync(npmCli)) throw new Error("Cloud worker requires npm beside node.exe; update the Crabbox Windows bootstrap image and reprovision the worker");
+            return await new Promise((resolve) => {
+              const child = spawn(process.platform === "win32" ? process.execPath : "npm", [...(process.platform === "win32" ? [npmCli] : []), ...(locked ? ["ci"] : ["install", "--no-save", "--package-lock=false"]), "--prefix", installDir, "--omit=dev", "--no-audit", "--no-fund", "--ignore-scripts=false", ...(locked ? [] : [archive])], { cwd: stage, env: nodeEnv, detached: process.platform !== "win32", windowsHide: true, stdio: ["ignore", log, log] });
+              let error;
+              const stopInstall = () => {
+                if (!child.pid) return;
+                // Kill the owned npm group, including lifecycle scripts, then join close below.
+                try {
+                  if (process.platform === "win32") {
+                    const stopped = spawnSync("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], { env: nodeEnv, windowsHide: true, stdio: "ignore", timeout: 10000 });
+                    if (stopped.error) error = stopped.error;
+                  } else process.kill(-child.pid, "SIGKILL");
+                } catch (cause) { if (cause.code !== "ESRCH") error = cause; }
+              };
+              const timeout = setTimeout(() => {
+                error = new Error("Cloud worker bootstrap package installation timed out");
+                stopInstall();
+              }, 600000);
+              const cancelInstall = () => downloadAbort.abort(new Error("Cloud worker bootstrap installation cancelled"));
+              process.once("SIGTERM", cancelInstall);
+              process.once("SIGINT", cancelInstall);
+              child.once("error", (cause) => { error = cause; });
+              child.once("close", (status, signal) => {
+                clearTimeout(timeout);
+                process.removeListener("SIGTERM", cancelInstall);
+                process.removeListener("SIGINT", cancelInstall);
+                downloadAbort.signal.removeEventListener("abort", stopInstall);
+                resolve({ status, signal, error });
+              });
+              downloadAbort.signal.addEventListener("abort", stopInstall, { once: true });
+              if (downloadAbort.signal.aborted) stopInstall();
             });
-            downloadAbort.signal.addEventListener("abort", stopInstall, { once: true });
-            if (downloadAbort.signal.aborted) stopInstall();
-          });
-        } finally { fs.closeSync(log); }
+          } finally { fs.closeSync(log); }
+        };
+        let installed = await runInstall();
         downloadAbort.signal.throwIfAborted();
+        if (locked && (installed.status !== 0 || installed.error)) {
+          const code = /npm (?:error|ERR!) code ([A-Z0-9_]+)/.exec(fs.readFileSync(logPath, "utf8"))?.[1];
+          warnUnlocked("npm ci rejected lock " + (code || installed.signal || "exit " + installed.status));
+          locked = false;
+          fs.rmSync(path.join(installDir, "package-lock.json"), { force: true });
+          fs.rmSync(path.join(installDir, "node_modules"), { recursive: true, force: true });
+          writeProject();
+          installed = await runInstall();
+          downloadAbort.signal.throwIfAborted();
+        }
         if (installed.status !== 0 || installed.error) {
           const tail = fs.readFileSync(logPath, "utf8").slice(-2048);
           throw new Error("Cloud worker bootstrap package installation failed (" + (installed.error?.message || installed.signal || "exit code " + installed.status) + "): " + tail);
@@ -510,6 +548,7 @@ setPhase("preparation");
       [CLOUD_BOOTSTRAP_TOKEN_ENV]: JSON.stringify({
         nodeBootstrap: token,
         workerBundle: params.workerBundle?.token,
+        installLock: installLock?.token,
       }),
       ...(enrollment?.mode === "connect" ? { [CLOUD_SETUP_CODE_ENV]: enrollment.setupCode } : {}),
     },

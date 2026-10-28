@@ -8,11 +8,11 @@ import type { ActiveWebListener } from "./inbound/types.js";
 const hoisted = vi.hoisted(() => ({
   loadOutboundMediaFromUrl: vi.fn(),
   controllerListeners: new Map<string, ActiveWebListener>(),
+  getPNForLID: vi.fn<() => Promise<string | null>>(async () => null),
   transcodeAudioBufferToOpus: vi.fn(),
 }));
 const loadWebMediaMock = vi.fn();
 let sendMessageWhatsApp: typeof import("./send.js").sendMessageWhatsApp;
-let sendWhatsAppUploadFile: typeof import("./send.js").sendWhatsAppUploadFile;
 let sendPollWhatsApp: typeof import("./send.js").sendPollWhatsApp;
 let sendReactionWhatsApp: typeof import("./send.js").sendReactionWhatsApp;
 let sendTypingWhatsApp: typeof import("./send.js").sendTypingWhatsApp;
@@ -27,7 +27,14 @@ vi.mock("./connection-controller-runtime-context.js", async () => {
     ...actual,
     getWhatsAppConnectionController: vi.fn((accountId: string) => {
       const listener = hoisted.controllerListeners.get(accountId) ?? null;
-      return listener ? { getActiveListener: () => listener } : null;
+      return listener
+        ? {
+            getActiveListener: () => listener,
+            getCurrentSock: () => ({
+              signalRepository: { lidMapping: { getPNForLID: hoisted.getPNForLID } },
+            }),
+          }
+        : null;
     }),
   };
 });
@@ -52,7 +59,7 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
   };
 });
 
-function sendOptions(overrides: Partial<Parameters<typeof sendWhatsAppUploadFile>[2]> = {}) {
+function sendOptions(overrides: Partial<Parameters<typeof sendMessageWhatsApp>[2]> = {}) {
   return { verbose: false, cfg: WHATSAPP_TEST_CFG, ...overrides };
 }
 
@@ -88,17 +95,13 @@ describe("web outbound", () => {
   }
 
   beforeAll(async () => {
-    ({
-      sendMessageWhatsApp,
-      sendWhatsAppUploadFile,
-      sendPollWhatsApp,
-      sendReactionWhatsApp,
-      sendTypingWhatsApp,
-    } = await import("./send.js"));
+    ({ sendMessageWhatsApp, sendPollWhatsApp, sendReactionWhatsApp, sendTypingWhatsApp } =
+      await import("./send.js"));
   });
 
   beforeEach(() => {
     vi.clearAllMocks();
+    hoisted.getPNForLID.mockReset().mockResolvedValue(null);
     hoisted.transcodeAudioBufferToOpus.mockReset().mockResolvedValue(Buffer.from("opus-output"));
     hoisted.loadOutboundMediaFromUrl.mockReset().mockImplementation(
       async (
@@ -208,6 +211,21 @@ describe("web outbound", () => {
     expect(result).toEqual({ messageId: "msg-lid", toJid: "123456789@lid" });
   });
 
+  it("reports the phone chat identity for a delivered LID text reply", async () => {
+    hoisted.getPNForLID.mockResolvedValue("1555@s.whatsapp.net");
+    sendMessage.mockResolvedValueOnce({
+      kind: "text",
+      messageId: "mapped-lid-reply",
+      keys: [{ id: "mapped-lid-reply", remoteJid: "123456789@lid", fromMe: true }],
+      providerAccepted: true,
+    });
+
+    await expect(sendText("Report")).resolves.toEqual({
+      messageId: "mapped-lid-reply",
+      toJid: "1555@s.whatsapp.net",
+    });
+  });
+
   it("preserves intentional indentation when the caller opts out of transport trimming", async () => {
     await sendText("    indented", { preserveLeadingWhitespace: true });
 
@@ -266,7 +284,7 @@ describe("web outbound", () => {
     const buffer = Buffer.from("attachment");
     const mediaReadFile = vi.fn(async () => buffer);
     media(buffer, "application/octet-stream", "document", "blob");
-    await sendWhatsAppUploadFile(
+    await sendMessageWhatsApp(
       "+1555",
       "attachment",
       sendOptions({
@@ -292,7 +310,7 @@ describe("web outbound", () => {
   it("uses explicit upload MIME metadata to deliver a remote PDF as a document", async () => {
     const buffer = Buffer.from("attachment");
     media(buffer, "application/octet-stream", "document", "download.bin");
-    await sendWhatsAppUploadFile(
+    await sendMessageWhatsApp(
       "+1555",
       "attachment",
       sendOptions({

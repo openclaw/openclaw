@@ -1,7 +1,6 @@
 import path from "node:path";
 import * as timers from "node:timers/promises";
 import type { Worker } from "node:worker_threads";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -33,8 +32,9 @@ import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime
 import { getSessionTranscriptReconcileWorkerPoolSnapshot as poolSnapshot } from "./session-transcript-reconcile-pool.js";
 import * as reconcilePool from "./session-transcript-reconcile-pool.js";
 import {
-  holdReconcileAck,
   markRebuild as markDirty,
+  observeCanonicalWriterLeases,
+  readAgentDatabaseLeaseIds,
   rebuildState,
   seedTranscript as seed,
 } from "./session-transcript-reconcile.fixtures.test-support.js";
@@ -46,7 +46,10 @@ import {
   waitForSessionTranscriptIndexReconcilesInStateDir as drainStateDirectory,
   waitForSessionTranscriptProjection as waitForProjection,
 } from "./session-transcript-reconcile.js";
-import { useReconcileWorkerObserver } from "./session-transcript-reconcile.test-support.js";
+import {
+  holdReconcileAck,
+  useReconcileWorkerObserver,
+} from "./session-transcript-reconcile.test-support.js";
 import type { SessionTranscriptReconcileWorkerMessage } from "./session-transcript-reconcile.worker.js";
 
 vi.mock("node:worker_threads", async () =>
@@ -124,32 +127,6 @@ function countAgentDatabaseLeases(pathname: string, env?: NodeJS.ProcessEnv): nu
     )
     .get(process.pid, pathname) as { count: number };
   return row.count;
-}
-
-function readAgentDatabaseLeaseIds(pathname: string, env?: NodeJS.ProcessEnv): string[] {
-  return openOpenClawStateDatabase({ env })
-    .db.prepare(
-      "SELECT lease_id FROM agent_database_leases WHERE owner_pid = ? AND path = ? ORDER BY lease_id",
-    )
-    .all(process.pid, pathname)
-    .map((row) => String(row.lease_id));
-}
-
-function observeCanonicalWriterLeases() {
-  const leases = new Map<string, string>();
-  const spy = workerProbe.admission(admission, (request, grant, admit) => {
-    const facts = request.facts;
-    if (
-      request.stage === "open" &&
-      isRecord(facts) &&
-      typeof facts.databasePath === "string" &&
-      typeof facts.leaseId === "string"
-    ) {
-      leases.set(facts.databasePath, facts.leaseId);
-    }
-    admit(request, grant);
-  });
-  return { leases, restore: () => spy.mockRestore() };
 }
 
 function createCleanupFenceProbe() {

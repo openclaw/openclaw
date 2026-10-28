@@ -204,7 +204,7 @@ export function parseInteractiveCardContent(parsed: unknown): string {
     }
   }
 
-  const postText = renderPostContent(parsed).textContent.trim();
+  const postText = renderPostContent(parsed).textContent;
   if (postText && postText !== POST_FALLBACK_TEXT) {
     return postText;
   }

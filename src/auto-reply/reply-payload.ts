@@ -156,6 +156,14 @@ function hasReplyPayloadMedia(payload: Pick<ReplyPayload, "mediaUrl" | "mediaUrl
   );
 }
 
+export function shouldKeepPayloadDuringSilentTurn(payload: ReplyPayload): boolean {
+  return (
+    payload.isError === true ||
+    getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true ||
+    (payload.audioAsVoice === true && hasReplyPayloadMedia(payload))
+  );
+}
+
 /** Returns normalized TTS supplement metadata only when the payload has media to carry it. */
 export function getReplyPayloadTtsSupplement(
   payload: Pick<ReplyPayload, "mediaUrl" | "mediaUrls" | "ttsSupplement">,
@@ -369,8 +377,10 @@ export type ReplyPayloadMetadata = {
   nonTerminalToolErrorWarning?: boolean;
   /** Host label or status about the run (truncation, restart, compaction); not the answer. */
   hostNotice?: true;
-  /** Runtime acknowledgment of a committed queue decision, independent of active reply delivery. */
-  queueAdmissionNotice?: true;
+  /** The channel notice has a canonical model-fallback transcript event in the Control UI. */
+  modelFallbackNotice?: true;
+  /** Runtime queue decision; successful acceptance can use a client's queue presentation. */
+  queueAdmissionNotice?: true | "queued";
 };
 
 // Source Gateways and native plugin SDK chunks must share the same payload identity.
@@ -521,6 +531,19 @@ export function retainSilentFinalPayloads(payloads: readonly ReplyPayload[]): Re
       ? [copyReplyPayloadMetadata(payload, nonTextPayload)]
       : [];
   });
+}
+
+/** Structured no_change suppresses unsent content; ordinary silence retains its media contract. */
+export function selectAutomationReplyPayloads(
+  payloads: ReplyPayload[],
+  noChange: boolean,
+  quiet: boolean,
+): ReplyPayload[] {
+  return noChange
+    ? payloads.filter((payload) => payload.isError)
+    : quiet
+      ? retainSilentFinalPayloads(payloads)
+      : payloads;
 }
 
 /** Marks a host-owned payload as deliverable even when normal source replies are suppressed. */

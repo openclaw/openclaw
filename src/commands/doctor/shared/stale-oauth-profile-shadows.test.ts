@@ -95,6 +95,7 @@ describe("stale OAuth profile shadow doctor repair", () => {
     stateDir = path.join(tempRoot, "state");
     childAgentDir = path.join(stateDir, "agents", "telegram", "agent");
     now = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(now);
     process.env.OPENCLAW_STATE_DIR = stateDir;
     process.env.OPENCLAW_HOME = stateDir;
   });
@@ -126,7 +127,7 @@ describe("stale OAuth profile shadow doctor repair", () => {
     const { hits } = await scanStaleOAuthProfileShadows({ cfg: {}, now });
 
     expect(hits).toHaveLength(0);
-    await expect(repairStaleOAuthProfileShadows({ cfg: {}, now })).resolves.toEqual({
+    await expect(repairStaleOAuthProfileShadows({ cfg: {} })).resolves.toEqual({
       changes: [],
       warnings: [],
     });
@@ -182,7 +183,6 @@ describe("stale OAuth profile shadow doctor repair", () => {
     const result = await repairStaleOAuthProfileShadows({
       cfg: { agents: { entries: { telegram: {} } } },
       env,
-      now,
     });
 
     expect(result.warnings).toEqual([]);
@@ -222,7 +222,7 @@ describe("stale OAuth profile shadow doctor repair", () => {
       saveAuthProfileStore(shadowStore(profileId, now, "main"));
 
       const { hits } = await scanStaleOAuthProfileShadows({ cfg: {}, now });
-      const repair = await repairStaleOAuthProfileShadows({ cfg: {}, now });
+      const repair = await repairStaleOAuthProfileShadows({ cfg: {} });
 
       expect(hits).toEqual([]);
       expect(repair).toEqual({ changes: [], warnings: [] });
@@ -252,7 +252,7 @@ describe("stale OAuth profile shadow doctor repair", () => {
         await fs.writeFile(authPath, failure === "corrupt JSON" ? '{"profiles":' : "null");
       }
 
-      const repair = await repairStaleOAuthProfileShadows({ cfg: {}, now });
+      const repair = await repairStaleOAuthProfileShadows({ cfg: {} });
 
       expect(loadPersistedAuthProfileStore(childAgentDir)?.profiles).toEqual(childStore.profiles);
       expect(repair.changes).toEqual([]);
@@ -314,7 +314,7 @@ describe("stale OAuth profile shadow doctor repair", () => {
     }
     let result;
     try {
-      result = await maintenance.run(() => repairStaleOAuthProfileShadows({ cfg: {}, now }));
+      result = await maintenance.run(() => repairStaleOAuthProfileShadows({ cfg: {} }));
     } finally {
       await maintenance.release();
     }
@@ -365,7 +365,7 @@ describe("stale OAuth profile shadow doctor repair", () => {
         return readFile(file, options);
       });
 
-      const repair = await repairStaleOAuthProfileShadows({ cfg: {}, now });
+      const repair = await repairStaleOAuthProfileShadows({ cfg: {} });
 
       expect(repair.changes).toEqual([]);
       expect(loadPersistedAuthProfileStore(childAgentDir)?.profiles).toEqual(keptStore.profiles);

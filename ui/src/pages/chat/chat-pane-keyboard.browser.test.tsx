@@ -3,9 +3,9 @@ import { expect, it, onTestFinished, vi } from "vitest";
 import "../../styles.css";
 import "../../styles/chat.ts";
 import { connectShellViewport, shellViewport } from "../../app/shell-viewport.ts";
+import { createGatewayBrowserClientFixture } from "./chat-application-context.test-support.ts";
 import {
   connectPaneTestView,
-  createGatewayBrowserClientFixture,
   createTestChatPane,
   getPaneTestRuntime,
 } from "./chat-pane.test-support.ts";

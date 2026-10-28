@@ -15,14 +15,15 @@ import {
 } from "../../agent-tool-availability.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { holdQueuedSwarmRun, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
+import { recordFinal } from "./subagent-spawn.boundary-run.test-support.js";
 import { visibleResult } from "./subagent-spawn.fixtures.test-support.js";
 import {
   holdNativeCapacity,
   nativeReplyFixture,
 } from "./subagent-spawn.plugin-native-rewrite.test-support.js";
 import {
+  createSpawnTranscriptTarget,
   createSpawnOperatorSource,
-  recordSpawnBoundaryFinal,
   type NativePluginSpawnTestOptions,
 } from "./subagent-spawn.production-boundary.test-support.js";
 
@@ -155,14 +156,7 @@ function registerNativePluginSandboxCases(options: NativePluginSpawnTestOptions)
       expect(initialEntry.sandbox).toBe(required ? "required" : undefined);
       const recorder = createUserTurnTranscriptRecorder({
         input: { text: "sandbox requester input" },
-        target: {
-          agentId: "main",
-          sessionKey: parentSessionKey,
-          sessionId: initialEntry.sessionId,
-          sessionEntry: initialEntry,
-          storePath: bound.storePath,
-          config: bound.cfg,
-        },
+        target: createSpawnTranscriptTarget(bound, initialEntry),
       });
       const inReply = (run: () => Promise<void>) =>
         nativeReplyFixture(
@@ -191,12 +185,7 @@ function registerNativePluginSandboxCases(options: NativePluginSpawnTestOptions)
           await holdNativeCapacity(bound, capacity);
         } else {
           options.runEmbeddedAgent.mockImplementationOnce(async (params) => {
-            await recordSpawnBoundaryFinal({
-              storePath: bound.storePath,
-              sessionKey: expectDefined(params.sessionKey, "child session"),
-              runId: params.runId,
-              text: "private child result",
-            });
+            await recordFinal(bound, params, "private child result");
             return visibleResult("private child result");
           });
           await inReply(async () => {
@@ -255,12 +244,13 @@ function registerNativePluginSandboxCases(options: NativePluginSpawnTestOptions)
             delete bound.cfg.tools!.sandbox;
           }
           setRuntimeConfigSnapshot({ ...bound.cfg });
-          const before = {
-            ids: [...subagentRuns.keys()],
-            transcript: await transcript(),
-            adoption: adopt.mock.calls.length,
-            model: options.runEmbeddedAgent.mock.calls.length,
-          };
+          const effects = async () => [
+            [...subagentRuns.keys()],
+            await transcript(),
+            adopt.mock.calls.length,
+            options.runEmbeddedAgent.mock.calls.length,
+          ];
+          const before = await effects();
           await inReply(async () => {
             const requestId = [scenario.mode, scenario.deny].join("-");
             if (scenario.blocked) {
@@ -290,10 +280,7 @@ function registerNativePluginSandboxCases(options: NativePluginSpawnTestOptions)
             }
           });
           if (scenario.blocked) {
-            expect([...subagentRuns.keys()]).toEqual(before.ids);
-            expect(await transcript()).toEqual(before.transcript);
-            expect(adopt).toHaveBeenCalledTimes(before.adoption);
-            expect(options.runEmbeddedAgent).toHaveBeenCalledTimes(before.model);
+            expect(await effects()).toEqual(before);
           }
         }
       } catch (error) {

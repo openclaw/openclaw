@@ -1,0 +1,94 @@
+# Publish pages
+
+## Rules for every write
+
+- Each distinct write gets a fresh lowercase UUID `requestId`. Keep the exact
+  payload so you can replay it. Pass imported text as JSON arguments, never
+  through shell interpolation.
+- Creates omit `id`, `expectedRevision` and `expectedHash`; the backend picks the
+  ID and filename. Edits supply all three from a current read.
+- Collections (`aliases`, `tags`, `dependencies`, `fields`) replace when supplied
+  and are preserved when omitted. Empty clears. Supplying `fields` replaces the
+  whole object.
+- `save_page` cannot set lifecycle, entity IDs, claim kinds, relationships or
+  arbitrary frontmatter. Don't smuggle them into `fields`. Unsupported facts go
+  in attributed prose.
+- One body input is at most 48,000 characters, and a page body has a smaller
+  size budget (see [page budgets](#page-budgets)). Keep long originals attached;
+  never truncate them to fit.
+- Search before creating. Match source ID, URL, original hash, title and date,
+  not just a similar title.
+
+## Create, then link
+
+You can't predict paths. Publish a new page with its evidence first, then use the
+returned path for self-citations and cross-links in a follow-up edit. Link to
+other pages only after they exist. Reread revision/hash before each follow-up
+edit.
+
+## Edit an existing page
+
+- Small change: `knowledge_edit_body` with UTF-16 `start`/`end` offsets from a
+  `knowledge_record` content read, the replacement, a reason and the
+  vault/revision/hash/ontology fences. Equal offsets insert; empty replacement
+  deletes.
+- Full replacement: read the entire body first (follow `content.nextOffset`;
+  compare hashes across pages). Never edit from a truncated read.
+- Request `metadataView: "full"` before changing domain fields. Preserve
+  unrelated prose and metadata.
+
+## Page budgets
+
+A page body may hold 12,000 characters (one default `knowledge_record` read) if
+it is a hub, one of the most-linked pages in the store, and 24,000 otherwise.
+Claims have no budget.
+
+- A write that would grow a body past its budget saves nothing and returns a
+  receipt with `state: "rejected"` and `budget.pages`: current and attempted
+  size, the budget, the page's link degree and hub status, its largest sections
+  with `start` offsets, and connected pages each section links to or names.
+- Edits that keep a body the same size or smaller always succeed, even on a page
+  already over budget. Such a page can only shrink.
+- On rejection, don't truncate, summarize away detail, or park the text on an
+  unrelated nearby page. Move a whole section that has its own subject with
+  `knowledge_extract_section`, to a listed candidate it is about or to a new page,
+  then reread and retry your edit.
+- A rejected page edit never blocks a fact: save it with `knowledge_remember` or
+  a claim.
+- Integrate into an existing topic before adding one. A page near its budget
+  usually means a subject needs its own page.
+
+`knowledge_extract_section` takes the source fences, the heading's
+`sectionStart`, a `destination` (fences of an existing page connected to the
+source, or `{title, type}` for a new page), a one-line `summary`, a reason, and
+the vault and ontology fences. In one publication the section moves verbatim with
+its links and the source evidence it quotes; claims it cites that name the source
+as a subject gain the destination as primary subject and keep the source; the
+source keeps the heading, your summary and a link. The destination's own budget
+applies. Afterwards decide for each moved claim whether the source page is still
+a subject, and remove it with `knowledge_annotate` `entities` when it is not.
+Reference-style links and a destination ending inside an open code block reject
+the move: write the section's links inline or as `[[id|label]]` first.
+
+## Publish related records together
+
+`knowledge_publish_batch` publishes 1–25 items (max 1 MiB) under one
+`requestId`, `expectedVaultId` and `expectedOntologyFingerprint`.
+
+- Each item: `key`, `kind` (`page`, `claim`, `relationship`) and an ordinary
+  write `input` without its own request/vault/ontology fields.
+- Keys match `^[a-z][a-z0-9_-]{0,39}$` (`morgan_hale`, not `MorganHale`).
+- Refer to batch items with `@key` in any ID position, including forward
+  references. In bodies, `[[@key|Label]]` becomes a stable-ID link at publish.
+  Page edits use an existing `id`, never `@key`.
+- Upload originals first; inline `source` text is not accepted in a batch.
+- Optional `source: {provider, key, sha256}` binds the batch to one original.
+  Unchanged source returns the prior receipt and ignores the new input. Changed
+  bytes need `expectedPreviousRequestId` from `knowledge_source_check`, after
+  you reconcile existing outputs. Use separate stable keys for split meetings and
+  follow-up batches.
+
+Use individual tools (`knowledge_save_page`, `knowledge_create_claim`,
+`knowledge_create_relationship`) for isolated or follow-on writes.
+
+If anything is uncertain after a write, read [recovery](recovery.md).

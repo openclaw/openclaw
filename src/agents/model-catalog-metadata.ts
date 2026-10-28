@@ -39,6 +39,7 @@ function clearRouteBoundCatalogMetadata(
     contextWindowDefault: _contextWindowDefault,
     contextTokens: _contextTokens,
     parameterCount: _parameterCount,
+    family: _family,
     reasoning: _reasoning,
     configuredReasoning: _configuredReasoning,
     thinkingPolicyProvider: _thinkingPolicyProvider,
@@ -110,6 +111,7 @@ export function overlayCatalogMetadata(
       : {}),
     ...(overlay.contextTokens !== undefined ? { contextTokens: overlay.contextTokens } : {}),
     ...(overlay.parameterCount !== undefined ? { parameterCount: overlay.parameterCount } : {}),
+    ...(overlay.family !== undefined ? { family: overlay.family } : {}),
     ...(overlay.contextCapacitySource
       ? { contextCapacitySource: overlay.contextCapacitySource }
       : {}),

@@ -1,4 +1,5 @@
 import { parseStrictInteger } from "@openclaw/normalization-core/number-coercion";
+import { parseEnvValue as stripQuotes } from "../secrets/shared.js";
 import { sliceUtf16Safe } from "../utils.js";
 import type { SandboxBackendHandle } from "./sandbox/backend-handle.types.js";
 import type { ReadOnlyWorkspaceSkillMount } from "./sandbox/workspace-mounts.js";
@@ -139,15 +140,4 @@ export function deriveSessionName(command: string): string | undefined {
 function tokenizeCommand(command: string): string[] {
   const matches = command.match(/(?:[^\s"']+|"(?:\\.|[^"\\])*"|'[^']*')+/g) ?? [];
   return matches.map((token) => stripQuotes(token)).filter(Boolean);
-}
-
-function stripQuotes(value: string): string {
-  const trimmed = value.trim();
-  if (
-    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
-    (trimmed.startsWith("'") && trimmed.endsWith("'"))
-  ) {
-    return trimmed.slice(1, -1);
-  }
-  return trimmed;
 }

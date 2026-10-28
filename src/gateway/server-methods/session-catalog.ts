@@ -2,7 +2,6 @@ import { statSync } from "node:fs";
 import path from "node:path";
 import {
   ErrorCodes,
-  errorShape,
   validateSessionsCatalogArchiveParams,
   validateSessionsCatalogContinueParams,
   validateSessionsCatalogImportParams,
@@ -22,6 +21,7 @@ import { recordSessionStateEventAsync } from "../../sessions/session-state-event
 import { upsertSessionUpstreamLinkAsync } from "../../sessions/session-upstream-links.js";
 import { authorizeGatewaySessionCreation } from "../operator-role-policy.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
+import { respondError } from "./response.js";
 import { copySessionCatalogToGateway } from "./session-catalog-gateway-copy.js";
 import { importAuthorizedSessionCatalog } from "./session-catalog-import.js";
 import { retireSessionCatalogLists } from "./session-catalog-list-operations.js";
@@ -76,18 +76,14 @@ function registrationOrRespond(catalogId: string, respond: RespondFn) {
     (candidate) => candidate.provider.id === catalogId,
   );
   if (!registration) {
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, `unknown session catalog: ${catalogId}`),
-    );
+    respondError(respond, ErrorCodes.INVALID_REQUEST, `unknown session catalog: ${catalogId}`);
   }
   return registration;
 }
 
 function respondCatalogError(error: unknown, respond: RespondFn): void {
   const details = catalogError(error);
-  respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, details.message, { details }));
+  respondError(respond, ErrorCodes.INVALID_REQUEST, details.message, { details });
 }
 
 async function authorizeSessionCatalogThread(
@@ -124,10 +120,10 @@ async function authorizeSessionCatalogThread(
   if (sourceVisibility) {
     return { agentId, allowProcessHomeFallback: allowHomeFallback, sourceVisibility };
   }
-  respond(
-    false,
-    undefined,
-    errorShape(ErrorCodes.FORBIDDEN, "session catalog thread is not visible to this caller"),
+  respondError(
+    respond,
+    ErrorCodes.FORBIDDEN,
+    "session catalog thread is not visible to this caller",
   );
   return null;
 }
@@ -185,7 +181,7 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
       }
       const provider = registration.provider;
       if (!provider.continueSession && !provider.copyToGatewaySession) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "catalog is view-only"));
+        respondError(respond, ErrorCodes.INVALID_REQUEST, "catalog is view-only");
         return;
       }
       try {
@@ -304,26 +300,23 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
               ? "terminal is not available; restart the Gateway with terminal support and retry"
               : undefined;
       if (unavailable) {
-        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, unavailable));
+        respondError(respond, ErrorCodes.UNAVAILABLE, unavailable);
         return;
       }
       const provider = resolveSessionCatalogProvider(request.catalogId);
       if (!provider) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, `unknown session catalog: ${request.catalogId}`),
+        respondError(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          `unknown session catalog: ${request.catalogId}`,
         );
         return;
       }
       if (!provider.startTerminalSession) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            "session catalog cannot start terminal sessions; choose a catalog that advertises startTerminal",
-          ),
+        respondError(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          "session catalog cannot start terminal sessions; choose a catalog that advertises startTerminal",
         );
         return;
       }
@@ -342,13 +335,10 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
           ? request.hostId.slice("node:".length).trim()
           : undefined;
         if (!nodeId || request.hostId !== `node:${nodeId}`) {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              'invalid catalog host; choose "gateway:local" or a listed "node:<id>" host and retry',
-            ),
+          respondError(
+            respond,
+            ErrorCodes.INVALID_REQUEST,
+            'invalid catalog host; choose "gateway:local" or a listed "node:<id>" host and retry',
           );
           return;
         }
@@ -361,13 +351,10 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
           // The caller owns worktree provisioning; missing/unreadable paths must not fall back home.
         }
         if (!cwdIsDirectory) {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              "cwd must be an existing absolute directory; create or choose a worktree and retry",
-            ),
+          respondError(
+            respond,
+            ErrorCodes.INVALID_REQUEST,
+            "cwd must be an existing absolute directory; create or choose a worktree and retry",
           );
           return;
         }
@@ -482,7 +469,7 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
         return;
       }
       if (!provider.archive) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "catalog cannot archive"));
+        respondError(respond, ErrorCodes.INVALID_REQUEST, "catalog cannot archive");
         return;
       }
       try {

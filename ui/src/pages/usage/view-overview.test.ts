@@ -4,7 +4,7 @@ import { i18n } from "../../i18n/index.ts";
 import { captureI18nStateForTesting } from "../../i18n/lib/translate.test-support.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
-import type { UsageAggregates, UsageSessionEntry, UsageTotals } from "./types.ts";
+import type { UsageAggregates, UsageProps, UsageSessionEntry, UsageTotals } from "./types.ts";
 import { totals, dailyEntry } from "./usage-chart.test-support.ts";
 import { renderCostWindowComparison, renderFilterChips, UsageInsights } from "./view-overview.tsx";
 import { mountView, text, texts, usageState } from "./view-render.test-support.ts";
@@ -12,7 +12,6 @@ import { SessionsCard } from "./view-sessions-card.tsx";
 import {
   buildAggregatesFromSessions,
   createUsageOverview,
-  createUsageProps,
   usageFixture,
 } from "./view.test-support.ts";
 
@@ -220,10 +219,26 @@ describe("SessionsCard", () => {
     agentId: "main",
     usage: { ...totals, totalTokens: tokens },
   });
+  const mountSessions = (
+    sessions: () => UsageSessionEntry[],
+    usage: UsageProps,
+    totalSessions = 2,
+    overview?: UsageProps["data"]["sessionPage"],
+  ) =>
+    mountView(() =>
+      SessionsCard({
+        get sessions() {
+          return sessions();
+        },
+        usage,
+        totalSessions,
+        overview,
+      }),
+    );
 
   it("exposes the selected session view to assistive technology", () => {
     const { usage, onChange } = usageState();
-    const view = mountView(() => SessionsCard({ sessions: [], usage, totalSessions: 0 }));
+    const view = mountSessions(() => [], usage, 0);
 
     const all = view.getByRole<HTMLButtonElement>("button", { name: "All", pressed: true });
     const recent = view.getByRole<HTMLButtonElement>("button", {
@@ -246,15 +261,7 @@ describe("SessionsCard", () => {
   it("preserves sort focus while waiting for the server to reorder rows", () => {
     const { usage, onChange } = usageState();
     const [sessions, setSessions] = createSignal([session("Alpha"), session("Beta")]);
-    const { container } = mountView(() =>
-      SessionsCard({
-        get sessions() {
-          return sessions();
-        },
-        usage,
-        totalSessions: 2,
-      }),
-    );
+    const { container } = mountSessions(sessions, usage);
     const select = container.querySelector<HTMLSelectElement>(".sessions-sort select")!;
     select.focus();
     select.value = "cost";
@@ -277,15 +284,7 @@ describe("SessionsCard", () => {
     }));
     const onSelectSession = vi.fn();
     usage.callbacks.details.onSelectSession = onSelectSession;
-    const { container } = mountView(() =>
-      SessionsCard({
-        get sessions() {
-          return sessions();
-        },
-        usage,
-        totalSessions: 2,
-      }),
-    );
+    const { container } = mountSessions(sessions, usage);
     const first = container.querySelector<HTMLButtonElement>(".session-bar-selection")!;
     first.focus();
 
@@ -386,21 +385,9 @@ describe("SessionsCard", () => {
   });
 
   it("leads with the top ten sessions and expands to the full page on request", () => {
-    const base = createUsageProps();
     const sessions = Array.from({ length: 12 }, (_, index) => session(`S${index + 1}`));
     const overview = createUsageOverview({ total: 12, tableSessionCount: 12 });
-    const container = document.createElement("div");
-    mountSolid(
-      () =>
-        SessionsCard({
-          sessions,
-          usage: { ...base, data: { ...base.data, overview } },
-          overview,
-          totalSessions: 12,
-        }),
-      { container },
-    );
-    flush();
+    const { container } = mountSessions(() => sessions, usageFixture({ overview }), 12, overview);
     const rows = () => container.querySelectorAll(".session-bar-row").length;
     expect(rows()).toBe(10);
     const toggle = container.querySelector<HTMLButtonElement>(".sessions-show-all")!;

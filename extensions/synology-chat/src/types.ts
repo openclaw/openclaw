@@ -14,8 +14,6 @@ type SynologyChatConfigFields = {
   allowInsecureSsl?: boolean;
 };
 
-type SynologyWebhookPathSource = "default" | "inherited-base" | "explicit";
-
 /** Raw channel config from openclaw.json channels.synology-chat */
 export interface SynologyChatChannelConfig extends SynologyChatConfigFields {
   /** Raw per-account config (overrides base config). */
@@ -26,7 +24,7 @@ export type ResolvedSynologyChatAccount = Required<
   Omit<SynologyChatConfigFields, "allowedUserIds">
 > & {
   accountId: string;
-  webhookPathSource: SynologyWebhookPathSource;
+  webhookPathSource: "default" | "inherited-base" | "explicit";
   allowedUserIds: string[];
 };
 

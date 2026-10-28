@@ -22,9 +22,6 @@ console.log(
   JSON.stringify({
     lineCount: lines.length,
     rows: lines.filter((line) => line === `${delimiter} row ${delimiter}`).length,
-    header: lines[1],
-    firstLine: lines[0],
-    lastLine: lines.at(-1),
     softWrapRowsMatch:
       lines[3] === `${delimiter} a   ${delimiter}` &&
       lines[4] === `${delimiter} ` + "\u200b".repeat(150_000) + `b   ${delimiter}`,

@@ -30,6 +30,8 @@ export function readMemoryUsage(input: unknown, label: string): DiagnosticMemory
       "heapSizeLimitBytes",
       "oldGenerationAfterGcBytes",
       "workerCount",
+      "postgresBridgeCount",
+      "postgresPoolSelfRootCount",
       "workerHeapSampledCount",
       "workerHeapTotalBytes",
       "workerHeapUsedBytes",

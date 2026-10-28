@@ -159,10 +159,7 @@ it("acquires fresh required placement for a queued successor after its predecess
           createFollowupRunner({ typing, typingMode: "never", defaultModel: "gpt-test" }),
         );
         // Settlement wakes the successor from the predecessor's retained async context.
-        retirement = (async () => {
-          await releasePredecessor.promise;
-          predecessor.complete();
-        })();
+        retirement = releasePredecessor.promise.then(() => predecessor.complete());
       }),
     );
     expect(events).toEqual(["admit:1", "release:1"]);
@@ -214,10 +211,8 @@ it.each([
     const source = createQueueTestRun({ prompt });
     source.run.sessionKey = key;
     source.turnAdoptionLifecycle = { onAdopted: vi.fn(), onSettled: vi.fn() };
-    if (phase === "adopted preparation" && prompt === "first") {
-      source.abortSignal = olderCancel.signal;
-    } else if (phase === "adopted preparation") {
-      source.abortSignal = new AbortController().signal;
+    if (phase === "adopted preparation") {
+      source.abortSignal = prompt === "first" ? olderCancel.signal : new AbortController().signal;
     }
     sources.push(source);
     enqueueFollowupRun(key, source, { mode: "collect", debounceMs: 0 }, "none", undefined, false);

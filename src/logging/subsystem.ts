@@ -55,19 +55,6 @@ function isRichConsoleEnv(): boolean {
 // Chalk caches style builders per instance; select between fixed levels on each message.
 const consoleColors: [ChalkInstance?, ChalkInstance?] = [];
 
-function getColorForConsole(): ChalkInstance {
-  const hasForceColor =
-    typeof process.env.FORCE_COLOR === "string" &&
-    process.env.FORCE_COLOR.trim().length > 0 &&
-    process.env.FORCE_COLOR.trim() !== "0";
-  const level =
-    hasForceColor ||
-    (!process.env.NO_COLOR && (process.stdout.isTTY || process.stderr.isTTY || isRichConsoleEnv()))
-      ? 1
-      : 0;
-  return (consoleColors[level] ??= new Chalk({ level }));
-}
-
 const SUBSYSTEM_COLORS = ["cyan", "green", "yellow", "blue", "magenta", "red"] as const;
 const SUBSYSTEM_COLOR_OVERRIDES = new Map<string, (typeof SUBSYSTEM_COLORS)[number]>([
   ["gmail-watcher", "blue"],
@@ -173,7 +160,17 @@ function createConsoleLineFormatter(subsystem: string) {
   const prefix = `[${displaySubsystem}]`;
   const prefixColor = pickSubsystemColor(displaySubsystem);
   return (level: LogLevel, message: string, style: "pretty" | "compact"): string => {
-    const color = getColorForConsole();
+    const hasForceColor =
+      typeof process.env.FORCE_COLOR === "string" &&
+      process.env.FORCE_COLOR.trim().length > 0 &&
+      process.env.FORCE_COLOR.trim() !== "0";
+    const colorLevel =
+      hasForceColor ||
+      (!process.env.NO_COLOR &&
+        (process.stdout.isTTY || process.stderr.isTTY || isRichConsoleEnv()))
+        ? 1
+        : 0;
+    const color = (consoleColors[colorLevel] ??= new Chalk({ level: colorLevel }));
     const levelColor =
       level === "error" || level === "fatal"
         ? color.red
@@ -507,16 +504,22 @@ export function runtimeForLogger(
 ): OutputRuntimeEnv {
   return {
     log(...args) {
-      logger.info(args.map(formatRuntimeArg).join(" ").trim());
+      if (logger.isEnabled("info")) {
+        logger.info(args.map(formatRuntimeArg).join(" ").trim());
+      }
     },
     error(...args) {
-      logger.error(args.map(formatRuntimeArg).join(" ").trim());
+      if (logger.isEnabled("error")) {
+        logger.error(args.map(formatRuntimeArg).join(" ").trim());
+      }
     },
     writeStdout(value) {
       logger.info(value);
     },
     writeJson(value: unknown, space = 2) {
-      logger.info(JSON.stringify(value, undefined, space > 0 ? space : undefined));
+      if (logger.isEnabled("info")) {
+        logger.info(JSON.stringify(value, undefined, space > 0 ? space : undefined));
+      }
     },
     exit,
   };

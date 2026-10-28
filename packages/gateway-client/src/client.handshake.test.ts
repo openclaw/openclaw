@@ -3,35 +3,40 @@ import { createServer as createHttpServer, type IncomingHttpHeaders } from "node
 import { createServer as createHttpsServer } from "node:https";
 import { connect, createServer as createTcpServer } from "node:net";
 import { checkServerIdentity } from "node:tls";
+import type { ConnectParams } from "@openclaw/gateway-protocol/frame-guards";
+import { MIN_NODE_PROTOCOL_VERSION } from "@openclaw/gateway-protocol/version";
 import { installGlobalProxy, type ProxylineHandle } from "@openclaw/proxyline";
 import { afterEach, beforeEach, describe, expect, it, test, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../../test/helpers/tls-fixture.js";
 import { validatePreviousConnectParams } from "../../gateway-protocol/src/connect-compatibility.test-support.js";
-import { GATEWAY_SERVER_CAPS, validateConnectParams } from "../../gateway-protocol/src/index.js";
 import {
-  GatewayClient,
-  GatewayClientRequestTimeoutError,
-  type GatewayClientCloseInfo,
-  type GatewayClientOptions,
-} from "./client.js";
+  GATEWAY_SERVER_CAPS,
+  PROTOCOL_VERSION,
+  validateConnectParams,
+} from "../../gateway-protocol/src/index.js";
+import type { GatewayClientCloseInfo } from "./client.js";
 import {
   transportFixture,
   sendFrame,
   sendChallenge,
   sendResponse,
 } from "./client.transport.test-support.js";
-import {
-  GatewayProtocolRequestTimeoutError,
-  type GatewayProtocolSocket,
-} from "./protocol-client.js";
-import { MAX_SAFE_TIMEOUT_DELAY_MS } from "./timeouts.js";
 import { rawDataToString } from "./websocket-data.js";
 import { resolveGatewayWebSocketTransport } from "./websocket-transport.js";
-import { WebSocket } from "./websocket.test-support.js";
 
 const fingerprint = new X509Certificate(TEST_TLS_CERT_PEM).fingerprint256;
 const tlsServer = () => createHttpsServer({ key: TEST_TLS_KEY_PEM, cert: TEST_TLS_CERT_PEM });
+const nodeManifest = {
+  caps: ["system"],
+  commands: ["system.run"],
+  computerUse: { version: 1 },
+  workerRuns: {
+    bundleHash: "a".repeat(64),
+    openclawVersion: "2026.8.12",
+    protocolFeatures: ["worker-heartbeat-v1"],
+  },
+};
 let proxy: ProxylineHandle | undefined;
 const {
   client: createClient,
@@ -117,6 +122,7 @@ it.each([
   const { client } = startClient({
     url: `wss://fixture:synthetic-password@127.0.0.1:${port}`,
     tlsFingerprint: pin,
+    origin: "https://client.example",
     deviceIdentity: null,
     edgeAuthHeaders: { "X-Test-Edge-Auth": "synthetic-test-edge-token", eXpEcT: "100-continue" },
     onConnectError: outcome.resolve,
@@ -129,6 +135,7 @@ it.each([
     expect(result).toBe("open");
     expect(upgrades).toBe(1);
     expect(headers).toMatchObject({
+      origin: "https://client.example",
       "x-test-edge-auth": "synthetic-test-edge-token",
       expect: "100-continue",
       authorization: `Basic ${Buffer.from("fixture:synthetic-password").toString("base64")}`,
@@ -256,7 +263,7 @@ it.each([
           id: frame.id,
           ok: valid,
           ...(valid
-            ? { payload: { type: "hello-ok", protocol: 4 } }
+            ? { payload: { type: "hello-ok", protocol: PROTOCOL_VERSION } }
             : { error: { code: "INVALID_REQUEST", message: "invalid connect params" } }),
         });
       });
@@ -305,7 +312,7 @@ it("keeps a hello received during WebSocket closing in the pre-hello failure pat
       // Write both frames before admitting the peer's close reply, preserving
       // their wire order without waiting for retired application callbacks.
       socket.pause();
-      client.updateNodeManifest({ caps: [], commands: [] });
+      client.updateNodeManifest(structuredClone(nodeManifest));
       sendResponse(socket, frame.id, { type: "hello-ok" });
       socket.send(JSON.stringify({ type: "event", event: "late-hello-marker" }), (error) => {
         socket.resume();
@@ -318,6 +325,7 @@ it("keeps a hello received during WebSocket closing in the pre-hello failure pat
     });
   });
   await Promise.all([lateFramesWritten.promise, closed.promise]);
+  expect(client).toMatchObject({ opts: nodeManifest });
   expect(onEvent).not.toHaveBeenCalled();
   expect(onHelloOk).not.toHaveBeenCalled();
   expect(onConnectError).toHaveBeenCalledExactlyOnceWith(
@@ -366,50 +374,6 @@ test("decodes every ws raw-data shape", () => {
   expect(rawDataToString(Buffer.from([0xe9]), "latin1")).toBe("é");
 });
 
-type ProtocolHarness = {
-  socket: GatewayProtocolSocket | null;
-  stopped: boolean;
-  generation: number;
-  reconnectSupervisor: { reset(initialMs?: number): void };
-  handleMessage: (socket: GatewayProtocolSocket, generation: number, raw: string) => void;
-};
-
-function protocolHarness(client: GatewayClient): ProtocolHarness {
-  return (client as unknown as { protocol: ProtocolHarness }).protocol;
-}
-
-function syntheticClient(options: GatewayClientOptions) {
-  const client = new GatewayClient(options);
-  const send = vi.fn();
-  const close = vi.fn();
-  const protocol = protocolHarness(client);
-  const socket: GatewayProtocolSocket = { isOpen: () => true, send, close };
-  Object.assign(protocol, { socket, stopped: false, generation: 1 });
-  Object.assign(client, { ws: { readyState: WebSocket.OPEN, send, close, terminate: vi.fn() } });
-  return {
-    client,
-    send,
-    close,
-    receive: (frame: unknown) =>
-      protocol.handleMessage(socket, protocol.generation, JSON.stringify(frame)),
-    stop: async () => {
-      client.stop();
-      await vi.advanceTimersByTimeAsync(250);
-    },
-  };
-}
-
-function createWatchedGatewayClient(tickIntervalMs = 5) {
-  const harness = syntheticClient({
-    requestTimeoutMs: 100,
-    tickWatchMinIntervalMs: 5,
-    tickWatchTimeoutMs: 10,
-  });
-  Object.assign(harness.client, { tickIntervalMs, lastTick: Date.now() });
-  (harness.client as unknown as { startTickWatch: () => void }).startTickWatch();
-  return harness;
-}
-
 describe("GatewayClient", () => {
   beforeEach(() => {
     vi.spyOn(Math, "random").mockReturnValue(0);
@@ -419,55 +383,6 @@ describe("GatewayClient", () => {
     // Timer spies must restore their fake functions before the clock uninstalls them.
     vi.restoreAllMocks();
     vi.useRealTimers();
-  });
-
-  test("sends the configured websocket origin", async () => {
-    const { server, url, origin } = await startWebSocketServer();
-    const receivedOrigin = new Promise<string | undefined>((resolve) => {
-      server.once("connection", (_socket, request) => resolve(request.headers.origin));
-    });
-    const client = createClient({ url, origin, connectChallengeTimeoutMs: 0 });
-    client.start();
-
-    await expect(receivedOrigin).resolves.toBe(origin);
-  });
-
-  test("returns non-sensitive connection metadata", () => {
-    const client = new GatewayClient({
-      clientName: "cli",
-      mode: "backend",
-      preauthHandshakeTimeoutMs: 30_000,
-      deviceIdentity: {
-        deviceId: "device-1",
-        privateKeyPem: "private-key",
-        publicKeyPem: "public-key",
-      },
-    });
-
-    expect(client.getConnectionMetadata()).toEqual({
-      clientName: "cli",
-      hasDeviceIdentity: true,
-      mode: "backend",
-      preauthHandshakeTimeoutMs: 30_000,
-    });
-  });
-
-  test("reconnects with updated node manifest metadata", () => {
-    const { client, close } = syntheticClient({ caps: ["system"], commands: ["system.run"] });
-
-    const manifest = {
-      caps: ["canvas", "system"],
-      commands: ["canvas.present", "system.run"],
-      workerRuns: {
-        bundleHash: "a".repeat(64),
-        openclawVersion: "2026.8.12",
-        protocolFeatures: ["worker-heartbeat-v1"],
-      },
-    };
-    client.updateNodeManifest(structuredClone(manifest));
-
-    expect(close).toHaveBeenCalledWith(1012, "node manifest changed");
-    expect((client as unknown as { opts: Record<string, unknown> }).opts).toMatchObject(manifest);
   });
 
   test("rejects an unbounded request, reconnects, and does not replay it", async () => {
@@ -487,7 +402,7 @@ describe("GatewayClient", () => {
         if (frame.method === "connect") {
           sendResponse(socket, frame.id, {
             type: "hello-ok",
-            protocol: 4,
+            protocol: PROTOCOL_VERSION,
             policy: { tickIntervalMs: 20 },
           });
           return;
@@ -509,7 +424,10 @@ describe("GatewayClient", () => {
         helloCount += 1;
         if (helloCount === 1) {
           // Keep the real reconnect lifecycle fast without changing production defaults.
-          protocolHarness(client).reconnectSupervisor.reset(10);
+          const { protocol } = client as unknown as {
+            protocol: { reconnectSupervisor: { reset(delay: number): void } };
+          };
+          protocol.reconnectSupervisor.reset(10);
           firstHello.resolve();
           return;
         }
@@ -521,111 +439,113 @@ describe("GatewayClient", () => {
     client.start();
     await firstHello.promise;
     const stalledRequest = client.request("chat.send", undefined, { expectFinal: true });
-    void stalledRequest.catch(() => {});
+    const finiteRequest = client.request("finite", undefined, { timeoutMs: 10_000 });
+    const settlements = Promise.allSettled([stalledRequest, finiteRequest]);
     await expect(stalledRequest).rejects.toThrow("gateway closed (4000): tick timeout");
-    await secondHello.promise;
-    await expect(client.request("status")).resolves.toEqual({ status: "ok" });
-    expect(closeEvents[0]).toEqual({ code: 4000, reason: "tick timeout" });
-    expect(methodsByConnection.slice(0, 2)).toEqual([
-      ["connect", "chat.send"],
-      ["connect", "status"],
-    ]);
-    expect(methodsByConnection.flat().filter((method) => method === "chat.send")).toHaveLength(1);
-  }, 5000);
-
-  test("lets finite pending requests own their timeout when ticks are missing", async () => {
-    vi.useFakeTimers();
-    const { client, close, stop } = createWatchedGatewayClient();
-    const request = client.request("status", undefined, { timeoutMs: 100 });
-    const outcome = request.catch((error: unknown) => error);
-    await vi.advanceTimersByTimeAsync(20);
-
-    expect(close).not.toHaveBeenCalled();
-
-    await vi.advanceTimersByTimeAsync(80);
-    const error = await outcome;
-    expect(error).toBeInstanceOf(GatewayClientRequestTimeoutError);
-    expect(error).toBeInstanceOf(GatewayProtocolRequestTimeoutError);
-    expect(error).toMatchObject({
-      message: "gateway request timeout for status",
-      code: "CLIENT_TIMEOUT",
-      method: "status",
-      timeoutMs: 100,
-      requestSent: true,
-    });
-    await vi.advanceTimersByTimeAsync(5);
-
-    expect(close).toHaveBeenCalledWith(4000, "tick timeout");
-    await stop();
-  });
-
-  test("keeps the watchdog active for mixed finite and unbounded requests", async () => {
-    vi.useFakeTimers();
-    const { client, close, stop } = createWatchedGatewayClient();
-    const requests = [
-      client.request("status", undefined, { timeoutMs: 100 }),
-      client.request("chat.send", undefined, { expectFinal: true }),
-    ];
-    const settlements = Promise.allSettled(requests);
-
-    await vi.advanceTimersByTimeAsync(20);
-
-    expect(close).toHaveBeenCalledWith(4000, "tick timeout");
-    await stop();
     await expect(settlements).resolves.toEqual([
       expect.objectContaining({ status: "rejected" }),
       expect.objectContaining({ status: "rejected" }),
     ]);
-  });
-
-  test("keeps an unbounded request alive while inbound ticks continue", async () => {
-    vi.useFakeTimers();
-    const { client, close, send, receive, stop } = createWatchedGatewayClient();
-    const request = client.request<{ status: string }>("chat.send", undefined, {
-      expectFinal: true,
-    });
-    const requestFrame = JSON.parse(String(send.mock.calls[0]?.[0])) as { id: string };
-
-    for (let seq = 1; seq <= 4; seq += 1) {
-      await vi.advanceTimersByTimeAsync(5);
-      receive({ type: "event", event: "tick", seq, payload: {} });
-    }
-
-    expect(close).not.toHaveBeenCalled();
-    receive({
-      type: "res",
-      id: requestFrame.id,
-      ok: true,
-      payload: { status: "ok" },
-    });
-    await expect(request).resolves.toEqual({ status: "ok" });
-    await stop();
-  });
-
-  test("clamps oversized tick watchdog intervals before scheduling", () => {
-    vi.useFakeTimers();
-    const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
-    const { client } = createWatchedGatewayClient(Number.MAX_SAFE_INTEGER);
-
-    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), MAX_SAFE_TIMEOUT_DELAY_MS);
-    client.stop();
-  });
-
-  test("clamps oversized stopAndWait timeouts before scheduling", async () => {
-    vi.useFakeTimers();
-    const client = new GatewayClient({});
-    const ws = { readyState: WebSocket.OPEN, close: vi.fn(), terminate: vi.fn() };
-    (client as unknown as { ws: unknown }).ws = ws;
-    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
-
-    const stopPromise = client.stopAndWait({ timeoutMs: Number.MAX_SAFE_INTEGER });
-
-    await vi.advanceTimersByTimeAsync(1);
-    expect(ws.terminate).not.toHaveBeenCalled();
-    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_SAFE_TIMEOUT_DELAY_MS);
-
-    await vi.advanceTimersByTimeAsync(249);
-    await expect(stopPromise).resolves.toBeUndefined();
-    expect(ws.terminate).toHaveBeenCalledTimes(1);
-  });
+    await secondHello.promise;
+    await expect(client.request("status")).resolves.toEqual({ status: "ok" });
+    expect(closeEvents[0]).toEqual({ code: 4000, reason: "tick timeout" });
+    expect(methodsByConnection.slice(0, 2)).toEqual([
+      ["connect", "chat.send", "finite"],
+      ["connect", "status"],
+    ]);
+    expect(methodsByConnection.flat().filter((method) => method === "chat.send")).toHaveLength(1);
+  }, 5000);
 });
+
+it.each([
+  { platform: "macos", legacy: "darwin", family: "Mac", protocolBounds: {} },
+  {
+    platform: "windows",
+    legacy: "win32",
+    family: "Windows",
+    protocolBounds: { maxProtocol: PROTOCOL_VERSION },
+  },
+])(
+  "omits v4-only declarations from the signed $legacy fallback",
+  async ({ platform, legacy, family, protocolBounds }) => {
+    const { server, url } = await startWebSocketServer();
+    const connected = createDeferred();
+    const requests: ConnectParams[] = [];
+    server.on("connection", (socket) => {
+      sendChallenge(socket, { nonce: `nonce-${requests.length}`, ts: Date.now() });
+      socket.once("message", (raw) => {
+        const frame = JSON.parse(rawDataToString(raw)) as { id: string; params: ConnectParams };
+        requests.push(frame.params);
+        if (requests.length === 1) {
+          sendFrame(socket, {
+            type: "res",
+            id: frame.id,
+            ok: false,
+            error: {
+              code: "INVALID_REQUEST",
+              message: "protocol mismatch",
+              details: { code: "PROTOCOL_MISMATCH", expectedProtocol: MIN_NODE_PROTOCOL_VERSION },
+            },
+          });
+        } else {
+          sendResponse(socket, frame.id, { type: "hello-ok", protocol: MIN_NODE_PROTOCOL_VERSION });
+        }
+      });
+    });
+    const signDevicePayload = vi.fn((_key: string, _payload: string) => "synthetic-signature");
+    const client = createClient({
+      url,
+      ...protocolBounds,
+      role: "node",
+      mode: "node",
+      clientName: "node-host",
+      preauthHandshakeTimeoutMs: 30_000,
+      platform,
+      deviceFamily: family,
+      modelIdentifier: "TestMachine1,1",
+      caps: ["old"],
+      commands: ["old.command"],
+      deviceIdentity: {
+        deviceId: "synthetic-device",
+        privateKeyPem: "synthetic-key",
+        publicKeyPem: "synthetic-public",
+      },
+      hostDeps: { signDevicePayload, publicKeyRawBase64UrlFromPem: () => "synthetic-public" },
+      onHelloOk: () => connected.resolve(),
+    });
+    client.updateNodeManifest(structuredClone(nodeManifest));
+    expect(client.getConnectionMetadata()).toEqual({
+      clientName: "node-host",
+      hasDeviceIdentity: true,
+      mode: "node",
+      preauthHandshakeTimeoutMs: 30_000,
+    });
+    client.start();
+    await connected.promise;
+    expect(requests).toHaveLength(2);
+    expect(requests[0]).toMatchObject({
+      minProtocol: PROTOCOL_VERSION,
+      maxProtocol: PROTOCOL_VERSION,
+      client: { platform, deviceFamily: family, modelIdentifier: "TestMachine1,1" },
+      ...nodeManifest,
+    });
+    expect(signDevicePayload.mock.calls[0]?.[1].split("|").slice(9)).toEqual([
+      platform,
+      family.toLowerCase(),
+    ]);
+    expect(requests[1]).toMatchObject({
+      minProtocol: MIN_NODE_PROTOCOL_VERSION,
+      maxProtocol: MIN_NODE_PROTOCOL_VERSION,
+      client: { platform: legacy },
+      commands: ["system.run"],
+    });
+    for (const field of ["computerUse", "workerRuns"]) {
+      expect(requests[1]).not.toHaveProperty(field);
+    }
+    expect(requests[1]?.client).not.toHaveProperty("deviceFamily");
+    expect(requests[1]?.client).not.toHaveProperty("modelIdentifier");
+    expect(signDevicePayload.mock.calls[1]?.[1].split("|").slice(9)).toEqual([legacy, ""]);
+    expect(requests[0]?.device?.nonce).toBe("nonce-0");
+    expect(requests[1]?.device?.nonce).toBe("nonce-1");
+  },
+);

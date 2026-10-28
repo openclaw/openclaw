@@ -1,6 +1,6 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { expect, it, onTestFinished, vi } from "vitest";
+import { assert, expect, it, onTestFinished, vi } from "vitest";
 import { ExtensionRelayBridge } from "./relay-bridge.js";
 import {
   FakeSocket,
@@ -25,6 +25,11 @@ function frames(socket: FakeSocket, type: string) {
 }
 
 const attached = (socket: FakeSocket) => events(socket, "Target.attachedToTarget");
+function attachedSession(socket: FakeSocket) {
+  const sessionId = asOptionalRecord(attached(socket).at(-1)?.params)?.sessionId;
+  assert(typeof sessionId === "string", "Expected attached session ID");
+  return sessionId;
+}
 
 function deliver(receiver: { onMessage(raw: string): void }, message: unknown) {
   receiver.onMessage(JSON.stringify(message));
@@ -68,13 +73,12 @@ function candidate(bridge: ExtensionRelayBridge) {
 
 function candidateHello(
   receiver: { onMessage(raw: string): void },
-  userAgent: string,
   browserVersion: string,
   tabs?: ReturnType<typeof defaultTabs>,
 ) {
   deliver(receiver, {
     type: "hello",
-    userAgent,
+    userAgent: "candidate",
     browserVersion,
     extensionVersion: "2.0.0",
     ...(tabs === undefined ? {} : { tabs }),
@@ -135,9 +139,7 @@ async function holdCdpCommand(method: string, params: Record<string, unknown> = 
   const { client, cdp } = connectClient(bridge);
   sendCommand(cdp, 1, "Target.setAutoAttach", { autoAttach: true });
   await vi.advanceTimersByTimeAsync(0);
-  const sessionId = asOptionalRecord(
-    client.frames().find((frame) => frame.method === "Target.attachedToTarget")?.params,
-  )?.sessionId;
+  const sessionId = attachedSession(client);
   sendCommand(cdp, 2, method, params, sessionId);
   return { bridge, extension, client, cdp, sessionId };
 }
@@ -174,9 +176,7 @@ it.each([
 it.each(["detach", "heartbeat"])("retires awaited Runtime work on %s", async (loss) => {
   const { bridge, client, extension, cdp, sessionId } = await holdCdpCommand(
     "Runtime.callFunctionOn",
-    {
-      awaitPromise: true,
-    },
+    { awaitPromise: true },
   );
   await vi.advanceTimersByTimeAsync(17_000);
   expect(response(client, 2)).toBeUndefined();
@@ -190,11 +190,10 @@ it.each(["detach", "heartbeat"])("retires awaited Runtime work on %s", async (lo
     expect(bridge.extensionConnected).toBe(false);
     expect(vi.getTimerCount()).toBe(0);
   }
-  expect(response(client, 2)).toMatchObject({
-    error: {
-      message: loss === "detach" ? "Physical session detached" : "extension disconnected",
-    },
-  });
+  expect(response(client, 2)).toHaveProperty(
+    "error.message",
+    loss === "detach" ? "Physical session detached" : "extension disconnected",
+  );
 });
 it("notifies connection waiters only after an authenticated valid hello", async () => {
   vi.useFakeTimers();
@@ -303,15 +302,11 @@ it("announces initial targets before acknowledging auto-attach", async () => {
   expect(response(client, 1)).toBeUndefined();
   sendResult(handlers, attach?.seq, { targetId: "target-1" });
   await flush();
-  expect(client.frames()).toEqual([
-    expect.objectContaining({
-      method: "Target.attachedToTarget",
-      params: expect.objectContaining({
-        targetInfo: expect.objectContaining({ targetId: "target-1" }),
-      }),
-    }),
+  expect(client.frames()).toMatchObject([
+    { method: "Target.attachedToTarget", params: { targetInfo: { targetId: "target-1" } } },
     { id: 1, result: {} },
   ]);
+  expect(client.frames()[1]).toEqual({ id: 1, result: {} });
 });
 
 it.each(["active", "replaced extension"])("binds atomic creation to %s", async (lifecycle) => {
@@ -375,7 +370,7 @@ it("keeps the active extension while a candidate is pending, malformed, or close
   expect(bridge.extensionConnected).toBe(true);
   expect(active.closed).toBe(false);
   const { socket: malformedSocket, handlers: malformed } = candidate(bridge);
-  candidateHello(malformed, "candidate", "Chrome/145.0.0.0");
+  candidateHello(malformed, "Chrome/145.0.0.0");
   expect(malformedSocket).toMatchObject(closedSocket(4001, "expected valid hello"));
   expect(bridge.identity?.browserVersion).toBe("Chrome/144.0.0.0");
   expect(active.closed).toBe(false);
@@ -386,12 +381,12 @@ it("rejects an older candidate when a newer candidate promotes first", () => {
   const { socket: firstSocket, handlers: first } = candidate(bridge);
   const { socket: secondSocket, handlers: second } = candidate(bridge);
   expect(activeSocket.closed).toBe(false);
-  candidateHello(second, "second", "Chrome/146.0.0.0", []);
+  candidateHello(second, "Chrome/146.0.0.0", []);
   expect(activeSocket.closed).toBe(true);
   expect(firstSocket.closed).toBe(false);
   expect(secondSocket.closed).toBe(false);
   expect(bridge.identity?.browserVersion).toBe("Chrome/146.0.0.0");
-  candidateHello(first, "first", "Chrome/145.0.0.0", []);
+  candidateHello(first, "Chrome/145.0.0.0", []);
   expect(firstSocket).toMatchObject(closedSocket(4000, "superseded by newer extension connection"));
   expect(bridge.identity?.browserVersion).toBe("Chrome/146.0.0.0");
   first.onClose();
@@ -400,34 +395,24 @@ it("rejects an older candidate when a newer candidate promotes first", () => {
   expect(secondSocket.closed).toBe(false);
 });
 
-it("answers the Puppeteer connect bootstrap without protocol errors", async () => {
+it.each([
+  [
+    "Browser.getVersion",
+    expect.objectContaining({ protocolVersion: "1.3", product: "Chrome/144.0.0.0" }),
+  ],
+  ["Target.getBrowserContexts", { browserContextIds: [] }],
+  ["Target.setDiscoverTargets", {}],
+] as const)("answers bootstrap %s", async (method, result) => {
   const { bridge } = readyBridge();
   const { client, cdp } = connectClient(bridge);
-  const bootstrap: Array<{ id: number; method: string; params?: Record<string, unknown> }> = [
-    { id: 1, method: "Browser.getVersion" },
-    { id: 2, method: "Target.setDiscoverTargets", params: { discover: true } },
-    {
-      id: 3,
-      method: "Target.setAutoAttach",
-      params: { autoAttach: true, waitForDebuggerOnStart: false, flatten: true },
-    },
-    { id: 4, method: "Target.getBrowserContexts" },
-  ];
-  for (const message of bootstrap) {
-    deliver(cdp, message);
-  }
-  await flush();
-  for (const message of bootstrap) {
-    const reply = response(client, message.id);
-    expect(reply, `response for ${message.method}`).toBeTruthy();
-    expect(reply?.error, `error for ${message.method}`).toBeUndefined();
-  }
-  expect(response(client, 1)?.result).toMatchObject({
-    protocolVersion: "1.3",
-    product: "Chrome/144.0.0.0",
-  });
-  const contexts = response(client, 4);
-  expect(contexts?.result).toEqual({ browserContextIds: [] });
+  await dispatch(
+    cdp,
+    1,
+    method,
+    method === "Target.setDiscoverTargets" ? { discover: true } : undefined,
+  );
+  expect(response(client, 1)?.result).toEqual(result);
+  expect(response(client, 1)?.error).toBeUndefined();
 });
 
 it("invalidates captured operation identity when another extension reconnects", async () => {
@@ -449,8 +434,7 @@ it.each(["target_closed", "canceled_by_user"])("honors native %s recovery", asyn
       : replyFor(message),
   );
   const { first, firstCdp, second, secondCdp } = await attachClients(bridge);
-  const original = attached(first)[0];
-  const sessionId = (original?.params as { sessionId?: string } | undefined)?.sessionId;
+  const sessionId = attachedSession(first);
   expect(typeof sessionId).toBe("string");
   await dispatch(firstCdp, 2, "Target.detachFromTarget", { sessionId });
   targetId = "replacement-target";
@@ -559,8 +543,7 @@ it("repairs reconnect attach without undoing a later explicit detach", async () 
   expect(response(client, 2)?.result).toMatchObject(targetInfos("target-1").result);
   const { client: peer, cdp: peerCdp } = connectClient(bridge);
   await dispatch(peerCdp, 1, "Target.setAutoAttach", { autoAttach: true });
-  const sessionId = (attached(client).at(-1)?.params as { sessionId?: string } | undefined)
-    ?.sessionId;
+  const sessionId = attachedSession(client);
   expect(typeof sessionId).toBe("string");
   await dispatch(cdp, 3, "Target.detachFromTarget", { sessionId });
   const attachedEventCount = attached(client).length;
@@ -591,9 +574,10 @@ it("does not project a disconnected zero-tab extension as authoritative empty", 
   handlers.onClose();
   const { client, cdp } = connectClient(bridge);
   await dispatch(cdp, 1, "Target.getTargets");
-  expect(response(client, 1)).toMatchObject({
-    error: { message: expect.stringMatching(/extension.*disconnected/i) },
-  });
+  expect(response(client, 1)).toHaveProperty(
+    "error.message",
+    expect.stringMatching(/extension.*disconnected/i),
+  );
 });
 
 it("rejects discovery when the previous native retirement fails", async () => {
@@ -609,15 +593,9 @@ it("rejects discovery when the previous native retirement fails", async () => {
   sendCommand(cdp, 1, "Target.getTargets");
   const detach = await retirement.promise;
   sendCommand(cdp, 2, "Target.getTargets");
-  deliver(handlers, {
-    type: "error",
-    seq: detach.seq,
-    message: "native detach failed",
-  });
+  deliver(handlers, { type: "error", seq: detach.seq, message: "native detach failed" });
   await flush();
-  expect(response(client, 2)).toMatchObject({
-    error: { message: "Target identities are unavailable" },
-  });
+  expect(response(client, 2)).toHaveProperty("error.message", "Target identities are unavailable");
 });
 
 it("publishes a shared recovered attachment to every waiting auto-attach client", async () => {

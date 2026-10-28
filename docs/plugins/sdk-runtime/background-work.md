@@ -16,7 +16,7 @@ Use optional `api.runtime.subagent.native` inside an eligible `reply_dispatch` h
 
 `spawn` returns native accepted IDs and always uses collector completion. Reuse a nonempty `requestId` within the same plugin and parent turn to replay the same request. Reusing it with different arguments fails instead of creating another child. Normal tool hooks still run; incompatible rewrites of the native runtime, run mode, collector completion, or replay identity are rejected before creating a child.
 
-`collect({ ids, timeoutSeconds: 0 })` reads current status. A bounded wait returns when a result is available or the timeout expires. `collect({ ids, awaitResults: true })` joins all requested results without polling; do not combine it with `timeoutSeconds`. Pending IDs are not failures. Completion states are `done`, `failed`, `killed`, or `timeout`, with native result, structured output, and error fields when available.
+`collect({ ids, timeoutSeconds: 0 })` reads current status. A bounded wait returns when a result is available or the timeout expires. `collect({ ids, awaitResults: true })` joins all requested results without polling; do not combine it with `timeoutSeconds`. Pending IDs are not failures. Completion states are `done`, `failed`, `killed`, or `timeout`, with native result, structured output, and error fields when available. `result` is the child's complete final answer up to 100 KB, not the 4,096-character lifecycle preview; `resultTruncated: true` marks a result that exceeded that bound or whose complete answer was no longer available. Native children are one-shot: they accept no follow-up input, so spawn another child to continue the work.
 
 `model`, `thinking`, and `fastMode` select native child overrides, subject to the existing model and requester policies. `context` selects `fork` or `isolated`; native defaults apply when omitted. No ACP runtime is exposed by this facade.
 
@@ -40,6 +40,36 @@ Supported ingress is the Gateway's normal reply-dispatch path with an existing a
 Both calls recheck the invoking plugin's full-runtime lifetime and request authority after asynchronous preparation and at effect. The requester's effective native tool policy must allow both `sessions_spawn` and a callable native `agents_wait` for spawn, and `agents_wait` for collection; disabled Swarm/collector support, denied tools, revoked authority, or a retired hook cannot fall back to an administrator or system actor. Collection checks the exact parent session incarnation and native ownership; unrelated or reset parents cannot read a result.
 
 A handler owns its calls only until it settles or times out. Accepted children transfer to native execution custody and do not automatically send a chat reply. A controller can await results while its handler remains active, or retain accepted IDs in its existing plugin store and collect during a later eligible invocation for the same parent incarnation. Persist controller decisions in the plugin's own store; this facade does not add a task engine, scheduler, or model-memory protocol. Existing `subagent.run`, `complete`, and `waitForRun` behavior is unchanged.
+
+## Blind native children
+
+Hosts advertising `native-subagent-blind-v1` in `api.runtime.capabilities` accept optional `blind: true` on `spawn`; the model-facing `sessions_spawn` tool accepts the same field. Use it for evaluation trials whose instructions must not tell the child which model runs it or where it runs.
+
+A blind child's prompt omits:
+
+- the current model identity line;
+- the Runtime line's `model`, `default_model`, `agent`, `name`, `session`, `sessionUrl`, and `repo` fields;
+- the agent workspace path, which appears as `<workspace>` everywhere it would be printed, including workspace file headings;
+- the requester and child session keys in the task's session context.
+
+Nothing else changes: model selection, tools, working directory and file containment, acceptance and collection `selection` receipts, and the parent's session list still use and report the real model. The setting is stored on the child session, so its later turns and the hidden native children it spawns stay blind. It grants no authority.
+
+`blind` requires `context: "isolated"`: a forked transcript carries the requester's conversation, so `context: "fork"` is refused, including for any child a blind child spawns. `sessions_spawn` also refuses it with `runtime: "acp"` or `visible: true`. A tool hook that removes it from a native spawn is rejected like any other incompatible rewrite.
+
+Blinding covers prompts OpenClaw renders: the built-in runtime, CLI backends, and compaction. It does not change a CLI's own built-in instructions or a plugin agent harness that writes its own instructions. A child can still learn its model from tools that report it, such as `session_status`. Host, OS, Node, and shell facts remain, and provider-specific prompt guidance or tool schemas can still hint at a model family.
+
+```typescript
+if (!api.runtime.capabilities?.includes("native-subagent-blind-v1")) {
+  // Report blinding as unavailable rather than claiming a blind trial.
+}
+const trial = await native.spawn({
+  requestId: "trial-a",
+  task: "Apply the frozen rubric to the attached change.",
+  model: "anthropic/claude-opus-5-5",
+  context: "isolated",
+  blind: true,
+});
+```
 
 ## Plugin-local subagent profiles
 

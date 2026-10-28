@@ -15,15 +15,15 @@ export function completedMonitor(
   return {
     ...test,
     async run(
-      inspect: () => Promise<void> = async () => {},
+      inspect: (running: ReturnType<typeof test.start>) => Promise<void> = async () => {},
       phase: "during" | "completed" = "completed",
     ) {
-      test.start();
+      const running = test.start();
       try {
         if (phase === "completed") {
           await completed.promise;
         }
-        await inspect();
+        await inspect(running);
         if (phase === "during") {
           await completed.promise;
         }

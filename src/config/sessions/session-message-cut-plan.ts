@@ -164,6 +164,7 @@ export function planSessionMessageCut(
             entryId: params.entryId,
           },
           parentSessionKey: params.canonicalSourceKey,
+          ...(currentEntry.visibility === "draft" ? { visibility: "draft" as const } : {}),
         }
       : {}),
     ...(params.mode === "fork" ? params.forkWorkspace : {}),

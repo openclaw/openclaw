@@ -520,19 +520,13 @@ describe("OpenAI Chat Completions cache metadata", () => {
       lifetime: { prompt_cache_options: { ttl: "30m" } },
     },
   ])("uses native cache policy for $id with $compat", async ({ id, compat, key, lifetime }) => {
-    const cacheModel = {
+    const cacheModel = makeOpenAIProviderModel("openai-completions", {
       id,
       name: id,
-      api: "openai-completions",
-      provider: "openai",
-      baseUrl: "https://api.openai.com/v1",
       reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 128_000,
       maxTokens: 4096,
       compat,
-    } satisfies Model<"openai-completions">;
+    });
     let payload: unknown;
     const result = await streamOpenAICompletions(
       cacheModel,

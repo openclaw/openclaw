@@ -3,13 +3,15 @@ import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contra
 import { readSessionEntryStore } from "./session-accessor.sqlite-entry-store.js";
 import {
   assertPlannedLifecycleArtifactEntriesUnchanged,
-  collectProjectedReferencedSessionIds,
-  collectSessionStateIdsForEntry,
   deleteMaterializedSessionStatePlans,
   deletePlannedLifecycleArtifactEntries,
   planSessionStateAfterEntryRemoval,
 } from "./session-accessor.sqlite-lifecycle-state.js";
 import type { SessionEntryMaintenancePlan } from "./session-accessor.sqlite-lifecycle-types.js";
+import {
+  collectProjectedReferencedSessionIds,
+  collectSessionStateIdsForEntry,
+} from "./session-accessor.sqlite-references.js";
 import type {
   SessionAgentPurgeCommit,
   SessionAgentPurgePlan,

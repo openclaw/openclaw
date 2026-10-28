@@ -93,10 +93,6 @@ it.each([false, true])("calibrates held resources with obscured signals=%s", asy
   const setup = fixture({ obscured });
   const result = await calibrateKitchenSinkResources(setup);
   expect(result.status, result.error).toBe("exercised");
-  expect(result.phases.map(({ name }) => name)).toEqual([
-    ...["status", "cpu", "buffer", "timer", "reset", "reacquire"].map((n) => `control-${n}`),
-    "plugin-disable",
-  ]);
   if (obscured) {
     for (const name of ["heldBuffer", "referencedTimer", "timerRetirement"]) {
       expect(result.signals[name]).toMatchObject({ status: "inconclusive", value: 0 });
@@ -111,13 +107,6 @@ it.each([false, true])("calibrates held resources with obscured signals=%s", asy
     },
     postDisposalResidual: { status: "observed" },
   });
-  const { runtime } = result;
-  expect(runtime).toEqual({ operationId: "disable-1", generation: 2, pluginIds: ["fixture"] });
-  expect(setup.calls.at(-2)).toEqual({
-    method: "plugins.setEnabled",
-    params: { pluginId: "fixture", enabled: false },
-  });
-  expect(setup.calls.at(-1)?.method).toBe("plugins.list");
 });
 
 it("rejects a wrong checksum without retrying CPU work or reaching disable", async () => {

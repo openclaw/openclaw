@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { listDirectoryTreeStrict } from "../infra/directory-walk.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -39,10 +40,7 @@ async function fixture() {
   const archivedContents = async (
     directory = path.join(root, "backups", "heartbeat-migration"),
   ) => {
-    const entries = await fs.readdir(directory, {
-      recursive: true,
-      withFileTypes: true,
-    });
+    const entries = (await listDirectoryTreeStrict(directory)).map((walkEntry) => walkEntry.dirent);
     return Promise.all(
       entries
         .filter((entry) => entry.isFile())

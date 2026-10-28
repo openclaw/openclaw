@@ -57,7 +57,7 @@ async function prepare(
     agentId: "main",
     sendRunId: `original-${id}`,
     sendAttempts: 1,
-    sendState: "unconfirmed",
+    sendState: "waiting-reconnect",
     attachments: [
       {
         id: `${id}-file`,
@@ -219,7 +219,7 @@ it("hydrates queued attachment bytes after offline reload before a new hello", a
 });
 
 it.each(["agent:main:topic", "global"])(
-  "migrates landed v3 %s without retiring its exact Blob or attempt",
+  "restores landed v3 %s into another conversation without retiring its exact Blob",
   async (sessionKey) => {
     const host = hostFor();
     const item = await prepare(host, "legacy", sessionKey);
@@ -233,7 +233,10 @@ it.each(["agent:main:topic", "global"])(
       ...Object.values(migrated.recovery).map((entry) => entry.session),
     ];
     expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({ draftRevision: 42, queue: [item] });
+    expect(rows[0]).toMatchObject({
+      draftRevision: 42,
+      queue: [{ ...item, sendState: "held" }],
+    });
     expect(listOutboxes(host)).toEqual([]);
     const entry = expectDefined(readRecovery(host).entries[0], "owned recovery");
     const destination = destinationFor(host);
@@ -241,12 +244,13 @@ it.each(["agent:main:topic", "global"])(
     const restored = expectDefined(listOutboxes(host)[0]?.queue[0], "restored input");
     expect(restored).toMatchObject({
       id: item.id,
-      sendRunId: item.sendRunId,
-      sendAttempts: 1,
-      sendState: "unconfirmed",
+      sendAttempts: 0,
+      sendState: "failed",
       orderKey: 5,
       attachmentPayload: item.attachmentPayload,
     });
+    expect(restored.sendRunId).toBeUndefined();
+    expect(restored.sessionId).toBeUndefined();
     await expectBytes(host, restored);
     expect(cleanup).not.toHaveBeenCalled();
     clearOutbox(host);
@@ -265,7 +269,7 @@ it("keeps source Blob bytes across quota migration and explicit transfer failure
     throw new DOMException("quota", "QuotaExceededError");
   };
   let write = vi.spyOn(sessionStorage, "setItem").mockImplementation(fail);
-  expect(readRecovery(host).entries[0]?.session.queue).toEqual([item]);
+  expect(readRecovery(host).entries[0]?.session.queue).toEqual([{ ...item, sendState: "held" }]);
   expect(sessionStorage.getItem(source.key)).toBe(source.raw);
   await expectBytes(host, item);
   write.mockRestore();

@@ -68,5 +68,5 @@ export async function createMirrorFsBridgeFixture(workspaceDir: string) {
     },
   });
   const { OpenShellFsBridge } = await import("./fs-bridge.js");
-  return { bridge: new OpenShellFsBridge(sandbox, backend) };
+  return { backend, bridge: new OpenShellFsBridge(sandbox, backend) };
 }

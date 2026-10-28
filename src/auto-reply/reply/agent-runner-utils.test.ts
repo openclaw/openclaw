@@ -1,24 +1,17 @@
-// Tests agent runner utility decisions for fallbacks, channels, and reasoning tags.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChannelThreadingAdapter } from "../../channels/plugins/types.public.js";
 import type { FollowupRun } from "./queue.js";
 
-const hoisted = vi.hoisted(() => {
-  const resolveModelFallbackAvailabilityMock = vi.fn();
-  const getChannelPluginMock = vi.fn();
-  const isReasoningTagProviderMock = vi.fn();
-  return {
-    resolveModelFallbackAvailabilityMock,
-    getChannelPluginMock,
-    isReasoningTagProviderMock,
-  };
-});
+type ThreadingParams = Parameters<NonNullable<ChannelThreadingAdapter["buildToolContext"]>>[0];
 
-vi.mock("../../agents/agent-scope.js", async () => ({
-  modelFallbackOverrideFromAvailability: (
-    await vi.importActual<typeof import("../../agents/agent-scope.js")>(
-      "../../agents/agent-scope.js",
-    )
-  ).modelFallbackOverrideFromAvailability,
+const hoisted = vi.hoisted(() => ({
+  resolveModelFallbackAvailabilityMock: vi.fn(),
+  getChannelPluginMock: vi.fn(),
+  isReasoningTagProviderMock: vi.fn(),
+}));
+
+vi.mock("../../agents/model-selection-config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/model-selection-config.js")>()),
   resolveModelFallbackAvailability: (...args: unknown[]) =>
     hoisted.resolveModelFallbackAvailabilityMock(...args),
 }));
@@ -32,11 +25,13 @@ vi.mock("../../utils/provider-utils.js", () => ({
 }));
 
 const {
+  bindReplyMessageActionSource,
   buildThreadingToolContext,
   buildEmbeddedRunExecutionParams,
   mintReplyMessageActionTurnCapability,
 } = await import("./agent-runner-utils.js");
 const {
+  mintMessageActionTurnCapability,
   resolveCurrentPromptReaction,
   resolveMessageActionTurnAuthorization,
   resolveMessageActionTurnCapability,
@@ -74,6 +69,18 @@ function makeRun(overrides: Partial<FollowupRun["run"]> = {}): FollowupRun["run"
   } as unknown as FollowupRun["run"];
 }
 
+function buildExecution(params: Partial<Parameters<typeof buildEmbeddedRunExecutionParams>[0]>) {
+  return buildEmbeddedRunExecutionParams({
+    run: makeRun(),
+    sessionCtx: {},
+    hasRepliedRef: undefined,
+    provider: "openai",
+    model: "gpt-4.1-mini",
+    runId: "run-1",
+    ...params,
+  });
+}
+
 describe("agent-runner-utils", () => {
   beforeEach(() => {
     hoisted.resolveModelFallbackAvailabilityMock.mockReset();
@@ -107,6 +114,66 @@ describe("agent-runner-utils", () => {
         },
       };
     }
+
+    it("uses retained source scope for a fresh recovered run without dashboard ingress", () => {
+      const turn = makeTurn();
+      let current = true;
+      const prepare = vi.fn(
+        (identity: { agentId: string; runId: string; sessionId: string; sessionKey: string }) => {
+          if (!current) {
+            throw new Error("Original source revoked");
+          }
+          return mintMessageActionTurnCapability({
+            ...identity,
+            requesterAccountId: "original-account",
+            requesterSenderId: "original-sender",
+            toolContext: {
+              currentChannelProvider: "discord",
+              currentChannelId: "original-channel",
+              currentThreadTs: "original-thread",
+              currentSourceTurnId: "interrupted-input",
+              sameChannelThreadRequired: true,
+            },
+            expiresWithRun: true,
+          });
+        },
+      );
+      turn.opts = { prepareMessageActionTurnCapability: prepare };
+      bindReplyMessageActionSource(turn.followupRun.run, prepare);
+      const token = mintReplyMessageActionTurnCapability(turn, "recovered-run");
+      try {
+        expect(prepare).toHaveBeenCalledWith({
+          agentId: "agent-1",
+          runId: "recovered-run",
+          sessionId: source.sessionId,
+          sessionKey: source.sessionKey,
+          runtimePolicySessionKey: undefined,
+        });
+        expect(
+          resolveMessageActionTurnCapability({ ...source, runId: "recovered-run", token }),
+        ).toMatchObject({
+          requesterAccountId: "original-account",
+          requesterSenderId: "original-sender",
+          toolContext: {
+            currentChannelProvider: "discord",
+            currentChannelId: "original-channel",
+            currentThreadTs: "original-thread",
+            currentSourceTurnId: "interrupted-input",
+            sameChannelThreadRequired: true,
+          },
+        });
+        const unrelated = makeTurn();
+        unrelated.opts = turn.opts;
+        expect(mintReplyMessageActionTurnCapability(unrelated, "unrelated-run")).toBeUndefined();
+        expect(prepare).toHaveBeenCalledTimes(1);
+        current = false;
+        expect(() => mintReplyMessageActionTurnCapability(turn, "later-run")).toThrow(
+          "Original source revoked",
+        );
+      } finally {
+        revokeMessageActionTurnCapability(token);
+      }
+    });
 
     it("mints host-only dashboard authority for the original admitted identity", () => {
       const turn = makeTurn();
@@ -180,16 +247,12 @@ describe("agent-runner-utils", () => {
   it("uses the queued conversation policy snapshot", async () => {
     const run = makeRun({ conversationToolPolicy: { deny: ["exec"] } });
 
-    const resolved = await buildEmbeddedRunExecutionParams({
+    const resolved = await buildExecution({
       run,
       sessionCtx: {
         Provider: "telegram",
         ConversationToolPolicy: { deny: ["write"] },
       },
-      hasRepliedRef: undefined,
-      provider: "openai",
-      model: "gpt-4.1-mini",
-      runId: "run-1",
     });
 
     expect(resolved.conversationToolPolicy).toEqual({ deny: ["exec"] });
@@ -202,7 +265,7 @@ describe("agent-runner-utils", () => {
       chatType: "direct",
     });
 
-    const resolved = await buildEmbeddedRunExecutionParams({
+    const resolved = await buildExecution({
       run,
       sessionCtx: {
         Provider: "OpenAI",
@@ -215,55 +278,38 @@ describe("agent-runner-utils", () => {
           chat: { id: "native-chat-1", topicId: "topic-1" },
         },
         MemberRoleIds: ["admin", " ", "operator"],
+        media: [{ contentType: "audio/ogg; codecs=opus", kind: "audio" }],
       },
-      hasRepliedRef: undefined,
       provider: "anthropic",
       model: "claude-sonnet-4-6",
-      runId: "run-1",
     });
 
-    expect(resolved.authProfileId).toBeUndefined();
-    expect(resolved.authProfileIdSource).toBeUndefined();
-    expect(resolved.sessionId).toBe(run.sessionId);
-    expect(resolved.sessionKey).toBe(run.sessionKey);
-    expect(resolved.agentId).toBe(run.agentId);
-    expect(resolved.messageProvider).toBe("openai");
-    expect(resolved.chatType).toBe("channel");
-    expect(resolved.chatType).not.toBe(run.chatType);
-    expect(resolved.messageTo).toBe("channel-1");
-    expect(resolved.chatId).toBe("native-chat-1");
-    expect(resolved.memberRoleIds).toEqual(["admin", "operator"]);
-    expect(resolved.currentInboundAudio).toBe(false);
-    expect({
-      senderId: resolved.senderId,
-      channelContext: resolved.channelContext,
-      senderName: resolved.senderName,
-      senderUsername: resolved.senderUsername,
-      senderE164: resolved.senderE164,
-    }).toEqual({
-      senderId: "sender-1",
-      channelContext: run.channelContext,
-      senderName: undefined,
-      senderUsername: undefined,
-      senderE164: undefined,
-    });
+    expect(resolved).toEqual(
+      expect.objectContaining({
+        authProfileId: undefined,
+        authProfileIdSource: undefined,
+        sessionId: run.sessionId,
+        sessionKey: run.sessionKey,
+        agentId: run.agentId,
+        messageProvider: "openai",
+        chatType: "channel",
+        messageTo: "channel-1",
+        chatId: "native-chat-1",
+        memberRoleIds: ["admin", "operator"],
+        currentInboundAudio: true,
+        senderId: "sender-1",
+        channelContext: run.channelContext,
+        senderName: undefined,
+        senderUsername: undefined,
+        senderE164: undefined,
+      }),
+    );
   });
 
   it("hydrates the queued route before resolving channel threading policy", async () => {
     hoisted.getChannelPluginMock.mockReturnValue({
       threading: {
-        buildToolContext: ({
-          accountId,
-          context,
-        }: {
-          accountId?: string | null;
-          context: {
-            ChatType?: string;
-            MessageThreadId?: string | number;
-            NativeChannelId?: string;
-            To?: string;
-          };
-        }) => ({
+        buildToolContext: ({ accountId, context }: ThreadingParams) => ({
           currentChannelId: context.NativeChannelId ?? context.To,
           currentMessagingTarget: context.To,
           currentThreadTs:
@@ -274,7 +320,7 @@ describe("agent-runner-utils", () => {
     });
     const run = makeRun({ agentAccountId: "work", chatType: "direct" });
 
-    const resolved = await buildEmbeddedRunExecutionParams({
+    const resolved = await buildExecution({
       run,
       sessionCtx: {
         Provider: "cron-event",
@@ -289,77 +335,44 @@ describe("agent-runner-utils", () => {
         originatingChatType: "direct",
         originatingThreadId: 42,
       },
-      hasRepliedRef: undefined,
-      provider: "openai",
-      model: "gpt-4.1-mini",
-      runId: "run-1",
     });
 
-    expect(resolved.messageProvider).toBe("slack");
-    expect(resolved.messageTo).toBe("user:U1");
-    expect(resolved.currentChannelId).toBe("D1");
-    expect(resolved.currentMessagingTarget).toBe("user:U1");
-    expect(resolved.messageThreadId).toBe(42);
-    expect(resolved.currentThreadTs).toBe("42");
-    expect(resolved.agentAccountId).toBe("work");
-    expect(resolved.chatType).toBe("direct");
-    expect(resolved.replyToMode).toBe("off");
+    expect(resolved).toEqual(
+      expect.objectContaining({
+        messageProvider: "slack",
+        messageTo: "user:U1",
+        currentChannelId: "D1",
+        currentMessagingTarget: "user:U1",
+        messageThreadId: 42,
+        currentThreadTs: "42",
+        agentAccountId: "work",
+        chatType: "direct",
+        replyToMode: "off",
+        currentInboundAudio: false,
+      }),
+    );
   });
 
-  it.each([{ provider: "webchat", currentMessageId: undefined }])(
-    "carries prepared reply routing without leaking $provider identity",
-    async ({ provider, currentMessageId }) => {
-      const run = makeRun();
-      const replyRoute = {
+  it("carries prepared reply routing without leaking webchat identity", async () => {
+    const resolved = await buildExecution({
+      replyRoute: {
         originatingChannel: "reef",
         originatingTo: "reef:remote-agent",
         originatingReplyToMode: "all",
-      } satisfies Pick<
-        FollowupRun,
-        "originatingChannel" | "originatingTo" | "originatingReplyToMode"
-      >;
-
-      const resolved = await buildEmbeddedRunExecutionParams({
-        run,
-        replyRoute,
-        sessionCtx: {
-          Provider: provider,
-          To: "reef:local-agent",
-          MessageSid: "message-1",
-        },
-        hasRepliedRef: undefined,
-        provider: "openai",
-        model: "gpt-4.1-mini",
-        runId: "run-1",
-      });
-
-      expect(resolved).toMatchObject({
-        currentChannelId: "reef:remote-agent",
-        currentChannelProvider: "reef",
-        currentMessageId,
-        replyToMode: "all",
-      });
-    },
-  );
-
-  it("carries inbound audio context into embedded message tools", async () => {
-    const run = makeRun();
-
-    const resolved = await buildEmbeddedRunExecutionParams({
-      run,
-      sessionCtx: {
-        Provider: "telegram",
-        To: "268300329",
-        media: [{ contentType: "audio/ogg; codecs=opus", kind: "audio" }],
-        BodyForCommands: "",
       },
-      hasRepliedRef: undefined,
-      provider: "openai",
-      model: "gpt-4.1-mini",
-      runId: "run-1",
+      sessionCtx: {
+        Provider: "webchat",
+        To: "reef:local-agent",
+        MessageSid: "message-1",
+      },
     });
 
-    expect(resolved.currentInboundAudio).toBe(true);
+    expect(resolved).toMatchObject({
+      currentChannelId: "reef:remote-agent",
+      currentChannelProvider: "reef",
+      currentMessageId: undefined,
+      replyToMode: "all",
+    });
   });
 
   it("uses OriginatingTo for threading tool context on discord native commands", () => {
@@ -377,19 +390,19 @@ describe("agent-runner-utils", () => {
       hasRepliedRef: undefined,
     });
 
-    expect(context.currentChannelId).toBe("channel:123456789012345678");
-    expect(context.currentMessageId).toBe("msg-9");
-    expect(context.currentSourceTurnId).toBe("channel-user:v1:source-9");
+    expect(context).toEqual(
+      expect.objectContaining({
+        currentChannelId: "channel:123456789012345678",
+        currentMessageId: "msg-9",
+        currentSourceTurnId: "channel-user:v1:source-9",
+      }),
+    );
   });
 
   it("does not expose restart-sentinel synthetic ids as message-tool reply targets", () => {
     hoisted.getChannelPluginMock.mockReturnValue({
       threading: {
-        buildToolContext: ({
-          context,
-        }: {
-          context: { To?: string; MessageThreadId?: string | number };
-        }) => ({
+        buildToolContext: ({ context }: ThreadingParams) => ({
           currentChannelId: context.To,
           currentThreadTs:
             context.MessageThreadId != null ? String(context.MessageThreadId) : undefined,
@@ -414,8 +427,12 @@ describe("agent-runner-utils", () => {
       hasRepliedRef: undefined,
     });
 
-    expect(context.currentChannelId).toBe("telegram:-1003841603622:topic:928");
-    expect(context.currentThreadTs).toBe("928");
-    expect(context.currentMessageId).toBeUndefined();
+    expect(context).toEqual(
+      expect.objectContaining({
+        currentChannelId: "telegram:-1003841603622:topic:928",
+        currentThreadTs: "928",
+        currentMessageId: undefined,
+      }),
+    );
   });
 });

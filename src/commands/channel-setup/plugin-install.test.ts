@@ -5,6 +5,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createRequireRecord, bundledPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createPluginManifestRecordFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createColdPluginFixture } from "../../plugins/test-helpers/cold-plugin-fixtures.js";
 import { invokePluginArtifactInstallMock } from "../../plugins/test-helpers/install-fixtures.js";
 import { expectObjectFields } from "../../test-utils/mock-call-assertions.js";
@@ -177,21 +178,15 @@ function createManifestRecord(
   overrides: Partial<PluginManifestRecord> & Pick<PluginManifestRecord, "id">,
 ): PluginManifestRecord {
   const { id, ...rest } = overrides;
-  return {
+  return createPluginManifestRecordFixture({
     id,
-    channels: [],
-    providers: [],
-    cliBackends: [],
     syntheticAuthRefs: [],
     nonSecretAuthMarkers: [],
-    skills: [],
-    hooks: [],
-    origin: "bundled",
     rootDir: `/tmp/openclaw-test/${id}`,
     source: `/tmp/openclaw-test/${id}/index.ts`,
     manifestPath: `/tmp/openclaw-test/${id}/openclaw.plugin.json`,
     ...rest,
-  };
+  });
 }
 
 function loadSetupSnapshot(cfg: OpenClawConfig, pluginId?: string) {

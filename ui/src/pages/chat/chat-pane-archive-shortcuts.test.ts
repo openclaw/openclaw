@@ -6,12 +6,9 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import { showToast } from "../../lib/toast.ts";
-import {
-  createGatewayBrowserClientFixture,
-  createSessionCapabilityFixture,
-  createTestChatPane,
-  type TestChatPane,
-} from "./chat-pane.test-support.ts";
+import { createGatewayBrowserClientFixture } from "./chat-application-context.test-support.ts";
+import { createTestChatPane, type TestChatPane } from "./chat-pane.test-support.ts";
+import { createSessionCapabilityFixture } from "./chat-session-capability.test-support.ts";
 
 vi.mock("../../lib/toast.ts", () => ({ showToast: vi.fn() }));
 
@@ -43,7 +40,10 @@ function fixture(guard = "") {
   pane.active = true;
   state.sessionKey = row.key;
   state.sessionsResult = guard === "missing-row" ? null : result;
-  state.connected = guard !== "offline";
+  state.connected = guard !== "stopped";
+  if (guard === "stopped") {
+    pane.context.gateway.snapshot.phase = "stopped";
+  }
   pane.onboarding = guard === "onboarding";
   state.chatMessage = "Keep the unsent foreground draft";
   pane.onPaneSessionChange = vi.fn();
@@ -68,11 +68,14 @@ it.each(["success", "failure"])("archives via the keyboard with %s feedback", as
   if (outcome === "failure") {
     patch.mockRejectedValue(new Error("Archive rejected"));
   }
-  const action = vi.spyOn(pane, "handleHeaderSessionAction");
   const scope = { agentId: "main", expectedSessionId: row.sessionId };
   expect(press(pane).defaultPrevented).toBe(true);
-  expect(action).toHaveBeenCalledExactlyOnceWith({ kind: "toggle-archived" }, row);
-  await action.mock.results[0]?.value;
+  await vi.waitFor(() => expect(patch).toHaveBeenCalledOnce());
+  await vi.waitFor(() =>
+    expect(
+      outcome === "failure" ? state.chatError : vi.mocked(showToast).mock.calls.length,
+    ).toBeTruthy(),
+  );
   expect(state.chatMessage).toBe("Keep the unsent foreground draft");
   expect(pane.onPaneSessionChange).not.toHaveBeenCalled();
   if (outcome === "failure") {
@@ -115,7 +118,7 @@ it.each([
   ["non-durable", false],
   ["modal", false],
   ["onboarding", false],
-  ["offline", false],
+  ["stopped", false],
   ["read-only", false],
   ["unavailable", false],
   ["missing-row", false],

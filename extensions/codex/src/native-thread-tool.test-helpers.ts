@@ -8,6 +8,7 @@ import type { CodexAppServerClient } from "./app-server/client.js";
 import {
   registerCodexTestSessionIdentity,
   resetCodexTestBindingStore,
+  writeCodexAppServerBinding,
 } from "./app-server/session-binding.test-helpers.js";
 import { createClientHarness } from "./app-server/test-support.js";
 import type { codexControlRequest } from "./command-rpc.js";
@@ -67,4 +68,8 @@ export async function withCodexNativeThreadToolFixture(
       await closeOpenClawAgentDatabasesAsync();
     }
   });
+}
+
+export function writeNativeThreadToolBinding(threadId: string, sessionId = "session-id") {
+  return writeCodexAppServerBinding(sessionId, { threadId, cwd: "/tmp/project" });
 }

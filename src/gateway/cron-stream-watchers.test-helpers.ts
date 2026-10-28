@@ -38,15 +38,13 @@ export function job(overrides: Partial<CronJob> = {}): CronJob {
     wakeMode: "now",
     payload: { kind: "agentTurn", message: "base" },
     state: {},
+    ...overrides,
   };
-  const merged = { ...base, ...overrides };
-  return {
-    ...merged,
-    state: {
-      streamSourceIdentity: `source:${merged.id}`,
-      ...overrides.state,
-    },
+  base.state = {
+    streamSourceIdentity: `source:${base.id}`,
+    ...overrides.state,
   };
+  return base;
 }
 
 export function createCronStreamMatchingJob(match: string): CronJob {

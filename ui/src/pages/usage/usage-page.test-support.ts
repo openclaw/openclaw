@@ -1,6 +1,4 @@
-import type { RouteLoaderOptions } from "@openclaw/uirouter";
 import { expect, vi } from "vitest";
-import { createEmptyCostUsageTotals } from "../../../../src/infra/session-cost-usage-totals.js";
 import { buildUsageOverview } from "../../../../src/shared/usage-overview.js";
 import type { UsageOverviewOptions } from "../../../../src/shared/usage-types.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -8,13 +6,14 @@ import type { SessionsUsageResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context-fixtures.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
+import { createRouteLoaderOptions } from "../../test-helpers/route-loader-options.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { page as usageRoute } from "./route.tsx";
 import type { UsageRouteData, UsageSessionEntry } from "./types.ts";
 import { createUsagePage } from "./usage-page-state.ts";
-import { buildAggregatesFromSessions } from "./view.test-support.ts";
+import { buildAggregatesFromSessions, usageTotals } from "./view.test-support.ts";
 
 export type TestUsagePage = Awaited<ReturnType<typeof createPage>>;
 
@@ -332,7 +331,6 @@ export function createPendingUsageRouteData(
       agentId: null,
     },
     result: null,
-    costSummary: null,
     loadedAtMs: null,
     error: null,
   };
@@ -363,13 +361,7 @@ export function cacheSnapshot(status: "fresh" | "partial" | "stale" | "refreshin
     pendingFiles: status === "fresh" ? 0 : 1,
     staleFiles: status === "stale" ? 1 : 0,
   };
-  const totals = {
-    ...createEmptyCostUsageTotals(),
-    input: 100,
-    totalTokens: 100,
-    totalCost: 1,
-    inputCost: 1,
-  };
+  const totals = usageTotals(100, 1);
   return {
     result: {
       updatedAt: Date.now(),
@@ -387,14 +379,7 @@ export function cacheSnapshot(status: "fresh" | "partial" | "stale" | "refreshin
 }
 
 export async function preloadUsage(page: TestUsagePage): Promise<void> {
-  const options = {
-    signal: new AbortController().signal,
-    shouldRun: () => true,
-    revalidating: false,
-    location: { pathname: "/usage", search: "", hash: "" },
-    deps: "",
-    cause: "navigation",
-  } satisfies RouteLoaderOptions;
+  const options = createRouteLoaderOptions({ pathname: "/usage", search: "", hash: "" });
   page.routeData = (await usageRoute.loader!(page.context, options)) as UsageRouteData;
   await page.updateComplete;
 }

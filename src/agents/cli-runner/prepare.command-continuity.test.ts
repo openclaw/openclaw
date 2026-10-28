@@ -16,6 +16,7 @@ import {
 } from "../cli-runner.test-helpers.js";
 import { hashCliSessionText } from "../cli-session.js";
 import { prepareAgentCommandExecution } from "../command/prepare.js";
+import { createCliMcpTool } from "./prepare-mcp.test-support.js";
 import { prepareCliRunContext } from "./prepare.js";
 import {
   resetCliRunnerPrepareTestDeps,
@@ -236,15 +237,7 @@ describe("direct CLI command continuity", () => {
     }));
     const resolveMcpLoopbackScopedTools = vi.fn(() => ({
       agentId: "main",
-      tools: [
-        {
-          name: "message",
-          label: "Message",
-          description: "Send a message",
-          parameters: { type: "object", properties: {} },
-          execute: vi.fn(),
-        },
-      ],
+      tools: [createCliMcpTool("message", "Message", "Send a message")],
     }));
     setCliRunnerPrepareTestDeps({
       getActiveMcpLoopbackRuntime,

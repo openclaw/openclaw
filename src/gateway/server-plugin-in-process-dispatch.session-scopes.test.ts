@@ -260,13 +260,7 @@ async function createHostedCreation(state: OpenClawTestState, source: HostedSour
       params: Record<string, unknown> = {},
       toolCallId = "create-independent",
       signal?: AbortSignal,
-    ) =>
-      withCaller(async () => {
-        if (!tool) {
-          throw new Error("Session creation unavailable");
-        }
-        return await tool.execute(toolCallId, params, signal);
-      }),
+    ) => withCaller(() => tool.execute(toolCallId, params, signal)),
     create,
     spawn: (mode: SessionEntry["permissionMode"], agentId?: string) =>
       withCaller(() =>
@@ -559,10 +553,13 @@ describe("independent session creation tool", () => {
   it.each(["unidentified", "scheduled"] as const)(
     "does not turn a %s run into an operator creation grant",
     (source) =>
-      withHostedCreation(async ({ tool, toolCreate, handler }) => {
-        expect(tool).toBeNull();
-        await expect(toolCreate({ message: "Investigate" })).rejects.toThrow(/unavailable/);
+      withHostedCreation(async ({ tool, toolCreate, handler, keys }) => {
+        const before = await keys();
+        expect(tool.name).toBe("sessions_create");
+        const refused = await toolCreate({ message: "Investigate" });
+        expect(refused.details).toMatchObject({ gated: true });
         expect(handler).not.toHaveBeenCalled();
+        expect(await keys()).toEqual(before);
       }, source),
   );
 

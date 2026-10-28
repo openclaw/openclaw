@@ -4,10 +4,11 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Page } from "playwright";
-import { createServer, type ViteDevServer } from "vite";
+import type { ViteDevServer } from "vite";
 import { expect, it, vi } from "vitest";
 import { replaceSessionEntrySync } from "../../../src/config/sessions/session-accessor.ts";
 import { GatewayClient, isGatewayProtocolResponseError } from "../../../src/gateway/client.ts";
+import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../../src/gateway/control-ui-contract.js";
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.ts";
 import type { GatewayServer } from "../../../src/gateway/server-public.ts";
 import { racePromiseWithAbortSignal } from "../../../src/infra/abort-signal.ts";
@@ -17,12 +18,15 @@ import { readResidentUserProfileId } from "../../../src/state/user-profile-list.
 import { linkEmail, setUserProfileRole } from "../../../src/state/user-profile-writes.worker.ts";
 import { ensureProfileForEmail } from "../../../src/state/user-profiles.ts";
 import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../../../src/test-utils/gateway-scheduler-clock.ts";
+import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../../src/test-utils/openclaw-test-state.ts";
 import { getFreePort } from "../../../src/test-utils/ports.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
-import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
 import {
@@ -30,6 +34,7 @@ import {
   openDetailsPullRequests,
 } from "./chat-details.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { createGatewayProxy, gatewayProxyRoute } from "./gateway-proxy.test-support.ts";
 
 const sessionKey = "agent:main:pr-reader-lifetime";
 const checksMethod = "controlUi.sessionPullRequests.checks";
@@ -150,6 +155,8 @@ suite.define(() => {
     let proxy: ViteDevServer | undefined;
     let retiringReader: GatewayClient | undefined;
     let restoreFetch: (() => void) | undefined;
+    const refreshClock = createGatewaySchedulerClock(Date.now());
+    const refreshScheduler = createTestGatewayScheduler(refreshClock.clock);
     const providerEntered = createDeferredCore();
     const releaseProvider = createDeferredCore();
     const snapshotEntered = createDeferredCore();
@@ -295,42 +302,34 @@ suite.define(() => {
           throw new Error(`Unexpected synthetic GitHub request: ${url.pathname}`);
         });
         restoreFetch = () => transport.mockRestore();
-        const { startGatewayServer } = await import("../../../src/gateway/server.js");
-        gateway = await startGatewayServer(port, {
-          auth: { mode: "trusted-proxy", trustedProxy },
-          bind: "loopback",
-          controlUiEnabled: false,
-          sidecarStartup: "defer",
-        });
-        const forwarded = (email: string) => ({
-          "x-forwarded-for": "192.0.2.10",
-          "x-forwarded-proto": "http",
-          "x-forwarded-user": email,
-        });
+        const subscriptions =
+          await import("../../../src/gateway/control-ui-session-pr-subscriptions.js");
+        const createSubscriptions = subscriptions.createControlUiSessionPullRequestSubscriptions;
+        // Only PR refresh pacing uses controlled time; Gateway I/O and browser clocks stay real.
+        const subscriptionFactory = vi
+          .spyOn(subscriptions, "createControlUiSessionPullRequestSubscriptions")
+          .mockImplementation((deps) =>
+            createSubscriptions({ ...deps, scheduler: refreshScheduler }),
+          );
+        try {
+          const { startGatewayServer } = await import("../../../src/gateway/server.js");
+          gateway = await startGatewayServer(port, {
+            auth: { mode: "trusted-proxy", trustedProxy },
+            bind: "loopback",
+            controlUiEnabled: false,
+            sidecarStartup: "defer",
+          });
+          expect(subscriptionFactory).toHaveBeenCalledOnce();
+        } finally {
+          subscriptionFactory.mockRestore();
+        }
         // Chromium does not consistently apply extraHTTPHeaders to WebSocket upgrades.
-        proxy = await createServer({
-          configFile: false,
-          envFile: false,
-          root: state.workspaceDir,
-          appType: "custom",
-          logLevel: "error",
-          server: {
-            host: "127.0.0.1",
-            port: 0,
-            proxy: {
-              "/retiring": {
-                target: `http://127.0.0.1:${port}`,
-                ws: true,
-                headers: forwarded(retiringEmail),
-                rewrite: () => "/",
-              },
-              "/": {
-                target: `http://127.0.0.1:${port}`,
-                ws: true,
-                headers: forwarded(viewerEmail),
-              },
-            },
+        proxy = await createGatewayProxy(state.workspaceDir, {
+          "/retiring": {
+            ...gatewayProxyRoute(port, retiringEmail),
+            rewrite: () => "/",
           },
+          "/": gatewayProxyRoute(port, viewerEmail),
         });
         await proxy.listen();
         const proxyUrl = proxy.resolvedUrls?.local[0];
@@ -519,6 +518,7 @@ suite.define(() => {
             // A new PR keeps the details request cold while the real summary is already known.
             replacement.number = 203;
             replacement.checkName = "replacement-workspace current-reader check";
+            await refreshClock.advanceBy(10_000);
             expect(await refreshFromBrowser(page)).toEqual(["operator.read"]);
             // The subscription acknowledgement precedes the owner's paced refresh.
             expect(await waitFor(replacementSummaryDelivery)).toEqual(
@@ -567,6 +567,7 @@ suite.define(() => {
             // Change a list-visible metadata field so the shared detail cache admits new facts.
             replacement.title = "Updated replacement workspace review";
             replacement.additions = 5;
+            await refreshClock.advanceBy(10_000);
             await subscribe([sessionKey], true);
             await waitFor(snapshotEntered).catch((cause: unknown) => {
               throw new Error("The held PR snapshot provider was not entered", { cause });
@@ -613,6 +614,7 @@ suite.define(() => {
           async () => retiringReader?.stopAndWait(),
           () => proxy?.close(),
           () => gateway?.close({ reason: "session PR reader proof cleanup" }),
+          () => refreshScheduler.stop(),
           () => restoreFetch?.(),
         );
       },

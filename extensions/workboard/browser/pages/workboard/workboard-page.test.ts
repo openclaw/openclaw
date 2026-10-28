@@ -11,6 +11,7 @@ import {
   createWorkboardCard,
 } from "../../lib/workboard/test/index-helpers.ts";
 import { afterWorkboardUpdate } from "../../test/settle.ts";
+import { openCardMenu } from "./view.test-support.ts";
 import {
   mountPage,
   observeSessions,
@@ -27,6 +28,8 @@ afterEach(() => vi.useRealTimers());
 it("loads, refreshes, and searches cards through the plugin's authenticated host", async () => {
   const page = mountPage({ connected: true });
   await afterWorkboardUpdate(() => expect(page.container.textContent).toContain("Initial card"));
+  page.focus();
+  expect(document.activeElement).toBe(page.container.querySelector(".workboard-search-trigger"));
   page.cards([createWorkboardCard({ title: "Updated card" })]);
   page.fixture.emit("plugin.workboard.changed", { epoch: "current", revision: 1 });
   await afterWorkboardUpdate(() => expect(page.container.textContent).toContain("Updated card"));
@@ -43,6 +46,8 @@ it("loads, refreshes, and searches cards through the plugin's authenticated host
     expect(document.activeElement).toBe(current);
     return current;
   });
+  page.focus();
+  expect(document.activeElement).toBe(input);
   input.value = "Updated";
   input.dispatchEvent(new InputEvent("input", { bubbles: true }));
   await afterWorkboardUpdate(() => {
@@ -291,10 +296,11 @@ it("keeps a bare unknown link unresolved despite an ambient roster owner", async
   await afterWorkboardUpdate(() =>
     expect(page.container.querySelector(".workboard-card")?.textContent).toContain("Unknown"),
   );
+  const menu = openCardMenu(page.container.querySelector(".workboard-card")!);
   expect(openSessionButton(page.container)).toBeUndefined();
   expect(page.container.querySelector('button[aria-label="Stop session"]')).toBeNull();
   expectDefined(
-    page.container.querySelector<HTMLButtonElement>('button[aria-label="View details"]'),
+    menu.querySelector<HTMLButtonElement>('button[aria-label="View details"]'),
     "open unresolved card details",
   ).click();
   await afterWorkboardUpdate(() =>
@@ -654,8 +660,9 @@ describe("selection reconciliation", () => {
       page.fixture.connection.connected = true;
       page.fixture.notify();
       await afterWorkboardUpdate(() => expect(page.workboard.state.loaded).toBe(true));
+      const menu = openCardMenu(page.container.querySelector(".workboard-card")!);
       expectDefined(
-        page.container.querySelector<HTMLButtonElement>('button[aria-label="View details"]'),
+        menu.querySelector<HTMLButtonElement>('button[aria-label="View details"]'),
         "open task details",
       ).click();
       await afterWorkboardUpdate(() =>
@@ -768,7 +775,9 @@ describe("selection reconciliation", () => {
     await afterWorkboardUpdate(() =>
       expect(page.container.querySelector(".workboard-card")?.textContent).toContain(card.title),
     );
-    page.container.querySelector<HTMLButtonElement>('button[aria-label="View details"]')!.click();
+    openCardMenu(page.container.querySelector(".workboard-card")!)
+      .querySelector<HTMLButtonElement>('button[aria-label="View details"]')!
+      .click();
     await afterWorkboardUpdate(() =>
       expect(page.container.querySelector(".workboard-detail")).not.toBeNull(),
     );
@@ -874,4 +883,21 @@ it("saves explicit appearance clearing without sending legacy null values", asyn
       clearAppearance: ["icon", "color"],
     }),
   );
+});
+
+it("captures the board opener before the host dialog can defer mounting", async () => {
+  const page = mountPage({ connected: true });
+  const opener = await afterWorkboardUpdate(() =>
+    expectDefined(
+      page.container.querySelector<HTMLButtonElement>(".workboard-new-board"),
+      "new board trigger",
+    ),
+  );
+  opener.focus();
+  opener.click();
+  await afterWorkboardUpdate(() => {
+    const props = vi.mocked(page.fixture.host.components.mountDialog).mock.lastCall?.[1];
+    expect(props?.label).toBe("New board");
+    expect(props?.returnFocusTarget).toBe(opener);
+  });
 });

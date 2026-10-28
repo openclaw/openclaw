@@ -17,6 +17,9 @@ export async function stageLauncherFixture(root: string): Promise<void> {
     "gateway-run-argv.mjs",
     "gateway-shutdown-budget.mjs",
     "node-sqlite.mjs",
+    "node-sqlite-capabilities.mjs",
+    "runtime-process-bootstrap.generated.mjs",
+    "runtime-process-scripts.generated.mjs",
   ]) {
     await fs.copyFile(path.resolve(name), path.join(root, name));
   }

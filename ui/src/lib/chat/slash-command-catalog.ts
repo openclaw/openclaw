@@ -26,24 +26,6 @@ function remoteSlashCommandCacheKey(agentId: string | undefined, sessionKey?: st
   return JSON.stringify([agentId ?? null, sessionKey ?? null]);
 }
 
-async function requestRemoteSlashCommands(
-  client: GatewayBrowserClient,
-  agentId: string | undefined,
-  sessionKey?: string,
-): Promise<SlashCommandDef[] | undefined> {
-  try {
-    const result = await client.request<CommandsListResult>("commands.list", {
-      ...(agentId ? { agentId } : {}),
-      ...(sessionKey ? { sessionKey } : {}),
-      includeArgs: true,
-      scope: "text",
-    });
-    return buildSlashCommandsFromEntries(result.commands);
-  } catch {
-    return undefined;
-  }
-}
-
 function loadRemoteSlashCommands(
   client: GatewayBrowserClient,
   agentId: string | undefined,
@@ -73,7 +55,19 @@ function loadRemoteSlashCommands(
     commands: cached?.commands,
     expiresAt: cached?.expiresAt ?? 0,
   };
-  const inFlight = requestRemoteSlashCommands(client, agentId, sessionKey)
+  const inFlight = (async () => {
+    try {
+      const result = await client.request<CommandsListResult>("commands.list", {
+        ...(agentId ? { agentId } : {}),
+        ...(sessionKey ? { sessionKey } : {}),
+        includeArgs: true,
+        scope: "text",
+      });
+      return buildSlashCommandsFromEntries(result.commands);
+    } catch {
+      return undefined;
+    }
+  })()
     .then((commands) => {
       if (commands) {
         entry.commands = commands;

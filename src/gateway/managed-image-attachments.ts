@@ -72,6 +72,10 @@ import {
   insertManagedImageRecordWithFile,
 } from "./managed-image-attachments.custody.js";
 import {
+  createManagedImageAttachmentError,
+  getSanitizedManagedImageAttachmentError,
+} from "./managed-image-attachments.errors.js";
+import {
   formatLimitMiB,
   maxBytesForManagedMediaKind,
   resolveManagedMediaKind,
@@ -106,6 +110,7 @@ import {
 import {
   iterateSessionTranscriptSourcePages,
   SOURCE_PAGE_MAX_BYTES,
+  SOURCE_PAGE_MAX_MESSAGES,
 } from "./session-transcript-source-pages.js";
 export {
   MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX,
@@ -149,7 +154,10 @@ export type PreparedOutgoingMedia = {
   height?: number;
 };
 
-type SessionManagedOutgoingAttachmentIndex = Set<string>;
+type SessionManagedOutgoingAttachmentIndex = {
+  messageIds: Set<string>;
+  matches?: Set<string> | null;
+};
 type ManagedOutgoingTranscriptMatch = "match" | "missing" | "unavailable";
 type ManagedOutgoingAttachmentRef = { attachmentId: string; sessionKey: string };
 const EMPTY_MANAGED_ATTACHMENT_REFS: readonly ManagedOutgoingAttachmentRef[] = [];
@@ -173,30 +181,6 @@ function resolveManagedImageAttachmentLimits(
     maxHeight: config?.maxHeight ?? DEFAULT_MANAGED_IMAGE_ATTACHMENT_LIMITS.maxHeight,
     maxPixels: config?.maxPixels ?? DEFAULT_MANAGED_IMAGE_ATTACHMENT_LIMITS.maxPixels,
   };
-}
-
-function createManagedImageAttachmentError(message: string) {
-  const error = new Error(message);
-  error.name = "ManagedImageAttachmentError";
-  return error;
-}
-
-function getSanitizedManagedImageAttachmentError(
-  error: unknown,
-  label: string,
-  kind: ManagedMediaKind | "media",
-): Error {
-  if (
-    error instanceof Error &&
-    (error.name === "ManagedImageAttachmentError" ||
-      error.message.startsWith("Managed image attachment ") ||
-      error.message.startsWith("Invalid image data URL"))
-  ) {
-    return error;
-  }
-  return createManagedImageAttachmentError(
-    `Managed ${kind} attachment ${JSON.stringify(label)} could not be prepared`,
-  );
 }
 
 export function buildManagedMediaFailureBlock(params: {
@@ -340,10 +324,19 @@ export async function cleanupManagedOutgoingMediaRecords(params?: {
   const entries = await listManagedImageRecordEntries({ stateDir });
   let pendingPreparedAttachmentIds: Set<string> | null | undefined;
 
-  const transcriptAttachmentIndexCache = new Map<
-    string,
-    SessionManagedOutgoingAttachmentIndex | null
-  >();
+  const transcriptAttachmentIndexCache = new Map<string, SessionManagedOutgoingAttachmentIndex>();
+  for (const { record } of entries) {
+    if (!record.messageId) {
+      continue;
+    }
+    const key = managedOutgoingAttachmentSessionKey(record);
+    let index = transcriptAttachmentIndexCache.get(key);
+    if (!index) {
+      index = { messageIds: new Set() };
+      transcriptAttachmentIndexCache.set(key, index);
+    }
+    index.messageIds.add(record.messageId);
+  }
   for (const entry of entries) {
     const { record } = entry;
     if (sessionKeyFilter && record.sessionKey !== sessionKeyFilter) {
@@ -368,7 +361,7 @@ export async function cleanupManagedOutgoingMediaRecords(params?: {
     } else if (!entry.cleanupPending && record.messageId) {
       const transcriptMatch = await recordMatchesTranscriptMessage(
         record,
-        transcriptAttachmentIndexCache,
+        transcriptAttachmentIndexCache.get(managedOutgoingAttachmentSessionKey(record))!,
         stateDir,
       );
       // Session-store unavailability is not proof that durable chat history no longer owns media.
@@ -620,7 +613,7 @@ async function loadPendingPreparedAttachmentIds(stateDir: string): Promise<Set<s
 
 async function recordMatchesTranscriptMessage(
   record: ManagedImageRecord,
-  cache: Map<string, SessionManagedOutgoingAttachmentIndex | null>,
+  index: SessionManagedOutgoingAttachmentIndex,
   stateDir: string,
 ): Promise<ManagedOutgoingTranscriptMatch> {
   if (!record.messageId) {
@@ -628,10 +621,8 @@ async function recordMatchesTranscriptMessage(
   }
   const { sessionKey, agentId, messageId: requestedMessageId } = record;
   const refKey = buildManagedOutgoingAttachmentRefKey(requestedMessageId, record.attachmentId);
-  const cacheKey = sessionKey === "global" && agentId ? `agent:${agentId}:global` : sessionKey;
-  if (cache.has(cacheKey)) {
-    const index = cache.get(cacheKey);
-    return index === null ? "unavailable" : index?.has(refKey) ? "match" : "missing";
+  if (index.matches !== undefined) {
+    return index.matches === null ? "unavailable" : index.matches.has(refKey) ? "match" : "missing";
   }
   const cfg = getRuntimeConfig();
   const ownerAgentId =
@@ -650,42 +641,53 @@ async function recordMatchesTranscriptMessage(
       unavailable: "unavailable",
     },
     async (scope, assertCurrent) => {
-      const index = await readManagedOutgoingAttachmentIndex(scope);
+      const matches = await readManagedOutgoingAttachmentIndex(scope, index.messageIds);
       assertCurrent();
-      cache.set(cacheKey, index);
-      return index === null ? "unavailable" : index.has(refKey) ? "match" : "missing";
+      index.matches = matches;
+      return matches === null ? "unavailable" : matches.has(refKey) ? "match" : "missing";
     },
   );
   if (result === null) {
-    cache.set(cacheKey, new Set());
+    index.matches = new Set();
   }
   return result ?? "missing";
 }
 
+function managedOutgoingAttachmentSessionKey(record: ManagedImageRecord): string {
+  return record.sessionKey === "global" && record.agentId
+    ? `agent:${record.agentId}:global`
+    : record.sessionKey;
+}
+
 async function readManagedOutgoingAttachmentIndex(
   scope: SessionTranscriptReadScope,
-): Promise<SessionManagedOutgoingAttachmentIndex | null> {
+  messageIds: Set<string>,
+): Promise<Set<string> | null> {
   // Archive file stats cannot establish current SQLite visibility. Reuse membership
   // only within a cleanup pass; each new request must select canonical history again.
   // Cleanup also owns off-path branches because rewind/switch can expose them again;
   // serving stays limited to visible history.
-  const pages = iterateSessionTranscriptSourcePages(readSessionMessagesWithSourceAsync, scope, {
-    allowResetArchiveFallback: true,
-    includeOffPathMessages: true,
-  });
-  const index: SessionManagedOutgoingAttachmentIndex = new Set();
+  const index = new Set<string>();
+  const requestedIds = [...messageIds];
   try {
-    for await (const { messages } of pages) {
-      for (const message of messages) {
-        const messageId = asOptionalRecord(asOptionalRecord(message)?.["__openclaw"])?.id;
-        if (typeof messageId !== "string" || !messageId) {
-          continue;
-        }
-        for (const ref of collectManagedOutgoingAttachmentRefs(
-          readAssistantDisplayContent(message),
-          scope.sessionKey,
-        )) {
-          index.add(buildManagedOutgoingAttachmentRefKey(messageId, ref.attachmentId));
+    for (let start = 0; start < requestedIds.length; start += SOURCE_PAGE_MAX_MESSAGES) {
+      const pages = iterateSessionTranscriptSourcePages(readSessionMessagesWithSourceAsync, scope, {
+        allowResetArchiveFallback: true,
+        includeOffPathMessages: true,
+        messageIds: requestedIds.slice(start, start + SOURCE_PAGE_MAX_MESSAGES),
+      });
+      for await (const { messages } of pages) {
+        for (const message of messages) {
+          const messageId = asOptionalRecord(asOptionalRecord(message)?.["__openclaw"])?.id;
+          if (typeof messageId !== "string" || !messageIds.has(messageId)) {
+            continue;
+          }
+          for (const ref of collectManagedOutgoingAttachmentRefs(
+            readAssistantDisplayContent(message),
+            scope.sessionKey,
+          )) {
+            index.add(buildManagedOutgoingAttachmentRefKey(messageId, ref.attachmentId));
+          }
         }
       }
     }
@@ -821,10 +823,9 @@ export async function resolveManagedOutgoingMediaArtifactDownload(
 export async function resolveManagedOutgoingMediaUrlDownload(params: {
   sessionKey: string;
   url: string;
-  stateDir?: string;
 }): Promise<ManagedOutgoingMediaArtifactDownload | null> {
   const { url, sessionKey } = params;
-  const stateDir = params.stateDir ?? resolveStateDir();
+  const stateDir = resolveStateDir();
   const parsed = parseManagedOutgoingRoute(url);
   if (!parsed || parsed.sessionKey !== sessionKey) {
     return null;
@@ -944,6 +945,7 @@ export async function createManagedOutgoingMediaBlocks(params: {
 
       let savedOriginalPath: string | null = null;
       let insertedRecord: ManagedImageRecord | undefined;
+      let failureCode: ReplyMediaFailureCode = "delivery-failed";
       try {
         params.assertCurrent?.();
         const parsedDataUrl = parseMediaDataUrl(mediaUrl, fallbackLabel, limits);
@@ -1009,6 +1011,7 @@ export async function createManagedOutgoingMediaBlocks(params: {
         }
         const mediaKind = resolveManagedMediaKind(savedOriginalContentType);
         if (!mediaKind) {
+          failureCode = "unsupported-format";
           throw new Error("Managed media attachment has an unsupported content type");
         }
         if (localMediaPath && mediaKind !== "image" && !item.trustedLocal) {
@@ -1167,7 +1170,7 @@ export async function createManagedOutgoingMediaBlocks(params: {
         if (params.continueOnPrepareError) {
           blocks.push(
             buildManagedMediaFailureBlock({
-              code: "delivery-failed",
+              code: failureCode,
               kind: hintedKind,
               label,
               mimeType: item.mimeType ?? mimeTypeFromFilePath(localMediaPath ?? mediaUrl),

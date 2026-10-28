@@ -8,11 +8,6 @@ import type { SessionEntry, SessionSystemPromptReport } from "../../config/sessi
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { estimateAggregateUsageCost } from "../../utils/usage-format.js";
 
-function resolveNonNegativeTokenCount(value: number | undefined): number | undefined {
-  const resolved = asNonNegativeFiniteNumber(value);
-  return resolved === undefined ? undefined : Math.floor(resolved);
-}
-
 type SessionUsageUpdateParams = {
   cfg?: OpenClawConfig;
   agentDir?: string;
@@ -68,6 +63,7 @@ export function prepareSessionUsageUpdate(params: SessionUsageUpdateParams) {
     return undefined;
   }
   const preserveUserFacingRunState = params.preserveUserFacingSessionModelState === true;
+  const currentContextTokens = asNonNegativeFiniteNumber(params.currentContextSnapshot?.tokens);
   const update: SessionEntryUsageUpdate = {
     usage: params.usage,
     lastCallUsage: params.lastCallUsage,
@@ -78,7 +74,8 @@ export function prepareSessionUsageUpdate(params: SessionUsageUpdateParams) {
     contextBudgetStatus: params.contextBudgetStatus,
     systemPromptReport: params.systemPromptReport,
     promptTokens: params.promptTokens,
-    currentContextTokens: resolveNonNegativeTokenCount(params.currentContextSnapshot?.tokens),
+    currentContextTokens:
+      currentContextTokens === undefined ? undefined : Math.floor(currentContextTokens),
     hasContextUpdate,
     hasFreshContextSnapshot,
     hasCurrentContextSnapshot,

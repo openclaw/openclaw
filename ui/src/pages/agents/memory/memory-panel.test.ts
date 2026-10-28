@@ -8,6 +8,7 @@ import { createDeferred as deferred } from "../../../../../test/helpers/promise.
 import { ShellLayoutOwner } from "../../../app/shell-layout-owner.ts";
 import { ShellLayoutProvider } from "../../../app/shell-layout-traits-solid.tsx";
 import { showConfirmDialog } from "../../../components/confirm-dialog.ts";
+import { configSnapshot } from "../../../lib/config/config-snapshot.test-support.ts";
 import { createTestGatewayClient } from "../../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
 import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
@@ -815,13 +816,7 @@ describe.runIf(process.env.OPENCLAW_UI_MEMORY_CHROMIUM_E2E === "1")(
         featureMethods: ["chat.metadata", "chat.startup", STATUS, DIARY],
         methodResponses: {
           "agents.list": roster,
-          "config.get": {
-            config: {},
-            hash: "memory-proof-1",
-            issues: [],
-            raw: "{}",
-            valid: true,
-          },
+          "config.get": configSnapshot({}, "memory-proof-1", "{}"),
           [STATUS]: statusCases(11),
           [DIARY]: scoped({ main: agentDiary("main"), support: agentDiary("support") }),
         },

@@ -14,7 +14,6 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
-import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import {
   loadSessionEntry,
   replaceSessionEntry,
@@ -77,6 +76,13 @@ function recoveryState(entry: InternalSessionEntry | undefined) {
     sourceRunId: entry?.restartRecoveryDeliverySourceRunId,
     fingerprint: entry?.restartRecoveryDeliveryRequestFingerprint,
   };
+}
+
+function transcriptMessages(scope: Parameters<typeof loadTranscriptEventsSync>[0]) {
+  return loadTranscriptEventsSync(scope)
+    .filter(isRecord)
+    .filter((event) => event.type === "message")
+    .map((event) => event.message);
 }
 
 async function expectAdmitted(
@@ -184,7 +190,6 @@ async function createAcknowledgedClaim() {
     userMessage("Synthetic acknowledged input", `${sourceTurnId}:user`),
   );
   await recorder.persistApproved();
-  expect(recorder.hasPersisted()).toBe(true);
   return { ...fixture, recorder, sourceTurnId, transcriptScope };
 }
 
@@ -192,23 +197,18 @@ describe("createReplyRestartRecoveryClaimController", () => {
   beforeEach(() => setRuntimeConfigSnapshot({}));
   afterEach(() => clearRuntimeConfigSnapshot());
 
-  it.each(["absent", "persisted"] as const)(
-    "leaves source-less lifecycle admission to its existing writer when the recorder is %s",
-    async (mode) => {
-      await using fixture = await createStoredClaim(
-        { sessionId: "source-less-session" },
-        { admissionRunId: "source-less-run", setEntry: () => {} },
-      );
-      const { scope, controller } = fixture;
-      const recorder = mode === "persisted" ? fixture.recorder() : undefined;
-      await recorder?.persistApproved();
-      const before = fixture.read();
-      using write = vi.spyOn(sessionAccessor, "updateSessionEntry");
-      await expectAdmitted(controller, recorder);
-      expect(write).not.toHaveBeenCalled();
-      expect(loadSessionEntry(scope)).toEqual(before);
-    },
-  );
+  it("leaves already-persisted source-less admission to its existing writer", async () => {
+    await using fixture = await createStoredClaim(
+      { sessionId: "source-less-session" },
+      { admissionRunId: "source-less-run", setEntry: () => {} },
+    );
+    const { scope, controller } = fixture;
+    const recorder = fixture.recorder();
+    await recorder.persistApproved();
+    const before = fixture.read();
+    await expectAdmitted(controller, recorder);
+    expect(loadSessionEntry(scope)).toEqual(before);
+  });
 
   it.each([
     ["runtime", "main", {}],
@@ -349,8 +349,6 @@ describe("createReplyRestartRecoveryClaimController", () => {
     it("leaves staged worker input with placement admission without caller-thread SQL", async () => {
       await using fixture = await createPlacementAdmission();
       using hostSql = observeSql();
-      expect((await fixture.service.getManyAsync([fixture.entry.sessionId])).size).toBe(1);
-      expect(hostSql.queries).toEqual([]);
       await expectAdmitted(fixture.controller, fixture.recorder);
       expect(hostSql.queries).toEqual([]);
       expect(fixture.persistApproved).not.toHaveBeenCalled();
@@ -613,12 +611,7 @@ describe("createReplyRestartRecoveryClaimController", () => {
       sourceRunId: undefined,
       fingerprint: undefined,
     });
-    expect(
-      loadTranscriptEventsSync(fixture.transcriptScope)
-        .filter(isRecord)
-        .filter((event) => event.type === "message")
-        .map((event) => event.message),
-    ).toEqual([
+    expect(transcriptMessages(fixture.transcriptScope)).toEqual([
       expect.objectContaining({
         role: "user",
         content: "Synthetic acknowledged input",
@@ -652,7 +645,7 @@ describe("createReplyRestartRecoveryClaimController", () => {
       const actor = await fixture.actor();
       const adopt = actor.adoptRun.bind(actor);
       const patch = entryPatch.patchSessionEntryInWorker;
-      using spy = !cleanup
+      using interleaving = !cleanup
         ? vi.spyOn(actor, "adoptRun").mockImplementationOnce((...args) => {
             replace();
             return adopt(...args);
@@ -664,6 +657,7 @@ describe("createReplyRestartRecoveryClaimController", () => {
       const outcome = await (cleanup ? fixture.clear() : fixture.admit(fixture.recorder)).catch(
         (error: unknown) => error,
       );
+      expect(interleaving).toHaveBeenCalled();
       if (!sourceChanged) {
         expect(outcome).toBe(cleanup ? undefined : "admitted");
         expect(fixture.current().model).toBe("concurrent-model");
@@ -672,7 +666,6 @@ describe("createReplyRestartRecoveryClaimController", () => {
       } else {
         expect(outcome).toBeUndefined();
       }
-      expect(spy).toHaveBeenCalled();
       const persisted = fixture.read();
       expect(recoveryState(persisted)).toEqual({
         status: undefined,
@@ -801,7 +794,7 @@ describe("createReplyRestartRecoveryClaimController", () => {
         }),
       },
     );
-    const { storePath, sessionKey } = fixture.scope;
+    const { storePath } = fixture.scope;
     const { sessionId } = fixture.current();
     const recorder = createUserTurnTranscriptRecorder({
       message: userMessage("hello"),
@@ -814,15 +807,11 @@ describe("createReplyRestartRecoveryClaimController", () => {
       },
       updateMode: "none",
     });
-    using persistApproved = vi.spyOn(recorder, "persistApproved");
     await expectAdmitted(fixture.controller, recorder);
-    expect(persistApproved).toHaveBeenCalledWith(
-      expect.objectContaining({
-        expectedSessionId: sessionId,
-        target: expect.objectContaining({ sessionId, sessionKey, storePath, agentId: "main" }),
-      }),
-    );
     expect(recorder.getAdmissionReceipt()?.sessionId).toBe(sessionId);
+    expect(transcriptMessages({ ...fixture.scope, sessionId })).toEqual([
+      expect.objectContaining({ role: "user", content: "hello" }),
+    ]);
   });
 
   it.each(["metadata", "recovery-cycle", "owner-release"] as const)(

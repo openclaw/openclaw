@@ -23,6 +23,7 @@ import {
   WORKER_BUNDLE_ARTIFACT_MODE,
   WORKER_BUNDLE_ARTIFACT_PATHS,
   WORKER_BUNDLE_CHUNK_PATH_PATTERN,
+  WORKER_BUNDLE_ENTRY_PATH,
   type WorkerBundleHashEntry,
 } from "../../shared/worker-bundle-hash.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
@@ -492,7 +493,7 @@ async function resolvePackagedWorkerBundle(params: {
   protocolFeatures: string[];
 }): Promise<WorkerBundleArtifact | null> {
   try {
-    await fs.access(path.join(params.packageRoot, "dist/worker"));
+    await fs.access(path.join(params.packageRoot, "dist/worker", WORKER_BUNDLE_ENTRY_PATH));
     return null;
   } catch (error) {
     if (!isRecord(error) || error.code !== "ENOENT") {

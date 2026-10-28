@@ -39,8 +39,6 @@ const NPM_FRESHNESS_BYPASS_KEYS = [
   "npm_config_min-release-age",
 ] as const;
 
-type NpmFreshnessBypassMode = "before" | "min-release-age";
-
 export type NpmConfigScope = {
   npmConfigCwd?: string;
   npmConfigPrefix?: string | null;
@@ -278,7 +276,7 @@ export function findExplicitNpmConfigKeys(
 function resolveNpmFreshnessBypassMode(
   env: NodeJS.ProcessEnv,
   scope: NpmConfigScope,
-): NpmFreshnessBypassMode {
+): "before" | "min-release-age" {
   if (process.platform === "win32") {
     return "before";
   }

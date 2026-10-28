@@ -85,20 +85,19 @@ export function createPluginToolExecutionBinding(context: {
         }
         // Accessors remain lazy so an unreadable schema reaches tool quarantine,
         // and class-backed tools keep their private-field receiver.
-        Object.defineProperty(view, key, {
-          configurable: true,
-          enumerable: descriptor.enumerable,
-          ...("value" in descriptor
-            ? { writable: true, value: bindValue(key, descriptor.value) }
-            : {
-                get: descriptor.get
-                  ? () => context.admit(() => bindValue(key, Reflect.get(tool, key, tool)))
-                  : undefined,
-                set: descriptor.set
-                  ? (value: unknown) => context.admit(() => Reflect.set(tool, key, value, tool))
-                  : undefined,
-              }),
-        });
+        descriptor.configurable = true;
+        if ("value" in descriptor) {
+          descriptor.writable = true;
+          descriptor.value = bindValue(key, descriptor.value);
+        } else {
+          descriptor.get = descriptor.get
+            ? () => context.admit(() => bindValue(key, Reflect.get(tool, key, tool)))
+            : undefined;
+          descriptor.set = descriptor.set
+            ? (value: unknown) => context.admit(() => Reflect.set(tool, key, value, tool))
+            : undefined;
+        }
+        Object.defineProperty(view, key, descriptor);
       }
     }
     // SAFETY: Data fields retain their values; callable fields retain their signatures and receiver.

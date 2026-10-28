@@ -54,10 +54,15 @@ export async function prepareCandidateAuthorityRuntime(root: string) {
     "../../extensions/memory-core/doctor-health-api",
     "extensions/memory-core/doctor-health-api.js",
   );
+  const installedIndexReader = sibling(
+    "../plugins/test-helpers/installed-plugin-index",
+    "plugins/test-helpers/installed-plugin-index.js",
+  );
   return {
     worker: resolveRuntimeWorkerUrl({ ...workerDeclaration, root: installedRoot }),
     cli: sibling("../entry", "entry.js"),
     doctorResult: sibling("update-doctor-result", "infra/update-doctor-result.js"),
+    installedIndexReader,
     bundledPluginsDir: path.dirname(path.dirname(fileURLToPath(doctorHealth))),
   };
 }
@@ -73,7 +78,12 @@ export function writeCandidateAuthorityEntrypoints(params: {
   boundary: "candidate" | "doctor";
 }): string {
   const workerPath = path.join(params.root, "dist", workerDeclaration.distWorkerPath);
-  const { worker: candidateAuthorityWorker, cli, doctorResult } = params.runtime;
+  const {
+    worker: candidateAuthorityWorker,
+    cli,
+    doctorResult,
+    installedIndexReader,
+  } = params.runtime;
   const bootstrap = `
     import fs from 'node:fs';
     import fsp from 'node:fs/promises';
@@ -93,12 +103,17 @@ export function writeCandidateAuthorityEntrypoints(params: {
         const {getUpdateDoctorConfigWriteAuthority}=await import(${JSON.stringify(doctorResult.href)});
         const observation={event:'config-backup',role,pid:process.pid,ppid:process.ppid,source,
           doctorAuthority:!!getUpdateDoctorConfigWriteAuthority(process.env.OPENCLAW_CONFIG_PATH)};
-        event(observation);
         if(role===${JSON.stringify(params.boundary)}) {
-          fs.writeFileSync(${JSON.stringify(params.ready + ".tmp")},JSON.stringify(observation));
+          const {readPersistedInstalledPluginIndexRowSync}=await import(${JSON.stringify(installedIndexReader.href)});
+          const boundaryObservation={...observation,
+            index:readPersistedInstalledPluginIndexRowSync({env:process.env,artifactPreservingReadOnly:true})};
+          event(boundaryObservation);
+          fs.writeFileSync(${JSON.stringify(params.ready + ".tmp")},JSON.stringify(boundaryObservation));
           fs.renameSync(${JSON.stringify(params.ready + ".tmp")},${JSON.stringify(params.ready)});
           sendReceipt(${JSON.stringify(params.ready)},'config-backup');
           while(!fs.existsSync(${JSON.stringify(params.proceed)})) await setTimeout(10);
+        } else {
+          event(observation);
         }
       }
       return handle;

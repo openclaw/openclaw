@@ -70,7 +70,7 @@ type SessionBuckets = {
 /** Derived membership only; the cache's snapshot Map remains the record owner. */
 export class SubagentSessionReadLookup {
   #memberships = new Map<string, LookupMembership>();
-  #byRunId = new Map<string, Set<LookupMembership>>();
+  #byAlias = new Map<string, Set<LookupMembership>>();
   #byRequesterTurn = new Map<string, Set<LookupMembership>>();
   #sessions?: SessionBuckets;
   #topology?: readonly Readonly<RunIdentity>[];
@@ -83,8 +83,13 @@ export class SubagentSessionReadLookup {
   }
 
   set(cacheKey: string, entry: LookupIdentity | undefined): void {
-    this.#topology = undefined;
     const previous = this.#memberships.get(cacheKey);
+    if (
+      previous?.entry.childSessionKey !== entry?.childSessionKey ||
+      previous?.entry.requesterSessionKey !== entry?.requesterSessionKey
+    ) {
+      this.#topology = undefined;
+    }
     if (!entry) {
       if (previous) {
         this.#index(previous, false);
@@ -196,7 +201,8 @@ export class SubagentSessionReadLookup {
   }
 
   selectRunIds(ids: ReadonlySet<string>, additionalCacheKeys: readonly string[] = []): string[] {
-    return this.#select(this.#byRunId, ids, additionalCacheKeys);
+    const direct = [...ids].filter((id) => id && this.#memberships.get(id)?.runId === id);
+    return this.#select(this.#byAlias, ids, [...direct, ...additionalCacheKeys]);
   }
 
   selectRequesterTurn(requesterTurnRunId: string): string[] {
@@ -305,8 +311,8 @@ export class SubagentSessionReadLookup {
       this.#updateBucket(this.#byRequesterTurn, membership.requesterTurnRunId, membership, add);
     }
     for (const id of [membership.runId, membership.swarmRunId, membership.schedulerSlotId]) {
-      if (id) {
-        this.#updateBucket(this.#byRunId, id, membership, add);
+      if (id && (id !== membership.cacheKey || id !== membership.runId)) {
+        this.#updateBucket(this.#byAlias, id, membership, add);
       }
     }
     this.#indexSession(membership, add);

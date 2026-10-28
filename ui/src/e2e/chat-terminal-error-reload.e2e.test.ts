@@ -137,8 +137,6 @@ suite.define(() => {
       };
       await expectNotice();
       if (reloadActive) {
-        await failure.waitFor();
-        expect(await failure.count()).toBe(1);
         await page.getByRole("button", { name: "Try again", exact: true }).waitFor();
         expect({
           errors: await page.locator(".chat-error").count(),

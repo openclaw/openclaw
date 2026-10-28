@@ -2,6 +2,7 @@ import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/core";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { createRequireRecord, createZeroUsageFixture } from "openclaw/plugin-sdk/test-fixtures";
 import { expect, it } from "vitest";
+import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import { VERSION } from "../version.js";
 import {
@@ -24,18 +25,15 @@ function requireFn<T extends (...args: never[]) => unknown>(fn: T | null | undef
 
 const requireRecord = createRequireRecord("record", "expected-label-object");
 
-const streamTestModel = {
+const streamTestModel = makeProviderModelFixture<"openai-completions">({
   id: "test-model",
   name: "Test Model",
   api: "openai-completions",
   provider: "test",
   baseUrl: "https://example.test/v1",
-  reasoning: false,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   contextWindow: 8_192,
   maxTokens: 1_024,
-} satisfies Model<"openai-completions">;
+}) satisfies Model<"openai-completions">;
 
 function streamTestMessage(text: string) {
   return {
@@ -170,7 +168,7 @@ it("buildProviderStreamFamilyHooks: covers the stream family matrix", async () =
   let capturedPayload: Record<string, unknown> | undefined;
   let capturedModelId: string | undefined;
   let capturedModelReasoning: boolean | undefined;
-  let capturedHeaders: Record<string, string> | undefined;
+  let capturedHeaders: NonNullable<Parameters<StreamFn>[2]>["headers"];
   let capturedReasoning: string | undefined;
   let payloadSeed: Record<string, unknown> | undefined;
 

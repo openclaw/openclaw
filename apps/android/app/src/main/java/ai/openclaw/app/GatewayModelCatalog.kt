@@ -51,12 +51,14 @@ enum class GatewayModelUnavailableReason {
 internal data class GatewayModelCatalogResult(
   val models: List<GatewayModelSummary>,
   val refreshFailed: Boolean,
+  val hasPendingProviders: Boolean,
 )
 
 internal fun parseGatewayModelCatalog(root: JsonObject?): GatewayModelCatalogResult =
   GatewayModelCatalogResult(
     models = parseGatewayModels(root?.get("models") as? JsonArray),
     refreshFailed = root?.get("refreshFailed")?.jsonPrimitive?.booleanOrNull == true,
+    hasPendingProviders = (root?.get("pendingProviders") as? JsonArray)?.isNotEmpty() == true,
   )
 
 internal fun parseGatewayModels(models: JsonArray?): List<GatewayModelSummary> =

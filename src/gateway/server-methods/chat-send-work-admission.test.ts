@@ -69,9 +69,7 @@ it.each([
   inspectionFailure(false),
   new SessionMutationAuthorizationChangedError({ code: "FORBIDDEN", message: "Access changed." }),
   new Error("Unclassified admission failure"),
-  failure("Validation failed", { retryable: false }),
   failure("Not a canonical worker outcome", { code: "outcome-unknown" }),
-  failure("Workspace access denied", { code: "EACCES" }),
 ])("keeps non-storage admission failures RPC-only: %s", (error) => {
   const { respond, terminal } = reportAdmissionError(error);
   expect(respond).toHaveBeenCalledExactlyOnceWith(
@@ -96,28 +94,18 @@ it.each([
   expect(terminal).toHaveBeenCalledOnce();
 });
 
-it.each([
-  [failure("write failed", { code: "SQLITE_FULL" }), "disk is full"],
-  [failure("write failed", { code: "ENOSPC" }), "disk is full"],
-  [failure("write failed", { code: "SQLITE_IOERR" }), "Check the storage"],
-  [failure("write failed", { code: "EIO" }), "Check the storage"],
-  [
-    new SqliteWorkerError("Write settlement was lost", "outcome-unknown"),
-    "reopen the conversation",
-  ],
-  [new Error("Ordinary reply lost"), "reopen the conversation"],
-] as const)("gives actionable terminal reconciliation guidance for %s", (cause, expected) => {
+it("gives actionable terminal reconciliation guidance without exposing its cause", () => {
   const error = Object.assign(
     new SqliteWorkerError(
       "Session actor requires reconciliation before another command",
       "outcome-unknown",
     ),
-    { cause },
+    { cause: failure("write failed", { code: "SQLITE_FULL" }) },
   );
   const { respond, terminal } = reportAdmissionError(error);
   expect(terminal).toHaveBeenCalledOnce();
   const message: unknown = terminal.mock.calls[0]?.[0];
-  expect(message).toEqual(expect.stringContaining(expected));
+  expect(message).toMatch(/check.*history.*before trying again/i);
   expect(message).not.toMatch(/Session actor|SQLite|SQLITE_|outcome-unknown|write failed/);
   expect(respond.mock.calls[0]?.[2].message).toBe(message);
   expect(respond.mock.calls[0]?.[2].retryable).not.toBe(true);

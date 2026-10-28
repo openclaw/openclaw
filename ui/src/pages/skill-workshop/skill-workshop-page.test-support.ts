@@ -1,6 +1,7 @@
 import { vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { createApplicationGatewaySnapshot } from "../../test-helpers/application-context-fixtures.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 
 export function createRuntimeConfigStub(options?: {
@@ -16,6 +17,7 @@ export function createRuntimeConfigStub(options?: {
       lastError: null as string | null,
     },
     ensureLoaded: vi.fn(async () => undefined),
+    ensureDisplayLoaded: vi.fn(async () => undefined),
     refresh: vi.fn(async () => undefined),
     patch: options?.patch ?? vi.fn(async () => true),
     subscribe: () => () => undefined,
@@ -33,17 +35,13 @@ export function createContext(
   },
 ): ApplicationContext {
   const client = { request } as unknown as GatewayBrowserClient;
-  const snapshot: ApplicationGatewaySnapshot = {
+  const snapshot: ApplicationGatewaySnapshot = createApplicationGatewaySnapshot({
     client,
     phase: "connected",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
     hello: gatewayHelloForMethods(options?.methods ?? [], options?.scopes),
     assistantAgentId: "research",
     sessionKey: "global",
-    lastError: null,
-    lastErrorCode: null,
-  };
+  });
   const subscribe = () => () => undefined;
   const selectionListeners = new Set<() => void>();
   const selectionState = { selectedId: "research" };
@@ -72,7 +70,14 @@ export function createContext(
       get: () => ({ agentId: "research", name: "Research" }),
       subscribe,
     },
-    sessions: { state: { result: null, loading: false } },
+    sessions: {
+      state: { result: null, loading: false },
+      presentation: {
+        result: null,
+        agentId: null,
+        resultCached: false,
+      } satisfies ApplicationContext["sessions"]["presentation"],
+    },
     runtimeConfig: options?.runtimeConfig ?? createRuntimeConfigStub(),
     chatSubmissions: { retain: vi.fn() },
     navigate: vi.fn(),

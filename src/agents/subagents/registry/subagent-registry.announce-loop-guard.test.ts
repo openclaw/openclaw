@@ -33,25 +33,9 @@ vi.mock("../../../config/sessions/session-entry-read-runtime.js", async (importO
   ...(await importOriginal<
     typeof import("../../../config/sessions/session-entry-read-runtime.js")
   >()),
-  readSessionEntryReadOnlyInWorker: vi.fn<
-    typeof import("../../../config/sessions/session-entry-read-runtime.js").readSessionEntryReadOnlyInWorker
-  >(async (scope, assertCurrent) => {
-    assertCurrent?.();
-    const entry = await Promise.resolve(sessionStore[scope.sessionKey]);
-    assertCurrent?.();
-    return entry;
-  }),
-  withSessionEntryReadOnlyInWorker: vi.fn<
-    typeof import("../../../config/sessions/session-entry-read-runtime.js").withSessionEntryReadOnlyInWorker
-  >(async (scope, assertCurrent, consume) => {
-    assertCurrent();
-    const result = await consume(
-      { ok: true, value: sessionStore[scope.sessionKey] },
-      { kind: "file", assertCurrent },
-    );
-    assertCurrent();
-    return result;
-  }),
+  ...(await import("./subagent-registry.mock-state.test-support.js")).createSessionEntryReadMocks(
+    sessionStore,
+  ),
 }));
 
 const mocks = vi.hoisted(() => ({
@@ -152,6 +136,7 @@ describe("announce loop guard (#18264)", () => {
   async function hydrateAndActivateRegistry() {
     await registry.initSubagentRegistry();
     const recoveryRuntime = {
+      prepareFailedWorkerPlacement: async () => undefined,
       prepareRestartRecovery: () => undefined,
       resumeChatInput: async () => {
         throw new Error("Unexpected chat input recovery");
@@ -164,7 +149,7 @@ describe("announce loop guard (#18264)", () => {
       recoveryRuntime,
       resolveGatewayContext: () => gatewayContext as never,
     };
-    await registry.activateSubagentRegistry(gatewayContext.resolveGatewayContext);
+    await registry.activateSubagentRegistry(gatewayContext.resolveGatewayContext).settled;
   }
 
   const { flushAsync } = createLifecycleWaits("agent:main:main");

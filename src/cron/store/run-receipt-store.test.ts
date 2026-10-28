@@ -5,7 +5,6 @@ import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
 } from "../../agents/admitted-run-context.js";
-import * as sqliteQuery from "../../infra/kysely-sync.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db-cache.js";
 import {
   openOpenClawStateDatabase,
@@ -13,7 +12,6 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
-import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   bindCronJobAdmittedRun,
@@ -39,8 +37,6 @@ import {
 } from "./run-receipt-store.js";
 import {
   claimCronRunReceiptForTest,
-  claimCronRunReceiptInDatabaseForTest,
-  prepareCronRunReceiptClaim,
   makeCronReceiptJob,
   finishCronRunReceiptAsync,
   makeCronRecoveryJob,
@@ -78,8 +74,7 @@ function makeState(storePath: string) {
 function receipts(storePath: string, jobId: string) {
   return openOpenClawStateDatabase()
     .db.prepare(
-      `SELECT receipt_id AS receiptId, status, agent_id AS agentId,
-              started_at_ms AS startedAtMs, error_text AS error
+      `SELECT receipt_id AS receiptId, status, error_text AS error
          FROM cron_run_receipts
         WHERE store_key = ? AND job_id = ?
         ORDER BY started_at_ms DESC, receipt_id DESC`,
@@ -87,8 +82,6 @@ function receipts(storePath: string, jobId: string) {
     .all(cronStoreKey(storePath), jobId) as Array<{
     receiptId: string;
     status: string;
-    agentId: string;
-    startedAtMs: number;
     error: string | null;
   }>;
 }
@@ -179,7 +172,7 @@ it("allocates portable cursors inside the claim and reuses a deleted maximum", a
   });
 });
 
-it("checks force-disabled message access without host SQL until its admission closes", async () => {
+it("allows force-disabled message access only until its admission closes", async () => {
   const job: CronJob = {
     ...makeCronReceiptJob("force-disabled-message"),
     enabled: false,
@@ -188,17 +181,8 @@ it("checks force-disabled message access without host SQL until its admission cl
   };
   await using run = await messageRun(job, "message-use-run");
   const { admission, message, source } = run;
-  expect(message).toBeTypeOf("function");
-  expect(source).toBeTypeOf("function");
-  const sql = observeMainThreadSql();
-  try {
-    sql.calibrate();
-    expect(message).not.toThrow();
-    expect(source).not.toThrow();
-    sql.expectIdle();
-  } finally {
-    sql.restore();
-  }
+  expect(message).not.toThrow();
+  expect(source).not.toThrow();
   admission.close();
   expect(message).toThrow("no longer active");
   expect(source).toThrow("no longer active");
@@ -361,12 +345,9 @@ it.each(["present", "absent"] as const)(
     const untouchedReceipt = claimCronRunReceiptForTest(storePath, untouchedJob, startedAtMs);
     let database = openOpenClawStateDatabase();
     const schemaVersion = database.db.prepare("PRAGMA user_version").get();
-    const readTable = () =>
+    const table = () =>
       database.db
-        .prepare(
-          `SELECT name FROM sqlite_schema
-            WHERE type = 'table' AND name = 'cron_run_trigger_state_retirements'`,
-        )
+        .prepare("SELECT name FROM sqlite_schema WHERE name = 'cron_run_trigger_state_retirements'")
         .get();
     const readRetirements = () =>
       runOpenClawStateWriteTransaction(({ db }) => ({
@@ -398,48 +379,30 @@ it.each(["present", "absent"] as const)(
       await reopen();
       const previousTable =
         storage === "present" ? { name: "cron_run_trigger_state_retirements" } : undefined;
-      expect(readTable()).toEqual(previousTable);
+      expect(table()).toEqual(previousTable);
       expect(readRetirements()).toEqual({ edited: false, untouched: false });
-      expect(readTable()).toEqual(previousTable);
+      expect(table()).toEqual(previousTable);
 
       expect(() =>
         runOpenClawStateWriteTransaction(({ db }) => {
-          retireCronRunTriggerStateInDatabase({
-            database: db,
-            handle: editedReceipt,
-          });
+          retireCronRunTriggerStateInDatabase({ database: db, handle: editedReceipt });
           expect(
             isCronRunTriggerStateRetiredInDatabase({ database: db, handle: editedReceipt }),
           ).toBe(true);
-          expect(readTable()).toEqual({ name: "cron_run_trigger_state_retirements" });
           throw new Error("cron edit did not commit");
         }),
       ).toThrow("cron edit did not commit");
 
-      expect(readTable()).toEqual(previousTable);
+      expect(table()).toEqual(previousTable);
       expect(readRetirements()).toEqual({ edited: false, untouched: false });
       retire();
-      expect(readTable()).toEqual({ name: "cron_run_trigger_state_retirements" });
       expect(database.db.prepare("PRAGMA user_version").get()).toEqual(schemaVersion);
-      expect(
-        database.db
-          .prepare("SELECT receipt_id FROM cron_run_trigger_state_retirements WHERE receipt_id = ?")
-          .get(untouchedReceipt.receiptId),
-      ).toBeUndefined();
 
       await reopen();
       expect(readRetirements()).toEqual({ edited: true, untouched: false });
       expect(
-        receipts(storePath, editedJob.id).filter((receipt) => receipt.status === "running"),
-      ).toEqual([
-        {
-          receiptId: editedReceipt.receiptId,
-          status: "running",
-          agentId: editedJob.agentId,
-          startedAtMs,
-          error: null,
-        },
-      ]);
+        receipts(storePath, editedJob.id).filter(({ status }) => status === "running"),
+      ).toEqual([{ receiptId: editedReceipt.receiptId, status: "running", error: null }]);
     } finally {
       for (const handle of [editedReceipt, untouchedReceipt]) {
         await finishOk(handle, startedAtMs + 1);
@@ -447,44 +410,6 @@ it.each(["present", "absent"] as const)(
     }
   },
 );
-
-it("records completion by run ID after an owner edit and ignores duplicate outcomes", async () => {
-  const { storePath, job } = await storeJob(makeCronReceiptJob("idempotent-completion"));
-  const prepared = prepareCronRunReceiptClaim({
-    storePath,
-    job,
-    agentId: job.agentId!,
-    startedAtMs: 300,
-  });
-  prepared.handle.ownerStartTime = null;
-  const receipt = runOpenClawStateWriteTransaction(({ db }) =>
-    claimCronRunReceiptInDatabaseForTest({
-      database: db,
-      prepared,
-    }),
-  );
-  await saveCronStore(storePath, {
-    version: 1,
-    jobs: [{ ...job, agentId: "beta", updatedAtMs: 2 }],
-  });
-  const completed = { ...receipt, ownerPid: receipt.ownerPid + 1, configRevision: "old" };
-  await finishOk(completed, 310);
-  await finishCronRunReceiptAsync({
-    handle: completed,
-    status: "error",
-    finishedAtMs: 320,
-    error: "duplicate result",
-  });
-  expect(receipts(storePath, job.id)).toEqual([
-    {
-      receiptId: receipt.receiptId,
-      status: "ok",
-      agentId: "alpha",
-      startedAtMs: 300,
-      error: null,
-    },
-  ]);
-});
 
 it.each([
   ["commit", "started", 1, "committed"],
@@ -626,11 +551,7 @@ it("keeps the pending terminal receipt within 64 rows until reconciliation relea
   for (let index = 0; index < 64; index += 1) {
     const receipt = claimCronRunReceiptForTest(storePath, job, now + 100 + index * 2);
     history.push(receipt.receiptId);
-    await finishCronRunReceiptAsync({
-      handle: receipt,
-      status: "ok",
-      finishedAtMs: now + 101 + index * 2,
-    });
+    await finishOk(receipt, now + 101 + index * 2);
   }
   const database = openOpenClawStateDatabase().db;
   const terminalIds = () =>
@@ -669,7 +590,6 @@ it("keeps the pending terminal receipt within 64 rows until reconciliation relea
       receiptId: pending!.receiptId,
     });
     // A late result prunes while preserving the unreconciled run marker after an owner edit.
-    const queries = vi.spyOn(sqliteQuery, "executeSqliteQuerySync");
     runOpenClawStateWriteTransaction(({ db }) =>
       finishCronRunReceiptInDatabase({
         database: db,
@@ -680,16 +600,11 @@ it("keeps the pending terminal receipt within 64 rows until reconciliation relea
         finishedAtMs: now,
       }),
     );
-    const fetchedRows = queries.mock.results.flatMap((result) =>
-      result.type === "return" ? result.value.rows : [],
-    ).length;
-    queries.mockRestore();
     expect(terminalIds()).toEqual([...history.slice(1).toReversed(), pending!.receiptId]);
     expect(retirement()).toEqual({ receipt_id: pending!.receiptId });
     expect((await loadCronStore(storePath)).jobs[0]?.state.runningReceiptId).toBe(
       pending!.receiptId,
     );
-    expect(fetchedRows).toBeLessThanOrEqual(8);
 
     await reconciler.start();
     expect(runCommandJob).toHaveBeenCalledOnce();

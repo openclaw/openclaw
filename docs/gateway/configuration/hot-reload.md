@@ -17,6 +17,9 @@ including JSON5, `$include`, and environment substitutions.
 Startup waits for the config watcher's initial reconciliation, queued file-stability
 checks, and any resulting reload attempt before completing. Initial config
 publication cannot race the first request after startup.
+Plugin lifecycle requests such as `plugins.reload` that arrive while startup is
+still settling wait only for that initial reconciliation, then apply the current
+config, including an edit the watcher had queued. Startup completes after them.
 Credential refreshes that leave the effective config unchanged preserve pending
 work instead of invalidating its config snapshot.
 
@@ -76,13 +79,16 @@ failure return `UNAVAILABLE` to waiting config mutations; a later config observa
 can retry the saved change. Shutdown cancels retries and settles waiting mutations.
 Reload failures remain visible in the Gateway log.
 
-If an automatic plugin reload cannot drain active work, the Gateway records the
-failure and keeps the last-good runtime. When the drain timed out on that
-plugin's admitted work, the Gateway retries the replacement automatically once
-the work finishes; no additional config edit is needed. A later config edit also
+If an automatic plugin reload times out on admitted work and successfully rolls
+back, the Gateway records a deferred reload and keeps the last-good runtime.
+It retries the replacement automatically once that plugin's work and cleanup
+finish; no additional config edit is needed. Waiting config mutations still
+return `UNAVAILABLE` after the bounded attempt: keeping their receipt open could
+prevent the writing turn itself from finishing. Run `config.get` to confirm the
+active revision after the work settles. A later config edit also
 retries the full unapplied plugin change through the normal reload transaction.
-If that attempt fails, the previous runtime keeps serving and the failure is
-logged again. A new attempt replaces any earlier idle retry; if it fails for
+Another admitted-work timeout defers again; other failures remain errors.
+A new attempt replaces any earlier idle retry; if it fails for
 another reason, make a new edit or use the manual reload command below after
 fixing the error. Unapplied plugin settings cannot publish through an unrelated
 hot update; all pending changes apply together only after the transaction succeeds.
@@ -299,7 +305,7 @@ newly selected workspace. Reload does not replay `gateway:startup`.
 
 Under `gateway.controlUi`, the `enabled`, `environment`, `github`,
 `sessionObserver`, `embedSandbox`, `allowExternalEmbedUrls`, `experimental.customPlugins`,
-`experimental.claws`, and
+`experimental.templates`, and
 `automaticallyFetchFavicons` settings hot-apply. Reload open Control UI pages to
 pick up the environment label, CLI agent picker, embed preferences, and favicon
 display preference; the Gateway process keeps running. `allowedOrigins` and

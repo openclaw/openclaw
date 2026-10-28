@@ -3,7 +3,7 @@ import { withEnv } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it } from "vitest";
 import { matrixPlugin } from "./channel.js";
 import { resolveMatrixAccount } from "./matrix/accounts.js";
-import { resolveMatrixConfigForAccount } from "./matrix/client/config.js";
+import { resolveMatrixAuthContext } from "./matrix/client/config.js";
 import type { MatrixSetupInput } from "./setup-config.js";
 import { installMatrixTestRuntime } from "./test-runtime.js";
 import type { CoreConfig } from "./types.js";
@@ -32,26 +32,26 @@ function validateEnv() {
     input: { useEnv: true },
   });
 }
+const directory = matrixPlugin.directory!;
+const threading = matrixPlugin.threading!;
+const requireMention = matrixPlugin.groups!.resolveRequireMention!;
+const inferType = matrixPlugin.messaging!.inferTargetChatType!;
+const resolveAuth = (cfg: CoreConfig, env = {}) =>
+  resolveMatrixAuthContext({ cfg, accountId: "ops", env }).resolved;
+const accountConfig = (
+  account: NonNullable<NonNullable<CoreConfig["channels"]>["matrix"]>["accounts"],
+) => config({ accounts: account });
 
 describe("matrix target classification", () => {
   it("distinguishes users from rooms", () => {
-    expect(matrixPlugin.messaging?.inferTargetChatType?.({ to: "@owner:example.org" })).toBe(
-      "direct",
-    );
-    expect(matrixPlugin.messaging?.inferTargetChatType?.({ to: "!room:example.org" })).toBe(
-      "channel",
-    );
+    expect(inferType({ to: "@owner:example.org" })).toBe("direct");
+    expect(inferType({ to: "!room:example.org" })).toBe("channel");
   });
 });
 
 describe("matrix directory", () => {
   const runtime = createRuntimeEnv();
-  const threading = matrixPlugin.threading!;
-  const requireMention = matrixPlugin.groups!.resolveRequireMention!;
-
-  beforeEach(() => {
-    installMatrixTestRuntime();
-  });
+  beforeEach(() => installMatrixTestRuntime());
 
   it("lists peers and groups from config", async () => {
     const cfg = config({
@@ -63,7 +63,6 @@ describe("matrix directory", () => {
       },
     });
 
-    const directory = matrixPlugin.directory!;
     expect(await directory.listPeers!({ cfg, runtime })).toEqual(
       expect.arrayContaining([
         { kind: "user", id: "user:@alice:example.org" },
@@ -83,9 +82,7 @@ describe("matrix directory", () => {
   it("resolves replyToMode from account config", () => {
     const cfg = config({
       replyToMode: "off",
-      accounts: {
-        Assistant: { replyToMode: "all" },
-      },
+      accounts: { Assistant: { replyToMode: "all" } },
     });
 
     const resolveReplyToMode = threading.resolveReplyToMode!;
@@ -119,7 +116,10 @@ describe("matrix directory", () => {
 
   it("resolves group mention policy from account config", () => {
     const cfg = config({
-      groups: { "!room:example.org": { requireMention: true } },
+      groups: {
+        "!room:example.org": { requireMention: true },
+        "#ops:example.org": { requireMention: false },
+      },
       accounts: { Assistant: { groups: { "!room:example.org": { requireMention: false } } } },
     });
 
@@ -127,15 +127,6 @@ describe("matrix directory", () => {
     for (const groupId of ["!room:example.org", "matrix:room:!room:example.org"]) {
       expect(requireMention({ cfg, accountId: "assistant", groupId })).toBe(false);
     }
-  });
-
-  it("does not trust prefixed Matrix aliases in group context", () => {
-    const cfg = config({
-      groups: {
-        "#ops:example.org": { requireMention: false },
-      },
-    });
-
     expect(
       requireMention({
         cfg,
@@ -180,9 +171,7 @@ describe("matrix directory", () => {
       avatarUrl: "mxc://server/avatar",
       encryption: true,
       threadReplies: "inbound",
-      groups: {
-        "!room:example.org": { requireMention: true },
-      },
+      groups: { "!room:example.org": { requireMention: true } },
     });
 
     const updated = applyAccount(cfg, "ops", auth);
@@ -193,7 +182,7 @@ describe("matrix directory", () => {
       undefined,
       undefined,
     ]);
-    const defaultAccount = updated.channels?.["matrix"]?.accounts?.default;
+    const defaultAccount = matrix?.accounts?.default;
     expect(defaultAccount).toMatchObject({
       accessToken: "default-token",
       homeserver: "https://default.example.org",
@@ -203,9 +192,9 @@ describe("matrix directory", () => {
       threadReplies: "inbound",
     });
     expect(defaultAccount?.groups).toEqual({ "!room:example.org": { requireMention: true } });
-    const opsAccount = updated.channels?.["matrix"]?.accounts?.ops;
+    const opsAccount = matrix?.accounts?.ops;
     expect(opsAccount).toMatchObject({ enabled: true, ...auth });
-    const resolvedOps = resolveMatrixConfigForAccount(updated, "ops", {});
+    const resolvedOps = resolveAuth(updated);
     expect(resolvedOps).toMatchObject(auth);
     expect(resolvedOps.deviceId).toBeUndefined();
   });
@@ -218,35 +207,25 @@ describe("matrix directory", () => {
 
     const updated = applyAccount(cfg, "default", auth);
 
-    const matrixConfig = updated.channels?.["matrix"];
+    const matrixConfig = updated.channels?.matrix;
     expect(matrixConfig).toMatchObject({ enabled: true, ...auth });
-    expect(updated.channels?.["matrix"]?.accounts).toBeUndefined();
+    expect(matrixConfig?.accounts).toBeUndefined();
   });
 
-  it("requires account-scoped env vars when --use-env is set for non-default accounts", () => {
+  it.each([false, true])("validates account-scoped env readiness: %s", (ready) => {
     withEnv(
       {
-        MATRIX_OPS_HOMESERVER: undefined,
+        MATRIX_OPS_HOMESERVER: ready ? "https://ops.example.org" : undefined,
         MATRIX_OPS_USER_ID: undefined,
-        MATRIX_OPS_ACCESS_TOKEN: undefined,
+        MATRIX_OPS_ACCESS_TOKEN: ready ? "ops-token" : undefined,
         MATRIX_OPS_PASSWORD: undefined,
       },
       () => {
         expect(validateEnv()).toBe(
-          'Set per-account env vars for "ops" (for example MATRIX_OPS_HOMESERVER + MATRIX_OPS_ACCESS_TOKEN or MATRIX_OPS_USER_ID + MATRIX_OPS_PASSWORD).',
+          ready
+            ? null
+            : 'Set per-account env vars for "ops" (for example MATRIX_OPS_HOMESERVER + MATRIX_OPS_ACCESS_TOKEN or MATRIX_OPS_USER_ID + MATRIX_OPS_PASSWORD).',
         );
-      },
-    );
-  });
-
-  it("accepts --use-env for non-default account when scoped env vars are present", () => {
-    withEnv(
-      {
-        MATRIX_OPS_HOMESERVER: "https://ops.example.org",
-        MATRIX_OPS_ACCESS_TOKEN: "ops-token",
-      },
-      () => {
-        expect(validateEnv()).toBeNull();
       },
     );
   });
@@ -260,18 +239,16 @@ describe("matrix directory", () => {
         MATRIX_OPS_DEVICE_NAME: "Ops Env Device",
       },
       () => {
-        const cfg = config({
-          accounts: {
-            ops: {
-              homeserver: "https://ops.inline.example.org",
-              proxy: "http://127.0.0.1:7890",
-              userId: "@ops:inline.example.org",
-              accessToken: "ops-inline-token",
-              password: "ops-inline-password", // pragma: allowlist secret
-              deviceId: "OPSINLINEDEVICE",
-              deviceName: "Ops Inline Device",
-              encryption: true,
-            },
+        const cfg = accountConfig({
+          ops: {
+            homeserver: "https://ops.inline.example.org",
+            proxy: "http://127.0.0.1:7890",
+            userId: "@ops:inline.example.org",
+            accessToken: "ops-inline-token",
+            password: "ops-inline-password", // pragma: allowlist secret
+            deviceId: "OPSINLINEDEVICE",
+            deviceName: "Ops Inline Device",
+            encryption: true,
           },
         });
 
@@ -281,8 +258,7 @@ describe("matrix directory", () => {
           enabled: true,
           encryption: true,
         });
-        const resolvedOps = resolveMatrixConfigForAccount(updated, "ops", process.env);
-        expect(resolvedOps).toMatchObject({
+        expect(resolveAuth(updated, process.env)).toMatchObject({
           homeserver: "https://ops.env.example.org",
           accessToken: "ops-env-token",
           deviceId: "OPSENVDEVICE",
@@ -293,13 +269,8 @@ describe("matrix directory", () => {
   });
 
   it("clears stale access token when switching an account to password auth", () => {
-    const cfg = config({
-      accounts: {
-        default: {
-          homeserver: "https://matrix.example.org",
-          accessToken: "old-token",
-        },
-      },
+    const cfg = accountConfig({
+      default: { homeserver: auth.homeserver, accessToken: "old-token" },
     });
 
     const updated = applyAccount(cfg, "default", {
@@ -308,7 +279,8 @@ describe("matrix directory", () => {
       password: "new-password", // pragma: allowlist secret
     });
 
-    expect(updated.channels?.["matrix"]?.accounts?.default?.password).toBe("new-password");
-    expect(updated.channels?.["matrix"]?.accounts?.default?.accessToken).toBeUndefined();
+    const account = updated.channels?.matrix?.accounts?.default;
+    expect(account?.password).toBe("new-password");
+    expect(account?.accessToken).toBeUndefined();
   });
 });

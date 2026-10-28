@@ -63,7 +63,9 @@ workspace and state directory are on different filesystems, Doctor also keeps
 the original in a private `HEARTBEAT.md.doctor-archived.*` directory beside its
 former location. Writes through an already-open file descriptor remain
 recoverable there. A file recreated after completed migration is retained and
-reported; it does not overwrite the operator-owned job.
+reported by path without reading its contents or following a symlink, even when
+it could not safely be imported. It does not block Doctor or update admission
+and does not overwrite the operator-owned job.
 
 If existing scratch differs from `HEARTBEAT.md` and was not imported from that
 file, Doctor preserves the scratch and original file, prints a notice, and
@@ -102,6 +104,12 @@ Doctor supports the heartbeat configuration and task shapes shipped from July
 2026 onward. Older shapes are outside this migration. If an input cannot be
 converted faithfully, Doctor retains it and reports the problem instead of
 silently discarding its scheduling or delivery settings.
+
+A bare `tasks:` line followed by ordinary checklist bullets stays unchanged in
+the monitor's scratch, including scratch imported by an earlier Doctor. It does
+not create scheduled jobs or block retirement. Incomplete task declarations still
+require repair; update admission and Doctor use the same task validation, and
+Doctor leaves an incomplete `HEARTBEAT.md` in place before importing it.
 
 <a id="defaults" />
 <a id="what-the-heartbeat-prompt-is-for" />
@@ -215,6 +223,9 @@ Return `NO_REPLY` when a check has no visible update. During an automation run,
 use the self-scoped `record_result` action to record a meaningful outcome without
 sending a message. `no_change` suppresses automatic delivery; execution errors
 remain failures. See [Job scratch and quiet results](/automation/cron-jobs/payloads#job-scratch-and-quiet-results).
+
+Scheduled checks can finish silently in a saved internal session too. A completed
+check that returns `NO_REPLY` does not need an extra final-answer model request.
 
 <a id="manual-wake-on-demand" />
 <a id="immediate-session-events" />

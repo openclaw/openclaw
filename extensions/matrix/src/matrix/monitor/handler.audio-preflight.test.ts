@@ -115,6 +115,31 @@ describe("createMatrixRoomMessageHandler inbound media", () => {
     installMatrixMonitorTestRuntime();
   });
 
+  it.each([
+    { body: "clip.webm", expected: "<media:video>" },
+    { body: "Watch this clip", expected: "Watch this clip" },
+  ])("prepares resolved video body $body as $expected", async ({ body, expected }) => {
+    download.mockResolvedValue({
+      path: "/tmp/inbound/clip.webm",
+      contentType: "video/webm",
+      placeholder: "<media:video>",
+    });
+    const f = setup();
+    await f.receive("$video", {
+      msgtype: "m.video",
+      body,
+      filename: "clip.webm",
+      url: "mxc://example/video",
+      info: { mimetype: "video/webm" },
+    });
+    expect(f.runPrepared).toHaveBeenCalledOnce();
+    expect(f.context()).toMatchObject({
+      RawBody: expected,
+      CommandBody: expected,
+      BodyForAgent: expected,
+    });
+  });
+
   it.each([false, true])(
     "passes local audio and %s room context to transcription",
     async (room) => {

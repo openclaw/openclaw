@@ -1,4 +1,5 @@
 import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
+import type { AutomationResult } from "../../packages/gateway-protocol/src/schema/cron-automation-result.js";
 import type {
   CronDeliveryPreview as CronDeliveryPreviewWire,
   CronJob as CronJobWire,
@@ -159,6 +160,7 @@ export type CronEvent = {
   completionStatus?: CronCompletionStatus;
   error?: string;
   summary?: string;
+  result?: AutomationResult;
   diagnostics?: CronRunDiagnostics;
   delivered?: boolean;
   deliveryStatus?: CronDeliveryStatus;
@@ -219,6 +221,7 @@ export type CronRunOutcome = {
   /** Transient internal detail; never project into persisted or public cron events. */
   failureNotificationDetail?: CronFailureNotificationDetail;
   summary?: string;
+  result?: AutomationResult;
   /** Producer-authored terminal reply fact without exposing reply text. */
   replyDisposition?: AgentRunTerminalReplySnapshot["disposition"];
   sessionId?: string;
@@ -487,6 +490,7 @@ export type CronStoreFile = {
 type CronJobStateInput = Partial<
   Omit<
     CronJobState,
+    | "lastMeaningfulResult"
     | "autoDisabled"
     | "scheduleActivatedAtMs"
     | "streamSourceIdentity"

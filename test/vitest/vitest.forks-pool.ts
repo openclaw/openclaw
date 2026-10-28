@@ -57,7 +57,7 @@ class DiagnosticForksPoolWorker extends ForksPoolWorker {
         children.push(message.process);
       }
     };
-    // Vitest 5.0.3 + patches/vitest@5.0.3.patch starts
+    // Vitest 5.0.5 + patches/vitest@5.0.5.patch starts
     // forks synchronously and calls stop() after its deadline or joined exit.
     // Recheck that contract on upgrades; the transport remains Vitest-owned.
     childProcesses.subscribe(observe);

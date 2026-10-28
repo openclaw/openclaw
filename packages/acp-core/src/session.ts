@@ -19,29 +19,25 @@ export type AcpSessionStore = {
   deleteSession: (sessionId: string) => boolean;
 };
 
-type InMemoryAcpSessionStore = AcpSessionStore & {
-  /** Releases every record when the registry's lifecycle owner shuts down. */
-  dispose: () => void;
-};
-
-type AcpSessionStoreOptions = {
-  maxSessions?: number;
-  /**
-   * Invoked for every session that leaves the store, whichever path removes it:
-   * explicit delete, idle reaping, capacity eviction, or dispose. Consumers that
-   * mirror session identity elsewhere use this to stay in step with the store,
-   * since eviction and reaping produce no ACP request a peer could observe.
-   */
-  onSessionRemoved?: (sessionId: string) => void;
-};
-
 const DEFAULT_MAX_SESSIONS = 5_000;
 const DEFAULT_IDLE_TTL_MS = 24 * 60 * 60 * 1_000;
 
 /** Creates the bounded in-memory ACP session registry used by local ACP runtime clients. */
 export function createInMemorySessionStore(
-  options: AcpSessionStoreOptions = {},
-): InMemoryAcpSessionStore {
+  options: {
+    maxSessions?: number;
+    /**
+     * Invoked for every session that leaves the store, whichever path removes it:
+     * explicit delete, idle reaping, capacity eviction, or dispose. Consumers that
+     * mirror session identity elsewhere use this to stay in step with the store,
+     * since eviction and reaping produce no ACP request a peer could observe.
+     */
+    onSessionRemoved?: (sessionId: string) => void;
+  } = {},
+): AcpSessionStore & {
+  /** Releases every record when the registry's lifecycle owner shuts down. */
+  dispose: () => void;
+} {
   const maxSessions = resolveIntegerOption(options.maxSessions, DEFAULT_MAX_SESSIONS, { min: 1 });
   const onSessionRemoved = options.onSessionRemoved;
   const sessions = new Map<string, AcpSession>();

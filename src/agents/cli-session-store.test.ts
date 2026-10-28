@@ -12,9 +12,10 @@ import {
   clearCliSessionInStore,
   buildCliSessionForkRunParams,
   persistCliSessionBindingResult,
+  persistStoppedFirstCliSessionInStore,
   restoreCliSessionForkInStore,
 } from "./cli-session-store.js";
-import { resolveCliSessionReuse } from "./cli-session.js";
+import { getCliSessionBinding, resolveCliSessionReuse } from "./cli-session.js";
 import {
   createRunResult,
   loadPersistedSessionEntry,
@@ -446,6 +447,44 @@ it.for(["present", "missing-before-run", "missing-after-run", "missing-cache"] a
       expect(value?.cliSessionBindings).toEqual({ "codex-cli": { sessionId: "codex-session" } });
       expect(value?.cliSessionIds).toEqual({ "codex-cli": "codex-session" });
       expect(value?.claudeCliSessionId).toBeUndefined();
+    }
+  },
+);
+
+const unbound = makeSessionEntry();
+it.for([
+  ["empty binding", unbound, unbound, "stopped-first-session", false],
+  ["bound meanwhile", unbound, boundEntry("bound-meanwhile"), "bound-meanwhile", false],
+  ["reset session", unbound, makeSessionEntry({ sessionId: "reset" }), undefined, false],
+  [
+    "released writer",
+    makeSessionEntry({ activeWriterRunId: "old" }),
+    makeSessionEntry({ activeWriterRunId: "new" }),
+    undefined,
+    false,
+  ],
+  ["closed turn", unbound, unbound, undefined, true],
+] as const)(
+  "persists a stopped first CLI session: %s",
+  async ([_case, working, durable, expected, closed], { f }) => {
+    await f.seed({ ...working }, { ...durable });
+    const rejection = new Error("settlement closed");
+    const persistence = persistStoppedFirstCliSessionInStore({
+      ...f.target,
+      binding: { sessionId: "stopped-first-session", authEpochVersion: 7 },
+      expectedSession: { ...working },
+      assertSettlementCurrent: () => {
+        if (closed) {
+          throw rejection;
+        }
+      },
+    });
+    if (closed) {
+      await expect(persistence).rejects.toBe(rejection);
+      expect(getCliSessionBinding(f.read(), "claude-cli")).toBeUndefined();
+    } else {
+      await persistence;
+      expect(getCliSessionBinding(f.read(), "claude-cli")?.sessionId).toBe(expected);
     }
   },
 );

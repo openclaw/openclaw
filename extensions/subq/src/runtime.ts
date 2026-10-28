@@ -66,13 +66,6 @@ function probability(value: unknown): number {
   return value;
 }
 
-function tokenCount(value: unknown): number {
-  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
-    throw new Error("Invalid SubQ usage.");
-  }
-  return value;
-}
-
 /** Translate the documented wire contract; the host also validates the resulting Decision batch. */
 function parseResult(payload: unknown, batch: DecisionBatch): DecisionBatchResult {
   const result = record(payload);
@@ -143,7 +136,10 @@ function parseResult(payload: unknown, batch: DecisionBatch): DecisionBatchResul
     }
   }
   const usage = record(result.usage);
-  const inputTokens = tokenCount(usage.input_tokens);
+  const inputTokens = usage.input_tokens;
+  if (typeof inputTokens !== "number" || !Number.isSafeInteger(inputTokens) || inputTokens < 0) {
+    throw new Error("Invalid SubQ usage.");
+  }
   if (usage.output_tokens !== 0) {
     throw new Error("Invalid SubQ output usage.");
   }

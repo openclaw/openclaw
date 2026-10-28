@@ -27,7 +27,6 @@ export function runGit(cwd: string, args: string[]): string {
 
 type DispatchRepositoryOptions = {
   candidateOwned?: boolean;
-  releaseRef?: string;
   workflowSource?: string;
   targetSource?: Record<string, string>;
   targetAlreadyRemote?: boolean;
@@ -42,7 +41,7 @@ const dispatchRepositoryTemplates = new Map<string, ReturnType<typeof createDisp
 function createDispatchRepository(root: string, options: DispatchRepositoryOptions = {}) {
   const origin = join(root, "origin.git");
   const checkout = join(root, "checkout");
-  const releaseRef = options.releaseRef ?? "release/2026.8.1";
+  const releaseRef = "release/2026.8.1";
   const write = (path: string, content: string | Buffer) => {
     const destination = join(checkout, path);
     mkdirSync(dirname(destination), { recursive: true });
@@ -123,20 +122,18 @@ console.log(JSON.stringify({ valid: true, current: { runId: "123" }, root: { run
   if (options.candidateOwned) {
     write(
       "CHANGELOG.md",
-      [
-        "## 2026.8.1",
-        "",
-        options.releaseNotes ?? "Release notes for the selected candidate.",
-        "",
-        "### Complete contribution record",
-        "",
-        `This audited record covers the complete ${oldWorkflowSha}..${recordTarget} history: 1 in-range PR + 0 retained seed-only PRs = 1 unique PR.`,
-        "",
-        "#### Pull requests",
-        "",
-        "- **PR #1** fix: example.",
-        "",
-      ].join("\n"),
+      `## 2026.8.1
+
+${options.releaseNotes ?? "Release notes for the selected candidate."}
+
+### Complete contribution record
+
+This audited record covers the complete ${oldWorkflowSha}..${recordTarget} history: 1 in-range PR + 0 retained seed-only PRs = 1 unique PR.
+
+#### Pull requests
+
+- **PR #1** fix: example.
+`,
     );
   }
   for (const [relativePath, content] of Object.entries(options.targetSource ?? {})) {
@@ -153,7 +150,6 @@ console.log(JSON.stringify({ valid: true, current: { runId: "123" }, root: { run
 
 export function prepareDispatchRepository(root: string, options: DispatchRepositoryOptions) {
   const key = JSON.stringify([
-    options.releaseRef ?? "release/2026.8.1",
     options.workflowSource ?? CURRENT_WORKFLOW_SOURCE,
     options.targetSource ?? {},
     options.targetAlreadyRemote !== false,

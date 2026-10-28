@@ -1,5 +1,5 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { createAbortError, racePromiseWithAbortSignal } from "../infra/abort-signal.js";
+import { AsyncContext } from "../shared/async-context.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { ToolInputError } from "./tool-input-error.js";
 import type {
@@ -22,7 +22,7 @@ type ExecutionScope = {
 
 // Refs survive client-tool append and are shared by every cell in an admitted run.
 const schedules = new WeakMap<ToolSearchCatalogRef, CatalogSchedule>();
-const executionScope = new AsyncLocalStorage<ExecutionScope>();
+const executionScope = new AsyncContext<ExecutionScope>(Symbol("toolSearchExecution"));
 
 /** Observer cancellation must not release a slot still owned by implementation work. */
 export function retainToolSearchImplementation<T>(implementation: Promise<T>): Promise<T> {

@@ -1,3 +1,4 @@
+import "./session-send-recovery.discovery.mocks.test-support.js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import {
@@ -13,34 +14,20 @@ import { createMockGatewayRecoveryRuntime } from "./server-recovery-runtime.test
 import { recoverSessionSendDeliveries } from "./session-send-recovery.js";
 import { config, delivery, input } from "./session-send-recovery.test-support.js";
 
-const io = vi.hoisted(() => ({
-  discover: vi.fn(),
-  entries: vi.fn(),
-  pending: vi.fn(),
+const { recoveryDiscoveryMocks } =
+  await import("./session-send-recovery.discovery.mocks.test-support.js");
+const recoveryOverrides = vi.hoisted(() => ({
   resumeMain: vi.fn(),
-}));
-vi.mock(
-  import("../agents/main-session-recovery/main-session-restart-recovery-shared.js"),
-  async (importOriginal) => ({
-    ...(await importOriginal()),
-    discoverRestartRecoveryStoreTargets: io.discover,
-  }),
-);
-vi.mock(import("../config/sessions/session-entry-read-maintenance.js"), async (importOriginal) => ({
-  ...(await importOriginal()),
-  readPendingInputRecoveryEntriesInWorker: io.entries,
-}));
-vi.mock(import("../config/sessions/session-pending-input-history.js"), async (importOriginal) => ({
-  ...(await importOriginal()),
-  readSessionSendRecoveryPage: io.pending,
 }));
 vi.mock(
   import("../agents/main-session-recovery/main-session-restart-recovery.js"),
   async (importOriginal) => ({
     ...(await importOriginal()),
-    retryRestartAbortedMainSessionRecovery: io.resumeMain,
+    retryRestartAbortedMainSessionRecovery: recoveryOverrides.resumeMain,
   }),
 );
+
+const io = { ...recoveryDiscoveryMocks, ...recoveryOverrides };
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -76,7 +63,7 @@ it.each(["shutdown", "restart"] as const)(
       getRuntimeConfig: () => config,
       recoveryRuntime: runtime,
     });
-    const recovery = recoverSessionSendDeliveries(context, cancellation.signal);
+    const recovery = recoverSessionSendDeliveries(context, cancellation.signal).settled;
     try {
       await awaitGateBeforeSettlement(
         paused.promise,

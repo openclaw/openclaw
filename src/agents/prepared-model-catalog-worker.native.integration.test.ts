@@ -25,21 +25,16 @@ import { usePreparedCatalogWorkerFixtures } from "./test-helpers/prepared-model-
 
 const { makeTempDir, retireAfterTest, readCatalogWorkers } = usePreparedCatalogWorkerFixtures();
 
-it("retains configured dynamic models alongside native harness models after full refresh", async () => {
-  await expectNativeHarnessModelsPublishedFromWorker({ makeTempDir, retireAfterTest });
-});
+it("retains configured dynamic models alongside native harness models after full refresh", () =>
+  expectNativeHarnessModelsPublishedFromWorker({ makeTempDir, retireAfterTest }));
 
 it.each([
   { catalogReturnsRows: true, aliasOnly: false },
   { catalogReturnsRows: false, aliasOnly: false },
   { catalogReturnsRows: true, aliasOnly: true },
-])("refreshes legacy catalogs (rows=$catalogReturnsRows, alias=$aliasOnly)", async (options) => {
-  await expectLegacyWorkerCatalogRetention({
-    makeTempDir,
-    retireAfterTest,
-    ...options,
-  });
-});
+])("refreshes legacy catalogs (rows=$catalogReturnsRows, alias=$aliasOnly)", (options) =>
+  expectLegacyWorkerCatalogRetention({ makeTempDir, retireAfterTest, ...options }),
+);
 
 async function createGatewayNativeAdmissionFixture(gateCount: number, signal: AbortSignal) {
   const fixture = await createCatalogFixture(makeTempDir, 0);

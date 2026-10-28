@@ -215,8 +215,27 @@ export async function assembleModelCatalogBundle(options: {
       if (isRecord(provider)) {
         // Credential ownership belongs to the installed manifest, never a downloaded catalog.
         // Manifests shipped since 2026.9.7 may still carry the retired authoring field.
-        const { authScope: _authScope, recommendedModels: _retired, ...v1Provider } = provider;
-        providers[providerId] = v1Provider;
+        // Families stay installed-manifest facts too; hosts keep the bundled row's family.
+        // Routed per-vendor utility defaults are resolved only from installed manifests.
+        const {
+          authScope: _authScope,
+          recommendedModels: _retired,
+          family: _family,
+          defaultUtilityModels: _routedUtilityDefaults,
+          ...v1Provider
+        } = provider;
+        providers[providerId] = Array.isArray(v1Provider.models)
+          ? {
+              ...v1Provider,
+              models: v1Provider.models.map((model: unknown) => {
+                if (!isRecord(model)) {
+                  return model;
+                }
+                const { family: _modelFamily, ...hosted } = model;
+                return hosted;
+              }),
+            }
+          : v1Provider;
       } else {
         providers[providerId] = provider;
       }
@@ -602,7 +621,12 @@ export async function hydrateModelCatalogFromModelsDev(options: {
       if (!isRecord(declared)) {
         continue;
       }
-      options.bundle.providers[provider] ??= { ...declared, models: [] };
+      const {
+        family: _family,
+        defaultUtilityModels: _routedUtilityDefaults,
+        ...hostedProvider
+      } = declared;
+      options.bundle.providers[provider] ??= { ...hostedProvider, models: [] };
       mappings.set(provider, source);
     }
     // Endpoint-specific rules remain runtime-owned. Another plugin cannot veto

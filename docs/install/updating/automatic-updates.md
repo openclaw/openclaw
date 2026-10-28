@@ -166,6 +166,10 @@ in the restart sentinel and surface after the Gateway returns.
 `update.checkOnStart: false` disables all automatic update checks, feature
 statistics, and update notices, even when `update.auto.enabled` is `true`.
 `OPENCLAW_NO_AUTO_UPDATE=1` also disables automatic checks and applies.
+With either opt-out, Gateway startup does not probe Git or package managers for
+installation details. When checks are enabled, discovery starts with the first
+scheduled check. Explicit update and status requests still discover installation
+details on demand.
 External-supervisor mode disables automatic applies; startup update hints can
 still run unless `update.checkOnStart` is also disabled. See
 [Usage telemetry and update checks](/gateway/telemetry) for the information

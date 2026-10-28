@@ -91,13 +91,15 @@ export async function assembleXThread(options: {
     retained.set(root.id, root);
   }
   retained.set(options.mention.id, options.mention);
-  for (const post of [...posts.values()].toSorted(comparePosts).toReversed()) {
+  // oxlint-disable-next-line unicorn/no-array-sort, unicorn/no-array-reverse -- The Map spread creates a private array.
+  for (const post of [...posts.values()].sort(comparePosts).reverse()) {
     if (retained.size >= maxPosts) {
       break;
     }
     retained.set(post.id, post);
   }
-  const selected = [...retained.values()].toSorted(comparePosts);
+  // oxlint-disable-next-line unicorn/no-array-sort -- The Map spread creates a private array.
+  const selected = [...retained.values()].sort(comparePosts);
   const handle = (post: XPost) => `@${users.get(post.author_id)?.username ?? post.author_id}`;
   const quotes = new Set(quotedIds());
   const lines = selected.map((post) => {

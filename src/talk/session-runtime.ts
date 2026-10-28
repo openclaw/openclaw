@@ -1,3 +1,4 @@
+import { wrapCurrentPluginInstance } from "../plugins/plugin-instance-scope.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import {
   buildRealtimeVoiceAgentControlSpeechMessage,
@@ -202,7 +203,7 @@ export function createRealtimeVoiceBridgeSession(
       // An error callback is the terminal boundary for provider callback failures.
     }
   };
-  const bridge = params.provider.createBridge({
+  const bridgeRequest: RealtimeVoiceBridgeCreateRequest = {
     cfg: params.cfg,
     agentId: params.agentId,
     providerConfig: params.providerConfig,
@@ -353,7 +354,8 @@ export function createRealtimeVoiceBridgeSession(
       closeReported = true;
       params.onClose?.(reason);
     },
-  });
+  };
+  const bridge = params.provider.createBridge(wrapCurrentPluginInstance(bridgeRequest));
   bridgeRef.current = bridge;
 
   return session;

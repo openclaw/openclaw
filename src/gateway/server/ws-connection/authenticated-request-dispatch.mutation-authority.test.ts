@@ -46,11 +46,11 @@ import {
   disconnectStaleSharedGatewayAuthClients,
   SharedGatewaySessionGenerationState,
 } from "../../server-shared-auth-generation.js";
+import { dispatchProfile } from "../client-fixtures.test-support.js";
 import { createRequestGate } from "./authenticated-request-dispatch.fixtures.test-support.js";
 import {
   createDispatchTestHarness,
   createOperatorWsClient,
-  dispatchProfile,
   requestFrame,
 } from "./authenticated-request-dispatch.test-support.js";
 

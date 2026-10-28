@@ -2,6 +2,7 @@ import type { EngineConnection } from "openclaw/plugin-sdk/database-engine-worke
 import type { SqliteWorkerCommand } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { loadMemoryEmbeddingCache } from "./manager-embedding-cache.js";
 import type { MemoryPublicationOperations } from "./manager-publication-task.js";
+import { loadMemoryRebuildEmbeddings } from "./manager-rebuild-embeddings.js";
 import { readMemoryDatabaseFacts } from "./manager-retrieval-read.js";
 import { readMemorySourceChunks, readMemorySourceHash } from "./manager-source-index-kernel.js";
 import { loadMemorySourceFileState } from "./manager-source-state.js";
@@ -29,8 +30,21 @@ export function readMemoryIndex(db: EngineConnection, command: MemoryIndexReadCo
         type: command.type,
         value: readMemorySourceChunks(db, command.input.source, command.input.path),
       };
-    case "cache.read":
-      return { type: command.type, value: loadMemoryEmbeddingCache({ ...command.input, db }) };
+    case "cache.read": {
+      const cached =
+        command.input.cacheEnabled === false
+          ? new Map<string, number[]>()
+          : loadMemoryEmbeddingCache({ ...command.input, db });
+      if (command.input.published) {
+        loadMemoryRebuildEmbeddings({
+          db,
+          identities: command.input.providerIdentities,
+          query: command.input.published,
+          cached,
+        });
+      }
+      return { type: command.type, value: cached };
+    }
   }
   const unreachable: never = command;
   return unreachable;

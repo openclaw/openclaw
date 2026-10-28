@@ -25,7 +25,7 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { projectChatDisplayMessages as project } from "./chat-display-projection.js";
-import { CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES } from "./server-methods/chat-history-budget.js";
+import { CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES } from "./chat-history-budget.js";
 import { SessionHistorySseState } from "./session-history-state.js";
 import { projectSessionMessagePayload } from "./session-transcript-message.js";
 import { readRecentSessionMessagesWithStatsAsync } from "./session-transcript-readers.js";

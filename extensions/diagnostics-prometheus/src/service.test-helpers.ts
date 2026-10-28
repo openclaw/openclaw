@@ -3,6 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import type { DiagnosticEventPrivateData } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { createMockServerResponse } from "openclaw/plugin-sdk/test-env";
 import { expect } from "vitest";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import type {
   DiagnosticEventMetadata,
   DiagnosticEventPayload,
@@ -71,10 +72,28 @@ export function createMetricsHarness(
         privateData: DiagnosticEventPrivateData,
       ) => void)
     | undefined;
+  let workerListener:
+    | Parameters<NonNullable<TrustedExporterInternalDiagnostics["onWorkerRequestMetrics"]>>[0]
+    | undefined;
+  let wsListener:
+    | Parameters<NonNullable<TrustedExporterInternalDiagnostics["onGatewayWsMetrics"]>>[0]
+    | undefined;
   const internalDiagnostics: TrustedExporterInternalDiagnostics = {
     ...(getRuntimeIdentity ? { getRuntimeIdentity } : {}),
     ...(onGatewayWorkMetrics ? { onGatewayWorkMetrics } : {}),
     emit() {},
+    onGatewayWsMetrics(nextListener) {
+      wsListener = nextListener;
+      return () => {
+        wsListener = undefined;
+      };
+    },
+    onWorkerRequestMetrics(nextListener) {
+      workerListener = nextListener;
+      return () => {
+        workerListener = undefined;
+      };
+    },
     onEvent(nextListener) {
       listener = nextListener;
       return () => {
@@ -101,6 +120,38 @@ export function createMetricsHarness(
     handler: exporter.handler,
     logger: context.logger,
     record(event: EventInput, metadata: DiagnosticEventMetadata = trusted) {
+      if (event.type === "gateway.ws.event" && metadata.trusted) {
+        const entries = Object.entries(event.frameBytes ?? {});
+        let previous = 0;
+        const buckets = entries.map(([, count]) => {
+          const exclusive = count - previous;
+          previous = count;
+          return exclusive;
+        });
+        expectDefined(wsListener, "WebSocket metrics listener")(
+          event.event,
+          event.count,
+          event.bytes,
+          event.wireBytes,
+          buckets,
+          entries.map(([label]) => label),
+          event.sessionEvent,
+          event.presenceMode,
+        );
+        return;
+      }
+      if (event.type === "worker.request" && metadata.trusted) {
+        expectDefined(workerListener, "Worker metrics listener")(
+          event.kind,
+          event.requestClass,
+          event.phase,
+          event.queueDepth,
+          event.queueWaitMs,
+          event.durationMs,
+          event.timing,
+        );
+        return;
+      }
       expectDefined(listener, "Prometheus diagnostics listener")(
         { ...baseEvent(), ...event },
         metadata,
@@ -136,15 +187,8 @@ export async function withMetricsServer(
     void metrics.handler(req, res);
   });
   try {
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("expected TCP server address");
-    }
-    await run(`http://127.0.0.1:${address.port}/api/diagnostics/prometheus`);
+    const port = await listenOnLoopback(server);
+    await run(`http://127.0.0.1:${port}/api/diagnostics/prometheus`);
   } finally {
     try {
       if (server.listening) {

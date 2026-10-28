@@ -1,9 +1,15 @@
 # Release preparation
 
 Read `docs/reference/RELEASING.md` for current public policy. For regular
-releases, select the cut SHA once: use the operator's exact SHA or fetch
-`origin/main` once and record its full SHA and CI state. Create a clean worktree
-and `release/YYYY.M.PATCH` from it. Never absorb unrelated dirty files.
+releases, resolve patch versus feature lineage through the
+[owner lifecycle](release-owner.md#resolve-the-release-brief) before choosing a
+cut. Only a new beta feature train defaults to a fresh `origin/main` cut.
+Patches retain their selected release-line base; stable feature promotion uses
+the selected beta plus approved hotfixes. Pin the resolved base SHA once and
+record its CI state. Use a clean worktree and the canonical
+`release/YYYY.M.PATCH` branch; reuse an existing owned branch without resetting
+it. A handoff adopts the recorded cut instead of choosing another. Never absorb
+unrelated dirty files.
 
 The release branch is the active queue. Moving main is a workflow/provenance
 source, not an invitation to add fixes. Touch main before publication only for
@@ -77,7 +83,9 @@ Freeze the product-complete tree, including approved versions, fixes and
 complete release notes, as **Code SHA**. If the notes are final, this is also
 **Release SHA**. After this point admit only confirmed
 product, package/provenance, security, or publication-blocking defects; defer
-adjacent improvements. Validate that exact source and its publication bytes.
+adjacent improvements. Explicit operator-approved intake changes follow the
+[owner lifecycle](release-owner.md#prepare-and-admit-hotfixes) and invalidate
+affected evidence. Validate that exact source and its publication bytes.
 
 ## Changelog and release notes
 

@@ -1,7 +1,7 @@
 import "./doctor-health.test-support.js";
 import fs from "node:fs";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { prepareDoctorDatabasePreflight } from "../commands/doctor-database-preflight.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
@@ -55,17 +55,33 @@ it("refreshes supplied missing-history discovery after maintenance admits a newe
     mocks.packageRoot.mockReturnValue(undefined);
     mocks.runContributions.mockReset();
     mocks.emulateNativeInstall = false;
+    const configFlow = await import("../commands/doctor-config-flow.js");
+    const loadConfig = vi.spyOn(configFlow, "loadAndMaybeMigrateDoctorConfig");
     const runtime = createDoctorRuntime();
     try {
-      await runDoctorHealthFlow(runtime, repairOptions, undefined, prepared);
+      await expect(
+        runDoctorHealthFlow(runtime, repairOptions, undefined, prepared),
+      ).rejects.toMatchObject({
+        name: "DoctorMaintenanceRefusalError",
+        refusal: { kind: "data-at-risk", reason: "incomplete-migration" },
+      });
       expect(runtime.exit).not.toHaveBeenCalled();
+      expect(loadConfig).toHaveBeenCalledOnce();
       expect(
-        readAgentDeletionRecoveryHolds(openOpenClawStateDatabase({ env: state.env }))
-          .map((target) => target.path)
-          .toSorted(),
-      ).toEqual([mainPath, latePath].toSorted());
+        loadConfig.mock.calls[0]?.[0].agentDatabaseMigrationDiscovery?.discovery.targets
+          .map(({ agentId, path: databasePath, source }) => ({
+            agentId,
+            path: databasePath,
+            source,
+          }))
+          .toSorted((left, right) => left.agentId.localeCompare(right.agentId)),
+      ).toEqual([
+        { agentId: "late", path: latePath, source: "configured" },
+        { agentId: "main", path: mainPath, source: "configured" },
+      ]);
       expect([mainPath, latePath].map((file) => fs.readFileSync(file))).toEqual(bytes);
     } finally {
+      loadConfig.mockRestore();
       mocks.emulateNativeInstall = true;
       closeOpenClawStateDatabaseForTest();
     }

@@ -13,10 +13,7 @@ import { isLoopbackGatewayUrl } from "../gateway/net.js";
 import { resolveGatewayProbeTarget } from "../gateway/probe-target.js";
 import type { GatewayProbeAuth, GatewayProbeResult } from "../gateway/probe.js";
 import type { MemoryProviderStatus } from "../memory-host-sdk/engine-storage.js";
-import {
-  readMemorySearchManagerStatus,
-  type MemorySearchManager,
-} from "../memory-host-sdk/host/types.js";
+import { readMemorySearchManagerStatus } from "../memory-host-sdk/host/types.js";
 import type { ActiveMemoryProviderResult, MemoryHealth } from "../plugins/memory-provider-types.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -64,20 +61,6 @@ export type GatewayProbeSnapshot = {
   gatewaySelf: ReturnType<typeof pickGatewaySelfPresence>;
   gatewayCallOverrides?: GatewayProbeAuth & { url: string };
 };
-
-type StatusMemorySearchManager = Pick<
-  MemorySearchManager,
-  "probeVectorStoreAvailability" | "probeVectorAvailability" | "status" | "statusAsync" | "close"
->;
-
-type StatusMemorySearchManagerResolver = (params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  purpose: "status";
-  inspectSources: true;
-}) => Promise<{
-  manager: StatusMemorySearchManager | null;
-}>;
 
 function hasExplicitMemorySearchConfig(cfg: OpenClawConfig, agentId: string): boolean {
   if (cfg.memory && Object.hasOwn(cfg.memory, "search")) {
@@ -293,7 +276,6 @@ export async function resolveSharedMemoryStatusSnapshot(params: {
     cfg: OpenClawConfig,
     agentId: string,
   ) => { store: { databasePath: string } } | null;
-  getMemorySearchManager: StatusMemorySearchManagerResolver;
   /** Whether the selected slot owner registers the provider-neutral runtime. */
   isMemoryProviderNative?: (params: { cfg: OpenClawConfig; agentId: string }) => boolean;
   getMemoryProvider?: (params: {
@@ -324,7 +306,7 @@ export async function resolveSharedMemoryStatusSnapshot(params: {
     if (params.isMemoryProviderNative?.({ cfg, agentId })) {
       return await resolveProviderStatusSnapshot(params, agentId, memoryPlugin.slot);
     }
-    return await resolveMemoryManagerStatusSnapshot(params, agentId);
+    return await resolveMemoryManagerStatusSnapshot(cfg, agentId);
   }
 
   const hasExplicitConfig = hasExplicitMemorySearchConfig(cfg, agentId);
@@ -346,7 +328,7 @@ export async function resolveSharedMemoryStatusSnapshot(params: {
   if (!shouldInspectStore) {
     return null;
   }
-  return await resolveMemoryManagerStatusSnapshot(params, agentId);
+  return await resolveMemoryManagerStatusSnapshot(cfg, agentId);
 }
 
 async function resolveProviderStatusSnapshot(
@@ -388,14 +370,12 @@ async function resolveProviderStatusSnapshot(
 }
 
 async function resolveMemoryManagerStatusSnapshot(
-  params: {
-    cfg: OpenClawConfig;
-    getMemorySearchManager: StatusMemorySearchManagerResolver;
-  },
+  cfg: OpenClawConfig,
   agentId: string,
 ): Promise<MemoryStatusSnapshot | null> {
-  const { manager } = await params.getMemorySearchManager({
-    cfg: params.cfg,
+  const { getMemorySearchManager } = await import("./status.scan.deps.runtime.js");
+  const { manager } = await getMemorySearchManager({
+    cfg,
     agentId,
     purpose: "status",
     inspectSources: true,

@@ -1,7 +1,5 @@
-import { writeFile } from "node:fs/promises";
 import { expect, it } from "vitest";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { thinkingLevels } from "./chat-flow.test-support.ts";
@@ -28,15 +26,6 @@ suite.define(() => {
               await trigger.click();
               await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
               await page.locator(".agent-chat__capability-menu-panel").waitFor();
-            }
-            if (width === 393 && route.startsWith("new")) {
-              const frame = await takeControlUiScreenshotFrame(page, composer, [trigger], {
-                animations: "disabled",
-              });
-              await writeFile(
-                `${suite.artifactDir}/plus-${open ? "open" : "closed"}.png`,
-                frame.png,
-              );
             }
             const offset = await trigger.evaluate((button) => {
               const target = button.getBoundingClientRect();
@@ -81,7 +70,6 @@ suite.define(() => {
         expect(panel!.y).toBeGreaterThanOrEqual(0);
         expect(panel!.y + panel!.height).toBeLessThan(composer!.y);
         expect(panel!.height).toBeGreaterThan(200);
-        // Filtering and selection remain reachable without dismissing the picker.
         await search.fill("Model 23");
         await page.locator('[data-chat-model-option="example/model-23"]').click();
         expect(await trigger.textContent()).toContain("Model 23");
@@ -105,7 +93,7 @@ suite.define(() => {
         ],
       });
       await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
       const composer = page.locator(".agent-chat__input");
       await composer.locator('[data-chat-thinking-select="true"]').waitFor();
       await openChatSidePanelType(page, "Files");

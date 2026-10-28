@@ -1,9 +1,12 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   CHAT_INPUT_RECEIPT_MAX_RUN_IDS,
   CHAT_INPUT_RUN_ID_MAX_CHARS,
 } from "../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import type {
   ChatInputReceipts,
+  ChatPendingInputsDismissResult,
   ChatPendingInputsPage,
 } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { t } from "../../i18n/index.ts";
@@ -13,16 +16,22 @@ import { extractText } from "../../lib/chat/message-extract.ts";
 import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { resolveUiSelectedSessionAgentId } from "../../lib/sessions/session-key.ts";
+import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
 import type { ChatPendingInputView, PendingInputRequest } from "./chat-pending-inputs.types.ts";
-import { confirmQueuedMessageCustody, removeQueuedMessage } from "./chat-queue.ts";
+import {
+  readDeliveredQueuedChatSendForRun,
+  removeDeliveredQueuedChatSendForRun,
+  removeQueuedMessage,
+} from "./chat-queue.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import { projectChatSystemNotice } from "./chat-system-notice.ts";
-import { buildMessageItems } from "./chat-thread-items.ts";
+import { buildMessageItems, messageMatchesSearchQuery } from "./chat-thread-items.ts";
 import {
   getChatSessionProjection,
   readChatSessionProjectionScope,
   reconcileChatInputCustody,
+  selectChatInputDisplay,
 } from "./history-merge.ts";
 import type { PendingInputStatus } from "./system-notice-kinds.ts";
 
@@ -56,34 +65,61 @@ function reconcileQueuedInputs(
   });
 }
 
+function describePendingInputMessage(message: unknown): string {
+  const normalized = normalizeMessage(message);
+  const attachmentLabels = normalized.content.flatMap((part) =>
+    part.type === "attachment" || part.type === "attachment_error"
+      ? [part.attachment.label]
+      : part.type === "image"
+        ? part.sources.flatMap((source) => (source.fileName ? [source.fileName] : []))
+        : [],
+  );
+  const imageCount = normalized.content.filter((part) => part.type === "image").length;
+  return (
+    extractText(message) ||
+    attachmentLabels.join(", ") ||
+    (imageCount ? t("chat.queue.imageCount", { count: String(imageCount) }) : "")
+  );
+}
+
 export function buildPendingInputQueueItems(
   inputs: ChatPendingInputsPage["items"],
 ): ChatQueueDisplayItem[] {
   return inputs
     .toSorted((left, right) => left.acceptedAt - right.acceptedAt)
     .filter((input) => input.queued && input.state === "queued" && input.runId)
-    .map<ChatQueueDisplayItem>((input) => {
-      const message = normalizeMessage(input.message);
-      const attachmentLabels = message.content.flatMap((part) =>
-        part.type === "attachment" || part.type === "attachment_error"
-          ? [part.attachment.label]
-          : part.type === "image"
-            ? part.sources.flatMap((source) => (source.fileName ? [source.fileName] : []))
-            : [],
-      );
-      const imageCount = message.content.filter((part) => part.type === "image").length;
-      return {
-        id: `pending-input:${input.id}`,
-        text:
-          extractText(input.message) ||
-          attachmentLabels.join(", ") ||
-          (imageCount ? t("chat.queue.imageCount", { count: String(imageCount) }) : ""),
-        createdAt: input.acceptedAt,
-        pendingRunId: input.runId,
-        serverQueued: true,
-        sender: message.sender ?? undefined,
-      };
-    });
+    .map<ChatQueueDisplayItem>((input) => ({
+      id: `pending-input:${input.id}`,
+      text: describePendingInputMessage(input.message),
+      createdAt: input.acceptedAt,
+      pendingRunId: input.runId,
+      serverQueued: true,
+      sender: normalizeMessage(input.message).sender ?? undefined,
+    }));
+}
+
+const PENDING_INPUT_PREVIEW_MAX_CHARS = 60;
+
+function describePendingInputPreview(message: unknown): string {
+  const compact = describePendingInputMessage(message).replace(/\s+/gu, " ").trim();
+  if (!compact) {
+    return t("chat.pendingInputs.untitledInput");
+  }
+  return compact.length > PENDING_INPUT_PREVIEW_MAX_CHARS
+    ? `${truncateUtf16Safe(compact, PENDING_INPUT_PREVIEW_MAX_CHARS - 1)}…`
+    : compact;
+}
+
+function isDismissablePendingInput(input: ChatPendingInputsPage["items"][number]): boolean {
+  return (
+    !input.queued &&
+    (input.state === "interrupted" || input.state === "cancelled") &&
+    asNullableRecord(input.message)?.display !== false
+  );
+}
+
+export function isPendingInputDismissHidden(view: ChatPendingInputView, id: string): boolean {
+  return Boolean(view.dismissing?.has(id) || view.dismissed?.has(id));
 }
 
 export function buildPendingInputItems(
@@ -103,6 +139,13 @@ export function buildPendingInputItems(
     ) {
       pendingStatus = workerSetupPending ? "waitingForWorkerSetup" : "waitingForWorkspaceSync";
     }
+    const retired = isDismissablePendingInput(input)
+      ? {
+          id: input.id,
+          status: input.state === "interrupted" ? ("interrupted" as const) : ("cancelled" as const),
+          preview: describePendingInputPreview(input.message),
+        }
+      : undefined;
     // Custody keeps submission correlation outside the message; use it for
     // presentation without inventing transcript or execution identity.
     items.push(
@@ -113,6 +156,7 @@ export function buildPendingInputItems(
           status: pendingStatus,
           key: `pending-input:${input.id}:state`,
           timestamp: input.acceptedAt,
+          ...(retired ? { retired } : {}),
         }),
       ),
     );
@@ -143,9 +187,7 @@ function collectChatInputRunIds(state: ChatState): string[] {
     ...projection.entries
       .filter((entry) => entry.pending && entry.identity?.role === "user")
       .map((entry) => entry.pendingRunId),
-    ...state.chatQueue
-      .filter((item) => (item.sendAttempts ?? 0) > 0 || item.sendState === "unconfirmed")
-      .map((item) => item.sendRunId),
+    ...state.chatQueue.filter((item) => (item.sendAttempts ?? 0) > 0).map((item) => item.sendRunId),
   ];
   const current = new Set(
     runIds.filter((id): id is string => Boolean(id && id.length <= CHAT_INPUT_RUN_ID_MAX_CHARS)),
@@ -189,23 +231,17 @@ function reconcilePendingInputPage(
       .map((receipt) => receipt.runId),
     ...displayPage.items.filter((input) => input.state === "cancelled").map((input) => input.runId),
   ]);
-  // Acceptance keeps the browser's authenticated retry payload. Only consumption
-  // or explicit cancellation retires it; a restart may need a fresh admission.
+  // Any positive custody receipt transfers retry ownership to the Gateway.
   for (const item of state.chatQueue) {
     const canonical = findChatSubmissionMessage(state.chatMessages, item.sendRunId, true);
     if (
       item.sendRunId &&
-      (settled.has(item.sendRunId) ||
+      (acceptedRunIds.has(item.sendRunId) ||
+        settled.has(item.sendRunId) ||
         (canonical && (canonical.id !== null || canonical.sequence !== null))) &&
       (!item.sessionId || item.sessionId === state.currentSessionId)
     ) {
       removeQueuedMessage(state, item.id);
-    } else if (
-      item.sendRunId &&
-      acceptedRunIds.has(item.sendRunId) &&
-      (!item.sessionId || item.sendState === "unconfirmed")
-    ) {
-      confirmQueuedMessageCustody(state, item, state.currentSessionId ?? undefined);
     }
   }
   return displayPage;
@@ -363,4 +399,86 @@ async function requestPendingInputPage(
 
 export function loadChatPendingInputs(state: ChatState, before?: number): Promise<void> {
   return requestPendingInputPage(state, before, "navigation");
+}
+
+/** Use the transcript's identity, notice, and search projections, not raw custody. */
+export function listDismissablePendingInputIds(
+  view: ChatPendingInputView,
+  messages: readonly unknown[],
+  search: Readonly<{ open: boolean; query: string }>,
+): string[] {
+  return selectChatInputDisplay(messages, [], view.page.items).pendingInputs.flatMap((input) =>
+    !isPendingInputDismissHidden(view, input.id) &&
+    (!search.open ||
+      !search.query.trim() ||
+      messageMatchesSearchQuery(input.message, search.query)) &&
+    buildPendingInputItems([input]).some(
+      (item) => item.kind === "notice" && item.retiredPendingInput,
+    )
+      ? [input.id]
+      : [],
+  );
+}
+
+/** Hide the selected retired inputs at once, then keep or restore them by the Gateway outcome. */
+export async function dismissChatPendingInputs(
+  state: ChatState,
+  inputIds: readonly string[],
+): Promise<void> {
+  const view = getChatPendingInputs(state);
+  const client = state.client;
+  const sessionId = view?.sessionId;
+  if (!view || !sessionId || !client || !state.connected || !inputIds.length) {
+    return;
+  }
+  const owner = {};
+  const connectionIsCurrent = captureChatConnectionOwner(state, false);
+  const current = () => getChatPendingInputs(state) === view && connectionIsCurrent();
+  view.dismissing = new Map([
+    ...(view.dismissing ?? []),
+    ...inputIds.map((id) => [id, owner] as const),
+  ]);
+  view.error = undefined;
+  chatRunPresentation(state).publish();
+  try {
+    const result = await client.request<ChatPendingInputsDismissResult>(
+      "chat.pendingInputs.dismiss",
+      {
+        sessionKey: view.sessionKey,
+        ...(view.agentId ? { agentId: view.agentId } : {}),
+        sessionId,
+        inputIds: [...inputIds],
+      },
+    );
+    // Route changes retain this connection's custody; a replacement Gateway owns its own copies.
+    if (connectionIsCurrent()) {
+      const scope = { sessionKey: view.sessionKey, agentId: view.agentId };
+      for (const runId of result.runIds) {
+        const copy = readDeliveredQueuedChatSendForRun(state, runId, scope);
+        if (copy && (!copy.sessionId || copy.sessionId === sessionId)) {
+          removeDeliveredQueuedChatSendForRun(state, runId, scope);
+        }
+      }
+    }
+    if (!current()) {
+      return;
+    }
+    view.dismissed = new Set([
+      ...(view.dismissed ?? []),
+      ...result.dismissedIds,
+      ...result.missingIds,
+    ]);
+    void requestPendingInputPage(state, view.before, "refresh");
+  } catch (error) {
+    if (current()) {
+      view.error = formatUiError(error);
+    }
+  } finally {
+    if (getChatPendingInputs(state) === view) {
+      view.dismissing = new Map(
+        [...(view.dismissing ?? [])].filter(([, request]) => request !== owner),
+      );
+      chatRunPresentation(state).publish();
+    }
+  }
 }

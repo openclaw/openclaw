@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { Model } from "../llm/types.js";
+import { configFor } from "./model-auth.fixtures.test-support.js";
 
 const providerRuntimeMocks = vi.hoisted(() => ({
   prepareProviderDynamicModel: vi.fn(),
@@ -33,17 +34,9 @@ function model(provider: string, id: string): Model {
   });
 }
 
-const config: OpenClawConfig = {
-  models: {
-    providers: {
-      [DYNAMIC_PROVIDER]: {
-        api: "openai-completions",
-        baseUrl: "https://configured.example/v1",
-        models: [],
-      },
-    },
-  },
-};
+const config: OpenClawConfig = configFor(DYNAMIC_PROVIDER, "https://configured.example/v1", {
+  api: "openai-completions",
+});
 const agentDir = "/tmp/openclaw-agent";
 const ref = { provider: DYNAMIC_PROVIDER, id: "glm-5" };
 function candidates(overrides: Partial<CandidateOptions> = {}) {

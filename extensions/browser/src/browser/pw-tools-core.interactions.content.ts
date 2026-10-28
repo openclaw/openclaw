@@ -13,7 +13,11 @@ import {
   DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS,
   EXTENSION_RELAY_MAX_PAYLOAD_BYTES,
 } from "./constants.js";
-import { normalizeBrowserEvaluateFunctionSource } from "./evaluate-source.js";
+import { normalizeBrowserWaitFunctionSource } from "./evaluate-source.js";
+import {
+  evaluateBrowserWaitPredicate,
+  type BrowserWaitPredicateState,
+} from "./page-function-runtime.js";
 import { resolveStrictExistingUploadPaths } from "./paths.js";
 import {
   ensurePageState,
@@ -35,7 +39,6 @@ import { normalizeTimeoutMs } from "./pw-tools-core.shared.js";
 import { runPageEmulationTransition } from "./pw-tools-core.state.js";
 import {
   ANNOTATION_MAX_LABELS_DEFAULT,
-  type AnnotationItem,
   buildOverlayClearScript,
   buildOverlayInjectionScript,
   type CoordinateSpace,
@@ -103,46 +106,6 @@ async function resolvePlaywrightUploadFiles(opts: GuardedInteractionOptions & { 
   );
 }
 
-type BrowserWaitPredicateState = {
-  document: unknown;
-  pending?: boolean;
-  predicate?: () => unknown;
-  settled?: { kind: "value"; value: unknown } | { error: unknown; kind: "error" };
-};
-
-function createBrowserWaitPredicate(source: string): (state: BrowserWaitPredicateState) => boolean {
-  // eslint-disable-next-line @typescript-eslint/no-implied-eval -- compile only; Playwright runs it in-page
-  return new Function(
-    "state",
-    `
-      if (state.document !== this.document) throw "Wait predicate document changed";
-      state.predicate ??= (${source});
-      var settled = state.settled;
-      if (settled) {
-        delete state.settled;
-        if (settled.kind === "error") throw settled.error;
-        if (!!settled.value) return true;
-      }
-      if (state.pending) return false;
-      var predicate = state.predicate;
-      var value = predicate();
-      if (!value || typeof value.then !== "function") return !!value;
-      state.pending = true;
-      value.then(
-        function(resolved) {
-          state.settled = { kind: "value", value: resolved };
-          delete state.pending;
-        },
-        function(error) {
-          state.settled = { error: error, kind: "error" };
-          delete state.pending;
-        }
-      );
-      return false;
-    `,
-  ) as (state: BrowserWaitPredicateState) => boolean;
-}
-
 export async function waitForViaPlaywright(
   opts: GuardedInteractionOptions & {
     timeMs?: number;
@@ -158,8 +121,7 @@ export async function waitForViaPlaywright(
   const page = await getPageForTargetId(opts);
   const timeout = resolveActWaitTimeoutMs(opts.timeoutMs);
   const fn = opts.fn;
-  const predicateSource = fn ? normalizeBrowserEvaluateFunctionSource(fn) : "";
-  const predicate = fn ? createBrowserWaitPredicate(predicateSource) : undefined;
+  const predicateSource = fn ? normalizeBrowserWaitFunctionSource(fn) : "";
   const reconcileRemoteDialog = () => reconcileRemoteDialogAfterActionSettled(page, opts.signal);
   const waitForStep = async <T>(stepPromise: Promise<T>) => {
     await awaitActionWithAbort(stepPromise, opts.signal, reconcileRemoteDialog);
@@ -210,9 +172,10 @@ export async function waitForViaPlaywright(
         throwIfInteractionAborted(opts.signal);
         await waitFor(
           page.waitForFunction(
-            predicate!,
+            evaluateBrowserWaitPredicate,
             {
               document: documentHandle,
+              source: predicateSource,
             } satisfies BrowserWaitPredicateState,
             { timeout },
           ),
@@ -384,15 +347,7 @@ export async function screenshotWithLabelsViaPlaywright(opts: LabeledScreenshotO
   );
 }
 
-async function screenshotWithLabelsOnPage(
-  page: Page,
-  opts: LabeledScreenshotOptions,
-): Promise<{
-  buffer: Buffer;
-  labels: number;
-  skipped: number;
-  annotations: AnnotationItem[];
-}> {
+async function screenshotWithLabelsOnPage(page: Page, opts: LabeledScreenshotOptions) {
   restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
   const refKey = normalizeOptionalString(opts.ref);
   const elementSelector = normalizeOptionalString(opts.element);

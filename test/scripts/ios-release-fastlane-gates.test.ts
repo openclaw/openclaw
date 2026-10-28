@@ -194,7 +194,7 @@ puts JSON.generate(rows)
     const rubyArgs = ["-e", source, fastfilePath];
     const result = spawnSync(
       useBundle ? "bundle" : "ruby",
-      useBundle ? ["_4.0.22_", "exec", "ruby", ...rubyArgs] : rubyArgs,
+      useBundle ? ["_4.0.23_", "exec", "ruby", ...rubyArgs] : rubyArgs,
       { encoding: "utf8", env: { ...process.env, BUNDLE_GEMFILE: gemfilePath } },
     );
     expect(result.status, result.stderr).toBe(0);
@@ -396,7 +396,7 @@ puts JSON.generate(rows)
     const rubyArgs = ["-e", source, fastfilePath];
     const result = spawnSync(
       useBundle ? "bundle" : "ruby",
-      useBundle ? ["_4.0.22_", "exec", "ruby", ...rubyArgs] : rubyArgs,
+      useBundle ? ["_4.0.23_", "exec", "ruby", ...rubyArgs] : rubyArgs,
       { encoding: "utf8", env: { ...process.env, BUNDLE_GEMFILE: gemfilePath } },
     );
     expect(result.status, result.stderr).toBe(0);
@@ -675,7 +675,7 @@ puts JSON.generate(rows)
       expect(existsSync(tracePath)).toBe(false);
       expect(result.stderr).toContain("repository iOS Gemfile is missing");
       expect(result.stderr).toContain("Restore it from the repository checkout");
-      expect(result.stderr).toContain("bundle _4.0.22_ install");
+      expect(result.stderr).toContain("bundle _4.0.23_ install");
     } finally {
       rmSync(fixture, { force: true, recursive: true });
     }
@@ -1156,7 +1156,7 @@ puts JSON.generate(results)
     const rubyArgs = ["-e", source, fastfilePath];
     const result = spawnSync(
       useBundle ? "bundle" : "ruby",
-      useBundle ? ["_4.0.22_", "exec", "ruby", ...rubyArgs] : rubyArgs,
+      useBundle ? ["_4.0.23_", "exec", "ruby", ...rubyArgs] : rubyArgs,
       { encoding: "utf8", env: { ...process.env, BUNDLE_GEMFILE: gemfilePath } },
     );
     expect(result.status, result.stderr).toBe(0);
@@ -1545,7 +1545,7 @@ end
     const reducerJob = workflow.slice(reducerJobStart, reducerJobEnd);
 
     expect(workflow).toContain('IOS_SCREENSHOT_NODE_VERSION: "24.22.1"');
-    expect(workflow).toContain('IOS_SCREENSHOT_XCODE_VERSION: "Xcode 27.0 Build version 27A266a"');
+    expect(workflow).toContain('IOS_SCREENSHOT_XCODE_VERSION: "Xcode 27.1 Build version 27A9275"');
     expect(iosJob).toContain("timeout-minutes: 150");
     expect(iosJob).not.toContain("Capture iOS release screenshots");
     expect(captureJob).toContain("needs: [preflight]");

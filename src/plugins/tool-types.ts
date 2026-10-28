@@ -91,6 +91,9 @@ type OpenClawPluginToolContextBase = {
   browser?: {
     sandboxBridgeUrl?: string;
     allowHostControl?: boolean;
+    /** Prepared local exec parity; not standalone authority or permission for remote browsers. */
+    allowLocalLoopback?: boolean;
+    assertLocalLoopbackCurrent?: () => void;
   };
   messageChannel?: string;
   agentAccountId?: string;

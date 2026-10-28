@@ -463,8 +463,9 @@ describe("node worker launch wire", () => {
             fs.access(path.join(remoteWorkspaceDir, "worker-exec-escaped.txt")),
           ).rejects.toMatchObject({ code: "ENOENT" });
           expect(provider.outsideWriteOutput).toMatch(/escape|outside|containment|workspace/iu);
-          expect(provider.execOutput).toMatch(
-            /approval_required.*worker workspace permission mode.*run this command locally.*interactive approval.*administrator.*clear the session permission mode/isu,
+          // This redirection is refused by the shared approval binding before review.
+          expect(provider.execOutput.split("\n", 1)[0]).toBe(
+            "Exec denied (SYSTEM_RUN_DENIED: approval cannot safely bind this command): printf WORKER_EXEC_ESCAPED > worker-exec-escaped.txt",
           );
 
           const permissionHistory = await operator.request<{ messages?: unknown[] }>(

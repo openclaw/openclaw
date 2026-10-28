@@ -1,5 +1,8 @@
+import type { CronJob } from "../../api/types.ts";
+import { agentRoster } from "../../e2e/agent-roster.test-support.ts";
 import { githubIdentityViewFixture } from "../../features/github-connections/github-identity.test-support.ts";
 import { createInitialCronState } from "../../lib/cron/index.ts";
+import { createApplicationGatewaySnapshot } from "../../test-helpers/application-context-fixtures.ts";
 import type { AgentFiles } from "./panels-files.tsx";
 import type { Agents } from "./view.tsx";
 
@@ -27,15 +30,7 @@ export function createAgentViewTestProps(
 ): AgentsViewProps {
   const retired = Promise.withResolvers<void>().promise;
   const data: ReturnType<AgentsViewProps["readData"]> = {
-    agentsList: {
-      defaultId: "alpha",
-      mainKey: "main",
-      scope: "per-sender",
-      agents: [
-        { id: "alpha", name: "Alpha" },
-        { id: "beta", name: "Beta" },
-      ],
-    },
+    agentsList: agentRoster({ alpha: "Alpha", beta: "Beta" }, "alpha", "per-sender"),
     agentsSelectedId: "beta",
     agentsPanel: "overview",
     requestGeneration: 0,
@@ -107,17 +102,10 @@ export function createAgentViewTestProps(
       decisionModels: [],
       modelCatalogRetired: false,
       modelCatalogHasSnapshot: false,
-      modelCatalogGateway: {
-        client: null,
+      modelCatalogGateway: createApplicationGatewaySnapshot({
         phase: "connected",
-        offlineStable: false,
-        hello: null,
-        canvasPluginSurfaceUrl: null,
-        assistantAgentId: null,
         sessionKey: "main",
-        lastError: null,
-        lastErrorCode: null,
-      },
+      }),
       modelSelectionPolicy: undefined,
       onModelChange: () => false,
       onDecisionModelChange: () => false,
@@ -164,4 +152,19 @@ export function createAgentViewTestProps(
     onOpenAgentDefaults: () => undefined,
     ...overrides,
   };
+}
+
+export function createCronJob(id: string, overrides: Partial<CronJob> = {}): CronJob {
+  return {
+    id,
+    name: `Scheduled job ${id}`,
+    enabled: true,
+    createdAtMs: 0,
+    updatedAtMs: 0,
+    schedule: { kind: "cron", expr: "0 9 * * *" },
+    sessionTarget: "main",
+    wakeMode: "next-heartbeat",
+    payload: { kind: "systemEvent", text: "ping" },
+    ...overrides,
+  } as CronJob;
 }

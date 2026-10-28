@@ -3,8 +3,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { MediaUnderstandingProvider } from "openclaw/plugin-sdk/media-understanding";
 import type { ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import {
+  createCapturedPluginRegistration,
   createRuntimeEnv,
   createTestWizardPrompter,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -139,23 +139,15 @@ beforeEach(async () => {
     text: request.model.startsWith("glm") ? "OPENCLAW OCR 4827" : "red square",
     model: request.model,
   }));
-  let provider: ProviderPlugin | undefined;
-  let media: MediaUnderstandingProvider | undefined;
-  plugin.register(
-    createTestPluginApi({
-      id: "llama-cpp",
-      name: "llama.cpp",
-      source: "test",
-      config: {},
-      pluginConfig: {},
-      registerProvider: (value) => {
-        provider = value;
-      },
-      registerMediaUnderstandingProvider: (value) => {
-        media = value;
-      },
-    }),
-  );
+  const captured = createCapturedPluginRegistration({
+    id: "llama-cpp",
+    name: "llama.cpp",
+    source: "test",
+    config: {},
+  });
+  plugin.register(captured.api);
+  const provider = captured.providers.at(-1);
+  const media = captured.mediaUnderstandingProviders.at(-1);
   const method = provider?.auth.find((entry) => entry.id === "local-media");
   const ordinary = provider?.auth.find((entry) => entry.id === "local");
   assert(method && ordinary && media, "Missing production local media registration");
@@ -233,6 +225,7 @@ it.each(["chat", "embedding-only"])(
     expect(result.defaultModel).toBe(chatDefault);
     expect(updated.baseUrl).not.toBe(provider.baseUrl);
     expect(updated.params).toEqual(provider.params);
+    assert(updated.models, "Missing replacement router models");
     expect(updated.models.map((model) => model.id)).toEqual(
       provider.models.map((model) => model.id),
     );
@@ -367,7 +360,7 @@ it("preserves chat defaults, inventory, embeddings, provider settings and audio/
   const { configPatch: patch } = await unchangedSetup(ctx);
   expect(describeImage.mock.calls.map(([request]) => request.timeoutMs)).toEqual([30_000, 30_000]);
   expect(patch?.agents?.defaults?.model).toEqual(before.agents?.defaults?.model);
-  expect(patch?.models?.providers?.["llama-cpp"]?.models[0]).toEqual(provider.models[0]);
+  expect(patch?.models?.providers?.["llama-cpp"]?.models?.[0]).toEqual(provider.models[0]);
   expect(patch?.models?.providers?.["llama-cpp"]).toMatchObject({
     headers: provider.headers,
     params: { custom: "retained", modelCacheDir: root },

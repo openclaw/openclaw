@@ -57,44 +57,37 @@ describe("classifyPrForSweep", () => {
 describe("runPrCiSweeper", () => {
   it("classifies a dropped-CI PR as refire in dry-run without mutating", async () => {
     const dropped = listedPr(7, "a".repeat(40));
-    const attached = listedPr(8, "b".repeat(40));
     const { results, calls } = await sweep(
       {
-        prs: [dropped, attached],
-        runsBySha: {
-          [dropped.head.sha]: [{ conclusion: "startup_failure" }],
-          [attached.head.sha]: [{ conclusion: "success" }],
-        },
+        prs: [dropped],
+        runsBySha: { [dropped.head.sha]: [{ conclusion: "startup_failure" }] },
       },
       { dryRun: true, appSlug: "openclaw-barnacle" },
     );
-    expect(results).toEqual([
-      decision(7, dropped.head.sha, "refire", "ci-startup-failure"),
-      decision(8, attached.head.sha, "skip", "ci-attached"),
-    ]);
+    expect(results).toEqual([decision(7, dropped.head.sha, "refire", "ci-startup-failure")]);
     expect(calls.filter((call) => call.method === "pulls.update")).toEqual([]);
   });
 
-  it("logs cancelled CI without re-executing a non-auto-merge PR", async () => {
-    const attached = listedPr(21, "5".repeat(40));
+  it.each([
+    ["ci-attached", {}],
+    ["draft", { draft: true }],
+    ["auto-merge-enabled", { auto_merge: { merge_method: "squash" } }],
+  ] as const)("logs %s without mutating the PR", async (reason, overrides) => {
+    const attached = listedPr(21, "5".repeat(40), overrides);
     const { results, calls, logs } = await sweep({
       prs: [attached],
       runsBySha: {
         [attached.head.sha]: [{ id: 100, status: "completed", conclusion: "cancelled" }],
       },
     });
-    expect(results).toEqual([decision(21, attached.head.sha, "skip", "ci-attached")]);
-    expect(logs).toContain("pr-ci-sweeper: skip #21 (ci-attached: 100:completed/cancelled)");
+    expect(results).toEqual([decision(21, attached.head.sha, "skip", reason)]);
+    expect(logs).toContain(
+      `pr-ci-sweeper: skip #21 (${reason}${reason === "ci-attached" ? ": 100:completed/cancelled" : ""})`,
+    );
     expectNoMutation(calls);
-  });
-
-  it("logs draft skips so every scanned PR has a decision", async () => {
-    const draft = listedPr(22, "6".repeat(40), { draft: true });
-    const { results, calls, logs } = await sweep({ prs: [draft], runsBySha: {} });
-    expect(results).toEqual([decision(22, draft.head.sha, "skip", "draft")]);
-    expect(logs).toContain("pr-ci-sweeper: skip #22 (draft)");
-    // Drafts skip before the per-head run lookup so they cost no Actions reads.
-    expect(calls.filter((call) => call.method === "actions.listWorkflowRuns")).toEqual([]);
+    if (reason === "draft") {
+      expect(calls.filter((call) => call.method === "actions.listWorkflowRuns")).toEqual([]);
+    }
   });
 
   it("does not re-fire startup-failed CI when the final PR read becomes draft", async () => {
@@ -147,22 +140,7 @@ describe("runPrCiSweeper", () => {
       },
       { dryRun: true },
     );
-    // Page 2 crossed the 24h creation horizon, so page 3 is never fetched and
-    // the outside-lookback PR on page 2 stops the scan without a decision.
     expect(calls.filter((call) => call.method === "pulls.list.page")).toHaveLength(2);
     expect(results).toEqual([decision(30, recent.head.sha, "refire", "ci-run-missing")]);
-  });
-
-  it("leaves cancelled CI attached to an auto-merge PR without re-executing it", async () => {
-    const generated = listedPr(10, "d".repeat(40), { auto_merge: { merge_method: "squash" } });
-    const { results, calls } = await sweep({
-      prs: [generated],
-      runsBySha: {
-        [generated.head.sha]: [{ id: 1234, status: "completed", conclusion: "cancelled" }],
-      },
-    });
-
-    expect(results).toEqual([decision(10, generated.head.sha, "skip", "auto-merge-enabled")]);
-    expectNoMutation(calls);
   });
 });

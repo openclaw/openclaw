@@ -1,4 +1,3 @@
-// QA Lab product proof for doctor gateway auth and SecretRef behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
@@ -20,67 +19,59 @@ afterEach(async () => {
   cleanup = undefined;
 });
 
-async function createDoctorFixture() {
-  const instance = await createOpenClawTestInstance({
-    name: "qa-doctor-auth-secretref",
-    reserveIdlePort: false,
-  });
-  cleanup = () => instance.cleanup();
-  async function doctor(...flags: string[]): Promise<string> {
-    const result = await instance.cli(
-      ["doctor", "--non-interactive", "--no-workspace-suggestions", ...flags],
-      { timeoutMs: DOCTOR_CLI_TIMEOUT_MS },
-    );
-    expect(result.code).toBe(0);
-    return `${result.stdout}\n${result.stderr}`;
-  }
-
-  function normalized(output: string): string {
-    return stripAnsiSequences(output).replaceAll("│", " ").replace(/\s+/g, " ").trim();
-  }
-
-  async function readToken() {
-    const config: OpenClawConfig = JSON.parse(await fs.readFile(instance.configPath, "utf8"));
-    return config.gateway?.auth?.token;
-  }
-
-  async function writeConfig(config: OpenClawConfig): Promise<void> {
-    const io = createConfigIO({
-      env: instance.env,
-      configPath: instance.configPath,
-      homedir: () => instance.homeDir,
-    });
-    // Keep Doctor-authored fields so the next scenario is not a config-clobber recovery.
-    await io.writeConfigFile({ ...(await io.readSourceConfigBestEffort()), ...config });
-  }
-
-  function localGatewayConfig(
-    token?: GatewayToken,
-    providers?: NonNullable<OpenClawConfig["secrets"]>["providers"],
-  ): OpenClawConfig {
-    return {
-      gateway: {
-        mode: "local",
-        port: instance.port,
-        bind: "loopback",
-        auth: { mode: "token", ...(token === undefined ? {} : { token }) },
-        controlUi: { enabled: false },
-      },
-      ...(providers ? { secrets: { providers } } : {}),
-    };
-  }
-  return { instance, doctor, normalized, readToken, writeConfig, localGatewayConfig };
-}
-
-// Windows ACL failure diagnostics are owned by focused resolver and Doctor
-// tests; this broad process proof owns the platform-neutral product flow.
+// Windows ACL diagnostics have focused coverage; this proves the portable CLI flow.
 it.skipIf(process.platform === "win32")(
   "preserves SecretRef ownership while proving resolution, fallback, exec gating, and token generation",
   { timeout: DOCTOR_SCENARIO_TIMEOUT_MS },
   async () => {
-    const { instance, doctor, normalized, readToken, writeConfig, localGatewayConfig } =
-      await createDoctorFixture();
+    const instance = await createOpenClawTestInstance({
+      name: "qa-doctor-auth-secretref",
+      reserveIdlePort: false,
+    });
+    cleanup = () => instance.cleanup();
+    async function doctor(...flags: string[]): Promise<string> {
+      const result = await instance.cli(
+        ["doctor", "--non-interactive", "--no-workspace-suggestions", ...flags],
+        { timeoutMs: DOCTOR_CLI_TIMEOUT_MS },
+      );
+      expect(result.code).toBe(0);
+      return `${result.stdout}\n${result.stderr}`;
+    }
 
+    function normalized(output: string): string {
+      return stripAnsiSequences(output).replaceAll("│", " ").replace(/\s+/g, " ").trim();
+    }
+
+    async function readToken() {
+      const config: OpenClawConfig = JSON.parse(await fs.readFile(instance.configPath, "utf8"));
+      return config.gateway?.auth?.token;
+    }
+
+    async function writeConfig(config: OpenClawConfig): Promise<void> {
+      const io = createConfigIO({
+        env: instance.env,
+        configPath: instance.configPath,
+        homedir: () => instance.homeDir,
+      });
+      // Keep Doctor-authored fields so the next scenario is not a config-clobber recovery.
+      await io.writeConfigFile({ ...(await io.readSourceConfigBestEffort()), ...config });
+    }
+
+    function localGatewayConfig(
+      token?: GatewayToken,
+      providers?: NonNullable<OpenClawConfig["secrets"]>["providers"],
+    ): OpenClawConfig {
+      return {
+        gateway: {
+          mode: "local",
+          port: instance.port,
+          bind: "loopback",
+          auth: { mode: "token", ...(token === undefined ? {} : { token }) },
+          controlUi: { enabled: false },
+        },
+        ...(providers ? { secrets: { providers } } : {}),
+      };
+    }
     const resolvedValue = "qa-resolved-gateway-value";
     instance.env.QA_DOCTOR_GATEWAY_TOKEN = resolvedValue;
     await writeConfig(

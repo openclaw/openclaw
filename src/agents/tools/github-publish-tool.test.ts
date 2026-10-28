@@ -8,7 +8,6 @@ import { createSandboxTestContext } from "../sandbox/test-fixtures.js";
 import type { SandboxContext } from "../sandbox/types.js";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
 import { createHostSandboxFsBridge } from "../test-helpers/host-sandbox-fs-bridge.js";
-import { createCronToolSchema } from "./cron-tool-schema.js";
 import {
   getGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
@@ -27,21 +26,19 @@ const publication = {
   status: "requested" as const,
   message: "Publication was accepted.",
 };
-function setup(actionsAvailable = false) {
+function setup() {
   const callGateway = vi
     .mocked(callInProcessGatewayTool)
     .mockReset()
     .mockResolvedValue(publication);
-  const tool = createGitHubPublishTool({
-    actionsAvailable,
-  });
+  const tool = createGitHubPublishTool();
   const execute = (args: unknown, id = "choice") =>
     withGatewayToolCallerIdentity(caller, () => tool.execute(id, args));
   return { callGateway, tool, execute };
 }
 
 it("applies deployment action limits when publication and operator actions are available", () => {
-  const [tool] = applyGatewayToolPolicy([createGitHubPublishTool({ actionsAvailable: true })], {
+  const [tool] = applyGatewayToolPolicy([createGitHubPublishTool()], {
     tools: {
       gatewayPolicy: {
         allow: ["github_publish"],
@@ -60,7 +57,7 @@ it("applies deployment action limits when publication and operator actions are a
   for (const definition of [
     githubPublishToolDefinition,
     createGitHubPublishTool(),
-    createGitHubPublishTool({ publicationAvailable: false, actionsAvailable: true }),
+    createGitHubPublishTool({ publicationAvailable: false }),
   ]) {
     const [allowed] = applyGatewayToolPolicy([definition], {
       tools: {
@@ -182,50 +179,47 @@ it.each<{
     evidence: false,
   },
 ])("offers only supported sandbox actions for $name", ({ sandbox, prepare, refresh, evidence }) => {
-  for (const actionsAvailable of [false, true]) {
-    const tool = createGitHubPublishTool({
-      sandbox: sandbox === null ? null : publicationSandbox(sandbox),
-      actionsAvailable,
-    });
-    for (const [action, offered, properties] of [
-      ["prepare_pr", prepare, []],
-      ["refresh_base", refresh, ["conflictsResolved", "baseCommit"]],
-      ["upload_evidence", evidence, ["evidence"]],
-    ] as const) {
-      expect(Value.Check(tool.parameters, { action }), action).toBe(offered);
-      for (const property of properties) {
-        if (offered) {
-          expect(tool.parameters).toHaveProperty(`properties.${property}`);
-        } else {
-          expect(tool.parameters).not.toHaveProperty(`properties.${property}`);
-        }
-        expect(tool.description.includes(property), property).toBe(offered);
+  const tool = createGitHubPublishTool({
+    sandbox: sandbox === null ? null : publicationSandbox(sandbox),
+  });
+  for (const [action, offered, properties] of [
+    ["prepare_pr", prepare, []],
+    ["refresh_base", refresh, ["conflictsResolved", "baseCommit"]],
+    ["upload_evidence", evidence, ["evidence"]],
+  ] as const) {
+    expect(Value.Check(tool.parameters, { action }), action).toBe(offered);
+    for (const property of properties) {
+      if (offered) {
+        expect(tool.parameters).toHaveProperty(`properties.${property}`);
+      } else {
+        expect(tool.parameters).not.toHaveProperty(`properties.${property}`);
       }
-      expect(tool.description.includes(action), action).toBe(offered);
+      expect(tool.description.includes(property), property).toBe(offered);
     }
-    if (!refresh) {
-      expect(tool.description).not.toMatch(/refresh/i);
-    }
-    expect(Value.Check(tool.parameters, {})).toBe(true);
-    expect(
-      Value.Check(tool.parameters, {
-        action: "inspect_pr",
-        pullRequestUrl: "https://github.com/example/repository/pull/1",
-      }),
-    ).toBe(true);
-    for (const action of ["publish", "edit", "ready", "request_review"]) {
-      expect(Value.Check(tool.parameters, { action }), action).toBe(true);
-    }
-    for (const action of ["inspect", "merge", "close"]) {
-      expect(Value.Check(tool.parameters, { action }), action).toBe(actionsAvailable);
-    }
-    expect(
-      Value.Check(tool.parameters, { action: "ready", publishingSessionKey: "agent:main:child" }),
-    ).toBe(actionsAvailable);
-    const description = tool.description;
-    finalizeAgentToolAvailability([tool]);
-    expect(tool.description).toBe(description);
+    expect(tool.description.includes(action), action).toBe(offered);
   }
+  if (!refresh) {
+    expect(tool.description).not.toMatch(/refresh/i);
+  }
+  expect(Value.Check(tool.parameters, {})).toBe(true);
+  expect(
+    Value.Check(tool.parameters, {
+      action: "inspect_pr",
+      pullRequestUrl: "https://github.com/example/repository/pull/1",
+    }),
+  ).toBe(true);
+  for (const action of ["publish", "edit", "ready", "request_review"]) {
+    expect(Value.Check(tool.parameters, { action }), action).toBe(true);
+  }
+  for (const action of ["inspect", "merge", "close"]) {
+    expect(Value.Check(tool.parameters, { action }), action).toBe(true);
+  }
+  expect(
+    Value.Check(tool.parameters, { action: "ready", publishingSessionKey: "agent:main:child" }),
+  ).toBe(true);
+  const description = tool.description;
+  finalizeAgentToolAvailability([tool]);
+  expect(tool.description).toBe(description);
 });
 
 it.each([
@@ -237,7 +231,7 @@ it.each([
   "request_review",
   "upload_evidence",
 ])("rejects draft on %s without changing PR state", async (action) => {
-  const { callGateway, execute } = setup(true);
+  const { callGateway, execute } = setup();
   await expect(execute({ action, draft: false })).rejects.toThrow(
     "draft only selects the state when publishing a new PR",
   );
@@ -277,7 +271,7 @@ it.each([
   },
 );
 
-it("offers current-PR preparation without privileged actions", () => {
+it("offers current-PR preparation and lists actions gated by the Gateway", () => {
   const tool = createGitHubPublishTool({ sandbox: publicationSandbox() });
   const check = (args: unknown, valid = true) =>
     expect(Value.Check(tool.parameters, args)).toBe(valid);
@@ -306,11 +300,10 @@ it("offers current-PR preparation without privileged actions", () => {
   });
   check({ action: "edit", title: "New title", expectedTitle: "Old title" });
   for (const action of ["inspect", "merge", "close"]) {
-    check({ action }, false);
+    check({ action });
   }
-  for (const action of ["ready", "edit"]) {
-    check({ action, publishingSessionKey: "another" }, false);
-  }
+  check({ action: "ready", publishingSessionKey: "another" });
+  check({ action: "edit", publishingSessionKey: "another" });
   expect(tool.description).toContain("omit action to append accepted changes to the original PR");
   expect(tool.description).not.toContain("Imported source publication is not available");
   expect(tool.description).toContain("used only when creating a PR");
@@ -319,35 +312,10 @@ it("offers current-PR preparation without privileged actions", () => {
   expect(tool.description).toContain("Edit never synchronizes, stages, commits or pushes");
   const actionOnly = createGitHubPublishTool({
     publicationAvailable: false,
-    actionsAvailable: true,
   });
   expect(Value.Check(actionOnly.parameters, { action: "edit" })).toBe(false);
   expect(Value.Check(actionOnly.parameters, prepare)).toBe(false);
 });
-
-it.each(["available", "absent", "self-scoped", "denied"] as const)(
-  "offers a scheduled continuation only with %s automation creation",
-  (availability) => {
-    const publish = createGitHubPublishTool();
-    const automations = {
-      name: "automations",
-      description: "Schedule work",
-      parameters: createCronToolSchema({ selfRemoveOnly: availability === "self-scoped" }),
-    };
-    finalizeAgentToolAvailability(
-      [publish, ...(availability === "absent" ? [] : [automations])],
-      availability === "denied" ? { toolExecutionAllow: ["github_publish"] } : undefined,
-    );
-    if (availability === "available") {
-      expect(publish.description).toContain(
-        'automations: at + agentTurn + sessionTarget "session:<this session key from Runtime>"',
-      );
-    } else {
-      expect(publish.description).not.toContain("automations:");
-      expect(publish.description).toContain("a scheduled continuation is unavailable");
-    }
-  },
-);
 
 it.each(["responseId", "turnId"] as const)(
   "scopes reused call IDs by %s and keeps replays stable across runs",

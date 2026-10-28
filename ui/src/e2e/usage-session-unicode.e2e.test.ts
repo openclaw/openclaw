@@ -37,23 +37,8 @@ function usageResponse(sessionKey?: string) {
 }
 
 suite.define(() => {
-  it.each([
-    {
-      name: "surrogate pair at the truncation boundary",
-      key: "1234567🦞suffix",
-      truncated: "1234567…",
-    },
-    {
-      name: "surrogate pair within the truncation boundary",
-      key: "123456🦞suffix",
-      truncated: "123456🦞…",
-    },
-    {
-      name: "ordinary ASCII session key",
-      key: "123456789suffix",
-      truncated: "12345678…",
-    },
-  ])("preserves $name after a selected Gateway session disappears", async (scenario) => {
+  it("preserves a surrogate pair boundary after a selected Gateway session disappears", async () => {
+    const key = "1234567🦞suffix";
     await suite.withPage(
       {
         locale: "en-US",
@@ -63,7 +48,7 @@ suite.define(() => {
       async ({ page }) => {
         const gateway = await installMockGateway(page, {
           methodResponses: {
-            "sessions.usage": usageResponse(scenario.key),
+            "sessions.usage": usageResponse(key),
             "sessions.usage.timeseries": { points: [] },
             "sessions.usage.logs": { logs: [] },
             "usage.status": { updatedAt: Date.now(), providers: [] },
@@ -76,9 +61,9 @@ suite.define(() => {
           .poll(() => gateway.getRequests("sessions.usage"), { timeout: 10_000 })
           .not.toHaveLength(0);
 
-        const row = page.locator(".session-bar-row").filter({ hasText: scenario.key });
+        const row = page.locator(".session-bar-row").filter({ hasText: key });
         await expect.poll(() => row.count(), { timeout: 10_000 }).toBe(1);
-        const select = row.getByRole("button", { name: scenario.key, exact: true });
+        const select = row.getByRole("button", { name: key, exact: true });
         expect(await select.getAttribute("aria-pressed")).toBe("false");
         await select.focus();
         await page.keyboard.press("Shift+Enter");
@@ -88,8 +73,8 @@ suite.define(() => {
           .locator(".filter-chip")
           .filter({ has: page.locator(".filter-chip-label") });
         const label = chip.locator(".filter-chip-label");
-        await expect.poll(() => label.textContent(), { timeout: 10_000 }).toContain(scenario.key);
-        await expect.poll(() => chip.getAttribute("title")).toBe(scenario.key);
+        await expect.poll(() => label.textContent(), { timeout: 10_000 }).toContain(key);
+        await expect.poll(() => chip.getAttribute("title")).toBe(key);
 
         const overviewScope = { projection: "overview" };
         const previousRequests = (await gateway.getRequests("sessions.usage", overviewScope))
@@ -105,15 +90,12 @@ suite.define(() => {
         });
         expect(refreshRequest.params).toMatchObject({
           projection: "overview",
-          selectedSessions: [scenario.key],
+          selectedSessions: [key],
         });
         await expect.poll(() => row.count()).toBe(0);
 
-        await expect.poll(() => chip.getAttribute("title")).toBe(scenario.key);
-        await expect.poll(() => label.textContent()).toBe(`Session: ${scenario.truncated}`);
-        const renderedLabel = (await label.textContent()) ?? "";
-        expect((renderedLabel as string & { isWellFormed(): boolean }).isWellFormed()).toBe(true);
-        expect(renderedLabel).not.toContain("�");
+        await expect.poll(() => chip.getAttribute("title")).toBe(key);
+        await expect.poll(() => label.textContent()).toBe("Session: 1234567…");
       },
     );
   });

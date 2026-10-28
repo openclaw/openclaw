@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { collect } from "../../../../test/helpers/async-iterable.js";
 import type { AssistantMessageEvent } from "../types.js";
-import { assistantStream, collect } from "./stream.test-support.js";
+import { assistantStream } from "./stream.test-support.js";
 
 function fixture() {
   const { message, stream } = assistantStream([{ type: "text", text: "Hello world" }]);

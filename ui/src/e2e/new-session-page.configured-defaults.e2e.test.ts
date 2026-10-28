@@ -32,6 +32,7 @@ suite.define(() => {
         : (["last-used", "configured"] as const);
       for (const policy of policies) {
         const configuredDefaults = required || policy === "configured";
+        const fullDraftJourney = configuredDefaults && (!required || policy === undefined);
         await suite.withPage(
           { ...createControlUiE2eContextOptions(), reducedMotion: "reduce" },
           async ({ page }) => {
@@ -74,7 +75,7 @@ suite.define(() => {
                 "chat.metadata",
                 "chat.startup",
                 "sessions.create",
-                ...(required ? ["sessions.describe", "sessions.send"] : []),
+                ...(required ? ["sessions.describe", "chat.send"] : []),
                 ...(source === "identity" ? ["users.prefs.get", "users.prefs.set"] : []),
               ],
               sessions: [],
@@ -105,10 +106,11 @@ suite.define(() => {
                 "sessions.describe": {
                   session: {
                     key: "agent:main:configured-defaults-proof",
+                    sessionId: "session:agent:main:configured-defaults-proof",
                     placement: { state: "active" },
                   },
                 },
-                "sessions.send": { runId: "configured-defaults-proof", status: "started" },
+                "chat.send": { runId: "configured-defaults-proof", status: "started" },
                 "users.prefs.get": {
                   status: "ok",
                   entries: { "new-session.migration.v1": true, "new-session.v1:main": preference },
@@ -158,7 +160,7 @@ suite.define(() => {
                 ),
               )
               .toBe("low");
-            if (configuredDefaults) {
+            if (fullDraftJourney) {
               if (source === "browser") {
                 // A draft with no explicit model choice has exactly the pre-change row
                 // format: content and blobs, without the optional modelSelection field.
@@ -308,12 +310,16 @@ suite.define(() => {
                 await expect.poll(() => effort.getAttribute("data-chat-thinking-value")).toBe("");
                 await expect.poll(() => effort.textContent()).toContain("High");
               }
+            }
+            if (configuredDefaults) {
               await page.locator('[data-chat-model-select="true"]').click();
               await page.locator('[data-chat-model-search="true"]').fill("mini");
               await page.locator('[data-chat-model-option="openai/gpt-4.1-mini"]').click();
               await effort.click();
               await page.locator('[data-chat-thinking-slider="true"]').fill("0");
               await page.keyboard.press("Escape");
+            }
+            if (fullDraftJourney) {
               await page.locator(".new-session-page__message").fill("Resume this draft");
               await expect
                 .poll(() =>
@@ -372,8 +378,15 @@ suite.define(() => {
             const request = await gateway.waitForRequest("sessions.create");
             expect(request.params).toMatchObject({ model: preference.model, thinkingLevel: "low" });
             expect(request.params).toHaveProperty("fastMode", true);
-            const initialTurn = required ? await gateway.waitForRequest("sessions.send") : request;
-            if (configuredDefaults && source === "browser") {
+            const initialTurn = required ? await gateway.waitForRequest("chat.send") : request;
+            if (required) {
+              expect(initialTurn.params).toMatchObject({
+                sessionKey: "agent:main:configured-defaults-proof",
+                sessionId: "session:agent:main:configured-defaults-proof",
+                expectedLeafEntryId: null,
+              });
+            }
+            if (fullDraftJourney && source === "browser") {
               expect(initialTurn.params).toMatchObject({
                 attachments: [
                   {
@@ -384,7 +397,7 @@ suite.define(() => {
                 ],
               });
             }
-            if (configuredDefaults) {
+            if (fullDraftJourney) {
               await waitForCommittedChatRoute(page);
               // Replacing the document must not interrupt the submitted draft's cleanup.
               await waitForCommittedComposerDraft(page, JSON.stringify(["", "", ""]), null, 0);

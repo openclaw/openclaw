@@ -15,7 +15,6 @@ import {
 import { readRecentSessionUsageFromTranscriptAsync } from "../gateway/session-transcript-usage.js";
 import type { MediaUnderstandingDecision } from "../media-understanding/types.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
-import { statusModelRefs } from "../status/status-message.test-support.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import * as commandsRegistry from "./commands-registry.js";
 import { createSuccessfulImageMediaDecision } from "./media-understanding.test-fixtures.js";
@@ -53,13 +52,6 @@ afterEach(() => {
   listPluginCommands.mockReset().mockImplementation(() => []);
 });
 
-type FallbackContextStatusOverrides = {
-  activeProvider?: string;
-  activeModel?: string;
-  activeContextWindow?: number | null;
-  runtimeContextTokens?: number;
-  sessionContextTokens?: number;
-};
 function audioDecision(
   outcome: MediaUnderstandingDecision["outcome"],
   attempts: MediaUnderstandingDecision["attachments"][number]["attempts"],
@@ -76,39 +68,28 @@ function audioDecision(
   };
 }
 
-function makeFallbackContextStatusArgs({
-  activeProvider = "minimax-portal",
-  activeModel = "MiniMax-M2.7",
-  activeContextWindow = 200_000,
-  runtimeContextTokens,
-  sessionContextTokens,
-}: FallbackContextStatusOverrides): Parameters<typeof buildStatusMessage>[0] {
+const selected = { provider: "source", model: "large" };
+const active = { provider: "target", model: "small" };
+function fallbackContext(window: number | null, session: number, runtime?: number): StatusTestArgs {
+  const route = fallbackRoute(selected, active);
   const providers: Parameters<typeof providerModels> = [
-    ["xiaomi", "mimo-v2-flash", { contextWindow: 1_048_576 }],
+    ["source", "large", { contextWindow: 1_048_576 }],
   ];
-  if (activeContextWindow !== null) {
-    providers.push([activeProvider, activeModel, { contextWindow: activeContextWindow }]);
+  if (window !== null) {
+    providers.push(["target", "small", { contextWindow: window }]);
   }
-  const route = fallbackRoute(
-    { provider: "xiaomi", model: "mimo-v2-flash" },
-    { provider: activeProvider, model: activeModel },
-  );
   return {
     ...route,
     config: providerModels(...providers),
-    runtimeContextTokens,
+    runtimeContextTokens: runtime,
+    resolvedHarness: "openclaw",
     sessionEntry: {
       ...route.sessionEntry,
       ...freshUsage(49_000),
-      ...(sessionContextTokens === undefined
-        ? {}
-        : {
-            contextTokens: sessionContextTokens,
-            contextTokensSource: "runtime" as const,
-            agentHarnessId: "openclaw" as const,
-          }),
+      contextTokens: session,
+      contextTokensSource: "runtime",
+      agentHarnessId: "openclaw",
     },
-    resolvedHarness: "openclaw",
   };
 }
 
@@ -214,30 +195,18 @@ it.each([undefined, "MiniMax-M2.7"])(
   },
 );
 
-it.each<[FallbackContextStatusOverrides, string, string?]>([
-  [{ sessionContextTokens: 1_048_576 }, "49k/200k"],
-  [
-    {
-      activeProvider: "custom-runtime",
-      activeModel: "unknown-fallback-model",
-      activeContextWindow: null,
-      sessionContextTokens: 128_000,
-    },
-    "49k/128k",
-    "custom-runtime/unknown-fallback-model",
-  ],
-  [{ runtimeContextTokens: 123_456, sessionContextTokens: 1_048_576 }, "49k/123k"],
-  [{ sessionContextTokens: 123_456 }, "49k/123k"],
-])(
-  "renders fallback %j with context %s",
-  (overrides, context, model = "minimax-portal/MiniMax-M2.7") => {
-    const text = normalizedStatus(makeFallbackContextStatusArgs(overrides));
-    expect(text).toContain(`Fallback: ${model}`);
-    expect(text).toContain(`Context: ${context}`);
-    expect(text).not.toContain("Context: 49k/1.0m");
-    expect(text.includes("Context: 49k/200k")).toBe(context === "49k/200k");
-  },
-);
+it.each<[number | null, number, number | undefined, string]>([
+  [200_000, 1_048_576, undefined, "49k/200k"],
+  [null, 128_000, undefined, "49k/128k"],
+  [200_000, 1_048_576, 123_456, "49k/123k"],
+  [200_000, 123_456, undefined, "49k/123k"],
+])("renders fallback limits %j/%j/%j as %s", (window, session, runtime, context) => {
+  const text = normalizedStatus(fallbackContext(window, session, runtime));
+  expect(text).toContain("Fallback: target/small");
+  expect(text).toContain(`Context: ${context}`);
+  expect(text).not.toContain("Context: 49k/1.0m");
+  expect(text.includes("Context: 49k/200k")).toBe(context === "49k/200k");
+});
 
 function buildCliAliasStatus({ sessionEntry, ...args }: StatusTestArgs) {
   configureCliBackend(true);
@@ -344,47 +313,22 @@ it.each<[MediaUnderstandingDecision[], string, string?]>([
   }
 });
 
-it.each<[StatusTestArgs, string, boolean]>([
-  [
-    {
-      agent: {
-        model: {
-          primary: "anthropic/claude-opus-4-6",
-          fallbacks: ["google/gemini-2.5-flash", "openai/gpt-5-mini"],
-        },
-      },
-    },
-    "Fallbacks: google/gemini-2.5-flash, openai/gpt-5-mini",
-    true,
-  ],
-  [
-    {
-      modelRefs: statusModelRefs({ provider: "google", model: "gemini-3.1-flash-lite" }),
-      configuredDefaultModelLabel: "google/gemini-3-flash-preview",
-      agent: {
-        model: {
-          primary: "google/gemini-3-flash-preview",
-          fallbacks: [
-            "google/gemini-3.1-flash-lite",
-            "google/gemini-2.5-flash",
-            "google/gemini-3.1-pro-preview",
-          ],
-        },
-      },
-      sessionEntry: {
-        modelProvider: "google",
-        model: "gemini-3.1-flash-lite",
-        modelOverride: "gemini-3.1-flash-lite",
-        modelOverrideSource: "user",
-      },
-    },
-    "Model: google/gemini-3.1-flash-lite",
-    false,
-  ],
-])("renders configured fallbacks with %j", (args, expected, showFallbacks) => {
-  const text = normalizedStatus(args);
-  expect(text).toContain(expected);
-  expect(text.includes("Fallbacks:")).toBe(showFallbacks);
+it.each([false, true])("renders configured fallbacks with a pinned model=%s", (pinned) => {
+  const text = normalizedStatus({
+    ...modelArgs("google", pinned ? "small" : "primary"),
+    configuredDefaultModelLabel: "google/primary",
+    agent: { model: { primary: "google/primary", fallbacks: ["google/small", "openai/other"] } },
+    sessionEntry: pinned
+      ? {
+          modelProvider: "google",
+          model: "small",
+          modelOverride: "small",
+          modelOverrideSource: "user",
+        }
+      : undefined,
+  });
+  expect(text).toContain(pinned ? "Model: google/small" : "Fallbacks: google/small, openai/other");
+  expect(text.includes("Fallbacks:")).toBe(!pinned);
 });
 
 it("lists commands with aliases and hints", () => {
@@ -407,27 +351,20 @@ it("includes plugin commands in the paginated list", () => {
   listPluginCommands.mockReturnValue([
     { name: "plugin_cmd", description: "Plugin command", pluginId: "demo-plugin" },
   ]);
-  const firstPage = buildCommandsMessagePaginated(commandConfig, undefined, {
-    surface: "telegram",
-    page: 1,
-    forcePaginatedList: true,
-  });
+  const renderPage = (page = 1) =>
+    buildCommandsMessagePaginated(commandConfig, undefined, {
+      surface: "telegram",
+      page,
+      forcePaginatedList: true,
+    });
+  const firstPage = renderPage();
   expect(firstPage.text).toContain("ℹ️ Commands (1/");
   expect(firstPage.text).toContain("Session");
   expect(firstPage.text).toContain("/stop - Stop the current run.");
-  const pages = Array.from({ length: firstPage.totalPages }, (_, index) =>
-    buildCommandsMessagePaginated(commandConfig, undefined, {
-      surface: "telegram",
-      page: index + 1,
-      forcePaginatedList: true,
-    }),
-  );
+  const pages = Array.from({ length: firstPage.totalPages }, (_, index) => renderPage(index + 1));
   const pluginPage = pages.find((page) => page.text.includes("/plugin_cmd (demo-plugin)"));
-  if (!pluginPage) {
-    throw new Error("expected plugin command page");
-  }
-  expect(pluginPage.text).toContain("Plugins");
-  expect(pluginPage.text).toContain("/plugin_cmd (demo-plugin) - Plugin command");
+  expect(pluginPage?.text).toContain("Plugins");
+  expect(pluginPage?.text).toContain("/plugin_cmd (demo-plugin) - Plugin command");
 });
 
 const tool = (id: string, label: string, description: string, pluginId?: string) => ({
@@ -449,25 +386,18 @@ function group(tools: ReturnType<typeof tool>[], source: "core" | "plugin" = "co
 }
 
 it("groups shipped docks commands with tools", () => {
-  vi.spyOn(commandsRegistry, "listChatCommands").mockReturnValue([
-    {
-      key: "saved-layout",
-      description: "Inspect a saved layout.",
-      textAliases: ["/saved-layout"],
+  vi.spyOn(commandsRegistry, "listChatCommands").mockReturnValue(
+    (["docks", "tools"] as const).map((category) => ({
+      key: category,
+      description: category,
+      textAliases: [`/${category}`],
       scope: "text",
-      category: "docks",
-    },
-    {
-      key: "inspect-tool",
-      description: "Inspect a tool.",
-      textAliases: ["/inspect-tool"],
-      scope: "text",
-      category: "tools",
-    },
-  ]);
+      category,
+    })),
+  );
   const text = buildCommandsMessage();
-  expect(text).toContain("Tools\n  /saved-layout [text] - Inspect a saved layout.");
-  expect(text).toContain("  /inspect-tool [text] - Inspect a tool.");
+  expect(text).toContain("Tools\n  /docks [text] - docks");
+  expect(text).toContain("  /tools [text] - tools");
   expect(text.match(/^Tools$/gm)).toHaveLength(1);
   expect(text).not.toContain("Docks");
 });
@@ -481,17 +411,13 @@ it("renders compact inventory with plugin ownership and availability notices", (
         tool("exec", "Exec", "Run shell commands"),
         tool("web_search", "Web Search", "Search the web"),
       ]),
-      group(
-        [tool("docs_lookup", "Docs Lookup", "Search internal documentation", "docs")],
-        "plugin",
-      ),
+      group([tool("docs_lookup", "Docs", "Search docs", "docs")], "plugin"),
     ],
     notices: [
       {
         id: "browser-filtered-by-profile",
         severity: "info",
-        message:
-          'Browser is configured, but the current tool profile does not include the browser tool. Add tools.alsoAllow: ["browser"].',
+        message: 'Add tools.alsoAllow: ["browser"].',
       },
     ],
   });
@@ -515,18 +441,16 @@ it("trims verbose descriptions before schema-like doc blocks", () => {
       groups: [
         group([
           {
-            ...tool("cron", "Cron", "Schedule and manage cron jobs."),
+            ...tool("cron", "Cron", "Schedule jobs."),
             rawDescription:
-              'Manage Gateway cron jobs and send wake events. Use this for reminders, "check back later" requests, delayed follow-ups, and recurring tasks. Do not emulate scheduling with exec sleep or process polling.\n\nACTIONS:\n- status: Check cron scheduler status\nJOB SCHEMA:\n{ ... }',
+              "Schedule jobs.\n\nACTIONS:\n- status: Check status\nJOB SCHEMA:\n{ ... }",
           },
         ]),
       ],
     },
     { verbose: true },
   );
-  expect(text).toContain(
-    'Cron - Manage Gateway cron jobs and send wake events. Use this for reminders, "check back later" requests, delayed follow-ups, and recurring tasks. Do not emulate scheduling with exec sleep or process polling.',
-  );
+  expect(text).toContain("Cron - Schedule jobs.");
   expect(text).toContain("What this agent can use right now:");
   expect(text).toContain("Tool availability depends on this agent's configuration.");
   expect(text).not.toContain("ACTIONS:");
@@ -619,7 +543,7 @@ describe("status transcript usage and model context", () => {
     contextTokensSource: "runtime" as const,
   };
 
-  it("reads transcript usage for non-default agents", async () => {
+  it("reads fresh non-default agent usage while ignoring delivery mirrors", async () => {
     await withStatusHome(async () => {
       const { render, append } = transcriptFixture({ agentId: "worker1" });
       const args: StatusTestArgs = {
@@ -628,6 +552,15 @@ describe("status transcript usage and model context", () => {
         resolvedHarness: "openclaw",
       };
       expect(normalizeTestText(await render(args))).toContain("Context: 1.0k/32k");
+      append({
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        usage: usage(0, 0, 0, 0),
+      });
+      const mirrored = normalizeTestText(await render(args));
+      expect(mirrored).toContain("Cache: 100% hit · 1.0k cached, 0 new");
+      expect(mirrored).toContain("Context: 1.0k/32k");
       append({ role: "assistant", usage: { input: 2_000, output: 20, totalTokens: 2_000 } });
       expect(normalizeTestText(await render(args))).toContain("Context: 2.0k/32k");
     });
@@ -669,27 +602,6 @@ describe("status transcript usage and model context", () => {
       );
       present.forEach((snippet) => expect(text).toContain(snippet));
       absent.forEach((snippet) => expect(text).not.toContain(snippet));
-    });
-  });
-
-  it("uses the same transcript usage fallback as sessions.list when a delivery mirror is last", async () => {
-    await withStatusHome(async () => {
-      const { render, append } = transcriptFixture();
-      append({
-        role: "assistant",
-        provider: "openclaw",
-        model: "delivery-mirror",
-        usage: usage(0, 0, 0, 0),
-      });
-
-      const text = await render({
-        sessionEntry: runtimeEntry,
-        resolvedHarness: "openclaw",
-        sessionKey: "agent:main:main",
-      });
-
-      expect(normalizeTestText(text)).toContain("Cache: 100% hit · 1.0k cached, 0 new");
-      expect(normalizeTestText(text)).toContain("Context: 1.0k/32k");
     });
   });
 
@@ -743,42 +655,28 @@ describe("status transcript usage and model context", () => {
     expect(normalized).not.toContain("Context: 1.2k/2.0m");
   });
 
-  it("keeps provider-aware lookup for legacy fallback runtime slash ids", () => {
-    const route = fallbackRoute(
-      { provider: "xiaomi", model: "mimo-v2-flash" },
-      { provider: "fake-minimax", model: "FakeMiniMax-M2.5" },
-    );
-    const text = buildStatusMessage({
-      ...route,
-      config: providerModels(
-        ["fake-minimax", "FakeMiniMax-M2.5", { contextWindow: 777_000 }],
-        ["xiaomi", "mimo-v2-flash", { contextWindow: 1_048_576 }],
-      ),
-      sessionEntry: {
-        ...route.sessionEntry,
-        modelProvider: undefined,
-        model: "fake-minimax/FakeMiniMax-M2.5",
-        ...freshUsage(49_000),
-      },
-    });
-
-    const normalized = normalizeTestText(text);
-    expect(normalized).toContain("Fallback: fake-minimax/FakeMiniMax-M2.5");
-    expect(normalized).toContain("Context: 49k/777k");
-    expect(normalized).not.toContain("Context: 49k/200k");
-  });
-
-  it("keeps provider-aware lookup for non-fallback runtime slash ids", () => {
-    const text = buildStatusMessage({
-      ...modelArgs("openai", "gpt-4o"),
-      config: providerModels(["openai", "gpt-4o", { contextWindow: 777_000 }]),
-      sessionEntry: {
-        model: "openai/gpt-4o",
-        ...freshUsage(49_000),
-      },
-    });
-
-    const normalized = normalizeTestText(text);
-    expect(normalized).toContain("Context: 49k/777k");
-  });
+  it.each([true, false])(
+    "keeps provider-aware runtime slash lookup with fallback=%s",
+    (fallback) => {
+      const route = fallbackRoute(selected, active);
+      const normalized = normalizedStatus({
+        ...(fallback ? route : modelArgs(active.provider, active.model)),
+        config: providerModels(
+          ["target", "small", { contextWindow: 777_000 }],
+          ["source", "large", { contextWindow: 1_048_576 }],
+        ),
+        sessionEntry: {
+          ...(fallback ? route.sessionEntry : {}),
+          modelProvider: undefined,
+          model: "target/small",
+          ...freshUsage(49_000),
+        },
+      });
+      if (fallback) {
+        expect(normalized).toContain("Fallback: target/small");
+      }
+      expect(normalized).toContain("Context: 49k/777k");
+      expect(normalized).not.toContain("Context: 49k/200k");
+    },
+  );
 });

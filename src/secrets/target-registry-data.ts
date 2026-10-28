@@ -87,16 +87,10 @@ function listPluginConfigSecretTargetRegistryEntries(
   plugins: readonly Pick<PluginManifestRecord, "id" | "configContracts">[],
 ): SecretTargetRegistryEntry[] {
   const entries: SecretTargetRegistryEntry[] = [];
-  const seen = new Set<string>();
   for (const record of plugins) {
     const secretInputs = record.configContracts?.secretInputs?.paths ?? [];
     for (const secretInput of secretInputs) {
       const entry = createPluginOpenClawConfigSecretTargetEntry(record.id, secretInput.path);
-      const key = `${entry.configFile}:${entry.pathPattern}`;
-      if (seen.has(key)) {
-        continue;
-      }
-      seen.add(key);
       entries.push(entry);
     }
   }

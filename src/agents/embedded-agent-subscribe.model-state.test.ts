@@ -234,6 +234,7 @@ it.each(["error", "stop"] as const)(
         globalLane: "test",
         agentDir: "/tmp/async-progress",
         fallbackConfigured: false,
+        startedAtMs: nowMs,
       },
       preparedRuntime: {
         provider: "test-provider",
@@ -406,6 +407,7 @@ it.each([
         output: 5,
         cacheWrite: 4,
         cacheWrite1h: 3,
+        cacheWrite5m: 1,
         reasoningTokens: 2,
         cost: 0.125,
         billed: true,
@@ -417,6 +419,7 @@ it.each([
       ...expectedUsage(7, 5, 0.125, true),
       cacheWrite: 4,
       cacheWrite1h: 3,
+      cacheWrite5m: 1,
       reasoningTokens: 2,
       total: 16,
     },
@@ -481,6 +484,67 @@ it.each([
     expect(snapshot.usage.input).toBe(expected.input);
   },
 );
+
+it("keeps both detached snapshots isolated from transcript and terminal mutations", async () => {
+  const { emit, subscription } = createSubscribedSessionHarness({ runId: "snapshot-body-memory" });
+  const args = { nested: { value: "original" } };
+  const tool = makeAssistantMessageFixture({
+    stopReason: "toolUse",
+    content: [{ type: "toolCall", id: "lookup", name: "lookup", arguments: args }],
+  });
+  emit({ type: "message_start", message: tool });
+  emit({ type: "message_end", message: tool });
+  const toolSnapshot = expectDefined(subscription.getCurrentAttemptAssistant(), "Tool snapshot");
+  args.nested.value = "projected";
+  expect(toolSnapshot.content).toMatchObject([{ arguments: { nested: { value: "original" } } }]);
+  const thinking = "Private fixture reasoning.";
+  const final = makeAssistantMessageFixture({
+    stopReason: "stop",
+    content: [
+      { type: "thinking", thinking, thinkingSignature: "opaque-replay-signature" },
+      { type: "text", text: "[[reply_to:fixture]][[audio_as_voice]]Done." },
+    ],
+    openclawDelivery: { mediaUrls: ["https://example.test/fixture.png"] },
+    usage: makeUsage({ input: 100, output: 50 }),
+  });
+  emit({ type: "message_start", message: final });
+  emit({ type: "message_end", message: final });
+  await subscription.waitForPendingEvents();
+  const terminal = expectDefined(subscription.getCurrentAttemptAssistant(), "Terminal snapshot");
+  expect(terminal.content).toEqual(final.content);
+  expect(terminal.openclawDelivery).toMatchObject({ replyToId: "fixture", audioAsVoice: true });
+  const sourceReceipt = expectDefined(
+    agentEvents.readAgentAssistantSource(final),
+    "Source receipt",
+  );
+  expect(agentEvents.readAgentAssistantSource(terminal)).toBe(sourceReceipt);
+  // Transcript projection and a caller changing the terminal must not rewrite the kept answer.
+  final.content[0] = { type: "thinking", thinking: "projected" };
+  final.usage.input = 999;
+  expectDefined(final.openclawDelivery?.mediaUrls, "Source media URLs")[0] =
+    "https://example.test/projected.png";
+  terminal.content[0] = { type: "thinking", thinking: "caller changed terminal" };
+  emit({
+    type: "message_end",
+    message: makeAssistantMessageFixture({
+      stopReason: "stop",
+      content: [{ type: "text", text: "NO_REPLY" }],
+    }),
+  });
+  await subscription.waitForPendingEvents();
+  const kept = expectDefined(subscription.getKeptAnswer(), "Kept answer").assistant;
+  expect(kept.content).toEqual([
+    { type: "thinking", thinking, thinkingSignature: "opaque-replay-signature" },
+    { type: "text", text: "Done." },
+  ]);
+  expect(kept.usage.input).toBe(100);
+  expect(kept.openclawDelivery).toMatchObject({
+    mediaUrls: ["https://example.test/fixture.png"],
+    replyToId: "fixture",
+    audioAsVoice: true,
+  });
+  expect(agentEvents.readAgentAssistantSource(kept)).toBe(sourceReceipt);
+});
 
 it("retains billed cost-only usage after a prior model call", async () => {
   const costTotal = 0.125;

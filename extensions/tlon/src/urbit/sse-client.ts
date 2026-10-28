@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { Readable } from "node:stream";
+import { createArmableStallWatchdog } from "openclaw/plugin-sdk/channel-outbound";
 import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -28,6 +29,8 @@ type UrbitSseOptions = {
 
 const MAX_SSE_PAYLOAD_BYTES = 16 * 1024 * 1024;
 const MAX_RECONNECT_ATTEMPTS = 10;
+// Eyre sends a heartbeat every 20 s; treat three missed heartbeats as a stalled stream.
+const SSE_STALL_TIMEOUT_MS = 60_000;
 
 function parseUrbitSsePayload(data: string): { id?: number; json?: unknown; response?: string } {
   if (Buffer.byteLength(data, "utf8") > MAX_SSE_PAYLOAD_BYTES) {
@@ -178,8 +181,6 @@ export class UrbitSSEClient {
   }
 
   async openStream() {
-    // Use AbortController with manual timeout so we only abort during initial connection,
-    // not after the SSE stream is established and actively streaming.
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 60_000);
 
@@ -243,6 +244,22 @@ export class UrbitSSEClient {
       body instanceof ReadableStream
         ? Readable.fromWeb(body as never)
         : (body as NodeJS.ReadableStream);
+    const streamController = this.streamController;
+    // End a stalled stream so the reconnect below reopens the same channel.
+    const watchdog = createArmableStallWatchdog({
+      label: "tlon-sse",
+      timeoutMs: SSE_STALL_TIMEOUT_MS,
+      onTimeout: ({ idleMs }) => {
+        const error = new Error(
+          `Tlon Urbit SSE stream stalled: no data for ${Math.round(idleMs / 1000)}s`,
+        );
+        streamController?.abort(error);
+        if (stream instanceof Readable) {
+          stream.destroy(error);
+        }
+      },
+    });
+    watchdog.arm();
     const decoder = new TextDecoder();
     let buffer = "";
     let bufferBytes = 0;
@@ -310,15 +327,19 @@ export class UrbitSSEClient {
         if (this.aborted) {
           break;
         }
+        // Only waiting on the network counts; slow event handling is not a stall.
+        watchdog.disarm();
         if (typeof chunk === "string") {
           await consumeText(decoder.decode());
           await consumeText(chunk);
         } else {
           await consumeText(decoder.decode(chunk as Uint8Array, { stream: true }));
         }
+        watchdog.arm();
       }
       await consumeText(decoder.decode());
     } finally {
+      watchdog.stop();
       if (this.streamRelease) {
         const release = this.streamRelease;
         this.streamRelease = null;

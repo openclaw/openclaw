@@ -2,16 +2,14 @@ import { render, type JSX } from "@solidjs/web";
 import { ensureCustomElementDefined } from "../app/lazy-custom-element.ts";
 import { listen } from "../lib/reactive/listener.ts";
 
-type PromiseModalHost<T> = {
-  finish: (value: T) => void;
-  render: (content: () => JSX.Element) => void;
-  readonly settled: boolean;
-};
-
 /** Owns one imperative modal host; dismissal and reentrancy stay with its dialog. */
 export function withPromiseModalHost<T>(
   abort: { signal?: AbortSignal; value: T } | undefined,
-  initialize: (modal: PromiseModalHost<T>) => void | Promise<void>,
+  initialize: (modal: {
+    finish: (value: T) => void;
+    render: (content: () => JSX.Element) => void;
+    readonly settled: boolean;
+  }) => void | Promise<void>,
 ): Promise<T> {
   if (abort?.signal?.aborted) {
     return Promise.resolve(abort.value);

@@ -354,75 +354,6 @@ function consumePendingCollapse(pending: PendingCollapse[], candidate: ChangeCan
   return true;
 }
 
-function mergeCandidates(params: {
-  systemCandidates: ChangeCandidate[];
-  configCandidates: ChangeCandidate[];
-  pendingCollapse: readonly PendingCollapse[];
-  limit: number;
-}): {
-  entries: ChangeCandidate[];
-  systemBefore?: number;
-  configBefore?: number;
-  pendingCollapse: PendingCollapse[];
-  hasBufferedSystemEntries: boolean;
-  hasBufferedConfigEntries: boolean;
-} {
-  let systemIndex = 0;
-  let configIndex = 0;
-  let systemBefore: number | undefined;
-  let configBefore: number | undefined;
-  const pendingCollapse = [...params.pendingCollapse];
-  const entries: ChangeCandidate[] = [];
-
-  while (true) {
-    const system = params.systemCandidates[systemIndex];
-    const config = params.configCandidates[configIndex];
-    const next =
-      system && config
-        ? compareCandidates(system, config) <= 0
-          ? system
-          : config
-        : (system ?? config);
-    if (!next) {
-      break;
-    }
-
-    if (next === config && consumePendingCollapse(pendingCollapse, config)) {
-      configBefore = config.position.sequence;
-      configIndex += 1;
-      continue;
-    }
-    if (entries.length >= params.limit) {
-      break;
-    }
-
-    entries.push(next);
-    if (next === system) {
-      systemBefore = system.position.sequence;
-      systemIndex += 1;
-      if (system.pendingCollapse) {
-        pendingCollapse.push(system.pendingCollapse);
-        // Dropped markers can reveal duplicate config rows, never hide newer history.
-        if (pendingCollapse.length > MAX_PENDING_COLLAPSES) {
-          pendingCollapse.shift();
-        }
-      }
-    } else {
-      configBefore = config!.position.sequence;
-      configIndex += 1;
-    }
-  }
-
-  return {
-    entries,
-    systemBefore,
-    configBefore,
-    pendingCollapse,
-    hasBufferedSystemEntries: systemIndex < params.systemCandidates.length,
-    hasBufferedConfigEntries: configIndex < params.configCandidates.length,
-  };
-}
-
 async function initialBefore<T>(latest: AuditStore<T>["latest"]): Promise<number> {
   const sequence = (await latest({ limit: 1 }))[0]?.sequence;
   return sequence === undefined ? 0 : sequence + 1;
@@ -488,23 +419,64 @@ export async function listSystemChanges(
       operation.entry.changedPaths = [...write.entry.changedPaths];
     }
   }
-  const merged = mergeCandidates({
-    systemCandidates,
-    configCandidates,
-    pendingCollapse: cursor.pendingCollapse ?? [],
-    limit,
-  });
+  let systemIndex = 0;
+  let configIndex = 0;
+  let systemBefore: number | undefined;
+  let configBefore: number | undefined;
+  const collapseMarkers = [...(cursor.pendingCollapse ?? [])];
+  const entries: ChangeCandidate[] = [];
+
+  while (true) {
+    const system = systemCandidates[systemIndex];
+    const config = configCandidates[configIndex];
+    const next =
+      system && config
+        ? compareCandidates(system, config) <= 0
+          ? system
+          : config
+        : (system ?? config);
+    if (!next) {
+      break;
+    }
+
+    if (next === config && consumePendingCollapse(collapseMarkers, config)) {
+      configBefore = config.position.sequence;
+      configIndex += 1;
+      continue;
+    }
+    if (entries.length >= limit) {
+      break;
+    }
+
+    entries.push(next);
+    if (next === system) {
+      systemBefore = system.position.sequence;
+      systemIndex += 1;
+      if (system.pendingCollapse) {
+        collapseMarkers.push(system.pendingCollapse);
+        // Dropped markers can reveal duplicate config rows, never hide newer history.
+        if (collapseMarkers.length > MAX_PENDING_COLLAPSES) {
+          collapseMarkers.shift();
+        }
+      }
+    } else {
+      configBefore = config!.position.sequence;
+      configIndex += 1;
+    }
+  }
+
+  const hasBufferedSystemEntries = systemIndex < systemCandidates.length;
+  const hasBufferedConfigEntries = configIndex < configCandidates.length;
   // Payload timestamps can move backwards, so only discard markers after every
   // remaining config record has passed the cursor and none was a partner.
-  const pendingCollapse =
-    configScan.exhausted && !merged.hasBufferedConfigEntries ? [] : merged.pendingCollapse;
+  const pendingCollapse = configScan.exhausted && !hasBufferedConfigEntries ? [] : collapseMarkers;
   const next = {
     ...cursor,
-    systemAgentBefore: merged.hasBufferedSystemEntries
-      ? (merged.systemBefore ?? cursor.systemAgentBefore)
+    systemAgentBefore: hasBufferedSystemEntries
+      ? (systemBefore ?? cursor.systemAgentBefore)
       : systemScan.nextBeforeSequence,
-    configBefore: merged.hasBufferedConfigEntries
-      ? (merged.configBefore ?? cursor.configBefore)
+    configBefore: hasBufferedConfigEntries
+      ? (configBefore ?? cursor.configBefore)
       : configScan.nextBeforeSequence,
   };
   if (pendingCollapse.length > 0) {
@@ -513,8 +485,8 @@ export async function listSystemChanges(
     delete next.pendingCollapse;
   }
   const hasMore =
-    merged.hasBufferedSystemEntries ||
-    merged.hasBufferedConfigEntries ||
+    hasBufferedSystemEntries ||
+    hasBufferedConfigEntries ||
     pendingCollapse.length > 0 ||
     !systemScan.exhausted ||
     !configScan.exhausted;
@@ -522,10 +494,8 @@ export async function listSystemChanges(
     next.systemAgentBefore !== cursor.systemAgentBefore ||
     next.configBefore !== cursor.configBefore;
   return {
-    entries: merged.entries.map((candidate) => candidate.entry),
-    ...(hasMore && (merged.entries.length > 0 || scanAdvanced)
-      ? { nextCursor: encodeCursor(next) }
-      : {}),
+    entries: entries.map((candidate) => candidate.entry),
+    ...(hasMore && (entries.length > 0 || scanAdvanced) ? { nextCursor: encodeCursor(next) } : {}),
   };
 }
 

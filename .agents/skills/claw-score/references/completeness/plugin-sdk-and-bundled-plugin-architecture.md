@@ -31,7 +31,7 @@ Variation from the default completeness process:
 
 - Authoring and Packaging plugins: Root SDK entrypoint, Focused SDK imports, Entrypoint discovery, Migration shims, Plugin manifest, Package metadata, Runtime compatibility, Validation feedback
 - Bundled plugins: Bundled plugin listing, Bundled source overlays, Packaged bundled plugins, Generated plugin inventory, Bundled channel IDs
-- Canvas plugin: Hosted Canvas and A2UI surfaces, Agent canvas tool, Node Canvas commands, Control UI embeds, Canvas documents, A2UI transport and snapshots
+- Canvas plugin: Hosted Canvas surfaces, Agent canvas tool, Node Canvas commands, Control UI embeds, Canvas documents
 - Installing and running plugins: Plugin setup, Runtime activation, Enable and disable, Safe load failures, Dependency repair, Install update and uninstall
 - Channel plugins: Inbound event handling, Outbound delivery, Ingress authorization, Destination resolution, Native approval prompts
 - Provider and tool plugins: Provider plugins, Tool plugins, Model catalogs, Provider auth, Web search and fetch, Mixed plugins

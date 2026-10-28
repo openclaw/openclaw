@@ -33,10 +33,7 @@ export async function withResponseBodyTimeout<T>(params: {
           params.onTimeout?.({ timeoutMs }) ??
             createResponseBodyTimeoutError(`Response body timed out after ${timeoutMs}ms`),
         );
-      }, timeoutMs);
-      if (typeof timeoutId === "object" && "unref" in timeoutId) {
-        timeoutId.unref();
-      }
+      }, timeoutMs).unref();
     }
 
     return await racePromiseWithAbortSignal(

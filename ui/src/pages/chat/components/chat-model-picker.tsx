@@ -13,6 +13,7 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import { ProviderBrandIcon } from "../../../components/solid/provider-icon.tsx";
 import "../../../components/tooltip.ts";
 import { registerModelControlsEnglish } from "../../../i18n/locales/en-model-controls.ts";
+import { warmWhenIdle } from "../../../lib/idle-warmup.ts";
 import type { ChatModelCatalogState as ModelCatalogState } from "../../../lib/model-catalog-store.ts";
 import type { ModelProviderAuthLabel } from "../../../lib/model-provider-auth-label.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
@@ -36,6 +37,7 @@ registerEnglishCatalog(registerModelControlsEnglish);
 const ChatModelPickerPanel = lazy(() => import("./chat-model-picker-panel.tsx"), {
   export: "ChatModelPickerPanel",
 });
+warmWhenIdle(ChatModelPickerPanel.preload);
 
 export type ChatModelPickerParams = {
   providerAuth?: ReadonlyMap<string, ModelProviderAuthLabel>;
@@ -72,41 +74,6 @@ export type ChatModelPickerParams = {
   onTargetRetry?: (groupId: string) => unknown;
   onTargetSelect?: (groupId: string, value: string) => unknown;
 };
-
-function prepareChatModelPicker(params: ChatModelPickerParams) {
-  const activeModelOption = params.modelOptions.find((option) =>
-    isModelPickerOptionSelected(option, params.selectedModelValue, params.selectedAgentRuntime),
-  );
-  const triggerModelValue = params.triggerModelValue;
-  const triggerModelOption =
-    triggerModelValue === undefined
-      ? activeModelOption
-      : triggerModelValue === ""
-        ? undefined
-        : params.modelOptions.find((option) =>
-            isModelPickerOptionSelected(option, triggerModelValue, params.selectedAgentRuntime),
-          );
-  const modelToolsUnavailable = triggerModelOption?.supportsTools === false;
-  const selectedContextWindowOption = params.contextWindow?.options.find(
-    (option) => option.id === params.contextWindow?.selected,
-  );
-  const showContextWindowBadge =
-    selectedContextWindowOption !== undefined &&
-    params.contextWindow?.selected !== params.contextWindow?.defaultId;
-  const triggerTitle = [
-    params.triggerStatusLabel ?? params.triggerModelLabel,
-    modelToolsUnavailable ? t("chat.modelControls.chatOnly") : "",
-  ]
-    .filter(Boolean)
-    .join(" · ");
-  return {
-    triggerModelOption,
-    modelToolsUnavailable,
-    selectedContextWindowOption,
-    showContextWindowBadge,
-    triggerTitle,
-  };
-}
 
 export function ChatModelPicker(params: ChatModelPickerParams) {
   const search = createChatModelSearch();
@@ -147,7 +114,40 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
     pendingSearchFocus = target.ownerDocument.activeElement;
     requestAnimationFrame(focusSearch);
   });
-  const state = createMemo(() => prepareChatModelPicker(params));
+  const state = createMemo(() => {
+    const activeModelOption = params.modelOptions.find((option) =>
+      isModelPickerOptionSelected(option, params.selectedModelValue, params.selectedAgentRuntime),
+    );
+    const triggerModelValue = params.triggerModelValue;
+    const triggerModelOption =
+      triggerModelValue === undefined
+        ? activeModelOption
+        : triggerModelValue === ""
+          ? undefined
+          : params.modelOptions.find((option) =>
+              isModelPickerOptionSelected(option, triggerModelValue, params.selectedAgentRuntime),
+            );
+    const modelToolsUnavailable = triggerModelOption?.supportsTools === false;
+    const selectedContextWindowOption = params.contextWindow?.options.find(
+      (option) => option.id === params.contextWindow?.selected,
+    );
+    const showContextWindowBadge =
+      selectedContextWindowOption !== undefined &&
+      params.contextWindow?.selected !== params.contextWindow?.defaultId;
+    const triggerTitle = [
+      params.triggerStatusLabel ?? params.triggerModelLabel,
+      modelToolsUnavailable ? t("chat.modelControls.chatOnly") : "",
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    return {
+      triggerModelOption,
+      modelToolsUnavailable,
+      selectedContextWindowOption,
+      showContextWindowBadge,
+      triggerTitle,
+    };
+  });
   const closeModelPickerAfterSelection = (event: MouseEvent) => {
     // Option buttons live inside the picker overlay; its summary lives outside it.
     if (event.currentTarget instanceof Element) {
@@ -178,7 +178,6 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
             "chat-controls__inline-select-trigger chat-controls__model-trigger",
             {
               "chat-controls__model-trigger--loading": params.triggerLoading,
-              "chat-controls__inline-select-trigger--disabled": params.disabled,
             },
           ]}
           data-chat-model-select="true"
@@ -188,6 +187,7 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
           aria-label={`${t("chat.selectors.model")}: ${state().triggerTitle}${params.selectionScopeDescription ? `. ${params.selectionScopeDescription}` : ""}`}
           aria-busy={params.triggerLoading ? "true" : "false"}
           aria-disabled={params.disabled ? "true" : "false"}
+          aria-description={params.disabledReason}
           title={params.disabledReason?.trim() || undefined}
         >
           {state().modelToolsUnavailable ? (

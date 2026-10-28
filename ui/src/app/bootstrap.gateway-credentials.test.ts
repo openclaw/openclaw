@@ -94,6 +94,7 @@ it.each(["start", "connect", "plugins"])(
     } else {
       store.current().testOptions.onHello?.({
         ...GATEWAY_STORE_TEST_HELLO,
+        auth: { role: "operator", scopes: ["operator.read"] },
         ...(entry === "plugins" ? { features: { methods: ["plugins.controlUi.list"] } } : {}),
       });
     }

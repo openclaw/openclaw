@@ -804,6 +804,14 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
   const tools = Array.isArray(compiledContext?.tools) ? compiledContext.tools : undefined;
   const files: DiagnosticSupportBundleFile[] = [];
   const supplementalFiles: string[] = [];
+  const captureHeader = () => ({
+    traceSchema: "openclaw-trajectory",
+    schemaVersion: 1,
+    generatedAt: new Date().toISOString(),
+    traceId: manifest.traceId,
+    sessionId: manifest.sessionId,
+    sessionKey: manifest.sessionKey,
+  });
   const captures = {
     "metadata.json": ((): JsonRecord | undefined => {
       const runtimeMetadata = resolveLatestRuntimeEventData(runtimeEvents, "trace.metadata");
@@ -821,12 +829,7 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
           }
         : undefined;
       return {
-        traceSchema: "openclaw-trajectory",
-        schemaVersion: 1,
-        generatedAt: new Date().toISOString(),
-        traceId: manifest.traceId,
-        sessionId: manifest.sessionId,
-        sessionKey: manifest.sessionKey,
+        ...captureHeader(),
         harness: runtimeMetadata.harness,
         model: runtimeMetadata.model ?? modelFallback,
         config: runtimeMetadata.config,
@@ -927,12 +930,7 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
         return undefined;
       }
       return {
-        traceSchema: "openclaw-trajectory",
-        schemaVersion: 1,
-        generatedAt: new Date().toISOString(),
-        traceId: manifest.traceId,
-        sessionId: manifest.sessionId,
-        sessionKey: manifest.sessionKey,
+        ...captureHeader(),
         finalStatus: runtimeArtifacts?.finalStatus ?? runtimeEnd?.status,
         aborted: runtimeArtifacts?.aborted ?? runtimeEnd?.aborted,
         externalAbort: runtimeArtifacts?.externalAbort ?? runtimeEnd?.externalAbort,
@@ -1003,12 +1001,7 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
         return undefined;
       }
       return {
-        traceSchema: "openclaw-trajectory",
-        schemaVersion: 1,
-        generatedAt: new Date().toISOString(),
-        traceId: manifest.traceId,
-        sessionId: manifest.sessionId,
-        sessionKey: manifest.sessionKey,
+        ...captureHeader(),
         system: systemPrompt,
         submittedPrompts,
         latestSubmittedPrompt: submittedPrompts.at(-1),

@@ -24,6 +24,10 @@ Doctor keeps the config from before that hook, reports the failure, and continue
 with the remaining repairs. Warning-only results stay visible without changing
 config. Repair the affected plugin, then run `openclaw doctor --fix` again.
 
+If plugin migration obligations change during repair, Doctor reports the publication
+phase, expected and current plugin IDs, and changed field names. Diagnostic lists
+are bounded and omit configuration values; retained migration inputs stay protected.
+
 Doctor keeps plugin repair and diagnostic contracts available through later health
 checks and service finalization. It releases its private plugin resources when
 the flow ends, including failed runs.
@@ -33,6 +37,29 @@ line-comment and trailing-comma support as model loading. It keeps references
 backed by those local providers and repairs references to unavailable providers.
 This repair leaves `models.json` unchanged, preserving its comments. Unreadable
 or malformed catalogs still produce a warning and leave affected references intact.
+
+## Retired A2UI widgets
+
+A2UI widgets and the `registerBoardWidgetContentKind` Plugin SDK API have been
+removed. Use [`show_widget`](/tools/show-widget) with `kind: "html"` for
+interactive widget content. Calls that still request `kind: "a2ui"` fail
+validation with the next step: `A2UI widgets were removed; use kind "html"`.
+
+Doctor backs up the affected agent database before deleting stored A2UI widgets
+identified by `pluginKind: "canvas:a2ui"` or `registeredContentKind: "a2ui"`.
+It preserves other widgets and records a warning naming the deleted count,
+explaining that A2UI widgets were retired and can be recreated as HTML widgets.
+This repair does not convert their source into HTML.
+
+Other widgets using the retired registered-renderer API become inert HTML source
+previews after the same backup. Doctor preserves their original descriptor and
+manifest in the preview, keeps their layout and valid identity, and removes
+previous capabilities. Existing HTML, native plugin, and MCP widgets are unchanged.
+
+During `openclaw update`, the candidate's Doctor step owns this backed-up repair,
+including when the update was started by an older installed update driver.
+Stored A2UI rows do not prevent the update. Runtime readers accept only the
+current widget formats; they do not retain a compatibility renderer.
 
 ## Group allowlist fallback
 
@@ -45,30 +72,25 @@ apply. Update-time Doctor repair follows the same rules.
 
 ## Collaborative steering default
 
-Doctor writes `messages.queue.allowCollaborativeSteering: false` when the setting is
-absent, creating missing parent objects. New configuration files contain the same
-explicit default. Existing `true` and `false` values, including values supplied
-through config includes, stay unchanged.
+Collaborative steering is enabled by default. Doctor and initial configuration
+creation do not persist a separate steering override. Existing explicit `true` and
+`false` values, including values supplied through includes, remain unchanged.
+An older explicit value, even one written by an earlier Doctor, must be unset if
+you want the current default. Ordinary reads and startup leave authored config
+unchanged.
 
-The repair uses Doctor's existing backed-up, include-aware config writer. A
-supported, singly owned nested include receives the repair in
-that file. Ambiguous, shared, external, or root-level include layouts retain the
-writer's existing refusal behavior; Doctor reports the affected boundary so the
-operator can edit its owning file explicitly. Repeated repair is idempotent.
+With collaboration explicitly disabled, messages still queue quietly as
+requester-owned turns. Explicit `collaborativeSteeringFallback: "reject"` remains
+available. See [Queue steering](/concepts/queue-steering) for the authority tradeoff.
 
-Persisting this default can also update database-backed config bookkeeping.
-The existing [update rollback checks](/cli/update/how-updates-run) still apply:
-unattributed database writes prevent automatic restoration, including writes
-made during Doctor. The updater retains recovery artifacts for manual recovery.
+## Removed security presets
 
-Managed package updates and source updates invoke candidate Doctor and use this
-repair. Older update drivers that request a read-only Doctor phase cannot persist
-it in that phase. Direct package-manager upgrades, manual package replacement, and
-container-image replacement can bypass Doctor entirely. These installations use
-the runtime default immediately; run `openclaw doctor --fix` to persist it.
-Ordinary configuration reads and Gateway startup do not write this setting.
-
-See [Queue steering](/concepts/queue-steering) for the opt-in authority tradeoff.
+The unreleased `security.preset` field has been removed. Configurations containing
+`personal` or `corporate` must remove that field before startup; `openclaw doctor --fix`
+removes it through the existing unknown-key repair and backup flow.
+Doctor does not expand the removed preset. Explicit execution, sandbox, file,
+steering, and messaging settings are preserved; configure those controls directly
+if you relied on preset-derived restrictions.
 
 ## Cloud setup secret migration
 
@@ -99,12 +121,40 @@ setup image identities are not adopted as protected images.
 
 ### Heartbeat to ordinary automations
 
+If a state directory was moved before its default cron partition was recorded,
+interactive `openclaw doctor --fix` asks which retained partition to use before
+migrating heartbeat settings. The inventory includes each partition's jobs,
+scratch, receipts, and run history. Cron remains paused until a partition is chosen;
+other Gateway functionality remains available with a valid config.
+Updates also continue with a valid config while partition selection is deferred.
+Unsafe heartbeat sources still require repair before migration.
+
+Noninteractive updates and `openclaw doctor --fix --yes` do not guess. They keep
+the original retired heartbeat fields and report: run `openclaw doctor --fix`
+interactively to select the cron partition and migrate heartbeat settings.
+Retired heartbeat fields already make the config invalid, so that older config
+still requires interactive Doctor before the Gateway can start.
+
 `openclaw doctor --fix` converts supported July 2026 or newer heartbeat settings,
 persisted monitors, and structured heartbeat tasks into ordinary editable
 automations. It preserves job identity, history, scratch revisions and explicit
 unset markers, disabled state, schedule anchors and pending occurrences, tool
 authority, delivery targets, and quiet hours. A standalone `HEARTBEAT_OK` marker
 in a saved prompt becomes `NO_REPLY`; every other prompt byte remains unchanged.
+
+Doctor retains the original heartbeat settings through the entire pass, including
+workspace-file discovery for agents excluded by explicit per-agent enrollment.
+Disabled heartbeats stay disabled, and newly migrated jobs finish their cutover
+before Doctor returns. Interrupted cutovers also retain their original enablement
+in the existing receipt. Doctor disables a pending job when that receipt or the
+remaining source configuration proves it was disabled. Older pending receipts
+without those facts retain their job and report its exact disable command; after
+disabling it, rerun `openclaw doctor --fix`, then re-enable it if intended.
+Completed cutovers preserve later operator edits. Doctor also repairs the quiet
+reply token in receipt-owned tasks created from scratch by an earlier migration
+when their creation and definition-update timestamps still match. Ordinary runs
+preserve that provenance. Edited tasks and older converted tasks without that
+provenance remain unchanged.
 
 Migrated jobs use standard Automations delivery semantics. Heartbeat-specific
 duplicate suppression and no-route skipping are removed: repeated updates can be
@@ -133,13 +183,27 @@ Candidate update admission validates the projected configuration without changin
 the live config, databases, or backups. The installed updater can then run
 Doctor's backed-up data migration before the legacy settings are removed.
 Package updates using candidate admission also inspect the original heartbeat
-files. Unsafe or unreadable sources refuse the update before the running Gateway
-stops, including when an older updater omits workspace files from its private
-rehearsal. Differing scratch or a file retained after completed conversion does
+files. Unsafe or unreadable sources that still need conversion refuse the update
+before the running Gateway stops, including when an older updater omits workspace
+files from its private rehearsal. Differing scratch or a file retained after completed conversion does
 not block admission: Doctor preserves the originals and reports them for review.
+After completed conversion, Doctor only checks whether the path exists; it does
+not read the recreated file or follow its symlink.
 Unrelated invalid fields, unsupported legacy shapes, and heartbeat repairs in
 read-only, future-written, or included configuration still require operator
 repair before admission.
+
+### Memory flush model selection
+
+`openclaw doctor --fix` removes the retired
+`agents.defaults.compaction.memoryFlush.model` setting and records a warning
+naming its removal. Memory flushes use the active session model and its normal
+fallback chain. To keep memory extraction local, select a local session model
+and local fallbacks.
+
+Updates apply the same migration through the existing backed-up config write
+flow. Run Doctor before starting a Gateway with a configuration that still
+contains the retired setting.
 
 ### Provider configuration
 
@@ -535,9 +599,9 @@ runs the same migration. Repeating Doctor leaves the normalized row and its IDs
 unchanged. Published SDK and operator input normalization remain available at
 the input boundary.
 
-## Claw provenance schema
+## Template provenance schema
 
-Claw update plans and resume previews require the current provenance columns.
+Template provenance inspection requires the current provenance columns.
 Older SQLite databases that lack bootstrap or extension provenance columns now
 stop with `openclaw doctor --fix` guidance. Read-only planning leaves those
 databases unchanged instead of projecting absent columns as empty values.
@@ -885,6 +949,22 @@ Package installation does not perform operator-state migrations. Doctor and
 `openclaw update status` report pending plugin upgrades even when no update run
 exists.
 
+## Context engine plugin-ID selectors
+
+Releases before declared engine ownership stored the installing plugin's ID in
+`plugins.slots.contextEngine`. When that plugin registers a different engine
+ID, the selector never resolves and turns fall back to `legacy`. Doctor replaces
+the selector with the plugin's single declared `contextEngineIds` entry when the
+plugin is independently enabled or allowlisted and no other eligible plugin
+declares that engine. A selector that is already a declared engine ID, `legacy`,
+`none`, or an undeclared equal-ID plugin stays unchanged. With multiple declared
+engines, a disabled or denied owner, or a conflicting owner, Doctor keeps the
+selector and reports which engine ID to set. Incomplete plugin discovery skips
+the repair. Update-time Doctor applies the same rule through the normal backed-up
+config write; plugin settings and install records are not touched.
+
+See [Plugin and engine IDs](/concepts/context-engine#plugin-and-engine-ids).
+
 ## Blocked local plugins
 
 Doctor preserves the complete configuration entry and plugin policy for a local
@@ -1132,7 +1212,7 @@ against the current SQLite owners before the import can rename profiles.
 
     A tool policy scope with nonempty `allow` and `alsoAllow` lists fails validation. `doctor --fix` merges the lists only when the effective profile grants remain unchanged for every agent and provider that inherits the extras. It retains `alsoAllow: []` as an explicit override so inherited extras cannot reappear. If the extras may extend a profile or grant Gateway configuration-read access, Doctor leaves the conflicting scope untouched and reports the exact keys and values to review manually. This applies at the root `tools` policy, per-agent and per-provider policies, and channel or gateway tool policies. Sandbox lists remain untouched because `allow` and `alsoAllow` inherit independently; conflicting sandbox lists still require manual repair. Plugin-owned `plugins.entries.*.config` is left to the owning plugin's doctor contract. Gateway startup leaves these conflicts unchanged and directs the operator to Doctor; unresolved conflicts still require operator guidance before the config can validate.
 
-    `doctor --fix` removes `workspace: null` from `agents.entries.<id>` so normal workspace resolution can apply, including after migrating a legacy `agents.list` roster. Supported legacy heartbeat settings pass through the durable automation cutover. Invalid active-hour values remain unchanged with a repair diagnostic; Doctor does not silently replace quiet hours with unrestricted execution.
+    `doctor --fix` removes `workspace: null` from `agents.entries.<id>` so normal workspace resolution can apply, including after migrating a legacy `agents.list` roster. Supported legacy heartbeat settings pass through the durable automation cutover. Invalid active-hour values remain unchanged with a repair diagnostic naming the field and value; Doctor defers the heartbeat cutover instead of replacing quiet hours with unrestricted execution or an inherited window. Times still require `HH:MM`: correct `6:00` to `06:00`, for example, then rerun `openclaw doctor --fix` to migrate the intended window.
 
   </Accordion>
   <Accordion title="2. Legacy config key migrations">
@@ -1173,6 +1253,7 @@ against the current SQLite owners before the import can rename profiles.
 
     | Legacy key                                                                                    | Current key                                                                 |
     | ----------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+    | `gateway.controlUi.experimental.claws` | `gateway.controlUi.experimental.templates` (an existing `templates` value wins) |
     | `tools.toolSearch.mode: "code"` | `tools.toolSearch.mode: "tools"` (structured Tool Search) |
     | `tools.toolSearch.codeTimeoutMs` | removed (Tool Search activation is preserved) |
     | `tools.codeMode.runtime: "quickjs-wasi"` (global and per-agent)                                | `tools.codeMode.executor: "quickjs"` (an existing executor selection wins) |
@@ -1236,7 +1317,9 @@ against the current SQLite owners before the import can rename profiles.
     | `session.maintenance.rotateBytes`                                 | removed (deprecated)                                                        |
     | Runtime and channel tuning knobs retired in 2026.7                                               | removed (built-in production defaults apply)                               |
     | `diagnostics.memoryPressureSnapshot`, legacy `diagnostics.memoryPressureBundle`                  | removed (automatic critical-memory snapshots were retired; no replacement automatic capture) |
-    | `skills.workshop.autonomous.mode: "propose"`, `skills.workshop.approvalPolicy`, `skills.workshop.maxPending` | `"off"`; proposal settings removed (Skill Workshop proposals were retired) |
+    | `skills.workshop.autonomous.enabled`, `skills.workshop.approvalPolicy`, `skills.workshop.maxPending` | `autonomous.mode` (`true` → `"propose"`, `false` → `"off"`); proposal queue settings removed |
+
+    Doctor renames `gateway.controlUi.experimental.claws` to `templates`, preserving the boolean. If both keys exist, `templates` wins and `claws` is removed. Candidate update admission previews this repair without changing the config; the update-time Doctor pass persists it with the normal backup. External deployments that only run `openclaw config validate` must run the candidate's `openclaw doctor --fix` through their maintenance workflow before validation.
 
     Doctor migrates MCP `type: "http"` to `transport: "streamable-http"` and `type: "sse"` to `transport: "sse"` in both server maps. An existing `transport` wins. For command-based servers, Doctor removes `type: "stdio"`; the command still selects stdio. The update-time Doctor pass uses the same backed-up config repair. Plugin bundle files keep their external `type` format: bundle loading translates recognized types, and CLI exports use the destination's required format. An unknown bundle HTTP transport is rejected instead of being treated as SSE; its original `type` remains available to the destination CLI.
 

@@ -139,6 +139,23 @@ describe("installed plugin index persistence", () => {
     },
   );
 
+  it("retains declared engine ownership across metadata and install-record reads", async () => {
+    const stateDir = makeTempDir();
+    const ownership = { demo: ["canonical-engine"] };
+    const index = createIndex({
+      installRecords: { demo: { source: "npm", contextEngineIdsByPlugin: ownership } },
+    });
+    for (const plugin of index.plugins) {
+      plugin.contextEngineIds = ["canonical-engine"];
+    }
+
+    await writeIndex(index, { stateDir });
+
+    const persisted = requirePersisted(await readIndex({ stateDir }));
+    expect(persisted.plugins[0]?.contextEngineIds).toEqual(["canonical-engine"]);
+    expect((await readRecords({ stateDir }))?.demo?.contextEngineIdsByPlugin).toEqual(ownership);
+  });
+
   it("keeps a successor index when conditional rollback sees a newer revision", async () => {
     const f = makeStore();
     await withLease({ env: f.env }, async (lease) => {

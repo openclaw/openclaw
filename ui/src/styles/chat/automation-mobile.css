@@ -102,22 +102,6 @@
   text-align: center;
 }
 
-.session-automation-mobile__empty > svg {
-  width: 24px;
-  height: 24px;
-}
-
-.session-automation-mobile__empty > strong {
-  color: var(--text);
-  font-size: 14px;
-  font-weight: 500;
-}
-
-.session-automation-mobile__empty > p {
-  margin: 0;
-  font-size: 13px;
-}
-
 .session-automation-mobile__message {
   display: flex;
   align-items: center;
@@ -146,4 +130,8 @@
 .session-automation-mobile__empty.session-automation-mobile__message {
   display: grid;
   justify-content: normal;
+}
+
+.session-automation-mobile:has(> openclaw-panel-empty-state) {
+  padding: 0;
 }

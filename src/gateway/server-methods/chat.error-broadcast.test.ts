@@ -7,6 +7,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { loadOrCreateProcessDeviceIdentityAsync } from "../../infra/device-identity-async.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
+import { gatewayConnect } from "../server/client-fixtures.test-support.js";
 import { recordClientPresenceActivity } from "../server/client-presence.js";
 import { GatewayClientRegistry } from "../server/client-registry.js";
 import type { GatewayWsClient } from "../server/ws-types.js";
@@ -88,13 +89,7 @@ describe("chat.send error broadcast", () => {
           presenceKey: "activity-send",
           usesSharedGatewayAuth: false,
           socket: { readyState: 1 } as GatewayWsClient["socket"],
-          connect: {
-            minProtocol: 1,
-            maxProtocol: 1,
-            role: "operator",
-            scopes: ["operator.admin"],
-            client: { id: "openclaw-tui", version: "test", platform: "test", mode: "cli" },
-          },
+          connect: gatewayConnect(["operator.admin"], { id: "openclaw-tui", mode: "cli" }),
           authenticatedUserId: "send@activity.test",
           personPresence: { onlineSince: Date.now() - 1_000 },
         };
@@ -133,10 +128,9 @@ describe("chat.send error broadcast", () => {
         const duplicateResponse = vi.fn();
         await handleChatSend({ ...options, respond: duplicateResponse });
         expect(duplicateResponse).toHaveBeenCalledWith(
-          true,
-          { runId: "activity-send", status: "in_flight" },
+          false,
           undefined,
-          expect.objectContaining({ cached: true }),
+          expect.objectContaining({ code: "UNAVAILABLE", retryable: true }),
         );
         expect(ctx.recordClientActivity).not.toHaveBeenCalled();
         if (closedDuringAdmission) {

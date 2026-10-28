@@ -25,10 +25,7 @@ import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
 import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import * as sessionLifecycle from "../sessions/session-controller.lifecycle.js";
 import { listRpcSourceEntries } from "../sessions/session-controller.rpc-sources.js";
-import {
-  resetSessionControllerStateForTest,
-  rpcSourceTesting,
-} from "../sessions/session-lifecycle-admission.test-support.js";
+import { resetSessionControllerStateForTest } from "../sessions/session-lifecycle-admission.test-support.js";
 import { listSessionStateEventsSince } from "../sessions/session-state-events.js";
 import * as skillLibrarySelection from "../skills/library/selection.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
@@ -45,8 +42,11 @@ import type {
 } from "./server-methods/types.js";
 import { pendingChatSendDedupeKey } from "./server-shared.js";
 import { registerGoalAutomaticContinuationCases } from "./server.chat-goal-continuation.test-support.js";
+import { registerGoalRecoveryContinuationCase } from "./server.chat-goal-recovery.test-support.js";
+import { registerGoalReplacementCases } from "./server.chat-goal-replacement.test-support.js";
 import { registerWorkerGoalChatCases } from "./server.chat-goal-workers.test-support.js";
 import {
+  goalAgentResult,
   createGoalChatStartRequest,
   expectGoalChatRetryResponses,
   installReplyDispatchHook,
@@ -54,6 +54,7 @@ import {
   registerGoalChatRestartSettlementCase,
   registerGoalChatOperationCollisionCases,
 } from "./server.chat-goal.test-support.js";
+import { gatewayConnect, gatewayProfile } from "./server/client-fixtures.test-support.js";
 import { seedDeletedSessionTranscript } from "./session-history-fixture.test-support.js";
 import {
   bindSessionRowProjection,
@@ -82,13 +83,7 @@ const sessionKey = "agent:main:main";
 const sessionId = "goal-chat-session";
 const client: GatewayClient = {
   connId: "goal-chat-ui",
-  connect: {
-    minProtocol: 1,
-    maxProtocol: 1,
-    role: "operator",
-    scopes: ["operator.read", "operator.write", "operator.admin"],
-    client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
-  },
+  connect: gatewayConnect(["operator.read", "operator.write", "operator.admin"]),
 };
 let harness: Awaited<ReturnType<typeof createGatewaySuiteHarness>>;
 let context: GatewayRequestContext;
@@ -128,18 +123,7 @@ beforeEach(async () => {
   runEmbeddedAgent.mockImplementation(async (params) => {
     modelStarted.resolve(undefined);
     await modelRelease;
-    return {
-      payloads: [{ text: "Goal work continued." }],
-      meta: {
-        durationMs: 0,
-        agentMeta: {
-          sessionId: params.sessionId,
-          provider: "test",
-          model: "test",
-          usage: { input: 1, output: 1 },
-        },
-      },
-    };
+    return goalAgentResult(params.sessionId, "Goal work continued.");
   });
 });
 
@@ -182,7 +166,13 @@ async function useFreshSessionStore() {
 }
 
 async function rpc(
-  method: "chat.send" | "chat.history" | "chat.abort" | "sessions.abort" | "sessions.goal.update",
+  method:
+    | "chat.send"
+    | "chat.history"
+    | "chat.abort"
+    | "sessions.abort"
+    | "sessions.goal.update"
+    | "users.setRole",
   params: Record<string, unknown>,
   onResponse?: RespondFn,
   requestClient: GatewayClient = client,
@@ -226,7 +216,7 @@ async function withHeldModel(run: () => Promise<void>) {
 function profileClient(profileId: string): GatewayClient {
   return {
     ...client,
-    authenticatedUserProfile: { profileId, displayName: null, hasAvatar: false, updatedAt: 1 },
+    authenticatedUserProfile: gatewayProfile(profileId),
   };
 }
 
@@ -242,40 +232,9 @@ async function waitForModelRun(count = 1) {
     captureSessionControllerSettlement({ scope: storePath, identities: [sessionKey, sessionId] }),
   ]);
   expect(context.logGateway.error).not.toHaveBeenCalled();
-  let failureDiagnostic: string | undefined;
-  if (runEmbeddedAgent.mock.calls.length !== count) {
-    const entry = loadSessionEntry(scope());
-    failureDiagnostic = JSON.stringify({
-      warningCount: vi.mocked(context.logGateway.warn).mock.calls.length,
-      rpcSources: rpcSourceTesting.size,
-      admissionScopes: [...sessionLifecycle.collectSessionControllerTargets()]
-        .filter(([, identities]) => identities.has(sessionKey))
-        .slice(0, 5)
-        .map(([activeScope, identities]) => ({
-          file: path.basename(activeScope),
-          matchesExpected: activeScope === storePath,
-          identityCount: identities.size,
-          includesExpectedSessionId: identities.has(sessionId),
-        })),
-      dedupe: [...context.dedupe]
-        .filter(([key]) => key.startsWith("chat:"))
-        .slice(0, 5)
-        .map(([key, cached]) => ({
-          key,
-          ok: cached.ok,
-          status: isRecord(cached.payload) ? cached.payload.status : undefined,
-          error: cached.error && { code: cached.error.code, message: cached.error.message },
-        })),
-      entry: entry && {
-        sessionId: entry.sessionId,
-        lifecycleRevision: entry.lifecycleRevision,
-        status: entry.status,
-        lastRunId: entry.lastRunId,
-        abortedLastRun: entry.abortedLastRun,
-      },
-    });
-  }
-  expect(runEmbeddedAgent.mock.calls, failureDiagnostic).toHaveLength(count);
+  expect(runEmbeddedAgent.mock.calls, JSON.stringify(loadSessionEntry(scope()))).toHaveLength(
+    count,
+  );
 }
 
 function sendOptions(
@@ -311,6 +270,9 @@ function holdGoalReceipt() {
 
 describe("Goal chat admission and continuation", () => {
   registerGoalAutomaticContinuationCases(scope, runEmbeddedAgent, rpc, goalStart, userMessages);
+  registerGoalRecoveryContinuationCase(scope, runEmbeddedAgent, () => context, userMessages);
+
+  registerGoalReplacementCases(scope, runEmbeddedAgent, rpc, goalStart, () => context, client);
 
   registerGoalChatRestartSettlementCase({
     scope,

@@ -8,6 +8,7 @@ import { sqlPublicationAnchor } from "../infra/sql-connection.js";
 import { isSqliteCorruptionError } from "../infra/sqlite-error-diagnostics.js";
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
+import { openClawStateDatabaseCache } from "../state/openclaw-state-db-cache.js";
 import { readTrackedStateDatabaseIdentity } from "../state/openclaw-state-db-handle.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import {
@@ -15,6 +16,11 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import {
+  listResidentPluginStateEntries,
+  livePluginStateRow,
+  readPluginStateNamespace,
+} from "./plugin-state-namespace-owner.js";
 import { invalidatePluginStateMutation } from "./plugin-state-operation-epochs.js";
 import {
   pluginStatePublication,
@@ -26,6 +32,7 @@ import {
   wrapPluginStateError,
 } from "./plugin-state-store.database.js";
 import {
+  assertPluginStateKey,
   parseStoredJson,
   getPluginStateKysely,
   selectPluginStateEntry,
@@ -43,6 +50,7 @@ import {
   updatePluginStateEntry,
 } from "./plugin-state-store.mutations.js";
 import {
+  decodePluginStateLookups,
   listPluginStateEntries,
   lookupPluginStateEntries,
   validatePluginStateKeyRange,
@@ -103,6 +111,41 @@ function writePluginState<T>(
       message,
     );
   }
+}
+
+/** Private/report handles and transaction-local reads keep their native snapshot. */
+// Remove these sync resident readers with the compatibility API after 2026-12-31.
+function residentNamespace(
+  store: PluginStateDatabase,
+  scope: { pluginId: string; namespace: string },
+) {
+  if (
+    store.db.isTransaction ||
+    openClawStateDatabaseCache.getCachedOpenClawStateDatabase(store.path)?.db !== store.db
+  ) {
+    return undefined;
+  }
+  const identity = readTrackedStateDatabaseIdentity(sqlPublicationAnchor(store.db))?.key;
+  return identity ? readPluginStateNamespace(identity, scope) : undefined;
+}
+
+function residentLookups(
+  store: PluginStateDatabase,
+  scope: { pluginId: string; namespace: string; keys: readonly string[] },
+) {
+  const rows = residentNamespace(store, scope);
+  if (!rows) {
+    return undefined;
+  }
+  for (const key of scope.keys) {
+    assertPluginStateKey(store.db, key, "lookup");
+  }
+  const now = Date.now();
+  return decodePluginStateLookups(
+    scope.keys,
+    (key) => livePluginStateRow(rows.get(key), now)?.value_json,
+    store.path,
+  );
 }
 
 type PluginStateRegisterParams = PluginStateRegisterEntryParams & { env?: NodeJS.ProcessEnv };
@@ -249,7 +292,15 @@ export function pluginStateLookup(params: {
         ...dependency,
         identity: readTrackedStateDatabaseIdentity(sqlPublicationAnchor(store.db))?.key,
       });
-      return lookupPluginStateEntry(store, params);
+      const resident = residentLookups(store, { ...params, keys: [params.key] });
+      if (!resident) {
+        return lookupPluginStateEntry(store, params);
+      }
+      const lookup = resident[0]!;
+      if (!lookup.ok) {
+        throw lookup.error;
+      }
+      return lookup.value;
     },
     params.env,
   );
@@ -279,7 +330,7 @@ export function pluginStateLookupMany(params: {
         ...dependency,
         identity: readTrackedStateDatabaseIdentity(sqlPublicationAnchor(store.db))?.key,
       });
-      return lookupPluginStateEntries(store, params);
+      return residentLookups(store, params) ?? lookupPluginStateEntries(store, params);
     },
     params.env,
   );
@@ -474,12 +525,13 @@ export function pluginStateCount(params: {
     readPluginState(
       "count",
       "Failed to count plugin state entries.",
-      ({ db }) =>
-        countLivePluginStateNamespaceEntries(db, {
-          pluginId: params.pluginId,
-          namespace: params.namespace,
-          now: Date.now(),
-        }),
+      (store) => {
+        const rows = residentNamespace(store, params);
+        const now = Date.now();
+        return rows
+          ? [...rows.values()].filter((row) => livePluginStateRow(row, now)).length
+          : countLivePluginStateNamespaceEntries(store.db, { ...params, now });
+      },
       params.env,
     ) ?? 0
   );
@@ -494,7 +546,12 @@ export function pluginStateEntries(params: {
     readPluginState(
       "entries",
       "Failed to list plugin state entries.",
-      (store) => listPluginStateEntries(store, params),
+      (store) => {
+        const rows = residentNamespace(store, params);
+        return rows
+          ? listResidentPluginStateEntries(rows, store.path)
+          : listPluginStateEntries(store, params);
+      },
       params.env,
     ) ?? []
   );

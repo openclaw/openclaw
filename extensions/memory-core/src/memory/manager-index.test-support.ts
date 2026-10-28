@@ -390,12 +390,11 @@ export function createManagerIndexFixture(deps: {
     managers.add(manager);
   };
 
-  const getFreshManager = async (
+  const getManager = async (
     cfg: ManagerConfig,
     purpose?: "default" | "status" | "cli",
     inspectSources?: boolean,
   ): Promise<MemoryIndexManager> => {
-    setRuntimeConfigSnapshot(cfg);
     const manager = requireManager(
       await deps.getMemorySearchManager({
         runInBackgroundContext: runInMemoryTestBackgroundContext,
@@ -409,10 +408,24 @@ export function createManagerIndexFixture(deps: {
     return manager;
   };
 
-  const getPersistentManager = async (cfg: ManagerConfig): Promise<MemoryIndexManager> => {
-    const manager = await getFreshManager(cfg);
+  const getFreshManager = async (
+    cfg: ManagerConfig,
+    purpose?: "default" | "status" | "cli",
+    inspectSources?: boolean,
+  ): Promise<MemoryIndexManager> => {
+    setRuntimeConfigSnapshot(cfg);
+    return getManager(cfg, purpose, inspectSources);
+  };
+
+  const getPreparedPersistentManager = async (cfg: ManagerConfig): Promise<MemoryIndexManager> => {
+    const manager = await getManager(cfg);
     await resetManager(manager);
     return manager;
+  };
+
+  const getPersistentManager = async (cfg: ManagerConfig): Promise<MemoryIndexManager> => {
+    setRuntimeConfigSnapshot(cfg);
+    return getPreparedPersistentManager(cfg);
   };
 
   const seedSessionTranscript = async (params: SessionTranscript): Promise<void> => {
@@ -518,6 +531,7 @@ export function createManagerIndexFixture(deps: {
     trackManager,
     resetManager,
     getPersistentManager,
+    getPreparedPersistentManager,
     getFreshManager,
     getFtsSessionManager,
     seedSessionTranscript,

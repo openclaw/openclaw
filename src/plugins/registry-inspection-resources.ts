@@ -1,3 +1,7 @@
+import {
+  collectNestedErrorCandidates,
+  materializeErrorStack,
+} from "../infra/error-graph-internal.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { getPluginInstance, type PluginInstanceHandle } from "./plugin-instance-scope.js";
 import {
@@ -28,6 +32,13 @@ export function getPluginRegistryInspectionResources(registry: PluginRegistry) {
 
 function throwDisposalFailures(failures: Error[]): void {
   if (failures.length > 0) {
+    for (const failure of failures.flatMap(collectNestedErrorCandidates)) {
+      try {
+        materializeErrorStack(failure);
+      } catch {
+        // Plugin errors may be frozen; preserve their identity and custody classification.
+      }
+    }
     const Failure = failures.some(hasRetainedPluginRuntimeCloseError)
       ? AggregateError
       : PluginRuntimeCloseCompletedError;
@@ -38,8 +49,15 @@ function throwDisposalFailures(failures: Error[]): void {
 /** Owns only an explicitly acquired, uncached inspection's registration resources. */
 export class PluginRegistryInspectionResources {
   readonly #rollbackInstances = new Set<object>();
-  readonly #source = new PluginRegistrationResourceSource(() =>
-    this.retire(this.#registry, this.#rollbackInstances),
+  readonly #source = new PluginRegistrationResourceSource(
+    () => this.retire?.(this.#registry, this.#rollbackInstances),
+    () => {
+      // Released handles can outlive physical disposal; do not retain their load graphs.
+      this.retire = undefined;
+      this.#registry = undefined;
+      this.#rollbackInstances.clear();
+      this.#adoptedInvocations = undefined;
+    },
   );
   readonly #claim = this.#source.acquireClaim("inspection");
   readonly #registries = new Set<PluginRegistry>();
@@ -49,10 +67,12 @@ export class PluginRegistryInspectionResources {
   #release?: Promise<void>;
 
   constructor(
-    private readonly retire: (
-      registry: PluginRegistry | undefined,
-      rollbackInstances: ReadonlySet<object>,
-    ) => Promise<void>,
+    private retire:
+      | ((
+          registry: PluginRegistry | undefined,
+          rollbackInstances: ReadonlySet<object>,
+        ) => Promise<void>)
+      | undefined,
   ) {}
 
   attach(registry: PluginRegistry): void {
@@ -151,6 +171,10 @@ export class PluginRegistryInspectionResources {
   }
 
   wrapAdoptedValue<T>(value: T): T {
+    // Borrowers can still need adopted values before physical cleanup finishes.
+    if (!this.retire) {
+      throw new Error("Plugin inspection resources have been released");
+    }
     return this.#adoptedInvocations ? this.#adoptedInvocations.wrap(value) : value;
   }
 

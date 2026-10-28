@@ -12,6 +12,7 @@ type DispatchArgs = Parameters<GatewayRecoveryRuntime["dispatchAgent"]>;
 function createRecoveryRuntime(result: string) {
   const dispatchAgent = vi.fn(async (..._args: DispatchArgs) => result);
   const runtime: GatewayRecoveryRuntime = {
+    prepareFailedWorkerPlacement: async () => undefined,
     prepareRestartRecovery: () => undefined,
     resumeChatInput: async () => {
       throw new Error("Unexpected chat input recovery");
@@ -59,7 +60,7 @@ it.each(["exact", "stale"] as const)(
     onTestFinished(registerGatewayRecoveryRuntime(active.runtime));
     const exact = createRecoveryRuntime("exact");
     const params = { message: "completion", idempotencyKey: "completion-1" };
-    const result = dispatchGatewayLifecycleMethod("agent", params, {
+    const result = dispatchGatewayLifecycleMethod(params, {
       expectFinal: true,
       timeoutMs: 1_000,
       resolveGatewayContext: () =>

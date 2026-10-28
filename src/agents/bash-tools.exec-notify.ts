@@ -23,6 +23,7 @@ import { enqueueSystemEventWithReceipt } from "../infra/system-events.js";
 import { logWarn } from "../logger.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { isCronRunSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
+import { recoverAfterAgentDatabasePreparation } from "../state/agent-database-preparation-recovery.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
 import {
   processSessionInstanceId,
@@ -132,10 +133,8 @@ function installExecNotificationPersistence(session: ProcessSession) {
 }
 
 /** Replay only the notification obligation, through the ordinary exit owner. */
-export async function recoverExecExitNotifications(cfg: OpenClawConfig, signal: AbortSignal) {
-  const { recoverAfterAgentDatabasePreparation } =
-    await import("../state/agent-database-preparation-recovery.js");
-  await recoverAfterAgentDatabasePreparation(signal, (agentIds) =>
+export function recoverExecExitNotifications(cfg: OpenClawConfig, signal: AbortSignal) {
+  return recoverAfterAgentDatabasePreparation(signal, (agentIds) =>
     recoverExecExitNotificationsForAgents(cfg, signal, agentIds),
   );
 }
@@ -226,6 +225,9 @@ async function recoverExecExitNotificationsForAgents(
             target,
             id,
             {
+              // The pending-input store binds a source turn to one request and run. A
+              // completion or earlier notice interrupted before adoption keeps its key.
+              sourceTurnId: `exec:${id}:restart:${getAgentEventLifecycleGeneration()}`,
               abortSignal: signal,
               assertCurrent: () => {
                 signal.throwIfAborted();
@@ -280,7 +282,7 @@ function enqueueExecExitNotification(
     sessionKey: target.sessionKey!,
     source: "exec",
     contextKey: options.contextKey ?? `exec:${id}`,
-    sourceTurnId: `exec:${id}`,
+    sourceTurnId: options.sourceTurnId ?? `exec:${id}`,
     expectedTarget: target,
   });
 }
@@ -308,6 +310,8 @@ export function prepareExecExitNotification(
   }
   return captureSessionEventTarget(owner, targetKey, {
     operatorAuthority: getGatewayToolCallerIdentity()?.operatorAuthority,
+    // The completion continues the requester's own command, not a new sender's request.
+    retainRequesterOwner: true,
   }).then(
     (target) => {
       if (isCronRunSessionKey(targetKey)) {

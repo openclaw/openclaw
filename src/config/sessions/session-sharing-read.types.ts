@@ -2,36 +2,30 @@ import type { CanonicalSessionReaderContinuation } from "./session-canonical-key
 import type { StoredMessageReactionSummary } from "./session-reaction-store.types.js";
 import type { SessionSuggestionListParams } from "./session-sharing-store.types.js";
 
-export type SessionMembersWorkerInput = {
-  kind: "session-members";
+type SharingInput<Kind extends string> = {
+  kind: Kind;
   database: { agentId: string; path: string };
-  sessionKey: string;
   env: NodeJS.ProcessEnv;
+};
+
+export type SessionMembersWorkerInput = SharingInput<"session-members"> & {
+  sessionKey: string;
   continuation?: CanonicalSessionReaderContinuation;
 };
 
-export type SessionSuggestionsWorkerInput = {
-  kind: "session-suggestions";
-  database: { agentId: string; path: string };
+export type SessionSuggestionsWorkerInput = SharingInput<"session-suggestions"> & {
   sessionKey: string;
   params: SessionSuggestionListParams;
-  env: NodeJS.ProcessEnv;
 };
 
-export type SessionMembershipFactsWorkerInput = {
-  kind: "session-membership-facts";
-  database: { agentId: string; path: string };
+export type SessionMembershipFactsWorkerInput = SharingInput<"session-membership-facts"> & {
   sessionKeys?: readonly string[];
-  env: NodeJS.ProcessEnv;
   continuation?: CanonicalSessionReaderContinuation;
 };
 
-export type SessionReactionsWorkerInput = {
-  kind: "session-reactions";
-  database: { agentId: string; path: string };
+export type SessionReactionsWorkerInput = SharingInput<"session-reactions"> & {
   sessionKey: string;
   sessionId: string;
-  env: NodeJS.ProcessEnv;
 };
 
 export type SessionReactionsWorkerResult = {

@@ -63,7 +63,12 @@ export async function prepareAuthorityConfig(overrides: Partial<OpenClawConfig> 
 
 export async function withAuthorityTools<T>(
   params: RunEmbeddedAgentParams,
-  run: (tools: ReturnType<typeof createOpenClawCodingTools>) => Promise<T>,
+  run: (
+    tools: ReturnType<typeof createOpenClawCodingTools>,
+    admitted: Awaited<
+      ReturnType<NonNullable<RunEmbeddedAgentParams["preparedRunAdmission"]>["admit"]>
+    >,
+  ) => Promise<T>,
   options: Partial<NonNullable<Parameters<typeof createOpenClawCodingTools>[0]>> & {
     includeOpenClawTools?: boolean;
   } = {},
@@ -99,7 +104,7 @@ export async function withAuthorityTools<T>(
       },
       ...overrides,
     });
-    return run(tools);
+    return run(tools, admitted);
   });
 }
 

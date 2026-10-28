@@ -10,6 +10,7 @@ import { normalizeAgentId } from "../../routing/session-key.js";
 import {
   listAgentDatabaseAdmissionRefusals,
   readAgentDatabaseAdmissionRefusal,
+  readAgentDatabaseReadAdmissionRefusal,
 } from "../../state/agent-database-admission.js";
 import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
@@ -201,7 +202,7 @@ export type SessionStoreTargetInventoryRequest = {
   env: NodeJS.ProcessEnv;
   paths: CapturedSessionStorePaths;
   candidates: SessionStoreReadCandidate[];
-  recoveryExclusions?: { agentIds: string[]; storePaths: string[] };
+  recoveryExclusions?: { agentIds: string[]; storePaths: string[]; databasePaths: string[] };
   registryDiscovery?: {
     agentIds: string[];
     roots: Array<{ path: string; physicalPath: string }>;
@@ -318,9 +319,11 @@ function isCurrentRegistrySourceGeneration(
 }
 
 type InventoryEnvironment = {
+  config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   stateDir: string;
   serialized: NodeJS.ProcessEnv;
+  configuredPaths?: CapturedSessionStorePaths;
 };
 let publishedInventoryEnvironment:
   | {
@@ -334,7 +337,7 @@ let publishedInventoryEnvironment:
 export function captureSessionStoreEnvironment(
   cfg: OpenClawConfig,
   inputEnv?: NodeJS.ProcessEnv,
-): InventoryEnvironment & { config: OpenClawConfig } {
+): InventoryEnvironment {
   const config = captureRuntimeConfig(cfg);
   const publication =
     inputEnv === undefined && cfg === getRuntimeConfigSnapshot()
@@ -352,6 +355,7 @@ export function captureSessionStoreEnvironment(
     env.OPENCLAW_STATE_DIR = stateDir;
     // Windows path resolution needs the proxy; worker requests need a plain snapshot.
     environment = {
+      config,
       env,
       stateDir,
       serialized: Object.freeze({ ...env, OPENCLAW_STATE_DIR: stateDir }),
@@ -361,7 +365,7 @@ export function captureSessionStoreEnvironment(
       publishedInventoryEnvironment = { config, publication, captured: environment };
     }
   }
-  return { config, ...environment };
+  return environment;
 }
 
 /** Capture locators and bounded families without reading SQLite or assigning an owner. */
@@ -370,14 +374,27 @@ export function prepareSessionStoreTargetInventory(
   inputAgentIds: readonly string[],
   inputEnv?: NodeJS.ProcessEnv,
   selection?: SessionStoreTargetInventoryRequest["selection"],
+  admission: "read" | "write" = "write",
 ): Omit<SessionStoreTargetInventoryRequest, "registeredDatabases"> {
-  const { config, env, stateDir, serialized } = captureSessionStoreEnvironment(cfg, inputEnv);
+  const environment = captureSessionStoreEnvironment(cfg, inputEnv);
+  const { config, env, stateDir, serialized } = environment;
+  const capturePaths = (agentId: string) => ({
+    configured: resolveSessionStorePathCore(config.session?.store, { agentId, env }),
+    default: resolveSessionStorePathCore(undefined, { agentId, env }),
+  });
+  // Only logical configured paths follow config/env publication. Physical candidates
+  // and retired-owner discovery below must observe filesystem changes on every read.
+  const configuredPaths = (environment.configuredPaths ??= new Map(
+    listConfiguredSessionStoreAgentIds(config).map((agentId) => [agentId, capturePaths(agentId)]),
+  ));
   // Recovery skips unavailable stores before discovery can join their native opening.
   // The preparing owner can still discover its own borrowed admission.
   const refusals =
     selection === "recovery"
       ? listAgentDatabaseAdmissionRefusals({ env }).filter((refusal) =>
-          readAgentDatabaseAdmissionRefusal(refusal.agentId, { env }),
+          admission === "read"
+            ? readAgentDatabaseReadAdmissionRefusal(refusal.agentId, { env })
+            : readAgentDatabaseAdmissionRefusal(refusal.agentId, { env }),
         )
       : [];
   const excludedAgentIds = new Set(refusals.map((refusal) => refusal.agentId));
@@ -386,14 +403,11 @@ export function prepareSessionStoreTargetInventory(
   );
   const excludedStorePaths: string[] = [];
   const agentIds = [...new Set(inputAgentIds.map(normalizeAgentId))];
-  const configured = listConfiguredSessionStoreAgentIds(config);
+  const configured = [...configuredPaths.keys()];
   const paths = new Map(
     [...new Set([...agentIds, ...configured])].map((agentId) => [
       agentId,
-      {
-        configured: resolveSessionStorePathCore(config.session?.store, { agentId, env }),
-        default: resolveSessionStorePathCore(undefined, { agentId, env }),
-      },
+      configuredPaths.get(agentId) ?? capturePaths(agentId),
     ]),
   );
   const perAgent = isPerAgentSessionStoreConfig(config.session?.store);
@@ -476,6 +490,7 @@ export function prepareSessionStoreTargetInventory(
       ? {
           recoveryExclusions: {
             agentIds: [...excludedAgentIds],
+            databasePaths: [...excludedDatabasePaths],
             storePaths: excludedStorePaths,
           },
         }

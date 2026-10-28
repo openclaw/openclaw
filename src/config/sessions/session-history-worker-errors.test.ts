@@ -401,10 +401,7 @@ it.each([
       scope: "sibling-family" as const,
     };
     const original = { ...admitted };
-    const foreign = {
-      path: "/foreign.sqlite",
-      physicalPath: "/foreign.sqlite",
-    };
+    const foreign = { path: "/foreign.sqlite", physicalPath: "/foreign.sqlite" };
     const entered = createDeferredCore();
     const response = createDeferredCore<unknown>();
     let prepare: (() => unknown) | undefined;
@@ -424,12 +421,7 @@ it.each([
     const paths = new Map([
       ["main", { configured: "/configured.sqlite", default: "/default.sqlite" }],
     ]);
-    const inventoryRequest = {
-      config: {},
-      agentIds: ["main"],
-      ...common,
-      paths,
-    };
+    const inventoryRequest = { config: {}, agentIds: ["main"], ...common, paths };
     const discovery = withSessionHistoryWorkerReadCandidates<unknown>([admitted], (scope) =>
       kind === "store"
         ? scope.readStoreTarget(storeRequest)

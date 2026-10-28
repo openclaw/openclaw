@@ -60,6 +60,15 @@ harness installs the exact candidate (including beta versions), connects the app
 and invokes `system.which` through the real Gateway. It does not require old
 apps to advertise the current harness's full capability inventory.
 
+The harness installs one local tarball inside WSL and resolves every other
+dependency from npm. Release-shaped candidates keep core dependencies such as
+`@openclaw/ai` unbundled because they publish together with core, so package
+preparation hands Windows-node a self-contained copy: it bundles each unbundled
+core dependency at the exact candidate version from the verified prerelease
+plugin registry, and passes the candidate through unchanged when there is no
+registry or nothing to bundle. Other lanes keep installing the unmodified
+release package.
+
 Evidence names distinguish the app source kind and release tag or source SHA.
 No lane accepts a protocol mismatch as a passing test. Preview failures retain
 their raw GitHub job conclusions; Release Checks can therefore appear red while

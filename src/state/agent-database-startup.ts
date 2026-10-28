@@ -10,12 +10,14 @@ import {
   getOrLoadSqliteDatabaseAdmissionForPath,
   prepareSqliteDatabaseAdmission,
 } from "../infra/sqlite-database-admission.js";
+import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
 import { readSqliteIntegrityFileIdentity } from "../infra/sqlite-file-generation.js";
 import { withSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
 import { schemaAdmission } from "../infra/sqlite-schema-admission.js";
 import { WorkerTaskError } from "../infra/worker-task-pool.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { createPermitPool } from "../shared/permit-pool.js";
@@ -27,10 +29,18 @@ import {
   failPendingAgentDatabase,
   listAgentDatabaseAdmissionRefusals,
   preparePendingAgentDatabase,
+  preparePendingAgentDatabaseRead,
+  publishPendingAgentDatabaseReadAdmission,
   readAgentDatabaseAdmissionRefusal,
   type AgentDatabaseAdmissionRefusal,
 } from "./agent-database-admission.js";
 import { withAgentDatabasePreparationContext } from "./agent-database-preparation-context.js";
+import type {
+  PendingAgentDatabaseInspection as PendingInspection,
+  AgentDatabaseStartupActivation as Activation,
+  AgentDatabaseStartupPreparationPhase as PreparationPhase,
+  PendingAgentDatabaseRecovery as PendingRecovery,
+} from "./agent-database-startup.types.js";
 import { readAgentDeletionJournalStatusInWorker } from "./agent-deletion-journal.read.js";
 import {
   AGENT_DATABASE_PREFLIGHT_CONCURRENCY,
@@ -44,46 +54,6 @@ import {
 import type { AgentSchemaInspection } from "./openclaw-agent-schema-inspection.js";
 import type { OpenClawDatabaseSchemaPreflight } from "./openclaw-database-preflight.types.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
-
-type PendingInspection = {
-  target: { agentId?: string; path: string };
-  result: Promise<OpenClawDatabaseSchemaPreflight>;
-};
-type PreparationInput = {
-  agentId: string;
-  paths: readonly string[];
-  env: NodeJS.ProcessEnv;
-  signal: AbortSignal;
-  assertCurrent: () => void;
-  phase: (name: "secrets" | "models") => void;
-};
-type Activation = {
-  isCurrent: () => boolean;
-  preparationReady: Promise<void>;
-  openAgent: (input: PreparationInput) => Promise<void>;
-  migrateAgent: (input: PreparationInput) => Promise<void | { maintain: () => Promise<void> }>;
-  publishAgent: (input: PreparationInput) => Promise<void>;
-};
-type PreparationPhase =
-  | "inspection"
-  | "activation"
-  | "readiness"
-  | "open-wait"
-  | "open"
-  | "migration-wait"
-  | "migration"
-  | "publication-wait"
-  | "secrets"
-  | "models"
-  | "publication";
-type PendingRecovery = {
-  refusal: AgentDatabaseAdmissionRefusal;
-  completion: Promise<void>;
-  startedAt: number;
-  phase: PreparationPhase;
-  phaseStartedAt: number;
-  phaseDurationsMs: Partial<Record<PreparationPhase, number>>;
-};
 
 const PREPARATION_PROGRESS_INTERVAL_MS = 60_000;
 const STARTUP_PUBLICATION_ATTEMPTS = 4;
@@ -283,7 +253,8 @@ class AgentDatabaseStartupAdmission {
     }
     const signal = options.signal ? AbortSignal.any([this.signal, options.signal]) : this.signal;
     if (!options.forWrite) {
-      return racePromiseWithAbortSignal(pending.completion, signal);
+      const readiness = options.forWrite === false ? pending.readReady : pending.completion;
+      return readiness && racePromiseWithAbortSignal(readiness, signal);
     }
     // Allow five minutes for slow-host startup, plus a minute per queued inspection batch.
     const timeoutMs =
@@ -399,9 +370,11 @@ class AgentDatabaseStartupAdmission {
       });
       const startedAt = performance.now();
       const completion = createDeferredCore();
+      const readReady = createDeferredCore();
       const recovery: PendingRecovery = {
         refusal,
         completion: completion.promise,
+        readReady: readReady.promise,
         startedAt,
         phase: "inspection",
         phaseStartedAt: startedAt,
@@ -429,8 +402,8 @@ class AgentDatabaseStartupAdmission {
       const checked = Promise.allSettled(inspections.map(({ result }) => result));
       // Gateway-owned recovery outlives the caller's temporary discovery snapshot.
       const work = runInDetachedAsyncContext(async () => {
-        const publicationComplete = createDeferredCore();
         const preparation: { maintenance?: () => Promise<void> } = {};
+        let revokeReadAdmission: (() => void) | undefined;
         try {
           const results = await checked;
           phase("activation");
@@ -438,11 +411,14 @@ class AgentDatabaseStartupAdmission {
           if (!activation || this.stopped) {
             return;
           }
-          const assertCurrent = () => {
+          const assertLifetimeCurrent = () => {
             this.signal.throwIfAborted();
             if (!activation.isCurrent() || this.pending.get(agentId) !== recovery) {
               throw new Error(`Gateway no longer owns preparation for agent ${agentId}`);
             }
+          };
+          const assertCurrent = () => {
+            assertLifetimeCurrent();
             for (const witness of witnesses) {
               if (!witness.identity) {
                 throw witness.error;
@@ -500,6 +476,13 @@ class AgentDatabaseStartupAdmission {
               );
             }
           }
+          const canReadBeforeOpen = inspections.every(({ target }, index) => {
+            const result = results[index];
+            return (
+              result?.status === "fulfilled" &&
+              matchesInspectionPath(result.value.readReadyAgentPaths ?? [], target.path)
+            );
+          });
           phase("readiness");
           await racePromiseWithAbortSignal(activation.preparationReady, this.signal);
           assertCurrent();
@@ -507,6 +490,7 @@ class AgentDatabaseStartupAdmission {
             async () => {
               await assertNotDeleted();
               await preparePendingAgentDatabase(refusal, { env, assertCurrent }, async () => {
+                await using prepared = new AsyncDisposableStack();
                 const input = {
                   agentId,
                   paths,
@@ -515,53 +499,128 @@ class AgentDatabaseStartupAdmission {
                   assertCurrent,
                   phase,
                 };
-                phase("open-wait");
-                const release = await this.opening.acquire({ signal: this.signal });
-                try {
-                  assertCurrent();
-                  phase("open");
-                  await activation.openAgent(input);
-                } finally {
-                  release?.();
-                }
-                phase("migration-wait");
-                const releaseMigration = await this.migrating.acquire({ signal: this.signal });
-                try {
-                  assertCurrent();
-                  phase("migration");
-                  const migrated = await activation.migrateAgent(input);
-                  preparation.maintenance = migrated ? migrated.maintain : undefined;
-                } finally {
-                  releaseMigration?.();
-                }
-                // Keep the revision until admission publishes after its final journal check.
-                phase("publication-wait");
-                const previous = this.publication;
-                this.publication = publicationComplete.promise;
-                await previous;
-                assertCurrent();
-                this.publishingAgentId = agentId;
-                // Retry only publication; opening and migration have already completed.
-                for (let attempt = 1; ; attempt++) {
+                const publish = async () => {
+                  const publicationComplete = createDeferredCore();
+                  phase("publication-wait");
+                  const previous = this.publication;
+                  this.publication = publicationComplete.promise;
                   try {
-                    await activation.publishAgent(input);
-                    break;
-                  } catch (error) {
-                    const retryable =
-                      error instanceof AgentDatabaseStartupSupersededError ||
-                      error instanceof AgentDatabaseSchemaAdmissionChangedError;
-                    if (!retryable || attempt >= STARTUP_PUBLICATION_ATTEMPTS) {
-                      throw error;
+                    await previous;
+                    assertCurrent();
+                    this.publishingAgentId = agentId;
+                    for (let attempt = 1; ; attempt++) {
+                      try {
+                        await activation.publishAgent(input);
+                        break;
+                      } catch (error) {
+                        const retryable =
+                          error instanceof AgentDatabaseStartupSupersededError ||
+                          error instanceof AgentDatabaseSchemaAdmissionChangedError;
+                        if (!retryable || attempt >= STARTUP_PUBLICATION_ATTEMPTS) {
+                          throw error;
+                        }
+                        log.warn("agent database startup preparation was superseded; retrying", {
+                          agentId,
+                          attempt,
+                        });
+                        await assertNotDeleted();
+                      }
                     }
-                    log.warn("agent database startup preparation was superseded; retrying", {
-                      agentId,
-                      attempt,
-                    });
+                    phase("publication");
                     await assertNotDeleted();
+                  } finally {
+                    if (this.publishingAgentId === agentId) {
+                      this.publishingAgentId = undefined;
+                    }
+                    publicationComplete.resolve();
                   }
+                };
+                if (canReadBeforeOpen && activation.captureReadAdmission) {
+                  // Exact existing schemas can serve committed snapshots while full integrity
+                  // gates writes. Native readers retain schema, file, and quarantine checks.
+                  const assertReadCurrent = activation.captureReadAdmission({
+                    ...input,
+                    assertCurrent: assertLifetimeCurrent,
+                  });
+                  assertReadCurrent();
+                  await preparePendingAgentDatabaseRead(refusal, { env, assertCurrent }, publish);
+                  assertReadCurrent();
+                  assertCurrent();
+                  revokeReadAdmission = publishPendingAgentDatabaseReadAdmission(refusal, {
+                    env,
+                    paths: results.flatMap((result) =>
+                      result.status === "fulfilled" ? (result.value.readReadyAgentPaths ?? []) : [],
+                    ),
+                    assertCurrent: assertReadCurrent,
+                  });
+                  recovery.readReady = undefined;
+                  readReady.resolve();
+                  log.info("agent database reads ready while writable inspection continues", {
+                    agentId,
+                    ...recoveryTiming(recovery),
+                  });
+                  runInDetachedAsyncContext(() =>
+                    sessionChanges.emit({ all: true, scope: { agentId, topology: true } }),
+                  );
                 }
-                phase("publication");
-                await assertNotDeleted();
+                const retryLockedPreparation = async (run: () => Promise<void>) => {
+                  let preparationAttempts = 0;
+                  await retryAsync(
+                    async () => {
+                      if (preparationAttempts++ > 0) {
+                        await assertNotDeleted();
+                      }
+                      assertCurrent();
+                      await run();
+                    },
+                    {
+                      attempts: 4,
+                      minDelayMs: 500,
+                      maxDelayMs: 8000,
+                      jitter: 0.2,
+                      sleep: (ms) => sleepWithAbort(ms, this.signal),
+                      // Mixed cleanup failures and uncertain outcomes must not replay preparation.
+                      shouldRetry: isSqliteLockError,
+                      onRetry: ({ attempt }) =>
+                        log.warn("agent database startup locked; retrying preparation", {
+                          agentId,
+                          phase: recovery.phase,
+                          attempt,
+                        }),
+                    },
+                  );
+                };
+                await retryLockedPreparation(async () => {
+                  phase("open-wait");
+                  const release = await this.opening.acquire({ signal: this.signal });
+                  try {
+                    assertCurrent();
+                    phase("open");
+                    const opened = await activation.openAgent(input);
+                    if (opened) {
+                      prepared.use(opened);
+                    }
+                  } finally {
+                    release?.();
+                  }
+                });
+                await retryLockedPreparation(async () => {
+                  phase("migration-wait");
+                  const releaseMigration = await this.migrating.acquire({ signal: this.signal });
+                  try {
+                    assertCurrent();
+                    phase("migration");
+                    const migrated = await activation.migrateAgent(input);
+                    preparation.maintenance = migrated ? migrated.maintain : undefined;
+                  } finally {
+                    releaseMigration?.();
+                  }
+                });
+                if (!revokeReadAdmission) {
+                  await publish();
+                } else {
+                  await assertNotDeleted();
+                }
               });
             },
             { signal: this.signal, deadlineOwnedByCaller: true },
@@ -584,6 +643,7 @@ class AgentDatabaseStartupAdmission {
             });
           }
         } finally {
+          revokeReadAdmission?.();
           if (this.pending.get(agentId) === recovery) {
             this.pending.delete(agentId);
           }
@@ -593,7 +653,7 @@ class AgentDatabaseStartupAdmission {
           if (this.publishingAgentId === agentId) {
             this.publishingAgentId = undefined;
           }
-          publicationComplete.resolve();
+          readReady.resolve();
           completion.resolve();
         }
         // End the admission borrow and publication turn before advisory repair.

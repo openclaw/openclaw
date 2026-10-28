@@ -8,14 +8,42 @@
 import { findNodeAtLocation, parseTree } from "jsonc-parser/lib/esm/main.js";
 import { OcPathEditError } from "../edit-error.js";
 import type { JsoncValue } from "../jsonc/ast.js";
-import { renderJsoncValue } from "../jsonc/emit.js";
 import { resolveJsoncValueOcPath } from "../jsonc/resolve-value.js";
 import type { OcPath } from "../oc-path.js";
 import { splitOcPathSlots } from "../oc-path.js";
+import { OcEmitSentinelError, REDACTED_SENTINEL } from "../sentinel.js";
 import { sourceLineOffset } from "../source.js";
 import type { JsonlAst } from "./ast.js";
 import { pickJsonlLineIndex } from "./line.js";
 import { parseJsonl } from "./parse.js";
+
+function renderJsoncValue(
+  value: JsoncValue,
+  guardPath: string,
+  walked: readonly string[] = [],
+): string {
+  if (value.kind === "null") {
+    return "null";
+  }
+  if (value.kind === "number" || value.kind === "boolean") {
+    return String(value.value);
+  }
+  if (value.kind === "string") {
+    // Substring match: embedded sentinel leaks marker bytes too.
+    if (value.value.includes(REDACTED_SENTINEL)) {
+      throw new OcEmitSentinelError(`${guardPath}/${walked.join("/")}`);
+    }
+    return JSON.stringify(value.value);
+  }
+  if (value.kind === "array") {
+    const parts = value.items.map((v, i) => renderJsoncValue(v, guardPath, [...walked, String(i)]));
+    return `[${parts.join(",")}]`;
+  }
+  const parts = value.entries.map(
+    (e) => `${JSON.stringify(e.key)}:${renderJsoncValue(e.value, guardPath, [...walked, e.key])}`,
+  );
+  return `{${parts.join(",")}}`;
+}
 
 export function setJsonlOcPath(ast: JsonlAst, path: OcPath, newValue: JsoncValue): JsonlAst {
   const head = path.section;

@@ -54,8 +54,7 @@ export const healthHandlers: GatewayRequestHandlers = {
   health: async ({ respond, context, params, client }) => {
     const { getHealthCache, refreshHealthSnapshot, logHealth } = context;
     const wantsProbe = params?.probe === true;
-    const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
-    const includeSensitive = scopes.includes(ADMIN_SCOPE);
+    const includeSensitive = client?.connect.scopes?.includes(ADMIN_SCOPE) ?? false;
     const now = Date.now();
     const cached = getHealthCache();
     let cachedDiffersFromRuntime = false;
@@ -130,7 +129,7 @@ export const healthHandlers: GatewayRequestHandlers = {
     });
   },
   status: async ({ respond, client, params, context }) => {
-    const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
+    const scopes = client?.connect.scopes ?? [];
     const hostDesktopStatus = await context.hostDesktopService?.status();
     const prepared = await prepareStatusSummary({
       includeSensitive: scopes.includes(ADMIN_SCOPE),

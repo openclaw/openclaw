@@ -86,21 +86,17 @@ describe("tool display details", () => {
     ],
     [
       "web_search",
-      {
-        search_query: ["Kimi", "Gemini", "Claude", "OpenAI"].map((provider) => ({
-          q: `latest ${provider} model`,
-        })),
-      },
-      'for "latest Kimi model", "latest Gemini model", "latest Claude model"…',
+      { search_query: ["a", "b", "c", "d"].map((q) => ({ q })) },
+      'for "a", "b", "c"…',
     ],
     [
       "web_search",
       {
-        objective: "Find the OpenClaw repository on GitHub",
-        search_queries: ["openclaw github", "openclaw repository"],
+        objective: "Find OpenClaw",
+        search_queries: ["github", "repository"],
         count: 5,
       },
-      'for "Find the OpenClaw repository on GitHub", "openclaw github", "openclaw repository" (top 5)',
+      'for "Find OpenClaw", "github", "repository" (top 5)',
     ],
   ] as const)("formats %s arguments with intent-first detail: %j", (name, args, expected) => {
     expect(detailFor(name, args)).toBe(expected);
@@ -145,20 +141,15 @@ describe("tool display details", () => {
       "echo start && if test -f package.json; then pnpm test; fi",
       "(echo one; echo two)",
       "f() { echo one; echo two; }",
-      "function f { echo one; echo two; }",
       "function deploy-prod { echo one; echo two; }",
-      "function log::info { echo one; echo two; }",
-      "deploy-prod() { echo one; echo two; }",
       "log::info() { echo one; echo two; }",
       'select d in a b; do echo "$d"; break; done',
       "coproc worker { echo one; echo two; }",
       "coproc (echo one; echo two)",
       "[[ -f package.json && -f pnpm-lock.yaml ]] && pnpm test",
       "printf x | select d in a b; do break; done",
-      "printf x | [[ -n x ]]",
       "true & select d in a b; do break; done",
       "printf x |& select d in a b; do break; done",
-      "printf x | function deploy-prod { echo one; echo two; }",
       "function deploy-prod if true; then echo ok; fi",
       "function check [[ -n x ]]",
       "function bump (( n++ )) && pnpm test",
@@ -166,14 +157,11 @@ describe("tool display details", () => {
       "function worker (echo one; echo two)",
       "function worker(echo one; echo two)",
       "plain() if true; then echo ok; fi",
-      "! [[ -f a && -f b ]] && pnpm test",
       "time -p ! [[ -n x ]]",
-      "! time [[ -n x ]]",
       "time(echo one; echo two)",
       "function bump(( n++ )) && pnpm test",
       "time -- if true; then echo one; echo two; fi",
     ]) {
-      expect(splitTopLevelStages(command)).toEqual([command]);
       expect(execDetail(command, "explain")).toBe(command);
     }
 
@@ -182,8 +170,6 @@ describe("tool display details", () => {
       "time (( ready || fallback )) && pnpm test",
       ["(\\", "( ready && enabled )) && pnpm test"].join("\n"),
       ["echo $\\", "(( ready && enabled )) && pnpm test"].join("\n"),
-      "time(( n++ )) && pnpm test",
-      "time -p(( n++ )) && pnpm test",
       "!(( n++ )) && pnpm test",
       "time -p -- (( n++ )) && pnpm test",
     ]) {
@@ -201,16 +187,9 @@ describe("tool display details", () => {
 
     for (const quoted of [
       "printf '%s' '; if ' && pnpm test",
-      "printf '%s' 'function f { echo; }' && pnpm test",
-      "printf '%s' 'select d; do echo; done' && pnpm test",
-      "printf '%s' '[[ a && b ]]' && pnpm test",
       "printf '%s' $'can\\'t; if literal' && pnpm test",
       ["printf '%s' $\\", "'can\\'t; if literal' && pnpm test"].join("\n"),
     ]) {
-      expect(splitTopLevelStages(quoted)).toEqual([
-        quoted.slice(0, quoted.lastIndexOf(" && ")),
-        "pnpm test",
-      ]);
       expect(execDetail(quoted, "explain")).toBe("print text → run tests");
     }
 

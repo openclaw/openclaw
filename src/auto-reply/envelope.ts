@@ -105,19 +105,8 @@ export function formatAgentEnvelopeTimestamp(
     });
   }
   const formatted = formatUtcTimestamp(date, { displaySeconds: true });
-  try {
-    utcWeekdayFormatter ??= new Intl.DateTimeFormat("en-US", { timeZone: "UTC", weekday: "short" });
-    return `${utcWeekdayFormatter.format(date)} ${formatted}`;
-  } catch {
-    return formatted;
-  }
-}
-
-function resolveDirectEnvelopeBodyLabel(from: string | undefined): string {
-  const label = sanitizeEnvelopeHeaderPart(from || "");
-  const idMarkerIndex = label.search(/\s+id:/i);
-  const displayLabel = idMarkerIndex > 0 ? label.slice(0, idMarkerIndex).trim() : label;
-  return displayLabel.includes(":") ? "(sender)" : displayLabel;
+  utcWeekdayFormatter ??= new Intl.DateTimeFormat("en-US", { timeZone: "UTC", weekday: "short" });
+  return `${utcWeekdayFormatter.format(date)} ${formatted}`;
 }
 
 /** Formats the generic bracketed envelope prepended to agent-visible messages. */
@@ -177,7 +166,10 @@ export function formatInboundEnvelope(params: {
   const resolvedSenderRaw =
     normalizeOptionalString(params.senderLabel) || resolveSenderLabel(params.sender ?? {});
   const resolvedSender = resolvedSenderRaw ? sanitizeEnvelopeHeaderPart(resolvedSenderRaw) : "";
-  const directSender = resolveDirectEnvelopeBodyLabel(normalizeOptionalString(params.from));
+  const label = sanitizeEnvelopeHeaderPart(normalizeOptionalString(params.from) || "");
+  const idMarkerIndex = label.search(/\s+id:/i);
+  const displayLabel = idMarkerIndex > 0 ? label.slice(0, idMarkerIndex).trim() : label;
+  const directSender = displayLabel.includes(":") ? "(sender)" : displayLabel;
   const bodyLabel = isDirect ? (params.fromMe ? "(self)" : directSender) : resolvedSender;
   return formatAgentEnvelope({
     channel: params.channel,

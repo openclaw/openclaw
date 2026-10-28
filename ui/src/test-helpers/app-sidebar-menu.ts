@@ -1,5 +1,5 @@
 import { expect } from "vitest";
-import type { SidebarLifecycleState } from "./app-sidebar.ts";
+import type { SidebarLifecycleState, TestSessionMenu } from "./app-sidebar.ts";
 import { openPicker } from "./select-picker.ts";
 import { waitForFast } from "./wait-for.ts";
 
@@ -81,4 +81,19 @@ export async function selectSessionMenuValue(sidebar: SessionMenuHost, value: st
   await activateSessionMenuValue(sidebar, value);
   await waitForFast(() => expect(sidebar.sessionData.sessionsLoading).toBe(false));
   await sidebar.updateComplete;
+}
+
+export async function openRowSessionMenu(sidebar: SidebarLifecycleState, key: string) {
+  const row = sidebar.querySelector<HTMLElement>(`[data-session-key="${key}"]`);
+  if (!row) {
+    throw new Error(`expected session row for ${key}`);
+  }
+  row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+  await sidebar.updateComplete;
+  const menu = sidebar.querySelector<TestSessionMenu>("openclaw-session-menu");
+  if (!menu) {
+    throw new Error("expected session menu");
+  }
+  await menu.updateComplete;
+  return menu;
 }

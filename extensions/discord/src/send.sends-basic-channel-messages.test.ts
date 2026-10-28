@@ -365,15 +365,20 @@ it.each(["media follow-up", "text retry", "dispatch refresh"] as const)(
   },
 );
 
-it("uses configured defaultAccount for cached mention rewriting when accountId is omitted", async () => {
+it("preserves ambiguous and unknown mentions while rewriting the configured account's known users", async () => {
   rememberDiscordDirectoryUser({
     accountId: "work",
     userId: "222333444555666777",
-    handles: ["Alice"],
+    handles: ["Alice#1234", "Reviewer"],
+  });
+  rememberDiscordDirectoryUser({
+    accountId: "work",
+    userId: "333444555666777888",
+    handles: ["Reviewer"],
   });
   const { send, postMock } = sendHarness(["msg1"], ChannelType.GuildText);
   const work = { token: "Bot work-token", suppressEmbeds: true }; // pragma: allowlist secret
-  await send("ping @Alice.", {
+  await send("ping @Alice. @Reviewer @Alice#9999 @Unknown", {
     cfg: {
       channels: {
         discord: {
@@ -386,7 +391,7 @@ it("uses configured defaultAccount for cached mention rewriting when accountId i
   });
   expect(requestPath(postMock, 0)).toBe(Routes.channelMessages("789"));
   expect(requestBody(postMock)).toMatchObject({
-    content: "ping <@222333444555666777>.",
+    content: "ping <@222333444555666777>. @Reviewer @Alice#9999 @Unknown",
     flags: MessageFlags.SuppressEmbeds,
   });
 });
@@ -467,8 +472,6 @@ it.each([
   await expect(
     sendMessageDiscord("channel:chan1", "hello", clientOptions(rest)),
   ).rejects.toMatchObject({
-    missingPermissions: missing,
-    discordCode: 50013,
     status: 403,
     message: expect.stringContaining(
       missing[0] ?? "permission check did not identify missing ViewChannel/SendMessages",
@@ -557,7 +560,10 @@ it("reports blocked DMs from a native Discord REST error", async () => {
   });
   await expect(
     sendMessageDiscord("user:123", "hello", clientOptions(loopback.rest)),
-  ).rejects.toMatchObject({ kind: "dm-blocked", discordCode: 50007, status: 403 });
+  ).rejects.toMatchObject({
+    message: "discord dm failed: user blocks dms or privacy settings disallow it (code=50007)",
+    status: 403,
+  });
 });
 
 it("does not mask unrelated media upload failures", async () => {

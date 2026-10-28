@@ -20,6 +20,7 @@ const CRON_FIELD_LABEL_KEYS: Record<CronFieldKey, string> = {
   scheduleAt: "cron.form.runAt",
   everyAmount: "cron.form.every",
   cronExpr: "cron.form.expression",
+  cronTz: "cron.form.timezoneOptional",
   staggerAmount: "cron.form.staggerWindow",
   activeHoursStart: "cron.form.activeHoursStart",
   activeHoursEnd: "cron.form.activeHoursEnd",
@@ -70,6 +71,11 @@ export function focusFormField(props: string) {
   const el = document.getElementById(props);
   if (!(el instanceof HTMLElement)) {
     return;
+  }
+  // Advanced fields cannot be scrolled to or focused while their disclosure is closed.
+  const details = el.closest("details");
+  if (details) {
+    details.open = true;
   }
   el.scrollIntoView?.({ block: "center", behavior: resolveScrollBehavior() });
   el.focus();

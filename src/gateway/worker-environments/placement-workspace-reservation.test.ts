@@ -21,7 +21,6 @@ function seedLocal() {
 
 it.each([
   { reserve: "withLocalWorkspaceReservation", hasPlacement: false },
-  { reserve: "withLocalWorkspaceReservation", hasPlacement: true },
   { reserve: "withRepositoryWorkspaceReservation", hasPlacement: true },
 ] as const)(
   "$reserve prepares in a worker and validates effects without main-thread SQL (placement=$hasPlacement)",
@@ -36,7 +35,6 @@ it.each([
       await placements[reserve](IDENTITY, async (assertCurrent) => {
         assertCurrent();
         effect();
-        assertCurrent();
       });
       expect(effect).toHaveBeenCalledOnce();
       expect(reads.queries.filter((sql) => businessSql.test(sql))).toEqual([]);

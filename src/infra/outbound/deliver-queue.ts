@@ -82,6 +82,7 @@ export async function runOutboundDelivery(
     ...params,
     conversationDeliveryTarget: undefined,
     sessionGeneration: undefined,
+    transcriptGeneration: undefined,
     deliveryQueueStateContext: undefined,
   });
 }
@@ -288,9 +289,8 @@ async function runOutboundDeliveryWithQueue(
         channel,
         to,
         accountId: params.accountId,
-        sessionKeyForInternalHooks: params.mirror?.sessionKey ?? params.session?.key,
-        isGroup: params.mirror?.isGroup,
-        groupId: params.mirror?.groupId,
+        sessionKeyForInternalHooks: params.session?.key,
+        isGroup: params.session?.conversationType === "group",
         runId: params.replyPayloadSendingHook?.runId,
         logPrefix: OUTBOUND_DELIVERY_LOG_SCOPE,
       });

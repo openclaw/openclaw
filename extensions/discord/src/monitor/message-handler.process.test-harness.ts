@@ -7,7 +7,7 @@ import type {
 import { setReplyPayloadMetadata } from "openclaw/plugin-sdk/reply-payload-testing";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { afterEach, beforeAll, beforeEach, vi } from "vitest";
-import type { DiscordMessagePreflightContext } from "./message-handler.preflight.js";
+import type { DiscordMessagePreflightContext } from "./message-handler.preflight.types.js";
 import { resetThreadBindingsForTests } from "./thread-bindings.test-support.js";
 
 type SessionRecord = Parameters<
@@ -40,8 +40,6 @@ vi.mock("openclaw/plugin-sdk/plugin-runtime", async (importOriginal) => {
 });
 
 export const getGlobalHookRunnerForTest = getGlobalHookRunner;
-
-export const logVerboseForTest = runtimeEnvMocks.logVerbose;
 
 const sendMocks = vi.hoisted(() => ({
   reactMessageDiscord: vi.fn<
@@ -204,14 +202,11 @@ const createDiscordRestClientSpy = vi.hoisted(() =>
 );
 export const sendMocksForTest = sendMocks;
 export const typingMocksForTest = typingMocks;
-export const discordTargetMocksForTest = discordTargetMocks;
 export const dispatchInboundMessageForTest = dispatchInboundMessage;
 export const readAgentRunTerminalOutcomeForTest = readAgentRunTerminalOutcome;
 export const recordInboundSessionForTest = recordInboundSession;
-export const createDiscordRestClientSpyForTest = createDiscordRestClientSpy;
 let createBaseDiscordMessageContext: typeof import("./message-handler.test-harness.js").createBaseDiscordMessageContext;
 let createDiscordDirectMessageContextOverrides: typeof import("./message-handler.test-harness.js").createDiscordDirectMessageContextOverrides;
-export let createThreadBindingManager: typeof import("./thread-bindings.js").createThreadBindingManager;
 let processDiscordMessage: typeof import("./message-handler.process.js").processDiscordMessage;
 export let discordInboundEventDelivery: typeof import("../inbound-event-delivery.js").discordInboundEventDelivery;
 
@@ -421,7 +416,6 @@ export function registerDiscordProcessTestLifecycle() {
     vi.useRealTimers();
     ({ createBaseDiscordMessageContext, createDiscordDirectMessageContextOverrides } =
       await import("./message-handler.test-harness.js"));
-    ({ createThreadBindingManager } = await import("./thread-bindings.js"));
     ({ processDiscordMessage } = await import("./message-handler.process.js"));
     ({ discordInboundEventDelivery } = await import("../inbound-event-delivery.js"));
   });
@@ -475,11 +469,4 @@ export function getLastDispatchReplyOptions() {
 
 export async function runProcessDiscordMessage(ctx: DiscordMessagePreflightContext): Promise<void> {
   await processDiscordMessage(ctx);
-}
-
-export async function runInPartialStreamMode(): Promise<void> {
-  const ctx = await createBaseContext({
-    discordConfig: { streaming: { mode: "partial" } },
-  });
-  await runProcessDiscordMessage(ctx);
 }

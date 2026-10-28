@@ -579,7 +579,7 @@ it.each([
         sessionId: params.sessionId,
       },
       async () => {
-        // Schema projection reads session control authority from this admitted caller.
+        // Stable schemas list actions; execution checks this admitted caller's authority.
         expectDefined(getGatewayToolCallerIdentity(), "scheduled caller");
         const tools = applyEmbeddedAttemptToolsAllow(
           await createOpenClawCodingToolsAsync({
@@ -627,24 +627,28 @@ it.each([
         }
         const publish = tools.find((tool) => tool.name === "github_publish");
         offered = publish?.parameters;
-        if (publish && JSON.stringify(offered).includes('"inspect"')) {
-          try {
-            results.push(await publish.execute("scheduled-inspect", { action: "inspect" }));
-            results.push(
-              await publish.execute("scheduled-merge", {
-                action: "merge",
-                requestId: publication.requestId,
-                expectedHeadCommit: publication.headCommit,
-                mergeMethod: "merge",
-              }),
-            );
-          } catch (error) {
-            rejected = String(error);
-            if (
-              scenario === "role revoked during merge" ||
-              scenario === "self removal then role revoked during merge"
-            ) {
-              expect(params.abortSignal?.aborted).toBe(true);
+        if (publish) {
+          expect(JSON.stringify(offered)).toContain('"inspect"');
+          expect(JSON.stringify(offered)).toContain("merge");
+          for (const args of [
+            { action: "inspect" },
+            {
+              action: "merge",
+              requestId: publication.requestId,
+              expectedHeadCommit: publication.headCommit,
+              mergeMethod: "merge",
+            },
+          ]) {
+            try {
+              results.push(await publish.execute(`scheduled-${args.action}`, args));
+            } catch (error) {
+              rejected = String(error);
+              if (
+                scenario === "role revoked during merge" ||
+                scenario === "self removal then role revoked during merge"
+              ) {
+                expect(params.abortSignal?.aborted).toBe(true);
+              }
             }
           }
         }
@@ -738,6 +742,10 @@ it.each([
       }
       if (restarting) {
         await restartEntered.promise;
+        const loadParent = () => accessor.loadSessionEntry(recovery.target);
+        const entry = loadParent();
+        const sourceId = expectDefined(entry?.restartRecoveryDeliverySourceRunId, "source");
+        expect(sourceId).not.toBe(interruptedRunId);
         const harness = createAgentEventTestHarness();
         try {
           const shutdown = await prepareGatewayRunShutdown({
@@ -750,20 +758,16 @@ it.each([
             removeChatRun: () => undefined,
             broadcast: harness.broadcast,
             nodeSendToSession: harness.nodeSendToSession,
-            markMainSessionsAbortedForRestart: (params) =>
-              markRestartAbortedMainSessions({ ...params, cfg: config, stateDir }).then(
-                () => undefined,
-              ),
+            markMainSessionsAbortedForRestart: async (params) => {
+              await markRestartAbortedMainSessions({ ...params, cfg: config, stateDir });
+            },
           });
           shutdownReleased = shutdown.released;
-          const interrupted = expectDefined(
-            accessor.loadSessionEntry(recovery.target),
-            "interrupted cron parent",
-          );
+          const interrupted = expectDefined(loadParent(), "interrupted cron parent");
           expect(interrupted).toMatchObject({
             status: "interrupted",
             mainRestartRecovery: { cycleId: expect.any(String) },
-            restartRecoveryDeliverySourceRunId: interruptedRunId,
+            restartRecoveryDeliverySourceRunId: sourceId,
           });
           if (scenario !== "restart") {
             expect(interrupted.restartRecoveryTerminalRunIds).toContain(
@@ -921,8 +925,6 @@ it.each([
       );
       expect(entered).toBe(1);
       if (scenario === "operator" || scenario === "paused force run" || ownerEdit || recurring) {
-        expect(JSON.stringify(offered)).toContain('"inspect"');
-        expect(JSON.stringify(offered)).toContain("merge");
         expect(rejected).toBeUndefined();
         expect(results).toMatchObject([
           {
@@ -947,8 +949,8 @@ it.each([
       } else if (scenario === "current tool deny") {
         expect(offered).toBeUndefined();
       } else {
-        expect(JSON.stringify(offered)).not.toContain('"inspect"');
-        expect(JSON.stringify(offered)).not.toContain("merge");
+        expect(admittedOperator).toBe(false);
+        expect(rejected).toContain("require full operator write permission");
         expect(results).toEqual([]);
       }
     }

@@ -340,6 +340,10 @@
   cursor: default;
 }
 
+.chat-sharing-mobile__permission > .oc-menu-item__label {
+  display: contents;
+}
+
 .chat-sharing-mobile__check {
   display: flex;
   flex: none;
@@ -356,8 +360,12 @@
   filter: saturate(0.6);
 }
 
-.chat-sharing-mobile__permission:is(:disabled, [aria-disabled="true"]) .chat-sharing-mobile__check {
-  color: var(--muted);
+.chat-sharing-mobile__permission[aria-expanded="true"] .chat-sharing-mobile__trailing-icon {
+  transform: scaleY(-1);
+}
+
+.chat-sharing-mobile__permission:is(:disabled, [aria-disabled="true"])
+  .chat-sharing-mobile__trailing-icon {
   opacity: 0.42;
 }
 

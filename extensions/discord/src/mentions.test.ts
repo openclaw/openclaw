@@ -19,6 +19,15 @@ function expectRewrite(
   expect(rewriteDiscordKnownMentions(text, { accountId: "default", ...options })).toBe(expected);
 }
 
+// Only the fixture marker is rewritten; literal mentions must survive unchanged.
+function expectMarkedRewrite(template: string) {
+  const text = template.replaceAll("{mention}", "@alice");
+  const expected = template.replaceAll("{mention}", "<@123>");
+  expectRewrite(text, expected, {
+    mentionAliases: { alice: "123", "alice.com": "456", "host.com": "789" },
+  });
+}
+
 it("formatMention formats channel mentions from ids", () => {
   expect(formatMention({ channelId: "777555333" })).toBe("<#777555333>");
 });
@@ -42,16 +51,13 @@ describe("rewriteDiscordKnownMentions", () => {
     });
   });
 
-  it.each([".", "...", ",", "!", "?", ":", ";", ")"])(
-    "preserves %s after known mentions",
-    (suffix) => {
-      expectRewrite(
-        `@alice${suffix} @alice.dev${suffix} @alice#1234${suffix}`,
-        `<@111111111>${suffix} <@222222222>${suffix} <@111111111>${suffix}`,
-        { mentionAliases: { alice: "111111111", "alice.dev": "222222222" } },
-      );
-    },
-  );
+  it("preserves punctuation after handles, dotted aliases, and discriminators", () => {
+    expectRewrite(
+      "@alice... @alice.dev. @alice#1234!",
+      "<@111111111>... <@222222222>. <@111111111>!",
+      { mentionAliases: { alice: "111111111", "alice.dev": "222222222" } },
+    );
+  });
 
   it("prefers the longest known handle before treating trailing dots as punctuation", () => {
     remember(["alice.."], "333333333");
@@ -68,49 +74,25 @@ describe("rewriteDiscordKnownMentions", () => {
     });
   });
 
-  it.each<[string, string?]>([
-    ["user@host.com mail@alice. \\@alice."],
-    ["https://example.com/@alice. https://example.com/?@alice https://example.com/!@alice..."],
-    ["www.example.com/?@alice. //example.com/?@alice. [link](//example.com/?@alice.)"],
-    ["mailto:user@host.com?subject=@alice."],
-    ["See [docs](https://example.com),@alice", "See [docs](https://example.com),<@123456789>"],
-    ["(https://example.com/a_(b)) @alice.", "(https://example.com/a_(b)) <@123456789>."],
-    [
-      "See [docs](https://example.com/a_(@alice)),@alice.",
-      "See [docs](https://example.com/a_(@alice)),<@123456789>.",
-    ],
-    ["https://example.com/@alice"],
-    ["user@alice.com"],
-  ])("resolves prose mentions while preserving URLs and emails: %s", (text, expected) => {
-    expectRewrite(`${text} @alice.`, `${expected ?? text} <@123456789>.`, {
-      mentionAliases: { alice: "123456789", "alice.com": "987654321", "host.com": "111111111" },
-    });
+  it.each([
+    "user@host.com mail@alice. \\@alice.",
+    "https://example.com/@alice. https://example.com/?@alice https://example.com/!@alice...",
+    "www.example.com/?@alice. //example.com/?@alice. [link](//example.com/?@alice.)",
+    "mailto:user@host.com?subject=@alice.",
+    "See [docs](https://example.com),{mention}",
+    "(https://example.com/a_(b)) {mention}.",
+    "See [docs](https://example.com/a_(@alice)),{mention}.",
+  ])("preserves URLs and emails: %s", (text) => {
+    expectMarkedRewrite(`${text} {mention}.`);
   });
 
   it.each([
-    [
-      "inline `@alice.` fence ```\n@alice.\n``` text @alice.",
-      "inline `@alice.` fence ```\n@alice.\n``` text <@123456789>.",
-    ],
-    [
-      "Example: ``first ``` literal\nsecond``\nPlease review @alice",
-      "Example: ``first ``` literal\nsecond``\nPlease review <@123456789>",
-    ],
-    ["outside @alice then `inside @alice", "outside <@123456789> then `inside @alice"],
-    [
-      "literal \\` outside @alice then `inside @alice",
-      "literal \\` outside <@123456789> then `inside @alice",
-    ],
-  ])("does not rewrite mentions inside code: %s", (input, expected) => {
-    remember(["alice"]);
-    expectRewrite(input, expected);
-  });
-
-  it("does not end longer code fences at triple-backtick literals inside the body", () => {
-    remember(["alice"]);
-    const text = '````ts\nconst fence = "```";\n@alice\n```` text @alice';
-    expectRewrite(text, '````ts\nconst fence = "```";\n@alice\n```` text <@123456789>');
-  });
+    "inline `@alice.` fence ```\n@alice.\n``` text {mention}.",
+    "Example: ``first ``` literal\nsecond``\nPlease review {mention}",
+    "outside {mention} then `inside @alice",
+    "literal \\` outside {mention} then `inside @alice",
+    '````ts\nconst fence = "```";\n@alice\n```` text {mention}',
+  ])("preserves code mentions: %s", expectMarkedRewrite);
 
   it("is account-scoped", () => {
     remember(["alice"], "999888777", "ops");

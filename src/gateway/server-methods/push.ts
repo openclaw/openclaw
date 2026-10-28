@@ -1,7 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
-  errorShape,
   validatePushTestParams,
   validateWebPushSubscribeParams,
   validateWebPushPreferencesGetParams,
@@ -46,7 +45,7 @@ import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
 import { isRoleAuthorizedForMethod, parseGatewayRole } from "../role-policy.js";
 import { resolveNodePushTransport } from "./node-push-transport.js";
-import { respondUnavailableOnThrow } from "./response.js";
+import { respondError, respondUnavailableOnThrow } from "./response.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlers, GatewayRequestHandlerOptions } from "./types.js";
 import { defineValidatedGatewayHandler } from "./validation.js";
@@ -59,7 +58,7 @@ type PushRequestOptions = Omit<GatewayRequestHandlerOptions, "context"> & {
 };
 
 function respondWebPushForbidden(respond: PushRequestOptions["respond"], message: string) {
-  respond(false, undefined, errorShape(ErrorCodes.FORBIDDEN, message));
+  respondError(respond, ErrorCodes.FORBIDDEN, message);
 }
 
 function hasValidWebPushQuietHoursTimeZone(preferences: {
@@ -215,7 +214,7 @@ export const pushHandlers = {
     async ({ params, respond, context }) => {
       const nodeId = normalizeOptionalString(params.nodeId) ?? "";
       if (!nodeId) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId required"));
+        respondError(respond, ErrorCodes.INVALID_REQUEST, "nodeId required");
         return;
       }
 
@@ -225,13 +224,10 @@ export const pushHandlers = {
       await respondUnavailableOnThrow(respond, async () => {
         const registration = await loadApnsRegistration(nodeId);
         if (!registration) {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              `node ${nodeId} has no APNs registration (connect iOS node first)`,
-            ),
+          respondError(
+            respond,
+            ErrorCodes.INVALID_REQUEST,
+            `node ${nodeId} has no APNs registration (connect iOS node first)`,
           );
           return;
         }
@@ -244,7 +240,7 @@ export const pushHandlers = {
           registration.transport === "relay" ? context.getRuntimeConfig() : undefined,
         );
         if (!transport.ok) {
-          respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, transport.error));
+          respondError(respond, ErrorCodes.INVALID_REQUEST, transport.error);
           return;
         }
         const result = await sendApnsAlert({ ...transport.transport, nodeId, title, body });
@@ -286,22 +282,19 @@ export const pushHandlers = {
 
       const deviceId = normalizeOptionalString(client?.connect.device?.id);
       if (!deviceId) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "paired browser device identity required"),
+        respondError(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          "paired browser device identity required",
         );
         return;
       }
       const userProfileId = normalizeOptionalString(client?.authenticatedUserProfile?.profileId);
       if (context.getRuntimeConfig().gateway?.roles && !userProfileId) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            "Web Push requires an authenticated user profile when Gateway roles are enabled",
-          ),
+        respondError(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          "Web Push requires an authenticated user profile when Gateway roles are enabled",
         );
         return;
       }
@@ -384,22 +377,19 @@ export const pushHandlers = {
       await withAuthorizedWebPushSubscription(params.endpoint, options, async (authorized) => {
         const currentProfileId = authorized.assertCurrent();
         if (!hasValidWebPushQuietHoursTimeZone(params.preferences)) {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.INVALID_REQUEST, "invalid notification quiet-hours time zone"),
+          respondError(
+            respond,
+            ErrorCodes.INVALID_REQUEST,
+            "invalid notification quiet-hours time zone",
           );
           return undefined;
         }
         if (params.scope === "user") {
           if (!currentProfileId) {
-            respond(
-              false,
-              undefined,
-              errorShape(
-                ErrorCodes.INVALID_REQUEST,
-                "user defaults require a durable authenticated profile",
-              ),
+            respondError(
+              respond,
+              ErrorCodes.INVALID_REQUEST,
+              "user defaults require a durable authenticated profile",
             );
             return undefined;
           }
@@ -414,10 +404,10 @@ export const pushHandlers = {
             );
             authorized.assertCurrent();
             if (!result?.ok) {
-              respond(
-                false,
-                undefined,
-                errorShape(ErrorCodes.INVALID_REQUEST, "could not save notification preferences"),
+              respondError(
+                respond,
+                ErrorCodes.INVALID_REQUEST,
+                "could not save notification preferences",
               );
               return undefined;
             }
@@ -460,21 +450,13 @@ export const pushHandlers = {
       await respondUnavailableOnThrow(respond, async () => {
         const results = await broadcastWebPush({ title, body });
         if (results.length === 0) {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.INVALID_REQUEST, "no web push subscriptions registered"),
-          );
+          respondError(respond, ErrorCodes.INVALID_REQUEST, "no web push subscriptions registered");
           return;
         }
         if (!results.some((result) => result.ok)) {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.UNAVAILABLE, "all web push deliveries failed", {
-              details: { results },
-            }),
-          );
+          respondError(respond, ErrorCodes.UNAVAILABLE, "all web push deliveries failed", {
+            details: { results },
+          });
           return;
         }
         respond(true, { results }, undefined);

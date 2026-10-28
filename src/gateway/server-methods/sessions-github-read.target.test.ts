@@ -7,6 +7,7 @@ import { runGit } from "../../agents/worktrees/git.js";
 import * as registryRead from "../../agents/worktrees/registry-read.js";
 import { insertRegistryWorktree, updateRegistryWorktree } from "../../agents/worktrees/registry.js";
 import { managedWorktrees } from "../../agents/worktrees/service.js";
+import { makeWorktreeRecord } from "../../agents/worktrees/service.test-support.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
@@ -81,19 +82,13 @@ async function registerWorktree(origin?: string, bare = false) {
     await git(root, "remote", "add", "origin", origin);
   }
   const identity = await managedWorktrees.resolveRepositoryIdentity(root);
-  const worktree = {
-    id: "publication-read-worktree",
-    name: "publication-read-worktree",
+  const worktree = makeWorktreeRecord(identity.repoRoot, "publication-read-worktree", {
     path: root,
-    repoRoot: identity.repoRoot,
     repoFingerprint: identity.fingerprint,
     branch: "feature",
     baseRef: "main",
-    ownerKind: "session" as const,
     ownerId: sessionKey,
-    createdAt: 1,
-    lastActiveAt: 1,
-  };
+  });
   await insertRegistryWorktree(process.env, worktree);
   await upsertSessionEntryCore(
     { agentId: "main", sessionKey },

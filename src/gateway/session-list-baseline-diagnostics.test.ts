@@ -1,4 +1,3 @@
-import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   onInternalDiagnosticEvent,
@@ -11,7 +10,6 @@ import {
   shareSidebarSessionRows,
 } from "./session-row-presentation.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
-import { prepareSessionRowPublicationView } from "./session-row-publication.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
 
 beforeEach(() => resetDiagnosticEventsForTest());
@@ -22,20 +20,14 @@ afterEach(() => {
 
 const baseRow: GatewaySessionRow = { key: "agent:main:one", kind: "direct", updatedAt: 1 };
 
-async function publicationFixture(controlState = false) {
+async function publicationFixture() {
   const projection = await createSessionRowProjection({ cfg: {}, modelCatalog: [] });
   let state = projection.state;
-  if (controlState) {
-    vi.spyOn(projection, "state", "get").mockImplementation(() => state);
-  }
+  vi.spyOn(projection, "state", "get").mockImplementation(() => state);
   const causes: string[] = [];
-  let retainedBytes = 0;
   const unsubscribe = onInternalDiagnosticEvent((event) => {
     if (event.type === "sessions.list.baseline.retired") {
       causes.push(event.cause);
-    }
-    if (event.type === "sessions.list.retention") {
-      retainedBytes = event.estimatedBytes;
     }
   });
   return {
@@ -48,11 +40,6 @@ async function publicationFixture(controlState = false) {
         state = { ...state, revision: {}, cfg: cause === "config" ? { ...state.cfg } : state.cfg };
       }
     },
-    flush: async () => {
-      await setImmediate();
-      await waitForDiagnosticEventsDrained();
-      return retainedBytes;
-    },
     expectCauses: async (expected: string[]) => {
       await waitForDiagnosticEventsDrained();
       expect(causes.splice(0)).toEqual(expected);
@@ -64,47 +51,11 @@ async function publicationFixture(controlState = false) {
   };
 }
 
-it("accounts for conditional encodings after legacy reads and releases shared rows fully", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    using fixture = await publicationFixture();
-    const { projection, present, flush } = fixture;
-    const publication = prepareSessionRowPublicationView(projection)();
-    const opts = { rowMode: "compact" } as const;
-    const row: GatewaySessionRow = {
-      ...baseRow,
-      rowMode: "compact",
-      label: "synthetic ".repeat(256),
-    };
-    present().list([row], opts);
-    present().list([row], { ...opts, limit: 2 });
-    const legacyBytes = await flush();
-    present().list([row], { ...opts, ifRowsRevision: "" });
-    const encoded = JSON.stringify(row);
-    const packedBytes = encoded.length * 2 + Buffer.byteLength(`[${encoded}]`);
-    const factBytes = JSON.stringify({ label: row.label }).length * 2;
-    expect(await flush()).toBe(legacyBytes + packedBytes + factBytes);
-    const promoted = [...publication.lists.values()].find((view) => view.conditional)!;
-    expect(promoted.rowHistory).toBeUndefined();
-    present().list([{ ...row, updatedAt: 2 }], opts);
-    expect(promoted.rowHistory).toHaveLength(1);
-    expect(promoted.encodedBytes).toBeGreaterThan(row.label!.length * 3);
-    publication.lists.retireRows(promoted);
-    for (const view of publication.lists.values()) {
-      publication.lists.retireRows(view);
-    }
-    expect(await flush()).toBe(
-      [...publication.lists.values()].reduce((bytes, view) => bytes + view.bytes, 0),
-    );
-    projection.dispose();
-    expect(await flush()).toBe(0);
-  });
-});
-
 it.each([true, false])(
   "reports baseline retirement only for sidebar rows (sidebar=%s)",
   (sidebar) =>
     withOpenClawTestState({ scenario: "minimal" }, async () => {
-      using fixture = await publicationFixture(true);
+      using fixture = await publicationFixture();
       const { projection, present, invalidate, expectCauses } = fixture;
       const opts = { rowMode: sidebar ? "sidebar" : "compact" } as const;
       const row: GatewaySessionRow = { ...baseRow, ...opts };
@@ -123,9 +74,7 @@ it.each([true, false])(
           nextOffset: null,
           hasMore: false,
         }));
-        for (const rowMode of [undefined, "compact", "dashboard"] as const) {
-          present().list([{ ...baseRow, rowMode }], { rowMode });
-        }
+        present().list([{ ...baseRow, rowMode: "compact" }], { rowMode: "compact" });
       };
       invalidate("projection-revision");
       present();

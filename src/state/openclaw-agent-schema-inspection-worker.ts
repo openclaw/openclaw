@@ -150,7 +150,8 @@ export function createAgentSchemaInspectionWorker() {
               return null;
             }
             postgresAgent = false;
-          } else if (!postgresAgent) {
+          } else {
+            // Admission reads the server version; a runtime open could demand migration custody.
             const { withPostgresStoreMetadata } =
               await import("../infra/database-engine/postgres-store-metadata.js");
             const result = await withPostgresStoreMetadata(

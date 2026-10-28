@@ -84,7 +84,6 @@ suite.define(() => {
         await page.keyboard.press("Escape");
         await page.locator("#sidebar-issues-panel").waitFor({ state: "detached" });
         await expectInboxOnNextFrame(page, populated);
-        await expectInboxOnNextFrame(page, populated);
 
         await page.locator(".sidebar-recent-session__link").first().click();
         await page.getByRole("textbox", { name: "Chat composer", exact: true }).waitFor();

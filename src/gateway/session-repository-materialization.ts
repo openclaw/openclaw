@@ -9,6 +9,9 @@ import {
 } from "../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { gitNullConfigPath } from "../infra/git-exec.js";
+import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
+import { resolveRuntimeWorkerArgv } from "../infra/runtime-worker-url.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   readProjectCheckoutRemoteHead,
   ProjectCloneError,
@@ -29,6 +32,7 @@ import { prepareSessionWorktree } from "./session-worktree-preparation.js";
 import { prepareRepositoryGitHubIdentity } from "./worker-environments/repository-github-identity.js";
 import { withSessionRepositoryCheckpoint } from "./worker-environments/session-repository-checkpoints.js";
 import { applyStagedWorkerWorkspace } from "./worker-environments/workspace-reconcile-apply.js";
+import { restoreWorkerWorkspaceHistory } from "./worker-environments/workspace-result-history.js";
 
 /** Explicit Gateway moves and failed-placement recovery restore only accepted source results. */
 export async function materializeSessionRepositoryWorkspaceOnGateway(params: {
@@ -280,13 +284,28 @@ async function materializeCapturedRepositoryWorkspace(
         }
         await applied.verifyLocalStable();
         await alignPublication();
+        const historyNote = await restoreWorkerWorkspaceHistory({
+          ...snapshot,
+          root,
+          assertCurrent,
+        });
+        if (historyNote) {
+          createSubsystemLogger("gateway/worker-workspace").info(historyNote);
+        }
         for (const restore of await prepareRepositoryPublicationRestore({
           ...snapshot,
-          ...(published?.pushed_head_commit
-            ? { indexBase: { root, commit: published.pushed_head_commit, assertCurrent } }
-            : {}),
+          indexBase: { root, commit: await git(["rev-parse", "HEAD"]), assertCurrent },
         })) {
-          await command(restore.argv, { cwd: root, input: restore.input });
+          await command(
+            [
+              process.execPath,
+              ...resolveRuntimeWorkerArgv(
+                resolveRuntimeProcessEntrypointUrl("repositoryPublicationRestore"),
+              ),
+              restore.action,
+            ],
+            { cwd: root, input: restore.input },
+          );
         }
         await applied.verifyLocalStable();
         assertCurrent();

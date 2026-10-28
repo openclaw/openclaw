@@ -49,7 +49,7 @@ import {
 } from "./qa-credentials-admin.runtime.js";
 import { parseQaCredentialPositiveIntegerEnv } from "./qa-credentials-common.runtime.js";
 import { normalizeQaThinkingLevel, type QaThinkingLevel } from "./qa-gateway-config.js";
-import { normalizeQaTransportId, type QaTransportId } from "./qa-transport-registry.js";
+import { normalizeQaTransportId } from "./qa-transport-registry.js";
 import {
   defaultQaModelForMode,
   normalizeQaProviderMode,
@@ -283,52 +283,6 @@ function rejectNonFlowScenarioIds(params: {
   if (nonFlowScenarios.length > 0) {
     throw new Error(
       `${params.option} requires execution.kind: flow scenarios; unsupported scenario(s): ${nonFlowScenarios.join(", ")}`,
-    );
-  }
-}
-
-async function runQaParityPreflight(params: {
-  repoRoot: string;
-  transportId: QaTransportId;
-  providerMode: QaProviderMode;
-  primaryModel?: string;
-  alternateModel?: string;
-  allowFailures?: boolean;
-  sutOpenClawCommand?: QaGatewayChildCommand;
-}) {
-  const outputDir = path.join(
-    params.repoRoot,
-    ".artifacts",
-    "qa-e2e",
-    "preflight",
-    `suite-${createQaArtifactRunId()}`,
-  );
-  const result = await runQaSuiteWithInfraRetry(() =>
-    runQaFlowSuiteFromRuntime({
-      repoRoot: params.repoRoot,
-      outputDir,
-      transportId: params.transportId,
-      providerMode: params.providerMode,
-      primaryModel: params.primaryModel,
-      alternateModel: params.alternateModel,
-      scenarioIds: ["approval-turn-tool-followthrough"],
-      concurrency: 1,
-      ...(params.sutOpenClawCommand ? { sutOpenClawCommand: params.sutOpenClawCommand } : {}),
-    }),
-  );
-  process.stdout.write(`QA parity preflight watch: ${result.watchUrl}\n`);
-  process.stdout.write(`QA parity preflight report: ${result.reportPath}\n`);
-  process.stdout.write(`QA parity preflight summary: ${result.summaryPath}\n`);
-  const blockingScenarioCount = await readQaSuiteFailedOrSkippedScenarioCountFromFile(
-    result.summaryPath,
-    { requireExecutedScenario: params.allowFailures === true },
-  );
-  if (blockingScenarioCount > 0) {
-    if (params.allowFailures === true) {
-      return;
-    }
-    throw new Error(
-      `QA parity preflight failed with ${blockingScenarioCount} failing or skipped scenario${blockingScenarioCount === 1 ? "" : "s"}.`,
     );
   }
 }
@@ -914,15 +868,38 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
   const sutOpenClawCommand =
     opts.repoRoot === undefined ? undefined : await resolveExternalQaCandidateCommand(repoRoot);
   if (opts.preflight === true) {
-    await runQaParityPreflight({
+    const outputDir = path.join(
       repoRoot,
-      transportId,
-      providerMode,
-      primaryModel,
-      alternateModel,
-      allowFailures,
-      ...(sutOpenClawCommand ? { sutOpenClawCommand } : {}),
-    });
+      ".artifacts",
+      "qa-e2e",
+      "preflight",
+      `suite-${createQaArtifactRunId()}`,
+    );
+    const result = await runQaSuiteWithInfraRetry(() =>
+      runQaFlowSuiteFromRuntime({
+        repoRoot,
+        outputDir,
+        transportId,
+        providerMode,
+        primaryModel,
+        alternateModel,
+        scenarioIds: ["approval-turn-tool-followthrough"],
+        concurrency: 1,
+        ...(sutOpenClawCommand ? { sutOpenClawCommand } : {}),
+      }),
+    );
+    process.stdout.write(`QA parity preflight watch: ${result.watchUrl}\n`);
+    process.stdout.write(`QA parity preflight report: ${result.reportPath}\n`);
+    process.stdout.write(`QA parity preflight summary: ${result.summaryPath}\n`);
+    const blockingScenarioCount = await readQaSuiteFailedOrSkippedScenarioCountFromFile(
+      result.summaryPath,
+      { requireExecutedScenario: allowFailures },
+    );
+    if (blockingScenarioCount > 0 && !allowFailures) {
+      throw new Error(
+        `QA parity preflight failed with ${blockingScenarioCount} failing or skipped scenario${blockingScenarioCount === 1 ? "" : "s"}.`,
+      );
+    }
     return undefined;
   }
   const thinkingDefault = parseQaThinkingLevel("--thinking", opts.thinking);

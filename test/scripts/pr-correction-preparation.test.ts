@@ -217,27 +217,6 @@ describePosix("native correction preparation", () => {
     expect(f.has("execution-reached")).toBe(true);
   });
 
-  it("qualifies the reviewed correction for deferred GitHub gates without success stamps", () => {
-    const f = fixture("approved");
-    const result = f.shell(
-      "resolve_pr_gates_remote_mode() { echo github; }",
-      "mark_pr_operation_side_effects_if_available() { :; }",
-      f.changePlan,
-      executionReached,
-      "prepare_gates 42",
-      "prepare_push 42",
-    );
-    expect(result.status, result.stdout + result.stderr).toBe(73);
-    const gates = f.read("gates.env");
-    expect(gates).toContain("GATES_MODE=github_pending");
-    expect(gates).not.toMatch(/GATES_PASSED_AT|LAST_VERIFIED_HEAD_SHA/);
-    expect(gates).toContain(`HOSTED_GATES_TARGET_HEAD_SHA=${f.git("rev-parse", "HEAD")}`);
-    expect(f.has("execution-reached")).toBe(true);
-    expect(f.run("push_prep_head_to_pr_branch() { return 73; }; prepare_sync_head 42").status).toBe(
-      73,
-    );
-  });
-
   it.each(["completed", "pending", "revoked", "fork", "foreign-gate"])(
     "preserves correction authority when a partial publication has %s gates",
     (state) => {

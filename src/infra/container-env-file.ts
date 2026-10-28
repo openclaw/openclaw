@@ -47,7 +47,8 @@ export async function createContainerEnvFile(
   });
 
   try {
-    const filePath = await workspace.write("container.env", content);
+    // The engine consumes this scratch file before cleanup; no restart reuses it.
+    const filePath = await workspace.store.write("container.env", content, { durable: false });
     return {
       path: filePath,
       cleanup: async () => {

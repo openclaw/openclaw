@@ -6,12 +6,6 @@ import { buildHuggingfaceProvider } from "./provider-catalog.js";
 
 const PROVIDER_ID = "huggingface";
 
-type HuggingFacePluginConfig = {
-  discovery?: {
-    enabled?: boolean;
-  };
-};
-
 export default defineSingleProviderPluginEntry({
   id: PROVIDER_ID,
   name: "Hugging Face Provider",
@@ -28,7 +22,11 @@ export default defineSingleProviderPluginEntry({
     catalog: {
       run: async (ctx) => {
         const pluginConfig = ctx.config?.plugins?.entries?.[PROVIDER_ID]?.config as
-          | HuggingFacePluginConfig
+          | {
+              discovery?: {
+                enabled?: boolean;
+              };
+            }
           | undefined;
         if (pluginConfig?.discovery?.enabled === false) {
           return null;

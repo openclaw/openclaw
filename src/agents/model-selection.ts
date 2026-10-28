@@ -218,12 +218,7 @@ export function resolveConfiguredSubagentSpawnModelSelection(params: {
 }): string | undefined {
   const raw =
     normalizeModelSelection(params.modelOverride) ??
-    resolveSubagentConfiguredModelSelection({
-      cfg: params.cfg,
-      agentId: params.agentId,
-      includeAgentPrimary: params.includeAgentPrimary,
-      modelRuntime: params.modelRuntime,
-    });
+    resolveSubagentConfiguredModelSelection(params);
   if (!raw) {
     return undefined;
   }

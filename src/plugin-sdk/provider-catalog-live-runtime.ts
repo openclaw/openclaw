@@ -1,4 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { omitNullRequestHeaders } from "../../packages/llm-core/src/utils/request-headers.js";
 import { resolveProviderRequestHeaders } from "../agents/provider-request-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
@@ -287,13 +288,15 @@ export function createUpstreamProviderCatalog(params: {
   // Discovery identifies the client the same way inference does; the attribution
   // owner decides which providers and endpoints receive those headers.
   const buildRequestHeaders = (ctx: LiveModelCatalogHeaderContext): HeadersInit => ({
-    ...resolveProviderRequestHeaders({
-      provider: params.providerId,
-      api: params.providerConfig.api,
-      baseUrl: params.providerConfig.baseUrl,
-      capability: "llm",
-      transport: "http",
-    }),
+    ...omitNullRequestHeaders(
+      resolveProviderRequestHeaders({
+        provider: params.providerId,
+        api: params.providerConfig.api,
+        baseUrl: params.providerConfig.baseUrl,
+        capability: "llm",
+        transport: "http",
+      }),
+    ),
     ...buildDefaultLiveModelCatalogHeaders(ctx),
   });
   const buildStaticProvider = (apiKey?: string): ModelProviderConfig => ({

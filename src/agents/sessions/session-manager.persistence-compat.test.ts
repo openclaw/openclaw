@@ -17,7 +17,6 @@ import { waitForSessionTranscriptIndexReconcile } from "../../config/sessions/se
 import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions/transcript.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../internal-runtime-context.js";
 import { parseOpaqueLeafEntry } from "./session-manager-codec.js";
 import {
@@ -26,14 +25,12 @@ import {
 } from "./session-manager-fixtures.test-support.js";
 import { CURRENT_SESSION_VERSION, SessionManager } from "./session-manager.js";
 import { text } from "./session-message-fixtures.test-support.js";
+import { cleanupTrackedSessionState } from "./session-state-cleanup.test-support.js";
 
 const tempDirs = createTempDirTracker();
 const replayLimits = { maxBytes: 100_000, maxEvents: 100 };
 afterEach(async () => {
-  for (const stateDir of tempDirs.dirs) {
-    await cleanupSessionStateForTest({ stateDir });
-  }
-  tempDirs.cleanup();
+  await cleanupTrackedSessionState(tempDirs.dirs, tempDirs.cleanup);
 });
 
 function createScope(sessionId: string) {

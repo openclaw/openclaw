@@ -6,9 +6,6 @@ import {
   MOBILE_PAIRING_AUDIT_CLIENT,
   MOBILE_PAIRING_APPROVAL_SCOPES,
   MOBILE_PAIRING_CLIENT,
-  MOBILE_PAIRING_NODE_CAPS,
-  MOBILE_PAIRING_NODE_COMMANDS,
-  MOBILE_PAIRING_NODE_PERMISSIONS,
   approveBaselineNodePairing,
   assertGatewayHealth,
   attemptConnect,
@@ -156,39 +153,29 @@ it("requires the Gateway health RPC to report ok", () => {
 it("uses shipped protocol ranges, challenge time, instance id, and auth.token", () => {
   const identity = createMobilePairingIdentity();
   const challengePayload = { nonce: " nonce-1 ", ts: 1_700_000_000_001 };
-  const common = { challengePayload, client: MOBILE_PAIRING_CLIENT, identity };
-  const nodeParams = buildConnectRequest({
-    ...common,
-    id: "connect-1",
-    mode: "node",
-    role: "node",
-    scopes: [],
-    auth: { token: "node-token" },
-  }).params as { device: { signature: string } };
-  const operatorParams = buildConnectRequest({
-    ...common,
-    id: "connect-2",
-    mode: "ui",
-    role: "operator",
-    scopes: ["operator.read"],
-    auth: { token: "operator-token" },
-  }).params;
+  const request = (role: "node" | "operator") =>
+    buildConnectRequest({
+      id: `connect-${role}`,
+      challengePayload,
+      client: MOBILE_PAIRING_CLIENT,
+      identity,
+      mode: role === "node" ? "node" : "ui",
+      role,
+      scopes: role === "node" ? [] : ["operator.read"],
+      auth: { token: `${role}-token` },
+    }).params;
+  const nodeParams = request("node") as { device: { signature: string } };
+  const operatorParams = request("operator");
   const payload = `v2|${identity.deviceId}|openclaw-ios|node|node||1700000000001|node-token|nonce-1`;
   expect(nodeParams).toMatchObject({
     minProtocol: 3,
     maxProtocol: 4,
     client: { instanceId: MOBILE_PAIRING_CLIENT.instanceId },
-    caps: MOBILE_PAIRING_NODE_CAPS,
-    commands: MOBILE_PAIRING_NODE_COMMANDS,
-    permissions: MOBILE_PAIRING_NODE_PERMISSIONS,
-    locale: "en-US",
-    userAgent: "Version 26.6.1",
     auth: { token: "node-token" },
     device: { nonce: "nonce-1", signedAt: challengePayload.ts },
   });
   expect(operatorParams).toMatchObject({
     minProtocol: 4,
-    maxProtocol: 4,
     caps: ["inline-widgets"],
     auth: { token: "operator-token" },
   });
@@ -222,19 +209,12 @@ it("requires the connect.challenge timestamp used by the shipped client", () => 
 it("parses the QR bootstrap and extracts both baseline-issued role credentials", () => {
   const nodeToken = "node-token-secret";
   const operatorToken = "operator-token-secret";
-  const setupCode = Buffer.from(
-    JSON.stringify({
-      url: "ws://127.0.0.1:18789",
-      bootstrapToken: "bootstrap-token-secret",
-    }),
-  ).toString("base64url");
+  const expected = { url: "ws://127.0.0.1:18789", bootstrapToken: "bootstrap-token-secret" };
+  const setupCode = Buffer.from(JSON.stringify(expected)).toString("base64url");
   const bootstrap = parseQrBootstrapJson({ setupCode });
   const credentials = credentialsFor(nodeToken, operatorToken, bootstrap.url);
 
-  expect(bootstrap).toEqual({
-    url: "ws://127.0.0.1:18789",
-    bootstrapToken: "bootstrap-token-secret",
-  });
+  expect(bootstrap).toEqual(expected);
   expect({ node: credentials.node, operator: credentials.operator }).toEqual({
     node: { token: nodeToken, scopes: [] },
     operator: { token: operatorToken, scopes: operatorScopes },
@@ -316,10 +296,10 @@ it("completes legacy baseline node pairing only for the bootstrapped identity", 
   expect(inspect(states[1])).toEqual({ pendingRequestId: "request-1", paired: false });
   expect(inspect(states[2])).toEqual({ pendingRequestId: null, paired: true });
   expect(() =>
-    inspect({
-      pending: [{ requestId: "request-other", nodeId: "device-2" }],
-      paired: [],
-    }),
+    inspectBaselineNodePairing(
+      { pending: [{ requestId: "request-other", nodeId: "device-2" }], paired: [] },
+      "device-1",
+    ),
   ).toThrow(/unexpected pending request/);
   const observed: string[] = [];
   await approveBaselineNodePairing({
@@ -361,14 +341,6 @@ it("emits only redacted reconnect evidence", () => {
     expect(serialized).not.toContain(secret);
   }
   expect(JSON.parse(serialized)).toMatchObject({
-    ...cleanPairing,
-    phase: "candidate-restart",
-    ok: true,
-    connectedDevicePresent: true,
-    pendingPairingCount: 0,
-    nodeSurfaceReapprovalExpected: false,
-    missingPasswordReason: true,
-    missingPasswordClose1008: true,
     credentials: {
       node: tokenEvidence(nodeToken, "rotated-node-token"),
       operator: tokenEvidence(operatorToken),
@@ -401,23 +373,20 @@ it("keeps secrets out of CLI failures", () => {
 
 it("checks both candidate starts before Doctor and the final phase after Doctor", () => {
   const source = readFileSync("scripts/e2e/lib/upgrade-survivor/run.sh", "utf8");
-  const position = (phase: string) => source.indexOf(`phase ${phase}`);
+  const assertOrder = (...phases: string[]) => {
+    let previous = -1;
+    for (const phase of phases) {
+      const position = source.indexOf(`phase ${phase}`);
+      expect(position).toBeGreaterThan(previous);
+      previous = position;
+    }
+  };
   const update = "update-candidate update_candidate";
   const first = "mobile-pairing-candidate-first";
   const restart = "mobile-pairing-candidate-restart";
-  expect(position("bootstrap-mobile-pairing bootstrap_mobile_pairing")).toBeGreaterThan(-1);
-  for (const sequence of [
-    ["bootstrap-mobile-pairing bootstrap_mobile_pairing", update],
-    [update, "assert-automatic-migration assert_survival", first],
-    [update, "assert-historical-package-replacement-prestart", first],
-    [first, "assert-historical-package-replacement-startup-repair", restart],
-    [restart, "doctor run_doctor", "mobile-pairing-final"],
-  ]) {
-    let lastPosition = -1;
-    for (const phase of sequence) {
-      const nextPosition = position(phase);
-      expect(nextPosition).toBeGreaterThan(lastPosition);
-      lastPosition = nextPosition;
-    }
-  }
+  assertOrder("bootstrap-mobile-pairing bootstrap_mobile_pairing", update);
+  assertOrder(update, "assert-automatic-migration assert_survival", first);
+  assertOrder(update, "assert-historical-package-replacement-prestart", first);
+  assertOrder(first, "assert-historical-package-replacement-startup-repair", restart);
+  assertOrder(restart, "doctor run_doctor", "mobile-pairing-final");
 });

@@ -1,36 +1,23 @@
 /* @vitest-environment jsdom */
 
-import { createComponent, createSignal, merge } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred as deferred } from "../../../../../test/helpers/promise.js";
-import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import {
   clearNativeGatewayTestState,
   setNativeGatewayTestState,
 } from "../../../test-helpers/native-gateways.ts";
+import { stubResizeObserver } from "../../../test-helpers/resize-observer.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import * as diffSyntax from "./chat-diff-highlight.runtime.ts";
 import type { SessionDiffProps } from "./chat-sidebar-content-types.ts";
-import { SessionDiffPanel } from "./session-diff-panel.tsx";
-
-function mountPanel() {
-  const [props, setProps] = createSignal<Parameters<typeof SessionDiffPanel>[0]>({
-    owner: null,
-    execNode: null,
-    loader: null,
-    loadFileText: null,
-    openFile: null,
-    revealFile: null,
-  });
-  const view = mountSolid(() => createComponent(SessionDiffPanel, merge(props)));
-  return {
-    panel: view.container.querySelector<HTMLElement>("openclaw-session-diff")!,
-    unmount: view.unmount,
-    update: (patch: Partial<Parameters<typeof SessionDiffPanel>[0]>) =>
-      setProps((current) => ({ ...current, ...patch })),
-  };
-}
+import {
+  fileResult,
+  FRESH_PATCH,
+  mountPanel,
+  result,
+  SNAPSHOT_PATCH,
+} from "./session-diff-panel.test-support.tsx";
 
 function settlePanel(panel: HTMLElement) {
   return waitForSolid(() =>
@@ -39,65 +26,10 @@ function settlePanel(panel: HTMLElement) {
 }
 
 function setupDesktopResizeObserver() {
-  vi.stubGlobal(
-    "ResizeObserver",
-    class {
-      observe() {}
-      unobserve() {}
-      disconnect() {}
-    },
-  );
+  stubResizeObserver();
   onTestFinished(() => {
     vi.unstubAllGlobals();
   });
-}
-
-function result(branch: string): SessionsDiffResult {
-  return {
-    sessionKey: "agent:main:test",
-    branch,
-    baseRef: "main",
-    files: [],
-    additions: 0,
-    deletions: 0,
-  };
-}
-
-const SNAPSHOT_PATCH = [
-  "--- a/example.txt",
-  "+++ b/example.txt",
-  "@@ -3 +3 @@",
-  "-before",
-  "+snapshot line",
-].join("\n");
-
-const FRESH_PATCH = [
-  "--- a/example.txt",
-  "+++ b/example.txt",
-  "@@ -1,3 +1,3 @@",
-  " fresh gap edit",
-  " context",
-  "-before",
-  "+fresh snapshot line",
-].join("\n");
-
-function fileResult(patch: string): SessionsDiffResult {
-  return {
-    sessionKey: "agent:main:test",
-    branch: "feature/test",
-    baseRef: "main",
-    files: [
-      {
-        path: "example.txt",
-        status: "modified",
-        additions: 1,
-        deletions: 1,
-        patch,
-      },
-    ],
-    additions: 1,
-    deletions: 1,
-  };
 }
 
 function namedFileResult(paths: string[]): SessionsDiffResult {

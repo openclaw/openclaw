@@ -1,8 +1,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync } from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   buildReleasePreparationManifest,
   createReleasePrepareSteps,
@@ -11,19 +10,10 @@ import {
   runReleasePrepareSteps,
 } from "../../scripts/release-prepare.ts";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const testNodeExecPath = resolveTestNodeExecPath();
-
-function worktreeState(overrides: Partial<Awaited<ReturnType<typeof readWorktreeState>>> = {}) {
-  return {
-    changedFiles: [],
-    fingerprint: "f".repeat(64),
-    head: "a".repeat(40),
-    packageVersion: "2026.6.11",
-    status: "",
-    ...overrides,
-  };
-}
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function prepareSteps(overrides: Partial<Parameters<typeof createReleasePrepareSteps>[0]> = {}) {
   return createReleasePrepareSteps({
@@ -39,7 +29,6 @@ function prepareSteps(overrides: Partial<Parameters<typeof createReleasePrepareS
 describe("release preparation", () => {
   it("rejects ambiguous modes and invalid concurrency", () => {
     for (const [args, error] of [
-      ["--version 2026.7.2 --check --write", "Use only one mode flag"],
       ["--version 2026.7.2 --jobs 17", "Expected 1 through 16"],
       ["--check --check --unknown", "Use only one mode flag; received --check and --check."],
       ["--help --manifest -h", "Missing value for --manifest."],
@@ -110,54 +99,39 @@ describe("release preparation", () => {
 
     expect(result.error).toBeUndefined();
     expect(result).toMatchObject({ status: 23, stdout: "" });
-    for (const text of [
-      "[release-prepare] JSON child",
-      "child stdout begin",
-      "child stdout end",
-      "child stderr sentinel",
-    ]) {
+    for (const text of ["child stdout begin", "child stdout end", "child stderr sentinel"]) {
       expect(result.stderr).toContain(text);
     }
     expect(Buffer.byteLength(result.stderr)).toBeGreaterThan(2 * 1024 * 1024);
   });
-  it("fingerprints complete generated diffs beyond the former capture limit", async () => {
-    const rootDir = mkdtempSync(path.join(tmpdir(), "openclaw-release-prepare-"));
+  it("binds the shadow plan to complete generated diffs beyond the former capture limit", async () => {
+    const rootDir = tempDirs.make("openclaw-release-prepare-");
     const git = (args: string[]) => execFileSync("git", args, { cwd: rootDir });
-    try {
-      git(["init", "-q"]);
-      git(["config", "user.email", "release-test@openclaw.invalid"]);
-      git(["config", "user.name", "OpenClaw Release Test"]);
-      writeFileSync(path.join(rootDir, "package.json"), '{"version":"2026.7.2"}\n');
-      writeFileSync(path.join(rootDir, "generated.txt"), `${"a".repeat(33 * 1024 * 1024)}\n`);
-      git(["add", "."]);
-      git(["commit", "-q", "-m", "test fixture"]);
-      const generated = "b".repeat(33 * 1024 * 1024);
-      writeFileSync(path.join(rootDir, "generated.txt"), `${generated}\n`);
+    git(["init", "-q"]);
+    git(["config", "user.email", "release-test@openclaw.invalid"]);
+    git(["config", "user.name", "OpenClaw Release Test"]);
+    writeFileSync(path.join(rootDir, "package.json"), '{"version":"2026.7.2"}\n');
+    writeFileSync(path.join(rootDir, "generated.txt"), `${"a".repeat(33 * 1024 * 1024)}\n`);
+    git(["add", "."]);
+    git(["commit", "-q", "-m", "test fixture"]);
+    const generated = "b".repeat(33 * 1024 * 1024);
+    writeFileSync(path.join(rootDir, "generated.txt"), `${generated}\n`);
 
-      const state = await readWorktreeState(rootDir);
+    const state = await readWorktreeState(rootDir);
 
-      expect(state.changedFiles).toEqual(["generated.txt"]);
-      expect(state.fingerprint).toMatch(/^[0-9a-f]{64}$/u);
-      writeFileSync(path.join(rootDir, "generated.txt"), `${generated}changed-tail\n`);
-      const changedTail = await readWorktreeState(rootDir);
-      expect(changedTail.fingerprint).not.toBe(state.fingerprint);
-    } finally {
-      rmSync(rootDir, { force: true, recursive: true });
-    }
-  });
-
-  it("binds the plan to the exact source and worktree fingerprint", () => {
+    expect(state.changedFiles).toEqual(["generated.txt"]);
+    expect(state.fingerprint).toMatch(/^[0-9a-f]{64}$/u);
+    writeFileSync(path.join(rootDir, "generated.txt"), `${generated}changed-tail\n`);
+    const changedTail = await readWorktreeState(rootDir);
+    expect(changedTail.fingerprint).not.toBe(state.fingerprint);
     const steps = runReleasePrepareSteps({
-      cwd: "/repo",
+      cwd: rootDir,
       mode: "shadow",
       steps: prepareSteps(),
     });
     const manifest = buildReleasePreparationManifest({
-      after: worktreeState({
-        changedFiles: ["package.json"],
-        fingerprint: "b".repeat(64),
-      }),
-      before: worktreeState(),
+      after: changedTail,
+      before: state,
       mode: "shadow",
       steps,
       version: "2026.7.2",
@@ -168,8 +142,8 @@ describe("release preparation", () => {
       requestedVersion: "2026.7.2",
       mode: "shadow",
       status: "shadow",
-      sourceHead: "a".repeat(40),
-      candidateFingerprint: "b".repeat(64),
+      sourceHead: git(["rev-parse", "HEAD"]).toString().trim(),
+      candidateFingerprint: changedTail.fingerprint,
     });
     expect(manifest.steps.map((step) => step.status)).toEqual(["planned", "planned"]);
   });

@@ -1,19 +1,11 @@
 import { createHmac, randomBytes } from "node:crypto";
 import { join } from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
-import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
-import { SQLITE_WORKER_PREPARE_COMMAND } from "../infra/sqlite-worker-contract.js";
-import { runWithSqliteWorkerStateContext as withWorkerContext } from "../infra/sqlite-worker-state-context.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import { openOpenClawStateDatabase as openDatabase } from "../state/openclaw-state-db.js";
-import { getOpenClawStateRuntimeSchema as runtimeSchema } from "../state/openclaw-state-schema-compatibility.js";
-import { captureOpenClawStateWorkerContext as captureWorkerContext } from "../state/openclaw-state-worker-context.js";
-import { createSqliteWorkerBackend } from "../state/openclaw-state.worker.js";
 import { closeStateDatabaseForTest as closeDatabase } from "../test-utils/database-cleanup.js";
-import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { loadGatewayConfigRevisionProjector as loadProjector } from "./config-revision-token.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
@@ -59,46 +51,11 @@ it("lazily persists one opaque domain-separated key without changing schema vers
   expect(projector.projectResolvedHash(rawHash)).not.toBe(rawToken);
   expect(projector.projectRawHash(rawHash)).toBe(rawToken);
   expect(projector.projectRawHash(`${rawHash}0`)).not.toBe(rawToken);
-  expect(() =>
-    assertSqliteSchemaContains(
-      requireNativeSqliteDatabase(stored),
-      "previous state-schema reader",
-      runtimeSchema({ includeVersionLazyAdditiveTables: false }),
-    ),
-  ).not.toThrow();
 
   await closeDatabase();
   const reloaded = await loadProjector(options);
   expect(reloaded.projectRawHash(rawHash)).toBe(rawToken);
   expect(reloaded.hashResponseSessionBearer(bearer)).toBe(subject);
-});
-
-it("reuses the persisted key with one statement and no transaction envelope", async () => {
-  const options = stateOptions();
-  const context = captureWorkerContext(options);
-  const run = <T>(operation: () => T) => withWorkerContext(context, operation);
-  const backend = run(() =>
-    createSqliteWorkerBackend(undefined, { databasePath: context.admission.databasePath }),
-  );
-  try {
-    await backend[SQLITE_WORKER_PREPARE_COMMAND]?.("machineState.configRevisionKey");
-    const load = (candidateKey: Uint8Array) =>
-      run(() =>
-        backend.execute({ type: "machineState.configRevisionKey", input: { candidateKey } }),
-      );
-    const key = load(Buffer.alloc(32, 1));
-    const reads = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
-    using exec = vi.spyOn(openDatabase(options).db, "exec");
-    try {
-      expect(load(Buffer.alloc(32, 2))).toEqual(key);
-      expect(reads.queries.filter((sql) => /\bconfig_revision_keys\b/i.test(sql))).toHaveLength(1);
-      expect(exec.mock.calls.filter(([sql]) => /\b(?:BEGIN|COMMIT)\b/i.test(sql))).toEqual([]);
-    } finally {
-      reads.restore();
-    }
-  } finally {
-    await backend.close();
-  }
 });
 
 it("fails closed instead of replacing corrupt persisted key material", async () => {

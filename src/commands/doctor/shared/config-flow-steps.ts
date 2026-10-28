@@ -117,40 +117,6 @@ export function applyLegacyCompatibilityStep(params: {
   };
 }
 
-/** Strip unknown config keys while preserving active auth profile settings. */
-function applyUnknownConfigKeyStep(params: {
-  state: DoctorConfigMutationState;
-  shouldRepair: boolean;
-  doctorFixCommand: string;
-  preservedPaths?: readonly (readonly string[])[];
-}): {
-  state: DoctorConfigMutationState;
-  removed: string[];
-  repairs: string[];
-  warnings: string[];
-} {
-  const unknown = stripUnknownConfigKeys(params.state.candidate, params.preservedPaths);
-  if (unknown.removed.length === 0) {
-    return { state: params.state, removed: [], repairs: [], warnings: [] };
-  }
-  const protectedAuth = protectActiveAuthProfileConfig({
-    before: params.state.candidate,
-    after: unknown.config,
-  });
-
-  return {
-    state: applyDoctorConfigMutation({
-      state: params.state,
-      mutation: { config: protectedAuth.config, changes: unknown.removed },
-      shouldRepair: params.shouldRepair,
-      fixHint: `Run "${params.doctorFixCommand}" to remove these keys.`,
-    }),
-    removed: unknown.removed,
-    repairs: protectedAuth.repairs,
-    warnings: protectedAuth.warnings,
-  };
-}
-
 /** Retire heartbeat data before removing unknown configuration keys. */
 export async function applyRetiredConfigStep(params: {
   state: DoctorConfigMutationState;
@@ -158,9 +124,16 @@ export async function applyRetiredConfigStep(params: {
   doctorFixCommand: string;
   sourceConfig: OpenClawConfig;
   emitChanges: (changeLines: readonly string[]) => void;
+  preflight?: {
+    heartbeatMigrationDeferred?: true;
+    cronStoreSelectionUnresolved?: true;
+  };
 }): Promise<DoctorConfigMutationState> {
   let state = params.state;
-  if (params.shouldRepair) {
+  if (params.preflight?.heartbeatMigrationDeferred) {
+    return state;
+  }
+  if (params.shouldRepair && !params.preflight?.cronStoreSelectionUnresolved) {
     const { tryProjectRetiredHeartbeatConfig } = await import("../../doctor-heartbeat-legacy.js");
     const { retireHeartbeatWithDoctor } = await import("../../doctor-heartbeat-retirement.js");
     const retiredConfig = tryProjectRetiredHeartbeatConfig(state.candidate)
@@ -181,29 +154,38 @@ export async function applyRetiredConfigStep(params: {
     }
   }
 
-  const unknownStep = applyUnknownConfigKeyStep({
-    state,
-    shouldRepair: params.shouldRepair,
-    doctorFixCommand: params.doctorFixCommand,
-    preservedPaths: getDeferredPluginMigrationConfigFacts(params.sourceConfig)?.flatMap((pending) =>
+  const unknown = stripUnknownConfigKeys(
+    state.candidate,
+    getDeferredPluginMigrationConfigFacts(params.sourceConfig)?.flatMap((pending) =>
       (pending.configPaths ?? []).concat(pending.validationExcludedPaths ?? []),
     ),
+  );
+  if (unknown.removed.length === 0) {
+    return state;
+  }
+  const protectedAuth = protectActiveAuthProfileConfig({
+    before: state.candidate,
+    after: unknown.config,
   });
-  if (unknownStep.removed.length > 0 || unknownStep.repairs.length > 0) {
-    const lines = [
-      ...unknownStep.removed.map((pathLocal) => `- ${pathLocal}`),
-      ...unknownStep.repairs.map((change) => `- ${change}`),
-    ];
-    if (params.shouldRepair) {
-      params.emitChanges(lines);
-    } else {
-      note(lines.join("\n"), "Unknown config keys");
-    }
+  state = applyDoctorConfigMutation({
+    state,
+    mutation: { config: protectedAuth.config, changes: unknown.removed },
+    shouldRepair: params.shouldRepair,
+    fixHint: `Run "${params.doctorFixCommand}" to remove these keys.`,
+  });
+  const lines = [
+    ...unknown.removed.map((pathLocal) => `- ${pathLocal}`),
+    ...protectedAuth.repairs.map((change) => `- ${change}`),
+  ];
+  if (params.shouldRepair) {
+    params.emitChanges(lines);
+  } else {
+    note(lines.join("\n"), "Unknown config keys");
   }
-  if (unknownStep.warnings.length > 0) {
-    note(unknownStep.warnings.join("\n"), "Doctor warnings");
+  if (protectedAuth.warnings.length > 0) {
+    note(protectedAuth.warnings.join("\n"), "Doctor warnings");
   }
-  return unknownStep.state;
+  return state;
 }
 
 export type DoctorConfigReferenceSource = {

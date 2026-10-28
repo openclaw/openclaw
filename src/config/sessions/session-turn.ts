@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import {
   createSqliteLifecycleAggregateError,
   throwSqliteLifecycleErrors,
@@ -24,6 +25,7 @@ import {
   type ResolvedTranscriptScope,
 } from "./session-accessor.sqlite-scope.js";
 import { sanitizeTranscriptMessageForStorage } from "./session-accessor.sqlite-transcript-store.js";
+import { resolveSessionTranscriptRuntimeTarget } from "./session-accessor.transcript-target.js";
 import type {
   SessionTranscriptTurnMessageAppend,
   SessionTranscriptTurnWriteContext,
@@ -35,7 +37,6 @@ import type {
 } from "./session-actor-contract.js";
 import type { SessionActorMemoryTurnReads } from "./session-actor-memory-turn-contract.js";
 import { runSessionActorCommand } from "./session-actor-scope.js";
-import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
 import { runSessionEntryWorkerOperation } from "./session-entry-patch.js";
 import { getSessionInputActor, throwSessionInputActorFailure } from "./session-input-actor.js";
 import { prepareSessionInputFromReplica } from "./session-input-preparation.js";
@@ -47,6 +48,7 @@ import {
   type PreparedSessionSourceAuthority,
   type SessionSourceValidation,
 } from "./session-source-authority.js";
+import { SessionTranscriptColdError } from "./session-transcript-cold-error.js";
 import { buildRestartRecoveryExpectedState } from "./session-transcript-turn-state.js";
 import { restoreSessionTurnColdTranscript } from "./session-turn-cold.js";
 import {
@@ -137,11 +139,29 @@ export async function appendSessionTurnInWorker(
   };
   const actor = inputActor?.actor;
   let runtimeTarget: SqliteExpectedSessionTranscriptTurnResult["runtimeTarget"];
+  const selectRuntimeTarget = (
+    selected: NonNullable<SqliteExpectedSessionTranscriptTurnResult["runtimeTarget"]>,
+  ) => {
+    if (inputActor && selected.sessionKey !== inputActor.actor.target.sessionKey) {
+      throw new Error("Input actor differs from the recorder's admitted target");
+    }
+    runtimeTarget = selected;
+    scope.sessionKey = selected.sessionKey;
+    context.sessionKey = selected.sessionKey;
+    const selection = {
+      resolveRuntimeTarget: undefined,
+      selectedSessionId: selected.selectedSessionId,
+      selectedLifecycleRevision: selected.selectedLifecycleRevision,
+      sessionFile: selected.sessionKey,
+    };
+    options = { ...options, ...selection };
+    plan.sessionKey = selected.sessionKey;
+    plan.options = { ...plan.options, ...selection };
+  };
   let inputExpectedState = options.expectedSessionState;
-  const fixedVoiceTranscript =
+  const fixedMessages =
     !actor &&
     !memory &&
-    Boolean(options.voiceTranscript) &&
     !custody &&
     !cliWriter &&
     !options.sessionTurnMutation &&
@@ -157,12 +177,13 @@ export async function appendSessionTurnInWorker(
         !message.shouldAppendInTransaction &&
         !message.predicate,
     );
+  const fixedVoiceTranscript = fixedMessages && Boolean(options.voiceTranscript);
   // Observable append predicates and fixed voice commits retain eager restoration.
   const prepareColdTranscript =
     !memory &&
     !fixedVoiceTranscript &&
     !messages.some((append) => append.shouldAppend) &&
-    (options.resolveRuntimeTarget ||
+    ((actor && options.resolveRuntimeTarget) ||
       Boolean(sessionTurnMutation) ||
       messages.some(
         (append) =>
@@ -174,10 +195,23 @@ export async function appendSessionTurnInWorker(
   if (prepareColdTranscript) {
     plan.prepareColdTranscript = true;
   }
+  // Ordinary messages have no observable preparation. Let the locked append reject
+  // a cold transcript, then restore it through the existing owner and retry.
+  const restoreOnCold =
+    fixedMessages && !options.voiceTranscript && !prepareColdTranscript && messages.length > 0;
   let outcome = await (async () => {
     const restore = async () => {
       if (memory) {
         return undefined;
+      }
+      if (!actor && options.resolveRuntimeTarget) {
+        selectRuntimeTarget(
+          await resolveSessionTranscriptRuntimeTarget(
+            { ...scope, storePath: scope.path },
+            options.config,
+            { keyFormat: options.keyFormat },
+          ),
+        );
       }
       return restoreSessionTurnColdTranscript(
         scope,
@@ -189,7 +223,7 @@ export async function appendSessionTurnInWorker(
         plan.options.initialSessionEntry,
       );
     };
-    if (!prepareColdTranscript) {
+    if (!prepareColdTranscript && !restoreOnCold) {
       const rebound = await restore();
       if (rebound) {
         return rebound;
@@ -253,6 +287,7 @@ export async function appendSessionTurnInWorker(
         }
       },
       async run(prepareTurn, commit) {
+        using phase = observeDiagnosticsTimelinePhases("persist.turn.prepare");
         if (fixedVoiceTranscript) {
           // Fixed voice events keep transaction-local validation without a planning read.
           plan.options.messages = messages.map(({ config: _messageConfig, ...message }) => ({
@@ -267,21 +302,7 @@ export async function appendSessionTurnInWorker(
         const prepareOwnedTurn = async () => {
           const prepared = await prepareTurn();
           if (prepared.runtimeTarget) {
-            runtimeTarget = prepared.runtimeTarget;
-            if (inputActor && runtimeTarget.sessionKey !== inputActor.actor.target.sessionKey) {
-              throw new Error("Input actor differs from the recorder's admitted target");
-            }
-            scope.sessionKey = runtimeTarget.sessionKey;
-            context.sessionKey = runtimeTarget.sessionKey;
-            const selected = {
-              resolveRuntimeTarget: undefined,
-              selectedSessionId: runtimeTarget.selectedSessionId,
-              selectedLifecycleRevision: runtimeTarget.selectedLifecycleRevision,
-              sessionFile: runtimeTarget.sessionKey,
-            };
-            options = { ...options, ...selected };
-            plan.sessionKey = runtimeTarget.sessionKey;
-            plan.options = { ...plan.options, ...selected };
+            selectRuntimeTarget(prepared.runtimeTarget);
           }
           if (prepared.refusedOwnerSource) {
             ownerSource?.checks[prepared.refusedOwnerSource.index]?.refuse(
@@ -347,6 +368,7 @@ export async function appendSessionTurnInWorker(
           return { kind: "restore-cold-transcript" };
         }
         // Select one adapter for the whole turn before any message preparer can have effects.
+        phase.mark("persist.turn.authority");
         for (const [index, append] of accepted.entries()) {
           const hooks = append.workerPreparation;
           const facts = preparation?.messages[index];
@@ -369,6 +391,7 @@ export async function appendSessionTurnInWorker(
           }
         }
         plan.options.preparedGoalId = preparation?.goalId;
+        phase.mark("persist.turn.message");
         for (const [index, append] of plan.options.messages.entries()) {
           const hooks = accepted[index]!.workerPreparation;
           const facts = preparation?.messages[index];
@@ -409,9 +432,13 @@ export async function appendSessionTurnInWorker(
           };
         }
         assertCurrent();
-        return commit();
+        phase.mark("persist.turn.commit");
+        return await commit();
       },
       onAcknowledged(candidate) {
+        if (candidate.result.runtimeTarget) {
+          selectRuntimeTarget(candidate.result.runtimeTarget);
+        }
         publishCommittedSessionTurn(candidate, {
           scope,
           database,
@@ -582,14 +609,27 @@ export async function appendSessionTurnInWorker(
       });
     };
     for (let restorations = 0; ; restorations++) {
-      const result = await run();
+      let result: TurnResult;
+      try {
+        result = await run();
+      } catch (error) {
+        if (
+          !restoreOnCold ||
+          !isRecord(error) ||
+          error.name !== "SessionTranscriptColdError" ||
+          error.code !== "TRANSCRIPT_COLD"
+        ) {
+          throw error;
+        }
+        result = { kind: "restore-cold-transcript" };
+      }
       if (!("kind" in result)) {
         return result;
       }
       if (restorations === 2) {
         throw new SessionTranscriptColdError(scope.sessionId);
       }
-      // The read-only refusal released FIFO; restoration uses its existing guarded writer.
+      // The refusal released FIFO; restoration uses its existing guarded writer.
       const rebound = await restore();
       if (rebound) {
         return rebound;
@@ -599,6 +639,7 @@ export async function appendSessionTurnInWorker(
     (value) => ({ ok: true as const, value }),
     (error: unknown) => ({ ok: false as const, error }),
   );
+  using settlementPhase = observeDiagnosticsTimelinePhases("persist.turn.completion");
   const completions = await Promise.allSettled(committedCompletions);
   const completionErrors = completions.flatMap((completion) =>
     completion.status === "rejected" ? [completion.reason] : [],
@@ -614,6 +655,7 @@ export async function appendSessionTurnInWorker(
     }
   }
   try {
+    settlementPhase.mark("persist.turn.releaseAuthority");
     try {
       await releaseSessionSourceAuthorities(sources.filter((source) => source !== undefined));
     } finally {

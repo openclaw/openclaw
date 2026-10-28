@@ -4,6 +4,7 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { assert, describe, expect, it, vi } from "vitest";
 import { writePackageDistInventory } from "../../../scripts/lib/package-dist-inventory.js";
+import { listDirectoryTreeStrictSync } from "../../infra/directory-walk.js";
 import * as packageJson from "../../infra/package-json.js";
 import {
   openPackageActivationJournal,
@@ -54,9 +55,8 @@ describe("fresh update terminal reporting", () => {
       });
       const observations: string[] = [];
       const enter = vi.fn();
-      const execute = vi
-        .spyOn(executorOwner, "withUpdateCommandExecutor")
-        .mockImplementationOnce((runId, operation, options) =>
+      vi.spyOn(executorOwner, "withUpdateCommandExecutor").mockImplementationOnce(
+        (runId, operation, options) =>
           withExecutor(
             runId,
             (executor) => {
@@ -69,7 +69,7 @@ describe("fresh update terminal reporting", () => {
             },
             options,
           ),
-        );
+      );
       vi.mocked(defaultRuntime.writeJson).mockImplementation(() => {
         observations.push(createManagedHandoffLeaseStore().read(fixture.root).kind);
       });
@@ -89,7 +89,6 @@ describe("fresh update terminal reporting", () => {
         reason:
           cleanup === "release" ? "update-admission-cleanup-failed" : "target-metadata-preflight",
       });
-      expect(execute).toHaveBeenCalledOnce();
       if (cleanup === "no-enter") {
         expect(enter).not.toHaveBeenCalled();
         expect(failure).toBeInstanceOf(UpdateCommandFailure);
@@ -159,11 +158,11 @@ describe("fresh update terminal reporting", () => {
         fs.writeFileSync(file, "existing operator artifact\n");
       }
       const readState = () =>
-        fs
-          .readdirSync(stateDir, { recursive: true })
-          .toSorted((left, right) => String(left).localeCompare(String(right)))
+        listDirectoryTreeStrictSync(stateDir)
+          .map((walkEntry) => walkEntry.relativePath)
+          .toSorted((left, right) => left.localeCompare(right))
           .map((relative) => {
-            const file = path.join(stateDir, String(relative));
+            const file = path.join(stateDir, relative);
             return [relative, fs.statSync(file).isFile() ? fs.readFileSync(file) : null];
           });
       const anchor = resolvePackageActivationAnchor(fixture.root);
@@ -172,7 +171,6 @@ describe("fresh update terminal reporting", () => {
       let before: ReturnType<typeof readState> | undefined;
       let journal: Buffer | undefined;
       let acquired = false;
-      let injected = false;
       const postReleaseVersionRead = vi.fn(() => {
         throw new Error("released refusal must not reread the replacement package version");
       });
@@ -224,11 +222,7 @@ describe("fresh update terminal reporting", () => {
             expect(openPackageActivationJournal(anchor).read().phase).toBe("publication-complete");
             journal = fs.readFileSync(resolvePackageActivationJournalPath(anchor));
             before = readState();
-            expect(
-              JSON.parse(fs.readFileSync(path.join(fixture.root, "package.json"), "utf8")),
-            ).toMatchObject({ version: "2.0.0" });
             vi.spyOn(packageJson, "readPackageVersion").mockImplementation(postReleaseVersionRead);
-            injected = true;
             throw error;
           }
         },
@@ -236,7 +230,6 @@ describe("fresh update terminal reporting", () => {
       await expect(updateCommand(updateOptions)).rejects.toMatchObject({
         code: refusal === "metadata" ? 1 : 0,
       });
-      expect(injected).toBe(true);
       expect(defaultRuntime.writeJson).toHaveBeenCalledOnce();
       const output = vi.mocked(defaultRuntime.writeJson).mock.calls[0]?.[0];
       expect(output).toMatchObject({

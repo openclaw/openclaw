@@ -32,6 +32,7 @@ import {
   updateLegacySessionStore,
 } from "../../../infra/state-migrations.legacy-session-store.js";
 import { isValidAgentHarnessSessionStoreEntry } from "../../../sessions/agent-harness-session-key.js";
+import { isModelSelectionLocked } from "../../../sessions/model-overrides.js";
 import { createRetainedAgentDatabaseMatcher } from "../../../state/agent-deletion-discovery.js";
 import { resolveLegacyAuthProfilesPath } from "../../doctor-auth-legacy-paths.js";
 import {
@@ -51,6 +52,7 @@ import {
   migrateLegacyRuntimeModelRef,
   resolveLegacyRuntimeModelProviderAlias,
 } from "./legacy-runtime-model-providers.js";
+import { createModelAliasCanonicalizer } from "./model-alias-canonicalization.js";
 import { rewriteRenamedSessionRoutes, type ProviderRename } from "./provider-rename.js";
 import type { SessionModelRetirement } from "./retired-model-ref-repair.js";
 import { createRetiredModelRefRepairResolver } from "./retired-model-ref-repair.js";
@@ -464,8 +466,10 @@ function resolveVerifiedSessionAuthProfileIdMap(params: {
 export async function maybeRepairCodexSessionRoutes(params: {
   cfg: OpenClawConfig;
   retiredModelRefConfig?: Pick<OpenClawConfig, "agents" | "models">;
+  modelReplacements?: readonly import("./model-replacement.js").DoctorModelReplacement[];
   env?: NodeJS.ProcessEnv;
   shouldRepair: boolean;
+  canonicalizeModelAliasesOnly?: boolean;
   authProfileOnly?: boolean;
   providerRenameOnly?: boolean;
   blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
@@ -490,12 +494,14 @@ export async function maybeRepairCodexSessionRoutes(params: {
       ? undefined
       : createRetiredModelRefRepairResolver({
           cfg: params.cfg,
+          modelReplacements: params.modelReplacements,
           checkModelPolicy: true,
           retiredModelRefConfig: params.retiredModelRefConfig,
           env,
           warnings,
           agentIds: [...new Set(sessionTargets.map((target) => target.agentId))],
         });
+  const canonicalize = createModelAliasCanonicalizer(params.cfg, params.modelReplacements ?? []);
   const targets = sessionTargets.flatMap((target) => {
     const defaultModelRef = resolveRetired
       ? resolveAgentEffectiveModelPrimary(params.cfg, target.agentId)
@@ -530,8 +536,28 @@ export async function maybeRepairCodexSessionRoutes(params: {
     if (authProfileOnly && !authProfileIdMap?.size) {
       return [];
     }
-    const repair = (store: Record<string, SessionEntry>) =>
-      repairCodexSessionStoreRoutes({
+    const repair = (store: Record<string, SessionEntry>) => {
+      if (params.canonicalizeModelAliasesOnly) {
+        const changed: string[] = [];
+        for (const [key, entry] of Object.entries(store)) {
+          if (!entry.modelOverride || isModelSelectionLocked(entry)) {
+            continue;
+          }
+          const raw = entry.providerOverride
+            ? entry.providerOverride + "/" + entry.modelOverride
+            : entry.modelOverride;
+          const canonical = canonicalize(raw, target.agentId);
+          if (!canonical) {
+            continue;
+          }
+          // The resolved identity is unchanged; preserve profile suffixes and runtime metadata.
+          entry.modelOverride = canonical;
+          delete entry.providerOverride;
+          changed.push(key);
+        }
+        return changed;
+      }
+      return repairCodexSessionStoreRoutes({
         store,
         blockedModelIdentities: params.blockedModelIdentities,
         authProfileIdMap,
@@ -541,6 +567,7 @@ export async function maybeRepairCodexSessionRoutes(params: {
         providerRenames,
         warnings,
       });
+    };
     // Preview uses the same owner-bound repair against copies, preserving persisted entries.
     const scan = (store: Record<string, SessionEntry>) => repair(structuredClone(store));
     const staleSqliteSessionKeys: string[] = [];
@@ -581,8 +608,6 @@ export async function maybeRepairCodexSessionRoutes(params: {
     });
     return {
       scannedStores: targets.length,
-      repairedStores: 0,
-      repairedSessions: 0,
       warnings: [
         ...warnings,
         ...(stale.length > 0
@@ -643,8 +668,6 @@ export async function maybeRepairCodexSessionRoutes(params: {
   const repairedScope = `${repairedSessions} session${repairedSessions === 1 ? "" : "s"} across ${repairedStores} store${repairedStores === 1 ? "" : "s"}`;
   return {
     scannedStores: targets.length,
-    repairedStores,
-    repairedSessions,
     warnings,
     changes:
       repairedSessions > 0

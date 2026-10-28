@@ -8,6 +8,8 @@ import {
   PreparedModelRuntimeOwnerNotPublishedError,
   PreparedModelRuntimePluginGenerationRetiredError,
 } from "../../agents/prepared-model-runtime.errors.js";
+import { makeProviderModelFixture } from "../../agents/test-helpers/provider-model-fixture.js";
+import { createRuntimeLlmUsageFixture } from "../../agents/test-helpers/usage-fixtures.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginEntryConfig } from "../../config/types.plugins.js";
 import { AsyncWorkScopeClosedError } from "../../shared/async-work-scope.js";
@@ -66,18 +68,14 @@ function createPreparedModel(
       modelId,
       agentDir: "/tmp/openclaw-agent",
     },
-    model: {
+    model: makeProviderModelFixture({
       provider: "openai",
       id: modelId,
-      name: modelId,
       api: "openai",
       baseUrl: "https://fixture.invalid/v1",
-      input: ["text"],
-      reasoning: false,
       contextWindow: 128_000,
-      maxTokens: 4096,
       cost: { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0.2 },
-    },
+    }),
     auth: {
       apiKey: "test-api-key",
       source: "test",
@@ -151,14 +149,7 @@ function primeCompletionMocks() {
     content: [{ type: "text", text: "done" }],
     responseModel: "gpt-5.5-2026-08-01",
     stopReason: "stop",
-    usage: {
-      input: 11,
-      output: 7,
-      cacheRead: 5,
-      cacheWrite: 2,
-      total: 25,
-      cost: { total: 0.0042 },
-    },
+    usage: createRuntimeLlmUsageFixture(),
   });
 }
 

@@ -20,6 +20,7 @@ import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { ProcessesPanelData } from "../processes-panel-data.ts";
+import type { ChatProcessShowRequest } from "./chat-details-types.ts";
 import { createProcessesPresentation } from "./chat-processes-presentation.ts";
 import {
   syncSessionPanelInputs,
@@ -32,6 +33,8 @@ import "./chat-processes-panel.css";
 
 export type ChatProcessesPanelProps = SessionPanelProps & {
   mobile: boolean;
+  showRequest?: () => ChatProcessShowRequest | undefined;
+  onBackToDetails?: () => void;
   onScrollPortRef?: (element: HTMLElement) => void | (() => void);
 };
 export type ChatProcessesPanel = SolidBridgeElement<ChatProcessesPanelProps>;
@@ -42,6 +45,7 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
     const [finishedOpen, setFinishedOpen] = createSignal(false);
     let list!: HTMLDivElement;
 
+    let appliedRequest: ChatProcessesPanelProps["showRequest"];
     const listScrollState = useScrollState();
     const panel = useSessionPanel(
       host,
@@ -56,6 +60,18 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
             list.scrollTop = 0;
           }
         }
+        const request = host.showRequest;
+        if (request !== appliedRequest) {
+          appliedRequest = request;
+          const target = request?.();
+          if (target) {
+            setNavigation((draft) => {
+              draft.selected = target.instanceId;
+              draft.fromDetails = target.fromDetails;
+              draft.returnInstance = null;
+            });
+          }
+        }
       },
     );
     const presentation = createProcessesPresentation(panel);
@@ -68,12 +84,14 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
     const emptyNavigation = (): {
       listTop: number;
       selected: string | null;
+      fromDetails: boolean;
       returnInstance: string | null;
       openers: Map<string, HTMLButtonElement>;
       outputPositions: Map<string, { left: number; top: number }>;
     } => ({
       listTop: 0,
       selected: null,
+      fromDetails: false,
       returnInstance: null,
       openers: new Map<string, HTMLButtonElement>(),
       outputPositions: new Map<string, { left: number; top: number }>(),
@@ -91,6 +109,7 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
         draft.listTop = list.scrollTop;
         draft.returnInstance = row.instanceId;
         draft.selected = row.instanceId;
+        draft.fromDetails = false;
       });
     };
     const selectedRow = createMemo(() => rows().find((row) => row.instanceId === selected()));
@@ -308,6 +327,7 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
               fallback={
                 <div class="chat-processes__output-empty">
                   <PanelEmptyState
+                    presentation="desktop"
                     icon={<Icon name="terminal" />}
                     heading={t("chat.processesPanel.noOutputTitle")}
                     description={t("chat.processesPanel.noOutput")}
@@ -339,13 +359,31 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
                 ref={(element) => {
                   back = element;
                 }}
-                aria-label={t("chat.processesPanel.back")}
-                title={props.mobile ? undefined : t("chat.processesPanel.back")}
+                aria-label={t(
+                  navigation.fromDetails
+                    ? "chat.processesPanel.backToDetails"
+                    : "chat.processesPanel.back",
+                )}
+                title={
+                  props.mobile
+                    ? undefined
+                    : t(
+                        navigation.fromDetails
+                          ? "chat.processesPanel.backToDetails"
+                          : "chat.processesPanel.back",
+                      )
+                }
                 onClick={() => {
                   savePosition();
+                  const fromDetails = navigation.fromDetails;
                   setNavigation((draft) => {
                     draft.selected = null;
+                    draft.fromDetails = false;
                   });
+                  if (fromDetails) {
+                    props.onBackToDetails?.();
+                    return;
+                  }
                   onSettled(() => {
                     list.scrollTop = navigation.listTop;
                     const opener = navigation.returnInstance
@@ -469,11 +507,12 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
                       </div>
                     }
                   >
-                    <PanelLoadingSkeleton variant="file-list" label={t("common.loading")} compact />
+                    <PanelLoadingSkeleton variant="file-list" label={t("common.loading")} />
                   </Show>
                 }
               >
                 <PanelEmptyState
+                  presentation={props.mobile ? "mobile" : "desktop"}
                   icon={<Icon name="terminal" />}
                   heading={t("chat.processesPanel.emptyTitle")}
                   description={t("chat.processesPanel.empty")}
@@ -531,7 +570,7 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
         <div class="chat-processes__list" aria-busy={fallbackProps.loading ? "true" : "false"}>
           {error(fallbackProps.loading, fallbackProps.retry)}
           <Show when={fallbackProps.loading}>
-            <PanelLoadingSkeleton variant="file-list" label={t("common.loading")} compact />
+            <PanelLoadingSkeleton variant="file-list" label={t("common.loading")} />
           </Show>
         </div>
       </div>
@@ -561,6 +600,8 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
       sessionKey: { default: "", attribute: false },
       agentId: { default: "main", attribute: false },
       presented: { default: true, type: Boolean },
+      showRequest: { default: undefined, attribute: false },
+      onBackToDetails: { default: undefined, attribute: false },
       mobile: { default: false, type: Boolean },
       onScrollPortRef: { default: undefined, attribute: false },
     },

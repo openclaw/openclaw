@@ -1,0 +1,3 @@
+# Plugin UI manualImport calls; shrink only.
+# Run pnpm check:control-ui-controllers --prune after removing calls.
+extensions/workboard/browser/index.ts	1

@@ -9,12 +9,6 @@ type QueueSummaryState = {
   summaryLines: string[];
 };
 
-type QueueState<T> = QueueSummaryState & {
-  items: T[];
-  cap: number;
-  dropPolicy: QueueDropPolicy;
-};
-
 /** Build a summary prompt preview without mutating the source queue state. */
 export function previewQueueSummaryPrompt(state: QueueSummaryState): string | undefined {
   if (state.droppedCount <= 0) {
@@ -42,7 +36,11 @@ export function countPendingQueueItems<T>(items: readonly T[], inFlight?: Readon
 
 /** Apply overflow policy before enqueueing another item. */
 export function applyQueueDropPolicy<T>(params: {
-  queue: QueueState<T>;
+  queue: QueueSummaryState & {
+    items: T[];
+    cap: number;
+    dropPolicy: QueueDropPolicy;
+  };
   summarize: (item: T) => string;
   onDrop?: (items: T[]) => void;
   onSummaryElide?: (lines: string[]) => void;

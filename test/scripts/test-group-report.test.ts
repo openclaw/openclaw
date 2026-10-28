@@ -32,7 +32,7 @@ import {
   openFixtureReceiptChannel,
   type FixtureReceiptChannel,
 } from "../helpers/fixture-receipts.js";
-import { isProcessAlive } from "../helpers/process-wait.js";
+import { isProcessAlive, waitForDead as waitForProcessExit } from "../helpers/process-wait.js";
 import { startProcessWatchdogFixture } from "../helpers/process-watchdog.js";
 import { withinTest } from "../helpers/promise.js";
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
@@ -71,20 +71,6 @@ function fixtureReadyBeforeSettlement(
       },
     ),
   ]);
-}
-
-// spawnText can finish after signaling a foreign descendant without joining its extinction.
-async function waitForProcessExit(pid: number, signal: AbortSignal): Promise<void> {
-  try {
-    while (isProcessAlive(pid)) {
-      await delay(5, undefined, { signal });
-    }
-  } catch (error) {
-    if (signal.aborted) {
-      throw new Error(`process still alive: ${pid}`, { cause: error });
-    }
-    throw error;
-  }
 }
 
 function runReportCli(args: string[], env = process.env) {
@@ -267,27 +253,6 @@ const runCounter = (elapsedMs: number, rssMb: number) => ({
   status: 0,
 });
 
-function expectedArgs(overrides: Partial<ReturnType<typeof parseTestGroupReportArgs>>) {
-  return {
-    allowFailures: false,
-    compare: null,
-    concurrency: null,
-    configs: [],
-    fullSuite: false,
-    groupBy: "area",
-    killGraceMs: 10000,
-    limit: 25,
-    maxTestMs: null,
-    output: null,
-    reports: [],
-    rss: process.platform !== "win32",
-    timeoutMs: 1800000,
-    topFiles: 25,
-    vitestArgs: [],
-    ...overrides,
-  };
-}
-
 describe("scripts/test-group-report", () => {
   it("groups repo files by stable product area", () => {
     expect(resolveTestArea("packages/plugin-sdk/src/index.test.ts")).toBe("packages/plugin-sdk");
@@ -370,14 +335,14 @@ describe("scripts/test-group-report", () => {
           report: {
             testResults: [
               testResult(
-                "src/commands/agent.test.ts",
+                "src/a/x.test.ts",
                 [100, 700],
                 [
-                  ["agent ok", 150],
-                  ["agent slow", 2600],
+                  ["ok", 150],
+                  ["slow", 2600],
                 ],
               ),
-              testResult("extensions/discord/src/send.test.ts", [200, 450], [["send ok", 50]]),
+              testResult("extensions/b/x.test.ts", [200, 450], [["ok", 50]]),
             ],
           },
         },
@@ -387,8 +352,8 @@ describe("scripts/test-group-report", () => {
 
     expect(report.totals).toEqual({ durationMs: 850, fileCount: 2, testCount: 3 });
     expect(report.groups.map((group) => [group.key, group.durationMs])).toEqual([
-      ["src/commands", 600],
-      ["extensions/discord", 250],
+      ["src/a", 600],
+      ["extensions/b", 250],
     ]);
     expect(report.configs).toStrictEqual([
       { configs: ["commands"], ...keyedCounter("commands", 850, 2, 3) },
@@ -397,11 +362,18 @@ describe("scripts/test-group-report", () => {
       {
         config: "commands",
         durationMs: 2600,
-        file: "src/commands/agent.test.ts",
-        fullName: "agent slow",
+        file: "src/a/x.test.ts",
+        fullName: "slow",
         status: "passed",
       },
     ]);
+  });
+
+  it("defaults to area reports with platform RSS support", () => {
+    expect(parseTestGroupReportArgs([])).toMatchObject({
+      groupBy: "area",
+      rss: process.platform !== "win32",
+    });
   });
 
   it.each([
@@ -513,38 +485,27 @@ describe("scripts/test-group-report", () => {
       before: {
         groupBy: "area",
         totals: counter(1000, 2, 4),
-        groups: [
-          keyedCounter("src/commands", 700, 1, 2),
-          keyedCounter("extensions/discord", 300, 1, 2),
-        ],
+        groups: [keyedCounter("a", 700, 1, 2), keyedCounter("b", 300, 1, 2)],
         configs: [keyedCounter("commands", 1000, 2, 4)],
-        topFiles: [
-          fileCounter("src/commands/agent.test.ts", "src/commands", 700, 2),
-          fileCounter("extensions/discord/src/send.test.ts", "extensions/discord", 300, 2),
-        ],
+        topFiles: [fileCounter("a.test.ts", "a", 700, 2), fileCounter("b.test.ts", "b", 300, 2)],
         runs: [runCounter(2000, 100)],
       },
       after: {
         groupBy: "area",
         totals: counter(900, 2, 5),
-        groups: [keyedCounter("src/commands", 900, 2, 5)],
+        groups: [keyedCounter("a", 900, 2, 5)],
         configs: [keyedCounter("commands", 900, 2, 5)],
-        topFiles: [
-          fileCounter("src/commands/agent.test.ts", "src/commands", 800, 3),
-          fileCounter("src/commands/new.test.ts", "src/commands", 100, 2),
-        ],
+        topFiles: [fileCounter("a.test.ts", "a", 800, 3), fileCounter("new.test.ts", "a", 100, 2)],
         runs: [runCounter(1800, 80)],
       },
     });
 
     expect(comparison.totals.delta).toEqual({ durationMs: -100, fileCount: 0, testCount: 1 });
-    const commandsGroup = comparison.groups.find((group) => group.key === "src/commands");
+    const commandsGroup = comparison.groups.find((group) => group.key === "a");
     expect(commandsGroup?.delta).toStrictEqual({ durationMs: 200, fileCount: 1, testCount: 3 });
-    const removedDiscordFile = comparison.files.find(
-      (file) => file.file === "extensions/discord/src/send.test.ts",
-    );
-    expect(removedDiscordFile?.status).toBe("removed");
-    expect(removedDiscordFile?.delta).toStrictEqual({ durationMs: -300, testCount: -2 });
+    const removedFile = comparison.files.find((file) => file.file === "b.test.ts");
+    expect(removedFile?.status).toBe("removed");
+    expect(removedFile?.delta).toStrictEqual({ durationMs: -300, testCount: -2 });
     expect(comparison.runs[0]?.key).toBe("commands");
     expect(comparison.runs[0]?.delta).toStrictEqual({
       elapsedMs: -200,
@@ -610,18 +571,11 @@ describe("scripts/test-group-report", () => {
       },
     },
   ])("parses valid report arguments %#", ({ command, expected }) => {
-    expect(parseTestGroupReportArgs(command.split(" "))).toStrictEqual(expectedArgs(expected));
+    expect(parseTestGroupReportArgs(command.split(" "))).toMatchObject(expected);
   });
 
   it.each([
     { command: "--help --unknown", error: "Unknown option: --unknown" },
-    { command: "--help --limit", error: "--limit requires a value" },
-    ...["--config", "--output"].flatMap((flag) => [
-      { command: `${flag} --limit 5`, error: `${flag} requires a value` },
-      { command: `${flag} -h`, error: `${flag} requires a value` },
-    ]),
-    { command: "--limit", error: "--limit requires a value" },
-    { command: "--limit --output report.json", error: "--limit requires a value" },
     { command: "--compare before.json --limit", error: "--compare requires a value" },
     { command: "--compare --limit 5", error: "--compare requires a value" },
     {

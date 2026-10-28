@@ -26,7 +26,12 @@ async function drag(page: Page, x: number, y: number) {
 
 function installChat(page: Page, content: string) {
   return installMockGateway(page, {
-    featureMethods: ["chat.metadata", "chat.startup", "sessions.create"],
+    featureMethods: [
+      "chat.metadata",
+      "chat.startup",
+      "sessions.companion.state",
+      "sessions.create",
+    ],
     historyMessages: [{ role: "assistant", content }],
   });
 }

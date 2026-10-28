@@ -9,6 +9,7 @@ function stateDirFixture(root: string) {
     root,
     legacyDir: path.join(root, ".clawdbot"),
     targetDir: path.join(root, ".openclaw"),
+    read: (file: string) => fs.readFileSync(file, "utf8"),
     write: (file: string, bytes: string | Buffer) => {
       fs.mkdirSync(path.dirname(file), { recursive: true });
       fs.writeFileSync(file, bytes);
@@ -31,7 +32,7 @@ async function withStateDirFixture(
 it.each(["config", "environment"])(
   "preserves retired OAuth sidecars selected by %s and reports their relocated recovery path",
   (selection) =>
-    withStateDirFixture(async ({ root, legacyDir, targetDir, write, migrate }) => {
+    withStateDirFixture(async ({ root, legacyDir, targetDir, write, read, migrate }) => {
       const oauthDir = path.join(legacyDir, "oauth$old");
       const sidecarPath = path.join(oauthDir, "auth-profiles", `${"a".repeat(32)}.json`);
       const sidecarBytes = Buffer.from("retired encrypted bytes\u0000not parsed\n");
@@ -40,20 +41,16 @@ it.each(["config", "environment"])(
         ...(selection === "environment" ? { OPENCLAW_OAUTH_DIR: oauthDir } : {}),
       };
       write(sidecarPath, sidecarBytes);
-      const authStorePath = path.join(legacyDir, "agents/main/agent/auth-profiles.json");
+      const oauthRef = {
+        source: "openclaw-credentials",
+        provider: "openai-codex",
+        id: "a".repeat(32),
+      };
       write(
-        authStorePath,
+        path.join(legacyDir, "agents/main/agent/auth-profiles.json"),
         JSON.stringify({
           profiles: {
-            "openai-codex:default": {
-              type: "oauth",
-              provider: "openai-codex",
-              oauthRef: {
-                source: "openclaw-credentials",
-                provider: "openai-codex",
-                id: "a".repeat(32),
-              },
-            },
+            "openai-codex:default": { type: "oauth", provider: "openai-codex", oauthRef },
           },
         }),
       );
@@ -78,13 +75,13 @@ it.each(["config", "environment"])(
       expect(
         fs.readFileSync(path.join(movedOAuthDir, "auth-profiles", `${"a".repeat(32)}.json`)),
       ).toEqual(sidecarBytes);
-      expect(fs.readFileSync(path.join(targetDir, "clawdbot.json"), "utf8")).toBe(configBytes);
+      expect(read(path.join(targetDir, "clawdbot.json"))).toBe(configBytes);
       expect(env).toEqual(envBefore);
     }),
 );
 
 it("skips a legacy symlinked state dir when it points outside supported legacy roots", () =>
-  withStateDirFixture(async ({ root, legacyDir: legacySymlink, write, migrate }) => {
+  withStateDirFixture(async ({ root, legacyDir: legacySymlink, write, read, migrate }) => {
     const legacyDir = path.join(root, "legacy-state-source");
     write(path.join(legacyDir, "marker.txt"), "ok");
     const dirLinkType = process.platform === "win32" ? "junction" : "dir";
@@ -96,12 +93,12 @@ it("skips a legacy symlinked state dir when it points outside supported legacy r
     expect(result.warnings).toEqual([
       `Legacy state path is not a directory: ${legacySymlink}; move it manually before rerunning Doctor.`,
     ]);
-    expect(fs.readFileSync(path.join(legacyDir, "marker.txt"), "utf8")).toBe("ok");
-    expect(fs.readFileSync(path.join(legacySymlink, "marker.txt"), "utf8")).toBe("ok");
+    expect(read(path.join(legacyDir, "marker.txt"))).toBe("ok");
+    expect(read(path.join(legacySymlink, "marker.txt"))).toBe("ok");
   }));
 
 it("preserves both directories when the canonical root already exists", () =>
-  withStateDirFixture(async ({ legacyDir, targetDir, write, migrate }) => {
+  withStateDirFixture(async ({ legacyDir, targetDir, write, read, migrate }) => {
     fs.mkdirSync(legacyDir, { recursive: true });
     write(path.join(targetDir, "openclaw.json"), "{}");
     const result = await migrate();
@@ -112,7 +109,7 @@ it("preserves both directories when the canonical root already exists", () =>
     ]);
     expect(fs.lstatSync(legacyDir).isDirectory()).toBe(true);
     expect(fs.readdirSync(legacyDir)).toEqual([]);
-    expect(fs.readFileSync(path.join(targetDir, "openclaw.json"), "utf8")).toBe("{}");
+    expect(read(path.join(targetDir, "openclaw.json"))).toBe("{}");
   }));
 
 it.each(["OPENCLAW_STATE_DIR", "OPENCLAW_HOME", "OPENCLAW_CONFIG_PATH"])(

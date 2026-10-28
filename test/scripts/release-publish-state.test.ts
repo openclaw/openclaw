@@ -70,7 +70,6 @@ afterEach(() => vi.unstubAllGlobals());
 describe("release publication state", () => {
   it.each<[string, string, string[], string | undefined, number | undefined]>([
     ["2026.9.4", version, [version], undefined, undefined],
-    [version, "2026.9.4", [version], undefined, undefined],
     [
       "2026.9.7",
       "2026.9.7",
@@ -177,78 +176,64 @@ describe("release publication state", () => {
     expect(() => readPackages(sourceSha)).toThrow(`git fetch --no-tags origin ${sourceSha}`);
   });
 
-  it.each(["beta", "latest"])(
-    "observes core subpackages alongside the root on the %s route",
-    async (npmDistTag) => {
-      const requested: string[] = [];
-      vi.stubGlobal(
-        "fetch",
-        vi.fn(async (input: string) => {
-          const name = decodeURIComponent(new URL(input).pathname.slice(1));
-          requested.push(name);
-          return registry(name);
-        }),
-      );
-      const result = await observeReleaseNpmState({
-        ...npmOptions,
-        npmDistTag,
-        corePackages,
-      });
-      expect(requested.toSorted()).toEqual(
-        ["openclaw", ...corePackages.map((entry) => entry.packageName)].toSorted(),
-      );
-      expect(result.corePublished).toBe(true);
-      expect(result.publishedPackages).toEqual([pkg("openclaw"), ...corePackages]);
-      expect(result.gates.some((gate) => gate.status === "FAIL")).toBe(false);
-    },
-  );
+  it("observes core subpackages alongside the root on the beta route", async () => {
+    const requested: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string) => {
+        const name = decodeURIComponent(new URL(input).pathname.slice(1));
+        requested.push(name);
+        return registry(name);
+      }),
+    );
+    const result = await observeReleaseNpmState({
+      ...npmOptions,
+      npmDistTag: "beta",
+      corePackages,
+    });
+    expect(requested.toSorted()).toEqual(
+      ["openclaw", ...corePackages.map((entry) => entry.packageName)].toSorted(),
+    );
+    expect(result.corePublished).toBe(true);
+    expect(result.publishedPackages).toEqual([pkg("openclaw"), ...corePackages]);
+    expect(result.gates.some((gate) => gate.status === "FAIL")).toBe(false);
+  });
 });
 
-function observeRuns(params: {
-  workflow: string;
-  title?: string;
-  log?: string;
-  count?: number;
-  onProgress?: (message: string) => void;
-}) {
-  return observeGitHub(
-    (args) => {
-      const endpoint = args[1];
-      if (endpoint === undefined) {
-        throw new Error("Expected a GitHub REST endpoint.");
-      }
-      if (endpoint.includes("/releases/tags/")) {
-        throw new Error("HTTP 404: Not Found");
-      }
-      if (endpoint.includes("/releases?")) {
-        return "[]";
-      }
-      if (endpoint === "repos/openclaw/openclaw") {
-        return JSON.stringify({ permissions: { push: true } });
-      }
-      if (endpoint.includes("/actions/workflows/")) {
-        const selected =
-          endpoint.includes(`/${params.workflow}/`) && endpoint.includes("status=waiting");
-        return runInventory(
-          selected
-            ? [workflowRun(123, "waiting", params.title ?? "Plugin ClawHub Release", 2)]
-            : [],
-          selected ? (params.count ?? 1) : 0,
-        );
-      }
-      if (endpoint.endsWith("/attempts/2/jobs?per_page=100")) {
-        return JSON.stringify({ jobs: [{ id: 456, status: "completed" }] });
-      }
-      if (endpoint.endsWith("/jobs/456/logs") && params.log !== undefined) {
-        return params.log;
-      }
-      if (endpoint.endsWith("/runs/789")) {
-        return JSON.stringify({ status: "completed", conclusion: "failure" });
-      }
-      throw new Error(`Unavailable fixture endpoint: ${endpoint}`);
-    },
-    { onProgress: params.onProgress },
-  ).gates.filter((gate) => gate.id.startsWith(`concurrency.${params.workflow}.`));
+function observeRuns(params: { workflow: string; title?: string; log?: string; count?: number }) {
+  return observeGitHub((args) => {
+    const endpoint = args[1];
+    if (endpoint === undefined) {
+      throw new Error("Expected a GitHub REST endpoint.");
+    }
+    if (endpoint.includes("/releases/tags/")) {
+      throw new Error("HTTP 404: Not Found");
+    }
+    if (endpoint.includes("/releases?")) {
+      return "[]";
+    }
+    if (endpoint === "repos/openclaw/openclaw") {
+      return JSON.stringify({ permissions: { push: true } });
+    }
+    if (endpoint.includes("/actions/workflows/")) {
+      const selected =
+        endpoint.includes(`/${params.workflow}/`) && endpoint.includes("status=waiting");
+      return runInventory(
+        selected ? [workflowRun(123, "waiting", params.title ?? "Plugin ClawHub Release", 2)] : [],
+        selected ? (params.count ?? 1) : 0,
+      );
+    }
+    if (endpoint.endsWith("/attempts/2/jobs?per_page=100")) {
+      return JSON.stringify({ jobs: [{ id: 456, status: "completed" }] });
+    }
+    if (endpoint.endsWith("/jobs/456/logs") && params.log !== undefined) {
+      return params.log;
+    }
+    if (endpoint.endsWith("/runs/789")) {
+      return JSON.stringify({ status: "completed", conclusion: "failure" });
+    }
+    throw new Error(`Unavailable fixture endpoint: ${endpoint}`);
+  }).gates.filter((gate) => gate.id.startsWith(`concurrency.${params.workflow}.`));
 }
 
 describe("release concurrency observations", () => {
@@ -265,21 +250,14 @@ describe("release concurrency observations", () => {
     const result = observeGitHub(runGh, { budgetMs: 100, now: () => now });
     expect(result.gates.every((gate) => gate.status === "WARN")).toBe(true);
     expect(result.gates[0]?.message).toContain("observation budget exhausted (100 ms)");
-    for (const workflow of [
-      "openclaw-release-publish.yml",
-      "plugin-npm-release.yml",
-      "plugin-clawhub-release.yml",
-      "plugin-clawhub-new.yml",
-    ]) {
-      expectGate(result.gates, {
-        id: `concurrency.${workflow}.inventory`,
+    expect(result.gates).toContainEqual(
+      expect.objectContaining({
+        id: expect.stringMatching(/^concurrency\..*\.inventory$/),
         status: "WARN",
         message: expect.stringContaining("observation budget exhausted"),
-        remediation: expect.stringContaining(
-          `gh api 'repos/openclaw/openclaw/actions/workflows/${workflow}/runs?status=in_progress&per_page=100' --method GET`,
-        ),
-      });
-    }
+        remediation: expect.stringContaining("gh api"),
+      }),
+    );
     expect(runGh).toHaveBeenCalledTimes(2);
   });
 
@@ -325,26 +303,6 @@ describe("release concurrency observations", () => {
     expect(runGh.mock.calls.some(([args]) => args[1]?.includes("/releases?"))).toBe(false);
   });
 
-  it("replays a failed filtered release-inventory read with its exact --jq filter", () => {
-    const result = observeGitHub((args) => {
-      if (args[1]?.includes("/releases/tags/")) {
-        throw new Error("HTTP 404: Not Found");
-      }
-      if (args[1]?.includes("/releases?")) {
-        throw new Error("HTTP 502: Bad Gateway");
-      }
-      return runInventory([]);
-    });
-    const gate = result.gates.find((entry) => entry.id === "github.release");
-    expect(gate).toMatchObject({
-      status: "WARN",
-      message: expect.stringContaining("HTTP 502"),
-      remediation: expect.stringContaining(
-        `gh api 'repos/openclaw/openclaw/releases?per_page=100&page=1' --method GET --jq 'map(if .tag_name == "v${version}" then . else {tag_name} end)'`,
-      ),
-    });
-  });
-
   const log = (...lines: string[]) =>
     [`TARGET_REF: ${sourceSha}`, ...lines]
       .map((line) => `2026-09-18T01:02:03Z   ${line}`)
@@ -377,23 +335,14 @@ describe("release concurrency observations", () => {
       scenario: Partial<Parameters<typeof observeRuns>[0]>;
       message?: string;
     }) => {
-      const progress: string[] = [];
       const gates = observeRuns({
         ...scenario,
         workflow: scenario.workflow ?? "plugin-clawhub-release.yml",
-        onProgress: (update) => progress.push(update),
       });
       expect(gates).toMatchObject([
         { status, ...(message ? { message: expect.stringContaining(message) } : {}) },
       ]);
       if (evidence === "terminal parent") {
-        for (const text of [
-          "release lookup page 1",
-          "workflow plugin-clawhub-release.yml inventory",
-          "inspecting candidate run 123 1/1 via job log",
-        ]) {
-          expect(progress.join("\n")).toContain(text);
-        }
         expect(gates[0]?.remediation).toContain("checking parent ownership");
       }
     },

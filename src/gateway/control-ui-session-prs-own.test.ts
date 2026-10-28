@@ -22,6 +22,9 @@ vi.mock("../process/exec.js", async (original) => ({
 
 const headCommit = "a".repeat(40);
 const baseCommit = "b".repeat(40);
+function gitRef(repository: string, repositoryId: number, branch: string, commit: string) {
+  return { repository, repositoryId, branch, commit };
+}
 const worktree = {
   id: "own-imported-source",
   branch: "openclaw/local-task",
@@ -30,31 +33,65 @@ const worktree = {
     url: "https://github.com/example/repository/pull/7",
     host: "github.com",
     number: 7,
-    base: {
-      repository: "example/repository",
-      repositoryId: 10,
-      branch: "main",
-      commit: baseCommit,
-    },
-    head: {
-      repository: "contributor/repository",
-      repositoryId: 20,
-      branch: "original",
-      commit: headCommit,
-    },
+    base: gitRef("example/repository", 10, "main", baseCommit),
+    head: gitRef("contributor/repository", 20, "original", headCommit),
     preparedHeadCommit: headCommit,
   },
 };
 
-function frames(f: Awaited<ReturnType<typeof createFixture>>) {
+type Fixture = Awaited<ReturnType<typeof createFixture>>;
+function frames(f: Pick<Fixture, "socket">) {
   return f.socket.send.mock.calls.map(([data]) => JSON.parse(data.toString()));
 }
-function lastSnapshot(f: Awaited<ReturnType<typeof createFixture>>) {
+function lastSnapshot(f: Fixture) {
   return frames(f).findLast((frame) => frame.event === "controlUi.sessionPullRequests.changed")
     ?.payload.sessions[sessionKey];
 }
 
-async function readChecks(f: Awaited<ReturnType<typeof createFixture>>, respond = vi.fn()) {
+async function identifyOwner(f: Fixture) {
+  await syncCanonicalGitHubIdentity({
+    identity: { accountId: 101, login: "contributor" },
+    authenticationAlias: { kind: "email", email: f.readerEmail },
+  });
+}
+async function seedOwner(f: Fixture) {
+  await f.seed(sessionKey, f.profile.id, { worktree });
+  await identifyOwner(f);
+}
+async function poll(f: Fixture) {
+  await f.subscribe();
+  await f.subscriptions.pollNow();
+}
+const identityChanged = expect.objectContaining({
+  event: "sessions.changed",
+  payload: { reason: "profile-identity" },
+});
+function readGate() {
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  return {
+    entered: entered.promise,
+    release: () => release.resolve(),
+    wait: async () => {
+      entered.resolve();
+      await release.promise;
+    },
+  };
+}
+function check(id: number, name: string) {
+  return { id, name, head_sha: headCommit, status: "completed", conclusion: "success" };
+}
+function invalidateOn(f: Pick<Fixture, "socket">, events: string[], reason?: string) {
+  const received = createDeferredCore();
+  f.socket.send.mockImplementation((data) => {
+    const frame = JSON.parse(data.toString());
+    if (events.includes(frame.event) && (!reason || frame.payload.reason === reason)) {
+      received.resolve();
+    }
+  });
+  return received.promise;
+}
+async function readChecks(f: Fixture, respond = vi.fn()) {
   await handleGatewayRequest({
     req: {
       type: "req",
@@ -85,12 +122,13 @@ afterEach(() => {
 
 async function withOwnFixture(
   run: (
-    f: Awaited<ReturnType<typeof createFixture>>,
+    f: Fixture,
     remote: {
       pr: Record<string, unknown>;
       base: { private: boolean };
       setPermission: (permission: string) => void;
       beforeRead: (callback: () => Promise<void>) => void;
+      checks: { count: number; status: number; before?: () => Promise<void> };
       fetch: ReturnType<typeof vi.fn<typeof fetch>>;
     },
   ) => Promise<void>,
@@ -132,18 +170,18 @@ async function withOwnFixture(
       }
       await before?.();
       const endpoint = argv.at(-1);
+      const responses: Record<string, unknown> = {
+        "repos/example/repository": base,
+        "repos/contributor/repository": fork,
+        "repos/example/repository/pulls/7": pr,
+        "user/101": pr.user,
+        "repos/example/repository/collaborators/contributor/permission": {
+          user: pr.user,
+          permission,
+        },
+      };
       const value =
-        endpoint === "repos/example/repository"
-          ? base
-          : endpoint === "repos/contributor/repository"
-            ? fork
-            : endpoint === "repos/example/repository/pulls/7"
-              ? pr
-              : endpoint === "user/101"
-                ? pr.user
-                : endpoint === "repos/example/repository/collaborators/contributor/permission"
-                  ? { user: pr.user, permission }
-                  : undefined;
+        endpoint && Object.hasOwn(responses, endpoint) ? responses[endpoint] : undefined;
       return {
         code: value ? 0 : 1,
         signal: null,
@@ -153,6 +191,11 @@ async function withOwnFixture(
       };
     });
     vi.stubEnv("GH_TOKEN", "synthetic-unrelated-service-token");
+    const checks = {
+      count: 1,
+      status: 200,
+      before: undefined as (() => Promise<void>) | undefined,
+    };
     const fetch = vi.fn<typeof globalThis.fetch>(async (input, init) => {
       expect(new Headers(init?.headers).get("authorization")).toBe(
         scope === "operator.read"
@@ -160,18 +203,33 @@ async function withOwnFixture(
           : "Bearer synthetic-own-pr-read-token",
       );
       const url = new URL(requestUrl(input));
+      if (checks.count > 1) {
+        expect(url.origin + url.pathname).toBe(
+          `https://api.github.com/repos/example/repository/commits/${headCommit}/check-runs`,
+        );
+      }
       if (url.pathname === `/repos/example/repository/commits/${headCommit}/check-runs`) {
+        expect(url.origin).toBe("https://api.github.com");
+        if (checks.status !== 200) {
+          return githubJson({ message: "API rate limit exceeded" }, checks.status);
+        }
+        const page = Number(url.searchParams.get("page") ?? (checks.count === 1 ? 1 : null));
+        expect([1, 2]).toContain(page);
+        if (page === 1) {
+          await checks.before?.();
+        }
         return githubJson({
-          total_count: 1,
-          check_runs: [
-            {
-              id: 1,
-              name: "Original checks",
-              head_sha: headCommit,
-              status: "completed",
-              conclusion: "success",
+          total_count: checks.count,
+          check_runs: Array.from(
+            { length: Math.min(100, checks.count - (page - 1) * 100) },
+            (_, i) => {
+              const id = (page - 1) * 100 + i + 1;
+              return check(
+                id,
+                checks.count === 1 ? "Original checks" : `Private transport check ${id}`,
+              );
             },
-          ],
+          ),
         });
       }
       expect(url.href).toBe("https://api.github.com/repos/example/repository/pulls/7");
@@ -184,6 +242,7 @@ async function withOwnFixture(
         pr,
         base,
         fetch,
+        checks,
         setPermission: (value) => {
           permission = value;
         },
@@ -200,8 +259,7 @@ async function withOwnFixture(
 it("does not hydrate public or service cards from an authenticated imported snapshot", async () => {
   await withOwnFixture(async (f) => {
     await f.seed(sessionKey, f.profile.id, { worktree });
-    await f.subscribe();
-    await f.subscriptions.pollNow();
+    await poll(f);
     expect(lastSnapshot(f)?.pullRequests).toHaveLength(1);
     const service = await prepareControlUiSessionPrServiceTarget(
       () => getSessionRowProjection(f.context),
@@ -217,34 +275,20 @@ it("does not hydrate public or service cards from an authenticated imported snap
 
 it("keeps the verified card without counts when the check read is rate limited", async () => {
   await withOwnFixture(async (f, remote) => {
-    await syncCanonicalGitHubIdentity({
-      identity: { accountId: 101, login: "contributor" },
-      authenticationAlias: { kind: "email", email: f.readerEmail },
-    });
+    await identifyOwner(f);
     remote.pr.state = "open";
-    const served = remote.fetch.getMockImplementation();
-    remote.fetch.mockImplementation(async (input, init) =>
-      new URL(requestUrl(input)).pathname.endsWith("/check-runs")
-        ? githubJson({ message: "API rate limit exceeded" }, 429)
-        : served!(input, init),
-    );
+    remote.checks.status = 429;
     await f.seed(sessionKey, f.profile.id, { worktree });
-    await f.subscribe();
-    await f.subscriptions.pollNow();
-    expect(
-      remote.fetch.mock.calls.some(([input]) =>
-        new URL(requestUrl(input)).pathname.endsWith("/check-runs"),
-      ),
-    ).toBe(true);
+    await poll(f);
     const snapshot = lastSnapshot(f);
-    expect(snapshot?.pullRequests).toHaveLength(1);
-    expect(snapshot?.pullRequests[0]).toMatchObject({
-      number: 7,
-      state: "open",
-      url: worktree.githubPullRequest.url,
+    expect(snapshot).toMatchObject({
+      rateLimited: true,
+      pullRequests: [
+        expect.objectContaining({ number: 7, state: "open", url: worktree.githubPullRequest.url }),
+      ],
     });
+    expect(snapshot?.pullRequests).toHaveLength(1);
     expect(snapshot?.pullRequests[0]).not.toHaveProperty("checks");
-    expect(snapshot).toMatchObject({ rateLimited: true });
     expect(snapshot).not.toHaveProperty("discardPrevious");
   });
 });
@@ -262,18 +306,13 @@ it("admits only the prepared own binding and clears withdrawn private/profile ac
       worktree,
     ]) {
       await f.seed(sessionKey, f.profile.id, { worktree: binding });
-      await f.subscribe();
-      await f.subscriptions.pollNow();
+      await poll(f);
       expect(remote.fetch).not.toHaveBeenCalled();
       expect(io.command).not.toHaveBeenCalled();
     }
-    await syncCanonicalGitHubIdentity({
-      identity: { accountId: 101, login: "contributor" },
-      authenticationAlias: { kind: "email", email: f.readerEmail },
-    });
+    await identifyOwner(f);
     remote.pr.user = { id: 999, login: "other" };
-    await f.subscribe();
-    await f.subscriptions.pollNow();
+    await poll(f);
     expect(lastSnapshot(f)).toMatchObject({ pullRequests: [], discardPrevious: true });
     expect(remote.fetch).not.toHaveBeenCalled();
     remote.pr.user = { id: 101, login: "contributor" };
@@ -281,6 +320,9 @@ it("admits only the prepared own binding and clears withdrawn private/profile ac
     expect(lastSnapshot(f)?.pullRequests).toMatchObject([
       { number: 7, state: "closed", branch: "original" },
     ]);
+    await f.subscriptions.pollNow();
+    // Retire the owned watcher before measuring the denied foreign subscription alone.
+    await f.subscribe([]);
     await f.subscriptions.pollNow();
     // Own-PR authorization is refreshed by the bounded load, never watcher rechecks.
     const reads = io.command.mock.calls.length;
@@ -290,8 +332,7 @@ it("admits only the prepared own binding and clears withdrawn private/profile ac
     await f.subscribe([foreign]);
     await f.subscriptions.pollNow();
     expect(io.command).toHaveBeenCalledTimes(reads);
-    await f.subscribe();
-    await f.subscriptions.pollNow();
+    await poll(f);
 
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(Date.now() + 91_000);
@@ -319,70 +360,39 @@ it("admits only the prepared own binding and clears withdrawn private/profile ac
       undefined,
     );
     f.socket.send.mockClear();
-    const invalidated = createDeferredCore();
-    f.socket.send.mockImplementation((data) => {
-      const frame = JSON.parse(data.toString());
-      if (frame.event === "sessions.changed" && frame.payload.reason === "profile-identity") {
-        invalidated.resolve();
-      }
-    });
+    const invalidated = invalidateOn(f, ["sessions.changed"], "profile-identity");
     await f.changeReader("profile");
-    await withinTest(invalidated.promise, signal);
-    expect(frames(f)).toContainEqual(
-      expect.objectContaining({
-        event: "sessions.changed",
-        payload: { reason: "profile-identity" },
-      }),
-    );
+    await withinTest(invalidated, signal);
+    expect(frames(f)).toContainEqual(identityChanged);
     expect(JSON.stringify(frames(f))).not.toContain("Original contribution");
   });
 });
 
 it("keeps cached private facts guarded while another reader refreshes", async ({ signal }) => {
   await withOwnFixture(async (f, remote) => {
-    await f.seed(sessionKey, f.profile.id, { worktree });
-    await syncCanonicalGitHubIdentity({
-      identity: { accountId: 101, login: "contributor" },
-      authenticationAlias: { kind: "email", email: f.readerEmail },
-    });
+    await seedOwner(f);
     remote.base.private = true;
-    await f.subscribe();
-    await f.subscriptions.pollNow();
+    await poll(f);
     expect(lastSnapshot(f)?.pullRequests).toHaveLength(1);
 
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
-    remote.beforeRead(async () => {
-      entered.resolve();
-      await release.promise;
-    });
+    const gate = readGate();
+    remote.beforeRead(gate.wait);
     const polling = f.subscriptions.pollNow();
     try {
-      await awaitGateBeforeSettlement(entered.promise, polling, "Warm refresh was not admitted");
+      await awaitGateBeforeSettlement(gate.entered, polling, "Warm refresh was not admitted");
       io.currentIdentity.mockReturnValue(false);
       const second = f.addReader("second-own-pr-reader");
-      const delivered = createDeferredCore();
-      second.socket.send.mockImplementation((data) => {
-        const frame = JSON.parse(data.toString());
-        if (
-          frame.event === "controlUi.sessionPullRequests.changed" ||
-          frame.event === "sessions.changed"
-        ) {
-          delivered.resolve();
-        }
-      });
+      const delivered = invalidateOn(second, [
+        "controlUi.sessionPullRequests.changed",
+        "sessions.changed",
+      ]);
       await f.subscribe([sessionKey], second.client);
-      await withinTest(delivered.promise, signal);
-      const received = second.socket.send.mock.calls.map(([data]) => JSON.parse(data.toString()));
+      await withinTest(delivered, signal);
+      const received = frames(second);
       expect(JSON.stringify(received)).not.toContain("Original contribution");
-      expect(received).toContainEqual(
-        expect.objectContaining({
-          event: "sessions.changed",
-          payload: { reason: "profile-identity" },
-        }),
-      );
+      expect(received).toContainEqual(identityChanged);
     } finally {
-      release.resolve();
+      gate.release();
       await polling;
     }
   });
@@ -392,22 +402,14 @@ it.each(["grant", "unsubscribe"] as const)(
   "does not disclose a late own-PR read after %s",
   async (change) => {
     await withOwnFixture(async (f, remote) => {
-      await f.seed(sessionKey, f.profile.id, { worktree });
-      await syncCanonicalGitHubIdentity({
-        identity: { accountId: 101, login: "contributor" },
-        authenticationAlias: { kind: "email", email: f.readerEmail },
-      });
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
-      remote.beforeRead(async () => {
-        entered.resolve();
-        await release.promise;
-      });
+      await seedOwner(f);
+      const gate = readGate();
+      remote.beforeRead(gate.wait);
       try {
         await f.subscribe();
         const polling = f.subscriptions.pollNow();
         await awaitGateBeforeSettlement(
-          entered.promise,
+          gate.entered,
           polling,
           "Own imported PR read was not admitted",
         );
@@ -416,65 +418,38 @@ it.each(["grant", "unsubscribe"] as const)(
         } else {
           f.subscriptions.unsubscribe(f.client.connId!);
         }
-        release.resolve();
+        gate.release();
         await polling;
         expect(remote.fetch).not.toHaveBeenCalled();
         expect(JSON.stringify(frames(f))).not.toContain("Original contribution");
       } finally {
-        release.resolve();
+        gate.release();
       }
     });
   },
 );
 
 it.each([
-  ["snapshot", false],
-  ["snapshot", true],
-  ["checks", false],
-  ["checks", true],
-] as const)("keeps own-PR %s transport scoped (retired=%s)", async (mode, retired) => {
+  ["snapshot", "unchanged"],
+  ["snapshot", "grant"],
+  ["checks", "unchanged"],
+  ["checks", "grant"],
+  ["checks", "draft"],
+] as const)("keeps own-PR %s transport scoped (%s)", async (mode, change) => {
+  const retired = change === "grant";
   await withOwnFixture(async (f, remote) => {
-    await f.seed(sessionKey, f.profile.id, { worktree });
-    await syncCanonicalGitHubIdentity({
-      identity: { accountId: 101, login: "contributor" },
-      authenticationAlias: { kind: "email", email: f.readerEmail },
-    });
+    await seedOwner(f);
     remote.base.private = true;
     remote.pr.state = "open";
     if (mode === "checks") {
-      await f.subscribe();
-      await f.subscriptions.pollNow();
+      await poll(f);
       expect(lastSnapshot(f)?.pullRequests).toHaveLength(1);
     }
     f.socket.send.mockClear();
     remote.fetch.mockClear();
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
-    remote.fetch.mockImplementation(async (input, init) => {
-      expect(new Headers(init?.headers).get("authorization")).toBe(
-        "Bearer synthetic-own-pr-read-token",
-      );
-      const url = new URL(requestUrl(input));
-      expect(url.origin + url.pathname).toBe(
-        `https://api.github.com/repos/example/repository/commits/${headCommit}/check-runs`,
-      );
-      const page = Number(url.searchParams.get("page"));
-      expect([1, 2]).toContain(page);
-      if (page === 1) {
-        entered.resolve();
-        await release.promise;
-      }
-      return githubJson({
-        total_count: 101,
-        check_runs: Array.from({ length: page === 1 ? 100 : 1 }, (_, index) => ({
-          id: (page - 1) * 100 + index + 1,
-          name: `Private transport check ${(page - 1) * 100 + index + 1}`,
-          head_sha: headCommit,
-          status: "completed",
-          conclusion: "success",
-        })),
-      });
-    });
+    const gate = readGate();
+    remote.checks.count = 101;
+    remote.checks.before = gate.wait;
     const respond = vi.fn();
     let pending: Promise<unknown> | undefined;
     try {
@@ -482,11 +457,13 @@ it.each([
         await f.subscribe();
       }
       pending = mode === "snapshot" ? f.subscriptions.pollNow() : readChecks(f, respond);
-      await awaitGateBeforeSettlement(entered.promise, pending, "Selected transport never started");
+      await awaitGateBeforeSettlement(gate.entered, pending, "Selected transport never started");
       if (retired) {
+        await f.changeReader("grant");
+      } else if (change === "draft") {
         await f.changeReader("visibility");
       }
-      release.resolve();
+      gate.release();
       await pending;
       expect(remote.fetch).toHaveBeenCalledTimes(retired ? 1 : 2);
       if (retired) {
@@ -516,7 +493,7 @@ it.each([
         );
       }
     } finally {
-      release.resolve();
+      gate.release();
       await pending;
     }
   });

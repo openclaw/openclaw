@@ -2,23 +2,15 @@ import { requireFirstPostJsonRecordRequest } from "openclaw/plugin-sdk/test-fixt
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildOpenRouterSpeechProvider } from "./speech-provider.js";
 
-const { assertOkOrThrowHttpErrorMock, postJsonRequestMock, resolveProviderHttpRequestConfigMock } =
-  vi.hoisted(() => ({
-    assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
-    postJsonRequestMock: vi.fn(),
-    resolveProviderHttpRequestConfigMock: vi.fn((params: Record<string, unknown>) => ({
-      baseUrl: params.baseUrl ?? params.defaultBaseUrl ?? "https://openrouter.ai/api/v1",
-      allowPrivateNetwork: false,
-      headers: new Headers(params.defaultHeaders as HeadersInit | undefined),
-      dispatcherPolicy: undefined,
-    })),
-  }));
+const { assertOkOrThrowHttpErrorMock, postJsonRequestMock } = vi.hoisted(() => ({
+  assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
+  postJsonRequestMock: vi.fn(),
+}));
 
 vi.mock("openclaw/plugin-sdk/provider-http", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-http")>()),
   assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
   postJsonRequest: postJsonRequestMock,
-  resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
 }));
 
 function requireHeaders(value: unknown): Headers {
@@ -63,7 +55,6 @@ describe("openrouter speech provider", () => {
   afterEach(() => {
     assertOkOrThrowHttpErrorMock.mockClear();
     postJsonRequestMock.mockReset();
-    resolveProviderHttpRequestConfigMock.mockClear();
     vi.unstubAllEnvs();
   });
 

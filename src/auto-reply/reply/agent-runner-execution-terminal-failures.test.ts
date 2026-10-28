@@ -17,7 +17,7 @@ import {
   createAgentRunRestartAbortError,
 } from "../../agents/run-termination.js";
 import { makeAssistantMessageFixture } from "../../agents/test-helpers/assistant-message-fixtures.js";
-import { deriveGatewaySessionLifecycleProjectionPatch } from "../../gateway/session-lifecycle-state.js";
+import { deriveGatewaySessionLifecycleProjectionPatch } from "../../gateway/session-lifecycle-projection.js";
 import { GatewayDrainingError } from "../../process/command-queue.js";
 import {
   markGatewayRestartDraining,

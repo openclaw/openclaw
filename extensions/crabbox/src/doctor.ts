@@ -10,13 +10,16 @@ import {
 import { findCrabboxBinary } from "./crabbox-binary.js";
 import * as managedBinary from "./crabbox-managed-binary.js";
 import { CRABBOX_WORKER_PROVIDER_ID, parseCrabboxSetupSecrets } from "./crabbox-worker-profile.js";
-import { WARM_IMAGE_MAX_ENTRIES } from "./crabbox-worker-warm-image-records.js";
 import {
-  admitCrabboxWarmImageProfile,
   crabboxWarmImageRecoveryHint,
   CRABBOX_WARM_IMAGE_WAIT_HINT,
-  projectCrabboxWarmImage,
+  WARM_IMAGE_MAX_ENTRIES,
+  crabboxWarmImageHoldingLeaseIds,
   type WarmProfileRecord,
+} from "./crabbox-worker-warm-image-records.js";
+import {
+  admitCrabboxWarmImageProfile,
+  projectCrabboxWarmImage,
 } from "./crabbox-worker-warm-image-store.js";
 
 export const CRABBOX_CLOUD_WORKER_PROFILE_CHECK_ID = "crabbox/cloud-worker-profiles";
@@ -329,16 +332,21 @@ export function registerCrabboxWorkerProviderDoctorChecks(
                   ? `Warm-image capture ${image.capture.selector}${display} is taking longer than usual.`
                   : `Warm-image capture ${image.capture.selector}${display} is in progress.`,
               fixHint: uncertain
-                ? crabboxWarmImageRecoveryHint(image.capture.selector)
+                ? crabboxWarmImageRecoveryHint(image.capture.selector, image.capture.checkpointIds)
                 : CRABBOX_WARM_IMAGE_WAIT_HINT,
             });
           }
           if (image.retirement) {
+            const holders = crabboxWarmImageHoldingLeaseIds(image, image.retirement.checkpointId);
+            const held =
+              holders.length > 0
+                ? ` Held by allocation leases: ${holders.join(", ").slice(0, 1024)}.`
+                : "";
             findings.push({
               ...details,
-              message: `Warm-image checkpoint ${image.retirement.checkpointId}${display} is still awaiting deletion.`,
+              message: `Warm-image checkpoint ${image.retirement.checkpointId}${display} is still awaiting deletion.${held}`,
               fixHint:
-                "Cleanup retries during the next warm-image capture or worker teardown. Inspect `openclaw crabbox warm-images --json` and resolve provider deletion errors if it remains pending.",
+                "Cleanup retries during periodic maintenance or the next warm-image capture or worker teardown. Confirmed-gone allocation leases are released automatically; live or unconfirmed leases keep their holds. Inspect `openclaw crabbox warm-images --json` and the Gateway log for holding leases or provider deletion errors if it remains pending.",
             });
           }
         }

@@ -100,11 +100,7 @@ describe("Matrix live encrypted room ownership", () => {
   const liveSync = () => sdk.emit(ClientEvent.Sync, SyncState.Syncing, SyncState.Syncing);
   function holdProbe(once = false) {
     const probe = gate(false);
-    if (once) {
-      fixture.probe.mockImplementationOnce(probe.run);
-    } else {
-      fixture.probe.mockImplementation(probe.run);
-    }
+    fixture.probe[once ? "mockImplementationOnce" : "mockImplementation"](probe.run);
     return probe;
   }
   function makeClient(options: ConstructorParameters<typeof MatrixClient>[2]) {
@@ -209,17 +205,12 @@ describe("Matrix live encrypted room ownership", () => {
       const abort = new AbortController();
       const send = vi.fn(async () => "$sent");
       const operation = run(send, { abortSignal: abort.signal });
-      const settled = Promise.allSettled([operation]);
-      const outcome = vi.fn();
-      void settled.then(outcome);
       await started;
       if (cause === "STOPPED") {
         sdk.emit(ClientEvent.Sync, SyncState.Stopped, SyncState.Prepared);
       } else {
         abort.abort();
       }
-      await vi.advanceTimersByTimeAsync(0);
-      expect(outcome).toHaveBeenCalledWith([expect.objectContaining({ status: "rejected" })]);
       if (cause === "STOPPED") {
         await expect(operation).rejects.toThrow("sync stopped");
         expect(state).toHaveBeenCalledExactlyOnceWith("STOPPED", "PREPARED", undefined);
@@ -231,7 +222,6 @@ describe("Matrix live encrypted room ownership", () => {
       await vi.advanceTimersByTimeAsync(0);
       expect(fixture.stopped).not.toHaveBeenCalled();
       finish(true);
-      await settled;
       await stop;
       expect(fixture.stopped).toHaveBeenCalledOnce();
       expect(send).not.toHaveBeenCalled();

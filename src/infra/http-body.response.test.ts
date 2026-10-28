@@ -1,13 +1,18 @@
 // Tests bounded HTTP response reads and cleanup behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import {
   cancelUnreadResponseBody,
   readResponseTextPrefix,
   readResponseTextSnippet,
   readResponseWithLimit,
 } from "./http-body.js";
+import { makeStallingStream } from "./http-body.test-support.js";
 
 afterEach(() => vi.useRealTimers());
 
@@ -27,20 +32,6 @@ function makeStream(chunks: Uint8Array[], delayMs?: number) {
       }
       controller.close();
     },
-  });
-}
-
-function makeStallingStream(
-  initialChunks: Uint8Array[],
-  onCancel?: UnderlyingSource<Uint8Array>["cancel"],
-) {
-  return new ReadableStream<Uint8Array>({
-    start(controller) {
-      for (const chunk of initialChunks) {
-        controller.enqueue(chunk);
-      }
-    },
-    cancel: onCancel,
   });
 }
 
@@ -122,9 +113,9 @@ describe("cancelUnreadResponseBody", () => {
 });
 
 describe("readResponseWithLimit", () => {
-  it.each([undefined, 1_000])(
+  it.for([undefined, 1_000])(
     "aborts prefix reads without awaiting cancellation (deadline %s)",
-    async (timeoutMs) => {
+    async (timeoutMs, { signal: testSignal }) => {
       const readStarted = createDeferred();
       const cancel = vi.fn(async () => await new Promise<void>(() => {}));
       const body = new ReadableStream<Uint8Array>(
@@ -138,18 +129,20 @@ describe("readResponseWithLimit", () => {
       );
       const controller = new AbortController();
       const reason = new Error("index request cancelled");
-      const result = readResponseTextPrefix(new Response(body), 8, {
+      const operation = readResponseTextPrefix(new Response(body), 8, {
         signal: controller.signal,
         timeoutMs,
-      }).catch((error: unknown) => error);
+      });
+      const result = operation.catch((error: unknown) => error);
 
       try {
-        await withTestTimeout(readStarted.promise, 1_000, "response read did not start");
+        await withinTest(
+          awaitGateBeforeSettlement(readStarted.promise, operation, "response read did not start"),
+          testSignal,
+        );
         controller.abort(reason);
 
-        await expect(withTestTimeout(result, 1_000, "response abort did not settle")).resolves.toBe(
-          reason,
-        );
+        await expect(withinTest(result, testSignal)).resolves.toBe(reason);
         expect(cancel).toHaveBeenCalledOnce();
         expect(cancel).toHaveBeenCalledWith(reason);
         expect(body.locked).toBe(false);

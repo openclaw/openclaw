@@ -6,9 +6,11 @@ import { extractAssistantPhaseText } from "../../shared/chat-message-content.js"
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import { isSameOpenClawAgentDatabasePath } from "../../state/openclaw-agent-db.paths.js";
 import type { SessionTranscriptTurnMutation } from "./goals-operations.types.js";
+import { assertAcceptedRecoveryNotice } from "./recovery-notice.js";
 import { prepareExactSessionEntryRowReads } from "./session-accessor.sqlite-entry-read.js";
 import {
   findAssistantTranscriptEventInDatabase,
+  readTranscriptEventAtSeqInTransaction,
   readTranscriptEventMessage,
 } from "./session-accessor.sqlite-read.js";
 import type { ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
@@ -16,19 +18,22 @@ import { readActiveTranscriptEntryAnchorInTransaction } from "./session-accessor
 import type { SessionTranscriptTurnMessageAppend } from "./session-accessor.types.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import type { SqliteSessionTurnOptions } from "./session-turn.types.js";
+import { resolveSessionWorkStartError } from "./session-work-start.js";
 import { createExistingAgentSessionStoreTargetResolver } from "./targets-discovery.native.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
-let resolveSessionWorkStartError:
-  | typeof import("./lifecycle.js").resolveSessionWorkStartError
-  | undefined;
 let readGatewaySessionStore: typeof import("../../gateway/session-utils-store-read.js").readGatewaySessionStore;
 let prepareRoutingLookup:
   | typeof import("../../gateway/session-utils-store-lookup.js").prepareGatewaySessionStoreTargetLookup
   | undefined;
 
-export async function prepareSessionTurnPredicates() {
-  resolveSessionWorkStartError = (await import("./lifecycle.js")).resolveSessionWorkStartError;
+export async function prepareSessionTurnRoutingDependencies(
+  predicate: SessionTranscriptTurnMutation["routingPredicate"],
+) {
+  // Most turns do not route a Goal. Keep Gateway discovery out of their worker isolates.
+  if (!predicate) {
+    return;
+  }
   const { prepareGatewaySessionStoreTargetLookup } =
     await import("../../gateway/session-utils-store-lookup.js");
   prepareRoutingLookup = prepareGatewaySessionStoreTargetLookup;
@@ -97,8 +102,10 @@ export function prepareSessionTurnRouting(
 export function sessionTurnPredicateMatches(
   database: OpenClawAgentDatabase,
   resolved: ResolvedTranscriptScope,
-  predicate: SessionTranscriptTurnMessageAppend["predicate"],
+  append: SessionTranscriptTurnMessageAppend,
+  entry: SessionEntry,
 ): boolean {
+  const predicate = append.predicate;
   if (!predicate) {
     return true;
   }
@@ -111,6 +118,34 @@ export function sessionTurnPredicateMatches(
       })
     ) {
       throw new Error(predicate.errorMessage);
+    }
+    return true;
+  }
+  if (predicate.kind === "recovery-notice") {
+    const anchor = readActiveTranscriptEntryAnchorInTransaction({
+      database,
+      resolved,
+      entryId: predicate.anchor.entryId,
+    });
+    const local =
+      anchor && readTranscriptEventAtSeqInTransaction(database, resolved.sessionId, anchor.rawSeq);
+    assertAcceptedRecoveryNotice({
+      sessionKey: resolved.sessionKey,
+      entry,
+      predicate,
+      anchor,
+      localMessage: local && readTranscriptEventMessage(local.event),
+      message: append.message,
+    });
+    if (
+      predicate.priorEntryId &&
+      !readActiveTranscriptEntryAnchorInTransaction({
+        database,
+        resolved,
+        entryId: predicate.priorEntryId,
+      })
+    ) {
+      throw new Error("background result no longer owns the active transcript");
     }
     return true;
   }
@@ -133,9 +168,6 @@ export function assertSessionTurnAcceptedResult(
   }
   if (entry.activeWriterRunId !== (guard.expectedWriterRunId ?? undefined)) {
     throw new Error(guard.errorMessage);
-  }
-  if (!resolveSessionWorkStartError) {
-    throw new Error("Session turn predicates were not prepared");
   }
   const error = resolveSessionWorkStartError(sessionKey, entry, {
     expectedSessionId: options.expectedSessionId,

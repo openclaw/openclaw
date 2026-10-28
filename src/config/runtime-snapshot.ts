@@ -236,10 +236,15 @@ function publishRuntimeConfigSnapshot(
     sourceUnchanged: sourceMatchesPublished,
     previousEditedInPlace: previousEditedInPlace || previousSourceEditedInPlace,
   });
+  // SDK setters also accept opaque values; only proven plain revisions capture eagerly.
+  const captured =
+    configFact.value && sourceFact.value
+      ? captureRuntimeConfigWithSource(config, sourceConfig ?? config)
+      : null;
   prepareRuntimePluginsConfig(config);
   clearExecutablePathCache();
   runtimeConfigSnapshot = config;
-  runtimeConfigCapturedSnapshot = null;
+  runtimeConfigCapturedSnapshot = captured;
   runtimeConfigSourceSnapshot = sourceConfig ?? null;
   runtimeConfigSnapshotMetadata = metadata;
   if (

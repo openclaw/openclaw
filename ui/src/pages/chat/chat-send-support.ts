@@ -9,7 +9,7 @@ import type { StoredChatOutboxScope } from "../../lib/chat/outbox-store-scope.ts
 import { chatOutboxDeliveryKey } from "../../lib/chat/outbox-store.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
-import { visibleSessionMatches } from "../../lib/sessions/index.ts";
+import { visibleSessionMatches } from "../../lib/sessions/navigation.ts";
 import {
   areUiSessionKeysEquivalent,
   isUiGlobalSessionKey,
@@ -40,9 +40,6 @@ import {
 import { appendChatMessageToCache, readChatMessagesFromCache } from "./session-message-cache.ts";
 import { persistedSteerTargetRunId } from "./stream-causal-boundary.ts";
 import { buildLocalUserMessage } from "./user-message-content.ts";
-
-export const UNCONFIRMED_CHAT_SEND_ERROR =
-  "Delivery has not been confirmed. Check the conversation — retry only if your message didn't arrive.";
 
 export const OFFLINE_QUEUE_STORAGE_ERROR =
   "Could not store this message for reconnect. Free browser storage or reconnect before sending.";
@@ -99,6 +96,7 @@ export function chatSendHoldReason(
   agentId?: string,
 ): string | null {
   return (
+    (host.gatewayWorkPaused ? t("chat.queue.states.waitingForReconnect") : null) ??
     chatSendAdmissionHoldReason(host, sessionKey, agentId) ??
     chatSendPendingReason(host, sessionKey, initialTurnPending)
   );
@@ -283,11 +281,10 @@ export function retireDeliveredQueuedUserTurn(
       return "stale";
     }
     const reason = result.status === "failed" ? result.reason : "missing";
-    // Delivery proof must never become a fresh-send retry because local bytes
-    // were unavailable. Keep the same run identity and its no-replay barrier.
+    // Keep the same key if local projection fails after delivery.
     updateQueuedMessage(host, stored.id, (item) =>
       failOutboxPayload(
-        { ...item, sendState: item.sendState === "held" ? "held" : "unconfirmed" },
+        { ...item, sendState: item.sendState === "held" ? "held" : "failed" },
         reason,
       ),
     );
@@ -295,15 +292,13 @@ export function retireDeliveredQueuedUserTurn(
   });
 }
 
-type ChatDeliveryFailureHost = Parameters<typeof visibleSessionMatches>[0] & {
-  lastError?: string | null;
-  chatError?: string | null;
-  sessionsResult?: SessionsListResult | null;
-};
-
 /** Surface a terminal delivery failure in the owning pane or a named toast. */
 export function surfaceChatDeliveryFailure(
-  host: ChatDeliveryFailureHost,
+  host: Parameters<typeof visibleSessionMatches>[0] & {
+    lastError?: string | null;
+    chatError?: string | null;
+    sessionsResult?: SessionsListResult | null;
+  },
   sessionKey: string,
   agentId: string | undefined,
   error: string,

@@ -14,11 +14,11 @@ import {
 import { resolveGatewayLockPaths } from "../../infra/gateway-lock.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import { getFileLockProcessStartTime } from "../../shared/pid-alive.js";
-import * as existingWrites from "../../state/openclaw-state-db-existing-write.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { beforeIntentWriteAdmission } from "./lifecycle.restart-intent.test-support.js";
 import {
   createGatewayServiceRunArgs,
   lifecycleTestRuntime,
@@ -92,18 +92,6 @@ function writeLegacyLock(lock: LegacyLock) {
   const { stateLockPath } = resolveGatewayLockPaths(process.env);
   fs.mkdirSync(path.dirname(stateLockPath), { recursive: true });
   fs.writeFileSync(stateLockPath, JSON.stringify(lock));
-}
-
-function beforeIntentWriteAdmission(operation: () => void) {
-  const write = existingWrites.runExistingOpenClawStateWriteTransaction;
-  vi.spyOn(existingWrites, "runExistingOpenClawStateWriteTransaction").mockImplementation(
-    (mutate, options, contract) => {
-      if (contract.operationLabel === "gateway.restart-intent.write") {
-        operation();
-      }
-      return write(mutate, options, contract);
-    },
-  );
 }
 
 function publishOwner(pid = process.pid, supervised = false) {

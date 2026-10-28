@@ -11,6 +11,7 @@ import { listSessionMembersInDatabase } from "../config/sessions/session-sharing
 import type { PersonalGitHubPublicationRow } from "../gateway/github-personal-publication-store.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
+import { projectGitHubPublicationSessionFacts } from "./github-publication-session-facts.js";
 import type { GitHubPublicationSourcePredicate } from "./github-publication-source-contract.js";
 import type {
   GitHubPublicationSourceFacts,
@@ -84,20 +85,7 @@ function readSessionFacts(
     ? validateCanonicalSessionRowEntry(row, parseSessionEntryJson(row, "list"), "read")
     : undefined;
   const members = listSessionMembersInDatabase({ db: sourceDb }, selector.sessionKey);
-  return {
-    entry: entry && {
-      sessionId: entry.sessionId,
-      lifecycleRevision: entry.lifecycleRevision,
-      archivedAt: entry.archivedAt,
-      visibility: entry.visibility,
-      incognito: entry.incognito,
-      createdActor: entry.createdActor,
-      owner: entry.owner,
-      worktree: entry.worktree,
-      repositoryWorkspaceId: entry.repositoryWorkspaceId,
-    },
-    members,
-  };
+  return projectGitHubPublicationSessionFacts(entry, members);
 }
 
 /** Shared-state facts remain transaction-held for both durable and memory session sources. */

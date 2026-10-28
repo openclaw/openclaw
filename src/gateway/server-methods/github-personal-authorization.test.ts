@@ -21,6 +21,10 @@ const mocks = vi.hoisted(() => ({
   loadSession:
     vi.fn<(key: string, options?: { agentId?: string }) => SessionRead | Promise<SessionRead>>(),
   roleScopes: undefined as string[] | undefined,
+  roleReads: 0,
+  sessionCap: undefined as "invited" | undefined,
+  prepareSharing:
+    vi.fn<typeof import("../session-sharing-target-read.js").prepareSessionSharingRead>(),
 }));
 
 // mock-isolation: Reject legacy synchronous reads to enforce the async storage boundary.
@@ -76,8 +80,12 @@ vi.mock("../../state/user-profile-list.js", () => ({
 }));
 // mock-isolation: Control role ceilings independently of persistent operator policy.
 vi.mock("../operator-role-policy.js", () => {
-  const resolve = () => (mocks.roleScopes ? { scopes: mocks.roleScopes } : null);
+  const resolve = () => {
+    mocks.roleReads++;
+    return mocks.roleScopes ? { scopes: mocks.roleScopes } : null;
+  };
   return {
+    operatorSessionCap: () => mocks.sessionCap,
     resolveOperatorRolePolicy: resolve,
     resolveOperatorRolePolicyForProfile: resolve,
     resolveOperatorRolePolicyForAssignment: resolve,
@@ -86,6 +94,11 @@ vi.mock("../operator-role-policy.js", () => {
 // mock-isolation: Supply selected-session access without initializing sharing storage.
 vi.mock("../session-sharing.js", () => ({
   createSessionListEntryFilter: () => undefined,
+}));
+
+// mock-isolation: Supply the separately selected sharing target without opening session stores.
+vi.mock("../session-sharing-target-read.js", () => ({
+  prepareSessionSharingRead: mocks.prepareSharing,
 }));
 
 // mock-isolation: Admit sharing independently of the live personal grant under test.
@@ -147,6 +160,9 @@ function holdSessionRead() {
 beforeEach(() => {
   setRuntimeConfigSnapshot({});
   mocks.roleScopes = undefined;
+  mocks.roleReads = 0;
+  mocks.sessionCap = undefined;
+  mocks.prepareSharing.mockReset();
   mocks.loadSession.mockReset();
   mocks.loadSession.mockReturnValue(sessionRead());
 });
@@ -192,6 +208,37 @@ it("prepares the new session store after an in-place config publication", async 
   using reloaded = await second;
   expect(reloaded.currentSession().sessionId).toBe("reloaded-session");
   expect(mocks.loadSession).toHaveBeenCalledTimes(2);
+});
+
+it("rejects invited publication metadata when sharing selects a replacement store", async () => {
+  const config = getRuntimeConfigSnapshot()!;
+  const request = createRequest();
+  request.context.getRuntimeConfig = () => getRuntimeConfigSnapshot()!;
+  mocks.sessionCap = "invited";
+  const { snapshot, pending, entered } = holdSessionRead();
+  const replacement = {
+    ...sessionRead("main", { sessionId: "replacement-session" }),
+    storePath: "/test/reloaded/sessions.json",
+  };
+  const release = vi.fn();
+  mocks.prepareSharing.mockResolvedValue({
+    storageTarget: replacement,
+    readCurrent: () => ({
+      target: { ...replacement, storeKey: replacement.canonicalKey },
+      membership: new Set(["profile-cache-test"]),
+      sourcePath: replacement.storePath,
+      sourceAgentId: replacement.agentId,
+    }),
+    release,
+  });
+  const first = prepare(request);
+  const rejected = expect(first).rejects.toThrow("session lifecycle changed");
+  await entered.promise;
+  config.session = { store: replacement.storePath };
+  setRuntimeConfigSnapshot(config);
+  pending.resolve(snapshot);
+  await rejected;
+  expect(release).toHaveBeenCalledOnce();
 });
 
 it("keeps origin-free personal reads and publication bound to the live ingress grant", async () => {
@@ -247,6 +294,102 @@ it("reuses the worker result until publication metadata changes", async () => {
   expect(mocks.loadSession).toHaveBeenCalledTimes(1);
   read.release();
   expect(() => read.currentSession()).toThrow("session lifecycle changed");
+});
+
+it("checks live client policy once per publication options read", async () => {
+  mocks.roleScopes = ["operator.read", "operator.write"];
+  using read = await prepare();
+  // Owner benchmark: OPENCLAW_VITEST_RUNTIME=node OPENCLAW_BENCH_GITHUB_OPTIONS=both
+  // node scripts/run-vitest.mjs src/gateway/server-methods/github-personal-authorization.test.ts
+  // --maxWorkers=1 -t "checks live client policy". Use timing/allocation for separate runs.
+  // OPENCLAW_BENCH_GITHUB_OPTIONS_BASE may name a frozen adjacent copy of the source owner.
+  const mode = process.env.OPENCLAW_BENCH_GITHUB_OPTIONS;
+  if (mode === "timing" || mode === "allocation" || mode === "both") {
+    const iterations = 5_000;
+    const expected = JSON.stringify(read.session);
+    const baselinePath = process.env.OPENCLAW_BENCH_GITHUB_OPTIONS_BASE;
+    const baselineModule: typeof import("./github-personal-authorization.js") | undefined =
+      baselinePath ? await import(baselinePath) : undefined;
+    using baseline = baselineModule
+      ? await baselineModule.prepareGitHubPublicationOptionsRead(createRequest(), {
+          sessionKey: "main",
+        })
+      : undefined;
+    const readers = [
+      ...(baseline ? [{ arm: "base", reader: baseline }] : []),
+      { arm: "candidate", reader: read },
+    ];
+    for (const { reader } of readers) {
+      expect(JSON.stringify(reader.session)).toBe(expected);
+      for (let index = 0; index < iterations; index++) {
+        reader.currentSession();
+      }
+    }
+    for (const pass of mode === "both" ? ["timing", "allocation"] : [mode]) {
+      for (const [pair, ordered] of [readers, readers.toReversed()].entries()) {
+        for (const { arm, reader } of ordered) {
+          const profiler =
+            pass === "allocation"
+              ? new (await import("node:inspector/promises")).Session()
+              : undefined;
+          profiler?.connect();
+          try {
+            await profiler?.post("HeapProfiler.startSampling", {
+              samplingInterval: 512,
+              includeObjectsCollectedByMajorGC: true,
+              includeObjectsCollectedByMinorGC: true,
+            });
+            const started = performance.now();
+            const cpuStart = process.cpuUsage();
+            let result = read.session;
+            for (let index = 0; index < iterations; index++) {
+              result = reader.currentSession();
+            }
+            const cpu = process.cpuUsage(cpuStart);
+            const wallMs = performance.now() - started;
+            const sampled = await profiler?.post("HeapProfiler.stopSampling");
+            let allocatedBytes = 0;
+            const nodes = sampled ? [sampled.profile.head] : [];
+            for (const node of nodes) {
+              allocatedBytes += node.selfSize;
+              nodes.push(...node.children);
+            }
+            expect(JSON.stringify(result)).toBe(expected);
+            console.log(
+              JSON.stringify({
+                benchmark: "github-options-prepared-reader",
+                arm,
+                pair,
+                pass,
+                iterations,
+                wallMsPerCall: wallMs / iterations,
+                cpuUsPerCall: (cpu.user + cpu.system) / iterations,
+                ...(sampled ? { allocatedBytesPerCall: allocatedBytes / iterations } : {}),
+                response: expected,
+              }),
+            );
+          } finally {
+            profiler?.disconnect();
+          }
+        }
+      }
+    }
+  }
+  for (const consume of [
+    () => read.currentSession(),
+    () => read.currentSessionRead(),
+    () => read.assertSessionUnchanged(read.session),
+  ]) {
+    mocks.roleReads = 0;
+    consume();
+    expect(mocks.roleReads).toBe(1);
+  }
+  mocks.roleScopes = ["operator.approvals"];
+  expect(() => read.currentSession()).toThrow("operator.sessions.read permission");
+  expect(() => read.currentSessionRead()).toThrow("operator.sessions.read permission");
+  expect(() => read.assertSessionUnchanged(read.session)).toThrow(
+    "operator.sessions.read permission",
+  );
 });
 
 it.each([null, 123])(

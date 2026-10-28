@@ -52,8 +52,8 @@ const guardedTables = new Set([
   "session_members",
 ]);
 
-// The startup fixture owns a newly created root before any Gateway runs; its one
-// historical shared receipt has no requester authority and cannot publish.
+// Offline benchmark roots are synthetic and owned before any Gateway runs.
+// Historical startup receipts lack requester authority and can only reconcile reads.
 const publicationWriters = new Map<string, readonly string[]>([
   [
     key(publicationLifecycle, "insertGitHubPublicationSessionLifecycle"),
@@ -72,7 +72,12 @@ const publicationWriters = new Map<string, readonly string[]>([
     key(file, name),
     [
       key(publicationRequestWorker, "githubPublications.insert/write"),
-      ...(file === sharedPublication ? [offlinePublicationFixture] : []),
+      ...(file === sharedPublication
+        ? [
+            offlinePublicationFixture,
+            key("scripts/perf/publication-empty-recovery-measure.ts", "seedPublicationRequests"),
+          ]
+        : []),
     ],
   ]),
   ...[
@@ -82,7 +87,10 @@ const publicationWriters = new Map<string, readonly string[]>([
     "bindAcceptedGitHubPublicationClaimSnapshotInDatabase",
   ].map((name): [string, string[]] => [
     key(sharedPublication, name),
-    [key(publicationWorker, "sharedMutation")],
+    [
+      key(publicationWorker, "sharedMutation"),
+      ...(name === "claimGitHubPublicationExecutionInDatabase" ? [offlinePublicationFixture] : []),
+    ],
   ]),
   [
     key(sharedPublication, "writeGitHubPublicationExecutionInDatabase"),
@@ -310,6 +318,8 @@ const genericCredentialCallers = new Map<string, readonly string[]>([
       key("src/state/config-machine-state.worker.ts", "machineState.write"),
       // localOnboardingStateKey always uses the onboarding.local. namespace.
       key("src/state/local-onboarding-state.worker.ts", "localOnboarding.complete"),
+      // installationCountStateKey is fixed to telemetry.installationCount.<endpoint hash>.
+      key("src/infra/telemetry-store.worker.ts", "telemetry.claimInstallationCount"),
     ],
   ],
   [
@@ -328,6 +338,9 @@ const genericCredentialCallers = new Map<string, readonly string[]>([
     [
       key("src/tui/tui-last-session.kernel.ts", "tui.lastSession.write"),
       key("src/commands/doctor/shared/legacy-webhook-pins.ts", "recordUnwrittenWebhookCompletion"),
+      // Exclusive Doctor repair records only sessions.relative-store.v1.<path hash> fingerprints.
+      // This receipt prevents retained originals from resurrecting later-deleted conversations.
+      key("src/commands/doctor-relative-session-store.ts", "repairRelativeSessionStores"),
     ],
   ],
   [
@@ -536,7 +549,9 @@ const callers = new Map<string, readonly string[]>([
     key(sessionArtifacts, "copySessionNodeArtifactsForRepair"),
     [
       key(sessionEntries, "deleteLegacySessionEntryRows"),
-      key("src/config/sessions/legacy-main-session-migration-operations.ts", "copyClaimCrossStore"),
+      // Moved from copyClaimCrossStore: the same offline claim-copy transaction now also
+      // preserves relocation membership after source/destination claim and sharing checks.
+      key("src/config/sessions/session-claim-repair-copy.ts", "copySessionClaimForRepair"),
       key(
         "src/config/sessions/session-accessor.sqlite-canonical-repair.ts",
         "copySqliteSessionOwnedStateForRepair",
@@ -588,7 +603,7 @@ const callers = new Map<string, readonly string[]>([
   ]),
   [
     key(sharedPublication, "createGitHubPublicationExecutionStoreInDatabase"),
-    [key(publicationWorker, "sharedMutation")],
+    [key(publicationWorker, "sharedMutation"), offlinePublicationFixture],
   ],
   [
     key(publicationDeletion, "deletePersonalGitHubSessionReceiptsInDatabase"),
@@ -1317,7 +1332,7 @@ export function inspectPersonalCredentialWriters(
             node.parent.expression.name.text === "prepare" &&
             node.parent.arguments.length === 1 &&
             node.parent.arguments[0] === node &&
-            /^UPDATE github_publication_session_lifecycles SET requester_authority_json = NULL WHERE publication_kind = 'shared' AND request_id = 'startup-publication'$/u.test(
+            /^UPDATE github_publication_session_lifecycles SET requester_authority_json = NULL WHERE publication_kind = 'shared' AND request_id IN \('startup-publication', 'startup-publication-0', 'startup-publication-1', 'startup-publication-2', 'startup-publication-3'\)$/u.test(
               node.text,
             )
           ) {

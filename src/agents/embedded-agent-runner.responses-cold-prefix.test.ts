@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import fs from "node:fs/promises";
 import path from "node:path";
 import { configureAiTransportHost, getAiTransportHost } from "@openclaw/ai";
 import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
@@ -32,7 +31,6 @@ it("preserves signed empty Responses messages before reasoning across a cold run
     const sessionId = "responses-cold-prefix";
     const sessionKey = "agent:main:" + sessionId;
     const model = "gpt-5-cold-prefix-fixture";
-    const instructions = "Stable replay instructions.\n".repeat(32);
     const pluginDir = state.path("plugins", "cache-proof");
     writeTempPlugin({
       dir: state.path("plugins"),
@@ -44,7 +42,6 @@ it("preserves signed empty Responses messages before reasoning across a cold run
       },
       body: `module.exports = { id: "cache-proof", register(api) {
       api.registerTool({ name: "cache_probe", label: "Cache probe", description: "Return a synthetic record.", parameters: { type: "object", properties: {} }, execute: async () => ({ content: [{ type: "text", text: "synthetic tool result" }] }) });
-      api.on("before_prompt_build", (event) => ({ prependContext: "before " + event.prompt, appendContext: "after " + event.prompt }));
     }};`,
     });
     const config = cacheRunnerConfig({
@@ -59,18 +56,9 @@ it("preserves signed empty Responses messages before reasoning across a cold run
       tools: ["cache_probe"],
       modelSettings: { params: { transport: "sse", cacheRetention: "short" } },
     });
-    const defaults = config.agents?.defaults;
     const configuredModel = config.models?.providers?.openai?.models[0];
-    assert(defaults && configuredModel);
-    delete defaults.skipBootstrap;
-    Object.assign(defaults, {
-      bootstrapMaxChars: instructions.length + 4096,
-      bootstrapTotalMaxChars: instructions.length + 8192,
-    });
-    Object.assign(configuredModel, {
-      reasoning: true,
-      contextWindow: 1000000,
-    });
+    assert(configuredModel);
+    configuredModel.reasoning = true;
     await state.writeConfig(config);
     setRuntimeConfigSnapshot(config);
     await loadAndActivateRootPluginRegistry({
@@ -134,7 +122,7 @@ it("preserves signed empty Responses messages before reasoning across a cold run
             : responseMessage("msg_" + id, "synthetic answer"),
         ];
         // A provider-owned empty message precedes encrypted reasoning in the last warm turn.
-        if (requests.length === 7) {
+        if (requests.length === 1) {
           output.unshift(responseMessage("msg_empty", ""));
         }
         history.set(id, [...effectiveInput, ...output]);
@@ -160,15 +148,10 @@ it("preserves signed empty Responses messages before reasoning across a cold run
       },
     });
     try {
-      for (let turn = 1; turn <= 4; turn++) {
+      // Hook/skill refresh and warm reuse are covered by embedded-agent-runner.prompt-cache.test.ts.
+      for (let turn = 1; turn <= 2; turn++) {
         turnRequests = 0;
-        const revision = turn < 3 ? "initial" : "updated";
-        await fs.writeFile(
-          path.join(state.workspaceDir, "AGENTS.md"),
-          `${instructions}\n\n## Skills\nSynthetic skill ${revision}.\n` +
-            `## Temporal Context\nSynthetic day ${revision}.\n## Runtime\nSynthetic runtime ${revision}.\n`,
-        );
-        if (turn === 4) {
+        if (turn === 2) {
           clearEmbeddedSessionPromptStates([sessionId]);
           await closeOpenClawAgentDatabasesAsync(state.stateDir);
           cleanupSessionResources(sessionId);
@@ -205,9 +188,6 @@ it("preserves signed empty Responses messages before reasoning across a cold run
             runId,
             timeoutMs: 60000,
             prompt: "visible turn " + turn,
-            skillsSnapshot: { prompt: "skills revision " + (turn < 3 ? 1 : 2), skills: [] },
-            extraSystemPrompt:
-              "Preserve prior instructions and answer only the latest requested marker.",
           });
           expect(result.meta.error).toBeUndefined();
           expect(requests).toHaveLength(turn * 3);
@@ -216,8 +196,7 @@ it("preserves signed empty Responses messages before reasoning across a cold run
         }
       }
       expect(requests[1]?.previous_response_id).toBe("response_1");
-      expect(requests[3]?.previous_response_id).toBe("response_3");
-      expect(requests[9]?.previous_response_id).toBeUndefined();
+      expect(requests[3]?.previous_response_id).toBeUndefined();
       for (let index = 1; index < prefixes.length; index++) {
         assertStableProviderPrefix(prefixes[index - 1]!, prefixes[index]!, {
           label: "request " + (index + 1),

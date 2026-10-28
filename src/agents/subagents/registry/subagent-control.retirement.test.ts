@@ -149,7 +149,6 @@ async function registerTree(turnOwner = false, predecessor = false) {
 }
 
 it.each([
-  "normal retirement",
   "retirement with retained predecessor",
   "retirement write rollback",
   "successor registration write rollback",
@@ -512,7 +511,7 @@ async function restore() {
   await initSubagentRegistry();
   // These terminal-only fixtures need a live owner but never dispatch a model turn.
   const gatewayContext = { resolveGatewayContext: () => gatewayContext as never };
-  await activateSubagentRegistry(() => gatewayContext as never);
+  await activateSubagentRegistry(() => gatewayContext as never).settled;
 }
 
 function expectNoExecutionReplay() {

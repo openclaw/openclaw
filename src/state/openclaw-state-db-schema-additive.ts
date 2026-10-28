@@ -195,15 +195,8 @@ export function ensurePersonalGitHubPublicationSchema(db: EngineConnection): voi
 }
 
 /**
- * Add the feature-owned first-use columns that a STRICT rebuild cannot skip.
- *
- * These columns normally stay absent until their owning feature first writes
- * them, and the persistent schema contract accepts that shape. The STRICT
- * table rebuild is the one caller that cannot: it recreates each table from
- * canonical SQL, which already declares these columns, so a database missing
- * them fails the canonical column check and rolls the entire repair back.
- * Ensuring them immediately before that rebuild matches the shape the rebuild
- * produces anyway, and stays scoped to databases old enough to need it.
+ * Complete first-use columns before a STRICT rebuild or in a private port copy.
+ * Both require canonical layouts; ordinary admission leaves these columns lazy.
  */
 export function ensureFirstUseAdditiveStateColumnsForStrictMigration(db: DatabaseSync): void {
   for (const {
@@ -241,7 +234,7 @@ export function ensureAdditiveStateColumns(db: DatabaseSync, scope: "runtime" | 
     ensureColumn(db, tableName, `${columnName} ${dataType}`);
   }
   if (ensureColumn(db, ...columns.packageUpdatedAt[0])) {
-    db.exec("UPDATE claw_package_refs SET updated_at_ms = installed_at_ms;");
+    db.exec("UPDATE template_package_refs SET updated_at_ms = installed_at_ms;");
   }
   ensureColumns(db, columns.packageIntegrity);
   const addedDiagnosticEventSequence = ensureColumn(db, ...columns.diagnosticSequence[0]);

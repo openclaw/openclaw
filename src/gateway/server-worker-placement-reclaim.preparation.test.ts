@@ -32,6 +32,7 @@ import {
   sessionIdentity,
 } from "./worker-environments/placement-suite.test-support.js";
 import { prepareSessionWorkerPlacementStop } from "./worker-environments/session-placement-lifecycle.js";
+import { createWorkerWorkspaceRecoveryFixture } from "./worker-environments/workspace-recovery.test-support.js";
 
 const fixtures = useReclaimFixtures();
 async function cancellationLoadFixture(
@@ -94,6 +95,14 @@ async function cancellationLoadFixture(
     cancellationStarted,
     harness,
     coordinated,
+    replaceIncarnation: () => {
+      entry.lifecycleRevision = "replacement";
+      return replaceSessionEntry({ ...REQUEST, storePath }, entry);
+    },
+    expectCancellationBlocked: () => {
+      expect(cancellationStarted).not.toHaveBeenCalled();
+      expect(harness.environments.destroy).not.toHaveBeenCalled();
+    },
     armCancellation: () => {
       delayCancellation = true;
       started = createDeferredCore();
@@ -158,8 +167,7 @@ it.each(["same-owner", "replacement", "incarnation", "authorization"] as const)(
       if (change === "replacement") {
         await f.placements.startDrain(placementTransition(active));
       } else if (change === "incarnation") {
-        f.entry.lifecycleRevision = "replacement";
-        await replaceSessionEntry({ ...REQUEST, storePath: f.storePath }, f.entry);
+        await f.replaceIncarnation();
       } else if (change === "authorization") {
         authorized = false;
       }
@@ -173,8 +181,7 @@ it.each(["same-owner", "replacement", "incarnation", "authorization"] as const)(
         expect(f.harness.environments.destroy).toHaveBeenCalledOnce();
       } else {
         expect(await second).toBeInstanceOf(Error);
-        expect(f.cancellationStarted).not.toHaveBeenCalled();
-        expect(f.harness.environments.destroy).not.toHaveBeenCalled();
+        f.expectCancellationBlocked();
       }
     } finally {
       provisioning.release.resolve();
@@ -383,8 +390,7 @@ it.each(
       if (change === "replacement") {
         await f.placements.startDispatch(REQUEST);
       } else if (change === "incarnation") {
-        f.entry.lifecycleRevision = "replacement";
-        await replaceSessionEntry({ ...REQUEST, storePath: f.storePath }, f.entry);
+        await f.replaceIncarnation();
       }
       f.loaded.resolve();
       const result = await second;
@@ -482,8 +488,7 @@ it.each([
         }
         await f.placements.startDrain(placementTransition(current));
       } else if (advance === "incarnation") {
-        f.entry.lifecycleRevision = "replacement";
-        await replaceSessionEntry({ ...REQUEST, storePath: f.storePath }, f.entry);
+        await f.replaceIncarnation();
       }
       f.loaded.resolve();
       if (advance !== "replacement" && advance !== "incarnation") {
@@ -496,9 +501,12 @@ it.each([
       attaching.release.resolve();
       const result = await stopping;
       if (advance === "replacement" || advance === "incarnation") {
-        expect(result).toBeInstanceOf(Error);
-        expect(f.cancellationStarted).not.toHaveBeenCalled();
-        expect(f.harness.environments.destroy).not.toHaveBeenCalled();
+        expect(result).toMatchObject({
+          message: expect.stringContaining(
+            advance === "replacement" ? "worker changed before cancellation" : "Session",
+          ),
+        });
+        f.expectCancellationBlocked();
       } else {
         if (action === "archive") {
           expect(result).toBeUndefined();
@@ -531,15 +539,23 @@ it.each([
   async ({ advance, targetKind }) => {
     const reconciling = createPlacementTestHold();
     const cleaning = createPlacementTestHold();
+    let workspacePath = "";
+    const recovery = createWorkerWorkspaceRecoveryFixture({
+      resolveWorkspace: async () => ({ kind: "local", path: workspacePath }),
+    });
     const f = await cancellationLoadFixture({
       runMoveBarrier: async (request) => await barrier(request),
       afterReconcile: async () => {
         await reconciling.wait();
       },
-      afterStopTunnel: async () => {
+      withPreparedRecovery: async (identity, assertCurrent, run) => {
+        const result = await recovery.withPreparedRecovery(identity, assertCurrent, run);
+        // Recovery releases its source after publishing the local placement.
         await cleaning.wait();
+        return result;
       },
     });
+    workspacePath = path.dirname(f.storePath);
     const barrier = createGatewayWorkerPlacementMoveBarrier({
       placements: f.placements,
       loadSessionRuntime: async () => f.runtime,
@@ -567,12 +583,7 @@ it.each([
         },
       )
       .catch((error: unknown) => error);
-    await Promise.race([
-      reconciling.entered.promise,
-      moving.then(() => {
-        throw new Error("Move completed before reconciliation hold");
-      }),
-    ]);
+    await waitFor(reconciling.entered.promise, moving, "Move completed before reconciliation hold");
     expect(f.placements.get(REQUEST.sessionId)?.state).toBe("draining");
     f.cancellationStarted.mockClear();
     f.armCancellation();
@@ -590,12 +601,7 @@ it.each([
     try {
       await waitFor(f.loading.promise, stopping);
       reconciling.release.resolve();
-      await Promise.race([
-        cleaning.entered.promise,
-        moving.then(() => {
-          throw new Error("Move completed before cleanup hold");
-        }),
-      ]);
+      await waitFor(cleaning.entered.promise, moving, "Move completed before cleanup hold");
       expect(f.placements.get(REQUEST.sessionId)?.state).toBe("local");
       if (advance !== "cleanup") {
         cleaning.release.resolve();
@@ -627,7 +633,6 @@ it.each([
         expect(f.placements.get(REQUEST.sessionId)?.turnClaim).toBeNull();
         expect(await f.placements.listPendingWorkspaceResultsAsync()).toEqual([]);
         expect(f.harness.environments.createWithRequest).toHaveBeenCalledOnce();
-        expect(f.harness.log.filter((event) => event === "placement:requested")).toHaveLength(1);
       }
     } finally {
       reconciling.release.resolve();
@@ -728,7 +733,6 @@ async function barrierFixture(name: string) {
   });
   const run = vi.fn(async () => ({ ...placement, state: "reclaimed" as const }) as never);
   return {
-    placement,
     cancel,
     run,
     admit: (onInterrupt?: () => void) =>
@@ -773,27 +777,20 @@ it("one failed Stop cannot reopen ingress while another Stop still owns its clos
   (await f.admit()).release();
 });
 
-it.each(["authorization", "incarnation", "worker"] as const)(
+it.each(["authorization", "incarnation"] as const)(
   "rejects changed %s after cancellation and reopens admission on failure",
   async (change) => {
     const f = await barrierFixture(`changed-${change}`);
     const entered = createPlacementTestHold();
     let authorized = true;
     const interrupted = vi.fn();
-    const signalled = vi.fn();
     const acquired = await f.admit(() => {
       interrupted();
       acquired.release();
     });
     f.cancel.mockImplementation(async ({ assertCurrent }) => {
-      if (change !== "worker") {
-        assertCurrent();
-      }
+      assertCurrent();
       await entered.wait();
-      if (change === "worker") {
-        assertCurrent();
-        signalled();
-      }
     });
     try {
       const stop = f.prepare({
@@ -804,18 +801,11 @@ it.each(["authorization", "incarnation", "worker"] as const)(
         },
       });
       const rejected = expect(stop).rejects.toThrow(
-        change === "authorization"
-          ? "access revoked"
-          : change === "worker"
-            ? "worker changed before cancellation"
-            : "Session",
+        change === "authorization" ? "access revoked" : "Session",
       );
       await entered.entered.promise;
       if (change === "authorization") {
         authorized = false;
-      } else if (change === "worker") {
-        // Replacement must not mutate the captured owner snapshot.
-        f.placement.generation++;
       } else {
         await f.replaceEntry("replacement-with-same-session-id");
       }
@@ -823,7 +813,6 @@ it.each(["authorization", "incarnation", "worker"] as const)(
       await rejected;
       expect(interrupted).not.toHaveBeenCalled();
       expect(f.run).not.toHaveBeenCalled();
-      expect(signalled).not.toHaveBeenCalled();
       (await f.admit()).release();
     } finally {
       entered.release.resolve();

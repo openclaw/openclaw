@@ -19,47 +19,29 @@ import { buildVitestRunPlans } from "../scripts/test-projects.test-support.mts";
 import { createNodeEvalArgs } from "../src/test-utils/node-process.js";
 import { isUiTestTarget } from "./vitest/vitest.ui-paths.mjs";
 
-type PlannedTestOwner = {
-  configs: readonly string[];
-  includePatterns?: readonly string[];
-};
-type UiOwners = Record<"ui" | "e2e", Array<{ includePatterns: string[] }>>;
+type Owner = { configs: readonly string[]; includePatterns?: readonly string[] };
 const uiConfig = "ui/vitest.config.ts";
 const browserConfig = "test/vitest/vitest.ui-browser.config.ts";
 const e2eConfig = "test/vitest/vitest.ui-e2e.config.ts";
-
-function expectUiOwnerCount(owners: UiOwners, file: string, count: number) {
-  const kind = isUiTestTarget(file) ? "ui" : "e2e";
-  expect(
-    owners[kind].filter((group) => group.includePatterns.includes(file)),
-    file,
-  ).toHaveLength(count);
-}
-
-function fallbackGroups(shards: ReturnType<typeof createNodeTestShardBundles>) {
-  return shards.flatMap((shard) => shard.groups ?? [{ ...shard, shard_name: shard.shardName }]);
-}
+const includes = (file: string, group: Pick<Owner, "includePatterns">) =>
+  !group.includePatterns ||
+  group.includePatterns.some((pattern) => path.matchesGlob(file, pattern));
 
 function createPrExemptCensus() {
-  const prExemptFiles = listPrExemptRuntimeTestFiles();
-  expect(prExemptFiles.length).toBeGreaterThan(0);
-  const extensionGroups = createExtensionTestShards({
+  const files = listPrExemptRuntimeTestFiles();
+  expect(files.length).toBeGreaterThan(0);
+  const extensions = createExtensionTestShards({
     shardCount: DEFAULT_EXTENSION_TEST_SHARD_COUNT,
   }).flatMap((shard) => shard.planGroups);
   const configs = [
-    ...new Set([
-      ...extensionGroups.map((group) => group.config),
-      uiConfig,
-      browserConfig,
-      e2eConfig,
-    ]),
+    ...new Set([...extensions.map((group) => group.config), uiConfig, browserConfig, e2eConfig]),
   ];
-  // Discover in the same Node context as the prerelease planner, without the
-  // parent Vitest invocation's file filter or transformed config module graph.
-  const discovery = execFileSync(
-    process.execPath,
-    createNodeEvalArgs(
-      `
+  // Use an independent Node config graph, without the parent Vitest file filter.
+  const discovered: Record<string, Array<{ name: string; files: string[] }>> = JSON.parse(
+    execFileSync(
+      process.execPath,
+      createNodeEvalArgs(
+        `
       import { globSync } from "node:fs";
       import path from "node:path";
       import { pathToFileURL } from "node:url";
@@ -84,119 +66,93 @@ function createPrExemptCensus() {
       }
       process.stdout.write(JSON.stringify(projects));
     `,
-      { imports: ["./scripts/tsx.mjs"] },
+        { imports: ["./scripts/tsx.mjs"] },
+      ),
+      {
+        encoding: "utf8",
+        env: { ...process.env, OPENCLAW_VITEST_INCLUDE_FILE: undefined },
+        maxBuffer: 4 * 1024 * 1024,
+      },
     ),
-    {
-      encoding: "utf8",
-      env: { ...process.env, OPENCLAW_VITEST_INCLUDE_FILE: undefined },
-      maxBuffer: 4 * 1024 * 1024,
-    },
   );
-  const discovered: Record<string, Array<{ name: string; files: string[] }>> = JSON.parse(
-    discovery,
-  );
-  const projectsFor = (config: string) => expectDefined(discovered[config], config);
-  const filesFor = (config: string) => [
-    ...new Set(projectsFor(config).flatMap((project) => project.files)),
+  const projects = (config: string) => expectDefined(discovered[config], config);
+  const allFiles = (config: string) => [
+    ...new Set(projects(config).flatMap((project) => project.files)),
   ];
-  const retainedExtensionGroups = extensionGroups.map((group) => ({
+  const browserFiles = allFiles(browserConfig);
+  expect(
+    projects(uiConfig)
+      .find((project) => project.name === "browser")
+      ?.files.toSorted(),
+  ).toEqual(browserFiles.toSorted());
+  const extensionOwners = extensions.map((group) => ({
     configs: [group.config],
-    includePatterns: filesFor(group.config).filter((file) =>
+    includePatterns: allFiles(group.config).filter((file) =>
       group.roots.some((root) => file === root || file.startsWith(`${root}/`)),
     ),
   }));
-  const uiProjects = projectsFor(uiConfig);
-  const browserFiles = filesFor(browserConfig);
-  expect(uiProjects.find((project) => project.name === "browser")?.files.toSorted()).toEqual(
-    browserFiles.toSorted(),
-  );
-  const dedicatedGroups = (plan: ReturnType<typeof createUiTestShardGroups>) => {
-    const select = (files: string[], groups: typeof plan.ui) =>
-      files.filter((file) =>
-        groups.some((group) => !group.includePatterns || group.includePatterns.includes(file)),
-      );
-    const projectGroups = (config: string, groups: typeof plan.ui) =>
-      projectsFor(config).map((project) => ({
-        configs: [config],
-        includePatterns: select(project.files, groups),
-      }));
-    const ui = projectGroups(uiConfig, plan.ui);
-    const e2e = projectGroups(e2eConfig, plan.e2e);
-    const browser = { configs: [browserConfig], includePatterns: select(browserFiles, plan.ui) };
-    return { ui, e2e, canonical: [browser, ...e2e] };
-  };
   const configsByFile = new Map(
-    prExemptFiles.map((file) => {
-      const rawConfig = expectDefined(buildVitestRunPlans([file])[0]?.config, file);
-      return [file, resolveCanonicalNodeTestConfig(file, rawConfig) ?? rawConfig];
+    files.map((file) => {
+      const raw = expectDefined(buildVitestRunPlans([file])[0]?.config, file);
+      return [file, resolveCanonicalNodeTestConfig(file, raw) ?? raw];
     }),
   );
-  // Census entries are concrete files, so check their membership independently of the planner.
-  const ownersFor = (file: string, groups: readonly PlannedTestOwner[]) =>
-    groups.filter(
-      (group) =>
-        group.configs.includes(expectDefined(configsByFile.get(file), file)) &&
-        (!group.includePatterns ||
-          group.includePatterns.some((pattern) => path.matchesGlob(file, pattern))),
-    );
-  return { prExemptFiles, retainedExtensionGroups, dedicatedGroups, ownersFor };
-}
-
-let prExemptCensus: ReturnType<typeof createPrExemptCensus> | undefined;
-
-const getPrExemptCensus = () => (prExemptCensus ??= createPrExemptCensus());
-
-it.each(["hourly", "release"] as const)(
-  "retains one canonical owner for every PR-exempt file in %s plans",
-  (mode) => {
-    const { prExemptFiles, retainedExtensionGroups, dedicatedGroups, ownersFor } =
-      getPrExemptCensus();
+  return (mode: "hourly" | "release") => {
+    const release = mode === "release";
     const periodic = createNodeTestShardBundles({
       runnerBackend: "github",
       includeReleaseOnlyPluginShards: false,
-      includeReleaseOnlyRuntimeTests: mode === "release",
+      includeReleaseOnlyRuntimeTests: release,
       includePrExemptRuntimeTests: true,
       includeReleaseOnlyToolingShards: true,
-      ...(mode === "hourly"
-        ? {
-            compactMode: "pull-request",
-            includeProofTests: true,
-            compactNodeJobCap: 77,
-          }
+      ...(!release
+        ? { compactMode: "pull-request", includeProofTests: true, compactNodeJobCap: 77 }
         : {}),
     });
-    const uiOwners = dedicatedGroups(
-      createUiTestShardGroups({ includeReleaseOnlyTests: mode === "release" }),
-    );
-    if (mode === "hourly") {
+    const ui = createUiTestShardGroups({ includeReleaseOnlyTests: release });
+    const selected = (file: string, groups: typeof ui.ui) =>
+      groups.some((group) => !group.includePatterns || group.includePatterns.includes(file));
+    const projectCount = (file: string, config: string) =>
+      projects(config).filter((project) => project.files.includes(file)).length;
+    const uiCount = (file: string) =>
+      isUiTestTarget(file)
+        ? Number(selected(file, ui.ui)) * projectCount(file, uiConfig)
+        : Number(selected(file, ui.e2e)) * projectCount(file, e2eConfig);
+    if (!release) {
       expect(periodic.filter((job) => !job.requiresDist).length).toBeLessThanOrEqual(77);
       expect(periodic.length).toBeLessThanOrEqual(79);
     }
-    const groups = [...fallbackGroups(periodic), ...retainedExtensionGroups, ...uiOwners.canonical];
-    for (const file of prExemptFiles) {
-      expect(ownersFor(file, groups), file).toHaveLength(1);
+    const owners = [
+      ...periodic.flatMap((shard) => shard.groups ?? [{ ...shard, shard_name: shard.shardName }]),
+      ...extensionOwners,
+    ];
+    for (const file of files) {
+      const config = expectDefined(configsByFile.get(file), file);
+      const shared = owners.filter(
+        (owner) => owner.configs.includes(config) && includes(file, owner),
+      ).length;
+      const dedicated =
+        config === browserConfig
+          ? Number(browserFiles.includes(file) && selected(file, ui.ui))
+          : config === e2eConfig
+            ? Number(selected(file, ui.e2e)) * projectCount(file, e2eConfig)
+            : 0;
+      expect(shared + dedicated, file).toBe(1);
       if (file.startsWith("ui/")) {
-        expectUiOwnerCount(uiOwners, file, 1);
+        expect(uiCount(file), file).toBe(1);
       }
     }
     for (const file of RELEASE_ONLY_UI_TEST_FILES) {
-      expect(prExemptFiles, file).not.toContain(file);
-      expectUiOwnerCount(uiOwners, file, mode === "release" ? 1 : 0);
+      expect(files, file).not.toContain(file);
+      expect(uiCount(file), file).toBe(release ? 1 : 0);
     }
+  };
+}
+
+let census: ReturnType<typeof createPrExemptCensus> | undefined;
+it.each(["hourly", "release"] as const)(
+  "retains one canonical owner for every PR-exempt file in %s plans",
+  (mode) => {
+    (census ??= createPrExemptCensus())(mode);
   },
 );
-
-it("keeps release-only UI files out of ordinary owner-selected plans", () => {
-  const { dedicatedGroups } = getPrExemptCensus();
-  const owners = dedicatedGroups(
-    createUiTestShardGroups({
-      includeReleaseOnlyTests: false,
-      includePrExemptRuntimeTests: false,
-      changedPaths: ["ui/vite.config.ts"],
-      uiE2eFiles: [...RELEASE_ONLY_UI_TEST_FILES].filter((file) => !isUiTestTarget(file)),
-    }),
-  );
-  for (const file of RELEASE_ONLY_UI_TEST_FILES) {
-    expectUiOwnerCount(owners, file, 0);
-  }
-});

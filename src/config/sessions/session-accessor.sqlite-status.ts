@@ -9,7 +9,7 @@ import {
 } from "./session-accessor.sqlite-owner-projection.js";
 import {
   hasValidSessionEntryIdentity,
-  parseSqliteSessionEntryRecord,
+  parseCanonicalSqliteSessionEntry,
 } from "./session-entry-json.js";
 import {
   attachSessionEntrySnapshots,
@@ -19,7 +19,6 @@ import {
   sessionEntrySnapshotColumnsForKeys,
   type SessionEntrySnapshotRow,
 } from "./session-entry-snapshots.js";
-import { projectCanonicalSessionEntryShape } from "./store-entry-shape.js";
 import type { SessionEntry } from "./types.js";
 
 export function selectSessionEntryRows(
@@ -77,10 +76,10 @@ export function parseSessionEntryJson(
     SessionEntrySnapshotRow,
   projection: SessionEntryProjection = "full",
 ): SessionEntry | null {
-  const record = parseSqliteSessionEntryRecord(row);
+  const record = parseCanonicalSqliteSessionEntry(row);
   if (!record) {
     return null;
   }
   attachSessionEntrySnapshots(record, row, projection);
-  return projectSqliteSessionOwner(projectCanonicalSessionEntryShape(record), row);
+  return projectSqliteSessionOwner(record, row);
 }

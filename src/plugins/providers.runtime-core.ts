@@ -27,6 +27,7 @@ import {
   buildDeclaredProviderOwnerIndex,
   matchesDeclaredProviderOwner,
 } from "./provider-owner-index.js";
+import { projectRegisteredProvider } from "./provider-registration-projection.js";
 import {
   matchesProviderPluginRef,
   resolveProviderRuntimeWorkspaceDir,
@@ -588,9 +589,7 @@ export function createProviderRegistryResolver(dependencies: {
       return [];
     }
     const { registry, onlyPluginIds } = resolved;
-    const project =
-      onSelectedRegistry?.(registry) ??
-      ((provider: ProviderPlugin, pluginId: string) => Object.assign({}, provider, { pluginId }));
+    const project = onSelectedRegistry?.(registry) ?? projectRegisteredProvider;
     return registry.providers
       .filter((entry) => !onlyPluginIds || onlyPluginIds.includes(entry.pluginId))
       .map((entry) => project(entry.provider, entry.pluginId));

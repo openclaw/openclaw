@@ -1,16 +1,21 @@
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { OpenClawSchemaVersions } from "../state/openclaw-schema-versions.js";
+import type { UpdateCandidateBundledSource } from "./update-candidate-plugins.js";
 import type { UpdateDoctorConfigChange } from "./update-doctor-config.js";
+import type { UpdateRunStep } from "./update-run-record.js";
 import type { UpdateStepResult } from "./update-step-result.js";
+
+export type UpdateCanaryTarget = { kind: "cli"; entryPath: string } | { kind: "worker"; url: URL };
 
 export type UpdateCanaryCommand = {
   phase: "doctor" | "lint" | "config" | "plugins" | "runtime";
   name: string;
   args: string[];
-  entry?: string;
+  target?: UpdateCanaryTarget;
 };
 
 export function buildUpdateCanaryCommands(params: {
-  continuationEntry: string;
+  continuationEntry: URL;
   migrationPolicy?: "rehearse" | "startup-only";
   fullIntegrityCheck?: boolean;
 }): UpdateCanaryCommand[] {
@@ -19,7 +24,7 @@ export function buildUpdateCanaryCommands(params: {
     name: "candidate-recovery",
     // After a schema bump only a fresh candidate may finalize the run;
     // prove its full recovery import graph before live state changes.
-    entry: params.continuationEntry,
+    target: { kind: "worker", url: params.continuationEntry },
     args: ["--check"],
   };
   if (params.migrationPolicy === "startup-only") {
@@ -79,3 +84,24 @@ export type CanaryResult = {
   doctorConfigWrites?: boolean;
   doctorConfigChanges?: UpdateDoctorConfigChange[];
 } & CanaryOutcome;
+
+export type UpdateCandidateCanaryParams = {
+  root: string;
+  /** Serving updater's discovery, not the staged worker's package. */
+  sourceBundledPlugins?: UpdateCandidateBundledSource;
+  config: OpenClawConfig;
+  stateDir: string;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+  env?: NodeJS.ProcessEnv;
+  nodeRunner?: string;
+  /** Serving runtime for Gateway startup only; maintenance keeps nodeRunner. */
+  gatewayStartupRuntime?: string;
+  fullIntegrityCheck?: boolean;
+  assertCurrent?: () => void;
+  /** Startup-only callers must prove the preserved input boots without Doctor repair. */
+  migrationPolicy?: "rehearse" | "startup-only";
+  /** Emit at completion; replaying after the canary shifts persisted step timestamps. */
+  onStep?: (step: UpdateStepResult) => void | Promise<void>;
+  onProgress?: (step: UpdateRunStep) => void | Promise<void>;
+};

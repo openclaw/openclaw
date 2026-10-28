@@ -6,7 +6,7 @@ import { chromium } from "playwright";
 import type { Plugin } from "vite";
 import { defineConfig, defineProject, type ViteUserConfig } from "vitest/config";
 import type { Vitest } from "vitest/node";
-import { mermaidClassicBundlePlugin } from "../packages/mermaid-renderer/vite-plugin.ts";
+import { peleClassicBundlePlugin } from "../packages/mermaid-renderer/vite-plugin.ts";
 import {
   filterFilesByPatterns,
   intersectIncludePatterns,
@@ -87,6 +87,7 @@ let chromiumLaunchOptions: ReturnType<typeof resolveChromiumLaunchOptions> | nul
 
 // The accessibility-tree suite remains Chromium-only until its CDP probe is replaced.
 const webkitTestFiles = [
+  "src/pages/usage/view-details.browser.test.tsx",
   "src/components/settings-ui.browser.test.tsx",
   "src/components/select-picker.behavior.browser.test.ts",
   "src/components/select-picker.browser.test.tsx",
@@ -96,6 +97,7 @@ const webkitTestFiles = [
   "src/components/agent-select-opening.browser.test.ts",
   "src/components/app-sidebar-agent-menu-scroll.browser.test.ts",
   "src/components/app-sidebar-rail-menus.browser.test.ts",
+  "src/components/app-sidebar-session-visibility.browser.test.ts",
   "src/components/agent-emoji-picker.browser.test.ts",
   "src/components/appearance-picker.browser.test.ts",
   "src/components/confirm-dialog.browser.test.ts",
@@ -106,6 +108,7 @@ const webkitTestFiles = [
   "src/pages/skills/reader-shell.browser.test.tsx",
   "src/lib/toast.browser.test.ts",
   "src/components/session-menu.browser.test.ts",
+  "src/components/session-people-search.browser.test.ts",
   "src/components/control-theme.browser.test.tsx",
   "src/components/menu-surface.browser.test.tsx",
   "src/components/session-progress-hovercard.browser.test.ts",
@@ -179,7 +182,7 @@ export function createUiBrowserVitestConfig(
     root: here,
     plugins: [
       controlUiSolidPlugin(),
-      mermaidClassicBundlePlugin(),
+      peleClassicBundlePlugin(),
       controlUiLocaleModulesPlugin(),
       createVitestProjectCachePlugin(),
       createRedactingReporterPlugin(),

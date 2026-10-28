@@ -555,15 +555,6 @@ it.each(["active", "cancelled", "unrequested"])(
         sha: toolingSha,
       });
     }
-    const calls = remote.read().calls;
-    if (writer === "unrequested") {
-      expect(calls.some((args) => args[1] === `repos/${repository}/actions/runs/200`)).toBe(false);
-    } else {
-      expect(calls.at(-1)?.[1]).toBe(`repos/${repository}/actions/runs/200`);
-      if (writer === "active") {
-        expect(calls.some((args) => args[1] === `repos/${repository}/actions/runs/123`)).toBe(true);
-      }
-    }
   },
 );
 

@@ -5,7 +5,6 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import { updateConfigMachineStateInDatabase } from "../state/config-machine-state-write.js";
 import { readConfigMachineStateRowInDatabase } from "../state/config-machine-state.js";
 import type { DefaultProactiveJobReceipt } from "./proactive-job-receipt.types.js";
-import { cronStoreKey } from "./store/key.js";
 export type { DefaultProactiveJobReceipt } from "./proactive-job-receipt.types.js";
 
 export function isProactiveJobMigrationPending(
@@ -23,6 +22,7 @@ const DefaultProactiveJobReceiptSchema = z
     jobId: z.string().min(1),
     provisionedAtMs: z.number().int().nonnegative(),
     phase: z.enum(["pending", "complete"]),
+    heartbeatEnabled: z.boolean().optional(),
     convertedJobIds: z.array(z.string().min(1)).optional(),
   })
   .strict();
@@ -44,7 +44,7 @@ function defaultProactiveJobReceiptKey(
   storePath: string,
   agentId: string,
 ): `automation-default:${string}:${string}` {
-  return `automation-default:${cronStoreKey(storePath)}:${normalizeAgentId(agentId)}`;
+  return `automation-default:${storePath}:${normalizeAgentId(agentId)}`;
 }
 
 export function readDefaultProactiveJobReceiptInDatabase(
@@ -67,6 +67,7 @@ export function recordDefaultProactiveJobInDatabase(
   jobId: string,
   nowMs: number,
   phase: DefaultProactiveJobReceipt["phase"] = "complete",
+  heartbeatEnabled?: boolean,
 ): void {
   const previous = readDefaultProactiveJobReceiptInDatabase(db, storePath, agentId);
   if (previous && previous.jobId !== jobId) {
@@ -78,7 +79,13 @@ export function recordDefaultProactiveJobInDatabase(
     updateConfigMachineStateInDatabase<DefaultProactiveJobReceipt>(
       db,
       defaultProactiveJobReceiptKey(storePath, agentId),
-      () => ({ ...previous, jobId, provisionedAtMs: previous?.provisionedAtMs ?? nowMs, phase }),
+      () => ({
+        ...previous,
+        jobId,
+        provisionedAtMs: previous?.provisionedAtMs ?? nowMs,
+        phase,
+        ...(!previous && heartbeatEnabled !== undefined ? { heartbeatEnabled } : {}),
+      }),
       nowMs,
     );
   }

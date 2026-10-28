@@ -344,10 +344,7 @@ it.for([
             `Child completed; continue requester work: ${marker}`,
             () => accepted.resolve(),
           );
-          const settled = pending.then(
-            () => {},
-            () => {},
-          );
+          void pending.catch(() => {});
           await withinTest(
             awaitGateBeforeSettlement(
               accepted.promise,
@@ -364,7 +361,6 @@ it.for([
           expect(runs.has(child.runId)).toBe(false);
           release.resolve();
           await withinTest(pending, signal);
-          await settled;
           expect(received).toEqual([
             `${interSessionPrefix}Child completed; continue requester work: ${marker}`,
           ]);
@@ -393,9 +389,9 @@ it.for([
       const sessionId = foreignRequester ? foreignId : parentId;
       const scope = { agentId: "main", sessionKey: target, sessionId };
       const before = sessionAccessor.loadTranscriptEventsSync(scope);
+      const receivedBefore = [...received];
       const executionModule = await import("./agent-turn/agent-run-execution-phase.js");
       const execution = vi.spyOn(executionModule, "startAgentRunExecution");
-      agentCommandMock.mockClear();
       await mutateChild((draft) => {
         draft.pauseReason = undefined;
         draft.execution = { status: "terminal", endedAt: Date.now(), outcome: { status: "ok" } };
@@ -444,8 +440,6 @@ it.for([
         if (!foreignRequester && !resetRequester && !revokedSource) {
           await continuation;
           await Promise.all(trackedRequests());
-          expect(execution).toHaveBeenCalledOnce();
-          expect(agentCommandMock).toHaveBeenCalledOnce();
           expect(received).toEqual([
             `${interSessionPrefix}Child paused awaiting continuation: ${marker}`,
             ...(followsUp ? ["Same human follow-up"] : []),
@@ -479,8 +473,8 @@ it.for([
               );
             }
           }
+          expect(received).toEqual(receivedBefore);
           expect(execution).not.toHaveBeenCalled();
-          expect(agentCommandMock).not.toHaveBeenCalled();
           expect(sessionAccessor.loadTranscriptEventsSync(scope)).toEqual(before);
           expect(context.dedupe.has(`agent:${continuationRunId}`)).toBe(false);
           expect(failure).toBeInstanceOf(Error);

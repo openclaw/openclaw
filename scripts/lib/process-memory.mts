@@ -177,6 +177,45 @@ function relativeCgroupPath(mountRoot: string, cgroupPath: string) {
   return cgroupPath.startsWith(`${mountRoot}/`) ? cgroupPath.slice(mountRoot.length) : null;
 }
 
+// Raw diagnostics share the budget owner's hierarchy mapping. Memory peaks are
+// absolute; callers must not add ancestor usage to the leaf or reset counters.
+export function readProcessCgroupV2Snapshot(params: MemoryLimitParams = {}) {
+  if ((params.platform ?? process.platform) !== "linux") {
+    return null;
+  }
+  const resolved = resolveCgroupMemoryLimitPaths(params);
+  if (!resolved.sawObservedV2Mapping || resolved.sawUnresolvedCgroupLimit) {
+    return null;
+  }
+  const directories = new Set(
+    resolved.paths.filter((file) => path.basename(file) === "memory.max").map(path.dirname),
+  );
+  const files = [
+    "cpu.stat",
+    "cpu.max",
+    "cpu.pressure",
+    "memory.current",
+    "memory.peak",
+    "memory.events",
+    "memory.pressure",
+    "cpuset.cpus.effective",
+  ];
+  return [...directories].map((directory) => ({
+    directory,
+    counters: Object.fromEntries(
+      files.map((name) => {
+        let value: string | null;
+        try {
+          value = (params.fs ?? fs).readFileSync(path.join(directory, name), "utf8");
+        } catch {
+          value = null;
+        }
+        return [name, value] as const;
+      }),
+    ),
+  }));
+}
+
 // A systemd slice budget lives on the process's own cgroup, never on a hierarchy root, so
 // probing only the root misses every limit outside a namespaced container. Legacy and hybrid
 // hosts publish that same budget through the v1 memory controller instead of the `0::` record,

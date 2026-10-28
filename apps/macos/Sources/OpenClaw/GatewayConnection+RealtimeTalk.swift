@@ -107,6 +107,11 @@ extension GatewayConnection {
             },
             isCurrent: {
                 await self.isCurrentServerLease(lease)
+            },
+            supportsCloseDisposition: {
+                await self.supportsServerCapability(
+                    .talkSessionCloseDisposition,
+                    ifCurrentServerLease: lease) == true
             })
     }
 

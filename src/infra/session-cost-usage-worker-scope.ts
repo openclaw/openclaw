@@ -1,17 +1,17 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
+import type { SessionCostWorkerLane } from "../config/sessions/session-transcript-read-pools.js";
 import {
   acquireHistoryDatabaseResource,
   armDatabaseWorkerIdleRetirement,
   costReadLane,
   costRefreshLane,
-  historyClearTimeout,
+  clearDatabaseWorkerIdleRetirement,
   pruneHistoryDatabases,
   refreshDatabaseWorkerPressureSubscription,
   releaseRetiredDatabaseCustody,
   rotateDatabaseWorkers,
   type HistoryDatabaseResource,
-  type SessionCostWorkerLane,
   type SessionDatabaseCleanup,
 } from "../config/sessions/session-transcript-worker-resources.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -138,7 +138,7 @@ export async function withSessionCostUsageWorkerDatabases<T>(
     for (const resource of resources) {
       resource.aborters.add(abort);
     }
-    historyClearTimeout(lane.idleTimer);
+    clearDatabaseWorkerIdleRetirement(lane);
     lane.pending++;
     refreshDatabaseWorkerPressureSubscription();
     const hostEffects = new Set<Promise<WorkerTaskResponse>>();

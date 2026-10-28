@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { runCommandWithTimeout, type SpawnResult } from "../process/exec.js";
+import { runCommandWithTimeout } from "../process/exec.js";
+import { createCommandResult as commandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import { inspectWindowsGatewayFirewall } from "./windows-gateway-firewall-diagnostics.js";
 
 type InspectOptions = Parameters<typeof inspectWindowsGatewayFirewall>[0];
@@ -12,18 +13,6 @@ beforeEach(() => {
   vi.mocked(runCommandWithTimeout).mockReset();
 });
 afterEach(() => vi.restoreAllMocks());
-
-function commandResult(overrides: Partial<SpawnResult> = {}): SpawnResult {
-  return {
-    code: 0,
-    stdout: "",
-    stderr: "",
-    signal: null,
-    killed: false,
-    termination: "exit",
-    ...overrides,
-  };
-}
 
 function inspect(
   runner: FirewallCommandRunner,

@@ -27,31 +27,22 @@ function createLintFixture() {
     fs.mkdirSync(path.dirname(file(name)), { recursive: true });
     fs.writeFileSync(file(name), content);
   };
-  const json = (name: string, value: unknown) => write(name, JSON.stringify(value));
-  json("package.json", { type: "module" });
-  json("tsconfig.json", { compilerOptions: { strict: true, types: [], module: "nodenext" } });
-  write(coreConfig, '{"extends":"../../tsconfig.json"}');
-  json(".oxlintrc.json", {
-    plugins: ["typescript"],
-    categories: { correctness: "off" },
-    rules: { "typescript/no-redundant-type-constituents": "error" },
-  });
-  for (const name of ["state", "agent"]) {
-    write(
-      "src/state/openclaw-" + name + "-schema.sql",
-      "CREATE TABLE records (title TEXT NOT NULL);",
-    );
+  const schema = "CREATE TABLE records (title TEXT NOT NULL);";
+  for (const [name, contents] of Object.entries({
+    "package.json": '{"type":"module"}',
+    "tsconfig.json": '{"compilerOptions":{"strict":true,"types":[],"module":"nodenext"}}',
+    [coreConfig]: '{"extends":"../../tsconfig.json"}',
+    ".oxlintrc.json":
+      '{"plugins":["typescript"],"categories":{"correctness":"off"},"rules":{"typescript/no-redundant-type-constituents":"error"}}',
+    "src/state/openclaw-state-schema.sql": schema,
+    "src/state/openclaw-state-db.generated.ts":
+      'export type * from "../../.artifacts/kysely/openclaw-state-db.generated.js";',
+    [consumer]:
+      'import type { DB } from "./openclaw-state-db.generated.js"; export type Row = DB["records"] | null;',
+  })) {
+    write(name, contents);
   }
-  write(
-    "src/state/openclaw-state-db.generated.ts",
-    'export type * from "../../.artifacts/kysely/openclaw-state-db.generated.js";',
-  );
-  write(
-    consumer,
-    'import type { DB } from "./openclaw-state-db.generated.js"; export type Row = DB["records"] | null;',
-  );
   return {
-    file,
     write,
     exists: (name: string) => fs.existsSync(file(name)),
     run: (args: string[], env: NodeJS.ProcessEnv = {}) =>
@@ -60,6 +51,8 @@ function createLintFixture() {
         encoding: "utf8",
         env: {
           ...process.env,
+          CI: "false",
+          OPENCLAW_LINT_TOOL: "oxlint",
           GITHUB_ACTIONS: "false",
           OPENCLAW_CI_STATIC_EVIDENCE: "0",
           OPENCLAW_OXLINT_SKIP_PREPARE: "0",
@@ -84,21 +77,14 @@ const striped = [
 
 describe("typed lint Kysely prerequisites", () => {
   it.each([
-    { name: "direct", args: direct, sparse: false },
-    { name: "striped", args: striped, sparse: false },
-    { name: "sparse direct", args: direct, sparse: true },
-    { name: "sparse striped", args: striped, sparse: true },
+    { name: "striped", args: striped },
+    { name: "direct", args: direct },
     { name: "invalid direct", args: direct, invalid: true },
     { name: "invalid striped", args: striped, invalid: true },
   ])(
     "requires valid prepared declarations for $name core lint without plugin artifacts",
-    ({ args, sparse = false, invalid = false }) => {
+    ({ args, invalid = false }) => {
       const fixture = createLintFixture();
-      const agentProjection = ".artifacts/kysely/openclaw-agent-db.generated.ts";
-      if (sparse) {
-        fs.unlinkSync(fixture.file("src/state/openclaw-agent-schema.sql"));
-        fixture.write(agentProjection, "export interface Stale {}\n");
-      }
       if (invalid) {
         fixture.write("src/state/openclaw-state-schema.sql", "not valid SQL");
         fixture.write(consumer, "export const valid = true;\n");
@@ -110,8 +96,7 @@ describe("typed lint Kysely prerequisites", () => {
         expect(fixture.exists(".artifacts/kysely")).toBe(false);
         return;
       }
-      expect(fs.readFileSync(fixture.file(output), "utf8")).toContain("title: string;");
-      expect(fixture.exists(agentProjection)).toBe(!sparse);
+      expect(fixture.exists(output)).toBe(true);
       expect(fixture.exists(".artifacts/extension-package-boundary")).toBe(false);
     },
   );

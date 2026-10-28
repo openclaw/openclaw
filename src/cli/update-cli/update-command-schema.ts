@@ -16,6 +16,7 @@ import type { DevUpdateTarget } from "../../infra/update-dev-target.js";
 import type { UpdateFailureFact } from "../../infra/update-failure-facts.js";
 import { canResolveRegistryVersionForPackageTarget } from "../../infra/update-global.js";
 import { getUpdateRun, recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
+import { prepareGitCandidateNodeRuntime } from "../../infra/update-runner-git-node-preflight.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { UpdateRecoveryStep } from "../../shared/update-outcome.js";
 import { UPDATE_GLOBAL_PERMISSION_REASON } from "../../shared/update-outcome.js";
@@ -66,6 +67,7 @@ export async function previewUpdateCommand(params: {
     | "requestedChannel"
     | "controlPlaneUpdateSentinelMeta"
     | "packageActivationNotes"
+    | "nodeSecurityWarning"
   >;
   opts: UpdateCommandOptions;
   runId: string;
@@ -88,6 +90,9 @@ export async function previewUpdateCommand(params: {
     }));
   if (preflight) {
     preflight.preflightNotes.push(...(prepared.packageActivationNotes ?? []));
+    if (prepared.nodeSecurityWarning) {
+      preflight.preflightNotes.push(`SECURITY WARNING: ${prepared.nodeSecurityWarning}`);
+    }
     if (target.inspectionWarning) {
       preflight.preflightNotes.push(target.inspectionWarning);
     }
@@ -325,6 +330,7 @@ export async function preflightUpdateCommandSchemas(params: {
       const admission = await inspectUpdateDatabaseContexts({
         roots: switchToGit ? [root, resolveGitInstallDir()] : [root],
         updateInstallKind,
+        packageAlreadyCurrent: params.packageAlreadyCurrent,
         shouldRestart,
         jsonMode: Boolean(opts.json),
         timeoutMs: updateStepTimeoutMs,
@@ -360,8 +366,16 @@ export async function preflightUpdateCommandSchemas(params: {
               channel,
               devTarget,
             })
-          : { schemaVersions: packageTargetSchemaVersions };
+          : {
+              // A no-op keeps the installed runtime, even if registry metadata describes an older build.
+              schemaVersions: params.packageAlreadyCurrent
+                ? undefined
+                : packageTargetSchemaVersions,
+            };
       if ("metadataUnreadable" in target && target.metadataUnreadable) {
+        preflightNotes.push(
+          "Node compatibility was not checked because the Git target metadata is unavailable.",
+        );
         assertReadableGitMetadata(
           target.metadataUnreadable,
           "failureCode" in target && target.failureCode ? target.failureCode : undefined,
@@ -374,6 +388,28 @@ export async function preflightUpdateCommandSchemas(params: {
         target.schemaVersions,
         installedContexts,
       );
+      if (opts.dryRun && updateInstallKind === "git") {
+        if ("nodeEngine" in target && target.nodeEngine) {
+          preflightNotes.push(`Selected Git target requires Node ${target.nodeEngine}.`);
+          const runtime = await prepareGitCandidateNodeRuntime(
+            root,
+            process.env,
+            "package-tooling",
+            target.nodeEngine,
+          );
+          if (runtime.step) {
+            const message = [runtime.step.stdoutTail, runtime.step.stderrTail]
+              .filter(Boolean)
+              .join("\n");
+            preflightFailures.push({ reason: "preflight-node-runtime-incompatible", message });
+            preflightNotes.push(`Would refuse update: ${message}`);
+          }
+        } else {
+          preflightNotes.push(
+            "Node compatibility was not checked because the Git target does not declare engines.node.",
+          );
+        }
+      }
       if (opts.dryRun && updateInstallKind === "package") {
         const engineOnly =
           !params.packageAlreadyCurrent &&
@@ -401,6 +437,9 @@ export async function preflightUpdateCommandSchemas(params: {
           preflightNotes.push(
             `Would replace managed gateway service Node (${runtime.value.replacedNodeRunner}) with current Node (${runtime.value.nodeRunner}) for openclaw@${runtime.value.targetVersion}.`,
           );
+        }
+        if (runtime.ok && runtime.value.nodeSecurityWarning) {
+          preflightNotes.push(`SECURITY WARNING: ${runtime.value.nodeSecurityWarning}`);
         }
         if (
           params.packageInstallSpec &&

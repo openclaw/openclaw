@@ -145,50 +145,30 @@ describe("snapshot manifest parser", () => {
       basename: "openclaw-agent.sqlite",
       userVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
     },
-    artifact: {
-      path: SNAPSHOT_SQLITE_FILENAME,
-      sha256: "a".repeat(64),
-      sizeBytes: 4096,
-    },
+    artifact: { path: SNAPSHOT_SQLITE_FILENAME, sha256: "a".repeat(64), sizeBytes: 4096 },
   };
-  function manifestWith(
-    overrides: {
-      createdAt?: string;
-      extra?: boolean;
-      database?: Partial<SnapshotManifest["database"]>;
-      artifact?: Omit<Partial<SnapshotManifest["artifact"]>, "path"> & { path?: string };
-    } = {},
-  ) {
-    return {
-      ...validManifest,
-      ...overrides,
-      database: { ...validManifest.database, ...overrides.database },
-      artifact: { ...validManifest.artifact, ...overrides.artifact },
-    };
-  }
+  const databaseWith = (fields: Partial<SnapshotManifest["database"]>) => ({
+    ...validManifest,
+    database: { ...validManifest.database, ...fields },
+  });
+  const artifactWith = (
+    fields: Omit<Partial<SnapshotManifest["artifact"]>, "path"> & { path?: string },
+  ) => ({ ...validManifest, artifact: { ...validManifest.artifact, ...fields } });
 
   it.each([
-    ["unknown top-level field", manifestWith({ extra: true }), /fields must be exactly/u],
+    ["unknown top-level field", { ...validManifest, extra: true }, /fields must be exactly/u],
     ["wrong directory id", validManifest, /does not match directory/u, "other"],
-    ["timestamp", manifestWith({ createdAt: "2026-07-12T14:00:00Z" }), /not canonical/u],
+    ["timestamp", { ...validManifest, createdAt: "2026-07-12T14:00:00Z" }, /not canonical/u],
     [
       "path traversal",
-      manifestWith({ artifact: { path: "../database.sqlite" } }),
+      artifactWith({ path: "../database.sqlite" }),
       /artifact\.path must be database\.sqlite/u,
     ],
-    [
-      "prefixed digest",
-      manifestWith({ artifact: { sha256: `sha256:${"a".repeat(64)}` } }),
-      /sha256 is invalid/u,
-    ],
-    ["agent id", manifestWith({ database: { agentId: "Worker-1" } }), /agentId is invalid/u],
-    ["basename", manifestWith({ database: { basename: "../db.sqlite" } }), /basename is invalid/u],
-    [
-      "user version",
-      manifestWith({ database: { userVersion: 2 ** 31 } }),
-      /userVersion is invalid/u,
-    ],
-    ["empty artifact", manifestWith({ artifact: { sizeBytes: 0 } }), /sizeBytes is invalid/u],
+    ["prefixed digest", artifactWith({ sha256: `sha256:${"a".repeat(64)}` }), /sha256 is invalid/u],
+    ["agent id", databaseWith({ agentId: "Worker-1" }), /agentId is invalid/u],
+    ["basename", databaseWith({ basename: "../db.sqlite" }), /basename is invalid/u],
+    ["user version", databaseWith({ userVersion: 2 ** 31 }), /userVersion is invalid/u],
+    ["empty artifact", artifactWith({ sizeBytes: 0 }), /sizeBytes is invalid/u],
   ])("rejects %s", async (_name, value, error, expectedId = snapshotId) => {
     const snapshotDir = path.join(tempDirs.make("openclaw-manifest-parser-"), expectedId);
     await fs.mkdir(snapshotDir);

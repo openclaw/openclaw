@@ -1,8 +1,37 @@
+/* The standalone page hands the shell's bounded content height down to the
+   rail + preview, so a tall window is used instead of stopping at the layout
+   minimum. Embedded presentation keeps its own full-height rules below. */
+main.content:where(.content--portals-page) {
+  display: flex;
+  flex-direction: column;
+}
+
+main.content:where(.content--portals-page) > openclaw-router-outlet,
+openclaw-portals-page:not([embedded]) {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+}
+
+main.content:where(.content--portals-page) > openclaw-router-outlet {
+  margin-top: 0;
+}
+
+main.content:where(.content--portals-page) .content-header {
+  flex: 0 0 auto;
+}
+
+main.content:where(.content--portals-page) .portals-empty {
+  flex: 1 1 auto;
+}
+
+/* The preview's own 480px frame floor keeps the layout tall enough to scroll in
+   short windows; there is no viewport-offset cap. */
 .portals-layout {
   display: grid;
   grid-template-columns: minmax(210px, 260px) minmax(0, 1fr);
   gap: var(--space-4);
-  min-height: min(720px, calc(100vh - 190px));
+  flex: 1 1 auto;
 }
 
 .portals-rail {
@@ -225,7 +254,7 @@ openclaw-portals-page[embedded],
   height: var(--session-rail-icon, var(--rail-header-action-glyph-size));
 }
 
-.portals-page--embedded .portals-embedded__identity {
+.portals-page--embedded .portals-embedded__identity.session-panel-rail__identity {
   display: grid;
   gap: 3px;
 }
@@ -319,7 +348,6 @@ openclaw-portals-page[embedded],
 @media (max-width: 768px) {
   .portals-layout {
     grid-template-columns: minmax(0, 1fr);
-    min-height: auto;
   }
 
   .portals-rail {

@@ -4,8 +4,6 @@ import type { GitHubToolIdentityConfig } from "../config/types.tools.js";
 import { CLEARED_GITHUB_CREDENTIALS } from "./github-host-runtime.js";
 import { GITHUB_PUBLIC_HOST } from "./github-host.js";
 
-export const AGENT_GIT_CONFIG_PARAMETERS = "'maintenance.auto=false' 'gc.auto=0'";
-
 export function managedGitHubIdentityEnvironment(params: {
   profileDir: string;
   host?: string;

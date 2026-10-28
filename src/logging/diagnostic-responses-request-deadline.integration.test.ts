@@ -342,7 +342,7 @@ it.for(["success", "expiry"] as const)(
       expect(activity).toMatchObject({
         repeatedRequestNoProgressAgeMs: REQUEST_TIMEOUT_MS + 250,
         lastProgressReason: "model_call:stream_progress",
-        activeModelCallRecoveryDeadlineAtMs: fallbackStartedAt + REQUEST_TIMEOUT_MS,
+        activeModelCallRequestTimeoutMs: REQUEST_TIMEOUT_MS,
       });
       expect(operation.watchdog.decide().action).not.toBe("stop");
       expect(

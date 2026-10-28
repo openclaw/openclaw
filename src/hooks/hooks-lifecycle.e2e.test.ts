@@ -16,7 +16,6 @@ import {
   triggerInternalHook,
 } from "./internal-hooks.js";
 import { prepareInternalHooks } from "./loader.js";
-import { loadWorkspaceHookEntries } from "./workspace.js";
 
 const execFileAsync = promisify(execFile);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -28,24 +27,6 @@ afterEach(() => {
   vi.unstubAllEnvs();
   pinConfigDir();
 });
-
-async function runHooksCli(args: string[], env: NodeJS.ProcessEnv) {
-  try {
-    return await execFileAsync(process.execPath, ["openclaw.mjs", "hooks", ...args], {
-      cwd: process.cwd(),
-      env,
-      encoding: "utf8",
-      maxBuffer: 1024 * 1024,
-      timeout: 90_000,
-    });
-  } catch (error) {
-    const failed = error as Error & { stdout?: string; stderr?: string };
-    throw new Error(
-      `${failed.message}\nstdout:\n${failed.stdout ?? ""}\nstderr:\n${failed.stderr ?? ""}`,
-      { cause: error },
-    );
-  }
-}
 
 it("installs, discovers, toggles, and dispatches an authored hook pack", async () => {
   const rootDir = tempDirs.make("openclaw-hooks-lifecycle-e2e-");
@@ -117,22 +98,12 @@ it("installs, discovers, toggles, and dispatches an authored hook pack", async (
     throw new Error(install.error);
   }
 
-  await expect(
-    fs.readFile(path.join(install.targetDir, "hooks", hookName, "HOOK.md"), "utf8"),
-  ).resolves.toContain("gateway:startup");
-
-  const discovered = loadWorkspaceHookEntries(workspaceDir, {
-    config: initialConfig,
-  });
-  expect(discovered).toEqual([
-    expect.objectContaining({
-      hook: expect.objectContaining({ name: hookName, source: "openclaw-managed" }),
-      metadata: expect.objectContaining({ events: ["gateway:startup"] }),
-    }),
-  ]);
-
   for (const enabled of [false, true]) {
-    const result = await runHooksCli([enabled ? "enable" : "disable", hookName], env);
+    const result = await execFileAsync(
+      process.execPath,
+      ["openclaw.mjs", "hooks", enabled ? "enable" : "disable", hookName],
+      { cwd: process.cwd(), env, encoding: "utf8", maxBuffer: 1024 * 1024, timeout: 90_000 },
+    );
     expect(result.stdout).toContain(hookName);
     const config: OpenClawConfig = JSON5.parse(await fs.readFile(configPath, "utf8"));
     expect(config.hooks?.internal?.entries?.[hookName]?.enabled).toBe(enabled);

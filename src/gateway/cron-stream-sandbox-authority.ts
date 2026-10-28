@@ -456,20 +456,17 @@ export async function prepareCronStreamSandboxAuthority(params: {
           gatewayAccessGrant: operator.gatewayAccessGrant,
           assertCurrent: assertAuthorityCurrent,
           signal: revoked.signal,
-          readCurrentRoleAssignment: () => {
-            assertAuthorityCurrent();
-            return operator.assignedRole;
-          },
-          readCurrentGithubLogin: () => {
-            assertAuthorityCurrent();
-            return operator.githubLogin;
-          },
+          readCurrentRoleFacts: () => ({
+            assignedRole: operator.assignedRole,
+            githubLogin: operator.githubLogin,
+          }),
           ...(originalRole
             ? {
                 rolePolicy: {
                   sessionAccessCap: originalRole.sessions.others,
                   sandboxRequired: originalRole.sandbox === "required",
                   agents: originalRole.agents,
+                  accessPrograms: originalRole.accessPrograms,
                 },
               }
             : {}),

@@ -24,22 +24,12 @@ type ChannelGatewayClient = {
   request<T = unknown>(method: string, params?: unknown): Promise<T>;
 };
 
-type ChannelLogoutResult = {
-  cleared: boolean;
-};
-
 type ChannelGatewaySnapshot = {
   client: ChannelGatewayClient | null;
   phase: ApplicationGatewayPhase;
   hello?: {
     auth?: { role?: string; scopes?: readonly string[] } | null;
   } | null;
-};
-
-type ChannelGateway = {
-  readonly snapshot: ChannelGatewaySnapshot;
-  subscribe: (listener: (snapshot: ChannelGatewaySnapshot) => void) => () => void;
-  subscribeEvents: (listener: GatewayEventListener) => () => void;
 };
 
 /** One admitted read; retirement settles even when the transport never responds. */
@@ -179,7 +169,11 @@ function channelSnapshotAllowsScope(
   });
 }
 
-export function createChannelCapability(gateway: ChannelGateway) {
+export function createChannelCapability(gateway: {
+  readonly snapshot: ChannelGatewaySnapshot;
+  subscribe: (listener: (snapshot: ChannelGatewaySnapshot) => void) => () => void;
+  subscribeEvents: (listener: GatewayEventListener) => () => void;
+}) {
   const initialSnapshot = gateway.snapshot;
   const state: ChannelsState = {
     client: initialSnapshot.client ?? null,
@@ -395,7 +389,9 @@ export function createChannelCapability(gateway: ChannelGateway) {
   function logoutWhatsApp(accountId?: string) {
     return runWhatsAppRequest(
       (client) =>
-        client.request<ChannelLogoutResult>("channels.logout", {
+        client.request<{
+          cleared: boolean;
+        }>("channels.logout", {
           channel: "whatsapp",
           ...(accountId ? { accountId } : {}),
         }),

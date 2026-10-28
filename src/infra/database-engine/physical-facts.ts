@@ -24,8 +24,8 @@ export type { PostgresPhysicalFacts } from "./physical-facts-contract.js";
 const recovery =
   "Use the matching OpenClaw version or restore the matching PostgreSQL schema and anchor.";
 
-export function getPostgresPhysicalFacts(db: EngineConnection) {
-  return getSqliteDatabaseAdmission(db, admissionKey);
+export function getPostgresPhysicalFacts(db: EngineConnection, options?: { refresh?: boolean }) {
+  return getSqliteDatabaseAdmission(db, admissionKey, options);
 }
 
 /** Operator projections consume admission evidence without opening or probing a store. */

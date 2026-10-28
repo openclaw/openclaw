@@ -5,10 +5,13 @@ import {
   isStaleChunkImportError,
   retryStaleChunkReloadWhenReachable,
 } from "../../app/stale-chunk-reload.ts";
+import { registerBoardDocumentEnglish } from "../../i18n/locales/en-board-document.ts";
 import type { getPluginWidgetKindContribution } from "../../lib/board/widgets/index.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { LazyViewError } from "../solid/lazy-view-error.tsx";
 import type { BoardWidgetCellProps } from "./board-widget-cell-options.ts";
+
+registerEnglishCatalog(registerBoardDocumentEnglish);
 
 const CORE_BOARD_WIDGET_COMPONENTS = {
   "session:progress": lazy(() => import("../../lib/board/widgets/session-progress.tsx"), {

@@ -6,6 +6,7 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { MarkdownDomReconciler } from "../lib/markdown-dom-reconciler.ts";
+import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { renderSolidRef } from "../test-helpers/render-solid-ref.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { createMarkdownRef } from "./markdown-dom-ref.ts";
@@ -85,7 +86,11 @@ function sessionContext(rows: GatewaySessionRow[] = [], origin?: string): Applic
     agents: { state: { agentsList: { defaultId: "main", mainKey: "main" } } },
     gateway: {
       connectionRevision: 0,
-      snapshot: { hello: null, phase: "connected", selfUser: { id: "first-profile" } },
+      snapshot: {
+        hello: gatewayHelloForMethods(["controlUi.sessionPreview", "sessions.resolve"]),
+        phase: "connected",
+        selfUser: { id: "first-profile" },
+      },
     },
   } as unknown as ApplicationContext;
 }
@@ -117,6 +122,19 @@ function createTitler(rows: GatewaySessionRow[] = [], request = vi.fn()) {
 }
 
 describe("SessionLinkTitler", () => {
+  it("keeps a plain session link when the connection cannot read previews", async () => {
+    const { titler, request } = createTitler();
+    titler.context!.gateway.snapshot.hello = gatewayHelloForMethods(
+      ["controlUi.sessionPreview", "sessions.resolve"],
+      ["operator.sessions.read"],
+    );
+    const anchor = sessionAnchor();
+    await decorate(titler, anchor);
+    await vi.advanceTimersByTimeAsync(60_000);
+    await refresh(titler);
+    expect(request).not.toHaveBeenCalled();
+    expect(anchor.textContent).toBe(SESSION_KEY);
+  });
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-08-16T12:00:00Z"));

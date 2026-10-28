@@ -9,6 +9,7 @@ import {
 } from "../../plugins/types.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { sameWorkerBuild } from "../../worker/worker-build-identity.js";
+import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { MAX_NODE_BOOTSTRAP_TIMEOUT_MS } from "./bootstrap-timeouts.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
 import { createDedicatedNodeLeaseAttestations } from "./dedicated-node-lease-attestations.js";
@@ -73,6 +74,7 @@ export function createWorkerProviderLifecycle(
     finishConfirmedProvisionCleanup,
     preserveIndeterminateProvisionCleanup,
     destroy,
+    reclaim,
     retireMismatchedLease,
   } = createWorkerProviderOwnerLifecycle({
     ...options,
@@ -88,9 +90,7 @@ export function createWorkerProviderLifecycle(
           environmentId: record.environmentId,
           state: record.state,
           lastError: "Unused prepared worker expired",
-          assertCurrent: () => {
-            requireCurrentOwner(record);
-          },
+          assertCurrent: () => requireCurrentOwner(record),
         })
       : record;
 
@@ -340,20 +340,19 @@ export function createWorkerProviderLifecycle(
         error instanceof WorkerProviderError ||
         (error instanceof WorkerEnvironmentServiceError && error.code === "invalid_profile");
       // A current refusal cannot disprove allocation by an earlier attempt.
-      if (
+      const terminalFailure =
         record.state === "requested" ||
-        (provisioningTransition !== undefined && preparationComplete && permanent)
-      ) {
-        await move(record, "failed", { lastError: detail });
-        throw serviceError(
-          permanent ? "invalid_profile" : "provider_failure",
-          permanent
-            ? `Worker provider rejected profile: ${detail}`
-            : `Worker provider preparation failed: ${detail}`,
-        );
+        (provisioningTransition !== undefined && preparationComplete && permanent);
+      await (terminalFailure
+        ? move(record, "failed", { lastError: detail })
+        : saveError(record, error));
+      if (error instanceof SessionMutationAuthorizationChangedError) {
+        throw error;
       }
-      await saveError(record, error);
-      throw serviceError("provider_failure", `Worker provider operation failed: ${detail}`);
+      throw serviceError(
+        terminalFailure && permanent ? "invalid_profile" : "provider_failure",
+        `Worker provider ${!terminalFailure ? "operation failed" : permanent ? "rejected profile" : "preparation failed"}: ${detail}`,
+      );
     } finally {
       // A replay keeps its durable owner after timeout; this invocation must still close.
       attemptOpen = false;
@@ -734,6 +733,7 @@ export function createWorkerProviderLifecycle(
         return store.get(record.environmentId);
       }),
     destroy,
+    reclaim,
     identityResolverFor,
     ...machineCatalog,
     providerFor,

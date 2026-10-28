@@ -15,13 +15,6 @@ type JsonlReplayResult = {
   }>;
 };
 
-type JsonlReplayMarkdownReport = {
-  generatedAt: string;
-  providerMode: "mock-openai" | "live-frontier";
-  runtimePair: ["openclaw", "codex"];
-  transcripts: JsonlReplayResult["transcripts"];
-};
-
 function extractTextContent(content: unknown): string {
   return extractQaContentText(content, (block) => {
     const type = normalizeOptionalString(block.type)?.toLowerCase();
@@ -125,7 +118,12 @@ export async function runJsonlReplay(directory: string): Promise<JsonlReplayResu
   return { transcripts };
 }
 
-export function renderJsonlReplayMarkdownReport(report: JsonlReplayMarkdownReport): string {
+export function renderJsonlReplayMarkdownReport(report: {
+  generatedAt: string;
+  providerMode: "mock-openai" | "live-frontier";
+  runtimePair: ["openclaw", "codex"];
+  transcripts: JsonlReplayResult["transcripts"];
+}): string {
   const totalTurns = report.transcripts.reduce((sum, entry) => sum + entry.userTurnCount, 0);
   const driftedTranscripts = report.transcripts.filter(
     (entry) => entry.firstDriftAtTurn !== undefined,

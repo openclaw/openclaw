@@ -105,16 +105,15 @@ export async function createMSTeamsQaTransportAdapter(
   const bootstrapPath = path.join(context.outputDir, ".msteams-private-qa-bootstrap.mjs");
   const busByNativeMessageId = new Map<string, string>();
   const nativeByBusMessageId = new Map<string, string>();
-  const conversationKindByNativeId = new Map<string, "channel" | "direct" | "group">();
-  const logicalConversationByNativeId = new Map<string, string>();
+  const conversations = new Map<string, { id: string; kind: "channel" | "direct" | "group" }>();
   const requireGroupMention = context.adapterOptions?.transportPolicy?.requireGroupMention === true;
   const connector = await startMSTeamsQaBotFrameworkServer({
     botToken,
     nonce,
     async onOutbound(outbound) {
-      const kind = conversationKindByNativeId.get(outbound.conversationId) ?? "channel";
-      const conversationId =
-        logicalConversationByNativeId.get(outbound.conversationId) ?? outbound.conversationId;
+      const conversation = conversations.get(outbound.conversationId);
+      const kind = conversation?.kind ?? "channel";
+      const conversationId = conversation?.id ?? outbound.conversationId;
       const message = await context.messages.addOutboundMessage({
         accountId,
         to: `${kind === "direct" ? "dm" : kind}:${conversationId}`,
@@ -157,12 +156,12 @@ export async function createMSTeamsQaTransportAdapter(
     requiredPluginIds: ["msteams"],
     supportedActions: [],
     async sendInbound(input) {
-      const conversationId = nativeConversationId(input.conversation.id);
+      const { id, kind } = input.conversation;
+      const conversationId = nativeConversationId(id);
       const nativeThreadId = input.threadId
         ? (nativeByBusMessageId.get(input.threadId) ?? input.threadId)
         : undefined;
-      conversationKindByNativeId.set(conversationId, input.conversation.kind);
-      logicalConversationByNativeId.set(conversationId, input.conversation.id);
+      conversations.set(conversationId, { id, kind });
       const activityId = `qa-inbound-${randomUUID()}`;
       const rendered = renderMSTeamsQaText(input.text);
       const activity = {
@@ -181,17 +180,13 @@ export async function createMSTeamsQaTransportAdapter(
         conversation: {
           id: nativeThreadId ? `${conversationId};messageid=${nativeThreadId}` : conversationId,
           conversationType:
-            input.conversation.kind === "direct"
-              ? "personal"
-              : input.conversation.kind === "group"
-                ? "groupChat"
-                : "channel",
+            kind === "direct" ? "personal" : kind === "group" ? "groupChat" : "channel",
           tenantId: TENANT_ID,
         },
         ...(input.replyToId ? { replyToId: input.replyToId } : {}),
         channelData: {
           tenant: { id: TENANT_ID },
-          ...(input.conversation.kind === "channel"
+          ...(kind === "channel"
             ? {
                 team: { id: TEAM_ID, aadGroupId: TEAM_AAD_GROUP_ID },
                 channel: { id: conversationId },
@@ -236,8 +231,7 @@ export async function createMSTeamsQaTransportAdapter(
     resetTransport() {
       busByNativeMessageId.clear();
       nativeByBusMessageId.clear();
-      conversationKindByNativeId.clear();
-      logicalConversationByNativeId.clear();
+      conversations.clear();
     },
     createGatewayConfig: () => {
       return {

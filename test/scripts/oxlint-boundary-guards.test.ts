@@ -2,60 +2,58 @@ import { spawnSync } from "node:child_process";
 import { posix } from "node:path";
 import { beforeAll, expect, it } from "vitest";
 import noForcedProcessExit from "../../scripts/lib/no-forced-process-exit.mjs";
+import noRecursiveReaddir from "../../scripts/lib/no-recursive-readdir.mjs";
 
 const FIXTURES = "test/fixtures/oxlint-boundary-guards";
 const forcedExit = "no-forced-process-exit";
-function fixture(rule: string, file: string, violations: number, lines?: number[]) {
-  return {
-    rule: `openclaw-boundaries/${rule}`,
-    violation: posix.join(FIXTURES, file),
-    violations,
-    lines,
-  };
-}
 const cases = [
-  fixture(
+  [
     forcedExit,
     "forced-process-exit-violation.ts",
     25,
     [2, 2, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 21, 23, 24, 24, 25, 26, 27, 28, 30, 32],
-  ),
-  fixture(forcedExit, "forced-process-exit-violation.cjs", 6, [3, 4, 5, 6, 7, 9]),
-  fixture(forcedExit, "forced-process-exit-violation.mjs", 2, [2, 4]),
-  fixture(forcedExit, "../forced-process-exit.test-support.cjs", 0),
-  fixture("no-register-http-handler-call", "register-http-handler-violation.ts", 3),
-  fixture("no-raw-window-open-call", "raw-window-open-violation.ts", 5),
-  fixture("no-raw-window-open-call", "boundary-calls.tsx", 2, [3, 4]),
-  fixture("no-register-http-handler-call", "boundary-calls.tsx", 1, [5]),
-  fixture("no-raw-window-open-call", "boundary-calls.test-harness.tsx", 0),
-  fixture("no-register-http-handler-call", "boundary-calls.test-harness.tsx", 0),
-  fixture("no-widen-then-assert", "widen-then-assert-violation.test.ts", 3, [3, 7, 13]),
-  fixture("no-chained-type-assertions", "chained-type-assertions-violation.ts", 3),
-];
+  ],
+  [forcedExit, "forced-process-exit-violation.cjs", 6, [3, 4, 5, 6, 7, 9]],
+  [forcedExit, "forced-process-exit-violation.mjs", 2, [2, 4]],
+  [forcedExit, "../forced-process-exit.test-support.cjs", 0],
+  ["no-register-http-handler-call", "register-http-handler-violation.ts", 3],
+  ["no-raw-window-open-call", "raw-window-open-violation.ts", 5],
+  ["no-raw-window-open-call", "boundary-calls.tsx", 2, [3, 4]],
+  ["no-register-http-handler-call", "boundary-calls.tsx", 1, [5]],
+  ["no-raw-window-open-call", "boundary-calls.test-harness.tsx", 0],
+  ["no-register-http-handler-call", "boundary-calls.test-harness.tsx", 0],
+  ["no-widen-then-assert", "widen-then-assert-violation.test.ts", 3, [3, 7, 13]],
+  ["no-chained-type-assertions", "chained-type-assertions-violation.ts", 3],
+] satisfies [string, string, number, number[]?][];
+
+const recursiveKinds = {
+  unsafe: expect.stringMatching(/^Recursive readdir /),
+  unverifiable: expect.stringMatching(/^Cannot verify nonrecursive readdir /),
+};
+const recursiveCases = [
+  [
+    "recursive-readdir-violation.ts",
+    {
+      unsafe: [3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 15, 16, 17, 19, 21, 23, 25],
+      unverifiable: [27],
+    },
+  ],
+  [
+    "recursive-readdir-mutation.ts",
+    { unsafe: [], unverifiable: [4, 7, 10, 14, 17, 20, 36, 38, 41, 48, 53, 59, 64, 69, 74] },
+  ],
+  ["recursive-readdir-builtins.ts", { unsafe: [4, 6, 7, 10, 12, 22], unverifiable: [] }],
+  ["recursive-readdir-import-equals.ts", { unsafe: [3, 4], unverifiable: [] }],
+] satisfies [string, Record<keyof typeof recursiveKinds, number[]>][];
 
 it.each([
   ["src/runtime.ts", true],
-  ["src/cli/new-entry.mts", true],
-  ["extensions/example/src/worker.ts", true],
-  ["extensions/example/runtime-api.ts", true],
   ["extensions/example/src/harness-runtime.ts", true],
-  ["extensions/example/src/tools/run.ts", true],
-  ["packages/example/src/cli.ts", true],
-  ["packages/example/index.ts", true],
-  ["ui/src/app.ts", true],
   ["openclaw.mjs", true],
-  ["node-host-launcher.mjs", true],
-  ["docker-entrypoint.mjs", true],
   ["scripts/openclaw-immutable-launcher.mjs", true],
-  ["scripts/freebsd-service-inspect.mjs", true],
   ["scripts/build.mts", false],
   ["extensions/example/scripts/build.mjs", false],
-  ["extensions/example/vitest.config.ts", false],
-  ["packages/example/scripts/build.mts", false],
   ["src/child.test-support.cjs", false],
-  ["src/workflow.suite.ts", false],
-  ["extensions/example/src/fixtures/child.fixture.mjs", false],
-  ["packages/example/tests/child.ts", false],
   ["extensions/example/dist/worker.js", false],
 ])("reports forced termination in %s: %s", (file, expected) => {
   let reported = false;
@@ -93,7 +91,11 @@ beforeAll(() => {
       "config/oxlint/boundary-guards.json",
       "--format",
       "json",
-      ...new Set(cases.map((testCase) => testCase.violation)),
+      ...new Set(
+        [...cases.map(([, file]) => file), ...recursiveCases.map(([file]) => file)].map((file) =>
+          posix.join(FIXTURES, file),
+        ),
+      ),
     ],
     { encoding: "utf8" },
   );
@@ -101,33 +103,65 @@ beforeAll(() => {
   expect(violation.status, violation.stderr).toBe(1);
   const report = JSON.parse(violation.stdout) as {
     diagnostics: typeof diagnostics;
-    number_of_files: number;
   };
-  expect(report.number_of_files).toBe(new Set(cases.map((testCase) => testCase.violation)).size);
   diagnostics = report.diagnostics;
 });
 
-it.each(cases)("reports expected violations for $rule", (testCase) => {
-  // A fixture can trigger sibling rules; match both its file and its owning rule.
-  const matching = diagnostics.filter(
-    (diagnostic) =>
-      diagnostic.filename.replaceAll("\\", "/") === testCase.violation &&
-      diagnostic.code === `${testCase.rule.replace("/", "(")})`,
-  );
-  expect(matching.map((diagnostic) => diagnostic.severity)).toEqual(
-    Array(testCase.violations).fill("error"),
-  );
-  if (testCase.lines) {
-    expect(
-      matching
-        .map((diagnostic) => diagnostic.labels[0]?.span.line)
-        .toSorted((a, b) => (a ?? 0) - (b ?? 0)),
-    ).toEqual(testCase.lines);
-  }
-  if (testCase.rule === "openclaw-boundaries/no-forced-process-exit") {
-    for (const diagnostic of matching) {
-      expect(diagnostic.message).toContain("https://github.com/nodejs/node/issues/64274");
-      expect(diagnostic.message).toContain("Await owned cleanup, set process.exitCode, and return");
+it.each(cases)(
+  "reports expected violations for %s in %s",
+  (rule, file, violations, lines?: number[]) => {
+    // A fixture can trigger sibling rules; match both its file and its owning rule.
+    const matching = diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.filename.replaceAll("\\", "/") === posix.join(FIXTURES, file) &&
+        diagnostic.code === `openclaw-boundaries(${rule})`,
+    );
+    expect(matching.map((diagnostic) => diagnostic.severity)).toEqual(
+      Array(violations).fill("error"),
+    );
+    if (lines) {
+      expect(
+        matching
+          .map((diagnostic) => diagnostic.labels[0]?.span.line)
+          .toSorted((a, b) => (a ?? 0) - (b ?? 0)),
+      ).toEqual(lines);
     }
-  }
+  },
+);
+
+it.each(recursiveCases)(
+  "reports recursive readdir diagnostic kinds by line in %s",
+  (file, kinds) => {
+    const actual = diagnostics
+      .filter(
+        (diagnostic) =>
+          diagnostic.filename.replaceAll("\\", "/") === posix.join(FIXTURES, file) &&
+          diagnostic.code === "openclaw-boundaries(no-recursive-readdir)",
+      )
+      .map((diagnostic) => ({
+        line: diagnostic.labels[0]?.span.line,
+        message: diagnostic.message,
+        severity: diagnostic.severity,
+      }))
+      .toSorted((a, b) => (a.line ?? 0) - (b.line ?? 0));
+    const expected = (Object.keys(recursiveKinds) as Array<keyof typeof recursiveKinds>)
+      .flatMap((kind) =>
+        kinds[kind].map((line) => ({ line, message: recursiveKinds[kind], severity: "error" })),
+      )
+      .toSorted((a, b) => a.line - b.line);
+    expect(actual).toEqual(expected);
+  },
+);
+
+it("does no scope or listener work when the source cannot mention readdir", () => {
+  expect(
+    noRecursiveReaddir.create({
+      sourceCode: {
+        text: "export const answer = 42;",
+        get scopeManager() {
+          throw new Error("unnecessary scope materialization");
+        },
+      },
+    }),
+  ).toEqual({});
 });

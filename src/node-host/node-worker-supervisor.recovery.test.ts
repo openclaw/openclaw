@@ -2,7 +2,10 @@ import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { WORKER_NATIVE_PROCESS_OWNER_PROTOCOL_FEATURE } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import {
+  WORKER_NATIVE_PROCESS_OWNER_PROTOCOL_FEATURE,
+  WORKER_NATIVE_PROCESS_OWNER_V2_PROTOCOL_FEATURE,
+} from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
@@ -64,7 +67,9 @@ function selectCleanupContract(
   if (mode === "owned-anchor") {
     input.descriptor.admission.handshake.protocolFeatures =
       input.descriptor.admission.handshake.protocolFeatures.filter(
-        (feature) => feature !== WORKER_NATIVE_PROCESS_OWNER_PROTOCOL_FEATURE,
+        (feature) =>
+          feature !== WORKER_NATIVE_PROCESS_OWNER_PROTOCOL_FEATURE &&
+          feature !== WORKER_NATIVE_PROCESS_OWNER_V2_PROTOCOL_FEATURE,
       );
   }
 }

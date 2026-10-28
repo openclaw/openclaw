@@ -42,7 +42,11 @@ import {
   type ReplyOperationRunState,
 } from "./reply-operation-run-state.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
-import { createMockTypingController } from "./test-helpers.js";
+import {
+  isReplyOperationStalledBeforeOutput,
+  resolveStalledTurnNoticeText,
+} from "./stalled-turn-recovery.js";
+import { createReplyParams } from "./test-helpers.js";
 
 afterEach(() => clearRuntimeConfigSnapshot());
 
@@ -151,38 +155,30 @@ async function createStalledRun(
   const operation = admitted.operation;
   operation.setPhase("running");
   const runState: ReplyOperationRunState = {};
-  const run = runReplyAgent({
-    commandBody: "what is good at the hotel restaurant?",
-    followupRun,
-    queueKey,
-    sessionKey: queueKey,
-    storePath: transcriptTarget.storePath,
-    sessionEntry,
-    sessionStore: { [queueKey]: sessionEntry },
-    resolvedQueue: settings,
-    shouldSteer: false,
-    shouldFollowup: false,
-    isActive: false,
-    replyOperation: operation,
-    opts: {
-      [REPLY_OPERATION_RUN_STATE]: runState,
-    },
-    typing: createMockTypingController(),
-    sessionCtx: {
-      Provider: "telegram",
-      OriginatingChannel: "telegram",
-      OriginatingTo: "12345",
-      ChatType: "direct",
-      MessageSid: "msg-stalled",
-    } as unknown as TemplateContext,
-    defaultModel: "anthropic/claude",
-    resolvedVerboseLevel: "off",
-    isNewSession: false,
-    blockStreamingEnabled: false,
-    resolvedBlockStreamingBreak: "message_end",
-    shouldInjectGroupIntro: false,
-    typingMode: "instant",
-  });
+  const run = runReplyAgent(
+    createReplyParams(followupRun, {
+      commandBody: "what is good at the hotel restaurant?",
+      queueKey,
+      sessionKey: queueKey,
+      storePath: transcriptTarget.storePath,
+      sessionEntry,
+      sessionStore: { [queueKey]: sessionEntry },
+      resolvedQueue: settings,
+      replyOperation: operation,
+      opts: {
+        [REPLY_OPERATION_RUN_STATE]: runState,
+      },
+      sessionCtx: {
+        Provider: "telegram",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "12345",
+        ChatType: "direct",
+        MessageSid: "msg-stalled",
+      } as unknown as TemplateContext,
+      defaultModel: "anthropic/claude",
+      typingMode: "instant",
+    }),
+  );
   return { operation, run, runState, recorder, transcriptTarget };
 }
 
@@ -270,8 +266,18 @@ describe("runReplyAgent stalled turn continuation", () => {
     closeOpenClawAgentDatabasesForTest();
   });
 
-  it("queues exactly one transcript-only recovery run when nothing else is queued", async () => {
-    const stalled = await createStalledRun();
+  it("queues one transcript-only recovery without transferring personal authoring authority", async () => {
+    const stalled = await createStalledRun({
+      skillLibraryAuthoring: {
+        target: "personal",
+        defaultTarget: "workspace",
+        multipleProfiles: true,
+        bind: () => {
+          throw new Error("Personal authoring cannot move to a replacement run.");
+        },
+        invoke: vi.fn(),
+      },
+    });
     await stallBeforeOutput(stalled);
 
     expect(stalled.runState.continueStalledTurn?.()).toBe(true);
@@ -284,6 +290,46 @@ describe("runReplyAgent stalled turn continuation", () => {
     const recovery = drainedRuns.mock.calls[0]?.[0];
     expect(recovery?.prompt).toContain("previous turn stopped making progress");
     await expectTranscriptOnlyRecovery(stalled, recovery);
+    expect(recovery?.disableTools).toBeUndefined();
+    const authoring = recovery?.run.skillLibraryAuthoring;
+    expect(authoring?.defaultTarget).toBe("personal");
+    expect(() => authoring?.bind({} as never)).not.toThrow();
+    await expect(authoring?.invoke({ action: "list" })).rejects.toMatchObject({
+      code: "AUTHORITY_EXPIRED",
+    });
+  });
+
+  it("leaves rate-limited turns with a notice and drains newer input without stall guidance", async () => {
+    const stalled = await createStalledRun();
+    const attempt = stalled.operation.watchdog.attachAttempt({ assertCurrent() {} });
+    attempt.beginWait({
+      kind: "retry",
+      deadlineAtMs: Date.now() + 60_000,
+      rateLimitStopMessage: "Rate-limit recovery stopped after 9 automatic retries.",
+      isCurrent: () => true,
+    });
+    await stallBeforeOutput(stalled);
+
+    expect(stalled.runState.continueStalledTurn?.()).toBe(false);
+    expect(getFollowupQueueDepth(queueKey)).toBe(0);
+    expect(drainedRuns).not.toHaveBeenCalled();
+    expect(isReplyOperationStalledBeforeOutput(stalled.operation)).toBe(true);
+    expect(resolveStalledTurnNoticeText(stalled.operation)).toBe(
+      "⚠️ This turn was stopped while the model provider was rate-limiting requests. Please try again in a few minutes.",
+    );
+
+    const queued = createQueuedRequest(stalled, { senderId: "traveler", to: "12345" });
+    expect(enqueueFollowupRun(queueKey, queued, settings, "message-id", drainedRuns, false)).toBe(
+      true,
+    );
+    expect(stalled.runState.continueStalledTurn?.()).toBe(false);
+    expect(getFollowupQueueDepth(queueKey)).toBe(1);
+    expect(queued.stalledTurnRecovery).toBeUndefined();
+    expect(queued.currentInboundContext).toBeUndefined();
+
+    await settleStalledOwner(stalled);
+    await vi.waitFor(() => expect(drainedRuns).toHaveBeenCalledExactlyOnceWith(queued));
+    expect(getFollowupQueueDepth(queueKey)).toBe(0);
   });
 
   it.each(["followup", "collect"] as const)(
@@ -504,34 +550,6 @@ describe("runReplyAgent stalled turn continuation", () => {
           "⚠️ This turn was interrupted because it stopped making progress. Please try again.",
       }),
     ]);
-  });
-
-  it("never lets a workspace-target recovery author skills while keeping its other tools", async () => {
-    const stalled = await createStalledRun({
-      skillLibraryAuthoring: {
-        target: "personal",
-        defaultTarget: "workspace",
-        multipleProfiles: true,
-        bind: () => {
-          throw new Error("Personal authoring cannot move to a replacement run.");
-        },
-        invoke: vi.fn(),
-      },
-    });
-    await stallBeforeOutput(stalled);
-
-    expect(stalled.runState.continueStalledTurn?.()).toBe(true);
-    await settleStalledOwner(stalled);
-    await vi.waitFor(() => expect(drainedRuns).toHaveBeenCalledOnce());
-    const recovery = drainedRuns.mock.calls[0]?.[0];
-    expect(recovery?.disableTools).toBeUndefined();
-    const authoring = recovery?.run.skillLibraryAuthoring;
-    // Personal-only means the Workshop cannot fall back to the workspace tool.
-    expect(authoring?.defaultTarget).toBe("personal");
-    expect(() => authoring?.bind({} as never)).not.toThrow();
-    await expect(authoring?.invoke({ action: "list" })).rejects.toMatchObject({
-      code: "AUTHORITY_EXPIRED",
-    });
   });
 
   it("leaves the notice with a group-thread participant whose source declares no reply owner", async () => {

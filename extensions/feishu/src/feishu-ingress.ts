@@ -138,17 +138,17 @@ function inspectFeishuIngressEnvelope(
     );
   }
   const event = nestedEvent ?? envelope;
+  const missingLane = (message: string): FeishuIngressFacts => {
+    if (allowInvalidLane) {
+      return { eventId, laneKey: `invalid:${eventType}:${eventId}` };
+    }
+    throw new FeishuIngressPermanentError("invalid-event", message);
+  };
   if (eventType === "im.message.receive_v1") {
     const message = isRecord(event.message) ? event.message : null;
     const chatId = normalizeNullableString(message?.chat_id);
     if (!chatId) {
-      if (allowInvalidLane) {
-        return { eventId, laneKey: `invalid:${eventType}:${eventId}` };
-      }
-      throw new FeishuIngressPermanentError(
-        "invalid-event",
-        "Feishu message ingress envelope is missing event.message.chat_id.",
-      );
+      return missingLane("Feishu message ingress envelope is missing event.message.chat_id.");
     }
     return { eventId, laneKey: `chat:${chatId}` };
   }
@@ -156,13 +156,7 @@ function inspectFeishuIngressEnvelope(
   const fileType = normalizeNullableString(noticeMeta?.file_type);
   const documentId = normalizeNullableString(noticeMeta?.file_token);
   if (!fileType || !documentId) {
-    if (allowInvalidLane) {
-      return { eventId, laneKey: `invalid:${eventType}:${eventId}` };
-    }
-    throw new FeishuIngressPermanentError(
-      "invalid-event",
-      "Feishu comment ingress envelope is missing its document identity.",
-    );
+    return missingLane("Feishu comment ingress envelope is missing its document identity.");
   }
   return { eventId, laneKey: `comment-doc:${fileType}:${documentId}` };
 }

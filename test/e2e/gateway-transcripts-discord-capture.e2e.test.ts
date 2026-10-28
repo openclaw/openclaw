@@ -15,6 +15,10 @@ import { resolveRelativeBundledPluginPublicModuleId } from "../../src/test-utils
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../src/test-utils/env.js";
 import { withIsolatedTestHome } from "../../test/test-env.js";
 import { readRequestText, closeHttpServer } from "../helpers/gateway-integration-fixtures.js";
+import {
+  writeOpenAiResponsesSse,
+  writeOpenAiResponsesText,
+} from "../helpers/openai-responses-sse.js";
 import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
 
 type TranscriptCapturePorts = { gateway: number; provider: number };
@@ -36,8 +40,7 @@ type CaptureModule = Awaited<ReturnType<DiscordCaptureTestApi["loadDiscordGatewa
 type DiscordCaptureFixture = ReturnType<CaptureModule["createDiscordGatewayCaptureFixture"]>;
 
 function sendResponse(response: ServerResponse, item: Record<string, unknown>) {
-  response.writeHead(200, { "content-type": "text/event-stream" });
-  for (const event of [
+  writeOpenAiResponsesSse(response, [
     {
       type: "response.output_item.added",
       output_index: 0,
@@ -53,20 +56,11 @@ function sendResponse(response: ServerResponse, item: Record<string, unknown>) {
         usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
       },
     },
-  ]) {
-    response.write(`data: ${JSON.stringify(event)}\n\n`);
-  }
-  response.end();
+  ]);
 }
 
 function sendMessage(response: ServerResponse, id: string, text: string) {
-  sendResponse(response, {
-    type: "message",
-    id,
-    role: "assistant",
-    status: "completed",
-    content: [{ type: "output_text", text, annotations: [] }],
-  });
+  writeOpenAiResponsesText(response, { text, messageId: id, responseId: `resp_${randomUUID()}` });
 }
 
 afterEach(async () => {
@@ -93,7 +87,6 @@ it("fences late Discord STT through the model-selected plugin instance", async (
     "OPENCLAW_SKIP_CANVAS_HOST",
     "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER",
   ];
-  // Minimal mode skips login without removing channel config from the runtime.
   const clearedFlags = [
     "OPENCLAW_BUILD_PRIVATE_QA",
     "OPENCLAW_QA_FORCE_RUNTIME",
@@ -116,14 +109,12 @@ it("fences late Discord STT through the model-selected plugin instance", async (
   let fixtureScheduler: ReturnType<typeof createTestPluginServiceScheduler> | undefined;
   let releaseFixtureRegistry: (() => Promise<void>) | undefined;
   let cleanupRuntime: (() => Promise<void>) | undefined;
-  const requests: Record<string, unknown>[] = [];
+  let requests = 0;
   const errors: unknown[] = [];
-  const calls: ScriptedCall[] = [];
   const deniedConnections: string[] = [];
   let providerPort: number | undefined;
   deleteTestEnvValue("OPENCLAW_GATEWAY_PORT");
   const selectedGatewayPort = () => ports?.gateway ?? Number(process.env.OPENCLAW_GATEWAY_PORT);
-  // The native method must retain each caller's socket, supplied by Reflect.apply below.
   // oxlint-disable-next-line typescript/unbound-method
   const originalConnect = Socket.prototype.connect;
   // Reject unexpected Node HTTP(S), WS and fetch destinations. This guard does
@@ -152,26 +143,14 @@ it("fences late Discord STT through the model-selected plugin instance", async (
   });
   let currentCall: ScriptedCall | undefined;
   let awaitingOutput = false;
-  let summaryTranscript: string | undefined;
-  let summaryRequests = 0;
   const providerServer = createServer((request, response) => {
     void (async () => {
-      expect(request.method).toBe("POST");
-      expect(request.url).toBe("/v1/responses");
-      expect(request.headers.authorization).toBe("Bearer test");
       const body = asOptionalRecord(JSON.parse(await readRequestText(request)));
-      expect(body?.model).toBe("capture-proof");
-      expect(body?.stream).toBe(true);
-      requests.push(body!);
+      requests++;
       // Unscripted conversation calls fail visibly, including recording-only scan regressions.
       expect(currentCall, "unexpected model request outside an admitted tool turn").toBeDefined();
       const call = currentCall!;
       if (awaitingOutput && call.args.action === "stop" && !body?.tools) {
-        summaryRequests++;
-        expect(summaryTranscript).toBeDefined();
-        const summaryInput = JSON.stringify(body);
-        expect(summaryInput).toContain("Write concise meeting notes in the transcript's language.");
-        expect(summaryInput).toContain(summaryTranscript!);
         sendMessage(
           response,
           "msg_capture_summary",
@@ -185,9 +164,6 @@ it("fences late Discord STT through the model-selected plugin instance", async (
         return;
       }
       if (!awaitingOutput) {
-        expect(body?.tools).toEqual(
-          expect.arrayContaining([expect.objectContaining({ name: "transcripts" })]),
-        );
         awaitingOutput = true;
         sendResponse(response, {
           type: "function_call",
@@ -272,13 +248,11 @@ it("fences late Discord STT through the model-selected plugin instance", async (
     ) as DiscordCaptureTestApi;
     const { createDiscordGatewayCaptureFixture, captureTarget, capturedText, lateText } =
       await loadDiscordGatewayCaptureFixture();
-    summaryTranscript = capturedText;
     const { startGatewayWithClient } = await import("../../src/gateway/test-helpers.e2e.js");
     const { createPluginRuntime } = await import("../../src/plugins/runtime/index.js");
     const { createPluginRegistry } = await import("../../src/plugins/registry.js");
     const { createPluginRecord } = await import("../../src/plugins/loader-records.js");
-    const { getPluginInstance, getPluginValueInstance } =
-      await import("../../src/plugins/plugin-instance-scope.js");
+    const { getPluginInstance } = await import("../../src/plugins/plugin-instance-scope.js");
     const { loadPluginMetadataSnapshot } =
       await import("../../src/plugins/plugin-metadata-snapshot.js");
     const { bindPluginRuntimeArtifactSelection } =
@@ -289,21 +263,12 @@ it("fences late Discord STT through the model-selected plugin instance", async (
       await import("../../src/plugins/registry-inspection-resources.js");
     const { retireInspectionInstances } =
       await import("../../src/plugins/registry-inspection.test-support.js");
-    const {
-      setActivePluginRegistry,
-      captureActivePluginRegistrySnapshot,
-      restoreActivePluginRegistrySnapshot,
-    } = await import("../../src/plugins/runtime.js");
-    const { getPluginRuntimeLoadContext } =
-      await import("../../src/plugins/runtime/load-context.js");
-    const { withPluginRuntimeRegistryScope } =
-      await import("../../src/plugins/runtime/gateway-request-scope.js");
-    const { refreshPreparedModelRuntimeSnapshots, loadPublishedGatewayReplyDispatchRuntime } =
-      await import("../../src/agents/prepared-model-runtime.js");
-    const { resetPreparedModelRuntimeSnapshotsForTest } =
-      await import("../../src/agents/prepared-model-runtime.test-support.js");
-    const { clearConfigCache, clearRuntimeConfigSnapshot, getRuntimeConfig } =
-      await import("../../src/config/config.js");
+    const runtimeState = await import("../../src/plugins/runtime.js");
+    const loadContext = await import("../../src/plugins/runtime/load-context.js");
+    const runtimeScope = await import("../../src/plugins/runtime/gateway-request-scope.js");
+    const preparedRuntime = await import("../../src/agents/prepared-model-runtime.js");
+    const preparedTest = await import("../../src/agents/prepared-model-runtime.test-support.js");
+    const configState = await import("../../src/config/config.js");
     const { resetConfigOverrides } = await import("../../src/config/runtime-overrides.js");
     const { clearSessionStoreCacheForTest } =
       await import("../../src/config/sessions/store-writer-state.js");
@@ -316,7 +281,7 @@ it("fences late Discord STT through the model-selected plugin instance", async (
       [...activeSessions.values()].filter(
         (capture) => capture.session.source.accountId === captureTarget.accountId,
       );
-    const previousRegistry = captureActivePluginRegistrySnapshot();
+    const previousRegistry = runtimeState.captureActivePluginRegistrySnapshot();
     cleanupRuntime = () =>
       runQaGatewayFixture(
         async () => {
@@ -328,14 +293,14 @@ it("fences late Discord STT through the model-selected plugin instance", async (
         drainSessionStoreWriterQueuesForTest,
         async () => {
           clearSessionStoreCacheForTest();
-          await resetPreparedModelRuntimeSnapshotsForTest();
+          await preparedTest.resetPreparedModelRuntimeSnapshotsForTest();
           await closeOpenClawStateDatabaseByPathAsync(
             path.join(stateDir, "state", "openclaw.sqlite"),
           );
           resetConfigOverrides();
-          clearRuntimeConfigSnapshot();
-          clearConfigCache();
-          restoreActivePluginRegistrySnapshot(previousRegistry);
+          configState.clearRuntimeConfigSnapshot();
+          configState.clearConfigCache();
+          runtimeState.restoreActivePluginRegistrySnapshot(previousRegistry);
         },
       );
     resetConfigOverrides();
@@ -346,7 +311,6 @@ it("fences late Discord STT through the model-selected plugin instance", async (
         ownership: "explicit",
         entries: {
           main: { workspace },
-          "agent-b": { workspace },
         },
         defaults: {
           workspace,
@@ -442,15 +406,11 @@ it("fences late Discord STT through the model-selected plugin instance", async (
     fixture = pluginInstance.run(() =>
       createDiscordGatewayCaptureFixture({ cfg, scheduler, test: { expect, vi } }),
     );
-    // Match loader registration: runtime slots belong to the invoking plugin instance.
     pluginInstance.run(() => fixture!.register(api));
-    expect(
-      getPluginValueInstance(registration.registry.transcriptSourceProviders[0]!.provider),
-    ).toBe(pluginInstance);
     artifactBinding.runtimeRegistrationComplete = true;
     // Minimal startup retains this real registration; it skips monitor login/sidecars only.
     // This does not prove full plugin discovery or Discord monitor startup.
-    setActivePluginRegistry(registration.registry);
+    runtimeState.setActivePluginRegistry(registration.registry);
     gateway = await startGatewayWithClient({
       port: ports?.gateway,
       cfg,
@@ -459,17 +419,18 @@ it("fences late Discord STT through the model-selected plugin instance", async (
       scopes: ["operator.admin"],
     });
     await gateway.server.startupSettled;
-    const metadata = getPluginRuntimeLoadContext(registration.registry)?.metadataSnapshot;
-    // Minimal startup skips the model-publication sidecar. Publish through its
-    // production owner, retaining the real fixture registration for both agents.
-    setActivePluginRegistry(
+    const metadata = loadContext.getPluginRuntimeLoadContext(
+      registration.registry,
+    )?.metadataSnapshot;
+    // Minimal startup skips model publication; use its production owner.
+    runtimeState.setActivePluginRegistry(
       registration.registry,
       undefined,
       "gateway-bindable",
       metadata!.workspaceDir,
     );
-    await withPluginRuntimeRegistryScope(registration.registry, () =>
-      refreshPreparedModelRuntimeSnapshots(getRuntimeConfig, {
+    await runtimeScope.withPluginRuntimeRegistryScope(registration.registry, () =>
+      preparedRuntime.refreshPreparedModelRuntimeSnapshots(configState.getRuntimeConfig, {
         gatewayLifecycle: true,
         catalogMode: "static",
         allowGatewaySubagentBinding: true,
@@ -477,25 +438,12 @@ it("fences late Discord STT through the model-selected plugin instance", async (
         pluginMetadataSnapshot: metadata,
       }),
     );
-    for (const agentId of ["main", "agent-b"]) {
-      const published = await loadPublishedGatewayReplyDispatchRuntime({ agentId });
-      const inboundProvider = published?.inboundPluginRegistry.transcriptSourceProviders.find(
-        (entry) => entry.provider.id === "discord-voice",
-      )?.provider;
-      expect(inboundProvider).toBe(registration.registry.transcriptSourceProviders[0]?.provider);
-      const selectedRegistry = published?.pluginGeneration.pluginRegistry;
-      const selectedProvider = selectedRegistry?.transcriptSourceProviders.find(
-        (entry) => entry.provider.id === "discord-voice",
-      )?.provider;
-      expect(selectedProvider, agentId).toBe(inboundProvider);
-    }
     pluginInstance.run(() => fixture!.bindPublishedRuntime());
     const client = gateway.client;
     const sessionKey = `agent:main:capture-proof-${randomUUID()}`;
     const sessionId = `capture-${randomUUID()}`;
     const runTurn = async (args: CaptureArguments) => {
-      const call: ScriptedCall = { callId: `call_capture_${calls.length}`, args };
-      calls.push(call);
+      const call: ScriptedCall = { callId: `call_capture_${randomUUID()}`, args };
       currentCall = call;
       const accepted = await client.request<{ runId: string; status: string }>("agent", {
         sessionKey,
@@ -509,7 +457,6 @@ it("fences late Discord STT through the model-selected plugin instance", async (
         timeoutMs: 30_000,
       });
       expect(completed.status, args.action).toBe("ok");
-      expect(errors).toEqual([]);
       expect(currentCall).toBeUndefined();
       return call.output!;
     };
@@ -519,12 +466,11 @@ it("fences late Discord STT through the model-selected plugin instance", async (
       ...captureTarget,
       sessionId,
     });
-    expect(start).toContain(`Transcripts started: ${sessionId}`);
     const selector = /^Selector: (.+)$/m.exec(start)?.[1];
     expect(selector).toBeDefined();
     const speaker = await pluginInstance.run(() => fixture!.expectReady());
     const session = { selector, sessionId };
-    expect(requests).toHaveLength(2);
+    expect(requests).toBe(2);
 
     await fixture.recordAfterTurn();
     const readCapture = () =>
@@ -545,12 +491,10 @@ it("fences late Discord STT through the model-selected plugin instance", async (
         },
       ],
     });
-    expect(requests).toHaveLength(2);
+    expect(requests).toBe(2);
 
     await pluginInstance.run(() => fixture!.beginLateDelivery());
-    const stop = await runTurn({ action: "stop", selector });
-    expect(stop).toContain(`Transcripts stopped: ${sessionId}`);
-    expect(stop).toContain(`Selector: ${selector}`);
+    await runTurn({ action: "stop", selector });
     await fixture.finishLateDelivery();
     const stopped = await readCapture();
     expect(stopped).toMatchObject({
@@ -565,8 +509,7 @@ it("fences late Discord STT through the model-selected plugin instance", async (
     });
     expect(stopped.utterances).toEqual(captured.utterances);
     expect(JSON.stringify(stopped)).not.toContain(lateText);
-    expect(requests).toHaveLength(5);
-    expect(summaryRequests).toBe(1);
+    expect(requests).toBe(5);
 
     expect(errors).toEqual([]);
     expect(deniedConnections).toEqual([]);

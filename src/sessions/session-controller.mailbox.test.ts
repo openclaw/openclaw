@@ -130,6 +130,24 @@ function revocableAuthority(message: string, beforeThrow?: () => void) {
 }
 
 describe("controller mailbox scheduling", () => {
+  it.each([-90_000, 90_000])(
+    "preserves the debounce window after a %d ms wall-clock step",
+    async (step) => {
+      vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+      const run = source("debounced follow-up");
+      const dispatch = vi.fn(async () => {});
+      enqueueFollowupRun(key, run, { mode: "followup", debounceMs: 500 }, "none", dispatch, false);
+      ownedInputs.push(run.controllerInput!);
+
+      vi.setSystemTime(Date.now() + step);
+      scheduleFollowupDrain(key, dispatch);
+      await vi.advanceTimersByTimeAsync(499);
+      expect(dispatch).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(dispatch).toHaveBeenCalledOnce();
+    },
+  );
+
   it("drains a re-enqueued incognito followup from its original owner", async () => {
     vi.useFakeTimers();
     const sessionKey = "agent:main:dashboard:incognito-recovery-mailbox";
@@ -250,12 +268,14 @@ describe("controller mailbox scheduling", () => {
     }
   });
 
-  it.each(["ready", "task"] as const)(
+  it.each(["ready", "task", "unbound-task"] as const)(
     "releases the consumed %s callback before a source retry",
     async (kind) => {
       const input = reserveSource();
       const run = source("retry after preflight refusal");
-      bindSessionControllerSource(input, run);
+      if (kind !== "unbound-task") {
+        bindSessionControllerSource(input, run);
+      }
       const request = () =>
         kind === "ready"
           ? claimSessionControllerInput(run)
@@ -301,9 +321,14 @@ describe("controller mailbox scheduling", () => {
         drained.resolve();
       }
     };
-    enqueueFollowupRun(key, source("B"), { mode: "followup", debounceMs: 0 }, "none", dispatch);
-    enqueueFollowupRun(key, source("C"), { mode: "followup", debounceMs: 0 }, "none", dispatch);
+    const queued = [source("B"), source("C")];
+    for (const run of queued) {
+      enqueueFollowupRun(key, run, { mode: "followup", debounceMs: 0 }, "none", dispatch);
+    }
+    const older = interruptSource("old");
     const d = interruptSource(" D ");
+    retireSessionControllerInput(older);
+    expect(getExistingSessionControllerMailbox(key)?.priority).toBe(d);
     a.complete();
     expect(order).toEqual([]);
     const run = source("D");
@@ -314,17 +339,8 @@ describe("controller mailbox scheduling", () => {
     releaseSessionControllerClaim(claim);
     await drained.promise;
     expect(order).toEqual(["B", "C"]);
-  });
-  it("canceling an older priority never clears the newest interrupt reservation", async () => {
-    const first = interruptSource("old");
-    const newest = interruptSource("new");
-    retireSessionControllerInput(first);
-    expect(getExistingSessionControllerMailbox(key)?.priority).toBe(newest);
-    const run = source("new");
-    bindSessionControllerSource(newest, run);
-    const claim = await claimSessionControllerInput(run);
-    expect(claim.inputs).toEqual([newest]);
-    await releaseClaim(claim);
+    await queued[1]!.controllerInput!.settlement.promise;
+    await queued[1]!.controllerInput!.claim?.settlement.promise;
     expect(Boolean(findSessionControllerEntry(key))).toBe(false);
   });
   it("preserves exact protocol identities and withdrawal custody before payload exists", () => {

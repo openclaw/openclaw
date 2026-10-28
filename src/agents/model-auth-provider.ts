@@ -87,16 +87,12 @@ function shouldDeferSyntheticProfileAuth(params: {
 
 /** @deprecated Use resolveScopedAuthProfileStoreAsync to read through the auth owner worker. */
 export function resolveScopedAuthProfileStore(params: {
-  agentDir?: string;
   cfg?: OpenClawConfig;
   provider: string;
-  profileId?: string;
-  preferredProfile?: string;
 }): AuthProfileStore {
-  return ensureAuthProfileStore(params.agentDir, {
+  return ensureAuthProfileStore(undefined, {
     migrationProvider: params.provider,
     config: params.cfg,
-    profileId: params.profileId,
     externalCli: externalCliDiscoveryForProviderAuth(params),
   });
 }
@@ -209,6 +205,11 @@ export async function resolveApiKeyForProviderCore(input: {
    *  silently replaced by another profile or env/config credentials. */
   lockedProfile?: boolean;
   forceRefresh?: boolean;
+  /** Gates a new native refresh claim, not independently owned settlement. */
+  assertRefreshAdmission?: () => void;
+  validateOAuthCredential?: Parameters<
+    typeof resolveApiKeyForProfile
+  >[0]["validateOAuthCredential"];
   credentialPrecedence?: ProviderCredentialPrecedence;
   /** Skip implicit profile discovery for a prepared env/config fallback attempt. */
   allowAuthProfileFallback?: boolean;
@@ -258,7 +259,6 @@ export async function resolveApiKeyForProviderCore(input: {
     workspaceDir: input.workspaceDir,
     modelBaseUrl: input.modelBaseUrl,
   });
-  const changedAuthProvider = modelAuthConfig !== input.cfg;
   const params = { ...input, cfg: modelAuthConfig };
   const { provider, cfg, profileId, preferredProfile } = params;
   const noAuth = resolveExplicitProviderNoAuth({
@@ -324,6 +324,24 @@ export async function resolveApiKeyForProviderCore(input: {
       deprecatedProfileIds: getDeprecatedProfileIds(),
     });
     const configuredCredential = store.profiles[profileId];
+    const assertCompatibleProfile = (credentialProvider: string, selectedProfileId = profileId) => {
+      if (
+        !isStoredCredentialCompatibleWithAuthProvider({
+          cfg,
+          provider,
+          credential: { provider: credentialProvider },
+        })
+      ) {
+        throw new Error(
+          `Auth profile "${selectedProfileId}" is not compatible with the resolved model endpoint for "${provider}". Select a compatible provider profile.`,
+        );
+      }
+    };
+    // Pins cannot cross credential realms even when the endpoint did not change.
+    // Reject stored mismatches before SecretRef materialization or OAuth refresh.
+    if (configuredCredential) {
+      assertCompatibleProfile(configuredCredential.provider);
+    }
     const configuredProfileType = configuredCredential?.type;
     if (configuredProfileType) {
       assertAuthModeAllowedForModel({
@@ -342,6 +360,8 @@ export async function resolveApiKeyForProviderCore(input: {
       signal: params.signal,
       forceRefresh: params.forceRefresh,
       allowProfileFallback: !params.lockedProfile,
+      validateOAuthCredential: params.validateOAuthCredential,
+      assertRefreshAdmission: params.assertRefreshAdmission,
     });
     params.signal?.throwIfAborted();
     if (!resolved) {
@@ -352,14 +372,9 @@ export async function resolveApiKeyForProviderCore(input: {
       throw new Error("Locked auth profile resolution returned a different profile.");
     }
     const credential = resolved.credential ?? store.profiles[resolvedProfileId];
-    if (
-      changedAuthProvider &&
-      (!credential || !isStoredCredentialCompatibleWithAuthProvider({ cfg, provider, credential }))
-    ) {
-      throw new Error(
-        `Auth profile "${resolvedProfileId}" is not compatible with the resolved model endpoint for "${provider}".`,
-      );
-    }
+    // Personal stores need not appear in the shared snapshot; the resolver owns
+    // the returned credential's provider identity, including refreshed profiles.
+    assertCompatibleProfile(resolved.provider, resolvedProfileId);
     const result = projectProfileAuth(resolved, resolvedProfileId, credential, store);
     assertAuthModeAllowedForModel({
       ...modelPolicy,

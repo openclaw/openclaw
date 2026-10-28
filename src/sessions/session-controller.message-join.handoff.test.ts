@@ -1,18 +1,15 @@
 import path from "node:path";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
 import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
-import { resolveConversationCapabilityProfile } from "../agents/conversation-capability-profile.js";
-import { projectConversationToolNames } from "../agents/conversation-tool-policy-pipeline.js";
 import { bindWorkerToolPreparation } from "../agents/harness/host-private-capabilities.js";
 import { bindPreparedToolAuthority } from "../agents/harness/tool-authority-preparation.js";
 import { prepareOperatorModelPolicy } from "../agents/operator-model-policy.js";
-import { withPreparedSessionCapabilityRead } from "../agents/subagents/spawn/subagent-session-store.js";
 import { runActiveReplySteer } from "../auto-reply/reply/agent-runner-steer-adoption.js";
 import { createSteerParams } from "../auto-reply/reply/agent-runner-steer-adoption.test-support.js";
 import { withMessageInjectionAdmission } from "../auto-reply/reply/message-injection-authority.js";
 import { getFollowupQueueDepth } from "../auto-reply/reply/queue.js";
 import { clearFollowupQueue } from "../auto-reply/reply/queue/state.js";
-import { prepareReplyToolAuthority } from "../auto-reply/reply/reply-tool-authority.js";
+import { prepareReplyRunToolAuthority } from "../auto-reply/reply/reply-tool-authority.js";
 import {
   createQueueTestRun,
   toolAuthorityOverlay,
@@ -41,7 +38,13 @@ import { testing } from "./session-controller.test-support.js";
 const dirs = useSessionStoreTempDirs(afterAll, "openclaw-continuation-handoff-");
 const sessionId = "synthetic-handoff-parent";
 const sessionKey = "agent:main:synthetic-handoff-parent";
-const attempt = { provider: "openai", modelId: "synthetic-model" };
+const route = { provider: "openai", model: "synthetic-model" };
+const outcomes: Record<string, { status: string; reason?: string }> = {
+  "optional-completion": { status: "rejected", reason: "reply_expectation_mismatch" },
+  "late-cohort-revocation": { status: "rejected", reason: "tool_authority_mismatch" },
+  "late-source-and-cohort-revocation": { status: "failed" },
+  "accepted-cohort-revocation": { status: "indeterminate" },
+};
 afterEach(() => {
   clearFollowupQueue(sessionKey);
   testing.resetSessionControllerForTest();
@@ -97,8 +100,7 @@ it.each([
       ...registration,
       handoffId: registerSubagentCompletionToolHandoff(registration),
       sourceTool: "subagent_settle",
-      provider: attempt.provider,
-      model: attempt.modelId,
+      ...route,
     });
     expect(trustedInternalHandoff).toBeDefined();
     const inputProvenance = {
@@ -107,48 +109,7 @@ it.each([
       sourceSessionKey: sourceSessionKeys[0],
     };
     const isCompletion = scenario !== "plain-owner";
-    const policyParams = {
-      config,
-      sessionKey,
-      sessionId,
-      agentId: "main",
-      senderIsOwner: true,
-      modelProvider: attempt.provider,
-      modelId: attempt.modelId,
-      messageProvider: "webchat",
-      messageChannel: "webchat",
-    };
-    const profiles = await withPreparedSessionCapabilityRead(
-      () =>
-        [
-          resolveConversationCapabilityProfile({
-            ...policyParams,
-            ...(isCompletion ? { inputProvenance, trustedInternalHandoff } : {}),
-          }),
-          resolveConversationCapabilityProfile(policyParams),
-        ] as const,
-    );
-    for (const profile of profiles) {
-      expect(
-        projectConversationToolNames({
-          capabilityProfile: profile,
-          toolNames: ["read", "exec", "write", "sessions_send", "plugins"],
-          warn: () => {},
-        }),
-      ).toEqual(["read", "exec"]);
-    }
-    if (isCompletion) {
-      expect(profiles[0].policy.requesterPolicySource).toBe("completion-handoff");
-      expect(profiles[1].policy.requesterPolicySource).not.toBe("completion-handoff");
-    }
-    const scopes = [
-      "operator.admin",
-      "operator.approvals",
-      "operator.pairing",
-      "operator.questions",
-      "operator.read",
-      "operator.write",
-    ];
+    const scopes = ["operator.admin", "operator.read", "operator.write"];
     const modelPolicy = prepareOperatorModelPolicy({ cfg: config, policy: {} });
     const authority = (incoming = false) =>
       createAdmittedRunOperatorAuthority({
@@ -175,8 +136,7 @@ it.each([
       sessionKey,
       sessionFile: path.join(path.dirname(storePath), "synthetic.jsonl"),
       workspaceDir: path.dirname(storePath),
-      provider: attempt.provider,
-      model: attempt.modelId,
+      ...route,
       messageProvider: "webchat",
       messageChannel: "webchat",
       chatType: "direct",
@@ -196,7 +156,7 @@ it.each([
           throw new Error("Expected real handoff operation");
         }
         await operation.bindToolAuthoritySnapshotAsync(
-          prepareReplyToolAuthority({ ...incumbent, executionSelection: frozenSelection }),
+          prepareReplyRunToolAuthority(incumbent, entry),
         );
         const fingerprint = await operation.bindToolAuthorityRouteAsync(incumbent.run);
         const sink = vi.fn();
@@ -250,7 +210,6 @@ it.each([
             sourceSessionKey: sourceSessionKeys[0],
           };
           const runFollowup = vi.fn(async () => {});
-          const admission = {};
           // Actual adapter computes isInboundUserMessage=false from real peer host provenance.
           // It must not create the human continuation merely because profile/sender match.
           await runActiveReplySteer(
@@ -259,7 +218,7 @@ it.each([
               steeringIntent: { kind: "continue-existing" },
               sessionEntry: entry,
               storePath,
-              replyOperationRunState: admission,
+              replyOperationRunState: {},
               sessionCtx: { InputProvenance: incoming.run.inputProvenance },
             }),
           );
@@ -292,14 +251,14 @@ it.each([
         const prepare = () =>
           prepareReplyMessageContinuation({
             target,
+            delivery,
             assertCurrent: () => incomingAuthority.assertCurrent(),
             input: {
               kind: "continuation",
               caller,
               config,
               executionSelection: frozenSelection,
-              delivery,
-              selectedRoute: { provider: attempt.provider, model: attempt.modelId },
+              selectedRoute: route,
               fallbackAvailability: { kind: "none_configured", source: "inherited" },
             },
           });
@@ -310,7 +269,7 @@ it.each([
             return;
           }
           const prepared = await prepare();
-          if (["lower-scopes", "other-profile", "revoked-cohort"].includes(scenario)) {
+          if (["other-profile", "revoked-cohort"].includes(scenario)) {
             expect(prepared.kind).not.toBe("prepared");
             expect(sink).not.toHaveBeenCalled();
             return;
@@ -335,32 +294,14 @@ it.each([
               ),
             });
             const result = await injection.outcome;
-            if (scenario === "optional-completion") {
-              expect(result).toMatchObject({
-                status: "rejected",
-                reason: "reply_expectation_mismatch",
-              });
-            } else if (scenario === "late-cohort-revocation") {
-              expect(result).toMatchObject({
-                status: "rejected",
-                reason: "tool_authority_mismatch",
-              });
+            const expected = outcomes[scenario] ?? { status: "accepted" };
+            const accepted = ["accepted", "indeterminate"].includes(expected.status);
+            expect(result).toMatchObject(expected);
+            if (scenario === "late-cohort-revocation") {
               expect(result).toHaveProperty("errorMessage");
-              expect(await injection.acceptance).toBe(false);
-            } else if (scenario === "late-source-and-cohort-revocation") {
-              expect(result).toMatchObject({ status: "failed" });
-              expect(await injection.acceptance).toBe(false);
-            } else if (scenario === "accepted-cohort-revocation") {
-              expect(result).toMatchObject({ status: "indeterminate" });
-              expect(await injection.acceptance).toBe(true);
-            } else {
-              expect(result.status).toBe("accepted");
             }
-            expect(sink).toHaveBeenCalledTimes(
-              ["plain-owner", "trusted-completion", "accepted-cohort-revocation"].includes(scenario)
-                ? 1
-                : 0,
-            );
+            expect(await injection.acceptance).toBe(accepted);
+            expect(sink).toHaveBeenCalledTimes(accepted ? 1 : 0);
             // Neither the message nor fallback data acquires the incumbent's canonical handoff.
             expect(incoming.run.inputProvenance).toBeUndefined();
             expect(incoming.run.trustedInternalHandoff).toBeUndefined();

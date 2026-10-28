@@ -25,6 +25,7 @@ import { selectInstallMutationWriteOptions } from "./install-config-mutation.js"
 import { persistPluginInstall } from "./install-persistence.js";
 import { readPersistedInstalledPluginIndexInstallRecordsAsync } from "./installed-plugin-index-records.js";
 import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
+import { writeFixtureJson as writeJson } from "./loader-fixture-builders.test-support.js";
 import { loadAndActivateRootPluginRegistry, loadPluginRegistryHandle } from "./loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
@@ -55,10 +56,6 @@ function stateEnv(stateDir: string) {
     OPENCLAW_STATE_DIR: stateDir,
     OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
   };
-}
-
-function writeJson(dir: string, file: string, value: unknown) {
-  fs.writeFileSync(path.join(dir, file), JSON.stringify(value));
 }
 
 function writePackage(

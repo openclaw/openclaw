@@ -201,7 +201,7 @@ function SessionRenameInput(props: ChatPaneHeaderProps) {
 
 let nextWorkspaceMenuId = 0;
 
-function ProjectCrumb(props: ChatPaneHeaderProps) {
+export function ProjectCrumb(props: ChatPaneHeaderProps) {
   const overflow = useScrollState(true, false);
   const id = `chat-workspace-${++nextWorkspaceMenuId}`;
   const copied = () => props.copiedAction === "copy-path" || props.copiedAction === "copy-branch";

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
+import { sanitizeAgentRunTerminalReply } from "../agent-run-terminal-reply.js";
 import { runAgentStep } from "./agent-step.js";
 import type { GatewaySessionListRow } from "./sessions-helpers.js";
 import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
@@ -125,6 +126,45 @@ describe("runSessionsSendA2AFlow reply delivery", () => {
     expect(runAgentStep).not.toHaveBeenCalled();
     expectNoSend();
   }
+  function deliveredStep() {
+    expect(runAgentStep).toHaveBeenCalledOnce();
+    return vi.mocked(runAgentStep).mock.calls[0]![0];
+  }
+
+  it.each([true, false])(
+    "recovers a long delayed peer answer or reports missing history (%s)",
+    async (available) => {
+      const fullReply = "A long peer answer. ".repeat(400) + "ANSWER_END";
+      const terminalReply = sanitizeAgentRunTerminalReply(fullReply);
+      callGatewayMock.mockImplementation(async (request: CallGatewayOptions) => {
+        if (request.method === "agent.wait") {
+          return { status: "ok", terminalReply };
+        }
+        expect(request.method).toBe("chat.history");
+        expect(request.params).toMatchObject({
+          sessionKey: "agent:worker:main",
+          agentId: "worker",
+        });
+        if (!available) {
+          throw new Error("History access denied");
+        }
+        return {
+          messages: [{ role: "assistant", content: fullReply, __openclaw: { runId: "run-test" } }],
+        };
+      });
+      await runFlow({
+        callGateway: callGatewayMock,
+        targetAgentId: "worker",
+        targetSessionKey: "agent:worker:main",
+        requesterSessionKey: "agent:main:main",
+      });
+      const delivered = deliveredStep();
+      expect(delivered.message).toBe(
+        available ? fullReply : terminalReply.disposition === "visible" ? terminalReply.text : "",
+      );
+      expect(delivered.extraSystemPrompt?.includes("The reply may be truncated")).toBe(!available);
+    },
+  );
 
   it("passes threadId through to gateway send for Telegram forum topics", async () => {
     await runFlow({
@@ -250,8 +290,7 @@ describe("runSessionsSendA2AFlow reply delivery", () => {
           : {}),
       });
       if (cross) {
-        expect(runAgentStep).toHaveBeenCalledOnce();
-        expect(vi.mocked(runAgentStep).mock.calls[0]?.[0]).toMatchObject({
+        expect(deliveredStep()).toMatchObject({
           sessionKey: "agent:main:webchat:direct:requester",
           message: "Already delivered source reply",
           sourceSessionKey: "agent:main:webchat:direct:target",
@@ -350,8 +389,7 @@ describe("runSessionsSendA2AFlow reply delivery", () => {
     });
     await runNotification("run-lock-timeout");
 
-    expect(runAgentStep).toHaveBeenCalledOnce();
-    const stepInput = vi.mocked(runAgentStep).mock.calls[0]![0];
+    const stepInput = deliveredStep();
     expect(stepInput).toMatchObject({
       sessionKey: "agent:main:discord:group:req",
       sourceSessionKey: "agent:worker:discord:group:dev",
@@ -375,8 +413,7 @@ describe("runSessionsSendA2AFlow reply delivery", () => {
       runId: "run-failed-after-source-reply",
     });
 
-    expect(runAgentStep).toHaveBeenCalledOnce();
-    const stepInput = vi.mocked(runAgentStep).mock.calls[0]![0];
+    const stepInput = deliveredStep();
     expect(stepInput.message).toContain(wait.error);
     expect(stepInput.message).toContain("final reply was already delivered");
     expect(stepInput.message).toContain("Do not resend");

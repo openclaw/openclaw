@@ -7,6 +7,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { createAgentCapability } from "../../lib/agents/index.ts";
+import { createApplicationGatewaySnapshot } from "../../test-helpers/application-context-fixtures.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import {
@@ -119,17 +120,12 @@ function createApplyResult(): MigrationsMemoryApplyResult {
 
 function createContext(request: ReturnType<typeof vi.fn>): TestContext {
   const client = { request } as unknown as GatewayBrowserClient;
-  const snapshot: ApplicationGatewaySnapshot = {
+  const snapshot: ApplicationGatewaySnapshot = createApplicationGatewaySnapshot({
     client,
     phase: "connected",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
-    hello: null,
     assistantAgentId: "research",
     sessionKey: "agent:research:main",
-    lastError: null,
-    lastErrorCode: null,
-  };
+  });
   const gatewayFixture = createApplicationGateway(snapshot);
   const listeners = new Set<() => void>();
   const subscribe = (notify: () => void) => {

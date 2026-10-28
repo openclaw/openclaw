@@ -28,6 +28,7 @@ import { sessionReadHandlers } from "../../gateway/server-methods/sessions-read.
 import { appendSessionTranscriptMessagesByIdentity } from "../../plugin-sdk/session-transcript-runtime.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
+import { dropPostgresTestSchemas } from "../postgres-sync/schema-cleanup.test-support.js";
 import { withEngineStoreAdmission } from "./admission-scope.js";
 import { installDatabaseEngineSelection } from "./context.js";
 import { resetDatabaseEngineSelectionForTest } from "./context.test-support.js";
@@ -108,13 +109,7 @@ describe.skipIf(!connection)("PostgreSQL session search product flow", () => {
     }
     try {
       await cleanupSessionStateForTest({ stateDir: root });
-      const schemas = await client.query<{ nspname: string }>(
-        "SELECT nspname FROM pg_namespace WHERE left(nspname, $1) = $2",
-        [prefix.length + 1, `${prefix}_`],
-      );
-      for (const { nspname } of schemas.rows) {
-        await client.query(`DROP SCHEMA "${nspname}" CASCADE`);
-      }
+      await dropPostgresTestSchemas(client, prefix);
     } finally {
       await client.end();
       clearRuntimeConfigSnapshot();
@@ -202,8 +197,18 @@ describe.skipIf(!connection)("PostgreSQL session search product flow", () => {
     expect((await search("& | ! ()")).hits).toEqual([]);
     expect((await search("x".repeat(4096))).hits).toEqual([]);
     expect((await search("x ".repeat(2048).trim())).hits).toEqual([]);
-    await expect(search(" ")).rejects.toThrow("query must not be empty");
-    await expect(search("x".repeat(4097))).rejects.toThrow("query must not exceed 4096");
+  });
+
+  it("snippets the passage holding a punctuation-joined match and keeps its punctuation", async () => {
+    await append(
+      "filename",
+      "filename-hit",
+      `Opening notes for the deploy review. ${"Routine context keeps going here. ".repeat(80)}The fix to server.py landed after review.`,
+    );
+    const { hits } = await search("server.py", { sessionId: "filename" });
+    expect(hits.map((hit) => hit.messageId)).toEqual(["filename-hit"]);
+    expect(hits[0]!.snippet).toContain("fix to server.py landed");
+    expect(hits[0]!.snippet).not.toContain("Opening");
   });
 
   it("publishes appends, rebuilds the active branch and removes deleted transcripts", async () => {

@@ -1,16 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { createServer, type ServerResponse } from "node:http";
 import { expect } from "vitest";
+import { readRequestText } from "../../test/helpers/gateway-integration-fixtures.js";
+import { waitForGatewayStartup } from "../../test/helpers/gateway-startup.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { setTestEnvValue } from "../test-utils/env.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
-import {
-  closeProvider,
-  listenProvider,
-  readProviderBody,
-} from "./gateway-provider-fixture.test-support.js";
+import { closeProvider, listenProvider } from "./gateway-provider-fixture.test-support.js";
 import {
   removeGatewayTempHome,
   createGatewayConfigPath,
@@ -42,7 +40,7 @@ export function createChatFixture(
   const errors: unknown[] = [];
   const provider = createServer((request, response) => {
     void (async () => {
-      const body = await readProviderBody(request);
+      const body = await readRequestText(request);
       const header = request.headers.session_id;
       const sessionId = typeof header === "string" ? header : undefined;
       requests.push(body);
@@ -78,6 +76,7 @@ export function createChatFixture(
       origin: `http://127.0.0.1:${portClaim.port}`,
     });
     await gateway.server.startupSettled;
+    await waitForGatewayStartup(gateway.port);
   };
   return {
     requests,

@@ -1,6 +1,7 @@
 import { createMemo, createProjection, createUniqueId, For, onSettled, Show } from "solid-js";
 import type { SessionBranch } from "../../../api/types.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { formatRelativeTimestamp } from "../../../lib/format.ts";
@@ -75,11 +76,12 @@ export function ChatSessionVersionsMobile(props: ChatSessionVersionsMobileProps)
         </div>
       </Show>
       <Show when={empty()}>
-        <div class="chat-session-versions-mobile__empty" role="status">
-          <Icon name="history" />
-          <strong>{t("chat.sessionHeader.versionsEmptyTitle")}</strong>
-          <p>{t("chat.sessionHeader.versionsEmptyDescription")}</p>
-        </div>
+        <PanelEmptyState
+          presentation="mobile"
+          icon={<Icon name="history" />}
+          heading={t("chat.sessionHeader.versionsEmptyTitle")}
+          description={t("chat.sessionHeader.versionsEmptyDescription")}
+        />
       </Show>
       <Show when={props.branches.length > 0}>
         <ol

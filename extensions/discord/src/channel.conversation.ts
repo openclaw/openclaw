@@ -21,12 +21,11 @@ function resolveDiscordConversationIdFromTargets(
   targets: Array<string | undefined>,
 ): string | undefined {
   for (const raw of targets) {
-    const trimmed = raw?.trim();
-    if (!trimmed) {
+    if (!raw) {
       continue;
     }
     try {
-      const target = parseDiscordTarget(trimmed, { defaultKind: "channel" });
+      const target = parseDiscordTarget(raw, { defaultKind: "channel" });
       if (target?.normalized) {
         return target.normalized;
       }

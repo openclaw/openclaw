@@ -326,6 +326,15 @@ and follow the reported process-inspection guidance before retrying repair.
 The installed updater owns this process supervision: a first update driven by
 2026.9.5 remains limited by that older parent's settlement checks.
 
+Delegated update and Doctor workers also watch their recorded parent processes.
+If an updater exits while a worker is stalled, the worker requests shutdown and
+allows ten seconds for settlement before exiting. State remains protected until
+the worker has stopped; the next CLI or Gateway start can then reclaim its dead
+maintenance owner. A surviving maintenance owner is identified by role and PID
+in the refusal, with `openclaw update status --json` for update progress. Package
+recovery still verifies the installed candidate before settling its activation
+receipt, and retains the printed repair command when recovery is unsafe.
+
 Before starting a preserved candidate, the updater checks shared and existing
 agent database schemas against the candidate's contract. If migrations remain
 pending after the failed Doctor has stopped, it runs the candidate Doctor again

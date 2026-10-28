@@ -221,6 +221,16 @@ export function registerPluginsCli(program: Command) {
     .action(authoringAction((runtime) => runtime.runPluginsValidateCommand));
 
   plugins
+    .command("lint")
+    .description("Inspect runtime compatibility without executing plugin code")
+    .option("--root <path>", "Plugin package root")
+    .option("--json", "Print JSON")
+    .action(async (opts: import("./plugins-runtime-lint-command.js").PluginsRuntimeLintOptions) => {
+      const { runPluginsRuntimeLintCommand } = await import("./plugins-runtime-lint-command.js");
+      await runPluginsRuntimeLintCommand(opts);
+    });
+
+  plugins
     .command("pack")
     .description("Bundle a built plugin into an exact artifact for activation approval")
     .option("--root <path>", "Plugin package root")

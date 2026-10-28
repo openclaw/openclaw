@@ -3,6 +3,7 @@ import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
+import { omitNullRequestHeaders } from "../../../packages/llm-core/src/utils/request-headers.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { captureAmbientGatewayOperatorAuthority } from "../../gateway/operator-invocation-authority.js";
 import { providerSupportsNativePdfDocument } from "../../media-understanding/defaults.js";
@@ -51,6 +52,7 @@ import {
   resolveMediaAnalysisParams,
   type MediaToolSandbox,
 } from "./media-tool-shared.js";
+import { createMediaAssistantTextCoercer } from "./media-tool-text.js";
 import {
   applyAgentDefaultModelConfig,
   hasToolModelConfig,
@@ -59,13 +61,14 @@ import {
 import { anthropicAnalyzePdf, geminiAnalyzePdf } from "./pdf-native-providers.js";
 import {
   buildPdfExtractionContext,
-  coercePdfAssistantText,
   coercePdfModelConfig,
   parsePageRange,
   resolvePdfInputs,
   resolvePdfToolMaxTokens,
 } from "./pdf-tool.helpers.js";
 import { type PdfToolActiveModel, resolvePdfModelConfigForTool } from "./pdf-tool.model-config.js";
+
+const coercePdfAssistantText = createMediaAssistantTextCoercer("PDF");
 
 const DEFAULT_PROMPT = "Analyze this PDF document.";
 const DEFAULT_MAX_PDFS = 10;
@@ -465,7 +468,7 @@ export function createPdfTool(options?: {
                 : {}),
               baseUrl: model.baseUrl,
               requestConfig: {
-                headers: model.headers,
+                headers: omitNullRequestHeaders(model.headers),
                 request: getModelProviderRequestTransport(model),
               },
               signal: modelSignal,

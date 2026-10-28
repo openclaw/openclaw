@@ -315,7 +315,7 @@ function resolveContainedSkillPath(params: {
 function resolveNestedSkillsRoot(dir: string, maxEntriesToScan: number): string {
   const nested = path.join(dir, "skills");
   try {
-    if (!fs.existsSync(nested) || !fs.statSync(nested).isDirectory()) {
+    if (!fs.statSync(nested).isDirectory()) {
       return dir;
     }
   } catch {
@@ -359,24 +359,6 @@ export function canonicalSkillDirForSource(
   skillDirRealPath: string,
 ): string | undefined {
   return shouldEnforceConfiguredSkillRootContainment(source) ? undefined : skillDirRealPath;
-}
-
-function resolveSkillFilePath(params: {
-  source: string;
-  skillDir: string;
-  skillDirRealPath: string;
-  onDiagnostic?: SkillDiscoveryReporter;
-}): string | null {
-  const candidatePath = path.join(params.skillDir, "SKILL.md");
-  const resolved = resolveContainedSkillPath({
-    source: params.source,
-    rootDir: params.skillDir,
-    rootRealPath: params.skillDirRealPath,
-    candidatePath,
-    onDiagnostic: params.onDiagnostic,
-  });
-  // Let the root-scoped loader diagnose named paths that cannot be resolved.
-  return resolved || tryRealpath(candidatePath) ? resolved : path.resolve(candidatePath);
 }
 
 export function discoverSkillCandidates(params: {
@@ -425,15 +407,23 @@ export function discoverSkillCandidates(params: {
     skillDir: string,
     skillDirRealPath: string,
     name?: string,
-  ): CandidateSkillDir | undefined =>
-    resolveSkillFilePath({
-      source: params.source,
-      skillDir,
-      skillDirRealPath,
-      onDiagnostic: params.onDiagnostic,
-    })
+  ): CandidateSkillDir | undefined => {
+    const { source, onDiagnostic } = params;
+    const candidatePath = path.join(skillDir, "SKILL.md");
+    const resolved = resolveContainedSkillPath({
+      source,
+      rootDir: skillDir,
+      rootRealPath: skillDirRealPath,
+      candidatePath,
+      onDiagnostic,
+    });
+    // Let the root-scoped loader diagnose named paths that cannot be resolved.
+    const filePath =
+      resolved || tryRealpath(candidatePath) ? resolved : path.resolve(candidatePath);
+    return filePath
       ? { skillDir, skillDirRealPath, name: name ?? path.basename(skillDir) }
       : undefined;
+  };
   if (!rootIsContainer && hasSkillFileCandidate(baseDir)) {
     const candidate = readCandidate(baseDir, baseDirRealPath);
     return { candidates: candidate ? [candidate] : [], rootIsSkill: true };

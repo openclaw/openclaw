@@ -296,7 +296,11 @@ function readProcessSessionMembers(
   darwinTty?: string,
 ): Array<{ pid: number; pgid: number }> | undefined {
   const expectedSession = darwinTty ?? String(sessionId);
-  const args = darwinTty ? ["-t", darwinTty, "-o", "pid=,pgid="] : ["-axo", "pid=,pgid=,sid="];
+  const args = darwinTty
+    ? ["-t", darwinTty, "-o", "pid=,pgid="]
+    : process.platform === "linux"
+      ? ["-s", expectedSession, "-o", "pid=,pgid=,sid="]
+      : ["-axo", "pid=,pgid=,sid="];
   const output = readPsOutput(args);
   if (output === undefined) {
     return undefined;

@@ -130,20 +130,7 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     useToolStreamFakeTimers();
     const host = createHost();
 
-    emitEvent(
-      host,
-      "run-1",
-      1,
-      "lifecycle",
-      {
-        phase: "fallback",
-        selectedProvider: "fireworks",
-        selectedModel: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
-        activeProvider: "deepinfra",
-        activeModel: "moonshotai/Kimi-K2.5",
-      },
-      "agent:other:main",
-    );
+    emitEvent(host, "run-1", 1, "lifecycle", { ...fallback }, "agent:other:main");
 
     expect(host.fallbackStatus).toBeNull();
   });

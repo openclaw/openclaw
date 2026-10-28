@@ -27,7 +27,7 @@ export function buildCronToolDescription(params: {
       : "";
   if (params.managementOnly) {
     return (
-      'Manage any existing automation on this Gateway with the admitted automation management authority. Actions: list [includeDisabled,limit,offset] (enabled-only compact summaries by default; follow nextOffset); get jobId (full saved state, including streamStatus for a known watcher); update jobId job (partial patch, null clears); run jobId (runMode:"force" runs now; waits up to timeoutMs, default 60s; unfinished runs return runId); remove jobId (operator removal requests cancellation of an active run; the result reports activeRunCancellationRequested:true). To stop a saved watcher, use update with job:{enabled:false}, or open it on the Automations page and turn off its Active switch. This pauses the watcher without deleting its saved record. The enabled flag alone does not prove source termination; use get jobId to inspect state.streamStatus. Creator attribution and scheduled execution policy stay intact. Use the Automations page for other actions.' +
+      'Manage any existing automation on this Gateway with the admitted automation management authority. Actions: list [includeDisabled,limit,offset] (enabled-only compact summaries by default; follow nextOffset); get jobId (full saved state, including streamStatus for a known watcher); update jobId job (partial patch, null clears); run jobId (runMode:"force" runs now; waits up to timeoutMs, default 60s; unfinished runs return runId); remove jobId (operator removal requests cancellation of an active run; the result reports activeRunCancellationRequested:true); bind jobId (links an automation that names this conversation only by key to its current incarnation). To stop a saved watcher, use update with job:{enabled:false}, or open it on the Automations page and turn off its Active switch. This pauses the watcher without deleting its saved record. The enabled flag alone does not prove source termination; use get jobId to inspect state.streamStatus. Creator attribution and scheduled execution policy stay intact. Use the Automations page for other actions.' +
       commandPolicySuffix
     );
   }
@@ -62,9 +62,9 @@ STREAM CONSENT: creation, source changes and reactivation require current creato
   const scriptCue = params.triggersEnabled
     ? " Use triggers/script payloads to skip the model on quiet checks. Scripts reach MCP only through toolsAllow entries <server>__tool or <server>__*. Throw to record script failure (returning {error} succeeds); recurring-job failure alerts wait for consecutive failures, run output follows delivery."
     : "";
-  const description = `Schedule reminders, delayed self-wakeups, recurring work${params.triggersEnabled ? ", event watchers" : ""}. Never exec sleep/poll as timer.
+  return `Schedule reminders, delayed self-wakeups, recurring work${params.triggersEnabled ? ", event watchers" : ""}. Never exec sleep/poll as timer.
 
-ACTIONS: status | list (enabled-only summaries by default; includeDisabled:true includes paused records; follow nextOffset) | get jobId (full details) | add job | update jobId job (partial; null clears) | remove jobId (operator removal requests active-run cancellation) | run jobId (runMode:"force"=now; waits up to timeoutMs, default 60s; unfinished runs return runId) | runs jobId runId? (history) | wake text (caller-owned session; mode defaults to next-heartbeat). Check unfinished runs later with runs, never a scheduled verification job. wake has no delay; for a later resume use an at job below.
+ACTIONS: status | list (enabled-only summaries by default; includeDisabled:true includes paused records; follow nextOffset) | get jobId (full details) | add job | update jobId job (partial; null clears) | remove jobId (operator removal requests active-run cancellation) | run jobId (runMode:"force"=now; waits up to timeoutMs, default 60s; unfinished runs return runId) | runs jobId runId? (history) | wake text (caller-owned session; mode defaults to next-heartbeat) | bind jobId (owner turn in the automation's parent conversation; links a key-only automation to this conversation). Check unfinished runs later with runs, never a scheduled verification job. wake has no delay; for a later resume use an at job below.
 
 To pause a saved watcher without deleting its record, update job:{enabled:false}, or turn off its Active switch on the Automations page. The enabled flag and list absence do not prove source termination; use get jobId to inspect state.streamStatus.
 
@@ -79,7 +79,7 @@ SCHEDULE:
 - {kind:"cron",expr,tz?:"IANA"}: wall time in tz, never UTC-convert; omitted tz=Gateway host local.${streamScheduleLine}${eventScheduleLine}
 
 TARGET+PAYLOAD:
-- "current" (agentTurn default) = this conversation's context: the run stays detached, reads bounded chat context, then delivers its final visible assistant result to the resolved destination (this conversation unless another destination is configured). Delayed work/loop = at|every + agentTurn + current. This is not a resumed parent turn: it uses the scheduled agent workspace with its own session identity, not the conversation worktree or cloud worker placement. In-flight turns sent through the job's stable cron key are canceled if that key is reassigned. Verify required checkout/tool access before delegating repository work; result delivery alone does not resume the original agent.
+- "current" (agentTurn default) = this conversation's context: the run stays detached, reads bounded chat context, then delivers its final visible assistant result to the resolved destination (this conversation unless another destination is configured). Delayed work/loop = at|every + agentTurn + current. This is not a resumed parent turn: it has its own session identity; while this conversation is current it works at this conversation's saved workspace root with its sandbox (otherwise the scheduled agent workspace), and resetting the conversation ends the run. It never inherits cloud worker placement. In-flight turns sent through the job's stable cron key are canceled if that key is reassigned. Verify required checkout/tool access before delegating repository work; result delivery alone does not resume the original agent.
 - "isolated" = fresh detached session; standalone background work recorded in cron run history.
 - "main" = heartbeat lane; payload {kind:"systemEvent",text} (systemEvent default target).
 - "session:<key>" + agentTurn runs a turn inside that existing conversation (same history, saved workspace/worktree). To come back here later (wait for CI, recheck), add an at + agentTurn job with sessionTarget "session:<your session key from Runtime>" and message = instructions for your next turn. If that one-shot turn still needs to wait, call next_check in:"5m" to rearm this same job after successful run completion (minimum 2s); target, payload, and tool cap stay unchanged. Without a proposal it completes normally.
@@ -98,6 +98,7 @@ FAILURE ALERTS: routed jobs default to 2 consecutive execution failures and 1h c
 
 Optional job policy: activeHours{start,end,timezone?} is an end-exclusive execution window (including manual runs); idleOnly yields to foreground work. delivery.target:"owner" resolves the owner DM dynamically, never the last group; delivery.directPolicy:"block" prohibits DMs. agentTurn skipIfScratchEmpty skips an explicitly empty checklist, not missing scratch.
 
-Main-job wakeMode: "now"(default)|"next-heartbeat". Scheduled runs: self status/list/get/runs/remove + own next_check only. Use jobId. contextMessages 0-10 embeds recent chat lines in reminder text.`;
-  return description + commandPolicySuffix;
+Main-job wakeMode: "now"(default)|"next-heartbeat". contextMessages 0-10 embeds recent chat lines in reminder text.
+
+Inside a scheduled run only: ${buildCronSelfDescription({ activeRun: true, nextCheckEnabled: true })}${commandPolicySuffix}`;
 }

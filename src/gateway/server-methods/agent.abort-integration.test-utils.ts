@@ -1,7 +1,6 @@
 // Imported by agent.test.ts to keep its mocked suite in one Vitest module graph.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { registerExecApprovalFollowupRuntimeHandoff } from "../../agents/bash-tools.exec-approval-followup-state.js";
 import { isAgentRunDirectAbortReason } from "../../agents/run-termination.js";
 import { runSessionMutation } from "../../sessions/session-controller.lifecycle.js";
 import {
@@ -21,11 +20,14 @@ import {
   registerAgentAbortRunExecutionTest,
   registerAgentAbortStaleKeyExecutionTest,
 } from "./agent.abort-execution.test-support.js";
+import { registerAgentAbortQueueDeadlineTest } from "./agent.abort-queue-deadline.test-support.js";
 import { registerAgentAbortSubagentTests } from "./agent.abort-subagents.test-utils.js";
 import { registerAgentPreDispatchFailureTests } from "./agent.pre-dispatch-failure.test-utils.js";
 import { registerAgentQueuedRestartRecoveryTests } from "./agent.restart-recovery.test-support.js";
 import { registerAgentGlobalGoalEventTest } from "./agent.session-events.test-utils.js";
 import {
+  createElevatedExecApprovalFixture,
+  mockTelegramSessionEntry,
   getAgentTestMocks,
   operatorWriteCliClient,
   makeContext,
@@ -54,6 +56,64 @@ type HeldAgentResult = {
   payloads: Array<{ text: string }>;
   meta: { durationMs: number };
 };
+
+function holdFirstMainSessionWrite() {
+  let releaseSessionWrite: (() => void) | undefined;
+  let sessionWriteCalls = 0;
+  mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+    sessionWriteCalls += 1;
+    if (sessionWriteCalls === 1) {
+      await new Promise<void>((resolve) => {
+        releaseSessionWrite = resolve;
+      });
+    }
+    const store = {
+      "agent:main:main": buildExistingMainStoreEntry(),
+    };
+    return await updater(store);
+  });
+  return {
+    get calls() {
+      return sessionWriteCalls;
+    },
+    release: () => releaseSessionWrite?.(),
+  };
+}
+
+function createHeldVisionCatalog() {
+  let releaseCatalog: (() => void) | undefined;
+  const context = {
+    ...makeContext(),
+    loadGatewayModelCatalog: vi.fn<GatewayRequestContext["loadGatewayModelCatalog"]>(
+      async () =>
+        await new Promise<Awaited<ReturnType<GatewayRequestContext["loadGatewayModelCatalog"]>>>(
+          (resolve) => {
+            releaseCatalog = () =>
+              resolve([
+                {
+                  id: "vision-model",
+                  name: "vision-model",
+                  provider: "test",
+                  input: ["image"],
+                },
+              ]);
+          },
+        ),
+    ),
+  };
+  return { context, releaseCatalog: () => releaseCatalog?.() };
+}
+
+function pixelAttachments() {
+  return [
+    {
+      type: "file",
+      mimeType: "image/png",
+      fileName: "pixel.png",
+      content: Buffer.from("not really a png").toString("base64"),
+    },
+  ];
+}
 
 function captureAgentRunSettlement(runId: string): Promise<void> {
   const source = rpcSourceTesting.get(runId);
@@ -267,6 +327,8 @@ describe("gateway agent handler chat.abort integration", () => {
 
   it("preserves stop-command reason when /stop lands during the accepted ack yield", async () => {
     prime();
+    // Keep the ACK yield pending while Stop reads durable retry state.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     mocks.agentCommand.mockResolvedValueOnce({
       payloads: [{ text: "unexpected dispatch" }],
       meta: { durationMs: 1 },
@@ -336,20 +398,7 @@ describe("gateway agent handler chat.abort integration", () => {
   it("does not dispatch when chat.abort lands during pre-accept setup", async () => {
     prime();
     const requestedSessionKey = "agent:main:legacy-main";
-    let releaseSessionWrite: (() => void) | undefined;
-    let sessionWriteCalls = 0;
-    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
-      sessionWriteCalls += 1;
-      if (sessionWriteCalls === 1) {
-        await new Promise<void>((resolve) => {
-          releaseSessionWrite = resolve;
-        });
-      }
-      const store = {
-        "agent:main:main": buildExistingMainStoreEntry(),
-      };
-      return await updater(store);
-    });
+    const sessionWrite = holdFirstMainSessionWrite();
     const agentResult = createDeferred<HeldAgentResult>();
     mocks.agentCommand.mockReturnValueOnce(agentResult.promise);
 
@@ -368,7 +417,7 @@ describe("gateway agent handler chat.abort integration", () => {
     );
     let cancellation: Promise<void> | undefined;
     try {
-      await waitForAssertion(() => expect(sessionWriteCalls).toBe(1));
+      await waitForAssertion(() => expect(sessionWrite.calls).toBe(1));
       const source = expectPreparingAgentSource(runId, {
         sessionKey: "agent:main:main",
         sessionId: "existing-session-id",
@@ -402,7 +451,7 @@ describe("gateway agent handler chat.abort integration", () => {
         stopReason: "rpc",
       });
 
-      releaseSessionWrite?.();
+      sessionWrite.release();
       await pending;
       await flushScheduledDispatchStep();
 
@@ -421,7 +470,7 @@ describe("gateway agent handler chat.abort integration", () => {
     } finally {
       const settlement = captureAgentRunSettlement(runId);
       agentResult.resolve({ payloads: [], meta: { durationMs: 1 } });
-      releaseSessionWrite?.();
+      sessionWrite.release();
       await Promise.allSettled([pending, cancellation]);
       await flushScheduledDispatchStep();
       await settlement;
@@ -547,20 +596,7 @@ describe("gateway agent handler chat.abort integration", () => {
   it("does not dispatch when a stop command lands during pre-accept setup", async () => {
     prime();
     const requestedSessionKey = "agent:main:legacy-main";
-    let releaseSessionWrite: (() => void) | undefined;
-    let sessionWriteCalls = 0;
-    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
-      sessionWriteCalls += 1;
-      if (sessionWriteCalls === 1) {
-        await new Promise<void>((resolve) => {
-          releaseSessionWrite = resolve;
-        });
-      }
-      const store = {
-        "agent:main:main": buildExistingMainStoreEntry(),
-      };
-      return await updater(store);
-    });
+    const sessionWrite = holdFirstMainSessionWrite();
     const agentResult = createDeferred<HeldAgentResult>();
     mocks.agentCommand.mockReturnValueOnce(agentResult.promise);
 
@@ -578,7 +614,7 @@ describe("gateway agent handler chat.abort integration", () => {
     );
     let cancellation: Promise<void> | undefined;
     try {
-      await waitForAssertion(() => expect(sessionWriteCalls).toBe(1));
+      await waitForAssertion(() => expect(sessionWrite.calls).toBe(1));
       const source = expectPreparingAgentSource(runId, {
         sessionKey: "agent:main:main",
         sessionId: "existing-session-id",
@@ -616,7 +652,7 @@ describe("gateway agent handler chat.abort integration", () => {
         stopReason: "stop",
       });
 
-      releaseSessionWrite?.();
+      sessionWrite.release();
       await pending;
       await flushScheduledDispatchStep();
 
@@ -633,7 +669,7 @@ describe("gateway agent handler chat.abort integration", () => {
     } finally {
       const settlement = captureAgentRunSettlement(runId);
       agentResult.resolve({ payloads: [], meta: { durationMs: 1 } });
-      releaseSessionWrite?.();
+      sessionWrite.release();
       await Promise.allSettled([pending, cancellation]);
       await flushScheduledDispatchStep();
       await settlement;
@@ -643,20 +679,7 @@ describe("gateway agent handler chat.abort integration", () => {
 
   it("does not dispatch when session-level chat.abort lands during pre-accept setup", async () => {
     prime();
-    let releaseSessionWrite: (() => void) | undefined;
-    let sessionWriteCalls = 0;
-    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
-      sessionWriteCalls += 1;
-      if (sessionWriteCalls === 1) {
-        await new Promise<void>((resolve) => {
-          releaseSessionWrite = resolve;
-        });
-      }
-      const store = {
-        "agent:main:main": buildExistingMainStoreEntry(),
-      };
-      return await updater(store);
-    });
+    const sessionWrite = holdFirstMainSessionWrite();
     const agentResult = createDeferred<HeldAgentResult>();
     mocks.agentCommand.mockReturnValueOnce(agentResult.promise);
 
@@ -674,7 +697,7 @@ describe("gateway agent handler chat.abort integration", () => {
     );
     let cancellation: Promise<void> | undefined;
     try {
-      await waitForAssertion(() => expect(sessionWriteCalls).toBe(1));
+      await waitForAssertion(() => expect(sessionWrite.calls).toBe(1));
       const source = expectPreparingAgentSource(runId, {
         sessionKey: "agent:main:main",
         sessionId: "existing-session-id",
@@ -707,7 +730,7 @@ describe("gateway agent handler chat.abort integration", () => {
         stopReason: "rpc",
       });
 
-      releaseSessionWrite?.();
+      sessionWrite.release();
       await pending;
       await flushScheduledDispatchStep();
 
@@ -724,7 +747,7 @@ describe("gateway agent handler chat.abort integration", () => {
     } finally {
       const settlement = captureAgentRunSettlement(runId);
       agentResult.resolve({ payloads: [], meta: { durationMs: 1 } });
-      releaseSessionWrite?.();
+      sessionWrite.release();
       await Promise.allSettled([pending, cancellation]);
       await flushScheduledDispatchStep();
       await settlement;
@@ -744,24 +767,7 @@ describe("gateway agent handler chat.abort integration", () => {
     const agentResult = createDeferred<HeldAgentResult>();
     mocks.agentCommand.mockReturnValueOnce(agentResult.promise);
 
-    let releaseCatalog: (() => void) | undefined;
-    const context = {
-      ...makeContext(),
-      loadGatewayModelCatalog: vi.fn(
-        async () =>
-          await new Promise((resolve) => {
-            releaseCatalog = () =>
-              resolve([
-                {
-                  id: "vision-model",
-                  name: "vision-model",
-                  provider: "test",
-                  input: ["image"],
-                },
-              ]);
-          }),
-      ),
-    } as unknown as GatewayRequestContext;
+    const { context, releaseCatalog } = createHeldVisionCatalog();
     const respond = vi.fn();
     const runId = "idem-abort-during-attachment-setup";
     const pending = invokeAgent(
@@ -770,14 +776,7 @@ describe("gateway agent handler chat.abort integration", () => {
         agentId: "main",
         sessionKey: "agent:main:main",
         idempotencyKey: runId,
-        attachments: [
-          {
-            type: "file",
-            mimeType: "image/png",
-            fileName: "pixel.png",
-            content: Buffer.from("not really a png").toString("base64"),
-          },
-        ],
+        attachments: pixelAttachments(),
       },
       { context, respond, reqId: runId, flushDispatch: false },
     );
@@ -824,7 +823,7 @@ describe("gateway agent handler chat.abort integration", () => {
         stopReason: "rpc",
       });
 
-      releaseCatalog?.();
+      releaseCatalog();
       await pending;
       await flushScheduledDispatchStep();
 
@@ -841,7 +840,7 @@ describe("gateway agent handler chat.abort integration", () => {
     } finally {
       const settlement = captureAgentRunSettlement(runId);
       agentResult.resolve({ payloads: [], meta: { durationMs: 1 } });
-      releaseCatalog?.();
+      releaseCatalog();
       await Promise.allSettled([pending, cancellation]);
       await flushScheduledDispatchStep();
       await settlement;
@@ -869,24 +868,7 @@ describe("gateway agent handler chat.abort integration", () => {
     mocks.updateSessionStore.mockClear();
     mocks.agentCommand.mockClear();
 
-    let releaseCatalog: (() => void) | undefined;
-    const context = {
-      ...makeContext(),
-      loadGatewayModelCatalog: vi.fn(
-        async () =>
-          await new Promise((resolve) => {
-            releaseCatalog = () =>
-              resolve([
-                {
-                  id: "vision-model",
-                  name: "vision-model",
-                  provider: "test",
-                  input: ["image"],
-                },
-              ]);
-          }),
-      ),
-    } as unknown as GatewayRequestContext;
+    const { context, releaseCatalog } = createHeldVisionCatalog();
     const respond = vi.fn();
     const runId = "idem-delete-during-attachment-setup";
     const pending = invokeAgent(
@@ -895,21 +877,14 @@ describe("gateway agent handler chat.abort integration", () => {
         agentId: "main",
         sessionKey,
         idempotencyKey: runId,
-        attachments: [
-          {
-            type: "file",
-            mimeType: "image/png",
-            fileName: "pixel.png",
-            content: Buffer.from("not really a png").toString("base64"),
-          },
-        ],
+        attachments: pixelAttachments(),
       },
       { context, respond, reqId: runId, flushDispatch: false },
     );
 
     await waitForAssertion(() => expect(context.loadGatewayModelCatalog).toHaveBeenCalled());
     deleted = true;
-    releaseCatalog?.();
+    releaseCatalog();
     await pending;
 
     expectRespondError(respond, {
@@ -939,24 +914,7 @@ describe("gateway agent handler chat.abort integration", () => {
     mocks.updateSessionStore.mockClear();
     mocks.agentCommand.mockClear();
 
-    let releaseCatalog: (() => void) | undefined;
-    const context = {
-      ...makeContext(),
-      loadGatewayModelCatalog: vi.fn(
-        async () =>
-          await new Promise((resolve) => {
-            releaseCatalog = () =>
-              resolve([
-                {
-                  id: "vision-model",
-                  name: "vision-model",
-                  provider: "test",
-                  input: ["image"],
-                },
-              ]);
-          }),
-      ),
-    } as unknown as GatewayRequestContext;
+    const { context, releaseCatalog } = createHeldVisionCatalog();
     const respond = vi.fn();
     const runId = "idem-reset-during-attachment-setup";
     const pending = invokeAgent(
@@ -965,21 +923,14 @@ describe("gateway agent handler chat.abort integration", () => {
         agentId: "main",
         sessionKey,
         idempotencyKey: runId,
-        attachments: [
-          {
-            type: "file",
-            mimeType: "image/png",
-            fileName: "pixel.png",
-            content: Buffer.from("not really a png").toString("base64"),
-          },
-        ],
+        attachments: pixelAttachments(),
       },
       { context, respond, reqId: runId, flushDispatch: false },
     );
 
     await waitForAssertion(() => expect(context.loadGatewayModelCatalog).toHaveBeenCalled());
     currentEntry = { ...persistedEntry, sessionId: "reset-session-id" };
-    releaseCatalog?.();
+    releaseCatalog();
     await pending;
 
     expectRespondError(respond, {
@@ -1009,24 +960,7 @@ describe("gateway agent handler chat.abort integration", () => {
     const agentResult = createDeferred<HeldAgentResult>();
     mocks.agentCommand.mockReturnValueOnce(agentResult.promise);
 
-    let releaseCatalog: (() => void) | undefined;
-    const context = {
-      ...makeContext(),
-      loadGatewayModelCatalog: vi.fn(
-        async () =>
-          await new Promise((resolve) => {
-            releaseCatalog = () =>
-              resolve([
-                {
-                  id: "vision-model",
-                  name: "vision-model",
-                  provider: "test",
-                  input: ["image"],
-                },
-              ]);
-          }),
-      ),
-    } as unknown as GatewayRequestContext;
+    const { context, releaseCatalog } = createHeldVisionCatalog();
     const respond = vi.fn();
     const runId = "idem-selected-global-abort-during-attachment-setup";
     const pending = invokeAgent(
@@ -1035,14 +969,7 @@ describe("gateway agent handler chat.abort integration", () => {
         agentId: "work",
         sessionKey: "global",
         idempotencyKey: runId,
-        attachments: [
-          {
-            type: "file",
-            mimeType: "image/png",
-            fileName: "pixel.png",
-            content: Buffer.from("not really a png").toString("base64"),
-          },
-        ],
+        attachments: pixelAttachments(),
       },
       { context, respond, reqId: runId, flushDispatch: false },
     );
@@ -1095,7 +1022,7 @@ describe("gateway agent handler chat.abort integration", () => {
         stopReason: "rpc",
       });
 
-      releaseCatalog?.();
+      releaseCatalog();
       await pending;
       await flushScheduledDispatchStep();
 
@@ -1112,7 +1039,7 @@ describe("gateway agent handler chat.abort integration", () => {
     } finally {
       const settlement = captureAgentRunSettlement(runId);
       agentResult.resolve({ payloads: [], meta: { durationMs: 1 } });
-      releaseCatalog?.();
+      releaseCatalog();
       await Promise.allSettled([pending, cancellation]);
       await flushScheduledDispatchStep();
       await settlement;
@@ -1363,20 +1290,7 @@ describe("gateway agent handler chat.abort integration", () => {
 
   it("rejects unauthorized chat.abort during pre-accept setup", async () => {
     prime();
-    let releaseSessionWrite: (() => void) | undefined;
-    let sessionWriteCalls = 0;
-    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
-      sessionWriteCalls += 1;
-      if (sessionWriteCalls === 1) {
-        await new Promise<void>((resolve) => {
-          releaseSessionWrite = resolve;
-        });
-      }
-      const store = {
-        "agent:main:main": buildExistingMainStoreEntry(),
-      };
-      return await updater(store);
-    });
+    const sessionWrite = holdFirstMainSessionWrite();
     const agentResult = createDeferred<HeldAgentResult>();
     mocks.agentCommand.mockReturnValueOnce(agentResult.promise);
 
@@ -1399,7 +1313,7 @@ describe("gateway agent handler chat.abort integration", () => {
       },
     );
     try {
-      await waitForAssertion(() => expect(sessionWriteCalls).toBe(1));
+      await waitForAssertion(() => expect(sessionWrite.calls).toBe(1));
       const source = expectPreparingAgentSource(runId, {
         sessionKey: "agent:main:main",
         sessionId: "existing-session-id",
@@ -1429,7 +1343,7 @@ describe("gateway agent handler chat.abort integration", () => {
         status: "accepted",
       });
 
-      releaseSessionWrite?.();
+      sessionWrite.release();
       await pending;
       await flushScheduledDispatchStep();
 
@@ -1438,7 +1352,7 @@ describe("gateway agent handler chat.abort integration", () => {
     } finally {
       const settlement = captureAgentRunSettlement(runId);
       agentResult.resolve({ payloads: [], meta: { durationMs: 1 } });
-      releaseSessionWrite?.();
+      sessionWrite.release();
       await pending;
       await flushScheduledDispatchStep();
       await settlement;
@@ -1447,29 +1361,12 @@ describe("gateway agent handler chat.abort integration", () => {
   });
 
   it("updates exec approval followup aliases when chat.abort lands during pre-accept setup", async () => {
-    const bashElevated = {
-      enabled: true,
-      allowed: true,
-      defaultLevel: "on" as const,
-    };
-    const firstRegistration = registerExecApprovalFollowupRuntimeHandoff({
-      approvalId: "req-elevated-preaccept-abort",
-      sessionKey: "agent:main:telegram:direct:123",
-      bashElevated,
-    });
-    const secondRegistration = registerExecApprovalFollowupRuntimeHandoff({
-      approvalId: "req-elevated-preaccept-abort",
-      sessionKey: "agent:main:telegram:direct:123",
-      bashElevated,
-    });
+    const { registration: firstRegistration, secondRegistration } =
+      createElevatedExecApprovalFixture("req-elevated-preaccept-abort", 2);
     if (!firstRegistration || !secondRegistration) {
       throw new Error("expected runtime handoff ids");
     }
-    mockMainSessionEntry({
-      sessionId: "existing-session-id",
-      lastChannel: "telegram",
-      lastTo: "123",
-    });
+    mockTelegramSessionEntry();
     let releaseSessionWrite: (() => void) | undefined;
     let sessionWriteCalls = 0;
     mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
@@ -1804,58 +1701,7 @@ describe("gateway agent handler chat.abort integration", () => {
     }
   });
 
-  it("keeps an elapsed queue deadline terminal before the maintenance sweep", async () => {
-    prime();
-    const runId = "idem-agent-expired-queue-deadline";
-    let nowMs = 1_000_000;
-    const dateNow = vi.spyOn(Date, "now").mockImplementation(() => nowMs);
-    const agentResult = createDeferred<HeldAgentResult>();
-    let settlement: Promise<void> | undefined;
-    let onExecutionStarted: (() => void | Promise<void>) | undefined;
-    mocks.agentCommand.mockImplementation(
-      (opts: { onExecutionStarted?: () => void | Promise<void> }) => {
-        onExecutionStarted = opts.onExecutionStarted;
-        return agentResult.promise;
-      },
-    );
-    const context = makeContext();
-
-    try {
-      await invokeAgent(
-        {
-          message: "do not revive an expired queue deadline",
-          agentId: "main",
-          sessionKey: "agent:main:main",
-          idempotencyKey: runId,
-          timeout: 120,
-        },
-        { context, respond: vi.fn(), reqId: runId },
-      );
-
-      const abortEntry = requireValue(rpcSourceTesting.get(runId), "chat abort entry missing");
-      settlement = captureAgentRunSettlement(runId);
-      const startedAtMs = sourceQueuedAt(abortEntry);
-      const queueExpiresAtMs = sourceExpiry(abortEntry);
-      nowMs = queueExpiresAtMs + 1;
-      const executionStarted = requireValue(onExecutionStarted, "execution-start callback missing");
-      await executionStarted();
-
-      expect(sourceQueuedAt(abortEntry)).toBe(startedAtMs);
-      expect(sourceExpiry(abortEntry)).toBe(queueExpiresAtMs);
-      expect(abortEntry.input.abortSignal.aborted).toBe(true);
-      expect(abortEntry.adapter.abortStopReason).toBe("timeout");
-
-      nowMs = queueExpiresAtMs - 1;
-      await executionStarted();
-      expect(sourceExpiry(abortEntry)).toBe(queueExpiresAtMs);
-    } finally {
-      const remaining = captureAgentRunSettlement(runId);
-      agentResult.resolve({ payloads: [], meta: { durationMs: 1 } });
-      await settlement;
-      await remaining;
-      dateNow.mockRestore();
-    }
-  });
+  registerAgentAbortQueueDeadlineTest({ captureAgentRunSettlement, sourceQueuedAt, sourceExpiry });
 
   it("sets the maintenance expiry to the configured agent timeout, not the 24h chat default", async () => {
     prime();

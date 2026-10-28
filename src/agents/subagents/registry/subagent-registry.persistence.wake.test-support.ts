@@ -77,7 +77,7 @@ export function registerStaleRequesterWakeBatchTests({
             bindGatewayContextResolver(sibling, () =>
               siblingGatewayOpen ? (anchorGateway as never) : undefined,
             );
-            await mod.activateSubagentRegistry(() => anchorGateway as never);
+            await mod.activateSubagentRegistry(() => anchorGateway as never).settled;
             await waitForCalls(1);
             expect(wakeRequester).toHaveBeenCalledOnce();
             expect(oldParams?.settledEntry).toBe(anchor);
@@ -85,7 +85,7 @@ export function registerStaleRequesterWakeBatchTests({
             siblingGatewayOpen = false;
             const beforeActivation = settlement.startsWith("closed-");
             if (!beforeActivation) {
-              await mod.activateSubagentRegistry(() => nextGateway as never);
+              await mod.activateSubagentRegistry(() => nextGateway as never).settled;
             }
             const replacement = mod.getSubagentRunByRunId(sibling.runId)!;
             expect(mod.getSubagentRunByRunId(anchor.runId)).toBe(anchor);
@@ -112,7 +112,7 @@ export function registerStaleRequesterWakeBatchTests({
               oldDone.resolve(false);
               await settleOwnedWork();
               if (beforeActivation) {
-                await mod.activateSubagentRegistry(() => nextGateway as never);
+                await mod.activateSubagentRegistry(() => nextGateway as never).settled;
                 await settleOwnedWork();
               }
               // The old no-wake decision must not clear only the surviving member

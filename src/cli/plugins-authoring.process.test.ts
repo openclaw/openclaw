@@ -104,3 +104,80 @@ it("still rejects invalid host config for plugin enable", async () => {
   expect(result.code, result.stderr).toBe(1);
   expect(result.stderr).toContain("OpenClaw config is invalid");
 });
+
+it("lints installed runtime dependencies without executing code or reading host config", async () => {
+  const root = tempDirs.make("openclaw-plugin-lint-process-");
+  const project = path.join(root, "project");
+  const physical = path.join(project, "node_modules", ".pnpm", "direct@1", "node_modules");
+  const direct = path.join(physical, "direct");
+  const peer = path.join(physical, "peer");
+  const transitive = path.join(project, "node_modules", "transitive");
+  const development = path.join(project, "node_modules", "development");
+  const packages = [
+    {
+      dir: project,
+      manifest: {
+        name: "plugin",
+        version: "1.0.0",
+        dependencies: { direct: "1.0.0" },
+        devDependencies: { development: "1.0.0" },
+      },
+      source: "throw new Error('must not execute plugin');",
+    },
+    {
+      dir: direct,
+      manifest: {
+        name: "direct",
+        version: "1.0.0",
+        dependencies: { transitive: "2.0.0" },
+        peerDependencies: { peer: "3.0.0" },
+      },
+    },
+    {
+      dir: transitive,
+      manifest: { name: "transitive", version: "2.0.0" },
+      source: "Buffer.concat = () => null;",
+    },
+    {
+      dir: peer,
+      manifest: { name: "peer", version: "3.0.0" },
+      source: "eval('must not execute peer');",
+    },
+    {
+      dir: development,
+      manifest: { name: "development", version: "1.0.0" },
+      source: "Array.prototype.push = () => 0;",
+    },
+  ];
+  for (const pkg of packages) {
+    await fs.mkdir(pkg.dir, { recursive: true });
+    await fs.writeFile(path.join(pkg.dir, "package.json"), JSON.stringify(pkg.manifest));
+    if (pkg.source) {
+      await fs.writeFile(path.join(pkg.dir, "index.js"), pkg.source);
+    }
+  }
+  await fs.symlink(direct, path.join(project, "node_modules", "direct"), "junction");
+  const result = await runPlugins(root, ["lint", "--root", project, "--json"]);
+  expect(result.code, result.stderr).toBe(0);
+  expect(JSON.parse(result.stdout)).toEqual({
+    complete: true,
+    scannedPackages: 4,
+    scannedFiles: 3,
+    warnings: [
+      expect.objectContaining({
+        packageName: "peer",
+        packageVersion: "3.0.0",
+        ruleId: "runtime-code-generation",
+        file: "index.js",
+        line: 1,
+      }),
+      expect.objectContaining({
+        packageName: "transitive",
+        packageVersion: "2.0.0",
+        ruleId: "builtin-patch",
+        file: "index.js",
+        line: 1,
+      }),
+    ],
+  });
+});

@@ -1,4 +1,5 @@
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
+import { Cron } from "croner";
 import { resolveCronTriggerMinIntervalMs } from "../../../../src/config/cron-limits.js";
 import { hasCanonicalCronDeliveryMode } from "../../../../src/cron/store/delivery-codec.js";
 import type { CronJob, CronPayload } from "../../api/types.ts";
@@ -50,6 +51,16 @@ export function normalizeCronFormState(
   };
 }
 
+function parsesAsCron(expr: string, timezone?: string): boolean {
+  try {
+    // Croner validates the timezone lazily, on the first run lookup.
+    new Cron(expr, { timezone: timezone || undefined, catch: false }).nextRun();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function validateCronForm(form: CronFormState): CronFieldErrors {
   const errors: CronFieldErrors = {};
   if (!form.name.trim()) {
@@ -80,8 +91,15 @@ export function validateCronForm(form: CronFormState): CronFieldErrors {
       errors.everyAmount = "cron.errors.triggerIntervalTooShort";
     }
   } else if (form.scheduleKind === "cron") {
-    if (!form.cronExpr.trim()) {
+    const cronExpr = form.cronExpr.trim();
+    if (!cronExpr) {
       errors.cronExpr = "cron.errors.cronExprRequired";
+    } else if (!parsesAsCron(cronExpr, form.cronTz.trim())) {
+      if (parsesAsCron(cronExpr)) {
+        errors.cronTz = "cron.errors.cronTzInvalid";
+      } else {
+        errors.cronExpr = "cron.errors.cronExprInvalid";
+      }
     }
     if (!form.scheduleExact) {
       const staggerAmount = form.staggerAmount.trim();

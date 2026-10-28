@@ -49,14 +49,6 @@ function provenanceFields(provenance?: ClickClackMessageProvenance): Record<stri
   return fields;
 }
 
-type ClientOptions = {
-  baseUrl: string;
-  token: string;
-  correlationId?: string;
-  fetch?: typeof fetch;
-  beforeRequest?: () => void;
-};
-
 type MessageCreateOptions = {
   provenance?: ClickClackMessageProvenance;
   quotedMessageId?: string;
@@ -94,12 +86,6 @@ const CLICKCLACK_EPHEMERAL_REQUEST_TIMEOUT_MS = 15_000;
 const CLICKCLACK_MESSAGE_PAGE_LIMIT = 200;
 const CLICKCLACK_DISCUSSION_ROOT_PAGE_LIMIT = 8;
 const CLICKCLACK_DISCUSSION_THREAD_REQUEST_LIMIT = 24;
-
-type ClickClackMessagePage = {
-  messages: ClickClackMessage[];
-  oldest_seq: number;
-  has_older: boolean;
-};
 
 function compareMessages(left: ClickClackMessage, right: ClickClackMessage): number {
   return left.created_at.localeCompare(right.created_at) || left.id.localeCompare(right.id);
@@ -148,7 +134,13 @@ export function normalizeClickClackCorrelationId(value: unknown): string | undef
   return normalized;
 }
 
-export function createClickClackClient(options: ClientOptions) {
+export function createClickClackClient(options: {
+  baseUrl: string;
+  token: string;
+  correlationId?: string;
+  fetch?: typeof fetch;
+  beforeRequest?: () => void;
+}) {
   const baseUrl = options.baseUrl.replace(/\/$/, "");
   const fetcher = options.fetch ?? fetch;
   const correlationId = normalizeClickClackCorrelationId(options.correlationId);
@@ -291,7 +283,7 @@ export function createClickClackClient(options: ClientOptions) {
   }
 
   return {
-    me: async (): Promise<ClickClackUser> => requestObject("user", "/api/me"),
+    me: (): Promise<ClickClackUser> => requestObject("user", "/api/me"),
     setBotCommands: async (
       commands: { command: string; description: string; args_hint?: string }[],
     ): Promise<ClickClackBotCommand[]> =>
@@ -299,7 +291,7 @@ export function createClickClackClient(options: ClientOptions) {
         method: "PUT",
         body: JSON.stringify({ commands }),
       }),
-    workspaces: async (): Promise<ClickClackWorkspace[]> =>
+    workspaces: (): Promise<ClickClackWorkspace[]> =>
       requestObject("workspaces", "/api/workspaces"),
     channels: async (workspaceId: string): Promise<ClickClackChannel[]> =>
       requestObject("channels", `/api/workspaces/${encodeURIComponent(workspaceId)}/channels`),
@@ -357,9 +349,11 @@ export function createClickClackClient(options: ClientOptions) {
         if (beforeSeq !== undefined) {
           query.set("before_seq", String(beforeSeq));
         }
-        const page = await request<ClickClackMessagePage>(
-          `/api/channels/${encodeURIComponent(channelId)}/messages?${query.toString()}`,
-        );
+        const page = await request<{
+          messages: ClickClackMessage[];
+          oldest_seq: number;
+          has_older: boolean;
+        }>(`/api/channels/${encodeURIComponent(channelId)}/messages?${query.toString()}`);
 
         for (const root of page.messages) {
           latest = keepLatestMessages([...latest, root], boundedLimit);
@@ -417,7 +411,7 @@ export function createClickClackClient(options: ClientOptions) {
       ),
     message: async (messageId: string): Promise<NonceObjects["message"]> =>
       requestObject("message", `/api/messages/${encodeURIComponent(messageId)}`),
-    findMessageByNonce: async (params: {
+    findMessageByNonce: (params: {
       workspaceId: string;
       nonce: string;
     }): Promise<NonceObjects["message"] | undefined> => findByNonce("message", params),

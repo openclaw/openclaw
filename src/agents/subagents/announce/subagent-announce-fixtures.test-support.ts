@@ -1,6 +1,19 @@
 import { matchesTranscriptEvent } from "../../../sessions/transcript-visible-record.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 
+export function privateRequesterRouteCases() {
+  return [
+    { name: "channel-less", origin: undefined, canDeliver: false },
+    {
+      name: "internal session target",
+      origin: { channel: "internal", to: "agent:main:main" },
+      canDeliver: false,
+    },
+    { name: "channel", origin: { channel: "discord", to: "channel:123" }, canDeliver: true },
+    { name: "WebChat", origin: { channel: "webchat" }, canDeliver: true },
+  ];
+}
+
 export function visibleCompletion(text: string) {
   return {
     required: true,

@@ -564,8 +564,8 @@ export const OpenClawSchemaShape = {
           /** Autonomous Skill Workshop learning. */
           autonomous: z
             .strictObject({
-              /** "auto" lets agents save and update Workshop skills; "off" disables autonomous learning. */
-              mode: z.union([z.literal("off"), z.literal("auto")]).optional(),
+              /** "auto" lets background reviews change Workshop skills; "propose" saves their changes as drafts for review; "off" disables background learning. */
+              mode: z.union([z.literal("off"), z.literal("propose"), z.literal("auto")]).optional(),
               /** Post background review notices to supported channels. Default: false. */
               channelNotices: z.boolean().optional(),
             })

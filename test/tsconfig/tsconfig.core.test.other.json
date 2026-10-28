@@ -13,7 +13,7 @@
     "../../**/dist/**",
     "../../src/audit/**",
     "../../src/agents/**",
-    "../../src/claws/**",
+    "../../src/templates/**",
     "../../src/gateway/**",
     "../../src/infra/**",
     "../../src/process/**",

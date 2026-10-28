@@ -4,6 +4,7 @@ import type {
   SessionsUsageAggregates,
 } from "../../../../src/shared/usage-types.js";
 import { SessionOwnerChip } from "../../components/solid/session-owner-chip.tsx";
+import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import { SettingsSection } from "../../components/solid/settings-ui.tsx";
 import { presenceViewerLabel } from "../../lib/presence-users.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -66,31 +67,25 @@ export function UsageCreatorFilter(props: {
   const options = createMemo(() => {
     const entries = props.options
       .toSorted((a, b) => creatorLabel(a).localeCompare(creatorLabel(b)))
-      .map((creator) => ({ key: creator.key, label: creatorLabel(creator) }));
+      .map((creator) => ({ value: creator.key, label: creatorLabel(creator) }));
     // Keep the active filter explicit when this range has no creator metadata.
-    if (props.selectedKey !== null && !entries.some((option) => option.key === props.selectedKey)) {
-      entries.push({ key: props.selectedKey, label: t("usage.creators.selected") });
+    if (
+      props.selectedKey !== null &&
+      !entries.some((option) => option.value === props.selectedKey)
+    ) {
+      entries.push({ value: props.selectedKey, label: t("usage.creators.selected") });
     }
 
-    return entries;
+    return [{ value: "", label: t("usage.creators.all") }, ...entries];
   });
   return (
-    <select
+    <SettingsSelect
       class="usage-select usage-creator-filter"
       aria-label={t("usage.creators.select")}
+      value={props.selectedKey ?? ""}
+      options={options()}
       onChange={(event) => props.onSelect(event.currentTarget.value || null)}
-    >
-      <option value="" selected={props.selectedKey === null}>
-        {t("usage.creators.all")}
-      </option>
-      <For each={options()}>
-        {(creator) => (
-          <option value={creator.key} selected={creator.key === props.selectedKey}>
-            {creator.label}
-          </option>
-        )}
-      </For>
-    </select>
+    />
   );
 }
 

@@ -82,10 +82,17 @@ requires [`uv`/`uvx`](https://docs.astral.sh/uv/getting-started/installation/).
   for private endpoints and mutual TLS.
 - `mcp.servers.<name>.toolFilter`: optional per-server tool selection. `include`
   limits the discovered MCP tools to matching names; `exclude` hides matching
-  names. Entries are exact MCP tool names or simple `*` globs. Servers with
-  resources or prompts also generate utility tool names (`resources_list`,
-  `resources_read`, `prompts_list`, `prompts_get`), and those names use the
-  same filter.
+  names. Entries are exact MCP tool names or simple `*` globs. An exact entry
+  that names no advertised raw tool can also be an unambiguous unsuffixed name
+  shown by `openclaw mcp probe` (for example `docs__search`). Exact raw names
+  take precedence, and globs match raw names only. Use raw names for colliding
+  probe names, including names with a collision suffix such as `-2`: in
+  `include` such a name selects nothing, and in `exclude` it hides every tool
+  that could carry it. If `include` is set and the filter leaves none of the
+  advertised tools, OpenClaw logs a warning; an exclude-only filter that hides
+  every tool is treated as intentional. Servers with resources or prompts also
+  generate utility tool names (`resources_list`, `resources_read`,
+  `prompts_list`, `prompts_get`), and those names use the same filter.
 - `mcp.servers.<name>.codex`: optional Codex app-server projection controls.
   This block is OpenClaw metadata for Codex app-server threads only; it does not
   affect ACP sessions, generic Codex harness config, or other runtime adapters.
@@ -385,8 +392,7 @@ See [Plugins](/tools/plugin).
 ```
 
 - `host.enabled` is the single Canvas host switch and defaults to enabled. It
-  gates hosted widget documents under `/__openclaw__/canvas/` and A2UI renderer
-  assets under `/__openclaw__/a2ui/`.
+  gates hosted widget documents under `/__openclaw__/canvas/`.
 - Local-only: keep `gateway.bind: "loopback"` (default).
 - Non-loopback binds: these routes require Gateway auth (token/password/trusted-proxy), same as other Gateway HTTP surfaces.
 - Node WebViews typically don't send auth headers; after a macOS node is paired and connected, the Gateway advertises a node-scoped `pluginSurfaceUrls.canvas` capability URL.

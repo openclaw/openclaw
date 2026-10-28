@@ -1,15 +1,35 @@
 import { createMemo, Errored, For, isPending, Loading, onSettled, Show } from "solid-js";
+import type { SkillLibraryEntry } from "../../../../packages/gateway-protocol/src/index.ts";
+import type { SkillStatusEntry } from "../../api/types.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { registerSkillsBrowserEnglish } from "../../i18n/locales/en-skills-browser.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import type { ClawHubSearchResult } from "../../lib/skills/clawhub-search.ts";
 import { PluginCardSummary } from "../plugins/plugin-card.tsx";
-import { skillDiscoveryEntries, type SkillDiscoveryEntry } from "./discovery.ts";
 import { SkillStateStatus, verdictForSkill } from "./skill-status.tsx";
 import type { SkillsProps } from "./view-types.ts";
 import "../../styles/skills-discovery.css";
 
 registerSkillsBrowserEnglish();
+
+type SkillDiscoveryEntry = {
+  id: string;
+  name: string;
+  description: string;
+  attribution: string;
+  skill?: SkillStatusEntry;
+  library?: SkillLibraryEntry;
+  remote?: ClawHubSearchResult;
+};
+
+function installedReference(skill: SkillStatusEntry): string | null {
+  const link = skill.clawhub;
+  if (!link?.valid) {
+    return null;
+  }
+  return link.requestedReference ?? (link.ownerHandle ? `@${link.ownerHandle}/${link.slug}` : null);
+}
 
 function DiscoveryCard(props: { entry: SkillDiscoveryEntry; skills: SkillsProps }) {
   const reference = () => props.entry.remote?.installRef ?? "";
@@ -53,37 +73,37 @@ function DiscoveryCard(props: { entry: SkillDiscoveryEntry; skills: SkillsProps 
           <div class="installed-plugins-card__identity">
             <div class="plugin-card-title-row">
               <h2>{props.entry.name}</h2>
+              <div class="plugin-catalog-card__action">
+                {installed() ? (
+                  <SkillStateStatus
+                    skill={props.entry.skill ?? { disabled: !props.entry.library!.enabled }}
+                    verdict={
+                      props.entry.skill
+                        ? verdictForSkill(props.entry.skill, props.skills.state.clawhubVerdicts)
+                        : null
+                    }
+                  />
+                ) : (
+                  <button
+                    type="button"
+                    class="btn btn--sm plugin-catalog-card__install oc-action oc-action-secondary"
+                    disabled={
+                      props.skills.saving ||
+                      !props.skills.state.connected ||
+                      !props.skills.canInstall ||
+                      props.skills.loading ||
+                      props.skills.state.skillOperation !== null
+                    }
+                    aria-label={t("skillsPage.installNamed", { name: props.entry.name })}
+                    onClick={() => props.skills.onClawHubInstall(reference())}
+                  >
+                    {t(busy() ? "skillsPage.installing" : "skillsPage.install")}
+                  </button>
+                )}
+              </div>
             </div>
             <span class="plugin-card-author">{props.entry.attribution}</span>
           </div>
-        </div>
-        <div class="plugin-catalog-card__action">
-          {installed() ? (
-            <SkillStateStatus
-              skill={props.entry.skill ?? { disabled: !props.entry.library!.enabled }}
-              verdict={
-                props.entry.skill
-                  ? verdictForSkill(props.entry.skill, props.skills.state.clawhubVerdicts)
-                  : null
-              }
-            />
-          ) : (
-            <button
-              type="button"
-              class="btn btn--sm plugin-catalog-card__install oc-action oc-action-secondary"
-              disabled={
-                props.skills.saving ||
-                !props.skills.state.connected ||
-                !props.skills.canInstall ||
-                props.skills.loading ||
-                props.skills.state.skillOperation !== null
-              }
-              aria-label={t("skillsPage.installNamed", { name: props.entry.name })}
-              onClick={() => props.skills.onClawHubInstall(reference())}
-            >
-              {t(busy() ? "skillsPage.installing" : "skillsPage.install")}
-            </button>
-          )}
         </div>
       </div>
       <PluginCardSummary summary={props.entry.description} />
@@ -102,14 +122,73 @@ export function SkillDiscovery(props: SkillsProps) {
   const epoch = createMemo(() => props.clawhubSearchEpoch);
   const pending = createMemo(() => isPending(props.readClawHubSearch), { loadingValue: true });
   let input: HTMLInputElement | undefined;
-  const entries = createMemo(() =>
-    skillDiscoveryEntries({
-      skills: props.mutationSkills,
-      libraries: props.libraryEntries ?? [],
-      results: props.state.clawhubSearchResults ?? [],
-      query: props.state.clawhubSearchQuery,
-    }),
-  );
+  const entries = createMemo<SkillDiscoveryEntry[]>(() => {
+    const skills = props.mutationSkills;
+    const libraries = props.libraryEntries ?? [];
+    const results = props.state.clawhubSearchResults ?? [];
+    const queryValue = props.state.clawhubSearchQuery;
+    const items: SkillDiscoveryEntry[] = libraries
+      .filter((entry) => !entry.removed)
+      .map((library) => ({
+        id: `library:${library.skillId}`,
+        name: library.slug,
+        description: library.description,
+        attribution: library.ownerLabel,
+        library,
+        skill: skills.find(
+          (skill) => skill.source === "openclaw-library" && skill.name === library.name,
+        ),
+      }));
+    const libraryCommands = new Set(libraries.map((entry) => entry.name));
+    for (const skill of skills) {
+      // Library command names are persisted identities, unlike user-facing names/slugs.
+      if (skill.source === "openclaw-library" && libraryCommands.has(skill.name)) {
+        continue;
+      }
+      items.push({
+        id: `local:${skill.skillKey}`,
+        name: skill.name,
+        description: skill.description,
+        attribution: installedReference(skill) ?? skill.source,
+        skill,
+      });
+    }
+    const remoteIds = new Set<string>();
+    for (const remote of results) {
+      const reference = remote.installRef;
+      const identity = `${remote.registry}\n${reference}`;
+      if (remoteIds.has(identity)) {
+        continue;
+      }
+      remoteIds.add(identity);
+      // A name match is never installation proof. Match the registry and verified publisher/source.
+      const installed = items.find(
+        (entry) =>
+          entry.skill?.clawhub?.valid &&
+          entry.skill.clawhub.registry === remote.registry &&
+          installedReference(entry.skill) === reference,
+      );
+      if (installed) {
+        installed.remote = remote;
+      } else {
+        items.push({
+          id: `remote:${reference}`,
+          name: remote.displayName,
+          description: remote.summary ?? "",
+          attribution: reference,
+          remote,
+        });
+      }
+    }
+    const filter = queryValue.trim().toLowerCase();
+    // Remote matches retain the registry's semantic ranking, even if their copy lacks the query.
+    return items.filter(
+      (entry) =>
+        entry.remote ||
+        !filter ||
+        `${entry.name} ${entry.description} ${entry.attribution}`.toLowerCase().includes(filter),
+    );
+  });
   onSettled(() => {
     if (input?.isConnected) {
       input.focus({ preventScroll: true });

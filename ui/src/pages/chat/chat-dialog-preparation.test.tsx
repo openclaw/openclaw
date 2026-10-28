@@ -1,4 +1,5 @@
 /* @vitest-environment jsdom */
+
 import { createRoot, createSignal } from "solid-js";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
@@ -10,17 +11,18 @@ import { sessionsResult } from "../../lib/sessions/session-capability.test-suppo
 import { showToast } from "../../lib/toast.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { createGatewayBrowserClientFixture } from "./chat-application-context.test-support.ts";
 import {
   activePlacementSession,
-  createGatewayBrowserClientFixture,
-  createSessionCapabilityFixture,
   createTestChatPane,
+  runPaneHeaderAction,
 } from "./chat-pane.test-support.ts";
 import {
   readFileDraft,
   reviewRetainedFileDrafts,
   setFileDraft,
 } from "./components/chat-file-drafts.ts";
+import { createSessionWorkspaceHost } from "./components/chat-session-workspace-host.test-support.ts";
 import {
   getSessionWorkspace,
   openSessionWorkspacePreview,
@@ -52,6 +54,36 @@ function paneFor(row: GatewaySessionRow) {
   return { ...fixture, request };
 }
 
+function mobileHeader(target = () => "sample-run") {
+  const onConfirm = vi.fn();
+  const view = mountSolid(() => (
+    <ChatSubagentMobileHeader
+      sessionKey="agent:main:subagent:sample"
+      title="Sample worker"
+      backLabel="Back"
+      onBack={() => {}}
+      stop={{
+        target: target(),
+        label: "Stop",
+        accessibleLabel: "Stop sample worker",
+        disabled: false,
+        pending: false,
+        confirmation: {
+          title: "Stop worker",
+          message: "Stop sample worker?",
+          confirmLabel: "Stop",
+          cancelLabel: "Cancel",
+        },
+        onConfirm,
+      }}
+    />
+  ));
+  const button = () =>
+    view.container.querySelector<HTMLButtonElement>(".chat-subagents-mobile__stop");
+  const alert = () => view.container.querySelector('[role="alert"]');
+  return { onConfirm, button: button()!, currentButton: button, alert };
+}
+
 it("reports a worker-stop dialog preparation failure without admitting a stop", async () => {
   const row = activePlacementSession();
   const { pane, state, request } = paneFor(row);
@@ -73,7 +105,7 @@ it.each([false, true])("scopes a new-group preparation failure (retired=%s)", as
   const { pane, state } = paneFor(row);
   const preparation = createDeferred<string | null>();
   const dialog = vi.spyOn(inputDialog, "showInputDialog").mockReturnValueOnce(preparation.promise);
-  const operation = pane.handleHeaderSessionAction({ kind: "new-group" }, row);
+  const operation = runPaneHeaderAction(pane, { kind: "new-group" }, row);
   await waitForSolid(() => expect(dialog).toHaveBeenCalledOnce());
   if (retired) {
     pane.presented = false;
@@ -89,44 +121,17 @@ it("shows a mobile confirmation failure, then lets the same Stop control retry",
     .spyOn(confirmDialog, "showConfirmDialog")
     .mockReturnValueOnce(confirmation.promise)
     .mockResolvedValueOnce(true);
-  const onConfirm = vi.fn();
-  const view = mountSolid(() => (
-    <ChatSubagentMobileHeader
-      sessionKey="agent:main:subagent:sample"
-      title="Sample worker"
-      backLabel="Back"
-      onBack={() => {}}
-      stop={{
-        target: "sample-run",
-        label: "Stop",
-        accessibleLabel: "Stop sample worker",
-        disabled: false,
-        pending: false,
-        confirmation: {
-          title: "Stop worker",
-          message: "Stop sample worker?",
-          confirmLabel: "Stop",
-          cancelLabel: "Cancel",
-        },
-        onConfirm,
-      }}
-    />
-  ));
-  const button = view.container.querySelector<HTMLButtonElement>(".chat-subagents-mobile__stop")!;
+  const { onConfirm, button, currentButton, alert } = mobileHeader();
   button.click();
   await waitForSolid(() => expect(dialog).toHaveBeenCalledOnce());
   expect(button.disabled).toBe(false);
   confirmation.reject(new Error("Confirmation unavailable"));
-  await waitForSolid(() =>
-    expect(view.container.querySelector('[role="alert"]')?.textContent).toBe(
-      "Confirmation unavailable",
-    ),
-  );
+  await waitForSolid(() => expect(alert()?.textContent).toBe("Confirmation unavailable"));
   expect(onConfirm).not.toHaveBeenCalled();
   button.click();
   await waitForSolid(() => expect(onConfirm).toHaveBeenCalledOnce());
-  await waitForSolid(() => expect(view.container.querySelector('[role="alert"]')).toBeNull());
-  expect(view.container.querySelector(".chat-subagents-mobile__stop")).toBe(button);
+  await waitForSolid(() => expect(alert()).toBeNull());
+  expect(currentButton()).toBe(button);
 });
 
 it("drops a mobile preparation failure when the retained header changes runs", async () => {
@@ -136,50 +141,18 @@ it("drops a mobile preparation failure when the retained header changes runs", a
     onTestFinished(dispose);
     return createSignal("first-run");
   });
-  const onConfirm = vi.fn();
-  const view = mountSolid(() => (
-    <ChatSubagentMobileHeader
-      sessionKey="agent:main:subagent:sample"
-      title="Sample worker"
-      backLabel="Back"
-      onBack={() => {}}
-      stop={{
-        target: target(),
-        label: "Stop",
-        accessibleLabel: "Stop sample worker",
-        disabled: false,
-        pending: false,
-        confirmation: {
-          title: "Stop worker",
-          message: "Stop?",
-          confirmLabel: "Stop",
-          cancelLabel: "Cancel",
-        },
-        onConfirm,
-      }}
-    />
-  ));
-  const button = view.container.querySelector<HTMLButtonElement>(".chat-subagents-mobile__stop")!;
+  const { onConfirm, button, currentButton, alert } = mobileHeader(target);
   button.click();
   setTarget("replacement-run");
   confirmation.reject(new Error("Retired confirmation unavailable"));
   await expect(confirmation.promise).rejects.toThrow("Retired confirmation unavailable");
-  await waitForSolid(() => expect(view.container.querySelector('[role="alert"]')).toBeNull());
-  expect(view.container.querySelector(".chat-subagents-mobile__stop")).toBe(button);
+  await waitForSolid(() => expect(alert()).toBeNull());
+  expect(currentButton()).toBe(button);
   expect(onConfirm).not.toHaveBeenCalled();
 });
 
 function dirtyPreview(editable: boolean) {
-  const state: SessionWorkspaceHost = {
-    sessionKey: "agent:main:files",
-    connectionEpoch: 1,
-    connected: true,
-    client: createGatewayBrowserClientFixture(),
-    sessions: createSessionCapabilityFixture(),
-    hello: null,
-    sidebarContent: null,
-    handleOpenSidebar: vi.fn(),
-  };
+  const state: SessionWorkspaceHost = createSessionWorkspaceHost();
   const file: FileSidebarContent = {
     kind: "file",
     path: "notes.md",
@@ -189,6 +162,7 @@ function dirtyPreview(editable: boolean) {
   };
   const preview = openSessionWorkspacePreview(state, "file:notes.md", "notes.md", file);
   setFileDraft(file, { content: "Unsaved notes", expectedHash: "original" });
+  onTestFinished(() => setFileDraft(file, null));
   const save = vi.fn();
   const discard = vi.fn();
   setSessionWorkspacePreviewDraft(state, preview.id, {
@@ -207,16 +181,12 @@ it("retains dirty workspace content when the close confirmation cannot open", as
   vi.spyOn(confirmDialog, "showConfirmChoiceDialog").mockRejectedValueOnce(
     new Error("Close dialog unavailable"),
   );
-  try {
-    expect(await requestCloseSessionWorkspacePreview(state, preview.id)).toBe(false);
-    expect(getSessionWorkspace(state).previews).toContain(preview);
-    expect(readFileDraft(file)?.content).toBe("Unsaved notes");
-    expect(save).not.toHaveBeenCalled();
-    expect(discard).not.toHaveBeenCalled();
-    expect(showToast).toHaveBeenCalledWith({ message: "Close dialog unavailable" });
-  } finally {
-    setFileDraft(file, null);
-  }
+  expect(await requestCloseSessionWorkspacePreview(state, preview.id)).toBe(false);
+  expect(getSessionWorkspace(state).previews).toContain(preview);
+  expect(readFileDraft(file)?.content).toBe("Unsaved notes");
+  expect(save).not.toHaveBeenCalled();
+  expect(discard).not.toHaveBeenCalled();
+  expect(showToast).toHaveBeenCalledWith({ message: "Close dialog unavailable" });
 });
 
 it("keeps reload blocked and retries retained-draft review after preparation failure", async () => {
@@ -225,19 +195,15 @@ it("keeps reload blocked and retries retained-draft review after preparation fai
     .spyOn(draftDialog, "reviewFileDrafts")
     .mockRejectedValueOnce(new Error("Draft review unavailable"))
     .mockResolvedValueOnce(undefined);
-  try {
-    expect(canReloadControlUiDocument(true)).toBe(false);
-    const toast = vi.mocked(showToast).mock.calls.at(-1)?.[0];
-    expect(toast?.onAction).toBeDefined();
-    toast!.onAction!();
-    await waitForSolid(() =>
-      expect(showToast).toHaveBeenCalledWith({ message: "Draft review unavailable" }),
-    );
-    expect(readFileDraft(file)?.content).toBe("Unsaved notes");
-    expect(canReloadControlUiDocument()).toBe(false);
-    await reviewRetainedFileDrafts();
-    expect(review).toHaveBeenCalledTimes(2);
-  } finally {
-    setFileDraft(file, null);
-  }
+  expect(canReloadControlUiDocument(true)).toBe(false);
+  const toast = vi.mocked(showToast).mock.calls.at(-1)?.[0];
+  expect(toast?.onAction).toBeDefined();
+  toast!.onAction!();
+  await waitForSolid(() =>
+    expect(showToast).toHaveBeenCalledWith({ message: "Draft review unavailable" }),
+  );
+  expect(readFileDraft(file)?.content).toBe("Unsaved notes");
+  expect(canReloadControlUiDocument()).toBe(false);
+  await reviewRetainedFileDrafts();
+  expect(review).toHaveBeenCalledTimes(2);
 });

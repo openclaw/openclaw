@@ -179,10 +179,9 @@ function detectJsonlReplayDrift(): boolean {
 
 export async function writeQaConfidenceSelfTestArtifacts(params: {
   outputDir: string;
-  generatedAt?: string;
 }): Promise<{ reportPath: string; summaryPath: string; summary: QaConfidenceSelfTestSummary }> {
   await fs.mkdir(params.outputDir, { recursive: true });
-  const { generatedAt = new Date().toISOString() } = params;
+  const generatedAt = new Date().toISOString();
   const canaries: QaConfidenceSelfTestCanary[] = [
     {
       id: "prompt-drift",

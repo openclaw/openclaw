@@ -148,9 +148,13 @@ export function registerAbortAcknowledgmentCases({
     signal,
   }) => {
     const state = await setupStop();
-    const prepared = prepareReplySourceInput({ ...state.ctx, SessionKey: sessionKey }, state.cfg, {
-      expectedExistingSessionId: state.entry.sessionId,
-    });
+    const prepared = await prepareReplySourceInput(
+      { ...state.ctx, SessionKey: sessionKey },
+      state.cfg,
+      {
+        expectedExistingSessionId: state.entry.sessionId,
+      },
+    );
     const input = expectDefined(prepared.input, "preparing channel input");
     const preparation = createDeferred();
     const preparationFailure = new Error("late channel preparation cleanup failed");

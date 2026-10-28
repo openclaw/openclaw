@@ -3,7 +3,7 @@ import { GetPromptResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { fixtureCatalog, fixtureRuntime } from "./agent-bundle-mcp-fixture.test-support.js";
+import { fixtureCatalog, staticRuntime } from "./agent-bundle-mcp-fixture.test-support.js";
 import {
   createBundleMcpToolRuntime,
   materializeBundleMcpToolsForRun,
@@ -33,19 +33,16 @@ function makeConfiguredRuntime(
         description: `${serverName}.${toolName}`,
       })),
     );
-  return fixtureRuntime(catalog, {
+  return staticRuntime({
     sessionId: "session-request-boundary",
     workspaceDir: "/workspace",
     configFingerprint: "fingerprint",
-    createdAt: 0,
-    lastUsedAt: 0,
-    markUsed: () => {},
     peekCatalog: catalog,
+    getCatalog: async () => catalog(),
     callTool: async () => ({
       content: [{ type: "text", text: "FROM-CONFIG" }],
       isError: false,
     }),
-    dispose: async () => {},
   });
 }
 

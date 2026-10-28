@@ -7,6 +7,7 @@ import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapsh
 import { createColdPluginFixture } from "../plugins/test-helpers/cold-plugin-fixtures.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { expectDatabaseRows } from "./backup-create-family.test-support.js";
+import { pluginBackupPlanInput } from "./backup-resource-plan.test-support.js";
 import {
   createBackupSqliteSnapshotPlan,
   discoverBackupDatabasePaths,
@@ -90,16 +91,9 @@ it("captures every retained account and token database under a disabled plugin's
       expectRetained((file) => update.databases.find((entry) => entry.path === file)?.snapshotPath);
 
       const inventory = resolveActivatedPluginBackupInventory(input);
-      const resources = await createBackupResourcePlan({
-        stateDir: state.stateDir,
-        configPaths: [],
-        oauthDirs: [],
-        workspaceDirs: [],
-        excludedWorkspaceDirs: [],
-        agentRoots: [],
-        pluginResources: inventory.resources,
-        pluginRoots: inventory.pluginRoots,
-      });
+      const resources = await createBackupResourcePlan(
+        pluginBackupPlanInput(state.stateDir, inventory),
+      );
       const tempDir = state.path("backup");
       await fs.mkdir(tempDir);
       const captured = await createBackupSqliteSnapshotPlan({

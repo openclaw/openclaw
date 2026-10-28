@@ -20,13 +20,6 @@ type CuaDriverManifest = {
   cuaDriverArtifacts?: Partial<Record<SupportedArtifactPlatform, DriverArtifactRecord>>;
 };
 
-type CuaDriverArtifactDiagnosticCode =
-  | "COMPUTER_DRIVER_DIGEST_MISMATCH"
-  | "COMPUTER_DRIVER_MANIFEST_INVALID"
-  | "COMPUTER_DRIVER_PACKAGE_MISSING"
-  | "COMPUTER_DRIVER_PLATFORM_UNSUPPORTED"
-  | "COMPUTER_DRIVER_VERSION_MISMATCH";
-
 export type CuaDriverArtifactVerification =
   | { ok: true }
   | {
@@ -35,16 +28,13 @@ export type CuaDriverArtifactVerification =
       fixHint: string;
     };
 
-type CuaDriverArtifactInspectionOptions = {
-  platform: NodeJS.Platform;
-  arch: string;
-  linuxLibc?: "gnu" | "musl";
-  pluginManifest: unknown;
-  resolvePackageJson: (packageName: string) => string | undefined;
-};
-
 function failure(
-  code: CuaDriverArtifactDiagnosticCode,
+  code:
+    | "COMPUTER_DRIVER_DIGEST_MISMATCH"
+    | "COMPUTER_DRIVER_MANIFEST_INVALID"
+    | "COMPUTER_DRIVER_PACKAGE_MISSING"
+    | "COMPUTER_DRIVER_PLATFORM_UNSUPPORTED"
+    | "COMPUTER_DRIVER_VERSION_MISMATCH",
   message: string,
   fixHint: string,
 ): CuaDriverArtifactVerification {
@@ -111,9 +101,13 @@ function loadArtifactRecord(
   return { version, artifact };
 }
 
-export function inspectCuaDriverArtifacts(
-  options: CuaDriverArtifactInspectionOptions,
-): CuaDriverArtifactVerification {
+export function inspectCuaDriverArtifacts(options: {
+  platform: NodeJS.Platform;
+  arch: string;
+  linuxLibc?: "gnu" | "musl";
+  pluginManifest: unknown;
+  resolvePackageJson: (packageName: string) => string | undefined;
+}): CuaDriverArtifactVerification {
   const selected = resolveArtifactPlatform(options.platform, options.arch, options.linuxLibc);
   if (selected.kind === "not-applicable") {
     return { ok: true };

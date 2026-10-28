@@ -30,6 +30,12 @@ const enChatGoals = {
       recoveryInvalid:
         "The saved goal request is invalid; review the current goal before retrying.",
       admissionImmutable: "Retry or remove this request. Editing requires a new goal.",
+      replaceTitle: "Replace goal objective?",
+      replaceMessage: "Update the objective without changing the goal’s status.",
+      replaceRunningMessage: "Interrupt this turn, update the objective, then resume the goal.",
+      replace: "Replace objective",
+      goalChanged:
+        "The goal changed while confirmation was open. Review it and try again. Your draft is unchanged.",
       edit: "Edit goal",
       editUnavailable: "Goal editing is unavailable. Your draft is unchanged.",
       editFailed: "Couldn't save the goal. Review its current status and try again.",

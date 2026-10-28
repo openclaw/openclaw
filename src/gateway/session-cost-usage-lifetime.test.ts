@@ -12,7 +12,7 @@ import * as aggregation from "../infra/session-cost-usage-aggregation.js";
 import * as cacheRuntime from "../infra/session-cost-usage-cache-runtime.js";
 import { sessionCostUsageNotifications } from "../infra/session-cost-usage-events.js";
 import { closeAgentWorkAdmissions } from "../sessions/session-controller.lifecycle.js";
-import { sessionChanges } from "../sessions/session-row-changes.js";
+import { sessionChanges, type SessionRowChange } from "../sessions/session-row-changes.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import type { SessionCostUsagePublication } from "../shared/usage-types.js";
 import {
@@ -69,6 +69,21 @@ const sessionFresh = (totalTokens: number) => ({
 });
 const timestamp = Date.parse("2026-09-18T12:00:00Z");
 const mainConfig = () => ({ agents: { entries: { main: {} } } });
+const topologyAgents = () => ({
+  ownership: "explicit" as const,
+  entries: { main: {}, alpha: {}, beta: {} },
+});
+
+function refuseStartup(agentId: string) {
+  const refusal = createAgentDatabaseInspectionRefusal({
+    agentId,
+    paths: [resolveOpenClawAgentSqlitePath({ agentId })],
+    pending: true,
+    reason: "Startup preparation is pending",
+  });
+  recordAgentDatabaseAdmissions([refusal], { source: "startup" });
+  return refusal;
+}
 
 function observeProjection(config: Parameters<typeof costWindow>[0]) {
   const publications: SessionCostUsagePublication[] = [];
@@ -357,13 +372,7 @@ it("projects committed usage after startup preparation without borrowing its exp
       await wait(firstStarted.promise);
       expect(await wait(outcomes[0]!)).toEqual({ ok: true, context: "owner" });
       const initialRequests = requested.mock.calls.length;
-      const refusal = createAgentDatabaseInspectionRefusal({
-        agentId: target.agentId,
-        paths: [resolveOpenClawAgentSqlitePath({ agentId: target.agentId })],
-        pending: true,
-        reason: "Startup preparation is pending",
-      });
-      recordAgentDatabaseAdmissions([refusal], { source: "startup" });
+      const refusal = refuseStartup(target.agentId);
       holdRefresh = true;
       await preparePendingAgentDatabase(refusal, { assertCurrent() {} }, () =>
         publisher.run("preparation", async () => {
@@ -402,4 +411,72 @@ it("projects committed usage after startup preparation without borrowing its exp
   });
   onTestFinished(() => run);
   return run;
+});
+
+it("routes startup, shared selectors, invalidations, and admitted topology owners", async ({
+  signal,
+}) => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const agents = topologyAgents();
+    let config: Parameters<typeof costWindow>[0] = { agents };
+    setRuntimeConfigSnapshot(config);
+    await state.writeText("agents/unowned/marker", "Synthetic unowned agent");
+    const requested = vi
+      .spyOn(cacheRuntime, "requestCostUsageCacheRefresh")
+      .mockImplementation(() => {});
+    const roster = vi.spyOn(agentList, "listGatewayAgentsBasic");
+    const waitForRoster = () => withinTest(roster.mock.results.at(-1)!.value, signal);
+    const requestedAgents = () => requested.mock.calls.map(([request]) => request.agentId);
+    const lifetime = startSessionCostUsageProjectionLifetime({
+      getConfig: () => config,
+      warn: vi.fn(),
+    });
+    const topology = { agentId: "alpha", topology: true } as const;
+    const cases: Array<
+      [
+        name: string,
+        scope: Extract<SessionRowChange, { all: true }>["scope"],
+        store?: string,
+        factsInvalidated?: true,
+      ]
+    > = [
+      ["unqualified agent", { agentId: "alpha" }],
+      ["unknown object scope", {}],
+      ["topology without an owner", { topology: true }],
+      ["explicit store path", { ...topology, storePath: state.path("shared.sqlite") }],
+      ["config", "config"],
+      ["stores", "stores"],
+      ["forced topology invalidation", topology, undefined, true],
+      ["shared store selector", topology, state.path("shared.sqlite")],
+      ["custom store template", topology, state.path("{agentId}", "sessions.json")],
+      ["whitespace store selector", topology, " "],
+    ];
+    try {
+      await waitForRoster();
+      expect(requestedAgents()).toEqual(["main", "alpha", "beta"]);
+      for (const [name, scope, store, factsInvalidated] of cases) {
+        config = { agents, ...(store === undefined ? {} : { session: { store } }) };
+        requested.mockClear();
+        sessionChanges.emit({ all: true, scope, factsInvalidated });
+        await waitForRoster();
+        expect(requestedAgents(), name).toEqual(["main", "alpha", "beta"]);
+      }
+      config = { agents };
+      requested.mockClear();
+      for (const agentId of ["alpha", "beta", "alpha"]) {
+        sessionChanges.emit({ all: true, scope: { agentId, topology: true } });
+        await waitForRoster();
+      }
+      expect(requestedAgents()).toEqual(["alpha", "beta", "alpha"]);
+      requested.mockClear();
+      refuseStartup("alpha");
+      for (const agentId of ["unowned", "alpha"]) {
+        sessionChanges.emit({ all: true, scope: { agentId, topology: true } });
+        await waitForRoster();
+      }
+      expect(requested).not.toHaveBeenCalled();
+    } finally {
+      await lifetime.stop();
+    }
+  });
 });

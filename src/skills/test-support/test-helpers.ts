@@ -51,3 +51,17 @@ export function createFixtureSkillEntry(
     exposure: opts?.exposure,
   };
 }
+
+export function makeSkill(
+  name: string,
+  desc = "A skill",
+  filePath = `/skills/${name}/SKILL.md`,
+): Skill {
+  return createCanonicalFixtureSkill({
+    name,
+    description: desc,
+    filePath,
+    baseDir: `/skills/${name}`,
+    source: "workspace",
+  });
+}

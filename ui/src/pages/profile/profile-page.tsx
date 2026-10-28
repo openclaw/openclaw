@@ -13,8 +13,11 @@ import {
   refresh,
   Show,
 } from "solid-js";
+import { GATEWAY_OWNER_PROFILE_ID } from "../../../../packages/gateway-protocol/src/index.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
+import { ScopeUpgradeOwner } from "../../app/device-scope-upgrade-owner.runtime.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
+import { ScopeUpgradeActions, scopeUpgradeText } from "../../components/scope-upgrade-actions.tsx";
 import {
   LearnMoreLink,
   SettingsEmpty,
@@ -24,24 +27,32 @@ import {
   SettingsPage,
   SettingsRow,
   SettingsSection,
+  SettingsStatus,
+  SettingsToggleRow,
   SettingsValue,
 } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { GitHubConnections } from "../../features/github-connections/github-connections.tsx";
 import { registerModelAccountsEnglish } from "../../i18n/locales/en-model-accounts.ts";
 import { registerProfileEnglish } from "../../i18n/locales/en-profile.ts";
+import { registerRouteSubtitlesEnglish } from "../../i18n/locales/en-route-subtitles.ts";
+import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
+import "../../components/solid/viewer-facepile.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
+import { projectApplicationConfig } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import "../../styles/profile.css";
+import { uploadsEnabled } from "../../lib/uploads.ts";
 import { PROFILE_SETTINGS_TARGET_IDS } from "../config/settings-targets.ts";
-import { IdentitySection } from "./identity-section.tsx";
 import { ModelAccounts } from "./model-accounts.tsx";
 import { PersonalInstructions } from "./personal-instructions.tsx";
 import { userProfileAvatarUrl } from "./profile-avatar-url.ts";
 import { ProfileHero } from "./profile-hero.tsx";
 import { type IdentityChange, ProfileState } from "./profile-state.ts";
+
+registerRouteSubtitlesEnglish();
 
 registerEnglishCatalog(registerModelAccountsEnglish);
 registerEnglishCatalog(registerProfileEnglish);
@@ -70,6 +81,10 @@ function accessSummary(scopes: readonly string[] | null) {
 
 export function ProfilePage() {
   const context = useApplication();
+  const upgrade = projectOwner(context.scopeUpgrade, (source) =>
+    source.state.phase === "hidden" ? null : source.state,
+  );
+  onSettled(() => context.scopeUpgrade.activate(ScopeUpgradeOwner));
   const agents = projectOwner(context.agents, (source) => source.state.agentsList);
   const identities = projectOwner(context.agentIdentity, (source) => source);
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
@@ -86,7 +101,18 @@ export function ProfilePage() {
     const [gitCoauthorEnabled, setGitCoauthorEnabled] = createOptimistic(
       () => view().gitCoauthorEnabled,
     );
-    return { scope, saving, setSaving, gitCoauthorEnabled, setGitCoauthorEnabled };
+    const [prAttributionEnabled, setPrAttributionEnabled] = createOptimistic(
+      () => view().prAttributionEnabled,
+    );
+    return {
+      scope,
+      saving,
+      setSaving,
+      gitCoauthorEnabled,
+      setGitCoauthorEnabled,
+      prAttributionEnabled,
+      setPrAttributionEnabled,
+    };
   });
   const identityBusy = () => presentation().saving() ?? view().identityBusy;
   const presentMutation = action(function* (
@@ -102,13 +128,21 @@ export function ProfilePage() {
         current.setSaving(change.kind);
         if (change.kind === "git-coauthor") {
           current.setGitCoauthorEnabled(change.enabled);
+        } else if (change.kind === "pr-attribution") {
+          current.setPrAttributionEnabled(change.enabled);
         } else {
           affects(identityRead);
         }
       }
       yield Promise.race([pending, retired]);
       if (isCurrent()) {
-        yield refresh(change.kind === "git-coauthor" ? current.gitCoauthorEnabled : identityRead);
+        yield refresh(
+          change.kind === "git-coauthor"
+            ? current.gitCoauthorEnabled
+            : change.kind === "pr-attribution"
+              ? current.prAttributionEnabled
+              : identityRead,
+        );
       }
     } catch (error) {
       if (isCurrent()) {
@@ -206,24 +240,221 @@ export function ProfilePage() {
         </div>
       }
     >
-      <IdentitySection
-        config={context.config}
-        profile={view().ownProfile!}
-        canWrite={latest(canWrite)}
-        connected={view().identityReady}
-        avatarUrl={avatarUrl()}
-        displayName={view().displayName}
-        gitCoauthorEnabled={presentation().gitCoauthorEnabled()}
-        busy={identityBusy() ?? (props.pending ? "loading" : null)}
-        error={view().identityError}
-        onDisplayNameInput={(value) => {
-          state.displayName = value;
-          state.publish();
-        }}
-        onSaveDisplayName={() => void saveIdentity({ kind: "display-name" })}
-        onAvatarSelect={(file) => void saveIdentity({ kind: "avatar", file })}
-        onGitCoauthorChange={(enabled) => void saveIdentity({ kind: "git-coauthor", enabled })}
-      />
+      {(profile) => {
+        function IdentitySection() {
+          const busy = () => identityBusy() ?? (props.pending ? "loading" : null);
+          const configuration = createMemo(() => {
+            const source = context.config;
+            return source ? projectApplicationConfig(source) : null;
+          });
+          const canUpload = () => configuration()?.read().uploadsEnabled !== false;
+          const canEditIdentity = () => latest(canWrite);
+          const isOwnerProfile = () => profile().id === GATEWAY_OWNER_PROFILE_ID;
+          return (
+            <div id={PROFILE_SETTINGS_TARGET_IDS.identity}>
+              <SettingsSection
+                title={t("profilePage.identity.title")}
+                description={t("profilePage.identity.description")}
+              >
+                <Show when={!canEditIdentity() && view().identityReady}>
+                  <SettingsRow title={t("profilePage.identity.writeRequired")} />
+                </Show>
+                <SettingsRow
+                  title={t("profilePage.identity.avatar")}
+                  description={t("profilePage.identity.avatarDescription")}
+                  control={
+                    <span class="identity-avatar-control">
+                      <openclaw-viewer-avatar
+                        prop:user={{
+                          id: profile().id,
+                          name: profile().displayName ?? undefined,
+                          email: profile().emails[0],
+                          avatarUrl: avatarUrl() ?? undefined,
+                          watchedSessions: [],
+                        }}
+                        variant="profile"
+                      />
+                      <Show when={canEditIdentity() && canUpload()}>
+                        <button
+                          type="button"
+                          class="btn btn--sm"
+                          disabled={busy() !== null}
+                          onClick={(event) => {
+                            const input = event.currentTarget.nextElementSibling;
+                            if (
+                              canEditIdentity() &&
+                              uploadsEnabled(context.config) &&
+                              input instanceof HTMLInputElement
+                            ) {
+                              input.click();
+                            }
+                          }}
+                        >
+                          {busy() === "avatar"
+                            ? t("profilePage.identity.processingAvatar")
+                            : t("profilePage.identity.chooseAvatar")}
+                        </button>
+                        <input
+                          type="file"
+                          accept="image/png,image/jpeg,image/webp"
+                          hidden
+                          disabled={busy() !== null}
+                          onChange={(event) => {
+                            const input = event.currentTarget;
+                            const file = input.files?.[0];
+                            input.value = "";
+                            if (file && canEditIdentity() && uploadsEnabled(context.config)) {
+                              void saveIdentity({ kind: "avatar", file });
+                            }
+                          }}
+                        />
+                      </Show>
+                    </span>
+                  }
+                />
+                <SettingsRow
+                  title={t("profilePage.identity.displayName")}
+                  description={t("profilePage.identity.displayNameDescription")}
+                  control={
+                    <form
+                      class="identity-name-control"
+                      onSubmit={(event) => {
+                        event.preventDefault();
+                        void saveIdentity({ kind: "display-name" });
+                      }}
+                    >
+                      <input
+                        class="settings-input"
+                        type="text"
+                        maxlength={256}
+                        aria-label={t("profilePage.identity.displayName")}
+                        value={view().displayName}
+                        disabled={
+                          !canEditIdentity() || (busy() !== null && busy() !== "display-name")
+                        }
+                        readonly={busy() === "display-name"}
+                        onInput={(event) => {
+                          state.displayName = event.currentTarget.value;
+                          state.publish();
+                        }}
+                      />
+                      <button
+                        type="submit"
+                        class="btn btn--sm"
+                        disabled={
+                          !canEditIdentity() ||
+                          busy() !== null ||
+                          view().displayName.trim() === (profile().displayName ?? "")
+                        }
+                      >
+                        {busy() === "display-name" ? t("common.saving") : t("common.save")}
+                      </button>
+                    </form>
+                  }
+                />
+                <Show when={!isOwnerProfile()}>
+                  <SettingsRow
+                    title={t("profilePage.identity.linkedEmails")}
+                    description={t("profilePage.identity.linkedEmailsDescription")}
+                    control={
+                      profile().emails.length ? (
+                        <SettingsValue value={profile().emails.join(", ")} />
+                      ) : undefined
+                    }
+                  />
+                </Show>
+                <SettingsRow
+                  title={t("profilePage.identity.githubAccount")}
+                  description={
+                    isOwnerProfile()
+                      ? t("profilePage.identity.ownerGithubDescription")
+                      : profile().githubIdentity
+                        ? t("profilePage.identity.githubAccountDescription")
+                        : t("profilePage.identity.githubUnavailableDescription")
+                  }
+                  control={
+                    <Show
+                      when={profile().githubIdentity}
+                      fallback={
+                        <SettingsStatus
+                          kind="muted"
+                          label={t("profilePage.identity.githubUnavailable")}
+                        />
+                      }
+                    >
+                      {(identity) => (
+                        <>
+                          <a
+                            class="settings-account"
+                            href={identity().profileUrl}
+                            target={EXTERNAL_LINK_TARGET}
+                            rel={buildExternalLinkRel()}
+                          >
+                            <img
+                              class="settings-account__avatar"
+                              src={identity().avatarUrl}
+                              alt=""
+                            />
+                            <span class="settings-row__value settings-row__value--mono">
+                              @{identity().login}
+                            </span>
+                          </a>
+                          <SettingsStatus
+                            kind="ok"
+                            label={t("profilePage.identity.githubVerified")}
+                          />
+                        </>
+                      )}
+                    </Show>
+                  }
+                />
+                <SettingsToggleRow
+                  title={t("profilePage.identity.gitCoauthor")}
+                  description={
+                    // Publication selects its host independently of the displayed primary account.
+                    isOwnerProfile()
+                      ? t("profilePage.identity.ownerGitCoauthorDescription")
+                      : t("profilePage.identity.gitCoauthorDescription")
+                  }
+                  checked={!isOwnerProfile() && presentation().gitCoauthorEnabled()}
+                  disabled={
+                    !canEditIdentity() ||
+                    (busy() !== null && busy() !== "git-coauthor") ||
+                    isOwnerProfile()
+                  }
+                  saving={busy() === "git-coauthor"}
+                  onChange={(enabled) => void saveIdentity({ kind: "git-coauthor", enabled })}
+                />
+                <SettingsToggleRow
+                  title={t("profilePage.identity.prAttribution")}
+                  description={
+                    <>
+                      {t("profilePage.identity.prAttributionDescription")}
+                      <br />
+                      <a
+                        href="https://openclaw.ai"
+                        target={EXTERNAL_LINK_TARGET}
+                        rel={buildExternalLinkRel()}
+                      >
+                        {t("profilePage.identity.prAttributionLink")}
+                      </a>
+                    </>
+                  }
+                  checked={presentation().prAttributionEnabled()}
+                  disabled={!canEditIdentity() || busy() !== null}
+                  onChange={(enabled) => void saveIdentity({ kind: "pr-attribution", enabled })}
+                />
+                <Show when={view().identityError}>
+                  <div class="settings-row identity-error" role="alert">
+                    <span class="settings-row__desc">{view().identityError}</span>
+                  </div>
+                </Show>
+              </SettingsSection>
+            </div>
+          );
+        }
+        return <IdentitySection />;
+      }}
     </Show>
   );
 
@@ -290,6 +521,27 @@ export function ProfilePage() {
                     </button>
                   }
                 />
+                <Show when={upgrade.read()}>
+                  {(current) => (
+                    <SettingsRow
+                      title={t("profilePage.access.adminRequest")}
+                      description={
+                        current().phase === "available"
+                          ? t("profilePage.access.adminRequestHint")
+                          : scopeUpgradeText(current())
+                      }
+                      stackedOnNarrow
+                      control={
+                        <ScopeUpgradeActions
+                          state={current()}
+                          onRequest={() => context.scopeUpgrade.request()}
+                          onRetry={() => context.scopeUpgrade.retry()}
+                          onCancel={() => context.scopeUpgrade.cancel()}
+                        />
+                      }
+                    />
+                  )}
+                </Show>
                 <details class="settings-row settings-row--stacked">
                   <summary>{t("profilePage.access.details")}</summary>
                   <SettingsRow

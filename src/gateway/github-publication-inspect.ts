@@ -248,7 +248,6 @@ export async function readOwnGitHubPullRequest(params: {
     !isRecord(pr) ||
     !isRecord(pr.user) ||
     typeof pr.user.id !== "number" ||
-    !admittedIds.includes(pr.user.id) ||
     (baseRepository.private && !privateReaders.has(pr.user.id)) ||
     typeof pr.user.login !== "string" ||
     !isGitHubLogin(pr.user.login) ||
@@ -260,6 +259,11 @@ export async function readOwnGitHubPullRequest(params: {
     !isRecord(pr.head)
   ) {
     throw unavailable();
+  }
+  if (!admittedIds.includes(pr.user.id)) {
+    throw new Error(
+      "This PR is not authored by a GitHub account linked to you. inspect_pr checks your PR authorship, not the managed publisher's credentials. For this session's published PR, use edit without title or body; for a new PR, use publish. A bot-authored PR from another session cannot be imported with inspect_pr or prepare_pr.",
+    );
   }
   const base = refFacts(pr.base, baseRepository);
   let headRepository: ReturnType<typeof repositoryFacts> | undefined;

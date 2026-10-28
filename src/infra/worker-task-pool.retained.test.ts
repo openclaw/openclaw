@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { DatabaseSync } from "node:sqlite";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import type { WorkerOptions } from "node:worker_threads";
@@ -212,6 +213,38 @@ it("enforces the existing task deadline while the caller cannot run timers and j
     barrier.release();
   }
 });
+
+it.each(["service", "timer"] as const)(
+  "starts an owned task deadline after queueing and enforces it through %s",
+  async (expiry) => {
+    const pool = fixture();
+    const preceding = pool.startTask({}, {});
+    read(preceding);
+    const barrier = blockingInput();
+    const now = performance.now();
+    const clock = vi.spyOn(performance, "now").mockReturnValue(now);
+    const queued = pool.startTask(barrier.input, { timeoutMs: 100, timeoutFrom: "dispatch" });
+    void queued.result.catch(() => {});
+    try {
+      clock.mockReturnValue(now + 1_000);
+      queued.service();
+      expect(queued.read().status).toBe("pending");
+      read(preceding.release());
+      serviceUntil(queued, barrier.entered);
+      if (expiry === "service") {
+        clock.mockReturnValue(now + 1_101);
+        expect(() => read(queued)).toThrow("worker task timed out");
+      } else {
+        await expect(queued.result).rejects.toThrow("worker task timed out");
+      }
+      read(queued.release());
+      expect(pool.getSnapshot().workers).toBe(0);
+    } finally {
+      clock.mockRestore();
+      barrier.release();
+    }
+  },
+);
 
 it("answers an earlier task's synchronous host exchange while servicing a queued task", () => {
   const pool = taskFixture();

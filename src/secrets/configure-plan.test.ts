@@ -78,7 +78,6 @@ describe("secrets configure plan helpers", () => {
     const plan = buildSecretsConfigurePlan({
       selectedTargets: selected,
       providerChanges,
-      generatedAt: "2026-02-28T00:00:00.000Z",
     });
     expect([plan.targets.map((entry) => entry.path), plan.providerUpserts, plan.options]).toEqual([
       [TALK_TEST_PROVIDER_API_KEY_PATH],

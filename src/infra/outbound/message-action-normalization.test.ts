@@ -15,6 +15,15 @@ vi.mock("../../utils/message-channel.js", async (importOriginal) => ({
 }));
 
 describe("normalizeMessageActionInput", () => {
+  type Input = Parameters<typeof normalizeMessageActionInput>[0];
+  const makeInput = (
+    action: Input["action"],
+    args: Input["args"] = {},
+    extra: Partial<Input> = {},
+  ): Input => ({ action, args, ...extra });
+  const context = (currentChannelId: string, currentChannelProvider: string) => ({
+    toolContext: { currentChannelId, currentChannelProvider },
+  });
   const routedThreadContext = {
     currentChannelProvider: "discord",
     currentChatType: "channel" as const,
@@ -37,27 +46,25 @@ describe("normalizeMessageActionInput", () => {
     },
   );
 
-  type Input = Parameters<typeof normalizeMessageActionInput>[0];
   it.each<[Input, Record<string, unknown>, string[]]>([
+    [makeInput("send", { target: "  channel:C1  " }), { to: "channel:C1" }, []],
+    [makeInput("channel-info", { target: "  C123  " }), { channelId: "C123" }, []],
     [
-      { action: "send", args: { target: "channel:C1", to: "legacy", channelId: "legacy-channel" } },
+      makeInput("send", { target: "channel:C1", to: "legacy", channelId: "legacy-channel" }),
       { target: "channel:C1", to: "channel:C1" },
       ["channelId"],
     ],
     [
-      { action: "broadcast", args: {}, toolContext: { currentChannelId: "channel:C1" } },
+      makeInput("broadcast", {}, { toolContext: { currentChannelId: "channel:C1" } }),
       {},
       ["target", "to"],
     ],
     [
-      {
-        action: "unsend",
-        args: { channel: "imessage", messageId: "msg_123" },
-        toolContext: {
-          currentChannelId: "chat_guid:iMessage;+;chat0000",
-          currentChannelProvider: "imessage",
-        },
-      },
+      makeInput(
+        "unsend",
+        { channel: "imessage", messageId: "msg_123" },
+        context("chat_guid:iMessage;+;chat0000", "imessage"),
+      ),
       {
         target: "chat_guid:iMessage;+;chat0000",
         to: "chat_guid:iMessage;+;chat0000",
@@ -66,31 +73,25 @@ describe("normalizeMessageActionInput", () => {
       [],
     ],
     [
-      { action: "pin", args: { channel: "pinboard", messageId: "om_123" } },
+      makeInput("pin", { channel: "pinboard", messageId: "om_123" }),
       { messageId: "om_123" },
       ["target", "to"],
     ],
     [
-      { action: "poll-vote", args: { channel: "imessage", chatId: 42 } },
+      makeInput("poll-vote", { channel: "imessage", chatId: 42 }),
       { target: "chat_id:42", to: "chat_id:42", chatId: 42 },
       [],
     ],
   ])("normalizes message action input for %j", (input, expected, absent) => {
     const normalized = normalizeMessageActionInput(input);
-    expect(normalized).toEqual(expect.objectContaining(expected));
+    expect(normalized).toMatchObject(expected);
     for (const field of absent) {
       expect(field in normalized).toBe(false);
     }
   });
   it.each<[string, Input]>([
-    [
-      "heartbeat sentinel",
-      {
-        action: "send",
-        args: {},
-        toolContext: { currentChannelId: "heartbeat", currentChannelProvider: "telegram" },
-      },
-    ],
+    ["blank target", makeInput("send", { target: "   " })],
+    ["heartbeat sentinel", makeInput("send", {}, context("heartbeat", "telegram"))],
     [
       "internal session",
       {
@@ -104,21 +105,27 @@ describe("normalizeMessageActionInput", () => {
     ],
     [
       "explicit empty targets",
-      {
-        action: "read",
-        args: { targets: [] },
-        toolContext: { currentChannelId: "C_CURRENT", currentChannelProvider: "workspace" },
-      },
+      makeInput("read", { targets: [] }, context("C_CURRENT", "workspace")),
     ],
     [
       "resource without conversation",
-      {
-        action: "poll-vote",
-        args: { channel: "imessage", pollId: "poll_123" },
-      },
+      makeInput("poll-vote", { channel: "imessage", pollId: "poll_123" }),
     ],
   ])("rejects %s as a target", (_name, input) => {
     expect(() => normalizeMessageActionInput(input)).toThrow(/requires a target/);
+  });
+
+  it.each<[Input, string]>([
+    [
+      makeInput("broadcast", { to: "legacy" }),
+      "Use `target` for actions that accept a destination.",
+    ],
+    [
+      makeInput("broadcast", { target: "channel:C1" }),
+      "Action broadcast does not accept a target.",
+    ],
+  ])("rejects a destination for no-target action %j", (input, message) => {
+    expect(() => normalizeMessageActionInput(input)).toThrow(message);
   });
 
   it("rejects conflicting canonical and plugin delivery targets", () => {

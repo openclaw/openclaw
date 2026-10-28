@@ -76,6 +76,7 @@ export const SessionGitHubPublishParamsSchema = closedObject({
   sessionKey: Type.Optional(NonEmptyString),
   agentId: Type.Optional(NonEmptyString),
   idempotencyKey: NonEmptyString,
+  workspacePath: Type.Optional(Type.String({ minLength: 1, maxLength: 2048 })),
   title: Type.Optional(GitHubPublicationTitleSchema),
   body: Type.Optional(GitHubPublicationBodySchema),
   draft: Type.Optional(Type.Boolean()),

@@ -9,18 +9,6 @@ export type PluginInspectShape =
   | "hybrid-capability"
   | "non-capability";
 
-type PluginCapabilityEntry = {
-  kind: PluginCapabilityKind;
-  ids: string[];
-};
-
-type PluginShapeSummary = {
-  shape: PluginInspectShape;
-  capabilityMode: "none" | "plain" | "hybrid";
-  capabilityCount: number;
-  capabilities: PluginCapabilityEntry[];
-};
-
 type PluginShapeParams = {
   plugin: PluginRegistry["plugins"][number];
   report: Pick<
@@ -99,7 +87,15 @@ function derivePluginInspectShape(
   return "non-capability";
 }
 
-export function buildPluginShapeSummary(params: PluginShapeParams): PluginShapeSummary {
+export function buildPluginShapeSummary(params: PluginShapeParams): {
+  shape: PluginInspectShape;
+  capabilityMode: "none" | "plain" | "hybrid";
+  capabilityCount: number;
+  capabilities: {
+    kind: PluginCapabilityKind;
+    ids: string[];
+  }[];
+} {
   const capabilities = buildPluginCapabilityEntries(params.plugin, params.report);
   const capabilityCount = capabilities.length;
   const shape = derivePluginInspectShape(params, capabilityCount);

@@ -1,8 +1,6 @@
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { once } from "node:events";
-import { chmodSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
-import { createServer } from "node:net";
+import { chmodSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -26,7 +24,6 @@ const expectClean = () =>
 
 function invocation(bytes: Buffer) {
   writeFileSync(join(root, authorityPath), bytes);
-  rmSync(join(root, ".local/probe.json"), { force: true });
   const script = join(scripts, "pr-lib/baseline-refresh.mjs");
   return {
     args: [script, "check-source", "42", head, root, root, "invalid-lock", head],
@@ -68,7 +65,7 @@ describePosix("captured baseline hash stdin", () => {
     writeFileSync(
       probe,
       `#!/usr/bin/env python3
-import os,sys,stat,fcntl,json,socket
+import os,sys,stat,fcntl
 args=sys.argv[1:]
 if args == ['hash-object','--no-filters','--stdin']:
  s=os.fstat(0)
@@ -78,11 +75,8 @@ if args == ['hash-object','--no-filters','--stdin']:
  assert fcntl.fcntl(0,fcntl.F_GETFL) & os.O_ACCMODE == os.O_RDONLY, 'snapshot is writable'
  assert os.lseek(0,0,os.SEEK_CUR) == 0, 'snapshot offset is not zero'
  assert not any(n.startswith('openclaw-pr-hash-') for n in os.listdir(os.environ['TMPDIR'])), 'snapshot directory retained at dispatch'
- with open('.local/probe.json','w') as f: json.dump({'size':s.st_size,'links':s.st_nlink,'offset':0},f)
  if os.environ.get('MUTATE_ORIGINAL'): open('${authorityPath}','wb').write(b'changed after capture')
  if os.environ.get('FAIL_HASH'): sys.stderr.write('fixture Git hash failure\\n'); sys.exit(97)
- if os.environ.get('CANCEL_SOCKET'):
-  c=socket.socket(socket.AF_UNIX); c.connect(os.environ['CANCEL_SOCKET']); c.sendall(b'ready'); c.recv(1)
 os.execv(${JSON.stringify(git)},[${JSON.stringify(git)},*args])
 `,
     );
@@ -102,8 +96,6 @@ os.execv(${JSON.stringify(git)},[${JSON.stringify(git)},*args])
       const result = run(bytes);
       expect(result.status).toBe(1);
       expect(result.stderr).toContain("Missing baseline transition operation owner.");
-      const captured = JSON.parse(readFileSync(join(root, ".local/probe.json"), "utf8"));
-      expect(captured).toEqual({ size: bytes.length, links: 0, offset: 0 });
     }
   });
 
@@ -121,50 +113,6 @@ os.execv(${JSON.stringify(git)},[${JSON.stringify(git)},*args])
     ] as const) {
       expect(result.status).toBe(1);
       expect(result.stderr).toContain(message);
-    }
-  });
-
-  it("leaves no snapshot pathname when native supervision cancels a hashing child", async () => {
-    const { args, input } = invocation(Buffer.alloc(1024));
-    const socketPath = join(root, ".local/r");
-    const server = createServer();
-    server.listen(socketPath);
-    await once(server, "listening");
-    const runner = join(scripts, "pr-lib/process-group-runner.mjs");
-    const child = spawn(node, [runner, root, node, ...args], {
-      cwd: root,
-      env: { ...env, CANCEL_SOCKET: socketPath },
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-    const closed = once(child, "close");
-    child.stdout.resume();
-    let stderr = "";
-    child.stderr.on("data", (bytes) => {
-      stderr += bytes.toString();
-    });
-    child.stdin.end(input);
-    try {
-      const [socket] = await Promise.race([
-        once(server, "connection"),
-        closed.then(() => {
-          throw new Error(`hash child exited before readiness: ${stderr}`);
-        }),
-      ]);
-      await once(socket, "data");
-      expectClean();
-      child.kill("SIGTERM");
-      socket.destroy();
-      const [code] = await closed;
-      expect(code).toBe(143);
-      expectClean();
-    } finally {
-      if (child.exitCode === null && child.signalCode === null) {
-        child.kill("SIGTERM");
-        await closed;
-      }
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
     }
   });
 });

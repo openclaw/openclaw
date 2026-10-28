@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type {
   PluginDoctorStateMigration,
   PluginDoctorStateMigrationContext,
@@ -10,6 +11,15 @@ import { normalizeNativePendingAssignments } from "../app-server/native-subagent
 import { readCodexNativeSubagentSubmissions } from "../app-server/native-subagent-submission.js";
 import { CODEX_APP_SERVER_BINDING_NAMESPACE } from "../app-server/session-binding-meta.js";
 import { readStoredCodexAppServerBinding } from "../app-server/session-binding-record-codec.js";
+
+const loadSessionStoreRuntime = createLazyRuntimeModule(async () => {
+  const { getSessionEntryByIdAsync, resolveStorePath } =
+    await import("openclaw/plugin-sdk/session-store-runtime");
+  return { getSessionEntryByIdAsync, resolveStorePath };
+});
+const loadSessionBindingRecord = createLazyRuntimeModule(
+  () => import("../app-server/session-binding-record.js"),
+);
 
 type Params = Parameters<PluginDoctorStateMigration["migrateLegacyState"]>[0];
 type BindingRow = ReturnType<
@@ -70,9 +80,8 @@ async function normalizeRow(entry: BindingRow, params: Params, warnings: string[
       if (evidence?.state === "absent") {
         assignments = [];
       } else if (evidence?.state === "current") {
-        const { getSessionEntryByIdAsync, resolveStorePath } =
-          await import("openclaw/plugin-sdk/session-store-runtime");
-        const { bindingStoreKey } = await import("../app-server/session-binding-record.js");
+        const { getSessionEntryByIdAsync, resolveStorePath } = await loadSessionStoreRuntime();
+        const { bindingStoreKey } = await loadSessionBindingRecord();
         const current = await getSessionEntryByIdAsync({
           agentId,
           sessionId: stored.sessionId,

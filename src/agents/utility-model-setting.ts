@@ -3,7 +3,7 @@ import {
   resolveSelectedModelFallbacksOverride,
 } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveAgentConfig } from "./agent-scope-config.js";
+import { resolveAgentEntry } from "./agent-scope-config.js";
 
 type UtilityModelSetting =
   | { kind: "explicit"; modelRef: string; fallbacks: string[] }
@@ -15,7 +15,8 @@ export function readUtilityModelSetting(
   cfg: OpenClawConfig,
   agentId?: string,
 ): UtilityModelSetting {
-  const agent = agentId ? resolveAgentConfig(cfg, agentId)?.utilityModel : undefined;
+  // Only the entry's own field is read; the implicit legacy agent has none.
+  const agent = agentId ? resolveAgentEntry(cfg, agentId)?.utilityModel : undefined;
   const defaults = cfg.agents?.defaults?.utilityModel;
   const primary = (value: typeof defaults) => (typeof value === "string" ? value : value?.primary);
   const modelRef = (primary(agent) ?? primary(defaults))?.trim();

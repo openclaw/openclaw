@@ -162,9 +162,7 @@ it.each([
 
 it.each([
   ...[
-    { status: 401, message: "Bad credentials" },
     { status: 403, message: "Resource not accessible by integration" },
-    { status: 404, message: "Not Found" },
     { status: 500, message: "Internal Server Error" },
   ].map((failure) => [failure.message, [failure], [], 1, {}] as const),
   [

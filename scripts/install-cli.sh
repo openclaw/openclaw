@@ -129,9 +129,10 @@ NODE_VERSION_REQUESTED=0
 if [[ -n "${OPENCLAW_NODE_VERSION:-}" ]]; then
   NODE_VERSION_REQUESTED=1
 fi
-MIN_NODE_24_VERSION="24.22.1"
-MIN_NODE_26_VERSION="26.12.1"
-SUPPORTED_NODE_VERSION_LABEL="Node 24.22.1+ or Node 26.12.1+"
+# Compatibility floors mirror node-version.mjs, not the patched download default.
+MIN_NODE_24_VERSION="24.16.0"
+MIN_NODE_26_VERSION="26.1.0"
+SUPPORTED_NODE_VERSION_LABEL="Node 24.16.0+ or Node 26.1.0+"
 NODE_RELEASE_VERSION_CORE=""
 APK_NODE_BIN_DIR="/usr/bin"
 NPM_LOGLEVEL="${OPENCLAW_NPM_LOGLEVEL:-error}"
@@ -1027,7 +1028,8 @@ fix_npm_prefix_if_needed() {
   "$(npm_bin)" config set prefix "$target"
 
   local path_line="export PATH=\"${target}/bin:\$PATH\""
-  for rc in "${HOME}/.bashrc" "${HOME}/.zshrc"; do
+  local zsh_rc_dir="${ZDOTDIR:-$HOME}"
+  for rc in "${HOME}/.bashrc" "${zsh_rc_dir}/.zshrc"; do
     if [[ -f "$rc" ]] && ! grep -q ".npm-global" "$rc"; then
       echo "$path_line" >> "$rc"
     fi

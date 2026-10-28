@@ -81,10 +81,10 @@ const enChatMessageMetadata = {
       voiceTranscript: "Voice transcript",
       readAloud: "Read aloud",
       stopReading: "Stop reading",
-      duplicatesCollapsed: "{count} consecutive identical messages collapsed",
       contextFor: "Message context for {timestamp}",
     },
     systemNotice: {
+      modelChanged: "Model changed from {from} to {to}.",
       event: "{count} system event",
       events: "{count} system events",
       updatesNotDelivered: "Updates not delivered",

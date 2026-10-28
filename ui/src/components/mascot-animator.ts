@@ -131,7 +131,20 @@ export class MascotAnimator {
 
   poseAt(time: number): MascotPose {
     if (this.startTime === null) {
-      this.begin(time);
+      this.startTime = time;
+      this.lastPoseTime = time;
+      this.nextBlinkAt = time + this.random(0.8, 2.4);
+      this.nextGlanceAt = time + this.random(1.5, 4);
+      this.nextClawSnapAt = time + this.random(2, 5);
+      this.rescheduleMoodBeat(time);
+      if (
+        this.currentMood === "idle" ||
+        this.currentMood === "curious" ||
+        this.currentMood === "happy"
+      ) {
+        this.pendingGesture = "wave";
+        this.pendingGestureAt = time + 0.9;
+      }
     }
     const dt = clamp(time - this.lastPoseTime, 0, 0.1);
     this.lastPoseTime = time;
@@ -157,23 +170,6 @@ export class MascotAnimator {
     return clampMascotPose(pose);
   }
 
-  private begin(time: number): void {
-    this.startTime = time;
-    this.lastPoseTime = time;
-    this.nextBlinkAt = time + this.random(0.8, 2.4);
-    this.nextGlanceAt = time + this.random(1.5, 4);
-    this.nextClawSnapAt = time + this.random(2, 5);
-    this.rescheduleMoodBeat(time);
-    if (
-      this.currentMood === "idle" ||
-      this.currentMood === "curious" ||
-      this.currentMood === "happy"
-    ) {
-      this.pendingGesture = "wave";
-      this.pendingGestureAt = time + 0.9;
-    }
-  }
-
   private advanceSchedules(time: number): void {
     if (time >= this.nextBlinkAt) {
       this.blinkStarts.push(time);
@@ -190,7 +186,9 @@ export class MascotAnimator {
     this.blinkStarts = this.blinkStarts.filter((start) => time - start <= BLINK_DURATION);
 
     if (time >= this.nextGlanceAt) {
-      this.gazeTarget = this.randomGlanceTarget();
+      const magnitude = this.random(0.5, 1);
+      const angle = this.random(0, TAU);
+      this.gazeTarget = { x: Math.cos(angle) * magnitude, y: Math.sin(angle) * magnitude * 0.6 };
       this.gazeHoldUntil = time + this.random(0.7, 1.9);
       this.nextGlanceAt = this.gazeHoldUntil + this.glanceInterval();
     } else if (time >= this.gazeHoldUntil) {
@@ -479,12 +477,6 @@ export class MascotAnimator {
       return this.random(1.2, 3);
     }
     return this.random(3, 8);
-  }
-
-  private randomGlanceTarget(): { x: number; y: number } {
-    const magnitude = this.random(0.5, 1);
-    const angle = this.random(0, TAU);
-    return { x: Math.cos(angle) * magnitude, y: Math.sin(angle) * magnitude * 0.6 };
   }
 
   private rescheduleMoodBeat(time: number): void {

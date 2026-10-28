@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isPathInside } from "@openclaw/fs-safe/path";
 import * as tar from "tar";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { readConfigFileSnapshot, resolveStateDir } from "../config/config.js";
 import { prepareRestoredClientCredentials } from "../infra/client-credential-restore.js";
 import { formatDiskSpaceBytes, tryReadDiskSpace } from "../infra/disk-space.js";
@@ -13,7 +14,7 @@ import {
   buildBackupArchivePath,
   canonicalizePathForContainment,
   resolveBackupAgentRoots,
-  resolveRequiredBackupPath,
+  resolveBackupArchivePath,
 } from "./backup-shared.js";
 import { prepareBackupArchive } from "./backup-verify.js";
 import { resolveLegacyConfigSnapshotForBackup } from "./doctor/shared/automatic-config-repair.js";
@@ -261,13 +262,13 @@ async function restorePostgresExports(
 
 function formatRestoreResult(result: BackupRestoreResult): string {
   return [
-    `Backup archive restored to staging: ${shortenHomePath(result.targetPath)}`,
-    `Verified archive: ${shortenHomePath(result.archivePath)}`,
-    `Archive root: ${result.archiveRoot}`,
-    `Archive entries restored: ${result.entryCount}`,
+    terminalText`Backup archive restored to staging: ${shortenHomePath(result.targetPath)}`,
+    terminalText`Verified archive: ${shortenHomePath(result.archivePath)}`,
+    terminalText`Archive root: ${result.archiveRoot}`,
+    terminalText`Archive entries restored: ${result.entryCount}`,
     "",
     "Rollback warnings:",
-    ...result.warnings.map((warning) => `- ${warning}`),
+    ...result.warnings.map((warning) => terminalText`- ${warning}`),
     "",
     "Activation is explicit: stop the Gateway, move the restored asset tree into place or point OPENCLAW_STATE_DIR at the restored state asset, then run `openclaw doctor`.",
   ].join("\n");
@@ -278,7 +279,7 @@ export async function backupRestoreCommand(
   runtime: RuntimeEnv,
   options: { archive: string; target?: string; json?: boolean },
 ) {
-  const targetPath = resolveRequiredBackupPath(options.target, "--target");
+  const targetPath = resolveBackupArchivePath(options.target, "--target");
   await assertTargetOutsideLiveState(targetPath);
   const {
     result: verified,

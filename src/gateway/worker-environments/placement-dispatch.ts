@@ -286,6 +286,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
             runSetupScript: request.runSetupScript,
             admittedIntent: preparedIntent,
             inheritedProfile: request.inheritedProfile,
+            beforeProvision: assertCurrent,
           });
       return await startup.continueProvisionedDispatch({
         markPhase: diagnostics?.mark,
@@ -573,6 +574,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     },
     move: moveService.move,
     reclaim,
+    subscribeOrphanWorkspaceChanges: recovery.subscribeOrphanWorkspaceChanges,
     reconcile: recovery.reconcile,
     reconcileActive: recovery.reconcileActive,
     isInterruptedTurn: recovery.isInterruptedTurn,

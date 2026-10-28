@@ -1,18 +1,15 @@
 import { expect, it } from "vitest";
-import { createApiKeyCredential } from "./credential-fixtures.test-support.js";
+import {
+  createApiKeyCredential,
+  createOAuthRefreshCredential,
+} from "./credential-fixtures.test-support.js";
 import {
   buildPortableAuthProfileStoreForAgentCopy,
   resolveAuthProfilePortability,
 } from "./portability.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./types.js";
 
-const oauth = {
-  type: "oauth",
-  provider: "openai",
-  access: "access-token",
-  refresh: "refresh-token",
-  expires: Date.now() + 60_000,
-} satisfies AuthProfileCredential;
+const oauth = createOAuthRefreshCredential();
 const key = createApiKeyCredential("openai", "sk-test");
 const token = { type: "token", provider: "github-copilot", token: "gho-test" } as const;
 

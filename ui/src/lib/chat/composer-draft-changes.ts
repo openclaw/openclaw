@@ -1,17 +1,15 @@
 import { createChangeListeners, notifyListeners } from "../../../../src/shared/listeners.js";
 import type { ChatAttachment, ChatGoalDraftMode, HumanMention } from "./chat-types.ts";
 
-type ComposerDraftSnapshot = {
-  draft: string;
-  mentions: readonly HumanMention[];
-  attachments: ChatAttachment[];
-  pendingAttachmentReads: number;
-  attachmentReadRevision?: number;
-  goalDraftMode?: ChatGoalDraftMode | null;
-};
-
 export type ComposerDraftSource = {
-  read(): ComposerDraftSnapshot;
+  read(): {
+    draft: string;
+    mentions: readonly HumanMention[];
+    attachments: ChatAttachment[];
+    pendingAttachmentReads: number;
+    attachmentReadRevision?: number;
+    goalDraftMode?: ChatGoalDraftMode | null;
+  };
   subscribe(listener: () => void): () => void;
 };
 

@@ -32,12 +32,12 @@ OpenClaw serializes inbound auto-reply runs (all channels) through a tiny in-pro
 When unset, all inbound channel surfaces use:
 
 - `mode: "steer"`
-- `allowCollaborativeSteering: false`
+- `allowCollaborativeSteering: true`
 - a built-in 500ms debounce for steer, followup, and collect batching
 - `cap: 20`
 - `drop: "summarize"`
 
-Same-requester steering is the default. A compatible prompt from the active turn’s requester is injected into the runtime when it can accept steering, so no second session run is started. If the active run cannot accept steering, OpenClaw waits for the active run to finish before starting the prompt.
+Same-conversation collaborative steering is enabled by default. A compatible prompt can be injected into the active runtime, so no second session run is started. The active execution keeps its original authority; steering does not give each message its own tool policy. If the active run cannot accept steering, OpenClaw waits for the active run to finish before starting the prompt.
 
 ## Queue modes
 
@@ -65,7 +65,7 @@ before it starts ends that recovery without sending it again. See
 
 Queued Gateway input retains its authenticated requester. Each new execution resolves current applicable policy. Collecting messages requires compatible operator sources and tool permissions.
 
-By default, another person’s steering attempt is refused without queueing it. The runtime explains how to resend it with `/followup <message>` for a new turn under that person’s identity and current policy. Set `messages.queue.allowCollaborativeSteering: true` to let admitted human input in the same conversation steer an active turn under that turn's unchanged identity and prepared permissions. This lets Bob influence actions using permissions Alice has that Bob does not. Same-requester steering still requires compatible permissions. The option does not change queue modes or explicit cross-session `sessions_send(mode="steer")` authorization. See [Steering scope](/concepts/queue-steering#scope).
+When `messages.queue.allowCollaborativeSteering: false` is explicitly set, another person’s input queues quietly for a new turn under that person’s identity and current policy. It does not interrupt the current turn, and no resend or status notice is needed. Set `messages.queue.collaborativeSteeringFallback: "reject"` to require an explicit `/followup <message>` instead. Set `messages.queue.allowCollaborativeSteering: true` to let admitted human input in the same conversation steer an active turn under that turn's unchanged identity and prepared permissions. This lets Bob influence actions using permissions Alice has that Bob does not. Ordinary guidance from the same authenticated requester in the same conversation retains the active execution’s prepared permissions without substituting incoming caller capabilities or tool bindings. Current access and the original execution’s live authority still apply. The option does not change queue modes or explicit cross-session `sessions_send(mode="steer")` authorization. See [Steering scope](/concepts/queue-steering#scope).
 
 An accepted turn can continue after its request returns or its client disconnects.
 That does not extend revoked device authority or permissions removed by a current
@@ -104,6 +104,8 @@ Per-session `/queue` options apply to queued delivery. The `debounce` option als
 - `drop: "summarize"` (default): drop the oldest queued entries as needed, keep compact summaries, and inject them as a synthetic followup prompt.
 - `drop: "old"`: drop the oldest queued entries as needed, without preserving summaries.
 - `drop: "new"`: reject the newest message when the queue is already full.
+
+Gateway followup and collect debounce windows measure elapsed time, so wall-clock corrections do not shorten or extend them.
 
 The queue uses a built-in 500ms debounce. `cap` defaults to `20`, and `drop` defaults to `summarize`.
 
@@ -149,7 +151,9 @@ from collect batches, and bypasses pending-question answering. If the session ha
 no active or queued work, it starts through normal admission. The turn retains
 its submitter and resolves current policy when admitted.
 
-The queued notice appears only after enqueue succeeds. If the message starts
+Queue acceptance appears only after enqueue succeeds. The Control UI shows it in
+the input queue, without adding an agent reply. Other clients and channels retain
+a textual acknowledgment. If the message starts
 immediately, its start notice appears when execution starts, before the answer.
 Rejected outcomes are reported separately. Queue capacity, overflow, and cancellation
 rules still apply. Gateway-backed chat and the local embedded TUI support this
@@ -197,6 +201,11 @@ access cancels the collected turn and blocks further effects.
   prompt and its attachments. The cancellation record prevents replay after
   reconnect. Stop and timeout cancellations keep their recovery messages.
 
+After a successful session reset, an unsent follow-up reply retained for retry
+still belongs to the original session generation. Recovery does not replay it
+into the reset session. Recovery without a reset and replies to new turns
+continue normally.
+
 Gateway-backed clients (including `openclaw tui`) forward mid-run prompts and
 let the Gateway apply the queue mode. Esc/`/stop` uses a session-scoped abort
 so lost local handles cannot leave a still-queued prompt running.
@@ -218,6 +227,10 @@ Other connected clients can display the accepted input while it waits, without w
 In `collect` mode, appending the combined
 turn and marking its source inputs consumed happen in one transaction. A browser
 reconnect can reconcile those source inputs even if it missed their final events.
+
+An unrelated announcement does not consume another active request's accepted input or include it
+in its model context. The original request keeps that input, including inputs combined by collect
+mode, for its own continuation.
 
 The chat displays recorded non-Web client sources separately from the sender, for example `Alice · via CLI`. Web sources are omitted from these labels, including in collected messages that also contain input from another client.
 Reported app names describe the submitting client; they do not establish a human identity or grant permissions.

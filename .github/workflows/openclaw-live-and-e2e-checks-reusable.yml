@@ -477,6 +477,8 @@ on:
         default: true
         type: boolean
     secrets:
+      ABLITERATION_API_KEY:
+        required: false
       AZURE_SPEECH_KEY:
         required: false
       AZURE_SPEECH_REGION:
@@ -5069,6 +5071,7 @@ jobs:
             profile_env_only: false
             profiles: full
     env:
+      ABLITERATION_API_KEY: ${{ matrix.suite_id == 'native-live-extensions-a-k' && secrets.ABLITERATION_API_KEY || '' }}
       AZURE_SPEECH_KEY: ${{ matrix.suite_id == 'native-live-extensions-a-k' && secrets.AZURE_SPEECH_KEY || '' }}
       AZURE_SPEECH_REGION: ${{ matrix.suite_id == 'native-live-extensions-a-k' && secrets.AZURE_SPEECH_REGION || '' }}
       BASETEN_API_KEY: ${{ matrix.suite_id == 'native-live-extensions-a-k' && secrets.BASETEN_API_KEY || '' }}

@@ -122,7 +122,7 @@ export function registerParityHostLifecycle() {
   });
 }
 
-export async function captureAnthropicRequest(
+export async function captureAnthropicExchange(
   implementation: "provider" | "transport",
   options: {
     model?: Partial<Model<"anthropic-messages">>;
@@ -148,10 +148,7 @@ export async function captureAnthropicRequest(
   const info: string[] = [];
   const capabilities = getAiTransportHost().resolveProviderRequestCapabilities({});
   const fetchMock: typeof fetch = async (_input, init) => {
-    if (typeof init?.body !== "string") {
-      throw new Error("Expected a JSON Anthropic request body");
-    }
-    const payload: unknown = JSON.parse(init.body);
+    const payload: unknown = JSON.parse(await new Request(_input, init).text());
     if (!isRecord(payload)) {
       throw new Error("Expected an Anthropic request object");
     }
@@ -209,8 +206,18 @@ export async function captureAnthropicRequest(
           requestContext,
           streamOptions,
         );
-  const result = await stream.result();
-  expect(result.stopReason).toBe("stop");
+  const eventTrace = [];
+  for await (const event of stream) {
+    eventTrace.push(event);
+  }
+  return { requests, terminal: await stream.result(), eventTrace, warnings, info };
+}
+
+export async function captureAnthropicRequest(
+  ...args: Parameters<typeof captureAnthropicExchange>
+) {
+  const { requests, terminal, warnings, info } = await captureAnthropicExchange(...args);
+  expect(terminal.stopReason).toBe("stop");
   expect(requests).toHaveLength(1);
   const [request] = requests;
   if (!request) {

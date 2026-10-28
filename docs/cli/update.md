@@ -47,17 +47,29 @@ same SID. A different or unresolved account remains protected from automatic rep
 If service inspection is unavailable, package updates refuse before replacement
 when a live Gateway lock identifies the same installation. On Windows, a live lock
 PID is enough when its command-line package identity cannot be read.
-The public reason is `gateway-stop-unverified`. Stop the Gateway through Task
-Scheduler, its original terminal, or `openclaw gateway stop`, then rerun
-`openclaw update`. Updates without a live lock still continue on all platforms.
-This admission check requires an updated installed updater.
+The public reason is `gateway-stop-unverified`. Stop the Gateway through its
+systemd user/system unit on Linux, launchd on macOS, Task Scheduler on Windows,
+or its original terminal, then rerun `openclaw update`. For a managed service,
+try `openclaw gateway stop`. Run `openclaw gateway status --deep --json` to inspect
+the native failure: a missing systemd user bus (often over SSH or in a container),
+missing service-manager tools, denied access, and inspection timeouts retain their
+specific reason and recovery guidance. Updates without a live lock still continue
+on all platforms; an unverified live owner remains protected.
 
-For a global npm installation, the manual recovery path is
-`npm i -g openclaw@<target> --allow-scripts=openclaw`, then
-`openclaw doctor --fix`, then `openclaw gateway restart`. Replace `<target>` with
-the intended release and run service repair/restart from an elevated terminal
-if Task Scheduler denies access. OpenClaw prints this alternative; it does not
-run it automatically. Per-user Startup-folder installations do not require
+An already-current registry target skips core package replacement and does not
+require a Gateway stop for replacement. The registry artifact's schema limits do
+not apply when that artifact will not be installed. Plugin, runtime, and service maintenance
+still follow their own checks. Explicit package artifacts and installation
+rebinding can still require replacement even when version strings match.
+These admission checks require an updated installed updater.
+
+For a global npm installation, OpenClaw prints a short manual alternative
+(`npm i -g openclaw@<target> --allow-scripts=openclaw`, then
+`openclaw doctor --fix`, then `openclaw gateway restart`); it does not run it
+automatically. Follow the complete
+[manual update procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun)
+with the intended release as the target, and run the service commands from an
+elevated terminal if Task Scheduler denies access. Per-user Startup-folder installations do not require
 elevation for this check. An older installed updater keeps its previous behavior
 until replaced; use the elevated or manual path for that first upgrade.
 
@@ -67,8 +79,9 @@ update continues with a warning; only a confirmed ownership match skips replacem
 A missing package-manager executable is reported as unavailable, without database
 recovery instructions. For pacman (including Arch-based distributions), update
 with `sudo pacman -Syu` or your AUR helper. For FreeBSD,
-use the owning pkg or Ports deployment. Then restart the Gateway through its
-service owner.
+use the owning pkg or Ports deployment. Then run `openclaw doctor --fix` and restart
+the Gateway through its service owner; see
+[System-package and image-based installs](/install/updating/update-methods#system-package-and-image-based-installs).
 Older updaters must receive this fix through that system package manager first;
 a candidate cannot repair an updater that fails before staging it.
 
@@ -96,6 +109,16 @@ profile emits the guidance to stderr and does not create a state database for a
 skipped update. These non-outcomes do not run rollback verification or offer an
 update failure report.
 
+After durable success, updates automatically retire eligible superseded recovery
+copies through the state owner, retaining the current update's rollback generation.
+A failed update that stopped before repair or activation does the same and also
+retires its own original-state capture, since nothing it captured changed.
+Cleanup warnings never fail or roll back the successful update. Manual
+`openclaw update cleanup` remains available for inspection and retry; see
+[recovery retirement](/cli/update/repair-and-recovery#update-cleanup).
+
+Compatible Node 24.16.0+ on 24.x and 26.1.0+ remain accepted. If the updater or selected service Node is below the recommended security patches (24.22.1/26.12.1), update prints a prominent warning and continues; this recommendation alone does not reject the update. SQLite capability and target-package compatibility checks still apply. Run `openclaw security audit` to review the local Node security-patch warning.
+
 ## Usage
 
 ```bash
@@ -122,6 +145,10 @@ launcher scripts).
 Invalid configuration reports `invalid-config` before database schema inspection.
 An unreadable configuration file or failed configuration loading step instead
 reports `config-read-failed`, with a recognized filesystem error code when available.
+An ownership refusal during loading includes the `gateway-ownership-unverified`
+failure fact and points to `openclaw gateway recover-lock` for inspection. Active
+maintenance instead reports `gateway-maintenance-busy` with wait or stop guidance.
+Neither diagnostic includes the recorded holder's private details.
 For supported package targets, the candidate makes that
 decision after private staging; see [Candidate-owned admission](#candidate-owned-admission).
 The local diagnostic identifies invalid fields and recommends
@@ -595,6 +622,14 @@ worker-launch code; installing a corrected candidate cannot repair that first ho
 Source updates retain a retired workspace dependency link when only its ignored `node_modules` directory remains.
 An older installed updater that fails at `updater-runtime-retention` needs this correction in its running code before retrying; a newer candidate cannot repair that earlier step.
 
+Installed updaters up to 2026.10.7 and the 2026.10.10 betas retain their runtime in the update process
+and, after any second without a completed entry, rescan the whole retained tree
+to measure progress. On a busy or slow disk, `updater-runtime-retention` can take
+several minutes for a global install of about 45,000 files while still advancing;
+let it finish instead of interrupting the update. Newer updaters retain in a
+private worker bounded by the update deadline. The candidate does not take part in
+this step, so a newer target cannot speed it up.
+
 Runtime retention excludes updater-owned package backups in the global module
 directory, including backup symlinks to source checkouts. An older installed
 updater such as `2026.9.6` can still follow a retained
@@ -660,7 +695,9 @@ after admission, including every mutation.
 If the marker is absent or invalid, the updater uses its installed admission
 checks and records `update-admission-unsupported-target`. If the candidate times
 out, crashes, or returns no valid protocol-1 verdict, it records
-`update-admission-fallback` and uses those same installed checks. These warnings
+`update-admission-fallback` and uses those same installed checks. When stdout is
+not one JSON document (`malformed-json`), the warning ends with a bounded,
+redacted excerpt of the first stdout line. These warnings
 are informational; the installed checks determine whether the update proceeds.
 Both warning steps retain their identity, status, and timestamps when history
 compacts at its 128-step or 16 KiB limit. Warning text can be compacted to fit
@@ -676,7 +713,12 @@ passes `--context <absolute-path>` to a private mode-0600 context file; this com
 path and required argument select admission child mode. The command emits
 one JSON document with `protocol`, `verdict`, `reasons`, `warnings`, and `facts`
 containing candidate/installed versions, the candidate's `nodeEngines` requirement
-when declared, and named check results. It exits `0`
+when declared, and named check results. Console logs from admission and its
+private inspection workers go to stderr at every console level, so stdout carries
+only that document. Candidates up to 2026.10.7 and the 2026.10.10 betas wrote debug
+diagnostics to stdout when the console level was raised (for example
+`logging.consoleLevel: "debug"`), so their admission fell back with `malformed-json`
+to the installed checks. It exits `0`
 for admission, `3` for refusal, or `2` for an internal error without a valid
 verdict. It rejects inherited update authority variables with exit `2`, allowing
 the supervisor to fall back. It does not perform managed-service ancestry checks.
@@ -726,10 +768,23 @@ the installed updater: installing a candidate does not retrofit its parent drive
 
 ## Runtime retention failures
 
+Runtime retention is best effort once the updater has kept its own copy of the
+native recovery helper. When it then cannot retain the rest of its running
+runtime, for example because of a `host-owned-plugin-link`, a changed source
+file, or a failed retention worker, it logs the reason with "continuing update
+without a verified retained rollback runtime" and continues. It retains nothing
+else and leaves the installed runtime unchanged; native recovery and the
+existing rollback protections still apply. The update still stops before
+activation when no private storage outside the installation is available for
+that helper, when the retention worker's process cleanup cannot be confirmed,
+or on cancellation or a lost update lease. Updaters released before this change
+stopped at every retention failure, and the guidance below explains their
+recorded failures; it also explains a retention warning worth repairing.
+
 **Fix now:** `host-owned-plugin-link` means a dependency symlink reaches
 OpenClaw-owned files that the updater cannot safely retain as an independent
 plugin dependency. Retention protects the running updater and recovery workers
-when package replacement removes the old files. Do not skip this check.
+when package replacement removes the old files.
 
 Inspect the link and target in the local failure output. Keep the source files
 and recovery backups. For a current installation, ask the plugin maintainer to

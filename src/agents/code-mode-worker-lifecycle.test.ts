@@ -13,7 +13,7 @@ import {
 import { ToolSearchRuntime } from "./tool-search-runtime.js";
 
 async function parkExpiringRun(method: "callValue" | "agentWait") {
-  vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+  vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout", "performance"] });
   const { config, ctx, owner, continuation } = createRunFixture({
     tools: { codeMode: { enabled: true, snapshotTtlSeconds: 1 } },
   });

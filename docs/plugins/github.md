@@ -34,7 +34,7 @@ To intentionally keep it off and silence that notice, set
 The plugin is enabled by default. Connect to the Gateway, then click a public
 GitHub issue, pull request, or commit link in chat. The reader opens beside the
 conversation with a GitHub icon and an **Open on GitHub** link. Hover or focus
-an issue or pull request link to see its preview. Issue and pull request chips
+an issue, pull request, or commit link to see its preview. Issue and pull request chips
 show the full `owner/repo#number` reference, including shorthand references
 resolved from the session repository. Descriptive link labels stay unchanged.
 Login, OAuth, profile,
@@ -53,7 +53,8 @@ The reader shows the title and description first, while checks and discussion
 load independently. A quiet skeleton keeps the layout recognizable on a cold
 open. File diffs load when you select **Files** or scroll near that section.
 The reader includes discussion comments, published inline PR review comments
-with file and diff context, commit comments, and expandable file diffs. The
+with file and diff context, commit comments, and expandable file diffs. PR discussion
+and inline review comments load concurrently. The
 header separates the item state, author, change counts, and PR branches. **Overview**, **Checks**, **Files**, and **Discussion** shortcuts jump
 to the relevant section without leaving the reader.
 

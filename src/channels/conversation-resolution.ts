@@ -17,14 +17,23 @@ import { resolveConversationIdFromTargets } from "../infra/outbound/conversation
 import { normalizeConversationTargetRef } from "../infra/outbound/session-binding-normalization.js";
 import type { SessionBindingPlacement } from "../infra/outbound/session-binding.types.js";
 import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
+import { loadOptionalBundledChannelPublicArtifact } from "./plugins/optional-public-artifact.js";
 import { getLoadedChannelPluginForRead } from "./plugins/registry-loaded.js";
-import {
-  resolveBundledChannelThreadBindingDefaultPlacement,
-  resolveBundledChannelThreadBindingInboundConversation,
-} from "./plugins/thread-binding-api.js";
 import type { ChannelCommandConversationContext } from "./plugins/types.adapters.js";
+import type { ChannelMessagingAdapter } from "./plugins/types.core.js";
 import type { AnyChannelPlugin as ChannelPlugin } from "./plugins/types.plugin.js";
 import { normalizeAnyChannelId } from "./registry.js";
+
+type ThreadBindingApi = Pick<ChannelMessagingAdapter, "resolveInboundConversation"> & {
+  defaultTopLevelPlacement?: unknown;
+};
+
+function loadBundledChannelThreadBindingApi(channelId: string): ThreadBindingApi | undefined {
+  return loadOptionalBundledChannelPublicArtifact({
+    channelId,
+    artifactBasename: "thread-binding-api.js",
+  });
+}
 
 type ConversationResolution = {
   channel: string;
@@ -200,7 +209,12 @@ export function resolveChannelDefaultBindingPlacement(
   }
   const pluginPlacement =
     getLoadedChannelPluginForRead(channel)?.conversationBindings?.defaultTopLevelPlacement;
-  return pluginPlacement ?? resolveBundledChannelThreadBindingDefaultPlacement(channel);
+  if (pluginPlacement != null) {
+    return pluginPlacement;
+  }
+  const value = loadBundledChannelThreadBindingApi(channel)?.defaultTopLevelPlacement;
+  const normalized = normalizeOptionalString(typeof value === "string" ? value : undefined);
+  return normalized === "current" || normalized === "child" ? normalized : undefined;
 }
 
 /**
@@ -326,10 +340,11 @@ export function resolveInboundConversationResolution(
     return providerResolution;
   }
 
-  const artifactConversation = resolveBundledChannelThreadBindingInboundConversation({
-    channelId: channel,
-    ...resolverParams,
-  });
+  const artifactApi = loadBundledChannelThreadBindingApi(channel);
+  const artifactConversation =
+    typeof artifactApi?.resolveInboundConversation === "function"
+      ? artifactApi.resolveInboundConversation(resolverParams)
+      : undefined;
   const artifactResolution = normalizeResolutionTarget(resolutionScope, artifactConversation);
   if (artifactResolution || artifactConversation === null) {
     // Lightweight bundled artifacts can also reject targets before full plugin loading.

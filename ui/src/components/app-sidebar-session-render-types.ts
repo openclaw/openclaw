@@ -12,6 +12,7 @@ import type {
 import type { SessionOwnerOption } from "../lib/session-owner.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
 import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
+import type { PersonalSessionGroup } from "../lib/sessions/personal-groups.ts";
 import type { SolidBridgeElement } from "../lib/solid-bridge.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import type { ContributionsElement } from "../plugins/control-ui-contributions.solid.tsx";
@@ -53,7 +54,10 @@ export interface SessionListHost {
   readonly sidebarNarrationLines: ReadonlyMap<string, string>;
   readonly sidebarTools: ReadonlyMap<string, SidebarToolActivity>;
   readonly sidebarObserverDigests: ReadonlyMap<string, SessionObserverDigest>;
-  readonly sessionProjection: Pick<SidebarSessionProjection, "resolveSubtitle" | "mountCatalogRow">;
+  readonly sessionProjection: Pick<
+    SidebarSessionProjection,
+    "resolveSubtitle" | "heldSubtitle" | "mountCatalogRow"
+  >;
   readonly selectedSessionKeys: ReadonlySet<string>;
   readonly connected: boolean;
   readonly sessionData: Pick<
@@ -90,7 +94,6 @@ export interface SessionListHost {
     | "sessionDropTarget"
     | "sidebarSectionDropTarget"
     | "sessionListRemovalDrop"
-    | "setSessionsStatusFilter"
     | "startSessionDrag"
     | "startSidebarSectionDrag"
     | "archiveSessionWithUndo"
@@ -143,10 +146,10 @@ export interface SessionListHost {
   showMoreChildren(sessionKey: string): void;
   toggleSection(sectionId: string): void;
   expandedAgentId(): string;
-  /** Unadmitted New session handoff; presentation only, never a saved selection. */
-  pendingSessionCreate():
+  /** Foreground create display; never roster membership or saved selection. */
+  sessionCreateDisplay():
     | Readonly<{
-        creation: Readonly<{ sessionKey: string }>;
+        creation: Readonly<{ sessionKey: string; admitted: boolean }>;
         displayName?: string;
         category?: string;
       }>
@@ -155,6 +158,7 @@ export interface SessionListHost {
   readSessionMutationAccess(request: SessionMethodAccessRequest): SessionMethodAccess;
   requestOpenNewSession(agentId: string, target?: NewSessionTarget): void;
   setVisibleSessionLimit(sectionId: string, limit: number): void;
+  resetVisibleSessionLimit(sectionId: string): void;
   clearSessionSelection(): void;
 }
 
@@ -192,6 +196,10 @@ export type SidebarSessionListHost = SessionListHost & {
       | "loadingMoreSessionCatalogIds"
     >;
   projectHomeSession(row: GatewaySessionRow, agentId: string): SidebarRecentSession;
+  resolvePersonalGroupSession?(key: string): SidebarRecentSession | undefined;
+  readonly collapsedPersonalSessionGroups: ReadonlySet<string>;
+  togglePersonalSessionGroup(id: string): void;
+  personalGroupSessionRows(group: PersonalSessionGroup): SidebarRecentSession[];
   reconciledSidebarZone(): {
     entries: readonly SidebarZoneEntry[];
     sessionRows: ReadonlyMap<string, SidebarRecentSession>;

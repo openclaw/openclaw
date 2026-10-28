@@ -85,7 +85,7 @@ suite.define(() => {
       expect(
         (await gateway.getRequests("users.setDisplayName")).map((request) => request.params),
       ).toEqual([{ profileId: testProfile.id, displayName: renamed.displayName }]);
-      const credit = page.locator("#settings-profile-identity input.settings-toggle__input");
+      const credit = page.getByRole("switch", { name: "Git co-author credit", exact: true });
       await expect(credit).toBeEnabled();
       await expect(credit).toBeChecked();
       await credit.click();

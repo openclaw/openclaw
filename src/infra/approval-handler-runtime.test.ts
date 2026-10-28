@@ -1,7 +1,6 @@
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { createLazyChannelApprovalNativeRuntimeAdapterAsync } from "./approval-handler-adapter-runtime.js";
-import type { ChannelApprovalNativeRuntimeAdapter } from "./approval-handler-runtime-types.js";
 import {
   createChannelApprovalNativeRuntimeAdapter,
   createChannelApprovalHandlerFromCapability as createHandler,
@@ -85,33 +84,15 @@ async function createTestApprovalHandler(
 ) {
   return requireHandler({
     capability: makeNativeApprovalCapability(params),
-    ...TEST_HANDLER_PARAMS,
   });
 }
 
-async function requireHandler(params: Parameters<typeof createHandler>[0]) {
-  const runtime = await createHandler(params);
+async function requireHandler(params: Partial<Parameters<typeof createHandler>[0]>) {
+  const runtime = await createHandler({ ...TEST_HANDLER_PARAMS, ...params });
   if (runtime === null) {
     throw new Error("Expected approval handler runtime");
   }
   return runtime;
-}
-
-function makeLazyFixture(
-  onDelivered?: NonNullable<
-    ChannelApprovalNativeRuntimeAdapter<{ text: string }>["observe"]
-  >["onDelivered"],
-) {
-  return {
-    availability: { isConfigured: vi.fn(), shouldHandle: vi.fn() },
-    presentation: {
-      buildPendingPayload: vi.fn(async () => ({ text: "pending" })),
-      buildResolvedResult: vi.fn(),
-      buildExpiredResult: vi.fn(),
-    },
-    transport: { prepareTarget: vi.fn(), deliverPending: vi.fn() },
-    ...(onDelivered ? { observe: { onDelivered } } : {}),
-  } satisfies ChannelApprovalNativeRuntimeAdapter<{ text: string }>;
 }
 
 function gatedResult<T>(result: T) {
@@ -131,14 +112,15 @@ function firstCallArg(mock: ReturnType<typeof vi.fn>) {
     | undefined;
 }
 
+function expectRequestKind(mock: ReturnType<typeof vi.fn>, request: unknown, approvalKind: string) {
+  expect(mock).toHaveBeenCalledWith(expect.objectContaining({ request, approvalKind }));
+}
+
 describe("createChannelApprovalHandlerFromCapability", () => {
   it("awaits async native eligibility before loading delivery hooks", async () => {
     const deliverPending = vi.fn().mockResolvedValue({ messageId: "async-card" });
     const capability = makeNativeApprovalCapability({ deliverPending });
     const nativeRuntime = capability.nativeRuntime;
-    if (!nativeRuntime) {
-      throw new Error("Expected fixture native runtime");
-    }
     const load = vi.fn(async () => nativeRuntime);
     const eligibility = createDeferred<boolean>();
     const nativeRuntimeAsync = createLazyChannelApprovalNativeRuntimeAdapterAsync({
@@ -148,7 +130,6 @@ describe("createChannelApprovalHandlerFromCapability", () => {
     });
     const runtime = await requireHandler({
       capability: { native: capability.native, nativeRuntimeAsync },
-      ...TEST_HANDLER_PARAMS,
     });
     const requested = runtime.handleRequested(makeExecApprovalRequest("async-declined"));
     eligibility.resolve(false);
@@ -199,7 +180,7 @@ describe("createChannelApprovalHandlerFromCapability", () => {
       });
       const buildPendingPayload = vi.fn().mockResolvedValue({ text: "pending" });
       capability.nativeRuntime.presentation.buildPendingPayload = buildPendingPayload;
-      const approvalRuntime = await requireHandler({ ...TEST_HANDLER_PARAMS, capability });
+      const approvalRuntime = await requireHandler({ capability });
       const request = override
         ? makePluginRequest("plugin:legacy-owned-id")
         : makePluginRequest("custom:1", { turnSourceChannel: "test", turnSourceTo: "origin-chat" });
@@ -208,17 +189,12 @@ describe("createChannelApprovalHandlerFromCapability", () => {
       if (override) {
         expect(resolveApprovalKind).toHaveBeenCalledWith(normalizedRequest);
       }
-      expect(shouldHandle).toHaveBeenCalledWith(
-        expect.objectContaining({ request: normalizedRequest, approvalKind }),
-      );
-      expect(buildPendingPayload).toHaveBeenCalledWith(
-        expect.objectContaining({ request: normalizedRequest, approvalKind }),
-      );
+      expectRequestKind(shouldHandle, normalizedRequest, approvalKind);
+      expectRequestKind(buildPendingPayload, normalizedRequest, approvalKind);
       await approvalRuntime.stop();
 
       expect(unbindPending).toHaveBeenCalledOnce();
-      expect(firstCallArg(unbindPending)).toHaveProperty("request", normalizedRequest);
-      expect(firstCallArg(unbindPending)).toHaveProperty("approvalKind", approvalKind);
+      expectRequestKind(unbindPending, normalizedRequest, approvalKind);
     },
   );
 
@@ -240,7 +216,6 @@ describe("createChannelApprovalHandlerFromCapability", () => {
       nativeRuntime.presentation.buildExpiredResult =
         phase === "expired" ? buildResult : otherResult;
       const approvalRuntime = await requireHandler({
-        ...TEST_HANDLER_PARAMS,
         capability: {
           ...makeNativeApprovalCapability(),
           nativeRuntime: createLazyChannelApprovalNativeRuntimeAdapter({
@@ -332,7 +307,6 @@ describe("createChannelApprovalHandlerFromCapability", () => {
       } else {
         await approvalRuntime.handleRequested({ ...request, id: "exec:stop-2" });
         await expect(approvalRuntime.stop()).resolves.toBeUndefined();
-        expect(unbindPending).toHaveBeenCalledTimes(2);
         await expect(approvalRuntime.stop()).resolves.toBeUndefined();
       }
       expect(unbindPending).toHaveBeenCalledTimes(2);
@@ -341,75 +315,48 @@ describe("createChannelApprovalHandlerFromCapability", () => {
 });
 
 describe("createLazyChannelApprovalNativeRuntimeAdapter", () => {
-  it("loads the runtime lazily and reuses the loaded adapter", async () => {
-    const explicitIsConfigured = vi.fn().mockReturnValue(true);
-    const explicitShouldHandle = vi.fn().mockReturnValue(false);
-    const resolveApprovalKind = vi.fn().mockReturnValue("exec");
-    const pending = makeLazyFixture();
-    const typedResolveApprovalKind = vi.fn().mockReturnValue("plugin");
+  it("keeps eligibility and observers synchronous while caching the typed lazy runtime", async () => {
+    const onDelivered = vi.fn();
     const fixture = createChannelApprovalNativeRuntimeAdapter({
-      ...pending,
-      resolveApprovalKind: typedResolveApprovalKind,
+      availability: { isConfigured: vi.fn(), shouldHandle: vi.fn() },
+      presentation: {
+        buildPendingPayload: vi.fn(async () => ({ text: "pending" })),
+        buildResolvedResult: vi.fn(),
+        buildExpiredResult: vi.fn(),
+      },
+      transport: { prepareTarget: vi.fn(), deliverPending: vi.fn() },
+      observe: { onDelivered },
+      resolveApprovalKind: () => "plugin",
     });
-    const { buildPendingPayload } = pending.presentation;
     const load = vi.fn(async () => fixture);
     const adapter = createLazyChannelApprovalNativeRuntimeAdapter({
       eventKinds: ["exec"],
-      resolveApprovalKind,
-      isConfigured: explicitIsConfigured,
-      shouldHandle: explicitShouldHandle,
+      resolveApprovalKind: () => "exec",
+      isConfigured: () => true,
+      shouldHandle: () => false,
       load,
     });
     const cfg = { channels: {} } as never;
     const request = { id: "exec:1" } as never;
-    const view = {} as never;
-    const opaqueRequest = { id: "opaque-plugin-id" } as never;
-    expect(fixture.resolveApprovalKind?.(opaqueRequest)).toBe("plugin");
-    expect(typedResolveApprovalKind).toHaveBeenCalledWith(opaqueRequest);
-
+    const payload = { cfg, request, approvalKind: "exec" as const, nowMs: 1, view: {} as never };
     expectTypeOf<
       Awaited<ReturnType<typeof adapter.presentation.buildPendingPayload>>
     >().toEqualTypeOf<{ text: string }>();
     expect(adapter.eventKinds).toEqual(["exec"]);
     expect(adapter.resolveApprovalKind?.(request)).toBe("exec");
-    expect(resolveApprovalKind).toHaveBeenCalledWith(request);
     expect(adapter.availability.isConfigured({ cfg })).toBe(true);
     expect(adapter.availability.shouldHandle({ cfg, request, approvalKind: "exec" })).toBe(false);
-    const payload = { cfg, request, approvalKind: "exec" as const, nowMs: 1, view };
-    await expect(adapter.presentation.buildPendingPayload(payload)).resolves.toEqual({
-      text: "pending",
-    });
-    expect(load).toHaveBeenCalledTimes(1);
-    expect(explicitIsConfigured).toHaveBeenCalledWith({ cfg });
-    expect(explicitShouldHandle).toHaveBeenCalledWith({ cfg, request, approvalKind: "exec" });
-    expect(buildPendingPayload).toHaveBeenCalledWith(payload);
-  });
-
-  it("keeps observe hooks synchronous and only uses the already-loaded runtime", async () => {
-    const onDelivered = vi.fn();
-    const load = vi.fn().mockResolvedValue(makeLazyFixture(onDelivered));
-    const adapter = createLazyChannelApprovalNativeRuntimeAdapter({
-      isConfigured: vi.fn().mockReturnValue(true),
-      shouldHandle: vi.fn().mockReturnValue(true),
-      load,
-    });
-
-    adapter.observe?.onDelivered?.({ request: { id: "exec:1" } } as never);
+    adapter.observe?.onDelivered?.({ request } as never);
     expect(load).not.toHaveBeenCalled();
     expect(onDelivered).not.toHaveBeenCalled();
 
-    await adapter.presentation.buildPendingPayload({
-      cfg: {} as never,
-      request: { id: "exec:1" } as never,
-      approvalKind: "exec",
-      nowMs: 1,
-      view: {} as never,
+    await expect(adapter.presentation.buildPendingPayload(payload)).resolves.toEqual({
+      text: "pending",
     });
-    expect(load).toHaveBeenCalledTimes(1);
-
-    adapter.observe?.onDelivered?.({ request: { id: "exec:1" } } as never);
-    expect(onDelivered).toHaveBeenCalledWith({ request: { id: "exec:1" } });
-    expect(load).toHaveBeenCalledTimes(1);
+    adapter.observe?.onDelivered?.({ request } as never);
+    expect(onDelivered).toHaveBeenCalledWith({ request });
+    await adapter.presentation.buildPendingPayload(payload);
+    expect(load).toHaveBeenCalledOnce();
   });
 
   it.each([

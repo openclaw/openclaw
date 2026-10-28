@@ -19,7 +19,10 @@ import { hasErrnoCode } from "./errno.js";
 import { resolveNodeCompileCacheEnv } from "./node-compile-cache-env.js";
 import { SQLITE_READONLY_CHILD_ARG } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
-import { captureRuntimeWorkerSource } from "./runtime-worker-generation.js";
+import {
+  captureRuntimeWorkerSource,
+  resolveRuntimeWorkerGenerationUrl,
+} from "./runtime-worker-generation.js";
 import { resolveRuntimeWorkerArgv } from "./runtime-worker-url.js";
 import { tryProcessCwd } from "./safe-cwd.js";
 import { retainSnapshotWork } from "./sqlite-readonly-location-cleanup.js";
@@ -242,7 +245,9 @@ export function createScopedSqliteReadOnlyWorker(
     createSqliteReadOnlyWorkerSession({
       ...launch,
       argv: [
-        ...resolveRuntimeWorkerArgv(launch.runtimeGeneration?.resolve(workerUrl) ?? workerUrl),
+        ...resolveRuntimeWorkerArgv(
+          resolveRuntimeWorkerGenerationUrl(workerUrl, launch.runtimeGeneration),
+        ),
         SQLITE_READONLY_CHILD_ARG,
         "session",
       ],

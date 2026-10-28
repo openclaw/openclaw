@@ -221,6 +221,7 @@ async function createBuildRecoveryHarness(
       }
     }),
     destroy,
+    reclaim: destroy,
     requestDestroy: destroy,
     attachSession: vi.fn(unexpected("worker session attachment")),
     createWithRequest: vi.fn(unexpected("worker environment creation")),

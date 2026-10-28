@@ -7,33 +7,48 @@ const sessionKey = "agent:main:main";
 
 describe("acp translator errorKind mapping", () => {
   it.each([
-    ["refusal", "refusal"],
-    ["unknown", "end_turn"],
-  ])("records and delivers %s errors before settling as %s", async (errorKind, stopReason) => {
-    const eventLedger = createTestAcpEventLedger();
-    await eventLedger.startSession({ sessionId, sessionKey, cwd: "/tmp", complete: true });
-    const h = createPromptScenario({ eventLedger });
-    const prompt = h.start();
-    const runId = await prompt.sent;
-    const error = { state: "error", errorKind, errorMessage: "gateway error" };
-    const update = {
-      sessionUpdate: "agent_message_chunk",
-      content: { type: "text", text: "[OpenClaw interruption] gateway error" },
-    };
-    await h.chat(runId, error);
-    await expect(prompt.result).resolves.toEqual({ stopReason });
-    await h.chat(runId, error);
-    expect(
-      h.sessionUpdate.mock.calls.flatMap(([notification]) =>
-        notification.update.sessionUpdate === "agent_message_chunk" ? [notification.update] : [],
-      ),
-    ).toEqual([update]);
-    expect(h.sessionUpdate.mock.invocationCallOrder[0]).toBeLessThan(
-      prompt.settlement.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
-    );
-    const replay = await eventLedger.readReplay({ sessionId, sessionKey });
-    expect(replay.events.map((event) => event.update)).toContainEqual(update);
-  });
+    { errorKind: "refusal", gatewayStopReason: undefined, stopReason: "refusal" },
+    { errorKind: "unknown", gatewayStopReason: undefined, stopReason: "end_turn" },
+    { errorKind: "unknown", gatewayStopReason: "length", stopReason: "max_tokens" },
+    { errorKind: "unknown", gatewayStopReason: "max_tokens", stopReason: "max_tokens" },
+  ])(
+    "records and delivers $errorKind/$gatewayStopReason errors before settling as $stopReason",
+    async ({ errorKind, gatewayStopReason, stopReason }) => {
+      const eventLedger = createTestAcpEventLedger();
+      await eventLedger.startSession({ sessionId, sessionKey, cwd: "/tmp", complete: true });
+      const h = createPromptScenario({ eventLedger });
+      const prompt = h.start();
+      const runId = await prompt.sent;
+      const error = {
+        state: "error",
+        errorKind,
+        stopReason: gatewayStopReason,
+        errorMessage: "gateway error",
+      };
+      const summary = {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "Recovered summary" },
+      };
+      const update = {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "[OpenClaw interruption] gateway error" },
+      };
+      await h.chat(runId, { state: "delta", message: { content: [summary.content] } });
+      await h.chat(runId, error);
+      await expect(prompt.result).resolves.toEqual({ stopReason });
+      await h.chat(runId, error);
+      expect(
+        h.sessionUpdate.mock.calls.flatMap(([notification]) =>
+          notification.update.sessionUpdate === "agent_message_chunk" ? [notification.update] : [],
+        ),
+      ).toEqual([summary, update]);
+      expect(h.sessionUpdate.mock.invocationCallOrder[0]).toBeLessThan(
+        prompt.settlement.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+      );
+      const replay = await eventLedger.readReplay({ sessionId, sessionKey });
+      expect(replay.events.map((event) => event.update)).toContainEqual(update);
+    },
+  );
 
   it("settles errors without a message without emitting an empty notice", async () => {
     const h = createPromptScenario();

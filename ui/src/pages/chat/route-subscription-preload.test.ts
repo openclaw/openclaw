@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { expect, it, vi } from "vitest";
+import { createRouteLoaderOptions } from "../../test-helpers/route-loader-options.ts";
 import { createSessionRouteContext } from "./route-resolution.test-support.ts";
 import { pages } from "./route.ts";
 
@@ -18,14 +19,10 @@ it("loads subscription code during route loading without waiting or opening an o
   const { context, request } = createSessionRouteContext();
   const loads = pages.map(async (page) => {
     const location = { pathname: `/${page.id}/roboclaw/main`, search: "", hash: "" };
-    return page.loader!(context, {
-      location,
-      deps: page.loaderDeps!(context, location),
-      cause: "navigation",
-      revalidating: false,
-      shouldRun: () => true,
-      signal: new AbortController().signal,
-    });
+    return page.loader!(
+      context,
+      createRouteLoaderOptions(location, page.loaderDeps!(context, location)),
+    );
   });
   try {
     await runtime.started.promise;

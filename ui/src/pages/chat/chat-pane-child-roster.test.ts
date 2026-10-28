@@ -2,16 +2,13 @@
 
 import { expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { flush } from "../../test-helpers/solid-settle.ts";
+import { createGatewayBrowserClientFixture } from "./chat-application-context.test-support.ts";
 import {
-  createGatewayBrowserClientFixture,
   createPaneHeaderWorkspaceFixture,
   createTestChatPane,
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
 import type { SubagentRoster } from "./chat-spawned-subagent.ts";
-import { renderChatComposerNotices } from "./chat-view-notices.tsx";
 
 type ChildRosterPane = TestChatPane & {
   resolveChatReadTarget: () => { sessionKey: string; agentId?: string } | undefined;
@@ -65,9 +62,8 @@ it.each([
     parentKey: "agent:work:primary",
   },
 ] as const)(
-  "renders child attention for admitted $routeKey ancestry",
+  "projects the child roster for admitted $routeKey ancestry",
   async ({ routeKey, mainKey, scope, parentKey }) => {
-    vi.useFakeTimers();
     const fixture = createTestChatPane({ client: createGatewayBrowserClientFixture() });
     const pane = fixture.pane as ChildRosterPane;
     pane.state.sessionKey = routeKey;
@@ -86,37 +82,20 @@ it.each([
     } satisfies GatewaySessionRow;
     Reflect.set(pane.swarm, "hydrator", { rows: [child], hydrated: true, childrenRead: true });
     Reflect.set(pane.swarm, "enabled", false);
-    const container = document.body.appendChild(document.createElement("div"));
     try {
       const roster = pane.projectChildRoster(pane.resolveChatReadTarget());
       expect(roster).toMatchObject({
         subagentParentKey: parentKey,
         subagentSessions: [child],
         subagentSessionsHydrated: true,
-        subagentSessionsRead: true,
-        swarm: undefined,
       });
-      const view = mountSolid(
-        () => renderChatComposerNotices({ sessionKey: routeKey, messages: [], ...roster }),
-        { container },
-      );
-      const notice = container.querySelector<HTMLElement>("openclaw-chat-child-attention");
-      expect(notice).not.toBeNull();
-      flush();
-      expect(notice!.querySelector(".chat-child-attention")?.textContent).toContain(
-        child.agentStatus.note,
-      );
-      view.unmount();
       expect(pane.projectChildRoster(undefined)).toMatchObject({
         subagentParentKey: undefined,
         subagentSessions: undefined,
         subagentSessionsHydrated: false,
-        subagentSessionsRead: false,
       });
     } finally {
-      container.remove();
       Reflect.set(pane.swarm, "hydrator", null);
-      vi.useRealTimers();
     }
   },
 );

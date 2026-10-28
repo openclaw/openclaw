@@ -29,6 +29,7 @@ import {
 } from "../sessions/input-provenance.js";
 import { captureSessionTarget } from "../sessions/session-controller.lifecycle.js";
 import { getRpcSourceIdentity } from "../sessions/session-controller.rpc-sources.js";
+import { rpcSourcesByRunId } from "../sessions/session-controller.storage.js";
 import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -40,7 +41,12 @@ import { abortChatRunById } from "./chat-abort.js";
 import { createGatewayServerActiveWorkInspectors } from "./server-active-work.js";
 import type { AgentEventHandlerOptions } from "./server-chat.js";
 import { GatewayConnectionWork } from "./server-connection-work.js";
-import { registerActivitySummaryPublicationTests } from "./server-runtime-subscriptions.activity-summary.test-support.js";
+import { fixedStoreOwnershipConfig } from "./server-methods/sessions-fixed-store.test-support.js";
+import * as eventDispatch from "./server-runtime-event-dispatch.js";
+import {
+  registerActivitySummaryPublicationTests,
+  registerActivitySummaryRunTests,
+} from "./server-runtime-subscriptions.activity-summary.test-support.js";
 import { registerSessionPublicationTests } from "./server-runtime-subscriptions.publication.test-support.js";
 import {
   createSubscriptionTestFixture,
@@ -103,7 +109,8 @@ vi.mock("./session-activity-summaries.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../config/io.js", () => ({
+vi.mock("../config/io.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/io.js")>()),
   getRuntimeConfig: () => runtimeConfigState.value,
 }));
 
@@ -227,6 +234,7 @@ describe("startGatewayEventSubscriptions", () => {
   it.each(["before startup", "during close"] as const)(
     "stops observer events %s while chat events continue draining",
     async (phase) => {
+      using dispatch = vi.spyOn(eventDispatch, "dispatchEventHandler");
       const connectionWork = new GatewayConnectionWork();
       const handler = Object.assign(vi.fn(), { dispose: vi.fn() });
       agentEventHandlerMocks.create.mockReturnValue(handler);
@@ -252,6 +260,14 @@ describe("startGatewayEventSubscriptions", () => {
       expect(warn).not.toHaveBeenCalled();
       expect(observe).toHaveBeenCalledTimes(phase === "during close" ? 1 : 0);
       expect(handler).toHaveBeenCalledTimes(phase === "during close" ? 10 : 9);
+      const deliveries = dispatch.mock.calls.filter(
+        ([params]) => params.failureMessage === "Agent event dispatch failed",
+      );
+      expect({
+        deliveryGuards: new Set(deliveries.map(([params]) => params.isDeliveryCurrent)).size,
+        terminalFailureHandlers: deliveries.filter(([params]) => params.onFailure !== undefined)
+          .length,
+      }).toEqual({ deliveryGuards: 1, terminalFailureHandlers: 0 });
       emit();
       expect(handler).toHaveBeenCalledTimes(phase === "during close" ? 10 : 9);
       observe.mockRestore();
@@ -470,17 +486,9 @@ describe("startGatewayEventSubscriptions", () => {
     "uses the persisted bare-key owner in the prepared %s",
     async (physicalStore) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        runtimeConfigState.value = {
-          session: {
-            scope: "global",
-            store: resolveSessionStorePathCore(undefined, { agentId: "ops" }),
-          },
-          agents: {
-            ownership: "explicit",
-            defaults: { sessionStore: { agentId: "ops" } },
-            entries: { ops: {}, research: {} },
-          },
-        };
+        runtimeConfigState.value = fixedStoreOwnershipConfig(
+          resolveSessionStorePathCore(undefined, { agentId: "ops" }),
+        );
         const handler = Object.assign(vi.fn(), { dispose: vi.fn() });
         agentEventHandlerMocks.create.mockReturnValue(handler);
         const params = createParams();
@@ -571,7 +579,11 @@ describe("startGatewayEventSubscriptions", () => {
     agentEventHandlerMocks.create.mockReturnValue(Object.assign(vi.fn(), { dispose: vi.fn() }));
     unsubs = startGatewayEventSubscriptions(params);
 
-    emit({ phase: "start", startedAt: 1_000 });
+    {
+      using scan = vi.spyOn(rpcSourcesByRunId, Symbol.iterator);
+      emit({ phase: "start", startedAt: 1_000 });
+      expect(scan).not.toHaveBeenCalled();
+    }
     transitions.push({ state: "Start-normalized", lifecycle: readLifecycleState(entry) });
     await waitForFast(() => expect(agentEventHandlerMocks.create).toHaveBeenCalledOnce());
 
@@ -989,6 +1001,7 @@ describe("startGatewayEventSubscriptions", () => {
     runtimeConfigState,
     warn,
   };
+  registerActivitySummaryRunTests(publicationFixture);
   registerSessionPublicationTests(publicationFixture);
   registerTranscriptScopePublicationTests(publicationFixture);
 

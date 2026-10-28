@@ -19,6 +19,7 @@ import type {
   CliBackendUserInputResult,
 } from "../../plugins/cli-backend.types.js";
 import type { RunExit, TerminationReason } from "../../process/supervisor/types.js";
+import { isHostGeneratedInputProvenance } from "../../sessions/input-provenance.js";
 import { assertionSucceeds } from "../../shared/assertion.js";
 import { runWithAgentToolSourceExecutionScope } from "../agent-tool-source-execution-guard.js";
 import {
@@ -87,7 +88,12 @@ async function createPluginToolPermissionHandler(params: {
     if (!toolName) {
       return denyTool("OpenClaw denied an unnamed native tool.");
     }
-    if (run.cliToolAvailability && !run.cliToolAvailability.native.includes(toolName)) {
+    const discoveryOnly = run.cliToolAvailability?.discovery?.includes(toolName) === true;
+    if (
+      run.cliToolAvailability &&
+      !run.cliToolAvailability.native.includes(toolName) &&
+      !discoveryOnly
+    ) {
       return denyTool(`OpenClaw denied native tool ${toolName}: it is unavailable to this run.`);
     }
 
@@ -207,6 +213,13 @@ async function createPluginToolPermissionHandler(params: {
           }
         }
       }
+    }
+
+    // Schema discovery has no file, shell, or remote execution authority. Tool calls
+    // discovered this way still return through the MCP grant and normal tool policy.
+    if (discoveryOnly) {
+      assertActive();
+      return { behavior: "allow", updatedInput: toolInput };
     }
 
     const plan = resolveCliNativeToolApprovalPlan(permission);
@@ -556,6 +569,9 @@ export async function executePluginOwnedProcess(params: {
         env: params.env,
         prompt: params.prompt,
         ...(params.promptContext ? { promptContext: params.promptContext } : {}),
+        ...(isHostGeneratedInputProvenance(params.context.params.inputProvenance)
+          ? { promptOrigin: "host" as const }
+          : {}),
         modelId: params.context.normalizedModel,
         systemPrompt: stripSystemPromptCacheBoundary(params.context.systemPrompt).trim(),
         ...(params.sessionId ? { sessionId: params.sessionId } : {}),
@@ -689,9 +705,7 @@ export async function executePluginOwnedProcess(params: {
     params.onOutstandingWorkChange?.(false);
     // Permission callbacks can be retained by the plugin or its subprocess.
     // Closing the turn fences those capabilities before any outer cleanup runs.
-    if (!controller.signal.aborted) {
-      controller.abort(new Error("CLI plugin runtime turn is no longer active."));
-    }
+    controller.abort(new Error("CLI plugin runtime turn is no longer active."));
     detachReplyBackend?.();
     await closePluginIterator(iterator);
   }

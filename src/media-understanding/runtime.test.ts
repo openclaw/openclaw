@@ -213,50 +213,33 @@ describe("media-understanding runtime", () => {
   });
 
   it("passes workspaceDir through audio and video file helpers", async () => {
-    mocks.runCapability.mockResolvedValue({
-      outputs: [],
-      decision: { capability: "video", outcome: "skipped", attachments: [] },
-    });
-    mocks.normalizeMediaAttachments.mockReturnValue([
-      { index: 0, path: "/tmp/sample.mp4", mime: "video/mp4" },
-    ]);
+    for (const [capability, filePath, mime, runFile] of [
+      ["video", "/tmp/sample.mp4", "video/mp4", describeVideoFile],
+      ["audio", "/tmp/sample.ogg", "audio/ogg", transcribeAudioFile],
+    ] as const) {
+      if (capability === "audio") {
+        mocks.runCapability.mockReset();
+      }
+      mocks.runCapability.mockResolvedValue({
+        outputs: [],
+        decision: { capability, outcome: "skipped", attachments: [] },
+      });
+      mocks.normalizeMediaAttachments.mockReturnValue([{ index: 0, path: filePath, mime }]);
 
-    await describeVideoFile({
-      filePath: "/tmp/sample.mp4",
-      mime: "video/mp4",
-      cfg: {} as OpenClawConfig,
-      agentDir: "/tmp/agent",
-      workspaceDir: "/tmp/workspace",
-    });
+      await runFile({
+        filePath,
+        mime,
+        cfg: {} as OpenClawConfig,
+        agentDir: "/tmp/agent",
+        workspaceDir: "/tmp/workspace",
+      });
 
-    expect(requireRunCapabilityRequest()).toMatchObject({
-      capability: "video",
-      agentDir: "/tmp/agent",
-      workspaceDir: "/tmp/workspace",
-    });
-
-    mocks.runCapability.mockReset();
-    mocks.runCapability.mockResolvedValue({
-      outputs: [],
-      decision: { capability: "audio", outcome: "skipped", attachments: [] },
-    });
-    mocks.normalizeMediaAttachments.mockReturnValue([
-      { index: 0, path: "/tmp/sample.ogg", mime: "audio/ogg" },
-    ]);
-
-    await transcribeAudioFile({
-      filePath: "/tmp/sample.ogg",
-      mime: "audio/ogg",
-      cfg: {} as OpenClawConfig,
-      agentDir: "/tmp/agent",
-      workspaceDir: "/tmp/workspace",
-    });
-
-    expect(requireRunCapabilityRequest()).toMatchObject({
-      capability: "audio",
-      agentDir: "/tmp/agent",
-      workspaceDir: "/tmp/workspace",
-    });
+      expect(requireRunCapabilityRequest()).toMatchObject({
+        capability,
+        agentDir: "/tmp/agent",
+        workspaceDir: "/tmp/workspace",
+      });
+    }
   });
 
   it("passes per-request image prompts into media understanding config", async () => {

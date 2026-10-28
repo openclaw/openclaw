@@ -106,6 +106,31 @@ function heapBytesUnder(
   );
 }
 
+it("enables GC tracing without passing unsupported arguments to default Workers", async () => {
+  const { closed, stdout, stderr } = spawnFixture(
+    [
+      "--import",
+      preloadUrl,
+      "--input-type=module",
+      "-e",
+      `
+      const { Worker } = await import("node:worker_threads");
+      const { once } = await import("node:events");
+      const worker = new Worker('import("node:worker_threads").then(({ parentPort }) => parentPort.postMessage("ready"))', { eval: true });
+      await once(worker, "message");
+      await once(worker, "exit");
+      process.disconnect();
+      `,
+    ],
+    undefined,
+    true,
+    { ...process.env, OPENCLAW_BENCH_TRACE_GC: "1" },
+  );
+  expect(await closed, stderr()).toEqual([0, null]);
+  expect(stdout()).toContain('"phase":"identify-stop"');
+  expect(stdout()).toMatch(/gc=|"gc":/u);
+});
+
 it("preserves native trace-flag inheritance and explicit worker baseline preload propagation", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "transcript-worker-preload-"));
   onTestFinished(() => rm(directory, { recursive: true, force: true }));
@@ -541,8 +566,9 @@ function createWorker() {
         return Array.from({length: 100000}, (_, i) => ({i, values: [i, i + 1]}));
       }
       function discardedWorkerAllocation() {
-        const rows = Array.from({length: 100000}, (_, i) => ({i, values: [i, i + 1]}));
-        return rows[rows.length - 1].values[1];
+        // Avoid hot callback bookkeeping that V8 can retain after collecting the rows.
+        const rows = new Array(1_000_000).fill(1);
+        return rows[rows.length - 1];
       }
       parentPort.on('message', async message => {
         if (message !== 'fixed-allocations') return allocateForProfile();
@@ -745,7 +771,8 @@ it.each([
     expect(await readFile(profilePath, "utf8")).not.toBe("");
 
     if (kind === "heap") {
-      for (const includeCollectedObjects of [true, false]) {
+      // Exercise retention before another capture can warm the allocation fixture.
+      for (const includeCollectedObjects of [false, true]) {
         const fixedPath = path.join(directory, `heap-collected-${includeCollectedObjects}`);
         const samplingIntervalBytes = 1024;
         await controlGatewayProfile(child, "heap", "start", fixedPath, {
@@ -828,7 +855,8 @@ it("separates discarded allocation churn from retained objects and cleans up fai
     function retainedAllocation() {
       return Array.from({ length: 100000 }, (_, i) => ({ i, values: [i, i + 1] }));
     }
-    function discardedAllocation() {
+    // Keep GC/promotion churn separate from the exact-zero discarded allocation fixture.
+    function allocationChurn() {
       let checksum = 0;
       for (let batch = 0; batch < 10; batch++) {
         const rows = Array.from({ length: 20000 }, (_, i) => ({ i, values: [i, i + 1] }));
@@ -836,9 +864,17 @@ it("separates discarded allocation churn from retained objects and cleans up fai
       }
       return checksum;
     }
+    function discardedAllocation() {
+      const rows = new Array(1_000_000).fill(1);
+      return rows[rows.length - 1];
+    }
     process.on('message', async message => {
+      if (message.stop) return process.disconnect();
       if (!message.run) return;
-      for (let operation = 0; operation < 4; operation++) discardedAllocation();
+      for (let operation = 0; operation < 4; operation++) {
+        allocationChurn();
+        discardedAllocation();
+      }
       if (message.retain) retainedRows = retainedAllocation();
       globalThis.gc();
       await new Promise(setImmediate);
@@ -901,7 +937,8 @@ it("separates discarded allocation churn from retained objects and cleans up fai
   const retained = await readJson<HeapProfiler.SamplingHeapProfile>(retainedPath);
   expect(heapBytesUnder(retained.head, "retainedAllocation")).toBeGreaterThan(1_000_000);
   expect(heapBytesUnder(retained.head, "discardedAllocation")).toBe(0);
-  child.disconnect();
+  // Child-side IPC shutdown lets Node observe EOF and emit the close event.
+  child.send({ stop: true });
   await closed;
   const logPath = path.join(directory, "gateway.log");
   await writeFile(logPath, stdout());
@@ -931,6 +968,9 @@ it("accounts only the identified main isolate inside the requested heap capture"
     'OPENCLAW_GATEWAY_BENCH_GC {"phase":"diagnostics-stop","pid":42,"profilePath":"soak"}',
     '[42:0xabc:0] 18 ms: GC: {"gc":"mc","promoted":256}',
     'OPENCLAW_GATEWAY_BENCH_GC {"phase":"heap-stop","pid":42,"profilePath":"measured"}',
+    'OPENCLAW_GATEWAY_BENCH_GC {"phase":"diagnostics-start","pid":42,"profilePath":"round-1"}',
+    "[42:0xabc] 19 ms: pause=2.0 gc=s promoted=2048",
+    'OPENCLAW_GATEWAY_BENCH_GC {"phase":"diagnostics-stop","pid":42,"profilePath":"round-1"}',
     "[42:0xabc] 20 ms: pause=1.0 gc=s promoted=4096",
     '[42:0xabc:0] 25 ms: GC: {"gc":"s",interleaved shutdown log',
   ].join("\n");
@@ -946,6 +986,11 @@ it("accounts only the identified main isolate inside the requested heap capture"
     promotedBytes: 1024,
     gcCount: 1,
     excludedWorkerGcCount: 2,
+  });
+  expect(readGatewayGcTrace(logPath, "round-1", "diagnostics")).toMatchObject({
+    promotedBytes: 2048,
+    gcCount: 1,
+    excludedWorkerGcCount: 0,
   });
   expect(() => readGatewayGcTrace(logPath, "missing")).toThrow("complete heap capture window");
   for (const malformed of [

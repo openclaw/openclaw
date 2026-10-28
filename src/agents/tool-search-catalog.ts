@@ -142,24 +142,12 @@ function sameCatalogSchema(source: CatalogSource, a: unknown, b: unknown): boole
 function rebindCatalogExecutors(
   existingEntries: ToolSearchCatalogEntry[],
   currentEntries: readonly ToolSearchCatalogEntry[],
-): ToolSearchCatalogEntry[] | undefined {
-  const currentTools = new Map(currentEntries.map((entry) => [entry.id, entry.tool]));
-  if (currentTools.size !== currentEntries.length || currentTools.size !== existingEntries.length) {
-    return undefined;
-  }
+): ToolSearchCatalogEntry[] {
   // Keep identical same-run entries; changed executors need a detached descriptor snapshot.
-  // Every exact ID must still resolve, so missing entries fail the reuse check below.
-  const rebound = existingEntries.every(
-    (entry) => entry.tool && currentTools.get(entry.id) === entry.tool,
-  )
+  // The caller already compared the ordered, unique descriptors position by position.
+  return existingEntries.every((entry, index) => entry.tool === currentEntries[index]!.tool)
     ? existingEntries
-    : existingEntries.map((entry) => {
-        const tool = currentTools.get(entry.id);
-        return tool ? { ...entry, tool } : undefined;
-      });
-  return rebound.every((entry): entry is ToolSearchCatalogEntry => entry !== undefined)
-    ? rebound
-    : undefined;
+    : existingEntries.map((entry, index) => ({ ...entry, tool: currentEntries[index]!.tool }));
 }
 
 export function prepareToolSearchCatalogExecutionTool(
@@ -355,7 +343,11 @@ function registerToolSearchCatalog(params: {
     params.mode === "reuse" &&
     existing &&
     metadata &&
-    stableStringify(metadata.toolExecutionAllow) === stableStringify(toolExecutionAllow) &&
+    (metadata.toolExecutionAllow === toolExecutionAllow ||
+      (metadata.toolExecutionAllow !== undefined &&
+        toolExecutionAllow !== undefined &&
+        metadata.toolExecutionAllow.length === toolExecutionAllow.length &&
+        metadata.toolExecutionAllow.every((name, index) => name === toolExecutionAllow[index]))) &&
     sameCatalogDescriptors(existing.entries, entries)
       ? rebindCatalogExecutors(existing.entries, entries)
       : undefined;

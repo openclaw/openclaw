@@ -3,6 +3,7 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
+  createPluginCapabilities,
   createClient,
   createContext,
   createGateway,
@@ -46,15 +47,7 @@ function createFixture<Context extends ApplicationContext>(
     publishGeneration(generation: number, methods: string[] = []) {
       harness.emit(harness.gateway.snapshot.client, true, {
         hello: harness.gateway.snapshot.hello,
-        pluginCapabilities: {
-          ok: true,
-          generation,
-          descriptors: [],
-          methods,
-          controlUiTabs: [],
-          controlUiWidgetKinds: [],
-          pluginSurfaceUrls: {},
-        },
+        pluginCapabilities: createPluginCapabilities(generation, methods),
       });
     },
     waitForCall: (name: string) =>

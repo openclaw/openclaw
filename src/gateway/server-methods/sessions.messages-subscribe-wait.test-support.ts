@@ -128,7 +128,7 @@ export async function proveSubscriptionDoesNotWaitForDisplayRows(
         touchSessionEntry: true,
         updateMode: "file-only",
       });
-      expect(turn.appendedCount).toBe(1);
+      expect(turn.messages.filter((m) => m.appended)).toHaveLength(1);
       const refresh = projection.ensureMaterialized();
       pending.push(refresh);
       await wait(

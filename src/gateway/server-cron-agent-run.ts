@@ -31,7 +31,7 @@ export function createGatewayCronAgentDeps(
 }
 
 /** Select the reserved command path before any ordinary cron prompt processing. */
-export function createGatewayCronAgentJobRunner(
+function createGatewayCronAgentJobRunner(
   params: GatewayCronAgentParams,
 ): CronServiceDeps["runIsolatedAgentJob"] {
   return async (request) => {

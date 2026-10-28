@@ -10,36 +10,25 @@ import {
   withDistArtifactOwnership,
 } from "../../scripts/lib/dist-artifact-ownership.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { fixtureFiles } from "./script-fixture-files.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const tsx = path.resolve("scripts/tsx.mjs");
 const buildScript = path.resolve("scripts/build-plugin-control-ui.mts");
 const moduleUrl = (file: string) => pathToFileURL(path.resolve(file)).href;
-function fixtureFiles(root: string) {
-  const at = (file: string) => path.join(root, file);
-  return {
-    at,
-    read: (file: string) => fs.readFileSync(at(file), "utf8"),
-    json: (file: string) => JSON.parse(fs.readFileSync(at(file), "utf8")),
-    write(file: string, value: string | object) {
-      fs.mkdirSync(path.dirname(at(file)), { recursive: true });
-      fs.writeFileSync(at(file), typeof value === "string" ? value : JSON.stringify(value));
-    },
-  };
-}
 
 it("serializes concurrent Settings builders with checkout artifact writers", async ({ signal }) => {
   const root = tempDirs.make("openclaw-settings-build-");
   const files = fixtureFiles(root);
-  const plugin = fixtureFiles(files.at("extensions/fixture"));
+  const plugin = fixtureFiles(files.file("extensions/fixture"));
   fs.symlinkSync(path.resolve("node_modules"), path.join(root, "node_modules"), "junction");
-  files.write("package.json", { type: "module" });
-  plugin.write("package.json", {
+  files.json("package.json", { type: "module" });
+  plugin.json("package.json", {
     name: "@openclaw/fixture",
     type: "module",
     openclaw: { extensions: ["./index.ts"], controlUi: "./browser.ts" },
   });
-  plugin.write("openclaw.plugin.json", {
+  plugin.json("openclaw.plugin.json", {
     id: "fixture",
     configSchema: { type: "object" },
     controlUi: {
@@ -81,14 +70,14 @@ it("serializes concurrent Settings builders with checkout artifact writers", asy
   });
   try {
     await Promise.all(builders.map((builder) => builder.waiting));
-    expect(fs.existsSync(plugin.at("dist"))).toBe(false);
+    expect(fs.existsSync(plugin.file("dist"))).toBe(false);
   } finally {
     await lock.release();
     const codes = await Promise.all(builders.map((builder) => builder.done));
     expect(codes, builders.map((builder) => builder.output()).join("\n")).toEqual([0, 0]);
   }
-  const distribution = fixtureFiles(files.at("dist/extensions/fixture"));
-  const manifest = distribution.json("openclaw.plugin.json");
+  const distribution = fixtureFiles(files.file("dist/extensions/fixture"));
+  const manifest = JSON.parse(distribution.read("openclaw.plugin.json"));
   expect(manifest.controlUi.settingsViews).toEqual([{ section: "memory", panel: "overview" }]);
   expect(distribution.read(manifest.controlUi.entry)).toContain("Fixture");
   expect(
@@ -96,7 +85,7 @@ it("serializes concurrent Settings builders with checkout artifact writers", asy
   ).toContain('export * from "../../../../plugin-sdk/provider-usage.js"');
 
   // Vite invokes buildStart from native bundler callbacks after its CLI import returns.
-  const configPath = files.at("vite.config.mts");
+  const configPath = files.file("vite.config.mts");
   const preparer = moduleUrl("scripts/lib/prepare-control-ui-settings.mts");
   files.write(
     "vite.config.mts",
@@ -147,7 +136,7 @@ const result = await withDistArtifactOwnership(process.cwd(), () => runBuildAllS
 }));
 if (result.exitCode !== 0) throw new Error("UI build step failed");`,
   );
-  await promisify(execFile)(process.execPath, ["--import", tsx, files.at("build-all.mts")], {
+  await promisify(execFile)(process.execPath, ["--import", tsx, files.file("build-all.mts")], {
     cwd: root,
     signal,
   });
@@ -158,14 +147,14 @@ it("rebuilds browser assets without invalidating unchanged manifest inputs", () 
   const rootDir = tempDirs.make("openclaw-control-ui-script-");
   const files = fixtureFiles(rootDir);
   fs.symlinkSync(path.resolve("node_modules"), path.join(rootDir, "node_modules"), "junction");
-  files.write("package.json", {
+  files.json("package.json", {
     type: "module",
     openclaw: { controlUi: "browser.ts" },
   });
-  const manifestPath = files.at("openclaw.plugin.json");
-  files.write("openclaw.plugin.json", { id: "fixture" });
+  const manifestPath = files.file("openclaw.plugin.json");
+  files.json("openclaw.plugin.json", { id: "fixture" });
   const authoredManifest = files.read("openclaw.plugin.json");
-  const generatedManifestPath = files.at("dist/openclaw.plugin.json");
+  const generatedManifestPath = files.file("dist/openclaw.plugin.json");
   files.write("browser.ts", 'import "./browser.css"; export const label = "Fixture";\n');
   files.write("browser.css", ".fixture { color: red; }\n");
   const build = () =>
@@ -175,8 +164,7 @@ it("rebuilds browser assets without invalidating unchanged manifest inputs", () 
     });
 
   build();
-  expect(files.read("openclaw.plugin.json")).toBe(authoredManifest);
-  const generatedManifest = files.json("dist/openclaw.plugin.json");
+  const generatedManifest = JSON.parse(files.read("dist/openclaw.plugin.json"));
   const { entry, styles } = generatedManifest.controlUi;
   const compactManifest = JSON.stringify({
     id: "fixture",
@@ -194,7 +182,9 @@ it("rebuilds browser assets without invalidating unchanged manifest inputs", () 
 
     expect(files.read(entry)).toBe(asset);
     expect(files.read("openclaw.plugin.json")).toBe(manifest);
-    expect(files.json("dist/openclaw.plugin.json").controlUi).toEqual(generatedManifest.controlUi);
+    expect(JSON.parse(files.read("dist/openclaw.plugin.json")).controlUi).toEqual(
+      generatedManifest.controlUi,
+    );
     const after = fs.statSync(manifestPath, { bigint: true });
     expect(after).toMatchObject({ ino: before.ino, ctimeNs: before.ctimeNs });
   }

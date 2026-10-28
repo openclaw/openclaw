@@ -1,5 +1,8 @@
 import { normalizeOptionalAccountId } from "openclaw/plugin-sdk/account-id";
-import { toStringifiedError as toRetirementError } from "openclaw/plugin-sdk/error-runtime";
+import {
+  materializeErrorStack,
+  toStringifiedError as toRetirementError,
+} from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
@@ -64,7 +67,6 @@ type SharedMatrixClientState = {
 
 type SharedMatrixClientParams = {
   cfg?: CoreConfig;
-  env?: NodeJS.ProcessEnv;
   timeoutMs?: number;
   auth?: MatrixAuth;
   accountId?: string | null;
@@ -196,7 +198,7 @@ async function resolveSharedMatrixAuth(params: SharedMatrixClientParams): Promis
       "Matrix shared client requires a resolved runtime config. Load and resolve config at the command or gateway boundary, then pass cfg through the runtime path.",
     );
   }
-  return resolveMatrixAuth({ cfg: params.cfg, env: params.env, accountId: params.accountId });
+  return resolveMatrixAuth({ cfg: params.cfg, accountId: params.accountId });
 }
 
 async function resolveOpenSharedMatrixClientState(
@@ -292,10 +294,15 @@ async function runMonitorRetirement(
   if (!retirement) {
     return;
   }
-  retirement.closeTaskAdmission();
-  retirement.detachListeners();
-  await retirement.waitForTasks();
-  await retirement.cleanup();
+  try {
+    retirement.closeTaskAdmission();
+    retirement.detachListeners();
+    await retirement.waitForTasks();
+    await retirement.cleanup();
+  } catch (error) {
+    materializeErrorStack(error);
+    throw error;
+  }
 }
 
 function retireMonitorLease(
@@ -391,11 +398,13 @@ function beginGenerationRetirement(params: {
       await state.client.drainPendingDecryptions("matrix monitor sync quiesce");
     } catch (error) {
       state.poisonError = toRetirementError(error);
+      materializeErrorStack(state.poisonError);
     }
     try {
       await retireMonitorLeases(state, params.monitorLeases ?? []);
     } catch (error) {
       state.poisonError ??= toRetirementError(error);
+      materializeErrorStack(state.poisonError);
     }
     await state.noLeases.promise;
     if (state.poisonError) {
@@ -405,6 +414,7 @@ function beginGenerationRetirement(params: {
         .drainPendingDecryptions("matrix failed shutdown")
         .catch((error: unknown) => {
           state.poisonError = toRetirementError(error);
+          materializeErrorStack(state.poisonError);
         });
     }
     let failure = state.poisonError;
@@ -416,6 +426,7 @@ function beginGenerationRetirement(params: {
         discard = true;
         if (state.releaseMode === "persist") {
           failure = state.poisonError = toRetirementError(error);
+          materializeErrorStack(failure);
         }
       }
     }
@@ -429,6 +440,7 @@ function beginGenerationRetirement(params: {
   });
   void owner.then(result.resolve, (error: unknown) => {
     state.poisonError = toRetirementError(error);
+    materializeErrorStack(state.poisonError);
     result.reject(state.poisonError);
   });
   abortTransientLeases(state);

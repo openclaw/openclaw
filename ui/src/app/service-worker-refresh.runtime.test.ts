@@ -45,6 +45,19 @@ function installRegistration(active = createWorker()) {
 }
 
 describe("Control UI service-worker reconnect refresh", () => {
+  it.each([
+    { saveData: true, effectiveType: "4g" },
+    { saveData: false, effectiveType: "2g" },
+  ])("sends browser download preferences with the worker probe: %j", async (connection) => {
+    const worker = createWorker();
+    installRegistration(worker);
+    Object.assign(navigator, { connection: Object.assign(new EventTarget(), connection) });
+    await refreshControlUiServiceWorker();
+    expect(worker.postMessage).toHaveBeenCalledWith(
+      { type: "sw-version-probe", offlinePrecache: connection },
+      expect.any(Array),
+    );
+  });
   it.each(["lookup", "update", "installing"] as const)(
     "releases reconnect after a stalled %s and ignores late completion",
     async (phase) => {
@@ -80,6 +93,29 @@ describe("Control UI service-worker reconnect refresh", () => {
       expect(vi.getTimerCount()).toBe(0);
     },
   );
+  it("updates download policy on connection changes without an update check or duplicate listeners", async () => {
+    const worker = createWorker();
+    const registration = installRegistration(worker);
+    const connection = Object.assign(new EventTarget(), { saveData: false, effectiveType: "2g" });
+    Object.assign(navigator, { connection });
+    await refreshControlUiServiceWorker();
+    await refreshControlUiServiceWorker();
+    worker.postMessage.mockClear();
+    for (const preferences of [
+      { saveData: false, effectiveType: "4g" },
+      { saveData: true, effectiveType: "4g" },
+      { saveData: false, effectiveType: "2g" },
+    ]) {
+      Object.assign(connection, preferences);
+      connection.dispatchEvent(new Event("change"));
+      expect(worker.postMessage).toHaveBeenLastCalledWith(
+        { type: "sw-version-probe", offlinePrecache: preferences },
+        [],
+      );
+    }
+    expect(worker.postMessage).toHaveBeenCalledTimes(3);
+    expect(registration.update).toHaveBeenCalledTimes(2);
+  });
   it("recovers a document that missed the active worker's activation", async () => {
     const active = createWorker("already-active-build");
     const registration = installRegistration(active);
@@ -89,11 +125,19 @@ describe("Control UI service-worker reconnect refresh", () => {
     expect(registration.update).toHaveBeenCalledOnce();
   });
 
-  it.each(["discovered", "installing", "waiting"] as const)(
-    "holds reconnect work until a %s replacement can identify its build",
-    async (phase) => {
-      const replacement = createWorker("next-build", "installing");
-      const registration = installRegistration();
+  it.each([
+    ["discovered", "next-build"],
+    ["installing", "next-build"],
+    ["waiting", "next-build"],
+    ["installing", CONTROL_UI_BUILD_INFO.buildId],
+  ] as const)(
+    "holds reconnect work until a %s replacement identifies build %s",
+    async (phase, version) => {
+      const ownBuild = version === CONTROL_UI_BUILD_INFO.buildId;
+      const replacement = createWorker(version, "installing");
+      const registration = installRegistration(
+        createWorker(ownBuild ? "previous-build" : undefined),
+      );
       if (phase === "discovered") {
         registration.update.mockImplementation(async () => {
           registration.installing = replacement as unknown as ServiceWorker;
@@ -115,24 +159,12 @@ describe("Control UI service-worker reconnect refresh", () => {
       registration.waiting = null;
       replacement.state = "activated";
       replacement.dispatchEvent(new Event("statechange"));
-      await expect(refresh).resolves.toBe(true);
+      await expect(refresh).resolves.toBe(!ownBuild);
+      if (ownBuild) {
+        expect(scheduleStaleChunkReload).not.toHaveBeenCalled();
+      }
     },
   );
-
-  it("releases reconnect work when activation serves the document's own build", async () => {
-    const replacement = createWorker();
-    replacement.state = "installing";
-    const registration = installRegistration(createWorker("previous-build"));
-    registration.installing = replacement as unknown as ServiceWorker;
-    const listening = vi.spyOn(replacement, "addEventListener");
-    const refresh = refreshControlUiServiceWorker();
-    await vi.waitFor(() => expect(listening).toHaveBeenCalled());
-    registration.active = replacement as unknown as ServiceWorker;
-    replacement.state = "activated";
-    replacement.dispatchEvent(new Event("statechange"));
-    await expect(refresh).resolves.toBe(false);
-    expect(scheduleStaleChunkReload).not.toHaveBeenCalled();
-  });
 
   it("does not hold reconnect work when document recovery declines the reload", async () => {
     const registration = installRegistration(createWorker("next-build"));

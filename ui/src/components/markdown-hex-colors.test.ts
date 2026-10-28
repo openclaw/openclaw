@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { htmlFragment } from "./markdown.test-support.ts";
-import { toSanitizedMarkdownHtml, toStreamingMarkdownParts } from "./markdown.ts";
+import { htmlFragment, toStreamingMarkdownParts } from "./markdown.test-support.ts";
+import { toSanitizedMarkdownHtml } from "./markdown.ts";
 
 function swatches(fragment: HTMLElement) {
   return [...fragment.querySelectorAll<HTMLImageElement>(".markdown-hex-color__swatch")];

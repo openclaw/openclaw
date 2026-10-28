@@ -1,6 +1,5 @@
 export const BARNACLE: Map<number, number>;
 export function time(value?: string): number;
-export function automated(user: unknown): boolean;
 export function trustedBarnacle(comment: unknown): boolean;
 export function verifiedComment(
   comment: unknown,

@@ -1120,7 +1120,7 @@ export async function runBarnacleAutoResponse({ github, context, core = console,
     }
     await runAdmittedAutoResponse({
       github: guarded,
-      context: { ...context, payload, barnacleAppId: expectedAppId },
+      context: Object.assign(Object.create(context), { payload, barnacleAppId: expectedAppId }),
       core,
     });
   } catch (error) {

@@ -80,41 +80,43 @@ describe("syncMemoryWikiImportedSources", () => {
     expect(refreshIndexesMock).toHaveBeenCalledTimes(1);
   });
 
-  it("coalesces separately resolved equivalent configs for one vault", async () => {
-    const firstConfig = createConfig();
-    const secondConfig = createConfig("bridge", firstConfig.vault.path);
-    const { pending: first, resume } = await pauseBridge(firstConfig);
-    const second = runSync(secondConfig);
-    await Promise.resolve();
-    expect(syncBridgeMock).toHaveBeenCalledTimes(1);
-    resume();
-    const [firstResult, secondResult] = await Promise.all([first, second]);
-    expect(refreshIndexesMock).toHaveBeenCalledTimes(1);
-    expect(secondResult).toBe(firstResult);
-  });
+  it.each(["import", "refresh"] as const)(
+    "coalesces equivalent configs throughout %s",
+    async (phase) => {
+      const config = createConfig();
+      const gate = deferred<typeof bridgeResult | typeof refreshResult>();
+      const paused = phase === "import" ? syncBridgeMock : refreshIndexesMock;
+      paused.mockReturnValueOnce(gate.promise);
+      const first = runSync(config);
+      await vi.waitFor(() => expect(paused).toHaveBeenCalledTimes(1));
+      const followers = Array.from({ length: 32 }, () =>
+        runSync(createConfig("bridge", config.vault.path)),
+      );
+      await Promise.resolve();
+      expect(syncBridgeMock).toHaveBeenCalledTimes(1);
+      expect(refreshIndexesMock).toHaveBeenCalledTimes(phase === "import" ? 0 : 1);
+      gate.resolve(phase === "import" ? bridgeResult : refreshResult);
+      const [result, ...others] = await Promise.all([first, ...followers]);
+      expect(others.every((other) => other === result)).toBe(true);
+      expect(refreshIndexesMock).toHaveBeenCalledTimes(1);
+    },
+  );
 
-  it("keeps sharing the active flight while indexes refresh", async () => {
+  it.each([false, true])("clears settled flights (failed: %s)", async (failed) => {
     const config = createConfig();
-    const refreshGate = deferred<typeof refreshResult>();
-    refreshIndexesMock.mockReturnValueOnce(refreshGate.promise);
-    const first = runSync(config);
-    await vi.waitFor(() => expect(refreshIndexesMock).toHaveBeenCalledTimes(1));
-    const followers = Array.from({ length: 32 }, () => runSync(config));
-    await Promise.resolve();
-    expect(syncBridgeMock).toHaveBeenCalledTimes(1);
-    expect(refreshIndexesMock).toHaveBeenCalledTimes(1);
-    refreshGate.resolve(refreshResult);
-    const [firstResult, ...followerResults] = await Promise.all([first, ...followers]);
-    expect(followerResults.every((result) => result === firstResult)).toBe(true);
-  });
-
-  it("clears completed flights so later polls observe new source state", async () => {
-    const config = createConfig();
-    await runSync(config);
+    if (failed) {
+      syncBridgeMock.mockRejectedValueOnce(new Error("bridge unavailable"));
+      await expect(runSync(config)).rejects.toThrow("bridge unavailable");
+    } else {
+      await runSync(config);
+    }
     syncBridgeMock.mockResolvedValueOnce({ ...bridgeResult, updatedCount: 3 });
-    await expect(runSync(config)).resolves.toMatchObject({ updatedCount: 3 });
+    await expect(runSync(config)).resolves.toMatchObject({
+      updatedCount: 3,
+      pagePaths: bridgeResult.pagePaths,
+    });
     expect(syncBridgeMock).toHaveBeenCalledTimes(2);
-    expect(refreshIndexesMock).toHaveBeenCalledTimes(2);
+    expect(refreshIndexesMock).toHaveBeenCalledTimes(failed ? 1 : 2);
   });
 
   it("waits for an existing vault mutation before starting source sync", async () => {
@@ -161,17 +163,13 @@ describe("syncMemoryWikiImportedSources", () => {
       expect(syncUnsafeLocalMock).not.toHaveBeenCalled();
       resume();
       await first;
-      await vi.waitFor(() => expect(importer).toHaveBeenCalledTimes(modes ? 1 : 2));
-      if (modes) {
-        await expect(second).resolves.toEqual({
-          ...secondResult,
-          indexesRefreshed: false,
-          indexRefreshReason: "auto-compile-disabled",
-          indexUpdatedFiles: [],
-        });
-      } else {
-        await expect(second).resolves.toMatchObject({ pagePaths: ["sources/beta.md"] });
-      }
+      await expect(second).resolves.toEqual({
+        ...secondResult,
+        indexesRefreshed: !modes,
+        indexRefreshReason: modes ? "auto-compile-disabled" : "import-changed",
+        indexUpdatedFiles: modes ? [] : refreshResult.compile.updatedFiles,
+      });
+      expect(importer).toHaveBeenCalledTimes(modes ? 1 : 2);
       expect(refreshIndexesMock).toHaveBeenCalledTimes(2);
     },
   );
@@ -187,13 +185,5 @@ describe("syncMemoryWikiImportedSources", () => {
     await expect(second).resolves.toMatchObject({ pagePaths: ["sources/other.md"] });
     resume();
     await first;
-  });
-
-  it("clears failed flights so a later sync can retry", async () => {
-    const config = createConfig();
-    syncBridgeMock.mockRejectedValueOnce(new Error("bridge unavailable"));
-    await expect(runSync(config)).rejects.toThrow("bridge unavailable");
-    await expect(runSync(config)).resolves.toMatchObject({ pagePaths: bridgeResult.pagePaths });
-    expect(syncBridgeMock).toHaveBeenCalledTimes(2);
   });
 });

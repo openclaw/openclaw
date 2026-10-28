@@ -224,10 +224,6 @@ openclaw-sidebar-agent-roster {
   justify-content: center;
   min-width: 0;
 }
-.sidebar-session-team-state svg {
-  width: 12px;
-  height: 12px;
-}
 .sidebar-session-team-state .session-glyph {
   width: 12px;
   height: 12px;

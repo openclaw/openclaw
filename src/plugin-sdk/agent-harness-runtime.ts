@@ -172,6 +172,7 @@ export const agentHarnessAttemptTerminal = {
 };
 export { projectAgentHarnessTranscriptMessageForDisplay } from "../agents/harness/transcript-visibility.js";
 export { isOpenClawRuntimeContextCustomMessage } from "../agents/internal-runtime-context.js";
+export { isTranscriptOnlyOpenClawAssistantMessage } from "../shared/transcript-only-openclaw-assistant.js";
 export { restorePreparedUserTurnOperationalMetaForRuntime } from "../sessions/user-turn-transcript.metadata.js";
 export { fingerprintResolvedAuthProfileCredential } from "../agents/execution-auth-binding.js";
 export type {
@@ -187,6 +188,7 @@ type EmbeddedRunAttemptParamsBase = Omit<
   | "admittedRunContext"
   | "disableToolSearch"
   | "sessionReadScopeKey"
+  | "blindPrompt"
   | "authoredContextTokenCap"
   | "contextEngineLogicalTurnLease"
   | "onContextEngineTurnCandidate"

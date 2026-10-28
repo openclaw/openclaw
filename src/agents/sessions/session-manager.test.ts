@@ -560,28 +560,25 @@ describe("SessionManager stale-parent rebase", () => {
     expect(await events()).toContainEqual(expect.objectContaining({ id, parentId: "first-tail" }));
   });
 
-  it("retries a stale side append against its unchanged explicit parent", async () => {
+  it.each(["side", "branch"])("retries a stale %s append at its explicit parent", async (mode) => {
     const { dir, target, manager, persist, events } = await setup();
-    manager.appendLeafControl({ targetId: "base", appendParentId: "base", appendMode: "side" });
-    const reopened = SessionManager.open(target, dir);
-    expect(reopened.getLeafId()).toBe("base");
-    expect(reopened.getAppendParentId()).toBe("base");
-    expect(reopened.getAppendMode()).toBe("side");
+    if (mode === "side") {
+      manager.appendLeafControl({ targetId: "base", appendParentId: "base", appendMode: "side" });
+      const reopened = SessionManager.open(target, dir);
+      expect([
+        reopened.getLeafId(),
+        reopened.getAppendParentId(),
+        reopened.getAppendMode(),
+      ]).toEqual(["base", "base", "side"]);
+    } else {
+      manager.branch("base");
+    }
     await persist("concurrent-tail", rebaseAssistant("concurrent"), 2, "base");
-    const id = manager.appendMessage(makeUserMessage("side", 3));
-    expect(await events()).toContainEqual(expect.objectContaining({ id, parentId: "base" }));
-    expect(manager.getEntries().map((entry) => entry.id)).toEqual(
-      expect.arrayContaining(["concurrent-tail", id]),
-    );
-    expect(() => manager.prepareTranscriptRewrite()).not.toThrow();
-  });
-
-  it("retries a stale deliberate branch against an unchanged explicit parent", async () => {
-    const { manager, persist, events } = await setup();
-    manager.branch("base");
-    await persist("concurrent-tail", rebaseAssistant("concurrent"), 2, "base");
-    const id = manager.appendMessage(makeUserMessage("branch", 3));
+    const id = manager.appendMessage(makeUserMessage(mode, 3));
     expect(await events()).toContainEqual(expect.objectContaining({ id, parentId: "base" }));
     expect(manager.getChildren("base").map((entry) => entry.id)).toEqual(["concurrent-tail", id]);
+    if (mode === "side") {
+      expect(() => manager.prepareTranscriptRewrite()).not.toThrow();
+    }
   });
 });

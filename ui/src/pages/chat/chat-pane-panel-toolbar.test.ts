@@ -3,18 +3,18 @@
 import { expect, it, onTestFinished, vi } from "vitest";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { createGatewayBrowserClientFixture } from "./chat-application-context.test-support.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import {
-  createGatewayBrowserClientFixture,
   createPaneHeaderWorkspaceFixture,
-  createSessionCapabilityFixture,
   createTestChatPane,
   getPaneTestRuntime,
 } from "./chat-pane.test-support.ts";
+import { createSessionCapabilityFixture } from "./chat-session-capability.test-support.ts";
 import {
   chatPaneHeaderSessionMenu,
   mountChatPaneHeader,
-  openNativeMenu,
+  selectNativeMenu,
   renderPaneHeaderInto,
 } from "./components/chat-pane-header.test-support.ts";
 import type { SidebarPanelDefinition } from "./components/chat-sidebar-region-types.ts";
@@ -182,18 +182,12 @@ it("retains focused session menu controls through header refresh and restores fo
   const menu = mounted.container.querySelector("openclaw-chat-header-session-menu")!;
   await menu.updateComplete;
   const trigger = menu.querySelector<HTMLButtonElement>(".chat-header-session-menu__trigger")!;
-  await openNativeMenu(menu, "submenu:advanced");
-  await waitForSolid(() =>
-    expect(menu.querySelector<HTMLButtonElement>('[data-value="submenu:advanced"]')?.disabled).toBe(
-      false,
-    ),
-  );
-  menu.querySelector<HTMLButtonElement>('[data-value="submenu:advanced"]')!.click();
+  await selectNativeMenu(menu, "submenu:advanced");
   await waitForSolid(() =>
     expect(menu.querySelector('[data-value="submenu:open-in"]')).not.toBeNull(),
   );
   const openIn = menu.querySelector<HTMLButtonElement>('[data-value="submenu:open-in"]')!;
-  openIn.click();
+  await selectNativeMenu(menu, "submenu:open-in");
   await waitForSolid(() => expect(menu.querySelector('[data-value="split-right"]')).not.toBeNull());
   const split = menu.querySelector<HTMLButtonElement>('[data-value="split-right"]')!;
   split.focus();

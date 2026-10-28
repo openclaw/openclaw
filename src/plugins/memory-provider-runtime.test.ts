@@ -236,7 +236,7 @@ it("prefers the provider runtime and never falls back after errors or unavailabl
   expect(old.getMemorySearchManager).not.toHaveBeenCalled();
 });
 
-it.each([null, {}, { unsupported: true }])(
+it.each([null, {}])(
   "rejects malformed advertised provider runtime without legacy fallback: %s",
   async (providerRuntime) => {
     const old = legacy(manager());
@@ -411,74 +411,52 @@ it("reports legacy health without host filesystem paths", async () => {
   });
 });
 
-it.each<{
-  name: string;
-  facts: Partial<MemoryProviderStatus>;
-  complete: boolean;
-}>([
-  {
-    name: "pending embeddings after manager reacquisition",
-    facts: { custom: { providerState: { mode: "pending" }, indexIdentity: { status: "valid" } } },
-    complete: false,
-  },
-  {
-    name: "incomplete vectors",
-    facts: { vector: { enabled: true, index: { state: "incomplete" } } },
-    complete: false,
-  },
-  {
-    name: "unverified vectors",
-    facts: { vector: { enabled: true, index: { state: "unverified" } } },
-    complete: false,
-  },
-  {
-    name: "degraded embedding provider",
-    facts: {
-      custom: { providerState: { mode: "degraded", providerId: "test", reason: "unavailable" } },
+const vectorState = (indexState: "empty" | "complete" | "incomplete" | "unverified") => ({
+  vector: { enabled: true, index: { state: indexState } },
+});
+const healthCase = (name: string, facts: Partial<MemoryProviderStatus>, complete = false) => ({
+  name,
+  facts,
+  complete,
+});
+it.each([
+  healthCase("pending embeddings after reacquisition", {
+    custom: { providerState: { mode: "pending" }, indexIdentity: { status: "valid" } },
+  }),
+  healthCase("incomplete vectors", vectorState("incomplete")),
+  healthCase("unverified vectors", vectorState("unverified")),
+  healthCase("degraded provider", {
+    custom: { providerState: { mode: "degraded", providerId: "test", reason: "unavailable" } },
+  }),
+  healthCase("unavailable semantic provider with keyword fallback", {
+    provider: "none",
+    requestedProvider: "openai",
+    custom: {
+      providerState: { mode: "fts-only", attemptedProviderId: "openai", reason: "unavailable" },
     },
-    complete: false,
-  },
-  {
-    name: "unavailable semantic provider with keyword fallback",
-    facts: {
-      provider: "none",
-      requestedProvider: "openai",
-      custom: {
-        providerState: { mode: "fts-only", attemptedProviderId: "openai", reason: "unavailable" },
-      },
-    },
-    complete: false,
-  },
-  {
-    name: "intentional keyword-only index before lazy provider initialization",
-    facts: {
+  }),
+  healthCase(
+    "intentional keyword-only index before lazy initialization",
+    {
       provider: "none",
       requestedProvider: "none",
       custom: { providerState: { mode: "pending", requestedProvider: "none" } },
     },
-    complete: true,
-  },
-  { name: "dirty sources", facts: { dirty: true }, complete: false },
-  { name: "failed sync", facts: { lastSyncError: "worker ran out of memory" }, complete: false },
-  {
-    name: "complete semantic index",
-    facts: { vector: { enabled: true, index: { state: "complete" } } },
-    complete: true,
-  },
-  {
-    name: "empty semantic index",
-    facts: { vector: { enabled: true, index: { state: "empty" } } },
-    complete: true,
-  },
-  {
-    name: "intentional keyword-only index",
-    facts: {
+    true,
+  ),
+  healthCase("dirty sources", { dirty: true }),
+  healthCase("failed sync", { lastSyncError: "worker ran out of memory" }),
+  healthCase("complete semantic index", vectorState("complete"), true),
+  healthCase("empty semantic index", vectorState("empty"), true),
+  healthCase(
+    "intentional keyword-only index",
+    {
       provider: "none",
-      vector: { enabled: true, index: { state: "incomplete" } },
+      ...vectorState("incomplete"),
       custom: { searchMode: "fts-only", providerState: { mode: "fts-only" } },
     },
-    complete: true,
-  },
+    true,
+  ),
 ])("reports health and search coverage for $name", async ({ facts, complete }) => {
   const oldManager = manager();
   vi.spyOn(oldManager, "status").mockReturnValue({

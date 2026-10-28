@@ -128,5 +128,7 @@ export function isSameReplyExecutionSelection(
   left: ReplyExecutionSelection,
   right: ReplyIncomingExecutionSelection,
 ): boolean {
-  return isDeepStrictEqual(right.kind === "execution" ? left : left.session, right);
+  return right.kind === "execution"
+    ? isDeepStrictEqual(left, right)
+    : isDeepStrictEqual(left.session, right);
 }

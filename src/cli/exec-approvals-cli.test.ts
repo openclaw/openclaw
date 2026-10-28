@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { SESSION_EXEC_OVERRIDES_NOTE } from "../infra/exec-approvals-effective.js";
 import * as execApprovals from "../infra/exec-approvals.js";
+import { freezeTrustedJsonSnapshot } from "../shared/immutable-data.js";
 
 const {
   callGatewayFromCli,
@@ -142,10 +143,10 @@ describe("exec approvals CLI", () => {
 
   it("redacts the socket token from local write JSON while preserving its path", async () => {
     setLocalSocket("/tmp/local-exec-approvals.sock", "fixture-token");
-    localSnapshot.file = {
+    localSnapshot.file = freezeTrustedJsonSnapshot({
       version: 1,
       agents: {},
-    };
+    });
 
     await runApprovalsCommand(["approvals", "allowlist", "add", "/usr/bin/uname", "--json"]);
 
@@ -409,14 +410,14 @@ describe("exec approvals CLI", () => {
   });
 
   it("removes wildcard allowlist entry and prunes empty agent", async () => {
-    localSnapshot.file = {
+    localSnapshot.file = freezeTrustedJsonSnapshot({
       version: 1,
       agents: {
         "*": {
           allowlist: [{ pattern: "/usr/bin/uname", lastUsedAt: Date.now() }],
         },
       },
-    };
+    });
 
     const updateExecApprovals = vi.mocked(execApprovals.updateExecApprovals);
     updateExecApprovals.mockClear();

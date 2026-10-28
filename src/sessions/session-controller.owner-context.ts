@@ -1,13 +1,11 @@
-import { AsyncLocalStorage } from "node:async_hooks";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { AsyncContext } from "../shared/async-context.js";
 import { bindSessionControllerCleanupContext } from "./session-controller.cleanup-context.js";
 import type { OwnerContext } from "./session-controller.contracts.js";
 
 // One context owner publishes its exit capability to the scheduler-facing leaf.
 // Context carries exact controller objects; it grants no independent admission or authority.
-export const ownerContext = resolveGlobalSingleton(
+export const ownerContext = new AsyncContext<OwnerContext>(
   Symbol.for("openclaw.sessionControllerOwnerContext"),
-  () => new AsyncLocalStorage<OwnerContext>(),
 );
 bindSessionControllerCleanupContext(ownerContext);
 

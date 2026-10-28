@@ -95,7 +95,6 @@ export function resolveMediaGenerateToolContext<K extends keyof typeof GENERATIO
         agentDir: options?.agentDir,
         workspaceDir: options?.workspaceDir,
         authStore: options?.authProfileStore,
-        authProfileStoreSource: options?.authProfileStoreSource,
         modelConfig: cfg.agents?.defaults?.mediaModels?.[GENERATION_LABELS[providerKey]],
         providerKey,
         providers: preparedProviders,

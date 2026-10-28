@@ -16,6 +16,7 @@ import {
   createProviderHttpError,
   readProviderJsonResponse,
 } from "../agents/provider-http-errors.js";
+import { attachLocalServiceDiagnostics } from "../agents/provider-local-service-diagnostics.js";
 import type {
   AcquireConfiguredProviderLocalService,
   ConfiguredProviderLocalServiceTarget,
@@ -431,6 +432,10 @@ async function postEmbeddingRequest(params: {
         }
       },
     });
+  } catch (error) {
+    throw callOptions?.signal?.aborted
+      ? error
+      : attachLocalServiceDiagnostics(error, localServiceLease);
   } finally {
     localServiceLease?.release();
   }

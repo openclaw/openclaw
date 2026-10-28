@@ -9,7 +9,6 @@ import { parseBuzzQaCredentialPayload, readBuzzQaCredentialFile } from "./creden
 import { createBuzzQaRelayDriver } from "./relay-client.js";
 
 type AdapterFactory = NonNullable<QaRunnerCliRegistration["adapterFactory"]>;
-type FactoryContext = Parameters<AdapterFactory["create"]>[0];
 type AdapterDefinition = Awaited<ReturnType<AdapterFactory["create"]>>;
 
 const BUZZ_GATEWAY_ACCOUNT_ID = "default";
@@ -50,7 +49,7 @@ async function waitForBuzzChannelRunning(params: {
 }
 
 export async function createBuzzQaTransportAdapter(
-  context: FactoryContext,
+  context: Parameters<AdapterFactory["create"]>[0],
 ): Promise<AdapterDefinition> {
   const options = context.adapterOptions ?? {};
   const credentialFile = readNonBlankString(options.credentialFile);

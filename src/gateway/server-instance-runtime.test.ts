@@ -2,6 +2,8 @@ import { expect, it, onTestFinished, vi } from "vitest";
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "../../packages/gateway-client/src/timeouts.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { GatewayNativeApprovalMethod } from "../infra/approval-gateway-runtime-methods.js";
 import type { GatewayApprovalEventSubscriber } from "../infra/approval-gateway-runtime.types.js";
 import { findDeliveryIntentOwner } from "../infra/outbound/delivery-queue-storage.js";
@@ -13,6 +15,7 @@ import {
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 // First dispatch lazily loads these modules; keep cold compilation outside the test deadline.
@@ -26,6 +29,7 @@ import type { GatewayRequestContext, GatewayRequestHandlers } from "./server-met
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import { getGatewayRecoveryRuntime } from "./server-recovery-runtime-context.js";
 import { createRpcSourceForTest, claimRpcSourceForTest } from "./test-helpers.rpc-source.js";
+import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
 function createContext(): GatewayRequestContext {
   return {
@@ -81,6 +85,43 @@ function approvalRequest(id: string, request = {}) {
 }
 
 const unavailable = "Gateway instance dispatch unavailable";
+
+it("retains only the exact failed placement until its generation or Gateway changes", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const placements = createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() });
+    const target = {
+      sessionId: "failed-session",
+      sessionKey: "agent:main:dashboard:failed-placement",
+      agentId: "main",
+    };
+    const context = createContext();
+    context.workerSessionPlacementService = placements;
+    const runtime = createRuntime({ context });
+    const request = { ...target, profileId: "synthetic", executionMode: "worker-turn" as const };
+    const requested = await placements.startDispatch(request);
+    const failure = await placements.fail({
+      sessionId: target.sessionId,
+      expectedGeneration: requested.generation,
+      recoveryError: "Synthetic worker setup failure",
+    });
+    await expect(
+      runtime.recovery.prepareFailedWorkerPlacement({ ...target, agentId: "other" }),
+    ).resolves.toBeUndefined();
+    const prepared = await runtime.recovery.prepareFailedWorkerPlacement(target);
+    expect(prepared?.reason).toContain(failure.recoveryError);
+    expect(prepared?.reason).toContain("restart the worker");
+    expect(prepared?.isCurrent()).toBe(true);
+    await placements.startDispatch(request);
+    expect(prepared?.isCurrent()).toBe(false);
+    prepared?.release();
+    await expect(runtime.recovery.prepareFailedWorkerPlacement(target)).resolves.toBeUndefined();
+    runtime.close();
+    await expect(runtime.recovery.prepareFailedWorkerPlacement(target)).rejects.toThrow(
+      unavailable,
+    );
+  });
+});
+
 async function expectCompleted(id: string) {
   expect(await findDeliveryIntentOwner(id)).toMatchObject({ status: "completed" });
 }
@@ -229,7 +270,21 @@ it("sends recovery notices through normal outbound without invoking plugin actio
         threadId: "thread-1",
         text: "Recovery notice",
       };
-      const notice = { channel: "signal", ...target, idempotencyKey };
+      const generation = {
+        agentId: "main",
+        storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+        sessionKey: "agent:main:dashboard:notice",
+        sessionId: "notice-session",
+        lifecycleRevision: null,
+      };
+      await replaceSessionEntry(generation, { sessionId: generation.sessionId, updatedAt: 1 });
+      const notice = {
+        channel: "signal",
+        ...target,
+        idempotencyKey,
+        generation,
+        provenance: { kind: "recovery-notice" as const, noticeId: idempotencyKey },
+      };
       await runtime.recovery.sendRecoveryNotice(notice);
       await runtime.recovery.sendRecoveryNotice(notice);
 
@@ -242,7 +297,10 @@ it("sends recovery notices through normal outbound without invoking plugin actio
       const staleDelivery = runtime.recovery.sendRecoveryNotice({
         ...notice,
         idempotencyKey: "main-session-restart-recovery:run-2:failed-notice",
-        liveOnly: true,
+        provenance: {
+          kind: "recovery-notice",
+          noticeId: "main-session-restart-recovery:run-2:failed-notice",
+        },
         isCurrent: () => ownerCurrent,
       });
       await vi.waitFor(() => expect(sendText).toHaveBeenCalledTimes(2));
@@ -255,13 +313,17 @@ it("sends recovery notices through normal outbound without invoking plugin actio
       await expect(staleDelivery).rejects.toThrow("Recovery notice owner retired before delivery");
 
       expect(visibleSend).toHaveBeenCalledOnce();
-      expect(queuedResumption).toBeNull();
+      expect(queuedResumption).toMatchObject({ namespace: "prepared", status: "pending" });
       expect(sendText).toHaveBeenCalledWith(expect.objectContaining(target));
       expect(handleAction).not.toHaveBeenCalled();
 
       const guardedDurableNotice = {
         ...notice,
         idempotencyKey: "main-session-restart-recovery:subagent:run-3:resumed-notice",
+        provenance: {
+          kind: "recovery-notice" as const,
+          noticeId: "main-session-restart-recovery:subagent:run-3:resumed-notice",
+        },
         isCurrent: () => true,
       };
       await runtime.recovery.sendRecoveryNotice(guardedDurableNotice);
@@ -269,6 +331,10 @@ it("sends recovery notices through normal outbound without invoking plugin actio
       await runtime.recovery.sendRecoveryNotice(guardedDurableNotice);
       expect(visibleSend).toHaveBeenCalledTimes(2);
       await expectCompleted(guardedDurableNotice.idempotencyKey);
+      runtime.close();
+      await expect(runtime.recovery.sendRecoveryNotice(notice)).rejects.toThrow(
+        "Gateway instance dispatch unavailable for recovery notice",
+      );
     } finally {
       runtime.close();
       restoreActivePluginRegistrySnapshot(pluginRegistrySnapshot);
@@ -343,6 +409,20 @@ it.each(["unsubscribe", "resolve", "close"] as const)(
     expect(onRequested).not.toHaveBeenCalled();
   },
 );
+
+it("reads current approval config only while its Gateway instance is open", () => {
+  const initial = { gateway: { publicOrigin: "https://before.example.com" } };
+  const next = { gateway: { publicOrigin: "https://after.example.com" } };
+  let current = initial;
+  const context = { ...createContext(), getRuntimeConfig: () => current };
+  const runtime = createRuntime({ context });
+  const getRuntimeConfig = runtime.nativeApprovals.getRuntimeConfig;
+  expect(getRuntimeConfig()).toBe(initial);
+  current = next;
+  expect(getRuntimeConfig()).toBe(next);
+  runtime.close();
+  expect(() => getRuntimeConfig()).toThrow("Gateway instance approval runtime is closed");
+});
 
 it("rejects methods outside each closed internal principal", async () => {
   const runtime = createRuntime();

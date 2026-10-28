@@ -27,7 +27,21 @@ export function normalizeOptionalTimestamp(value: unknown): number | undefined {
 }
 
 /** Removes retired and projected fields before a session entry is persisted or returned. */
-export function projectCanonicalSessionEntryShape(value: Record<string, unknown>): SessionEntry {
+export function projectCanonicalSessionEntryShape(
+  value: Partial<
+    Record<
+      | keyof SessionEntry
+      | "sessionFile"
+      | "transcriptPath"
+      | "conversationLink"
+      | "titleRefinement"
+      | "owner"
+      | "participants"
+      | "participantCount",
+      unknown
+    >
+  >,
+): SessionEntry {
   assertSupportedSessionStoreEntry(value);
   if (hasLegacySessionEntryState(value)) {
     throw new SessionStoreMigrationRequiredError(
@@ -38,18 +52,31 @@ export function projectCanonicalSessionEntryShape(value: Record<string, unknown>
     sessionFile: _retiredSessionFile,
     transcriptPath: _retiredTranscriptPath,
     conversationLink: _retiredConversationLink,
+    titleRefinement: _retiredTitleRefinement,
     owner: _projectedOwner,
     participants: _projectedParticipants,
     participantCount: _projectedParticipantCount,
     ...canonicalValue
   } = value;
-  const setOptionalField = (key: keyof SessionEntry, normalized: unknown) => {
+  const setOptionalField = (key: keyof typeof canonicalValue, normalized: unknown) => {
     if (normalized) {
       canonicalValue[key] = normalized;
     } else {
       delete canonicalValue[key];
     }
   };
+  setOptionalField(
+    "clientCapabilities",
+    Array.isArray(canonicalValue.clientCapabilities)
+      ? [
+          ...new Set(
+            canonicalValue.clientCapabilities.filter(
+              (cap): cap is string => typeof cap === "string",
+            ),
+          ),
+        ].toSorted()
+      : undefined,
+  );
   const icon =
     typeof canonicalValue.icon === "string" ? normalizeSessionIconValue(canonicalValue.icon) : null;
   setOptionalField("icon", icon);

@@ -4,9 +4,9 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as updateCheck from "../../infra/update-check.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import * as shared from "./shared.js";
 import { updateStatusCommand } from "./status.js";
+import { cleanupUpdateCommandTest } from "./update-command-cleanup.test-support.js";
 
 const runtime = vi.hoisted(() => ({
   log: vi.fn(),
@@ -27,11 +27,7 @@ vi.mock("../../daemon/service.js", () => ({
   resolveGatewayService: () => ({ readCommand: async () => null }),
 }));
 
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
-  vi.restoreAllMocks();
-  vi.unstubAllEnvs();
-});
+afterEach(cleanupUpdateCommandTest);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 it("reports fresh native release preferences without changing the source checkout", async () => {

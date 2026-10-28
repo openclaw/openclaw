@@ -4,6 +4,7 @@ import { expect, it } from "vitest";
 import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
 import { recordControlUiE2eFailureFacts } from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { chatMessage } from "./chat-flow.test-support.ts";
 import {
   auditMarkdownTable,
   expectReadableAuditTable,
@@ -11,7 +12,10 @@ import {
   readResponsiveTableGeometry,
 } from "./chat-markdown-table-layout.test-support.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  createControlUiE2eSuite,
+  createControlUiE2eContextOptions,
+} from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI Markdown table interactions",
@@ -24,12 +28,7 @@ const wideTable = `| Service | Owner | Region | Status | Version | Deploy | Inci
 | Gateway | Platform | eu-west-1 | Healthy | 2026.8.18 | Complete | 0 | [Long operational note that keeps this column wide](https://example.com/table-reference) |`;
 
 function tableMessage(id: string, text: string, timestamp = Date.now()) {
-  return {
-    role: "assistant",
-    content: [{ type: "text", text }],
-    timestamp,
-    __openclaw: { id, seq: 1 },
-  };
+  return chatMessage("assistant", text, { timestamp, __openclaw: { id, seq: 1 } });
 }
 function expectFocused(locator: Locator) {
   return expect
@@ -68,6 +67,54 @@ function readTableGeometry(element: Element) {
 }
 
 suite.define(() => {
+  it.each(["plain", "attributed"] as const)(
+    "keeps %s leading tables clear of the assistant avatar",
+    async (kind) => {
+      const context = await tableContext(1600, 1000);
+      const page = await context.newPage();
+      await installMockGateway(page, {
+        sessions: [{ key: "agent:main:main", kind: "group" }],
+        historyMessages:
+          kind === "plain"
+            ? [tableMessage("leading-table", wideTable)]
+            : [
+                ...["Bob", "Alice"].map((name) =>
+                  chatMessage("user", "Show the table.", {
+                    __openclaw: { id: name, senderName: name },
+                  }),
+                ),
+                chatMessage("assistant", wideTable, {
+                  __openclaw: {
+                    id: "leading-table",
+                    seq: 3,
+                    runId: "table-run",
+                    replyToId: "Alice",
+                  },
+                }),
+              ],
+      });
+      await page.goto(suite.server.baseUrl + "chat");
+      const table = page.locator('[data-entry-id="leading-table"] .markdown-table');
+      const avatar = page.locator(".chat-group.assistant > :is(.chat-avatar, .chat-avatar-slot)");
+      await table.waitFor();
+      await avatar.waitFor();
+      expect(await page.locator(".chat-group.assistant .chat-reply-attribution").isVisible()).toBe(
+        kind === "attributed",
+      );
+      await waitForLayoutSettled(page, ".chat-thread, .markdown-table, .chat-avatar");
+      const tableBounds = (await table.boundingBox())!;
+      const avatarBounds = (await avatar.boundingBox())!;
+      const overlaps =
+        tableBounds.x < avatarBounds.x + avatarBounds.width &&
+        tableBounds.x + tableBounds.width > avatarBounds.x &&
+        tableBounds.y < avatarBounds.y + avatarBounds.height &&
+        tableBounds.y + tableBounds.height > avatarBounds.y;
+      expect(overlaps).toBe(false);
+      const textBounds = (await table.locator("..").boundingBox())!;
+      expect(tableBounds.width).toBeGreaterThan(textBounds.width);
+    },
+  );
+
   it("sizes desktop tables to content while preserving mobile layout and expanded headers", async () => {
     const context = await suite.newBrowserContext({ viewport: { width: 1440, height: 1000 } });
     await context.grantPermissions(["clipboard-read", "clipboard-write"], {
@@ -658,9 +705,7 @@ ${overflowTable}`,
 | \`src/ready.ts:2\` | ${targetKey} |`;
       const context = await suite.newBrowserContext({
         colorScheme: "dark",
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1280 },
+        ...createControlUiE2eContextOptions(),
       });
       const page = await context.newPage();
       page.setDefaultTimeout(15_000);

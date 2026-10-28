@@ -4,22 +4,19 @@ import { expect, it, onTestFinished, vi } from "vitest";
 import { registerModalSurface } from "../../components/overlay-registry.ts";
 import { getRenderedModalDialog, installDialogPolyfill } from "../../test-helpers/modal-dialog.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import {
-  createGatewayBrowserClientFixture,
-  createSessionCapabilityFixture,
-  createTestChatPane,
-} from "./chat-pane.test-support.ts";
+import { createGatewayBrowserClientFixture } from "./chat-application-context.test-support.ts";
+import { createTestChatPane } from "./chat-pane.test-support.ts";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
-import { isSidebarSlotVisible } from "./sidebar-layout.ts";
 import {
   configureNativeKeyTarget,
   nativeControlNavigationCases,
 } from "./test-helpers/chat-scroll-input.tsx";
 
-function createFocusedPane() {
+function createFocusedPane(platform = "Win32") {
+  const platformSpy = vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
+  onTestFinished(() => platformSpy.mockRestore());
   const { pane, state } = createTestChatPane({
     client: createGatewayBrowserClientFixture(),
-    sessions: createSessionCapabilityFixture(),
   });
   Object.assign(pane, { active: true, presented: true });
   const composer = document.createElement("div");
@@ -27,13 +24,24 @@ function createFocusedPane() {
   const textarea = composer.appendChild(document.createElement("textarea"));
   getChatComposerState(pane.presentationId).composerTextarea = textarea;
   pane.append(composer);
-  return { pane, state, focus: vi.spyOn(textarea, "focus") };
-}
-
-function typingTarget(pane: ReturnType<typeof createFocusedPane>["pane"], target: HTMLElement) {
-  target.addEventListener("keydown", (event) => pane.handleDocumentKeydown(event));
-  target.focus();
-  target.dispatchEvent(new KeyboardEvent("keydown", { key: "x", bubbles: true, composed: true }));
+  const press = (keys: KeyboardEventInit = {}, target?: HTMLElement) => {
+    const event = new KeyboardEvent("keydown", {
+      key: "x",
+      bubbles: true,
+      composed: true,
+      cancelable: true,
+      ...keys,
+    });
+    if (target) {
+      target.addEventListener("keydown", (key) => pane.handleDocumentKeydown(key));
+      target.focus();
+      target.dispatchEvent(event);
+    } else {
+      pane.handleDocumentKeydown(event);
+    }
+    return event;
+  };
+  return { pane, state, textarea, press, focus: vi.spyOn(textarea, "focus") };
 }
 
 function bodyElement<K extends keyof HTMLElementTagNameMap>(tag: K) {
@@ -57,11 +65,10 @@ it.each([
       const [name, key] = testCase;
       const fixture = testCase[4];
       return (
-        ["ArrowUp", "Home", "PageUp"].includes(key) &&
+        (key === "Home" || (key === "PageUp" && /^(Win32 input|video)/.test(name))) &&
         !name.startsWith("Linux ") &&
         !name.startsWith("audio ") &&
-        !(name.startsWith("video ") && (fixture.shiftKey || fixture.ctrlKey)) &&
-        !(name.startsWith("Mac ") && key === "PageUp")
+        !(name.startsWith("video ") && (fixture.shiftKey || fixture.ctrlKey))
       );
     })
     .map(
@@ -79,7 +86,6 @@ it.each([
     const request = vi.fn(async () => ({ messages: [], hasMore: false }));
     const { pane, state } = createTestChatPane({
       client: createGatewayBrowserClientFixture({ request }),
-      sessions: createSessionCapabilityFixture(),
     });
     vi.spyOn(pane.transcript, "isPositionSettled", "get").mockReturnValue(true);
     state.chatHistoryPagination = { hasMore: true, nextOffset: 2 };
@@ -101,29 +107,24 @@ it.each([
   },
 );
 
-it("keeps the letter-to-composer contract when a button is focused", () => {
-  const { pane, focus } = createFocusedPane();
-  typingTarget(pane, bodyElement("button"));
-  expect(focus).toHaveBeenCalledWith({ preventScroll: true });
-});
-
 it("distinguishes an open disclosure from an open overlay", () => {
-  const { pane, focus } = createFocusedPane();
+  const { press, focus } = createFocusedPane();
   const details = bodyElement("details");
   details.open = true;
   const summary = details.appendChild(document.createElement("summary"));
-  typingTarget(pane, summary);
+  press({}, summary);
   expect(focus).toHaveBeenCalledWith({ preventScroll: true });
   focus.mockClear();
   const dialog = bodyElement("dialog");
   dialog.open = true;
-  typingTarget(pane, dialog.appendChild(document.createElement("button")));
+  press({}, dialog.appendChild(document.createElement("button")));
   expect(focus).not.toHaveBeenCalled();
 });
 
 it("does not steal typing focus from a shadow-root confirmation", async () => {
+  await import("../../components/modal-dialog.tsx");
   onTestFinished(installDialogPolyfill());
-  const { pane, focus } = createFocusedPane();
+  const { press, focus } = createFocusedPane();
   const container = bodyElement("div");
   const shadow = container.attachShadow({ mode: "open" });
   const modal = shadow.appendChild(document.createElement("openclaw-modal-dialog"));
@@ -133,33 +134,84 @@ it("does not steal typing focus from a shadow-root confirmation", async () => {
   expect(dialog.open).toBe(true);
   expect(dialog.getRootNode()).toBe(shadow);
   expect(document.querySelector("dialog[open]")).toBeNull();
-  cancel.addEventListener("keydown", (event) => pane.handleDocumentKeydown(event));
-  cancel.dispatchEvent(new KeyboardEvent("keydown", { key: "x", cancelable: true }));
+  press({}, cancel);
   expect(focus).not.toHaveBeenCalled();
 });
 
 it("does not steal typing focus from a light-DOM confirmation", () => {
-  const { pane, focus } = createFocusedPane();
+  const { press, focus } = createFocusedPane();
   const modal = bodyElement("div");
   modal.setAttribute("aria-modal", "true");
   onTestFinished(registerModalSurface(modal));
-  pane.handleDocumentKeydown(new KeyboardEvent("keydown", { key: "x", cancelable: true }));
+  press();
   expect(focus).not.toHaveBeenCalled();
 });
 
-it("uses current panel availability before consuming its keyboard shortcut", () => {
-  const { pane, state } = createFocusedPane();
-  const shortcut = () =>
-    new KeyboardEvent("keydown", { key: "`", code: "Backquote", ctrlKey: true, cancelable: true });
-  state.terminalAvailable = false;
-  const unavailable = shortcut();
-  pane.handleDocumentKeydown(unavailable);
-  expect(unavailable.defaultPrevented).toBe(false);
-  expect(isSidebarSlotVisible(state.sidebarLayout, "terminal")).toBe(false);
+it.each(["MacIntel", "Win32"])(
+  "hands native paste to the composer on %s without canceling the browser action",
+  (platform) => {
+    const { pane, press, focus } = createFocusedPane(platform);
+    const transcript = pane.appendChild(document.createElement("div"));
+    const event = press(
+      {
+        key: "v",
+        code: "KeyV",
+        metaKey: platform === "MacIntel",
+        ctrlKey: platform !== "MacIntel",
+        shiftKey: platform === "MacIntel",
+      },
+      transcript,
+    );
+    expect(focus).toHaveBeenCalledWith({ preventScroll: true });
+    expect(event.defaultPrevented).toBe(false);
+  },
+);
 
-  state.terminalAvailable = true;
-  const available = shortcut();
-  pane.handleDocumentKeydown(available);
-  expect(available.defaultPrevented).toBe(true);
-  expect(isSidebarSlotVisible(state.sidebarLayout, "terminal")).toBe(true);
+it.each([
+  { name: "Control on Mac", platform: "MacIntel", ctrlKey: true },
+  { name: "Command on Windows", platform: "Win32", metaKey: true },
+  { name: "both primary modifiers", ctrlKey: true, metaKey: true },
+  { name: "Alt", ctrlKey: true, altKey: true },
+  { name: "another shortcut", ctrlKey: true, key: "c" },
+])("leaves $name with its existing owner", ({ name: _name, platform = "Win32", ...keys }) => {
+  const { press, focus } = createFocusedPane(platform);
+  press({ key: "v", code: "KeyV", shiftKey: true, ...keys });
+  expect(focus).not.toHaveBeenCalled();
+});
+
+it.each([
+  "<input>",
+  "<textarea></textarea>",
+  '<div contenteditable="true"><span></span></div>',
+  '<div role="textbox"><span></span></div>',
+  '<div role="combobox"><span></span></div>',
+  "<div data-chat-autotype-exempt><span></span></div>",
+])("keeps paste in %s", (markup) => {
+  const { press, focus } = createFocusedPane();
+  const fixture = bodyElement("div");
+  fixture.innerHTML = markup;
+  const target = fixture.querySelector<HTMLElement>("span, button, input, textarea")!;
+  press({ key: "v", ctrlKey: true, shiftKey: true }, target);
+  expect(focus).not.toHaveBeenCalled();
+});
+
+type FocusedPane = ReturnType<typeof createFocusedPane>;
+it.each<[string, (context: FocusedPane, event: KeyboardEvent) => void]>([
+  ["inactive", ({ pane }) => Object.assign(pane, { active: false })],
+  ["hidden", ({ pane }) => Object.assign(pane, { presented: false })],
+  ["disabled", ({ textarea }) => Object.assign(textarea, { disabled: true })],
+  ["readonly", ({ textarea }) => Object.assign(textarea, { readOnly: true })],
+  ["inert", ({ pane }) => pane.setAttribute("inert", "")],
+  ["handled", (_context, event) => event.preventDefault()],
+])("does not redirect paste when the session composer is %s", (_name, prepare) => {
+  const context = createFocusedPane();
+  const event = new KeyboardEvent("keydown", {
+    key: "v",
+    ctrlKey: true,
+    shiftKey: true,
+    cancelable: true,
+  });
+  prepare(context, event);
+  context.pane.handleDocumentKeydown(event);
+  expect(context.focus).not.toHaveBeenCalled();
 });

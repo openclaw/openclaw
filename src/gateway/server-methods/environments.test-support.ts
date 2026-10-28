@@ -208,6 +208,7 @@ export const workerService = (overrides: Partial<TestWorkerService> = {}) => ({
     reused: false,
   })),
   destroy: vi.fn(async () => workerRecord({ state: "destroyed" })),
+  reclaim: vi.fn(async () => workerRecord({ state: "destroyed" })),
   destroyUnattached: vi.fn(async () => workerRecord({ state: "destroyed" })),
   observeDesktop: vi.fn(async ({ control }) => ({
     transport: "rfb" as const,

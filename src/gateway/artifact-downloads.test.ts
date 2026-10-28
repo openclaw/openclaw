@@ -21,10 +21,10 @@ import {
   prepareArtifactDownloadResponse,
 } from "./artifact-download-projection.js";
 import { handleArtifactDownloadHttpRequest } from "./artifact-downloads.js";
+import type { ArtifactRecord } from "./artifacts-content.js";
 import { createGatewayRequest as createRequest } from "./hooks-test-helpers.js";
 import { resolveByteResponse } from "./http-byte-range.js";
 import { ANIMATED_GIF_BYTES, APNG_BYTES } from "./http-image.test-support.js";
-import type { ArtifactRecord } from "./server-methods/artifacts-content.js";
 import type { GatewayClient } from "./server-methods/client-types.js";
 import {
   prepareSessionMutationFacts,

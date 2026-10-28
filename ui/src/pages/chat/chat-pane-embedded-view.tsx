@@ -1,19 +1,20 @@
 import { dynamic, type JSX as SolidJSX } from "@solidjs/web";
-import { Match, Show, Switch, createSignal, lazy } from "solid-js";
+import { Match, Show, Switch, createMemo, createSignal, lazy } from "solid-js";
 import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
 import { isBrowserPanelAvailable } from "../../app/panel-availability.ts";
 import { EMPTY_LINK_READERS } from "../../components/link-reader-target.ts";
 import { PanelLoadingSkeleton } from "../../components/solid/panel-loading-skeleton.tsx";
-import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
+import { registerChatSessionOptionalEnglish } from "../../i18n/locales/en-chat-session-optional.ts";
 import { elementRef } from "../../lib/reactive/element-ref.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { ContentPresentation } from "../../lib/solid/presentation.ts";
 import type { ElementProperties } from "../../types/solid-elements.d.ts";
+import { buildChatBoardPanel } from "./chat-pane-board-panel.ts";
+import { buildChatDiscussionPanel } from "./chat-pane-discussion-panel.ts";
 import type { SidebarPanelDefinitionParams, SidebarPanelData } from "./chat-pane-embedded-types.ts";
 import { EmbeddedPluginPanel } from "./chat-pane-plugin-panel.tsx";
 import { usePanePresentation } from "./chat-pane-presentation.ts";
 import { ChatBoardPanel } from "./chat-pane-surfaces.tsx";
-import { resolveChatAttachmentLimits } from "./components/chat-attachment-admission.ts";
 import { ChatDetailSlot } from "./components/chat-detail-slot-view.tsx";
 import { ChatLazyBoundary } from "./components/chat-lazy-boundary.tsx";
 import type { ChatSessionRailElement } from "./components/chat-session-rail.tsx";
@@ -34,7 +35,7 @@ import { resolveChatLinkFaviconFetcher } from "./link-favicon-loader.ts";
 import type { SidebarSlotId } from "./sidebar-layout-types.ts";
 import { sidebarMainPanel } from "./sidebar-layout.ts";
 
-registerEnglishCatalog(registerChatSessionEnglish);
+registerEnglishCatalog(registerChatSessionOptionalEnglish);
 
 type PanelHostProps = { registerPanelHost?: SidebarPanelHostRegistration };
 type Props = SidebarPanelDefinitionParams & PanelHostProps;
@@ -45,8 +46,11 @@ const Terminal = lazy(() => import("../../components/terminal/terminal-panel-reg
 const Browser = lazy(() => import("../../components/browser/browser-panel.ts"), {
   export: "BrowserPanelHost",
 });
+const Context = lazy(() => import("./components/chat-context-panel.tsx"), {
+  export: "ChatContextPanel",
+});
 const Companion = lazy(() => import("./components/chat-session-rail.tsx"), {
-  export: "ChatSessionRail",
+  export: "ChatSessionRailPanel",
 });
 const Desktop = lazy(() => import("../../components/desktop/desktop-panel-solid.tsx"), {
   export: "DesktopPanel",
@@ -114,38 +118,6 @@ function BrowserPanel(props: Props) {
   );
 }
 
-function CompanionPanel(props: Props) {
-  const presented = usePanePresentation(() => props.companionPresented);
-  return (
-    <Companion
-      presentation={props.presentation}
-      data-sidebar-panel-host
-      ref={[elementRef(props.registerPanelHost)]}
-      presented={presented()}
-      focusRequest={props.companionFocusRequest}
-      sessionKey={props.state.sessionKey}
-      agentId={props.agentId}
-      assistantName={props.state.assistantName}
-      digest={props.digest}
-      running={Boolean(props.activeRunId)}
-      activeRunId={props.activeRunId}
-      pullRequests={props.pullRequests}
-      companion={props.companion}
-      modelControls={props.companionModelControls}
-      client={props.state.connected ? props.state.client : null}
-      connected={props.state.connected}
-      sendShortcut={props.state.settings.chatSendShortcut ?? "enter"}
-      inputDeviceId={props.state.settings.realtimeTalkInputDeviceId}
-      onSubmit={props.onCompanionSubmit}
-      onDraftChange={props.onCompanionDraftChange}
-      onAttachmentsChange={props.onCompanionAttachmentsChange}
-      onOpenImage={props.state.handleOpenImage}
-      uploadConfig={props.state.uploadConfig}
-      attachmentLimits={resolveChatAttachmentLimits(props.state.hello?.policy)}
-    />
-  );
-}
-
 function DesktopPanel(props: Props) {
   const presented = usePanePresentation(() => props.desktopPresented);
   return (
@@ -177,17 +149,18 @@ function DesktopPanel(props: Props) {
 }
 
 function DiscussionPanel(props: Props) {
+  const config = createMemo(() => buildChatDiscussionPanel(props.discussion!));
   return (
     <Discussion
       presentation={props.presentation}
       data-sidebar-panel-host
       ref={[elementRef(props.registerPanelHost)]}
-      sessionKey={props.discussion!.sessionKey}
-      canOpen={props.discussion!.canOpen}
+      sessionKey={config().sessionKey}
+      canOpen={config().canOpen}
       sourceGeneration={props.discussionSourceGeneration}
-      loadInfo={props.discussion!.loadInfo}
-      openDiscussion={props.discussion!.openDiscussion}
-      onStateChange={props.discussion!.onStateChange}
+      loadInfo={config().loadInfo}
+      openDiscussion={config().openDiscussion}
+      onStateChange={config().onStateChange}
     />
   );
 }
@@ -321,10 +294,25 @@ function SubagentsPanel(props: Props) {
   );
 }
 
+function ContextPanel(props: Props) {
+  const presented = usePanePresentation(() => props.contextPresented ?? false);
+  return (
+    <Context
+      data-sidebar-panel-host
+      ref={[elementRef(props.registerPanelHost)]}
+      details={props.contextDetails}
+      presented={presented()}
+      onScrollPortRef={props.onScrollPortRef}
+    />
+  );
+}
+
 function ProcessesPanel(props: Props) {
   const presented = usePanePresentation(() => props.processesPresented ?? false);
   return (
     <Processes
+      showRequest={props.processesShowRequest}
+      onBackToDetails={props.onBackToProcessDetails}
       onScrollPortRef={props.onScrollPortRef}
       mobile={props.presentation === "mobile"}
       data-sidebar-panel-host
@@ -369,7 +357,7 @@ function DetailPanel(props: SidebarPanelData) {
 }
 
 function DashboardPanel(props: SidebarPanelData) {
-  return <ChatBoardPanel {...props.dashboard!} />;
+  return <ChatBoardPanel {...buildChatBoardPanel(props.dashboard!)} />;
 }
 
 const embeddedPanels: Partial<
@@ -377,12 +365,13 @@ const embeddedPanels: Partial<
 > = {
   terminal: TerminalPanel,
   browser: BrowserPanel,
-  companion: CompanionPanel,
+  companion: Companion,
   desktop: DesktopPanel,
   discussion: DiscussionPanel,
   portal: PortalPanel,
   subagents: SubagentsPanel,
   processes: ProcessesPanel,
+  context: ContextPanel,
   "link-reader": LinkReaderPanel,
   workspace: WorkspacePanel,
   detail: DetailPanel,
@@ -397,7 +386,10 @@ export function SidebarPanel(
   const [activated] = createSignal(
     (previous = false) =>
       previous ||
-      (props.definition.slot !== "dashboard" && props.definition.slot !== "workspace") ||
+      (props.definition.slot !== "dashboard" &&
+        props.definition.slot !== "workspace" &&
+        props.definition.slot !== "context" &&
+        props.definition.slot !== "companion") ||
       props.visible !== false,
   );
   return (
@@ -440,6 +432,9 @@ declare module "@solidjs/web" {
       >;
       "openclaw-chat-subagents-panel": EmbeddedAttributes<
         HTMLElementTagNameMap["openclaw-chat-subagents-panel"]
+      >;
+      "openclaw-chat-context-panel": EmbeddedAttributes<
+        HTMLElementTagNameMap["openclaw-chat-context-panel"]
       >;
       "openclaw-chat-processes-panel": EmbeddedAttributes<
         HTMLElementTagNameMap["openclaw-chat-processes-panel"]

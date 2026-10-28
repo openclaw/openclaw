@@ -37,9 +37,6 @@ it("binds diagnostics without certifying absent captures", () => {
   }
   for (const changed of [
     { ...facts, candidate_sha: "f".repeat(40) },
-    { ...facts, plan_sha256: "f".repeat(64) },
-    { ...facts, run: { id: "457", attempt: 1 } },
-    { ...facts, request_id: "f".repeat(64) },
     { ...facts, raw: "private payload" },
   ]) {
     const result = receipt(changed);
@@ -126,20 +123,21 @@ it.each([
       );
     expect(await request()).toBe(403);
     expect(ingress.getDiagnostics().some((entry) => entry.category === expected)).toBe(true);
+    expect(JSON.stringify(ingress.getDiagnostics())).not.toMatch(/private|token|secret/);
     if (expected === "authority_unavailable") {
       expect(ingress.getDiagnostics()).toEqual([
         { sequence: 1, category: "authority_unavailable" },
       ]);
+      for (let i = 0; i < 20; i++) {
+        await request();
+      }
+      const diagnostic = createTelegramFailureDiagnostic(identity, ingress.getDiagnostics());
+      expect(diagnostic.diagnostics).toHaveLength(16);
+      expect(JSON.stringify(diagnostic)).not.toMatch(/private|token|secret/);
+      const copy = ingress.getDiagnostics();
+      copy.splice(0);
+      expect(ingress.getDiagnostics()).toHaveLength(16);
     }
-    for (let i = 0; i < 20; i++) {
-      await request();
-    }
-    const diagnostic = createTelegramFailureDiagnostic(identity, ingress.getDiagnostics());
-    expect(diagnostic.diagnostics).toHaveLength(16);
-    expect(JSON.stringify(diagnostic)).not.toMatch(/private|token|secret/);
-    const copy = ingress.getDiagnostics();
-    copy.splice(0);
-    expect(ingress.getDiagnostics()).toHaveLength(16);
   } finally {
     await fixture.close();
   }

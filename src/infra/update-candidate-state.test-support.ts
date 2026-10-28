@@ -81,3 +81,19 @@ export async function runUpdateCandidateSnapshotWorker(input: Input) {
   const admitted = await inventoryUpdateCandidateStateWorker(input);
   return SnapshotSchema.parse(await runWorker(input, "snapshot", admitted)).versions;
 }
+
+export function createStateSnapshotInput(root: string, stateDir: string, targetStateDir: string) {
+  return {
+    stateDir,
+    targetStateDir,
+    candidateRoot: fileURLToPath(new URL("../../", import.meta.url)),
+    config: {},
+    env: {
+      ...process.env,
+      OPENCLAW_HOME: root,
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+      OPENCLAW_WORKSPACE_DIR: path.join(root, "workspace"),
+    },
+  };
+}

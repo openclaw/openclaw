@@ -75,6 +75,14 @@ export type ApprovalRequestSessionDelivery = Pick<
   "sessionId" | "updatedAt" | "delivery"
 >;
 
+function approvalRequestSessionDelivery(
+  entry: ApprovalRequestSessionDelivery | null | undefined,
+): ApprovalRequestSessionDelivery | null {
+  return entry
+    ? { sessionId: entry.sessionId, updatedAt: entry.updatedAt, delivery: entry.delivery }
+    : null;
+}
+
 /** Classifies whether native delivery has named channel-account owners. */
 export async function classifyApprovalRequestChannelRouteAsync(params: {
   cfg: OpenClawConfig;
@@ -115,19 +123,14 @@ function resolveLegacyApprovalRequestSessionDelivery(params: {
       memory.binding?.actor.target.sessionKey === sessionKey
         ? memory.binding.actor.snapshot(memory.authority)?.entry
         : memory.owner?.readSession(sessionKey, memory.authority)?.entry;
-    return entry
-      ? { sessionId: entry.sessionId, updatedAt: entry.updatedAt, delivery: entry.delivery }
-      : null;
+    return approvalRequestSessionDelivery(entry);
   }
   const entry = loadSessionEntryReadOnly({
     storePath,
     sessionKey,
     clone: false,
   });
-  if (!entry) {
-    return null;
-  }
-  return { sessionId: entry.sessionId, updatedAt: entry.updatedAt, delivery: entry.delivery };
+  return approvalRequestSessionDelivery(entry);
 }
 
 function resolvePersistedApprovalRequestSessionBinding(
@@ -298,9 +301,7 @@ export async function resolveApprovalRequestSessionDeliveryAsync(
       memory.binding?.actor.target.sessionKey === sessionKey
         ? memory.binding.actor.snapshot(memory.authority)?.entry
         : memory.owner?.readSession(sessionKey, memory.authority)?.entry;
-    return entry
-      ? { sessionId: entry.sessionId, updatedAt: entry.updatedAt, delivery: entry.delivery }
-      : null;
+    return approvalRequestSessionDelivery(entry);
   }
   const entry = await readSessionEntryReadOnlyInWorker({
     agentId,
@@ -309,9 +310,7 @@ export async function resolveApprovalRequestSessionDeliveryAsync(
     projection: "list",
     hydrateSkillPromptRefs: false,
   });
-  return entry
-    ? { sessionId: entry.sessionId, updatedAt: entry.updatedAt, delivery: entry.delivery }
-    : null;
+  return approvalRequestSessionDelivery(entry);
 }
 
 function warnLegacyApprovalRouting(name: string): void {

@@ -323,7 +323,9 @@ private class NodeRuntimeWearGateway : AutoCloseable {
           return
         }
         val payload =
-          if (method == "sessions.list") {
+          if (method == "agents.list") {
+            """{"defaultId":"main","mainKey":"main","agents":[{"id":"main"}]}"""
+          } else if (method == "sessions.list") {
             if (params["search"]?.jsonPrimitive?.content == WEAR_SESSIONS_SEARCH) {
               wearSessionsRequests.incrementAndGet()
             }
@@ -349,7 +351,7 @@ private class NodeRuntimeWearGateway : AutoCloseable {
     }
     val scopes = if (role == "operator") """["operator.read","operator.write","operator.admin"]""" else "[]"
     webSocket.send(
-      """{"type":"res","id":"$id","ok":true,"payload":{"type":"hello-ok","protocol":3,"server":{"host":"wear-runtime","version":"proof"},"features":{"methods":["sessions.list","models.list"],"events":[],"capabilities":["session-scoped-model-catalog"]},"auth":{"role":"$role","scopes":$scopes},"snapshot":{"sessionDefaults":{"mainSessionKey":"agent:main:main"}}}}""",
+      """{"type":"res","id":"$id","ok":true,"payload":{"type":"hello-ok","protocol":3,"server":{"host":"wear-runtime","version":"proof"},"features":{"methods":["agents.list","sessions.list","models.list"],"events":[],"capabilities":["session-scoped-model-catalog"]},"auth":{"role":"$role","scopes":$scopes},"snapshot":{"sessionDefaults":{"mainSessionKey":"agent:main:main"}}}}""",
     )
   }
 

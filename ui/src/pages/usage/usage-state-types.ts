@@ -1,5 +1,4 @@
 import type { SessionLogEntry } from "../../../../src/infra/session-cost-usage.types.js";
-import type { CostUsageSummary } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type { PanelRefreshStatus } from "../../components/panel-refresh-status-state.ts";
 import type { PageReadResult } from "../../lib/page-request.ts";
@@ -41,7 +40,6 @@ export type UsageRouteData = {
     creatorKey?: string;
   };
   result: SessionsUsageResult | null;
-  costSummary: CostUsageSummary | null;
   loadedAtMs: number | null;
   error: string | null;
 };

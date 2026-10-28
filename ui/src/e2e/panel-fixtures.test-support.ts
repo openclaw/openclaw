@@ -1,15 +1,4 @@
 import type { Locator } from "playwright";
-import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
-
-export function sessionList(row: GatewaySessionRow, model = "gpt-5.5"): SessionsListResult {
-  return {
-    ts: Date.now(),
-    path: "",
-    count: 1,
-    defaults: { modelProvider: "openai", model, contextTokens: null },
-    sessions: [row],
-  };
-}
 
 export function workerDesktop(id: string) {
   return {

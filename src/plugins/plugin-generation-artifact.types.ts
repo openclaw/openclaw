@@ -8,7 +8,6 @@ export type PluginGenerationArtifact = {
   boundaryRoot: string;
   sourceAliases: Record<string, string>;
   sourceDigest: string;
-  sharedModule?: (importer: string, specifier: string) => string | undefined;
   linkHost: (hostRoot: string) => void;
   hasSource: (source: string) => boolean;
   resolve: (source: string, rejectHardlinks?: boolean) => string;

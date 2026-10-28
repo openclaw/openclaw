@@ -17,6 +17,7 @@ import {
   resolveDefaultWhatsAppAccountId,
   resolveWhatsAppAccount,
   resolveWhatsAppMediaMaxBytes,
+  type ResolvedWhatsAppAccount,
 } from "./accounts.js";
 import { getWhatsAppConnectionController } from "./connection-controller-runtime-context.js";
 import { resolveWhatsAppDocumentFileName } from "./document-filename.js";
@@ -34,7 +35,7 @@ import {
   resolveAdditiveWhatsAppMediaUrls,
 } from "./outbound-media-contract.js";
 import type { WhatsAppQuotedMessageKey } from "./quoted-message.js";
-import { markdownToWhatsAppChunks, toWhatsappJid } from "./targets-runtime.js";
+import { markdownToWhatsAppChunks, resolveJidToE164, toWhatsappJid } from "./targets-runtime.js";
 
 type PreparedWhatsAppOutboundMedia = Awaited<ReturnType<typeof prepareWhatsAppOutboundMedia>>;
 
@@ -53,13 +54,23 @@ function requireOutboundActiveWebListener(params: { cfg: OpenClawConfig; account
   return { accountId: resolvedAccountId, listener };
 }
 
-function resolveActualSentRemoteJid(result: WhatsAppSendResult, fallbackJid: string): string {
-  for (const key of result.keys) {
-    if (key.remoteJid?.trim()) {
-      return key.remoteJid.trim();
-    }
+async function resolveSentChatJid(
+  result: WhatsAppSendResult,
+  fallbackJid: string,
+  account: ResolvedWhatsAppAccount,
+): Promise<string> {
+  const jid = result.keys.find((key) => key.remoteJid?.trim())?.remoteJid?.trim() ?? fallbackJid;
+  if (!/(@lid|@hosted\.lid)$/.test(jid)) {
+    return jid;
   }
-  return fallbackJid;
+  // Source replies use the phone identity; an unmapped delivery must keep its actual recipient.
+  const phone = await resolveJidToE164(jid, {
+    authDir: account.authDir,
+    logMissing: false,
+    lidLookup: getWhatsAppConnectionController(account.accountId)?.getCurrentSock()
+      ?.signalRepository.lidMapping,
+  });
+  return phone ? toWhatsappJid(phone) : jid;
 }
 
 export async function sendMessageWhatsApp(
@@ -70,6 +81,8 @@ export async function sendMessageWhatsApp(
     cfg: OpenClawConfig;
     mediaUrl?: string;
     mediaUrls?: readonly string[];
+    fileName?: string;
+    contentType?: string;
     mediaAccess?: {
       localRoots?: readonly string[];
       readFile?: (filePath: string) => Promise<Buffer>;
@@ -98,14 +111,6 @@ export async function sendMessageWhatsApp(
     ChannelOutboundContext,
     "replyToIdSource" | "replyToMode" | "formatting" | "onPlatformSendDispatch"
   >,
-): Promise<{ messageId: string; toJid: string }> {
-  return await sendWhatsAppUploadFile(to, body, options);
-}
-
-export async function sendWhatsAppUploadFile(
-  to: string,
-  body: string,
-  options: Parameters<typeof sendMessageWhatsApp>[2] & { fileName?: string; contentType?: string },
 ): Promise<{ messageId: string; toJid: string }> {
   return await withWhatsAppLogicalDeliveryActivity(async () => {
     let text = options.preserveLeadingWhitespace ? body : normalizeWhatsAppPayloadText(body);
@@ -251,7 +256,7 @@ export async function sendWhatsAppUploadFile(
         acceptedResults.push(accepted);
         const result = {
           messageId: accepted.messageId,
-          toJid: resolveActualSentRemoteJid(accepted, jid),
+          toJid: await resolveSentChatJid(accepted, jid, account),
         };
         return {
           ...result,
@@ -267,17 +272,14 @@ export async function sendWhatsAppUploadFile(
         };
       };
       const result = await sendPart(text, mediaBuffer, mediaType);
-      const { messageId, toJid: sentRemoteJid } = result;
-      if (trailingTextChunks.length > 0) {
-        // Persist each accepted part before the next fallible send so recovery
-        // cannot replay already-delivered media or text chunks.
-        await reportProgress?.(result);
-        for (const trailingText of trailingTextChunks) {
-          const trailingResult = await sendPart(trailingText);
-          await reportProgress?.(trailingResult);
-        }
+      // Persist each accepted part before the next fallible send so recovery
+      // cannot replay already-delivered media or text chunks.
+      await reportProgress?.(result);
+      for (const trailingText of trailingTextChunks) {
+        const trailingResult = await sendPart(trailingText);
+        await reportProgress?.(trailingResult);
       }
-      return { messageId, toJid: sentRemoteJid };
+      return { messageId: result.messageId, toJid: result.toJid };
     } catch (err) {
       logger.error({ err: String(err), to, hasMedia }, "failed to send via web session");
       const firstAccepted = acceptedResults[0];
@@ -340,7 +342,7 @@ export async function sendPollWhatsApp(
   options: { verbose: boolean; accountId?: string; cfg: OpenClawConfig },
 ): Promise<{ messageId: string; toJid: string }> {
   const cfg = requireRuntimeConfig(options.cfg, "WhatsApp poll");
-  const { listener: active } = requireOutboundActiveWebListener({
+  const { listener: active, accountId } = requireOutboundActiveWebListener({
     cfg,
     accountId: options.accountId,
   });
@@ -350,6 +352,8 @@ export async function sendPollWhatsApp(
     await active.assertSendReady?.(to);
   }
   const result = requireWhatsAppAcceptedSendResult(await active.sendPoll(to, normalized));
-  const messageId = result.messageId;
-  return { messageId, toJid: resolveActualSentRemoteJid(result, jid) };
+  return {
+    messageId: result.messageId,
+    toJid: await resolveSentChatJid(result, jid, resolveWhatsAppAccount({ cfg, accountId })),
+  };
 }

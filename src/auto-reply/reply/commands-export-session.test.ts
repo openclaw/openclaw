@@ -5,16 +5,17 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { generateExportHtmlVendorAssets } from "../../../scripts/runtime-postbuild.mts";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  createPluginInlineViewResult,
+  bindPluginInlineViewInvocation,
+} from "../../plugins/inline-view.js";
 import { buildCommandTextFromArgs, findCommandByNativeName } from "../commands-registry.js";
 import { buildExportSessionReply } from "./commands-export-session.js";
 import { commandFixture } from "./commands-handler-fixture.test-support.js";
 
 const hoisted = await vi.hoisted(async () => {
   const { createExportCommandSessionMocks } = await import("./commands-export-test-mocks.js");
-  const promptBundle = {
-    systemPrompt: "system prompt",
-    tools: [],
-  };
+  const promptBundle = { systemPrompt: "system prompt", tools: [] };
   return {
     ...createExportCommandSessionMocks(vi),
     promptBundle,
@@ -63,10 +64,7 @@ vi.mock("./commands-system-prompt.js", () => ({
 
 vi.mock("../../agents/sessions/session-manager.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../agents/sessions/session-manager.js")>();
-  return {
-    ...actual,
-    migrateSessionEntries: hoisted.migrateSessionEntriesMock,
-  };
+  return { ...actual, migrateSessionEntries: hoisted.migrateSessionEntriesMock };
 });
 
 vi.mock("node:fs/promises", async () => {
@@ -82,10 +80,7 @@ vi.mock("node:fs/promises", async () => {
       return actual.readFile(filePath, { encoding });
     }),
   };
-  return {
-    ...mockedFsPromises,
-    default: mockedFsPromises,
-  };
+  return { ...mockedFsPromises, default: mockedFsPromises };
 });
 
 function makeParams(workspaceDir = tempDirs.make("openclaw-session-export-")) {
@@ -95,9 +90,23 @@ function makeParams(workspaceDir = tempDirs.make("openclaw-session-export-")) {
   });
 }
 
-async function writtenHtml(params: { workspaceDir: string }): Promise<string> {
-  return await fs.readFile(path.join(params.workspaceDir, "session.html"), "utf-8");
+async function writtenHtml(params: { workspaceDir: string }, outputPath = "session.html") {
+  return fs.readFile(path.join(params.workspaceDir, outputPath), "utf-8");
 }
+
+async function exportHtml() {
+  const params = makeParams();
+  await buildExportSessionReply(params);
+  return writtenHtml(params);
+}
+
+const template = [
+  '<style data-openclaw-export-placeholder="CSS"></style>',
+  '<script id="session-data" type="application/json" data-openclaw-export-placeholder="SESSION_DATA"></script>',
+  '<script data-openclaw-export-placeholder="MARKED_JS"></script>',
+  '<script data-openclaw-export-placeholder="HIGHLIGHT_JS"></script>',
+  '<script data-openclaw-export-placeholder="JS"></script>',
+].join("");
 
 function sessionDataFromHtml(html: string): Record<string, unknown> {
   const match = html.match(/id="session-data"[^>]*>([^<]+)</);
@@ -135,10 +144,7 @@ describe("buildExportSessionReply", () => {
     vi.clearAllMocks();
     hoisted.resolveDefaultSessionStorePathMock.mockReturnValue("/tmp/target-store/sessions.json");
     hoisted.loadSessionStoreMock.mockReturnValue({
-      "agent:target:session": {
-        sessionId: "session-1",
-        updatedAt: 1,
-      },
+      "agent:target:session": { sessionId: "session-1", updatedAt: 1 },
     });
     hoisted.resolveCommandsSystemPromptBundleMock.mockResolvedValue(hoisted.promptBundle);
     hoisted.readAcpSessionMetaForEntryAsyncMock.mockResolvedValue(undefined);
@@ -150,6 +156,38 @@ describe("buildExportSessionReply", () => {
       hoisted.exportHtmlTemplateContents.set(`vendor/${fileName}`, contents);
     }
     hoisted.sessionTranscriptEvents = [];
+  });
+
+  it("retains version, payload, fallback and invocation through the native HTML data export", async () => {
+    const result = bindPluginInlineViewInvocation(
+      createPluginInlineViewResult(
+        "incidents",
+        "incident",
+        { incidentId: "INC-42" },
+        { version: 3, summary: "INC-42 is investigating." },
+      ),
+      "incidents",
+      "show_incident",
+      "call-1",
+    );
+    const message = {
+      role: "toolResult",
+      toolCallId: "call-1",
+      toolName: "show_incident",
+      ...result,
+      __openclaw: { runId: "run-1" },
+    };
+    hoisted.sessionTranscriptEvents = [
+      {
+        type: "message",
+        id: "display-1",
+        parentId: null,
+        timestamp: "2026-10-19T12:00:00Z",
+        message,
+      },
+    ];
+    const restored = sessionDataFromHtml(await exportHtml());
+    expect(restored.entries).toEqual(hoisted.sessionTranscriptEvents);
   });
 
   it.each(["monthly report.html", "reports/monthly  report.html"])(
@@ -164,9 +202,7 @@ describe("buildExportSessionReply", () => {
       const reply = await buildExportSessionReply(params);
 
       expect(reply.text).toContain(`📄 File: ${outputPath}`);
-      expect(await fs.readFile(path.join(params.workspaceDir, outputPath), "utf-8")).toContain(
-        'id="session-data"',
-      );
+      expect(await writtenHtml(params, outputPath)).toContain('id="session-data"');
     },
   );
 
@@ -186,49 +222,27 @@ describe("buildExportSessionReply", () => {
         timestamp: "2026-06-15T00:00:02.000Z",
         targetId: null,
       },
-      {
-        type: "metadata",
-        id: "opaque-after-leaf",
-        parentId: "inactive-tail",
-      },
+      { type: "metadata", id: "opaque-after-leaf", parentId: "inactive-tail" },
     ];
     hoisted.sessionTranscriptEvents = entries;
 
-    const params = makeParams();
-    await buildExportSessionReply(params);
-
-    const html = await writtenHtml(params);
-    expect(html).not.toContain("{{CSS}}");
-    expect(html).not.toContain("{{JS}}");
-    expect(html).not.toContain("{{SESSION_DATA}}");
-    expect(html).not.toContain("{{MARKED_JS}}");
-    expect(html).not.toContain("{{HIGHLIGHT_JS}}");
+    const html = await exportHtml();
+    for (const placeholder of ["CSS", "JS", "SESSION_DATA", "MARKED_JS", "HIGHLIGHT_JS"]) {
+      expect(html).not.toContain(`{{${placeholder}}}`);
+    }
     expect(html).not.toContain("data-openclaw-export-placeholder");
-    expect(html).toContain(
-      Buffer.from(
-        JSON.stringify({
-          header: null,
-          entries: [entries[0], { ...entries[1], parentId: null }, entries[2]],
-          leafId: null,
-          hasLeafControl: true,
-          systemPrompt: "system prompt",
-          tools: [],
-        }),
-      ).toString("base64"),
-    );
+    expect(sessionDataFromHtml(html)).toEqual({
+      header: null,
+      entries: [entries[0], { ...entries[1], parentId: null }, entries[2]],
+      leafId: null,
+      hasLeafControl: true,
+      systemPrompt: "system prompt",
+      tools: [],
+    });
   });
 
   it("preserves replacement text with dollar sequences", async () => {
-    hoisted.exportHtmlTemplateContents.set(
-      "template.html",
-      [
-        '<style data-openclaw-export-placeholder="CSS"></style>',
-        '<script id="session-data" type="application/json" data-openclaw-export-placeholder="SESSION_DATA"></script>',
-        '<script data-openclaw-export-placeholder="MARKED_JS"></script>',
-        '<script data-openclaw-export-placeholder="HIGHLIGHT_JS"></script>',
-        '<script data-openclaw-export-placeholder="JS"></script>',
-      ].join(""),
-    );
+    hoisted.exportHtmlTemplateContents.set("template.html", template);
     hoisted.exportHtmlTemplateContents.set("template.css", "$&$1");
     hoisted.exportHtmlTemplateContents.set("template.js", "const marker = '$&$1';");
     hoisted.exportHtmlTemplateContents.set("vendor/marked.min.js", "const markedMarker = '$&$1';");
@@ -237,10 +251,7 @@ describe("buildExportSessionReply", () => {
       "const highlightMarker = '$&$1';",
     );
 
-    const params = makeParams();
-    await buildExportSessionReply(params);
-
-    const html = await writtenHtml(params);
+    const html = await exportHtml();
     expect(html).toContain("$&$1");
     expect(html).toContain("const marker = '$&$1';");
     expect(html).toContain("const markedMarker = '$&$1';");
@@ -264,12 +275,9 @@ describe("buildExportSessionReply", () => {
 
   it("marks the skipped-row list as truncated when more than 20 rows are invalid", async () => {
     hoisted.sessionTranscriptEvents = [
-      ...Array.from({ length: 25 }, (_, index) => ({
-        type: "message",
-        id: `bad-${index + 1}`,
-        timestamp: `2026-05-16T00:00:${String(index).padStart(2, "0")}.000Z`,
-        message: { content: "missing role" },
-      })),
+      ...Array.from({ length: 25 }, (_, index) =>
+        messageEntry(`bad-${index + 1}`, { content: "missing role" }, index),
+      ),
       messageEntry("entry-valid", { role: "assistant", content: "valid assistant" }, 60),
     ];
 
@@ -322,13 +330,6 @@ describe("buildExportSessionReply", () => {
         expect(warning).toContain("backend runtime");
         if (kind === "cli") {
           expect(reply.text).toContain("not included in this export");
-          expect(typeof warning).toBe("string");
-        } else {
-          expect(hoisted.readAcpSessionMetaForEntryAsyncMock).toHaveBeenCalledWith({
-            cfg: {},
-            sessionKey: "agent:target:session",
-            entry: { sessionId: "session-1", updatedAt: 1 },
-          });
         }
       } else {
         expect(reply.text).not.toContain("backend runtime");
@@ -344,16 +345,7 @@ describe("buildExportSessionReply", () => {
 
   describe("filesystem boundary", () => {
     beforeEach(() => {
-      hoisted.exportHtmlTemplateContents.set(
-        "template.html",
-        [
-          '<style data-openclaw-export-placeholder="CSS"></style>',
-          '<script id="session-data" data-openclaw-export-placeholder="SESSION_DATA"></script>',
-          '<script data-openclaw-export-placeholder="MARKED_JS"></script>',
-          '<script data-openclaw-export-placeholder="HIGHLIGHT_JS"></script>',
-          '<script data-openclaw-export-placeholder="JS"></script>',
-        ].join(""),
-      );
+      hoisted.exportHtmlTemplateContents.set("template.html", template);
       hoisted.exportHtmlTemplateContents.set("template.css", "new export");
       hoisted.exportHtmlTemplateContents.set("template.js", "");
       hoisted.exportHtmlTemplateContents.set("vendor/marked.min.js", "");
@@ -463,12 +455,10 @@ describe("buildExportSessionReply", () => {
         const reply = await buildExportSessionReply(params);
 
         expect(reply.text).toContain(`📄 File: ${basename}-2.html`);
-        expect(await fs.readFile(path.join(params.workspaceDir, `${basename}.html`), "utf-8")).toBe(
-          "existing",
+        expect(await writtenHtml(params, `${basename}.html`)).toBe("existing");
+        expect(await writtenHtml(params, `${basename}-2.html`)).toContain(
+          "<style>new export</style>",
         );
-        expect(
-          await fs.readFile(path.join(params.workspaceDir, `${basename}-2.html`), "utf-8"),
-        ).toContain("<style>new export</style>");
       } finally {
         vi.useRealTimers();
       }

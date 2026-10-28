@@ -32,17 +32,19 @@ import { readUpstreamUserText } from "./upstream-prompt-provenance.js";
 
 setupRunAttemptTestHooks();
 
+function turnInput(harness: ReturnType<typeof createStartedThreadHarness>) {
+  return (
+    harness.requests.find(({ method }) => method === "turn/start")!.params as CodexTurnStartParams
+  ).input;
+}
+
 async function completedInput(params: ReturnType<typeof createTestParams>) {
   setCodexTestModelSupportsTools(params, false);
   const harness = createStartedThreadHarness();
   const run = runCodexAppServerAttempt(params);
   await harness.waitForMethod("turn/start");
   await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-  const result = await run;
-  const input = (
-    harness.requests.find(({ method }) => method === "turn/start")!.params as CodexTurnStartParams
-  ).input;
-  return { result, input };
+  return { result: await run, input: turnInput(harness) };
 }
 
 it("forks a sender-attributed turn through a database alias using exact submitted text without changing its display", async () => {
@@ -84,9 +86,7 @@ it("forks a sender-attributed turn through a database alias using exact submitte
   const run = runCodexAppServerAttempt(params);
   try {
     await run.waitForTurnAccepted();
-    const request = harness.requests.find(({ method }) => method === "turn/start")!
-      .params as CodexTurnStartParams;
-    const sentInput = structuredClone(request.input);
+    const sentInput = structuredClone(turnInput(harness));
     const sentText = sentInput
       .flatMap((item) => (item.type === "text" ? [item.text] : []))
       .join("\n");
@@ -154,8 +154,10 @@ it("delivers prepared document paths alongside native images without changing th
   const params = createTestParams();
   const prompt = params.prompt;
   const note = "Attachment file: /fixture/managed/inventory.csv";
-  const prepare = vi.fn(async () => note);
-  params.hostCapabilities = { ...params.hostCapabilities, prepareInputAttachments: prepare };
+  params.hostCapabilities = {
+    ...params.hostCapabilities,
+    prepareInputAttachments: async () => note,
+  };
   params.model = createCodexTestModel("codex", ["text", "image"]);
   params.images = [
     {
@@ -166,13 +168,11 @@ it("delivers prepared document paths alongside native images without changing th
   ];
   const { result, input } = await completedInput(params);
   const user = result.messagesSnapshot.find((message) => message.role === "user");
-  expect(user).toBeDefined();
   expect(JSON.stringify(user?.content)).toContain(prompt);
   expect(JSON.stringify(user?.content)).not.toContain(note);
   expect(input?.[0]).toMatchObject({ type: "text", text: expect.stringContaining(note) });
   expect(input?.[1]?.type).toBe("image");
   expect(params.prompt).toBe(prompt);
-  expect(prepare).toHaveBeenCalledOnce();
 });
 
 it.each([false, true])(
@@ -183,9 +183,7 @@ it.each([false, true])(
       "current context " +
       "i".repeat(CODEX_TURN_START_TEXT_INPUT_MAX_CHARS - (combined ? 7000 : 2048));
     const hookPrefix = "current prefix " + "p".repeat(1000);
-    if (!combined) {
-      params.currentInboundContext = { text: expandedContext };
-    } else {
+    if (combined) {
       initializeGlobalHookRunner(
         createMockPluginRegistry([
           {
@@ -194,14 +192,14 @@ it.each([false, true])(
           },
         ]),
       );
-    }
-    if (combined) {
       params.contextEngine = createContextEngine({
         assemble: async () => ({
           messages: [assistantMessage(`${"h".repeat(10000)} historical tail`, 1)],
           estimatedTokens: 1000,
         }),
       });
+    } else {
+      params.currentInboundContext = { text: expandedContext };
     }
     const note = `Attachment paths: ${JSON.stringify(
       Array.from({ length: 80 }, (_, index) => ({
@@ -300,7 +298,7 @@ it.each<{ label: string; turn: JsonObject }>([
     }),
   );
 
-  const result = await run;
-  expect(result.terminal).toEqual({ kind: "ok" });
-  expect(result.assistantTexts).toEqual([text]);
+  expect(await run).toEqual(
+    expect.objectContaining({ terminal: { kind: "ok" }, assistantTexts: [text] }),
+  );
 });

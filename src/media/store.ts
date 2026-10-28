@@ -24,8 +24,11 @@ import { FsSafeError, isPathInside, type OpenResult } from "../infra/fs-safe.js"
 import { writeSiblingTempFile } from "../infra/sibling-temp-file.js";
 import { captureChannelReadScope } from "../shared/channel-read-authority.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
-import { resolveConfigDir } from "../utils.js";
+import { getMediaDir } from "./store-path.js";
 import { MEDIA_FILE_MODE, SaveMediaSourceError } from "./store.shared.js";
+
+// Keep the public media-runtime SDK export on its existing store path.
+export { getMediaDir } from "./store-path.js";
 
 /** Default per-file media-store byte cap used by store and plugin SDK callers. */
 export const MEDIA_MAX_BYTES = 5 * 1024 * 1024;
@@ -131,10 +134,6 @@ export function extractOriginalFilename(filePath: string): string {
   }
 
   return basename;
-}
-
-export function getMediaDir() {
-  return path.join(resolveConfigDir(), "media");
 }
 
 /** Creates the configured media-store root with private directory permissions. */
@@ -265,6 +264,7 @@ export async function writePlaybackTranscodeCache(params: {
     const filePath = await openMediaStore(params.maxBytes).write(relativePath, params.buffer, {
       maxBytes: params.maxBytes,
       tempPrefix: params.tempPrefix,
+      durable: false,
     });
     await prunePlaybackTranscodeCacheToSize();
     return filePath;

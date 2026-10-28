@@ -20,7 +20,7 @@ Other current examples cover distinct contracts: [Config readiness](../../../../
 observes an admitted schema receipt while retaining the editor;
 [WhatsApp Settings](../../../../extensions/whatsapp/browser/settings.tsx) presents
 owner commands under a retryable error slot; and the
-[input dialog](../../../../ui/src/components/input-dialog-view.tsx) separates
+[input dialog](../../../../ui/src/components/input-dialog.tsx) separates
 returned validation text from a rejected callback. Choose the matching contract
 rather than adding an action to every asynchronous operation.
 

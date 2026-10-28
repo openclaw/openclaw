@@ -3,6 +3,7 @@ import type { SessionEntry } from "./types.js";
 /** Identity is parser-validated; optional owner values retain their exact stored semantics. */
 export type SessionEntryCurrentFacts = {
   sessionId: string;
+  clientCapabilities?: string[];
   createdVia?: unknown;
   createdActor?: SessionEntry["createdActor"];
   incognito?: SessionEntry["incognito"];
@@ -28,8 +29,10 @@ export type SessionEntryCurrentFacts = {
   previousSessionId?: unknown;
   archivedAt?: unknown;
   repositoryWorkspaceId?: unknown;
+  goal?: unknown;
   lifecycleRevision?: unknown;
   lifecycleRunId?: unknown;
+  lastRunId?: unknown;
   activeWriterRunId?: unknown;
   spawnedBy?: unknown;
   spawnDepth?: unknown;

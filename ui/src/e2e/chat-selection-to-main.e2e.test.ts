@@ -8,6 +8,7 @@ import {
 import { waitForChatScrollIdle } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { catalog, pluginModule } from "./native-plugin-ui.test-support.ts";
+import { pollText, pollValue, pollCount } from "./new-session-page.test-support.ts";
 import { waitForCommittedComposerDraft } from "./settle.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI selected text destinations" });
@@ -55,11 +56,11 @@ function verticalGap(popup: { y: number; height: number }, pin: { y: number; hei
 }
 async function expectPreview(preview: Locator, text: string) {
   await preview.waitFor({ state: "visible" });
-  await expect.poll(() => preview.textContent()).toContain(text);
+  await pollText(preview).toContain(text);
 }
 async function expectReadOnlyPreview(preview: Locator, text: string) {
   await expect.poll(() => preview.isVisible()).toBe(true);
-  await expect.poll(() => preview.textContent()).toContain(text);
+  await pollText(preview).toContain(text);
   expect(await preview.locator("button").count()).toBe(0);
 }
 function attachmentText(attachment: { content: string }) {
@@ -129,7 +130,6 @@ suite.define(() => {
     { scenario: "oversized selection", viewport: viewports[0] },
     { scenario: "low media limit", viewport: viewports[0] },
     { scenario: "oversized edit", viewport: viewports[0] },
-    { scenario: "normal", viewport: viewports[0] },
     { scenario: "normal", viewport: viewports[1] },
   ])(
     "stages side-chat selection comments without a prefilled question with $scenario at $viewport.width px",
@@ -214,15 +214,19 @@ suite.define(() => {
           }
           await editor.waitFor({ state: "detached" });
           const send = side.locator(".chat-session-rail__composer button[type=submit]");
-          // A text comment alone is not a question.
-          expect(await send.isDisabled()).toBe(true);
-          await sideComposer.press("Enter");
-          expect(await gateway.getRequests("sessions.companion.ask")).toHaveLength(0);
-          expect(await chip.count()).toBe(1);
-          await sideComposer.fill("Explain the selected text.");
+          if (scenario === "normal") {
+            // Saving a comment is sufficient input; no second question is required.
+            expect(await send.isEnabled()).toBe(true);
+          } else {
+            await sideComposer.fill("Explain the selected text.");
+          }
           await send.click();
           const params = await sideQuestion(gateway);
-          expect(params.question).toBe("Explain the selected text.");
+          expect(params.question).toBe(
+            scenario === "normal"
+              ? "Respond to the selected text and comments."
+              : "Explain the selected text.",
+          );
           expect(params.attachments).toBeUndefined();
           expect(params.selectionContext).toContain(`Selected text:\n${passage}`);
           expect(params.selectionContext).toContain(
@@ -287,235 +291,174 @@ suite.define(() => {
     );
   });
 
-  it.each(viewports)(
-    "stages, edits, restores, and sends annotations at $width px",
-    async (viewport) => {
-      await withPage(
-        async ({ page, composer, editor, comment, toolbar, preview, sentChip, pendingChip }) => {
-          const gateway = await openSelection(page);
-          await composer.waitFor({ state: "visible" });
-          const text = selectedSource(page);
-          const highlightedText = () =>
-            page.evaluate(() =>
-              Array.from(CSS.highlights.get("openclaw-comment") ?? [])
-                .map((range) => (range instanceof Range ? range.toString() : ""))
-                .join(""),
-            );
-          const chip = (count: number) =>
-            pendingChip.filter({ hasText: count === 1 ? "1 comment" : `${count} comments` });
-          const pin = (number: number) =>
-            page.getByRole("button", { name: `Edit comment ${number}`, exact: true });
-          const open = async () => {
-            await selectText(text);
-            await button(toolbar, "Add to chat").click();
-            await editor.waitFor({ state: "visible" });
-          };
-          const bounded = async (locator: Locator) => {
-            const bounds = await locator.boundingBox();
-            expect(bounds).not.toBeNull();
-            expect(bounds!.x).toBeGreaterThanOrEqual(0);
-            expect(bounds!.y).toBeGreaterThanOrEqual(0);
-            expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(viewport.width);
-            expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(viewport.height);
-          };
-
-          await composer.fill(draft);
-          await open();
-          expect(await comment.inputValue()).toBe("");
-          expect(await composer.inputValue()).toBe(draft);
-          expect(await highlightedText()).toBe(selectedText);
-          await bounded(editor);
-          await comment.fill("Discard this comment.");
-          await comment.press("Escape");
-          expect(await highlightedText()).toBe("");
-          expect(await chip(1).count()).toBe(0);
-          expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-
-          await open();
-          const compactHeight = (await editor.boundingBox())!.height;
-          await comment.fill("Why is this step needed? 🦞");
-          expect(await highlightedText()).toBe(selectedText);
-          expect((await editor.boundingBox())!.height).toBe(compactHeight);
-          expect(await button(editor, "Cancel").count()).toBe(0);
-          expect(await button(editor, "Delete comment").count()).toBe(0);
-          await bounded(editor);
-          await button(editor, "Save comment").click();
-          await chip(1).waitFor({ state: "visible" });
-          expect(await highlightedText()).toBe("");
-          expect(await composer.inputValue()).toBe(draft);
-          await expect
-            .poll(() => composer.evaluate((element) => element === document.activeElement))
-            .toBe(true);
-          await open();
-          await comment.press("Enter");
-          await pin(2).waitFor({ state: "visible" });
-          await chip(2).click();
-          expect(await editor.count()).toBe(0);
-          await expect.poll(() => preview.isVisible()).toBe(true);
-          await composer.click();
-          await expect.poll(() => preview.isVisible()).toBe(false);
-
-          const pinBounds = (await pin(1).boundingBox())!;
-          const sourceBounds = (await text.boundingBox())!;
-          expect(Math.abs(pinBounds.y - sourceBounds.y)).toBeLessThan(30);
-          await pin(1).click();
-          expect(await highlightedText()).toBe(selectedText);
-          expect((await editor.boundingBox())!.height).toBeGreaterThan(compactHeight);
-          const editorBounds = (await editor.boundingBox())!;
-          expect(verticalGap(editorBounds, pinBounds)).toBeLessThan(20);
-          const deleteComment = button(editor, "Delete comment");
-          expect((await deleteComment.textContent())?.trim()).toBe("");
-          expect(await deleteComment.locator("svg").count()).toBe(1);
-          await bounded(editor);
-          expect(await comment.inputValue()).toBe("Why is this step needed? 🦞");
-          await comment.fill("An unsaved replacement");
-          await comment.press("Escape");
-          await pin(1).click();
-          expect(await comment.inputValue()).toBe("Why is this step needed? 🦞");
-          await comment.fill("Explain the rollback checks. 🦞\nKeep the existing draft.");
-          await comment.press("Control+Enter");
-          await pin(1).click();
-          expect(await comment.inputValue()).toContain("Explain the rollback checks. 🦞");
-          await comment.press("Escape");
-          await pin(2).click();
-          await deleteComment.click();
-          await chip(1).waitFor({ state: "visible" });
-          expect(await pin(2).count()).toBe(0);
-          await pin(1).click();
-          await deleteComment.click();
-          expect(await chip(1).count()).toBe(0);
-          expect(await pin(1).count()).toBe(0);
-          expect(await composer.inputValue()).toBe(draft);
-
-          await open();
-          await submitComment(comment, "Explain the rollback checks. 🦞");
-          await pin(1).waitFor({ state: "visible" });
-          await bounded(pin(1));
-          expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-          await waitForCommittedComposerDraft(
-            page,
-            `chat:v3:${storedChatOutboxScopeKey({ agentId: "main", sessionKey: "agent:main:main" })}`,
-            draft,
-            1,
-            ["Explain the rollback checks. 🦞"],
+  it("restores staged annotations and sends ordered read-only comments", async () => {
+    const viewport = viewports[1]!;
+    await withPage(
+      async ({ page, composer, editor, comment, toolbar, preview, sentChip, pendingChip }) => {
+        const gateway = await openSelection(page);
+        await composer.waitFor({ state: "visible" });
+        const text = selectedSource(page);
+        const highlightedText = () =>
+          page.evaluate(() =>
+            Array.from(CSS.highlights.get("openclaw-comment") ?? [])
+              .map((range) => (range instanceof Range ? range.toString() : ""))
+              .join(""),
           );
-          await page.reload();
-          await chip(1).waitFor({ state: "visible" });
-          expect(await composer.inputValue()).toBe(draft);
-          await chip(1).hover();
-          await expectPreview(preview, "Explain the rollback checks. 🦞");
-          await button(preview, "Edit comment 1").click();
-          expect(await comment.inputValue()).toBe("Explain the rollback checks. 🦞");
-          await comment.press("Escape");
-          await composer.click();
-          await open();
-          await comment.press("Enter");
-          await chip(2).waitFor({ state: "visible" });
-          await button(page, "Send message").click();
-          const params = await sentMessage(gateway);
-          expect(params.message).toBe(draft);
-          expect(params.attachments).toHaveLength(2);
-          const contents = params.attachments.map((attachment) => {
-            expect(attachment.mimeType).toBe("text/plain");
-            return attachmentText(attachment);
-          });
-          expect(contents[0]).toContain(selectedText);
-          expect(contents[0]).toContain("Explain the rollback checks. 🦞");
-          expect(contents[0]).toContain("agent:main:main");
-          expect(contents[1]).toContain(selectedText);
-          expect(contents[1]).not.toContain("Explain the rollback checks.");
-          await expect.poll(() => composer.inputValue()).toBe("");
-          expect(await chip(2).count()).toBe(0);
-          expect(await pin(1).count()).toBe(0);
-          await gateway.emitChatFinal({
-            runId: params.idempotencyKey,
-            text: "The checks are ready.",
-          });
-          await sentChip.waitFor({ state: "visible" });
-          expect(await sentChip.textContent()).toContain("2 comments");
-          await sentChip.hover();
-          await expectPreview(preview, "Explain the rollback checks. 🦞");
-          expect(await preview.locator("li").count()).toBe(2);
-          expect(await preview.locator("button").count()).toBe(0);
-          await bounded(preview);
-          await page.keyboard.press("Escape");
-          await preview.waitFor({ state: "hidden" });
-          await page.reload();
-          await sentChip.waitFor({ state: "visible" });
-          await sentChip.focus();
-          await preview.waitFor({ state: "visible" });
-          await expect
-            .poll(() => preview.textContent())
-            .toContain("Explain the rollback checks. 🦞");
-          expect(
-            await page
-              .locator(".chat-assistant-attachment-card__title")
-              .filter({ hasText: "selection-comment.txt" })
-              .count(),
-          ).toBe(0);
-        },
-        { viewport, serviceWorkers: "block" },
-      );
-    },
-  );
+        const chip = (count: number) =>
+          pendingChip.filter({ hasText: count === 1 ? "1 comment" : `${count} comments` });
+        const pin = (number: number) =>
+          page.getByRole("button", { name: `Edit comment ${number}`, exact: true });
+        const open = async () => {
+          await selectText(text);
+          await button(toolbar, "Add to chat").click();
+          await editor.waitFor({ state: "visible" });
+        };
+        const bounded = async (locator: Locator) => {
+          const bounds = await locator.boundingBox();
+          expect(bounds).not.toBeNull();
+          expect(bounds!.x).toBeGreaterThanOrEqual(0);
+          expect(bounds!.y).toBeGreaterThanOrEqual(0);
+          expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(viewport.width);
+          expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(viewport.height);
+        };
 
-  it.each(viewports)(
-    "keeps comment pins anchored through scrolling and reflow at $width px",
-    async (viewport) => {
-      await withPage(
-        async ({ page, editor, comment }) => {
-          const passage =
-            "Review the rollback checklist carefully before the deployment starts. Confirm every recovery step with the team.";
-          const filler = Array.from(
-            { length: 24 },
-            (_, index) => `Deployment context paragraph ${index + 1}.`,
-          ).join("\n\n");
-          await openSelection(page, {}, `${filler}\n\n${passage}\n\n${filler}`);
-          const text = selectedSource(page, passage);
-          await waitForChatScrollIdle(page);
-          await page.locator(".chat-thread").hover();
-          await page.mouse.wheel(0, -32);
-          await waitForChatScrollIdle(page);
-          await addComment(page, "Keep this pin on its original passage.", passage);
-          const pin = button(page, "Edit comment 1");
-          const aligned = async () => {
-            await expect
-              .poll(async () => {
-                const lastLine = await text.evaluate((element) => {
-                  const range = document.createRange();
-                  range.selectNodeContents(element);
-                  const last = Array.from(range.getClientRects()).findLast(
-                    (rect) => rect.width && rect.height,
-                  )!;
-                  return { top: last.top, height: last.height, right: last.right };
-                });
-                const marker = await pin.boundingBox();
-                return marker
-                  ? Math.abs(marker.y + marker.height / 2 - lastLine.top - lastLine.height / 2)
-                  : 1000;
-              })
-              .toBeLessThan(3);
-          };
-          await aligned();
-          await pin.click();
-          await page.locator(".chat-thread").evaluate((element) => (element.scrollTop += 100));
-          await editor.waitFor({ state: "detached" });
-          await text.scrollIntoViewIfNeeded();
-          await aligned();
-          await page.setViewportSize({
-            width: viewport.width === 390 ? 560 : 390,
-            height: viewport.height,
-          });
-          await text.scrollIntoViewIfNeeded();
-          await aligned();
-          await pin.click();
-          expect(await comment.inputValue()).toBe("Keep this pin on its original passage.");
-          await comment.press("Escape");
-        },
-        { viewport },
-      );
-    },
-  );
+        await composer.fill(draft);
+        await open();
+        expect(await highlightedText()).toBe(selectedText);
+        await comment.press("Escape");
+        await expect.poll(highlightedText).toBe("");
+        await open();
+        await bounded(editor);
+        await submitComment(comment, "Explain the rollback checks. 🦞");
+        await pin(1).waitFor({ state: "visible" });
+        await bounded(pin(1));
+        expect(await highlightedText()).toBe("");
+        expect(await composer.inputValue()).toBe(draft);
+        expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+        await waitForCommittedComposerDraft(
+          page,
+          `chat:v3:${storedChatOutboxScopeKey({ agentId: "main", sessionKey: "agent:main:main" })}`,
+          draft,
+          1,
+          ["Explain the rollback checks. 🦞"],
+        );
+        await page.reload();
+        await chip(1).waitFor({ state: "visible" });
+        expect(await composer.inputValue()).toBe(draft);
+        await chip(1).hover();
+        await expectPreview(preview, "Explain the rollback checks. 🦞");
+        await button(preview, "Edit comment 1").click();
+        expect(await comment.inputValue()).toBe("Explain the rollback checks. 🦞");
+        await comment.press("Escape");
+        await composer.click();
+        await open();
+        await comment.press("Enter");
+        await chip(2).waitFor({ state: "visible" });
+        await button(page, "Send message").click();
+        const params = await sentMessage(gateway);
+        expect(params.message).toBe(draft);
+        expect(params.attachments).toHaveLength(2);
+        const contents = params.attachments.map((attachment) => {
+          expect(attachment.mimeType).toBe("text/plain");
+          return attachmentText(attachment);
+        });
+        expect(contents[0]).toContain(selectedText);
+        expect(contents[0]).toContain("Explain the rollback checks. 🦞");
+        expect(contents[0]).toContain("agent:main:main");
+        expect(contents[1]).toContain(selectedText);
+        expect(contents[1]).not.toContain("Explain the rollback checks.");
+        await pollValue(composer).toBe("");
+        expect(await chip(2).count()).toBe(0);
+        expect(await pin(1).count()).toBe(0);
+        await gateway.emitChatFinal({
+          runId: params.idempotencyKey,
+          text: "The checks are ready.",
+        });
+        await sentChip.waitFor({ state: "visible" });
+        expect(await sentChip.textContent()).toContain("2 comments");
+        await sentChip.hover();
+        await expectPreview(preview, "Explain the rollback checks. 🦞");
+        expect(await preview.locator("li").count()).toBe(2);
+        expect(await preview.locator("button").count()).toBe(0);
+        await bounded(preview);
+        await page.keyboard.press("Escape");
+        await preview.waitFor({ state: "hidden" });
+        await page.reload();
+        await sentChip.waitFor({ state: "visible" });
+        await sentChip.focus();
+        await preview.waitFor({ state: "visible" });
+        await pollText(preview).toContain("Explain the rollback checks. 🦞");
+        expect(
+          await page
+            .locator(".chat-assistant-attachment-card__title")
+            .filter({ hasText: "selection-comment.txt" })
+            .count(),
+        ).toBe(0);
+      },
+      { viewport, serviceWorkers: "block" },
+    );
+  });
+
+  it("keeps comment pins and their editor anchored through scrolling and reflow", async () => {
+    await withPage(async ({ page, editor, comment }) => {
+      const passage =
+        "Review the rollback checklist carefully before the deployment starts. Confirm every recovery step with the team.";
+      const filler = Array.from(
+        { length: 24 },
+        (_, index) => `Deployment context paragraph ${index + 1}.`,
+      ).join("\n\n");
+      const sourceMarkdown = `**${passage}** This context is not selected.`;
+      await openSelection(page, {}, `${filler}\n\n${sourceMarkdown}\n\n${filler}`);
+      const text = selectedSource(page, passage);
+      await waitForChatScrollIdle(page);
+      await page.locator(".chat-thread").hover();
+      await page.mouse.wheel(0, -32);
+      await waitForChatScrollIdle(page);
+      await selectText(text.locator("strong"));
+      await button(page, "Add to chat").click();
+      await submitComment(comment, "Keep this pin on its original passage.");
+      const pin = button(page, "Edit comment 1");
+      const aligned = async () => {
+        await expect
+          .poll(async () => {
+            const lastLine = await text.evaluate((element) => {
+              const last = [...element.querySelector("strong")!.getClientRects()].at(-1)!;
+              const range = document.createRange();
+              range.selectNodeContents(element);
+              const right = Math.max(
+                ...Array.from(range.getClientRects(), (rect) =>
+                  rect.top < last.bottom && rect.bottom > last.top ? rect.right : 0,
+                ),
+              );
+              return { top: last.top, height: last.height, right };
+            });
+            const marker = await pin.boundingBox();
+            return marker && marker.x >= lastLine.right
+              ? Math.abs(marker.y + marker.height / 2 - lastLine.top - lastLine.height / 2)
+              : 1000;
+          })
+          .toBeLessThan(3);
+      };
+      await aligned();
+      await pin.click();
+      await page.locator(".chat-thread").evaluate((element) => (element.scrollTop += 100));
+      await editor.waitFor({ state: "detached" });
+      await text.scrollIntoViewIfNeeded();
+      await aligned();
+      await pin.click();
+      await page.setViewportSize({ width: 390, height: viewports[0]!.height });
+      await aligned();
+      await expect
+        .poll(async () => {
+          const marker = await pin.boundingBox();
+          const popup = await editor.boundingBox();
+          return marker && popup ? verticalGap(popup, marker) : 1000;
+        })
+        .toBeLessThan(12);
+      expect(await comment.inputValue()).toBe("Keep this pin on its original passage.");
+      await comment.press("Escape");
+    });
+  });
 
   it.each([false, true])(
     "keeps retained comments usable after clearing history (replacement: %s)",
@@ -560,13 +503,6 @@ suite.define(() => {
           await selectedSource(page).waitFor({ state: "visible" });
           await waitForChatScrollIdle(page);
           await saveComment();
-          await pin.click();
-          await submitComment(comment, "Check rollback first.", "Save");
-          await pin.click();
-          expect(await comment.inputValue()).toBe("Check rollback first.");
-          await button(editor, "Delete comment").click();
-          expect(await pin.count()).toBe(0);
-          await saveComment();
           await saveComment();
           expect(await composer.inputValue()).toBe(draft);
           const send = replacement ? button(page, "Fixture send") : button(page, "Send message");
@@ -581,55 +517,28 @@ suite.define(() => {
           expect(await preview.getByText(selectedText, { exact: true }).count()).toBe(2);
           await button(preview, "Edit comment 1").click();
           await comment.fill("Edited after history was cleared.");
-          await page.setViewportSize({ width: 900, height: 850 });
-          await expect.poll(() => editor.isVisible()).toBe(true);
           await button(editor, "Save").click();
           await chip.hover();
           await preview
             .getByText("Edited after history was cleared.", { exact: true })
             .waitFor({ state: "visible" });
           await button(preview, "Delete comment").first().click();
-          await expect.poll(() => chip.textContent()).toContain("1 comment");
+          await pollText(chip).toContain("1 comment");
           await composer.fill(draft);
           await send.click();
           const params = await sentMessage(gateway);
           expect(params.message).toBe(draft);
           expect(params.attachments).toHaveLength(1);
           expect(attachmentText(params.attachments[0]!)).toContain("Review before deployment.");
-          await expect.poll(() => pin.count()).toBe(0);
+          await pollCount(pin).toBe(0);
         },
         { reducedMotion: "no-preference" },
       );
     },
   );
 
-  it("repositions the open editor when its pinned passage wraps", async () => {
-    await withPage(async ({ page, editor, comment }) => {
-      const passage =
-        "Review the rollback checklist carefully before the deployment starts. Confirm every recovery step with the team before proceeding.";
-      await openSelection(page, {}, passage);
-      const text = page.locator(".chat-bubble .chat-text p");
-      await text.waitFor({ state: "visible" });
-      await addComment(page, "Review this passage.", passage);
-      const pin = button(page, "Edit comment 1");
-      await pin.click();
-      await page.setViewportSize({ width: 390, height: 900 });
-      await expect
-        .poll(async () => {
-          const marker = await pin.boundingBox();
-          const popup = await editor.boundingBox();
-          return marker && popup ? verticalGap(popup, marker) : 1000;
-        })
-        .toBeLessThan(12);
-      expect(await comment.inputValue()).toBe("Review this passage.");
-    });
-  });
-
   it("keeps formatted selection text and DOM source offsets consistent", async () => {
     await withPage(async ({ page }) => {
-      const sent = page.locator(".chat-sent-comments-inline");
-      const sentQuote = sent.getByRole("button", { name: "A B", exact: true });
-      const fullQuote = sent.getByRole("region", { name: "Highlighted passage:", exact: true });
       const gateway = await openSelection(page, {}, "A  \nB");
       const paragraph = page.locator(".chat-bubble .chat-text p");
       await paragraph.waitFor({ state: "visible" });
@@ -645,19 +554,6 @@ suite.define(() => {
       const offsets = /DOM text UTF-16 range: \[(\d+), (\d+)\)/.exec(content);
       expect(offsets).not.toBeNull();
       expect(sourceText?.slice(Number(offsets![1]), Number(offsets![2]))).toBe(selectedDomText);
-      await gateway.emitChatFinal({
-        runId: params.idempotencyKey,
-        text: "Selected passage received.",
-      });
-      await sentQuote.waitFor({ state: "visible" });
-      await sentQuote.hover();
-      await expectReadOnlyPreview(fullQuote, "A\nB");
-      expect(await fullQuote.textContent()).toBe("A\nB");
-      await page.reload();
-      await sentQuote.waitFor({ state: "visible" });
-      await sentQuote.hover();
-      await expectReadOnlyPreview(fullQuote, "A\nB");
-      expect(await fullQuote.textContent()).toBe("A\nB");
     });
   });
 });

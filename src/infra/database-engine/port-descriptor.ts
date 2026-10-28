@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 import type { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { readTableColumns } from "../../state/openclaw-state-db-schema-helpers.js";
+import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../kysely-sync.js";
 import { assertSqliteIntegrity } from "../sqlite-integrity.js";
 import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../sqlite-schema-facts.js";
 import { normalizeSchemaSql } from "../sqlite-schema-sql.js";
@@ -112,6 +113,21 @@ export async function admitDatabasePortDescriptor(
   }
   return admitted;
 }
+/** Only existing tables can need their feature-owned nullable columns completed. */
+export function pendingSqliteColumns(
+  db: DatabaseSync,
+  definitions: readonly { tableName: string; columnName: string }[],
+): Record<string, string[]> {
+  const pending: Record<string, string[]> = {};
+  for (const { tableName, columnName } of definitions) {
+    const present = readTableColumns(db, tableName);
+    if (present.size && !present.has(columnName)) {
+      (pending[tableName] ??= []).push(columnName);
+    }
+  }
+  return pending;
+}
+
 /** Validate the canonical SQLite surface before scanning or owner migration. */
 export function inspectSqlitePortSchema(
   db: DatabaseSync,
@@ -122,6 +138,18 @@ export function inspectSqlitePortSchema(
   admitSqliteSchema(db);
   const facts = getAdmittedSqliteSchemaFacts(db);
   const descriptor = facts ? selectFragments(baseDescriptor, facts.tables) : baseDescriptor;
+  const retained = descriptor.retainedSqliteTables?.filter((name) => facts?.tables.has(name)) ?? [];
+  for (const table of retained) {
+    const query = getNodeSqliteKysely<Record<string, Record<string, never>>>(db)
+      .selectFrom(table)
+      .select((eb) => eb.val(1).as("present"))
+      .limit(1);
+    if (executeSqliteQueryTakeFirstSync(db, query)) {
+      throw new DatabasePortDataError(
+        `Retained table ${table} contains rows; preserve this store on SQLite and archive the retired data through its owner before retrying the port`,
+      );
+    }
+  }
   const sourceTriggers = [
     ...(descriptor.triggers ?? []),
     ...(descriptor.omittedSqliteTriggers ?? []),
@@ -141,6 +169,7 @@ export function inspectSqlitePortSchema(
     [...facts.tables].some(
       (name) =>
         !name.startsWith("sqlite_") &&
+        !retained.includes(name) &&
         !descriptor.tables.some((table) => table.name === name) &&
         !descriptor.projections?.some((projection) => projection.tables.includes(name)),
     )
@@ -166,5 +195,8 @@ export function inspectSqlitePortSchema(
   if (descriptor.triggers?.some((trigger) => !facts.triggers.has(trigger.name))) {
     throw new DatabasePortDataError("Missing canonical SQLite trigger");
   }
-  return descriptor;
+  return {
+    ...descriptor,
+    notes: retained.map((name) => `Skipped empty retained SQLite table ${name}`),
+  };
 }

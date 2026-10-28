@@ -91,14 +91,15 @@ export function createPluginDependencyLookup(
     if (specifier.startsWith("#") || (manifest?.exports != null && manifest.name === name)) {
       return "package-map";
     }
-    if (!prepared.has(name)) {
-      const dependency = resolve(name, importer);
-      if (dependency) {
-        capture(name, dependency);
-      }
-      prepared.set(name, dependency !== undefined);
+    if (prepared.has(name)) {
+      return prepared.get(name);
     }
-    return prepared.get(name);
+    const dependency = resolve(name, importer);
+    if (dependency) {
+      capture(name, dependency);
+    }
+    prepared.set(name, dependency !== undefined);
+    return dependency !== undefined;
   };
 }
 
@@ -155,22 +156,34 @@ export function createPluginNativeDependencyScopes(
   };
 }
 
+type PluginDependencyPlan = {
+  manifest: Record<string, unknown>;
+  names: readonly string[];
+};
+
+function createPluginDependencyPlan(manifest: Record<string, unknown>): PluginDependencyPlan {
+  return { manifest, names: [...pluginDependencyNames(manifest)].toSorted() };
+}
+
 export function capturePluginDependencies(params: {
   root: string;
   manifestFile?: string;
+  plan?: PluginDependencyPlan;
   /** Nested manifests nobody selected (benchmarks, examples) keep their declarations optional. */
   incidental?: boolean;
   references: ReadonlyMap<string, ReadonlySet<string>>;
   resolve: ReturnType<typeof createPluginDependencyResolver>;
   capture: (name: string, dependency: PluginDependencyResolution) => void;
 }) {
-  const manifest: {
-    dependencies?: Record<string, string>;
-    optionalDependencies?: Record<string, string>;
-    peerDependencies?: Record<string, string>;
-  } = params.manifestFile ? JSON.parse(fs.readFileSync(params.manifestFile, "utf8")) : {};
+  // Native namespace inspection supplies a fresh file; immutable captures supply their owner plan.
+  const plan =
+    params.plan ??
+    (params.manifestFile
+      ? createPluginDependencyPlan(JSON.parse(fs.readFileSync(params.manifestFile, "utf8")))
+      : undefined);
+  const manifest = plan?.manifest;
   const dependencies = [
-    ...[...pluginDependencyNames(manifest)].toSorted().map((name) => ({
+    ...(plan?.names ?? []).map((name) => ({
       name,
       importer: path.join(params.root, "package.json"),
     })),
@@ -186,10 +199,10 @@ export function capturePluginDependencies(params: {
     const dependency = params.resolve(name, importer);
     if (!dependency) {
       if (
-        !params.manifestFile ||
+        !plan ||
         params.incidental ||
-        name in (manifest.optionalDependencies ?? {}) ||
-        name in (manifest.peerDependencies ?? {})
+        name in (asOptionalRecord(manifest?.optionalDependencies) ?? {}) ||
+        name in (asOptionalRecord(manifest?.peerDependencies) ?? {})
       ) {
         continue;
       }
@@ -199,7 +212,6 @@ export function capturePluginDependencies(params: {
     }
     params.capture(name, dependency);
   }
-  return manifest;
 }
 
 export function resolvePluginModulePackageRoot(filename: string): string {
@@ -368,9 +380,19 @@ export function createPluginPackageMetadataCapture(params: {
     string,
     {
       manifest?: Record<string, unknown> | null;
+      dependencyPlan?: PluginDependencyPlan;
       prepareAliases(manifest: Record<string, unknown>): void;
     }
   >();
+  const getManifest = (metadata: string) => {
+    const scope = metadataScopes.get(metadata)!;
+    const manifest =
+      asOptionalRecord(scope.manifest) ??
+      asOptionalRecord(JSON.parse(fs.readFileSync(metadata, "utf8"))) ??
+      {};
+    scope.manifest = manifest;
+    return manifest;
+  };
   const pendingScopes = new Set<string>();
   const prepareNativeScopes = () => {
     for (const metadata of pendingScopes) {
@@ -514,6 +536,10 @@ export function createPluginPackageMetadataCapture(params: {
     setManifest(metadata: string, manifest: Record<string, unknown> | null | undefined) {
       metadataScopes.get(metadata)!.manifest = manifest;
     },
+    dependencyPlan(metadata: string): PluginDependencyPlan {
+      const scope = metadataScopes.get(metadata)!;
+      return (scope.dependencyPlan ??= createPluginDependencyPlan(getManifest(metadata)));
+    },
     get pending() {
       return pendingScopes.size > 0;
     },
@@ -557,11 +583,7 @@ export function createPluginPackageMetadataCapture(params: {
           scope = () => {
             if (!parsed) {
               const metadata = metadataScopes.get(target)!;
-              const data =
-                asOptionalRecord(metadata.manifest) ??
-                asOptionalRecord(JSON.parse(fs.readFileSync(target, "utf8"))) ??
-                {};
-              metadata.manifest = data;
+              const data = getManifest(target);
               metadata.prepareAliases(data);
               parsed = {
                 source,

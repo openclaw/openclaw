@@ -19,10 +19,11 @@ import {
 import { findPathKey, mergePathPrepend } from "../infra/path-prepend.js";
 import { logWarn } from "../logger.js";
 import { redactToolPayloadText } from "../logging/redact.js";
+import { resolveHostExecMemoryLimit } from "../process/child-memory.js";
 import { withChildProcessOperation } from "../process/spawn-diagnostics.js";
 import type { SpawnInitiation } from "../process/spawn-initiation.js";
 import { getProcessSupervisor, type ManagedRun } from "../process/supervisor/index.js";
-import type { RunExit, SpawnInput } from "../process/supervisor/types.js";
+import type { SpawnInput } from "../process/supervisor/types.js";
 import type {
   SecretEgressProcessGrant,
   SecretEgressSentinelBinding,
@@ -42,12 +43,12 @@ import {
   captureAgentToolSourceExecutionGuard,
   runWithAgentToolSourceExecutionScope,
 } from "./agent-tool-source-execution-guard.js";
+import { createProcessSessionId } from "./bash-process-id.js";
 import type { ProcessSession } from "./bash-process-registry.js";
 import {
   addSession,
   appendOutput,
   createProcessSession,
-  isProcessSessionIdTaken,
   markCancellationRequested,
   resolveProcessCleanupMs,
   waitForExecSession,
@@ -57,21 +58,19 @@ import { prepareHostExecSpawn, resolveExecLaunchEnv } from "./bash-tools.exec-ho
 import { createExecLaunchLifecycle } from "./bash-tools.exec-launch.js";
 import { maybeNotifyOnExit, prepareExecExitNotification } from "./bash-tools.exec-notify.js";
 import {
-  appendExecTimeoutRetryGuidance,
-  renderExecOutputText,
+  buildExecExitOutcome,
+  buildExecRuntimeErrorOutcome,
+  joinExecFailureOutput,
+  type ExecProcessOutcome,
   renderExecUpdateText,
 } from "./bash-tools.exec-output.js";
 import { settleExecProcessExit } from "./bash-tools.exec-settlement.js";
-import type {
-  ExecExitFailureKind,
-  ExecProcessOutcome,
-  ExecToolDetails,
-} from "./bash-tools.exec-types.js";
+import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import { chunkString, clampWithDefault, readEnvInt } from "./bash-tools.shared.js";
+import type { ExecApprovalTransport } from "./exec-approval-transport.js";
 import { recordAgentCleanupFailure } from "./run-cleanup-timeout.js";
 import type { AgentToolResult } from "./runtime/index.js";
-import { createSessionSlug } from "./session-slug.js";
 import { createStreamingBinaryOutputSanitizer } from "./shell-utils.js";
 import {
   getGatewayToolCallerIdentity,
@@ -195,109 +194,6 @@ export function resolveApprovalRunningNoticeMs(value?: number) {
   return Math.floor(value);
 }
 
-function joinExecFailureOutput(aggregated: string, reason: string) {
-  return aggregated ? `${aggregated}\n\n${reason}` : reason;
-}
-
-function buildExecExitOutcome(params: {
-  exit: RunExit;
-  aggregated: string;
-  durationMs: number;
-  timeoutSec: number | null | undefined;
-  processContinuationAvailable: boolean;
-}): ExecProcessOutcome {
-  const exitCode = params.exit.exitCode ?? 0;
-  const isNormalExit = params.exit.reason === "exit";
-  const isShellFailure = exitCode === 126 || exitCode === 127;
-  const status: ExecProcessOutcome["status"] =
-    isNormalExit && !isShellFailure ? "completed" : "failed";
-  if (status === "completed") {
-    const exitMsg = exitCode !== 0 ? `\n\n(Command exited with code ${exitCode})` : "";
-    return {
-      status: "completed",
-      exitCode,
-      exitSignal: params.exit.exitSignal,
-      exitReason: params.exit.reason,
-      durationMs: params.durationMs,
-      aggregated: (exitMsg ? renderExecOutputText(params.aggregated) : params.aggregated) + exitMsg,
-      timedOut: false,
-      noOutputTimedOut: params.exit.noOutputTimedOut,
-    };
-  }
-  const failureKind: ExecExitFailureKind = isShellFailure
-    ? exitCode === 127
-      ? "shell-command-not-found"
-      : "shell-not-executable"
-    : params.exit.reason === "overall-timeout"
-      ? "overall-timeout"
-      : params.exit.reason === "no-output-timeout"
-        ? "no-output-timeout"
-        : params.exit.exitSignal != null
-          ? "signal"
-          : "aborted";
-  let reason: string;
-  switch (failureKind) {
-    case "shell-command-not-found":
-      reason = "Command not found";
-      break;
-    case "shell-not-executable":
-      reason = "Command not executable (permission denied)";
-      break;
-    case "overall-timeout": {
-      const timeoutText =
-        typeof params.timeoutSec === "number" && params.timeoutSec > 0
-          ? `Command timed out after ${params.timeoutSec} seconds.`
-          : "Command timed out.";
-      const retryGuidance = appendExecTimeoutRetryGuidance(timeoutText, failureKind);
-      reason = params.processContinuationAvailable
-        ? `${retryGuidance}\n\nIf it should keep running, start it with exec background=true or yieldMs so OpenClaw can register a pollable process session. Do not rely on shell backgrounding with a trailing &.`
-        : retryGuidance;
-      break;
-    }
-    case "no-output-timeout":
-      reason = appendExecTimeoutRetryGuidance("Command timed out waiting for output.", failureKind);
-      break;
-    case "signal":
-      reason = `Command aborted by signal ${params.exit.exitSignal}`;
-      break;
-    case "aborted":
-      reason = "Command aborted before exit code was captured";
-      break;
-    default:
-      throw new Error("Unsupported exec failure kind");
-  }
-  return {
-    status: "failed",
-    exitCode: params.exit.exitCode,
-    exitSignal: params.exit.exitSignal,
-    exitReason: params.exit.reason,
-    durationMs: params.durationMs,
-    aggregated: params.aggregated,
-    timedOut: params.exit.timedOut,
-    noOutputTimedOut: params.exit.noOutputTimedOut,
-    failureKind,
-    oomScoreWrapperSelected: params.exit.oomScoreWrapperSelected,
-    reason: joinExecFailureOutput(params.aggregated, reason),
-  };
-}
-
-export function buildExecRuntimeErrorOutcome(params: {
-  error: unknown;
-  aggregated: string;
-  durationMs: number;
-}): ExecProcessOutcome {
-  return {
-    status: "failed",
-    exitCode: null,
-    exitSignal: null,
-    durationMs: params.durationMs,
-    aggregated: params.aggregated,
-    timedOut: false,
-    failureKind: "runtime-error",
-    reason: joinExecFailureOutput(params.aggregated, String(params.error)),
-  };
-}
-
 /** Starts a host or sandbox exec process and registers it for polling/backgrounding. */
 export async function runExecProcess({
   startupSignal: initialStartupSignal,
@@ -313,6 +209,7 @@ export async function runExecProcess({
   // Execute this instead of `command` (which is kept for display/session/logging).
   // Used to sanitize safeBins execution while preserving the original user input.
   execCommand?: string;
+  approvalTransport?: ExecApprovalTransport;
   workdir: string;
   env: Record<string, string>;
   secretEgressBindings?: readonly SecretEgressSentinelBinding[];
@@ -363,7 +260,7 @@ export async function runExecProcess({
   const operatorSignal = operatorAuthority?.signal;
   let releaseOperatorAuthority: (() => void) | undefined;
   const startedAt = Date.now();
-  const sessionId = createSessionSlug(isProcessSessionIdTaken);
+  const sessionId = createProcessSessionId();
   const execCommand = opts.execCommand ?? opts.command;
   const diagnosticTarget = opts.sandbox ? "sandbox" : "host";
   const supervisor = getProcessSupervisor();
@@ -416,7 +313,18 @@ export async function runExecProcess({
   // Clearing the callback also releases the completed turn's captured authority.
   let onUpdate = initialOnUpdate && AsyncLocalStorage.bind(initialOnUpdate);
   let beforeSpawn = initialBeforeSpawn;
-  let assertPolicyCurrent = initialAssertCurrent;
+  let assertPolicyCurrent: (() => void) | undefined = opts.approvalTransport
+    ? () => {
+        initialAssertCurrent?.();
+        opts.approvalTransport?.assertExecution({
+          command: opts.command,
+          execCommand,
+          cwd: opts.workdir,
+          env: opts.env,
+          pty: opts.usePty,
+        });
+      }
+    : initialAssertCurrent;
   let onSettledBeforeNotify = initialOnSettledBeforeNotify;
 
   const emitUpdate = () => {
@@ -548,7 +456,11 @@ export async function runExecProcess({
       if (outcome.status === "completed") {
         finalOutcome = runtimeErrorOutcome(detail);
       } else {
-        finalOutcome = { ...outcome, reason: joinExecFailureOutput(outcome.reason, detail) };
+        finalOutcome = {
+          ...outcome,
+          message: joinExecFailureOutput(outcome.message, detail),
+          reason: joinExecFailureOutput(outcome.reason, detail),
+        };
         logWarn(`exec: finalization after process failure failed (${detail}).`);
       }
       // Failed commands retain cleanup failures in the same bounded tool output.
@@ -685,6 +597,7 @@ export async function runExecProcess({
       cwd: spawnSpec.cwd ?? opts.workdir,
       env: spawnSpec.env,
       timeoutMs,
+      memoryLimitBytes: opts.sandbox ? undefined : resolveHostExecMemoryLimit(),
       captureOutput: false,
       onStdout: handleOutput("stdout", sanitizeStdout),
       onStderr: handleOutput("stderr", sanitizeStderr),
@@ -787,4 +700,3 @@ export async function runExecProcess({
     },
   };
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

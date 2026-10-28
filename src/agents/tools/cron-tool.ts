@@ -19,7 +19,7 @@ import {
 } from "../../gateway/cron-creator-authority-grant.js";
 import { DEFAULT_EXEC_APPROVAL_TIMEOUT_MS } from "../../infra/exec-approvals-core.js";
 import { normalizeAccountId } from "../../routing/account-id.js";
-import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
+import { isCronSessionKey, parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { isRecord } from "../../utils.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import {
@@ -41,6 +41,7 @@ import {
 import { createCronAutomationActions } from "./cron-tool-automation.js";
 import {
   isEmptyRecoveredCronPatch,
+  prepareCronToolArguments,
   readCronToolJob,
   stripCronCreateNullClears,
 } from "./cron-tool-canonicalize.js";
@@ -148,7 +149,10 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
   const { activeRun, nextCheckEnabled, assertCurrent: assertCurrentRun } = automation;
   // Trigger-gated surfaces default on, matching cron/service/jobs-validation.ts.
   const triggersEnabled = opts?.config?.cron?.triggers?.enabled !== false;
-  const selfRemoveOnly = Boolean(readCronSelfRemoveOnlyJobId(opts));
+  // Conversation continuations keep their catalog; the execution guard still scopes each call.
+  const selfRemoveOnly =
+    Boolean(readCronSelfRemoveOnlyJobId(opts)) &&
+    (!opts?.agentSessionKey?.trim() || isCronSessionKey(opts.agentSessionKey));
   const tool: AnyAgentTool = {
     label: "Automations",
     name: AUTOMATIONS_TOOL_NAME,
@@ -174,6 +178,7 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
       nextCheckEnabled,
       management: managementAuthority && (managementAuthority.managementOnly ? "only" : "also"),
     }),
+    prepareArguments: prepareCronToolArguments,
     execute: async (_toolCallId, args, operationSignal) => {
       operationSignal?.throwIfAborted();
       assertCurrentRun?.();
@@ -204,7 +209,7 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
         !CRON_MANAGEMENT_METHODS.some((method) => method === `cron.${action}`)
       ) {
         throw new Error(
-          "This turn can only list, get, update, run, or remove automations. Use the Automations page for other actions.",
+          "This turn can only list, get, update, run, remove, or bind automations. Use the Automations page for other actions.",
         );
       }
       assertCronSelfRemoveScope(opts, action, params);
@@ -405,7 +410,8 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
               );
             }
             case "get":
-            case "runs": {
+            case "runs":
+            case "bind": {
               const id = requireCronJobIdParam(params);
               const runId = action === "runs" ? readToolStringParam(params, "runId") : undefined;
               return jsonResult(

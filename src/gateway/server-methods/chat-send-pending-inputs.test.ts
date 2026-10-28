@@ -3,11 +3,10 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayClientInfo } from "../../../packages/gateway-protocol/src/client-info.js";
-import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { seedCanonicalAcpSessionMeta } from "../../acp/runtime/session-meta-fixture.test-support.js";
 import * as acpReads from "../../acp/runtime/session-meta-readonly.js";
-import type { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
@@ -33,10 +32,7 @@ import {
   type RpcSourceRef,
 } from "../../sessions/session-controller.rpc-sources.js";
 import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
-import {
-  createUserTurnTranscriptRecorder,
-  type UserTurnTranscriptRecorder,
-} from "../../sessions/user-turn-transcript.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { setDisplayName, setUserProfileRole } from "../../state/user-profile-writes.worker.js";
@@ -57,6 +53,7 @@ import {
   setClientProfile,
   useBrowserFollowupFixture,
 } from "./chat-send-pending-inputs.test-support.js";
+import { createSessionMutationCatalog } from "./sessions-mutations.native-consent.test-support.js";
 import type { GatewayClient, RespondFn } from "./types.js";
 installGatewayTestHooks();
 const createBrowserFollowupFixture = useBrowserFollowupFixture();
@@ -94,19 +91,6 @@ function expectInFlight(respond: RespondFn, runId: string) {
     undefined,
     expect.objectContaining({ cached: true }),
   );
-}
-function holdResumedDispatch() {
-  const recorder = createDeferred<UserTurnTranscriptRecorder>();
-  const release = createDeferred();
-  dispatchInboundMessageMock.mockImplementation(async (options: unknown) => {
-    const { replyOptions } = options as Parameters<typeof dispatchInboundMessage>[0];
-    if (replyOptions?.userTurnTranscriptRecorder) {
-      recorder.resolve(replyOptions.userTurnTranscriptRecorder);
-    }
-    await release.promise;
-    return {};
-  });
-  return { recorder: recorder.promise, release: () => release.resolve() };
 }
 function expectNoPlacementQueries(queries: string[]) {
   expect(queries.filter((query) => /\bworker_session_placements\b/u.test(query))).toEqual([]);
@@ -469,18 +453,69 @@ describe("ordinary chat input admission", () => {
     { id: "openclaw-macos", mode: "ui", displayName: "macOS", storage: "durable" },
     { id: "gateway-client", mode: "backend", displayName: "Automation", storage: "durable" },
     { id: "openclaw-control-ui", mode: "webchat", displayName: "Web", storage: "memory" },
+    {
+      id: "openclaw-control-ui",
+      mode: "webchat",
+      displayName: "Web fallback",
+      storage: "durable",
+      autoFallback: true,
+    },
   ] satisfies Array<
     Pick<GatewayClientInfo, "id" | "mode" | "displayName"> & {
       storage: "durable" | "memory";
+      autoFallback?: boolean;
     }
   >)(
-    "stages the approved $id $storage follow-up and its source before ACK without changing the active transcript",
-    async ({ storage, ...clientInfo }) => {
+    "stages the approved $displayName $storage follow-up and its source before ACK without changing the active transcript",
+    async ({ storage, autoFallback = false, ...clientInfo }) => {
       await using fixture = await createBrowserFollowupFixture({ storage });
       fixture.client.connect.client = { ...fixture.client.connect.client, ...clientInfo };
       fixture.params.queueMode = "followup";
       const profile = ensureProfileForEmail("alice@example.test");
       setClientProfile(fixture.client, { ...profile, updatedAt: 1 }, "Alice");
+      await patchSessionEntryCore(fixture.scope, () => ({
+        modelProvider: "openai",
+        model: autoFallback ? "fallback-model" : "previous-model",
+        providerOverride: "openai",
+        modelOverride: autoFallback ? "fallback-model" : "previous-model",
+        ...(autoFallback
+          ? {
+              modelOverrideSource: "auto" as const,
+              modelOverrideFallbackOriginProvider: "openai",
+              modelOverrideFallbackOriginModel: "selected-model",
+              fallbackNotice: {
+                kind: "active" as const,
+                selectedModel: "openai/selected-model",
+                activeModel: "openai/fallback-model",
+                reason: "timeout",
+              },
+            }
+          : {}),
+      }));
+      const selected = { provider: "openai", model: "selected-model" };
+      if (!autoFallback) {
+        fixture.context.loadGatewayModelCatalogSnapshot = async () =>
+          createSessionMutationCatalog(
+            getRuntimeConfig(),
+            { agentDir: () => "/fixture/agent", workspaceDir: "/fixture/workspace" },
+            ["previous-model", selected.model].map((id) => ({ provider: "openai", id, name: id })),
+          );
+        const patchResponse = vi.fn<RespondFn>();
+        const patch = { key: fixture.scope.sessionKey, model: "openai/selected-model" };
+        await handleGatewayRequest({
+          req: { type: "req", id: "select-model", method: "sessions.patch", params: patch },
+          client: fixture.client,
+          context: fixture.context,
+          isWebchatConnect: () => true,
+          respond: patchResponse,
+        });
+        expect(patchResponse.mock.calls[0]?.[0]).toBe(true);
+        expect(loadSessionEntry(fixture.scope)).not.toHaveProperty("model");
+      }
+      const modelSelection = {
+        ...selected,
+        previous: { provider: "openai", model: autoFallback ? "selected-model" : "previous-model" },
+      };
       const clone = vi.spyOn(globalThis, "structuredClone");
       const { scope, params, context, approvedContent, activeTranscript } = fixture;
       const readPending = () =>
@@ -518,7 +553,7 @@ describe("ordinary chat input admission", () => {
             role: "user",
             content: approvedContent,
             idempotencyKey: `${params.idempotencyKey}:user`,
-            __openclaw: { senderId: profile.id, ...provenance },
+            __openclaw: { senderId: profile.id, ...provenance, modelSelection },
           },
         };
         expect(await pendingAtAck).toMatchObject({
@@ -527,8 +562,12 @@ describe("ordinary chat input admission", () => {
         });
         expect(await pendingAtNotification).toEqual(await pendingAtAck);
         const recorder = await fixture.dispatchedRecorder;
+        expect(loadSessionEntry(scope)?.lastSubmittedModel).toEqual(
+          autoFallback ? undefined : modelSelection.previous,
+        );
         const committed = await recorder.persistApproved();
-        expect(committed?.message["__openclaw"]).toMatchObject(provenance);
+        expect(committed?.message["__openclaw"]).toMatchObject({ ...provenance, modelSelection });
+        expect(loadSessionEntry(scope)?.lastSubmittedModel).toEqual(selected);
         // Initial resolution detaches the store; custody needs only the current target binding.
         expect(
           clone.mock.calls.filter(
@@ -700,6 +739,8 @@ describe("ordinary chat input admission", () => {
     "revalidates %s after message approval before committing custody",
     async (change) => {
       await using fixture = await createBrowserFollowupFixture();
+      const baseline = { provider: "openai", model: "previous-model" };
+      await patchSessionEntryCore(fixture.scope, () => ({ lastSubmittedModel: baseline }));
       if (change === "session access") {
         setClientProfile(
           fixture.client,
@@ -751,6 +792,9 @@ describe("ordinary chat input admission", () => {
       expectNotStarted(respond);
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
       await expectUncommitted(fixture);
+      if (change !== "session replacement") {
+        expect(loadSessionEntry(fixture.scope)?.lastSubmittedModel).toEqual(baseline);
+      }
       if (change === "session replacement") {
         expect(loadSessionEntry(fixture.scope)?.sessionId).toBe("successor-session");
         expect(
@@ -852,10 +896,14 @@ describe("ordinary chat input admission", () => {
       }
 
       const retried = await fixture.send();
-      if (disposition === "consumed") {
+      if (disposition !== "changed-payload") {
         expect(retried).toHaveBeenCalledWith(
           true,
-          { runId: fixture.params.idempotencyKey, status: "ok" },
+          {
+            runId: fixture.params.idempotencyKey,
+            status: "ok",
+            ...(disposition === "consumed" ? { messageSeq: 2 } : {}),
+          },
           undefined,
           expect.objectContaining({ cached: true }),
         );
@@ -874,10 +922,9 @@ describe("ordinary chat input admission", () => {
     { restart: true, attachment: true },
     { restart: false, attachment: false },
   ])(
-    "re-admits interrupted input under its original identity (%j)",
-    async ({ restart, attachment }, { signal }) => {
+    "acknowledges interrupted recorded input without dispatching again (%j)",
+    async ({ restart, attachment }) => {
       await using fixture = await createBrowserFollowupFixture({ preserveContent: true });
-      let resumedDispatch: ReturnType<typeof holdResumedDispatch> | undefined;
       const profile = ensureProfileForEmail("restart-input@example.test");
       setClientProfile(fixture.client, { ...profile, updatedAt: 1 }, "Input author");
       if (restart && !attachment) {
@@ -912,37 +959,30 @@ describe("ordinary chat input admission", () => {
             sessionId: fixture.scope.sessionId,
             __controlUiReconnectResume: true,
           });
-        } else {
-          dispatchInboundMessageMock.mockReset();
         }
-        resumedDispatch = holdResumedDispatch();
+        dispatchInboundMessageMock.mockClear();
         const ack = await fixture.send();
-        expectStarted(ack, { runId: fixture.params.idempotencyKey });
-        const resumed = await withinTest(resumedDispatch.recorder, signal);
-        expect((await pending(fixture)).items).toEqual([{ ...original, state: "queued" }]);
+        expect(ack).toHaveBeenCalledWith(
+          true,
+          { runId: fixture.params.idempotencyKey, status: "ok" },
+          undefined,
+          expect.objectContaining({ cached: true }),
+        );
+        expect((await pending(fixture)).items).toEqual([{ ...original, state: "interrupted" }]);
         if (restart) {
           expect(() => originalRecorder.withPendingInput?.(() => {})).toThrow("ownership ended");
-        } else {
-          expectInFlight(await fixture.send(), fixture.params.idempotencyKey);
-          expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
         }
-        const committed = await resumed.persistApproved();
-        expect(committed).toMatchObject({ appended: true, messageId: original?.id });
-        expect(committed?.message).toEqual(original?.message);
+        expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+        expect(fixture.readTranscript()).toEqual(fixture.activeTranscript);
         expect(fixture.beforeApprove).toHaveBeenCalledOnce();
-        if (!restart) {
-          await resumed.persistApproved();
-          expect(fixture.readTranscript()).toHaveLength(fixture.activeTranscript.length + 1);
-        }
-        expect((await pending(fixture)).items).toEqual([]);
       } finally {
-        resumedDispatch?.release();
+        await fixture.finishDispatch();
       }
     },
   );
 
   it.each(["sender", "payload", "cancelled"] as const)(
-    "does not recover pending input when its %s prevents fresh admission",
+    "never re-adopts recorded input when its %s changes",
     async (change) => {
       await using fixture = await createMentionFixture({ preserveContent: true });
       const { recorder, original } = await admitPending(fixture);
@@ -959,8 +999,24 @@ describe("ordinary chat input admission", () => {
       } else if (change === "payload") {
         fixture.params.message += " Changed request.";
       }
-      const rejected = await fixture.send();
-      expect(rejected.mock.calls[0]?.[0]).toBe(false);
+      const response = await fixture.send();
+      expect(response.mock.calls[0]?.[0]).toBe(change === "cancelled");
+      if (change === "sender") {
+        expect(response).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({
+            code: "INVALID_REQUEST",
+            message: "One or more mentioned people are unavailable. Select the recipients again.",
+          }),
+        );
+      } else if (change === "payload") {
+        expect(response).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({ details: { reason: "chat-request-conflict" } }),
+        );
+      }
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
       expect((await pending(fixture)).items).toEqual([
         { ...original, state: change === "cancelled" ? "cancelled" : "interrupted" },

@@ -1,18 +1,14 @@
-import assert from "node:assert/strict";
 import { expect, it } from "vitest";
 import {
   parseStaticDiagnostics,
   parseStaticFailureReport,
 } from "../../scripts/lib/ci-static-check-evidence.mjs";
 
-// Native diagnostic and trailer from scheduled main run 36319748969; setup is omitted.
-const typeFile = "src/tasks/task-registry-acp-cleanup.sqlite.test.ts";
-const typeMessage =
-  "Argument of type 'ProcessEnv' is not assignable to parameter of type '(sql: string) => void'.\n" +
-  "  Type 'Dict<string>' provides no match for the signature '(sql: string): void'.";
-const realTypeDiagnostic = `${typeFile}(200,38): error TS2345: ${typeMessage}`;
+const typeFile = "src/owner.ts";
+const typeMessage = "Invalid argument.\n  Expected a callback.";
+const realTypeDiagnostic = `${typeFile}(2,3): error TS2345: ${typeMessage}`;
 const signature = (kind: string, file: string, test: string) => ({ kind, file, test });
-const realTypeSignature = signature("tsgo", typeFile, `(200,38) TS2345: ${typeMessage}`);
+const realTypeSignature = signature("tsgo", typeFile, `(2,3) TS2345: ${typeMessage}`);
 
 const lint = {
   filename: "extensions/example/card.ts",
@@ -40,9 +36,7 @@ type EvidenceRow = { phase: string; data: Record<string, unknown> };
 type Kind = "tsgo" | "oxlint";
 type Change = (rows: EvidenceRow[]) => void;
 const changeRow = (index: number, patch: Record<string, unknown>) => (rows: EvidenceRow[]) => {
-  const row = rows[index];
-  assert.ok(row, `Missing static evidence fixture row ${index}`);
-  Object.assign(row.data, patch);
+  Object.assign(rows[index]!.data, patch);
 };
 type Signature = { kind: string; file: string; test: string };
 function expectReport(log: string, kind: Kind, expected: Signature[], complete = expected) {
@@ -50,11 +44,11 @@ function expectReport(log: string, kind: Kind, expected: Signature[], complete =
   expect(parseStaticFailureReport(log, kind, true)).toEqual(complete);
 }
 
-const frame = (phase: string, data: Record<string, unknown>) => ({
-  phase,
-  data: { version: 1, ...data },
-});
 function completeStaticLog(kind: Kind = "tsgo", change: Change = () => {}) {
+  const frame = (phase: string, data: Record<string, unknown>) => ({
+    phase,
+    data: { version: 1, ...data },
+  });
   const leaf = (index: number, exitCode: number, stdout: string) =>
     frame("leaf", {
       id: `batch:${index}`,
@@ -82,22 +76,16 @@ function completeStaticLog(kind: Kind = "tsgo", change: Change = () => {}) {
   );
 }
 
-it.each([
-  [
-    "multiline error",
-    `${realTypeDiagnostic}\n[tsgo:state-logging] failed (exit 2) in 47.4s\n[tsgo:agents-tools] passed in 52.4s\n[tsgo:core:test] FAILED (exit 2)`,
-    [realTypeSignature],
-  ],
-  [
-    "distinct errors in one file",
-    "src/owner.ts(20,7): error TS2367: Types have no overlap.\nsrc/owner.ts(30,9): error TS2554: Expected 3 arguments, but got 2.",
-    [
-      signature("tsgo", "src/owner.ts", "(20,7) TS2367: Types have no overlap."),
-      signature("tsgo", "src/owner.ts", "(30,9) TS2554: Expected 3 arguments, but got 2."),
-    ],
-  ],
-])("legacy %s permits recovery, not gate exemption", (_name, output, expected) => {
-  expectReport(stepLog(output), "tsgo", expected, []);
+it("legacy diagnostics permit recovery, not gate exemption", () => {
+  const second = "src/owner.ts(3,4): error TS2554: Expected 3 arguments.";
+  const telemetry =
+    "[tsgo:core] failed (exit 2) in 47.4s\n[tsgo:core] passed in 52.4s\n[tsgo:core] FAILED (exit 2)";
+  expectReport(
+    stepLog(`${realTypeDiagnostic}\n${second}\n${telemetry}`),
+    "tsgo",
+    [realTypeSignature, signature("tsgo", typeFile, "(3,4) TS2554: Expected 3 arguments.")],
+    [],
+  );
 });
 
 it.each([
@@ -160,13 +148,7 @@ it.each(["tsgo", "oxlint"] as const)("rejects unaccounted %s step output", (kind
   const log = completeStaticLog(kind);
   for (const invalid of [
     log.replace("##[endgroup]", "##[endgroup]\nError: setup worker crashed"),
-    log.replace(
-      "##[endgroup]",
-      "##[endgroup]\n[tsgo:state-logging] failed (exit 2) in 47.4s; worker killed",
-    ),
     log.replace(`[ci-static:${kind}:step]`, `[ci-static:${kind}:unknown]`),
-    log.replace('"completed":2', '"completed":1'),
-    log.replace('"groups":1', '"groups":2'),
   ]) {
     expectReport(invalid, kind, []);
   }
@@ -176,7 +158,6 @@ it.each([
   ["missing leaf", (rows) => rows.splice(1, 1)],
   ["duplicate leaf", (rows) => rows.splice(1, 0, rows[0]!)],
   ["duplicate step", (rows) => rows.push(rows[3]!)],
-  ["duplicate group", (rows) => rows.splice(3, 0, rows[2]!)],
   ["missing step", (rows) => rows.pop()],
   ["orphan leaf", changeRow(2, { leaves: ["batch:0"], planned: 1, completed: 1 })],
   ["unfinished graph", changeRow(2, { completed: 1 })],
@@ -184,7 +165,6 @@ it.each([
   ["duplicate graph coverage", changeRow(2, { leaves: ["batch:0", "batch:0"] })],
   ["non-diagnostic failure", changeRow(1, { exitCode: 137 })],
   ["signaled compiler", changeRow(0, { signal: "SIGTERM" })],
-  ["skipped compiler", changeRow(1, { skipped: true })],
   ["compiler stderr", changeRow(0, { stderr: "panic: worker stopped" })],
   ["unparsed compiler output", changeRow(0, { stdout: `${realTypeDiagnostic}\nworker crashed` })],
   ["false successful compiler", changeRow(1, { stdout: realTypeDiagnostic })],

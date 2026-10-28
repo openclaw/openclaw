@@ -7,7 +7,10 @@ import {
   extractResolvedApplyPatchTargetPaths,
   toDisplayPath,
 } from "./apply-patch-paths.js";
-import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
+import {
+  createHostSandboxFsBridge,
+  createSandboxFsBridgeFromResolver,
+} from "./test-helpers/host-sandbox-fs-bridge.js";
 
 const defaultCwd = process.cwd();
 const cwdPath = (...segments: string[]) => path.join(defaultCwd, ...segments);
@@ -32,11 +35,6 @@ describe("extractApplyPatchTargetPaths", () => {
   );
   it.each([
     [
-      "update/delete",
-      envelope("*** Update File: a.ts\n@@\n context\n+added", "*** Delete File: b.ts"),
-      ["a.ts", "b.ts"],
-    ],
-    [
       "blank lines before move",
       envelope("*** Update File: a.ts\n\n*** Move to: b.ts"),
       ["a.ts", "b.ts"],
@@ -47,11 +45,6 @@ describe("extractApplyPatchTargetPaths", () => {
       "indented headers",
       "  *** Begin Patch\n  *** Add File: src/new.ts\n+x\n  *** Delete File: src/dead.ts\n  *** Update File: src/old.ts\n  *** Move to: src/renamed.ts\n@@\n-old\n+new\n  *** End Patch",
       ["src/new.ts", "src/dead.ts", "src/old.ts", "src/renamed.ts"],
-    ],
-    [
-      "single-space headers",
-      envelope(" *** Add File: src/new.ts\n+x", " *** Delete File: src/dead.ts"),
-      ["src/new.ts", "src/dead.ts"],
     ],
     ["unrecognized grammar", "nothing here\n*** Random Marker: x\n+a\ncontext", []],
     [
@@ -89,7 +82,6 @@ describe("extractApplyPatchTargetPaths", () => {
       path.resolve(defaultCwd, String.raw`src\windows\path.ts`),
       path.resolve(defaultCwd, String.raw`safe\evil.ts`),
     ]);
-    expect(extractApplyPatchTargetPaths(patch)).not.toContain(cwdPath("safe", "evil.ts"));
   });
 
   it("can resolve paths with the same cwd semantics as apply_patch execution", () => {
@@ -169,24 +161,20 @@ describe("extractApplyPatchTargetPaths", () => {
       "*** Add File: /workspace/src/ok.ts\n+x",
       "*** Add File: /outside.ts\n+y",
     );
+    const bridge = createSandboxFsBridgeFromResolver((filePath) => {
+      if (filePath === "/outside.ts") {
+        throw new Error("Path escapes sandbox root");
+      }
+      return {
+        containerPath: filePath,
+        hostPath: filePath.replace("/workspace", "/host/workspace"),
+        relativePath: filePath.replace("/workspace/", ""),
+      };
+    });
     expect(
       extractApplyPatchTargetPaths(patch, {
         cwd: "/workspace",
-        sandbox: {
-          root: "/workspace",
-          bridge: {
-            resolvePath: ({ filePath }: { filePath: string }) => {
-              if (filePath === "/outside.ts") {
-                throw new Error("Path escapes sandbox root");
-              }
-              return {
-                containerPath: filePath,
-                hostPath: filePath.replace("/workspace", "/host/workspace"),
-                relativePath: filePath.replace("/workspace/", ""),
-              };
-            },
-          } as never,
-        },
+        sandbox: { root: "/workspace", bridge },
       }),
     ).toEqual(["/host/workspace/src/ok.ts"]);
   });

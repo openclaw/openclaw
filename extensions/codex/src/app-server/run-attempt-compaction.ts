@@ -1,11 +1,11 @@
 import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { invalidateCodexComputerFrame } from "./computer-context.js";
-import type { CodexAttemptResources } from "./run-attempt-resources.js";
+import type { StartedCodexAttemptResources } from "./run-attempt-start.js";
 import { restoreCodexThreadInstructionsAfterCompaction } from "./thread-policy.js";
 
 /** Restore host-owned context after native compaction rebuilds a live thread. */
 export async function restoreCodexAttemptCompactionContext(
-  resources: CodexAttemptResources,
+  resources: StartedCodexAttemptResources,
 ): Promise<void> {
   const { state, prompt } = resources;
   const { runtime, attemptTools } = prompt.context;

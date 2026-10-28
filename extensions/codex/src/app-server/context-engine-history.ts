@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
-import type {
-  AgentMessage,
-  ContextEngineProjection,
+import {
+  isTranscriptOnlyOpenClawAssistantMessage,
+  type AgentMessage,
+  type ContextEngineProjection,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
@@ -88,7 +89,9 @@ export async function prepareCodexContextEngineHistory(params: {
 }) {
   const { assembled, projectionParams, startupBinding, assertCurrent } = params;
   const prepareSeed = params.runtimeParams.hostCapabilities.prepareBoundedSeed;
+  // Exclude bookkeeping before fingerprinting so local-only appends cannot rotate history.
   const includeMessage = (message: AgentMessage) =>
+    !isTranscriptOnlyOpenClawAssistantMessage(message) &&
     (message.role !== "custom" || isCodexDurableCustomMessage(message)) &&
     !(
       message.role === "user" &&

@@ -5,9 +5,9 @@ const { records } = vi.hoisted(() => ({ records: new Map<string, string>() }));
 // mock-isolation: OAuth record fixtures use an in-memory vault so tests cannot read or write real secrets.
 vi.mock("../secrets/store/secret-store-hidden-github.js", () => ({
   deleteHiddenGitHubSecretRecord: ({ name }: { name: string }) => records.delete(name),
-  listHiddenGitHubSecretRecords: ({ prefix }: { prefix: string }) =>
+  listHiddenGitHubSecretRecords: ({ prefix }: { prefix?: string }) =>
     [...records.entries()]
-      .filter(([name]) => name.startsWith(`${prefix}-`))
+      .filter(([name]) => prefix === undefined || name.startsWith(`${prefix}-`))
       .toSorted(([a], [b]) => a.localeCompare(b))
       .map(([name, value]) => ({ name, value })),
   readHiddenGitHubSecretRecord: ({ name }: { name: string }) => records.get(name),
@@ -19,6 +19,7 @@ import {
   deleteGitHubDeviceAuthorizationRecord,
   deleteGitHubOAuthRecord,
   inspectGitHubOAuthRecord,
+  listGitHubAuthorizationRecords,
   listGitHubDeviceAuthorizationRecords,
   listGitHubOAuthRecords,
   readGitHubDeviceAuthorizationRecord,
@@ -85,6 +86,10 @@ it("round-trips exact pending and refresh records under opaque hidden names", as
     { requestId, record: deviceRecord },
   ]);
   expect(await listGitHubOAuthRecords()).toEqual([{ profileId, record: oauthRecord }]);
+  expect(await listGitHubAuthorizationRecords()).toEqual({
+    deviceRecords: [{ requestId, record: deviceRecord }],
+    oauthRecords: [{ profileId, record: oauthRecord }],
+  });
   expect(await readGitHubDeviceAuthorizationRecord(requestId)).toEqual(deviceRecord);
   expect(await inspectGitHubOAuthRecord(profileId)).toEqual({
     state: "valid",

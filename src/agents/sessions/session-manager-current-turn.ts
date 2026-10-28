@@ -1,6 +1,6 @@
 import type { SessionTranscriptContextVersion } from "../../config/sessions/session-accessor.sqlite-contract.js";
 import { readTranscriptEventAtSeqSync } from "../../config/sessions/session-accessor.sqlite-read.js";
-import { readActiveTranscriptEntryAnchor } from "../../config/sessions/session-accessor.sqlite-transcript-anchor.js";
+import { readActiveTranscriptEntryAnchor } from "../../config/sessions/session-accessor.sqlite-transcript-admitted-read.js";
 import { isIndexedSessionEntry } from "../../config/sessions/session-entry-codec.js";
 import { walkSessionCurrentTurn } from "../../config/sessions/session-entry-navigation.js";
 import type { TranscriptEntryAnchor } from "../../config/sessions/transcript-entry-anchor.js";

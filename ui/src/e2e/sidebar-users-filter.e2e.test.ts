@@ -1,13 +1,157 @@
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { sessionsListResponse } from "./session-management.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Sidebar user filter",
   startServerBeforeBrowser: true,
 });
 
+function peopleGatewayOptions(): NonNullable<Parameters<typeof installMockGateway>[1]> {
+  return {
+    operatorScopes: ["operator.read", "operator.write"],
+    presenceUsers: ["Ada Chen", "Bob Rivera", "Jacqueline Henriksen"].map((name, index) => ({
+      id: ["ada", "bob", "jacqueline"][index]!,
+      identity: { type: "profile", id: ["ada", "bob", "jacqueline"][index]! },
+      name,
+      self: index === 0,
+    })),
+    methodResponses: {
+      "sessions.list": {
+        ...sessionsListResponse([]),
+        ownerSessionCounts: [
+          { profileId: "ada", open: 33, running: 11 },
+          { profileId: "bob", open: 1, running: 0 },
+          { profileId: "jacqueline", open: 0, running: 0 },
+        ],
+      },
+    },
+  };
+}
+
 suite.define(() => {
+  it("keeps people counts at the edge and personal actions in one accessible menu", () =>
+    suite.withPage(
+      {
+        colorScheme: "light",
+        locale: "en-US",
+        viewport: { width: 1280, height: 800 },
+        permissions: ["clipboard-read", "clipboard-write"],
+      },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, peopleGatewayOptions());
+        await page.goto(suite.server.baseUrl + "chat");
+        await page.locator('[data-navigation-view="online"]').click();
+        const person = page.locator('[data-online-user-id="ada"]');
+        const row = person.locator("..");
+        const counts = person.locator(".sidebar-online__counts");
+        await counts.waitFor();
+        await page.mouse.move(900, 600);
+        const rowBounds = (await row.boundingBox())!;
+        const rest = (await counts.boundingBox())!;
+        expect(rowBounds.x + rowBounds.width - rest.x - rest.width).toBeLessThanOrEqual(10);
+        const more = row.getByRole("button", { name: "Actions for Ada Chen", exact: true });
+        expect(await more.evaluate((el) => getComputedStyle(el.parentElement!).opacity)).toBe("0");
+        await person.hover();
+        await more.click();
+        const menu = page.getByRole("menu", { name: "Actions for Ada Chen", exact: true });
+        await menu.waitFor();
+        expect(await counts.boundingBox()).toEqual(rest);
+        expect(await page.locator(".person-activity-hovercard").count()).toBe(0);
+        await menu.getByRole("menuitem", { name: "Pin to sidebar", exact: true }).click();
+        const shortcut = page.locator('[data-sidebar-entry="person:ada"]');
+        await shortcut.waitFor();
+        await page.reload();
+        await page.locator('[data-navigation-view="online"]').click();
+        await person.waitFor();
+        await shortcut.waitFor();
+        await person.click({ button: "right" });
+        await menu.getByRole("menuitem", { name: "Unpin from sidebar", exact: true }).click();
+        await expect.poll(() => shortcut.count()).toBe(0);
+        await person.focus();
+        await page.keyboard.press("Shift+F10");
+        await menu.waitFor();
+        const href = await person.getAttribute("href");
+        const newTab = menu.getByRole("menuitem", {
+          name: "Open activity in new tab",
+          exact: true,
+        });
+        expect(await newTab.getAttribute("href")).toBe(href);
+        expect(await newTab.getAttribute("target")).toBe("_blank");
+        const [popup] = await Promise.all([page.waitForEvent("popup"), newTab.click()]);
+        await expect.poll(() => new URL(popup.url()).pathname).toBe(href);
+        await popup.close();
+        await menu.getByRole("menuitem", { name: "Copy activity link", exact: true }).click();
+        await expect
+          .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+          .toBe(new URL(href!, page.url()).href);
+        await person.click({ button: "right" });
+        await menu.waitFor();
+        await page.keyboard.press("Escape");
+        await expect.poll(() => menu.isVisible()).toBe(false);
+        expect(await person.evaluate((el) => el === document.activeElement)).toBe(true);
+        await more.click();
+        await page.mouse.click(900, 600);
+        await expect.poll(() => menu.isVisible()).toBe(false);
+        await person.click({ button: "right" });
+        await menu.getByRole("menuitem", { name: "View activity", exact: true }).click();
+        await expect.poll(() => new URL(page.url()).pathname).toBe(href);
+        expect(await gateway.getRequests("sessions.patch")).toEqual([]);
+      },
+    ));
+
+  it("aligns quiet person actions on mobile without opening the activity hovercard", () =>
+    suite.withPage(
+      {
+        colorScheme: "dark",
+        locale: "en-US",
+        hasTouch: true,
+        viewport: { width: 390, height: 844 },
+      },
+      async ({ page }) => {
+        await installMockGateway(page, peopleGatewayOptions());
+        await page.goto(suite.server.baseUrl + "chat");
+        await navigationDrawerToggle(page).tap();
+        await page.locator('[data-navigation-view="online"]').tap();
+        const person = page.locator('[data-online-user-id="ada"]');
+        const more = person
+          .locator("..")
+          .getByRole("button", { name: "Actions for Ada Chen", exact: true });
+        await more.waitFor();
+        expect(await more.evaluate((el) => getComputedStyle(el.parentElement!).opacity)).toBe("1");
+        expect((await more.boundingBox())!.height).toBeGreaterThanOrEqual(40);
+        await page.locator('[data-online-user-id="ada"] [data-session-count="running"]').waitFor();
+        const actions = await page.locator(".sidebar-online__row").evaluateAll((rows) =>
+          rows.map((row) => {
+            const button = row.querySelector<HTMLElement>(".sidebar-online__menu-trigger")!;
+            const name = row.querySelector<HTMLElement>(".sidebar-online__person-name")!;
+            return {
+              x: button.getBoundingClientRect().x,
+              nameRight: name.getBoundingClientRect().right,
+              background: getComputedStyle(button).backgroundColor,
+            };
+          }),
+        );
+        expect(actions).toHaveLength(3);
+        expect(
+          Math.max(...actions.map((action) => action.x)) -
+            Math.min(...actions.map((action) => action.x)),
+        ).toBeLessThan(1);
+        for (const action of actions) {
+          expect(action.nameRight).toBeLessThanOrEqual(action.x);
+          expect(action.background).toBe("rgba(0, 0, 0, 0)");
+        }
+        await more.tap();
+        const menu = page.getByRole("menu", { name: "Actions for Ada Chen", exact: true });
+        await menu.waitFor();
+        expect(await page.locator(".person-activity-hovercard").count()).toBe(0);
+        await menu.getByRole("menuitem", { name: "Pin to sidebar", exact: true }).tap();
+        await page.locator('[data-sidebar-entry="person:ada"]').waitFor();
+      },
+    ));
+
   it("filters connected and offline profiles without collapsing the Users view", () =>
     suite.withPage(
       { colorScheme: "dark", locale: "en-US", serviceWorkers: "block" },

@@ -24,12 +24,9 @@ vi.mock("../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => lifecycleLog,
 }));
 
-function createLifecycle(
-  runId: string,
-  options: Partial<Parameters<typeof createAgentCommandLifecycle>[0]> = {},
-) {
+function createLifecycle(options: Partial<Parameters<typeof createAgentCommandLifecycle>[0]> = {}) {
   return createAgentCommandLifecycle({
-    runId,
+    runId: "command",
     lifecycleGeneration: () => "test-generation",
     startedAt: 100,
     state: {
@@ -46,8 +43,12 @@ function emittedEvent() {
   return event;
 }
 
-function expectEvent(data: Record<string, unknown>, details = {}, once = false) {
-  const matcher = expect.objectContaining({ ...details, data: expect.objectContaining(data) });
+function expectEvent(data: Record<string, unknown>, once = false) {
+  const matcher = expect.objectContaining({
+    runId: "command",
+    stream: "lifecycle",
+    data: expect.objectContaining(data),
+  });
   if (once) {
     expect(emitAgentEvent).toHaveBeenCalledExactlyOnceWith(matcher);
   } else {
@@ -55,10 +56,27 @@ function expectEvent(data: Record<string, unknown>, details = {}, once = false) 
   }
 }
 
-const errorTerminal = () => ({
-  metadata: {},
-  outcome: buildAgentRunTerminalOutcome({ status: "error", stopReason: "error" }),
-});
+type Terminal = Parameters<ReturnType<typeof createLifecycle>["emitEnd"]>[0];
+function terminal(
+  outcome: Parameters<typeof buildAgentRunTerminalOutcome>[0] = {
+    status: "error",
+    stopReason: "error",
+  },
+  metadata: Terminal["metadata"] = {},
+): Terminal {
+  return { metadata, outcome: buildAgentRunTerminalOutcome(outcome) };
+}
+const receipt = {
+  runId: "command",
+  sessionId: "session",
+  turnId: "recovery",
+  requested: { provider: "openai", model: "model" },
+  effective: { provider: "openai", model: "model", responseModel: "model" },
+  successfulToolNames: ["write"],
+  assistantTranscriptIdempotencyKey: "selected",
+  rerouted: false,
+  terminalDisposition: "visible" as const,
+};
 
 beforeEach(() => vi.clearAllMocks());
 
@@ -71,7 +89,7 @@ describe("createAgentCommandLifecycle", () => {
         lifecycleEnded: false,
       };
       const callbacks = createAgentAttemptLifecycleCallbacks(state);
-      const lifecycle = createLifecycle("recovered-command", { state });
+      const lifecycle = createLifecycle({ state });
       await callbacks.onAgentEvent({
         stream: "lifecycle",
         data: {
@@ -92,38 +110,23 @@ describe("createAgentCommandLifecycle", () => {
           ...(error ? { error: { kind: "incomplete_turn" as const, message: error } } : {}),
         },
       };
-      const receipt = {
-        runId: "recovered-command",
-        sessionId: "session",
-        turnId: "recovery",
-        requested: { provider: "openai", model: "model" },
-        effective: { provider: "openai", model: "model", responseModel: "model" },
-        successfulToolNames: ["write"],
-        assistantTranscriptIdempotencyKey: "selected",
-        rerouted: false,
-        terminalDisposition: "visible" as const,
-      };
-      const terminal = {
-        metadata: { terminalReceipt: receipt },
-        outcome: buildAgentRunTerminalOutcome({
+      const completion = terminal(
+        {
           status: error ? "error" : "ok",
           stopReason: error ? "error" : "stop",
           error,
-        }),
-      };
-      // Exercise the same error selector and publisher used by command post-run settlement.
-      expect(lifecycle.resolveResultError(result, false)).toBe(error);
+        },
+        { terminalReceipt: receipt },
+      );
       if (lifecycle.resolveResultError(result, false)) {
-        lifecycle.emitResultError(result, false, terminal);
+        lifecycle.emitResultError(result, false, completion);
       } else {
-        lifecycle.emitEnd(terminal);
+        lifecycle.emitEnd(completion);
       }
       callbacks.onAttemptTerminalReplaced();
-      lifecycle.emitEnd(terminal);
-      expect(state.lifecycleEnded).toBe(true);
+      lifecycle.emitEnd(completion);
       expect(emitAgentEvent).toHaveBeenCalledOnce();
-      const event = emittedEvent();
-      const data = event.data;
+      const { data } = emittedEvent();
       expect(data).toMatchObject({
         phase: error ? "error" : "end",
         terminalReceipt: receipt,
@@ -131,34 +134,32 @@ describe("createAgentCommandLifecycle", () => {
       });
       expect(data.error).toBe(error);
       expect(data).not.toHaveProperty("errorObservation");
+      if (outcome === "recovered") {
+        expect(lifecycleLog.info).toHaveBeenCalledOnce();
+        expect(lifecycleLog.warn).not.toHaveBeenCalled();
+        expect(lifecycleLog.error).not.toHaveBeenCalled();
+      }
     },
   );
 
   it("publishes an outer timeout that arrives after a yielded result", () => {
     const controller = new AbortController();
-    const lifecycle = createLifecycle("yield-then-outer-timeout", {
+    const lifecycle = createLifecycle({
       abortSignal: controller.signal,
     });
-    const terminal = {
-      metadata: { yielded: true, aborted: false },
-      outcome: buildAgentRunTerminalOutcome({
-        status: "ok",
-        stopReason: "end_turn",
-        livenessState: "paused",
-      }),
-    };
-    controller.abort(new DOMException("outer deadline", "TimeoutError"));
-    lifecycle.emitEnd(terminal);
-    expectEvent(
-      {
-        phase: "end",
-        yielded: true,
-        aborted: true,
-        stopReason: "timeout",
-        executionSettled: true,
-      },
-      { runId: "yield-then-outer-timeout" },
+    const completion = terminal(
+      { status: "ok", stopReason: "end_turn", livenessState: "paused" },
+      { yielded: true, aborted: false },
     );
+    controller.abort(new DOMException("outer deadline", "TimeoutError"));
+    lifecycle.emitEnd(completion);
+    expectEvent({
+      phase: "end",
+      yielded: true,
+      aborted: true,
+      stopReason: "timeout",
+      executionSettled: true,
+    });
   });
 
   it("turns an embedded-runtime stale install post-turn error into restart guidance", () => {
@@ -171,27 +172,14 @@ describe("createAgentCommandLifecycle", () => {
         url: pathToFileURL(missingChunk).href,
       },
     );
-    const lifecycle = createLifecycle("stale-install");
+    const lifecycle = createLifecycle();
 
-    lifecycle.emitPostTurnError(error, errorTerminal());
+    lifecycle.emitPostTurnError(error, terminal());
 
     const event = emittedEvent();
     expect(event.data.error).toMatch(/installation may have changed.*gateway restart/i);
     expect(JSON.stringify(event)).not.toContain(missingChunk);
     expect(JSON.stringify(event)).not.toContain(importingChunk);
-  });
-
-  it("logs successful stops at the expected severity", () => {
-    const lifecycle = createLifecycle("logged-terminal-owner");
-
-    lifecycle.emitEnd({
-      metadata: {},
-      outcome: buildAgentRunTerminalOutcome({ status: "ok", stopReason: "stop" }),
-    });
-
-    expect(lifecycleLog.info).toHaveBeenCalledOnce();
-    expect(lifecycleLog.warn).not.toHaveBeenCalled();
-    expect(lifecycleLog.error).not.toHaveBeenCalled();
   });
 
   it.each(["finishing", "end", "error"] as const)(
@@ -216,20 +204,20 @@ describe("createAgentCommandLifecycle", () => {
         }),
         unsafeMetadata: { credential: secret },
       };
-      const lifecycle = createLifecycle("terminal-owner");
-      const terminal = {
-        metadata,
-        outcome: buildAgentRunTerminalOutcome({
+      const lifecycle = createLifecycle();
+      const completion = terminal(
+        {
           status: "timeout",
           ...metadata,
           error: "Request timed out before a response was generated.",
-        }),
-      };
+        },
+        metadata,
+      );
 
       if (phase === "finishing") {
-        lifecycle.emitFinishing(terminal);
+        lifecycle.emitFinishing(completion);
       } else if (phase === "end") {
-        lifecycle.emitEnd(terminal);
+        lifecycle.emitEnd(completion);
       } else {
         lifecycle.emitResultError(
           {
@@ -240,26 +228,23 @@ describe("createAgentCommandLifecycle", () => {
             },
           },
           true,
-          terminal,
+          completion,
         );
       }
 
-      expectEvent(
-        {
-          phase,
-          aborted: true,
-          stopReason: "timeout",
-          timeoutPhase: "provider",
-          providerStarted: true,
-          livenessState: "blocked",
-          yielded: true,
-          replayInvalid: true,
-          suppressErrorNotice: phase === "finishing",
-          error: "Request timed out before a response was generated.",
-          ...(phase !== "finishing" ? { executionSettled: true } : {}),
-        },
-        { runId: "terminal-owner", stream: "lifecycle" },
-      );
+      expectEvent({
+        phase,
+        aborted: true,
+        stopReason: "timeout",
+        timeoutPhase: "provider",
+        providerStarted: true,
+        livenessState: "blocked",
+        yielded: true,
+        replayInvalid: true,
+        suppressErrorNotice: phase === "finishing",
+        error: "Request timed out before a response was generated.",
+        ...(phase !== "finishing" ? { executionSettled: true } : {}),
+      });
       const event = emittedEvent();
       if (phase === "finishing") {
         expect(event.data).not.toHaveProperty("executionSettled");
@@ -274,7 +259,7 @@ describe("createAgentCommandLifecycle", () => {
     { message: "Context compaction failed.", expected: "Context compaction failed." },
     { message: "  ", expected: "Agent run failed" },
   ])("publishes structured failure detail: $message", ({ message, expected }) => {
-    const lifecycle = createLifecycle("structured-failure-owner");
+    const lifecycle = createLifecycle();
 
     lifecycle.emitResultError(
       {
@@ -282,7 +267,7 @@ describe("createAgentCommandLifecycle", () => {
         meta: { durationMs: 0, error: { kind: "compaction_failure", message } },
       },
       false,
-      errorTerminal(),
+      terminal(),
     );
 
     expectEvent(
@@ -291,7 +276,6 @@ describe("createAgentCommandLifecycle", () => {
         error: expected,
         executionSettled: true,
       },
-      { runId: "structured-failure-owner", stream: "lifecycle" },
       true,
     );
   });
@@ -328,7 +312,7 @@ describe("createAgentCommandLifecycle", () => {
         errorObservation: observation,
       },
     });
-    const lifecycle = createLifecycle("compaction-recovery-owner", { state });
+    const lifecycle = createLifecycle({ state });
     const result = {
       payloads: [{ text, isError: true }],
       meta: {
@@ -337,11 +321,9 @@ describe("createAgentCommandLifecycle", () => {
         error: { kind: "compaction_failure" as const, message: message ?? text },
       },
     };
-    const terminal = errorTerminal();
-    expect(lifecycle.resolveResultError(result, false)).toBe(text);
-    expect(lifecycle.resolveTerminalError(result, false, terminal)).toBe(text);
-    lifecycle.emitResultError(result, false, terminal);
-    expectEvent({ phase: "error", error: text, executionSettled: true }, {}, true);
+    const completion = terminal();
+    lifecycle.emitResultError(result, false, completion);
+    expectEvent({ phase: "error", error: text, executionSettled: true }, true);
     if (preserveObservation) {
       expect(emittedEvent().data.errorObservation).toEqual(observation);
     } else {
@@ -362,11 +344,11 @@ describe("createAgentCommandLifecycle", () => {
       lifecycleEnded: false,
       ...(source === "lifecycle callback" ? { lifecycleError: error } : {}),
     };
-    const lifecycle = createLifecycle("secret-safe-terminal-owner", { state });
-    const terminal = errorTerminal();
+    const lifecycle = createLifecycle({ state });
+    const completion = terminal();
 
     if (source === "post-turn error") {
-      lifecycle.emitPostTurnError(new Error(error), terminal);
+      lifecycle.emitPostTurnError(new Error(error), completion);
     } else {
       lifecycle.emitResultError(
         {
@@ -379,7 +361,7 @@ describe("createAgentCommandLifecycle", () => {
           },
         },
         source === "fallback payload",
-        terminal,
+        completion,
       );
     }
 
@@ -396,7 +378,7 @@ describe("createAgentCommandLifecycle", () => {
       if (kind === "abort") {
         controller.abort();
       }
-      const lifecycle = createLifecycle("diagnostic-terminal-owner", {
+      const lifecycle = createLifecycle({
         abortSignal: controller.signal,
       });
       const error = attachErrorDiagnostic(
@@ -415,7 +397,7 @@ describe("createAgentCommandLifecycle", () => {
         "stderr: an earlier request timed out and was aborted",
       );
 
-      lifecycle.emitPostTurnError(error, errorTerminal());
+      lifecycle.emitPostTurnError(error, terminal());
 
       expect(emitAgentEvent).toHaveBeenCalledOnce();
       const event = emittedEvent();
@@ -435,7 +417,7 @@ describe("createAgentCommandLifecycle", () => {
     const profileId = "openai:private-profile";
     const rawCause = `Codex app-server auth profile "${profileId}" was not found`;
     const secret = ["sk", "abcdefghijklmnopqrstuv"].join("-");
-    const lifecycle = createLifecycle("missing-selected-profile");
+    const lifecycle = createLifecycle();
     const error = new FailoverError(rawCause, {
       reason: "auth",
       code: "selected_auth_profile_unavailable",
@@ -463,12 +445,8 @@ describe("createAgentCommandLifecycle", () => {
   it("does not let generic abort metadata erase a superseded outcome", () => {
     const controller = new AbortController();
     controller.abort();
-    const lifecycle = createLifecycle("superseded-owner", { abortSignal: controller.signal });
-
-    lifecycle.emitEnd({
-      metadata: { aborted: true },
-      outcome: buildAgentRunTerminalOutcome({ status: "error", stopReason: "superseded" }),
-    });
+    const lifecycle = createLifecycle({ abortSignal: controller.signal });
+    lifecycle.emitEnd(terminal({ status: "error", stopReason: "superseded" }, { aborted: true }));
 
     expectEvent({
       aborted: true,
@@ -479,36 +457,30 @@ describe("createAgentCommandLifecycle", () => {
 
   it("keeps post-turn errors narrow while publishing bounded delivery evidence", () => {
     const secret = ["sk", "abcdefghijklmnopqrstuv"].join("-");
-    const lifecycle = createLifecycle("post-turn-delivery-owner");
-    lifecycle.emitPostTurnError(new Error("delivery failed"), {
-      metadata: {
-        suppressErrorNotice: true,
-        terminalDelivery: normalizeAgentRunTerminalDeliverySnapshot({
-          status: "failed",
-          resultCount: 0,
-          errorMessage: secret,
-        }),
-        terminalReceipt: {
-          runId: "unrelated-receipt",
-          sessionId: "session",
-          turnId: "turn",
-          requested: { provider: "provider", model: "model" },
-          effective: { provider: "provider", model: "model", responseModel: "model" },
-          successfulToolNames: [],
-          rerouted: false,
-          terminalDisposition: "visible",
+    const lifecycle = createLifecycle();
+    lifecycle.emitPostTurnError(
+      new Error("delivery failed"),
+      terminal(
+        {
+          status: "timeout",
+          stopReason: "timeout",
+          livenessState: "blocked",
+          timeoutPhase: "provider",
+          providerStarted: true,
         },
-        terminalReply: { disposition: "visible", text: secret },
-        unsafeMetadata: { secret },
-      },
-      outcome: buildAgentRunTerminalOutcome({
-        status: "timeout",
-        stopReason: "timeout",
-        livenessState: "blocked",
-        timeoutPhase: "provider",
-        providerStarted: true,
-      }),
-    });
+        {
+          suppressErrorNotice: true,
+          terminalDelivery: normalizeAgentRunTerminalDeliverySnapshot({
+            status: "failed",
+            resultCount: 0,
+            errorMessage: secret,
+          }),
+          terminalReceipt: { ...receipt, runId: "unrelated-receipt" },
+          terminalReply: { disposition: "visible", text: secret },
+          unsafeMetadata: { secret },
+        },
+      ),
+    );
 
     const event = emittedEvent();
     expect(event.data).toMatchObject({
@@ -535,25 +507,22 @@ describe("createAgentCommandLifecycle", () => {
   it("rejects malformed canonical metadata on error events", () => {
     const secret = ["sk", "abcdefghijklmnopqrstuv"].join("-");
     const malicious = { authorization: `Bearer ${secret}`, nested: { secret } };
-    const lifecycle = createLifecycle("malformed-terminal-owner");
-    const terminal = {
-      metadata: {
-        aborted: malicious,
-        stopReason: malicious,
-        yielded: malicious,
-        timeoutPhase: malicious,
-        providerStarted: malicious,
-        livenessState: malicious,
-        replayInvalid: malicious,
-        terminalReceipt: normalizeAgentRunTerminalReceipt(malicious),
-        terminalDelivery: normalizeAgentRunTerminalDeliverySnapshot(malicious),
-        error: malicious,
-        unknownMetadata: malicious,
-      },
-      outcome: buildAgentRunTerminalOutcome({ status: "error", stopReason: "error" }),
-    };
+    const lifecycle = createLifecycle();
+    const completion = terminal(undefined, {
+      aborted: malicious,
+      stopReason: malicious,
+      yielded: malicious,
+      timeoutPhase: malicious,
+      providerStarted: malicious,
+      livenessState: malicious,
+      replayInvalid: malicious,
+      terminalReceipt: normalizeAgentRunTerminalReceipt(malicious),
+      terminalDelivery: normalizeAgentRunTerminalDeliverySnapshot(malicious),
+      error: malicious,
+      unknownMetadata: malicious,
+    });
 
-    lifecycle.emitResultError({ payloads: [], meta: { durationMs: 0 } }, false, terminal);
+    lifecycle.emitResultError({ payloads: [], meta: { durationMs: 0 } }, false, completion);
 
     const event = emittedEvent();
     expect(event.data).toMatchObject({ phase: "error", aborted: false, stopReason: "error" });

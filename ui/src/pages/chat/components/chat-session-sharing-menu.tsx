@@ -11,7 +11,7 @@ import {
 import { PersonAvatarLink, PersonName } from "../../../components/person-activity-link-solid.tsx";
 import { personActivityLink } from "../../../components/person-activity-link.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
-import type { MenuControls, MenuEntry } from "../../../components/solid/menu.tsx";
+import type { MenuControls, MenuEntry, MenuItem } from "../../../components/solid/menu.tsx";
 import { SessionOwnerChip } from "../../../components/solid/session-owner-chip.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
@@ -20,6 +20,8 @@ import {
   type ChatSessionSharingOutcome,
   VISIBILITY_LABEL_KEYS,
   ChatSessionSharingModeIcon,
+  projectChatSessionSharingRoster,
+  chatSessionPermissionLabel,
   ChatSessionSharingError,
   createChatSessionSharingPresentation,
 } from "./chat-session-sharing-shared.tsx";
@@ -44,11 +46,12 @@ export function useChatSessionSharingMenu(
       props.personActivity,
       owner()?.label,
     );
-  const members = createMemo(
-    () => new Set(result()?.members.map((member) => member.identityId) ?? []),
+  const showPermissions = () =>
+    props.membersAvailable !== false && visibility() !== "shared" && visibility() !== "draft";
+  const people = createMemo(() =>
+    projectChatSessionSharingRoster(props).filter((row) => !row.owner),
   );
-  const identities = () =>
-    result()?.identities.filter((identity) => identity.id !== result()?.owner?.id) ?? [];
+  const identities = () => people().map((row) => row.identity);
   const allowed = () =>
     result()?.allowedVisibilities ?? props.allowedVisibilities ?? [visibility()];
   const canPublish = () => visibility() === "draft" && allowed().includes("shared");
@@ -59,7 +62,7 @@ export function useChatSessionSharingMenu(
   });
   const matches = () => {
     const terms = query().trim().toLocaleLowerCase().split(/\s+/u);
-    return identities().filter((identity) =>
+    return people().filter(({ identity }) =>
       terms.every((term) =>
         [identity.label, identity.id, identity.type].join(" ").toLocaleLowerCase().includes(term),
       ),
@@ -189,7 +192,7 @@ export function useChatSessionSharingMenu(
           attributes: { title: props.publicShareDisabledReason },
         });
       }
-      if (owner()) {
+      if (showPermissions() && owner()) {
         entries.push({
           kind: "content",
           id: "owner",
@@ -226,13 +229,13 @@ export function useChatSessionSharingMenu(
           ),
         });
       }
-      if (props.membersAvailable !== false) {
+      if (showPermissions()) {
         entries.push({
           kind: "content",
           id: "members-title",
           content: (
             <div class="chat-pane__sharing-title chat-pane__sharing-members-title">
-              {t("chat.sessionSharing.members")}
+              {t("chat.sessionSharing.permissions")}
             </div>
           ),
         });
@@ -247,58 +250,72 @@ export function useChatSessionSharingMenu(
   const memberItems = createMemo(
     () =>
       mapArray(
-        () => (props.membersAvailable === false ? [] : matches()),
-        (identity): MenuEntry => {
-          const member = () => members().has(identity().id);
-          const disabledReason = () =>
-            member() ? props.memberRemoveDisabledReason : props.memberAddDisabledReason;
-          return {
-            get id() {
-              return `member:${identity().id}`;
-            },
+        () => (!showPermissions() ? [] : matches()),
+        (row): MenuEntry => {
+          const identity = () => row().identity;
+          const branch: MenuEntry = {
+            id: `permission:${identity().id}`,
+            class: "chat-pane__sharing-permission",
             get label() {
-              return identity().label ?? identity().id;
+              return `${identity().label ?? identity().id}, ${row().controlLabel}`;
             },
-            class: "session-menu__item chat-pane__sharing-member",
+            get trigger() {
+              return row().controlLabel;
+            },
             get disabled() {
-              return Boolean(busy() || disabledReason());
+              return !busy() && Boolean(row().disabledReason);
             },
-            get attributes() {
-              return { title: disabledReason() };
+            get attributes(): MenuItem["attributes"] {
+              return {
+                title: row().disabledReason,
+                "aria-disabled": busy() ? "true" : undefined,
+              };
             },
-            icon: (
-              <span class="chat-pane__sharing-member-icon" aria-hidden="true">
-                <Show when={identity().type === "human"} fallback={<Icon name="bot" />}>
+            onBeforeShow(event) {
+              if (busy()) {
+                event.preventDefault();
+              }
+            },
+            get children() {
+              return row().options.map((level) => ({
+                id: `permission:${level}:${identity().id}`,
+                label: chatSessionPermissionLabel(level),
+                type: "radio" as const,
+                checked: row().level === level,
+                closeOnSelect: false,
+              }));
+            },
+          };
+          return {
+            kind: "group",
+            id: `member:${identity().id}`,
+            get items() {
+              return row().fixed ? [] : [branch];
+            },
+            render: (renderItems) => (
+              <div class="session-menu__item chat-pane__sharing-member">
+                <span class="chat-pane__sharing-member-icon" aria-hidden="true">
                   <SessionOwnerChip owner={identity()} size="header" />
-                </Show>
-              </span>
-            ),
-            content: (
-              <span
-                class="session-menu__text chat-pane__sharing-member-label"
-                title={disabledReason() ? undefined : (identity().label ?? identity().id)}
-              >
-                {identity().label ?? identity().id}
-              </span>
-            ),
-            details: (
-              <Show when={member()}>
-                <span class="session-menu__check" aria-label={t("chat.sessionSharing.selected")}>
-                  <Icon name="check" />
                 </span>
-              </Show>
+                <span class="oc-menu-item__label session-menu__text chat-pane__sharing-member-label">
+                  {identity().label ?? identity().id}
+                </span>
+                <Show when={row().fixed} fallback={renderItems(() => [branch])}>
+                  <span>{row().controlLabel}</span>
+                </Show>
+              </div>
             ),
           };
         },
-        { keyed: (identity) => identity.id },
+        { keyed: (row) => row.identity.id },
       ),
     { lazy: true },
   );
-  const errorEntry = createMemo(
-    (): MenuEntry => ({
-      kind: "content",
-      id: "error",
-      content: (
+  const errorEntry: MenuEntry = {
+    kind: "content",
+    id: "error",
+    content: (
+      <div>
         <ChatSessionSharingError
           error={props.state?.error}
           completion={presentation.completion()}
@@ -310,10 +327,9 @@ export function useChatSessionSharingMenu(
             </div>
           )}
         </ChatSessionSharingError>
-      ),
-    }),
-    { lazy: true },
-  );
+      </div>
+    ),
+  };
   const membersSection: MenuEntry = {
     kind: "group",
     id: "members",
@@ -321,7 +337,7 @@ export function useChatSessionSharingMenu(
       return memberItems()();
     },
     render: (renderItems) => (
-      <Show when={props.membersAvailable !== false}>
+      <Show when={showPermissions()}>
         <Loading
           on={scope()}
           fallback={
@@ -359,6 +375,6 @@ export function useChatSessionSharingMenu(
       </Show>
     ),
   };
-  const items = createMemo(() => [...baseItems(), membersSection, errorEntry()], { lazy: true });
+  const items = createMemo(() => [...baseItems(), membersSection, errorEntry], { lazy: true });
   return { items, select: presentation.select };
 }

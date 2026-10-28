@@ -40,10 +40,7 @@ vi.mock("../logging/subsystem.js", async (importOriginal) => {
     ...actual,
     createSubsystemLogger: (subsystem: string) => {
       const logger = actual.createSubsystemLogger(subsystem);
-      if (subsystem !== "gateway/broadcast") {
-        return logger;
-      }
-      return { ...logger, error: warnSpy };
+      return subsystem === "gateway/broadcast" ? { ...logger, error: warnSpy } : logger;
     },
   };
 });
@@ -51,6 +48,13 @@ vi.mock("../logging/subsystem.js", async (importOriginal) => {
 const makeClient = (connId: string) => makePresenceClient(connId, "operator", ["operator.read"]);
 const frameSummaries = (peer: ReturnType<typeof makeClient>) =>
   sentFrames(peer).map(({ event, seq }: { event: string; seq: number }) => ({ event, seq }));
+const addPeers = (
+  connection: ReturnType<typeof createGatewayConnectionState>,
+  peers: ReturnType<typeof makeClient>[],
+) => {
+  connection.clients.clear();
+  peers.forEach(({ client }) => connection.clients.add(client));
+};
 function expectFrame(
   peer: ReturnType<typeof makeClient>,
   event: string,
@@ -148,6 +152,9 @@ const steeringNotice = (display = false) =>
       message: expect.objectContaining({
         ...(display ? { display: true } : {}),
         content: [{ type: "text", text: "Use the smaller patch." }],
+        __openclaw: expect.objectContaining({
+          pluginSteering: expect.objectContaining({ pluginId: "reviewer", pluginName: "Reviewer" }),
+        }),
       }),
     }),
   });
@@ -173,11 +180,8 @@ describe("broadcast serialization failures", () => {
       const { connection, projection } = await createProjectedConnection(() => cfg);
       const handler = transcriptHandler(connection, projection, peers);
       for (const order of [peers, peers.toReversed()]) {
-        connection.clients.clear();
-        for (const peer of order) {
-          peer.socket.send.mockClear();
-          connection.clients.add(peer.client);
-        }
+        addPeers(connection, order);
+        peers.forEach(({ socket }) => socket.send.mockClear());
         await handler({ target: scope, messageId: "steer", messageSeq: 1, message });
         for (const peer of peers) {
           const frames = sentFrames(peer);
@@ -186,11 +190,7 @@ describe("broadcast serialization failures", () => {
             peer.client.connect.client.id === GATEWAY_CLIENT_IDS.CONTROL_UI ? 1 : 0,
           );
           if (notices.length) {
-            expect(notices[0].payload.message).toMatchObject({
-              display: true,
-              content: [{ type: "text", text: "Use the smaller patch." }],
-              __openclaw: { pluginSteering: { pluginId: "reviewer", pluginName: "Reviewer" } },
-            });
+            expect(notices[0]).toEqual(steeringNotice(true));
           }
           expect(frames.some((frame) => frame.event === "sessions.changed")).toBe(true);
         }
@@ -230,9 +230,7 @@ describe("broadcast serialization failures", () => {
       const viewerPeer = makeControlUiPeer(viewer);
       const peers = [ownerPeer, viewerPeer];
       const { connection, projection } = await createProjectedConnection(() => cfg);
-      for (const peer of peers) {
-        connection.clients.add(peer.client);
-      }
+      addPeers(connection, peers);
       const handler = transcriptHandler(connection, projection, peers);
       const update = { target: scope, messageId: "steer", messageSeq: 1, message };
       await handler(update);
@@ -331,6 +329,56 @@ describe("broadcast serialization failures", () => {
       { event: "users.prefs.changed", seq: 3 },
       { event: "mentions.changed", seq: 4 },
     ]);
+  });
+
+  it.each(["operator.sessions.read", "operator.sessions.write"])(
+    "delivers bounded mention invalidations only to targeted %s clients",
+    (scope) => {
+      const recipient = makeClient("recipient");
+      const other = makeClient("other");
+      recipient.client.connect.scopes = [scope];
+      other.client.connect.scopes = [scope];
+      const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({
+        clients: new GatewayClientRegistry([recipient.client, other.client]),
+      });
+      const payload = { gatewayInstanceId: "gateway", revision: 1 };
+      const recipients = new Set([recipient.client.connId]);
+
+      broadcast("mentions.changed", payload);
+      broadcastToConnIds("mentions.changed", { ...payload, content: "Hidden" }, recipients);
+      expect(recipient.socket.send).not.toHaveBeenCalled();
+      broadcastToConnIds("mentions.changed", payload, recipients);
+
+      expect(frameSummaries(recipient)).toEqual([{ event: "mentions.changed", seq: 1 }]);
+      expect(other.socket.send).not.toHaveBeenCalled();
+    },
+  );
+
+  it("delivers mention failures only to the targeted sender with current session access", () => {
+    const sender = makeClient("sender");
+    const other = makeClient("other");
+    for (const peer of [sender, other]) {
+      peer.client.connect.scopes = ["operator.sessions.read"];
+    }
+    let allowed = true;
+    const { broadcastToConnIds } = broadcaster([sender, other], {
+      canReceiveSessionEvent: (_client, keys) =>
+        allowed && keys.every((key) => key === "agent:main:visible"),
+    });
+    const recipients = new Set([sender.client.connId]);
+    const payload = {
+      sessionKey: "agent:main:visible",
+      errorMessage: "Your message was posted, but mention notifications could not be delivered.",
+    };
+    broadcastToConnIds("mentions.failed", payload, recipients);
+    expect(frameSummaries(sender)).toEqual([{ event: "mentions.failed", seq: 1 }]);
+    expect(other.socket.send).not.toHaveBeenCalled();
+
+    allowed = false;
+    broadcastToConnIds("mentions.failed", payload, recipients);
+    broadcastToConnIds("mentions.failed", { errorMessage: payload.errorMessage }, recipients);
+    expect(sender.socket.send).toHaveBeenCalledOnce();
+    expect(other.socket.send).not.toHaveBeenCalled();
   });
 
   it.each(["suppressed snapshot", "unprepared presence", "circular payload"] as const)(
@@ -523,7 +571,6 @@ describe("presence recipient projection", () => {
           sessionKey,
           {
             sessionId: `${agentId}-${sessionKey}`,
-            updatedAt: 1,
             visibility,
             createdVia: "operator",
             createdActor: { type: "human", source: "profile", id: "creator" },
@@ -551,8 +598,7 @@ describe("presence recipient projection", () => {
         [reader, admin],
         [admin, reader],
       ]) {
-        connection.clients.clear();
-        order.forEach((peer) => connection.clients.add(peer.client));
+        addPeers(connection, order);
         connection.broadcast("presence", payload, { stateVersion });
         expect(lastFrame(reader).payload.presence).toEqual([
           { ...person, watchedSessions: [sharedKey, "agent:work:global", "agent:work:unknown"] },
@@ -614,7 +660,6 @@ describe("presence recipient projection", () => {
       const key = "agent:main:private";
       await seedSession(key, {
         sessionId: "private",
-        updatedAt: 1,
         visibility: "draft",
         createdVia: "operator",
         createdActor: { type: "human", source: "profile", id: "creator" },

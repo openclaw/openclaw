@@ -153,23 +153,6 @@ export function beginModelCatalogSnapshot(
 
 const MAX_CACHED_MODEL_CATALOGS = 64;
 
-function trimModelCatalogCache(client: ModelCatalogClient, cache: ModelCatalogCache): void {
-  const retired = new Set<string>();
-  for (const key of cache.entries.keys()) {
-    if (cache.entries.size <= MAX_CACHED_MODEL_CATALOGS) {
-      break;
-    }
-    cache.entries.delete(key);
-    retired.add(key);
-  }
-  if (retired.size && modelCatalogCache.get(client) === cache) {
-    notifyModelCatalogCache(client, {
-      type: "invalidated",
-      matches: (_scope, key) => retired.has(key),
-    });
-  }
-}
-
 export function modelCatalogParams(options: ModelsListParams): ModelsListParams {
   const { agentId, view = "configured", ...params } = options;
   return { view, ...params, ...(agentId === undefined ? {} : { agentId: agentId.trim() }) };
@@ -240,7 +223,20 @@ export function publishModelCatalogResult(
       pending.resolve(result);
     }
   }
-  trimModelCatalogCache(client, cache);
+  const retired = new Set<string>();
+  for (const candidateKey of cache.entries.keys()) {
+    if (cache.entries.size <= MAX_CACHED_MODEL_CATALOGS) {
+      break;
+    }
+    cache.entries.delete(candidateKey);
+    retired.add(candidateKey);
+  }
+  if (retired.size && modelCatalogCache.get(client) === cache) {
+    notifyModelCatalogCache(client, {
+      type: "invalidated",
+      matches: (_scope, candidateKey) => retired.has(candidateKey),
+    });
+  }
   if (params.refresh && discoverySucceeded) {
     notifyModelCatalogCache(client, {
       type: "invalidated",

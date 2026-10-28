@@ -4,7 +4,7 @@ import { readSourceConfigSnapshot, readSourceConfigSnapshotForWrite } from "./io
 import { canonicalizeConfiguredMcpServer } from "./mcp-config-normalize.js";
 import { replaceConfigFile } from "./mutate.js";
 import { redactSensitiveArgv } from "./redact-argv.js";
-import { REDACTED_SENTINEL, restoreRedactedValues } from "./redact-snapshot.js";
+import { REDACTED_SENTINEL, redactConfigObject, restoreRedactedValues } from "./redact-snapshot.js";
 import { buildConfigSchemaCore } from "./schema.js";
 import type { McpServerToolFilterConfig } from "./types.mcp.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
@@ -40,6 +40,10 @@ type McpConfigMutation = {
   next?: Record<string, unknown>;
 };
 type McpConfigMutationHook = (mutation: McpConfigMutation) => Promise<void>;
+type McpConfigWriteAuthority = {
+  assertCurrent?: () => void;
+  assertCurrentAsync?: () => Promise<void>;
+};
 
 function normalizeToolSelectionList(value: readonly string[] | undefined): string[] | undefined {
   if (!value) {
@@ -117,6 +121,33 @@ function resolveConfiguredMcpServers(
   };
 }
 
+function redactMcpServerArgsForDisplay(server: unknown): unknown {
+  if (!isRecord(server)) {
+    return server;
+  }
+  if (!Array.isArray(server.args) || !server.args.every((arg) => typeof arg === "string")) {
+    return server;
+  }
+  return {
+    ...server,
+    args: redactSensitiveArgv(server.args, REDACTED_SENTINEL),
+  };
+}
+
+/** Redact MCP server secrets before CLI or chat display. */
+export function redactMcpServersForDisplay(
+  servers: Record<string, unknown>,
+): Record<string, unknown> {
+  const argvRedacted = Object.fromEntries(
+    Object.entries(servers).map(([name, server]) => [name, redactMcpServerArgsForDisplay(server)]),
+  );
+  const redactedRoot = redactConfigObject(
+    { mcp: { servers: argvRedacted } },
+    buildConfigSchemaCore().uiHints,
+  );
+  return redactedRoot.mcp.servers;
+}
+
 export async function listConfiguredMcpServers(): Promise<ConfigMcpReadResult> {
   return resolveConfiguredMcpServers(await readSourceConfigSnapshot());
 }
@@ -171,7 +202,8 @@ async function mutateConfiguredMcpServer(
     };
   }
 
-  const servers = structuredClone(loaded.mcpServers);
+  const next = loaded.config;
+  const servers: ConfigMcpServers = next.mcp?.servers ?? {};
   if (params.kind === "set") {
     const argvRestored = restoreMcpServerArgvSentinels({
       incoming: params.server,
@@ -208,9 +240,7 @@ async function mutateConfiguredMcpServer(
   }
   const errorLabel = params.kind === "update" ? params.errorLabel : params.kind;
   const success = params.kind === "set" ? undefined : { [successKey]: true };
-  const assertCurrent = params.kind === "update" ? undefined : params.assertCurrent;
-  const assertCurrentAsync = params.kind === "unset" ? params.assertCurrentAsync : undefined;
-  const next = structuredClone(loaded.config);
+  const { assertCurrent, assertCurrentAsync } = params;
   if (Object.keys(servers).length > 0) {
     next.mcp = { ...next.mcp, servers };
   } else if (next.mcp) {
@@ -264,7 +294,7 @@ async function mutateConfiguredMcpServer(
 }
 
 async function updateConfiguredMcpServerTools(
-  params: {
+  params: McpConfigWriteAuthority & {
     name: string;
     tools: McpServerToolFilterConfig | null;
     skipLifecycleLease?: boolean;
@@ -275,6 +305,8 @@ async function updateConfiguredMcpServerTools(
     {
       kind: "update",
       name: params.name,
+      assertCurrent: params.assertCurrent,
+      assertCurrentAsync: params.assertCurrentAsync,
       errorLabel: "tool selection update",
       update: (server) => {
         if (params.tools === null) {
@@ -300,7 +332,7 @@ async function updateConfiguredMcpServerTools(
 }
 
 async function updateConfiguredMcpServer(
-  params: {
+  params: McpConfigWriteAuthority & {
     name: string;
     update: (server: Record<string, unknown>) => Record<string, unknown>;
     skipLifecycleLease?: boolean;
@@ -311,6 +343,8 @@ async function updateConfiguredMcpServer(
     {
       kind: "update",
       name: params.name,
+      assertCurrent: params.assertCurrent,
+      assertCurrentAsync: params.assertCurrentAsync,
       errorLabel: "configure",
       update: (server) => canonicalizeConfiguredMcpServer(params.update(server)),
     },
@@ -319,13 +353,12 @@ async function updateConfiguredMcpServer(
 }
 
 async function setConfiguredMcpServer(
-  params: {
+  params: McpConfigWriteAuthority & {
     name: string;
     server: unknown;
     createOnly?: boolean;
     skipLifecycleLease?: boolean;
     expectedServer?: Record<string, unknown>;
-    assertCurrent?: () => void;
   },
   onCommitted?: McpConfigMutationHook,
 ): Promise<ConfigMcpWriteResult> {
@@ -340,11 +373,9 @@ async function setConfiguredMcpServer(
 }
 
 async function unsetConfiguredMcpServer(
-  params: {
+  params: McpConfigWriteAuthority & {
     name: string;
     expectedServer?: Record<string, unknown>;
-    assertCurrent?: () => void;
-    assertCurrentAsync?: () => Promise<void>;
   },
   onCommitted?: McpConfigMutationHook,
 ): Promise<ConfigMcpWriteResult> {

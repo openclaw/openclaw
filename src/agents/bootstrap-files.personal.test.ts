@@ -37,19 +37,16 @@ describe("personal bootstrap", () => {
     await fs.mkdir(personalDir, { recursive: true });
     await fs.writeFile(path.join(personalDir, "USER.md"), "Alice private preferences");
     const read = workspaceFiles.readWorkspaceFileWithGuards;
-    const intercepted = vi
+    using intercepted = vi
       .spyOn(workspaceFiles, "readWorkspaceFileWithGuards")
       .mockImplementationOnce(async (params) => {
         const loaded = await read(params);
         linkEmail("alice@example.test", bob.id);
         return loaded;
       });
-    try {
-      expect(await loadPersonalUserBootstrapFile(workspaceDir, alice.id)).toBeUndefined();
-      expect(intercepted).toHaveBeenCalledOnce();
-    } finally {
-      intercepted.mockRestore();
-    }
+
+    expect(await loadPersonalUserBootstrapFile(workspaceDir, alice.id)).toBeUndefined();
+    expect(intercepted).toHaveBeenCalledOnce();
   });
 
   it("refreshes the selected overlay without retaining a previous selection", async () => {

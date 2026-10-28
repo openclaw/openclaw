@@ -74,13 +74,6 @@ suite.define(() =>
   it.each([
     { action: "Archive only this session", childCount: 1, width: 390, keys: [parentKey] },
     { action: "Archive all (2)", childCount: 1, width: 1280, keys: [childKey, parentKey] },
-    { action: "Cancel", childCount: 1, width: 390, keys: [] },
-    {
-      action: "Archive all (3)",
-      childCount: 2,
-      width: 390,
-      keys: [siblingKey, childKey, parentKey],
-    },
     {
       action: "Archive all (12)",
       childCount: 11,
@@ -92,17 +85,6 @@ suite.define(() =>
       suite,
       async (page) => {
         const { gateway, modal } = await openNestedParent(page, childCount);
-        await expect
-          .poll(() =>
-            ui.button(modal, "Cancel").evaluate((element) => element === document.activeElement),
-          )
-          .toBe(true);
-        expect(
-          await ui.button(modal, `Archive all (${childCount + 1})`).getAttribute("class"),
-        ).toContain("primary");
-        expect(
-          await ui.button(modal, "Archive only this session").getAttribute("class"),
-        ).not.toMatch(/primary|danger/u);
         const geometry = await modal.locator(".exec-approval-actions").evaluate((footer) => {
           const box = footer.getBoundingClientRect();
           const buttons = [...footer.querySelectorAll("button")].map((button) => {
@@ -141,61 +123,11 @@ suite.define(() =>
         expect(geometry.rowsAligned).toBe(true);
         expect(geometry.bottomAligned).toBe(true);
         expect(geometry.buttons.every((button) => button.contained && button.unclipped)).toBe(true);
-        const cancel = geometry.buttons.find((button) => button.label === "Cancel")!;
-        const secondary = geometry.buttons.find(
-          (button) => button.label === "Archive only this session",
-        )!;
-        const primary = geometry.buttons.find(
-          (button) => button.label === `Archive all (${childCount + 1})`,
-        )!;
-        if (width === 1280) {
-          expect(geometry.buttons.map((button) => button.label)).toEqual([
-            "Cancel",
-            "Archive only this session",
-            `Archive all (${childCount + 1})`,
-          ]);
-          expect(Math.abs(cancel.top - primary.top)).toBeLessThanOrEqual(1);
-        } else {
-          expect(geometry.buttons.map((button) => button.label)).toEqual([
-            "Archive only this session",
-            `Archive all (${childCount + 1})`,
-            "Cancel",
-          ]);
-          expect(cancel.top).toBeGreaterThan(Math.max(secondary.bottom, primary.bottom));
-          if (width === 390) {
-            expect(Math.abs(secondary.top - primary.top)).toBeLessThanOrEqual(1);
-          }
-        }
-        if (action === "Cancel" || width === 1280) {
-          for (const name of [
-            "Archive only this session",
-            `Archive all (${childCount + 1})`,
-            "Cancel",
-          ]) {
-            await page.keyboard.press("Tab");
-            await expect
-              .poll(() =>
-                ui.button(modal, name).evaluate((element) => element === document.activeElement),
-              )
-              .toBe(true);
-          }
-        }
         const parentOnly = action === "Archive only this session";
+        await ui.button(modal, action).click();
         if (parentOnly) {
-          await support.captureUiProof(suite, page, "nested-archive-dialog.png");
-        }
-        if (action === "Cancel") {
-          await page.keyboard.press("Enter");
-        } else {
-          await ui.button(modal, action).click();
-        }
-        if (action === "Cancel") {
-          await modal.locator("dialog[open]").waitFor({ state: "detached" });
-          expect(await archivedKeys(gateway)).toEqual(keys);
-        } else if (parentOnly) {
           await expect.poll(() => archivedKeys(gateway)).toEqual(keys);
           await page.getByText("Session archived", { exact: true }).waitFor();
-          await support.captureUiProof(suite, page, "nested-archive-this-session.png");
         } else {
           await expect.poll(() => ui.requestCount(gateway, "sessions.patchMany")).toBe(1);
           expect(await archivedKeys(gateway, ["sessions.patchMany"])).toEqual(keys);

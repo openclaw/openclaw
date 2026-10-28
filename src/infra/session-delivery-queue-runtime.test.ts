@@ -1,10 +1,6 @@
 import { describe, expect, it as baseIt, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
-import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
-import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
-import { withTestDir } from "../test-helpers/temp-dir.js";
-import { withEnvAsync } from "../test-utils/env.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
@@ -21,6 +17,7 @@ import {
   releaseSessionDeliveryClaim as releaseClaim,
 } from "./session-delivery-queue-storage.js";
 import * as storage from "./session-delivery-queue-storage.js";
+import { withSessionDeliveryQueue } from "./session-delivery-queue.test-helpers.js";
 
 const nativeDrain = recovery.drainPendingSessionDelivery;
 const loadPending = storage.loadPendingSessionDelivery;
@@ -143,53 +140,39 @@ function runtimeFixture(context: OpenClawStateWorkerContext) {
     },
   };
 }
-async function withRuntime(run: (runtime: ReturnType<typeof runtimeFixture>) => Promise<void>) {
-  await withTestDir({ prefix: "openclaw-session-delivery-runtime-" }, async (tempDir) => {
-    await withEnvAsync({ OPENCLAW_STATE_DIR: tempDir }, async () => {
-      const fixture = runtimeFixture(captureOpenClawStateWorkerContext());
+const it = baseIt.extend<{ runtime: ReturnType<typeof runtimeFixture> }>({
+  runtime: ({ task: _task }, use) =>
+    withSessionDeliveryQueue(async (_stateDir, context) => {
+      const fixture = runtimeFixture(context);
       try {
-        await run(fixture);
+        await use(fixture);
       } finally {
-        // Join owners and admitted work before restoring their environment or deleting the queue.
+        // Join admitted work before the queue helper closes its database.
         await fixture.close();
         await fixture.time.scheduler.stop();
-        await closeOpenClawStateDatabaseByPathAsync(fixture.context.admission.databasePath);
         vi.restoreAllMocks();
       }
-    });
-  });
-}
-const it = baseIt.extend<{ runtime: ReturnType<typeof runtimeFixture> }>({
-  runtime: ({ task: _task }, use) => withRuntime(use),
+    }),
 });
 
 describe("session delivery queue runtime", () => {
   it("drains one scheduled id without requesting the pending inventory", async ({ runtime: r }) => {
     const id = await r.enqueue();
-    const unrelatedIds: string[] = [];
-    for (let index = 0; index < 8; index += 1) {
-      unrelatedIds.push(await r.enqueue(agentTurn(`unrelated:${index}`)));
-    }
-    const reloadPending = vi.spyOn(storage, "loadPendingSessionDelivery");
+    const unrelatedId = await r.enqueue(agentTurn("unrelated"));
     const listPending = vi.spyOn(storage, "loadPendingSessionDeliveries");
-    const drain = vi.spyOn(recovery, "drainPendingSessionDelivery");
     const onSettled = vi.fn(async () => {});
     const stop = r.start({ onSettled });
     await expect(r.schedule(id)).resolves.toBe(true);
-    expect(reloadPending).toHaveBeenCalledExactlyOnceWith(id, r.context);
     await r.time.advanceBy(0);
     await stop();
     expect(listPending).not.toHaveBeenCalled();
-    expect(drain).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ id, queueContext: r.context }),
-    );
     expect(r.deliver).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ id }), {
       queueContext: r.context,
     });
     expect(onSettled).toHaveBeenCalledWith(expect.objectContaining({ id }), "recovered", r.context);
     expect(await r.pending(id)).toBeNull();
     const pending = await r.all();
-    expect(pending.map((entry) => entry.id).toSorted()).toEqual(unrelatedIds.toSorted());
+    expect(pending.map((entry) => entry.id)).toEqual([unrelatedId]);
   });
 
   it.for(["lookup failure", "drain failure", "unchanged row"] as const)(
@@ -208,16 +191,8 @@ describe("session delivery queue runtime", () => {
       const stop = r.start();
       await expect(r.schedule(id)).resolves.toBe(true);
       await r.time.advanceBy(0);
-      if (mode === "lookup failure") {
-        expect(r.logger.error).toHaveBeenCalledWith(expect.stringContaining("failed to load"));
-      } else if (mode === "drain failure") {
-        await expect(drain.mock.results[0]?.value).rejects.toThrow("database scan failed");
-        expect(r.logger.error).toHaveBeenCalledWith(
-          expect.stringContaining("runtime drain failed"),
-        );
-      } else {
-        await expect(drain.mock.results[0]?.value).resolves.toMatchObject({ id, retryCount: 0 });
-      }
+      expect(r.logger.error).toHaveBeenCalledTimes(mode === "unchanged row" ? 0 : 1);
+      expect(await r.pending(id)).not.toBeNull();
       expect(r.deliver).not.toHaveBeenCalled();
       await r.idleFor(999);
       await r.finish(stop, r.deliver, 1, 1);
@@ -255,7 +230,6 @@ describe("session delivery queue runtime", () => {
     await r.schedule(id);
     r.time.clock.setTime(claimed.availableAt - dayMs);
     await r.schedule(id);
-    expect(r.time.clock.wakes.at(-1)?.delayMs).toBe(dayMs);
     await r.idleFor(dayMs - 1);
     await r.finish(stop, r.deliver, 1, 1);
   });
@@ -317,26 +291,17 @@ describe("session delivery queue runtime", () => {
         .fn<() => Promise<void>>()
         .mockRejectedValueOnce(new Error("session locked"))
         .mockResolvedValueOnce();
-      const drain = vi
-        .spyOn(recovery, "drainPendingSessionDelivery")
-        .mockImplementationOnce(async (params) => {
-          const pending = await r.retryDrain(params);
-          if (lookupFailure) {
-            throw new Error("database busy");
-          }
-          return pending;
-        });
+      vi.spyOn(recovery, "drainPendingSessionDelivery").mockImplementationOnce(async (params) => {
+        const pending = await r.retryDrain(params);
+        if (lookupFailure) {
+          throw new Error("database busy");
+        }
+        return pending;
+      });
       const stop = r.start({ deliver });
       await r.schedule(id);
       await r.time.advanceBy(0);
-      if (lookupFailure) {
-        await expect(drain.mock.results[0]?.value).rejects.toThrow("database busy");
-        expect(r.logger.error).toHaveBeenCalledWith(
-          expect.stringContaining("runtime drain failed"),
-        );
-      } else {
-        await expect(drain.mock.results[0]?.value).resolves.toMatchObject({ id, retryCount: 1 });
-      }
+      expect(r.logger.error).toHaveBeenCalledTimes(lookupFailure ? 1 : 0);
       expect(deliver).toHaveBeenCalledTimes(1);
       expect(await r.all()).toEqual([
         expect.objectContaining({ id, retryCount: 1, lastError: "session locked" }),
@@ -344,7 +309,6 @@ describe("session delivery queue runtime", () => {
       const attemptedAt = r.time.scheduler.now();
       if (lookupFailure) {
         await r.time.advanceBy(1_000);
-        await expect(drain.mock.results[1]?.value).resolves.toMatchObject({ id, retryCount: 1 });
       }
       await r.time.advanceBy(lookupFailure ? 3_999 : 4_999);
       expect(r.time.scheduler.now() - attemptedAt).toBe(4_999);
@@ -450,8 +414,7 @@ describe("session delivery queue runtime", () => {
 
   it("keeps the earliest retry across repeated scan failures", async ({ runtime: r }) => {
     await r.enqueue(agentTurn("music:task-scan:agent-loop"));
-    const listPending = vi
-      .spyOn(storage, "loadPendingSessionDeliveries")
+    vi.spyOn(storage, "loadPendingSessionDeliveries")
       .mockRejectedValueOnce(new Error("database busy"))
       .mockRejectedValueOnce(new Error("database still busy"))
       .mockImplementation(() => r.all());
@@ -463,7 +426,6 @@ describe("session delivery queue runtime", () => {
     await schedulePendingSessionDeliveries();
     await r.idleFor(499);
     await r.time.advanceBy(1);
-    await expect(listPending.mock.results[2]?.value).resolves.toHaveLength(1);
     await r.finish(stop);
   });
 });

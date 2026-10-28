@@ -8,24 +8,13 @@ vi.mock("openclaw/plugin-sdk/process-runtime", () => ({
   runCommandWithTimeout: runCommandMock,
 }));
 
+import { commandResult } from "../../../test-support/command-result.test-support.js";
 import {
   cleanupTailscaleExposure,
   getTailscaleSelfInfo,
   setupTailscaleExposure,
   setupTailscaleExposureRoutes,
 } from "./tailscale.js";
-
-function commandResult(overrides: Record<string, unknown> = {}) {
-  return {
-    stdout: "",
-    stderr: "",
-    code: 0,
-    signal: null,
-    killed: false,
-    termination: "exit",
-    ...overrides,
-  };
-}
 
 const dnsResult = () =>
   commandResult({
@@ -61,7 +50,7 @@ describe("voice-call tailscale helpers", () => {
       { stdout: "{not-json" },
       { code: null, termination: "timeout" },
       { code: null, termination: "signal", outputLimitExceeded: true },
-    ]) {
+    ] as const) {
       runCommandMock.mockResolvedValueOnce(commandResult(result));
       await expect(getTailscaleSelfInfo()).resolves.toBeNull();
     }

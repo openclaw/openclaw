@@ -310,10 +310,6 @@ export function requireCompactResult(result: CompactResult | undefined): Compact
   return result;
 }
 
-export function compactDetails(result: CompactResult): Record<string, unknown> {
-  return (result.result?.details ?? {}) as Record<string, unknown>;
-}
-
 export async function flushAsyncTasks(iterations = 3): Promise<void> {
   for (let index = 0; index < iterations; index += 1) {
     await nextImmediate();

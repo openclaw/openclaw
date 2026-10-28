@@ -1,17 +1,13 @@
-import type {
-  AssistantMessageEventStreamContract,
-  AssistantMessageEventStreamLike,
-  StreamFn,
-} from "@openclaw/llm-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { jsonResponse } from "../../../../src/test-helpers/http.js";
 import { createApiRegistry } from "../api-registry.js";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import { streamSimpleGoogle } from "../providers/google.js";
 import { makeProviderModel } from "../providers/provider-model.test-support.js";
+import { registerSynchronousTestApi } from "../providers/provider-stream.test-support.js";
 import { registerBuiltInApiProviders } from "../providers/register-builtins.js";
 import type { Model } from "../types.js";
 import { createAnthropicMessagesTransportStreamFn } from "./anthropic-transport-stream.js";
-import { createAzureOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
 import { createBoundaryAwareStreamFnForModel } from "./provider-transport-stream.js";
 import { prepareModelForSimpleCompletion } from "./simple-completion-transport.js";
 
@@ -24,10 +20,7 @@ function captureRequests() {
   const requests: Request[] = [];
   const captureFetch: typeof fetch = async (input, init) => {
     requests.push(new Request(input, init));
-    return new Response(JSON.stringify({ error: { message: "request captured" } }), {
-      status: 400,
-      headers: { "content-type": "application/json" },
-    });
+    return jsonResponse({ error: { message: "request captured" } }, 400);
   };
   return { requests, captureFetch };
 }
@@ -41,26 +34,6 @@ function makeModel<T extends Model["api"]>(
     maxTokens: 128,
     ...overrides,
   });
-}
-
-function isSynchronousStream(
-  stream: AssistantMessageEventStreamLike,
-): stream is AssistantMessageEventStreamContract {
-  return (
-    "push" in stream &&
-    typeof stream.push === "function" &&
-    "end" in stream &&
-    typeof stream.end === "function"
-  );
-}
-
-function requireSynchronousStream(
-  stream: ReturnType<StreamFn>,
-): AssistantMessageEventStreamContract {
-  if (stream instanceof Promise || !isSynchronousStream(stream)) {
-    throw new Error("Expected synchronous assistant event stream");
-  }
-  return stream;
 }
 
 afterEach(() => {
@@ -229,27 +202,6 @@ describe("managed OpenCode conversation headers at fetch egress", () => {
 });
 
 describe("managed OpenAI Responses session headers at fetch egress", () => {
-  it("honors Azure proxy opt-in with short cache retention", async () => {
-    const { requests, captureFetch } = captureRequests();
-    configureAiTransportHost({ ...initialHost, buildModelFetch: () => captureFetch });
-
-    const streamFn = createAzureOpenAIResponsesTransportStreamFn();
-    const stream = await streamFn(
-      makeModel({
-        api: "azure-openai-responses",
-        provider: "openai-proxy",
-        baseUrl: "https://responses-proxy.example.test/v1",
-        compat: { sendSessionIdHeader: true },
-      }),
-      makeContext(),
-      { apiKey: "test-key", sessionId: "conversation-a", cacheRetention: "short" },
-    );
-    await stream.result();
-
-    expect(requests).toHaveLength(1);
-    expect(requests[0]?.headers.get("session_id")).toBe("conversation-a");
-  });
-
   it.each([
     {
       name: "proxy opt-in",
@@ -285,22 +237,7 @@ describe("managed OpenAI Responses session headers at fetch egress", () => {
       buildModelFetch: () => captureFetch,
       requiresManagedTransport: () => testCase.managed,
       plugin: { ...initialHost.plugin, resolveProviderStream: () => undefined },
-      registerCustomApi: (registry, api, streamFn) => {
-        if (registry.getApiProvider(api)) {
-          return false;
-        }
-        const registeredStream = (
-          model: Model,
-          context: Parameters<StreamFn>[1],
-          options?: Parameters<StreamFn>[2],
-        ) => requireSynchronousStream(streamFn(model, context, options));
-        registry.registerApiProvider({
-          api,
-          stream: registeredStream,
-          streamSimple: registeredStream,
-        });
-        return true;
-      },
+      registerCustomApi: registerSynchronousTestApi,
     });
 
     const apiRegistry = createApiRegistry();

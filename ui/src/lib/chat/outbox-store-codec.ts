@@ -230,15 +230,20 @@ export function normalizeStoredQueueItem(entry: unknown): ChatQueueItem | null {
   if (replyToId) {
     item.replyToId = replyToId;
   }
-  if (entry.sendState === "steering" || entry.sendState === "executing-command") {
-    item.sendState = "unconfirmed";
+  if (
+    entry.sendState === "executing-command" ||
+    (entry.sendState === "unconfirmed" && normalizeOptionalString(entry.localCommandName))
+  ) {
+    item.sendState = "failed";
+    item.sendError = "Command was interrupted. Review the conversation before retrying.";
+  } else if (entry.sendState === "steering") {
+    item.sendState = "waiting-reconnect";
   } else if (entry.sendState === "submitting") {
     item.sendState = "waiting-idle";
   } else if (entry.sendState === "sending") {
     item.sendState = "waiting-reconnect";
   } else if (
     entry.sendState === "failed" ||
-    entry.sendState === "unconfirmed" ||
     entry.sendState === "held" ||
     entry.sendState === "waiting-idle" ||
     entry.sendState === "waiting-reconnect"
@@ -267,6 +272,17 @@ export function normalizeStoredQueueItem(entry: unknown): ChatQueueItem | null {
   const agentId = normalizeOptionalString(entry.agentId);
   if (agentId) {
     item.agentId = normalizeAgentId(agentId);
+  }
+  if (
+    item.sendRunId &&
+    ((item.sendAttempts ?? 0) > 0 || entry.sendRequestStartedAtMs !== undefined) &&
+    item.sendState !== "failed" &&
+    !item.sessionId &&
+    !item.localCommandName &&
+    !item.intent
+  ) {
+    // Unsettled attempts need a physical target before automatic replay.
+    item.sendState = "held";
   }
   if (
     entry.mentions !== undefined &&

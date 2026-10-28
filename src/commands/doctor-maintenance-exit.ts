@@ -7,11 +7,12 @@ export function holdDoctorMaintenanceExit(reportInterruption?: (message: string)
   const finished = createDeferredCore();
   // A failed outcome is relevant only if an exit is draining this gate.
   void finished.promise.catch(() => undefined);
-  const unregister = registerSignalExitGate(finished.promise, (signal) => {
+  const unregister = registerSignalExitGate(finished.promise, (signal, reason) => {
     if (controller.signal.aborted) {
       return;
     }
-    const message = `Doctor interrupted${signal ? ` by ${signal}` : ""}; cancelling inspections and settling admitted repairs before exit.`;
+    const cause = signal ?? reason;
+    const message = `Doctor interrupted${cause ? ` by ${cause}` : ""}; cancelling inspections and settling admitted repairs before exit.`;
     controller.abort(new Error(message));
     try {
       reportInterruption?.(message);

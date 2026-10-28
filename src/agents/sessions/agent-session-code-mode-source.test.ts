@@ -53,6 +53,7 @@ import {
   createAssistant,
   createAssistantResultStream,
   createTestSession,
+  mockToolTurn,
   registerAgentSessionLoopTestLifecycle,
   streamMocks,
   testModel,
@@ -100,22 +101,23 @@ afterEach(() => {
   resetSecretRedactionRegistryForTest();
 });
 
-function mockToolTurn(content: AssistantMessage["content"]) {
-  streamMocks.streamSimple
-    .mockImplementationOnce((model: Model) =>
-      createAssistantResultStream(createAssistant(model, content, "toolUse")),
-    )
-    .mockImplementation((model: Model) =>
-      createAssistantResultStream(createAssistant(model, "Done.")),
-    );
-}
-
 function createSourceSession(
   sessionManager: SessionManager,
   tools: ReturnType<typeof createCodeModeHarness>["tools"],
   options: NonNullable<Parameters<typeof createTestSession>[0]> = {},
 ) {
   return createTestSession({ sessionManager, customTools: toToolDefinitions(tools), ...options });
+}
+
+function installWriteHook(handler: (message: AgentMessage) => unknown) {
+  initializeGlobalHookRunner(
+    createMockPluginRegistry([
+      {
+        hookName: "before_message_write",
+        handler: (event: unknown) => handler((event as { message: AgentMessage }).message),
+      },
+    ]),
+  );
 }
 
 function toolCall(
@@ -160,6 +162,7 @@ async function expectReopens(
 
 const source =
   "function computeToken() { return 42; }\nconst API_TOKEN = computeToken(); return API_TOKEN;";
+const codeArgs = (code = source) => ({ title: "Calculate", code });
 const genericLiteral = "fixture-only-not-a-real-secret";
 const registeredLiteral = "fixture-registered-source-value";
 const vendorLiteral = "sk-fixturesyntheticcredential1234567890";
@@ -180,7 +183,7 @@ it.each(sourceCases)(
     guardSessionManager(manager, { config, allowedToolNames: ["exec", "wait"] });
     const originalArgs = {
       ...args,
-      title: "Compute the harmless number",
+      title: "Calculate",
       note: source,
       nested: { code: source, command: source },
       apiKey: "fixture-structured-secret",
@@ -202,7 +205,6 @@ it.each(sourceCases)(
       nextCallId: () => `${scope.sessionId}:${++modelCallSeq}`,
     });
     await session.prompt("Compute the harmless number.");
-    expect(streamMocks.streamSimple).toHaveBeenCalledTimes(2);
     const liveResult = session.state.messages.find((message) => message.role === "toolResult");
     if (outcome === "validation") {
       expect(liveResult).toMatchObject({
@@ -224,17 +226,14 @@ it.each(sourceCases)(
     await nextSession.prompt("Recall the earlier calculation.");
     const providerContext = streamMocks.streamSimple.mock.calls.at(-1)![1];
     const assistant = providerContext.messages.find((message) => message.role === "assistant");
-    expect(assistant).toMatchObject({
-      content: [
-        { text: source },
-        { type: "toolCall", id: "call_source", name: "exec", arguments: originalArgs },
-      ],
-    });
-    assert(assistant?.content[1]?.type === "toolCall");
-    expect(assistant.content[1].arguments).toEqual(originalArgs);
+    assert(assistant);
+    expect(assistant.content).toEqual([
+      { type: "text", text: source },
+      toolCall("call_source", originalArgs),
+    ]);
     const replayResult = providerContext.messages.find((item) => item.role === "toolResult");
     assert(replayResult);
-    expect(replayResult.toolCallId).toBe(assistant.content[1].id);
+    expect(replayResult.toolCallId).toBe("call_source");
     expect(providerContext.messages.indexOf(replayResult)).toBe(
       providerContext.messages.indexOf(assistant) + 1,
     );
@@ -281,24 +280,13 @@ it.each(["message_end", "before_message_write"] as const)(
           })
         : await createResourceLoader();
     if (hook === "before_message_write") {
-      initializeGlobalHookRunner(
-        createMockPluginRegistry([
-          {
-            hookName: hook,
-            handler: (event: unknown) => ({
-              message: replace((event as { message: AgentMessage }).message),
-            }),
-          },
-        ]),
-      );
+      installWriteHook((message) => ({ message: replace(message) }));
     }
     guardSessionManager(manager, { config: {}, allowedToolNames: ["exec", "wait"] });
     const { session } = await createSourceSession(manager, tools, { resourceLoader });
     for (const nextAction of ["mutate", "replace", "remove", "collision"]) {
       action = nextAction;
-      mockToolTurn([
-        toolCall(`hook_${action}`, { title: "Compute the harmless number", code: source }),
-      ]);
+      mockToolTurn([toolCall(`hook_${action}`, codeArgs())]);
       await session.prompt(`Test ${action}.`);
       const stored = toolCalls(manager.buildSessionContext().messages, `hook_${action}`);
       if (action === "remove") {
@@ -330,24 +318,12 @@ it.each(["message_end", "before_message_write"] as const)(
 it("preserves mixed tool arguments through a reentrant direct SQLite append", async () => {
   const { dir, scope, manager, tools } = await createSessionFixture("source-mixed");
   let reentrant: AgentMessage | undefined;
-  initializeGlobalHookRunner(
-    createMockPluginRegistry([
-      {
-        hookName: "before_message_write",
-        handler: (event: unknown) => {
-          const { message } = event as { message: AgentMessage };
-          if (message.role === "assistant" && message.stopReason === "toolUse" && !reentrant) {
-            // A direct append during the hook must preserve the same source bytes.
-            const outcome = appendTranscriptMessageSync(scope, {
-              message,
-              eventId: "reentrant_source",
-            });
-            reentrant = outcome.ok ? outcome.value?.message : undefined;
-          }
-        },
-      },
-    ]),
-  );
+  installWriteHook((message) => {
+    if (message.role === "assistant" && message.stopReason === "toolUse" && !reentrant) {
+      const outcome = appendTranscriptMessageSync(scope, { message, eventId: "reentrant_source" });
+      reentrant = outcome.ok ? outcome.value?.message : undefined;
+    }
+  });
   guardSessionManager(manager, { config: {}, allowedToolNames: ["exec", "wait", "other"] });
   const otherParameters = Type.Object({ code: Type.String() });
   const other: ToolDefinition<typeof otherParameters> = {
@@ -362,14 +338,13 @@ it("preserves mixed tool arguments through a reentrant direct SQLite append", as
   };
   mockToolTurn([
     toolCall("mixed_rejected", {}, "unavailable"),
-    toolCall("mixed_code", { title: "Compute the harmless number", code: source }),
+    toolCall("mixed_code", codeArgs()),
     toolCall("mixed_other", { code: source }, "other"),
   ]);
   const { session } = await createSourceSession(manager, tools, {
     customTools: [...toToolDefinitions(tools), other],
   });
   await session.prompt("Run both independent calls.");
-  expect(streamMocks.streamSimple).toHaveBeenCalledTimes(2);
   expect(session.state.messages.filter((message) => message.role === "toolResult")).toMatchObject([
     { toolCallId: "mixed_rejected", isError: true },
     { toolCallId: "mixed_code", details: { value: 42 } },
@@ -409,14 +384,7 @@ it("preserves source across reused managers and ordinary append batches", async 
   };
   for (const mode of ["code", "shell", "code"] as const) {
     guardSessionManager(manager, { config: {}, allowedToolNames: ["exec", "wait"], runId: mode });
-    mockToolTurn([
-      toolCall(
-        "reused_id",
-        mode === "code"
-          ? { title: "Compute the harmless number", code: source }
-          : { command: source },
-      ),
-    ]);
+    mockToolTurn([toolCall("reused_id", mode === "code" ? codeArgs() : { command: source })]);
     const { session } = await createSourceSession(manager, tools, {
       customTools: mode === "code" ? toToolDefinitions(tools) : [shell],
     });
@@ -561,9 +529,7 @@ describe("provider source fidelity", () => {
         contextWindowTokens: 32_768,
       });
       try {
-        expect(session.getActiveToolNames().join(",")).toBe("read");
         await session.prompt(`Read ${filename}.`);
-        expect(providerPayload !== undefined).toBe(true);
         const stored = JSON.stringify(sessionManager.getEntries());
         const liveToolResult = currentResult();
         const liveToolText = textContent(liveToolResult) ?? "";

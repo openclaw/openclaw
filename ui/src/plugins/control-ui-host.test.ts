@@ -7,6 +7,7 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { AgentsListResult } from "../api/types.ts";
 import { createAgentSelectionCapability } from "../app/agent-selection.ts";
 import { AssistantDock, type AssistantDockOwner } from "../app/assistant-dock.ts";
+import { makeBootRoster } from "../app/bootstrap.test-support.ts";
 import { createApplicationConfigCapability } from "../app/config.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { PLUGIN_PANEL_TOGGLE_EVENT } from "../components/panel-toggle-contract.ts";
@@ -19,6 +20,7 @@ import {
   sessionsResult,
 } from "../lib/sessions/session-capability.test-support.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
+import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { createControlUiPluginHost } from "./control-ui-host.ts";
 import { type ControlUiPluginOwner, ControlUiPluginRuntime } from "./control-ui-runtime.ts";
 import { scopeControlUiHost } from "./control-ui-scope.ts";
@@ -79,8 +81,14 @@ const sessionSnapshot = (
 };
 
 function createRosterHost(request: GatewayBrowserClient["request"], assistantDock?: AssistantDock) {
-  const client = { request } as GatewayBrowserClient;
-  const { gateway } = createGatewayHarness(client);
+  const client = createTestGatewayClient((method, ...args) =>
+    method === "plugins.controlUi.list"
+      ? { plugins: [], diagnostics: [] }
+      : request(method, ...args),
+  );
+  const { gateway } = createGatewayHarness(client, undefined, {
+    initial: { hello: gatewayHelloForMethods(["plugins.controlUi.list"]) },
+  });
   const agents = createAgentCapability(gateway);
   const sessions = createTestSessionCapability(gateway);
   const context = {
@@ -293,12 +301,7 @@ describe("native UI roster refresh", () => {
   it.each(["agents", "sessions"] as const)(
     "refreshes cached %s rows without discarding the current roster scope",
     async (surface) => {
-      const firstAgents: AgentsListResult = {
-        defaultId: "main",
-        mainKey: "main",
-        scope: "per-sender",
-        agents: [{ id: "main" }],
-      };
+      const firstAgents: AgentsListResult = makeBootRoster();
       const nextAgents: AgentsListResult = {
         ...firstAgents,
         agents: [...firstAgents.agents, { id: "research" }],

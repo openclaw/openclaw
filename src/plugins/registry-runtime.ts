@@ -1,7 +1,7 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { createChannelIngressDrain } from "../channels/message/ingress-drain.js";
 import { createChannelIngressQueue } from "../channels/message/ingress-queue.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { readRuntimeConfig } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   createPluginBlobStore,
@@ -320,7 +320,7 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
                   batch,
                   options,
                   selectedRegistry,
-                  getRuntimeConfig(),
+                  readRuntimeConfig(),
                   record.id,
                   () => {
                     assertRuntimeCurrent();
@@ -339,7 +339,7 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
                 await import("../decisions/runtime.js");
               assertRuntimeCurrent();
               const selectedRegistry = currentDecisionRegistry(capturedRegistry);
-              const config = getRuntimeConfig();
+              const config = readRuntimeConfig();
               const result = await withPluginRuntimeRegistryScope(selectedRegistry, () =>
                 evaluateDecisionV2Operation(
                   batch,
@@ -398,6 +398,8 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
               runWithCurrentPluginScope(() => gateway.openPluginPanel(params)),
             readSessionFacts: (params) =>
               runWithCurrentPluginScope(() => gateway.readSessionFacts(params)),
+            appendAgentMessage: (params) =>
+              runWithCurrentPluginScope(() => gateway.appendAgentMessage(params)),
             withSessionFacts: (select, run) =>
               runWithCurrentPluginScope(() =>
                 gateway.withSessionFacts(select, (snapshot) => {
@@ -469,6 +471,13 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
             listSessionEntries: session.listSessionEntries,
             listSessionEntriesAsync: (params) =>
               runWithCurrentPluginScope(() => session.listSessionEntriesAsync(params)),
+            withSessionEntriesAsync: (params, consume) =>
+              runWithCurrentPluginScope(() =>
+                session.withSessionEntriesAsync(params, (entries) => {
+                  assertRuntimeCurrent();
+                  return consume(entries);
+                }),
+              ),
             createSessionEntryListReader: (params) =>
               runWithPluginScope(async () => {
                 const read = await session.createSessionEntryListReader(params);
@@ -513,7 +522,6 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
               return await runWithPluginScope(async () => {
                 const resolveCurrentExecutionOwner = () =>
                   resolveStoredSessionExecutionOwner({
-                    action: "admit work on",
                     sessionKey: params.sessionKey,
                     storePath: params.storePath,
                   });
@@ -630,24 +638,21 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
         }
         const subagent: PluginRuntime["subagent"] = getRuntimeProperty();
         const native = subagent.native;
+        const list = native?.list;
+        const runNative = <T>(run: () => T): T =>
+          runWithPluginScope(() =>
+            withNativeSubagentRuntimeGuard(
+              { pluginId, assertCurrent: assertNativeRuntimeCurrent },
+              run,
+            ),
+          );
         return {
           ...(native
             ? {
                 native: {
-                  spawn: (params) =>
-                    runWithPluginScope(() =>
-                      withNativeSubagentRuntimeGuard(
-                        { pluginId, assertCurrent: assertNativeRuntimeCurrent },
-                        () => native.spawn(params),
-                      ),
-                    ),
-                  collect: (params) =>
-                    runWithPluginScope(() =>
-                      withNativeSubagentRuntimeGuard(
-                        { pluginId, assertCurrent: assertNativeRuntimeCurrent },
-                        () => native.collect(params),
-                      ),
-                    ),
+                  spawn: (params) => runNative(() => native.spawn(params)),
+                  collect: (params) => runNative(() => native.collect(params)),
+                  ...(list ? { list: (params) => runNative(() => list(params)) } : {}),
                 },
               }
             : {}),

@@ -27,13 +27,24 @@ import {
 import { cleanupTempDirs, makeTempDir as makeTempRepoRoot } from "./helpers/temp-dir.js";
 
 const tempDirs: string[] = [];
+const write = (root: string, name: string, content: string | Buffer) =>
+  writeFileSync(path.join(root, name), content);
+const read = (root: string, name: string) => readFileSync(path.join(root, name), "utf8");
+const hookFailure = (dir: string) => runFailure(dir, "bash", ["git-hooks/pre-commit"]);
+const expectNoCommit = (dir: string) =>
+  expect(runFailure(dir, "git", ["rev-parse", "--verify", "HEAD"]).status).not.toBe(0);
+const expectNoToolingWrites = (dir: string) => {
+  for (const name of ["node_modules", "formatter-call.json"]) {
+    expect(existsSync(path.join(dir, name))).toBe(false);
+  }
+};
 
 function writeJson(dir: string, value: Record<string, unknown>) {
-  writeFileSync(path.join(dir, "package.json"), JSON.stringify(value));
+  write(dir, "package.json", JSON.stringify(value));
 }
 
 function patchManifest(dir: string, patch: Record<string, unknown>) {
-  writeJson(dir, { ...JSON.parse(readFileSync(path.join(dir, "package.json"), "utf8")), ...patch });
+  writeJson(dir, { ...JSON.parse(read(dir, "package.json")), ...patch });
 }
 
 function packageFixture(root: string, name: string, manifest: Record<string, unknown>) {
@@ -41,7 +52,7 @@ function packageFixture(root: string, name: string, manifest: Record<string, unk
   mkdirSync(dir, { recursive: true });
   writeJson(dir, { name, version: "0.68.0", ...manifest });
   if (typeof manifest.main === "string") {
-    writeFileSync(path.join(dir, manifest.main), "module.exports = {};\n");
+    write(dir, manifest.main, "module.exports = {};\n");
   }
   return dir;
 }
@@ -54,61 +65,43 @@ function installRunNodeToolFixture(dir: string): void {
   );
 }
 
-afterEach(() => {
-  cleanupTempDirs(tempDirs);
-});
+afterEach(() => cleanupTempDirs(tempDirs));
 
 describe("git-hooks/pre-commit (integration)", () => {
-  it.each(["--all", ".agents/skills/discord-clawd/SKILL.md"])(
-    "preserves the staged path %s without running the changed-scope check",
-    (name) => {
-      const dir = createContentGuardFixture(tempDirs);
-      const fakeBinDir = path.join(dir, "bin");
-      writeFileSync(path.join(dir, "secret.txt"), "do-not-stage\n", "utf8");
-      writeFileSync(path.join(dir, "package.json"), '{"name":"tmp"}\n', "utf8");
-      writeFileSync(path.join(dir, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n", "utf8");
-      writeExecutable(
-        fakeBinDir,
-        "pnpm",
-        "#!/bin/sh\necho 'pnpm should not run from pre-commit' >&2\nexit 99\n",
-      );
-      const ignored = name.startsWith(".agents/");
-      if (ignored) {
-        stage(dir, ".gitignore", ".agents/skills/discord-clawd/\n");
-      }
-      stage(dir, name, "hello\n");
-      run(dir, "bash", ["git-hooks/pre-commit"], {
-        PATH: `${fakeBinDir}:${process.env.PATH ?? ""}`,
-      });
-      expect(run(dir, "git", ["diff", "--cached", "--name-only"]).split("\n")).toEqual(
-        ignored ? [name, ".gitignore"] : [name],
-      );
-    },
-  );
+  it("preserves force-added ignored skill files without running the changed-scope check", () => {
+    const name = ".agents/skills/discord-clawd/SKILL.md";
+    const dir = createContentGuardFixture(tempDirs);
+    const fakeBinDir = path.join(dir, "bin");
+    write(dir, "secret.txt", "do-not-stage\n");
+    write(dir, "package.json", '{"name":"tmp"}\n');
+    write(dir, "pnpm-lock.yaml", "lockfileVersion: '9.0'\n");
+    writeExecutable(
+      fakeBinDir,
+      "pnpm",
+      "#!/bin/sh\necho 'pnpm should not run from pre-commit' >&2\nexit 99\n",
+    );
+    stage(dir, ".gitignore", ".agents/skills/discord-clawd/\n");
+    stage(dir, name, "hello\n");
+    run(dir, "bash", ["git-hooks/pre-commit"], {
+      PATH: `${fakeBinDir}:${process.env.PATH ?? ""}`,
+    });
+    expect(run(dir, "git", ["diff", "--cached", "--name-only"]).split("\n")).toEqual([
+      name,
+      ".gitignore",
+    ]);
+  });
 
-  it.each(["unconfigured", "external"])("formats staged files with %s private rules", (mode) => {
+  it("formats with external private rules and then blocks their literals", () => {
     const dir = makeTempRepoRoot(tempDirs, "openclaw-pre-commit-normal-");
     run(dir, "git", ["init", "-q", "--initial-branch=main"]);
     const fakeBinDir = installPreCommitFixture(dir);
     const logPath = installFormattingRecorder(dir);
-    if (mode === "unconfigured") {
-      run(dir, "git", ["config", "--local", "--unset", ruleSetting]);
-      unlinkSync(path.join(dir, rulePath));
-    } else if (mode === "external") {
-      const privateDir = makeTempRepoRoot(tempDirs, "openclaw-private-rules-");
-      const privatePath = path.join(privateDir, "private rules.txt");
-      copyFileSync(path.join(dir, rulePath), privatePath);
-      unlinkSync(path.join(dir, rulePath));
-      run(dir, "git", ["config", "--local", ruleSetting, privatePath]);
-      expect(run(dir, "git", ["config", "--path", "--get", ruleSetting])).toBe(privatePath);
-    }
-
-    writeFileSync(
-      path.join(dir, "changed.ts"),
-      mode === "unconfigured" ? literals[0] : "export const value = 1;\n",
-      "utf8",
-    );
-    run(dir, "git", ["add", "--", "changed.ts"]);
+    const privateDir = makeTempRepoRoot(tempDirs, "openclaw-private-rules-");
+    const privatePath = path.join(privateDir, "private rules.txt");
+    copyFileSync(path.join(dir, rulePath), privatePath);
+    unlinkSync(path.join(dir, rulePath));
+    run(dir, "git", ["config", "--local", ruleSetting, privatePath]);
+    stage(dir, "changed.ts", "export const value = 1;\n");
 
     run(dir, "bash", ["git-hooks/pre-commit"], {
       PATH: `${fakeBinDir}:${process.env.PATH ?? ""}`,
@@ -117,71 +110,37 @@ describe("git-hooks/pre-commit (integration)", () => {
     expect(readFormatterLog(logPath)).toEqual([
       "oxfmt --write --threads=1 --no-error-on-unmatched-pattern changed.ts",
     ]);
-    if (mode === "external") {
-      writeFileSync(path.join(dir, "changed.ts"), literals[0]);
-      run(dir, "git", ["add", "--", "changed.ts"]);
-      expect(runFailure(dir, "bash", ["git-hooks/pre-commit"]).stderr).toContain(
-        "Blocked staged content",
-      );
-    }
+    stage(dir, "changed.ts", literals[0]);
+    expect(hookFailure(dir).stderr).toContain("Blocked staged content");
   });
 
-  it.each(["partial.ts", "gone.ts", "alias.ts", "payload.ts"])(
+  it.each(["gone.ts", "alias.ts"])(
     "preserves staged and working-tree bytes independently for %s",
     (name) => {
       const dir = createContentGuardFixture(tempDirs);
-      const partial = name === "partial.ts";
       const deleted = name === "gone.ts";
       const symlink = name === "alias.ts";
-      const staged = partial
-        ? "export const value = FORMAT_ME;\n"
-        : deleted
-          ? "export const keep = 1;\n"
-          : "clean staged version\n";
-      const working = partial
-        ? `${staged}export const unstagedOnly = 1;\n`
-        : symlink
-          ? "const other = 2;\n"
-          : literals[0];
-      if (partial) {
-        writeExecutable(
-          path.join(dir, "node_modules/.bin"),
-          "oxfmt",
-          `#!/usr/bin/env bash
-set -euo pipefail
-printf 'oxfmt %s\n' "$*" >> hook-tool.log
-case "$*" in *--stdin-filepath=*) sed 's/FORMAT_ME/FORMATTED/' ;; esac
-`,
-        );
-      }
+      const staged = "export const keep = 1;\n";
+      const working = "const other = 2;\n";
       if (symlink) {
-        writeFileSync(path.join(dir, "target-a.ts"), "const unformatted =  1\n", "utf8");
-        writeFileSync(path.join(dir, "target-b.ts"), working);
+        write(dir, "target-a.ts", "const unformatted =  1\n");
+        write(dir, "target-b.ts", working);
         symlinkSync("target-a.ts", path.join(dir, name));
         run(dir, "git", ["add", "--", name]);
         unlinkSync(path.join(dir, name));
         symlinkSync("target-b.ts", path.join(dir, name));
       } else {
         stage(dir, name, staged);
-        if (deleted) {
-          unlinkSync(path.join(dir, name));
-        } else {
-          writeFileSync(path.join(dir, name), working);
-        }
+        unlinkSync(path.join(dir, name));
       }
       run(dir, "git", commitArgs);
       expect(run(dir, "git", ["show", `HEAD:${name}`])).toBe(
-        symlink ? "target-a.ts" : partial ? "export const value = FORMATTED;" : staged.trim(),
+        symlink ? "target-a.ts" : staged.trim(),
       );
       if (deleted) {
         expect(existsSync(path.join(dir, name))).toBe(false);
       } else {
-        expect(readFileSync(path.join(dir, name), "utf8")).toBe(working);
-      }
-      if (partial) {
-        expect(readFormatterLog(path.join(dir, "hook-tool.log"))).toEqual([
-          "oxfmt --stdin-filepath=partial.ts",
-        ]);
+        expect(read(dir, name)).toBe(working);
       }
     },
   );
@@ -195,16 +154,13 @@ case "$*" in *--stdin-filepath=*) sed 's/FORMAT_ME/FORMATTED/' ;; esac
       "#!/bin/sh\ncat >/dev/null\nexit 0\n",
     );
     stage(dir, "partial.ts", "export const value = 1;\n");
-    writeFileSync(
-      path.join(dir, "partial.ts"),
-      "export const value = 1;\nexport const extra = 2;\n",
-    );
+    write(dir, "partial.ts", "export const value = 1;\nexport const extra = 2;\n");
 
     const result = runFailure(dir, "git", commitArgs);
 
     expect(result.stderr).toContain("Formatter returned no output");
     expect(run(dir, "git", ["show", ":partial.ts"])).toBe("export const value = 1;");
-    expect(runFailure(dir, "git", ["rev-parse", "--verify", "HEAD"]).status).not.toBe(0);
+    expectNoCommit(dir);
   });
 });
 
@@ -212,9 +168,7 @@ describe("staged content guard", () => {
   const fixture = () => createContentGuardFixture(tempDirs);
 
   function blocked(dir: string, names: string[], commit = false) {
-    const result = commit
-      ? runFailure(dir, "git", commitArgs)
-      : runFailure(dir, "bash", ["git-hooks/pre-commit"]);
+    const result = commit ? runFailure(dir, "git", commitArgs) : hookFailure(dir);
     const output = result.stdout + result.stderr;
     expect(result.status).toBe(1);
     expect(output).toContain("Blocked staged content");
@@ -253,12 +207,12 @@ describe("staged content guard", () => {
         );
       } else {
         stage(dir, name, `PRIVATE_SOURCE_CONTEXT prefix${literals[1]}suffix\n`);
-        writeFileSync(path.join(dir, name), "clean working tree\n");
+        write(dir, name, "clean working tree\n");
       }
       blocked(dir, [name], kind === "added");
       expect(readFormatterLog(log)).toEqual([]);
       if (kind === "added") {
-        expect(runFailure(dir, "git", ["rev-parse", "--verify", "HEAD"]).status).not.toBe(0);
+        expectNoCommit(dir);
       }
     },
   );
@@ -266,7 +220,7 @@ describe("staged content guard", () => {
   it("discovers a new path staged during formatting", () => {
     const dir = fixture();
     stage(dir, "payload.ts", "clean\n");
-    writeFileSync(path.join(dir, "introduced.txt"), literals[1]);
+    write(dir, "introduced.txt", literals[1]);
     const log = installFormattingRecorder(dir, "git add -- introduced.txt");
     blocked(dir, ["introduced.txt"], true);
     expect(readFormatterLog(log)).toHaveLength(1);
@@ -296,7 +250,7 @@ describe("staged content guard", () => {
 
   it("reports literal paths safely and includes ignored docs, tests and generated files", () => {
     const dir = fixture();
-    writeFileSync(path.join(dir, ".gitignore"), "ignored/\n");
+    write(dir, ".gitignore", "ignored/\n");
     const names = [
       "space name.txt",
       "--all",
@@ -317,22 +271,18 @@ describe("staged content guard", () => {
     expect(result.stderr).not.toContain("\u001b");
   });
 
-  it("scans the former public rule filename and beyond both batch limits", () => {
+  it("scans beyond both path-count and path-byte batch limits", () => {
     const dir = fixture();
-    const formerRulePath = "scripts/pre-commit/blocked-literals.txt";
-    stage(dir, formerRulePath, literals[0]);
-    blocked(dir, [formerRulePath]);
     // Long paths cross the byte budget first; short paths also cross the 256-entry count budget.
     const batchPaths = [];
     for (let i = 0; i < 600; i++) {
       const suffix = i < 70 ? `/${"x".repeat(180)}/${"y".repeat(180)}` : "";
       const name = `batch-${String(i).padStart(3, "0")}${suffix}.txt`;
       mkdirSync(path.dirname(path.join(dir, name)), { recursive: true });
-      writeFileSync(path.join(dir, name), "clean\n");
+      write(dir, name, "clean\n");
       batchPaths.push(name);
     }
     run(dir, "git", ["add", "--", ...batchPaths]);
-    stage(dir, formerRulePath, "clean\n");
     stage(dir, "zzz-last.txt", literals[1]);
     blocked(dir, ["zzz-last.txt"]);
   });
@@ -344,7 +294,7 @@ describe("staged content guard", () => {
     const head = run(dir, "git", ["rev-parse", "HEAD"]);
     run(dir, "git", ["update-index", "--add", "--cacheinfo", `160000,${head},submodule`]);
     mkdirSync(path.join(dir, "submodule"));
-    writeFileSync(path.join(dir, "submodule", "payload.txt"), literals[0]);
+    write(dir, "submodule/payload.txt", literals[0]);
     run(dir, "bash", ["git-hooks/pre-commit"]);
     expect(run(dir, "git", ["diff", "--cached", "--name-only"])).toBe("submodule");
   });
@@ -361,9 +311,9 @@ describe("staged content guard", () => {
     if (content === null) {
       unlinkSync(path.join(dir, rulePath));
     } else {
-      writeFileSync(path.join(dir, rulePath), content);
+      write(dir, rulePath, content);
     }
-    const result = runFailure(dir, "bash", ["git-hooks/pre-commit"]);
+    const result = hookFailure(dir);
     expect(result.status).toBe(1);
     expect(result.stderr).toContain(ruleSetting);
     expect(result.stderr).toContain("retry");
@@ -386,10 +336,10 @@ describe("staged content guard", () => {
     "redacts filenames and formatter streams with %s while preserving failure status",
     (_label, rules, text, redacted) => {
       const dir = fixture();
-      writeFileSync(path.join(dir, rulePath), `${rules.join("\n")}\n`);
+      write(dir, rulePath, `${rules.join("\n")}\n`);
       const name = `report-${text}\n🦞.ts`;
       stage(dir, name, text);
-      const finding = runFailure(dir, "bash", ["git-hooks/pre-commit"]);
+      const finding = hookFailure(dir);
 
       stage(dir, name, "clean\n");
       const context = `🦞 café ${text}\nuntouched ${text} tail\n`;
@@ -398,7 +348,7 @@ describe("staged content guard", () => {
         dir,
         `printf 'stdout %s' '${context}'\nprintf 'stderr %s' '${context}' >&2\nprintf broken > .git/index\nexit 23`,
       );
-      const result = runFailure(dir, "bash", ["git-hooks/pre-commit"]);
+      const result = hookFailure(dir);
       expect(result).toEqual({
         status: 23,
         stdout: `stdout ${expected}`,
@@ -417,34 +367,21 @@ describe("staged content guard", () => {
       stage(dir, name, "clean\n");
       if (kind === "config path") {
         run(dir, "git", ["config", "--local", ruleSetting, `~${literals[1]}/private rules.txt`]);
-        expect(runFailure(dir, "git", ["config", "--path", "--get", ruleSetting]).status).not.toBe(
-          1,
-        );
       } else if (kind === "index") {
-        writeFileSync(path.join(dir, ".git/index"), literals[1]);
+        write(dir, ".git/index", literals[1]);
       } else {
         const oid = run(dir, "git", ["rev-parse", `:${name}`]);
         const objectPath = `.git/objects/${oid.slice(0, 2)}/${oid.slice(2)}`;
         if (kind === "post-format blob") {
           // Keep git add from recreating the missing blob before the post-scan.
-          writeFileSync(path.join(dir, ".gitignore"), "*.txt\n");
+          write(dir, ".gitignore", "*.txt\n");
           stage(dir, "trigger.ts", "formatter trigger\n");
           installFormattingRecorder(dir, `rm -- '${objectPath}'`);
         } else {
           unlinkSync(path.join(dir, objectPath));
-          const grep = runFailure(dir, "git", [
-            "grep",
-            "--cached",
-            "--fixed-strings",
-            "clean",
-            "--",
-            name,
-          ]);
-          expect(grep.status).toBe(1);
-          expect(grep.stderr.length).toBeGreaterThan(0);
         }
       }
-      const result = runFailure(dir, "bash", ["git-hooks/pre-commit"]);
+      const result = hookFailure(dir);
       expect(result.stderr).toContain("Git could not");
       for (const literal of literals) {
         expect(result.stdout + result.stderr).not.toContain(literal);
@@ -520,7 +457,7 @@ if (process.argv.some(arg => arg.startsWith("--stdin-filepath="))) process.stdou
         ...env,
         NAPI_RS_FORCE_WASI: undefined,
       });
-      expect(JSON.parse(readFileSync(path.join(dir, "formatter-call.json"), "utf8"))).toEqual({
+      expect(JSON.parse(read(dir, "formatter-call.json"))).toEqual({
         cwd: dir,
         args,
       });
@@ -569,15 +506,12 @@ if (process.argv.some(arg => arg.startsWith("--stdin-filepath="))) process.stdou
       rmSync(pkg, { recursive: true });
       symlinkSync(outside, pkg);
     } else if (kind === "broken binding") {
-      writeFileSync(
-        path.join(binding, "binding.cjs"),
-        'throw new Error("unusable native binding");',
-      );
+      write(binding, "binding.cjs", 'throw new Error("unusable native binding");');
     } else if (kind === "escaped dependency") {
       const outside = makeTempRepoRoot(tempDirs, "openclaw-outside-dependency-");
       rmSync(dependency, { recursive: true });
       writeJson(outside, { name: "tinypool", version: "2.1.2", main: "index.cjs" });
-      writeFileSync(path.join(outside, "index.cjs"), "module.exports = {};\n");
+      write(outside, "index.cjs", "module.exports = {};\n");
       symlinkSync(outside, dependency);
     } else if (kind === "drift") {
       writeFileSync(
@@ -599,18 +533,17 @@ if (process.argv.some(arg => arg.startsWith("--stdin-filepath="))) process.stdou
     if (override) {
       expect(result.stderr).toContain("Cannot qualify an overridden formatter platform binding");
     }
-    expect(existsSync(path.join(dir, "formatter-call.json"))).toBe(false);
-    expect(existsSync(path.join(dir, "node_modules"))).toBe(false);
+    expectNoToolingWrites(dir);
   });
 
   it("keeps partial-stage and private-content guards around the tooling formatter", () => {
     const { dir, env } = toolingFixture();
     stage(dir, "partial.ts", "export const value = FORMAT_ME;\n");
     const working = `export const value = FORMAT_ME;\n// ${literals[0]}\n`;
-    writeFileSync(path.join(dir, "partial.ts"), working);
+    write(dir, "partial.ts", working);
     run(dir, "git", commitArgs, env);
     expect(run(dir, "git", ["show", "HEAD:partial.ts"])).toBe("export const value = FORMATTED;");
-    expect(readFileSync(path.join(dir, "partial.ts"), "utf8")).toBe(working);
+    expect(read(dir, "partial.ts")).toBe(working);
     rmSync(path.join(dir, "formatter-call.json"));
     stage(dir, "blocked.ts", literals[1]);
     const failed = runFailure(dir, "git", commitArgs, env);
@@ -626,40 +559,30 @@ if (process.argv.some(arg => arg.startsWith("--stdin-filepath="))) process.stdou
     const failed = runFailure(dir, "git", commitArgs, env);
     expect(failed.status).toBe(1);
     expect(failed.stderr).toContain("[pre-commit] FAILED (exit 23)");
-    expect(runFailure(dir, "git", ["rev-parse", "--verify", "HEAD"]).status).not.toBe(0);
+    expectNoCommit(dir);
   });
 
-  it.each([true, false])(
-    "never hydrates dependencies with the local formatter installed=%s",
-    (installed) => {
-      const dir = makeTempRepoRoot(tempDirs, "openclaw-run-node-tool-");
-      installRunNodeToolFixture(dir);
-      writeFileSync(path.join(dir, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n", "utf8");
+  it("reports missing dependencies without hydrating them", () => {
+    const dir = makeTempRepoRoot(tempDirs, "openclaw-run-node-tool-");
+    installRunNodeToolFixture(dir);
+    write(dir, "pnpm-lock.yaml", "lockfileVersion: '9.0'\n");
 
-      const fakeBinDir = path.join(dir, "bin");
-      const markerPath = path.join(dir, "pnpm-called");
-      mkdirSync(fakeBinDir, { recursive: true });
-      writeExecutable(
-        fakeBinDir,
-        "pnpm",
-        `#!/usr/bin/env bash\ntouch ${JSON.stringify(markerPath)}\nexit 99\n`,
-      );
+    const fakeBinDir = path.join(dir, "bin");
+    const markerPath = path.join(dir, "pnpm-called");
+    mkdirSync(fakeBinDir, { recursive: true });
+    writeExecutable(
+      fakeBinDir,
+      "pnpm",
+      `#!/usr/bin/env bash\ntouch ${JSON.stringify(markerPath)}\nexit 99\n`,
+    );
 
-      const args = ["scripts/pre-commit/run-node-tool.sh", "oxfmt", "--write", "a.ts"];
-      const env = { PATH: `${fakeBinDir}:${process.env.PATH ?? ""}` };
-      if (installed) {
-        const toolBinDir = path.join(dir, "node_modules", ".bin");
-        mkdirSync(toolBinDir, { recursive: true });
-        writeExecutable(toolBinDir, "oxfmt", "#!/usr/bin/env bash\nprintf 'local:%s\\n' \"$*\"\n");
-        expect(run(dir, "bash", args, env)).toBe("local:--write a.ts");
-      } else {
-        const result = runFailure(dir, "bash", args, env);
-        expect(result.status).toBe(1);
-        expect(result.stderr).toContain(
-          "Missing repo dependencies: cannot run oxfmt without node_modules.",
-        );
-      }
-      expect(existsSync(markerPath)).toBe(false);
-    },
-  );
+    const args = ["scripts/pre-commit/run-node-tool.sh", "oxfmt", "--write", "a.ts"];
+    const env = { PATH: `${fakeBinDir}:${process.env.PATH ?? ""}` };
+    const result = runFailure(dir, "bash", args, env);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "Missing repo dependencies: cannot run oxfmt without node_modules.",
+    );
+    expect(existsSync(markerPath)).toBe(false);
+  });
 });

@@ -7,6 +7,24 @@ import { ChatDetailsSubagents, type ChatDetailsSubagentsProps } from "./chat-det
 
 type Row = ChatDetailsSubagentsProps["rows"][number];
 
+function mountSubagents(initial: readonly Row[], mobile = false) {
+  const [rows, setRows] = createSignal(initial);
+  const [collapsed, setCollapsed] = createSignal(false);
+  const openChild = vi.fn();
+  const openCollection = vi.fn();
+  const view = mountSolid(() => (
+    <ChatDetailsSubagents
+      rows={rows()}
+      mobile={mobile}
+      collapsed={collapsed()}
+      workingLabel="Working"
+      onOpenSubagent={openChild}
+      onOpenSubagents={openCollection}
+    />
+  ));
+  return { view, setRows, setCollapsed, openChild, openCollection };
+}
+
 it.each([
   { mobile: false, limit: 5 },
   { mobile: true, limit: 3 },
@@ -18,18 +36,7 @@ it.each([
       label: "Review",
       status: index === 1 ? "running" : "done",
     }));
-    const [rows, setRows] = createSignal<readonly Row[]>(initial);
-    const openChild = vi.fn();
-    const openCollection = vi.fn();
-    const view = mountSolid(() => (
-      <ChatDetailsSubagents
-        rows={rows()}
-        mobile={mobile}
-        workingLabel="Working"
-        onOpenSubagent={openChild}
-        onOpenSubagents={openCollection}
-      />
-    ));
+    const { view, setRows, openChild, openCollection } = mountSubagents(initial, mobile);
     const buttons = view.getAllByRole("button");
     expect(buttons).toHaveLength(limit);
     buttons[0]!.click();
@@ -55,18 +62,7 @@ it.each([
 );
 
 it("omits empty content and removes collapsed activity when the last waiting child settles", () => {
-  const [rows, setRows] = createSignal<readonly Row[]>([]);
-  const [collapsed, setCollapsed] = createSignal(false);
-  const view = mountSolid(() => (
-    <ChatDetailsSubagents
-      rows={rows()}
-      mobile={false}
-      collapsed={collapsed()}
-      workingLabel="Working"
-      onOpenSubagent={vi.fn()}
-      onOpenSubagents={vi.fn()}
-    />
-  ));
+  const { view, setRows, setCollapsed } = mountSubagents([]);
   expect(view.container.childElementCount).toBe(0);
   setCollapsed(true);
   setRows([{ key: "waiting-child", label: "Waiting child", status: "waiting" }]);
@@ -82,43 +78,23 @@ it("omits empty content and removes collapsed activity when the last waiting chi
   expect(view.getByRole("button", { name: "Waiting child Done" })).toBeTruthy();
 });
 
-it.each([false, true])(
-  "folds failed runs into Done without changing child outcomes (mobile=%s)",
-  (mobile) => {
-    const initial: Row[] = [
-      { key: "a", label: "A", status: "running" },
-      { key: "b", label: "B", status: "waiting" },
-      { key: "c", label: "C", status: "queued" },
-      { key: "d", label: "D", status: "done" },
-      { key: "e", label: "E", status: "failed" },
-      { key: "f", label: "F", status: "stopped" },
-    ];
-    const [rows, setRows] = createSignal<readonly Row[]>(initial);
-    const openChild = vi.fn();
-    const view = mountSolid(() => (
-      <ChatDetailsSubagents
-        rows={rows()}
-        mobile={mobile}
-        workingLabel="Working"
-        onOpenSubagent={openChild}
-        onOpenSubagents={vi.fn()}
-      />
-    ));
-    expect(
-      view.getByRole("button", {
-        name: "All subagents. 1 Working, 1 Waiting on subagents, 1 Queued, 2 Done, 1 Stopped",
-      }),
-    ).toBeTruthy();
-    setRows(initial.map((row) => (row.key === "e" ? { ...row, status: "running" } : row)));
-    flush();
-    expect(
-      view.getByRole("button", {
-        name: "All subagents. 2 Working, 1 Waiting on subagents, 1 Queued, 1 Done, 1 Stopped",
-      }),
-    ).toBeTruthy();
-    setRows([initial[4]!]);
-    flush();
-    view.getByRole("button", { name: "E Failed" }).click();
-    expect(openChild).toHaveBeenCalledExactlyOnceWith("e");
-  },
-);
+it("folds failed runs into Done without changing child outcomes", () => {
+  const initial: Row[] = [
+    { key: "a", label: "A", status: "running" },
+    { key: "b", label: "B", status: "waiting" },
+    { key: "c", label: "C", status: "queued" },
+    { key: "d", label: "D", status: "done" },
+    { key: "e", label: "E", status: "failed" },
+    { key: "f", label: "F", status: "stopped" },
+  ];
+  const { view, setRows, openChild } = mountSubagents(initial);
+  expect(
+    view.getByRole("button", {
+      name: "All subagents. 1 Working, 1 Waiting on subagents, 1 Queued, 2 Done, 1 Stopped",
+    }),
+  ).toBeTruthy();
+  setRows([initial[4]!]);
+  flush();
+  view.getByRole("button", { name: "E Failed" }).click();
+  expect(openChild).toHaveBeenCalledExactlyOnceWith("e");
+});

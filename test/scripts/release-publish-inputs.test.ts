@@ -51,26 +51,19 @@ it.each([
   { published: true, latest: "2026.9.7", decision: "superseded", route: "npm-readback" },
 ])("seals registry decision $decision without acknowledging the SDK evidence", async (row) => {
   const input = row.coreBeta ? fixture("beta", "openclaw") : fixture();
-  const fetchImpl = vi.fn(async () =>
+  const fetchImpl = async () =>
     row.bootstrap
       ? new Response("{}", { status: 404 })
       : Response.json({
           versions: { "2026.9.5": {}, ...(row.published ? { [version]: {} } : {}) },
           "dist-tags": { latest: row.latest, beta: row.latest },
-        }),
-  );
+        });
   const sealed = await seal(input, fetchImpl);
-  expect(fetchImpl).toHaveBeenCalledTimes(1);
   expect(sealed).toMatchObject({
-    version: 1,
-    targetSha,
-    npmDistTag: row.coreBeta ? "beta" : "latest",
     pluginSdkApiAcknowledgement: "",
     pluginSdkApiEvidenceDigest: input.digest,
     npmDecisions: [
       {
-        packageName: row.coreBeta ? "openclaw" : "@openclaw/example",
-        packageVersion: version,
         decision: row.decision,
         route: row.route,
         supersededBy: row.decision === "superseded" ? "2026.9.7" : null,

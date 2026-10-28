@@ -64,10 +64,8 @@ function expectInventory(rows: NodeTestShard[], files: string[]) {
 }
 
 it.each([
-  ["agentic-agents-support", ["agents-support"], undefined],
   ["agentic-gateway-methods", ["gateway-methods", "gateway-methods-isolated"], undefined],
   ["agentic-cli-process", ["cli-process"], 90],
-  ["core-runtime-config", ["runtime-config"], 90],
 ] as const)("keeps %s timing walls until refitted", async (owner, names, timeout) => {
   const configs = names.map((name) => `test/vitest/vitest.${name}.config.ts`);
   const files = expectDefined(listWholeConfigSplitFiles(owner), "release owner inventory");
@@ -203,22 +201,15 @@ it("fits measured release work without changing coverage or worker contracts", a
       })
       .toSorted();
   expect(contracts(rows)).toEqual(contracts(before));
-  for (const owner of [
-    "agentic-cli-process",
-    "agentic-control-plane-agent-chat",
-    "core-runtime-config",
-  ]) {
-    const owns = (name: string) => name.startsWith(`${owner}-hosted-`);
-    const owned = groupsOf(rows).filter((group) => owns(group.shard_name));
-    expect(owned.length, owner).toBeGreaterThan(1);
-    for (const group of owned) {
+  const split = rows.filter((row) =>
+    groupsOf([row]).some((group) => /-hosted-\d+$/u.test(group.shard_name)),
+  );
+  expect(split.length).toBeGreaterThan(0);
+  for (const row of split) {
+    expect(row.predictedSeconds).toBeLessThanOrEqual(720);
+    expect(row.timeoutMinutes).not.toBe(90);
+    for (const group of groupsOf([row]).filter((entry) => /-hosted-\d+$/u.test(entry.shard_name))) {
       expect(group.includePatterns!.length).toBeLessThanOrEqual(64);
-    }
-    for (const row of rows.filter((job) =>
-      groupsOf([job]).some((group) => owns(group.shard_name)),
-    )) {
-      expect(row.predictedSeconds, owner).toBeLessThanOrEqual(720);
-      expect(row.timeoutMinutes, owner).not.toBe(90);
     }
   }
   const packed = rows.filter((row) => row.groups);

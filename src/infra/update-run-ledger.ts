@@ -14,6 +14,11 @@ import { isSqliteLockError } from "./sqlite-error-diagnostics.js";
 import { assertSqliteSchemaContains } from "./sqlite-schema-contract.js";
 import { extractSqliteTableSchema } from "./sqlite-schema-sql.js";
 import {
+  admitUpdateResultInTransaction,
+  claimUpdateResultInTransaction,
+} from "./update-result-claim.js";
+import type { UpdateResultPayload } from "./update-result-payload.js";
+import {
   inspectUpdateRepairDriverAdmission,
   isStaleIdentitylessUpdateRun,
   recordedUpdateRunDrivers,
@@ -81,9 +86,10 @@ export function createUpdateRun(
   assertCurrent?: (stage: "transaction" | "commit") => void,
 ): UpdateRunRecord {
   const now = Date.now();
+  const createdAtMs = input.accepted?.startedAtMs ?? now;
   const initial: UpdateRunRecord = {
     runId: input.runId ?? randomUUID(),
-    createdAtMs: now,
+    createdAtMs,
     updatedAtMs: now,
     trigger: input.trigger,
     phase: "requested",
@@ -92,8 +98,8 @@ export function createUpdateRun(
     origin: { ...input.origin, windowsUserSid: readWindowsUserSid() },
     target: input.target ?? {},
     before: input.before ?? {},
-    after: {},
-    steps: [{ step: "requested", status: "in_progress", startedAtMs: now }],
+    after: input.after ?? {},
+    steps: [{ step: "requested", status: "in_progress", startedAtMs: createdAtMs }],
     verification: {},
     repair: [],
     confirmedAtMs: null,
@@ -108,6 +114,9 @@ export function createUpdateRun(
       detail: input.settlement.detail,
     });
     finishUpdateRunRecord(initial, { status: "succeeded", reason: input.settlement.reason });
+  }
+  if (input.accepted) {
+    finishUpdateRunRecord(initial, { status: "succeeded" });
   }
   const row = encodeRun(initial, options);
   return runUpdateRunAdmission(
@@ -162,6 +171,9 @@ export function createUpdateRun(
         db,
         getNodeSqliteKysely<LedgerDatabase>(db).insertInto("update_runs").values(admittedRow),
       );
+      if (input.reportResult && !input.preview && !input.settlement) {
+        admitUpdateResultInTransaction(db, admittedRow.run_id);
+      }
       return decodeRun(admittedRow);
     },
     options,
@@ -435,15 +447,15 @@ function finishInterruptedRunInTransaction(
   expected: UpdateRunRecord,
   status: "skipped" | "failed",
   options: LedgerOptions,
-): void {
+): UpdateRunRecord | undefined {
   if (
     inspectRecoveryRows(db).some(
       ({ record }) => record.runId === expected.runId || isUpdateRecoveryPending(record),
     )
   ) {
-    return;
+    return undefined;
   }
-  mutateRunInTransaction(
+  return mutateRunInTransaction(
     db,
     expected.runId,
     (record) => {
@@ -475,6 +487,7 @@ export function finishInterruptedUpdateBeforeActivation(
   expected: UpdateRunRecord,
   assertCurrent: () => void,
   options: LedgerOptions,
+  reportUpdateResult?: (payload: UpdateResultPayload) => void,
 ): void {
   if (
     expected.status !== "running" ||
@@ -488,6 +501,7 @@ export function finishInterruptedUpdateBeforeActivation(
     errorMessage: "Interrupted update schema is unavailable.",
   });
   assertCurrent();
+  let updateResult: UpdateResultPayload | undefined;
   runExistingOpenClawStateWriteTransaction(
     ({ db, path: pathname }) => {
       assertCurrent();
@@ -506,12 +520,18 @@ export function finishInterruptedUpdateBeforeActivation(
           assertSqliteSchemaContains(db, pathname, recoverySchema);
         }
       }
-      finishInterruptedRunInTransaction(db, expected, "failed", options);
+      const finished = finishInterruptedRunInTransaction(db, expected, "failed", options);
+      if (finished && reportUpdateResult) {
+        updateResult = claimUpdateResultInTransaction(db, finished);
+      }
       assertCurrent();
     },
     options,
     { schemaSql: schema, operationLabel: "update.interrupted" },
   );
+  if (updateResult) {
+    reportUpdateResult?.(updateResult);
+  }
 }
 
 export function recordUpdateRunVerification(

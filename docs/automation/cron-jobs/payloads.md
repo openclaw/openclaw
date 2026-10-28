@@ -103,7 +103,9 @@ With `message` in the tool cap, scheduled agent turns can read messages and chan
 information on supported channel plugins without an inbound chat. Operator-created
 jobs use the current operator read policy. Agent-created jobs retain their recorded
 creator origin and account, and the channel's delegated read restrictions still
-apply. Delivery settings do not grant read access.
+apply. Delivery settings do not grant read access. Script payloads and condition triggers
+use the same recorded creator origin at message-action admission; the channel
+still enforces its own restrictions on reads and mutations.
 
 Scheduled agent turns can inspect their own job and remove it when finished,
 even without an interactive sender. This self-scoped `automations` tool does not
@@ -121,8 +123,27 @@ scope ceiling; it is not a new PR-only permission or a blanket grant to automati
 The stored tool cap, sandbox, and current tool denials still apply. Scheduled
 automation management remains self-scoped.
 
-This source is not inferred for existing jobs, guests, isolated/current targets,
-scripts, or another conversation. An authenticated owner update can bind it again
+The same applies to a new `isolated` or `current` `agentTurn` job that an
+authenticated operator turn links to its creating conversation. The job retains
+the creator's source privately, runs in its own detached session, and rechecks
+the original operator scopes, role, device, and access grant at each occurrence
+and before its effects. If the device or grant is revoked, or the role changes,
+the next occurrence is refused with a message asking you to recreate the
+automation from an authenticated turn, and the job is disabled. A revocation
+during a run stops that run's remaining operator effects.
+
+If the creating conversation is reset, a linked detached job keeps running
+unbound, without that conversation's workspace or memory, and still rechecks the
+creator's device and grant. A removed or archived conversation pauses the job.
+
+Stored jobs are unchanged: a source is never inferred for an existing job, so
+jobs created before this behavior keep their recorded ownership check. Binding
+an older job that names its conversation only by key from an authenticated
+Control UI turn in that conversation stores that turn's source (see
+[Binding older jobs](/cli/cron#binding-older-jobs-to-their-conversation)). A source
+is also never captured for guests, scripts, unlinked jobs, jobs created without
+an authenticated operator turn (such as `cron.add` from the CLI), or another
+conversation. An authenticated owner update can bind it again
 to the updated task. Executable edits without that authentication discard it.
 Display-only edits and disabling or re-enabling the job preserve its stored
 source; names, schedules, and other executable inputs remain bound. A fresh
@@ -244,6 +265,19 @@ on such a route stays unbound and runs on that key; once a stored account become
 job stops with the adoption instructions instead of switching to that account. Job
 creation follows the same rule. An account refusal ends the run; it never falls back
 to another model or provider. Credentialless models remain usable without an account.
+
+Unbound CLI-runtime automations use the CLI's own login and do not require an
+inference binding. OpenClaw does not forward a stored inference profile on this
+native-only path. Jobs with a saved inference binding keep using that account.
+Known provider-auth environment variables and the backend's credential exclusions
+are removed after environment overrides, even when the live-test preserve-env
+option is set. Runtime settings, such as the context window, are retained.
+For paired-node runs, the Gateway withholds host credentials on every node. Nodes
+advertising native-only auth support also use their own provider inventory to
+remove credentials. Older nodes retain their existing local environment behavior
+and receive no new invocation parameter. Update the node and approve its new
+capability to apply node-side filtering.
+
 Native runtime-owned jobs retain their runtime’s existing authorization checks, and a
 native connection cannot silently replace a job’s recorded host-managed inference account.
 An explicit update from an authorized native creator can adopt its runtime authority.
@@ -267,7 +301,7 @@ Model-selection precedence for isolated jobs, highest first:
 3. User-selected stored automation-session model override
 4. Agent/default model selection
 
-A user-selected stored session model is an exact selection, as described in [selection source policy](/concepts/model-failover#selection-source-policy): if it fails, the run reports the failure instead of answering from configured fallbacks. The same applies when an agent turn runs in a main or custom (`session:<key>`) session whose model was selected by the user. Per-job `--fallbacks` still apply.
+A user-selected stored session model is an exact selection, as described in [selection source policy](/concepts/model-failover#selection-source-policy): if it fails, the run reports the failure instead of answering from configured fallbacks. The same applies to an agent turn in a main or custom (`session:<key>`) session and to a main-session system event when the session's model was selected by the user. Per-job `--fallbacks` still apply.
 
 Fast mode follows the resolved live selection. Isolated automation resolves it in this order: stored session `fastMode`, per-agent `agents.entries.*.fastModeDefault`, global `agents.defaults.fastModeDefault`, then selected-model `params.fastMode`. Auto mode uses the model's `params.fastAutoOnSeconds` cutoff, defaulting to 60 seconds.
 
@@ -312,11 +346,18 @@ the content instead of overwriting another edit.
 
 Use a normal final reply for a visible result and `NO_REPLY` for silence.
 `record_result` accepts one outcome (`no_change`, `progress`, `done`, `blocked`,
-or `needs_attention`) and a nonempty summary capped at 2000 characters. It records
-the result without sending a notification by itself. Meaningful outcomes are
-retained in ordinary run history and bounded session context, including when the
-final reply is silent; this is not a delivery retry queue. `no_change` keeps
-runner delivery silent without hiding execution failures. Adaptive scheduling still uses `next_check` on a paced
+or `needs_attention`). `no_change` needs no summary; every other outcome requires
+a trimmed summary of 1–2000 characters. It records the result without sending a
+notification by itself. Structured results are retained in run history. After a
+successful run, the last meaningful result is saved with the job and included as
+bounded context in its next prompt, even when the final reply is silent. Quiet
+checks and execution failures do not overwrite that result or append result
+boilerplate to the conversation. This is not a delivery retry queue. `no_change`
+keeps runner delivery silent without hiding execution failures. A `progress`,
+`done`, `blocked`, or `needs_attention` summary is the run's authored outcome:
+an earlier tool failure the run moved past no longer adds a generic
+`⚠️ <tool> failed` notice to an otherwise silent run. The failure stays visible
+in the transcript and progress lane. Adaptive scheduling still uses `next_check` on a paced
 job. Scratch is context, not another scheduler:
 runtime does not parse `tasks:` blocks or read `HEARTBEAT.md`.
 
@@ -431,12 +472,12 @@ envelope continue their ordinary non-app behavior; recreate or reauthorize one
 only when it needs Codex app access. See
 [Native Codex plugins](/plugins/codex-native-plugins#scheduled-automations).
 
-| Style           | `--session` value   | Runs in                                              | Best for                        |
-| --------------- | ------------------- | ---------------------------------------------------- | ------------------------------- |
-| Main session    | `main`              | Owning agent's main session                          | Reminders, system events        |
-| Isolated        | `isolated`          | Dedicated `cron:<jobId>`                             | Reports, background chores      |
-| Current session | `current`           | Detached; commits to the creation-bound conversation | Context-aware recurring work    |
-| Custom session  | `session:custom-id` | Persistent named session                             | Workflows that build on history |
+| Style           | `--session` value   | Runs in                                | Best for                        |
+| --------------- | ------------------- | -------------------------------------- | ------------------------------- |
+| Main session    | `main`              | Owning agent's main session            | Reminders, system events        |
+| Isolated        | `isolated`          | Dedicated `cron:<jobId>`               | Reports, background chores      |
+| Current session | `current`           | Child run of the creating conversation | Context-aware recurring work    |
+| Custom session  | `session:custom-id` | Persistent named session               | Workflows that build on history |
 
 Agent-turn jobs default to the creating conversation when the create request carries session context. Callers without a session key, including CLI and API callers that do not supply one, fall back to `isolated`. System events default to `main`; command and script payloads still default to `isolated`.
 
@@ -444,15 +485,15 @@ With `announce`, agent, command, and script results belong to the chat or topic 
 
 <AccordionGroup>
   <Accordion title="Main session vs current vs isolated vs custom">
-    **Main session** jobs run their system event or agent-turn payload through the owning agent’s ordinary session queue, with that session’s existing context and delivery context. The automation remains running until the turn settles; queue acceptance alone is not success. Internal automation turns do not extend daily or idle reset freshness; only visible user activity updates session freshness. **Current-session** jobs execute in a detached run session, read a bounded tail of the conversation captured when the job was created, and deliver the final visible assistant result to the resolved destination (the creating conversation when no external route is configured). **Isolated** jobs run a dedicated agent turn with a fresh session. **Custom sessions** (`session:xxx`) persist context across runs, enabling workflows like daily standups that build on previous summaries.
+    **Main session** jobs run their system event or agent-turn payload through the owning agent’s ordinary session queue, with that session’s existing context and delivery context. The automation remains running until the turn settles; queue acceptance alone is not success. Internal automation turns do not extend daily or idle reset freshness; only visible user activity updates session freshness. **Current-session** jobs run as a child of the conversation that created them: each run has its own `cron:<jobId>` run session, works with that conversation's resources and authority, reads a bounded tail of the conversation, and delivers the final visible assistant result to the resolved destination (the creating conversation when no external route is configured). **Isolated** jobs run a dedicated agent turn with a fresh session. **Custom sessions** (`session:xxx`) persist context across runs, enabling workflows like daily standups that build on previous summaries.
 
-    `current` binds conversation context, not the original agent execution or its worktree; announce results belong to the resolved delivery destination. The detached run has its own session identity and uses the scheduled agent's workspace and captured tool restrictions. It does not inherit the conversation's cloud worker placement. Messages sent to the job's cron session address its latest detached run, independently of the bound conversation. In-flight turns sent through that stable cron key are canceled if the key is reassigned. A task-specific checkout path in the prompt does not grant access to it. Before using a job to continue repository work, verify that its execution environment can access the required checkout and tools; otherwise keep the work with its existing execution owner. A result committed to the conversation does not itself resume the original agent.
+    `current` binds conversation context, not the original agent execution; announce results belong to the resolved delivery destination. The child run has its own session identity and captured tool restrictions, and the conversation's own session row is not changed by it. While the conversation is current, a linked `current` job uses that conversation's dashboard and memory. It runs on its own scheduled model (its `--model`, or the agent's default) with the runtime and inference account recorded when the job was created, so switching the conversation's model or runtime later does not change the job's runs. A job with no recorded account, such as one on a CLI backend that uses its own login, keeps following the conversation's model selection. So does a job whose account was recorded before OpenClaw recorded runtimes, until its account is selected again with `--model <provider/model>@<profile>`. A `current` or `isolated` job linked to the conversation that created it works in that conversation's saved workspace and working directory while the conversation is current, at the workspace root rather than a subdirectory, and keeps the conversation's required sandbox. An unlinked job, or one whose conversation was reset, uses the scheduled agent's workspace. A job whose conversation was removed or archived, or whose bound worktree is gone, pauses instead of running. Resetting the conversation during a run ends the run: OpenClaw tools refuse further effects, and a CLI backend's process is stopped so its own file tools cannot keep writing to the workspace. It does not inherit the conversation's cloud worker placement. Messages sent to the job's cron session address its latest run, independently of the bound conversation. In-flight turns sent through that stable cron key are canceled if the key is reassigned. A task-specific checkout path in the prompt does not grant access to it. Before using a job to continue repository work, verify that its execution environment can access the required checkout and tools; otherwise keep the work with its existing execution owner. A result committed to the conversation does not itself resume the original agent.
 
     Custom-session agent turns enter the session's ordinary turn queue and wait for active work before preparing context, so a scheduled tick cannot invalidate an in-progress compaction. The automation remains running until that turn settles; queue acceptance alone does not count as success. Saved authenticated continuations retain their original source and its current permissions through execution and delivery.
 
     To come back to this conversation later (for example, to recheck CI), add a one-shot `at` job with `payload: { kind: "agentTurn", message: "Instructions for your next turn" }` and `sessionTarget: "session:<your session key from Runtime>"`. It runs inside the existing conversation with the same history and saved workspace/worktree.
 
-    Custom-session agent turns use the existing session’s saved workspace and working directory, including its managed worktree. Requester-scoped jobs may use a saved workspace only for their owning conversation; trusted operator-scheduled jobs can target another conversation’s saved workspace. A missing, retired, or mismatched worktree stops the run instead of falling back to the agent’s default workspace. Filesystem containment and the job’s tool restrictions still apply; a path in the job prompt does not grant access. Persistent-session rollover keeps the saved workspace binding, permission mode, containment root, and inherited tool restrictions; detached runs do not inherit this workspace context. A new `session:custom-id` without an existing session starts in the configured agent workspace. Use `delivery: { mode: "none" }` without an external target for quiet named-session work that needs no runner fallback announcement.
+    Custom-session agent turns use the existing session’s saved workspace and working directory, including its managed worktree. Requester-scoped jobs may use a saved workspace only for their owning conversation; trusted operator-scheduled jobs can target another conversation’s saved workspace. A missing, retired, or mismatched worktree stops the run instead of falling back to the agent’s default workspace. Filesystem containment and the job’s tool restrictions still apply; a path in the job prompt does not grant access. Persistent-session rollover keeps the saved workspace binding, permission mode, containment root, and inherited tool restrictions; other detached runs inherit it only from a current creating conversation, as described for `current` jobs above. A new `session:custom-id` without an existing session starts in the configured agent workspace. Use `delivery: { mode: "none" }` without an external target for quiet named-session work that needs no runner fallback announcement.
 
     Main-session automation events are self-contained reminders. They include their own job scratch and notices assigned to that occurrence, not another monitor’s checklist or unrelated queued events. Put required instructions in the job payload or scratch.
 
@@ -463,7 +504,7 @@ With `announce`, agent, command, and script results belong to the chat or topic 
     A new transcript/session id per run. OpenClaw carries safe preferences (thinking/fast/verbose settings, labels, explicit user-selected model/auth overrides), but does not inherit ambient conversation context from an older automation session row: channel/group routing, send or queue policy, elevation, origin, or ACP runtime binding. Use `current` or `session:<id>` when a recurring job should deliberately build on the same conversation context.
   </Accordion>
   <Accordion title="Unattended run contract">
-    Isolated automation and hook agent turns are explicitly unattended: no one is present to clarify or approve. The final reply must be the deliverable rather than a plan, acknowledgement, or request for input. The agent returns `NO_REPLY` when nothing needs doing. When the task failed or is blocked, the reply explains what failed and what it tried in ordinary prose.
+    Isolated automation and hook agent turns are explicitly unattended: no one is present to clarify or approve. The final reply must be the deliverable rather than a plan, acknowledgement, or request for input. The agent records `no_change` without a summary and returns `NO_REPLY` when nothing needs doing. Unchanged state and repeated known blockers stay quiet; new blockers and changes that need action get a concise result. Explicitly requested recurring reports and digests still run and deliver at their requested cadence. Execution failures remain visible rather than being treated as no change. For machine-checkable conditions, use an existing deterministic condition trigger or script to skip inference when nothing changed, instead of paying for a model turn to rediscover that fact.
 
     A completed model run is not proof that the requested task succeeded. The scheduler does not classify assistant prose as an execution error: a blocker report remains ordinary output, including a subagent's settled final answer. It follows the job's delivery policy and does not itself trigger retries, error backoff, failure alerts, or owner-conversation repair. Runtime failures, such as provider errors or execution timeouts, still fail the run and use the normal scheduler failure policy. Required delivery failures are tracked separately; see [Failure notifications](/automation/cron-jobs/delivery#failure-notifications).
 
@@ -474,6 +515,11 @@ With `announce`, agent, command, and script results belong to the chat or topic 
     Child completion does not resume an isolated automation turn. If the orchestrator must act on child results (for example, integrate or verify their work), it must spawn with `collect: true` and collect the results with `agents_wait` before ending its turn; fire-and-forget delegation is valid when the child output itself is the deliverable.
 
     When isolated automation runs orchestrate subagents, delivery prefers the final descendant output over stale parent interim text. If descendant tasks are still running or settling, OpenClaw suppresses that partial parent update instead of announcing it. This includes a yielded orchestrator waiting for its successor to start and completed descendants whose result delivery is still pending. The wait shares the existing run deadline and stops on cancellation. A `delivery.mode: "none"` run whose turn only handed work to a child waits for the child under the same deadline and records the child's final reply as the run output without sending it. Subagents must return a meaningful result or a concrete blocker, even when delivery is `none`. A child that returns only `NO_REPLY` enters [missing-answer recovery](/tools/subagents/announce#announce); if it still produces no result or times out, the automation fails.
+
+    For successful children, spawn-only handoffs use the complete final answer
+    while it is still retained, not the 4,096-character lifecycle preview. If the
+    complete answer is no longer available, delivery keeps the existing preview,
+    including its trailing `…`.
 
     For text-only Discord announce targets, OpenClaw sends the final assistant text once instead of replaying both streamed/intermediate text and the final answer. Media and structured Discord payloads are still delivered separately so attachments and components are not dropped.
 

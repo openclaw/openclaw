@@ -1243,25 +1243,26 @@ describe("canonical descendant lifecycle through real owners", () => {
             ),
           ).toBe(true);
           const inherited = structuredClone(nativeFirst.dynamicTools);
-          const unavailable = async ({
+          const expectOwnerDenied = async ({
             bridge,
           }: Parameters<
             NonNullable<NonNullable<Parameters<typeof fixture.turn>[2]>["inspectTools"]>
           >[0]) => {
             expect(bridge.specs).toEqual(inherited);
-            expect(bridge.availableTools.some((tool) => tool.name === "codex_threads")).toBe(false);
+            expect(bridge.availableTools.some((tool) => tool.name === "codex_threads")).toBe(true);
             const calls = fixture.native.calls.length;
             const result = await bridge.handleToolCall({
               threadId: firstBinding.threadId,
               turnId: "current",
-              callId: "unavailable-owner",
+              callId: "nonowner-denied",
               namespace: null,
               tool: "codex_threads",
               arguments: { action: "list" },
             });
             expect(result.success).toBe(false);
-            expect(result.executionStarted, JSON.stringify(result.contentItems)).toBe(false);
-            expect(JSON.stringify(result.contentItems)).toContain("not available for this turn");
+            // The declared executor rejects nonowners before sending any native request.
+            expect(result.executionStarted, JSON.stringify(result.contentItems)).toBe(true);
+            expect(JSON.stringify(result.contentItems)).toContain("owner-authorized sender");
             expect(fixture.native.calls).toHaveLength(calls);
           };
           await fixture.native.restart();
@@ -1270,7 +1271,7 @@ describe("canonical descendant lifecycle through real owners", () => {
             (
               await fixture.turn(firstKey, "first nonowner turn", {
                 senderIsOwner: false,
-                inspectTools: unavailable,
+                inspectTools: expectOwnerDenied,
               })
             ).threadId,
           ).toBe(firstBinding.threadId);
@@ -1376,7 +1377,7 @@ describe("canonical descendant lifecycle through real owners", () => {
             (
               await fixture.turn(laterKey, "descendant turn", {
                 senderIsOwner: false,
-                inspectTools: unavailable,
+                inspectTools: expectOwnerDenied,
               })
             ).threadId,
           ).toBe(laterBinding.threadId);

@@ -5,6 +5,7 @@ import type { SettingsSearchBlock } from "../../app-navigation.ts";
 import { setCurrentThemeBranding } from "../../app/theme-branding.ts";
 import { i18n } from "../../i18n/index.ts";
 import type { JsonSchema } from "../../lib/config-form-utils.ts";
+import { restorePropertyDescriptor } from "../../test-helpers/property-descriptor.ts";
 import { findSettingsSearchBlocks } from "./settings-search.ts";
 
 function object(
@@ -37,7 +38,7 @@ it("does not advertise hidden Lobsterdex choices while retaining the rest of tab
   setCurrentThemeBranding(resolveThemeBranding({ lobsterdex: true }));
   expect(search("Lobsterdex")).toContainEqual(expect.objectContaining({ routeId: "appearance" }));
 });
-it("loads Settings English only when cold search opens, before the config page", async () => {
+it("keeps target metadata cold and loads Settings English when search opens", async () => {
   const testApiKey = Symbol.for("openclaw.i18nManagerTestApi");
   const previousTestApi = Object.getOwnPropertyDescriptor(globalThis, testApiKey);
   vi.resetModules();
@@ -57,6 +58,7 @@ it("loads Settings English only when cold search opens, before the config page",
     "modelProviders.title",
   ];
   try {
+    await import("./settings-targets.ts");
     for (const key of lazyKeys) {
       expect(runtime.t(key), key).toBe(key);
     }
@@ -64,6 +66,16 @@ it("loads Settings English only when cold search opens, before the config page",
     const find = (query: string) => coldSearch({ query, schema: null, value: null, uiHints: {} });
 
     expectBlocks(find("check for updates"), { routeId: "updates", label: "Updates" });
+    expectBlocks(
+      coldSearch({
+        query: "attribution",
+        schema: null,
+        value: null,
+        uiHints: {},
+        identityAvailable: true,
+      }),
+      { routeId: "profile", hash: "#settings-profile-identity" },
+    );
     expectBlocks(find("collapse task progress"), { routeId: "appearance", label: "Chat" });
     expect(en.configView).toBe(configView);
     expect(en.updates).toBe(updates);
@@ -88,11 +100,7 @@ it("loads Settings English only when cold search opens, before the config page",
   } finally {
     await runtime.i18n.setLocale("en");
     vi.resetModules();
-    if (previousTestApi) {
-      Object.defineProperty(globalThis, testApiKey, previousTestApi);
-    } else {
-      Reflect.deleteProperty(globalThis, testApiKey);
-    }
+    restorePropertyDescriptor(globalThis, testApiKey, previousTestApi);
   }
 });
 

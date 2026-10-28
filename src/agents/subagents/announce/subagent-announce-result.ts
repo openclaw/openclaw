@@ -1,6 +1,12 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isIncognitoSessionKey } from "../../../routing/session-key.js";
+import { readTerminalSourceReplyDeliveryMirror } from "../../../shared/chat-message-content.js";
 import { truncateUtf16WithEllipsis } from "../../../shared/text-truncate.js";
+import {
+  parseInlineDirectives,
+  stripInlineDirectiveTagsForDelivery,
+} from "../../../utils/directive-tags.js";
+import { prepareTerminalAssistantReply } from "../../assistant-terminal-reply.js";
 import { wrapPromptDataBlock } from "../../sanitize-for-prompt.js";
 import { extractStoredAssistantText } from "../../tools/chat-history-text.js";
 import { resolveSubagentCompletionResultText } from "../completion/subagent-completion-result.js";
@@ -25,6 +31,8 @@ type SubagentAnnounceResultDeps = Pick<
 };
 
 export type PreparedAnnounceResult = { text: string | undefined; isCurrent: () => boolean };
+
+type SubagentFinalAnswerDeps = Omit<SubagentAnnounceResultDeps, "readSubagentRun">;
 
 export class SubagentAnnouncePreparationConflictError extends Error {
   override name = "SubagentAnnouncePreparationConflictError";
@@ -59,18 +67,45 @@ export async function readSubagentRunAnnounceResultUsing(
   ) {
     return { text: capturedResult, isCurrent };
   }
+  if (!resolveSubagentChildAgentId(child)) {
+    return { text: capturedResult, isCurrent };
+  }
+  const answer = await readSubagentRunFinalAnswerUsing(child, deps, () => {
+    if (!isCurrent()) {
+      throw new SubagentAnnouncePreparationConflictError(
+        "The completed child run's transcript identity changed during announcement.",
+      );
+    }
+  });
+  if (!answer) {
+    return {
+      text: `[truncated-by-retention: complete child answer unavailable]\n${terminalReply.text}`,
+      isCurrent,
+    };
+  }
+  return { text: answer, isCurrent };
+}
+
+/**
+ * Read the complete visible final answer this exact run recorded, including an archived
+ * transcript after delete-mode cleanup. The bounded lifecycle preview is not consulted.
+ */
+export async function readSubagentRunFinalAnswerUsing(
+  child: SubagentRunRecord,
+  deps: SubagentFinalAnswerDeps,
+  assertCurrent?: () => void,
+): Promise<string | undefined> {
   const runId = child.runId;
-  const childSessionKey = child.childSessionKey;
   const childAgentId = resolveSubagentChildAgentId(child);
   if (!childAgentId) {
-    return { text: capturedResult, isCurrent };
+    return undefined;
   }
   const target = child.execution.transcriptTarget;
   const agentId = target?.agentId ?? childAgentId;
   const storePath =
     target?.storePath ??
     deps.resolveSessionStorePathCore(deps.getRuntimeConfig().session?.store, { agentId });
-  const sessionKey = target?.sessionKey ?? childSessionKey;
+  const sessionKey = target?.sessionKey ?? child.childSessionKey;
   return withSubagentSessionSource({ agentId, storePath, sessionKey }, async (source) => {
     const sourcePath = source?.path ?? storePath;
     const sessionId =
@@ -87,19 +122,25 @@ export async function readSubagentRunAnnounceResultUsing(
       event = (await deps.findSessionTranscriptArchiveEventReadOnly({ ...scope, sessionId }, runId))
         ?.event;
     }
-    if (!isCurrent()) {
-      throw new SubagentAnnouncePreparationConflictError(
-        "The completed child run's transcript identity changed during announcement.",
-      );
-    }
-    const answer = isRecord(event) ? extractStoredAssistantText(event.message) : undefined;
-    if (!answer) {
-      return {
-        text: `[truncated-by-retention: complete child answer unavailable]\n${terminalReply.text}`,
-        isCurrent,
-      };
-    }
-    return { text: answer, isCurrent };
+    assertCurrent?.();
+    const message = isRecord(event) ? asOptionalObjectRecord(event.message) : undefined;
+    // Explicit delivery records already own their display text, including literal NO_REPLY.
+    // Parent review keeps media references as data rather than extracting channel attachments.
+    const answer =
+      message?.display === true || readTerminalSourceReplyDeliveryMirror(message)
+        ? extractStoredAssistantText(message)
+        : stripInlineDirectiveTagsForDelivery(
+            parseInlineDirectives(
+              prepareTerminalAssistantReply(
+                message && {
+                  content: typeof message.text === "string" ? message.text : message.content,
+                  stopReason: message.stopReason,
+                  phase: message.phase,
+                },
+              ).text,
+            ).text,
+          ).text;
+    return answer || undefined;
   });
 }
 
@@ -187,9 +228,11 @@ export function buildChildCompletionFindings(
       child.childSessionKey.trim() ||
       `child ${index + 1}`;
     const displayIndex: number = sections.length + 1;
+    // Requesters may quote results verbatim, so keep the child's characters.
     const result = {
       label: "Child result",
       text: resultText?.trim() || "(no output)",
+      encoding: "verbatim" as const,
       truncationMarker: `[result truncated; sessions_history sessionKey=${JSON.stringify(child.childSessionKey)} (text fields truncated to 4,000 characters)]`,
     };
     const resultBlock = wrapPromptDataBlock(result) || "Child result: (no output)";

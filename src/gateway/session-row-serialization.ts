@@ -2,14 +2,14 @@ import type { SessionRow } from "../../packages/gateway-protocol/src/schema/sess
 
 const encodings = new WeakMap<SessionRow, string>();
 
+/** Packing can carry forward bytes already owned by the same immutable source row. */
+export function registerSerializedSessionRow(row: SessionRow, encoded: string): void {
+  encodings.set(row, encoded);
+}
+
 /** Account for already prepared UTF-16 strings without encoding rows just for telemetry. */
 export function sessionRowEncodingBytes(row: SessionRow): number {
   return (encodings.get(row)?.length ?? 0) * 2;
-}
-
-/** Publish an immutable presentation with the bytes prepared by its owner. */
-export function registerSessionRowEncoding(row: SessionRow, encoded: string): void {
-  encodings.set(row, encoded);
 }
 
 /** Only the immutable presentation is encoded; recipient-specific wrappers stay private. */

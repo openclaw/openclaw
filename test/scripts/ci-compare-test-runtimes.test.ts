@@ -56,8 +56,14 @@ it("joins packed timing keys to their child labels without counting the same wal
   );
 });
 
-it("compares runtime walls and failures per job without treating overlapping cases as wall time", () => {
-  expectRows(fixture, [
+it("replays saved logs without double-counting overlapping cases or repeated summaries", () => {
+  const dir = tempDirs.make("ci-runtime-log-");
+  const input = path.join(dir, "input.log"),
+    output = path.join(dir, "saved.log");
+  writeFileSync(input, fixture);
+  const result = cli(["--log-file", input, "--save-log", output, "--json"]);
+  expect(result.status, result.stderr).toBe(0);
+  expect(JSON.parse(result.stdout)).toEqual([
     row("core", "bun", 2, {
       job: "node-1",
       wallSource: "wrapper",
@@ -78,6 +84,7 @@ it("compares runtime walls and failures per job without treating overlapping cas
     }),
     row("core", "node", 4, { job: "node-2", wallSource: "vitest-duration" }),
   ]);
+  expect(readFileSync(output, "utf8")).toBe(fixture);
 });
 
 it("retains incomplete runs, sums serial config durations, and separates native Bun and Node subsets", () => {
@@ -97,17 +104,6 @@ it("retains incomplete runs, sums serial config durations, and separates native 
       row("native", "bun-native", 0.04),
     ],
   );
-});
-
-it("replays a saved run log through the CLI and preserves it for repeat analysis", () => {
-  const dir = tempDirs.make("ci-runtime-log-");
-  const input = path.join(dir, "input.log"),
-    output = path.join(dir, "saved.log");
-  writeFileSync(input, fixture);
-  const result = cli(["--log-file", input, "--save-log", output, "--json"]);
-  expect(result.status, result.stderr).toBe(0);
-  expect(JSON.parse(result.stdout)).toHaveLength(3);
-  expect(readFileSync(output, "utf8")).toBe(fixture);
 });
 
 it("fetches one run archive and ignores duplicate per-step copies of whole-job logs", () => {

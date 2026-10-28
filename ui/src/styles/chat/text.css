@@ -115,14 +115,19 @@
 }
 
 .markdown-hex-color {
+  margin-inline: 0.2em;
   white-space: nowrap;
+
+  &:not(:is(strong, b) *) {
+    font-weight: 500;
+  }
 }
 
 .markdown-hex-color__swatch {
   display: inline-block;
   width: 0.85em;
   height: 0.85em;
-  margin-inline-start: 0.3em;
+  margin-inline-end: 0.3em;
   vertical-align: -0.05em;
   border: 1px solid var(--muted);
   border-radius: 3px;
@@ -210,7 +215,7 @@
   padding: 10px;
   border: 0;
   background: transparent;
-  color: var(--text);
+  color: color-mix(in srgb, var(--muted) 94%, transparent);
   cursor: var(--cursor-action);
   place-items: center;
 }
@@ -272,6 +277,7 @@
 }
 
 .markdown-table-dialog__close {
+  color: var(--text);
   position: fixed;
   top: 8px;
   right: 8px;
@@ -328,58 +334,71 @@
 }
 
 /* Auto layout gives prose more space than short values, then wraps it. */
-:is(.markdown-table, .markdown-table-dialog.chat-text) :where(table) {
-  display: table;
-  width: 100%;
-  table-layout: auto;
-  margin: 0;
-  border: 0;
-  border-collapse: collapse;
-  background: transparent;
-  box-shadow: none;
-  overflow: visible;
-}
+.markdown-table,
+.markdown-table-dialog.chat-text {
+  :where(table) {
+    display: table;
+    width: 100%;
+    table-layout: auto;
+    margin: 0;
+    border: 0;
+    border-collapse: collapse;
+    background: transparent;
+    box-shadow: none;
+    overflow: visible;
+  }
 
-/* Many-column comparisons keep useful column widths instead of wrapping a
-   notes column into a word per line. Short numeric columns still fit naturally. */
-:is(.markdown-table, .markdown-table-dialog.chat-text) table:has(tr > :nth-child(5)) {
-  width: max-content;
-  min-width: 100%;
-}
+  /* Many-column comparisons keep useful column widths instead of wrapping a
+   notes column into a word per line. Markdown body rows have the header's column
+   count, so inspecting the header avoids searching every row. */
+  table:has(> :where(thead) > tr > :nth-child(5)) {
+    width: max-content;
+    min-width: 100%;
+  }
 
-:is(.markdown-table, .markdown-table-dialog.chat-text) :where(table, thead, tbody, tr, th, td) {
-  background: transparent;
-}
+  :where(table),
+  :where(thead),
+  :where(tbody),
+  :where(tr),
+  :where(th),
+  :where(td) {
+    background: transparent;
+  }
 
-:is(.markdown-table, .markdown-table-dialog.chat-text) :where(th, td) {
-  padding-block: 12px;
-  border-right: 0;
-  border-bottom-color: color-mix(in srgb, var(--border) 42%, transparent);
-  min-width: 0;
-  /* Preserve short tokens' intrinsic width; long hashes still wrap at the cap. */
-  max-width: 24rem;
-  overflow-wrap: break-word;
-  white-space: normal;
-  word-break: normal;
-  vertical-align: top;
-}
+  :where(th),
+  :where(td) {
+    padding-block: 12px;
+    border-right: 0;
+    border-bottom-color: color-mix(in srgb, var(--border) 42%, transparent);
+    min-width: 0;
+    /* Preserve short tokens' intrinsic width; long hashes still wrap at the cap. */
+    max-width: 24rem;
+    overflow-wrap: break-word;
+    white-space: normal;
+    word-break: normal;
+    vertical-align: top;
+  }
 
-:is(.markdown-table, .markdown-table-dialog.chat-text) :where(th:first-child, td:first-child) {
-  padding-inline-start: 0;
-}
+  :where(th:first-child),
+  :where(td:first-child) {
+    padding-inline-start: 0;
+  }
 
-:is(.markdown-table, .markdown-table-dialog.chat-text) :where(th) {
-  border-bottom-color: var(--border-strong);
-  background: transparent;
-}
+  :where(th) {
+    border-bottom-color: var(--border-strong);
+    background: transparent;
+  }
 
-:is(.markdown-table, .markdown-table-dialog.chat-text) :where(tbody tr) {
-  transition: none;
-}
+  :where(tbody tr) {
+    transition: none;
+  }
 
-:is(.markdown-table, .markdown-table-dialog.chat-text)
-  :where(tbody tr:nth-child(even), tbody tr:hover) {
-  background: transparent;
+  @media (hover: hover) {
+    :where(tbody tr:nth-child(even)),
+    :where(tbody tr:hover) {
+      background: transparent;
+    }
+  }
 }
 
 .markdown-table-dialog.chat-text :where(thead) {
@@ -393,6 +412,27 @@
 /* The transcript, excluding reserved Details space, owns spare width.
    Only top-level assistant tables borrow it; prose and nested tables stay put. */
 @container chat-transcript (min-width: 900px) {
+  .chat-group.assistant:has(> :is(.chat-avatar, .chat-avatar-slot)) {
+    --chat-leading-table-clearance: var(--chat-avatar-column);
+  }
+
+  /* A leading breakout table shares the avatar's row. Clear that identity
+     before borrowing its gutter. Reply attribution moves the avatar with the
+     content; it is not clearance. Later content blocks keep their own spacing. */
+  .chat-group.assistant
+    > .chat-group-messages
+    > :is(.chat-bubble:first-child, .chat-reply-attribution + .chat-bubble)
+    > .chat-text:first-child
+    > .markdown-table:first-child,
+  .chat-group.assistant
+    > .chat-group-messages
+    > :is(.chat-agent-run-body:first-child, .chat-reply-attribution + .chat-agent-run-body)
+    > .chat-bubble:first-child
+    > .chat-text:first-child
+    > .markdown-table:first-child {
+    margin-block-start: var(--chat-leading-table-clearance, 0px);
+  }
+
   .chat-virtual-row {
     --chat-table-outset: max(
       0px,
@@ -401,8 +441,7 @@
         calc(
           (
               100cqw - var(--chat-table-reserved-space, 0px) -
-                var(--chat-transcript-column-width, 100cqw) - 2 * var(--chat-thread-gutter) - 2 *
-                var(--chat-thread-side-inset)
+                var(--chat-transcript-column-width, 100cqw) - 2 * var(--chat-thread-inline-inset)
             ) /
             2
         )
@@ -462,9 +501,10 @@
 
   @supports not (overflow-clip-margin: 12rem) {
     .chat-virtual-row:has(.chat-group.assistant .chat-bubble > .chat-text > .markdown-table) {
-      /* WebKit supports content-visibility without an adjustable paint clip.
-         Keep mounted wide-table rows visible; transcript virtualization remains. */
+      /* WebKit lacks an adjustable paint clip. Let wide tables extend beyond
+         the row; transcript virtualization still bounds mounted content. */
       content-visibility: visible;
+      contain: none;
     }
   }
 }
@@ -644,23 +684,40 @@
   }
 }
 
-/* --link, not --accent: user bubbles are filled with --accent-subtle (and peer
-   bubbles with the sender tint), so an accent-colored link sits on its own hue
-   and drops to 4.1:1 on the chocolate palette — 3.95:1 at the worst sender hue —
-   while the body text beside it holds 9:1. Hover shifts color instead of fading
-   opacity, which composited the link toward its background and cost another 1.1. */
+:is(.chat-thread, .chat-session-rail__thread) {
+  --chat-text-link: var(--chat-canvas-link, var(--link));
+  --chat-text-link-hover: var(--chat-canvas-link-hover, var(--link-hover));
+}
+
+/* Paired surfaces keep their own link contract. */
+.chat-bubble--tool-shell,
+.chat-text :is(table, pre) {
+  --chat-text-link: var(--link);
+  --chat-text-link-hover: var(--link-hover);
+}
+
 .chat-text :where(a) {
-  color: var(--link);
+  color: var(--chat-text-link, var(--link));
   text-decoration-color: color-mix(in srgb, currentColor 45%, transparent);
   text-underline-offset: 2px;
 }
 
 .chat-text :where(a:hover) {
+  color: var(--chat-text-link-hover, var(--link-hover));
+}
+
+/* Inline code has its own fill; file links explicitly remove that chip surface. */
+.chat-text a:not(.markdown-file-link, .markdown-github-item, .markdown-session-link) > code {
+  color: var(--link);
+}
+
+.chat-text a:not(.markdown-file-link, .markdown-github-item, .markdown-session-link):hover > code {
   color: var(--link-hover);
 }
 
 .chat-text :where(.markdown-link-favicon) {
-  display: none;
+  display: inline-block;
+  visibility: hidden;
   width: 1em;
   height: 1em;
   margin-inline-end: 0.3em;
@@ -668,7 +725,7 @@
 }
 
 .chat-text :where(.markdown-link-favicon.is-loaded) {
-  display: inline-block;
+  visibility: visible;
 }
 
 .chat-text :where(a:has(> .markdown-link-favicon.is-loaded)) {
@@ -910,6 +967,7 @@
   margin: 0;
   border: 0;
   border-radius: 50%;
+  outline: 0;
   box-shadow: none;
 }
 
@@ -936,7 +994,7 @@
    source order, and sidebar-markdown.css is imported after this file. */
 :is(.chat-text, .sidebar-markdown) a.markdown-file-link {
   position: relative;
-  color: var(--link);
+  color: var(--chat-text-link, var(--link));
   /* File links are href-less anchors (driven by data-file-path), so the UA
      link pointer does not apply; they are content links and keep the hand. */
   cursor: pointer;
@@ -1079,14 +1137,13 @@
   color: var(--link-hover);
 }
 
-/* Code surfaces must lift off the host bubble in every theme. --secondary equals
-   --card on every dark palette, so chips painted with it vanished inside user
-   bubbles; --bg-muted/--border-strong separate in both modes without an override. */
+/* Inline-code overrides let palettes separate chips from their host without
+   changing the muted surfaces and strong borders of other components. */
 .chat-text :where(:not(pre, a.markdown-file-link) > code) {
-  background: var(--bg-muted);
+  background: var(--inline-code-bg, var(--bg-muted));
   padding: 0.1em 0.2em;
   border-radius: var(--radius-sm);
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--inline-code-border, var(--border-strong));
   overflow-wrap: anywhere;
   word-break: break-word;
 }
@@ -1099,7 +1156,7 @@
    rather than resetting them here, so no theme override has to be out-specified;
    this rule only has to undo the separate mono-font declarations. */
 :is(.chat-text, .sidebar-markdown) a.markdown-file-link > code {
-  color: var(--link);
+  color: var(--chat-text-link, var(--link));
   font-family: inherit;
   font-size: inherit;
 }

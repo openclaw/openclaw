@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import { resolveDatabaseEngineInput, resolveDatabaseEngineSelection } from "./config.js";
+import { createSqliteFamilyEngines } from "./selection-fixture.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const connection = "postgresql://localhost/synthetic";
@@ -12,29 +13,21 @@ const input = (database: OpenClawConfig["database"]) => resolveDatabaseEngineInp
 const select = (database: OpenClawConfig["database"], env?: NodeJS.ProcessEnv) =>
   resolveDatabaseEngineSelection({ database }, env);
 
-const sqliteEngines = {
-  state: "sqlite",
-  agent: "sqlite",
-  workboard: "sqlite",
-  logbook: "sqlite",
-  "team-reports": "sqlite",
-  quarantine: "sqlite",
-  "managed-update": "sqlite",
-  "package-activation": "sqlite",
-};
+const sqliteEngines = createSqliteFamilyEngines();
 
 describe("host database engine selection", () => {
   it.each([undefined, "sqlite", "postgres"] as const)(
     "keeps the public default independent of family overrides: %s",
     async (engine) => {
       const isPostgres = engine === "postgres";
+      const sqlite = { engine: "sqlite" } as const;
       const families: NonNullable<OpenClawConfig["database"]>["families"] = isPostgres
         ? {
-            state: { engine: "sqlite" },
-            agent: { engine: "sqlite" },
-            workboard: { engine: "sqlite" },
-            logbook: { engine: "sqlite" },
-            "team-reports": { engine: "sqlite" },
+            state: sqlite,
+            agent: sqlite,
+            workboard: sqlite,
+            logbook: sqlite,
+            "team-reports": sqlite,
           }
         : { state: { engine: "postgres" } };
       await expect(
@@ -88,8 +81,7 @@ describe("host database engine selection", () => {
 
   it("resolves a file SecretRef on the host with the configured prefix", async () => {
     const file = path.join(tempDirs.make("workboard-database-secret-"), "connection.json");
-    const fileConnection = "postgresql://localhost/workboard_fixture";
-    fs.writeFileSync(file, JSON.stringify({ dsn: fileConnection }), { mode: 0o600 });
+    fs.writeFileSync(file, JSON.stringify({ dsn: connection }), { mode: 0o600 });
     await expect(
       resolveDatabaseEngineInput({
         database: {
@@ -101,7 +93,7 @@ describe("host database engine selection", () => {
         },
         secrets: { providers: { database: { source: "file", path: file } } },
       }),
-    ).resolves.toEqual({ connection: fileConnection, schemaPrefix: "fixture" });
+    ).resolves.toEqual({ connection, schemaPrefix: "fixture" });
   });
 
   it.each([

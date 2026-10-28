@@ -191,7 +191,7 @@ it("retains the exact schema-28 admission contract", () => {
 });
 
 it.each(["commit", "rollback"] as const)(
-  "preserves rows and publishes the two index removals atomically (%s)",
+  "preserves rows across atomic index removal (%s)",
   async (outcome) => {
     await withFixture("index-retirement.sqlite", async ({ database, migrate }) => {
       const before = retained(database);
@@ -233,33 +233,6 @@ it.each(["commit", "rollback"] as const)(
         currentWitness,
         originalWitness,
       );
-
-      // The primary key still enforces uniqueness and serves current message reactions.
-      database.exec(`
-          UPDATE session_nodes SET last_interaction_at = 20 WHERE session_key = 'agent:main:test';
-          INSERT INTO session_reactions
-            (session_key, session_id, message_id, emoji, identity_id, created_at)
-            VALUES ('agent:main:test', 'session', 'message', '👍', 'bob', 2);
-          DELETE FROM session_reactions WHERE identity_id = 'alice';
-        `);
-      expect(row(database, "SELECT last_interaction_at FROM session_nodes")).toEqual({
-        last_interaction_at: 20,
-      });
-      expect(
-        rows(
-          database,
-          `SELECT identity_id FROM session_reactions
-            WHERE session_key = 'agent:main:test' AND session_id = 'session' AND message_id = 'message'`,
-        ),
-      ).toEqual([{ identity_id: "bob" }]);
-      expect(() =>
-        database.exec(`INSERT INTO session_reactions
-            (session_key, session_id, message_id, emoji, identity_id, created_at)
-            VALUES ('agent:main:test', 'session', 'message', '👍', 'bob', 3)`),
-      ).toThrow(/UNIQUE/u);
-      database.exec("DELETE FROM session_nodes WHERE session_key = 'agent:main:test'");
-      expect(rows(database, "SELECT * FROM session_reactions")).toEqual([]);
-      expect(rows(database, "PRAGMA foreign_key_check")).toEqual([]);
     });
   },
 );

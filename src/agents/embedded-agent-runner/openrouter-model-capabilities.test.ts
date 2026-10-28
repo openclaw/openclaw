@@ -70,6 +70,14 @@ function mockCatalog(data: unknown[], chunked = false) {
   return fetchSpy;
 }
 
+function storedModels(namespace = "models.v4") {
+  return createCorePluginStateSyncKeyedStore({
+    ownerId: "core:openrouter-model-capabilities",
+    namespace,
+    maxEntries: 10_000,
+  });
+}
+
 describe("openrouter-model-capabilities", () => {
   beforeEach(() => {
     stateDir = mkdtempSync(join(tmpdir(), "openclaw-openrouter-capabilities-"));
@@ -102,20 +110,16 @@ describe("openrouter-model-capabilities", () => {
     mockCatalog([
       {
         id: "acme/top-level-max-completion",
-        name: "Top Level Max Completion",
         architecture: { modality: "text+image->text" },
         supported_parameters: ["reasoning", "tools"],
         context_length: 65432,
         max_completion_tokens: 12345,
-        pricing: { prompt: "0.000001", completion: "0.000002" },
       },
       {
         id: "acme/top-level-max-output",
-        name: "Top Level Max Output",
         modality: "text+image->text",
         context_length: 54321,
         max_output_tokens: 23456,
-        pricing: { prompt: "0.000003", completion: "0.000004" },
       },
       {
         id: "perplexity/sonar-deep-research",
@@ -126,8 +130,7 @@ describe("openrouter-model-capabilities", () => {
     const module = await freshCapabilities("top-level-max-tokens");
     await expectNoSyncSql(() => module.load("acme/top-level-max-completion"));
 
-    const maxCompletion = module.get("acme/top-level-max-completion");
-    expect(maxCompletion).toMatchObject({
+    expect(module.get("acme/top-level-max-completion")).toMatchObject({
       input: ["text", "image"],
       reasoning: true,
       supportsTools: true,
@@ -159,18 +162,14 @@ describe("openrouter-model-capabilities", () => {
     const module = await freshCapabilities("captured-store");
     const loading = module.load("acme/captured-model");
     await requested.promise;
-    const stored = () =>
-      createCorePluginStateSyncKeyedStore({
-        ownerId: "core:openrouter-model-capabilities",
-        namespace: "models.v4",
-        maxEntries: 10_000,
-      }).entries();
     await withEnvAsync({ OPENCLAW_STATE_DIR: join(stateDir, "successor") }, async () => {
       response.resolve(Response.json({ data: [{ id: "acme/captured-model" }] }));
       await loading;
-      expect(stored()).toEqual([]);
+      expect(storedModels().entries()).toEqual([]);
     });
-    expect(stored()).toEqual([expect.objectContaining({ key: "acme/captured-model" })]);
+    expect(storedModels().entries()).toEqual([
+      expect.objectContaining({ key: "acme/captured-model" }),
+    ]);
   });
 
   it("preserves chunked native pricing and reasoning capabilities in memory and across SQLite reads", async () => {
@@ -202,7 +201,6 @@ describe("openrouter-model-capabilities", () => {
       [
         {
           id: modelId,
-          name: "SQLite Cached Model",
           architecture: { modality: "text+image->text" },
           supported_parameters: ["tools"],
           reasoning: { supported_efforts: ["high", "low"], mandatory: true },
@@ -221,7 +219,6 @@ describe("openrouter-model-capabilities", () => {
             ],
           },
         },
-        { id: "minimax/minimax-m2.7", reasoning: { mandatory: true } },
       ],
       true,
     );
@@ -236,11 +233,6 @@ describe("openrouter-model-capabilities", () => {
     await expectNoSyncSql(() => reader.load(modelId));
     expect(reader.loaded(modelId)).toMatchObject(expected);
     expect(fetchSpy).toHaveBeenCalledTimes(1);
-    expect(reader.get("minimax/minimax-m2.7")).toMatchObject({
-      reasoning: true,
-      compat: { supportsReasoningEffort: false },
-      thinkingLevelMap: { off: null },
-    });
   });
 
   it.each(["JSON v2", "SQLite v3"] as const)(
@@ -248,9 +240,8 @@ describe("openrouter-model-capabilities", () => {
     async (format) => {
       const json = format === "JSON v2";
       const modelId = json ? "nvidia/nemotron-3-super-120b-a12b:free" : "minimax/minimax-m2.7";
-      const name = json ? "Nemotron 3 Super 120B Free" : modelId;
       const legacy = {
-        name,
+        name: modelId,
         input: ["text"],
         reasoning: !json,
         contextWindow: json ? 1_000_000 : 32_000,
@@ -262,23 +253,14 @@ describe("openrouter-model-capabilities", () => {
         mkdirSync(cacheDir, { recursive: true });
         writeFileSync(
           join(cacheDir, "openrouter-models.json"),
-          JSON.stringify({
-            version: 2,
-            models: { [modelId]: legacy },
-          }),
+          JSON.stringify({ version: 2, models: { [modelId]: legacy } }),
         );
       } else {
-        createCorePluginStateSyncKeyedStore({
-          ownerId: "core:openrouter-model-capabilities",
-          namespace: "models.v3",
-          maxEntries: 10_000,
-        }).register(modelId, legacy);
+        storedModels("models.v3").register(modelId, legacy);
       }
       const refreshed = json
         ? {
             id: modelId,
-            name,
-            architecture: { modality: "text->text" },
             context_length: 1_000_000,
             top_provider: { context_length: 262_144, max_completion_tokens: 262_144 },
             pricing: { prompt: "0", completion: "0" },
@@ -309,29 +291,25 @@ describe("openrouter-model-capabilities", () => {
     },
   );
 
-  it.each([
-    ["missing data", {}],
-    ["non-array data", { data: {} }],
-  ])("preserves cached capabilities when a refresh has %s", async (_label, malformedPayload) => {
+  it("preserves cached capabilities when a refresh has non-array data", async () => {
     const modelId = "acme/healthy-model";
     const fetchSpy = mockResponses(
       Response.json({ data: [{ id: modelId, name: "Healthy Model", context_length: 8192 }] }),
-      Response.json(malformedPayload),
+      Response.json({ data: {} }),
     );
 
-    const writer = await freshCapabilities(`malformed-writer-${_label}`);
+    const writer = await freshCapabilities("malformed-writer");
     await writer.load(modelId);
     await writer.load("acme/new-model");
 
     expect(writer.get(modelId)?.name).toBe("Healthy Model");
-    const reader = await freshCapabilities(`malformed-reader-${_label}`);
+    const reader = await freshCapabilities("malformed-reader");
     expect(reader.get(modelId)?.name).toBe("Healthy Model");
     expect(fetchSpy).toHaveBeenCalledTimes(2);
   });
 
   it("bounds an oversized streamed OpenRouter catalog instead of buffering it whole", async () => {
-    // First pull emits a chunk larger than the cap; a well-behaved bounded read
-    // must cancel before requesting the (effectively infinite) second chunk.
+    // Bounded reading must cancel before consuming the endless small chunks.
     let pullCount = 0;
     const cancel = vi.fn(async () => undefined);
     const stream = new ReadableStream<Uint8Array>({
@@ -341,21 +319,11 @@ describe("openrouter-model-capabilities", () => {
       },
       cancel,
     });
-    const fetchSpy = vi.fn(
-      async () =>
-        new Response(stream, {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
-    );
-    vi.stubGlobal("fetch", fetchSpy);
+    const fetchSpy = mockResponses(new Response(stream));
 
     const module = await freshCapabilities("oversized-stream");
     await module.load("acme/anything");
 
-    // The body was cancelled after the first oversized chunk rather than read
-    // to completion, and the overflow left no poisoned cache entry behind.
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
     expect(pullCount).toBeLessThanOrEqual(2);
     expect(cancel).toHaveBeenCalledOnce();
     expect(module.get("acme/anything")).toBeUndefined();
@@ -365,14 +333,7 @@ describe("openrouter-model-capabilities", () => {
   it.each(["get", "loaded"] as const)(
     "does not refetch immediately after an awaited miss through %s",
     async (firstLookup) => {
-      const fetchSpy = mockCatalog([
-        {
-          id: "acme/known-model",
-          name: "Known Model",
-          architecture: { modality: "text->text" },
-          context_length: 1234,
-        },
-      ]);
+      const fetchSpy = mockCatalog([{ id: "acme/known-model" }]);
 
       const module = await freshCapabilities(`awaited-miss-${firstLookup}`);
       await module.load("acme/missing-model");

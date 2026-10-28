@@ -70,6 +70,21 @@ export function withMcpOAuthProviderForTest<T>(
   });
 }
 
+export async function saveMcpOAuthAccessTokenForTest(
+  identity: McpOAuthIdentity,
+  accessToken: string,
+  expiresIn = 3600,
+): Promise<void> {
+  await withMcpOAuthProviderForTest({ identity }, async (provider) => {
+    await provider.saveTokens({
+      access_token: accessToken,
+      refresh_token: "test-auth-token",
+      token_type: "Bearer",
+      expires_in: expiresIn,
+    });
+  });
+}
+
 export function resolvedOAuthConfig(identity: McpOAuthIdentity) {
   return {
     kind: "http" as const,

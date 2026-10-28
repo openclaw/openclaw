@@ -9,6 +9,7 @@ import {
 } from "../installed-plugin-index-store-path.js";
 import { refreshPersistedInstalledPluginIndex } from "../installed-plugin-index-store-write.js";
 import type { InstalledPluginIndex } from "../installed-plugin-index.js";
+import { createIndexFixture } from "./installed-plugin-index-fixture.js";
 
 /** Observe the durable index without consuming the production metadata cache. */
 export function readPersistedInstalledPluginIndexRowSync(
@@ -42,14 +43,11 @@ export async function seedInstalledPluginIndex(
 export function createInstalledPluginIndex(
   overrides: Partial<InstalledPluginIndex> = {},
 ): InstalledPluginIndex {
-  return {
-    version: 1,
+  return createIndexFixture({
     hostContractVersion: "2026.4.25",
     compatRegistryVersion: "compat-v1",
-    migrationVersion: 1,
     policyHash: "policy-v1",
     generatedAtMs: 1777118400000,
-    installRecords: {},
     plugins: [
       {
         pluginId: "demo",
@@ -64,9 +62,8 @@ export function createInstalledPluginIndex(
         compat: [],
       },
     ],
-    diagnostics: [],
     ...overrides,
-  };
+  });
 }
 
 export function createInstalledPluginIndexCandidate(

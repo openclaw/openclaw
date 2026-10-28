@@ -127,13 +127,18 @@ export function installRealOtelSdkTestHarness({
   };
 }
 
-export function installTestMeter(views?: MeterProviderOptions["views"]) {
+export function createTestMeter(providerOptions: Pick<MeterProviderOptions, "views"> = {}) {
   const metricExporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
   const reader = new PeriodicExportingMetricReader({
     exporter: metricExporter,
-    ...(views ? { exportIntervalMillis: 60_000 } : {}),
+    ...(providerOptions.views ? { exportIntervalMillis: 60_000 } : {}),
   });
-  const meterProvider = new MeterProvider({ readers: [reader], views });
+  const meterProvider = new MeterProvider({ readers: [reader], ...providerOptions });
+  return { reader, meterProvider, metricExporter };
+}
+
+export function installTestMeter(views?: MeterProviderOptions["views"]) {
+  const { reader, meterProvider, metricExporter } = createTestMeter({ views });
   metrics.disable();
   expect(metrics.setGlobalMeterProvider(meterProvider)).toBe(true);
   if (!views) {

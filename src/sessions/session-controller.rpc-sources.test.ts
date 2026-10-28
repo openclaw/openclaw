@@ -40,13 +40,11 @@ import { rpcSourceTesting } from "./session-lifecycle-admission.test-support.js"
 const storeScope = "/synthetic/rpc-source-contracts/sessions.db";
 const sessionKey = "agent:main:rpc-sources";
 const sessionId = "rpc-source-session";
-function registration(
+const registration = (
   runId: string,
   target: ReturnType<typeof captureSessionTarget>,
   scope = { sessionKey, sessionId },
-) {
-  return { runId, ...scope, timeoutMs: 1, target };
-}
+) => ({ runId, ...scope, timeoutMs: 1, target });
 afterEach(() => {
   controllerTesting.resetSessionControllerForTest();
   vi.useRealTimers();
@@ -86,28 +84,33 @@ function runSource(ref: RpcSourceRef, run: Parameters<typeof withSessionTurn>[1]
   );
 }
 
-function state(ref: RpcSourceRef) {
-  return {
-    active: isRpcSourceActive(ref),
-    projected: projectedActive(ref),
-    queued: isRpcSourceQueued(ref),
-    aborted: ref.input.abortSignal.aborted,
-    startedAt: startedAt(ref),
-  };
-}
+const state = (ref: RpcSourceRef) => ({
+  active: isRpcSourceActive(ref),
+  projected: projectedActive(ref),
+  queued: isRpcSourceQueued(ref),
+  aborted: ref.input.abortSignal.aborted,
+  startedAt: startedAt(ref),
+});
 const settle = (...sources: ReturnType<typeof reserve>[]) =>
   Promise.all(sources.map(({ entry }) => sourceSettlement(entry.input)));
 
-it("reserves before async preparation, then executes the same input rather than a second turn", async () => {
+it("reserves through async preparation and starts each same-input turn and clock only in FIFO order", async () => {
+  vi.useFakeTimers();
   const first = reserve("first");
   const prepared = createDeferred();
   const second = reserve("second");
   const order: string[] = [];
   const follower = runSource(second.entry, async () => {
+    expect(state(second.entry)).toMatchObject({ active: true, startedAt: Date.now() });
     order.push("second");
   });
+  await vi.advanceTimersByTimeAsync(60_000);
   expect(state(first.entry)).toMatchObject({ active: false, queued: true });
-  expect(state(second.entry)).toMatchObject({ active: false });
+  expect(state(second.entry)).toMatchObject({
+    active: false,
+    startedAt: undefined,
+    aborted: false,
+  });
   expect(order).toEqual([]);
   const leader = (async () => {
     await prepared.promise;
@@ -334,28 +337,4 @@ it("lists only the captured logical session and agent", () => {
   for (const [runId] of rpcSourceTesting.entries()) {
     rpcSourceTesting.delete(runId);
   }
-});
-
-it("does not project a waiting source as active or start its execution clock while a predecessor prepares", async () => {
-  vi.useFakeTimers();
-  const predecessor = reserve("preparing");
-  const waiting = reserve("waiting");
-  const started = createDeferred();
-  const release = createDeferred();
-  const task = runSource(waiting.entry, async () => {
-    started.resolve();
-    await release.promise;
-  });
-  await vi.advanceTimersByTimeAsync(60_000);
-  expect(state(waiting.entry)).toMatchObject({
-    active: false,
-    startedAt: undefined,
-    aborted: false,
-  });
-  predecessor.cleanup();
-  await started.promise;
-  expect(state(waiting.entry)).toMatchObject({ active: true, startedAt: Date.now() });
-  release.resolve();
-  await task;
-  waiting.cleanup();
 });

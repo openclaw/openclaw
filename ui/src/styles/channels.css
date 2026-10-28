@@ -3,8 +3,12 @@
    shared settings design language. */
 
 /* Compact refresh actions should not retain the spacing reserved for settings
-   headers with full-size controls. */
-.settings-section:has(.settings-section__actions .btn--xs.btn--icon) {
+   headers with full-size controls. Actions are direct children or have one tooltip/form
+   wrapper; bounded child paths avoid scanning large section lists. */
+.settings-section:has(
+  > * > .settings-section__actions > .btn--xs.btn--icon,
+  > * > .settings-section__actions > * > .btn--xs.btn--icon
+) {
   gap: var(--space-2);
 }
 

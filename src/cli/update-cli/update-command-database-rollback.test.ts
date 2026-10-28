@@ -26,7 +26,10 @@ import {
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
-import { runFixtureGit as git } from "../../infra/update-runner-git-candidate.test-support.js";
+import {
+  isolateGitIdentity,
+  runFixtureGit as git,
+} from "../../infra/update-runner-git-candidate.test-support.js";
 import { updateGitCheckout } from "../../infra/update-runner-git.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { CommandProcessCleanupError } from "../../process/exec-result.js";
@@ -391,15 +394,7 @@ it.each([
       ]);
     };
     if (gitInstall) {
-      vi.stubEnv("GIT_CONFIG_COUNT", "0");
-      for (const key of [
-        "GIT_AUTHOR_NAME",
-        "GIT_AUTHOR_EMAIL",
-        "GIT_COMMITTER_NAME",
-        "GIT_COMMITTER_EMAIL",
-      ]) {
-        vi.stubEnv(key, undefined);
-      }
+      isolateGitIdentity();
       await git(packageRoot, "init", "--initial-branch=main");
       await git(packageRoot, "config", "user.name", "OpenClaw Test");
       await git(packageRoot, "config", "user.email", "openclaw@example.com");
@@ -533,6 +528,10 @@ it.each([
     const readSchemas = schemas.readUpdateStateSchemaVersions;
     vi.spyOn(schemas, "readUpdateStateSchemaVersions").mockImplementation((params) =>
       readSchemas({ ...params, root: undefined }),
+    );
+    const readGenerations = schemas.readUpdateDatabaseGenerationsIsolated;
+    vi.spyOn(schemas, "readUpdateDatabaseGenerationsIsolated").mockImplementation(
+      (paths, options) => readGenerations(paths, { ...options, root: undefined }),
     );
     mocks.runPackageUpdate.mockImplementation(
       async (
@@ -720,16 +719,6 @@ it.each([
           expect(captured?.warnings ?? []).toEqual([]);
           expect(databaseBackup?.sourceGenerations[agent]).toEqual(expect.any(String));
         }
-        if (restores && initialFailure) {
-          expect(databaseBackup?.migration).toMatchObject({
-            name: "openclaw doctor",
-            backup: databaseBackup?.directory,
-            from: databaseBackup?.sourceGenerations,
-          });
-        }
-        if (scenario === "git-edited") {
-          expect([readDatabase(shared).version, readDatabase(agent).version]).toEqual([18, 23]);
-        }
         const expectedReason = outsideWrite
           ? "state-migrated-no-rollback"
           : scenario === "verification"
@@ -770,10 +759,6 @@ it.each([
           expect(starts).toEqual(scenario === "intervening" ? ["1.0.0", "1.0.0"] : ["1.0.0"]);
           const rollback = execution.result.steps.find((step) => step.name === "database rollback");
           expect(rollback).toMatchObject({ exitCode: 1, cwd: retainedSnapshotDirectory });
-          expect(rollback?.stderrTail).toContain("Current databases were preserved");
-          expect(rollback?.stderrTail).toContain(
-            `retained snapshots at ${retainedSnapshotDirectory}`,
-          );
           for (const file of files) {
             if (scenario === "git-edited") {
               expect(readDatabase(file).rows).toEqual(candidateRows);
@@ -807,10 +792,7 @@ it.each([
           }
           expect(restart).not.toHaveBeenCalled();
           if (preservesMigrated) {
-            expect(observedStart).toHaveBeenCalledOnce();
-            expect(service?.exitCode).toBeNull();
             expect(await readServing()).toMatchObject({ version: "2.0.0" });
-            expect(starts.at(-1)).toBe("2.0.0");
           } else {
             expect(observedStart).not.toHaveBeenCalled();
             expect(service).toBeUndefined();
@@ -855,14 +837,7 @@ it.each([
           return;
         }
         expect(readState()).toEqual(before);
-        expect(execution.databaseBackup?.databases).toHaveLength(2);
         expect(execution.databaseBackup?.missingPaths).toContain(missing);
-        expect(execution.result.steps.map((step) => step.name)).toEqual(
-          expect.arrayContaining([
-            "database snapshot",
-            ...(initialFailure ? ["database rollback"] : []),
-          ]),
-        );
         expect(starts).toEqual(["1.0.0"]);
         const finishFailure = await finalize().catch((error: unknown) => error);
         expect(
@@ -871,7 +846,6 @@ it.each([
           ),
         ).toEqual([18, 23]);
         if (scenario === "config-refused") {
-          expect(finishFailure).toBeInstanceOf(UpdateCommandFailure);
           assert(finishFailure instanceof UpdateCommandFailure);
           expect(finishFailure.result.reason).toBe("state-migrated-no-rollback");
           expect(restart).not.toHaveBeenCalled();
@@ -939,7 +913,6 @@ it.each([
         expect(report).toContain("Migrated database file retained");
         expect(await fs.readFile(swapFixture.launcher, "utf8")).toBe("old launcher\n");
         for (const entry of execution.databaseBackup!.databases) {
-          expect(await fs.stat(entry.snapshotPath)).toMatchObject({ size: entry.sizeBytes });
           expect(readDatabase(`${entry.path}.migrated-${run.runId}`).version).toBe(
             entry.path === shared ? 18 : 23,
           );

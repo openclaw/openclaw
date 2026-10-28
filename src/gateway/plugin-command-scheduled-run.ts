@@ -417,7 +417,7 @@ export async function runPluginCommandScheduledTurn(params: {
               runId,
               runSessionKey: schedule.parent.sessionKey,
               toolsAllow,
-              operatorAuthorityRestored: true,
+              operatorAuthority,
             }),
             admissionSource: request.admissionSource,
             cfg,

@@ -236,12 +236,16 @@ export function readCurrentConfigForPolicyCheck(params: {
   return createCurrentConfigReader(params).loadConfig({ skipSuspiciousRecovery: true });
 }
 
-/** Keep the Claw Add policy reader bound to its admitted plugin-state lease. */
+/** Keep the Template Add policy reader bound to its admitted plugin-state lease. */
 export async function withCurrentConfigPolicyReader<T>(
   params: {
     configPath: string;
     env: NodeJS.ProcessEnv;
-    lease: { databasePath: string; assertOwned: () => void };
+    lease: {
+      databasePath: string;
+      assertOwned: () => void | Promise<void>;
+      assertCurrent: () => void;
+    };
   },
   run: (getCurrentConfig: () => OpenClawConfig) => Promise<T>,
 ): Promise<T> {

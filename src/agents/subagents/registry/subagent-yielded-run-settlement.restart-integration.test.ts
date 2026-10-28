@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeRestartRecoveryRun as makeRunRecord, useSubagentRestartRecoveryFixture } from "./subagent-restart-recovery.test-support.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../../../browser-lifecycle-cleanup.js";
 import { appendTranscriptMessage } from "../../../config/sessions/session-accessor.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import {
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
@@ -140,6 +141,7 @@ describe("yielded run settlement", () => {
   };
   // #141474: preserve recorded outcomes; diagnose only yielded collectors with no outcome.
   const DIAGNOSTIC = expect.stringContaining("no recorded collectorCompletion");
+  const collectorId = "legacy-yielded-collector";
   const LEGACY_SHAPES = [
     {
       shape: "execution.outcome absent",
@@ -166,20 +168,24 @@ describe("yielded run settlement", () => {
       reason: undefined,
     },
   ];
+  const pausedRun = (overrides: Parameters<typeof makeRunRecord>[0]) =>
+    makeRunRecord({
+      pauseReason: "sessions_yield",
+      startedAt: T0 - 5 * MINUTE_MS,
+      endedAt: T0 - 4 * MINUTE_MS,
+      ...overrides,
+    });
   const legacyYieldedCollector = (
     outcome?: { status: "ok" | "timeout" } | { status: "error"; error: string },
   ) =>
-    makeRunRecord({
-      runId: "legacy-yielded-collector",
+    pausedRun({
+      runId: collectorId,
       childSessionKey: COLLECTOR_KEY,
       requesterAgentId: "main",
       collect: true,
       groupId: "group-legacy",
       swarmRequesterSessionKey: "agent:main:main",
       expectsCompletionMessage: false,
-      pauseReason: "sessions_yield",
-      startedAt: T0 - 5 * MINUTE_MS,
-      endedAt: T0 - 4 * MINUTE_MS,
       ...(outcome ? { outcome } : {}),
     });
   const sweep = async () => {
@@ -208,22 +214,10 @@ describe("yielded run settlement", () => {
       freezeTime();
       await writeYieldedTranscript();
       // Controls: yielded rows that a continuation can still reach stay untouched.
-      const orchestrator = makeRunRecord({
-        runId: "yielded-orchestrator",
-        childSessionKey: "agent:main:subagent:orchestrator",
-        expectsCompletionMessage: true,
-        wakeOnDescendantSettle: true,
-        pauseReason: "sessions_yield",
-        startedAt: T0 - 5 * MINUTE_MS,
-        endedAt: T0 - 4 * MINUTE_MS,
-      });
-      const legacyLeaf = makeRunRecord({
+      const legacyLeaf = pausedRun({
         runId: "yielded-legacy-leaf",
         childSessionKey: "agent:main:subagent:legacy-leaf",
         expectsCompletionMessage: true,
-        pauseReason: "sessions_yield",
-        startedAt: T0 - 5 * MINUTE_MS,
-        endedAt: T0 - 4 * MINUTE_MS,
       });
       // Controls: collectors the sweep must never settle, one with a recorded result and one
       // whose stop is already claimed.
@@ -242,26 +236,23 @@ describe("yielded run settlement", () => {
       });
       for (const run of [
         legacyYieldedCollector(outcome),
-        orchestrator,
         legacyLeaf,
         frozenCollector,
         killClaimedCollector,
       ]) {
         await addSubagentRunForTests(run);
       }
-      expect(persisted("legacy-yielded-collector")?.execution.outcome?.status).toBe(
-        outcome?.status,
-      );
+      expect(persisted(collectorId)?.execution.outcome?.status).toBe(outcome?.status);
       const frozenBefore = persisted("yielded-frozen-collector");
       await restartRegistry();
       expect(
-        await waitSurface("legacy-yielded-collector"),
+        await waitSurface(collectorId),
         "before the sweep the waiter has no result",
-      ).toMatchObject({ completed: [], pending: ["legacy-yielded-collector"] });
+      ).toMatchObject({ completed: [], pending: [collectorId] });
 
       await sweep();
 
-      const settled = persisted("legacy-yielded-collector");
+      const settled = persisted(collectorId);
       expect(settled?.pauseReason).toBeUndefined();
       // The yield time stays the end time for either stored shape, and a recorded outcome stays.
       expect(settled?.execution).toMatchObject({
@@ -273,14 +264,14 @@ describe("yielded run settlement", () => {
       expect(settled?.endedReason).toBe(endedReason);
       expect(settled?.collectorCompletion?.status).toBe(expectedWait.status);
       expect(settled?.collectorCompletion?.reason).toBe(reason);
-      const waited = await waitSurface("legacy-yielded-collector");
+      const waited = await waitSurface(collectorId);
       expect(waited.pending).toEqual([]);
       expect(waited.completed).toMatchObject([expectedWait]);
       expect(waited.completed[0]?.reason).toBe(reason);
       if (outcome?.status === "ok") {
         expect(waited.completed[0]?.error).toBeUndefined();
       }
-      for (const control of [orchestrator, legacyLeaf]) {
+      for (const control of [legacyLeaf]) {
         expect(persisted(control.runId), control.runId).toMatchObject({
           pauseReason: "sessions_yield",
           execution: { status: "terminal" },
@@ -302,19 +293,14 @@ describe("yielded run settlement", () => {
 
   it("reads the yielded turn rather than unrelated later turns beyond the recent-message window", async () => {
     await settleCollector({ status: "ok" }, [YIELDED_REPLY, 65]);
-    await expectSilentResult("legacy-yielded-collector", { status: "done", result: YIELDED_REPLY });
+    await expectSilentResult(collectorId, { status: "done", result: YIELDED_REPLY });
   });
 
-  it.each(
-    [
-      { name: "explicitly hidden", text: "Hidden collector text", display: false as const },
-      { name: "empty", text: "" },
-      { name: "whitespace-only", text: "  \n  " },
-    ].flatMap((shape) => [
-      { ...shape, status: "ok" as const },
-      { ...shape, status: "timeout" as const },
-    ]),
-  )(
+  it.each([
+    { name: "explicitly hidden", text: "Hidden collector text", display: false, status: "ok" },
+    { name: "empty", text: "", display: undefined, status: "timeout" },
+    { name: "whitespace-only", text: "  \n  ", display: undefined, status: "ok" },
+  ] as const)(
     "does not resurrect earlier output when the $status collector yield is $name",
     async ({ text, display, status }) => {
       await settleCollector({ status }, [
@@ -325,22 +311,22 @@ describe("yielded run settlement", () => {
           earlierReply: "Earlier progress is not the final result",
         },
       ]);
-      expect(persisted("legacy-yielded-collector")?.execution.outcome?.status).toBe(status);
-      expect(persisted("legacy-yielded-collector")?.completion?.resultText).toBeNull();
-      await expectSilentResult("legacy-yielded-collector", {
+      expect(persisted(collectorId)?.execution.outcome?.status).toBe(status);
+      expect(persisted(collectorId)?.completion?.resultText).toBeNull();
+      await expectSilentResult(collectorId, {
         status: status === "ok" ? "done" : "timeout",
         result: "",
       });
     },
   );
 
-  it.each(["", "NO_REPLY", "HEARTBEAT_OK"])(
-    "preserves intentional empty or silent collector output (%j)",
+  it.each(["NO_REPLY", "HEARTBEAT_OK"])(
+    "preserves intentional silent collector output (%j)",
     async (reply) => {
       await settleCollector({ status: "ok" }, [reply, 1]);
-      expect(persisted("legacy-yielded-collector")?.completion?.resultText).toBe(reply || null);
+      expect(persisted(collectorId)?.completion?.resultText).toBe(reply);
       // The existing delivery policy consumes silent tokens rather than exposing them.
-      await expectSilentResult("legacy-yielded-collector", { status: "done", result: "" });
+      await expectSilentResult(collectorId, { status: "done", result: "" });
     },
   );
 
@@ -362,76 +348,55 @@ describe("yielded run settlement", () => {
         completion: { required: false, resultText: YIELDED_REPLY, capturedAt: T0 - 4 * MINUTE_MS },
       });
       await restartRegistry();
-      const execute = stateWorker.runOpenClawStateWorkerOperation;
       let injected = 0;
       let refusedFallback = false;
-      vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation").mockImplementation(
-        (context, operation, options) =>
-          execute(
-            context,
-            (scope) =>
-              operation({
-                execute: async (command, executeOptions) => {
-                  if (
-                    injected < (retry === "restart" ? 2 : 1) &&
-                    isSubagentRegistryWriteCommand(command) &&
-                    command.input.values.some(
-                      (row) =>
-                        row.run_id === "legacy-yielded-collector" &&
-                        rowToSubagentRunRecord(row)?.browserCleanupDispatchedAt !== undefined,
-                    )
-                  ) {
-                    injected += 1;
-                    if (retry === "restart") {
-                      markGatewayRestartDraining();
-                    }
-                    // Observe the real terminal commit independently before refusing this later write.
-                    expect(persisted("legacy-yielded-collector")).toMatchObject({
-                      collectorCompletion: { status: "done" },
-                      completion: { resultText: YIELDED_REPLY },
-                    });
-                    expect(
-                      persisted("legacy-yielded-collector")?.browserCleanupDispatchedAt,
-                    ).toBeUndefined();
-                    throw new Error("injected postcommit browser claim write failure");
-                  }
-                  if (
-                    retry === "restart" &&
-                    !refusedFallback &&
-                    injected === 2 &&
-                    isSubagentRegistryWriteCommand(command) &&
-                    command.input.values.some(
-                      (row) =>
-                        row.run_id === "legacy-yielded-collector" &&
-                        rowToSubagentRunRecord(row)?.cleanupHandled === false,
-                    )
-                  ) {
-                    refusedFallback = true;
-                    throw new Error("injected restart fallback write refusal");
-                  }
-                  return scope.execute(command, executeOptions);
-                },
-              }),
-            options,
-          ),
-      );
+      using _ = probe.command(stateWorker, async (command, executeOptions, scope) => {
+        const next = isSubagentRegistryWriteCommand(command)
+          ? command.input.values.find((row) => row.run_id === collectorId)
+          : undefined;
+        const entry = next && rowToSubagentRunRecord(next);
+        if (
+          injected < (retry === "restart" ? 2 : 1) &&
+          entry?.browserCleanupDispatchedAt !== undefined
+        ) {
+          injected++;
+          if (retry === "restart") {
+            markGatewayRestartDraining();
+          }
+          // Refuse only the later cleanup claim, after the durable terminal commit.
+          expect(persisted(collectorId)).toMatchObject({
+            collectorCompletion: { status: "done" },
+            completion: { resultText: YIELDED_REPLY },
+          });
+          expect(persisted(collectorId)?.browserCleanupDispatchedAt).toBeUndefined();
+          throw new Error("injected postcommit browser claim write failure");
+        }
+        if (
+          retry === "restart" &&
+          !refusedFallback &&
+          injected === 2 &&
+          entry?.cleanupHandled === false
+        ) {
+          refusedFallback = true;
+          throw new Error("injected restart fallback write refusal");
+        }
+        return scope.execute(command, executeOptions);
+      });
       await testing.sweepOnceForTests();
       // The observer retains the first failed root even though the completion owner retries it.
       await expect(fixture.settle()).rejects.toThrow("Failed to settle subagent cleanup roots");
       await fixture.settle();
       if (retry === "restart") {
         expect(refusedFallback).toBe(true);
-        expect(persisted("legacy-yielded-collector")?.browserCleanupDispatchedAt).toBeUndefined();
+        expect(persisted(collectorId)?.browserCleanupDispatchedAt).toBeUndefined();
         resetGatewayWorkAdmission();
         await vi.advanceTimersByTimeAsync(1_000);
         await fixture.settle();
       }
       expect(injected).toBe(retry === "restart" ? 2 : 1);
-      expect(persisted("legacy-yielded-collector")?.browserCleanupDispatchedAt).toBeTypeOf(
-        "number",
-      );
+      expect(persisted(collectorId)?.browserCleanupDispatchedAt).toBeTypeOf("number");
       expect(cleanupBrowserSessionsForLifecycleEnd).toHaveBeenCalledTimes(1);
-      await expectSilentResult("legacy-yielded-collector", {
+      await expectSilentResult(collectorId, {
         status: "done",
         result: YIELDED_REPLY,
       });
@@ -453,8 +418,8 @@ describe("yielded run settlement", () => {
     });
     await addSubagentRunForTests(legacyYieldedCollector());
     const surfaces = async () => {
-      const entry = subagentRuns.get("legacy-yielded-collector") as SubagentRunRecord;
-      const waiter = await waitSurface("legacy-yielded-collector");
+      const entry = subagentRuns.get(collectorId) as SubagentRunRecord;
+      const waiter = await waitSurface(collectorId);
       const listed = (
         await createSubagentsTool({ agentSessionKey: "agent:main:main", agentId: "main" }).execute(
           "list",

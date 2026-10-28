@@ -3,7 +3,7 @@ import { toErrorObject as toLintErrorObject } from "@openclaw/normalization-core
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { getGlobalDispatcher, setGlobalDispatcher, type Dispatcher } from "undici";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { raceWithTimeoutResult } from "../../../test/helpers/promise.js";
+import { withinTest } from "../../../test/helpers/promise.js";
 import { waitForControlUiDocument } from "../../commands/control-ui-handoff.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { readResponseWithLimit } from "../http-body.js";
@@ -440,9 +440,9 @@ describe("redirect boundaries", () => {
     }
   });
 
-  it.each(["/next", undefined])(
+  it.for(["/next", undefined])(
     "settles redirects before retained capture cancellation (location: %s)",
-    async (location) => {
+    async (location, { signal }) => {
       const cancel = vi.fn();
       const response = new Response(new ReadableStream<Uint8Array>({ cancel }), {
         status: 302,
@@ -462,7 +462,7 @@ describe("redirect boundaries", () => {
       );
 
       try {
-        const result = await raceWithTimeoutResult(request, 500, undefined);
+        const result = await withinTest(request, signal);
         if (location) {
           expect(result).toBe("ok");
         } else {

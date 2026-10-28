@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
-import { MediaAttachmentCache } from "./attachments.js";
+import { MediaAttachmentCache } from "./attachments.cache.js";
 
 const readRemoteMediaBufferMock = vi.hoisted(() => vi.fn());
 

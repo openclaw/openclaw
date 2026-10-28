@@ -9,7 +9,7 @@ vi.mock("openclaw/plugin-sdk/web-media", async () => {
   return discordWebMediaMockFactory();
 });
 
-import { discordOutbound } from "./outbound-adapter.js";
+import { discordOutbound } from "./outbound-payload.js";
 import * as send from "./send.js";
 const cfg = { channels: { discord: { accounts: { default: {} } } } };
 const retry = { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 };

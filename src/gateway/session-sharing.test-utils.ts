@@ -4,8 +4,10 @@ import { onUserProfilesChanged } from "../state/user-profile-events.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
+import type { createGatewayBroadcaster } from "./server-broadcast.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
+import type { SessionRowProjection } from "./session-row-projection.js";
 import type { resolveSessionSharingRole } from "./session-sharing-policy.js";
 import { prepareSessionMutationFacts } from "./session-sharing-preparation.js";
 import {
@@ -164,6 +166,37 @@ export async function canReceivePreparedSessionEvent(
       read.release();
     }
   }
+}
+
+export function createProjectedSessionEventPredicate(
+  cfg: OpenClawConfig,
+  projection: Pick<SessionRowProjection, "hasMembership" | "sharingTarget">,
+): NonNullable<Parameters<typeof createGatewayBroadcaster>[0]["canReceiveSessionEvent"]> {
+  return (client, sessionKeys, agentId, event, payload) =>
+    canReceiveSessionEvent({
+      cfg,
+      client,
+      sessionKeys,
+      agentId,
+      event,
+      payload,
+      prepared: {
+        sharing: prepareProjectedSessionSharing({
+          cfg,
+          client,
+          isMember: (target, identityId) =>
+            projection.hasMembership(target.storePath, target.storeKey, identityId),
+        }),
+        target: (key, targetAgentId) => {
+          const { agentId: ownerAgentId } = resolveSessionStoreIdentity({
+            cfg,
+            sessionKey: key,
+            agentId: targetAgentId,
+          });
+          return projection.sharingTarget({ key, agentId: ownerAgentId });
+        },
+      },
+    });
 }
 
 type SharingTarget = Parameters<typeof resolveSessionSharingRole>[0]["target"];

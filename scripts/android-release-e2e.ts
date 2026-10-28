@@ -16,7 +16,8 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { callGateway } from "../src/gateway/call.js";
-import { registerSealedRuntimeProcessEntrypoint } from "../src/infra/runtime-process-url.js";
+import { registerSealedRuntimeProcessEntrypoints } from "../src/infra/runtime-process-url.js";
+import { writeSealedRuntimeProcessFixture } from "../src/test-utils/sealed-runtime-process-fixture.js";
 import { createOpenClawTestInstance } from "../test/helpers/openclaw-test-instance.js";
 import { applyMockOpenAiModelConfig } from "./e2e/lib/fixtures/mock-openai-config.mjs";
 import {
@@ -430,10 +431,14 @@ export async function main(argv = process.argv.slice(2)) {
         outputOptions: getStandaloneRuntimeProcessOutputOptions(name),
         logLevel: "warn",
       });
-      registerSealedRuntimeProcessEntrypoint(
-        "serviceChildGroupAnchor",
-        pathToFileURL(path.join(outDir, `${name}.js`)),
+      const bootstrap = await writeSealedRuntimeProcessFixture(
+        path.join(root, "process-owner", "sealed"),
+        "serviceChildRelay",
+        {
+          serviceChildGroupAnchor: pathToFileURL(path.join(outDir, `${name}.js`)),
+        },
       );
+      registerSealedRuntimeProcessEntrypoints("serviceChildRelay", bootstrap);
     }
     phase("gateway-start");
     service(

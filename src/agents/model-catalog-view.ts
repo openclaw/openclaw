@@ -53,6 +53,13 @@ export function selectModelCatalogRuntimeEntry(params: {
   const keyOf = createModelCatalogIdentityKeyResolver();
   const key = keyOf(params.entry);
   const observed = params.routeVariants.filter((variant) => keyOf(variant) === key);
+  return selectRuntimeEntry(params, observed);
+}
+
+function selectRuntimeEntry(
+  params: Omit<Parameters<typeof selectModelCatalogRuntimeEntry>[0], "routeVariants">,
+  observed: readonly ModelCatalogEntry[],
+): ReturnType<typeof selectModelCatalogRuntimeEntry> {
   const variants = (observed.length ? observed : [params.entry])
     .filter((variant) =>
       variant.nativeRuntime
@@ -109,6 +116,9 @@ export function createModelCatalogView(params: {
   return {
     logicalEntries: dedupeByKey(params.catalog, keyOf),
     variantsOf,
+    selectRuntimeEntry(selection: Parameters<typeof selectRuntimeEntry>[0]) {
+      return selectRuntimeEntry(selection, variantsOf(selection.entry) ?? []);
+    },
     readProjection(
       entry: ModelCatalogEntry,
       projection: ModelCatalogRouteProjection,

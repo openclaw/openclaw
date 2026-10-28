@@ -11,7 +11,9 @@ import {
   runWithGatewayIndependentRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { sweepSessionStateWatchNotices } from "../sessions/session-state-events.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import type { AgentRecoveryProgress } from "../state/agent-database-preparation-recovery.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
 import { measureStartup, type GatewayStartupTrace } from "./server-startup-trace.js";
 
@@ -76,7 +78,7 @@ export async function markGatewayStartupMainSessionOrphans(
 type SubagentRegistryActivation = (
   resolveGatewayContext: GatewayContextResolver,
   startupTrace?: GatewayStartupTrace,
-) => void | Promise<void>;
+) => AgentRecoveryProgress;
 
 /** The tracked post-ready tail owns recovery and observers until their original work settles. */
 export async function runGatewayStartupObservers(params: {
@@ -93,6 +95,7 @@ export async function runGatewayStartupObservers(params: {
   isClosing?: () => boolean;
   onSubagentRecoverySettled?: () => void;
   unlockStartupMethods?: () => void;
+  trackInputRecovery?: (progress: Promise<AgentRecoveryProgress>) => Promise<void>;
   startupTrace?: GatewayStartupTrace;
   log: { warn: (message: string) => void };
   logHooks: {
@@ -122,43 +125,70 @@ export async function runGatewayStartupObservers(params: {
     },
     "startup:agent-deletion-recovery",
     params.signal,
-  ).then(
-    () => true,
-    (error: unknown) => {
-      if (!params.signal.aborted && !params.isClosing?.()) {
-        params.log.warn(`Agent deletion recovery failed before replay: ${String(error)}`);
-      }
-      return false;
-    },
-  );
+  ).catch((error: unknown) => {
+    if (!params.signal.aborted && !params.isClosing?.()) {
+      params.log.warn(`Agent deletion recovery failed before replay: ${String(error)}`);
+    }
+    throw error;
+  });
+  const deliveryProgress = createDeferredCore<AgentRecoveryProgress>();
+  const execProgress = createDeferredCore<AgentRecoveryProgress>();
+  const registryProgress = createDeferredCore<AgentRecoveryProgress>();
+  const completed = Promise.resolve();
+  const noRecovery: AgentRecoveryProgress = {
+    initial: completed,
+    pending: new Map(),
+    settled: completed,
+  };
+  // Publish admission progress without releasing the root work that owns each full tail.
+  const initialRecovery = Promise.allSettled(
+    [deliveryProgress, execProgress, registryProgress].map(({ promise }) =>
+      params.trackInputRecovery
+        ? params.trackInputRecovery(promise)
+        : promise.then((progress) => progress.initial),
+    ),
+  ).then((outcomes) => {
+    if (
+      outcomes.every((outcome) => outcome.status === "fulfilled") &&
+      !params.signal.aborted &&
+      params.isClosing?.() !== true
+    ) {
+      params.unlockStartupMethods?.();
+    }
+  });
   // Delivery keeps its admission and shutdown tail outside registry activation.
   const delivery = runWithGatewayIndependentRootWorkAdmission(
     async () => {
-      if (!(await deletionRecovery)) {
-        return;
-      }
+      await deletionRecovery;
       const context = params.resolveGatewayContext();
       if (context && !params.signal.aborted && !params.isClosing?.()) {
         await measureStartup(params.startupTrace, "sidecars.delivery-recovery", async () => {
           const { recoverSessionSendDeliveries } = await import("./session-send-recovery.js");
-          await recoverSessionSendDeliveries(context, params.signal, params.startupTrace);
+          const progress = recoverSessionSendDeliveries(
+            context,
+            params.signal,
+            params.startupTrace,
+          );
+          deliveryProgress.resolve(progress);
+          await progress.settled;
         });
       }
     },
     "startup:delivery-recovery",
     params.signal,
-  ).catch((error: unknown) => {
-    if (!params.signal.aborted) {
-      params.log.warn(
-        `Session delivery restart recovery could not complete; saved inputs remain available: ${formatErrorMessageForDisplay(error, formatErrorMessageWithCode(error))}`,
-      );
-    }
-  });
+  )
+    .catch((error: unknown) => {
+      deliveryProgress.reject(error);
+      if (!params.signal.aborted) {
+        params.log.warn(
+          `Session delivery restart recovery could not complete; saved inputs remain available: ${formatErrorMessageForDisplay(error, formatErrorMessageWithCode(error))}`,
+        );
+      }
+    })
+    .finally(() => deliveryProgress.resolve(noRecovery));
   const recovery = runWithGatewayIndependentRootWorkAdmission(
     async () => {
-      if (!(await deletionRecovery)) {
-        return;
-      }
+      await deletionRecovery;
       await measureStartup(params.startupTrace, "sidecars.subagent-recovery", async () => {
         // Each recovery owner retains its pending agents. Their waits must not
         // serialize unrelated recovery, and shutdown still joins every tail.
@@ -171,17 +201,22 @@ export async function runGatewayStartupObservers(params: {
                     await import("../agents/bash-tools.exec-notify.js");
                   await withPluginRuntimeGatewayContextResolver(
                     params.resolveGatewayContext,
-                    () => recoverExecExitNotifications(params.config, params.signal),
+                    async () => {
+                      const progress = recoverExecExitNotifications(params.config, params.signal);
+                      execProgress.resolve(progress);
+                      await progress.settled;
+                    },
                     { inheritRequestScope: false },
                   );
                 } catch (error) {
+                  execProgress.reject(error);
                   if (!params.signal.aborted) {
                     params.log.warn(`Exec restart notifications remain pending: ${String(error)}`);
                   }
                 }
               });
             }
-          })(),
+          })().finally(() => execProgress.resolve(noRecovery)),
           (async () => {
             const activateSubagentRegistry = await measureStartup(
               params.startupTrace,
@@ -189,11 +224,25 @@ export async function runGatewayStartupObservers(params: {
               params.loadSubagentRegistryActivation,
             );
             if (!params.signal.aborted && params.isClosing?.() !== true) {
-              await measureStartup(params.startupTrace, "sidecars.subagent-activation", () =>
-                activateSubagentRegistry(params.resolveGatewayContext, params.startupTrace),
+              await measureStartup(
+                params.startupTrace,
+                "sidecars.subagent-activation",
+                async () => {
+                  const progress = activateSubagentRegistry(
+                    params.resolveGatewayContext,
+                    params.startupTrace,
+                  );
+                  registryProgress.resolve(progress);
+                  await progress.settled;
+                },
               );
             }
-          })(),
+          })()
+            .catch((error: unknown) => {
+              registryProgress.reject(error);
+              throw error;
+            })
+            .finally(() => registryProgress.resolve(noRecovery)),
         ]);
         for (const outcome of outcomes) {
           if (outcome.status === "rejected") {
@@ -204,16 +253,20 @@ export async function runGatewayStartupObservers(params: {
     },
     "startup:subagent-recovery",
     params.signal,
-  ).catch((err: unknown) => {
-    if (!params.signal.aborted && !params.isClosing?.()) {
-      params.log.warn(`subagent restart recovery failed to activate: ${String(err)}`);
-    }
-  });
-  const inputRecovery = Promise.all([recovery, delivery]).finally(() => {
-    // Keep new chat input behind saved inputs until replay has handed off custody.
-    if (params.isClosing?.() !== true) {
-      params.unlockStartupMethods?.();
-    }
+  )
+    .catch((err: unknown) => {
+      execProgress.reject(err);
+      registryProgress.reject(err);
+      if (!params.signal.aborted && !params.isClosing?.()) {
+        params.log.warn(`subagent restart recovery failed to activate: ${String(err)}`);
+      }
+    })
+    .finally(() => {
+      execProgress.resolve(noRecovery);
+      registryProgress.resolve(noRecovery);
+    });
+  // Suspended admission can retire replay before it awaits deletion recovery.
+  const inputRecovery = Promise.allSettled([deletionRecovery, recovery, delivery]).finally(() => {
     // The main-session sweep must not reserve predecessors during saved-input admission.
     params.onSubagentRecoverySettled?.();
   });
@@ -265,6 +318,6 @@ export async function runGatewayStartupObservers(params: {
     });
   } finally {
     // Independent observers overlap, but shutdown joins all accepted startup work.
-    await Promise.all([sentinelRefresh, inputRecovery]);
+    await Promise.all([sentinelRefresh, initialRecovery, inputRecovery]);
   }
 }

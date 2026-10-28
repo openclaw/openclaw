@@ -47,10 +47,6 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-function childResult(cleanup: "normal" | "uncertain" = "normal") {
-  return { ...createCommandResult(), cleanup };
-}
-
 function writePrivate(file: string, contents: string) {
   fs.writeFileSync(file, contents, { mode: 0o600 });
 }
@@ -116,7 +112,10 @@ function prepareFixture(source: OpenClawTestState) {
     prepareRuntime: async (assertCurrent) => assertCurrent(),
     cleanup,
   });
-  const launch = vi.spyOn(commands, "runUtf8CommandWithTimeout").mockResolvedValue(childResult());
+  const launch = vi.spyOn(commands, "runUtf8CommandWithTimeout").mockResolvedValue({
+    ...createCommandResult(),
+    cleanup: "normal",
+  });
   const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
   const schemas: databasePreflight.DoctorDatabasePreflight = {
     updateSchemaRehearsal: { runId: driver.runId, updaterVersion: "2026.9.2" },
@@ -166,21 +165,13 @@ function migration(
 
 it("consumes declared paths, admits legacy plugins with one typed reported warning, and never detects or migrates during inventory", async () => {
   await fixture(async (f) => {
-    const legacy = migration("old");
-    const declared = migration("declared", (params) => {
-      expect(params).toMatchObject({
-        requireLocalResources: true,
-        stateDir: f.root,
-        config: { agents: { defaults: { workspace: path.join(f.root, "workspace") } } },
-      });
-      return [
-        { path: path.join(f.root, "plugin.sqlite"), kind: "sqlite" },
-        { path: path.join(f.root, "future", "destination"), kind: "directory" },
-      ];
-    });
+    const declared = migration("declared", () => [
+      { path: path.join(f.root, "plugin.sqlite"), kind: "sqlite" },
+      { path: path.join(f.root, "future", "destination"), kind: "directory" },
+    ]);
     writePrivate(path.join(f.root, "plugin.sqlite"), "fixture data; no native open");
     selection.entries = [
-      { pluginId: "legacy-plugin", migration: legacy },
+      { pluginId: "legacy-plugin", migration: migration("old") },
       { pluginId: "legacy-plugin", migration: migration("second") },
       { pluginId: "declared-plugin", migration: declared },
     ];
@@ -188,8 +179,6 @@ it("consumes declared paths, admits legacy plugins with one typed reported warni
     expect(f.launch).toHaveBeenCalledOnce();
     const fact = JSON.parse(f.runtime.log.mock.calls[0]![0]);
     expect(fact).toMatchObject({
-      kind: "doctor-schema-rehearsal",
-      stateDir: f.root,
       warnings: [{ kind: "undeclared-migration-resources", pluginId: "legacy-plugin" }],
     });
     expect(fact.warnings).toHaveLength(1);
@@ -274,17 +263,13 @@ it.each([
         held ? readDriver(pid) : undefined,
       );
     }
-    selection.entries = [
-      {
-        pluginId: "test-plugin",
-        migration: migration("declared", () => {
-          if (mode === "parent-retired") {
-            held = false;
-          }
-          return [{ path: path.join(f.root, "future", "destination"), kind: "directory" }];
-        }),
-      },
-    ];
+    const entry = migration("declared", () => {
+      if (mode === "parent-retired") {
+        held = false;
+      }
+      return [{ path: path.join(f.root, "future", "destination"), kind: "directory" }];
+    });
+    selection.entries = [{ pluginId: "test-plugin", migration: entry }];
     const displaced = path.join(f.external, "original-copy");
     const retained = path.join(f.root, "replacement-data");
     f.runtime.log.mockImplementationOnce(() => {
@@ -322,7 +307,7 @@ it.each([
 
 it("retains a copy when the admitted child cannot confirm settlement", async () => {
   await fixture(async (f) => {
-    f.launch.mockResolvedValue(childResult("uncertain"));
+    f.launch.mockResolvedValue({ ...createCommandResult(), cleanup: "uncertain" });
     await expect(f.invoke()).rejects.toThrow(/did not settle/);
     expect(f.cleanup).not.toHaveBeenCalled();
     expect(fs.existsSync(f.statePath)).toBe(true);

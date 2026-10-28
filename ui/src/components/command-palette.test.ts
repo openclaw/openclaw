@@ -315,12 +315,11 @@ describe("CommandPalette search", () => {
       };
       const { gateway } = createGateway(true, {
         methods: ["plugins.list"],
-        request: async (rpc) => {
-          if (rpc !== "plugins.list") {
-            throw new Error(`Unexpected method: ${rpc}`);
-          }
-          return { plugins: pluginId ? [plugin] : [] };
-        },
+        request: catalogRequest({
+          "plugins.list": {
+            plugins: pluginId ? [plugin] : [],
+          },
+        }),
       });
       const context = createContext(gateway, async () => null);
       const { palette, query } = await mountPalette({
@@ -341,9 +340,7 @@ describe("CommandPalette search", () => {
   it("moves the keyboard selection through catalog groups in visible order", async () => {
     const { gateway } = createGateway(true, {
       methods: ["cron.list"],
-      request: vi.fn(async () => ({
-        jobs: [{ id: "bravo", name: "Needle Bravo" }],
-      })),
+      request: vi.fn(async () => ({ jobs: [{ id: "bravo", name: "Needle Bravo" }] })),
     });
     const context = createContext(gateway);
     const { palette, query, queryAll } = await mountPalette(

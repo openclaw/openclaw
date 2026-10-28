@@ -1,13 +1,11 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import { resizeBrowserViewport } from "./browser-client.ts";
 import {
-  createBrowserClient,
-  createView,
   setupBrowserPanelTestCleanup,
   stubScreenshotMedia,
-  TestBrowserPanelHost,
   type BrowserRequestEnvelope,
 } from "./browser-panel-controller-test-support.ts";
+import { panelScenario } from "./browser-panel-stream.test-support.ts";
 
 setupBrowserPanelTestCleanup();
 beforeEach(() => {
@@ -25,27 +23,11 @@ function scenario(
   routes: Record<string, (request: BrowserRequestEnvelope) => unknown>,
   activeTargetId?: string,
 ) {
-  const gateway = createBrowserClient(async (request) => {
-    const key = request.path === "/act" ? String(request.body?.kind) : request.path;
-    const route = routes[key];
-    if (!route) {
-      throw new Error(`Unexpected browser route: ${request.path} (${key})`);
-    }
-    return route(request);
-  });
-  const host = new TestBrowserPanelHost(gateway.client);
-  const controller = host.createPanel();
+  const state = panelScenario(activeTargetId, undefined, routes);
   if (activeTargetId) {
-    controller.canAutoResizeViewport = true;
-    controller.activeTargetId = activeTargetId;
-    controller.view = createView(activeTargetId);
+    state.controller.canAutoResizeViewport = true;
   }
-  const actions = (kind: string) =>
-    gateway.request.mock.calls
-      .map(([, envelope]) => envelope as BrowserRequestEnvelope)
-      .filter((envelope) => envelope.path === "/act" && envelope.body?.kind === kind)
-      .map((envelope) => envelope.body);
-  return { ...gateway, host, controller, actions };
+  return state;
 }
 
 it.each([false, true, undefined])(

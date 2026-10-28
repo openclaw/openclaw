@@ -146,6 +146,14 @@ function textAttachment(bytes: string) {
   };
 }
 
+async function history(socket: GatewaySocket, sessionKey = "main") {
+  const result = await rpcReq<{ messages: unknown[] }>(socket, "chat.history", { sessionKey });
+  expect(result.ok).toBe(true);
+  return result.payload?.messages;
+}
+
+const containingMessages = (...messages: Record<string, unknown>[]) =>
+  expect.arrayContaining(messages.map((message) => expect.objectContaining(message)));
 describe("gateway WebSocket chat abort ownership", () => {
   test("preserves committed native input across a profile-bound reconnect", async () => {
     const scope = await prepareChatSession("native-reconnect", "native-reconnect-bound");
@@ -435,11 +443,8 @@ describe("gateway WebSocket chat abort ownership", () => {
         const established = await rpcReq(socket, "chat.send", sendParameters);
         expectRun(established, runId, "error", false);
         expect(terminalStates).toEqual(yielded ? ["final", "error"] : ["error"]);
-        const history = await rpcReq<{ messages: unknown[] }>(socket, "chat.history", {
-          sessionKey: "main",
-        });
-        expect(history.payload?.messages).toContainEqual(
-          expect.objectContaining({
+        expect(await history(socket)).toEqual(
+          containingMessages({
             role: "custom",
             customType: "run-failed-before-reply",
             content: expect.stringContaining("dispatch rejected before a late abort"),
@@ -450,8 +455,10 @@ describe("gateway WebSocket chat abort ownership", () => {
           sessionKey: "main",
           runId,
         });
-        expect(lateAbort.ok).toBe(true);
-        expect(lateAbort.payload).toMatchObject({ ok: true, aborted: false, runIds: [] });
+        expect(lateAbort).toMatchObject({
+          ok: true,
+          payload: { ok: true, aborted: false, runIds: [] },
+        });
 
         const replay = await rpcReq(socket, "chat.send", sendParameters);
         expect(replay.ok).toBe(false);
@@ -564,19 +571,15 @@ describe("gateway WebSocket chat abort ownership", () => {
         });
         if (!runtimeTerminal) {
           const settled = await rpcReq(socket, "agent.wait", { runId, timeoutMs: 1_000 });
-          expect(settled.ok).toBe(true);
-          expect(settled.payload).toMatchObject({
-            runId,
-            status: "error",
-            stopReason: "aborted",
-            endedAt: expect.any(Number),
+          expect(settled).toMatchObject({
+            ok: true,
+            payload: { runId, status: "error", stopReason: "aborted", endedAt: expect.any(Number) },
           });
         }
 
         // The history RPC response follows every previously emitted chat
         // event on this socket, so it exposes any contradictory late terminal.
-        const barrier = await rpcReq(socket, "chat.history", { sessionKey: "main" });
-        expect(barrier.ok).toBe(true);
+        await history(socket);
         expect(terminalStates).toEqual([terminalState]);
       } finally {
         dispatchRelease.resolve();
@@ -693,14 +696,8 @@ describe("gateway WebSocket chat abort ownership", () => {
       await withinTest(failureEntered.promise, signal);
       await lifecycle;
       // The same-socket response fences delivered events while the notice commit is held.
-      const heldHistory = await rpcReq<{ messages: unknown[] }>(socket, "chat.history", {
-        sessionKey: scope.sessionKey,
-      });
-      expect(heldHistory.ok).toBe(true);
-      expect(heldHistory.payload?.messages).not.toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ customType: "run-failed-before-reply" }),
-        ]),
+      expect(await history(socket, scope.sessionKey)).not.toEqual(
+        containingMessages({ customType: "run-failed-before-reply" }),
       );
       expect.soft(terminalStates).toEqual([]);
       failureRelease.resolve();
@@ -708,24 +705,20 @@ describe("gateway WebSocket chat abort ownership", () => {
       expect.soft(terminalStates).toEqual(["error"]);
       expect.soft(terminalFrame.payload?.errorMessage).toBe(warning);
       expect(loadSessionEntry(scope)).toMatchObject({ status: "failed", lastRunId: runId });
-      const history = await rpcReq<{ messages: unknown[] }>(reader, "chat.history", {
-        sessionKey: scope.sessionKey,
-      });
-      expect(history.ok).toBe(true);
-      expect(history.payload?.messages).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
+      expect(await history(reader, scope.sessionKey)).toEqual(
+        containingMessages(
+          {
             role: "assistant",
             content: expect.arrayContaining([
               expect.objectContaining({ type: "text", text: "Running it now." }),
             ]),
-          }),
-          expect.objectContaining({
+          },
+          {
             role: "custom",
             customType: "run-failed-before-reply",
             content: warning,
-          }),
-        ]),
+          },
+        ),
       );
       expect(loadTranscriptEventsSync(scope)).toContainEqual(
         expect.objectContaining({
@@ -880,7 +873,7 @@ describe("gateway WebSocket chat abort ownership", () => {
           import("./server-methods/chat-send-handler.js"),
         ]);
         const parse = attachments.parseMessageWithAttachments;
-        const ensureSandbox = sandboxContext.ensureSandboxWorkspaceForSession;
+        const prepareSandbox = sandboxContext.prepareSandboxWorkspaceForSession;
         const discard = attachments.discardPreparedInboundMedia;
         const handleSend = chatSend.handleChatSend;
         const parseSpy = vi
@@ -892,9 +885,9 @@ describe("gateway WebSocket chat abort ownership", () => {
           });
         restoreSpies.push(() => parseSpy.mockRestore());
         const sandboxSpy = vi
-          .spyOn(sandboxContext, "ensureSandboxWorkspaceForSession")
+          .spyOn(sandboxContext, "prepareSandboxWorkspaceForSession")
           .mockImplementation(async (...args) => {
-            const result = await ensureSandbox(...args);
+            const result = await prepareSandbox(...args);
             if (inboundPath) {
               expect(result).toBeNull();
               prepared.resolve();
@@ -978,23 +971,18 @@ describe("gateway WebSocket chat abort ownership", () => {
         const response = await send;
         await sendWork;
         await discardWork;
-        expect(response.ok).toBe(true);
-        expect(response.payload).toMatchObject({
+        const terminal = {
           runId,
           status: "timeout",
           summary: "aborted",
           stopReason: "rpc",
-        });
+        };
+        expect(response).toMatchObject({ ok: true, payload: terminal });
         expect(responses).toEqual([
           {
             filePresent: false,
             cleanupSettled: true,
-            payload: expect.objectContaining({
-              runId,
-              status: "timeout",
-              summary: "aborted",
-              stopReason: "rpc",
-            }),
+            payload: expect.objectContaining(terminal),
           },
         ]);
         expect(discardSpy).toHaveBeenCalledOnce();

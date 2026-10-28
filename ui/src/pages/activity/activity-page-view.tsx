@@ -9,6 +9,7 @@ import "../../styles/agent-row-chip.css";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
+  createDeferred,
   createMemo,
   createSignal,
   createStore,
@@ -25,6 +26,7 @@ import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { LoadingState } from "../../components/solid/loading-state.tsx";
 import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
+import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import { SettingsStatus, SettingsToggle } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { registerActivityEnglish } from "../../i18n/locales/en-activity.ts";
@@ -52,6 +54,19 @@ import "../../styles/activity.css";
 registerEnglishCatalog(registerActivityEnglish);
 
 const STATUS_ORDER: ActivityStatus[] = ["running", "done", "error"];
+
+function yieldActivityRender(): Promise<void> {
+  // SAFETY: scheduler.yield is an optional browser API; timers cover WebKit.
+  const browser = globalThis as typeof globalThis & {
+    scheduler?: { yield?: () => Promise<void> };
+  };
+  return (
+    browser.scheduler?.yield?.() ??
+    new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    })
+  );
+}
 
 function formatDuration(value: number): string {
   if (!Number.isFinite(value) || value < 0) {
@@ -160,21 +175,7 @@ export function ActivityPageView(pageProps: { page: ActivityPageState }) {
     container: () => stream,
     enabled: () => filters.autoFollow,
     identity: liveRevision,
-  });
-  onSettled(() => {
-    let previous = liveSnapshot();
-    // Ordered append/reset receipts preserve stream-follow intent across each publication.
-    return pageProps.page.liveActivity.subscribe(() => {
-      const current = liveSnapshot();
-      if (current.revision !== previous.revision) {
-        follow.reset();
-      }
-      const appended = current.entries !== previous.entries;
-      previous = current;
-      if (filters.autoFollow && appended) {
-        follow.schedule();
-      }
-    });
+    content: () => liveSnapshot().entries,
   });
   const [presentationTime, setPresentationTime] = createSignal(Date.now());
   const activityExpiry = createPresenceActivityLifecycle(presence, () =>
@@ -236,23 +237,15 @@ export function ActivityPageView(pageProps: { page: ActivityPageState }) {
           <div class="activity-live-filter-popover__panel">
             <label class="field">
               <span>{t("activity.toolFilter")}</span>
-              <select
-                class="settings-select"
+              <SettingsSelect
                 aria-label={t("activity.toolFilter")}
                 value={filters.toolFilter}
                 onChange={(event) => update({ toolFilter: event.currentTarget.value })}
-              >
-                <option value="" selected={filters.toolFilter === ""}>
-                  {t("activity.allTools")}
-                </option>
-                <For each={props.toolNames}>
-                  {(name) => (
-                    <option value={name} selected={name === filters.toolFilter}>
-                      {name}
-                    </option>
-                  )}
-                </For>
-              </select>
+                options={[
+                  { value: "", label: t("activity.allTools") },
+                  ...props.toolNames.map((name) => ({ value: name, label: name })),
+                ]}
+              />
             </label>
           </div>
         </Popover>
@@ -304,6 +297,7 @@ export function ActivityPageView(pageProps: { page: ActivityPageState }) {
     function ActivityEntryView(props: {
       entry: ActivityEntry;
       formatTimestamp: ReturnType<typeof createMsFormatter>;
+      immediate: boolean;
     }) {
       return (
         <details
@@ -332,43 +326,45 @@ export function ActivityPageView(pageProps: { page: ActivityPageState }) {
               <span>{formatDuration(props.entry.durationMs)}</span>
             </span>
           </summary>
-          <div class="activity-entry__body">
-            <div class="activity-entry__facts">
-              {props.entry.entryKind === "answer_candidate" ? (
-                <span class="mono">
-                  {t("activity.answerCandidate.itemId")}: {props.entry.itemId}
-                </span>
-              ) : (
-                <>
-                  <span>{hiddenArgumentsLabel(props.entry.hiddenArgumentCount)}</span>
+          <Show when={props.immediate || remainderReady() || expandedIds().has(props.entry.id)}>
+            <div class="activity-entry__body">
+              <div class="activity-entry__facts">
+                {props.entry.entryKind === "answer_candidate" ? (
                   <span class="mono">
-                    {t("activity.toolCallId")}: {props.entry.toolCallId}
+                    {t("activity.answerCandidate.itemId")}: {props.entry.itemId}
                   </span>
-                </>
-              )}
-              <a
-                class="activity-entry__run-link mono"
-                href={activityRunInspectorHref(props.entry.runId, liveProps.basePath)}
-              >
-                {t("activity.runId")}: {props.entry.runId}
-              </a>
-              {props.entry.sessionKey ? (
-                <span class="mono">
-                  {t("activity.session")}: {props.entry.sessionKey}
-                </span>
-              ) : undefined}
-            </div>
-            {props.entry.outputPreview ? (
-              <>
-                <pre class="activity-entry__preview">{props.entry.outputPreview}</pre>
-                {props.entry.outputTruncated ? (
-                  <div class="activity-entry__note">{t("activity.outputTruncated")}</div>
+                ) : (
+                  <>
+                    <span>{hiddenArgumentsLabel(props.entry.hiddenArgumentCount)}</span>
+                    <span class="mono">
+                      {t("activity.toolCallId")}: {props.entry.toolCallId}
+                    </span>
+                  </>
+                )}
+                <a
+                  class="activity-entry__run-link mono"
+                  href={activityRunInspectorHref(props.entry.runId, liveProps.basePath)}
+                >
+                  {t("activity.runId")}: {props.entry.runId}
+                </a>
+                {props.entry.sessionKey ? (
+                  <span class="mono">
+                    {t("activity.session")}: {props.entry.sessionKey}
+                  </span>
                 ) : undefined}
-              </>
-            ) : (
-              <div class="activity-entry__note">{t("activity.noOutputPreview")}</div>
-            )}
-          </div>
+              </div>
+              {props.entry.outputPreview ? (
+                <>
+                  <pre class="activity-entry__preview">{props.entry.outputPreview}</pre>
+                  {props.entry.outputTruncated ? (
+                    <div class="activity-entry__note">{t("activity.outputTruncated")}</div>
+                  ) : undefined}
+                </>
+              ) : (
+                <div class="activity-entry__note">{t("activity.noOutputPreview")}</div>
+              )}
+            </div>
+          </Show>
         </details>
       );
     }
@@ -393,6 +389,13 @@ export function ActivityPageView(pageProps: { page: ActivityPageState }) {
           matchesEntry(entry, needle),
       );
     });
+    const hasEntries = createMemo(() => filtered().length > 0);
+    // Summaries preserve exact closed-row geometry. Populate offscreen bodies
+    // after a task boundary; either end stays ready for the first screen/follow.
+    const remainderReady = createDeferred(
+      () => (hasEntries() ? yieldActivityRender().then(() => true) : false),
+      { loadingValue: false },
+    );
 
     // The stream fills the remaining viewport height; the settings-page column
     // wrapper is intentionally skipped so the fill-height flex chain
@@ -452,8 +455,12 @@ export function ActivityPageView(pageProps: { page: ActivityPageState }) {
               </div>
             ) : (
               <For each={filtered()} keyed={(entry) => entry.id}>
-                {(entry) => (
-                  <ActivityEntryView entry={entry()} formatTimestamp={formatTimestamp()} />
+                {(entry, index) => (
+                  <ActivityEntryView
+                    entry={entry()}
+                    formatTimestamp={formatTimestamp()}
+                    immediate={index() < 10 || index() >= filtered().length - 10}
+                  />
                 )}
               </For>
             )}

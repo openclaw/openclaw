@@ -33,7 +33,7 @@ import type {
 import {
   acquireSessionTranscriptReadResource,
   armDatabaseWorkerIdleRetirement,
-  historyClearTimeout,
+  clearDatabaseWorkerIdleRetirement,
   pruneHistoryDatabases,
   refreshDatabaseWorkerPressureSubscription,
   registerSessionTranscriptReaderLane,
@@ -78,7 +78,7 @@ export function createSessionTranscriptReadPool<Input extends SessionTranscriptW
     ) {
       // Register before admission yields; cleanup also owns reads waiting to dispatch.
       const resources = new Set<HistoryDatabaseResource>();
-      historyClearTimeout(lane.idleTimer);
+      clearDatabaseWorkerIdleRetirement(lane);
       lane.pending++;
       refreshDatabaseWorkerPressureSubscription();
       try {

@@ -1,6 +1,7 @@
 // Host-owned SQLite leases serialize trusted work across processes.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
+import { materializeErrorStack } from "../infra/error-graph-internal.js";
 import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
@@ -22,6 +23,7 @@ import {
   createOpenClawStateLeaseError as leaseError,
   createOpenClawStateLeaseAbortError as abortError,
   createOpenClawStateLeaseLostError,
+  resolveOpenClawStateLeaseOperationError,
   OpenClawStateLeaseError,
 } from "./openclaw-state-lease-error.js";
 import { leaseHeartbeatState } from "./openclaw-state-lease-heartbeat-shared.js";
@@ -37,6 +39,7 @@ import {
 } from "./openclaw-state-lease-options.js";
 import { registerProcessExitLeaseCleanup } from "./openclaw-state-lease-process-exit.js";
 import {
+  createOpenClawStateLeaseLostErrorFromDatabase,
   prepareLeaseDatabase,
   resolveLeaseDatabasePath,
   renewOpenClawStateLease as renew,
@@ -106,11 +109,12 @@ async function runStateLeaseOwnerInScope<T>(
   maintenance: OpenClawDatabaseMaintenanceScope | undefined,
 ): Promise<T> {
   const validated = validateOpenClawStateLeaseOptions(invocation.options);
-  const owner = randomUUID();
+  const renewalTimer: { dueAt?: number; lateByMs: number } = { lateByMs: 0 };
   const identity: LeaseIdentity = {
     scope: validated.scope,
     key: validated.key,
-    owner,
+    owner: randomUUID(),
+    renewalTimer,
     leaseLabel: validated.leaseLabel,
   };
   let closed = false;
@@ -153,8 +157,11 @@ async function runStateLeaseOwnerInScope<T>(
       leaseLost.abort(
         cause instanceof OpenClawStateLeaseError
           ? cause
-          : createOpenClawStateLeaseLostError(validated, cause),
+          : invocation.kind === "native" && phase === "owned" && !closed
+            ? createOpenClawStateLeaseLostErrorFromDatabase(identity, validated.database, cause)
+            : createOpenClawStateLeaseLostError(validated, cause),
       );
+      materializeErrorStack(leaseLost.signal.reason);
     }
   };
   const assertActive = () => {
@@ -175,13 +182,20 @@ async function runStateLeaseOwnerInScope<T>(
       throw leaseLost.signal.reason;
     }
   };
+  const assertOwnerCurrent = () => {
+    assertActive();
+    // Timer delivery can lag the persisted expiry; never admit an effect in that gap.
+    if (closed || confirmedExpiresAt === undefined || Date.now() >= confirmedExpiresAt) {
+      abortLost();
+      throw leaseLost.signal.reason;
+    }
+  };
+  const assertWorkerCurrent = validated.heartbeat === "worker" ? assertActive : assertOwnerCurrent;
   function stopWorker() {
     void workerHeartbeat?.stop().catch(abortLost);
     void startingHeartbeat?.stop().catch(abortLost);
   }
-  function stopTimer() {
-    void timerHeartbeat?.stopRenewal();
-  }
+  const stopTimer = () => void timerHeartbeat?.stopRenewal();
   let unregisterProcessExitCleanup: (() => void) | undefined;
   if (workerStorage) {
     workerOperations = createOpenClawStateLeaseWorkerOwner({
@@ -292,11 +306,7 @@ async function runStateLeaseOwnerInScope<T>(
         label: `${validated.leaseLabel} ${validated.scope}/${validated.key}`,
         waitMs: validated.waitMs,
         signal: validated.signal,
-        assertCurrent() {
-          if (leaseLost.signal.aborted) {
-            throw leaseLost.signal.reason;
-          }
-        },
+        assertCurrent: () => leaseLost.signal.throwIfAborted(),
         prepare:
           invocation.kind === "native" &&
           validated.prepareDatabase &&
@@ -358,7 +368,7 @@ async function runStateLeaseOwnerInScope<T>(
           }
           return;
         }
-        assertActive();
+        assertWorkerCurrent();
         if (validated.database.schemaPolicy === "existing") {
           throw new Error("This lease mode does not support worker writes");
         }
@@ -369,12 +379,6 @@ async function runStateLeaseOwnerInScope<T>(
           }
           // The worker transaction rechecks durable expiry; host grants only check liveness.
           workerHeartbeat.assertRunning();
-          return;
-        }
-        // A delayed expiry timer must not admit another synchronous effect.
-        if (confirmedExpiresAt === undefined || Date.now() >= confirmedExpiresAt) {
-          abortLost();
-          assertActive();
         }
       },
     });
@@ -424,6 +428,9 @@ async function runStateLeaseOwnerInScope<T>(
       }
     };
     const renewFromTimer = () => {
+      const now = Date.now();
+      renewalTimer.lateByMs = Math.max(0, now - (renewalTimer.dueAt ?? now));
+      renewalTimer.dueAt = now + heartbeatMs;
       if (!runTimerRenewal) {
         return;
       }
@@ -442,7 +449,6 @@ async function runStateLeaseOwnerInScope<T>(
 
     const assertOperationOwned = (transaction?: EngineConnection) => {
       assertActive();
-      const params = { ...identity, database: validated.database, transaction };
       if (workerHeartbeat) {
         try {
           workerHeartbeat.assertRunning();
@@ -452,7 +458,7 @@ async function runStateLeaseOwnerInScope<T>(
         }
       }
       // Durable ownership authorizes the effect; worker liveness adds no authority.
-      verifyLeaseOwnership(params);
+      verifyLeaseOwnership({ ...identity, database: validated.database, transaction });
     };
     const renewForHandoff = () => {
       const params = { ...identity, database: validated.database };
@@ -543,6 +549,11 @@ async function runStateLeaseOwnerInScope<T>(
       await workerOperations?.drain();
     };
 
+    const usesOwnerCurrent =
+      validated.processBound &&
+      validated.heartbeat !== "worker" &&
+      validated.database.schemaPolicy !== "existing";
+    const assertNativeCurrent = usesOwnerCurrent ? assertWorkerCurrent : assertOperationOwned;
     let result: T;
     try {
       const execution = workerOperations;
@@ -572,6 +583,7 @@ async function runStateLeaseOwnerInScope<T>(
       } else {
         scheduleExpiry();
         runTimerRenewal = AsyncLocalStorage.snapshot();
+        renewalTimer.dueAt = Date.now() + heartbeatMs;
         heartbeat = setInterval(renewFromTimer, heartbeatMs);
         heartbeat.unref?.();
       }
@@ -592,15 +604,19 @@ async function runStateLeaseOwnerInScope<T>(
         await verify();
         const lease: OpenClawStateAsyncLeaseContext = {
           signal: operationSignal,
+          assertCurrent: execution.assertCurrent,
           assertOwned: async () => execution.run(() => verify()),
           renew: async () => execution.run(() => verify(true)),
         };
         execution.bind(lease);
         result = await invocation.run(lease, identity);
       } else {
-        assertOperationOwned();
+        assertNativeCurrent();
         const lease: OpenClawStateLeaseContext = {
           signal: operationSignal,
+          assertCurrent: usesOwnerCurrent
+            ? assertOwnerCurrent
+            : () => operationSignal.throwIfAborted(),
           renew: renewOperation,
           assertOwned: assertOperationOwned,
           ...(workerHeartbeat
@@ -684,22 +700,14 @@ async function runStateLeaseOwnerInScope<T>(
           ? abortError(validated.signal, "operation", validated.leaseLabel)
           : undefined;
       workerOperations?.rethrowIfUncertain(failure, authorityError);
-      if (authorityError instanceof Error) {
-        if (failure !== error && authorityError instanceof OpenClawStateLeaseError) {
-          // Nested owners may observe the same failed operation differently. Keep
-          // the caller's authority code and all operation/drainage causes.
-          throw leaseError(authorityError.code, authorityError.message, failure);
-        }
-        throw authorityError;
-      }
-      throw failure;
+      throw resolveOpenClawStateLeaseOperationError(error, failure, authorityError);
     }
     if (workerStorage) {
       assertActive();
       await asyncOwnership?.verify();
       assertActive();
     } else {
-      assertOperationOwned();
+      assertNativeCurrent();
     }
     return result;
   };

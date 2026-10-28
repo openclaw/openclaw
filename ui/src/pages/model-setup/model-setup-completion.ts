@@ -19,16 +19,14 @@ import {
 } from "./state.ts";
 import type { ModelSetupWizardCompletion, ModelSetupWizardRunner } from "./wizard-runner.ts";
 
-type ModelSetupCompletionOwner = {
-  state: ModelSetupState;
-  firstRun: FirstRunSetup;
-  wizard: ModelSetupWizardRunner;
-  detect: () => Promise<SystemAgentSetupDetectResult | null>;
-  activate: (params: SystemAgentSetupActivateParams, targetId: string) => Promise<void>;
-};
-
 export async function completeModelSetupWizard(
-  owner: ModelSetupCompletionOwner,
+  owner: {
+    state: ModelSetupState;
+    firstRun: FirstRunSetup;
+    wizard: ModelSetupWizardRunner;
+    detect: () => Promise<SystemAgentSetupDetectResult | null>;
+    activate: (params: SystemAgentSetupActivateParams, targetId: string) => Promise<void>;
+  },
   {
     startMethod,
     preparedModelRef,

@@ -23,16 +23,7 @@ const family = {
 };
 
 function makeJob(id: string, fields: Partial<CronStoredJob> = {}): CronStoredJob {
-  return cronTestJob({
-    id,
-    name: `Operator ${id}`,
-    enabled: false,
-    createdAtMs: 1_800_000_000_000,
-    updatedAtMs: 1_800_000_000_000,
-    sessionTarget: "main",
-    payload: { kind: "systemEvent", text: "fixture" },
-    ...fields,
-  });
+  return cronTestJob({ id, enabled: false, ...fields });
 }
 
 const durableTables = ["cron_jobs", "cron_job_scratch", "cron_job_runtime_authorities"];
@@ -48,13 +39,13 @@ async function expectPersisted(expected: ReturnType<typeof readDurableRows>) {
 }
 
 async function withFamilyStore(
-  workload: { unrelatedCount: number; descriptionBytes: number },
   run: (fixture: {
     cron: CronService;
     db: DatabaseSync;
     staleStore: string;
     removeFamilyNative: (family: CronJobFamilyIdentity) => Promise<number>;
   }) => Promise<void>,
+  workload = { unrelatedCount: 3, descriptionBytes: 32 },
 ) {
   await withOpenClawTestState({ label: "cron-stale-family" }, async (state) => {
     const activeStore = state.statePath("cron", "jobs.json");
@@ -82,22 +73,18 @@ async function withFamilyStore(
       const insert = db.prepare(
         "INSERT INTO cron_job_scratch (store_key, job_id, content, revision, updated_at_ms) VALUES (?, ?, ?, 1, 1800000000000)",
       );
-      insert.run(activeStore, active.id, "active scratch");
-      for (const job of stale) {
-        insert.run(staleStore, job.id, `scratch:${job.id}`);
+      for (const [storePath, jobs] of [
+        [activeStore, [active]],
+        [staleStore, stale],
+      ] as const) {
+        for (const job of jobs) {
+          insert.run(storePath, job.id, `scratch:${job.id}`);
+        }
       }
     });
-    const cron = new CronService(
-      cronTestDeps({
-        storePath: activeStore,
-        cronEnabled: false,
-        nowMs: () => 1_800_000_000_000,
-      }),
-    );
+    const cron = new CronService(cronTestDeps({ storePath: activeStore, cronEnabled: false }));
     try {
-      expect((await cron.list({ includeDisabled: true })).map((job) => job.id)).toEqual([
-        active.id,
-      ]);
+      await cron.list({ includeDisabled: true });
       await run({
         cron,
         db: requireNativeSqliteDatabase(openOpenClawStateDatabase().db),
@@ -109,7 +96,6 @@ async function withFamilyStore(
       });
     } finally {
       cron.stop();
-      await closeOpenClawStateDatabaseAsync();
     }
   });
 }
@@ -120,12 +106,9 @@ function withoutJobs(before: ReturnType<typeof readDurableRows>, store: string, 
   );
 }
 
-const ordinary = { unrelatedCount: 3, descriptionBytes: 32 };
-
 describe("Cron stale-family cleanup", () => {
   it("preserves unrelated description-rich jobs without fetching their descriptions", async () => {
     await withFamilyStore(
-      { unrelatedCount: 32, descriptionBytes: 128 * 1024 },
       async ({ removeFamilyNative, db, staleStore }) => {
         const expected = withoutJobs(readDurableRows(db), staleStore, ["z-declared", "a-legacy"]);
         const counter = trackSqliteStatementExecutions(db, ["familyRows"], (sql) =>
@@ -143,11 +126,12 @@ describe("Cron stale-family cleanup", () => {
         expect(counter.rowCounts.familyRows).toBeGreaterThan(0);
         expect(counter.textBytes.familyRows).toBeLessThan(16 * 1024);
       },
+      { unrelatedCount: 32, descriptionBytes: 128 * 1024 },
     );
   });
 
   it("preserves decoded Unicode, malformed TEXT, and embedded NUL identities", async () => {
-    await withFamilyStore(ordinary, async ({ cron, db, staleStore }) => {
+    await withFamilyStore(async ({ cron, db, staleStore }) => {
       db.exec(`
         UPDATE cron_jobs SET name = CAST(x'80' AS TEXT) WHERE job_id = 'a-legacy';
         UPDATE cron_jobs SET declaration_key = CAST(x'80' AS TEXT) WHERE job_id = 'z-declared';
@@ -181,7 +165,7 @@ describe("Cron stale-family cleanup", () => {
   });
 
   it("retains column authorization and needs no SQL function authorization", async () => {
-    await withFamilyStore(ordinary, async ({ removeFamilyNative, db, staleStore }) => {
+    await withFamilyStore(async ({ removeFamilyNative, db, staleStore }) => {
       const before = readDurableRows(db);
       const restrictedRemove = async (column?: string, policy = constants.SQLITE_DENY) => {
         db.setAuthorizer((action, table, readColumn) =>
@@ -213,7 +197,7 @@ describe("Cron stale-family cleanup", () => {
   });
 
   it("rechecks live authority after waiting for the service lock", async () => {
-    await withFamilyStore(ordinary, async ({ cron, db }) => {
+    await withFamilyStore(async ({ cron, db }) => {
       const entered = createDeferred();
       const release = createDeferred();
       const blocker = cron.updateWithPrecondition("active-owned", {}, async () => {

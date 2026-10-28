@@ -8,7 +8,7 @@ import type {
   ModelRuntimeChoice,
   ModelsListResult,
 } from "../../packages/gateway-protocol/src/schema/model-catalog.js";
-import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
 import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { readAcpSessionMetaForEntries } from "../acp/runtime/session-meta-readonly.js";
@@ -28,7 +28,6 @@ import { resolveFreshSessionTotalTokens, resolveSessionTotalTokens } from "../co
 import { resolveProjectedSessionContextTokens } from "../config/sessions/context-token-provenance.js";
 import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
-import type { SessionEntry } from "../config/sessions/types.js";
 import { resolveStoredSessionKeyForAgentStore } from "../gateway/session-store-key.js";
 import { info } from "../globals.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
@@ -52,8 +51,6 @@ import {
   toSessionDisplayRow,
 } from "./sessions-table.js";
 
-type SessionCandidate = { agentId: string; entry: SessionEntry; sessionKey: string };
-
 const DEFAULT_SESSIONS_LIMIT = 100;
 
 function toSessionCatalogEntry(
@@ -72,23 +69,6 @@ function toSessionCatalogEntry(
       ? { nativeRuntime: runtime.agentRuntime.id }
       : {}),
   };
-}
-
-/** True ACP sessions use the child runtime's model, not the configured fallback. */
-function applyAcpModelOverlayIfNeeded(
-  modelRef: { provider: string; model: string },
-  sessionKey: string,
-  acpRuntime: boolean,
-): { provider: string; model: string } {
-  if (!acpRuntime || !isAcpSessionKey(sessionKey)) {
-    return modelRef;
-  }
-  const agentId = parseAgentSessionKey(sessionKey)?.agentId ?? "acp";
-  return { provider: "acpx", model: `${agentId}-acp` };
-}
-
-function compareSessionRowsByUpdatedAt(a: SessionCandidate, b: SessionCandidate): number {
-  return (b.entry.updatedAt ?? 0) - (a.entry.updatedAt ?? 0);
 }
 
 function parseSessionsLimit(value: string | number | undefined): number | undefined | null {
@@ -230,18 +210,20 @@ export async function sessionsCommand(
       .map(({ sessionKey, entry }) => ({ agentId: target.agentId, entry, sessionKey }));
   });
   const totalCount = allEntries.length;
-  const sessionEntries = sortAndLimitBy(allEntries, limit, compareSessionRowsByUpdatedAt).map(
-    ({ agentId: storeAgentId, entry, sessionKey }) => {
-      const row = toSessionDisplayRow(sessionKey, entry);
-      const agentId = parseAgentSessionKey(row.key)?.agentId ?? storeAgentId;
-      const acpSessionKey = resolveStoredSessionKeyForAgentStore({
-        cfg,
-        agentId,
-        sessionKey: row.key,
-      });
-      return { acpSessionKey, agentId, entry, row };
-    },
-  );
+  const sessionEntries = sortAndLimitBy(
+    allEntries,
+    limit,
+    (a, b) => (b.entry.updatedAt ?? 0) - (a.entry.updatedAt ?? 0),
+  ).map(({ agentId: storeAgentId, entry, sessionKey }) => {
+    const row = toSessionDisplayRow(sessionKey, entry);
+    const agentId = parseAgentSessionKey(row.key)?.agentId ?? storeAgentId;
+    const acpSessionKey = resolveStoredSessionKeyForAgentStore({
+      cfg,
+      agentId,
+      sessionKey: row.key,
+    });
+    return { acpSessionKey, agentId, entry, row };
+  });
   const acpSessionMetadata = await readAcpSessionMetaForEntries({
     cfg,
     entries: sessionEntries.map(({ acpSessionKey, agentId, entry }) => ({
@@ -275,11 +257,12 @@ export async function sessionsCommand(
       const acpRuntime = acpMeta != null;
       // ACP rows need stored-key metadata before model/runtime resolution so
       // bridge sessions and true ACP runtime sessions display differently.
-      const modelRef = applyAcpModelOverlayIfNeeded(
-        resolveSessionDisplayModelRef(cfg, row, classifyCliProvider, agentId),
-        acpSessionKey,
-        acpRuntime,
-      );
+      let modelRef = resolveSessionDisplayModelRef(cfg, row, classifyCliProvider, agentId);
+      /** True ACP sessions use the child runtime's model, not the configured fallback. */
+      if (acpRuntime && isAcpSessionKey(acpSessionKey)) {
+        const acpAgentId = parseAgentSessionKey(acpSessionKey)?.agentId ?? "acp";
+        modelRef = { provider: "acpx", model: `${acpAgentId}-acp` };
+      }
       const agentRuntime = resolveCurrentSessionAgentRuntimeMetadata({
         cfg,
         agentId,
@@ -484,10 +467,14 @@ export async function sessionsCommand(
 
   const primaryTarget = targets[0];
   if (primaryTarget && targets.length === 1 && !aggregateAgents) {
-    runtime.log(info(`Session store: ${resolveSessionStoreDisplayPath(primaryTarget)}`));
+    runtime.log(
+      info(terminalText`Session store: ${resolveSessionStoreDisplayPath(primaryTarget)}`),
+    );
   } else {
     runtime.log(
-      info(`Session stores: ${targets.length} (${targets.map((t) => t.agentId).join(", ")})`),
+      info(
+        terminalText`Session stores: ${targets.length} (${targets.map((t) => t.agentId).join(", ")})`,
+      ),
     );
   }
   runtime.log(
@@ -523,12 +510,12 @@ export async function sessionsCommand(
         Object.assign(column, { header: colorize(rich, theme.heading, column.header) }),
       ),
       rows: rows.map((row) => ({
-        agent: colorize(rich, theme.accentBright, sanitizeTerminalText(row.agentId)),
+        agent: colorize(rich, theme.accentBright, terminalText`${row.agentId}`),
         kind: formatKindCell(row.kind, rich),
         key: formatSessionKeyCell(row.key, rich),
         age: formatSessionAgeCell(row.updatedAt, rich),
         model: formatSessionModelCell(row.displayModelRef.model, rich),
-        runtime: colorize(rich, theme.info, sanitizeTerminalText(row.runtimeLabel)),
+        runtime: colorize(rich, theme.info, terminalText`${row.runtimeLabel}`),
         tokens: formatTokensCell(
           resolveSessionTotalTokens(row),
           resolveFreshSessionTotalTokens(row),

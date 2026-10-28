@@ -153,6 +153,12 @@ Key beliefs can live in structured `claims` frontmatter with per-claim evidence,
 
 When `render.createBacklinks` is enabled, compile adds repeatable `## Related` blocks to pages. Those blocks list source pages, pages that reference the current page, and nearby pages that share the same source ids.
 
+Local Markdown link paths are percent-decoded for lint and generated backlinks:
+`[Target](%74arget.md)` resolves to `target.md`. Malformed percent escapes remain
+literal, and Obsidian wikilinks keep their existing syntax.
+In native render mode, generated links to paths with spaces or parentheses use
+angle-bracket destinations, such as `[Meeting notes](<sources/meeting notes.md>)`.
+
 When `render.createDashboards` is enabled, compile also maintains report dashboards under `reports/` for open questions, contradictions, low-confidence pages, and stale pages.
 
 Unmanaged raw Markdown can live under `sources/` without OpenClaw page frontmatter. Add `<!-- openclaw:wiki:raw-source -->` near the top of the page body to opt it out of wiki page metadata and freshness lint; generated or source-sync tracked imports still require their structured metadata.
@@ -168,6 +174,7 @@ openclaw wiki compile
 openclaw wiki lint
 openclaw wiki search "alpha"
 openclaw wiki get entity.alpha --from 1 --lines 80
+openclaw wiki chatgpt import --export ./chatgpt-export
 
 openclaw wiki apply synthesis "Alpha Summary" \
   --body "Short synthesis body" \
@@ -191,6 +198,9 @@ openclaw wiki obsidian daily
 openclaw wiki status --agent support
 openclaw wiki search "refund policy" --agent support
 ```
+
+ChatGPT imports preserve active-branch message text, including pasted JSON.
+Serialized image parts are omitted; serialized text parts are decoded as text.
 
 ## Agent tools
 

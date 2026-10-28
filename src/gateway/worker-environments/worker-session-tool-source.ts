@@ -31,13 +31,6 @@ import {
 } from "./worker-session-tool-result.js";
 import type { WorkerSessionToolSource as ExactSource } from "./worker-session-tool-topology.js";
 
-type WorkerToolRequest = Pick<WorkerSessionToolRequest, "identity" | "signal" | "onUpdate"> & {
-  toolName: string;
-  tool: AnyAgentTool | ((authority: WorkerSessionToolAuthority) => AnyAgentTool);
-  approvalMode?: "deny";
-  request: { toolCallId: string; arguments: unknown };
-};
-
 export function prepareWorkerSessionToolRequest(
   binding: Pick<WorkerSessionToolRequest, "identity" | "signal" | "onUpdate">,
   toolName: string,
@@ -81,7 +74,12 @@ export function createWorkerSessionToolSourceRunner(params: {
     source: Pick<ExactSource, "agentId" | "sessionId" | "sessionKey"> & {
       turnClaim: WorkerSessionTurnClaim;
     };
-    request: WorkerToolRequest;
+    request: Pick<WorkerSessionToolRequest, "identity" | "signal" | "onUpdate"> & {
+      toolName: string;
+      tool: AnyAgentTool | ((authority: WorkerSessionToolAuthority) => AnyAgentTool);
+      approvalMode?: "deny";
+      request: { toolCallId: string; arguments: unknown };
+    };
   }): Promise<AgentToolResult<unknown>> => {
     const startArgs = operation.request.request.arguments;
     if (!isRecord(startArgs)) {

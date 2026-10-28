@@ -12,7 +12,15 @@ import {
   requestCount,
   saveKey,
   waitForProviders,
+  type ModelProvidersPageTestElement,
 } from "./model-providers-page.test-support.tsx";
+
+const keyInput = (page: ModelProvidersPageTestElement) =>
+  page.querySelector<HTMLInputElement>(".model-providers__inline-form input");
+const keyButton = (page: ModelProvidersPageTestElement) =>
+  page.querySelector<HTMLButtonElement>(".model-providers__inline-form button")!;
+const primaryButton = (page: ModelProvidersPageTestElement) =>
+  modelPicker(page, "primary").querySelector<HTMLButtonElement>(".picker-select__trigger");
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -33,28 +41,22 @@ describe("ModelProvidersPage mutation presentation", () => {
 
     await waitForSolid(() => {
       expect(requestCount(request, "models.authSetApiKey")).toBe(1);
-      expect(
-        page.querySelector<HTMLInputElement>(".model-providers__inline-form input")?.disabled,
-      ).toBe(true);
-      expect(page.querySelector(".model-providers__inline-form button")?.textContent).toContain(
-        "Saving",
-      );
+      expect(keyInput(page)?.disabled).toBe(true);
+      expect(keyButton(page).textContent).toContain("Saving");
     });
-    page.querySelector<HTMLButtonElement>(".model-providers__inline-form button")!.click();
+    keyButton(page).click();
     expect(requestCount(request, "models.authSetApiKey")).toBe(1);
 
     pending.reject(new Error("Synthetic credential rejection"));
     await waitForSolid(() => {
       expect(page.renderRoot.textContent).toContain("Synthetic credential rejection");
-      const input = page.querySelector<HTMLInputElement>(".model-providers__inline-form input");
-      expect(input?.value).toBe("synthetic-api-key");
-      expect(input?.disabled).toBe(false);
+      expect(keyInput(page)).toMatchObject({ value: "synthetic-api-key", disabled: false });
     });
 
     request.mockImplementation(async (method) =>
       method === "models.authSetApiKey" ? {} : original(method),
     );
-    page.querySelector<HTMLButtonElement>(".model-providers__inline-form button")!.click();
+    keyButton(page).click();
     await waitForSolid(() =>
       expect(page.querySelector(".model-providers__inline-form")).toBeNull(),
     );
@@ -88,10 +90,7 @@ describe("ModelProvidersPage mutation presentation", () => {
     page.view.props.onPrimaryChange("openai/synthetic-model");
     await waitForSolid(() => {
       expect(runtimeConfig.patch).toHaveBeenCalledTimes(1);
-      expect(
-        modelPicker(page, "primary").querySelector<HTMLButtonElement>(".picker-select__trigger")
-          ?.disabled,
-      ).toBe(true);
+      expect(primaryButton(page)?.disabled).toBe(true);
       expect(behaviorDefaults.every((input) => input.disabled)).toBe(true);
     });
     expect(page.view.props.defaultModels.primary).toBe("openai/synthetic-model");
@@ -100,10 +99,7 @@ describe("ModelProvidersPage mutation presentation", () => {
     await waitForSolid(() => {
       expect(page.view.props.defaultModels.primary).toBe(previous);
       expect(page.renderRoot.textContent).toContain("Synthetic defaults rejection");
-      expect(
-        modelPicker(page, "primary").querySelector<HTMLButtonElement>(".picker-select__trigger")
-          ?.disabled,
-      ).toBe(false);
+      expect(primaryButton(page)?.disabled).toBe(false);
       expect(behaviorDefaults.every((input) => !input.disabled)).toBe(true);
     });
   });
@@ -191,13 +187,9 @@ describe("ModelProvidersPage mutation presentation", () => {
           expect(page.view.props.credentialAgentLabel).toBe("Writer");
           expect(page.querySelector(".model-providers__inline-form")).toBeNull();
         } else if (retirement === "reconnect") {
-          expect(
-            page.querySelector<HTMLInputElement>(".model-providers__inline-form input")?.disabled,
-          ).toBe(false);
+          expect(keyInput(page)?.disabled).toBe(false);
         } else {
-          expect(
-            page.querySelector<HTMLInputElement>(".model-providers__inline-form input")?.value,
-          ).toBe("synthetic-draft-after-navigation");
+          expect(keyInput(page)?.value).toBe("synthetic-draft-after-navigation");
         }
       });
 

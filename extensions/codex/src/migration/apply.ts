@@ -210,11 +210,9 @@ async function applyCodexPluginInstallItem(
         await requestTargetCodexAppServerJson({
           method,
           requestParams,
-          timeoutMs: 60_000,
           startOptions: appServer.start,
           agentDir: resolvePlannedMigrationTargets(ctx).agentDir,
           config: ctx.config,
-          isolated: false,
         }),
       appCache: defaultCodexAppInventoryCache,
       appCacheKey,
@@ -290,26 +288,25 @@ function resolveTargetCodexAppServer(ctx: MigrationProviderContext) {
 async function requestTargetCodexAppServerJson(params: {
   method: string;
   requestParams?: unknown;
-  timeoutMs: number;
   startOptions: ReturnType<typeof resolveTargetCodexAppServer>["start"];
   agentDir: string;
   config: MigrationProviderContext["config"];
-  isolated?: boolean;
 }): Promise<unknown> {
+  const options = { ...params, timeoutMs: 60_000, isolated: false };
   if (params.method !== "plugin/list") {
-    return await requestCodexAppServerJson(params);
+    return await requestCodexAppServerJson(options);
   }
 
   // Use the monotonic clock so NTP adjustments or sleep resumes cannot stretch
   // or shrink the discovery budget while request timers (also monotonic) are in flight.
-  const deadline = performance.now() + params.timeoutMs;
+  const deadline = performance.now() + options.timeoutMs;
   const discoveryTimeoutMs = targetCodexMarketplaceDiscoveryTimeoutMs();
   const discoveryDeadline = Math.min(deadline, performance.now() + discoveryTimeoutMs);
   let lastResponse: v2.PluginListResponse;
   do {
     const remainingMs = Math.max(1, discoveryDeadline - performance.now());
     lastResponse = await requestCodexAppServerJson<v2.PluginListResponse>({
-      ...params,
+      ...options,
       timeoutMs: remainingMs,
     });
     if (

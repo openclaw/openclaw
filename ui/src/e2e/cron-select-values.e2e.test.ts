@@ -1,6 +1,3 @@
-// Control UI tests cover Automations form select display state.
-import { writeFileSync } from "node:fs";
-import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import type { CronJob } from "../api/types.ts";
@@ -17,8 +14,6 @@ import { openSidebarPages } from "./sidebar-customization.test-support.ts";
 const suite = createControlUiE2eSuite({
   name: "Control UI cron select values mocked Gateway E2E",
   startServerBeforeBrowser: true,
-  unavailableMessage: (executablePath) =>
-    `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
 });
 
 const gardenMessage = "Summarize the fictional garden inventory.";
@@ -119,7 +114,6 @@ suite.define(() => {
           const once = page.locator('[data-test-id="cron-schedule-kind-at"]');
           await page.locator("#cron-schedule-at").waitFor({ state: "visible" });
           expect(await once.evaluate((element) => element.matches(":focus-within"))).toBe(true);
-          await page.screenshot({ path: path.join(suite.artifactDir, "keyboard-once.png") });
           const geometry = await once.evaluate((element) => {
             const choice = element.getBoundingClientRect();
             const actions = document.querySelector(".cron-editor-actions");
@@ -137,14 +131,9 @@ suite.define(() => {
               footerTop: footer.top,
               footerBottom: footer.bottom,
               scrollportBottom: document.querySelector(".content")!.getBoundingClientRect().bottom,
-              footerHeight: footer.height,
               reachable: hit === element || (hit !== null && element.contains(hit)),
             };
           });
-          writeFileSync(
-            path.join(suite.artifactDir, "keyboard-geometry.json"),
-            JSON.stringify(geometry, null, 2),
-          );
           expect(geometry.top).toBeGreaterThanOrEqual(0);
           expect(geometry.bottom).toBeLessThanOrEqual(geometry.footerTop);
           expect(geometry.reachable).toBe(true);
@@ -225,9 +214,6 @@ suite.define(() => {
         );
         expect(await page.locator('[data-test-id="cron-submit"]').isDisabled()).toBe(true);
         expect(await gateway.getRequests("cron.update")).toHaveLength(0);
-        await page.screenshot({
-          path: path.join(suite.artifactDir, "delivery-repair-required.png"),
-        });
 
         await mode.click();
         await page.getByRole("option", { name: "None (internal)", exact: true }).click();

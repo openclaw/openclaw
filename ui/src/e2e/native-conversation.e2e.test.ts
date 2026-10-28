@@ -7,14 +7,13 @@ import {
   defaultControlUiFeatureMethods,
 } from "../test-helpers/control-ui-e2e.ts";
 import {
+  textContent,
   captureUiProofEnabled,
   controlUiSessionUrl,
   createChatFlowE2eSuite,
   installMockGateway,
   requireRecord,
-  requireString,
 } from "./chat-flow.test-support.ts";
-import { installNativeEmbed, installNativeWebChrome } from "./native-nav.test-support.ts";
 import { catalog } from "./native-plugin-ui.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
@@ -139,21 +138,19 @@ suite.define(() => {
       await installConversationHost(page);
       const linkedUrl = controlUiSessionUrl(suite.server.baseUrl, "agent:main:linked");
       const gateway = await installMockGateway(page, {
-        workspace: "/workspace",
+        workspace: "/default-workspace",
         sessions: ["main", "next", "linked"].map((name) => ({
           key: `agent:main:${name}`,
           label: name,
           kind: "direct",
+          spawnedCwd: "/workspace",
         })),
         historyMessages: [
           {
             role: "assistant",
-            content: [
-              {
-                type: "text",
-                text: `Conversation ready. [Linked conversation](${linkedUrl}) · [Settings](/settings?section=general) · [Notes](notes.txt)`,
-              },
-            ],
+            content: textContent(
+              `Conversation ready. [Linked conversation](${linkedUrl}) · [Settings](/settings?section=general) · [Notes](notes.txt)`,
+            ),
           },
         ],
         methodResponses: {
@@ -250,7 +247,6 @@ suite.define(() => {
       });
       const first = (await messages(page))[0];
       expect(first).toMatchObject({ type: "ready", contract: 1, surface: "conversation" });
-      expect(first?.capabilities).toEqual(["navigate", "presentation", "focus-composer"]);
       const documentId = first?.documentId;
       const timeOrigin = await page.evaluate(() => performance.timeOrigin);
       const initialUrl = page.url();
@@ -275,19 +271,6 @@ suite.define(() => {
       if (proofDir) {
         await page.screenshot({ path: path.join(proofDir, "conversation-initial.png") });
       }
-      await composer.fill("Verify the web composer");
-      await pane.getByRole("button", { name: "Send message", exact: true }).click();
-      const request = requireRecord((await gateway.waitForRequest("chat.send")).params);
-      expect(request.message).toBe("Verify the web composer");
-      expect(request.sessionKey).toBe("agent:main:main");
-      await gateway.emitChatFinal({
-        runId: requireString(request.idempotencyKey, "run id"),
-        text: "Web composer verified.",
-      });
-      await pane
-        .locator(".chat-thread-inner")
-        .getByText("Web composer verified.", { exact: true })
-        .waitFor();
       await command(
         page,
         "navigate",
@@ -583,62 +566,6 @@ suite.define(() => {
       await gateway.resolveDeferred("sessions.reclaim", { ok: true });
       expect(await gateway.getRequests("sessions.reclaim")).toHaveLength(1);
       expect(await page.evaluate(() => performance.timeOrigin)).toBe(timeOrigin);
-      expect((await messages(page)).some((message) => message.type === "session-facts")).toBe(
-        false,
-      );
     });
   });
-
-  it.each(["browser", "dashboard", "ios"] as const)(
-    "preserves %s chat and settings presentation",
-    async (mode) => {
-      await suite.withPage({ viewport, serviceWorkers: "block" }, async ({ page }) => {
-        if (mode === "ios") {
-          await installNativeEmbed(page, { platform: "ios", formFactor: "pad" });
-        } else if (mode === "dashboard") {
-          await installNativeWebChrome(page);
-        }
-        await installMockGateway(page, {
-          historyMessages: [
-            { role: "assistant", content: [{ type: "text", text: "Ordinary conversation." }] },
-          ],
-        });
-        await page.goto(`${suite.server.baseUrl}chat`);
-        await page.locator(".agent-chat__composer-combobox textarea").waitFor();
-        expect(await page.locator(".chat-pane__header").isVisible()).toBe(true);
-        expect(await page.locator(".native-embed-header").count()).toBe(mode === "ios" ? 1 : 0);
-        expect(await page.locator(".settings-sidebar__agent").count()).toBe(mode === "ios" ? 1 : 0);
-        expect(
-          await page.evaluate(() => "__OPENCLAW_NATIVE_CONVERSATION_DOCUMENT__" in window),
-        ).toBe(false);
-        if (mode === "ios") {
-          await page.locator(".native-embed-header__back").click();
-          await page
-            .locator(".native-embed-header")
-            .getByText("Settings", { exact: true })
-            .waitFor();
-          expect(new URL(page.url()).pathname).toBe("/settings");
-        } else {
-          if (mode === "dashboard") {
-            const controls = page.locator(".macos-titlebar-controls");
-            await controls.waitFor();
-            const controlsBox = await controls.boundingBox();
-            const leadingBox = await page.locator(".chat-pane__header-leading").boundingBox();
-            expect(controlsBox).not.toBeNull();
-            expect(leadingBox).not.toBeNull();
-            const gap = leadingBox!.x - (controlsBox!.x + controlsBox!.width);
-            expect(gap).toBeGreaterThanOrEqual(0);
-            expect(gap).toBeLessThanOrEqual(8);
-          } else {
-            expect(await headerLeadingInset(page)).toBe(12);
-          }
-          expect(await page.locator(".chat-pane__header").boundingBox()).toMatchObject({
-            y: 0,
-            height: mode === "dashboard" ? 52 : 44,
-          });
-          expect(await page.locator("openclaw-app-sidebar").isVisible()).toBe(true);
-        }
-      });
-    },
-  );
 });

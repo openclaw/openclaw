@@ -9,7 +9,7 @@ import { useAutoCleanupTempDirTracker } from "../../test-support.js";
 import * as outputFiles from "./output-files.js";
 import { observeOutputWriteSettlement } from "./output-files.test-support.js";
 import { DEFAULT_UPLOAD_DIR } from "./paths.js";
-import { getPlaywrightCore } from "./playwright-core.runtime.js";
+import { launchChromium, readTargetId } from "./pw-chromium.test-support.js";
 import { ensurePageState } from "./pw-session-state.js";
 import * as pwSession from "./pw-session.js";
 import { closePlaywrightBrowserConnection, getPageForTargetId } from "./pw-session.js";
@@ -23,7 +23,6 @@ import { clickViaPlaywright, typeViaPlaywright } from "./pw-tools-core.interacti
 import { setInputFilesViaPlaywright } from "./pw-tools-core.interactions.content.js";
 import { executeActViaPlaywright } from "./pw-tools-core.interactions.execution.js";
 import { snapshotRoleViaPlaywright } from "./pw-tools-core.snapshot.js";
-import { getFreePort } from "./test-port.js";
 
 const runChromiumProof = process.env.OPENCLAW_BROWSER_DOWNLOAD_E2E === "1";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -39,15 +38,6 @@ function closeServer(server: Server): Promise<void> {
   return new Promise((resolve, reject) => {
     server.close((error) => (error ? reject(error) : resolve()));
   });
-}
-
-async function readTargetId(page: import("playwright-core").Page): Promise<string> {
-  const session = await page.context().newCDPSession(page);
-  try {
-    return (await session.send("Target.getTargetInfo")).targetInfo.targetId;
-  } finally {
-    await session.detach();
-  }
 }
 
 function sendDownload(response: ServerResponse, payload: Buffer, filename: string) {
@@ -109,15 +99,8 @@ describe.runIf(runChromiumProof)("managed Chromium action and download cancellat
   }
 
   async function launchBrowser(rootDir: string, url?: string) {
-    const cdpPort = await getFreePort();
-    const profileDir = path.join(rootDir, "profile");
-    const context = await getPlaywrightCore().chromium.launchPersistentContext(profileDir, {
-      headless: true,
-      executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
-      args: [`--remote-debugging-port=${cdpPort}`],
-    });
+    const { context, cdpUrl } = await launchChromium(rootDir);
     cleanup.push(async () => await context.close());
-    const cdpUrl = `http://127.0.0.1:${cdpPort}`;
     cleanup.push(async () => await closePlaywrightBrowserConnection({ cdpUrl }));
     const page = context.pages()[0] ?? (await context.newPage());
     if (url) {
@@ -176,7 +159,7 @@ describe.runIf(runChromiumProof)("managed Chromium action and download cancellat
     if (!ref) {
       throw new Error(`Missing download ref: ${trigger}`);
     }
-    const outputPath = path.join(rootDir, `${mode}-${trigger}.txt`);
+    const outputPath = path.join(rootDir, ` ${mode}-${trigger}.txt `);
     const options = {
       ...captureOptions({ cdpUrl, targetId }, rootDir, outputPath),
       ssrfPolicy: { dangerouslyAllowPrivateNetwork: false, allowedHostnames: ["localhost"] },
@@ -185,9 +168,14 @@ describe.runIf(runChromiumProof)("managed Chromium action and download cancellat
       mode === "ref-based"
         ? downloadViaPlaywright({ ...options, path: outputPath, ref })
         : waitForDownloadViaPlaywright(options);
+    const captureSettled = pending.then(
+      () => {},
+      () => {},
+    );
     if (mode === "waiter") {
       await expect.poll(() => ensurePageState(controlled).downloadWaiterDepth).toBe(1);
-      await page.getByRole("link", { name: trigger }).click();
+      // Policy denial can settle the capture before the native click returns.
+      await Promise.race([page.getByRole("link", { name: trigger }).click(), captureSettled]);
     }
     return { outputPath, pending, payload, downloadRequestCount: () => downloadRequestCount };
   }
@@ -389,7 +377,9 @@ describe.runIf(runChromiumProof)("managed Chromium action and download cancellat
     async ({ mode, allowed }) => {
       const download = await preparePolicyDownload(mode, allowed);
       if (allowed) {
-        await expect(fs.readFile((await download.pending).path)).resolves.toEqual(download.payload);
+        const result = await download.pending;
+        expect(result.path).toBe(download.outputPath);
+        await expect(fs.readFile(result.path)).resolves.toEqual(download.payload);
       } else {
         await expect(download.pending).rejects.toThrow(/blocked|private/i);
         await expect(fs.access(download.outputPath)).rejects.toMatchObject({ code: "ENOENT" });

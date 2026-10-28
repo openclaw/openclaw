@@ -6,7 +6,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { enablePluginInConfig, enablePluginWithCapabilityConsent } from "./enable.js";
 import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
-import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
+import { withPluginLifecycleLeaseAsync } from "./plugin-lifecycle-lease.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 import {
   type ProviderAuthChoiceMetadata,
@@ -40,7 +40,7 @@ export async function probeSetupProviderChoices<T>(
 ): Promise<T[]> {
   await using cache = createPluginCache();
   const env = params.env ?? process.env;
-  const discovery = await withPluginLifecycleLease({ env, signal: params.signal }, async () =>
+  const discovery = await withPluginLifecycleLeaseAsync({ env, signal: params.signal }, async () =>
     withPluginCache(cache, async () => {
       let config = params.config;
       const choices: ProviderAuthChoiceMetadata[] = [];

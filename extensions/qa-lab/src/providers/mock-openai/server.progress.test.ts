@@ -33,9 +33,6 @@ import {
 
 const { startMockServer } = createMockServerTestHarness();
 
-const READ_PROMPT =
-  "Tool progress QA check: read `empty.txt` before answering. After the read completes, reply exactly `PROGRESS_OK`.";
-
 const EXEC_PROMPT =
   "Tool progress QA check: call the exec tool exactly once with this exact command before answering: `true`. After that command completes, reply exactly `PROGRESS_OK`.";
 
@@ -69,15 +66,15 @@ type ProgressResult = {
   callId?: string;
 };
 
+const anthropicResult = (id: unknown, content: unknown, is_error?: boolean) => ({
+  role: "user",
+  content: [{ type: "tool_result", tool_use_id: id, content, is_error }],
+});
+
 async function requestProgress(route: string, prompt: string, results: ProgressResult[]) {
   const server = await startMockServer();
   const responses = route === "responses";
-  const input = [
-    {
-      role: "user",
-      content: responses ? [textBlock(prompt)] : prompt,
-    },
-  ];
+  const input = [{ role: "user", content: responses ? [textBlock(prompt)] : prompt }];
   const history = results.flatMap<unknown>(({ tool, args, output, isError, callId }, index) => {
     const id = callId ?? `progress_${index}`;
     return responses
@@ -85,13 +82,7 @@ async function requestProgress(route: string, prompt: string, results: ProgressR
           functionCall(tool, args, id),
           { type: "function_call_output", call_id: id, output, is_error: isError },
         ]
-      : [
-          anthropicCall(tool, args, id),
-          {
-            role: "user",
-            content: [{ type: "tool_result", tool_use_id: id, content: output, is_error: isError }],
-          },
-        ];
+      : [anthropicCall(tool, args, id), anthropicResult(id, output, isError)];
   });
   const body = {
     model: "qa-model",
@@ -102,36 +93,31 @@ async function requestProgress(route: string, prompt: string, results: ProgressR
   return (await expectOk(postJson(server, `/v1/${route}`, body))).json();
 }
 
-describe("Anthropic command progress wire", () => {
-  it("honors the Matrix required failure after exit 0", async () => {
-    const prompt = buildMatrixToolProgressMentionSafetyPrompt(
-      "@qa-sut:matrix-qa.test",
-      "PROGRESS_OK",
-    );
-    const plan = await requestProgress("messages", prompt, []);
-    const call = plan.content[0];
-    expect(call.name).toBe("exec");
-    const args = call.input;
-    expect(args.command).toBe(
-      "while [ ! -d 'matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.release' ]; do sleep 1; done; rmdir 'matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.release'; false",
-    );
-    const results: ProgressResult[] = [
-      { tool: "exec", args, output: [{ type: "text", text: RUNNING_OUTPUT }] },
-    ];
-    const pending = await requestProgress("messages", prompt, results);
-    expect(pending.content).toMatchObject([{ name: "process" }]);
-    results.push(pollResult(EXIT_ZERO));
-    expect(await requestProgress("messages", prompt, results)).toMatchObject({
-      content: [{ text: "BUG-TOOL-DID-NOT-FAIL" }],
-    });
+it("honors the Matrix required failure after exit 0", async () => {
+  const prompt = buildMatrixToolProgressMentionSafetyPrompt(
+    "@qa-sut:matrix-qa.test",
+    "PROGRESS_OK",
+  );
+  const plan = await requestProgress("messages", prompt, []);
+  const command =
+    "while [ ! -d 'matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.release' ]; do sleep 1; done; rmdir 'matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.release'; false";
+  expect(plan.content[0]).toMatchObject({ name: "exec", input: { command } });
+  const results: ProgressResult[] = [
+    { tool: "exec", args: plan.content[0].input, output: [{ type: "text", text: RUNNING_OUTPUT }] },
+  ];
+  const pending = await requestProgress("messages", prompt, results);
+  expect(pending.content).toMatchObject([{ name: "process" }]);
+  results.push(pollResult(EXIT_ZERO));
+  expect(await requestProgress("messages", prompt, results)).toMatchObject({
+    content: [{ text: "BUG-TOOL-DID-NOT-FAIL" }],
   });
-  it("rejects empty call IDs even when command failure is allowed", async () => {
-    const response = await requestProgress("messages", FAILURE_ALLOWED_PROMPT, [
-      { ...execResult(RUNNING_OUTPUT), callId: "" },
-      { ...pollResult(EXIT_ZERO), callId: "" },
-    ]);
-    expect(response).toMatchObject({ content: [{ text: "BUG-TOOL-PROGRESS-CALL-MISMATCH" }] });
-  });
+});
+it("rejects empty call IDs even when command failure is allowed", async () => {
+  const response = await requestProgress("messages", FAILURE_ALLOWED_PROMPT, [
+    { ...execResult(RUNNING_OUTPUT), callId: "" },
+    { ...pollResult(EXIT_ZERO), callId: "" },
+  ]);
+  expect(response).toMatchObject({ content: [{ text: "BUG-TOOL-PROGRESS-CALL-MISMATCH" }] });
 });
 
 function execResult(output: ProgressResult["output"], isError?: boolean): ProgressResult {
@@ -141,72 +127,37 @@ function execResult(output: ProgressResult["output"], isError?: boolean): Progre
 function pollResult(output: string, isError?: boolean, sessionId = "lucky-slug"): ProgressResult {
   return { tool: "process", args: { action: "poll", sessionId }, output, isError };
 }
+const polled = (output: string, isError?: boolean) => [
+  execResult(RUNNING_OUTPUT),
+  pollResult(output, isError),
+];
 
 const FAILURE_ALLOWED_PROMPT = EXEC_PROMPT.replace(
   "command completes,",
   "command completes or fails,",
 );
 
-it.each<[string, string, ProgressResult[], string]>([
+const failedExec = execResult("Node: node-1\n(Command exited with code 7)", false);
+it.each<[string, ProgressResult[], boolean, string]>([
   [
-    "single-newline exit-like stdout",
-    EXEC_PROMPT,
-    [execResult(RUNNING_OUTPUT), pollResult("ordinary output\nProcess exited with code 0.")],
+    "exit-like stdout",
+    polled("ordinary output\nProcess exited with code 0."),
+    false,
     "BUG-TOOL-DID-NOT-COMPLETE",
   ],
+  ["unknown exit", polled("\n\nProcess exited with unknown exit code.", true), true, "PROGRESS_OK"],
+  ["foreground failure", [failedExec], false, "BUG-TOOL-FAILED"],
+  ["allowed failure", [failedExec], true, "PROGRESS_OK"],
+  ["running error", [execResult(RUNNING_OUTPUT, true)], true, "BUG-TOOL-DID-NOT-COMPLETE"],
   [
-    "terminal typed failure with unknown exit code",
-    FAILURE_ALLOWED_PROMPT,
-    [execResult(RUNNING_OUTPUT), pollResult("\n\nProcess exited with unknown exit code.", true)],
-    "PROGRESS_OK",
-  ],
-  [
-    "foreground failure",
-    EXEC_PROMPT,
-    [execResult("Node: node-1\n(Command exited with code 7)", false)],
-    "BUG-TOOL-FAILED",
-  ],
-  [
-    "allowed foreground failure",
-    FAILURE_ALLOWED_PROMPT,
-    [execResult("Node: node-1\n(Command exited with code 7)", false)],
-    "PROGRESS_OK",
-  ],
-  [
-    "typed error with running handle",
-    FAILURE_ALLOWED_PROMPT,
-    [execResult(RUNNING_OUTPUT, true)],
-    "BUG-TOOL-DID-NOT-COMPLETE",
-  ],
-  [
-    "restricted approval decisions",
-    FAILURE_ALLOWED_PROMPT,
+    "restricted approval",
     [execResult(APPROVAL_RESTRICTED_OUTPUT, false)],
+    true,
     "BUG-TOOL-DID-NOT-COMPLETE",
   ],
-])("background command progress: %s", async (_name, prompt, results, expected) => {
+])("background command progress: %s", async (_name, results, allowFailure, expected) => {
+  const prompt = allowFailure ? FAILURE_ALLOWED_PROMPT : EXEC_PROMPT;
   expectResponseText(await requestProgress("responses", prompt, results), expected);
-});
-
-it("keeps Slack commentary progress open while its exec is running", async () => {
-  const command =
-    "printf '%s' 'SLACK-QA-TOOL-A1B2C3D4' >/dev/null; sleep 5; printf '%s\\n' 'SLACK-QA-OUTPUT-A1B2C3D4'";
-  const prompt = `SLACK-QA-COMMENTARY-A1B2C3D4 ${command} SLACK-QA-COMMENTARY-DONE-A1B2C3D4`;
-  const results: ProgressResult[] = [{ tool: "exec", args: { command }, output: RUNNING_OUTPUT }];
-  expect(await requestProgress("responses", prompt, results)).toMatchObject({
-    output: [
-      {
-        name: "process",
-        arguments: JSON.stringify({ action: "poll", sessionId: "lucky-slug", timeout: 30_000 }),
-      },
-    ],
-  });
-  results.push(pollResult(EXIT_ZERO));
-  expectStage(
-    await requestProgress("responses", prompt, results),
-    "final_answer",
-    "SLACK-QA-COMMENTARY-DONE-A1B2C3D4",
-  );
 });
 
 it("selects commentary, exec, and final delivery for the actual Telegram scenario prompt", async () => {
@@ -247,71 +198,59 @@ it("selects commentary, exec, and final delivery for the actual Telegram scenari
     { type: "function_call", name: "exec" },
   ]);
   const call = outputToolCall(plan, "exec");
+  const running = [...input, call, makeToolOutputWithCallId(String(call.call_id), RUNNING_OUTPUT)];
+  const poll = outputToolCall(await request(running), "process");
+  expect(poll.arguments).toBe(
+    JSON.stringify({ action: "poll", sessionId: "lucky-slug", timeout: 30_000 }),
+  );
   const final = await request([
-    ...input,
-    call,
-    makeToolOutputWithCallId(
-      String(call.call_id),
-      "SLACK-QA-OUTPUT-00000000\n\nProcess exited with code 0.",
-    ),
+    ...running,
+    poll,
+    makeToolOutputWithCallId(String(poll.call_id), `SLACK-QA-OUTPUT-00000000${EXIT_ZERO}`),
   ]);
   expectStage(final, "final_answer", "SLACK-QA-COMMENTARY-DONE-00000000");
 });
 
-async function completeProgress(params: {
-  prompt: string;
-  tool: string;
-  args: Record<string, unknown>;
-  output: string | unknown[];
-  isError?: boolean;
-}) {
-  const plan = await requestProgress("messages", params.prompt, []);
+async function completeProgress(prompt: string, result: ProgressResult) {
+  const plan = await requestProgress("messages", prompt, []);
   const call = plan.content[0];
-  expect(call).toMatchObject({ type: "tool_use", name: params.tool, input: params.args });
-  return requestProgress("messages", params.prompt, [{ ...params, callId: call.id }]);
+  expect(call).toMatchObject({ type: "tool_use", name: result.tool, input: result.args });
+  return requestProgress("messages", prompt, [{ ...result, callId: call.id }]);
 }
 
-describe("tool progress stdout", () => {
-  it.each([
-    {
-      label: "exec stdout containing a foreign approval fence",
-      tool: "exec",
-      prompt: EXEC_PROMPT,
-      output: APPROVAL_OUTPUT.replaceAll("```", "````"),
-      isError: false,
-    },
-    { label: "an empty read result", tool: "read", prompt: READ_PROMPT, output: "" },
-  ])("finishes after $label", async (fixture) => {
-    const response = await completeProgress({
-      args: fixture.tool === "exec" ? { command: "true" } : { path: "empty.txt" },
-      ...fixture,
-    });
-    expectAnthropicText(response, "PROGRESS_OK");
-  });
+it.each<[string, string, ProgressResult]>([
+  [
+    "exec stdout containing a foreign approval fence",
+    EXEC_PROMPT,
+    execResult(APPROVAL_OUTPUT.replaceAll("```", "````"), false),
+  ],
+  [
+    "an empty read result",
+    "Tool progress QA check: read `empty.txt` before answering. After the read completes, reply exactly `PROGRESS_OK`.",
+    { tool: "read", args: { path: "empty.txt" }, output: "" },
+  ],
+])("finishes after %s", async (_label, prompt, result) => {
+  expectAnthropicText(await completeProgress(prompt, result), "PROGRESS_OK");
 });
 
 it("rejects untyped content without failure evidence for error-progress completion", async () => {
-  const response = await completeProgress({
-    prompt: ERROR_PROMPT,
+  const response = await completeProgress(ERROR_PROMPT, {
     tool: "read",
     args: { path: "denied.txt" },
     output: "Access denied",
-    isError: undefined,
   });
   expectAnthropicText(response, "BUG-TOOL-DID-NOT-FAIL");
 });
 
 it("distinguishes a successful CodeMode runner from its failed read", async () => {
   const server = await startMockServer();
+  const codeSchema = {
+    type: "object",
+    properties: { code: { type: "string" } },
+    required: ["code"],
+  };
   const tools = [
-    {
-      name: "exec",
-      input_schema: {
-        type: "object",
-        properties: { code: { type: "string" } },
-        required: ["code"],
-      },
-    },
+    { name: "exec", input_schema: codeSchema },
     { name: "wait", input_schema: { type: "object", properties: {} } },
   ];
   const request = (messages: unknown[]) =>
@@ -322,17 +261,11 @@ it("distinguishes a successful CodeMode runner from its failed read", async () =
   const result = await request([
     ...input,
     { role: "assistant", content: plan.content },
-    {
-      role: "user",
-      content: [
-        {
-          type: "tool_result",
-          tool_use_id: requireRecord(plan.content[0], "tool use").id,
-          is_error: false,
-          content: completedResult({ status: "error", error: "Access denied" }),
-        },
-      ],
-    },
+    anthropicResult(
+      requireRecord(plan.content[0], "tool use").id,
+      completedResult({ status: "error", error: "Access denied" }),
+      false,
+    ),
   ]);
   expectAnthropicText(result, "PROGRESS_OK");
 });

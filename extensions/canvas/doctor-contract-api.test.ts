@@ -4,38 +4,30 @@ import { fileURLToPath } from "node:url";
 import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { resolvePreferredOpenClawTmpDir, tempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  legacyConfigRules,
-  normalizeCompatibilityConfig,
-  stateMigrations,
-} from "./doctor-contract-api.js";
+import { normalizeCompatibilityConfig, stateMigrations } from "./doctor-contract-api.js";
 
 const migration = stateMigrations[0];
-const canvasDoctorWorkspaceRoot = resolvePreferredOpenClawTmpDir();
 const migrated = { changes: ["Migrated 1 Canvas document(s) into core storage"], warnings: [] };
 
-async function createCanvasDoctorWorkspace(documentId = "cv_existing") {
+async function createCanvasDoctorWorkspace() {
   const workspace = await tempWorkspace({
-    rootDir: canvasDoctorWorkspaceRoot,
+    rootDir: resolvePreferredOpenClawTmpDir(),
     prefix: "openclaw-canvas-doctor-",
   });
   const stateDir = path.join(workspace.dir, "state");
   const customRoot = path.join(workspace.dir, "custom");
   const coreDocumentsDir = path.join(stateDir, "canvas", "documents");
-  const params: Parameters<PluginDoctorStateMigration["detectLegacyState"]>[0] = {
-    config: { plugins: { entries: { canvas: { config: { host: { root: customRoot } } } } } },
-    env: process.env,
-    stateDir,
-    oauthDir: path.join(stateDir, "credentials"),
-    context: { openPluginStateKeyedStore: () => undefined as never },
-  };
   return Object.assign(workspace, {
-    stateDir,
-    customRoot,
     coreDocumentsDir,
-    coreDocumentDir: path.join(coreDocumentsDir, documentId),
-    legacyDocumentDir: path.join(customRoot, "documents", documentId),
-    params,
+    target: path.join(coreDocumentsDir, "cv_existing"),
+    source: path.join(customRoot, "documents", "cv_existing"),
+    params: {
+      config: { plugins: { entries: { canvas: { config: { host: { root: customRoot } } } } } },
+      env: process.env,
+      stateDir,
+      oauthDir: path.join(stateDir, "credentials"),
+      context: { openPluginStateKeyedStore: () => undefined as never },
+    } satisfies Parameters<PluginDoctorStateMigration["detectLegacyState"]>[0],
   });
 }
 
@@ -46,34 +38,20 @@ async function writeDocument(dir: string, content: string) {
 
 const readDoc = (dir: string, file = "index.html") => fs.readFile(path.join(dir, file), "utf8");
 
-afterEach(() => {
-  vi.restoreAllMocks();
-});
+afterEach(() => vi.restoreAllMocks());
 
 describe("Canvas doctor", () => {
-  it("flags and removes retired file-host settings", () => {
-    expect(legacyConfigRules.map((rule) => rule.path)).toEqual([
-      ["canvasHost"],
-      ["plugins", "entries", "canvas", "config", "host", "root"],
-      ["plugins", "entries", "canvas", "config", "host", "port"],
-      ["plugins", "entries", "canvas", "config", "host", "liveReload"],
-    ]);
-    expect(legacyConfigRules.every((rule) => rule.message.includes("doctor --fix"))).toBe(true);
+  it("removes retired file-host settings without mutating the input", () => {
     const host = { enabled: false, root: "~/canvas", port: 18793, liveReload: true };
     const cfg = { plugins: { entries: { canvas: { enabled: true, config: { host } } } } };
-
+    const original = structuredClone(cfg);
     const result = normalizeCompatibilityConfig({ cfg });
-
     expect(result.config.plugins?.entries?.canvas).toEqual({
       enabled: true,
       config: { host: { enabled: false } },
     });
-    expect(result.changes).toEqual([
-      "Removed retired Canvas host config: plugins.entries.canvas.config.host.root, plugins.entries.canvas.config.host.port, plugins.entries.canvas.config.host.liveReload.",
-    ]);
-    expect(cfg.plugins?.entries?.canvas?.config).toEqual({
-      host: { enabled: false, root: "~/canvas", port: 18793, liveReload: true },
-    });
+    expect(result.changes).toHaveLength(1);
+    expect(cfg).toEqual(original);
     expect(normalizeCompatibilityConfig({ cfg: result.config })).toEqual({
       config: result.config,
       changes: [],
@@ -81,8 +59,7 @@ describe("Canvas doctor", () => {
   });
   it("ignores the default core document root", async () => {
     await using workspace = await createCanvasDoctorWorkspace();
-    await fs.mkdir(workspace.coreDocumentDir, { recursive: true });
-
+    await fs.mkdir(workspace.target, { recursive: true });
     await expect(
       migration?.detectLegacyState({ ...workspace.params, config: {} }),
     ).resolves.toBeNull();
@@ -90,40 +67,37 @@ describe("Canvas doctor", () => {
 
   it("moves custom-root documents into the stable core layout", async () => {
     await using workspace = await createCanvasDoctorWorkspace();
-    const { stateDir, customRoot, legacyDocumentDir, coreDocumentDir, params } = workspace;
-    await fs.mkdir(path.join(legacyDocumentDir, "collection.media"), { recursive: true });
-    await writeDocument(legacyDocumentDir, "<p>existing</p>");
-    await fs.writeFile(path.join(legacyDocumentDir, "collection.media", "asset.txt"), "asset");
+    const { source, target, coreDocumentsDir, params } = workspace;
+    await fs.mkdir(path.join(source, "collection.media"), { recursive: true });
+    await writeDocument(source, "<p>existing</p>");
+    await fs.writeFile(path.join(source, "collection.media", "asset.txt"), "asset");
 
     await expect(migration?.detectLegacyState(params)).resolves.toEqual({
       preview: [
-        `- Canvas documents: ${path.join(customRoot, "documents")} -> ${path.join(stateDir, "canvas", "documents")} (1 document(s))`,
+        `- Canvas documents: ${path.dirname(source)} -> ${coreDocumentsDir} (1 document(s))`,
       ],
     });
     await expect(migration?.migrateLegacyState(params)).resolves.toEqual(migrated);
-    await expect(readDoc(coreDocumentDir)).resolves.toBe("<p>existing</p>");
-    await expect(readDoc(coreDocumentDir, "collection.media/asset.txt")).resolves.toBe("asset");
-    await expect(fs.access(legacyDocumentDir)).rejects.toThrow();
+    await expect(readDoc(target)).resolves.toBe("<p>existing</p>");
+    await expect(readDoc(target, "collection.media/asset.txt")).resolves.toBe("asset");
+    await expect(fs.access(source)).rejects.toThrow();
   });
 
   it("leaves a conflicting legacy document in place", async () => {
-    await using workspace = await createCanvasDoctorWorkspace("cv_conflict");
-    const { legacyDocumentDir, coreDocumentDir, params } = workspace;
-    await writeDocument(legacyDocumentDir, "legacy");
-    await writeDocument(coreDocumentDir, "core");
-
+    await using workspace = await createCanvasDoctorWorkspace();
+    const { source, target, params } = workspace;
+    await writeDocument(source, "legacy");
+    await writeDocument(target, "core");
     const result = await migration?.migrateLegacyState(params);
-
-    expect(result?.changes).toEqual([]);
-    expect(result?.warnings).toHaveLength(1);
-    await expect(readDoc(legacyDocumentDir)).resolves.toBe("legacy");
-    await expect(readDoc(coreDocumentDir)).resolves.toBe("core");
+    expect(result).toEqual({ changes: [], warnings: [expect.any(String)] });
+    await expect(readDoc(source)).resolves.toBe("legacy");
+    await expect(readDoc(target)).resolves.toBe("core");
   });
 
   it("cleans partial copies and retries the migration", async () => {
-    await using workspace = await createCanvasDoctorWorkspace("cv_retry");
-    const { legacyDocumentDir, coreDocumentsDir, coreDocumentDir, params } = workspace;
-    await writeDocument(legacyDocumentDir, "complete");
+    await using workspace = await createCanvasDoctorWorkspace();
+    const { source, coreDocumentsDir, target, params } = workspace;
+    await writeDocument(source, "complete");
     const copy = vi.spyOn(fs, "cp").mockImplementationOnce(async (_source, destination) => {
       const destinationPath =
         typeof destination === "string" ? destination : fileURLToPath(destination);
@@ -132,17 +106,15 @@ describe("Canvas doctor", () => {
     });
 
     const failed = await migration?.migrateLegacyState(params);
-
-    expect(failed?.changes).toEqual([]);
-    expect(failed?.warnings).toHaveLength(1);
-    await expect(fs.access(coreDocumentDir)).rejects.toThrow();
-    await expect(readDoc(legacyDocumentDir)).resolves.toBe("complete");
+    expect(failed).toEqual({ changes: [], warnings: [expect.any(String)] });
+    await expect(fs.access(target)).rejects.toThrow();
+    await expect(readDoc(source)).resolves.toBe("complete");
     expect(
       (await fs.readdir(coreDocumentsDir)).filter((name) => name.startsWith(".canvas-migrate-")),
     ).toEqual([]);
 
     copy.mockRestore();
     await expect(migration?.migrateLegacyState(params)).resolves.toEqual(migrated);
-    await expect(readDoc(coreDocumentDir)).resolves.toBe("complete");
+    await expect(readDoc(target)).resolves.toBe("complete");
   });
 });

@@ -20,7 +20,10 @@ import {
   NODE_WORKER_PRIVATE_COMMANDS,
   isPrivateNodeInvokeCommand,
 } from "../infra/node-commands.js";
-import { getActivePluginGatewayNodePolicyRegistry } from "../plugins/runtime-state.js";
+import {
+  getActivePluginGatewayNodePolicyRegistry,
+  getPluginRegistryVersion,
+} from "../plugins/runtime-state.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
 
 const MOBILE_NODE_COMMANDS = {
@@ -207,53 +210,84 @@ function normalizePlatformId(platform?: string, deviceFamily?: string): Platform
   );
 }
 
-export function listDangerousPluginNodeCommands(): string[] {
-  const registry = getActivePluginGatewayNodePolicyRegistry();
-  if (!registry) {
-    return [];
-  }
-  return normalizeUniqueStringEntries([
-    ...registry.nodeHostCommands.flatMap(({ command }) =>
-      command.dangerous === true ? [command.command] : [],
-    ),
-    ...registry.nodeInvokePolicies.flatMap(({ policy }) =>
-      policy.dangerous === true ? policy.commands : [],
-    ),
-  ]);
-}
+type PreparedPluginNodePolicy = {
+  version: number | undefined;
+  dangerous: Set<string>;
+  defaults: Map<PlatformId, string[]>;
+  foregroundRestricted: Set<string>;
+};
+const pluginPolicies = new WeakMap<
+  NonNullable<ReturnType<typeof getActivePluginGatewayNodePolicyRegistry>>,
+  PreparedPluginNodePolicy
+>();
 
-function listDefaultPluginNodeCommands(platformId: PlatformId): string[] {
-  // The direct watch transport has a fixed, minimal command surface. Do not let
-  // generic plugin defaults silently expand it when plugins are installed.
-  if (platformId === "watchos") {
-    return [];
-  }
+function getPreparedPluginNodePolicy(): PreparedPluginNodePolicy | undefined {
   const registry = getActivePluginGatewayNodePolicyRegistry();
   if (!registry) {
-    return [];
+    return undefined;
   }
-  return normalizeUniqueStringEntries([
-    ...registry.nodeInvokePolicies.flatMap(({ policy }) =>
-      policy.dangerous !== true && policy.defaultPlatforms?.includes(platformId)
-        ? policy.commands
+  const version = getPluginRegistryVersion(registry);
+  const existing = pluginPolicies.get(registry);
+  if (existing && existing.version === version) {
+    return existing;
+  }
+  // Descriptor metadata belongs to a published registry generation. Node approvals
+  // and config grants remain live inputs below, independent of this prepared fact.
+  const dangerous = new Set(
+    normalizeUniqueStringEntries([
+      ...registry.nodeHostCommands.flatMap(({ command }) =>
+        command.dangerous === true ? [command.command] : [],
+      ),
+      ...registry.nodeInvokePolicies.flatMap(({ policy }) =>
+        policy.dangerous === true ? policy.commands : [],
+      ),
+    ]),
+  );
+  const defaults = new Map<PlatformId, string[]>();
+  const platforms: PlatformId[] = ["unknown", ...PLATFORM_RULES.map(({ id }) => id)];
+  for (const platformId of platforms) {
+    // Direct Watch transport never inherits generic plugin defaults.
+    if (platformId === "watchos") {
+      continue;
+    }
+    defaults.set(
+      platformId,
+      normalizeUniqueStringEntries([
+        ...registry.nodeInvokePolicies.flatMap(({ policy }) =>
+          policy.dangerous !== true && policy.defaultPlatforms?.includes(platformId)
+            ? policy.commands
+            : [],
+        ),
+        ...registry.nodeHostCommands.flatMap(
+          ({ command: { dangerous: isDangerous, agentTool, command } }) =>
+            isDangerous !== true && agentTool?.defaultPlatforms?.includes(platformId)
+              ? [command]
+              : [],
+        ),
+      ]),
+    );
+  }
+  const foregroundRestricted = new Set(
+    registry.nodeInvokePolicies.flatMap(({ policy }) =>
+      policy.foregroundRestrictedOnIos === true
+        ? policy.commands.map((command) => command.trim())
         : [],
     ),
-    ...registry.nodeHostCommands.flatMap(({ command: { dangerous, agentTool, command } }) =>
-      dangerous !== true && agentTool?.defaultPlatforms?.includes(platformId) ? [command] : [],
-    ),
-  ]);
+  );
+  const prepared = { version, dangerous, defaults, foregroundRestricted };
+  pluginPolicies.set(registry, prepared);
+  return prepared;
+}
+
+export function listDangerousPluginNodeCommands(): string[] {
+  return [...(getPreparedPluginNodePolicy()?.dangerous ?? [])];
 }
 
 export function isForegroundRestrictedPluginNodeCommand(command: string): boolean {
-  const registry = getActivePluginGatewayNodePolicyRegistry();
   const normalized = command.trim();
-  if (!registry || !normalized) {
-    return false;
-  }
-  return registry.nodeInvokePolicies.some(
-    (entry) =>
-      entry.policy.foregroundRestrictedOnIos === true &&
-      entry.policy.commands.some((policyCommand) => policyCommand.trim() === normalized),
+  return (
+    normalized !== "" &&
+    (getPreparedPluginNodePolicy()?.foregroundRestricted.has(normalized) ?? false)
   );
 }
 type NodeCommandPolicyNode = {
@@ -301,7 +335,8 @@ function resolveNodeCommandAllowlistInternal(
       ? IOS_WATCH_RELAY_COMMANDS
       : [];
   const talkCommands = hasTalkSurface(node) ? TALK_PTT_COMMANDS : [];
-  const pluginDefaults = listDefaultPluginNodeCommands(platformId);
+  const pluginPolicy = getPreparedPluginNodePolicy();
+  const pluginDefaults = pluginPolicy?.defaults.get(platformId) ?? [];
   // Desktop host commands need pairing approval instead of ordinary session defaults.
   const approved = desktop
     ? (node?.approvedCommands ?? (isLiveNodeSession(node) ? (node?.commands ?? []) : [])).filter(
@@ -311,15 +346,11 @@ function resolveNodeCommandAllowlistInternal(
   const extra = cfg.gateway?.nodes?.commands?.allow ?? [];
   const deny = new Set(cfg.gateway?.nodes?.commands?.deny ?? []);
   // A plugin `dangerous` flag governs the surface that plugin contributes
-  // (listDefaultPluginNodeCommands) and forces a registered invoke policy. It is
+  // (prepared plugin defaults) and forces a registered invoke policy. It is
   // not authority to revoke a command core itself declares in PLATFORM_DEFAULTS,
   // whose grant chain is node-local enablement plus pairing approval. Letting it
   // do so disabled desktop `computer.act` on every Gateway that auto-starts a
   // bundled computer-use provider plugin.
-  const baseCommands = new Set(base);
-  const dangerousPluginCommands = new Set(
-    listDangerousPluginNodeCommands().filter((command) => !baseCommands.has(command)),
-  );
   // Dangerous built-ins that also appear in PLATFORM_DEFAULTS stay declarable
   // at pairing but do not enter the runtime allowlist by default.
   const dangerousBuiltinCommands = new Set(DEFAULT_DANGEROUS_NODE_COMMANDS);
@@ -331,7 +362,7 @@ function resolveNodeCommandAllowlistInternal(
       .filter(
         (cmd) =>
           cmd &&
-          !dangerousPluginCommands.has(cmd) &&
+          (!pluginPolicy?.dangerous.has(cmd) || base.includes(cmd)) &&
           (pairing || !dangerousBuiltinCommands.has(cmd)),
       ),
   );

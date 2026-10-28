@@ -1,5 +1,6 @@
 // Covers plugin-owned model id normalization through selection surfaces.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 
@@ -177,14 +178,8 @@ describe("model-selection plugin runtime normalization", () => {
 
   it("keeps concurrent model-policy runs isolated while sharing metadata", async () => {
     normalizeProviderModelIdWithPluginMock.mockReturnValue(undefined);
-    let signalFirstCatalogLoad: (() => void) | undefined;
-    let releaseFirstCatalogLoad: (() => void) | undefined;
-    const firstCatalogLoadStarted = new Promise<void>((resolve) => {
-      signalFirstCatalogLoad = resolve;
-    });
-    const firstCatalogLoadRelease = new Promise<void>((resolve) => {
-      releaseFirstCatalogLoad = resolve;
-    });
+    const { promise: firstCatalogLoadStarted, resolve: signalFirstCatalogLoad } = createDeferred();
+    const { promise: firstCatalogLoadRelease, resolve: releaseFirstCatalogLoad } = createDeferred();
     loadPreparedModelCatalogSnapshotMock
       .mockImplementationOnce(async () => {
         signalFirstCatalogLoad?.();

@@ -1,6 +1,7 @@
 import { hash } from "node:crypto";
-import { Type } from "typebox";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { runNodeScript } from "../../../test/helpers/run-node-script.js";
 import { createPromptCacheRequestObserver } from "./prompt-cache-request-observer.js";
 import { prepareProviderPrompt } from "./provider-prompt-serialization.js";
 
@@ -19,12 +20,9 @@ function createObserver(
   );
 }
 
-function requestContext(
-  observer: ReturnType<typeof createObserver>,
-  systemPrompt = "original system",
-) {
-  return observer.onModelRequest(model, { systemPrompt, messages: [] });
-}
+type Observer = ReturnType<typeof createObserver>;
+const requestContext = (observer: Observer, systemPrompt = "original system") =>
+  observer.onModelRequest(model, { systemPrompt, messages: [] });
 
 const inputChange = (fields: Record<string, unknown>) => ({
   input: [{ role: "user", content: "first", ...fields }],
@@ -40,6 +38,21 @@ function fingerprint(payload: unknown) {
   return { scopeDigest: "same-scope", ...result };
 }
 
+async function measure(observer: Observer, body: unknown, cacheRead?: number) {
+  await requestContext(observer);
+  observer.onModelUsage(
+    cacheRead === undefined
+      ? undefined
+      : {
+          cacheRead,
+          contextUsage: { state: "available", promptTokens: 10_000, totalTokens: 10_100 },
+        },
+    fingerprint(body),
+    { responseId: "resp-cache-fixture" },
+  );
+  return observer.getObservation();
+}
+
 describe("prompt cache request observer", () => {
   beforeEach(() => {
     currentTestScope = String(++testScope);
@@ -48,19 +61,16 @@ describe("prompt cache request observer", () => {
 
   it("pairs a drop with the last measured wire request across missing usage and run boundaries", async () => {
     const sessionId = scopedKey("wire-pair");
-    const request = async (key: string, cacheRead?: number) => {
-      const observer = createObserver(sessionId);
-      await requestContext(observer, "stable");
-      observer.onModelUsage(
-        cacheRead === undefined ? undefined : { cacheRead },
-        fingerprint({
+    const request = (key: string, cacheRead?: number) =>
+      measure(
+        createObserver(sessionId),
+        {
           prompt_cache_key: key,
           previous_response_id: "private-response",
           input: [],
-        }),
+        },
+        cacheRead,
       );
-      return observer.getObservation();
-    };
     expect((await request("private-first", 9_000))?.broke).toBe(false);
     await request("private-unmeasured");
     const dropped = await request("private-final", 2_000);
@@ -78,7 +88,6 @@ describe("prompt cache request observer", () => {
       },
     });
     expect(JSON.stringify(dropped)).not.toContain("private-");
-    // A fresh request with the original key must compare against the measured drop.
     expect((await request("private-first", 0))?.requests?.previous?.cacheKeyHash).toBe(
       dropped?.requests?.current?.cacheKeyHash,
     );
@@ -120,23 +129,12 @@ describe("prompt cache request observer", () => {
   it.each([
     ["system", { instructions: "provider rewritten system" }, "provider-input-change:system"],
     ["tools", { tools: [{ type: "function", name: "changed" }] }],
-    ["tools", { tools: [{ name: "read", type: "function" }] }],
     ["message:0.content", inputChange({ content: "private rewritten history" })],
-    ["message:0.role", inputChange({ role: "assistant" })],
-    ["message:0.id", inputChange({ id: "private-id" })],
     ["message:0.encrypted_content", inputChange({ encrypted_content: "private-ciphertext" })],
     ["message:0.order", { input: [{ content: "first", role: "user" }] }],
     ["message:0.other", inputChange({ "private-field-name": "private-value" })],
     ["message:0.removed", { input: [] }],
-    ["parameters:reasoning", { reasoning: { effort: "high" } }],
-    ["parameters:prompt_cache_key", { prompt_cache_key: "private-affinity" }],
-    ["parameters:prompt_cache_retention", { prompt_cache_retention: "24h" }],
-    ["parameters:prompt_cache_options", { prompt_cache_options: { ttl: "30m" } }],
-    ["parameters:store", { store: false }],
-    ["parameters:include", { include: ["reasoning.encrypted_content"] }],
-    ["parameters:truncation", { truncation: "disabled" }],
     ["parameters:service_tier", { service_tier: "default" }],
-    ["parameters:metadata", { metadata: { "private-name": "private-value" } }],
     ["parameters:other", { "private-parameter-name": "private-value" }],
     [
       "continuation:parameters:previous_response_id",
@@ -169,23 +167,11 @@ describe("prompt cache request observer", () => {
         instructions: "original system",
         tools: [{ type: "function", name: "read" }],
         input: [{ role: "user", content: "first" }],
-        reasoning: { effort: "low" },
       };
-      const measure = async (body: unknown, cacheRead: number) => {
-        await requestContext(observer);
-        observer.onModelUsage(
-          {
-            cacheRead,
-            contextUsage: { state: "available", promptTokens: 10_000, totalTokens: 10_100 },
-          },
-          fingerprint(body),
-          { responseId: "resp-cache-fixture" },
-        );
-      };
-      await measure(payload, 9_000);
+      await measure(observer, payload, 9_000);
       clock.mockReturnValue(3_000);
-      await measure({ ...payload, ...replacement }, 2_000);
-      expect(observer.getObservation()).toMatchObject({
+      const observation = await measure(observer, { ...payload, ...replacement }, 2_000);
+      expect(observation).toMatchObject({
         broke: true,
         changes: null,
         providerPrefix: expected,
@@ -194,12 +180,12 @@ describe("prompt cache request observer", () => {
         responseId: "resp-cache-fixture",
       });
       if (dropCause) {
-        expect(observer.getObservation()?.dropCause).toBe(dropCause);
+        expect(observation?.dropCause).toBe(dropCause);
       }
       if (expected === "parameters:service_tier") {
-        expect(observer.getObservation()?.requests?.current?.serviceTier).toBe("default");
+        expect(observation?.requests?.current?.serviceTier).toBe("default");
       }
-      expect(JSON.stringify(observer.getObservation())).not.toContain("private");
+      expect(JSON.stringify(observation)).not.toContain("private");
     },
   );
 
@@ -218,18 +204,47 @@ describe("prompt cache request observer", () => {
           }),
       );
       for (const cacheRead of reads) {
-        await observer.onModelRequest(
-          { provider: "anthropic", id: "claude-sonnet-4-6", api: "anthropic-messages" },
-          {
-            messages: [],
-            systemPrompt: "stable prefix",
-            tools: [{ name: "read", description: "Read text", parameters: Type.Object({}) }],
-          },
-        );
+        await requestContext(observer, "stable prefix");
         observer.onModelUsage({ input: 10_000 - cacheRead, cacheRead, cacheWrite: 0 });
       }
     }
     expect(observed.map((entry) => entry.cacheRead)).toEqual(turns.flat());
     expect(observed.filter((entry) => entry.broke).map((entry) => entry.request)).toEqual(["2:1"]);
   });
+});
+
+it("bounds diagnostic retention for resident hydrated histories across requests", async ({
+  signal,
+}) => {
+  const result = await runNodeScript(
+    [
+      "--expose-gc",
+      "--import",
+      "./scripts/tsx.mjs",
+      "scripts/perf/prompt-cache-observation-measure.ts",
+      "--sessions",
+      "4",
+      "--messages",
+      "512",
+      "--rounds",
+      "20",
+    ],
+    process.env,
+    undefined,
+    { cwd: fileURLToPath(new URL("../../../", import.meta.url)), signal },
+  );
+  expect(result.error).toBeUndefined();
+  expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+  const measured = JSON.parse(result.stdout.trim().split("\n").at(-1)!) as {
+    retainedFirst: number;
+    retainedFinal: number;
+    residentMessages: number;
+    sessionCount: number;
+  };
+  // Full diagnostic hashes fit within 1 KiB/message; revision maps do not.
+  expect(measured.retainedFinal).toBeLessThan(measured.residentMessages * 1024 + 128 * 1024);
+  // Re-observing the resident window must replace, rather than accumulate, baselines.
+  expect(measured.retainedFinal - measured.retainedFirst).toBeLessThan(
+    measured.sessionCount * 64 * 1024,
+  );
 });

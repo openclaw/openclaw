@@ -4,6 +4,7 @@ import {
   CodexNativeProcessAuthority,
   getCodexNativeProcessClient,
 } from "./native-process-authority.js";
+import { itemNotification, turnCompleted } from "./protocol.test-helpers.js";
 import { createClientHarness } from "./test-support.js";
 
 const cleanups: (() => void)[] = [];
@@ -54,7 +55,7 @@ function source(sharedClient?: ReturnType<typeof createClientHarness>) {
   };
 }
 
-const command = { threadId: "thread", turnId: "turn", itemId: "command" };
+const command = { threadId: "thread-1", turnId: "turn-1", itemId: "command" };
 const assertActive = () => {};
 const metadata = { threadId: command.threadId, toolCallId: command.itemId };
 
@@ -113,21 +114,10 @@ describe("native process custody", () => {
     earlier.owner.release();
     earlierProcess.settle();
     later.admit("successor");
-    client.send({
-      method: "item/completed",
-      params: {
-        threadId: command.threadId,
-        turnId: command.turnId,
-        item: { id: command.itemId, type: "commandExecution" },
-      },
-    });
-    client.send({
-      method: "turn/completed",
-      params: {
-        threadId: command.threadId,
-        turn: { id: command.turnId, status: "completed", items: [] },
-      },
-    });
+    client.send(
+      itemNotification("item/completed", { id: command.itemId, type: "commandExecution" }),
+    );
+    client.send(turnCompleted({ id: command.turnId, status: "completed" }));
     const current = later.claim();
     expect(() => current.assertAdmission()).not.toThrow();
     current.settle();

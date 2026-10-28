@@ -7,7 +7,6 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { evaluate } from "./client.js";
 import { runtimeConfig } from "./config.js";
 import {
-  closeServer,
   collectRequest,
   decisionContext,
   mixedFixture,
@@ -149,6 +148,6 @@ it.each(["127.0.0.1", "localhost", "[::1]"])("reuses local %s sockets", async (h
       expect(lookup).not.toHaveBeenCalled();
     }
   } finally {
-    await closeServer(server);
+    await server[Symbol.asyncDispose]();
   }
 });

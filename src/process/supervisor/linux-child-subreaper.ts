@@ -6,6 +6,7 @@ import {
   isChildSubreaper,
   reapChild,
 } from "@openclaw/proc-safe/reaper";
+import { runtimeHasSourceLoader } from "../../../cli-invocation.mjs";
 import { hasErrnoCode, ignoreMissingPath } from "../../infra/errno.js";
 
 function childPids(): number[] {
@@ -34,10 +35,8 @@ export function acquireLinuxChildSubreaper() {
   if (process.platform !== "linux") {
     throw new Error("Linux child ownership requires Linux");
   }
-  if (/\.[cm]?ts$/u.test(new URL(import.meta.url).pathname)) {
-    throw new Error(
-      "Linux child ownership requires the built process owner, without a source loader",
-    );
+  if (runtimeHasSourceLoader()) {
+    throw new Error("Linux child ownership requires a process owner without source-loader hooks");
   }
   becomeChildSubreaper();
   if (!isChildSubreaper()) {

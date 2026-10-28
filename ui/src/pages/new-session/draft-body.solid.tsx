@@ -28,7 +28,6 @@ export const preloadNewSessionSubmission = () =>
   void NewSessionSubmission.preload().catch(() => undefined);
 
 type DraftAction = { label: string; onClick: () => void; disabled?: boolean };
-export type DraftErrorProps = { message: string; action?: DraftAction };
 export type NewSessionBodyProps = {
   error: string | null;
   errorAction?: DraftAction;
@@ -51,7 +50,7 @@ function newSessionAnnouncement(
     : undefined;
 }
 
-export function DraftError(props: DraftErrorProps) {
+export function DraftError(props: { message: string; action?: DraftAction }) {
   return (
     <div class="callout danger new-session-page__error new-session-page__alert" role="alert">
       <span class="new-session-page__alert-icon" aria-hidden="true">
@@ -98,6 +97,7 @@ export function NewSessionBody(props: NewSessionBodyProps) {
           props.inChat ? "" : "new-session-page__scroll",
           {
             "chat-thread": Boolean(props.pendingMessage || props.inChat),
+            "chat-thread--annotations": Boolean(props.pendingMessage || props.inChat),
             "chat-thread--direct":
               Boolean(props.pendingMessage || props.inChat) && avatarPlacement() === "footer",
           },

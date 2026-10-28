@@ -4,6 +4,7 @@ import type { HeapProfiler, Profiler } from "node:inspector";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { HeapSpaceInfo } from "node:v8";
+import type { getSessionRowSelectionMetrics } from "../../src/infra/gateway-work-metrics.ts";
 import type { sampleTrackedWorkerMemory } from "../../src/infra/worker-cpu.ts";
 import type { WorkerMessageMetric } from "../../src/infra/worker-message-metrics.ts";
 import type { startGatewayBenchDiagnostics } from "./gateway-bench-diagnostics.ts";
@@ -36,6 +37,7 @@ export type GatewayCpuUsageSnapshot = {
 export type GatewayResourceSnapshot = GatewayCpuUsageSnapshot & {
   memory: NodeJS.MemoryUsage;
   heapSpaces: HeapSpaceInfo[];
+  sessionRowSelections?: ReturnType<typeof getSessionRowSelectionMetrics>;
   workers?: ReturnType<typeof sampleTrackedWorkerMemory>;
   activeResources: Record<string, number>;
   runtime: { node: string; platform: string; arch: string };
@@ -333,8 +335,11 @@ async function sendGatewayBenchCommand(
   command: GatewayBenchCommand,
 ): Promise<GatewayProfileReply> {
   const { kind, action } = command;
-  // Constructor census scans the full heap three times, unlike a resource sample.
-  const timeoutMs = command.kind === "resource-usage" && command.sessionCensus ? 120_000 : 30_000;
+  // Heap scans and snapshot serialization are heavier than a resource sample.
+  const timeoutMs =
+    command.kind === "resource-usage" && (command.sessionCensus || command.snapshotPath)
+      ? 120_000
+      : 30_000;
   return await new Promise<GatewayProfileReply>((resolve, reject) => {
     const finish = (result: Error | GatewayProfileReply) => {
       clearTimeout(timer);
@@ -535,5 +540,9 @@ export async function measureGatewayAllocations(
     heapUsedDeltaBytes: after.memory.heapUsed - before.memory.heapUsed,
     rssDeltaBytes: after.memory.rss - before.memory.rss,
     cpu: measureGatewayCpuUsage(before, after),
+    sessionRowSelections: {
+      before: before.sessionRowSelections,
+      after: after.sessionRowSelections,
+    },
   };
 }

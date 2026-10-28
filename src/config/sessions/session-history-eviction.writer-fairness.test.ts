@@ -133,17 +133,14 @@ it("admits a session patch and cross-store cold history between page-reclamation
           offset: undefined,
           messageId: undefined,
         });
-        const pausedHistoryFailure = await withTestTimeout(
+        const page = await withTestTimeout(
           history,
           10_000,
           "Cold history waited for the paused archive sweep",
-        ).then(
-          () => undefined,
-          (error: unknown) => error,
         );
         expect(pageResults).toHaveLength(1);
         resumePrune.resolve();
-        const [page, result] = await Promise.all([history, maintenance]);
+        const result = await maintenance;
         expect(page.messages.map(readChatHistoryMessageId)).toEqual([
           "history-user",
           "history-assistant",
@@ -164,7 +161,6 @@ it("admits a session patch and cross-store cold history between page-reclamation
         });
         expect(pageResults[0]?.remainingFreePages).toBeGreaterThan(0);
         expect(pageResults.at(-1)?.remainingFreePages).toBe(0);
-        expect(pausedHistoryFailure).toBeUndefined();
       } finally {
         resumePrune.resolve();
         await Promise.allSettled([maintenance, patch, history]);

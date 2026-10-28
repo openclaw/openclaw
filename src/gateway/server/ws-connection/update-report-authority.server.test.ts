@@ -18,6 +18,7 @@ import {
   closeOpenClawStateDatabaseForTest,
 } from "../../../state/openclaw-state-db.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../../agent-runtime-approval-authority.js";
+import { gatewayRequest } from "../../request-frame.test-support.js";
 import { createDirectChatContext } from "../../server-chat.agent-events.test-helpers.js";
 import {
   createDispatchTestHarness,
@@ -145,16 +146,11 @@ function createReportHarness(
   });
   const dispatch = (id: string, action: "preview" | "submit", previewDigest?: string) =>
     harness.dispatcher.dispatch(
-      {
-        type: "req",
-        id,
-        method: "update.report",
-        params: {
-          action,
-          attemptId: "authority-proof",
-          ...(previewDigest === undefined ? {} : { previewDigest }),
-        },
-      },
+      gatewayRequest(id, "update.report", {
+        action,
+        attemptId: "authority-proof",
+        ...(previewDigest === undefined ? {} : { previewDigest }),
+      }),
       client,
     );
   return {

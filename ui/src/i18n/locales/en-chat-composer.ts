@@ -3,6 +3,10 @@ import { en } from "./en.ts";
 
 const catalog = {
   chat: {
+    view: {
+      activityDetails: "View activity details",
+      workingDetails: "Agent is working. View details",
+    },
     composer: {
       running: "running",
       composerInput: "Chat composer",
@@ -14,7 +18,6 @@ const catalog = {
       emojiSuggestions: "Emoji suggestions",
       placeholder: "Message {name}",
       emptyHint: "Write a message to send.",
-      placeholderWithAttachments: "Add a message or paste more images...",
       preparingModel: "Preparing model...",
       responding: "{name} is responding...",
       sendingMessage: "Sending message...",
@@ -51,45 +54,14 @@ const catalog = {
       removeNamedAttachment: "Remove {name}",
       removeBrowserAnnotation: "Remove browser annotation: {name}",
       addAttachment: "Add attachment",
-      attach: "Attach…",
+      attach: "Add attachment…",
       attachPhoto: "Photo",
+      attachMedia: "Media",
       attachFileOption: "File",
       menu: {
-        back: "Back",
-        skills: "Skills",
-        connectors: "Plugins",
-        webSearch: "Web search",
-        webSearchGloballyDisabled:
-          "Web search is disabled in config (tools.web.search.enabled). Session overrides cannot turn it back on.",
-        webSearchClearStaleEnable:
-          "Web search is disabled in config. Click to clear this session’s enable override.",
-        managePlugins: "Manage plugins",
-        manageSkills: "Manage skills",
-        addMcpServer: "Add MCP server…",
-        addMcpServerTitle: "Add MCP server",
-        addMcpServerDescription: "Configure the server and choose where it is enabled.",
-        scopeLabel: "Availability",
-        scopeSession: "This session",
-        scopeEverywhere: "Everywhere",
-        scopeSessionHint:
-          "The server is saved globally disabled and enabled only for this session.",
-        scopeEverywhereHint: "The server is saved and enabled for every session.",
         toolAccess: {
-          label: "Tool access",
-          loading: "Loading tools…",
           loadFailed: "Couldn’t load tools.",
-          noTools: "No tools available for this MCP server.",
-          summary: "{enabled} of {total} tools on",
-          summaryOne: "{enabled} of {total} tool on",
         },
-        enabledCount: "{count} on",
-        loadingSkills: "Loading skills…",
-        skillsLoadFailed: "Couldn’t load skills.",
-        noSkills: "No skills available.",
-        noConnectors: "No MCP servers configured.",
-        depsMissing: "deps missing",
-        skillBlocked: "not available for this agent",
-        sessionTag: "session",
         offlineBlocked: "Connect to the gateway to change session capabilities.",
         adminBlocked: "Admin access is required to manage MCP servers.",
         savingBlocked: "Wait for the current session capability change to finish.",
@@ -105,6 +77,10 @@ const catalog = {
         summary: "Session context usage: {used} of {limit} ({pct}%)",
         contextWindow: "Context window",
         promptBudget: "Prompt budget",
+        latestRun: "Latest run",
+        inputShort: "In",
+        outputShort: "Out",
+        costShort: "Cost",
         latestRunTokens: "Latest run tokens",
         estimatedCost: "Est. cost",
         planUsage: "Plan usage",
@@ -112,10 +88,10 @@ const catalog = {
         resets: "Resets {time}",
         usageCredits: "Usage credits",
         budgetValue: "{used} of {limit}",
-        limitFiveHour: "5-hour limit",
+        limitFiveHour: "5-hour",
         limitWeekly: "Weekly",
-        limitDaily: "Daily limit",
-        limitHours: "{hours}-hour limit",
+        limitDaily: "Daily",
+        limitHours: "{hours}-hour",
       },
       takePhoto: "Take photo",
       cameraAccessFailed: "Unable to access the camera.",
@@ -193,6 +169,18 @@ const catalog = {
     queue: {
       reviewEdit: "Review edit",
       reloadBlocked: "Save or cancel your queued message edit before reloading.",
+      memoryOnlyReloadBlocked:
+        "A pending message is only saved in this tab. Keep this tab open until it is sent, or copy it before discarding it and reloading.",
+      memoryOnlyReview: "Review pending input",
+      memoryOnlyTitle: "Unsent pending message",
+      memoryOnlyDescription:
+        "This pending message stays only in this tab. Copy its text or download its attachments before discarding the local copy to refresh. Discarding does not cancel a message already received by the Gateway.",
+      memoryOnlyText: "Message text",
+      memoryOnlyDiscard: "Discard local copy and refresh",
+      memoryOnlyChanged:
+        "The pending input changed or is being edited. It has not been discarded; review the current input before refreshing.",
+      memoryOnlyUnavailable:
+        "The pending input could not be opened. It remains protected in this tab; try Review pending input again.",
       connectionPending: "Finishing connection recovery. Try sending again when it is ready.",
       editSourceChanged:
         "This queued message changed while you were editing. Your edit is still here. Copy it, cancel the edit, and review the queue before trying again.",
@@ -202,10 +190,6 @@ const catalog = {
       initialTurnPending:
         "The initial message is unresolved. Reconnect if needed, then review it before sending another message.",
       notSent: "Not sent",
-      deliveryUnconfirmed: "Delivery unconfirmed",
-      checkDelivery: "Check delivery",
-      checkDeliveryHelp:
-        "Delivery is unconfirmed. Check delivery looks for the original message without resending it or starting a worker. Inspect the conversation, or copy the retained prompt if you choose to start a separate attempt.",
       retry: "Retry",
       retryQueuedMessage: "Retry queued message",
       discard: "Discard",
@@ -221,12 +205,12 @@ const catalog = {
       cancelEdit: "Cancel editing and keep the queued message",
       states: {
         applyingSettings: "Applying chat settings",
-        blockedByUnconfirmed:
-          "Queue paused. Retry or discard the earlier unconfirmed message in the conversation.",
+        blockedByReview:
+          "Queue paused. Review or discard the earlier held message in the conversation.",
         runningCommand: "Running command",
         waitingForReconnect: "Waiting for reconnect",
         editing: "Editing",
-        needsReview: "Delivery uncertain",
+        needsReview: "Needs review",
       },
       imageCount: "Image ({count})",
     },
@@ -249,46 +233,7 @@ const catalog = {
       unsupported:
         "Human mentions are not available in this mode. Remove the selected mentions or send from a normal chat.",
     },
-    permissions: {
-      title: "Grant {permissions}",
-      neededOn: "OpenClaw needs access on {node} to continue this action.",
-      openApp:
-        "Grant access in the OpenClaw Mac app on that device: Settings → This Mac → Permissions. Then tell the agent to try again.",
-      ready: "Access is available. You can ask the agent to try again.",
-      following: "Then grant the remaining permissions: {permissions}.",
-      actions: {
-        "not-determined": "Grant {permissions}",
-        denied: "Open System Settings",
-        "restart-required": "Relaunch OpenClaw",
-        "stale-grant": "Open System Settings",
-        "disabled-in-openclaw": "Enable {permissions}",
-      },
-      tryAgain: "Try again",
-      retryMessage: "I granted {permissions}, try again.",
-      states: {
-        "not-determined": "Choose Grant to review the permission request.",
-        denied: "Open System Settings to allow access for OpenClaw.",
-        "restart-required":
-          "If you enabled access in System Settings, relaunch OpenClaw to make it available.",
-        "stale-grant":
-          "macOS may be using a stale permission grant. Open System Settings to review it.",
-        "disabled-in-openclaw": "Choose Enable to review and enable this capability in OpenClaw.",
-      },
-      capabilities: {
-        notifications: "Notifications",
-        accessibility: "Accessibility",
-        eventPosting: "Event Posting",
-        screenRecording: "Screen Recording",
-        microphone: "Microphone",
-        speechRecognition: "Speech Recognition",
-        camera: "Camera",
-        cameraEnabled: "Camera in OpenClaw",
-        location: "Location",
-        computerControl: "Computer Control",
-        canvas: "Canvas",
-        automation: "Automation",
-      },
-    },
+    permissions: {},
     voice: {
       asking: "Asking OpenClaw...",
       replyFailed: "The voice reply was interrupted. Start Talk again to retry.",
@@ -302,8 +247,6 @@ const catalog = {
       selectionConfirmationFailed: "Voice change unconfirmed.",
     },
     sendErrors: {
-      outboxPayloadCopied:
-        "This queued message was copied from another tab. Check the conversation and retry only if it has not arrived.",
       outboxPayloadCapacity:
         "Browser attachment storage is full. Try a smaller batch or send/discard queued messages to free space. No new message was sent; your input is retained.",
       outboxPayloadUnavailable:
@@ -328,9 +271,6 @@ const catalog = {
     outboxRecoveryGoal: "Includes an unsent goal change",
     outboxRecoveryReply: "Reply to: {text}",
     outboxRecoveryAttachments: "Attachments: {files}",
-    outboxRecoveryUnconfirmedLabel: "may have been sent",
-    outboxRecoveryUnconfirmed:
-      "Delivery unconfirmed. This message may already have been sent. Check the original chat before sending it again.",
     outboxRecoveryAttachmentMissing:
       "An attachment could not be loaded. Review the message and reattach the file before sending.",
     outboxRecoveryDelete: "Delete",
@@ -373,7 +313,7 @@ const catalog = {
         "Use a public HTTPS URL without credentials or attach a local file by a safe path.",
       failureFileNotFound: "File not found. Check the path and try again.",
       failureUnsupportedFormat:
-        "Rejected by the local attachment allowlist. Send a supported file type.",
+        "This file type cannot be attached here. If it is saved in this session, download it from Files, or ask for a ZIP containing the original file.",
       history: "History",
       image: "Image",
       notSent: "Not sent",
@@ -431,6 +371,7 @@ const catalog = {
 export const registerChatComposerEnglish = Object.assign(
   () => {
     const {
+      view,
       composer,
       queue,
       mentions,
@@ -443,7 +384,10 @@ export const registerChatComposerEnglish = Object.assign(
       ...outboxRecovery
     } = catalog.chat;
     Object.assign(en.chat, outboxRecovery);
-    Object.assign(en.chat.composer, composer);
+    Object.assign(en.chat.view, view);
+    const { menu, ...composerLabels } = composer;
+    Object.assign(en.chat.composer, composerLabels);
+    en.chat.composer.menu ??= menu;
     Object.assign(en.chat.queue, queue);
     Object.assign(en.chat.mentions, mentions);
     Object.assign(en.chat.permissions, permissions);

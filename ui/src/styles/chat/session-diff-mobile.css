@@ -309,3 +309,7 @@ openclaw-session-diff:has(> .session-diff--mobile) {
   width: 16px;
   height: 16px;
 }
+
+.session-diff-mobile__summary:has(+ .session-diff__files > openclaw-panel-empty-state) {
+  margin-bottom: 0;
+}

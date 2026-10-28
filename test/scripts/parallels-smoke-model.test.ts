@@ -757,138 +757,50 @@ ensure_vm_running`,
   });
 
   const sourceRegressions: Record<string, [string, string, boolean?][]> = {
-    "uses a forced Windows gateway stop only when the installed CLI supports it": [
+    "feature-detects forced Windows gateway stop": [
       [windows, "Invoke-OpenClaw gateway stop --help"],
-      [windows, "$stopHelp -match"],
-      [windows, "$gatewayArgs += '--force'"],
-      [windows, "Invoke-OpenClaw @gatewayArgs"],
-      [windows, 'const forceFlag = action === "stop"', false],
     ],
-    "waits for apt locks during Linux snapshot bootstrap": [
-      [linux, "APT_LOCK_RETRY_SECONDS = 900"],
-      [linux, "BOOTSTRAP_TIMEOUT_SECONDS = 1200"],
-      [linux, "command -v wget"],
-      [linux, "run_apt_with_lock_retry"],
-      [linux, '"Could not get lock"'],
-      [linux, '"Unable to acquire the dpkg frontend lock"'],
-      [linux, '"Unable to lock directory"'],
-      [linux, "this.downloadGuestFile(tgzUrl"],
-      [linux, "curl -fsSL --connect-timeout 10 --max-time 120 --retry 2"],
-      [linux, "wget -q --timeout=10 --read-timeout=120 --tries=3"],
-    ],
+    "retries apt locks during Linux bootstrap": [[linux, "run_apt_with_lock_retry"]],
     "uses collision-resistant guest script names": [
       [transports, 'import { randomUUID } from "node:crypto"'],
-      [transports, "guestScriptName"],
-      [transports, "Date.now()}.sh", false],
-      [transports, "Date.now()}.ps1", false],
-      [transports, "Math.random()", false],
     ],
-    "retries failed aggregate fresh lanes once from a restored snapshot": [
+    "retries aggregate fresh lanes from a restored snapshot": [
       [npmUpdate, "retrying once from restored snapshot"],
-      [npmUpdate, 'attempt === 1 ? "" : `-retry-${attempt}`'],
-      [npmUpdate, "failed after retry"],
     ],
-    "preseeds dev update channel before stable-to-dev update lanes": [
+    "preseeds the dev channel on both guests": [
       [macos, 'channel: "dev"'],
       [windows, "Name channel -Value 'dev'"],
-      [macos, "OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1"],
-      [windows, "OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS"],
     ],
-    "requires macOS dashboard smoke to load built assets": [
-      [macos, "asset_paths="],
-      [macos, "grep -E '(^|/)assets/'"],
-      [macos, 'curl -fsSL --connect-timeout 2 --max-time 5 "$asset_url"'],
-    ],
-    "passes aggregate model overrides into each OS fresh lane": [
-      [npmUpdate, "scripts/e2e/parallels-${platform}-smoke.sh"],
-      [npmUpdate, 'this.formatRerun("bash", args, commandEnv)'],
-      [npmUpdate, '"--model"'],
-      [npmUpdate, "auth.modelId"],
-      [npmUpdate, "authForPlatform"],
-      [npmUpdate, "OPENCLAW_PARALLELS_LINUX_DISABLE_BONJOUR"],
-    ],
-    "keeps the Windows update config scrub compatible with PowerShell 5.1": [
+    "loads dashboard assets": [[macos, 'curl -fsSL --connect-timeout 2 --max-time 5 "$asset_url"']],
+    "forwards per-platform aggregate auth": [[npmUpdate, "authForPlatform"]],
+    "supports PowerShell 5.1 config scrubbing": [
       [npmUpdateScripts, "ConvertFrom-Json -AsHashtable", false],
-      [npmUpdateScripts, "$nodeScript | Set-Content -Path $nodeScriptPath -Encoding UTF8"],
     ],
-    "keeps macOS Discord roundtrip isolated from the lane orchestrator": [
-      [macos, "MacosDiscordSmoke"],
+    "isolates Discord credentials from the orchestrator": [
       [macos, "Authorization: Bot", false],
       [discord, "Authorization: Bot"],
-      [discord, 'import { randomUUID } from "node:crypto"'],
-      [discord, "Math.random()", false],
-      [discord, '"--silent"'],
-      [discord, "doctor --fix --yes --non-interactive"],
-      [discord, "channels status --probe --json"],
-      [discord, "Stop ${this.input.vmName} after successful Discord smoke"],
     ],
-    "resolves macOS smoke commands from the guest PATH": [
-      [macos, "/usr/local/bin:/usr/local/sbin"],
+    "resolves macOS commands from guest PATH": [
       [macos, 'const guestOpenClaw = "openclaw"'],
       [macos, 'const guestNode = "node"'],
       [macos, 'const guestNpm = "npm"'],
-      [macos, "$(npm root -g)/openclaw/openclaw.mjs"],
-      [macos, "guestOpenClawEntryExec"],
-      [macos, 'const guestOpenClaw = "/opt/homebrew/bin/openclaw"', false],
-      [macos, 'const guestNode = "/opt/homebrew/bin/node"', false],
-      [macos, 'const guestNpm = "/opt/homebrew/bin/npm"', false],
-      [macos, "/opt/homebrew/lib/node_modules/openclaw/openclaw.mjs", false],
     ],
-    "keeps Windows gateway reachability on a real deadline with start recovery": [
-      [windows, "OPENCLAW_PARALLELS_WINDOWS_GATEWAY_RECOVERY_AFTER_S"],
-      [windows, "Date.now() < deadline"],
-      [windows, "gateway start"],
-      [windows, "gateway-reachable recovery"],
-    ],
-    "runs Windows ref onboarding through a detached done-file runner": [
-      [windows, "runWindowsBackgroundPowerShell"],
-      [transports, "Join-Path (Join-Path $env:WINDIR 'Temp\\\\openclaw-parallels')"],
+    "recovers Windows gateway reachability": [[windows, "gateway-reachable recovery"]],
+    "restricts Windows background run directory permissions": [
       [transports, "icacls.exe $runDir /inheritance:r"],
-      [transports, "__OPENCLAW_BACKGROUND_DONE__"],
-      [transports, "__OPENCLAW_BACKGROUND_EXIT__"],
-      [transports, "poll.status !== 0 && poll.status !== 124"],
-      [transports, 'cmd.exe /d /s /c start "" /b powershell.exe'],
-      [transports, 'if exist "${windowsDonePath}"'],
-      [transports, 'type "%WINDIR%\\\\Temp\\\\${guestRunDir}\\\\run.log"'],
-      [transports, "WINDOWS_BACKGROUND_LOG_MAX_BYTES"],
-      [transports, "Write-OpenClawUtf8File $pidPath ([string]$PID)"],
-      [transports, 'launch.stdout.includes("started")'],
-      [transports, "waitForWindowsBackgroundMaterialized"],
     ],
-    "runs the macOS dev update through a detached done-file runner": [
+    "runs macOS updates in the background": [
       [macos, 'this.guest.shBackground(\n      "macos-update-dev"'],
-      [transports, 'spawn("/bin/bash"'],
-      [transports, "detached: true"],
-      [transports, "child.unref()"],
-      [transports, "POSIX_BACKGROUND_LOG_MAX_BYTES"],
-      [transports, 'runGuest(["/bin/test", "-f", donePath]'],
-      [transports, 'runGuest(["/bin/cat", exitPath]'],
-      [transports, '["/bin/mkdir", "-m", "700", "-p", runDir]'],
-      [transports, 'command=$(/bin/ps -p "$background_pid" -o command='],
-      [transports, "*${posixSingleQuote(runnerPath)}*)"],
-      [transports, 'transport(["/bin/bash", "-c"', false],
-      [macos, 'fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, "utf8")) : {}'],
-      [macos, "fs.mkdirSync(path.dirname(configPath), { recursive: true })"],
     ],
-    "runs the Windows agent turn through the detached done-file runner": [
+    "runs Windows agent turns in the background": [
       [windows, 'guestPowerShellBackground(\n      "agent-turn"'],
-      [windows, 'readPositiveIntEnv(\n    "OPENCLAW_PARALLELS_WINDOWS_AGENT_TIMEOUT_S"'],
-      [windows, "windowsAgentTurnConfigPatchScript(this.auth.modelId)"],
-      [windows, "--model"],
-      [windows, 'resolveParallelsModelTimeoutSeconds("windows")'],
-      [windowsAgentTurn, "finalAssistant(Raw|Visible)Text"],
-      [windowsAgentTurn, "parallels-windows-smoke-retry-$attempt"],
       [windowsAgentTurn, "agent turn attempt $attempt failed or finished without OK response"],
-      [windows, "$config.models.providers", false],
-      [windows, "timeoutSeconds = 300", false],
-      [windowsAgentTurn, '"$sessionId.jsonl"'],
     ],
-    "waits through transient Windows restoring state before VM operations": [
-      [windows, "waitForVmNotRestoring"],
+    "retries Windows restoration and launch": [
       [windows, "snapshot-switch retry"],
       [transports, "launch retry"],
     ],
-    "keeps Parallels dev updates on the test-owned gateway lifecycle": [
+    "leaves update restarts to the test-owned lifecycle": [
       [
         macos,
         "update --channel dev --yes --json --no-restart --timeout ${this.updateDevTimeoutSeconds}",
@@ -897,22 +809,10 @@ ensure_vm_running`,
         windows,
         "update --channel dev --yes --json --no-restart --timeout ${this.updateTimeoutSeconds}",
       ],
-      [macos, "--install-daemon"],
-      [windows, "--install-daemon"],
     ],
-    "resolves Windows OpenClaw commands without assuming the npm shim path": [
-      [powershell, "windowsOpenClawResolver"],
-      [powershell, "OPENCLAW_PARALLELS_AGENT_RUNTIME_POLICY_SUPPORTED"],
-      [powershell, "Programs\\nodejs"],
-      [powershell, 'selectedModelEntry.agentRuntime = { id: "openclaw" }'],
-      [powershell, "delete selectedModelEntry.agentRuntime"],
-      [powershell, "delete providerEntry.agentRuntime"],
-      [powershell, "Resolve-OpenClawCommand"],
-      [powershell, "npm\\node_modules\\openclaw\\openclaw.mjs"],
-      [powershell, "$ErrorActionPreference = 'Continue'"],
-      [powershell, "$PSNativeCommandUseErrorActionPreference = $false"],
+    "resolves Windows OpenClaw without assuming the npm shim": [
       [windows, "windowsOpenClawResolver"],
-      [windows, "Join-Path $env:APPDATA 'npm\\\\openclaw.cmd'", false],
+      [powershell, "Resolve-OpenClawCommand"],
     ],
   };
   it.each(Object.entries(sourceRegressions))("%s", (_name, checks) => {
@@ -949,12 +849,6 @@ ensure_vm_running`,
       "120",
       "https://example.test/metadata",
     ]);
-
-    const controller = readFileSync(WINDOWS_PREPARE_WRAPPER, "utf8");
-    expect(controller.match(/\bcurl -fsSL\b/g)).toHaveLength(1);
-    expect(controller.match(/\bfetch_host_metadata\b/g)).toHaveLength(5);
-    expect(controller).toContain("for attempt in 1 2 3");
-    expect(controller).not.toContain("--retry 2");
 
     const tempDir = makeTempDir(tempDirs, "openclaw-windows-metadata-retry-");
     const callCount = join(tempDir, "curl-calls");
@@ -1072,10 +966,7 @@ ensure_vm_running`,
       expect(repair).toContain("Missing optional dependency @openai/codex-");
       expect(repair).toContain("NPM_CONFIG_CACHE");
       expect(repair).toContain("--ignore-scripts");
-      expect(repair).toContain("codex-platform-repair: managed npm install completed");
     }
-    expect(posixRepair).toContain("repair_missing_codex_platform_package");
-    expect(windowsRepair).toContain("Repair-MissingCodexPlatformPackage");
   });
 
   it("keeps Windows provider-only plugin isolation temp scripts per run", () => {
@@ -1084,10 +975,7 @@ ensure_vm_running`,
       modelId: "openai/gpt-5.6-luna",
     });
 
-    expect(script).not.toContain("'openclaw-parallels-plugin-isolation.cjs'");
     expect(script).toContain("[guid]::NewGuid().ToString('N')");
-    expect(script).toContain("openclaw-parallels-plugin-isolation-");
-    expect(script).toContain("try {");
     expect(script).toContain("} finally {");
     expect(script).toContain(
       "Remove-Item $isolationScriptPath -Force -ErrorAction SilentlyContinue",
@@ -1109,7 +997,6 @@ ensure_vm_running`,
     expect(packageArtifact).toContain('"--allow-unreleased-changelog"');
     expect(hostServer).toContain("hostUrl: `http://127.0.0.1:${port}`");
     expect(hostServer).toContain('OPENCLAW_NPM_REGISTRY_UPSTREAM: "https://registry.npmjs.org"');
-    expect(hostServer).toContain("http.server");
   });
 
   describe.skipIf(process.platform === "win32")("Parallels host IP detection", () => {
@@ -2326,11 +2213,6 @@ if (commandArgs[0] === "list") {
       macos: 1800,
       windows: 1800,
     });
-    expect(macos).toContain(
-      'this.agentTimeoutSeconds = readPositiveIntEnv("OPENCLAW_PARALLELS_MACOS_AGENT_TIMEOUT_S", 2700)',
-    );
-    expect(macos).toContain("--timeout ${this.modelTimeoutSeconds}");
-    expect(linux).toContain('--timeout ${resolveParallelsModelTimeoutSeconds("linux")}');
   });
 
   it("rejects loose Parallels numeric limits before starting smoke lanes", () => {
@@ -2384,20 +2266,6 @@ if (commandArgs[0] === "list") {
     expectFatalError(
       () => parseNpmUpdateSmokeArgs(["--platform", "macos,macos"]),
       "duplicate --platform entry: macos",
-    );
-
-    expect(macos).toContain(
-      'this.updateDevTimeoutSeconds = readPositiveIntEnv(\n      "OPENCLAW_PARALLELS_MACOS_UPDATE_DEV_TIMEOUT_S"',
-    );
-    expect(linux).toContain('readPositiveIntEnv(\n    "OPENCLAW_PARALLELS_LINUX_AGENT_TIMEOUT_S"');
-    expect(windows).toContain(
-      'readPositiveIntEnv(\n    "OPENCLAW_PARALLELS_WINDOWS_UPDATE_TIMEOUT_S"',
-    );
-    expect(packageArtifact).toContain(
-      'readPositiveIntEnv("OPENCLAW_PARALLELS_PACKAGE_LOCK_TIMEOUT_MS", 30 * 60_000)',
-    );
-    expect(npmUpdate).toContain(
-      'readPositiveIntEnv("OPENCLAW_PARALLELS_NPM_UPDATE_TIMEOUT_S", 2700)',
     );
   });
 

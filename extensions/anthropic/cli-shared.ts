@@ -419,7 +419,7 @@ function resolveClaudeCliRestrictedExecutionArgs(
     CLAUDE_NO_CHROME_ARG,
     CLAUDE_STRICT_MCP_CONFIG_ARG,
     CLAUDE_TOOLS_ARG,
-    availability.native.join(","),
+    [...availability.native, ...(availability.discovery ?? [])].join(","),
   );
   if (availability.openClaw.length > 0) {
     normalized.push(

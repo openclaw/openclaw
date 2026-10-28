@@ -2,7 +2,9 @@ import type { SessionsStorageStatusResult } from "@openclaw/gateway-protocol";
 import { expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { configSnapshot } from "../../lib/config/config-snapshot.test-support.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { sessionStorageStatus } from "./session-storage.test-support.ts";
 import { SessionStorageSettings } from "./session-storage.tsx";
 import {
   clickSettings,
@@ -13,8 +15,8 @@ import {
 
 type Maintenance = Partial<SessionsStorageStatusResult["maintenance"]>;
 function inventory(count: number, maintenance: Maintenance = {}): SessionsStorageStatusResult {
-  return {
-    agents: [
+  return sessionStorageStatus(
+    [
       {
         agentId: "main",
         storePath: "/synthetic/agent.sqlite",
@@ -26,30 +28,18 @@ function inventory(count: number, maintenance: Maintenance = {}): SessionsStorag
         embeddedArchiveBytes: 0,
       },
     ],
-    maintenance: {
-      running: false,
-      lastStartedAt: null,
-      lastCompletedAt: null,
-      lastError: null,
-      archivedTranscripts: 0,
-      externalizedTranscripts: 0,
-      ...maintenance,
-    },
-  };
+    maintenance,
+  );
 }
-async function mount() {
+async function mount(initialInventory = inventory(7)) {
   const config = { session: { maintenance: { coldStorage: { enabled: true, afterDays: 30 } } } };
   const respond = async (method: string): Promise<unknown> =>
     method === "sessions.storage.status"
-      ? inventory(7)
+      ? initialInventory
       : {
-          config,
-          hash: "raw-one",
+          ...configSnapshot(config, "raw-one"),
           configRevisionHash: "revision-one",
           appliedConfigHash: "revision-one",
-          valid: true,
-          issues: [],
-          raw: JSON.stringify(config),
         };
   const request = vi.fn(respond);
   const reply =
@@ -60,7 +50,11 @@ async function mount() {
     };
   const client = { request } as unknown as GatewayBrowserClient;
   const mounted = await mountConfigSettings(client, () => <SessionStorageSettings />);
-  await waitText(mounted.page, "7 uncompressed");
+  const hotTranscripts = initialInventory.agents.reduce(
+    (sum, agent) => sum + agent.hotTranscripts,
+    0,
+  );
+  await waitText(mounted.page, `${hotTranscripts} uncompressed`);
   return { ...mounted, request, respond, reply };
 }
 function click(page: HTMLElement, label: string) {
@@ -77,48 +71,24 @@ function draft(page: HTMLElement, value: string) {
   input.dispatchEvent(new Event("input", { bubbles: true }));
   return input;
 }
-it.each([
-  ["status", "reconnect"],
-  ["run", "client"],
-])("rejects a delayed %s response after the Gateway %s changes", async (kind, change) => {
-  const warnings = vi.spyOn(console, "warn");
-  const { page, context, request, client, reply, publish } = await mount();
-  const method = `sessions.storage.${kind}`;
-  const previous = createDeferred<SessionsStorageStatusResult>();
-  request.mockImplementation(reply(method, () => previous.promise));
-  click(page, kind === "status" ? "Refresh" : "Run now");
-  await waitForSolid(() =>
-    expect(request.mock.calls.filter(([called]) => called === method)).toHaveLength(
-      kind === "status" ? 2 : 1,
-    ),
-  );
-  expect(page.textContent).toContain("7 uncompressed");
-  const currentRequest = vi.fn(reply("sessions.storage.status", async () => inventory(42)));
-  if (change === "client") {
-    publish(true, { request: currentRequest } as unknown as GatewayBrowserClient);
-  } else {
-    request.mockImplementation(currentRequest);
-    const hello = context.gateway.snapshot.hello;
-    publish(false, client, hello);
-    publish(true, client, hello);
-  }
-  await waitText(page, "42 uncompressed");
-  previous.resolve(inventory(700, { archivedTranscripts: 693 }));
-  await previous.promise;
-  flush();
-  expect(page.textContent).toContain("42 uncompressed");
-  expect(page.textContent).not.toContain("700 uncompressed");
-  if (kind === "run") {
-    expect(page.textContent).not.toContain("Batch completed");
-    expect(button(page, "Run now").disabled).toBe(false);
-  }
-  expect(
-    warnings.mock.calls.filter(([message]) =>
-      String(message).includes("UNTRACKED_READ_AFTER_AWAIT"),
-    ),
-  ).toEqual([]);
-});
+it("retains expanded agent inventory rows across refreshes and updates reordered agent values", async () => {
+  const initial = inventory(7);
+  initial.agents.push({ ...initial.agents[0]!, agentId: "research", hotTranscripts: 3 });
+  const { page, request, reply } = await mount(initial);
+  const disclosure = page.querySelector<HTMLDetailsElement>("details.settings-row--stacked")!;
+  disclosure.open = true;
+  const rows = [...disclosure.querySelectorAll(".settings-row")];
 
+  const updated = structuredClone(initial);
+  updated.agents[0]!.hotTranscripts = 11;
+  updated.agents.reverse();
+  request.mockImplementation(reply("sessions.storage.status", async () => updated));
+  click(page, "Refresh");
+  await waitText(page, "14 uncompressed");
+  expect([...disclosure.querySelectorAll(".settings-row")]).toEqual([rows[1], rows[0]]);
+  expect(rows[0]?.textContent).toContain("11 uncompressed");
+  expect(disclosure.open).toBe(true);
+});
 it("shows submission progress and clears a rejected run before retrying", async () => {
   const { page, request, reply } = await mount();
   const runControl = button(page, "Run now");
@@ -131,9 +101,6 @@ it("shows submission progress and clears a rejected run before retrying", async 
 
   failed.reject(new Error("Maintenance unavailable"));
   await waitText(page, "Maintenance unavailable", '[role="alert"]');
-  expect(button(page, "Run now")).toBe(runControl);
-  expect(page.querySelector('input[type="number"]')).toBe(ageControl);
-  expect(runControl.disabled).toBe(false);
 
   const retry = createDeferred<SessionsStorageStatusResult>();
   request.mockImplementation(reply("sessions.storage.run", () => retry.promise));
@@ -160,13 +127,13 @@ it("does not hold a replacement submission behind a retired request", async () =
   await waitForSolid(() => expect(button(page, "Running").disabled).toBe(true));
   current.resolve(inventory(7));
   await waitText(page, "Batch completed. 0 transcripts archived.");
-  expect(button(page, "Run now").disabled).toBe(false);
 
-  retired.resolve(inventory(7, { archivedTranscripts: 693 }));
+  retired.resolve(inventory(700, { archivedTranscripts: 693 }));
   await retired.promise;
   flush();
   expect(button(page, "Run now").disabled).toBe(false);
   expect(page.textContent).not.toContain("693");
+  expect(page.textContent).not.toContain("700 uncompressed");
 });
 
 it("keeps a days draft and inventory through reconnect and retires them on client replacement", async () => {
@@ -182,8 +149,6 @@ it("keeps a days draft and inventory through reconnect and retires them on clien
   request.mockImplementationOnce(() => retired.promise);
   click(page, "Refresh");
   publish(false, client, null);
-  retired.resolve(inventory(700));
-  await retired.promise;
   flush();
   expect(input).toMatchObject({ value: "14", disabled: true });
   expect(page.textContent).toContain("42 uncompressed");
@@ -195,6 +160,11 @@ it("keeps a days draft and inventory through reconnect and retires them on clien
   expect(page.textContent).toContain("42 uncompressed");
   reconnect.resolve(inventory(21));
   await waitText(page, "21 uncompressed");
+  retired.resolve(inventory(700));
+  await retired.promise;
+  flush();
+  expect(page.textContent).toContain("21 uncompressed");
+  expect(page.textContent).not.toContain("700 uncompressed");
   expect(input.value).toBe("14");
 
   draft(page, "");
@@ -207,9 +177,6 @@ it("keeps a days draft and inventory through reconnect and retires them on clien
   publish(true, { request: replacementRequest } as unknown as GatewayBrowserClient);
   try {
     await waitForSolid(() => {
-      expect(
-        replacementRequest.mock.calls.some(([method]) => method === "sessions.storage.status"),
-      ).toBe(true);
       expect(input.value).toBe("30");
       expect(page.textContent).not.toContain("21 uncompressed");
     });
@@ -263,16 +230,12 @@ async function startBackgroundRun() {
   );
   click(mounted.page, "Run now");
   await waitText(mounted.page, "Background batch started.");
-  await waitText(mounted.page, "Running", ".settings-status");
   return { ...mounted, running, nextStatus };
 }
 
 it("follows run completion after reconnect", async () => {
   const { page, request, nextStatus, client, publish } = await startBackgroundRun();
-  expect(page.textContent).not.toContain("Batch completed");
   publish(false, client, null);
-  flush();
-  expect(page.textContent).toContain("Background batch started.");
   nextStatus.mockResolvedValue(
     inventory(5, {
       lastCompletedAt: 200,

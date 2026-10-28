@@ -29,6 +29,8 @@ export type PickerParams<Option extends PickerOption> = {
   sheet?: boolean;
   /** `true` searches long lists; `"always"` keeps the field for short lists too. */
   searchable?: boolean | "always";
+  /** Supply intrinsic-width content for large flat catalogs; undefined declines windowing. */
+  windowed?: (visibleOptions: readonly Option[]) => JSX.Element;
   searchPlaceholder?: string;
   groupBy?: (option: Option) => PickerGroup | undefined;
   showOptionTooltips?: boolean;

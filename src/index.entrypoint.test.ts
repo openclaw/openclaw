@@ -85,9 +85,10 @@ describe("legacy package executable entrypoint", () => {
     vi.clearAllMocks();
     vi.resetModules();
     // Module resets retain mock factories; each entry case needs a fresh import witness.
-    vi.doMock("./cli/failure-output.js", () => {
+    vi.doMock("./cli/failure-output.js", async (importOriginal) => {
       lifecycleImports.failureOutput();
       return {
+        ...(await importOriginal<typeof import("./cli/failure-output.js")>()),
         formatCliFailureLines: vi.fn(() => []),
         formatCliJsonFailure: vi.fn(),
         isExpectedCliError: vi.fn(() => false),

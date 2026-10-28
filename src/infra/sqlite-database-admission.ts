@@ -39,6 +39,8 @@ import {
 import { createSqliteDatabaseWriteReceipts } from "./sqlite-database-write-receipts.js";
 import { getSqliteNativeAdmissionFacts } from "./sqlite-native-admission.js";
 import { hasSqlitePostCommitScope, stageSqliteTransactionState } from "./sqlite-post-commit.js";
+import { sqliteSchemaOwners } from "./sqlite-schema-scope.js";
+import type { DatabaseFileIdentity } from "./sqlite-worker-identity.js";
 
 export {
   readSqliteDatabaseAdmissions,
@@ -131,6 +133,7 @@ export const {
   getSqliteDatabaseSchemaRevision,
   getOrLoadSqliteDatabaseAdmissionForPath,
   peekSqliteDatabaseAdmissionForPath,
+  prepareSqliteDatabaseAdmissionForPath,
   hasSqliteDatabaseSchemaAdmissionForPath,
   getSqliteDatabaseAdmissionIdentityForPath,
   hasSqliteDatabaseSchemaAdmissionForIdentity,
@@ -145,6 +148,9 @@ const scopedWrites = createSqliteDatabaseWriteReceipts({
   readRevision: readSqliteDatabaseWriteRevision,
   writer: (database) => state.dataWriters.get(database),
   suspended: (database) => state.suspended.has(database),
+  // Native schema ownership survives a caught savepoint rollback; staged admissions do not.
+  hasPendingSchemaMutation: (database) =>
+    database.isTransaction && sqliteSchemaOwners.get(database)?.transactionalSchema === true,
   publish(record, keys) {
     state.registry.publish(record, keys);
     exchange(record);
@@ -191,7 +197,22 @@ function exchange(target: string | Admission, create?: boolean): void {
 }
 
 /** Identity descriptors stay open for the process: closing one can release SQLite's POSIX locks. */
-export function retainSqliteDatabaseAdmissionLocation(location: string): void {
+export function retainSqliteDatabaseAdmissionLocation(
+  location: string,
+  expectedIdentity?: DatabaseFileIdentity,
+): void {
+  const retained = state.registry.forLocation(location);
+  if (
+    retained &&
+    expectedIdentity?.birthtime !== undefined &&
+    retained.physicalIdentity.key === expectedIdentity.key &&
+    retained.physicalIdentity.birthtime === expectedIdentity.birthtime &&
+    state.registry.descriptors.get(retained.identity)?.descriptor === retained.descriptor
+  ) {
+    // Bound workers check this physical identity; unbound opens still discover the current file.
+    seals.load(retained);
+    return;
+  }
   const observed = fs.statSync(location, { bigint: true });
   if (!observed.isFile()) {
     return;
@@ -347,9 +368,10 @@ export function bindSqliteDatabaseAdmission(database: DatabaseSync, expected?: s
     state.unproven.add(database);
     return;
   }
-  const record = state.registry.records.get(observed);
-  if (record && !isRetired(record)) {
-    retainConnection(database, record);
+  // Restore descriptor-held facts before schema tracking initializes the new handle.
+  const known = state.registry.records.get(observed);
+  if ((known && !isRetired(known)) || state.registry.descriptors.get(observed)?.facts.size) {
+    admission(database);
   }
 }
 
@@ -483,13 +505,20 @@ export function beginSqliteDatabaseWrite(database: DatabaseSync, unscoped = fals
   }
 }
 
-/** Native settlement invalidates row caches, including failed or rolled-back writes. */
-export function finishSqliteDatabaseWrite(database: DatabaseSync): void {
+/** Failed writes invalidate too, unless the prepared native owner certifies no effect. */
+export function finishSqliteDatabaseWrite(database: DatabaseSync, noEffect = false): void {
   if (!state.dataWriters.has(database)) {
     return;
   }
   const record = state.dataWriters.get(database);
   state.dataWriters.delete(database);
+  if (noEffect) {
+    scopedWrites.cancel(database);
+    if (record) {
+      Atomics.sub(new Int32Array(record.references.get(threadId)!), 1, 1);
+    }
+    return;
+  }
   state.localWriteRevisions.set(database, (state.localWriteRevisions.get(database) ?? 0) + 1);
   scopedWrites.finish(database, record);
   if (record) {

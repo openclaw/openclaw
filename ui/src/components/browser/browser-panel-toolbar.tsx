@@ -6,7 +6,11 @@ import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { createLayoutMeasurement } from "../../lib/reactive/layout-measurement.ts";
 import { showToast } from "../../lib/toast.ts";
 import { generateUUID } from "../../lib/uuid.ts";
-import { readLinkFavicon, type LinkFaviconFetcher } from "../../pages/chat/link-favicon-cache.ts";
+import {
+  createLinkFaviconReader,
+  retainLinkFaviconCache,
+  type LinkFaviconFetcher,
+} from "../../pages/chat/link-favicon-cache.ts";
 import { Icon } from "../solid/icon.tsx";
 import { Menu, type MenuItem } from "../solid/menu.tsx";
 import { PanelIconButton } from "../solid/panel-icon-button.tsx";
@@ -72,12 +76,14 @@ export function BrowserToolbar(
       let disposed = false;
       const refresh = () => {
         if (!disposed) {
-          setFavicon(readLinkFavicon(hostname, fetcher, refresh) || undefined);
+          setFavicon(reader.read(hostname, fetcher) || undefined);
         }
       };
+      const reader = createLinkFaviconReader(refresh);
       refresh();
       return () => {
         disposed = true;
+        reader.dispose();
       };
     });
     return null;
@@ -189,6 +195,12 @@ export function BrowserToolbar(
         }
       }}
     >
+      <Show when={props.fetchFavicon} keyed>
+        {(fetcher) => {
+          onSettled(() => retainLinkFaviconCache(fetcher));
+          return null;
+        }}
+      </Show>
       {!nativeTab() &&
       !props.controller.host.fixedTab &&
       !props.controller.host.dashboardTarget?.sessionScoped &&

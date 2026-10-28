@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost } from "../host.js";
+import { collectEventTypes } from "../transports/openai-stream-cases.test-support.js";
 import { withProviderAcceptanceObserver } from "../transports/transport-stream-shared.js";
 import { streamOpenAICodexResponses } from "./openai-chatgpt-responses.js";
 import {
@@ -235,9 +236,7 @@ describe("OpenAI ChatGPT Responses inference streaming", () => {
     const options = withProviderAcceptanceObserver({ apiKey }, acceptanceObserver);
 
     const stream = streamOpenAICodexResponses(model, context, options);
-    for await (const event of stream) {
-      order.push(event.type);
-    }
+    await collectEventTypes(stream, order);
 
     expect(order).toEqual(["accepted", "start", "done"]);
     expect(acceptanceObserver).toHaveBeenCalledWith({ kind: "provider_stream_opened" });

@@ -1,6 +1,9 @@
 import type { DatabaseSync, SQLInputValue, StatementSync } from "node:sqlite";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { isSqliteLockError, sqlitePrimaryResultCode } from "./sqlite-error-diagnostics.js";
+import { discardSqliteTransactionState } from "./sqlite-post-commit.js";
 import { classifySqliteMutation } from "./sqlite-schema-mutation.js";
+import { wrapSqliteWorkerError } from "./sqlite-worker-error.js";
 
 declare module "node:sqlite" {
   interface StatementSync {
@@ -45,6 +48,41 @@ const pending = resolveGlobalSingleton(
   () => new WeakMap<DatabaseSync, number>(),
 );
 
+const preparedMutations = resolveGlobalSingleton(
+  Symbol.for("openclaw.sqlitePreparedNativeMutation"),
+  () =>
+    new WeakMap<
+      DatabaseSync,
+      { phase: "armed" | "observing" | "preparing" | "executing" | "finished"; prepare: () => void }
+    >(),
+);
+
+/** The writer certifies one default-ABORT statement without triggers or native callbacks. */
+export function withSqlitePreparedNativeMutation<T>(
+  database: DatabaseSync,
+  prepare: () => void,
+  statement: () => T,
+): T {
+  if (
+    database.isTransaction ||
+    hasPendingSqliteNativeExecution(database) ||
+    preparedMutations.has(database)
+  ) {
+    throw new Error("Prepared SQLite mutations require exclusive autocommit custody");
+  }
+  preparedMutations.set(database, { phase: "armed", prepare });
+  try {
+    return statement();
+  } finally {
+    preparedMutations.delete(database);
+  }
+}
+
+/** Only the native begin callback may consume the pending autocommit receipt. */
+export function isPreparingSqliteNativeMutation(database: DatabaseSync): boolean {
+  return preparedMutations.get(database)?.phase === "preparing";
+}
+
 /** Execution custody is not evidence of COMMIT or complete authority write-set coverage. */
 export function hasPendingSqliteNativeExecution(database: DatabaseSync): boolean {
   return (pending.get(database) ?? 0) > 0;
@@ -53,7 +91,7 @@ export function hasPendingSqliteNativeExecution(database: DatabaseSync): boolean
 export type SqliteNativeMutation = ReturnType<typeof classifySqliteMutation>;
 type NativePhase = "exec" | "execute" | "bind" | "iterate";
 type NativeOperation = {
-  finish: (succeeded: boolean, abandoned?: boolean) => void;
+  finish: (succeeded: boolean, abandoned?: boolean, noEffect?: boolean) => void;
   stepped?: () => void;
 };
 type IteratorLifetime = {
@@ -148,13 +186,26 @@ export function observeSqliteNativeOperations(
   observe: (mutation: SqliteNativeMutation, phase: NativePhase) => NativeOperation,
 ): <T>(operation: () => T, mutation: SqliteNativeMutation) => T {
   const begin = (mutation: SqliteNativeMutation, phase: NativePhase): NativeOperation => {
+    const prepared = preparedMutations.get(database);
+    if (prepared) {
+      if (
+        prepared.phase !== "armed" ||
+        phase !== "execute" ||
+        !mutation.dataChange ||
+        mutation.schemaChange ||
+        mutation.control
+      ) {
+        throw new Error("Prepared SQLite mutations must execute exactly one data statement");
+      }
+      prepared.phase = "observing";
+    }
     const observed = observe(mutation, phase);
     pending.set(database, (pending.get(database) ?? 0) + 1);
     return {
       ...observed,
-      finish(succeeded, abandoned) {
+      finish(succeeded, abandoned, noEffect) {
         try {
-          observed.finish(succeeded, abandoned);
+          observed.finish(succeeded, abandoned, noEffect);
         } finally {
           const remaining = (pending.get(database) ?? 1) - 1;
           if (remaining === 0) {
@@ -172,17 +223,48 @@ export function observeSqliteNativeOperations(
     mutation: SqliteNativeMutation,
     phase: NativePhase = "execute",
   ): T => {
+    const prepared = preparedMutations.get(database);
     const observed = begin(mutation, phase);
     let succeeded = false;
+    let nativeCompleted = false;
+    let noEffect = false;
     try {
+      if (prepared) {
+        prepared.phase = "preparing";
+        prepared.prepare();
+        prepared.phase = "executing";
+      }
       const result = operation();
+      nativeCompleted = true;
       if (phase !== "bind") {
         observed.stepped?.();
       }
       succeeded = true;
       return result;
+    } catch (error) {
+      // The certified statement uses ABORT semantics. I/O and unknown failures
+      // retain the ordinary conservative receipt and crash-recovery behavior.
+      noEffect = Boolean(
+        prepared &&
+        (prepared.phase === "preparing" ||
+          (!nativeCompleted &&
+            (isSqliteLockError(error) || sqlitePrimaryResultCode(error) === 19))),
+      );
+      if (prepared && !noEffect) {
+        const failure = wrapSqliteWorkerError(
+          "Prepared SQLite mutation outcome is unknown",
+          "outcome-unknown",
+          error,
+        );
+        discardSqliteTransactionState(database, failure);
+        throw failure;
+      }
+      throw error;
     } finally {
-      observed.finish(succeeded);
+      if (prepared) {
+        prepared.phase = "finished";
+      }
+      observed.finish(succeeded, false, noEffect);
     }
   };
   database.exec = (sql) =>

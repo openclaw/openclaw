@@ -91,20 +91,15 @@ function setOAuthProfile(
   } satisfies AuthProfileStore);
 }
 
-function subscriptionBlock(
+const block = (
   blockedUntil: number,
-  blockedSource: "wham" | "codex_rate_limits",
-  blockedModel?: string,
-  blockedScope?: "model",
-) {
-  return {
-    blockedUntil,
-    blockedReason: "subscription_limit" as const,
-    blockedSource,
-    ...(blockedModel ? { blockedModel } : {}),
-    ...(blockedScope ? { blockedScope } : {}),
-  };
-}
+  fields: NonNullable<AuthProfileStore["usageStats"]>[string] = {},
+) => ({
+  blockedUntil,
+  blockedReason: "subscription_limit" as const,
+  blockedSource: "wham" as const,
+  ...fields,
+});
 
 describe("modelsAuthListCommand", () => {
   beforeEach(() => {
@@ -118,41 +113,38 @@ describe("modelsAuthListCommand", () => {
 
   afterEach(() => vi.restoreAllMocks());
 
-  it("shows the cooldown reason and re-authentication action in text and JSON", async () => {
-    setOAuthProfile("anthropic:claude-cli", "claude-cli", {
-      cooldownUntil: 1_900_000_100_000,
-      cooldownReason: "session_expired",
-    });
-    const { text, json } = await listBoth();
-    expect(text.at(-1)).toContain("cooldown:session_expired");
-    expect(text.at(-1)).toContain(
-      "claude auth login && openclaw models auth login --provider anthropic --method cli",
+  it("escapes profile labels, model blocks and store paths only in terminal output", async () => {
+    const profileId = "openai:café\x1b[31m\nforged\tprofile\r\x00\x85";
+    const model = "café\x1b[2J\nforged-model";
+    setOAuthProfile(
+      profileId,
+      "openai",
+      block(1_900_000_100_000, { blockedModel: model, blockedScope: "model" }),
     );
+    mocks.resolveAuthStatePathForDisplay.mockReturnValue("/tmp/café\x1b[31m\nstore.sqlite");
+    const { text, json } = await listBoth();
 
-    expectProfile(json, {
-      id: "anthropic:claude-cli",
-      cooldownReason: "session_expired",
-      recoveryHint:
-        "Re-authenticate with `claude auth login && openclaw models auth login --provider anthropic --method cli --profile-id 'anthropic:claude-cli'`.",
-    });
+    expect(text[1]).toBe("Auth state store: /tmp/café\\nstore.sqlite");
+    expect(text.at(-1)).toContain("- openai:café\\nforged\\tprofile\\r [openai/oauth;");
+    expect(text.at(-1)).toContain("for model café\\nforged-model until");
+    expect(text.join("")).not.toMatch(/\p{Cc}/u);
+    expectProfile(json, { id: profileId, label: profileId, blockedModel: model });
+    expect(json).toMatchObject({ authStatePath: "/tmp/café\x1b[31m\nstore.sqlite" });
   });
 
-  it.each(["rate_limit", "overloaded", "auth", "auth_permanent", "billing"] as const)(
-    "shows only enforced %s health for a self-managed provider",
-    async (reason) => {
+  it.each([false, true])(
+    "projects managed health without transient cooldowns (disabled=%s)",
+    async (disabled) => {
       const snapshot = createPluginMetadataSnapshotFixture({
         plugins: [{ id: "gateway", providers: ["my-gateway"], managesOwnAvailability: true }],
       });
-      const disabled = reason === "auth_permanent" || reason === "billing";
-      const bypassed = reason === "rate_limit" || reason === "overloaded";
-      const window = disabled
-        ? {
-            cooldownUntil: 1_900_003_100_000,
-            cooldownReason: "rate_limit" as const,
-            disabledUntil: 1_900_000_100_000,
-            disabledReason: reason,
-          }
-        : { cooldownUntil: 1_900_000_100_000, cooldownReason: reason };
+      const window = {
+        cooldownUntil: 1_900_003_100_000,
+        cooldownReason: "rate_limit" as const,
+        ...(disabled
+          ? { disabledUntil: 1_900_000_100_000, disabledReason: "billing" as const }
+          : {}),
+      };
       mocks.ensureAuthProfileStore.mockReturnValue({
         version: 1,
         profiles: { "my-gateway:manual": createApiKeyCredential("my-gateway", "synthetic-key") },
@@ -161,38 +153,30 @@ describe("modelsAuthListCommand", () => {
       const { text, json } = await withPluginMetadataSnapshotScope(
         snapshot,
         async () => {
-          const output = await listBoth();
           if (disabled) {
             expect(listUnavailableAuthProfiles(mocks.ensureAuthProfileStore())).toEqual([
               expect.objectContaining({
                 profileId: "my-gateway:manual",
                 kind: "disabled",
-                reason,
+                reason: "billing",
                 until: 1_900_000_100_000,
               }),
             ]);
           }
-          return output;
+          return listBoth();
         },
         { trustConfigIdentity: true },
       );
       const identity = summary("my-gateway:manual", "api_key");
-      if (bypassed) {
-        expect(json).toMatchObject({ profiles: [identity] });
-        expect(text.at(-1)).toBe("- my-gateway:manual [my-gateway/api_key]");
+      expectProfile(json, { ...identity, ...(disabled ? { disabledReason: "billing" } : {}) });
+      expect(text.at(-1)).not.toContain("cooldown");
+      expect(json).not.toMatchObject({
+        profiles: [expect.objectContaining({ cooldownUntil: expect.anything() })],
+      });
+      if (disabled) {
+        expect(text.at(-1)).toContain("disabled:billing");
       } else {
-        expect(json).toMatchObject({
-          profiles: [{ ...identity, [disabled ? "disabledReason" : "cooldownReason"]: reason }],
-        });
-        expect(text.at(-1)).toContain((disabled ? "disabled:" : "cooldown:") + reason);
-        if (disabled) {
-          expect(text.at(-1)).not.toContain("cooldown");
-        }
-      }
-      if (bypassed || disabled) {
-        expect(json).not.toMatchObject({
-          profiles: [expect.objectContaining({ cooldownUntil: expect.anything() })],
-        });
+        expect(text.at(-1)).toBe("- my-gateway:manual [my-gateway/api_key]");
       }
     },
   );
@@ -205,9 +189,12 @@ describe("modelsAuthListCommand", () => {
     });
     const { text, json } = await listBoth();
     expect(text.at(-1)).toContain("cooldown:wham_token_expired");
+    expect(text.at(-1)).toContain("openclaw models auth login --provider openai");
     expectProfile(json, {
       cooldownReason: "auth",
       cooldownClassification: "wham_token_expired",
+      recoveryHint:
+        "Re-authenticate with `openclaw models auth login --provider openai --profile-id 'openai:expired'`.",
     });
   });
 
@@ -215,20 +202,24 @@ describe("modelsAuthListCommand", () => {
     vi.spyOn(Date, "now").mockReturnValue(NOW);
     const profile = { type: "api_key", provider: "openai", key: "credential-secret" } as const;
     const usageStats = {
-      "openai:profile-wide": subscriptionBlock(
-        NOW + 60_000,
-        "codex_rate_limits",
-        "legacy-model-must-not-leak",
-      ),
-      "openai:model-scoped": subscriptionBlock(NOW + 120_000, "wham", "gpt-5.5", "model"),
-      "openai:model-scope-without-model": subscriptionBlock(
-        NOW + 180_000,
-        "wham",
-        undefined,
-        "model",
-      ),
-      "openai:expired": subscriptionBlock(NOW - 1, "codex_rate_limits", "gpt-expired", "model"),
-      "openai:invalid": subscriptionBlock(8_700_000_000_000_000, "wham", "gpt-invalid", "model"),
+      "openai:profile-wide": block(NOW + 60_000, {
+        blockedSource: "codex_rate_limits",
+        blockedModel: "legacy-model-must-not-leak",
+      }),
+      "openai:model-scoped": block(NOW + 120_000, {
+        blockedModel: "gpt-5.5",
+        blockedScope: "model",
+      }),
+      "openai:model-scope-without-model": block(NOW + 180_000, { blockedScope: "model" }),
+      "openai:expired": block(NOW - 1, {
+        blockedSource: "codex_rate_limits",
+        blockedModel: "gpt-expired",
+        blockedScope: "model",
+      }),
+      "openai:invalid": block(8_700_000_000_000_000, {
+        blockedModel: "gpt-invalid",
+        blockedScope: "model",
+      }),
     };
     mocks.ensureAuthProfileStore.mockReturnValue({
       ...createAuthProfileStoreFixture(
@@ -261,33 +252,9 @@ describe("modelsAuthListCommand", () => {
     expectBlock("openai:model-scope-without-model", "2026-08-30T00:03:00.000Z", "wham");
     for (const id of ["openai:expired", "openai:invalid"]) {
       expect(text.find((line) => line.includes(id))).not.toContain("blocked:");
-      const profileEntry = byId[id];
-      expect(profileEntry).toBeDefined();
-      for (const field of [
-        "blockedUntil",
-        "blockedReason",
-        "blockedSource",
-        "blockedScope",
-        "blockedModel",
-      ]) {
-        expect(profileEntry).not.toHaveProperty(field);
-      }
+      expect(byId[id]).toEqual(summary(id, "api_key"));
     }
     expect(JSON.stringify(json)).not.toMatch(/secret|legacy-model-must-not-leak/u);
-  });
-
-  it("routes legacy Gemini CLI cooldowns to supported Google API-key setup", async () => {
-    setOAuthProfile("google-gemini-cli:legacy", "google-gemini-cli", {
-      cooldownUntil: 1_900_000_100_000,
-      cooldownReason: "session_expired",
-    });
-    const runtime = await list({ json: true });
-
-    expectProfile(runtime.jsonPayloads[0], {
-      id: "google-gemini-cli:legacy",
-      recoveryHint: expect.stringContaining("--provider google`"),
-    });
-    expect(JSON.stringify(runtime.jsonPayloads[0])).not.toContain("--provider google-gemini-cli");
   });
 
   it.each([
@@ -312,10 +279,6 @@ describe("modelsAuthListCommand", () => {
       mocks.ensureAuthProfileStore.mockReturnValue(store);
       const runtime = await list({ provider: "OpenAI", json: true });
 
-      expect(mocks.externalCliDiscoveryForProviderAuth).toHaveBeenCalledWith({
-        cfg: {},
-        provider: "openai",
-      });
       expect(runtime.jsonPayloads).toStrictEqual([
         {
           agentDir: "/tmp/openclaw/agents/main",

@@ -8,6 +8,7 @@ import { closeGatewayTestWebSocket } from "../../test/helpers/gateway-websocket.
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles.js";
+import { modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import { listConfiguredOwnerInputs } from "../agents/prepared-model-runtime.configured.js";
 import {
   getPreparedModelRuntimeSnapshot,
@@ -58,6 +59,7 @@ import {
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
+import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import { assertOpenClawDatabasesReady } from "../state/openclaw-database-preflight.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { acquireTestPortBlock, type TestPortClaim } from "../test-utils/port-claims.js";
@@ -197,6 +199,7 @@ it.for([
     const checkHostJournalReads = outcome === "recover" && !holdSubagentRestoration;
     const restorationEntered = createDeferredCore();
     const restorationRelease = createDeferredCore();
+    const initialRecoveryReady = createDeferredCore();
     let startupSettled = false;
     let recoverySource: OpenClawConfig | undefined;
     let bootstrapSecrets: ReturnType<typeof getActiveSecretsRuntimeSnapshot> | undefined;
@@ -204,8 +207,17 @@ it.for([
     if (holdSubagentRestoration) {
       vi.stubEnv("OPENCLAW_TEST_MINIMAL_GATEWAY", undefined);
       const startPostAttach = postAttach.startGatewayPostAttachRuntime;
-      vi.spyOn(postAttach, "startGatewayPostAttachRuntime").mockImplementation(async (...args) => {
-        const runtime = await startPostAttach(...args);
+      vi.spyOn(postAttach, "startGatewayPostAttachRuntime").mockImplementation(async (params) => {
+        const unlockStartupMethods = params.unlockStartupMethods;
+        const runtime = await startPostAttach({
+          ...params,
+          unlockStartupMethods: (options) => {
+            unlockStartupMethods(options);
+            if (!options?.keepChatSendUnavailable) {
+              initialRecoveryReady.resolve();
+            }
+          },
+        });
         subagentRecoverySettled = runtime.subagentRecoverySettled;
         return runtime;
       });
@@ -214,9 +226,13 @@ it.for([
         bootstrapSecrets = getActiveSecretsRuntimeSnapshot();
         return startEarly(params);
       });
-      vi.spyOn(subagents, "activateSubagentRegistry").mockImplementation(async () => {
+      vi.spyOn(subagents, "activateSubagentRegistry").mockImplementation(() => {
         restorationEntered.resolve();
-        await restorationRelease.promise;
+        return {
+          initial: Promise.resolve(),
+          pending: new Map([["worker", restorationRelease.promise]]),
+          settled: restorationRelease.promise,
+        };
       });
     }
     const nativeBroker = process.platform === "linux" && !process.versions.bun;
@@ -381,15 +397,15 @@ it.for([
       vi.spyOn(session, "prepareGatewayStartupSessions").mockImplementation(async (params) => {
         const databases = await prepare(params);
         if (params.agentIds?.has(agentId)) {
+          sessionPrepared = true;
           if (outcome === "recover") {
             const result = await runExec(process.execPath, ["-e", "console.log(process.ppid)"], {
               logOutput: false,
             });
             preparationParent = Number(result.stdout);
+            preparationEntered.resolve();
+            await preparationRelease.promise;
           }
-          sessionPrepared = true;
-          preparationEntered.resolve();
-          await preparationRelease.promise;
         }
         return databases;
       });
@@ -455,7 +471,7 @@ it.for([
         await assertOpenClawDatabasesReady({ env, operation: "gateway-startup", config: cfg });
         inspectionSettled = admission.pendingPreparation;
         waitForHealthyAgent = () =>
-          admission.waitForAgentPreparation(healthyAgentId, { env, signal });
+          admission.waitForAgentPreparation(healthyAgentId, { env, signal, forWrite: true });
         // Other Unix hosts exercise the broker context without pretending their OS is Linux.
         if (brokerExpected && !nativeBroker) {
           suppliedBroker = await spawnBroker.startGatewaySpawnBroker({
@@ -514,10 +530,12 @@ it.for([
       // Sidecar settlement can precede the unpaused sibling's database admission.
       await waitForHealthyAgent();
       expect(readAgentDatabaseAdmissionRefusal(healthyAgentId, { env })).toBeUndefined();
+      if (holdSubagentRestoration) {
+        // startupSettled does not join the independent initial-recovery admission signal.
+        await withinTest(initialRecoveryReady.promise, signal);
+      }
       const readiness = await probeGateway(port, "/readyz");
-      expect(readiness.status).toBe(
-        (agentId === "main" && paused) || holdSubagentRestoration ? 503 : 200,
-      );
+      expect(readiness.status).toBe(agentId === "main" && paused ? 503 : 200);
       if (agentId === "main" && paused) {
         await expect(readiness.json()).resolves.toMatchObject({
           ready: false,
@@ -605,21 +623,6 @@ it.for([
         expect(inspectionAlive(preparationEnteredPath)).toBe(false);
         expect(fs.readFileSync(agentPath)).toEqual(agentBytes);
       } else if (outcome === "recover" || outcome === "superseded") {
-        fs.writeFileSync(releasePath, "resume");
-        await withinTest(
-          Promise.race([
-            preparationEntered.promise,
-            hostJournalRead.promise.then(() => expect(hostJournalReads).toBe(0)),
-          ]),
-          signal,
-        );
-        expect(sessionPrepared).toBe(true);
-        if (outcome === "recover") {
-          expect(preparationParent).toBe(brokerExpected ? brokerPid : process.pid);
-        }
-        expect(refusal()).toMatchObject({
-          code: "agent-database-inspection-pending",
-        });
         if (outcome === "recover") {
           chatClient = await connectWebchatClient({ port });
           gatewayReplyMock.mockImplementationOnce(async () => {
@@ -642,17 +645,13 @@ it.for([
               openai: {
                 baseUrl: "https://api.openai.com/v1",
                 models: [
-                  {
-                    id: "gpt-5.6-sol",
+                  modelDefinition("gpt-5.6-sol", {
                     name: "GPT-5.6",
                     api: "openai-responses",
                     agentRuntime: { id: "openclaw" },
-                    reasoning: true,
-                    input: ["text"],
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                     contextWindow: 128000,
                     maxTokens: 4096,
-                  },
+                  }),
                 ],
               },
             },
@@ -669,7 +668,7 @@ it.for([
             source,
           );
         }
-        preparationRelease.resolve();
+        fs.writeFileSync(releasePath, "resume");
         if (outcome === "superseded") {
           await vi.waitFor(
             () =>
@@ -679,8 +678,21 @@ it.for([
               }),
             { timeout: 10000 },
           );
+          expect(sessionPrepared).toBe(false);
           return;
         }
+        await withinTest(
+          Promise.race([
+            preparationEntered.promise,
+            hostJournalRead.promise.then(() => expect(hostJournalReads).toBe(0)),
+          ]),
+          signal,
+        );
+        expect(preparationParent).toBe(brokerExpected ? brokerPid : process.pid);
+        expect(refusal()).toMatchObject({
+          code: "agent-database-inspection-pending",
+        });
+        preparationRelease.resolve();
         await waitForRecovery();
         await withinTest(maintenanceCompleted.promise, signal);
         expect(
@@ -705,15 +717,16 @@ it.for([
           false,
         );
         if (holdSubagentRestoration) {
-          // Fresh chat waits for restored sources even after database readiness.
+          // The optional worker stays gated without making the healthy Gateway unready.
           await withinTest(restorationEntered.promise, signal);
           expect(startupSettled).toBe(true);
           const recoveringReadiness = await probeGateway(port, "/readyz");
-          expect(recoveringReadiness.status).toBe(503);
+          expect(recoveringReadiness.status).toBe(200);
           await expect(recoveringReadiness.json()).resolves.toMatchObject({
-            ready: false,
-            coreReady: false,
-            failing: ["chat-recovery"],
+            ready: true,
+            coreReady: true,
+            failing: [],
+            agentRecovery: ["worker"],
           });
           expect(await rpcReq(chatClient!, "chat.send", chatParams)).toMatchObject({
             ok: false,
@@ -804,7 +817,8 @@ it("admits an unsealed fleet including reserved system agents while skipping an 
   for (const pathname of paths) {
     const database = new DatabaseSync(pathname);
     try {
-      database.exec("PRAGMA journal_mode=DELETE");
+      // Index repair retains late publication, after all native generations have opened.
+      database.exec("PRAGMA journal_mode=DELETE; DROP INDEX idx_agent_session_nodes_active");
     } finally {
       database.close();
     }
@@ -820,6 +834,17 @@ it("admits an unsealed fleet including reserved system agents while skipping an 
   let peakOpenings = 0;
   const openingEntered = agentIds.map(() => createDeferredCore());
   const openingReleases = new Map(agentIds.map((id) => [id, createDeferredCore()]));
+  const openedGenerations = new Map<string, string | undefined>();
+  const publishedGenerations = new Map<string, string | undefined>();
+  const allOpened = createDeferredCore();
+  const readGeneration = async (agentId: string, pathname: string) => {
+    const execution = captureOpenClawAgentDatabaseExecution({ agentId, path: pathname, env });
+    try {
+      return execution.capturePreparedGenerationClaim()?.incarnation;
+    } finally {
+      await execution.release();
+    }
+  };
   const admitted = new Set<string>();
   const allAdmitted = createDeferredCore();
   const unsubscribe = sessionChanges.subscribe((change) => {
@@ -851,10 +876,27 @@ it("admits an unsealed fleet including reserved system agents while skipping an 
             openingEntered[openings.length - 1]!.resolve();
             try {
               await withinTest(openingReleases.get(input.agentId)!.promise, signal);
-              await activation.openAgent(input);
+              const prepared = await activation.openAgent(input);
+              openedGenerations.set(
+                input.agentId,
+                await readGeneration(input.agentId, input.paths[0]!),
+              );
+              if (openedGenerations.size === agentIds.length) {
+                allOpened.resolve();
+              }
+              return prepared;
             } finally {
               activeOpenings -= 1;
             }
+          },
+          publishAgent: async (input) => {
+            // Five completed opens exceed the owner's four-idle-executor limit.
+            await withinTest(allOpened.promise, signal);
+            await activation.publishAgent(input);
+            publishedGenerations.set(
+              input.agentId,
+              await readGeneration(input.agentId, input.paths[0]!),
+            );
           },
         }),
       );
@@ -895,13 +937,18 @@ it("admits an unsealed fleet including reserved system agents while skipping an 
     }
     await withinTest(allAdmitted.promise, signal);
     expect(peakOpenings).toBe(2);
+    expect([...openedGenerations.values()]).not.toContain(undefined);
+    expect(new Set([...openedGenerations.values(), ...publishedGenerations.values()]).size).toBe(
+      agentIds.length,
+    );
+    expect(publishedGenerations).toEqual(openedGenerations);
     expect(warnings).toHaveBeenCalledWith(
-      "Skipped openclaw-agent.sqlite: database is not a configured target; run openclaw doctor to inspect retained data.",
+      `Skipped ${leftover} (agent unowned): database is not a configured target; run openclaw doctor to inspect retained data.`,
     );
     for (const [index, pathname] of stalePaths.entries()) {
       expect(fs.readFileSync(pathname)).toEqual(staleBytes[index]);
       expect(warnings).toHaveBeenCalledWith(
-        `Skipped ${path.basename(pathname)}: database is not a configured target; run openclaw doctor to inspect retained data.`,
+        `Skipped ${pathname} (agent ${agentIds[index]}): database is not a configured target; run openclaw doctor to inspect retained data.`,
       );
     }
     for (const agentId of agentIds) {
@@ -912,6 +959,7 @@ it("admits an unsealed fleet including reserved system agents while skipping an 
     expect((await probeGateway(started.port, "/readyz")).status).toBe(200);
   } finally {
     unsubscribe();
+    allOpened.resolve();
     for (const release of openingReleases.values()) {
       release.resolve();
     }

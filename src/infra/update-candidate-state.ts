@@ -2,17 +2,16 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
-import { resolveStateDir } from "../config/paths.js";
 import { resolveDaemonRuntimePinStorePath } from "../daemon/runtime-pin-store.js";
 import { listDefaultAgentDatabasePaths } from "../state/agent-database-path-discovery.js";
+import {
+  migrateCronDefaultStoreIdentity,
+  resolveLegacyCronDefaultStoreKey,
+} from "../state/openclaw-state-db-cron-identity-migration.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import { readStateSchemaContentVersion } from "../state/openclaw-state-db-schema-version.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import { resolveOpenClawRegisteredAgentDatabasePath } from "../state/openclaw-state-db.paths.js";
-import {
-  getOpenClawDatabaseMaintenanceScope,
-  maintenanceOwnerHasSourceCustody,
-} from "../state/openclaw-state-maintenance-context.js";
 import { resolveClientCredentialStorePath } from "./client-credential-paths.js";
 import type { ClientCredentialRehearsalBinding } from "./client-credential-restore-contract.js";
 import { resolveDatabaseFamilyEngines } from "./database-engine/registry.js";
@@ -64,7 +63,6 @@ import {
 } from "./update-candidate-state.shared.js";
 import {
   readUpdateStateDatabaseSizes,
-  readUpdateStateDatabaseSizesInProcess,
   updateStateDatabaseExists,
 } from "./update-candidate-state.sizes.js";
 import {
@@ -72,9 +70,11 @@ import {
   UpdateStateSchemaVersionsSchema,
   type UpdateStateSchemaVersion,
 } from "./update-candidate-state.versions.js";
-import type { UpdateDatabaseGenerations } from "./update-database-generations.js";
-import type { UpdateRecoveryCaptureAcquisition } from "./update-recovery-capture-acquisition.js";
 
+export {
+  readUpdateDatabaseGenerationsIsolated,
+  readUpdateDatabaseGenerationPairIsolated,
+} from "./update-candidate-state.inspection.js";
 export type { UpdateStateSchemaVersion } from "./update-candidate-state.versions.js";
 export const UpdateCandidateStateSnapshotSchema = z.object({
   versions: UpdateStateSchemaVersionsSchema,
@@ -424,64 +424,6 @@ export async function readUpdateStateDatabaseInventory(input: StateInput) {
   });
 }
 
-/** Raw fingerprint reads need their own process so descriptor closes cannot release caller locks. */
-export async function readUpdateDatabaseGenerationsIsolated(
-  paths: readonly string[],
-  options: {
-    env?: NodeJS.ProcessEnv;
-    root?: string;
-    timeoutMs?: number;
-    signal?: AbortSignal;
-    acquisition?: UpdateRecoveryCaptureAcquisition;
-    retryAdvice?: boolean;
-    pluginOwners?: import("./database-engine/port-descriptor.js").DatabasePortPluginOwners;
-  } = {},
-): Promise<UpdateDatabaseGenerations> {
-  const scope = getOpenClawDatabaseMaintenanceScope();
-  const maintenanceOwner =
-    options.acquisition?.mode === "maintenance-owner" &&
-    paths.every((pathname) => maintenanceOwnerHasSourceCustody(scope, pathname));
-  const { root, timeoutMs, env: sourceEnv = process.env, signal: caller } = options;
-  const controller = new AbortController();
-  const signal = caller ? AbortSignal.any([caller, controller.signal]) : controller.signal;
-  const stagingRoot = await createSqliteSnapshotStagingDirectory(
-    resolvePrivateSqliteSnapshotStagingRoot(sourceEnv),
-    root !== undefined,
-    signal,
-  );
-  const inspection = withStateInspectionCleanup(stagingRoot, async () => {
-    const worker = { nodeRunner: process.execPath, sourceEnv, stagingRoot, timeoutMs, signal };
-    const generations = parseUpdateStateInspectionWorker(
-      await runUpdateStateInspectionWorker({
-        ...worker,
-        root,
-        retryAdvice: options.retryAdvice,
-        sources: paths,
-        ...(maintenanceOwner ? { ioBudget: "deadline" as const } : {}),
-        input: {
-          mode: "database-generations",
-          paths,
-          ...(options.pluginOwners ? { pluginOwners: options.pluginOwners } : {}),
-          stateDir: resolveStateDir(sourceEnv),
-          config: {},
-        },
-        databases: maintenanceOwner
-          ? await readUpdateStateDatabaseSizesInProcess(paths, signal)
-          : await readUpdateStateDatabaseSizes(paths, worker),
-      }),
-      z.record(z.string(), z.nullable(z.string().regex(/^[a-f0-9]{64}$/u))),
-    );
-    if (
-      Object.keys(generations).length !== new Set(paths).size ||
-      paths.some((pathname) => !Object.hasOwn(generations, pathname))
-    ) {
-      throw new Error("Database generation worker did not return the supplied inventory.");
-    }
-    return generations;
-  });
-  return retainSnapshotWork(inspection, () => controller.abort());
-}
-
 /** Schema fencing reads private copies in candidate workers under size-aware deadlines. */
 export async function readUpdateStateSchemaVersions({
   root,
@@ -553,7 +495,7 @@ export async function readUpdateStateSchemaVersions({
 
 /** Keep snapshot dependencies out of schema inspection; rebind registry paths to private copies. */
 export async function snapshotUpdateCandidateState(
-  input: StateInput & {
+  sourceInput: StateInput & {
     targetStateDir: string;
     candidateRoot: string;
     pluginPlanPath: string;
@@ -563,13 +505,22 @@ export async function snapshotUpdateCandidateState(
   },
 ): Promise<z.infer<typeof UpdateCandidateStateSnapshotSchema>> {
   const { createVerifiedSqliteSnapshot } = await import("./sqlite-snapshot.js");
+  const { AGENT_FTS_SCHEMAS } = await import("../state/openclaw-agent-fts-schema.js");
   const { copyUpdateCandidatePlugins, UpdateCandidatePluginPlanSchema } =
     await import("./update-candidate-plugins.js");
   const plugins = UpdateCandidatePluginPlanSchema.parse(
-    JSON.parse(await fs.readFile(input.pluginPlanPath, "utf8")),
+    JSON.parse(await fs.readFile(sourceInput.pluginPlanPath, "utf8")),
   );
-  const admittedDatabases = new Set(input.databaseInventory);
-  const sourceRoot = path.resolve(input.stateDir);
+  const admittedDatabases = new Set(sourceInput.databaseInventory);
+  const sourceRoot = path.resolve(sourceInput.stateDir);
+  // Released parents omit both selectors. The physical database root cannot prove
+  // a config-relative cron identity; leave that choice to the original-state Doctor.
+  const sourceStoreKey =
+    sourceInput.env?.OPENCLAW_STATE_DIR?.trim() || sourceInput.env?.OPENCLAW_CONFIG_PATH?.trim()
+      ? resolveLegacyCronDefaultStoreKey(sourceInput.env)
+      : undefined;
+  // Discovery uses the selected installation; cron identity retains the source selectors above.
+  const input = { ...sourceInput, env: { ...sourceInput.env, OPENCLAW_STATE_DIR: sourceRoot } };
   const shared = path.join(sourceRoot, "state", "openclaw.sqlite");
   const localCredentials = resolveClientCredentialStorePath({ OPENCLAW_STATE_DIR: sourceRoot });
   const { readClientCredentialFileIdentity } = await import("./client-credential-receipt.js");
@@ -646,6 +597,9 @@ export async function snapshotUpdateCandidateState(
                 file === shared
                   ? ["migration_sources", ...leaseTables, "agent_databases"]
                   : undefined,
+              // A SQLite upgrade can make owned FTS indexes look malformed; the
+              // candidate's agent database admission rebuilds them.
+              ftsSchemas: AGENT_FTS_SCHEMAS,
             }
           : undefined,
       // The rehearsal is private and disposable; compaction would create another
@@ -656,6 +610,14 @@ export async function snapshotUpdateCandidateState(
         ? {
             transform: (db: DatabaseSync) => {
               contentVersion = readStateSchemaContentVersion(db);
+              // Preserve the known source selector before rehearsal changes the state root.
+              // The migration still refuses an unmatched historical partition.
+              if (sourceStoreKey && tableExists(db, "config_machine_state")) {
+                migrateCronDefaultStoreIdentity(db, {
+                  previousVersion: contentVersion ?? userVersion,
+                  legacyDefaultStoreKey: sourceStoreKey,
+                });
+              }
               const queries = getNodeSqliteKysely<CandidateStateDatabase>(db);
               execApprovals.rebaseReceipt(db);
               // Source process leases cannot own the independently opened rehearsal copy.

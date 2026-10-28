@@ -27,12 +27,16 @@ const scratchFile = (name) => path.join(scratchRoot, name);
 const ERROR_DETAIL_TAIL_BYTES = 16 * 1024;
 
 function readClawHubPreflightLimits() {
+  const timeoutMs = readPositiveIntEnv("OPENCLAW_PLUGINS_E2E_CLAWHUB_PREFLIGHT_TIMEOUT_MS", 30_000);
+  if (timeoutMs > 2_147_483_647) {
+    throw new Error(`invalid OPENCLAW_PLUGINS_E2E_CLAWHUB_PREFLIGHT_TIMEOUT_MS: ${timeoutMs}`);
+  }
   return {
     bodyMaxBytes: readPositiveIntEnv(
       "OPENCLAW_PLUGINS_E2E_CLAWHUB_PREFLIGHT_BODY_MAX_BYTES",
       1024 * 1024,
     ),
-    timeoutMs: readPositiveIntEnv("OPENCLAW_PLUGINS_E2E_CLAWHUB_PREFLIGHT_TIMEOUT_MS", 30_000),
+    timeoutMs,
   };
 }
 

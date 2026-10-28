@@ -1,17 +1,20 @@
-import { createHash } from "node:crypto";
+import { spawn } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { Worker } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
+import { sqliteFamilyHashes as familyHashes } from "../../test/helpers/sqlite-family-hashes.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { sourceHostPluginConflict } from "../claws/plugin-capability-probe.js";
+import { captureConfigHealthStateStore } from "../config/io.health-state.js";
 import {
   resolveConfigWidePluginMetadataSnapshot,
   resolveConfigWidePluginMetadataSnapshotAsync,
 } from "../config/io.plugin-metadata.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { resolveRuntimeWorkerThreadExecArgv } from "../infra/runtime-worker-url.js";
+import { SqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
+import { sqliteWorkerPreloadEnv } from "../infra/sqlite-worker-preload.test-support.js";
 import { migrateLegacyConfigMachineState } from "../infra/state-migrations.config-machine-state.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
@@ -25,6 +28,8 @@ import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { sourceHostPluginConflict } from "../templates/plugin-capability-probe.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import * as bundledDiscovery from "./bundled-discovery-state.js";
 import {
@@ -106,16 +111,7 @@ async function seed(env: NodeJS.ProcessEnv, value: InstalledPluginIndex) {
   return database.path;
 }
 
-function familyHashes(databasePath: string) {
-  return ["", "-wal", "-shm", "-journal"].map((suffix) => {
-    const file = `${databasePath}${suffix}`;
-    return fs.existsSync(file)
-      ? [suffix, createHash("sha256").update(fs.readFileSync(file)).digest("hex")]
-      : [suffix, null];
-  });
-}
-
-it("prepares Claw metadata off-thread and observes committed inventory and policy changes", async () => {
+it("prepares Template metadata off-thread and observes committed inventory and policy changes", async () => {
   const env = environment();
   await seed(env, index());
   const pkg = {
@@ -464,6 +460,121 @@ it("preserves database-family bytes during ambient artifact-preserving async ins
   await withoutMainThreadSql(() => withArtifactPreservingStateReads(inspect));
   await closeOpenClawStateDatabaseAsync();
   expect(familyHashes(databasePath)).toEqual(before);
+});
+
+it("reads committed live startup metadata without space for a database snapshot", async () => {
+  const env = environment();
+  const databasePath = await seed(env, index());
+  const moduleUrl = (name: string) => new URL(name, import.meta.url).href;
+  const writer = spawn(
+    process.execPath,
+    [
+      ...resolveRuntimeWorkerThreadExecArgv(
+        new URL("../infra/gateway-state-owner.ts", import.meta.url),
+      ),
+      "--input-type=module",
+      "--eval",
+      `
+        import { DatabaseSync } from "node:sqlite";
+        import { acquireGatewayStateOwner } from ${JSON.stringify(moduleUrl("../infra/gateway-state-owner.ts"))};
+        import { defaultPayload } from ${JSON.stringify(moduleUrl("../infra/gateway-state-owner-record.ts"))};
+        const pathname = process.argv[1];
+        const owner = acquireGatewayStateOwner({
+          databasePath: pathname,
+          payload: { ...defaultPayload(pathname), role: "gateway" },
+        });
+        const database = new DatabaseSync(pathname);
+        database.exec("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE unrelated_payload(data BLOB)");
+        database.prepare("INSERT INTO config_health_entries(config_path, last_observed_suspicious_signature, updated_at_ms) VALUES (?, ?, ?)").run("/synthetic/openclaw.json", "preserved-health", 123);
+        process.on("message", value => {
+          database.exec("BEGIN IMMEDIATE; INSERT INTO unrelated_payload VALUES(zeroblob(1048576))");
+          if (value === "newer-schema") {
+            database.exec("PRAGMA user_version=2147483647");
+          } else {
+            database.prepare("UPDATE config_machine_state SET value_json=? WHERE state_key='plugins.installedIndex'").run(JSON.stringify(value));
+          }
+          database.exec("COMMIT");
+          process.send("committed");
+        });
+        process.on("disconnect", () => { database.close(); owner.release(); });
+        process.send("ready");
+      `,
+      databasePath,
+    ],
+    { stdio: ["ignore", "ignore", "pipe", "ipc"] },
+  );
+  let stderr = "";
+  writer.stderr?.on("data", (chunk: Buffer) => {
+    stderr += chunk.toString();
+  });
+  const closed = once(writer, "close");
+  const nextMessage = () =>
+    Promise.race([
+      once(writer, "message"),
+      closed.then(([code]) => {
+        throw new Error(`Synthetic metadata writer exited (${code}): ${stderr}`);
+      }),
+    ]);
+  try {
+    expect((await nextMessage())[0]).toBe("ready");
+    const preload = path.join(env.OPENCLAW_STATE_DIR, "no-snapshot-space.cjs");
+    fs.writeFileSync(
+      preload,
+      `
+        const fs = require("node:fs");
+        const original = fs.mkdtempSync;
+        fs.mkdtempSync = function (prefix, ...args) {
+          if (String(prefix).includes("openclaw-sqlite-readonly")) {
+            throw Object.assign(new Error("synthetic snapshot disk full"), { code: "ENOSPC" });
+          }
+          return original.call(this, prefix, ...args);
+        };
+        require("node:module").syncBuiltinESMExports();
+      `,
+    );
+    await withEnvAsync(sqliteWorkerPreloadEnv(preload), async () => {
+      await withoutMainThreadSql(async () => {
+        const health = await withArtifactPreservingStateReads(() =>
+          captureConfigHealthStateStore(
+            { env, homedir: () => env.OPENCLAW_STATE_DIR, logger: console },
+            "/synthetic/openclaw.json",
+          ).read(),
+        );
+        expect(health.state.entries?.["/synthetic/openclaw.json"]).toMatchObject({
+          lastObservedSuspiciousSignature: "preserved-health",
+        });
+        expect(health.basis?.["/synthetic/openclaw.json"]?.updatedAtMs).toBe(123);
+      });
+      for (const message of ["first committed inventory", "inventory after unrelated growth"]) {
+        const committed = nextMessage();
+        writer.send({ revision: 1, index: index(message) });
+        expect((await committed)[0]).toBe("committed");
+        await withoutMainThreadSql(() =>
+          withArtifactPreservingStateReads(() =>
+            withPluginCache(createPluginCache(), async () => {
+              expect((await readPersistedInstalledPluginIndex({ env }))?.diagnostics).toEqual([
+                { level: "warn", message },
+              ]);
+            }),
+          ),
+        );
+      }
+    });
+    const committed = nextMessage();
+    writer.send("newer-schema");
+    expect((await committed)[0]).toBe("committed");
+    await expect(
+      withArtifactPreservingStateReads(() =>
+        withPluginCache(createPluginCache(), () => readPersistedInstalledPluginIndex({ env })),
+      ),
+    ).rejects.toBeInstanceOf(SqliteSchemaVersionError);
+  } finally {
+    if (writer.connected) {
+      writer.disconnect();
+    }
+    const [code] = await closed;
+    expect(code, stderr).toBe(0);
+  }
 });
 
 it("reads retained metadata snapshots off-thread and sees committed writes after the scope", async () => {

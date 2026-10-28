@@ -2,7 +2,9 @@ import type { SessionsCompanionStateResult } from "../../../../packages/gateway-
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { shellViewport } from "../../app/shell-viewport.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import { canCallGatewayMethod, canPresentGatewayMethod } from "../../lib/gateway-methods.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
+import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
 import { uploadsEnabled, uploadsDisabledMessage } from "../../lib/uploads.ts";
 import type { ChatMobileHost, MobileHostDestination } from "./chat-mobile-host.ts";
@@ -14,8 +16,14 @@ import {
   requestSessionCompanionAnswer,
 } from "./chat-session-companion.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import { resolveChatAgentId } from "./chat-state-route.ts";
+import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
+import type { ChatProcessShowRequest } from "./components/chat-details-types.ts";
+import { reportChatComposerDraftStorageError } from "./composer-persistence-feedback.ts";
+import {
+  isIncognitoComposerScope,
+  resolveChatComposerDurableScope,
+} from "./composer-persistence-state.ts";
 import type { SidebarLayout, SidebarSlotId } from "./sidebar-layout-types.ts";
 import {
   closeSlot,
@@ -276,17 +284,35 @@ export abstract class ChatPaneSidePanels extends ChatPaneStateOwner {
   private sessionCompanionPresented = false;
   readonly companionIntents: {
     focusRequest?: () => boolean;
-    /** The subagent requested by the panel, or null for its list; taken once. */
+    /** The process instance or subagent requested by the panel, or null for its list; taken once. */
+    processesShowRequest?: () => ChatProcessShowRequest | undefined;
     subagentsShowRequest?: () => string | null | undefined;
     /** The narrow pane control to restore focus to; taken once by the region. */
     sideFocusOrigin?: () => HTMLElement | null;
   } = { focusRequest: undefined, subagentsShowRequest: undefined, sideFocusOrigin: undefined };
-  readonly sessionCompanionThreads = new ChatSessionCompanionThreads();
+  readonly sessionCompanionThreads = new ChatSessionCompanionThreads({
+    scope: (sessionKey, agentId) => {
+      const state = this.state;
+      if (!state) {
+        return null;
+      }
+      const conversation = resolveUiConversationIdentity(state, sessionKey, agentId);
+      if (isIncognitoComposerScope(state, conversation)) {
+        return null;
+      }
+      const scope = resolveChatComposerDurableScope(state, conversation);
+      return scope ? { ...scope, scopeKey: `comments:v1:${scope.scopeKey}` } : null;
+    },
+    onError: () => {
+      if (this.state) {
+        reportChatComposerDraftStorageError(this.state);
+      }
+    },
+  });
   protected readonly setSessionObserverVisibility = (visible: boolean) => {
-    const state = this.state;
-    if (state?.connected && state.client) {
-      void sendSessionObserverVisibility(state.client, visible).catch(() => undefined);
-    }
+    void sendSessionObserverVisibility(this.context.gateway.snapshot, visible).catch(
+      () => undefined,
+    );
   };
 
   protected restorePaneSidebarLayout(layout: SidebarLayout): SidebarLayout {
@@ -371,11 +397,16 @@ export abstract class ChatPaneSidePanels extends ChatPaneStateOwner {
     this.companionIntents.subagentsShowRequest = take;
     this.requestBackgroundPanel("subagents", "open");
     if (focus) {
-      void this.focusSubagentsPanel();
+      void this.focusSidePanel("subagents");
     }
   }
 
-  private async focusSubagentsPanel(): Promise<void> {
+  protected readonly openContextPanel = (): void => {
+    this.requestBackgroundPanel("context", "open");
+    void this.focusSidePanel("context");
+  };
+
+  private async focusSidePanel(slot: SidebarSlotId): Promise<void> {
     const state = this.state;
     if (!state) {
       return;
@@ -391,14 +422,23 @@ export abstract class ChatPaneSidePanels extends ChatPaneStateOwner {
       this.isConnected &&
       this.state === state &&
       state.sessionKey === sessionKey &&
-      this.isSlotShown(state.sidebarLayout, "subagents")
+      this.isSlotShown(state.sidebarLayout, slot)
     ) {
       region?.focusActiveSideTab({ preventScroll: true });
     }
   }
 
   /** The layout as this pane shows it, which a narrow pane decides for the background panels. */
-  protected presentSidebarLayout(layout: SidebarLayout): SidebarLayout {
+  protected presentSidebarLayout(savedLayout: SidebarLayout): SidebarLayout {
+    const layout =
+      !savedLayout.columns[0]?.panels.some((panel) => panel.slot === "companion") ||
+      canPresentGatewayMethod(
+        this.context.gateway.snapshot,
+        "sessions.companion.state",
+        "operator.read",
+      )
+        ? savedLayout
+        : closeSlot(savedLayout, "companion");
     const mobile = this.mobileHost(layout);
     if (mobile) {
       const next = ensureSidebarConversation(layout);
@@ -433,8 +473,9 @@ export abstract class ChatPaneSidePanels extends ChatPaneStateOwner {
   }
 
   protected requestBackgroundPanel(
-    slot: "subagents" | "processes",
+    slot: "subagents" | "processes" | "context",
     intent: "open" | "close" | "toggle",
+    processTarget?: ChatProcessShowRequest,
   ): void {
     const state = this.state;
     if (!state) {
@@ -446,6 +487,24 @@ export abstract class ChatPaneSidePanels extends ChatPaneStateOwner {
         (this.usesMobileHost
           ? this.isSlotShown(state.sidebarLayout, slot)
           : isSidebarSlotVisible(state.sidebarLayout, slot)));
+    if (slot === "processes" && !closing) {
+      const readIdentity = () =>
+        JSON.stringify([
+          gatewayPresentationScope(this.context.gateway).key,
+          this.state?.sessionKey,
+          this.state && resolveChatAgentId(this.state),
+          this.state && selectedChatSessionRow(this.state)?.sessionId,
+        ]);
+      const identity = readIdentity();
+      const target = processTarget ?? { instanceId: null, fromDetails: false };
+      const take = () => {
+        if (this.companionIntents.processesShowRequest === take) {
+          this.companionIntents.processesShowRequest = undefined;
+        }
+        return readIdentity() === identity ? target : undefined;
+      };
+      this.companionIntents.processesShowRequest = take;
+    }
     let origin: HTMLElement | null = null;
     if (!closing && this.paneWidth < SIDEBAR_NARROW_BREAKPOINT_PX) {
       // Desktop moves focus with the narrow region; the mobile dock retains
@@ -597,7 +656,17 @@ export abstract class ChatPaneSidePanels extends ChatPaneStateOwner {
 
   protected hydrateSessionCompanion(sessionKey: string): void {
     const state = this.state;
-    if (!state?.connected || !state.client || !sessionKey || parseCatalogSessionKey(sessionKey)) {
+    if (
+      !state?.connected ||
+      !state.client ||
+      !sessionKey ||
+      parseCatalogSessionKey(sessionKey) ||
+      !canCallGatewayMethod(
+        this.context.gateway.snapshot,
+        "sessions.companion.state",
+        "operator.read",
+      )
+    ) {
       return;
     }
     const agentId = resolveChatAgentId(state);

@@ -33,6 +33,9 @@ function decodeSessionEntryCurrentFacts(
       ...(deviceFolder ? { deviceFolder } : {}),
       sessionId: value.sessionId,
       createdVia: value.createdVia,
+      clientCapabilities: Array.isArray(value.clientCapabilities)
+        ? value.clientCapabilities.filter((cap): cap is string => typeof cap === "string")
+        : undefined,
       spawnedBy: value.spawnedBy,
       spawnDepth: value.spawnDepth,
       completionOwnerSessionKey: value.completionOwnerSessionKey,
@@ -57,8 +60,10 @@ function decodeSessionEntryCurrentFacts(
     ...(value.repositoryWorkspaceId === undefined
       ? {}
       : { repositoryWorkspaceId: value.repositoryWorkspaceId }),
+    goal: value.goal,
     lifecycleRevision: value.lifecycleRevision,
     lifecycleRunId: value.lifecycleRunId,
+    lastRunId: value.lastRunId,
     activeWriterRunId: value.activeWriterRunId,
     skillLibrarySelections: value.skillLibrarySelections,
     executionPolicy: value.executionPolicy,

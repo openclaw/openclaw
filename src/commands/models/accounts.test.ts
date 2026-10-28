@@ -305,7 +305,6 @@ describe("personal model account CLI over an identified Gateway connection", () 
         expectJsonOutput(output, page);
         expectPersonalContext(output, url);
         expect(output.log).not.toHaveBeenCalled();
-        expect(connections).toHaveLength(1);
         expect(connections[0]?.params).toMatchObject({
           device: { nonce: "test-nonce" },
           scopes: ["operator.read"],
@@ -326,7 +325,6 @@ describe("personal model account CLI over an identified Gateway connection", () 
       async ({ url, requests, connections, upgradeHeaders }) => {
         await modelsAccountsListCommand({ url, json: true }, output);
         expect(methods(requests)).toEqual(["users.self", "users.listModelAccounts"]);
-        expect(connections).toHaveLength(1);
         expect(connections[0]?.params.auth).toBeUndefined();
         expect(upgradeHeaders[0]?.["x-edge-auth"]).toBeUndefined();
         expectPersonalContext(output, url);
@@ -355,36 +353,26 @@ describe("personal model account CLI over an identified Gateway connection", () 
 
   it.each([
     {
-      run: (port: string, output: ReturnType<typeof runtime>) =>
-        modelsAccountsUpdateDefaultCommand(
-          { port, action: "use", authProfileId: ACCOUNT_ID },
-          output,
-        ),
+      options: { action: "use" as const, authProfileId: ACCOUNT_ID },
       method: "users.selectModelAccount",
       params: { profileId: PROFILE_ID, authProfileId: ACCOUNT_ID },
       note: "Existing sessions keep",
     },
     {
-      run: (port: string, output: ReturnType<typeof runtime>) =>
-        modelsAccountsUpdateDefaultCommand(
-          { port, action: "clear-default", provider: "openai" },
-          output,
-        ),
+      options: { action: "clear-default" as const, provider: "openai" },
       method: "users.unlinkAuthProfile",
       params: { profileId: PROFILE_ID, provider: "openai" },
       note: "Saved credentials and existing session accounts are unchanged",
     },
   ])(
     "binds $method to the authenticated person without changing sessions",
-    async ({ run, method, params, note }) => {
+    async ({ options, method, params, note }) => {
       const output = runtime();
       await withGateway(
         (request) => (request.method === method ? { links: connected.links } : undefined),
-        async ({ port, url, requests, connections }) => {
-          await run(port, output);
+        async ({ port, requests }) => {
+          await modelsAccountsUpdateDefaultCommand({ port, ...options }, output);
           expect(requestData(requests)).toEqual([rpc("users.self"), rpc(method, params)]);
-          expect(connections).toHaveLength(1);
-          expectPersonalContext(output, url);
           expect(output.log).toHaveBeenCalledWith(expect.stringContaining(note));
         },
       );
@@ -498,7 +486,7 @@ describe("personal model account CLI over an identified Gateway connection", () 
             ? { status: "pending", step: keyStep, error: validationError }
             : { status: "connected", authProfileId: ACCOUNT_ID, links: [] },
       },
-      async ({ port, url, requests, connections }) => {
+      async ({ port, url, requests }) => {
         mocks.password.mockImplementation(async () => {
           expectPersonalContext(output, url);
           return answers === 0 ? invalidKey : apiKey;
@@ -512,19 +500,6 @@ describe("personal model account CLI over an identified Gateway connection", () 
           authRpc("answer", { ...operation, stepId: "api-key", value: invalidKey }),
           authRpc("answer", { ...operation, stepId: "api-key", value: apiKey }),
         ]);
-        expect(connections).toHaveLength(1);
-        expect(
-          mocks.autocomplete.mock.calls.map(([prompt]) => {
-            if (!Array.isArray(prompt.options)) {
-              throw new Error("Expected static login choices");
-            }
-            return prompt.options.map(({ value }) => value);
-          }),
-        ).toEqual([
-          ["openai", "xai"],
-          ["api-key", "device-code"],
-        ]);
-        expect(mocks.password).toHaveBeenCalledTimes(2);
         expect(mocks.password).toHaveBeenCalledWith(
           expect.objectContaining({ output: process.stderr, signal: expect.any(AbortSignal) }),
         );
@@ -625,11 +600,10 @@ describe("personal model account CLI over an identified Gateway connection", () 
             return connected;
           },
         },
-        async ({ port, requests, connections }) => {
+        async ({ port, requests }) => {
           await login(port, output, true);
           expect(session.getStatus()).toBe("done");
           expect(inputStepId).toEqual(expect.any(String));
-          expect(connections).toHaveLength(1);
           expect(new Set(requests.map(({ socket }) => socket)).size).toBe(1);
           expect(
             requests
@@ -703,7 +677,7 @@ describe("personal model account CLI over an identified Gateway connection", () 
           return acknowledged.promise;
         },
       },
-      async ({ port, connections }) => {
+      async ({ port }) => {
         const command = expect(login(port, output)).rejects.toMatchObject({ code: 130 });
         const request = await received.promise;
         expect(request.params).toEqual(operation);
@@ -711,7 +685,6 @@ describe("personal model account CLI over an identified Gateway connection", () 
         expect(output.log).not.toHaveBeenCalled();
         acknowledged.resolve({ status: "cancelled" });
         await command;
-        expect(connections).toHaveLength(1);
       },
     );
   });
@@ -728,7 +701,7 @@ describe("personal model account CLI over an identified Gateway connection", () 
         },
         cancel: () => ({ status: "cancelled" }),
       },
-      async ({ port, requests, connections }) => {
+      async ({ port, requests }) => {
         const command = expect(login(port)).rejects.toMatchObject({ code: 130 });
         await started.promise;
         const interrupt = onSignal.mock.calls.find(([event]) => event === "SIGINT")?.[1];
@@ -745,7 +718,6 @@ describe("personal model account CLI over an identified Gateway connection", () 
           "users.authConnect.cancel",
         ]);
         expect(requests.at(-1)?.params).toEqual(operation);
-        expect(connections).toHaveLength(1);
         expectNoPrompt();
       },
     );

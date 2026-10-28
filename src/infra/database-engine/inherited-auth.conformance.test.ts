@@ -2,9 +2,18 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { createServer } from "node:http";
 import { getEnvironmentData } from "node:worker_threads";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { Client } from "pg";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { rawDataToString } from "../../../packages/gateway-client/src/websocket-data.js";
+import { WebSocket } from "../../../packages/gateway-client/src/websocket.js";
+import type { ResponseFrame } from "../../../packages/gateway-protocol/src/schema/frames.js";
+import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
 import { readRequestText } from "../../../test/helpers/gateway-integration-fixtures.js";
+import {
+  acquireGatewayTestWebSocket,
+  closeGatewayTestWebSocket,
+} from "../../../test/helpers/gateway-websocket.js";
 import { withinTest } from "../../../test/helpers/promise.js";
 import { resolveSharedAuthStoreOwnership } from "../../agents/auth-profiles/path-resolve.js";
 import { resolveAuthProfileDatabasePath } from "../../agents/auth-profiles/sqlite.js";
@@ -18,11 +27,21 @@ import {
 import { resetPreparedModelCatalogStateForTest } from "../../agents/prepared-model-runtime.test-support.js";
 import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../../config/io.js";
 import { resetConfigRuntimeState } from "../../config/runtime-snapshot.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { stageSessionPendingInput } from "../../config/sessions/session-accessor.pending-inputs.js";
+import * as recoveryEntries from "../../config/sessions/session-entry-read-maintenance.js";
+import { listSessionPendingInputs } from "../../config/sessions/session-pending-input-history.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createOperatorRecoveryFixture } from "../../gateway/operator-run-recovery.test-support.js";
 import { installGatewayDatabaseEngine } from "../../gateway/server-database-engine.js";
+import {
+  createChatInputRecovery,
+  normalizeChatSendRequest,
+} from "../../gateway/server-methods/chat-send-request.js";
 import {
   catalogReply,
   catalogSessionRpc,
+  createCatalogModel,
   expectAssistantReply,
 } from "../../gateway/server-methods/models-catalog-fixture.test-support.js";
 import {
@@ -31,6 +50,8 @@ import {
   listenModelsEndpoint,
   startModelsGateway,
 } from "../../gateway/server-methods/models-integration.test-support.js";
+import { createContext } from "../../gateway/server-plugin-in-process-dispatch.test-support.js";
+import { loadOrCreateDeviceIdentityAsync } from "../../infra/device-identity-async.js";
 import { clearSecretsRuntimeSnapshot } from "../../secrets/runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
@@ -41,11 +62,13 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { assertOpenClawDatabasesReady } from "../../state/openclaw-database-preflight.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { acquireStateDatabaseSchemaLease } from "../gateway-state-owner.js";
+import { dropPostgresTestSchemas } from "../postgres-sync/schema-cleanup.test-support.js";
 import { retireSqliteDatabaseAdmissionForPath } from "../sqlite-database-admission.js";
 import { sqliteWorkerPreloadEnv } from "../sqlite-worker-preload.test-support.js";
-import { withEngineStoreAdmission } from "./admission-scope.js";
+import { withEngineStoreAdmission as admit } from "./admission-scope.js";
 import { resetDatabaseEngineSelectionForTest } from "./context.test-support.js";
 
 const configured: unknown = getEnvironmentData("openclaw.test.state.conformance.connection");
@@ -56,22 +79,31 @@ const localProfile = `${localProvider}:local`;
 const inheritedProfile = `${inheritedProvider}:inherited`;
 const localKey = "synthetic-inheritauth-local-key";
 const inheritedKey = "synthetic-inheritauth-owner-key";
+const ownerMarkers = (messages: Array<{ role: string; content: unknown }>) =>
+  messages.flatMap((message) =>
+    message.role === "user"
+      ? ["SAVED_OWNER", "FRESH_OWNER"].filter((marker) =>
+          JSON.stringify(message.content ?? null).includes(marker),
+        )
+      : [],
+  );
 
-function currentMainSnapshot() {
+function currentAgentSnapshot(agentId = "main") {
   const input = listConfiguredOwnerInputs(getRuntimeConfig(), undefined, true).find(
-    (entry) => entry.agentId === "main",
+    (entry) => entry.agentId === agentId,
   );
   return input && getPreparedModelRuntimeSnapshot(input);
 }
 
 async function closeDatabases() {
-  withEngineStoreAdmission(() => closeOpenClawAgentDatabasesForTest());
+  admit(() => closeOpenClawAgentDatabasesForTest());
   await closeOpenClawAgentDatabasesAsync();
   await closeStateDatabaseForTest();
 }
 
 describe.skipIf(!connection)("PostgreSQL inherited auth startup", () => {
-  it("publishes admitted agents without a pending owner's credentials and adds them on admission", async ({
+  // One real PostgreSQL startup, four model turns, and deferred saved-input recovery.
+  it("serves admitted agents and replays a deferred owner's saved input before fresh input", async ({
     signal,
   }) => {
     const prefix = `inheritauth_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
@@ -118,8 +150,16 @@ process.emit = function(event, ...args) {
       vi.stubEnv(key, value);
     }
     let gateway: Awaited<ReturnType<typeof startModelsGateway>> | undefined;
+    let probe: WebSocket | undefined;
     let unsubscribe: (() => void) | undefined;
+    const recoveryEntered = createDeferredCore();
+    const releaseRecovery = createDeferredCore();
+    const savedInputStarted = createDeferredCore();
+    const freshInputStarted = createDeferredCore();
+    const releaseSavedInput = createDeferredCore();
     const requests: Array<{ authorization: string | undefined; body: string }> = [];
+    const ownerInputOrder: string[] = [];
+    const ownerAuthorizations: Array<string | undefined> = [];
     const providerErrors: unknown[] = [];
     const providerWork: Promise<void>[] = [];
     const endpoint = createServer((request, response) => {
@@ -128,12 +168,28 @@ process.emit = function(event, ...args) {
           response.writeHead(404).end();
           return;
         }
+        const body = await readRequestText(request);
         requests.push({
           authorization: request.headers.authorization,
-          body: await readRequestText(request),
+          body,
         });
+        const messages = (
+          JSON.parse(body) as { messages: Array<{ role: string; content: unknown }> }
+        ).messages;
+        // Runtime context may follow the actual user input.
+        const ownerInput = ownerMarkers(messages).at(-1);
+        if (ownerInput) {
+          ownerInputOrder.push(ownerInput);
+          ownerAuthorizations.push(request.headers.authorization);
+        }
+        if (ownerInput === "SAVED_OWNER") {
+          savedInputStarted.resolve();
+          await withinTest(releaseSavedInput.promise, signal);
+        } else if (ownerInput === "FRESH_OWNER") {
+          freshInputStarted.resolve();
+        }
         response.writeHead(200, { "content-type": "text/event-stream" });
-        response.end(catalogReply("inherited-auth", "fixture", "INHERITOR_OK"));
+        response.end(catalogReply("inherited-auth", "fixture", `${ownerInput ?? "INHERITOR"}_OK`));
       })();
       providerWork.push(work);
       void work.catch((error: unknown) => {
@@ -144,13 +200,8 @@ process.emit = function(event, ...args) {
     try {
       const baseUrl = `${await listenModelsEndpoint(endpoint)}/v1`;
       const model = {
-        id: "fixture",
-        name: "Inherited auth fixture",
-        reasoning: false,
-        input: ["text" as const],
-        contextWindow: 32_768,
+        ...createCatalogModel("fixture", "Inherited auth fixture"),
         maxTokens: 1_024,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       };
       const cfg: OpenClawConfig = {
         database: {
@@ -174,7 +225,11 @@ process.emit = function(event, ...args) {
             skipBootstrap: true,
             workspace: state.workspaceDir,
           },
-          entries: { main: {}, owner: {} },
+          entries: {
+            main: {},
+            owner: { model: { primary: `${inheritedProvider}/fixture` } },
+            inheritor: { model: { primary: `${inheritedProvider}/fixture` } },
+          },
         },
         models: {
           mode: "replace",
@@ -201,7 +256,7 @@ process.emit = function(event, ...args) {
       await state.writeConfig(cfg);
       setRuntimeConfigSnapshot(cfg);
       await installGatewayDatabaseEngine();
-      withEngineStoreAdmission(() => {
+      admit(() => {
         const lease = acquireStateDatabaseSchemaLease(resolveOpenClawStateSqlitePath(state.env));
         try {
           lease.run(() => {
@@ -220,6 +275,81 @@ process.emit = function(event, ...args) {
           lease.release();
         }
       });
+      const profile = admit(() => ensureProfileForEmail("inherited-auth-recovery@example.test"));
+      const fixture = await createOperatorRecoveryFixture({
+        stateDir: state.stateDir,
+        context: createContext(),
+        profileId: profile.id,
+        config: cfg,
+        agentId: "owner",
+        sessionKey: "agent:owner:recovery-order",
+        sourceRunId: "saved-owner",
+        parentSessionKey: null,
+      });
+      await loadOrCreateDeviceIdentityAsync();
+      const normalized = await normalizeChatSendRequest({
+        client: fixture.client,
+        params: {
+          agentId: "owner",
+          sessionKey: fixture.target.sessionKey,
+          idempotencyKey: fixture.target.sourceRunId,
+          message: "SAVED_OWNER",
+          queueMode: "followup",
+          deliver: false,
+        },
+      });
+      if (!normalized.ok) {
+        throw new Error(normalized.error);
+      }
+      const requestFingerprint = expectDefined(
+        normalized.value.requestIdentity,
+        "saved owner input fingerprint",
+      );
+      const recovery = expectDefined(
+        createChatInputRecovery({
+          request: normalized.value,
+          source: fixture.entry.restartRecoveryOperatorSource,
+        }),
+        "saved owner input authority",
+      );
+      // This is saved input, without a separate interrupted predecessor to resume.
+      await replaceSessionEntry(fixture.target, {
+        sessionId: fixture.entry.sessionId,
+        updatedAt: Date.now(),
+        lifecycleRevision: fixture.entry.lifecycleRevision,
+        createdActor: fixture.entry.createdActor,
+      });
+      const receipt = expectDefined(
+        await stageSessionPendingInput(fixture.target, {
+          runId: fixture.target.sourceRunId,
+          requestFingerprint,
+          message: {
+            role: "user",
+            content: "SAVED_OWNER",
+            timestamp: Date.now(),
+            idempotencyKey: `${fixture.target.sourceRunId}:user`,
+            __openclaw: {
+              chatInputRecovery: recovery,
+              chatRequestIdentity: requestFingerprint,
+            },
+          },
+          assertCurrent() {},
+        }),
+        "durable saved owner input",
+      );
+      receipt.finish("interrupted");
+      await receipt.settled?.();
+      const owner = fixture.target;
+      const readRecoveryEntries = recoveryEntries.readPendingInputRecoveryEntriesInWorker;
+      vi.spyOn(recoveryEntries, "readPendingInputRecoveryEntriesInWorker").mockImplementation(
+        async (input) => {
+          if (input.agentId === "owner") {
+            recoveryEntered.resolve();
+            await withinTest(releaseRecovery.promise, signal);
+          }
+          return readRecoveryEntries(input);
+        },
+      );
       expect(resolveSharedAuthStoreOwnership(state.env)).toEqual({ location: "legacy-main" });
       const mainPath = resolveAuthProfileDatabasePath(state.agentDir());
       const ownerPath = resolveAuthProfileDatabasePath(state.agentDir("owner"));
@@ -240,33 +370,75 @@ process.emit = function(event, ...args) {
         gateway = await startModelsGateway(state, cfg, "inheritauth-token");
         await gateway.server.startupSettled;
         await admission.waitForAgentPreparation("main", { env: state.env, signal });
-        expect(readAgentDatabaseAdmissionRefusal("owner", { env: state.env })).toMatchObject({
+        const rpc = catalogSessionRpc(gateway.client);
+        // Session creation waits for ordinary startup methods, independently of chat recovery.
+        const session = await rpc.create(`${localProvider}/fixture`, "agent:main:pending-owner");
+        const pendingOwner = expectDefined(
+          readAgentDatabaseAdmissionRefusal("owner", { env: state.env }),
+          "pending owner admission",
+        );
+        expect(pendingOwner).toMatchObject({
           code: "agent-database-inspection-pending",
         });
-        const pendingReadiness = await fetch(`http://127.0.0.1:${gateway.port}/readyz`);
-        expect(pendingReadiness.status).toBe(503);
-        expect(await pendingReadiness.json()).toMatchObject({
-          ready: false,
-          coreReady: false,
-          failing: expect.arrayContaining(["chat-recovery"]),
+        probe = new WebSocket(`ws://127.0.0.1:${gateway.port}`);
+        const responses = new Map<string, ReturnType<typeof createDeferredCore<ResponseFrame>>>();
+        probe.on("message", (data) => {
+          const frame = JSON.parse(rawDataToString(data)) as ResponseFrame;
+          if (frame.type === "res") {
+            responses.get(frame.id)?.resolve(frame);
+          }
         });
-        const initial = currentMainSnapshot();
-        expect(initial).toBeDefined();
-        expect(initial!.inheritedAuthDir).toBe(state.agentDir("owner"));
-        expect(getPreparedModelRuntimeAuthStore(initial!)?.profiles).toEqual({
-          [localProfile]: { type: "api_key", provider: localProvider, key: localKey },
-        });
-        const rpc = catalogSessionRpc(gateway.client);
-        const session = await rpc.create(`${localProvider}/fixture`, "agent:main:pending-owner");
-        // The agent RPC is available while saved-input recovery still gates fresh chat.
-        const started = await gateway.client.request<{ runId: string; status: string }>("agent", {
-          agentId: "main",
-          sessionKey: session.key,
-          message: "Reply with INHERITOR_OK.",
+        await acquireGatewayTestWebSocket(probe, 5_000);
+        const socket = probe;
+        const requestProbe = (id: string, method: string, params: unknown) => {
+          const response = createDeferredCore<ResponseFrame>();
+          responses.set(id, response);
+          socket.send(JSON.stringify({ type: "req", id, method, params }));
+          return withinTest(response.promise, signal);
+        };
+        expect(
+          await requestProbe("connect", "connect", {
+            minProtocol: PROTOCOL_VERSION,
+            maxProtocol: PROTOCOL_VERSION,
+            client: { id: "gateway-client", version: "test", platform: "test", mode: "backend" },
+            role: "operator",
+            scopes: ["operator.admin"],
+            auth: { token: "inheritauth-token" },
+          }),
+        ).toMatchObject({ ok: true });
+        const ownerFreshInput = {
+          agentId: "owner",
+          sessionKey: owner.sessionKey,
+          message: "FRESH_OWNER",
+          idempotencyKey: "fresh-owner",
+          queueMode: "followup",
           deliver: false,
-          idempotencyKey: "pending-owner",
+        };
+        // Read the raw refusal: GatewayClient retries startup errors automatically.
+        expect(await requestProbe("owner-pending", "chat.send", ownerFreshInput)).toMatchObject({
+          ok: false,
+          error: {
+            code: "UNAVAILABLE",
+            retryable: true,
+            message: `${pendingOwner.reason}\n${pendingOwner.repairHint}`,
+          },
         });
-        expect(started.status).toBe("accepted");
+        await expect
+          .poll(async () => (await fetch(`http://127.0.0.1:${gateway!.port}/readyz`)).status, {
+            timeout: 20_000,
+          })
+          .toBe(200);
+        const initial = currentAgentSnapshot();
+        expect(initial).toBeDefined();
+        const initialInheritor = currentAgentSnapshot("inheritor");
+        expect(initialInheritor).toBeDefined();
+        expect(
+          getPreparedModelRuntimeAuthStore(initialInheritor!)?.profiles[inheritedProfile],
+        ).toBeUndefined();
+        expect(
+          getPreparedModelRuntimeAuthStore(initial!)?.profiles[inheritedProfile],
+        ).toBeUndefined();
+        const started = await rpc.send(session.key, "Reply with INHERITOR_OK.", "pending-owner");
         expect(await rpc.wait(started.runId)).toMatchObject({ status: "ok" });
         expectAssistantReply((await rpc.history(session.key)).messages, "INHERITOR_OK");
         expect(requests).toContainEqual({
@@ -280,7 +452,7 @@ process.emit = function(event, ...args) {
 
         const inheritedPublished = createDeferredCore();
         unsubscribe = registerPreparedModelRuntimePublicationListener((event) => {
-          const snapshot = currentMainSnapshot();
+          const snapshot = currentAgentSnapshot();
           if (
             event.phase === "published" &&
             snapshot &&
@@ -293,28 +465,59 @@ process.emit = function(event, ...args) {
         await withinTest(inheritedPublished.promise, signal);
         await admission.waitForAgentPreparation("owner", { env: state.env, signal });
         expect(readAgentDatabaseAdmissionRefusal("owner", { env: state.env })).toBeUndefined();
-        await expect
-          .poll(async () => (await fetch(`http://127.0.0.1:${gateway!.port}/readyz`)).status, {
-            timeout: 20_000,
-          })
-          .toBe(200);
-        const recovered = currentMainSnapshot();
+        await withinTest(recoveryEntered.promise, signal);
+        expect(await requestProbe("owner-recovering", "chat.send", ownerFreshInput)).toMatchObject({
+          ok: false,
+          error: { code: "UNAVAILABLE", retryable: true },
+        });
+        expect(ownerInputOrder).toEqual([]);
+        expect((await listSessionPendingInputs(owner)).items).toMatchObject([
+          { runId: owner.sourceRunId, state: "interrupted" },
+        ]);
+        const recovered = currentAgentSnapshot();
         expect(getPreparedModelRuntimeAuthStore(recovered!)?.profiles[inheritedProfile]).toEqual({
           type: "api_key",
           provider: inheritedProvider,
           key: inheritedKey,
         });
-        const recoveredStores = recovered!.createStores();
-        const inheritedModel = recoveredStores.modelRegistry.find(inheritedProvider, "fixture");
-        expect(inheritedModel).toBeDefined();
-        await expect(
-          recoveredStores.modelRegistry.getApiKeyAndHeaders(inheritedModel!),
-        ).resolves.toMatchObject({ apiKey: inheritedKey });
+        releaseRecovery.resolve();
+        await withinTest(savedInputStarted.promise, signal);
+        const fresh = await gateway.client.request<{ runId: string }>("chat.send", ownerFreshInput);
+        expect(ownerInputOrder).toEqual(["SAVED_OWNER"]);
+        releaseSavedInput.resolve();
+        expect(await rpc.wait(owner.sourceRunId)).toMatchObject({ status: "ok" });
+        await withinTest(freshInputStarted.promise, signal);
+        expect(await rpc.wait(fresh.runId)).toMatchObject({ status: "ok" });
+        expect(ownerInputOrder).toEqual(["SAVED_OWNER", "FRESH_OWNER"]);
+        expect(ownerAuthorizations).toEqual([`Bearer ${inheritedKey}`, `Bearer ${inheritedKey}`]);
+        const history = await rpc.history(owner.sessionKey);
+        expect(ownerMarkers(history.messages as Array<{ role: string; content: unknown }>)).toEqual(
+          ["SAVED_OWNER", "FRESH_OWNER"],
+        );
+        expect((await listSessionPendingInputs(owner)).items).toEqual([]);
+        const inheritor = await gateway.client.request<{ key: string }>("sessions.create", {
+          agentId: "inheritor",
+          model: `${inheritedProvider}/fixture`,
+          key: "agent:inheritor:admitted-owner",
+        });
+        const inheritedInput = "Reply with INHERITOR_OK after the owner is admitted.";
+        const inherited = await rpc.send(inheritor.key, inheritedInput, "admitted-owner");
+        expect(await rpc.wait(inherited.runId)).toMatchObject({ status: "ok" });
+        expect(
+          requests.find((request) => request.body.includes(inheritedInput))?.authorization,
+        ).toBe(`Bearer ${inheritedKey}`);
+        expectAssistantReply((await rpc.history(inheritor.key)).messages, "INHERITOR_OK");
+        expect(providerErrors).toEqual([]);
       });
     } finally {
       unsubscribe?.();
       signal.removeEventListener("abort", releaseInspection);
       releaseInspection();
+      releaseRecovery.resolve();
+      releaseSavedInput.resolve();
+      if (probe) {
+        await closeGatewayTestWebSocket(probe);
+      }
       await gateway?.close();
       endpoint.closeAllConnections();
       if (endpoint.listening) {
@@ -322,19 +525,14 @@ process.emit = function(event, ...args) {
       }
       await Promise.allSettled(providerWork);
       await closeDatabases();
-      const schemas = await database.query<{ nspname: string }>(
-        "SELECT nspname FROM pg_namespace WHERE starts_with(nspname, $1)",
-        [prefix + "_"],
-      );
-      for (const { nspname } of schemas.rows) {
-        await database.query(`DROP SCHEMA "${nspname.replaceAll('"', '""')}" CASCADE`);
-      }
+      await dropPostgresTestSchemas(database, prefix);
       await database.end();
       await state.cleanup();
       clearSecretsRuntimeSnapshot();
       await resetPreparedModelCatalogStateForTest();
       resetDatabaseEngineSelectionForTest();
       resetConfigRuntimeState();
+      vi.restoreAllMocks();
     }
-  }, 90_000);
+  }, 270_000);
 });

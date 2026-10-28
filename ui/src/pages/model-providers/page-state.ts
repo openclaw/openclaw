@@ -18,20 +18,3 @@ export type ModelProvidersState = {
   /** Advances on a forced refresh so each account row re-reads its plan limits. */
   accountUsageRevision: number;
 };
-
-export function createModelProvidersState(): ModelProvidersState {
-  return {
-    data: null,
-    busy: {},
-    messages: {},
-    probeResults: {},
-    keyEditorProvider: null,
-    keyDraft: "",
-    profileOrders: {},
-    addProviderId: "",
-    addProviderKey: "",
-    defaultsDraft: null,
-    selectedAgentId: "",
-    accountUsageRevision: 0,
-  };
-}

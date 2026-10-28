@@ -206,7 +206,11 @@ async function runDoctorHealthFlowWithResult(
     const automaticHeartbeatRepair = await prepareAutomaticHeartbeatRepair(options);
     // Published updater markers opt only custody and backup into maintenance.
     const maintenanceOptions = automaticHeartbeatRepair ? { ...options, repair: true } : options;
-    if (options.repair === true || options.yes === true || interactiveRepair) {
+    // Standalone Doctor warms archives before stopping the Gateway; update already owns the stop.
+    if (
+      !repairMode.updateInProgress &&
+      (options.repair === true || options.yes === true || interactiveRepair)
+    ) {
       preparedArchiveDiscovery = await measure("doctor.archive-preparation", () =>
         startup.prepareDoctorMaintenanceArchives(
           databasePreflight,
@@ -228,6 +232,7 @@ async function runDoctorHealthFlowWithResult(
         assertCurrent: writeAuthority?.assertCurrent,
         databaseGenerations: writeAuthority?.databaseGenerations,
         databasePluginOwners: writeAuthority?.databasePluginOwners,
+        serviceInspectionDeadlineAtMs: writeAuthority?.serviceInspectionDeadlineAtMs,
         beforeStateMutation: createDoctorOriginalCaptureHook({
           root,
           runtime: repairRuntime,
@@ -301,6 +306,21 @@ async function runDoctorHealthFlowWithResult(
           },
         }),
       );
+
+      const { prepareDoctorClientCredentials } =
+        await import("../commands/doctor-client-credentials.js");
+      if (
+        !(await prepareDoctorClientCredentials({
+          runtime: doctorRuntime,
+          options,
+          prompter,
+          maintenanceActive: maintenance !== undefined,
+          schemas,
+        }))
+      ) {
+        exitCode = 1;
+        return undefined;
+      }
 
       if (maintenance && (options.repair === true || options.yes === true)) {
         const repairedState = await measure("doctor.state-database-repair", () =>

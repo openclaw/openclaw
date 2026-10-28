@@ -22,6 +22,7 @@ import {
   type OpenClawTestState,
 } from "../../../test-utils/openclaw-test-state.js";
 import { createDoctorPrompter } from "../../doctor-prompter.js";
+import { createTestModelDefinition } from "../../test-runtime-config-helpers.js";
 import { maybeRepairCodexSessionRoutes } from "./codex-route-session-repair.js";
 import { maybeRepairProviderRenameCronJobs } from "./provider-rename-state.js";
 import {
@@ -44,15 +45,7 @@ function sourceConfig(): OpenClawConfig {
           baseUrl: "https://ollama.com",
           api: "ollama",
           apiKey: { source: "env", provider: "default", id: "OLLAMA_API_KEY" },
-          models: ["previous", "override", "origin"].map((id) => ({
-            id,
-            name: id,
-            reasoning: false,
-            input: ["text"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 8192,
-            maxTokens: 4096,
-          })),
+          models: ["previous", "override", "origin"].map((id) => createTestModelDefinition(id)),
         },
       },
     },
@@ -286,8 +279,8 @@ describe("persisted provider rename", () => {
       const before = readEntries();
       const args = { cfg, env: state.env, providerRenames: renames, providerRenameOnly: true };
       expect(
-        (await maybeRepairCodexSessionRoutes({ ...args, shouldRepair: true })).repairedSessions,
-      ).toBe(4);
+        (await maybeRepairCodexSessionRoutes({ ...args, shouldRepair: true })).changes[0],
+      ).toContain("in 4 sessions across ");
       const changes: Record<string, Partial<SessionEntry>> = {
         paired: selection("ollama-cloud", "model:cloud", "other:cloud"),
         full: selection("ollama-cloud", "ollama-cloud/model:cloud", "ollama-cloud/other:cloud"),

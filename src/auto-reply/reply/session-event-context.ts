@@ -1,4 +1,3 @@
-import { GATEWAY_OWNER_PROFILE_ID } from "../../../packages/gateway-protocol/src/schema/users.js";
 import { resolveConfiguredAgentId } from "../../agents/agent-scope-config.js";
 import { getRuntimeConfigSnapshotMetadata } from "../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
@@ -7,7 +6,9 @@ import { createCronExecutionId } from "../../cron/run-id.js";
 import { resolveCreatorSandbox } from "../../gateway/operator-role-policy.js";
 import { readExecRequestOwners } from "../../infra/exec-request-context.js";
 import { channelRouteTargetsMatchExact } from "../../plugin-sdk/channel-route.js";
+import { normalizeAccountId } from "../../routing/account-id.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { CRON_EXECUTION_SOURCE_TOOL } from "../../sessions/input-provenance.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { bindCommandOwnerAuthority } from "../command-owner-authority.js";
@@ -15,8 +16,10 @@ import type { MsgContext } from "../templating.js";
 import type { SessionEventOptions, SessionEventTarget } from "./session-event-contract.js";
 import {
   getSessionEventRuntimeConfig,
+  readSessionEventTargetCommandOwner,
   readSessionEventTargetEnvironment,
   readSessionEventTargetOperatorAuthority,
+  readSessionEventTargetOwnerContinuation,
   resolveSessionEventKey,
 } from "./session-event-target.js";
 import { setChannelSourceTurnId } from "./source-turn-id.js";
@@ -88,7 +91,7 @@ export function buildSessionEventContext(params: {
     CommandAuthorized: false,
     InputProvenance: {
       kind: "internal_system",
-      sourceTool: options.source,
+      sourceTool: automation ? CRON_EXECUTION_SOURCE_TOOL : options.source,
       ...(automation && automation.job.state.runningAtMs !== undefined
         ? {
             jobId: automation.job.id,
@@ -127,15 +130,16 @@ export function buildSessionEventContext(params: {
   }
   const operatorAuthority = automation?.controlUiAdmin
     ? automation.operatorAuthority
-    : options.source === "plugin"
+    : options.source === "plugin" || options.source === "tool_handoff"
       ? readSessionEventTargetOperatorAuthority(target)
       : undefined;
   if (
     operatorAuthority &&
-    (automation?.controlUiAdmin || operatorAuthority.profileId === GATEWAY_OWNER_PROFILE_ID)
+    (automation?.controlUiAdmin || readSessionEventTargetOwnerContinuation(target))
   ) {
-    // Plugin handoffs continue their captured owner capability while retaining
-    // internal provenance and the event text's existing command authorization.
+    // A tool handoff resumes the yielded turn: it continues that turn's own owner decision
+    // under the same live operator source, retaining internal provenance and the event
+    // text's existing command authorization. Non-owner and system turns never gain it.
     bindCommandOwnerAuthority(ctx, {
       operatorAuthority,
       isCurrent: () => {
@@ -143,6 +147,30 @@ export function buildSessionEventContext(params: {
         return true;
       },
     });
+  } else {
+    const commandOwner = readSessionEventTargetCommandOwner(target);
+    if (commandOwner) {
+      const { authority, requester } = commandOwner;
+      // A continuation of the requester's own work keeps their owner tools only while
+      // they are still an owner under the current config.
+      bindCommandOwnerAuthority(ctx, {
+        recoveryReference: authority.recoveryReference,
+        isCurrent: () => {
+          params.assertCurrent();
+          return authority.isCurrent(getSessionEventRuntimeConfig());
+        },
+      });
+      // Owner-checked effects (for example Gateway maintenance) recheck this sender at
+      // use. Project it only on the requester's own channel account, never across
+      // channels where the same raw ID can name someone else.
+      if (
+        deliveryContext?.channel === requester.channel &&
+        normalizeAccountId(deliveryContext.accountId) === normalizeAccountId(requester.accountId)
+      ) {
+        ctx.SenderId = requester.senderId;
+        ctx.SenderE164 = requester.senderE164;
+      }
+    }
   }
   setChannelSourceTurnId(ctx, options.sourceTurnId);
   return ctx;

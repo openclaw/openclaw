@@ -1,7 +1,9 @@
 import path from "node:path";
+import { withNodeRuntimePath } from "../../../node-runtime-env.mjs";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { isBunRuntime } from "../../daemon/runtime-binary.js";
+import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
 import { createLowDiskSpaceWarning } from "../../infra/disk-space.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { SqliteReadOnlyInspectionContentionError } from "../../infra/sqlite-readonly-worker-protocol.js";
@@ -28,6 +30,7 @@ import {
   resolveNpmLifecyclePolicyGate,
   type ResolvedGlobalInstallTarget,
 } from "../../infra/update-global.js";
+import { resolveNativePackageProjectRoot } from "../../infra/update-native-package-owner.js";
 import { createUpdatePreflightFailure } from "../../infra/update-preflight-details.js";
 import { isFailedUpdateStep, updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
 import {
@@ -130,6 +133,19 @@ export async function resolveUpdateCommandTarget(
           recordUpdateCommandTarget(opts.run, { step });
         }
       };
+      const recordNodeSecurityWarning = (warning: string) => {
+        recordPreflightStep({
+          name: "node-security-patch",
+          command: "inspect Node.js security patch level",
+          cwd: root,
+          durationMs: 0,
+          exitCode: 0,
+          warnings: [warning],
+        });
+      };
+      if (prepared.nodeSecurityWarning) {
+        recordNodeSecurityWarning(prepared.nodeSecurityWarning);
+      }
       const resolveMode = async (): Promise<UpdateRunResult["mode"]> => {
         // Policy/config refusals can precede target preparation. Inspect their owner too.
         return updateInstallKind === "git"
@@ -235,7 +251,7 @@ export async function resolveUpdateCommandTarget(
         !legacyConfigPlan &&
         !usesCandidateUpdateAdmission(opts, installKind)
       ) {
-        const failure = createUpdateConfigFailure(configSnapshot);
+        const failure = createUpdateConfigFailure(configSnapshot, configReadFailure);
         await refuseUpdate(failure.reason, failure.message, failure.failureFacts);
         return undefined;
       }
@@ -278,7 +294,7 @@ export async function resolveUpdateCommandTarget(
         updateInstallKind !== "package" &&
         usesCandidateUpdateAdmission(opts, installKind)
       ) {
-        const failure = createUpdateConfigFailure(configSnapshot);
+        const failure = createUpdateConfigFailure(configSnapshot, configReadFailure);
         await refuseUpdate(failure.reason, failure.message, failure.failureFacts);
         return undefined;
       }
@@ -444,6 +460,10 @@ export async function resolveUpdateCommandTarget(
           pkgOwnership,
         });
         packageInstallEnv = await createGlobalInstallEnv(undefined, packageInstallTarget);
+        if (packageUpdateNodeRunner) {
+          // Candidate staging runs npm lifecycle scripts before the runtime preflight rebinds PATH.
+          packageInstallEnv = withNodeRuntimePath(packageInstallEnv, packageUpdateNodeRunner);
+        }
         if (packageInstallTarget.manager === "npm") {
           const destination = await inspectNpmGlobalDestination(root, packageInstallTarget);
           if (destination.kind !== "owned" && destination.kind !== "empty") {
@@ -614,6 +634,13 @@ export async function resolveUpdateCommandTarget(
           );
           return undefined;
         }
+        if (
+          runtime.value.nodeSecurityWarning &&
+          runtime.value.nodeSecurityWarning !== prepared.nodeSecurityWarning
+        ) {
+          warn(`SECURITY WARNING: ${runtime.value.nodeSecurityWarning}`);
+          recordNodeSecurityWarning(runtime.value.nodeSecurityWarning);
+        }
       }
 
       // No-op updates need no candidate snapshot; package-space warnings remain advisory above.
@@ -626,10 +653,16 @@ export async function resolveUpdateCommandTarget(
       ) {
         const env = opts.run?.env ?? process.env;
         const source = await readUpdateCandidateSource(env, legacyConfigPlan);
+        const backupProject =
+          packageInstallTarget &&
+          resolveNativePackageProjectRoot(packageInstallTarget, packageInstallEnv ?? env);
         const snapshot = await assessInitialUpdateSnapshotCapacity({
           config: source.config,
           stateDir: resolveStateDir(env),
           env,
+          backupDirectory: backupProject
+            ? path.dirname(resolvePathViaExistingAncestorSync(backupProject))
+            : (packageInstallTarget?.globalRoot ?? path.dirname(root)),
         });
         opts.run?.executorFence?.assertCurrent();
         recordPreflightStep(snapshot);

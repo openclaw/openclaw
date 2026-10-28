@@ -61,6 +61,10 @@ export function continueStalledReplyTurn({
   runFollowupTurn: FinalizeReplyAgentRunInput["runFollowupTurn"];
   guidance?: string;
 }): boolean {
+  // A rerun would hit the same saturated quota.
+  if (replyOperation.staleExpiryReason === "rate_limited") {
+    return false;
+  }
   // Preflight can stall before admission persists the request. Transcript-only
   // recovery cannot answer that input; leave its notice with dispatch.
   if (
@@ -134,6 +138,7 @@ type ExecutePreparedReplyAgentRunInput = Omit<
     isRestartRecoveryArmed: () => Promise<boolean>;
     onCompactionNoticePayload: (payload: ReplyPayload) => void;
     preflightCompactionApplied: boolean;
+    recoveryMemoryFlushAttempted?: boolean;
     setRunFollowupTurn: (runner: FinalizeReplyAgentRunInput["runFollowupTurn"]) => void;
     shouldEmitToolOutput: () => boolean;
     shouldEmitToolResult: () => boolean;

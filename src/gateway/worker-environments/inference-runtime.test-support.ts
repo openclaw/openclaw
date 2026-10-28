@@ -30,6 +30,7 @@ import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
 import { getPluginRuntimeGenerationRegistry } from "../../plugins/runtime/generation-scope.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
+import { createWorkerConnectionIdentity } from "./connection-identity.test-support.js";
 import type { WorkerInferenceExecutionParams } from "./inference-runtime.js";
 import { executeWorkerInference } from "./inference.js";
 import * as workerTurnOwners from "./placement-turn-claim-events.js";
@@ -95,24 +96,19 @@ export const sessionEntry: SessionEntry = {
   authProfileOverride: PROFILE,
   authProfileOverrideSource: "user",
 };
-const identity: WorkerConnectionIdentity = {
-  environmentId: "environment-runtime-test",
+const turnClaim: NonNullable<WorkerConnectionIdentity["turnClaim"]> = {
+  sessionId: SESSION_ID,
+  claimId: "claim-runtime-test",
+  runId: "run-runtime-test",
+  placementGeneration: 4,
+  owner: { kind: "worker", environmentId: "environment-runtime-test", ownerEpoch: 3 },
+};
+const identity: WorkerConnectionIdentity = createWorkerConnectionIdentity(turnClaim, {
   credentialHash: ["credential", "hash", "runtime", "test"].join("-"),
   bundleHash: "bundle-hash-runtime-test",
-  sessionId: SESSION_ID,
-  runId: "run-runtime-test",
-  turnClaim: {
-    sessionId: SESSION_ID,
-    claimId: "claim-runtime-test",
-    runId: "run-runtime-test",
-    placementGeneration: 4,
-    owner: { kind: "worker", environmentId: "environment-runtime-test", ownerEpoch: 3 },
-  },
-  ownerEpoch: 3,
-  rpcSetVersion: 1,
   protocolFeatures: ["worker-inference-v1"],
   credentialExpiresAtMs: 100_000,
-};
+});
 export const usage: Usage = {
   input: 11,
   output: 7,

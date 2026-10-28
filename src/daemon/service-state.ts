@@ -198,11 +198,15 @@ async function readGatewayServiceStateWithBinding(
   const managerAbsent = absent && service.readCommand === readSystemdServiceExecStart;
   systemdReadBinding?.verify();
   let commandInspection: GatewayServiceCommandInspection | undefined;
+  let effectiveExecutable: string | undefined;
   let command: GatewayServiceCommandConfig | null = null;
   if (!absent) {
     const scheduledTask = service.readCommand === readScheduledTaskCommand;
     const readOptions = {
       timeoutMs: remainingTimeoutMs("effective service command"),
+      onEffectiveExecutable: (executable: string) => {
+        effectiveExecutable = executable;
+      },
       ...(scheduledTask ? { requireLoaded: true } : {}),
       ...(systemdReadTarget ? { systemdReadTarget } : {}),
     };
@@ -394,5 +398,12 @@ async function readGatewayServiceStateWithBinding(
     }
     return deadlineDiagnosticState(state, error);
   }
-  return state;
+  // Later failed or expired inspection cannot promote an earlier executable observation.
+  return command &&
+    commandInspection?.kind !== "unavailable" &&
+    loadState.status !== "unknown" &&
+    runtime?.status !== "unknown" &&
+    effectiveExecutable
+    ? { ...state, effectiveExecutable }
+    : state;
 }

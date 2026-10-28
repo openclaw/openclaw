@@ -127,7 +127,8 @@ function prependFailedExec(
   turn.attempt.itemLifecycle = { startedCount: 2, completedCount: 2, activeCount: 0 };
 }
 
-it.each(["message", "error code", "exec refusal"])(
+const MALFORMED_ARGS = "Provider completed tool call with malformed JSON arguments";
+it.each(["message", "error code", "gateway diagnostic", "exec refusal"])(
   "continues once after settled tools (%s)",
   async (shape) => {
     const refused = shape === "exec refusal";
@@ -135,12 +136,11 @@ it.each(["message", "error code", "exec refusal"])(
       ? await refusedExecThenRejectedCall()
       : rejectedCallAfterSettledTool(
           {},
-          shape === "error code"
-            ? {
-                errorMessage: "Provider completed tool call with malformed JSON arguments",
-                errorCode: "malformed_tool_call_arguments",
-              }
-            : {},
+          shape === "message"
+            ? {}
+            : shape === "error code"
+              ? { errorMessage: MALFORMED_ARGS, errorCode: "malformed_tool_call_arguments" }
+              : { errorMessage: "Upstream returned invalid tool input for 'exec'." },
         );
     if (!refused) {
       expect(turn.attempt.replayMetadata.hadPotentialSideEffects).toBe(true);
@@ -171,6 +171,36 @@ it.each(["message", "error code", "exec refusal"])(
     expect(activateInternalPrompt).toHaveBeenCalledOnce();
   },
 );
+
+it("continues once when the rejected call followed visible progress text", async () => {
+  const turn = rejectedCallAfterSettledTool(
+    {},
+    {
+      api: "openai-responses",
+      provider: "minimax-tp",
+      model: "MiniMax-M3.1-Flash",
+      stopReason: "error",
+      errorCode: "malformed_tool_call_arguments",
+      errorMessage: "Responses stream completed tool call with invalid JSON arguments",
+      content: [{ type: "text", text: "Progress: checking the weekly report." }],
+    },
+  );
+  const { resolve, activateInternalPrompt } = terminalCase(turn);
+  await expect(resolve()).resolves.toEqual({ action: "retry" });
+  expect(activateInternalPrompt).toHaveBeenCalledExactlyOnceWith(
+    expect.stringContaining("do not repeat it"),
+  );
+});
+
+it("continues after a consumed preflight refusal with visible progress text", async () => {
+  const turn = await refusedExecThenRejectedCall();
+  turn.attemptAssistant.content = [
+    { type: "text", text: "Progress: retrying the inspection after the refusal." },
+  ];
+  const { resolve, activateInternalPrompt } = terminalCase(turn);
+  await expect(resolve()).resolves.toEqual({ action: "retry" });
+  expect(activateInternalPrompt).toHaveBeenCalledOnce();
+});
 
 it("continues after multiple consumed preflight refusals", async () => {
   const turn = await refusedExecThenRejectedCall();

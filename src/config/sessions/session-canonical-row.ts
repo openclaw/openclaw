@@ -28,9 +28,7 @@ export function canonicalSessionKeyMigrationRequiredError(
 }
 
 /** One validator serves full Doctor scans, pending rows, and canonical writer inputs. */
-export function validateCanonicalSessionRow(
-  row: CanonicalSessionValidationRow,
-): SessionEntry | undefined {
+export function validateCanonicalSessionRow(row: CanonicalSessionValidationRow): void {
   const record =
     row.entry_valid === 1
       ? parseSqliteSessionEntryRecord({
@@ -38,10 +36,7 @@ export function validateCanonicalSessionRow(
           current_session_id: row.current_session_id,
         })
       : null;
-  return validateCanonicalSessionRowEntry(
-    row,
-    record ? projectCanonicalSessionEntryShape(record) : null,
-  );
+  validateCanonicalSessionRowEntry(row, record ? projectCanonicalSessionEntryShape(record) : null);
 }
 
 /** Exact readers validate the entry decoded from the same selected row. */

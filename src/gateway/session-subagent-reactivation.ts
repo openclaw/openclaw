@@ -20,20 +20,28 @@ import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worke
 import type { GatewayContextResolver } from "./server-methods/types.js";
 import { SessionRecoverySourceChangedError } from "./session-recovery-source.js";
 
-/** Retain the registry owner that authorizes an interrupted child's operator recovery. */
-export async function prepareRestartInterruptedSubagentRecovery(params: {
+/** Retain the registry owner for explicit recovery, including terminal restart failures. */
+export async function prepareSubagentRestartRecovery(params: {
   sessionKey: string;
   agentId: string;
   entry: InternalSessionEntry;
   assertCurrent?: () => void;
 }): Promise<{ runId: string; assertCurrent: () => void } | undefined> {
-  if (params.entry.status !== "interrupted" || params.entry.abortedLastRun !== true) {
+  const terminalFailure = params.entry.status === "failed" && params.entry.abortedLastRun !== true;
+  if (
+    !terminalFailure &&
+    (params.entry.status !== "interrupted" || params.entry.abortedLastRun !== true)
+  ) {
     return undefined;
   }
   const observed = await getLatestSubagentRunByChildSessionKey(params.sessionKey, params.agentId);
   if (
     !observed ||
-    !isRestartInterruptedSubagent(observed) ||
+    !isRestartInterruptedSubagent(
+      observed,
+      terminalFailure ? { allowTerminalFailure: true } : undefined,
+    ) ||
+    (terminalFailure && observed.execution.interruptionReason !== undefined) ||
     resolveSubagentChildAuthority(observed, params.entry).status !== "verified" ||
     params.entry.lastRunId !== observed.runId
   ) {
@@ -58,7 +66,11 @@ export async function prepareRestartInterruptedSubagentRecovery(params: {
         !current ||
         !isSameSubagentRun(interrupted, observed) ||
         !isSameSubagentRunOwner(current, interrupted) ||
-        !isRestartInterruptedSubagent(current)
+        !isRestartInterruptedSubagent(
+          current,
+          terminalFailure ? { allowTerminalFailure: true } : undefined,
+        ) ||
+        (terminalFailure && current.execution.interruptionReason !== undefined)
       ) {
         throw new SessionRecoverySourceChangedError();
       }
@@ -73,20 +85,33 @@ export async function reactivateCompletedSubagentSession(params: {
   task?: string;
   gatewayContextResolver?: GatewayContextResolver;
   assertCurrent?: () => void;
-  acpSession?: {
+  session?: {
     cfg: OpenClawConfig;
     activeSessionAgentId: string;
     sessionEntry?: SessionEntry;
   };
+  /** Continue only the task paused by this run; any other pause leaves the turn a follow-up. */
+  pausedRunId?: string;
 }): Promise<boolean> {
   const runId = params.runId?.trim();
   if (!runId) {
     return false;
   }
+  const admittedEntry = params.session?.sessionEntry;
+  const sessionEntry = admittedEntry
+    ? { sessionId: admittedEntry.sessionId, lifecycleRevision: admittedEntry.lifecycleRevision }
+    : undefined;
   const paused = getLatestLiveSubagentRunByChildSessionKey(
     params.sessionKey,
     (entry) => entry.pauseReason === "sessions_yield",
   );
+  if (
+    params.pausedRunId &&
+    // A stopped task stays stopped; its late handoff result runs as an ordinary follow-up.
+    (paused?.runId !== params.pausedRunId || paused.killIntent || paused.killReconciliation)
+  ) {
+    return false;
+  }
   const existing = paused ?? (await getLatestSubagentRunByChildSessionKey(params.sessionKey));
   const continuesInterruptedTask =
     existing?.execution.status === "interrupted" && isRestartInterruptedSubagent(existing);
@@ -96,14 +121,14 @@ export async function reactivateCompletedSubagentSession(params: {
   if (params.gatewayContextResolver && !params.gatewayContextResolver()) {
     return false;
   }
-  if (params.acpSession) {
+  if (params.session) {
     const [acpMeta] = await readAcpSessionMetaForEntries({
-      cfg: params.acpSession.cfg,
+      cfg: params.session.cfg,
       entries: [
         {
-          agentId: params.acpSession.activeSessionAgentId,
+          agentId: params.session.activeSessionAgentId,
           sessionKey: params.sessionKey,
-          entry: params.acpSession.sessionEntry,
+          entry: params.session.sessionEntry,
         },
       ],
     });
@@ -173,7 +198,7 @@ export async function reactivateCompletedSubagentSession(params: {
           nextRunId: runId,
           ...(continuesInterruptedTask
             ? { expected: source, preserveRequesterSettleWake: true }
-            : { preserveCompletedRun: true }),
+            : { preserveCompletedRun: true, sessionEntry }),
           runTimeoutSeconds: source.runTimeoutSeconds ?? 0,
           ...(hasTask ? { task } : {}),
           assertCurrent: assertOriginalOwnerCurrent,

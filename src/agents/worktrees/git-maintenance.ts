@@ -3,6 +3,7 @@ import path from "node:path";
 import { isMissingPathError } from "../../infra/errors.js";
 import { withContentGitSlot } from "../../infra/git-content-budget.js";
 import { enqueueGitRefMutation, requireGitCommandOutput } from "../../infra/git-exec.js";
+import { lstatIfExists } from "../../infra/path-existence.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import {
   resolveRuntimeWorkerArgv,
@@ -14,6 +15,10 @@ import {
   withChildProcessOperation,
   type GitProcessOperation,
 } from "../../process/spawn-diagnostics.js";
+import {
+  readConfigMachineStateAsync,
+  writeConfigMachineStateAsync,
+} from "../../state/config-machine-state-async.js";
 import { WorktreeGcProgress } from "./gc-progress.js";
 import { listGitWorktrees, requireGit, resolveGitMetadataPath, runGit } from "./git.js";
 import { readRegistryWorktrees } from "./registry-read.js";
@@ -23,6 +28,8 @@ const log = createSubsystemLogger("agents/worktrees");
 const operation: GitProcessOperation = "worktree.maintenance";
 const WORKTREE_GIT_MAINTENANCE_TIMEOUT_MS = 30 * 60 * 1000;
 const PACK_BATCH_BYTES = 512 * 1024 * 1024;
+// Index size bounds object metadata even when many tiny blobs compress well.
+const PACK_BATCH_INDEX_BYTES = 32 * 1024 * 1024;
 const PACK_BATCH_COUNT = 1024;
 const PACK_BATCH_TIMEOUT_MS = 5 * 60 * 1000;
 const TEMP_PACK_MAX_AGE_MS = 24 * 60 * 60 * 1000;
@@ -41,15 +48,19 @@ type MaintenanceParams = {
 async function repairWorktreeObjects(
   repoRoot: string,
   remote: string,
+  env: NodeJS.ProcessEnv,
   params: Pick<MaintenanceParams, "signal" | "commitGuard">,
 ): Promise<void> {
   const started = performance.now();
+  const fetched = new Set<string>();
   const options = () => {
     params.signal?.throwIfAborted();
     params.commitGuard?.();
     const remaining = OBJECT_REPAIR_TIMEOUT_MS - (performance.now() - started);
     if (remaining <= 0) {
-      throw new Error("Worktree object repair exceeded its five-minute budget");
+      throw new Error(
+        `Worktree object repair exceeded its five-minute budget (${fetched.size} objects fetched); retry to continue from the next worktree`,
+      );
     }
     return {
       operation,
@@ -65,88 +76,98 @@ async function repairWorktreeObjects(
       env: { GIT_NO_LAZY_FETCH: "1" },
     };
   };
-  const heads = [
-    ...new Set(
-      (await listGitWorktrees(repoRoot, options())).flatMap((worktree) =>
-        worktree.head && !/^0+$/.test(worktree.head) ? [worktree.head] : [],
-      ),
-    ),
-  ];
-  const fetched = new Set<string>();
-  for (;;) {
-    // Git includes every linked index (including resolve-undo), while no-walk
-    // visits only the live HEAD trees, not intentionally unhydrated history.
-    const inventory = await requireGit(
-      repoRoot,
-      [
-        "rev-list",
-        "--objects",
-        "--indexed-objects",
-        "--no-walk=unsorted",
-        "--missing=print",
-        "--no-object-names",
-        "--stdin",
-      ],
-      { ...options(), input: `${heads.join("\n")}\n` },
-    );
-    const missing = inventory
-      .split("\n")
-      .filter((line) => line.startsWith("?"))
-      .map((line) => line.slice(1));
-    if (missing.length === 0) {
-      if (fetched.size > 0) {
-        log.info(`Repaired ${fetched.size} missing live worktree objects in ${repoRoot}.`);
+  const worktrees = (await listGitWorktrees(repoRoot, options())).toSorted((a, b) =>
+    a.path < b.path ? -1 : a.path > b.path ? 1 : 0,
+  );
+  const cursorKey = `worktrees.objectRepair:${repoRoot}`;
+  const cursor = await readConfigMachineStateAsync<string | null>(cursorKey, { env });
+  const start = Math.max(0, cursor ? worktrees.findIndex((tree) => tree.path > cursor) : 0);
+  for (const worktree of [...worktrees.slice(start), ...worktrees.slice(0, start)]) {
+    options();
+    // This is a scheduling position, never a healthy-object receipt. Record the
+    // attempt first so an interrupted or unreadable checkout cannot starve siblings.
+    await writeConfigMachineStateAsync(cursorKey, worktree.path, { env });
+    for (;;) {
+      // Include this index's resolve-undo objects, but not every linked index.
+      // Quiet suppresses healthy OIDs while preserving Git's missing-object output.
+      const inventory = await requireGit(
+        worktree.path,
+        [
+          "rev-list",
+          "--objects",
+          "--single-worktree",
+          "--indexed-objects",
+          "--no-walk=unsorted",
+          "--missing=print",
+          "--quiet",
+          "--stdin",
+        ],
+        {
+          ...options(),
+          input: worktree.head && !/^0+$/.test(worktree.head) ? `${worktree.head}\n` : "",
+        },
+      );
+      const missing = inventory
+        .split("\n")
+        .filter((line) => line.startsWith("?"))
+        .map((line) => line.slice(1));
+      if (missing.length === 0) {
+        break;
       }
-      return;
-    }
-    if (missing.some((oid) => fetched.has(oid))) {
-      throw new Error("Worktree object repair incomplete; inspect the promisor remote and retry");
-    }
-    if (fetched.size >= OBJECT_REPAIR_MAX_OBJECTS) {
-      throw new Error(
-        `Worktree object repair reached its ${OBJECT_REPAIR_MAX_OBJECTS}-object limit; retry to recover the remaining objects`,
-      );
-    }
-    for (
-      let offset = 0;
-      offset < missing.length && fetched.size < OBJECT_REPAIR_MAX_OBJECTS;
-      offset += OBJECT_REPAIR_BATCH_SIZE
-    ) {
-      const batch = missing.slice(
-        offset,
-        offset + Math.min(OBJECT_REPAIR_BATCH_SIZE, OBJECT_REPAIR_MAX_OBJECTS - fetched.size),
-      );
-      try {
-        await requireGit(
-          repoRoot,
-          [
-            "fetch",
-            "--refetch",
-            "--no-auto-maintenance",
-            "--no-tags",
-            "--no-prune",
-            "--no-write-fetch-head",
-            "--recurse-submodules=no",
-            "--stdin",
-            "--",
-            remote,
-          ],
-          {
-            ...options(),
-            input: `${batch.join("\n")}\n`,
-          },
-        );
-      } catch {
-        options();
-        // Remote diagnostics may include credentials; report the recovery action.
+      if (missing.some((oid) => fetched.has(oid))) {
+        throw new Error("Worktree object repair incomplete; inspect the promisor remote and retry");
+      }
+      if (fetched.size >= OBJECT_REPAIR_MAX_OBJECTS) {
         throw new Error(
-          `Could not fetch ${batch.length} missing worktree objects; check promisor remote access and retry`,
+          `Worktree object repair reached its ${OBJECT_REPAIR_MAX_OBJECTS}-object limit; retry to recover the remaining objects`,
         );
       }
-      for (const oid of batch) {
-        fetched.add(oid);
+      for (
+        let offset = 0;
+        offset < missing.length && fetched.size < OBJECT_REPAIR_MAX_OBJECTS;
+        offset += OBJECT_REPAIR_BATCH_SIZE
+      ) {
+        const batch = missing.slice(
+          offset,
+          offset + Math.min(OBJECT_REPAIR_BATCH_SIZE, OBJECT_REPAIR_MAX_OBJECTS - fetched.size),
+        );
+        try {
+          await requireGit(
+            repoRoot,
+            [
+              "fetch",
+              "--refetch",
+              "--no-auto-maintenance",
+              "--no-tags",
+              "--no-prune",
+              "--no-write-fetch-head",
+              "--recurse-submodules=no",
+              "--stdin",
+              "--",
+              remote,
+            ],
+            {
+              ...options(),
+              input: `${batch.join("\n")}\n`,
+            },
+          );
+        } catch {
+          options();
+          // Remote diagnostics may include credentials; report the recovery action.
+          throw new Error(
+            `Could not fetch ${batch.length} missing worktree objects; check promisor remote access and retry`,
+          );
+        }
+        for (const oid of batch) {
+          fetched.add(oid);
+        }
       }
     }
+  }
+  options();
+  await writeConfigMachineStateAsync(cursorKey, null, { env });
+  if (fetched.size > 0) {
+    log.info(`Repaired ${fetched.size} missing live worktree objects in ${repoRoot}.`);
   }
 }
 
@@ -187,20 +208,24 @@ async function maintainWorktreePacks(
     return;
   }
   const commonDir = await requireGit(repoRoot, ["rev-parse", "--git-common-dir"], options);
-  // Fetch must not replace the MIDX between batch publication and expiry.
-  await enqueueGitRefMutation(
-    repoRoot,
-    commonDir,
+  // Content writers acquire their slot before publishing refs; keep that order
+  // so maintenance cannot hold the ref queue while waiting for those writers.
+  await withContentGitSlot(
     () =>
-      withContentGitSlot(async () => {
-        const packs = await readPacks();
-        assertCurrent();
-        const before = packs.filter((name) => name.endsWith(".pack")).length;
-        await report(before);
-        await cleanTemporaryPacks(packDirectory, packs, params.signal, assertCurrent);
-        const after = await consolidatePacks(repoRoot, packDirectory, packs, options);
-        await report(before, after);
-      }, params.signal),
+      enqueueGitRefMutation(
+        repoRoot,
+        commonDir,
+        async () => {
+          const packs = await readPacks();
+          assertCurrent();
+          const before = packs.filter((name) => name.endsWith(".pack")).length;
+          await report(before);
+          await cleanTemporaryPacks(packDirectory, packs, params.signal, assertCurrent);
+          const after = await consolidatePacks(repoRoot, packDirectory, packs, options);
+          await report(before, after);
+        },
+        params.signal,
+      ),
     params.signal,
   );
 }
@@ -263,6 +288,12 @@ async function consolidatePacks(
   names: string[],
   options: NonNullable<Parameters<typeof requireGit>[2]>,
 ) {
+  // MIDX is optional lookup metadata. Invalidate both entry points, including
+  // stale indexes, without enumerating every object to rebuild the whole repo.
+  for (const name of ["multi-pack-index", "multi-pack-index.d/multi-pack-index-chain"]) {
+    options.beforeRun?.();
+    await fs.rm(path.join(directory, name), { force: true });
+  }
   const present = new Set(names);
   const packs = [];
   for (const name of names) {
@@ -279,24 +310,45 @@ async function consolidatePacks(
     }
     options.beforeRun?.();
     const stat = await fs.stat(path.join(directory, name));
-    packs.push({ name, size: stat.size, promisor: present.has(`${stem}.promisor`) });
+    const index = await fs.stat(path.join(directory, `${stem}.idx`));
+    packs.push({
+      name,
+      size: stat.size,
+      indexBytes: index.size,
+      promisor: present.has(`${stem}.promisor`),
+    });
   }
   packs.sort((a, b) => a.size - b.size || a.name.localeCompare(b.name));
   let objectFormat: string | undefined;
   for (const promisor of [true, false]) {
     const candidates = packs.filter((pack) => pack.promisor === promisor);
-    const selected = [];
+    const batch = [];
     let bytes = 0;
+    let indexBytes = 0;
     for (const pack of candidates) {
-      if (bytes + pack.size > PACK_BATCH_BYTES || selected.length >= PACK_BATCH_COUNT) {
+      if (pack.indexBytes > PACK_BATCH_INDEX_BYTES) {
+        continue;
+      }
+      if (
+        bytes + pack.size > PACK_BATCH_BYTES ||
+        indexBytes + pack.indexBytes > PACK_BATCH_INDEX_BYTES ||
+        batch.length >= PACK_BATCH_COUNT
+      ) {
         break;
       }
-      selected.push(pack.name);
+      batch.push(pack);
       bytes += pack.size;
+      indexBytes += pack.indexBytes;
     }
-    if (selected.length < 2) {
+    // Leave a dominant pack alone until the smaller inputs together reach its
+    // size; bounded batches can still make progress below a fixed pack count.
+    while (batch.length > 1 && bytes < 2 * batch.at(-1)!.size) {
+      bytes -= batch.pop()!.size;
+    }
+    if (batch.length < 2) {
       continue;
     }
+    const selected = batch.map((pack) => pack.name);
     // Validate only the packs this pass may retire, without walking refs or
     // missing partial-clone objects. The streaming writer does not check source CRCs.
     objectFormat ??= await requireGit(repoRoot, ["rev-parse", "--show-object-format"], options);
@@ -325,49 +377,42 @@ async function consolidatePacks(
         },
       );
     }
-    let preferred = selected.at(-1)!;
-    // The rewrite threshold applies to the inventory, not the byte-limited batch.
-    if (candidates.length >= 16) {
-      // A static Git alias streams between native children without buffering packs in the Gateway.
-      // index-pack publishes the promisor marker before the index; geometric repack cannot do this on older Git.
-      const alias =
-        "!if command -v ionice >/dev/null 2>&1; then ionice -c 3 -p $$ >/dev/null 2>&1; fi; git pack-objects --stdin-packs --stdout --window=0 --threads=1 | git index-pack --stdin --threads=1" +
-        (promisor ? " --promisor" : "");
-      const result = await requireGit(
-        repoRoot,
-        ["-c", `alias.openclaw-consolidate=${alias}`, "openclaw-consolidate"],
-        {
-          ...options,
-          timeoutMs: PACK_BATCH_TIMEOUT_MS,
-          input: `${selected.join("\n")}\n`,
-        },
-      );
-      const hash = /^pack\s+([a-f0-9]{40}|[a-f0-9]{64})$/.exec(result)?.[1];
-      if (!hash) {
-        throw new Error("Git pack consolidation returned an invalid pack identity");
-      }
-      preferred = `pack-${hash}.pack`;
-    }
-    // Expire only this homogeneous batch: a full MIDX could retire an unrelated promisor pack.
-    // Expiry rebuilds the full index after deleting packs, so do it only once per group.
-    await requireGit(
+    // index-pack publishes the promisor marker and verified index before returning
+    // the hash. Plain --stdin-packs copies every object, including unreachable ones.
+    const alias =
+      "!if command -v ionice >/dev/null 2>&1; then ionice -c 3 -p $$ >/dev/null 2>&1; fi; git pack-objects --stdin-packs --stdout --window=0 --threads=1 | git index-pack --stdin --threads=1" +
+      (promisor ? " --promisor" : "");
+    const result = await requireGit(
       repoRoot,
-      ["multi-pack-index", "write", "--stdin-packs", `--preferred-pack=${preferred}`],
+      ["-c", `alias.openclaw-consolidate=${alias}`, "openclaw-consolidate"],
       {
         ...options,
-        input: `${[...new Set([...selected, preferred])].map((name) => name.replace(/\.pack$/, ".idx")).join("\n")}\n`,
+        timeoutMs: PACK_BATCH_TIMEOUT_MS,
+        input: `${selected.join("\n")}\n`,
       },
     );
-    await requireGit(repoRoot, ["multi-pack-index", "expire"], options);
+    const hash = /^pack\s+([a-f0-9]{40}|[a-f0-9]{64})$/.exec(result)?.[1];
+    if (!hash) {
+      throw new Error("Git pack consolidation returned an invalid pack identity");
+    }
+    for (const name of selected) {
+      const stem = path.join(directory, name.slice(0, -5));
+      // The union can already be one of the inputs. Never retire the output or
+      // a pack another Git writer has since pinned or marked as cruft.
+      if (
+        name === `pack-${hash}.pack` ||
+        (await lstatIfExists(`${stem}.keep`)) ||
+        (await lstatIfExists(`${stem}.mtimes`))
+      ) {
+        continue;
+      }
+      for (const extension of ["idx", "pack", "rev", "bitmap", "promisor"]) {
+        options.beforeRun?.();
+        await fs.rm(`${stem}.${extension}`, { force: true });
+      }
+    }
   }
   const remainingNames = await fs.readdir(directory);
-  const remaining = remainingNames.filter((name) => /^pack-[a-f0-9]+\.idx$/.test(name));
-  if (remaining.length > 0) {
-    await requireGit(repoRoot, ["multi-pack-index", "write", "--stdin-packs"], {
-      ...options,
-      input: `${remaining.join("\n")}\n`,
-    });
-  }
   return remainingNames.filter((name) => name.endsWith(".pack")).length;
 }
 
@@ -462,7 +507,7 @@ export function createWorktreeGitMaintenance(env: NodeJS.ProcessEnv) {
         // Only an explicit repair pass may fetch. Pack progress is already published.
         if (params.retryDeferred && remote) {
           await withContentGitSlot(
-            () => repairWorktreeObjects(repoRoot, remote, params),
+            () => repairWorktreeObjects(repoRoot, remote, env, params),
             params.signal,
           );
         }

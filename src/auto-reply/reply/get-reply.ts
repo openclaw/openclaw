@@ -135,7 +135,7 @@ async function resolveReplyFromConfig(
       isFastTestEnv,
       configOverride,
     });
-  const source = prepareReplySourceInput(ctx, cfg, opts);
+  const source = await prepareReplySourceInput(ctx, cfg, opts);
   opts = source.options;
   try {
     // Retain preparation timings before a stall happens. Whole-turn summaries

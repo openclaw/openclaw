@@ -1,9 +1,9 @@
 // Zalo tests cover actions plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
-import { zaloMessageActions } from "./actions.js";
+import { zaloPlugin } from "./channel.js";
 
-describe("zaloMessageActions.describeMessageTool", () => {
+describe("zaloPlugin.actions.describeMessageTool", () => {
   it("honors the selected Zalo account during discovery", () => {
     const cfg: OpenClawConfig = {
       channels: {
@@ -24,13 +24,13 @@ describe("zaloMessageActions.describeMessageTool", () => {
       },
     };
 
-    expect(zaloMessageActions.describeMessageTool?.({ cfg, accountId: "default" })).toBeNull();
-    expect(zaloMessageActions.describeMessageTool?.({ cfg, accountId: "work" })).toEqual({
+    expect(zaloPlugin.actions?.describeMessageTool?.({ cfg, accountId: "default" })).toBeNull();
+    expect(zaloPlugin.actions?.describeMessageTool?.({ cfg, accountId: "work" })).toEqual({
       actions: ["send"],
       capabilities: [],
     });
-    expect(zaloMessageActions.supportsAction?.({ action: "send" })).toBe(true);
-    expect(zaloMessageActions.supportsAction?.({ action: "react" })).toBe(false);
+    expect(zaloPlugin.actions?.supportsAction?.({ action: "send" })).toBe(true);
+    expect(zaloPlugin.actions?.supportsAction?.({ action: "react" })).toBe(false);
   });
 
   it("keeps healthy account actions when one account SecretRef is unavailable", () => {
@@ -50,10 +50,10 @@ describe("zaloMessageActions.describeMessageTool", () => {
         },
       },
     } as OpenClawConfig;
-    expect(zaloMessageActions.describeMessageTool?.({ cfg })).toEqual({
+    expect(zaloPlugin.actions?.describeMessageTool?.({ cfg })).toEqual({
       actions: ["send"],
       capabilities: [],
     });
-    expect(zaloMessageActions.describeMessageTool?.({ cfg, accountId: "broken" })).toBeNull();
+    expect(zaloPlugin.actions?.describeMessageTool?.({ cfg, accountId: "broken" })).toBeNull();
   });
 });

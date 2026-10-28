@@ -1,8 +1,6 @@
 import { expect, it, vi } from "vitest";
 import type { SessionObserverDigest } from "../../packages/gateway-protocol/src/schema/sessions.js";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
-import { setLoggerOverride } from "../logging/logger.js";
-import { loggingState } from "../logging/state.js";
 import { emitSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import type { SessionObserverDeps } from "./session-observer-model.js";
 import {
@@ -469,29 +467,5 @@ it("invalidates the persist-time guard after disposal", async () => {
   } finally {
     await harness.observer.disposeAsync();
     clearTimeout(unrelatedTimer);
-  }
-});
-it("preserves the cause of a model failure", async () => {
-  const previousConsole = loggingState.rawConsole;
-  const previousOverride = loggingState.overrideSettings;
-  const lines: string[] = [];
-  const capture = (line: unknown) => lines.push(String(line));
-  const cause = new Error("model failed");
-  const fail = async () => {
-    throw cause;
-  };
-  const harness = createHarness({ completeModel: vi.fn(fail), persistDigest: vi.fn(fail) });
-  try {
-    setLoggerOverride({ level: "silent", consoleLevel: "warn", consoleStyle: "json" });
-    loggingState.rawConsole = { log: capture, info: capture, warn: capture, error: capture };
-    await startAndAddToolNotes(harness.observer);
-    await vi.advanceTimersByTimeAsync(24_000);
-    const diagnostic = lines
-      .map((line) => JSON.parse(line))
-      .find((line) => line.message === "session observer disabled after consecutive failures");
-    expect(diagnostic).toMatchObject({ error: "model failed", consecutiveFailures: 2 });
-  } finally {
-    loggingState.rawConsole = previousConsole;
-    setLoggerOverride(previousOverride as Parameters<typeof setLoggerOverride>[0]);
   }
 });

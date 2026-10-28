@@ -1,19 +1,21 @@
 import { randomUUID } from "node:crypto";
-import type {
-  QaBusConversation,
-  QaBusCreateThreadInput,
-  QaBusDeleteMessageInput,
-  QaBusEditMessageInput,
-  QaBusEvent,
-  QaBusInboundMessageInput,
-  QaBusMessage,
-  QaBusOutboundMessageInput,
-  QaBusPollInput,
-  QaBusReadMessageInput,
-  QaBusReactToMessageInput,
-  QaBusSearchMessagesInput,
-  QaBusSnapshotConversation,
-  QaBusThread,
+import {
+  parseQaTarget,
+  sanitizeQaBusToolCalls,
+  type QaBusConversation,
+  type QaBusCreateThreadInput,
+  type QaBusDeleteMessageInput,
+  type QaBusEditMessageInput,
+  type QaBusEvent,
+  type QaBusInboundMessageInput,
+  type QaBusMessage,
+  type QaBusOutboundMessageInput,
+  type QaBusPollInput,
+  type QaBusReadMessageInput,
+  type QaBusReactToMessageInput,
+  type QaBusSearchMessagesInput,
+  type QaBusSnapshotConversation,
+  type QaBusThread,
 } from "openclaw/plugin-sdk/qa-channel-protocol";
 import {
   buildQaBusSnapshot,
@@ -24,7 +26,6 @@ import {
   searchQaBusMessages,
 } from "./bus-queries.js";
 import { createQaBusWaiterStore, throwQaBusClosed } from "./bus-waiters.js";
-import { parseQaTarget, sanitizeQaBusToolCalls } from "./qa-bus-protocol.js";
 
 const DEFAULT_BOT_ID = "openclaw";
 const DEFAULT_BOT_NAME = "OpenClaw QA";

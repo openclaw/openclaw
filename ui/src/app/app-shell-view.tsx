@@ -11,8 +11,10 @@ import {
   ContextNewSessionAction,
   renderNewSessionLink as NewSessionLink,
 } from "../components/solid/new-session-link.tsx";
+import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import { KEYBOARD_SHORTCUT_COMBOS } from "../lib/keyboard-shortcut-contract.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { projectOwner } from "../lib/reactive/projection.ts";
 import { resolveUiSelectedSessionAgentId } from "../lib/sessions/session-key.ts";
 import { registerToastContainer } from "../lib/toast.ts";
 import { PluginSurface } from "../plugins/control-ui-view.solid.tsx";
@@ -95,6 +97,10 @@ export function ApplicationShell(props: {
     props.host.shellRevision();
     return readShellView(props.host);
   });
+  const sessionOwner = createMemo(() => view().context.sessions);
+  const sessionRows = createMemo(() =>
+    projectOwner(sessionOwner(), (sessions) => sessions.state.result?.sessions),
+  );
   const shellConnectionStatus = createMemo(() => view().shellConnectionStatus);
   const footerStatus = createMemo(() =>
     shellConnectionStatus() || view().connectionRecovery ? view().gatewayStatus : null,
@@ -317,6 +323,7 @@ export function ApplicationShell(props: {
         <Show
           when={
             !view().nativeEmbed &&
+            !view().mobileNavLayout &&
             !view().navCollapsed &&
             !view().onboarding &&
             !view().settingsTakeover
@@ -335,6 +342,28 @@ export function ApplicationShell(props: {
               props.host.resizeNavigation(event.detail.splitRatio)
             }
           />
+        </Show>
+        <Show when={view().runtime.readOnlyConfig} keyed>
+          {(notice) => (
+            <p
+              class="shell-config-read-only callout info"
+              inert={view().mobileNavLayout && view().navDrawerOpen}
+            >
+              <strong>{t("nav.gateway.configReadOnly")}</strong>{" "}
+              {notice.message || t("nav.gateway.configReadOnlyHint")}
+              <Show when={notice.docsUrl}>
+                {" "}
+                <a
+                  href={notice.docsUrl}
+                  target={EXTERNAL_LINK_TARGET}
+                  rel={buildExternalLinkRel()}
+                  data-link-reader-external
+                >
+                  {t("common.learnMore")}
+                </a>
+              </Show>
+            </p>
+          )}
         </Show>
         <main
           id="control-ui-main"
@@ -463,6 +492,9 @@ export function ApplicationShell(props: {
               connected: view().gatewayConnected,
               canGrant: view().overlaySnapshot.approvalCanGrant,
               errors: view().overlaySnapshot.approvalErrors,
+              nodeNames: view().overlaySnapshot.approvalNodeNames,
+              sessions: sessionRows().read(),
+              currentSessionKey: view().sessionRoute ? props.host.activeSessionKey : undefined,
               onDecision: (
                 approvalId: string,
                 decision: Parameters<

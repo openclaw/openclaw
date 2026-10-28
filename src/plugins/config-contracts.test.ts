@@ -1,6 +1,7 @@
 // Covers plugin config contract validation and ownership boundaries.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginManifestRegistry } from "./manifest-registry.js";
+import { createPluginManifestRecordFixture } from "./plugin-metadata.test-support.js";
 
 const mocks = vi.hoisted(() => {
   const loadManifestRegistry = vi.fn();
@@ -51,19 +52,14 @@ function createRegistry(
     diagnostics: [],
     plugins: id
       ? [
-          {
+          createPluginManifestRecordFixture({
             id,
             origin,
             configContracts,
+            source: `/tmp/${id}/openclaw.plugin.json`,
             rootDir: `/tmp/${id}`,
             manifestPath: `/tmp/${id}/openclaw.plugin.json`,
-            source: `/tmp/${id}/openclaw.plugin.json`,
-            channels: [],
-            providers: [],
-            cliBackends: [],
-            skills: [],
-            hooks: [],
-          },
+          }),
         ]
       : [],
   };

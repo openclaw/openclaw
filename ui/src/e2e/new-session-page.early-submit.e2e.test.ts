@@ -12,10 +12,8 @@ const suite = createNewSessionPageE2eSuite();
 
 suite.define(() => {
   it.each([
-    { method: "agents.list", attempt: "Enter", width: 1280 },
     { method: "agents.list", attempt: "Enter", width: 390 },
     { method: "models.list", attempt: "paste+Enter", width: 1280 },
-    { method: "agents.list", attempt: "Start", width: 1280 },
   ])(
     "explains $attempt only after attempting submission while $method is pending at $width px",
     async ({ method, attempt, width }) => {
@@ -61,11 +59,7 @@ suite.define(() => {
           expect(await start.isDisabled()).toBe(true);
           expect(await notice.count()).toBe(0);
           await captureUiProof(suite, page, `${method}-${attempt}-${width}-rendered.png`);
-          if (attempt === "Start") {
-            await start.click({ force: true });
-          } else {
-            await composer.press("Enter");
-          }
+          await composer.press("Enter");
           await notice.waitFor({ state: "visible" });
           expect(await notice.textContent()).toContain(
             method === "agents.list"

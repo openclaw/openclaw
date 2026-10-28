@@ -1,5 +1,10 @@
 // The child probes share invocation-owned preparation and module state.
 export const pluginProcessRuntimeEntrypoints = {
+  directoryInventory: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../infra/directory-walk",
+    distWorkerPath: "infra/directory-walk.js",
+  },
   installCommand: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "../cli/plugins-install-command",

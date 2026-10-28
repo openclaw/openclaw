@@ -70,6 +70,23 @@ function addTailscaleHint(account: ResolvedSmsAccount, hints: string[]): void {
   );
 }
 
+function compareWebhook<
+  Summary extends { expectedUrl: string; configuredMethod: string },
+  Prefix extends "" | "messaging-service-",
+>(summary: Summary, url: string, prefix: Prefix) {
+  if (!url) {
+    return { status: `${prefix}missing`, ...summary } as const;
+  }
+  const configured = { ...summary, configuredUrl: url };
+  if (summary.configuredMethod && summary.configuredMethod !== "POST") {
+    return { status: `${prefix}method-mismatch`, ...configured } as const;
+  }
+  if (url !== summary.expectedUrl) {
+    return { status: `${prefix}url-mismatch`, ...configured } as const;
+  }
+  return { status: `${prefix}matches`, ...configured } as const;
+}
+
 function compareTwilioWebhook(
   account: ResolvedSmsAccount,
   phoneNumber: TwilioIncomingPhoneNumber | undefined,
@@ -88,21 +105,8 @@ function compareTwilioWebhook(
     expectedUrl: account.publicWebhookUrl,
     configuredMethod: phoneNumber.smsMethod.toUpperCase(),
   };
-  if (!phoneNumber.smsUrl) {
-    return { status: "missing", ...summary } as const;
-  }
-  const configured = { ...summary, configuredUrl: phoneNumber.smsUrl };
-  if (summary.configuredMethod && summary.configuredMethod !== "POST") {
-    return { status: "method-mismatch", ...configured } as const;
-  }
-  if (phoneNumber.smsUrl !== account.publicWebhookUrl) {
-    return { status: "url-mismatch", ...configured } as const;
-  }
-  return {
-    status: "matches",
-    ...configured,
-    voiceUrl: phoneNumber.voiceUrl,
-  } as const;
+  const probe = compareWebhook(summary, phoneNumber.smsUrl, "");
+  return probe.status === "matches" ? { ...probe, voiceUrl: phoneNumber.voiceUrl } : probe;
 }
 
 function compareTwilioMessagingService(
@@ -121,17 +125,7 @@ function compareTwilioMessagingService(
     expectedUrl: account.publicWebhookUrl,
     configuredMethod: service.inboundMethod.toUpperCase(),
   };
-  if (!service.inboundRequestUrl) {
-    return { status: "messaging-service-missing", ...summary } as const;
-  }
-  const configured = { ...summary, configuredUrl: service.inboundRequestUrl };
-  if (summary.configuredMethod && summary.configuredMethod !== "POST") {
-    return { status: "messaging-service-method-mismatch", ...configured } as const;
-  }
-  if (service.inboundRequestUrl !== account.publicWebhookUrl) {
-    return { status: "messaging-service-url-mismatch", ...configured } as const;
-  }
-  return { status: "messaging-service-matches", ...configured } as const;
+  return compareWebhook(summary, service.inboundRequestUrl, "messaging-service-");
 }
 
 function recentInboundSummary(

@@ -1,5 +1,5 @@
 import {
-  prepareReplyToolAuthorityCallerRead,
+  captureReplyToolAuthorityCallerBinding,
   recordPreparedToolAuthorityRead,
   type ReplyToolAuthorityContinuation,
 } from "../agents/harness/host-private-capabilities.js";
@@ -11,17 +11,23 @@ import {
 } from "../auto-reply/reply/message-injection-authority.js";
 import type { FollowupRun } from "../auto-reply/reply/queue/types.js";
 import { prepareFollowupRunToolAuthorityFingerprint } from "../auto-reply/reply/reply-tool-authority.js";
+import type { prepareSteeringDelivery } from "../auto-reply/reply/steering-delivery-preparation.js";
 import {
   replyMessageInjectionTargetOwner,
   type ReplyMessageInjectionTarget,
   type ReplyOperation,
   type ReplyToolAuthorityOverlay,
 } from "./session-controller.contracts.js";
+import {
+  captureReplySessionExecutionSelection,
+  isSameReplyExecutionSelection,
+} from "./session-controller.execution-selection.js";
 
 /** Prepare current caller policy against this captured execution, without rebuilding that execution. */
 export async function prepareReplyMessageContinuation(params: {
   target: ReplyMessageInjectionTarget;
   input: ReplyToolAuthorityContinuation;
+  delivery: ReturnType<typeof prepareSteeringDelivery>;
   assertCurrent: () => void;
 }) {
   const owner = params.target[replyMessageInjectionTargetOwner];
@@ -49,26 +55,58 @@ export async function prepareReplyMessageContinuation(params: {
   };
   assertOwner();
   try {
-    const caller = await prepareReplyToolAuthorityCallerRead(
+    const selected = captureReplyToolAuthorityCallerBinding(
       owner.projectToolAuthorityFingerprintAsync,
       params.input,
       fingerprint,
       undefined,
       assertOwner,
     );
-    assertOwner();
-    if (!caller) {
+    const observation = selected?.joinObservation;
+    if (!selected || !observation) {
       // Released snapshots keep their existing complete-policy compatibility path.
       return { kind: "unsupported" as const };
     }
+    // Keep delivery ahead of incoming settings/policy so combined failures retain
+    // their existing fallback reason. The binding stays selected across the await.
+    params.delivery.bindAdmission({
+      recoveryDeliveryClaim: observation.recoveryDeliveryClaim,
+      matchesExecutionSettings: (entry, agentId) =>
+        isSameReplyExecutionSelection(
+          observation.executionSelection,
+          captureReplySessionExecutionSelection({
+            config: params.input.config,
+            agentId,
+            sessionEntry: entry,
+          }),
+        ),
+    });
+    await params.delivery.prepareCurrent();
+    selected.assertCurrent();
+    if (
+      !isSameReplyExecutionSelection(
+        observation.executionSelection,
+        params.input.executionSelection,
+      )
+    ) {
+      throw new MessageInjectionPolicyMismatchError(
+        "execution-settings-changed",
+        "The execution settings changed before steering",
+      );
+    }
+    const caller = await selected.prepare();
+    selected.assertCurrent();
+    if (!caller) {
+      return { kind: "unsupported" as const };
+    }
     await caller.prepareCurrent();
-    assertOwner();
-    params.input.delivery.assertCurrent();
+    selected.assertCurrent();
+    params.delivery.assertCurrent();
     const retained = caller.retainCurrent();
     const assertCurrent = () => {
-      assertOwner();
+      selected.assertCurrent();
       retained.assertCurrent();
-      params.input.delivery.assertCurrent();
+      params.delivery.assertCurrent();
     };
     return {
       kind: "prepared" as const,
@@ -80,7 +118,7 @@ export async function prepareReplyMessageContinuation(params: {
       prepareCurrent: async () => {
         assertCurrent();
         await caller.prepareCurrent();
-        await params.input.delivery.prepareCurrent();
+        await params.delivery.prepareCurrent();
         assertCurrent();
         recordPreparedToolAuthorityRead({
           ...caller,
@@ -92,11 +130,15 @@ export async function prepareReplyMessageContinuation(params: {
   } catch (error) {
     params.assertCurrent();
     if (error instanceof MessageInjectionTargetUnavailableError) {
-      return { kind: "deferred" as const, reason: "reply-owner-ended" as const };
+      return {
+        kind: "deferred" as const,
+        reason: "reply-owner-ended" as const,
+        errorMessage: error.message,
+      };
     }
     assertOwner();
     if (error instanceof MessageInjectionPolicyMismatchError) {
-      return { kind: "deferred" as const, reason: error.reason };
+      return { kind: "deferred" as const, reason: error.reason, errorMessage: error.message };
     }
     throw error;
   }
@@ -109,6 +151,7 @@ export async function prepareReplyMessageJoin(params: {
   target: ReplyMessageInjectionTarget;
   assertCurrent: () => void;
   continuation?: ReplyToolAuthorityContinuation;
+  delivery: ReturnType<typeof prepareSteeringDelivery>;
   collaborativeCaller?: ReplyToolAuthorityOverlay;
 }) {
   const { followupRun, operation, target, assertCurrent } = params;
@@ -117,6 +160,7 @@ export async function prepareReplyMessageJoin(params: {
     const joined = await prepareReplyMessageContinuation({
       target,
       input: params.continuation,
+      delivery: params.delivery,
       assertCurrent,
     });
     if (joined.kind === "deferred") {
@@ -147,6 +191,7 @@ export async function prepareReplyMessageJoin(params: {
       reason: legacy.requesterMismatch
         ? ("requester-mismatch" as const)
         : ("tool_authority_mismatch" as const),
+      errorMessage: undefined,
     };
   }
   return {

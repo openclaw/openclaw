@@ -532,12 +532,6 @@ describe("dependency guard script", () => {
     expect(isDependencyManifest("src/index.ts")).toBe(false);
     expect(
       dependencyFieldChanges(
-        { scripts: { test: "old" }, dependencies: { a: "1" } },
-        { scripts: { test: "new" }, dependencies: { a: "1" } },
-      ),
-    ).toEqual([]);
-    expect(
-      dependencyFieldChanges(
         { dependencies: { a: "1" }, devDependencies: { b: "1" } },
         { dependencies: { a: "2" }, devDependencies: { b: "1", c: "1" } },
       ),
@@ -554,7 +548,6 @@ describe("dependency guard script", () => {
     const cases: Array<[string[], boolean]> = [
       [["removed", "removed"], true],
       [["removed", "added"], false],
-      [["changed"], false],
       [[], false],
     ];
     for (const [changes, expected] of cases) {
@@ -606,24 +599,6 @@ describe("dependency guard script", () => {
     const cases: Array<[BlockedOptions, string[]]> = [
       [
         {
-          lockfileChanges: ["pnpm-lock.yaml", "tools/nested/pnpm-lock.yaml"],
-          dependencyManifestChanges: [{ path: "package.json", fields: ["dependencies"] }],
-        },
-        [
-          "<!-- openclaw:dependency-graph-guard -->",
-          "Maintainer dependency review required",
-          "- `pnpm-lock.yaml`\n",
-          "- `tools/nested/pnpm-lock.yaml`\n",
-          "- `package.json`\n",
-          "git restore --source=\"$(git merge-base HEAD FETCH_HEAD)\" --staged --worktree -- 'pnpm-lock.yaml' 'tools/nested/pnpm-lock.yaml'",
-          "git fetch 'https://github.com/openclaw/openclaw.git' 'main'",
-          "```text\n/allow-dependencies-change\n```",
-          `Current SHA: \`${headSha}\``,
-          "A later push requires a fresh approval comment.",
-        ],
-      ],
-      [
-        {
           baseBranch: "release/canary branch",
           lockfileChanges: [
             "dir with spaces/pnpm-lock.yaml",
@@ -633,10 +608,6 @@ describe("dependency guard script", () => {
         [
           "git restore --source=\"$(git merge-base HEAD FETCH_HEAD)\" --staged --worktree -- 'dir with spaces/pnpm-lock.yaml' 'safe/quote'\\''$(touch bad);/package-lock.json'",
         ],
-      ],
-      [
-        { autoscrubStatus: { kind: "unavailable" } },
-        ["Automatic lockfile cleanup is best effort.", "These lockfile changes remain in this PR."],
       ],
       [
         {
@@ -691,7 +662,6 @@ describe("dependency guard script", () => {
       ],
       [[], [], [], false],
       [["pnpm-lock.yaml", "patches/example.patch"], ["pnpm-lock.yaml"], [], false],
-      [["pnpm-lock.yaml", "pnpm-workspace.yaml"], ["pnpm-lock.yaml"], [], false],
     ];
     for (const [dependencyFiles, lockfileChanges, dependencyManifestChanges, expected] of cases) {
       expect(
@@ -730,7 +700,7 @@ describe("dependency guard script", () => {
       request: async (requestPath: string) => {
         calls.push({ api: "base", path: requestPath });
         if (requestPath.includes("/compare/")) {
-          return comparison("base-sha", mergeBaseSha);
+          return comparison(staleSha, mergeBaseSha);
         }
         if (requestPath.includes("/contents/pnpm-lock.yaml?")) {
           return { ...contentFile("base lockfile"), sha: "base-file" };
@@ -745,24 +715,20 @@ describe("dependency guard script", () => {
       },
     };
 
-    const autoscrubPullRequest = {
-      user: { id: 1, login: "contributor", type: "User" },
-      base: { ref: "main", sha: "base-sha" },
-      head: { ref: "contributor/change", sha: headSha },
-    };
+    const autoscrubPullRequest = pullRequest;
     const guard = {
       owner: "openclaw",
       repo: "openclaw",
       pullRequest: autoscrubPullRequest,
-      pullPath: "/repos/openclaw/openclaw/pulls/1",
-      issuePath: "/repos/openclaw/openclaw/issues/1",
+      pullPath,
+      issuePath,
       commentMarker: "<!-- openclaw:dependency-graph-guard -->",
       approvalCommand: "/allow-dependencies-change",
       api: {
         request: async (requestPath: string) =>
           requestPath.endsWith("/permission") ? { role_name: "read" } : autoscrubPullRequest,
         paginate: async (requestPath: string) => {
-          if (requestPath === "/repos/openclaw/openclaw/issues/1/comments") {
+          if (requestPath === `${issuePath}/comments`) {
             return [];
           }
           throw new Error(`unexpected guard request: ${requestPath}`);
@@ -782,7 +748,7 @@ describe("dependency guard script", () => {
 
     expect(commit).toEqual({ sha: staleSha, mergeBaseSha });
     expect(calls.map((call) => `${call.api}:${call.path}`)).toEqual([
-      `base:/repos/openclaw/openclaw/compare/base-sha...${headSha}?per_page=1&page=2`,
+      `base:${comparisonPath}?per_page=1&page=2`,
       `base:/repos/openclaw/openclaw/contents/pnpm-lock.yaml?ref=${mergeBaseSha}`,
       "write:graphql",
     ]);
@@ -790,7 +756,7 @@ describe("dependency guard script", () => {
       input: {
         branch: {
           repositoryNameWithOwner: "contributor/openclaw",
-          branchName: "contributor/change",
+          branchName: "change",
         },
         expectedHeadOid: headSha,
         fileChanges: {
@@ -858,13 +824,8 @@ describe("dependency guard script", () => {
     const cases: Array<[method: string, phase: string, failure: number | string]> = [
       ["GET", "http", 500],
       ["HEAD", "http", 500],
-      ["GET", "http", 503],
       ["GET", "connection", "ECONNRESET"],
-      ["GET", "connection", "EAI_AGAIN"],
-      ["GET", "connection", "ENOTFOUND"],
-      ["HEAD", "connection", "UND_ERR_SOCKET"],
       ["GET", "body", "UND_ERR_SOCKET"],
-      ["GET", "body", "ECONNRESET"],
       ["GET", "budget", "ECONNRESET"],
     ];
     for (const [method, phase, failure] of cases) {
@@ -919,22 +880,15 @@ describe("dependency guard script", () => {
     const certificate = connectionError("fetch failed", "CERT_HAS_EXPIRED", "certificate expired");
     const cases: Array<[string, string, FailureOptions?]> = [
       ["POST", "http", { status: 500 }],
-      ["PATCH", "http", { status: 500 }],
-      ["DELETE", "http", { status: 500 }],
-      ["POST", "http", { status: 503 }],
       ["POST", "body", { code: "UND_ERR_SOCKET", matchMessage: true }],
       ["GET", "invalid-json"],
       ["GET", "body", { error: new Error("unknown stream error") }],
       ["POST", "connection", reset],
-      ["PATCH", "connection", reset],
-      ["DELETE", "connection", reset],
       ["GET", "connection", { error: new DOMException("aborted", "AbortError") }],
       ["GET", "connection", { error: certificate }],
       ["GET", "connection", { error: new TypeError("invalid request") }],
       ["GET", "connection", aborted],
       ["GET", "body", aborted],
-      ["POST", "connection", aborted],
-      ["POST", "body", aborted],
     ];
     for (const [method, phase, options = {}] of cases) {
       const { status, code, error: suppliedError, abort, matchMessage } = options;

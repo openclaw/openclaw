@@ -36,10 +36,9 @@ export class SessionLabelOwnerIndex {
       }
       delete this.store[sessionKey];
     }
-    const cloned = structuredClone(entry);
-    this.store[primaryKey] = cloned;
-    this.#add(primaryKey, cloned.label);
-    return cloned;
+    this.store[primaryKey] = entry;
+    this.#add(primaryKey, entry.label);
+    return entry;
   }
 
   #add(sessionKey: string, label: string | undefined): void {
@@ -104,6 +103,9 @@ export function inheritSessionSelection(
       : {}),
     ...(parentEntry.contextWindow ? { contextWindow: parentEntry.contextWindow } : {}),
     ...(parentEntry.thinkingLevel ? { thinkingLevel: parentEntry.thinkingLevel } : {}),
+    ...(parentEntry.cyberAccessProgram !== undefined
+      ? { cyberAccessProgram: parentEntry.cyberAccessProgram }
+      : {}),
     ...(parentEntry.fastMode !== undefined ? { fastMode: parentEntry.fastMode } : {}),
     ...(parentEntry.toolOverrides ? { toolOverrides: parentEntry.toolOverrides } : {}),
     ...(parentEntry.verboseLevel ? { verboseLevel: parentEntry.verboseLevel } : {}),

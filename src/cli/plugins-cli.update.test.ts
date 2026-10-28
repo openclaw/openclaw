@@ -1,5 +1,6 @@
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createPluginDeclaredSurface } from "../../test/helpers/plugin-declared-surface.js";
 import { createTestConfigSnapshot } from "../commands/test-runtime-config-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginCapabilityConsentReview } from "../plugins/capability-summary.js";
@@ -9,6 +10,7 @@ import {
   type PluginInstallTransaction,
 } from "../plugins/install-transaction.js";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
+import { expectNoCalls } from "../test-utils/mock-call-assertions.js";
 import {
   createTestInstalledPluginIndex,
   pluginCliConfigMock as configMock,
@@ -72,18 +74,10 @@ function createCapabilityConsentReview(): PluginCapabilityConsentReview {
     name: "Alpha plugin",
     version: "2.0.0",
     source: { kind: "npm", spec: "@acme/alpha", integrity: "sha512-alpha" },
-    declared: {
-      channels: [],
-      providers: [],
+    declared: createPluginDeclaredSurface({
       tools: ["read", "write"],
       contracts: ["gatewayMethodDispatch: alpha.run"],
-      hooks: [],
-      mcpServers: [],
-      cliCommands: [],
-      cliBackends: [],
-      skills: [],
-      dangerousConfigFlags: [],
-    },
+    }),
     grants: {
       hooks: {
         allowPromptInjection: { effective: true },
@@ -175,12 +169,6 @@ function primeBraveRecords() {
   const nextRecords = { brave: record("2026.6.11", "/tmp/brave-stable") };
   setInstalledPluginIndexInstallRecords(previousRecords);
   return { previousRecords, nextRecords };
-}
-
-function expectNoCalls(...mocks: unknown[]) {
-  for (const mock of mocks) {
-    expect(mock).not.toHaveBeenCalled();
-  }
 }
 
 beforeEach(resetPluginsCliTestState);

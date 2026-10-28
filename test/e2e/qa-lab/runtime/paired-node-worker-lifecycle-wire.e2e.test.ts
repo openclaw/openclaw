@@ -154,14 +154,14 @@ async function describePlacement(gateway: WireGateway, key: string): Promise<Pla
   return described.session?.placement ?? {};
 }
 
-function readTurnClaim(gateway: WireGateway, key: string) {
+function readPlacementOwner(gateway: WireGateway, key: string) {
   return withOpenClawStateDatabaseReadOnly(
     ({ db }) =>
       executeSqliteQueryTakeFirstSync(
         db,
         getNodeSqliteKysely<StateDatabase>(db)
           .selectFrom("worker_session_placements")
-          .select(["turn_claim_owner", "turn_claim_run_id"])
+          .select(["state", "turn_claim_owner", "turn_claim_run_id"])
           .where("session_key", "=", key),
       ),
     { env: gateway.runtimeEnv },
@@ -472,7 +472,7 @@ describe("paired node worker lifecycle wire", () => {
         await stopEntered.promise;
         await stopCompleted.promise;
         expect(processIsAlive(oldPid)).toBe(false);
-        expect(readTurnClaim(gateway, unconfirmedKey)).toMatchObject({
+        expect(readPlacementOwner(gateway, unconfirmedKey)).toMatchObject({
           turn_claim_owner: null,
           turn_claim_run_id: null,
         });
@@ -484,7 +484,7 @@ describe("paired node worker lifecycle wire", () => {
         await expect(
           operator.request("agent.wait", { runId: fencedRunId, timeoutMs: 0 }),
         ).resolves.toMatchObject({ status: "timeout" });
-        expect(readTurnClaim(gateway, unconfirmedKey)).toMatchObject({
+        expect(readPlacementOwner(gateway, unconfirmedKey)).toMatchObject({
           turn_claim_owner: null,
           turn_claim_run_id: null,
         });
@@ -656,7 +656,12 @@ describe("paired node worker lifecycle wire", () => {
           { timeoutMs: PROOF_TIMEOUT_MS },
         )) as { placement?: Placement };
         expect(movedLocal.placement).toMatchObject({ state: "local" });
-        expect(await describePlacement(gateway, retainedKey)).toMatchObject({ state: "local" });
+        // Session displays may lag the move; its committed owner must already be local.
+        expect(readPlacementOwner(gateway, retainedKey)).toMatchObject({
+          state: "local",
+          turn_claim_owner: null,
+          turn_claim_run_id: null,
+        });
         await workerNode.waitForInvokes();
         expect(
           workerNode.frames

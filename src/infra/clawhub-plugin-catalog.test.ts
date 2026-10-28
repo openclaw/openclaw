@@ -13,7 +13,9 @@ import {
 } from "./clawhub-plugin-catalog.js";
 import { captureClawHubJson as mockResponse } from "./clawhub.test-support.js";
 
-const listingMetadata = {
+const registry = { baseUrl: "https://example.com" };
+const remotePlugin = {
+  name: "memory-plus",
   displayName: "Memory Plus",
   family: "code-plugin",
   isOfficial: false,
@@ -22,10 +24,6 @@ const listingMetadata = {
   categories: ["memory"],
   latestVersion: "1.2.3",
   runtimeId: "memory-plus",
-};
-const remotePlugin = {
-  name: "memory-plus",
-  ...listingMetadata,
   ownerImage: "https://cdn.example.com/alice.png",
   icon: `/api/v1/skill-icons/${"a".repeat(64)}`,
   stats: { downloads: 42, installs: 7 },
@@ -44,23 +42,19 @@ async function catalog(
   response: unknown = { items: [remotePlugin] },
 ) {
   const fetchImpl = mockResponse(response);
-  const result = await fetchClawHubPluginCatalog({
-    baseUrl: "https://example.com",
-    ...options,
-  });
-  return { result, url: fetchImpl.url(), fetchImpl: fetchImpl.fetch };
+  const result = await fetchClawHubPluginCatalog({ ...registry, ...options });
+  return { result, url: fetchImpl.url() };
 }
 
 function readCategories(categories: unknown[]) {
   mockResponse({ categories });
-  return fetchClawHubPluginCategories({
-    baseUrl: "https://example.com",
-  });
+  return fetchClawHubPluginCategories(registry);
 }
 
 function readDetail(value: Record<string, unknown>, version?: string) {
   mockResponse({ package: remotePlugin, versions: { items: [] }, ...value });
   return fetchClawHubPluginDetail({
+    ...registry,
     packageName: "memory-plus",
     version,
     skipAuth: true,
@@ -76,36 +70,22 @@ function joinDetail(remote: Awaited<ReturnType<typeof fetchClawHubPluginDetail>>
 
 afterEach(() => vi.restoreAllMocks());
 
-it.each([false, true])("attributes search unless telemetry is disabled: %s", async (disabled) => {
-  await withEnvAsync({ CLAWHUB_DISABLE_TELEMETRY: String(disabled) }, async () => {
-    const { result, url, fetchImpl } = await catalog(
-      { query: "memory", searchSource: "openclaw-control-ui", category: "memory", limit: 5 },
-      { results: [{ score: 9, package: remotePlugin }] },
-    );
-    expect(fetchImpl).toHaveBeenCalledOnce();
-    expect(url.pathname).toBe("/api/v1/plugins/search");
-    expect(Object.fromEntries(url.searchParams)).toEqual({
-      q: "memory",
-      category: "memory",
-      limit: "5",
-      ...(disabled ? {} : { searchSource: "openclaw-control-ui" }),
-    });
-    expect(result.items.map((item) => item.packageName)).toEqual(["memory-plus"]);
-  });
-});
-
 it.each([false, true])(
-  "retries only unrecorded searches: telemetry disabled=%s",
+  "attributes searches and retries only unrecorded requests: telemetry disabled=%s",
   async (disabled) => {
     await withEnvAsync({ CLAWHUB_DISABLE_TELEMETRY: String(disabled) }, async () => {
       const fetchImpl = vi
-        .fn(async () => jsonResponse({ results: [{ score: 9, package: remotePlugin }] }))
+        .fn(async (_input: string | URL | Request) =>
+          jsonResponse({ results: [{ score: 9, package: remotePlugin }] }),
+        )
         .mockRejectedValueOnce(new TypeError("fetch failed"));
       vi.spyOn(globalThis, "fetch").mockImplementation(fetchImpl);
       const result = fetchClawHubPluginCatalog({
-        baseUrl: "https://example.com",
+        ...registry,
         query: "memory",
         searchSource: "openclaw-control-ui",
+        category: "memory",
+        limit: 5,
       });
       if (disabled) {
         await expect(result).resolves.toMatchObject({ items: [{ packageName: "memory-plus" }] });
@@ -114,6 +94,18 @@ it.each([false, true])(
         await expect(result).rejects.toThrow("fetch failed");
         expect(fetchImpl).toHaveBeenCalledOnce();
       }
+      const input = fetchImpl.mock.calls[0]?.[0];
+      if (!input) {
+        throw new Error("Expected a catalog request");
+      }
+      const url = new URL(input instanceof Request ? input.url : input);
+      expect(url.pathname).toBe("/api/v1/plugins/search");
+      expect(Object.fromEntries(url.searchParams)).toEqual({
+        q: "memory",
+        category: "memory",
+        limit: "5",
+        ...(disabled ? {} : { searchSource: "openclaw-control-ui" }),
+      });
     });
   },
 );
@@ -158,36 +150,24 @@ it.each([
   );
 });
 
-it("reads the bounded plugin overview in one request", async () => {
+it("reads ranked plugins and categories from the overview", async () => {
   const ranking = { featured: true, trending: true, featuredRank: 1, trendingRank: 0 };
   const fetchImpl = mockResponse({
     categories: [remoteCategory],
     items: [{ ...remotePlugin, ...ranking }],
   });
 
-  const result = await fetchClawHubPluginOverview({
-    baseUrl: "https://example.com",
-  });
+  const result = await fetchClawHubPluginOverview(registry);
 
   expect(fetchImpl.url().pathname).toBe("/api/v1/plugins/overview");
   expect(result.categories).toEqual([remoteCategory]);
-  expect(result.items).toEqual([
-    expect.objectContaining({
+  expect(result.items).toMatchObject([
+    {
       packageName: "memory-plus",
       iconUrl: `https://example.com${remotePlugin.icon}`,
       ...ranking,
-    }),
+    },
   ]);
-  expect(fetchImpl.fetch).toHaveBeenCalledOnce();
-});
-
-it("retains category priority identities from curated page metadata", async () => {
-  const category = { ...remoteCategory, pinnedPackages: ["@vendor/model"] };
-  const { result } = await catalog(
-    { intent: "all", category: "models" },
-    { items: [], categories: [category] },
-  );
-  expect(result).toEqual({ items: [], categories: [category] });
 });
 
 it("browses the combined plugin endpoint with an opaque cursor", async () => {
@@ -202,16 +182,8 @@ it("browses the combined plugin endpoint with an opaque cursor", async () => {
     sort: "trending",
     limit: "12",
   });
-  expect(result).toEqual({
-    items: [
-      {
-        packageName: "memory-plus",
-        ...listingMetadata,
-        iconUrl: `https://example.com${remotePlugin.icon}`,
-        downloads: 42,
-        installs: 7,
-      },
-    ],
+  expect(result).toMatchObject({
+    items: [{ packageName: "memory-plus", downloads: 42, installs: 7 }],
     nextCursor: "pkgplugins:{opaque}",
   });
 });
@@ -242,9 +214,11 @@ it.each([
     { category: "models", curated: "true", sort: "downloads", limit: "8" },
   ],
 ] as const)("preserves canonical ordering: %j", async (options, query) => {
-  const { url } = await catalog(options);
+  const category = { ...remoteCategory, pinnedPackages: ["@vendor/model"] };
+  const { result, url } = await catalog(options, { items: [], categories: [category] });
   expect(url.pathname).toBe("/api/v1/plugins");
   expect(Object.fromEntries(url.searchParams)).toEqual(query);
+  expect(result).toEqual({ items: [], categories: [category] });
 });
 
 it("validates and restores canonical category ordering", async () => {
@@ -272,33 +246,27 @@ it.each([
 });
 
 it("batch-reads current and legacy categories for exact package versions", async () => {
-  const categories = ["memory", "tools"];
   const packages = [
     { name: "@openclaw/memory", version: "1.2.3" },
     { name: "@openclaw/missing", version: "4.5.6" },
   ];
   const response = [
-    { ...packages[0], categories },
+    { ...packages[0], categories: ["memory", "tools"] },
     { ...packages[1], categories: null },
   ];
-  let request: Request | undefined;
-  const fetchImpl = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-    request = new Request(input, init);
-    return jsonResponse({ packages: response });
-  });
-  vi.spyOn(globalThis, "fetch").mockImplementation(fetchImpl);
+  const request = mockResponse({ packages: response });
 
   const result = await fetchClawHubPluginVersionCategories({
-    baseUrl: "https://example.com",
+    ...registry,
     token: "private-token",
     skipAuth: true,
     packages,
   });
 
-  expect(request?.method).toBe("POST");
-  expect(request?.headers.has("authorization")).toBe(false);
-  expect(new URL(request?.url ?? "").pathname).toBe("/api/v1/packages/categories:batch");
-  await expect(request?.json()).resolves.toEqual({ packages });
+  expect(request.init()?.method).toBe("POST");
+  expect(new Headers(request.init()?.headers).has("authorization")).toBe(false);
+  expect(request.url().pathname).toBe("/api/v1/packages/categories:batch");
+  expect(request.body()).toEqual({ packages });
   expect(result).toEqual(response);
 });
 
@@ -314,7 +282,7 @@ it.each([
 ])("reads exact-version detail with UI metadata %j", async (ui, expected) => {
   const display = {
     topics: ["Retrieval"],
-    tags: { latest: "1.2.3", stable: "1.2.2" },
+    tags: { latest: "1.2.3" },
     createdAt: 100,
     updatedAt: 300,
   };
@@ -343,10 +311,7 @@ it.each([
   };
   const verification = {
     tier: "source-linked",
-    summary: "Linked to source.",
     sourceRepo: "alice/memory-plus",
-    sourceCommit: "abc123",
-    sourcePath: "plugins/memory-plus",
     scanStatus: "clean",
   };
   const security = {
@@ -397,14 +362,13 @@ it.each([
   });
 
   const detail = await fetchClawHubPluginDetail({
-    baseUrl: "https://example.com",
+    ...registry,
     packageName: "memory-plus",
     version: "1.2.2",
   });
 
   const url = fetchImpl.url();
   expect(`${url.pathname}${url.search}`).toBe("/api/v1/packages/memory-plus/detail?version=1.2.2");
-  expect(fetchImpl.fetch).toHaveBeenCalledOnce();
   expect(detail).toMatchObject({
     packageName: "memory-plus",
     iconUrl: `https://example.com${remotePlugin.icon}`,
@@ -431,10 +395,12 @@ it.each([
   });
   expect(detail.uiCapabilities).toEqual(expected);
   const joined = joinDetail(detail);
-  expect(joined).toMatchObject(capabilities);
+  expect(joined).toMatchObject({
+    ...capabilities,
+    mcpServers: ["memory", "legacy"],
+    mcpServerDetails: mcpServers,
+  });
   expect(joined.uiCapabilities).toEqual(expected);
-  expect(joined.mcpServers).toEqual(["memory", "legacy"]);
-  expect(joined.mcpServerDetails).toEqual(detail.mcpServerDetails);
   expect(Value.Check(PluginDiscoveryDetailSchema, joined)).toBe(true);
 });
 
@@ -499,8 +465,32 @@ it("withholds unsafe MCP endpoints and only projects bounded public metadata", a
   expect(Value.Check(PluginDiscoveryDetailSchema, joinDetail(detail))).toBe(true);
 });
 
+it("keeps astral MCP display text whole at the metadata caps", async () => {
+  const detail = await readDetail({
+    version: {
+      version: "1.2.3",
+      createdAt: 100,
+      pluginManifestSummary: {
+        configFields: [],
+        bundledSkills: [],
+        mcpServers: [
+          {
+            name: "astral",
+            transport: "stdio",
+            scope: `${"s".repeat(999)}\u{1F600}scope tail`,
+            setup: `${"d".repeat(1999)}\u{1F9DE}setup tail`,
+          },
+        ],
+      },
+    },
+  });
+  expect(detail.mcpServerDetails).toEqual([
+    { name: "astral", transport: "stdio", scope: "s".repeat(999), setup: "d".repeat(1999) },
+  ]);
+});
+
 it.each([undefined, {}])("keeps unreleased detail with optional security: %s", async (security) => {
-  const fetchImpl = mockResponse({
+  const detail = await readDetail({
     package: {
       ...remotePlugin,
       latestVersion: undefined,
@@ -511,28 +501,19 @@ it.each([undefined, {}])("keeps unreleased detail with optional security: %s", a
     readme: null,
     security,
   });
-  const detail = await fetchClawHubPluginDetail({
-    baseUrl: "https://example.com",
+  expect(detail).toMatchObject({
     packageName: "memory-plus",
-    skipAuth: true,
+    versions: [],
+    configFields: [],
+    selectedRelease: null,
+    downloadability: {
+      status: "unavailable",
+      reason: "The listing has no selected release.",
+    },
+    metadata: { manifest: "missing", readme: "missing", security: "missing" },
+    compatibility: { minGatewayVersion: ">=2.0.0" },
   });
-  expect(detail).toEqual(
-    expect.objectContaining({
-      packageName: "memory-plus",
-      versions: [],
-      configFields: [],
-      selectedRelease: null,
-      downloadability: {
-        status: "unavailable",
-        reason: "The listing has no selected release.",
-      },
-      metadata: { manifest: "missing", readme: "missing", security: "missing" },
-      compatibility: { minGatewayVersion: ">=2.0.0" },
-    }),
-  );
-  expect(detail.readme).toBeUndefined();
-  expect(detail.security).toBeUndefined();
-  expect(fetchImpl.fetch).toHaveBeenCalledOnce();
+  expect([detail.readme, detail.security]).toEqual([undefined, undefined]);
 });
 it.each([
   { blocked: true, securityVersion: "1.0.0", expected: "unavailable" },

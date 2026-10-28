@@ -2,10 +2,8 @@ import { randomUUID } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { applySessionEntryTargetOperation } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { resolveSqliteSessionKey } from "../config/sessions/session-accessor.sqlite-scope-helpers.js";
-import {
-  acquireSessionActorStorage,
-  captureSessionActorStorageOwner,
-} from "../config/sessions/session-actor-storage-binding.js";
+import { acquireSessionActorStorage } from "../config/sessions/session-actor-storage-acquisition.js";
+import { captureSessionActorStorageOwner } from "../config/sessions/session-actor-storage-binding.js";
 import { buildSessionCreationStamp } from "../config/sessions/session-entry-provenance.js";
 import type { CapturedSessionEntryReadSource } from "../config/sessions/session-entry-read-source.types.js";
 import type { SessionPendingInputAuthorityFacts } from "../config/sessions/session-pending-input-authority.js";

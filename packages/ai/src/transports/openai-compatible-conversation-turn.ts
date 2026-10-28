@@ -1,17 +1,6 @@
 // Some providers require a non-empty user or assistant turn before submission.
 import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 
-function hasNonEmptyContentPart(part: unknown): boolean {
-  if (!part || typeof part !== "object") {
-    return false;
-  }
-  const record = part as Record<string, unknown>;
-  if (record.type === "text") {
-    return hasNonEmptyString(record.text);
-  }
-  return true;
-}
-
 function hasNonEmptyMessageContent(content: unknown): boolean {
   if (hasNonEmptyString(content)) {
     return true;
@@ -19,7 +8,16 @@ function hasNonEmptyMessageContent(content: unknown): boolean {
   if (!Array.isArray(content)) {
     return false;
   }
-  return content.some(hasNonEmptyContentPart);
+  return content.some((part) => {
+    if (!part || typeof part !== "object") {
+      return false;
+    }
+    const record = part as Record<string, unknown>;
+    if (record.type === "text") {
+      return hasNonEmptyString(record.text);
+    }
+    return true;
+  });
 }
 
 /** Returns whether an OpenAI-compatible messages payload contains a usable turn. */

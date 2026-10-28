@@ -1,14 +1,23 @@
 import {
   normalizeJsonSchemaForTypeBox,
   normalizeTypeBoxValidationErrors,
+  prepareJsonSchemaFormats,
+  type JsonSchemaRefinement,
   type TypeBoxValidationError,
 } from "@openclaw/normalization-core/json-schema";
+import { createJsonSchemaValidator } from "@openclaw/normalization-core/json-schema-validator";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
-// Compiles plugin manifest schemas for validation without runtime loading.
 import { Format } from "typebox/format";
-import { Check, Compile, Pointer, type Validator as TypeBoxValidator } from "typebox/schema";
+import {
+  Check,
+  Compile,
+  HasUnevaluated,
+  Pointer,
+  type Validator as TypeBoxValidator,
+} from "typebox/schema";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { getRuntimeExecutionProfile } from "../../standalone-runtime-profile.mjs";
 import { appendAllowedValuesHint, summarizeAllowedValues } from "../config/allowed-values.js";
 import { LruCache } from "../infra/lru-cache.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
@@ -21,9 +30,15 @@ import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 
+type SchemaValidator = {
+  Check(value: unknown): boolean;
+  Errors(value: unknown): [boolean, TypeBoxValidationError[]];
+};
+
 type CachedValidator = {
   hasDefaults: boolean;
-  validate: TypeBoxValidator;
+  validate: SchemaValidator;
+  validationSchema: JsonSchemaValue;
   schema: JsonSchemaValue;
 };
 
@@ -35,7 +50,7 @@ export type JsonSchemaValue = JsonSchemaObject | boolean;
 
 const schemaCache = new LruCache<CachedValidator>(512);
 const immutableSchemaValidators = new WeakMap<object, CachedValidator>();
-const annotationOnlyFormats = [
+const annotationOnlyFormats = new Set([
   "date-time",
   "date",
   "duration",
@@ -56,7 +71,24 @@ const annotationOnlyFormats = [
   "uri-template",
   "url",
   "uuid",
-] as const;
+]);
+
+function createPluginFormatPolicy(): ReadonlyMap<string, JsonSchemaRefinement> {
+  const formats = new Map<string, JsonSchemaRefinement>();
+  for (const [name, check] of Format.Entries()) {
+    if (!annotationOnlyFormats.has(name)) {
+      formats.set(name, {
+        check: (value) => typeof value !== "string" || check(value),
+        error: () => `must match format "${name}"`,
+      });
+    }
+  }
+  formats.set("uri", {
+    check: (value) => typeof value !== "string" || URL.canParse(value),
+    error: () => 'must match format "uri"',
+  });
+  return formats;
+}
 
 function schemaHasDefaults(schema: unknown): boolean {
   if (!schema || typeof schema !== "object") {
@@ -94,8 +126,19 @@ function applyValidatedSourceDefaults(
   return value;
 }
 
-function compileSchema(schema: JsonSchemaValue): TypeBoxValidator {
-  return withPluginFormatSemantics(() => Compile(normalizeJsonSchemaForTypeBox(schema) as never));
+function createSchemaValidator(schema: JsonSchemaValue): SchemaValidator {
+  const normalized = normalizeJsonSchemaForTypeBox(schema);
+  if (getRuntimeExecutionProfile() !== "embedded-aot") {
+    const validate: TypeBoxValidator = Compile(normalized);
+    if (validate.IsAccelerated() || !HasUnevaluated({}, normalized)) {
+      return validate;
+    }
+  }
+  const validate = createJsonSchemaValidator(normalized);
+  return {
+    Check: validate.check,
+    Errors: (value) => [false, validate.errors(value)],
+  };
 }
 
 function relaxConditionalRequiredKeywords(
@@ -125,28 +168,7 @@ function relaxConditionalRequiredKeywords(
   ) as JsonSchemaValue;
 }
 
-function withPluginFormatSemantics<T>(callback: () => T): T {
-  const previousFormats = Format.Entries();
-  // Compiled checks capture format functions; interpreted errors read the global registry.
-  // Scope both paths without changing other TypeBox consumers.
-  Format.Set("uri", (value) => URL.canParse(value));
-  for (const format of annotationOnlyFormats) {
-    Format.Set(format, () => true);
-  }
-  try {
-    return callback();
-  } finally {
-    Format.Clear();
-    for (const [format, check] of previousFormats) {
-      Format.Set(format, check);
-    }
-  }
-}
-
-function checkSchemaWithCurrentFormats(
-  validate: TypeBoxValidator,
-  value: unknown,
-): TypeBoxValidationError[] | null {
+function checkSchema(validate: SchemaValidator, value: unknown): TypeBoxValidationError[] | null {
   if (validate.Check(value)) {
     return null;
   }
@@ -385,9 +407,11 @@ export function validateJsonSchemaValue(params: {
       }
     }
     if (!cached) {
+      const validationSchema = prepareJsonSchemaFormats(params.schema, createPluginFormatPolicy());
       cached = {
         hasDefaults: schemaHasDefaults(params.schema),
-        validate: compileSchema(params.schema),
+        validate: createSchemaValidator(validationSchema),
+        validationSchema,
         schema: params.schema,
       };
       if (params.cache !== false) {
@@ -402,37 +426,35 @@ export function validateJsonSchemaValue(params: {
     }
   }
 
-  return withPluginFormatSemantics(() => {
-    const originalValue = params.sourceValue === undefined ? params.value : params.sourceValue;
-    const value =
-      params.applyDefaults && cached.hasDefaults
-        ? applyJsonSchemaDefaults(params.schema, structuredClone(originalValue))
-        : originalValue;
-    const errors = checkSchemaWithCurrentFormats(cached.validate, value);
-    // Defaults may activate a required-only conditional failure in otherwise valid source.
-    if (
-      errors &&
-      !(
-        params.applyDefaults &&
-        value !== originalValue &&
-        Check(
-          normalizeJsonSchemaForTypeBox(relaxConditionalRequiredKeywords(params.schema)),
-          value,
-        ) &&
-        cached.validate.Check(originalValue)
-      )
-    ) {
-      return { ok: false, errors: formatValidationErrors(errors) };
-    }
-    if (originalValue === params.value) {
-      return { ok: true, value };
-    }
-    return {
-      ok: true,
-      value:
-        value === originalValue
-          ? params.value
-          : applyValidatedSourceDefaults(structuredClone(params.value), originalValue, value),
-    };
-  });
+  const originalValue = params.sourceValue === undefined ? params.value : params.sourceValue;
+  const value =
+    params.applyDefaults && cached.hasDefaults
+      ? applyJsonSchemaDefaults(cached.validationSchema, structuredClone(originalValue))
+      : originalValue;
+  const errors = checkSchema(cached.validate, value);
+  // Defaults may activate a required-only conditional failure in otherwise valid source.
+  if (
+    errors &&
+    !(
+      params.applyDefaults &&
+      value !== originalValue &&
+      Check(
+        normalizeJsonSchemaForTypeBox(relaxConditionalRequiredKeywords(cached.validationSchema)),
+        value,
+      ) &&
+      cached.validate.Check(originalValue)
+    )
+  ) {
+    return { ok: false, errors: formatValidationErrors(errors) };
+  }
+  if (originalValue === params.value) {
+    return { ok: true, value };
+  }
+  return {
+    ok: true,
+    value:
+      value === originalValue
+        ? params.value
+        : applyValidatedSourceDefaults(structuredClone(params.value), originalValue, value),
+  };
 }

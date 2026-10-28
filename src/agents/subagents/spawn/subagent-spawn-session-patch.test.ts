@@ -223,7 +223,7 @@ it("inherits admitted skill pins without overwriting a parent refresh", async ()
     });
     let refreshedParent: SessionEntry | null = null;
     const preparePhysical = sessionStorePaths.preparePhysicalSessionStorePath;
-    const prepare = vi
+    using _ = vi
       .spyOn(sessionStorePaths, "preparePhysicalSessionStorePath")
       .mockImplementation(async (...args) => {
         if (args[0].sessionKey === childSessionKey) {
@@ -235,26 +235,23 @@ it("inherits admitted skill pins without overwriting a parent refresh", async ()
         }
         return preparePhysical(...args);
       });
-    try {
-      const result = await spawn({
-        expectedParentSessionId: "parent-first",
-        senderIsOwner: true,
-      });
-      expect(result).toMatchObject({ status: "ok" });
-      const child = readEntry(storePath, childSessionKey);
-      expect(child).toMatchObject({
-        spawnedBySessionId: "parent-first",
-        spawnedBySenderIsOwner: true,
-        skillLibrarySelections,
-      });
-      expect(refreshedParent).toMatchObject({
-        totalTokens: 10,
-        skillLibrarySelections: [],
-      });
-      expect(loadSessionEntry(scope)).toEqual(refreshedParent);
-    } finally {
-      prepare.mockRestore();
-    }
+
+    const result = await spawn({
+      expectedParentSessionId: "parent-first",
+      senderIsOwner: true,
+    });
+    expect(result).toMatchObject({ status: "ok" });
+    const child = readEntry(storePath, childSessionKey);
+    expect(child).toMatchObject({
+      spawnedBySessionId: "parent-first",
+      spawnedBySenderIsOwner: true,
+      skillLibrarySelections,
+    });
+    expect(refreshedParent).toMatchObject({
+      totalTokens: 10,
+      skillLibrarySelections: [],
+    });
+    expect(loadSessionEntry(scope)).toEqual(refreshedParent);
   });
 });
 

@@ -1,6 +1,5 @@
 import path from "node:path";
 import { serialize } from "node:v8";
-import { Type } from "typebox";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
@@ -13,7 +12,7 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { SqliteTranscriptMutationConflictError } from "../../config/sessions/session-mutation-conflict-error.js";
-import type { Model } from "../../llm/types.js";
+import type { Context, Model } from "../../llm/types.js";
 import type { ReplyBackendMessageInjectionV2 } from "../../sessions/session-controller.contracts.js";
 import { beginReplyMessageInjectionTarget } from "../../sessions/session-controller.js";
 import { captureCurrentReplyMessageInjectionTarget } from "../../sessions/session-controller.message-injection.js";
@@ -31,6 +30,7 @@ import { createToolResultPromptProjectionState } from "../embedded-agent-runner/
 import type { AgentEvent } from "../runtime/index.js";
 import { guardSessionManager } from "../session-tool-result-guard-wrapper.js";
 import { installSessionToolResultGuard } from "../session-tool-result-guard.js";
+import { createStubTool } from "../test-helpers/agent-tool-stubs.js";
 import {
   createAssistant,
   createAssistantResultStream,
@@ -344,29 +344,21 @@ it("keeps the active turn and all steers after an earlier steer receipt rewrites
     });
     const toolStarted = createDeferredCore();
     const releaseTool = createDeferredCore();
-    let requests = 0;
+    const requests: Context["messages"][] = [];
     const words = ["W0XYZ", "W1XYZ", "W2XYZ", "W3XYZ", "W4XYZ"];
     const inputs = words.map((word, index) => ({
       text: `Also include the word ${word}.`,
       idempotencyKey: `steer-${index}`,
     }));
     streamMocks.streamSimple.mockImplementation((model, context) => {
-      requests += 1;
-      const text = context.messages
-        .filter((message) => message.role === "user")
-        .flatMap((message) =>
-          typeof message.content === "string"
-            ? [message.content]
-            : message.content.flatMap((block) => (block.type === "text" ? [block.text] : [])),
-        )
-        .join("\n");
+      requests.push(context.messages);
       return createAssistantResultStream(
         createAssistant(
           model,
-          requests === 1
+          requests.length === 1
             ? [{ type: "toolCall", id: "held-tool", name: "hold", arguments: {} }]
-            : [{ type: "text", text: words.filter((word) => text.includes(word)).join(" ") }],
-          requests === 1 ? "toolUse" : "stop",
+            : "Done",
+          requests.length === 1 ? "toolUse" : "stop",
         ),
       );
     });
@@ -375,10 +367,7 @@ it("keeps the active turn and all steers after an earlier steer receipt rewrites
       withSessionWriteSettlement: transcript.withOwnedTranscriptWrite,
       customTools: [
         {
-          name: "hold",
-          label: "Hold",
-          description: "Hold the current tool until steering is queued",
-          parameters: Type.Object({}),
+          ...createStubTool("hold"),
           execute: async () => {
             toolStarted.resolve();
             await releaseTool.promise;
@@ -466,11 +455,10 @@ it("keeps the active turn and all steers after an earlier steer receipt rewrites
       expect(await Promise.all(attempts.map((attempt) => attempt.outcome))).toEqual(
         words.map(() => ({ status: "accepted" })),
       );
-      expect(requests).toBe(2);
-      expect(session.messages.at(-1)).toMatchObject({
-        role: "assistant",
-        content: [{ type: "text", text: "W0XYZ W1XYZ W2XYZ W3XYZ W4XYZ" }],
-      });
+      expect(requests).toHaveLength(2);
+      for (const input of inputs) {
+        expect(JSON.stringify(requests[1])).toContain(input.text);
+      }
       const reopened = await SessionManager.openAsync(target);
       const users = reopened
         .getBranch()

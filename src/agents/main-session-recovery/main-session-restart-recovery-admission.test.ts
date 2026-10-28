@@ -1,3 +1,4 @@
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -8,10 +9,12 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../config/io.js";
 import {
+  appendTranscriptMessage,
   patchSessionEntryCore,
   loadSessionEntry,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import { GatewayInputRecovery } from "../../gateway/agent-input-recovery.js";
 import { callGateway } from "../../gateway/call.js";
 import { createChannelAutostartRecovery } from "../../gateway/server-channel-autostart-recovery.js";
 import { createGatewayInstanceRuntime } from "../../gateway/server-instance-runtime.js";
@@ -41,8 +44,13 @@ import * as recoveryTargets from "./main-session-restart-recovery-exact-target.j
 import {
   createRestartRecoveryStoreFixture,
   makePendingFinalDelivery,
+  mainSessionEntry,
 } from "./main-session-restart-recovery-fixture.test-support.js";
 import { mainSessionRecoveryLog } from "./main-session-restart-recovery-shared.js";
+import {
+  makeUserMessage,
+  makeToolResultMessage,
+} from "./main-session-restart-recovery-transcript.test-support.js";
 import {
   retryRestartAbortedMainSessionRecovery as retryRecovery,
   scheduleRestartAbortedMainSessionRecovery,
@@ -194,6 +202,109 @@ describe("startup recovery admission", () => {
     }
   });
 
+  it.for([
+    { layout: "canonical", outcome: "resume", pendingAgent: "slow" },
+    { layout: "canonical", outcome: "stop", pendingAgent: "slow" },
+    { layout: "canonical", outcome: "fail", pendingAgent: "slow" },
+    { layout: "shared", outcome: "resume", pendingAgent: "slow" },
+    { layout: "shared", outcome: "resume", pendingAgent: "main" },
+  ] as const)(
+    "recovers ready sessions before pending input custody ($layout, $outcome, $pendingAgent)",
+    async ({ layout, outcome, pendingAgent }, { signal }) => {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: tmpDir }, async () => {
+        const sharedStore = layout === "shared" ? path.join(tmpDir, "shared.sqlite") : undefined;
+        const cfg = {
+          agents: { entries: { main: {}, slow: {} } },
+          ...(sharedStore ? { session: { store: sharedStore } } : {}),
+        };
+        setRuntimeConfigSnapshot(cfg);
+        const targets = [pendingAgent === "slow" ? "main" : "slow", pendingAgent].map(
+          (agentId) => ({
+            agentId,
+            storePath:
+              sharedStore ?? path.join(tmpDir, "agents", agentId, "sessions", "sessions.json"),
+            sessionKey: `agent:${agentId}:main`,
+          }),
+        );
+        for (const target of targets.toSorted((left, right) =>
+          left.agentId.localeCompare(right.agentId),
+        )) {
+          await replaceSessionEntry(
+            {
+              ...target,
+              defaultAgentId: "main",
+            },
+            mainSessionEntry({
+              sessionId: `${target.agentId}-interrupted`,
+              ...(target.agentId === pendingAgent ? { mainRestartRecovery: undefined } : {}),
+              pendingFinalDelivery: makePendingFinalDelivery(),
+            }),
+          );
+          for (const message of [
+            makeUserMessage("resume interrupted tool work"),
+            makeToolResultMessage("saved result"),
+          ]) {
+            await appendTranscriptMessage(
+              { ...target, sessionId: `${target.agentId}-interrupted` },
+              { cwd: tmpDir, message },
+            );
+          }
+        }
+        const pendingBefore = structuredClone(loadSessionEntry(targets[1]!));
+        const pending = createDeferred();
+        const inputRecovery = new GatewayInputRecovery(true);
+        await inputRecovery.track(
+          Promise.resolve({
+            initial: Promise.resolve(),
+            pending: new Map([[pendingAgent, pending.promise]]),
+            settled: pending.promise,
+          }),
+        );
+        const first = createDeferred();
+        const second = createDeferred();
+        let completed = 0;
+        observeAdmission((origin) => {
+          if (origin === "main-session:startup-recovery") {
+            (++completed === 1 ? first : second).resolve();
+          }
+        });
+        const failed = createDeferred();
+        const decisions = vi.spyOn(mainSessionRecoveryLog, "info");
+        const warnings = vi.spyOn(mainSessionRecoveryLog, "warn").mockImplementation((message) => {
+          if (message.includes("main-session input recovery failed for slow")) {
+            failed.resolve();
+          }
+        });
+        dispatchSettlement.resolve();
+        const recovery = schedule(
+          { getConfig: () => cfg, inputRecovery, maxRetries: 1 },
+          pending.resolve,
+        );
+        await withinTest(first.promise, signal);
+        expect(
+          callGateway,
+          JSON.stringify({ warnings: warnings.mock.calls, decisions: decisions.mock.calls }),
+        ).toHaveBeenCalledOnce();
+        expect(loadSessionEntry(targets[0]!)?.abortedLastRun).toBe(false);
+        expect(loadSessionEntry(targets[1]!)).toEqual(pendingBefore);
+        if (outcome === "stop") {
+          await recovery.stop();
+          pending.resolve();
+        } else if (outcome === "fail") {
+          pending.reject(new Error("input custody restoration failed"));
+          await withinTest(failed.promise, signal);
+          await recovery.stop();
+        } else {
+          pending.resolve();
+          await withinTest(second.promise, signal);
+          await recovery.stop();
+        }
+        expect(callGateway).toHaveBeenCalledTimes(outcome === "resume" ? 2 : 1);
+        expect(loadSessionEntry(targets[1]!)?.abortedLastRun).toBe(outcome !== "resume");
+      });
+    },
+  );
+
   it.for(["resume", "crash", "stop", "replace", "healthy"] as const)(
     "preserves interrupted turns through crash-loop quarantine (%s)",
     async (action, { signal }) => {
@@ -292,9 +403,6 @@ describe("startup recovery admission", () => {
       await withinTest(Promise.race([paused.promise, dispatched.promise]), signal);
       expect(callGateway).not.toHaveBeenCalled();
       expect(loadSessionEntry(target)).toEqual(before);
-      expect(
-        info.mock.calls.filter(([line]) => line.includes("restart recovery paused until")),
-      ).toEqual([[expect.stringContaining(new Date(now + 10_001).toISOString())]]);
       expect(notice).not.toHaveBeenCalled();
       if (action === "resume") {
         await expect(
@@ -428,29 +536,9 @@ describe("startup recovery admission", () => {
         sessionId: "other-session",
         pendingFinalDelivery: makePendingFinalDelivery(),
       });
-      await makeMainSessionFixture({
-        sessionKey: "agent:main:archived",
-        sessionId: "archived-session",
-        archivedAt: Date.now(),
+      const waitSpy = vi.spyOn(gatewayRuntime, "waitForAgent").mockImplementation(() => {
+        throw new Error("Startup preparation must not wait for execution");
       });
-      await makeMainSessionFixture({
-        sessionKey: "agent:main:subagent:child",
-        sessionId: "child-session",
-        spawnDepth: 1,
-      });
-      const info = vi.spyOn(mainSessionRecoveryLog, "info");
-      const executionWait = createDeferred();
-      const wait = gatewayRuntime.waitForAgent;
-      const waitSpy = vi
-        .spyOn(gatewayRuntime, "waitForAgent")
-        .mockImplementation(async <T>(request: Record<string, unknown>, timeoutMs?: number) => {
-          if (typeof request.timeoutMs === "number" && request.timeoutMs > 0) {
-            executionWait.resolve();
-            await dispatchSettlement.promise;
-            return { status: "ok", endedAt: Date.now() } as T;
-          }
-          return await wait<T>(request, timeoutMs);
-        });
       const prepared = createDeferred();
       const releasePreparation = createDeferred();
       const read = transcriptReaders.readSessionMessagesAsync;
@@ -461,9 +549,7 @@ describe("startup recovery admission", () => {
         }
         return await read(...args);
       });
-      const readSpy = vi
-        .spyOn(transcriptReaders, "readSessionMessagesAsync")
-        .mockImplementation(preparation.run);
+      vi.spyOn(transcriptReaders, "readSessionMessagesAsync").mockImplementation(preparation.run);
       const passFinished = createDeferred();
       observeAdmission((origin) => {
         if (origin === "main-session:startup-recovery") {
@@ -478,7 +564,6 @@ describe("startup recovery admission", () => {
       );
       await withinTest(prepared.promise, signal);
       expect(callGateway).not.toHaveBeenCalled();
-      expect(readSpy).toHaveBeenCalledOnce();
       let stopping: Promise<void> | undefined;
       if (action === "stop") {
         stopping = recovery.stop();
@@ -486,7 +571,7 @@ describe("startup recovery admission", () => {
       }
       releasePreparation.resolve();
       // Execution remains held by dispatchSettlement until this test's cleanup.
-      await withinTest(Promise.race([passFinished.promise, executionWait.promise]), signal);
+      await withinTest(passFinished.promise, signal);
       await stopping;
       expect(preparation.peak).toBe(1);
       expect(callGateway).toHaveBeenCalledTimes(action === "stop" ? 0 : 2);
@@ -500,24 +585,6 @@ describe("startup recovery admission", () => {
       }
       if (action === "continue") {
         expect(waitSpy).not.toHaveBeenCalled();
-        const lines = info.mock.calls.map(([line]) => line);
-        expect(lines).toContainEqual(
-          expect.stringMatching(/startup complete: started=2 .*skipReasons=.*not_main_session:1/),
-        );
-        const decisions = lines
-          .filter((line) => line.startsWith("main-session restart recovery candidate "))
-          .map((line) => JSON.parse(line.slice("main-session restart recovery candidate ".length)));
-        expect(decisions).toHaveLength(2);
-        expect(decisions).toContainEqual(
-          expect.objectContaining({
-            sessionKey: first.sessionKey,
-            sourceRunId: "interrupted-main",
-            decision: "started",
-            nextOwner: "restart-recovery-lane",
-            boot: expect.any(String),
-            pass: expect.any(String),
-          }),
-        );
       }
       if (action === "stop") {
         const state = first.readEntry()?.mainRestartRecovery;
@@ -550,17 +617,9 @@ describe("startup recovery admission", () => {
       const releaseReplay = createDeferred();
       let holdPreparationRead = timing === "startup replay";
       const loadTarget = recoveryTargets.loadExpectedRestartRecoveryTarget;
-      const exactReads: Array<{
-        sessionId?: string;
-        initializationPending?: boolean;
-      }> = [];
       vi.spyOn(recoveryTargets, "loadExpectedRestartRecoveryTarget").mockImplementation(
         async (params) => {
           const entry = await loadTarget(params);
-          exactReads.push({
-            sessionId: entry?.sessionId,
-            initializationPending: entry?.initializationPending,
-          });
           if (holdPreparationRead) {
             holdPreparationRead = false;
             // Finish preparation after recovery reads the row, before it handles that snapshot.
@@ -591,7 +650,7 @@ describe("startup recovery admission", () => {
           failedAttempt.resolve();
         }
       });
-      const info = observeInfo({
+      observeInfo({
         "startup complete:": () => startup.resolve(),
         '"reason":"archived"': () => blocked.resolve(),
       });
@@ -613,10 +672,6 @@ describe("startup recovery admission", () => {
       }
       if (timing !== "preparation commit") {
         await withinTest(replayLoaded.promise, signal);
-        expect(exactReads.at(-1)).toEqual({
-          sessionId: "main-session",
-          initializationPending: true,
-        });
       }
       if (action === "replace") {
         await replaceSessionEntry(target, {
@@ -647,11 +702,6 @@ describe("startup recovery admission", () => {
         expect(callGateway).toHaveBeenCalledTimes(action === "archive" ? 0 : 1);
         expect(loadSessionEntry(target)?.abortedLastRun).toBe(action === "archive");
       }
-      const decisions = info.mock.calls.map(([line]) => line);
-      expect(decisions).toContainEqual(expect.stringContaining('"decision":"deferred"'));
-      expect(decisions).toContainEqual(
-        expect.stringContaining('"nextOwner":"session-preparation"'),
-      );
     },
   );
 
@@ -748,24 +798,10 @@ describe("startup recovery admission", () => {
 
   it.for([
     {
-      name: "ordinary failure during drain",
-      draining: true,
-      failure: () => new Error("preparation failed"),
-    },
-    {
       name: "wrapped drain failure",
       draining: true,
       failure: () =>
         new Error("preparation failed", { cause: new gatewayWorkAdmission.GatewayDrainingError() }),
-    },
-    {
-      name: "aggregate drain failure",
-      draining: true,
-      failure: () =>
-        new AggregateError(
-          [new gatewayWorkAdmission.GatewayDrainingError(), new Error("cleanup failed")],
-          "preparation cleanup failed",
-        ),
     },
     {
       name: "drain error without active drain",

@@ -30,28 +30,25 @@ it.each(["plan", "inventory"] as const)(
       const marker = path.join(parent, ".openclaw-private-update-capture");
       let markerProbes = 0;
       const originalLstatSync = fsSync.lstatSync.bind(fsSync);
-      const spy = vi.spyOn(fsSync, "lstatSync").mockImplementation((target, options) => {
+      using _ = vi.spyOn(fsSync, "lstatSync").mockImplementation((target, options) => {
         if (String(target) === marker) {
           markerProbes += 1;
         }
         return originalLstatSync(target, options);
       });
-      try {
-        // A protected child keeps its excluded parent traversable, with one filesystem scan.
-        expect(policy.isTraversable(parent)).toBe(true);
-        expect(markerProbes).toBe(1);
-        expect(policy.isIncluded(parent)).toBe(false);
-        expect(policy.isIncluded(protectedPath)).toBe(true);
 
-        await fs.writeFile(marker, "openclaw-private-update-capture-v1\n");
-        expect(policy.isTraversable(parent)).toBe(false);
-        expect(policy.isIncluded(protectedPath)).toBe(false);
-        await fs.writeFile(marker, "incomplete");
-        expect(() => policy.isTraversable(parent)).toThrow("Private update capture marker");
-        expect(() => policy.isIncluded(protectedPath)).toThrow("Private update capture marker");
-      } finally {
-        spy.mockRestore();
-      }
+      // A protected child keeps its excluded parent traversable, with one filesystem scan.
+      expect(policy.isTraversable(parent)).toBe(true);
+      expect(markerProbes).toBe(1);
+      expect(policy.isIncluded(parent)).toBe(false);
+      expect(policy.isIncluded(protectedPath)).toBe(true);
+
+      await fs.writeFile(marker, "openclaw-private-update-capture-v1\n");
+      expect(policy.isTraversable(parent)).toBe(false);
+      expect(policy.isIncluded(protectedPath)).toBe(false);
+      await fs.writeFile(marker, "incomplete");
+      expect(() => policy.isTraversable(parent)).toThrow("Private update capture marker");
+      expect(() => policy.isIncluded(protectedPath)).toThrow("Private update capture marker");
     });
   },
 );

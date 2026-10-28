@@ -14,6 +14,7 @@ import {
 } from "../../components/solid/settings-ui.tsx";
 import { registerMemoryImportEnglish } from "../../i18n/locales/en-memory-import.ts";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
+import { registerRouteSubtitlesEnglish } from "../../i18n/locales/en-route-subtitles.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import type { PluginCatalogItem } from "../../lib/plugins/index.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
@@ -24,6 +25,8 @@ import {
   type MemoryEngineSelection,
   type MemoryTab,
 } from "./memory-schema.ts";
+
+registerRouteSubtitlesEnglish();
 
 registerEnglishCatalog(registerSettingsEnglish);
 

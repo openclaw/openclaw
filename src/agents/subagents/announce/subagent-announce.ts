@@ -25,8 +25,8 @@ import {
   type AgentInternalEvent,
 } from "../../internal-events.js";
 import {
+  buildSubagentPrivateCompletionInstruction,
   SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION,
-  SUBAGENT_PRIVATE_COMPLETION_INSTRUCTION,
 } from "../completion/subagent-completion-instructions.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "../registry/subagent-lifecycle-events.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
@@ -40,6 +40,7 @@ import {
 } from "../registry/subagent-registry-read.js";
 import type { PendingFinalDeliveryPayload } from "../registry/subagent-registry-read.types.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
+import { getSubagentTerminalReplySummary } from "../registry/subagent-run-payload-facts.js";
 import { deleteSubagentSessionForCleanup } from "../registry/subagent-session-cleanup.js";
 import { getSubagentDepthFromSessionStoreInWorker } from "../spawn/subagent-depth.js";
 import type { SubagentRunOutcome } from "../subagent-run-outcome.types.js";
@@ -66,6 +67,7 @@ import {
 import {
   resolveAnnounceOrigin,
   resolveSubagentCompletionOrigin,
+  type DeliveryContext,
 } from "./subagent-announce-origin.js";
 import {
   readChildCompletionFindings,
@@ -93,6 +95,7 @@ export type SubagentAnnounceFlowOutcome = NonNullable<
 
 function buildAnnounceReplyInstruction(params: {
   requesterIsSubagent: boolean;
+  requesterOrigin: DeliveryContext | undefined;
   completionTarget?: "parent";
   modelRouteChange?: string;
   preserveModelRouteNotice: boolean;
@@ -103,7 +106,7 @@ function buildAnnounceReplyInstruction(params: {
       ? " Preserve any runtime-authored model-route change notice in your update."
       : " Keep runtime-authored model-route change notices internal on this shared surface.";
   if (params.completionTarget === "parent") {
-    return SUBAGENT_PRIVATE_COMPLETION_INSTRUCTION;
+    return buildSubagentPrivateCompletionInstruction(params.requesterOrigin);
   }
   if (params.requesterIsSubagent) {
     return `${SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION} Convert the reviewed outcome into a concise internal orchestration update for your parent agent in your own words.${modelRouteInstruction} Keep this internal context private (don't mention system/log/stats/session details or announce type).`;
@@ -134,6 +137,7 @@ type SubagentAnnounceFlowParams = Omit<PendingFinalDeliveryPayload, "requesterDi
   /** Exact source reserved synchronously by the durable registry handoff. */
   controllerInput?: SessionControllerInput;
   signal?: AbortSignal;
+  onAccepted?: () => void;
   onExecutionStarted?: () => void;
   onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void | Promise<void>;
   onBeforeDeleteChildSession?: () => boolean | Promise<boolean>;
@@ -217,7 +221,7 @@ async function runSubagentAnnounceFlowBound(
       if (!settled && isSessionRunActive(childSessionId)) {
         shouldDeleteChildSession = false;
         // Keep delete cleanup retryable until the active child can be removed.
-        if (outcome?.status !== "timeout" || params.cleanup === "delete") {
+        if (outcome.status !== "timeout" || params.cleanup === "delete") {
           return "retryable";
         }
       }
@@ -370,7 +374,10 @@ async function runSubagentAnnounceFlowBound(
         reply = timeoutProgress;
       }
     }
-    if (!params.terminalReply && (!ownResult || !childRun?.completion?.terminalReply)) {
+    if (
+      !params.terminalReply &&
+      (!ownResult || !childRun || !getSubagentTerminalReplySummary(childRun))
+    ) {
       if (
         !legacySilent &&
         !reply &&
@@ -532,6 +539,7 @@ async function runSubagentAnnounceFlowBound(
             : undefined;
         const replyInstruction = buildAnnounceReplyInstruction({
           requesterIsSubagent,
+          requesterOrigin: directOrigin,
           completionTarget: params.completionTarget,
           modelRouteChange,
           // Nested and local operator parents may report the route fact. External
@@ -585,6 +593,7 @@ async function runSubagentAnnounceFlowBound(
           directIdempotencyKey,
           onDeliveryResult: reportDeliveryResult,
           signal: params.signal,
+          onAccepted: params.onAccepted,
           onExecutionStarted: params.onExecutionStarted,
           resolveGatewayContext: params.resolveGatewayContext,
           controllerInput: params.controllerInput,
@@ -598,7 +607,7 @@ async function runSubagentAnnounceFlowBound(
     if (hasSqliteWorkerOutcomeUnknown(err)) {
       throw err;
     }
-    defaultRuntime.error?.(`Subagent announce failed: ${String(err)}`);
+    defaultRuntime.error(`Subagent announce failed: ${String(err)}`);
     if (!deliveryResultReported) {
       await reportDeliveryResult(
         err instanceof SourceOwnerChangedError

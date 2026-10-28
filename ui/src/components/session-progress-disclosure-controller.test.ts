@@ -54,6 +54,50 @@ function wheelThenAdvance(transcript: ReturnType<typeof observeTranscript>, ms =
   advance(ms);
 }
 
+it.each(["pointerup", "pointercancel", "lostpointercapture", "blur", "second pointer"])(
+  "releases a header drag on %s and accepts the next drag",
+  (reason) => {
+    const fixture = disclosure({}, true);
+    fixture.show();
+    const summary = fixture.card().querySelector("summary")!;
+    const captured = new Set<number>();
+    summary.setPointerCapture = (id) => captured.add(id);
+    summary.hasPointerCapture = (id) => captured.has(id);
+    summary.releasePointerCapture = (id) => captured.delete(id);
+    const pointer = (target: EventTarget, type: string, id: number, y: number) => {
+      const event = new MouseEvent(type, {
+        bubbles: true,
+        cancelable: true,
+        button: 0,
+        clientY: y,
+      });
+      Object.defineProperties(event, {
+        pointerId: { value: id },
+        isPrimary: { value: id === 1 },
+      });
+      target.dispatchEvent(event);
+    };
+    pointer(summary, "pointerdown", 1, 100);
+    pointer(summary, "pointermove", 1, 80);
+    fixture.expectChoice(true, "20px");
+    if (reason === "blur") {
+      window.dispatchEvent(new Event("blur"));
+    } else if (reason === "second pointer") {
+      pointer(document, "pointerdown", 2, 80);
+    } else {
+      pointer(summary, reason, 1, 80);
+    }
+    expect(captured.size).toBe(0);
+    pointer(summary, "pointermove", 1, 50);
+    fixture.expectChoice(true, "20px");
+    pointer(summary, "pointerdown", 1, 100);
+    pointer(summary, "pointermove", 1, 90);
+    fixture.expectChoice(true, "30px");
+    pointer(summary, "pointerup", 1, 90);
+    expect(captured.size).toBe(0);
+  },
+);
+
 it("parks disclosure gestures and restores the retained choice on reveal", () => {
   const fixture = disclosure({ cardLifetime: {} });
   const view = fixture.show();
@@ -165,7 +209,12 @@ it.each([
   }
   expect(fixture.card().open).toBe(false);
   context.readingHistory = false;
-  const revised = { ...progressCard, revision: 3, markdown: "Revised progress" };
+  const revised = {
+    ...progressCard,
+    revision: 3,
+    markdown: "**Updated progress**",
+    steps: [{ step: "Wire the updated checklist", status: "in_progress" as const }],
+  };
   for (const [status, remount] of [
     ["running", false],
     ["done", false],
@@ -176,6 +225,8 @@ it.each([
     }
     fixture.show(revised, status);
     expect(fixture.card().open).toBe(false);
+    expect(fixture.card().textContent).toContain("Wire the updated checklist");
+    expect(fixture.card().querySelector("strong")?.textContent).toBe("Updated progress");
   }
   fixture.show({ ...revised, revision: 4 });
   expect(fixture.card().open).toBe(false);

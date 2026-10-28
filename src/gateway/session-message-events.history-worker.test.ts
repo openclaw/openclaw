@@ -33,7 +33,7 @@ test.each(["by-id", "count"] as const)(
       messages: [{ eventId: "msg-selected", message: transcriptMessage }],
       updateMode: "none",
     });
-    expect(persisted.appendedCount).toBe(1);
+    expect(persisted.messages.filter((m) => m.appended)).toHaveLength(1);
 
     const { ws } = await openClient({ scopes: ["operator.read"] });
     await using cleanup = { [Symbol.asyncDispose]: () => closeGatewayTestWebSocket(ws) };

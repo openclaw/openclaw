@@ -14,12 +14,6 @@ type IsoBmffTrack = {
 
 type IsoBmffInspection = "audio-only-aac" | "ambiguous" | "not-isobmff";
 
-type Box = {
-  type: string;
-  payloadStart: number;
-  end: number;
-};
-
 type InspectionState = {
   boxCount: number;
   tracks: IsoBmffTrack[];
@@ -44,7 +38,7 @@ async function readBox(
   handle: Awaited<ReturnType<typeof fs.open>>,
   offset: number,
   parentEnd: number,
-): Promise<Box> {
+) {
   if (parentEnd - offset < BOX_HEADER_BYTES) {
     throw new Error("truncated ISO-BMFF box header");
   }
@@ -76,7 +70,7 @@ async function readBox(
 
 async function readSampleEntryTypes(
   handle: Awaited<ReturnType<typeof fs.open>>,
-  box: Box,
+  box: Awaited<ReturnType<typeof readBox>>,
   state: InspectionState,
 ): Promise<string[]> {
   if (box.end - box.payloadStart < 8) {

@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { expect, it } from "vitest";
+import { makeBootRoster } from "../app/bootstrap.test-support.ts";
 import { createChatSubmissions } from "../app/chat-submissions.ts";
 import "../test-helpers/app-sidebar-suite.ts";
 import {
@@ -17,15 +18,16 @@ it.each(["chip", "roster"] as const)(
   async (mode) => {
     const gateway = createGatewayHarness(createTestGatewayClient(async () => ({})));
     const context = {
-      ...createContext(gateway.gateway, createSessions("main", ["agent:main:main"]), {
-        defaultId: "main",
-        mainKey: "main",
-        scope: "per-sender",
-        agents: [
-          { id: "main", name: "Harbor" },
-          { id: "scout", name: "Scout" },
-        ],
-      }),
+      ...createContext(
+        gateway.gateway,
+        createSessions("main", ["agent:main:main"]),
+        makeBootRoster({
+          agents: [
+            { id: "main", name: "Harbor" },
+            { id: "scout", name: "Scout" },
+          ],
+        }),
+      ),
       chatSubmissions: createChatSubmissions(),
     };
     const { sidebar } = await mountSidebarContext(context, "panel", "chat");

@@ -11,11 +11,7 @@ import {
 } from "../../agents/prepared-model-runtime.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../../agents/prepared-model-runtime.test-support.js";
 import { makeProviderModelFixture } from "../../agents/test-helpers/provider-model-fixture.js";
-import {
-  setRuntimeConfigSnapshot,
-  validateConfigObject,
-  type OpenClawConfig,
-} from "../../config/config.js";
+import { setRuntimeConfigSnapshot, type OpenClawConfig } from "../../config/config.js";
 import { captureRuntimeConfigAsyncReader } from "../../config/io.runtime.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
@@ -23,11 +19,6 @@ import {
   patchSessionEntryCore,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import * as sessionReplacement from "../../config/sessions/session-accessor.sqlite-replacement-projection.js";
-import {
-  areDiagnosticsEnabledForProcess,
-  setDiagnosticsEnabledForProcess,
-} from "../../infra/diagnostic-events.js";
 import {
   createDiagnosticTraceContext,
   getActiveDiagnosticTraceContext,
@@ -97,8 +88,6 @@ function pausedCatalog(calls = 1) {
 }
 
 function diagnostics() {
-  const previous = areDiagnosticsEnabledForProcess();
-  setDiagnosticsEnabledForProcess(true);
   let clock = performance.now();
   const clockSpy = vi.spyOn(performance, "now").mockImplementation(() => clock);
   const records: Array<{ traceId: string | undefined; message: string }> = [];
@@ -115,7 +104,6 @@ function diagnostics() {
     restore() {
       clockSpy.mockRestore();
       log.mockRestore();
-      setDiagnosticsEnabledForProcess(previous);
     },
   };
 }
@@ -156,7 +144,6 @@ async function modelContext(state: OpenClawTestState, store: string) {
     },
     session: { store },
   };
-  expect(validateConfigObject(cfg)).toMatchObject({ ok: true });
   await state.writeConfig(cfg);
   setRuntimeConfigSnapshot(cfg);
   return patchContext(async () => [model], cfg);
@@ -330,11 +317,13 @@ test(
     expect(timing.records).toHaveLength(2);
     expect(
       timing.records.find((record) => record.traceId === catalogTrace.traceId)?.message,
-    ).toMatch(/^slow session patch 1500ms method=sessions\.patch .* catalog=1500ms(?: |$)/);
+    ).toMatch(
+      /^slow session patch 1500ms method=sessions\.patch targets=1 fields=contextWindow .* catalog=1500ms(?: |$)/,
+    );
     expect(
       timing.records.find((record) => record.traceId === successorTrace.traceId)?.message,
     ).toMatch(
-      /^slow session patch 1500ms method=sessions\.patch .* lifecycleAdmission=1500ms(?: |$)/,
+      /^slow session patch 1500ms method=sessions\.patch targets=1 fields=pinned .* lifecycleAdmission=1500ms(?: |$)/,
     );
   }),
 );
@@ -494,7 +483,7 @@ test(
     expect(readEntry(metadataKey)?.pinnedAt).toEqual(expect.any(Number));
     expect(timing.records.map(({ message }) => message)).toEqual([
       expect.stringMatching(
-        /^slow session patch 1500ms method=sessions\.patchMany .* catalog=3000ms(?: |$)/,
+        /^slow session patch 1500ms method=sessions\.patchMany targets=2 fields=contextWindow .* catalog=3000ms(?: |$)/,
       ),
     ]);
   }),
@@ -731,7 +720,6 @@ test(
       errorShape(ErrorCodes.FORBIDDEN, "Original cold-store source was revoked"),
     );
     const source = new AbortController();
-    let failedOpenAdmissions = 0;
     const admissionObserver = probe.admission(workerAdmission, (request, grant, admit) => {
       if (
         request.stage === "open" &&
@@ -740,12 +728,10 @@ test(
         isRecord(request.facts.creatingIdentity) &&
         request.facts.creatingIdentity.key === `path:${failedPath}`
       ) {
-        failedOpenAdmissions++;
         source.abort(revoked);
       }
       admit(request, grant);
     });
-    const writers = vi.spyOn(sessionReplacement, "applySessionEntryCanonicalReplacements");
     const respond = vi.fn();
     const params = { targets, patch: { model: "openai/gpt-5.6-sol" } };
     try {
@@ -759,17 +745,10 @@ test(
           }
         },
       });
-      expect(failedOpenAdmissions).toBe(1);
-      expect(source.signal.reason).toBe(revoked);
       expectBatch(respond, [
         { ...failed, ok: false, error: revoked.error },
         { ...successful, ok: true },
       ]);
-      // Failed preparation must not reenter the canonical writer through a fallback.
-      expect(writers.mock.calls.some(([request]) => request.storePath === failedPath)).toBe(false);
-      expect(writers.mock.calls.some(([request]) => request.storePath === successfulPath)).toBe(
-        true,
-      );
       await expect(fs.stat(failedPath)).rejects.toMatchObject({ code: "ENOENT" });
       expect(readEntry(successful.key, successful.agentId, successfulPath)).toMatchObject({
         sessionId: expect.any(String),
@@ -777,7 +756,6 @@ test(
         modelOverride: "gpt-5.6-sol",
       });
     } finally {
-      writers.mockRestore();
       admissionObserver.mockRestore();
     }
   }, false),

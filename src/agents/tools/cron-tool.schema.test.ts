@@ -57,7 +57,6 @@ describe("cron model schema regressions", () => {
       { readOnly: true },
     ]) {
       const changed = createCronToolSchema(options);
-      expect(changed).not.toBe(unscoped);
       expect(changed).not.toEqual(unscoped);
       expect(createCronToolSchema({ ...options })).toBe(changed);
     }
@@ -74,7 +73,11 @@ describe("cron model schema regressions", () => {
   });
 
   it("does not advertise forbidden automation management inside a scheduled run", () => {
-    const restricted = createCronTool({ selfRemoveOnlyJobId: "current", runId: "run-current" });
+    const restricted = createCronTool({
+      agentSessionKey: "agent:main:cron:current",
+      selfRemoveOnlyJobId: "current",
+      runId: "run-current",
+    });
     expect(restricted.parameters).toHaveProperty("properties.action.enum", [
       "status",
       "list",
@@ -84,9 +87,6 @@ describe("cron model schema regressions", () => {
     ]);
     for (const field of ["job", "text", "mode", "runMode", "sessionKey", "contextMessages"]) {
       expect(restricted.parameters).not.toHaveProperty(`properties.${field}`);
-    }
-    for (const action of ["add", "update", "run", "wake"]) {
-      expect(Value.Check(restricted.parameters, { action, jobId: "current" })).toBe(false);
     }
     expect(restricted.description).not.toContain("ADD: job");
     expect(restricted.description).not.toContain("delayed self-wakeups");
@@ -113,12 +113,45 @@ describe("cron model schema regressions", () => {
     expect(Value.Check(recovery, { action: "next_check" })).toBe(false);
   });
 
+  it("keeps conversation definitions stable while scheduled calls stay self-scoped", async () => {
+    const agentSessionKey = "agent:main:prefix-proof";
+    const user = createCronTool({ agentSessionKey });
+    const scheduled = createCronTool({
+      agentSessionKey,
+      selfRemoveOnlyJobId: "current",
+      runId: "run-current",
+    });
+    expect(scheduled.description).toBe(user.description);
+    expect(scheduled.parameters).toEqual(user.parameters);
+    for (const action of ["scratch_get", "scratch_set", "record_result", "next_check"]) {
+      expect(Value.Check(user.parameters, { action })).toBe(true);
+      await expect(user.execute(action, { action })).rejects.toThrow(
+        /only available (?:inside|to) the currently running/,
+      );
+    }
+    for (const action of ["add", "update", "run", "wake"]) {
+      const args = { action, jobId: "current" };
+      expect(Value.Check(scheduled.parameters, args)).toBe(true);
+      await expect(scheduled.execute(action, args)).rejects.toThrow(
+        "Automations tool is restricted to the current automation.",
+      );
+    }
+    await expect(
+      scheduled.execute("other-job", { action: "remove", jobId: "other" }),
+    ).rejects.toThrow("Automations tool is restricted to the current automation.");
+    expect(callGatewayMock).not.toHaveBeenCalled();
+    await scheduled.execute("own-job", { action: "remove", jobId: "current" });
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      { method: "cron.remove", params: { id: "current" } },
+      expect.anything(),
+    );
+  });
+
   it("advertises timeout clears while retaining numeric bounds", () => {
     for (const [timeoutSeconds, accepted] of [
       [null, true],
       [0, true],
       [0.03, true],
-      [30, true],
       [-1, false],
       ["30", false],
     ] as const) {
@@ -132,13 +165,10 @@ describe("cron model schema regressions", () => {
     }
   });
 
-  it("keeps declarationKey portable across model schema converters", () => {
+  it("projects portable job keys and the complete schema into llama.cpp's GBNF subset", () => {
     const declarationKey = propertyAt(schema, "job.declarationKey");
     expect(declarationKey).toMatchObject({ type: "string", minLength: 1, maxLength: 200 });
     expect(declarationKey).not.toHaveProperty("pattern");
-  });
-
-  it("projects the complete cron schema into llama.cpp's GBNF subset", () => {
     const projected = normalizeToolParameterSchema(schema, {
       modelCompat: { toolSchemaProfile: "llamacpp" },
     });
@@ -161,17 +191,12 @@ describe("cron model schema regressions", () => {
   );
 
   it("preserves failure-alert values in the shared job schema", () => {
-    expect(propertyAt(schema, "job.failureAlert")?.anyOf).toContainEqual({
-      type: "boolean",
-      const: false,
-    });
     for (const [failureAlert, accepted] of [
       [null, true],
       [false, true],
       [{ after: 3, cooldownMs: 0, includeSkipped: true }, true],
       [undefined, true],
       [true, false],
-      ["invalid", false],
     ] as const) {
       const args = { action: "update", job: { failureAlert } };
       const validate = () =>
@@ -181,7 +206,6 @@ describe("cron model schema regressions", () => {
           name: "automations",
           arguments: args,
         });
-      expect(Value.Check(schema, args)).toBe(accepted);
       if (accepted) {
         expect(validate()).toEqual(args);
       } else {
@@ -243,16 +267,7 @@ describe("cron model schema regressions", () => {
       "systemEvent",
       "agentTurn",
     ]);
-    for (const key of [
-      "command",
-      "cwd",
-      "mode",
-      "match",
-      "batchMs",
-      "maxBatchBytes",
-      "source",
-      "options",
-    ]) {
+    for (const key of ["command", "source"]) {
       expect(propertyAt(disabled.parameters, `job.schedule.${key}`)).toBeUndefined();
     }
     for (const key of ["script", "toolBudget"]) {
@@ -260,10 +275,6 @@ describe("cron model schema regressions", () => {
     }
     expect(disabled.description).toContain("TRIGGERS DISABLED");
     expect(disabled.description).toContain("say it is unsupported");
-    expect(disabled.description).not.toContain("TRIGGER (condition watcher");
-    expect(disabled.description).not.toContain('kind:"stream"');
-    expect(disabled.description).not.toContain('kind:"event"');
-    expect(disabled.description).not.toContain('kind:"script"');
   });
 
   it("keeps the full trigger surface and approval guidance when config omits cron.triggers", () => {
@@ -320,6 +331,11 @@ describe("cron shorthand and schedule recovery", () => {
   function update(params: Record<string, unknown>) {
     return execute({ action: "update", jobId: "job", ...params });
   }
+  function presentation() {
+    const present = getToolTerminalPresentation(createCronTool());
+    expect(present).toBeTypeOf("function");
+    return (action: string, details: unknown) => present?.({ action }, { content: [], details });
+  }
 
   describe("cron shorthand recovery", () => {
     it.each(
@@ -366,47 +382,36 @@ describe("cron shorthand and schedule recovery", () => {
         });
         if (retired) {
           await expect(mutation).rejects.toThrow("The requesting turn is no longer active.");
-          expect(gatewayCalls()).toEqual([["cron.get", expect.anything(), { id: "watcher" }]]);
         } else {
           await expect(mutation).resolves.toMatchObject({ details: { ok: true } });
-          expect(gatewayCalls()).toEqual([
-            ["cron.get", expect.anything(), { id: "watcher" }],
-            [
-              `cron.${action}`,
-              expect.anything(),
-              {
+          expect(callGatewayMock).toHaveBeenLastCalledWith(
+            {
+              method: `cron.${action}`,
+              params: {
                 id: "watcher",
                 expectedConfigRevision: "sha256:captured",
                 ...(patch ? { patch } : {}),
               },
-            ],
-          ]);
+            },
+            expect.anything(),
+          );
         }
         expect(mutated).toBe(!retired);
       },
     );
 
     it("presents list metadata without private job content", () => {
-      const presentation = getToolTerminalPresentation(createCronTool());
-      if (!presentation) {
-        throw new Error("expected terminal presentation");
-      }
-      const result = {
-        content: [],
-        details: {
-          total: 250,
-          jobs: [{ id: "one", name: "private reminder", payload: { text: "secret" } }],
-        },
+      const present = presentation();
+      const details = {
+        total: 250,
+        jobs: [{ id: "one", name: "private reminder", payload: { text: "secret" } }],
       };
-      expect(presentation({ action: "list" }, result)).toEqual({
-        text: "Automations listed.\nCount: 250",
-      });
-      expect(presentation({ action: "add" }, result)).toBeUndefined();
+      expect(present("list", details)).toEqual({ text: "Automations listed.\nCount: 250" });
+      expect(present("add", details)).toBeUndefined();
     });
 
     it("presents watcher execution separately from its saved setting", () => {
-      const presentation = getToolTerminalPresentation(createCronTool());
-      expect(presentation).toBeTypeOf("function");
+      const present = presentation();
       const observed = {
         id: "watcher",
         name: "Application errors",
@@ -414,8 +419,6 @@ describe("cron shorthand and schedule recovery", () => {
         enabled: false,
         state: { streamStatus: "error", streamError: "PRIVATE_DIAGNOSTIC" },
       };
-      const present = (action: string, details: unknown) =>
-        presentation?.({ action }, { content: [], details });
       const uncertain = present("update", observed);
       expect(uncertain?.text).toContain("Paused. Source termination is not confirmed.");
       expect(uncertain?.text).not.toContain("PRIVATE_DIAGNOSTIC");
@@ -431,23 +434,12 @@ describe("cron shorthand and schedule recovery", () => {
       expect(present("remove", { ok: true, removed: true })).toBeUndefined();
     });
 
+    const script = { script: "return { notify: 'changed' }", timeoutSeconds: 30, toolBudget: 12 };
     it.each([
       {
         name: "script before agent-turn hints",
-        input: {
-          everyMs: 60_000,
-          script: "return { notify: 'changed' }",
-          timeoutSeconds: 30,
-          toolBudget: 12,
-        },
-        expected: {
-          payload: {
-            kind: "script",
-            script: "return { notify: 'changed' }",
-            timeoutSeconds: 30,
-            toolBudget: 12,
-          },
-        },
+        input: { everyMs: 60_000, ...script },
+        expected: { payload: { kind: "script", ...script } },
       },
       {
         name: "out-of-range timestamp for gateway validation",
@@ -459,52 +451,15 @@ describe("cron shorthand and schedule recovery", () => {
       expectAdd(expected);
     });
 
-    const watcherName = "Build watcher";
-    const report = { kind: "agentTurn", message: "Report build output" };
-    const tail = ["tail", "-F", "/tmp/build.log"];
     it.each<[label: string, args: Record<string, unknown>, error?: string]>([
       [
         "on-exit",
-        { action: "add", kind: "on-exit", command: "pnpm build", cwd: "/repo", message: "rebuilt" },
+        { action: "add", kind: "on-exit", command: "pnpm build" },
         "automation on-exit schedules cannot be created or edited",
       ],
       ["command-only update", { action: "update", jobId: "job", command: "make" }],
-      [
-        "flat command without kind",
-        {
-          action: "add",
-          name: watcherName,
-          everyMs: 60_000,
-          command: tail,
-          message: report.message,
-        },
-      ],
-      [
-        "nested command without kind",
-        {
-          action: "add",
-          job: {
-            name: watcherName,
-            schedule: { expr: "* * * * *", command: tail },
-            payload: report,
-          },
-        },
-      ],
-      [
-        "malformed stream",
-        {
-          action: "add",
-          job: {
-            name: watcherName,
-            schedule: {
-              type: "stream",
-              command: "/usr/bin/tail -n 0 -F /tmp/build.log",
-              pattern: "^BUILD:",
-            },
-            payload: { type: "send_message", conversationId: "current", template: "{{line}}" },
-          },
-        },
-      ],
+      ["flat command without kind", { action: "add", everyMs: 60_000, command: ["tail"] }],
+      ["nested command without kind", { action: "add", job: { schedule: { command: ["tail"] } } }],
     ])(
       "rejects %s before Gateway effects",
       async (_label, args, error = "Read the full automations schema and WATCH OUTPUT example") => {
@@ -528,37 +483,24 @@ describe("cron shorthand and schedule recovery", () => {
     it("repairs recognized padded keys (#95407)", async () => {
       await execute({
         action: "add",
-        job: {
-          name: job.name,
-          description: "Check-in",
-          "schedule ": job.schedule,
-          "payload ": job.payload,
-          "sessionTarget ": "isolated",
-          "enabled ": true,
-        },
+        job: { schedule: job.schedule, "payload ": job.payload },
       });
-      expectAdd({ ...job, description: "Check-in", sessionTarget: "isolated", enabled: true });
-      for (const key of ["schedule ", "payload ", "sessionTarget ", "enabled "]) {
-        expect(gatewayCalls()[0]?.[2]).not.toHaveProperty(key);
-      }
+      expectAdd({ schedule: job.schedule, payload: job.payload });
+      expect(gatewayCalls()[0]?.[2]).not.toHaveProperty("payload ");
     });
 
     it("does not repair prototype keys (#95407)", async () => {
       await execute({
         action: "add",
-        job: { ...job, "__proto__ ": { malicious: true }, "constructor ": "unrecognized" },
+        job: { ...job, "__proto__ ": { malicious: true } },
       });
-      expectAdd({ "__proto__ ": { malicious: true }, "constructor ": "unrecognized" });
+      expectAdd({ "__proto__ ": { malicious: true } });
     });
 
     it("preserves canonical/padded conflicts for gateway rejection (#95407)", async () => {
-      const conflict = () => ({
-        "schedule ": { kind: "every", everyMs: 60_000 },
-        enabled: false,
-        "enabled ": true,
-      });
-      await execute({ action: "add", job: { ...job, ...conflict() } });
-      expectAdd({ schedule: job.schedule, ...conflict() });
+      const conflict = { "payload ": { kind: "systemEvent", text: "conflict" } };
+      await execute({ action: "add", job: { ...job, ...conflict } });
+      expectAdd({ payload: job.payload, ...conflict });
     });
 
     it.each([

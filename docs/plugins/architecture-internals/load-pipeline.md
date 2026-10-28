@@ -27,6 +27,11 @@ At startup, OpenClaw does roughly this:
 7. call native `register(api)` hooks and collect registrations into the plugin registry
 8. expose the registry to commands/runtime surfaces
 
+The asynchronous host loader prepares up to four independent external plugin source
+captures at a time. Module evaluation, registration, and diagnostics remain in
+manifest order; readiness waits for the complete registry. Each capture keeps its
+existing artifact and worker owner. Synchronous CLI loads acquire sources inline.
+
 Native plugin imports evaluate each requested SDK entry synchronously before
 linking the plugin's asynchronous module graph. This lets CommonJS bundles
 `require()` the same SDK entry during concurrent channel startup without seeing
@@ -56,6 +61,10 @@ one is known (including ids resolved from a manifest inside an
 otherwise-rejected directory), so config referencing that id sees a blocked
 plugin tied to a path-safety warning instead of an unrelated "unknown plugin"
 error.
+
+When every candidate is rejected, installation and capability inspection surface
+the discovery warning, including the unsafe path, so you can correct permissions
+or ownership before retrying.
 
 ### Manifest-first behavior
 
@@ -185,6 +194,13 @@ registration. Both keys share the existing bounded cache and are removed when
 the registry retires or the load cache is cleared.
 Validation, full registration, and CLI metadata loads have separate cache entries;
 validating a module cannot satisfy a later request for its registrations.
+
+An uncached inspection releases its execution authority immediately, while borrowed
+registrations keep physical resources alive until the last claim releases them.
+After registration cleanup, instance retirement, work drains, and donor releases
+finish, the inspection drops its retirement callback, registry, and cleanup captures.
+Keeping a released handle does not keep those completed discovery graphs alive.
+Pending disposal and failures that retain resource custody keep their references.
 
 Outbound channel bootstrap remembers successful and unavailable senders within
 the selected plugin cache and metadata scope. Inventory replacement or metadata

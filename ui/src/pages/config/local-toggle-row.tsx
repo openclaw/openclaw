@@ -10,18 +10,16 @@ import type { ConfigProps } from "./view-types.ts";
 
 registerEnglishCatalog(registerPreferencesEnglish);
 
-type LocalToggle =
-  | "chatShowTaskProgress"
-  | "chatCollapseTaskProgress"
-  | "composerHoldToRecord"
-  | "sidebarLiveActivity"
-  | "sessionDeleteConfirm"
-  | "lobsterPetVisits"
-  | "lobsterPetSounds";
-
 export function LocalToggleRow(props: {
   config: ConfigProps;
-  setting: LocalToggle;
+  setting:
+    | "chatShowTaskProgress"
+    | "chatCollapseTaskProgress"
+    | "composerHoldToRecord"
+    | "sidebarLiveActivity"
+    | "sessionDeleteConfirm"
+    | "lobsterPetVisits"
+    | "lobsterPetSounds";
   title: string;
   hint: JSX.Element;
   extraDescription?: JSX.Element;

@@ -1,7 +1,6 @@
 import { expect, it, onTestFinished } from "vitest";
 import { createSubagentSessionListReadView } from "../agents/subagents/registry/subagent-registry-state.js";
 import type { SessionEntry } from "../config/sessions.js";
-import { runSynchronousWork } from "../shared/synchronous-work.js";
 import { filterSessionEntries } from "./session-list-filters.js";
 import { readSessionListSelectionFacts } from "./session-list-target.js";
 import { createSessionRowProjectionContext } from "./session-row-projection-context.js";
@@ -66,20 +65,18 @@ it("benchmarks warm identity filtering across viewers", () => {
     const samples: number[] = [];
     for (let index = 0; index < 70; index++) {
       const started = process.threadCpuUsage();
-      const result = runSynchronousWork(
-        filterSessionEntries({
-          cfg,
-          entries: selected.entries,
-          getTarget: selected.get,
-          involvementKeys: selected.involvementKeys,
-          getRowContext: () => context,
-          userProfileIdentityById: identities,
-          configuredAgentIds,
-          now: 5_000,
-          opts: {},
-          involvingActorId: involving ? `profile-${index % 50}` : undefined,
-        }),
-      );
+      const result = filterSessionEntries({
+        cfg,
+        entries: selected.entries,
+        getTarget: selected.get,
+        involvementKeys: selected.involvementKeys,
+        getRowContext: () => context,
+        userProfileIdentityById: identities,
+        configuredAgentIds,
+        now: 5_000,
+        opts: {},
+        involvingActorId: involving ? `profile-${index % 50}` : undefined,
+      });
       const elapsed = process.threadCpuUsage(started);
       if (index >= 20) {
         samples.push((elapsed.user + elapsed.system) / 1_000);

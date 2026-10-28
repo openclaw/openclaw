@@ -36,17 +36,20 @@ export function readSessionEntryResult(
         collectSessionEntryLookupKeys(sessionKey),
         projection,
       );
-      const captured = captureSessionEntryReadSource(database, undefined);
-      facts = {
-        kind: "session-exact-entries",
-        ...selected,
-        source: captured,
-        databaseIdentity: {
-          ...readOpenClawAgentDatabaseIdentity(database),
-          identity: captured.databaseIdentity,
-        },
-        lifecycleTimestamps: {},
-      };
+      // Borrowed writer reads bypass retained facts; only plain readers install them.
+      if (!capturedDatabase) {
+        const captured = captureSessionEntryReadSource(database, undefined);
+        facts = {
+          kind: "session-exact-entries",
+          ...selected,
+          source: captured,
+          databaseIdentity: {
+            ...readOpenClawAgentDatabaseIdentity(database),
+            identity: captured.databaseIdentity,
+          },
+          lifecycleTimestamps: {},
+        };
+      }
       return selected.entries.find((row) => row.sessionKey === sessionKey.trim())?.entry;
     },
     capturedDatabase,

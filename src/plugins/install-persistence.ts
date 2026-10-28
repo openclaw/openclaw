@@ -45,7 +45,10 @@ import { safeRealpathSync } from "./path-safety.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { resolvePluginConfigEnablement } from "./plugin-config-enablement.js";
 import { inspectPluginGenerationSources } from "./plugin-generation-source-inspection.js";
-import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
+import {
+  withPluginLifecycleLeaseAsync,
+  type PluginMetadataLeaseContext,
+} from "./plugin-lifecycle-lease.js";
 import { tracePluginLifecyclePhaseAsync } from "./plugin-lifecycle-trace.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import { refreshPluginRegistryAfterConfigMutation } from "./registry-refresh.js";
@@ -207,14 +210,27 @@ type PluginInstallPersistenceParams = {
 export async function persistPluginInstall(
   params: PluginInstallPersistenceParams,
 ): Promise<OpenClawConfig> {
-  return await withPluginLifecycleLease({ env: params.env }, async (lease) =>
-    persistPluginInstallOwned(params, lease.assertOwned),
+  return await withPluginLifecycleLeaseAsync({ env: params.env }, async (lease) =>
+    persistPluginInstallOwned(
+      {
+        ...params,
+        beforePersistentApply: composeConfigWriteAssertions(
+          params.beforePersistentApply,
+          lease.assertCurrent,
+        ),
+        beforePersistentEffect: async () => {
+          await params.beforePersistentEffect?.();
+          await lease.assertOwned();
+        },
+      },
+      lease,
+    ),
   );
 }
 
 async function persistPluginInstallOwned(
   params: PluginInstallPersistenceParams,
-  assertOwned: () => void,
+  lease: PluginMetadataLeaseContext,
 ): Promise<OpenClawConfig> {
   let committed = false;
   let retainPublishedPayload = false;
@@ -247,7 +263,10 @@ async function persistPluginInstallOwned(
         previousInstall,
         nextInstall: params.install,
       });
-      const installedDiscovery = discoverOpenClawPlugins({ installRecords: nextInstallRecords });
+      const installedDiscovery = discoverOpenClawPlugins({
+        extraPaths: reconciledConfig.plugins?.load?.paths,
+        installRecords: nextInstallRecords,
+      });
       const realpathCache = new Map<string, string>();
       const targetPathKeys = new Set(
         [params.install.installPath, params.install.sourcePath]
@@ -290,15 +309,31 @@ async function persistPluginInstallOwned(
           `Plugin package "${params.pluginId}" has no authoritative runtime child list. Refresh the plugin registry, then reinstall the package or run openclaw doctor before retrying.`,
         );
       }
+      // Retain ownership with the install record, so uninstall does not need to
+      // execute or even read a plugin whose files are missing or broken.
+      const contextEngineIdsByPlugin = Object.fromEntries(
+        manifests.flatMap((manifest) =>
+          manifest.contextEngineIds ? [[manifest.id, [...manifest.contextEngineIds]]] : [],
+        ),
+      );
+      const nextInstallRecord = nextInstallRecords[params.pluginId];
+      if (!nextInstallRecord) {
+        throw new Error(`Missing install record for "${params.pluginId}".`);
+      }
+      if (Object.keys(contextEngineIdsByPlugin).length > 0) {
+        nextInstallRecord.contextEngineIdsByPlugin = contextEngineIdsByPlugin;
+      } else {
+        delete nextInstallRecord.contextEngineIdsByPlugin;
+      }
       const ownedPluginIds = manifests.map((plugin) => plugin.id).toSorted();
       const prepareMigration = async () => {
         const deferredPluginMigrations = await readDeferredPluginMigrationsAsync();
-        assertOwned();
+        await lease.assertOwned();
         params.beforePersistentApply?.();
         const prepared = await readConfigFileSnapshotForWrite({
           deferredPluginMigrations,
         });
-        assertOwned();
+        await lease.assertOwned();
         params.beforePersistentApply?.();
         if (
           params.snapshot.baseHash !== undefined &&
@@ -314,7 +349,7 @@ async function persistPluginInstallOwned(
           installRecords: nextInstallRecords,
           installOwners: [params.pluginId],
           assertCurrent: () => {
-            assertOwned();
+            lease.assertCurrent();
             params.beforePersistentApply?.();
             params.snapshot.writeOptions.assertConfigPathForWrite?.();
           },
@@ -380,6 +415,24 @@ async function persistPluginInstallOwned(
             }),
           })
         : undefined;
+      const ownershipDiscovery = slotMetadata
+        ? discoverOpenClawPlugins({
+            extraPaths: next.plugins?.load?.paths,
+            installRecords: nextInstallRecords,
+          })
+        : undefined;
+      const slotOwnershipRecords =
+        slotMetadata && ownershipDiscovery
+          ? [
+              ...loadPluginManifestRegistryCore({
+                config: next,
+                candidates: ownershipDiscovery.candidates,
+                diagnostics: ownershipDiscovery.diagnostics,
+                installRecords: nextInstallRecords,
+              }).plugins.filter((plugin) => !slotMetadata.byPluginId.has(plugin.id)),
+              ...slotMetadata.plugins,
+            ]
+          : undefined;
       for (const pluginId of enabledPluginIds) {
         next = await tracePluginLifecyclePhaseAsync(
           "slot selection",
@@ -391,6 +444,8 @@ async function persistPluginInstallOwned(
               pluginId,
               slotMetadata,
               params.beforePersistentApply,
+              (warning) => warn(warning, warning),
+              slotOwnershipRecords,
             );
           },
           { command: "install", pluginId },
@@ -456,6 +511,7 @@ async function persistPluginInstallOwned(
           assertCurrent: params.beforePersistentApply,
         });
         // Publish and drain the previous generation before removing its source files.
+        await lease.assertOwned();
         await params.applyRuntime?.({
           config: next,
           write: receipt.configWrite,

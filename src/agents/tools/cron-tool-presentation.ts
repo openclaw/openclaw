@@ -125,7 +125,7 @@ export function buildCronSelfDescription(params: {
   }
   return (
     inspection +
-    " scratch_get reads this job's checklist and revision; scratch_set replaces or clears content using expectedRevision from the read (reread after a revision conflict). record_result accepts one outcome (no_change, progress, done, blocked, needs_attention) and concise summary for this run. no_change or NO_REPLY keeps the response silent." +
+    " scratch_get reads this job's checklist and revision; scratch_set replaces or clears content using expectedRevision from the read (reread after a revision conflict). record_result accepts one outcome (no_change, progress, done, blocked, needs_attention). Omit summary for no_change; other outcomes require a trimmed 1–2000-character summary. Unchanged state and repeated known blockers stay quiet with no_change and NO_REPLY; explicit recurring digests/reports still deliver as requested. Use existing deterministic condition triggers or scripts to skip inference for machine-checkable no-change. no_change or NO_REPLY keeps the response silent." +
     (params.nextCheckEnabled
       ? ' next_check in:"15m" proposes the next delay for this paced job or one-shot session continuation. A successful one-shot proposal rearms this same job from run end (minimum 2s); without one it completes normally.'
       : "")

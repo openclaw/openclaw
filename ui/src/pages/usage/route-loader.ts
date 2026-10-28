@@ -37,7 +37,6 @@ export async function loadUsageRouteData(
     gatewaySnapshot,
     query,
     result: null,
-    costSummary: null,
     loadedAtMs: null,
     error: null,
   };
@@ -62,7 +61,7 @@ export async function loadUsageRouteData(
       options.signal,
     );
     return result.ok
-      ? { ...pending, ...result.value, gatewaySnapshot: current, loadedAtMs: Date.now() }
+      ? { ...pending, result: result.value, gatewaySnapshot: current, loadedAtMs: Date.now() }
       : {
           ...pending,
           gatewaySnapshot: current,

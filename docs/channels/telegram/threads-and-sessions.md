@@ -52,8 +52,10 @@ How forum topics map to sessions, agents, and ACP bindings.
 
     Disabling `threadBindings.enabled` globally, for Telegram, or for one account leaves ordinary Telegram messages working.
 
-    Template context exposes `MessageThreadId` and `IsForum`. DM chats with `message_thread_id` keep reply metadata but only use thread-aware session keys when Telegram `getMe` reports `has_topics_enabled: true`.
+    Template context exposes `MessageThreadId` and `IsForum`. DM chats with `message_thread_id` use thread-aware session keys when Telegram reports topics enabled. Native private-topic messages and title updates also establish topic scope when startup `getMe` data is stale.
     The retired `dm.threadReplies` and `direct.*.threadReplies` overrides are gone; BotFather threaded mode is the single source of truth. Run `openclaw doctor --fix` to remove stale config keys.
+
+    Observed private-topic creation and rename events update the existing session's name in the connected Control UI without starting an agent turn. A manually chosen session label keeps priority over the native topic name. Renaming an unmessaged topic does not create a session.
 
   </Accordion>
 </AccordionGroup>

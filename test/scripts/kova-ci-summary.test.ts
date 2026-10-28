@@ -43,16 +43,19 @@ const healthMetrics = {
   timeToHealthReadyMs: metric("Health ready", "ms", 20, { max: 30, p95: 30 }),
 };
 
-it("prints help without treating --help as a valued option", () => {
-  const result = runCli("--help");
-  expect(result).toMatchObject({ status: 0, stderr: "" });
-  expect(result.stdout).toContain("usage: node --import tsx scripts/kova-ci-summary.mts --report");
-});
-
-it("rejects flag-shaped value before help handling", () => {
-  const result = runCli("--report", "-h");
-  expect(result).toMatchObject({ status: 2, stdout: "" });
-  expect(result.stderr).toContain("error: --report requires a value");
+it.each([
+  [["--help"], 0, "usage: node --import tsx scripts/kova-ci-summary.mts --report"],
+  [["--report", "-h"], 2, "error: --report requires a value"],
+  [
+    ["--report", "unused.json", "--report-urlz", "https://example.test/report"],
+    2,
+    "unknown argument: --report-urlz",
+  ],
+] satisfies [string[], number, string][])("handles CLI arguments %j", (args, status, message) => {
+  const result = runCli(...args);
+  expect(result.status).toBe(status);
+  expect(status === 0 ? result.stderr : result.stdout).toBe("");
+  expect(status === 0 ? result.stdout : result.stderr).toContain(message);
 });
 
 it.each([
@@ -69,12 +72,6 @@ it.each([
   const { result } = runSummary(report);
   expect(result.status).toBe(1);
   expect(result.stderr).toContain(`invalid Kova report: missing ${missing}`);
-});
-
-it("rejects unknown flags instead of silently dropping report metadata", () => {
-  const result = runCli("--report", "unused.json", "--report-urlz", "https://example.test/report");
-  expect(result.status).toBe(2);
-  expect(result.stderr).toContain("unknown argument: --report-urlz");
 });
 
 it("renders blocked reports without resource metrics", () => {

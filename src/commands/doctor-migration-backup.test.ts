@@ -26,6 +26,12 @@ import { withDoctorSqliteMaintenanceLock } from "./doctor-sqlite-maintenance-loc
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
+const protectedArchive = (pathname: string) =>
+  expect.objectContaining({
+    path: pathname,
+    outcome: "protected",
+    reason: "incomplete-recovery-operation",
+  });
 
 function createFixture(seed: (databasePath: string, value: string) => void, scoped = false) {
   const stateDir = tempDirs.make("openclaw-doctor-backup-");
@@ -97,29 +103,19 @@ describe("Doctor full migration backups", () => {
     database.exec("PRAGMA user_version = 24; UPDATE preserved SET value = 'partially migrated';");
   }
 
-  function backup(
-    source: ReturnType<typeof createFixture>,
-    pending = [source.agent],
-    paths = [source.agent],
-  ) {
-    return capture({ env: source.env, pendingDatabasePaths: pending, databasePaths: paths });
+  function backup(pending = [fixture.agent], paths = [fixture.agent]) {
+    return capture({ env: fixture.env, pendingDatabasePaths: pending, databasePaths: paths });
   }
 
   it("backs up the full inventory when only the shared database has a pending migration", async () => {
-    await backup(fixture, [fixture.shared]);
+    await backup([fixture.shared]);
     expect(listBackups(fixture.shared)).toHaveLength(1);
     expect(listBackups(fixture.agent)).toHaveLength(1);
     expect(readPreservedValue(listBackups(fixture.agent)[0]!)).toBe("agent before migration");
     const preview = inspectSessionSqliteRecovery({ cfg: {}, env: fixture.env });
     expect(preview.artifacts).toHaveLength(2);
     for (const database of [fixture.shared, fixture.agent]) {
-      expect(preview.artifacts).toContainEqual(
-        expect.objectContaining({
-          path: listBackups(database)[0],
-          outcome: "protected",
-          reason: "incomplete-recovery-operation",
-        }),
-      );
+      expect(preview.artifacts).toContainEqual(protectedArchive(listBackups(database)[0]!));
     }
   });
 
@@ -133,11 +129,11 @@ describe("Doctor full migration backups", () => {
       .mockImplementationOnce(syncDirectory)
       .mockImplementationOnce(failSync)
       .mockImplementationOnce(failSync);
-    await expect(backup(fixture)).rejects.toThrow("capture completion sync failed");
-    await expect(backup(fixture)).rejects.toThrow("capture completion sync failed");
+    await expect(backup()).rejects.toThrow("capture completion sync failed");
+    await expect(backup()).rejects.toThrow("capture completion sync failed");
     sync.mockRestore();
     const originals = [fixture.agent, fixture.shared].flatMap(listBackups);
-    await backup(fixture);
+    await backup();
     expect([fixture.agent, fixture.shared].flatMap(listBackups)).toEqual(originals);
   });
 
@@ -147,7 +143,7 @@ describe("Doctor full migration backups", () => {
       .spyOn(sqliteSnapshot, "createVerifiedSqliteSnapshot")
       .mockImplementationOnce(originalCreateSnapshot)
       .mockRejectedValueOnce(new Error("interrupted backup"));
-    await expect(backup(fixture)).rejects.toThrow("interrupted backup");
+    await expect(backup()).rejects.toThrow("interrupted backup");
     createSnapshot.mockRestore();
     expect(listBackups(fixture.agent)).toHaveLength(1);
     expect(listBackups(fixture.shared)).toHaveLength(0);
@@ -155,7 +151,7 @@ describe("Doctor full migration backups", () => {
       using database = new DatabaseSync(source);
       database.exec("UPDATE preserved SET value = 'after interruption';");
     }
-    await backup(fixture);
+    await backup();
     for (const source of [fixture.agent, fixture.shared]) {
       const backups = listBackups(source);
       expect(backups).toHaveLength(1);
@@ -165,7 +161,7 @@ describe("Doctor full migration backups", () => {
 
   it("reuses the original rollback group after partial migration and repeated retries", async () => {
     const { secondAgent, inventory } = addSecondAgent(fixture);
-    await backup(fixture, inventory, inventory);
+    await backup(inventory, inventory);
     const originals = [fixture.shared, ...inventory].map((source) => listBackups(source)[0]!);
     expect(new Set(originals.map((name) => name.split(".pre-startup-migration-")[1])).size).toBe(1);
 
@@ -174,7 +170,7 @@ describe("Doctor full migration backups", () => {
       .spyOn(sqliteVec, "loadSqliteVecExtension")
       .mockRejectedValue(new Error("sqlite-vec cannot load on this CPU"));
     for (let attempt = 0; attempt < 4; attempt++) {
-      await backup(fixture, [secondAgent], inventory.toReversed());
+      await backup([secondAgent], inventory.toReversed());
     }
     expect(load).not.toHaveBeenCalled();
 
@@ -190,7 +186,7 @@ describe("Doctor full migration backups", () => {
     "preserves a completed rollback group when %s damage is discovered after partial migration",
     async (damage) => {
       const { secondAgent, inventory } = addSecondAgent(fixture);
-      await backup(fixture, inventory, inventory);
+      await backup(inventory, inventory);
       const originalAgent = listBackups(fixture.agent)[0]!;
       const originalShared = listBackups(fixture.shared)[0]!;
       const originalSecond = listBackups(secondAgent)[0]!;
@@ -203,7 +199,7 @@ describe("Doctor full migration backups", () => {
       }
       const remaining = [fixture.shared, ...inventory].flatMap(listBackups);
 
-      await expect(backup(fixture, [secondAgent], inventory)).rejects.toMatchObject({
+      await expect(backup([secondAgent], inventory)).rejects.toMatchObject({
         refusal: { kind: "data-at-risk", reason: "incomplete-migration" },
       });
       expect([fixture.shared, ...inventory].flatMap(listBackups)).toEqual(remaining);
@@ -216,7 +212,7 @@ describe("Doctor full migration backups", () => {
   );
 
   it("starts a new coherent group for a replaced database without removing older backups", async () => {
-    await backup(fixture);
+    await backup();
     const originalSharedBackup = listBackups(fixture.shared)[0]!;
     const legacyBackup = `${fixture.shared}.pre-startup-migration-legacy-operator-copy.bak`;
     fs.copyFileSync(originalSharedBackup, legacyBackup);
@@ -224,8 +220,8 @@ describe("Doctor full migration backups", () => {
     const newAgent = path.join(path.dirname(fixture.agent), "replacement.sqlite");
     seedDatabase(newAgent, "new agent history");
     fs.renameSync(newAgent, fixture.agent);
-    await backup(fixture);
-    await backup(fixture);
+    await backup();
+    await backup();
 
     const newSharedBackups = listBackups(fixture.shared).filter(
       (pathname) => pathname !== originalSharedBackup && pathname !== legacyBackup,
@@ -439,13 +435,7 @@ describe("Doctor table-scoped migration backup selection", () => {
     );
     expectFullBackup(fixture.shared);
     const recovery = inspectSessionSqliteRecovery({ cfg: {}, env: fixture.env });
-    expect(recovery.artifacts).toContainEqual(
-      expect.objectContaining({
-        path: archive,
-        outcome: "protected",
-        reason: "incomplete-recovery-operation",
-      }),
-    );
+    expect(recovery.artifacts).toContainEqual(protectedArchive(archive));
 
     {
       using migrated = new DatabaseSync(fixture.agent);
@@ -515,27 +505,8 @@ describe("Doctor table-scoped migration backup selection", () => {
     },
   );
 
-  it("does not reuse a scoped schema archive for a subsequent full-only repair", async () => {
-    await backup();
-    const earlierBackups = [fixture.agent, fixture.shared].flatMap(listBackups);
-    expect(earlierBackups.some((archive) => archive.endsWith(".scoped.bak"))).toBe(true);
-    await withDoctorSqliteMaintenanceLock({
-      env: fixture.env,
-      operation: "test full-only repair backup",
-      protectedPaths: [fixture.agent, fixture.shared],
-      run: (authority) =>
-        backupDoctorSqliteDatabases({
-          env: fixture.env,
-          pendingDatabasePaths: [fixture.agent],
-          databasePaths: [fixture.agent],
-          authority,
-        }),
-    });
-    expectFullBackup(fixture.agent, earlierBackups);
-    expectFullBackup(fixture.shared, earlierBackups);
-  });
-
   it.each([
+    "full-only repair",
     "undeclared",
     "OPENCLAW_UPDATE_IN_PROGRESS",
     "OPENCLAW_UPDATE_POST_CORE_CONVERGENCE",
@@ -543,12 +514,28 @@ describe("Doctor table-scoped migration backup selection", () => {
   ])("replaces scoped images with full images for %s", async (marker) => {
     await backup();
     const earlierBackups = [fixture.agent, fixture.shared].flatMap(listBackups);
-    if (marker === "undeclared") {
-      vi.mocked(schemaScope.resolveSchemaMigrationBackupTables).mockReturnValue(undefined);
+    expect(earlierBackups.some((archive) => archive.endsWith(".scoped.bak"))).toBe(true);
+    if (marker === "full-only repair") {
+      await withDoctorSqliteMaintenanceLock({
+        env: fixture.env,
+        operation: "test full-only repair backup",
+        protectedPaths: [fixture.agent, fixture.shared],
+        run: (authority) =>
+          backupDoctorSqliteDatabases({
+            env: fixture.env,
+            pendingDatabasePaths: [fixture.agent],
+            databasePaths: [fixture.agent],
+            authority,
+          }),
+      });
     } else {
-      fixture.env[marker] = "1";
+      if (marker === "undeclared") {
+        vi.mocked(schemaScope.resolveSchemaMigrationBackupTables).mockReturnValue(undefined);
+      } else {
+        fixture.env[marker] = "1";
+      }
+      await backup();
     }
-    await backup();
     expectFullBackup(fixture.agent, earlierBackups);
     expectFullBackup(fixture.shared, earlierBackups);
   });

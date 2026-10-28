@@ -24,9 +24,7 @@ export function rememberWhatsAppBaileysCacheEntry<T>(
   if (!cache) {
     return;
   }
-  if (cache.has(key)) {
-    cache.delete(key);
-  }
+  cache.delete(key);
   cache.set(key, {
     expiresAt: Date.now() + ttlMs,
     value,

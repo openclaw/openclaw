@@ -12,8 +12,9 @@ import type { MessageClientSource } from "../../../../src/chat/message-client-so
 import type { ClawHubRecommendation } from "../../../../src/shared/clawhub-recommendations.js";
 import type { RunFailureNotice } from "../../../../src/shared/run-failure-notice.js";
 import type { SkillWorkshopChangeNotice } from "../../../../src/shared/skill-workshop-change-notice.js";
+import type { CyberAccessProgram } from "../../api/types.ts";
 import type { BrowserTabTarget } from "../../components/browser/browser-target.ts";
-import type { toolIconData } from "../../components/icon-data-tools.ts";
+import type { IconName } from "../../components/icon-data.ts";
 import type { SenderIdentity } from "./sender-label.ts";
 
 export type { HumanMention };
@@ -83,6 +84,8 @@ export type DurableDraftModelSelection = {
   model: string;
   agentRuntime?: string;
   thinkingLevel: string;
+  cyberAccessProgram?: CyberAccessProgram;
+  daybreakAccessProgram?: Exclude<CyberAccessProgram, "standard">;
 };
 
 export type DurableComposerDraft = {
@@ -94,6 +97,8 @@ export type DurableComposerDraft = {
   modelSelection?: DurableDraftModelSelection;
   attachments: DurableComposerDraftAttachment[];
   questionDrafts?: DurableQuestionDraft[];
+  /** Context-only comments have no uploaded file payload. */
+  selectionAnnotations?: ChatSelectionAnnotation[];
 };
 
 export type ChatComposerDraftRetry = {
@@ -123,7 +128,7 @@ export type ChatGoalAction = "pause" | "resume" | "clear";
 export type ChatGoalRecovery = {
   pending: boolean;
   goalId?: string;
-  action?: ChatGoalAction | "edit" | "complete" | "block";
+  action?: ChatGoalAction | "edit" | "replace" | "complete" | "block";
   retired?: "expired" | "invalid";
   onCheck: () => Promise<boolean>;
 };
@@ -199,7 +204,6 @@ export type ChatQueueItem = {
     | "executing-command"
     | "sending"
     | "waiting-reconnect"
-    | "unconfirmed"
     // Provider review requires a new operator decision even if delivery has prior attempts.
     | "held"
     | "failed";
@@ -215,7 +219,6 @@ export type ChatItem =
       kind: "message";
       key: string;
       message: unknown;
-      duplicateCount?: number;
       /** A distinct input remains a presentation boundary before execution starts. */
       startsTurn?: true;
     }
@@ -224,8 +227,9 @@ export type ChatItem =
       key: string;
       text: string;
       timestamp: number;
-      icon?: keyof typeof toolIconData;
+      icon?: IconName;
       label?: string;
+      modelChange?: { from: string; to: string };
       startsTurn?: true;
       boundaryId?: string;
       tone?: "danger";
@@ -239,7 +243,11 @@ export type ChatItem =
       /** A background skill review's changes; rendered as a native row instead of `text`. */
       skillChanges?: SkillWorkshopChangeNotice;
       runError?: RunFailureNotice;
+      /** Total identical failures represented by the latest display notice. */
+      repeatCount?: number;
       permissionMissing?: NodePermissionRequest;
+      /** Retained input that ended interrupted or cancelled and may be dismissed. */
+      retiredPendingInput?: { id: string; status: "interrupted" | "cancelled"; preview: string };
     }
   | {
       kind: "divider";
@@ -248,7 +256,7 @@ export type ChatItem =
       compactionId?: string;
       systemEvent?: "info";
       label: string;
-      icon?: keyof typeof toolIconData;
+      icon?: IconName;
       metric?: string;
       description?: string;
       timestamp: number;
@@ -366,7 +374,14 @@ export type MessageGroup = {
   messages: Array<{
     message: unknown;
     key: string;
-    duplicateCount?: number;
+    /** Source row for actions when presentation splits a mixed envelope. */
+    actionKey?: string;
+    /** Original envelope supplies copy/reply/reaction/full-message actions. */
+    actionMessage?: unknown;
+    /** Only the last visible part of a split envelope owns its source footer. */
+    presentationOwnsFooter?: boolean;
+    /** Only the last split part publishes the original terminal status. */
+    presentationOwnsTerminalStatus?: boolean;
     replyTarget?: NormalizedMessage["replyTarget"];
     /** Rendered reply content, excluding assistant thinking tags. */
     hasVisibleContent: boolean;
@@ -392,6 +407,7 @@ export type MessageImageSource = {
 };
 
 export type MessageContentItem =
+  | import("../../../../src/shared/plugin-inline-view.js").PluginInlineViewBlock
   | ClawHubRecommendation
   | {
       type: "image";
@@ -491,6 +507,8 @@ export type ToolCard = {
   resultMessageId?: string;
   /** Gateway display projection omitted content; the durable result may still be complete. */
   outputTruncated?: boolean;
+  /** Bounded external preview; does not authorize full-message recovery. */
+  catalogTruncated?: boolean;
   toolOutput?: ToolOutputMetadata;
   /** Structured tool result details (e.g. the edit tool's precomputed diff). */
   details?: unknown;
@@ -521,4 +539,11 @@ export type ToolCardOutcome =
   | "failed"
   | "blocked"
   | "skipped"
+  | "unrecorded"
   | "unknown";
+
+export type ChatGoalMutationAction = { goalId: string } & (
+  | { action: ChatGoalAction }
+  | { action: "edit"; objective: string }
+  | { action: "replace"; objective: string; expectedRunId: string; expectedGoalUpdatedAt: number }
+);

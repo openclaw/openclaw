@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { buildStatusChannelsTableRows } from "./channels-table.js";
 import { buildStatusAgentTableRows, buildStatusChannelDetailSections } from "./report-tables.js";
 
 type Agent = Parameters<typeof buildStatusAgentTableRows>[0]["agentStatus"]["agents"][number];
@@ -13,6 +14,83 @@ type RowCells = [string, string, string, string, string];
 const rowColumns = ["Agent", "BootstrapFile", "Sessions", "Active", "Store"];
 const row = (cells: RowCells) =>
   Object.fromEntries(rowColumns.map((key, index) => [key, cells[index]]));
+
+it("neutralizes untrusted table fields before styling and preserves store line breaks", () => {
+  const hostile = (text: string) => `\u001b]0;title\u0007\u001b[2J${text}\u0007\r\nnext\tcell`;
+  const safe = (text: string) => `${text}\\r\\nnext\\tcell`;
+  const warn = (text: string) => `\u001b[33m${text}\u001b[0m`;
+  expect(
+    buildStatusChannelsTableRows({
+      rows: [
+        {
+          id: "evil",
+          label: hostile("Channel"),
+          enabled: true,
+          state: "ok",
+          detail: hostile("Detail"),
+        },
+      ],
+      channelIssues: [{ channel: "evil", message: hostile("Issue") }],
+      ok: colors.ok,
+      warn,
+      muted: colors.ok,
+      accentDim: colors.ok,
+    }),
+  ).toEqual([
+    {
+      Channel: safe("Channel"),
+      Enabled: "ok(ON)",
+      State: warn("WARN"),
+      Detail: `${safe("Detail")} · ${warn(`gateway: ${safe("Issue")}`)}`,
+    },
+  ]);
+  expect(
+    buildStatusAgentTableRows({
+      agentStatus: {
+        agents: [
+          agent(hostile("agent"), {
+            name: hostile("Name"),
+            status: "degraded",
+            sessionsPath: hostile("/tmp/store"),
+            admissionRefusal: { reason: hostile("Refused"), repairHint: hostile("Recover") },
+          }),
+        ],
+      },
+      ok: colors.ok,
+      warn,
+    }),
+  ).toEqual([
+    row([
+      `${safe("agent")} (${safe("Name")})${warn(" (degraded)")}`,
+      "unknown",
+      "unavailable",
+      warn("refused"),
+      `${safe("/tmp/store")}\n${safe("Refused")}\n${safe("Recover")}`,
+    ]),
+  ]);
+  expect(
+    buildStatusChannelDetailSections({
+      details: [
+        {
+          title: hostile("Accounts"),
+          columns: [hostile("Account"), "Status"],
+          rows: [{ [hostile("Account")]: hostile("account"), Status: "WARN" }],
+        },
+      ],
+      ok: colors.ok,
+      warn,
+    }),
+  ).toEqual([
+    {
+      title: safe("Accounts"),
+      columns: [
+        { key: hostile("Account"), header: safe("Account"), flex: false, minWidth: 10 },
+        { key: "Status", header: "Status", flex: false, minWidth: 10 },
+      ],
+      rows: [{ [hostile("Account")]: safe("account"), Status: warn("WARN") }],
+    },
+  ]);
+});
 
 it.each([
   {

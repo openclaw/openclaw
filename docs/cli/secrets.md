@@ -60,6 +60,7 @@ Naming and value rules:
 
 - Names must match `^[A-Z][A-Z0-9_]{0,127}$`.
 - Values are limited to 64 KiB (65,536 UTF-8 bytes). An oversized value exits `2` whether it arrives from stdin, `--value`, or `--value-file`.
+- File and stdin inputs must be valid UTF-8. Malformed input exits `2` before changing the store; convert a backup of the input to UTF-8 before retrying.
 - A `secret` entry may not be empty, because an empty credential cannot be diagnosed later. `get` refuses secret kinds, and listings mask them. `env` entries may be empty.
 - Known redaction placeholders such as `__OPENCLAW_REDACTED__` cannot be stored as values. CLI `set` and `import` skip redacted inputs for existing usable entries with an explicit unchanged message; a placeholder without a usable existing entry exits `2`.
 - `--kind secret|env` explicitly changes an entry's kind. Otherwise `set` and `import` preserve the entry's current kind when saving, including protection changes made while input or confirmation is pending. Only new names use automatic detection: names ending in a common credential suffix such as `_API_KEY`, `_TOKEN`, `_PASSWORD`, `_PRIVATE_KEY`, or `_SECRET` become `secret`, and other names become `env`.
@@ -119,6 +120,8 @@ openclaw secrets store get LOG_LEVEL
 ```
 
 Secret values never appear in human, `--json`, or `--plain` output. `store get` refuses a `secret` entry as write-only by design and exits `2`. It exits `3` when the name does not exist. Environment-kind values are readable.
+
+Human-readable `store list` and `store get` output escapes terminal controls in environment values. Use `--json` or `--plain` when you need the original value.
 
 Team-scoped `env` entries reach Gateway-hosted commands run by OpenClaw's own exec tool, including OpenClaw Code Mode calls into `openclaw:core:exec` and Codex `gateway_exec`. Explicit per-call env wins over store values. Sandbox, remote `node`, ACP, and Codex-native shell execution do not receive them. `secret` entries stay out of subprocesses by default. With `secrets.egressProxy.enabled: true`, Gateway-hosted exec receives only authenticated sentinels and the Gateway replaces them at HTTPS egress. See [Secret egress proxy](/gateway/secrets#secret-egress-proxy).
 

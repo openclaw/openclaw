@@ -3,7 +3,7 @@ import type { ExecApprovalsFile } from "./exec-approvals-core.js";
 import { updateExecApprovalsForMaintenance } from "./exec-approvals-store.js";
 
 export function saveExecApprovals(file: ExecApprovalsFile): void {
-  updateExecApprovalsForMaintenance({ update: () => file });
+  updateExecApprovalsForMaintenance(() => file);
   if (file.socket?.path || file.socket?.token) {
     runClientCredentialOperation(process.env, {
       kind: "socket.ensure",

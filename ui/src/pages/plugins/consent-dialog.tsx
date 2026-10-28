@@ -8,6 +8,7 @@ import {
 import { Icon } from "../../components/solid/icon.tsx";
 import "../../components/modal-dialog.tsx";
 import {
+  RetryAction,
   SettingsRow,
   SettingsSection,
   SettingsStatus,
@@ -23,6 +24,7 @@ import type {
   PluginsInspectResult,
 } from "../../lib/plugins/index.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
+import { PluginNativeUiDisclosure } from "./native-ui-disclosure.tsx";
 import { pluginFallbackGradient, pluginMonogram } from "./presentation.ts";
 import { ReasonedDisabledControl } from "./reasoned-disabled-control.tsx";
 
@@ -30,7 +32,7 @@ registerEnglishCatalog(registerPluginManagementEnglish);
 
 registerEnglishCatalog(registerPluginConsentEnglish);
 
-export type PluginConsentIntent = { kind: "enable"; pluginId: string; rowKey: string };
+type PluginConsentIntent = { kind: "enable"; pluginId: string; rowKey: string };
 
 type PluginConsentFallback = {
   name: string;
@@ -470,6 +472,7 @@ export function renderPluginConsentDialog(props: PluginConsentDialogProps): JSX.
         {inspection() ? (
           <>
             {renderProvenance(inspection()!.source)} {renderTrust(inspection()!.trust)}
+            {inspection()!.overview?.hasNativeUi ? <PluginNativeUiDisclosure /> : undefined}
             {details() ? renderWidenedCapabilities(details()!) : undefined}
             {renderPluginDeclaredCapabilities(inspection()!.declared)}
             {renderPluginGrants(inspection()!.grants, plugin()?.origin)}
@@ -515,16 +518,15 @@ export function renderPluginConsentDialog(props: PluginConsentDialogProps): JSX.
             fallback={(error, reset) => (
               <div class="plugins-consent__error" role="alert">
                 <span>{formatUiError(error())}</span>
-                <button
+                <RetryAction
                   type="button"
                   class="btn btn--sm oc-action oc-action-secondary"
-                  onClick={() => {
+                  label={t("pluginsPage.tryAgain")}
+                  onRetry={() => {
                     props.onRetry();
                     reset();
                   }}
-                >
-                  {t("pluginsPage.tryAgain")}
-                </button>
+                />
               </div>
             )}
           >

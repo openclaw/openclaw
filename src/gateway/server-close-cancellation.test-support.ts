@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
+import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import type { ReplyOperation } from "../sessions/session-controller.contracts.js";
 import {
@@ -20,6 +21,22 @@ import type { createRpcSourceForTest } from "./test-helpers.rpc-source.js";
 type MarkMainSessionsAbortedForRestart = NonNullable<
   GatewayCloseParams["markMainSessionsAbortedForRestart"]
 >;
+
+export function recoveryRun(
+  runId: string,
+  sessionKey: string,
+  sessionId: string,
+  lifecycleGeneration = getAgentEventLifecycleGeneration(),
+) {
+  return {
+    storePath: "/synthetic/gateway-close/sessions.sqlite",
+    agentId: "main",
+    runId,
+    lifecycleGeneration,
+    sessionKey,
+    sessionId,
+  };
+}
 
 export function registerGatewayCancellationTests({
   createClose,

@@ -8,6 +8,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import { waitForFast } from "../../test/helpers/vitest-wait.js";
 import type { InternalGetReplyOptions } from "../auto-reply/reply/get-reply.types.js";
 import type { ReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.types.js";
 import { loadSessionEntry, updateSessionEntry } from "../config/sessions/session-accessor.js";
@@ -41,13 +42,6 @@ import {
   testState,
   writeSessionStore,
 } from "./test-helpers.js";
-
-function waitForFast<T>(
-  callback: () => T | Promise<T>,
-  options: { timeout?: number; interval?: number } = {},
-) {
-  return vi.waitFor(callback, { interval: 1, ...options });
-}
 
 let ws: WebSocket;
 

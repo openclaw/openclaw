@@ -11,6 +11,17 @@ type SidebarSessionSubtitle = {
 };
 
 export function resolveSidebarSessionRowSubtitle(
+  host: Parameters<typeof sidebarSessionRowSubtitleParams>[0],
+  session: SidebarRecentSession,
+  display?: CatalogBackingSessionDisplay,
+) {
+  const params = sidebarSessionRowSubtitleParams(host, session, display);
+  return params
+    ? host.sessionProjection.resolveSubtitle(params)
+    : { subtitle: undefined, narration: undefined };
+}
+
+export function sidebarSessionRowSubtitleParams(
   host: {
     readonly sidebarAgentsMode?: "chip" | "roster";
     readonly sessionsShowPreview: boolean;
@@ -27,7 +38,7 @@ export function resolveSidebarSessionRowSubtitle(
   // previews on. Only the agent-first roster keeps preview-independent status
   // lines; attention details stay on the leading icon tooltip and hovercard.
   if (host.sidebarAgentsMode !== "roster" && !host.sessionsShowPreview) {
-    return { subtitle: undefined, narration: undefined };
+    return null;
   }
   const toolActivity =
     host.sidebarAgentsMode !== "roster" &&
@@ -36,7 +47,7 @@ export function resolveSidebarSessionRowSubtitle(
     host.sidebarLiveActivity
       ? host.sidebarTools.get(session.key)
       : undefined;
-  return host.sessionProjection.resolveSubtitle({
+  return {
     session,
     hasDisplay: display !== undefined,
     sidebarLiveActivity: host.sidebarLiveActivity,
@@ -44,7 +55,7 @@ export function resolveSidebarSessionRowSubtitle(
     narrationLine: host.sidebarNarrationLines.get(session.key),
     toolActivity,
     observerDigest: host.sidebarObserverDigests.get(session.key) ?? null,
-  });
+  };
 }
 
 /** Resolves the single subtitle slot without displacing visible status. */

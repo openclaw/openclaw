@@ -27,12 +27,10 @@ export class StreamDisconnectGrace {
       return;
     }
 
-    const disconnectTimer = setTimeout(() => {
+    current.disconnectTimer = setTimeout(() => {
       this.streams.delete(providerCallId);
       this.onGraceExpired({ providerCallId, streamId });
-    }, STREAM_DISCONNECT_GRACE_MS);
-    disconnectTimer.unref?.();
-    current.disconnectTimer = disconnectTimer;
+    }, STREAM_DISCONNECT_GRACE_MS).unref();
   }
 
   retire(providerCallId: string, streamId: string): void {

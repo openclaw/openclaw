@@ -95,7 +95,7 @@ export class SearchableSelectList extends SelectListInput implements Component, 
 
   // Rank exact label matches before description matches, then fuzzy matches.
   private smartFilter(query: string): SearchableSelectItem[] {
-    const q = normalizeLowercaseStringOrEmpty(query);
+    const q = normalizeLowercaseStringOrEmpty(query).normalize("NFC");
     type ScoredItem = { item: SearchableSelectItem; tier: number; score: number };
     type FuzzyCandidate = { item: SearchableSelectItem; searchText: string };
     const scoredItems: ScoredItem[] = [];
@@ -108,11 +108,11 @@ export class SearchableSelectList extends SelectListInput implements Component, 
       const searchText = stripAnsi(item.searchText ?? "");
       return {
         item,
-        label: normalizeLowercaseStringOrEmpty(label),
-        description: normalizeLowercaseStringOrEmpty(description),
+        label: normalizeLowercaseStringOrEmpty(label).normalize("NFC"),
+        description: normalizeLowercaseStringOrEmpty(description).normalize("NFC"),
         searchText: normalizeLowercaseStringOrEmpty(
           [label, description, searchText].filter((value) => value.length > 0).join(" "),
-        ),
+        ).normalize("NFC"),
       };
     });
     for (const prepared of this.preparedItems) {
@@ -216,9 +216,42 @@ export class SearchableSelectList extends SelectListInput implements Component, 
         continue;
       }
       const isSelected = i === this.selectedIndex;
-      lines.push(
-        truncateToWidth(this.renderItemLine(item, isSelected, safeWidth, patterns), safeWidth, ""),
-      );
+      const prefix = isSelected ? "→ " : "  ";
+      const prefixWidth = prefix.length;
+      const displayValue =
+        sanitizeRenderableLine(this.getItemLabel(item)) ||
+        sanitizeRenderableLine(item.value) ||
+        "(unnamed)";
+
+      const description = sanitizeRenderableLine(item.description ?? "");
+      if (description && safeWidth > SearchableSelectList.DESCRIPTION_LAYOUT_MIN_WIDTH) {
+        const availableWidth = safeWidth - prefixWidth - SearchableSelectList.RIGHT_MARGIN_WIDTH;
+        const spacingWidth = SearchableSelectList.DESCRIPTION_SPACING_WIDTH;
+        const maxValueWidth =
+          availableWidth - SearchableSelectList.DESCRIPTION_MIN_WIDTH - spacingWidth;
+        const truncatedValue = truncateToWidth(displayValue, maxValueWidth, "");
+        const valueText = this.highlightMatch(truncatedValue, patterns);
+        const descriptionWidth = availableWidth - visibleWidth(valueText) - spacingWidth;
+
+        if (descriptionWidth >= SearchableSelectList.DESCRIPTION_MIN_WIDTH) {
+          const spacing = " ".repeat(spacingWidth);
+          const truncatedDesc = truncateToWidth(description, descriptionWidth, "");
+          // Highlight before styling so match boundaries cannot split ANSI sequences.
+          const highlightedDesc = this.highlightMatch(truncatedDesc, patterns);
+          const descText = isSelected ? highlightedDesc : this.theme.description(highlightedDesc);
+          const line = `${prefix}${valueText}${spacing}${descText}`;
+          lines.push(
+            truncateToWidth(isSelected ? this.theme.selectedText(line) : line, safeWidth, ""),
+          );
+          continue;
+        }
+      }
+
+      const maxWidth = safeWidth - prefixWidth - 2;
+      const truncatedValue = truncateToWidth(displayValue, maxWidth, "");
+      const valueText = this.highlightMatch(truncatedValue, patterns);
+      const line = `${prefix}${valueText}`;
+      lines.push(truncateToWidth(isSelected ? this.theme.selectedText(line) : line, safeWidth, ""));
     }
 
     if (this.filteredItems.length > this.maxVisible) {
@@ -227,47 +260,6 @@ export class SearchableSelectList extends SelectListInput implements Component, 
     }
 
     return lines;
-  }
-
-  private renderItemLine(
-    item: SearchableSelectItem,
-    isSelected: boolean,
-    width: number,
-    patterns: RegExp[],
-  ): string {
-    const prefix = isSelected ? "→ " : "  ";
-    const prefixWidth = prefix.length;
-    const displayValue =
-      sanitizeRenderableLine(this.getItemLabel(item)) ||
-      sanitizeRenderableLine(item.value) ||
-      "(unnamed)";
-
-    const description = sanitizeRenderableLine(item.description ?? "");
-    if (description && width > SearchableSelectList.DESCRIPTION_LAYOUT_MIN_WIDTH) {
-      const availableWidth = width - prefixWidth - SearchableSelectList.RIGHT_MARGIN_WIDTH;
-      const spacingWidth = SearchableSelectList.DESCRIPTION_SPACING_WIDTH;
-      const maxValueWidth =
-        availableWidth - SearchableSelectList.DESCRIPTION_MIN_WIDTH - spacingWidth;
-      const truncatedValue = truncateToWidth(displayValue, maxValueWidth, "");
-      const valueText = this.highlightMatch(truncatedValue, patterns);
-      const descriptionWidth = availableWidth - visibleWidth(valueText) - spacingWidth;
-
-      if (descriptionWidth >= SearchableSelectList.DESCRIPTION_MIN_WIDTH) {
-        const spacing = " ".repeat(spacingWidth);
-        const truncatedDesc = truncateToWidth(description, descriptionWidth, "");
-        // Highlight before styling so match boundaries cannot split ANSI sequences.
-        const highlightedDesc = this.highlightMatch(truncatedDesc, patterns);
-        const descText = isSelected ? highlightedDesc : this.theme.description(highlightedDesc);
-        const line = `${prefix}${valueText}${spacing}${descText}`;
-        return isSelected ? this.theme.selectedText(line) : line;
-      }
-    }
-
-    const maxWidth = width - prefixWidth - 2;
-    const truncatedValue = truncateToWidth(displayValue, maxWidth, "");
-    const valueText = this.highlightMatch(truncatedValue, patterns);
-    const line = `${prefix}${valueText}`;
-    return isSelected ? this.theme.selectedText(line) : line;
   }
 
   handleInput(keyData: string): void {

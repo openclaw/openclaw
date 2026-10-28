@@ -18,6 +18,7 @@ import type { PluginServicesHandle } from "../plugins/services.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import type { AgentRecoveryProgress } from "../state/agent-database-preparation-recovery.js";
 import type { GatewayBroadcastFn, GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
 import type { GatewayControlUiRootLifecycle } from "./server-control-ui-root.js";
 import type { GatewayRecoveryRuntime } from "./server-instance-runtime.types.js";
@@ -89,6 +90,7 @@ export async function startGatewayPostAttachRuntime(params: {
   };
   logChannels: { info: (msg: string) => void; error: (msg: string) => void };
   unlockStartupMethods: (options?: { keepChatSendUnavailable?: boolean }) => void;
+  trackInputRecovery?: (progress: Promise<AgentRecoveryProgress>) => Promise<void>;
   loadStartupPlugins?: () => Awaitable<{
     pluginRegistry: PluginRegistry;
     gatewayMethods: string[];
@@ -123,6 +125,7 @@ export async function startGatewayPostAttachRuntime(params: {
   // Rehearsal loads plugins without resuming copied jobs, services, or notices.
   const candidateCanary = params.updateCanary === true;
   const subagentRecoverySettled = createDeferredCore();
+  const initialInputRecoveryReady = createDeferredCore();
   const mainSessionOrphansReady = params
     .trackStartupWork(async (signal) => {
       await params.waitForPostReadyWork?.();
@@ -234,12 +237,10 @@ export async function startGatewayPostAttachRuntime(params: {
   const startupLogSettled = createDeferredCore();
   // Tailscale and sidecar work can delay the public readiness handle past log failure.
   void startupLogSettled.promise.catch(() => {});
-  let startupLogOwnerAssigned = false;
   const assignStartupLogOwner = (owner: Promise<void>) => {
-    if (params.sidecarStartup !== "defer" || startupLogOwnerAssigned) {
+    if (params.sidecarStartup !== "defer") {
       return;
     }
-    startupLogOwnerAssigned = true;
     void owner.then(startupLogSettled.resolve, startupLogSettled.reject);
   };
   const startStartupLog = () => {
@@ -416,9 +417,10 @@ export async function startGatewayPostAttachRuntime(params: {
                 getConfig: params.getConfig,
                 shouldContinue: () => params.isClosing?.() !== true,
                 startupCheckedStorePaths: params.mainSessionRecoveryStartupCheckedStorePaths,
-                // Requester continuations need the restored cohort's Gateway binding
-                // and operator authority before their first recovery attempt.
-                waitForStart: () => subagentRecoverySettled.promise,
+                // Initial recovery registers each agent's custody; pending cohorts
+                // keep their own source-restoration gate instead of blocking all agents.
+                waitForStart: () => initialInputRecoveryReady.promise,
+                inputRecovery: params.resolveGatewayContext()?.inputRecovery,
                 gatewayRuntime: params.recoveryRuntime,
               });
             }
@@ -495,7 +497,11 @@ export async function startGatewayPostAttachRuntime(params: {
             | undefined,
         isClosing: params.isClosing,
         onSubagentRecoverySettled: subagentRecoverySettled.resolve,
-        unlockStartupMethods: params.unlockStartupMethods,
+        unlockStartupMethods: () => {
+          params.unlockStartupMethods();
+          initialInputRecoveryReady.resolve();
+        },
+        trackInputRecovery: params.trackInputRecovery,
         startupTrace: params.startupTrace,
         log: params.log,
         logHooks: params.logHooks,

@@ -1,10 +1,10 @@
 // Round-trip and naming coverage for the archived-transcript zstd cold tier.
 import fs from "node:fs";
 import path from "node:path";
+import { zstdDecompressSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
-  decodeSessionArchiveBytes,
   encodeSessionArchiveContent,
   materializeSessionArchiveForRead,
   readSessionArchiveContentSync,
@@ -14,12 +14,12 @@ import {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("archive compression", () => {
-  it("decodes both plain bytes and compressed archive bytes", () => {
+  it("writes compressed bytes compatible with Node zstd", () => {
     const content = `${JSON.stringify({ type: "message", body: "archive round trip" })}\n`;
     const encoded = encodeSessionArchiveContent(content);
 
-    expect(decodeSessionArchiveBytes(Buffer.from(content, "utf8"), false)).toBe(content);
-    expect(decodeSessionArchiveBytes(encoded.bytes, encoded.suffix !== "")).toBe(content);
+    expect(encoded.suffix).toBe(SESSION_ARCHIVE_ZSTD_SUFFIX);
+    expect(zstdDecompressSync(encoded.bytes).toString("utf8")).toBe(content);
   });
 
   it("invalidates a materialized cache when its source archive is removed", () => {

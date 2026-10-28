@@ -13,7 +13,9 @@ vi.mock("../worker-task-pool.js", async (importOriginal) => {
       construct(Target, args: ConstructorParameters<typeof actual.WorkerTaskPool>) {
         const [options] = args;
         const url = options.workerUrl;
-        if (!/\/(?:port-command\.worker|database-backup)\.[jt]s$/.test(url.pathname)) {
+        if (
+          !/\/(?:port-command\.entry\.worker|database-backup\.worker)\.[jt]s$/.test(url.pathname)
+        ) {
           return new Target(...args);
         }
         let pool = pools.get(url.href);

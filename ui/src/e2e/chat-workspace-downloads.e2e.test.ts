@@ -1,9 +1,9 @@
-import { readFile } from "node:fs/promises";
 import { createServer, request } from "node:http";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { createDeferredCore } from "../../../src/shared/deferred.ts";
 import { reserveTestPortListener } from "../../../src/test-utils/port-claims.ts";
+import { readControlUiE2eDownload } from "../test-helpers/control-ui-e2e-download.ts";
 import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
@@ -90,9 +90,7 @@ suite.define(() => {
       expect(download.url()).toBe(new URL(downloadPath, baseUrl).href);
       releaseBody.resolve();
       expect(download.suggestedFilename()).toBe(selected.name);
-      const saved = await download.path();
-      expect(saved).toBeTruthy();
-      expect((await readFile(saved!)).equals(selected.bytes)).toBe(true);
+      expect((await readControlUiE2eDownload(download)).equals(selected.bytes)).toBe(true);
       expect(await download.failure()).toBeNull();
     };
     try {
@@ -107,6 +105,9 @@ suite.define(() => {
         0,
       );
       for (const file of files) {
+        if (file !== files[0]) {
+          await page.getByRole("button", { name: "Toggle file tree", exact: true }).click();
+        }
         selected = file;
         await gateway.setMethodResponse("sessions.files.download", {
           filename: file.name,

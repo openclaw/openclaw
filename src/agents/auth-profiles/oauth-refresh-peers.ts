@@ -146,7 +146,6 @@ function isRemovableOAuthRefreshPeer(params: {
 
 async function listPeerCandidates(params: {
   cfg: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
   ownerDatabasePath: string;
 }): Promise<CandidateAuthProfileStore[]> {
   const ownerDatabasePath = resolvePathViaExistingAncestorSync(params.ownerDatabasePath);
@@ -186,7 +185,6 @@ function updateOAuthRefreshPeer(
  */
 export async function fenceOAuthRefreshPeers(params: {
   cfg: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
   ownerDatabasePath: string;
   profileId: string;
   generation: OAuthCredential;
@@ -394,7 +392,6 @@ export type OAuthRefreshGenerationPeer = {
 /** Capture exact historical peers before removal updates their config references. */
 export async function listOAuthRefreshGenerationPeers(params: {
   cfg: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
   ownerDatabasePath: string;
   profileId: string;
   generation: OAuthCredential;

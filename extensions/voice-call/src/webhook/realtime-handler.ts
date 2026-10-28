@@ -540,10 +540,9 @@ export class RealtimeCallHandler {
       const host = this.publicOrigin || DEFAULT_HOST;
       const streamPathPattern = this.getStreamPathPattern();
       const timer = setTimeout(() => {
-        if (!this.pendingStreamTokens.has(token)) {
+        if (!this.pendingStreamTokens.delete(token)) {
           return;
         }
-        this.pendingStreamTokens.delete(token);
         if (this.closing) {
           return;
         }

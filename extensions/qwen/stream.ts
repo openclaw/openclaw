@@ -1,7 +1,10 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { streamSimple } from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
-import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  normalizeProviderId,
+  resolveProviderEndpoint,
+} from "openclaw/plugin-sdk/provider-model-shared";
 import {
   createPayloadPatchStreamWrapper,
   isOpenAICompatibleThinkingEnabled,
@@ -21,6 +24,8 @@ import {
   isQwenTokenPlanThinkingOnlyModelId,
   QWEN_TOKEN_PLAN_LEGACY_PROVIDER_ID,
   QWEN_TOKEN_PLAN_PROVIDER_ID,
+  QWEN_TOKEN_PLAN_CN_BASE_URL,
+  QWEN_TOKEN_PLAN_GLOBAL_BASE_URL,
   supportsQwenTokenPlanGlmMaxThinking,
 } from "./models.js";
 
@@ -80,6 +85,21 @@ function isQwenTokenPlanProviderId(providerId: string): boolean {
   return (
     normalized === QWEN_TOKEN_PLAN_PROVIDER_ID || normalized === QWEN_TOKEN_PLAN_LEGACY_PROVIDER_ID
   );
+}
+
+function resolveQwenStreamProviderId(ctx: ProviderWrapStreamFnContext): string | undefined {
+  if (isQwenProviderId(ctx.provider)) {
+    return ctx.provider;
+  }
+  const endpoint = resolveProviderEndpoint(ctx.model?.baseUrl);
+  if (endpoint.endpointClass !== "modelstudio-native") {
+    return undefined;
+  }
+  // Custom names keep their identity; the physical endpoint selects payload constraints.
+  return endpoint.hostname === new URL(QWEN_TOKEN_PLAN_CN_BASE_URL).hostname ||
+    endpoint.hostname === new URL(QWEN_TOKEN_PLAN_GLOBAL_BASE_URL).hostname
+    ? QWEN_TOKEN_PLAN_PROVIDER_ID
+    : "qwen";
 }
 
 function resolveQwenThinkingContract(
@@ -265,7 +285,11 @@ export function createQwenThinkingWrapper(
 export function wrapQwenProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn | undefined {
   // Simple completions use dispatch aliases; payload policy follows the original wire API.
   const sourceApi = ctx.sourceApi ?? ctx.model?.api;
-  if (!isQwenProviderId(ctx.provider) || (sourceApi && sourceApi !== "openai-completions")) {
+  if (sourceApi && sourceApi !== "openai-completions") {
+    return undefined;
+  }
+  const streamProviderId = resolveQwenStreamProviderId(ctx);
+  if (!streamProviderId) {
     return undefined;
   }
   const thinkingFormat = ctx.model
@@ -279,8 +303,8 @@ export function wrapQwenProviderStream(ctx: ProviderWrapStreamFnContext): Stream
   }
   const tokenPlanContract = explicitLegacyThinkingFormat
     ? undefined
-    : resolveQwenThinkingContract(ctx.provider, ctx.modelId);
-  const tokenPlanProvider = isQwenTokenPlanProviderId(ctx.provider);
+    : resolveQwenThinkingContract(streamProviderId, ctx.modelId);
+  const tokenPlanProvider = isQwenTokenPlanProviderId(streamProviderId);
   // The picker catalog is intentionally curated; direct Token Plan refs still
   // need provider constraints unless an explicit transport format owns them.
   const useWireConstraints =

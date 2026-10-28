@@ -88,6 +88,9 @@ const LoginGate = lazy(() => import("../components/login-gate-solid.tsx"), {
 
 /** Mount into index.html's plain host; the returned disposer owns this application epoch. */
 export function mountOpenClawApp(host: HTMLElement, runtime = bootstrapApplication()): () => void {
+  // render() appends to existing children; retire the HTML frame in the same
+  // task as the first Solid commit so it cannot remain beside the live app.
+  host.replaceChildren();
   return render(() => OpenClawApp(host, runtime), host);
 }
 

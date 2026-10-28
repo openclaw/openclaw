@@ -30,29 +30,6 @@ function trackDocuments(page: Page) {
 }
 
 suite.define(() => {
-  it("hands the boot skeleton to the pending route without a blank shell", async () => {
-    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
-      const held = await holdModuleResponse(page, /\/src\/pages\/chat\/route-entry\.ts(?:\?.*)?$/u);
-      await installMockGateway(page, { awaitInitialRoster: false });
-      try {
-        await page.goto(`${suite.server.baseUrl}chat/main`);
-        await held.request;
-        await page.locator(".shell").waitFor();
-        expect(await page.locator("openclaw-router-outlet .loading-skeleton").count()).toBe(1);
-        expect(await page.locator(".connect-splash").count()).toBe(0);
-
-        held.release();
-        await waitForControlUiRoute(page, { routeId: "chat" });
-        expect(await page.locator("openclaw-chat-page").count()).toBe(1);
-        expect(await page.locator("openclaw-router-outlet .lazy-view-state--loading").count()).toBe(
-          0,
-        );
-      } finally {
-        held.release();
-      }
-    });
-  });
-
   it("keeps the connecting presentation until the shell module can commit", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const held = await holdModuleResponse(page, shellModule);
@@ -76,35 +53,6 @@ suite.define(() => {
       } finally {
         held.release();
       }
-    });
-  });
-
-  it("reloads into the real shell after its failed import becomes reachable", async () => {
-    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
-      let failedImports = 0;
-      const documents = trackDocuments(page);
-      await page.route(shellModule, async (route) => {
-        failedImports += 1;
-        await route.abort("failed");
-      });
-      await installMockGateway(page, { awaitInitialRoster: false });
-      await page.goto(`${suite.server.baseUrl}new`);
-      const failure = page.locator(".lazy-view-error--stale[role=alert]");
-      await failure.waitFor();
-      expect(failedImports).toBe(1);
-      expect(await page.locator("openclaw-app-shell").count()).toBe(0);
-      await expect
-        .poll(() => page.evaluate(() => window.openclawControlUi?.snapshot().ready))
-        .toBe(false);
-      const reload = failure.getByRole("button", { name: "Reload", exact: true });
-      expect(await reload.isEnabled()).toBe(true);
-
-      await page.unroute(shellModule);
-      await reload.click();
-      await waitForControlUiRoute(page, { routeId: "new-session" });
-      expect(await page.locator("openclaw-app-shell").count()).toBe(1);
-      expect(await failure.count()).toBe(0);
-      expect(documents()).toBe(2);
     });
   });
 

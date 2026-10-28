@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
 import type { ConfigSnapshotReadMeasure } from "../config/io.read.types.js";
+import { CronStoreSelectionRequiredError } from "../cron/store/selection-error.js";
 import type { ExistingAgentDatabaseTarget } from "../infra/session-sqlite-migration-readers.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { agentEngineInput } from "../state/openclaw-agent-db-engine.js";
@@ -66,15 +67,29 @@ export async function prepareDoctorMigrationBackups(params: {
       agentDatabaseTargets: databaseTargets,
       verifiedSnapshots,
       automaticRepair,
-      schemaPreparationPending:
-        Boolean(schemas.pendingMigrations?.length) ||
-        Boolean(schemas.agentRefusals?.length) ||
-        schemas.indeterminate.length > 0,
+      schemaPreparationPending: hasUnpreparedSchemas(schemas, backups.versionMigrations),
     }),
   );
   for (const message of [...heartbeatBackups.changes, ...heartbeatBackups.warnings]) {
     runtime.log(message);
   }
+}
+
+/**
+ * Report stores that canonical readers still cannot open. The version phase commits
+ * every migration it returns, so those stores are current and need no conservative
+ * full backup; refused, unreadable, or unmigrated stores still do.
+ */
+export function hasUnpreparedSchemas(
+  schemas: Pick<DoctorDatabasePreflight, "pendingMigrations" | "agentRefusals" | "indeterminate">,
+  committedVersionMigrations: readonly { path: string }[] | undefined,
+): boolean {
+  const committed = new Set(committedVersionMigrations?.map((migration) => migration.path));
+  return (
+    Boolean(schemas.pendingMigrations?.some((migration) => !committed.has(migration.path))) ||
+    Boolean(schemas.agentRefusals?.length) ||
+    schemas.indeterminate.length > 0
+  );
 }
 
 async function hasPendingHeartbeatMigration(
@@ -100,13 +115,21 @@ async function hasPendingHeartbeatMigration(
     pluginValidation: "core-only",
   }).readConfigFileSnapshot();
   const projected = tryProjectRetiredHeartbeatConfig(sourceConfig);
-  return Boolean(
-    projected &&
-    (!isDeepStrictEqual(projected, sourceConfig) ||
-      hasPendingHeartbeatCadenceMigration(sourceConfig, env) ||
-      (await collectHeartbeatScratchMigrationFindings(sourceConfig, env)).length > 0 ||
-      hasPendingHeartbeatOutcomes(targets, env)),
-  );
+  try {
+    return Boolean(
+      projected &&
+      (!isDeepStrictEqual(projected, sourceConfig) ||
+        hasPendingHeartbeatCadenceMigration(sourceConfig, env) ||
+        (await collectHeartbeatScratchMigrationFindings(sourceConfig, env)).length > 0 ||
+        hasPendingHeartbeatOutcomes(targets, env)),
+    );
+  } catch (error) {
+    // Selection may unlock legacy heartbeat work later; preserve its full rollback group.
+    if (error instanceof CronStoreSelectionRequiredError) {
+      return true;
+    }
+    throw error;
+  }
 }
 
 /** Heartbeat retirement changes current-schema data too; preserve the complete rollback group. */

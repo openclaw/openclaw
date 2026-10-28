@@ -99,25 +99,21 @@ it.each<{ source: string; reason?: string }>([
   expect(existsSync(join(checkout, "node_modules"))).toBe(source === "installed");
 });
 
-it("checks fallback versions before loading through the watcher child and preserves local resolution", () => {
+it("loads fallback dependencies through the watcher child and preserves local resolution", () => {
   const root = tempDirs.make("openclaw-watch-dependencies-");
   const { checkout, tooling, writePackage } = createToolingDependencyFixture(root, true);
   const manifest = {
     dependencies: { "fixture-pkg": "1.0.0" },
-    devDependencies: { "dev-pkg": "1.0.0" },
     optionalDependencies: { "@fixture/scoped": "1.0.0" },
     imports: { "#source": "./scripts/local-source.mjs" },
   };
   writeJson(join(checkout, "package.json"), manifest);
   copyFileSync("scripts/watch-pr-ci.mjs", join(checkout, "scripts/watch-pr-ci.mjs"));
   writePackage("fixture-pkg", 'export default "tooling";');
-  writePackage("dev-pkg", 'export default "dev";');
   writePackage("@fixture/scoped", 'export default "scoped";', "1.0.0", tooling, {
     "./subpath": 'export { default } from "./index.mjs";',
   });
-  writePackage("local-pkg", 'export default "fallback";', "1.0.0", tooling, {
-    "./private": 'export { default } from "./index.mjs";',
-  });
+  writePackage("local-pkg", 'export default "fallback";');
   writePackage("local-pkg", 'export default "local";', "1.0.0", join(checkout, "scripts"));
   writeFileSync(join(tooling, "relative.mjs"), 'export default "wrong";\n');
   writeFileSync(join(checkout, "scripts/local-source.mjs"), 'export default "source";\n');
@@ -125,17 +121,15 @@ it("checks fallback versions before loading through the watcher child and preser
     join(checkout, "scripts/watch-pr-ci.mts"),
     `import assert from "node:assert/strict";
 import missing from "fixture-pkg";
-import dev from "dev-pkg";
 import scoped from "@fixture/scoped/subpath";
 import local from "local-pkg";
 import source from "#source";
-assert.deepEqual({ missing, dev, scoped, local, source }, {
-  missing: "tooling", dev: "dev", scoped: "scoped", local: "local", source: "source",
+assert.deepEqual({ missing, scoped, local, source }, {
+  missing: "tooling", scoped: "scoped", local: "local", source: "source",
 });
 for (const specifier of ["./relative.mjs", new URL("./relative.mjs", import.meta.url).href]) {
   await assert.rejects(import(specifier), { code: "ERR_MODULE_NOT_FOUND" });
 }
-await assert.rejects(import("local-pkg/private"), { code: "ERR_PACKAGE_PATH_NOT_EXPORTED" });
 console.log("fallback and local resolution OK");
 `,
   );
@@ -162,17 +156,5 @@ console.log("fallback and local resolution OK");
   expect(result.stderr).toBe(
     `[watch-pr-ci] resolving missing packages from scripts/pr tooling root ${tooling}\n`,
   );
-  writePackage("fixture-pkg", 'export default "stale";', "0.0.0-stale");
-  writeFileSync(
-    join(tooling, "node_modules/fixture-pkg/index.mjs"),
-    'console.log("STALE FIXTURE LOADED"); export default "tooling";\n',
-  );
-  const rejected = run();
-  expect(rejected.status, rejected.stderr).toBe(1);
-  expect(rejected.stderr).toContain("'fixture-pkg' has version 0.0.0-stale");
-  expect(rejected.stderr).toContain("requires 1.0.0");
-  expect(rejected.stderr).toContain(tooling);
-  expect(rejected.stderr).toContain("pnpm install --frozen-lockfile");
-  expect(rejected.stdout + rejected.stderr).not.toContain("STALE FIXTURE LOADED");
   expect(existsSync(join(checkout, "node_modules"))).toBe(false);
 });

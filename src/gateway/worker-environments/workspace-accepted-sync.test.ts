@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import fs, { type FileHandle } from "node:fs/promises";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { afterEach, describe, expect, it } from "vitest";
@@ -12,6 +12,7 @@ import {
   withinTest,
 } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { observeSettlement } from "../../agents/promise-settlement.test-support.js";
 import { runCommandWithTimeout, type SpawnResult } from "../../process/exec.js";
 import {
   WorkerTunnelOwnerDisconnectedError,
@@ -41,10 +42,28 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     cleanup();
   }),
 );
-function createGateRelease(gate: FileHandle, newline = false) {
+async function gateRelease(gatePath: string, newline = false) {
+  expect((await runCommandWithTimeout(["mkfifo", gatePath], { timeoutMs: 10_000 })).code).toBe(0);
+  const gate = await fs.open(gatePath, "r+");
   let releasing: Promise<void> | undefined;
   return (message = "release") =>
     (releasing ??= gate.write(message + (newline ? "\n" : "")).then(() => gate.close()));
+}
+async function seedWorkspace(local: string, workspace: string) {
+  await Promise.all([
+    fs.writeFile(path.join(local, "result.txt"), "local\n"),
+    fs.writeFile(path.join(workspace, "result.txt"), "worker\n"),
+  ]);
+}
+function runWorkspaceCommandLocally(
+  command: WorkerWorkspaceCommand,
+  baseEnv: NodeJS.ProcessEnv,
+  preload?: string,
+) {
+  return runCommandWithTimeout(
+    [process.execPath, ...(preload ? ["--require", preload] : []), ...command.argv.slice(1)],
+    { timeoutMs: 10_000, baseEnv, input: command.input },
+  );
 }
 const RECEIVER_ENTRY_PATH = workerWorkspaceRsyncReceiverEntryPath(BUNDLE_HASH);
 const RECEIVER_CLEANUP_MS = { release: 10_000, termination: 1_000 };
@@ -135,14 +154,6 @@ function remoteManifestResult(command: WorkerWorkspaceCommand) {
 const resultContents = (directory: string) =>
   fs.readFile(path.join(directory, "result.txt"), "utf8");
 
-function commitCase(
-  name: string,
-  outcome: "committed" | "applied" | "begun",
-  expected: "success" | "pending" | "rollback",
-  secondCommit = result(),
-) {
-  return { name, outcome, expected, secondCommit, retry: outcome === "applied" };
-}
 type TransactionCall = { action: string; nonce: string } & Partial<
   Pick<WorkerWorkspaceCommand, "transportRetry">
 >;
@@ -193,15 +204,6 @@ function mockPublication(
   };
 }
 
-function observeSettlement(promise: Promise<unknown>) {
-  let settled = false;
-  const markSettled = () => {
-    settled = true;
-  };
-  void promise.then(markSettled, markSettled);
-  return () => settled;
-}
-
 function createPublisher(
   params: Pick<PublisherParams, "runWorkspaceCommand"> & Partial<PublisherParams>,
 ) {
@@ -229,12 +231,8 @@ async function gatedApplyFixture(signal: AbortSignal, deadline = false) {
   const settlePreload = path.join(root, "settle-clock.cjs");
   await Promise.all([fs.mkdir(local), fs.mkdir(workspace)]);
   workspace = await fs.realpath(workspace);
-  await Promise.all([
-    fs.writeFile(path.join(local, "result.txt"), "local\n"),
-    fs.writeFile(path.join(workspace, "result.txt"), "worker\n"),
-  ]);
-  expect((await runCommandWithTimeout(["mkfifo", gate], { timeoutMs: 10_000 })).code).toBe(0);
-  const releaseApply = createGateRelease(await fs.open(gate, "r+"));
+  await seedWorkspace(local, workspace);
+  const releaseApply = await gateRelease(gate);
   await fs.writeFile(
     preload,
     `const fs = require("node:fs");
@@ -313,17 +311,10 @@ Atomics.wait = function(waitArray, index, value, timeout) {
       );
       return result({ code: 255, stderr: "connection lost after remote apply started" });
     }
-    const commandResult = await runCommandWithTimeout(
-      [
-        process.execPath,
-        ...(deadline && transactionAction === "settle" ? ["--require", settlePreload] : []),
-        ...command.argv.slice(1),
-      ],
-      {
-        timeoutMs: 10_000,
-        baseEnv: env,
-        input: command.input,
-      },
+    const commandResult = await runWorkspaceCommandLocally(
+      command,
+      env,
+      deadline && transactionAction === "settle" ? settlePreload : undefined,
     );
     if (transactionAction === "begin" && commandResult.code === 0) {
       stagingRoot = commandResult.stdout.trim();
@@ -345,7 +336,6 @@ Atomics.wait = function(waitArray, index, value, timeout) {
   });
 
   return {
-    root,
     local,
     workspace,
     settleStarted,
@@ -368,11 +358,8 @@ Atomics.wait = function(waitArray, index, value, timeout) {
         stderr: "",
       });
     },
-    async expectNoTransactionArtifacts() {
-      expect(
-        (await fs.readdir(root)).filter((name) => name.startsWith(".openclaw-accepted-")),
-      ).toEqual([]);
-    },
+    transactionArtifacts: async () =>
+      (await fs.readdir(root)).filter((name) => name.startsWith(".openclaw-accepted-")),
     get applyExited() {
       return applyExited;
     },
@@ -430,12 +417,8 @@ describe("accepted workspace publication", () => {
       home = await fs.realpath(home);
       const workspace = path.join(home, workspaceRelative);
       await fs.mkdir(workspace, { recursive: true });
-      await Promise.all([
-        fs.writeFile(path.join(local, "result.txt"), "local\n"),
-        fs.writeFile(path.join(workspace, "result.txt"), "worker\n"),
-      ]);
-      expect((await runCommandWithTimeout(["mkfifo", gate], { timeoutMs: 10_000 })).code).toBe(0);
-      const releaseReceiver = createGateRelease(await fs.open(gate, "r+"), true);
+      await seedWorkspace(local, workspace);
+      const releaseReceiver = await gateRelease(gate, true);
       await fs.writeFile(
         path.join(bin, "rsync"),
         '#!/bin/sh\nset -eu\nfor destination do :; done\nprintf "staged\\n" > "$destination/result.txt"\n( : > "$OPENCLAW_TEST_RECEIVER_MARKER"; read -r _ < "$OPENCLAW_TEST_RECEIVER_GATE"; printf "local\\n" > "$destination/result.txt" ) </dev/null >/dev/null 2>&1 &\nexit 0\n',
@@ -461,11 +444,7 @@ describe("accepted workspace publication", () => {
         if (action === "apply") {
           await fs.writeFile(applyMarker, "");
         }
-        return await runCommandWithTimeout([process.execPath, ...command.argv.slice(1)], {
-          timeoutMs: 10_000,
-          baseEnv: env,
-          input: command.input,
-        });
+        return await runWorkspaceCommandLocally(command, env);
       };
       const publisher = createPublisher({
         runWorkspaceCommand,
@@ -545,7 +524,6 @@ describe("accepted workspace publication", () => {
       lifetime.run(async () => {
         const fixture = await gatedApplyFixture(signal, deadline);
         const {
-          root,
           local,
           workspace,
           settleStarted,
@@ -567,7 +545,7 @@ describe("accepted workspace publication", () => {
               awaitGateBeforeSettlement(
                 settleStarted.promise,
                 publishing,
-                `timeout waiting for ${path.join(root, "apply-started")}`,
+                "publication ended before settlement started",
               ),
               signal,
             );
@@ -600,7 +578,7 @@ describe("accepted workspace publication", () => {
             ]);
             expect(transactionCalls.at(-1)?.transportRetry).toBe("never");
           }
-          await fixture.expectNoTransactionArtifacts();
+          expect(await fixture.transactionArtifacts()).toEqual([]);
         } finally {
           await releaseApply().catch(() => undefined);
           await fixture.applyExited?.catch(() => undefined);
@@ -609,19 +587,22 @@ describe("accepted workspace publication", () => {
       }),
   );
 
-  it("keeps an unobservable apply pending when settlement is unobservable", async () => {
+  it.each([
+    { name: "unobservable", settle: new WorkerTunnelOwnerDisconnectedError() },
+    {
+      name: "malformed",
+      settle: result({ stdout: '{"version":1,"outcome":"applied","extra":true}\n' }),
+    },
+  ])("keeps an unobservable apply pending when settlement is $name", async ({ settle }) => {
     const { actions, publishing } = mockPublication({
       apply: commandFailure("apply"),
-      settle: new WorkerTunnelOwnerDisconnectedError(),
+      settle,
     });
     const thrown = await publishing.catch((error: unknown) => error);
     expect(thrown).toBeInstanceOf(AcceptedWorkspacePublicationIndeterminateError);
     expect(thrown).toMatchObject({
-      message: "Accepted workspace publication is indeterminate and requires recovery",
       operation: "apply",
-      cause: expect.objectContaining({
-        message: "Worker workspace sync failed: apply transport lost",
-      }),
+      cause: { message: "Worker workspace sync failed: apply transport lost" },
     });
     expect(actions()).toEqual(["begin", "apply", "settle"]);
   });
@@ -648,24 +629,15 @@ describe("accepted workspace publication", () => {
     expect(actions()).toEqual(expected);
   });
 
-  it("keeps an ambiguous apply pending when settlement output is malformed", async () => {
-    const { actions, publishing } = mockPublication({
-      apply: commandFailure("apply"),
-      settle: result({ stdout: '{"version":1,"outcome":"applied","extra":true}\n' }),
-    });
-    await expect(publishing).rejects.toBeInstanceOf(AcceptedWorkspacePublicationIndeterminateError);
-    expect(actions()).toEqual(["begin", "apply", "settle"]);
-  });
-
   it.each([
-    commitCase("committed phase", "committed", "success"),
-    commitCase("applied phase; retry succeeds", "applied", "success"),
-    commitCase("retry is unobservable", "applied", "pending", commandFailure("retry")),
-    commitCase("begun phase", "begun", "rollback"),
-    commitCase("retry is rejected", "applied", "rollback", commandFailure("retry", 1)),
-  ])(
-    "handles an ambiguous commit when $name",
-    async ({ outcome, retry, secondCommit, expected }) => {
+    ["committed", "success", result()],
+    ["applied", "success", result()],
+    ["applied", "pending", commandFailure("retry")],
+    ["begun", "rollback", result()],
+    ["applied", "rollback", commandFailure("retry", 1)],
+  ] as const)(
+    "handles an ambiguous commit in %s as %s (%j)",
+    async (outcome, expected, secondCommit) => {
       const { transactionCalls, publishing } = mockPublication(
         {
           commit: [commandFailure("commit"), secondCommit],
@@ -688,7 +660,7 @@ describe("accepted workspace publication", () => {
         "apply",
         "commit",
         "settle",
-        ...(retry ? ["commit"] : []),
+        ...(outcome === "applied" ? ["commit"] : []),
         ...(expected === "rollback" ? ["rollback"] : []),
       ]);
     },

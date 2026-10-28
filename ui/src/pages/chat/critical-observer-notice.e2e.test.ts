@@ -1,9 +1,6 @@
 import { expect, it } from "vitest";
 import { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-support.ts";
-import {
-  activateSelfRemovingControl,
-  waitForPatch,
-} from "../../e2e/session-management.test-support.ts";
+import * as ui from "../../e2e/session-management.compact.test-support.ts";
 import { seedStorage } from "../../e2e/sidebar-assertions.test-support.ts";
 import { controlUiSessionUrl, installMockGateway } from "../../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../../test-helpers/control-ui-session-fixtures.ts";
@@ -17,9 +14,9 @@ const conversation = "Your current conversation stays uninterrupted.";
 
 suite.define(() => {
   it("keeps background observer assessments in the sidebar without interrupting chat or replacing Undo", async () => {
-    await suite.withPage(
-      { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1440 } },
-      async ({ page }) => {
+    await ui.withSessionPage(
+      suite,
+      async (page) => {
         await seedStorage(page, { "openclaw:sidebar:sessions:show-preview": "true" });
         const background = sessionRow(backgroundSessionKey, "Verification", baseTime - 1, {
           hasActiveRun: true,
@@ -36,8 +33,7 @@ suite.define(() => {
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, selectedSessionKey));
         await page.getByText(conversation).waitFor();
         const currentUrl = page.url();
-        const session = (key: string) =>
-          page.locator(`.sidebar-recent-session[data-session-key="${key}"]`);
+        const session = ui.sessionRows(page);
         const row = session(backgroundSessionKey);
         await row.waitFor({ state: "visible" });
         await gateway.waitForRequest("sessions.messages.subscribe", {
@@ -45,34 +41,23 @@ suite.define(() => {
         });
 
         // Record transient notices too, so an auto-dismiss cannot turn an unwanted alert into a pass.
-        const observerNotices = await page.evaluateHandle(() => {
-          const messages: string[] = [];
-          const host = document.querySelector("openclaw-toast-host");
-          if (!host) {
-            throw new Error("Shared toast host is unavailable");
-          }
-          const observer = new MutationObserver(() => {
-            const message = host.querySelector(".app-toast__message")?.textContent;
-            if (message) {
-              messages.push(message);
-            }
-          });
-          observer.observe(host, { childList: true, subtree: true, characterData: true });
-          return messages;
+        const observerNotices = await page.locator("openclaw-toast-host").evaluateHandle((host) => {
+          const notices = { count: 0 };
+          new MutationObserver(() => {
+            notices.count += host.querySelectorAll(".app-toast__message").length;
+          }).observe(host, { childList: true, subtree: true, characterData: true });
+          return notices;
         });
 
-        const emit = async (
-          health: "stuck" | "waiting-on-user",
-          revision: number,
-          headline: string,
-        ) => {
+        let revision = 0;
+        const emit = async (health: "stuck" | "waiting-on-user", headline: string) => {
           await gateway.emitGatewayEvent("session.observer", {
             sessionKey: backgroundSessionKey,
             agentId: "main",
             sessionId: background.sessionId,
             runId,
             health,
-            revision,
+            revision: ++revision,
             headline,
             updatedAt: baseTime + revision,
           });
@@ -81,36 +66,26 @@ suite.define(() => {
           await page.waitForLoadState("networkidle");
         };
 
-        await emit("stuck", 1, "Needs repair");
-        expect(await page.locator(".app-toast").count()).toBe(0);
-        await emit("waiting-on-user", 2, "Needs a decision");
-        expect(await page.locator(".app-toast").count()).toBe(0);
-        expect(await observerNotices.jsonValue()).toEqual([]);
+        await emit("stuck", "Needs repair");
+        await emit("waiting-on-user", "Needs a decision");
+        expect(await observerNotices.jsonValue()).toEqual({ count: 0 });
         expect(page.url()).toBe(currentUrl);
 
         const archiveRow = session(archived.key);
-        const waitArchived = (value: boolean) =>
-          waitForPatch(
-            gateway,
-            (params) => params.key === archived.key && params.archived === value,
-          );
-        await archiveRow.hover();
-        await archiveRow.click({ button: "right" });
-        await activateSelfRemovingControl(
-          page.getByRole("menuitem", { name: "Archive session", exact: true }),
-        );
-        await waitArchived(true);
+        await ui.archiveSession(page, archiveRow, "sidebar");
         const toast = page.locator(".app-toast");
         const undo = toast.getByRole("button", { name: "Undo", exact: true });
         await undo.waitFor({ state: "visible" });
         await undo.focus();
-        await emit("stuck", 3, "Still needs repair");
+        await emit("stuck", "Still needs repair");
+        expect(await toast.count()).toBe(1);
         expect(await toast.textContent()).toContain("Session archived");
+        expect(await page.getByText(conversation).count()).toBe(1);
         await undo.click();
-        await waitArchived(false);
-        await archiveRow.waitFor({ state: "visible" });
+        await ui.sessionPatch(gateway, archived.key, { archived: false });
         expect(page.url()).toBe(currentUrl);
       },
+      { viewport: { height: 900, width: 1440 } },
     );
   });
 });

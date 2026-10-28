@@ -1,5 +1,8 @@
 /** Public installed-plugin-index API for load, refresh, policy hash, and invalidation checks. */
+import { getRuntimeConfigCapture } from "../config/runtime-config-capture-state.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { freezeTrustedJsonSnapshot } from "../shared/immutable-data.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { withBundledPluginEnablementCompat } from "./bundled-compat.js";
 import { isBundledProviderCompatPlugin } from "./bundled-provider-compat.js";
@@ -13,6 +16,7 @@ import {
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import { discoverOpenClawPlugins, type PluginDiscoveryResult } from "./discovery.js";
 import { hasConfigPathActivationMetadataMigration } from "./installed-plugin-index-config-path-scope.js";
+import { getInstalledPluginIndexFacts } from "./installed-plugin-index-facts.js";
 import { hashJson } from "./installed-plugin-index-hash.js";
 import {
   isInstalledPluginIndexInstallOwnerAmbiguous,
@@ -43,6 +47,8 @@ import {
   loadPluginManifestRegistryCore,
   type PluginManifestRegistry,
 } from "./manifest-registry.js";
+import { getPluginCache } from "./plugin-cache.js";
+import { resolvePluginMetadataEnvFingerprint } from "./plugin-metadata-env.js";
 
 export {
   INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION,
@@ -93,12 +99,56 @@ function buildInstalledPluginIndex(
           diagnostics: [...baseDiscovery.diagnostics, ...params.diagnostics],
         }
       : baseDiscovery;
+  // Captured configs and discovery belong to one immutable operation generation.
+  // Workspace-local candidates stay in the key; empty workspaces share physical inventory.
+  const config = params.config;
+  const cache =
+    config &&
+    getRuntimeConfigCapture(config) &&
+    !params.candidates &&
+    !params.discovery &&
+    !params.refreshReason
+      ? getPluginCache().metadata.derivedIndexes
+      : undefined;
+  const registryPath = resolveInstalledPluginIndexStorePath({
+    env,
+    stateDir: params.stateDir,
+    filePath: params.pluginIndexFilePath,
+  });
+  const hostContractVersion = resolveCompatibilityHostVersion(env);
+  const compatRegistryVersion = resolveCompatRegistryVersion();
+  const key = cache
+    ? hashJson({
+        discovery,
+        installRecords,
+        registryPath,
+        hostContractVersion,
+        compatRegistryVersion,
+        artifactPreservingReadOnly: params.artifactPreservingReadOnly === true,
+        env: resolvePluginMetadataEnvFingerprint(env),
+        policy: resolveInstalledPluginIndexPolicyHash(config, env, {
+          artifactPreservingReadOnly: params.artifactPreservingReadOnly,
+        }),
+      })
+    : undefined;
+  const cached = config && key ? cache?.get(config)?.get(key) : undefined;
+  if (cached) {
+    const { workspaceDir: _workspaceDir, ...payload } = cached.index;
+    const index = freezeTrustedJsonSnapshot({
+      ...payload,
+      generatedAtMs: (params.now?.() ?? new Date()).getTime(),
+      ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
+    });
+    const sourceFacts = getInstalledPluginIndexFacts(cached.index);
+    const facts = getInstalledPluginIndexFacts(index);
+    // Workspace and capture time do not change the inventory fingerprint.
+    if (facts && sourceFacts?.fingerprint) {
+      facts.fingerprint = sourceFacts.fingerprint;
+    }
+    return { index, discovery, manifestRegistry: cached.manifestRegistry };
+  }
   const registry = loadPluginManifestRegistryCore({
-    registryPath: resolveInstalledPluginIndexStorePath({
-      env,
-      stateDir: params.stateDir,
-      filePath: params.pluginIndexFilePath,
-    }),
+    registryPath,
     config: params.config,
     workspaceDir: params.workspaceDir,
     env,
@@ -121,23 +171,34 @@ function buildInstalledPluginIndex(
     artifactPreservingReadOnly: params.artifactPreservingReadOnly,
   });
 
+  let index: InstalledPluginIndex = {
+    version: INSTALLED_PLUGIN_INDEX_VERSION,
+    warning: INSTALLED_PLUGIN_INDEX_WARNING,
+    hostContractVersion,
+    compatRegistryVersion,
+    migrationVersion: INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION,
+    policyHash: resolveInstalledPluginIndexPolicyHash(params.config, env, {
+      artifactPreservingReadOnly: params.artifactPreservingReadOnly,
+    }),
+    generatedAtMs,
+    ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
+    ...(params.refreshReason ? { refreshReason: params.refreshReason } : {}),
+    installRecords,
+    plugins,
+    diagnostics,
+  };
+  if (cache && key && config) {
+    let entries = cache.get(config);
+    if (!entries) {
+      cache.set(config, (entries = new Map()));
+    }
+    // Parsing retains passthrough install-record values; own them before freezing.
+    index = freezeTrustedJsonSnapshot(structuredClone(index));
+    entries.set(key, { index, manifestRegistry: registry });
+    pruneMapToMaxSize(entries, 64);
+  }
   return {
-    index: {
-      version: INSTALLED_PLUGIN_INDEX_VERSION,
-      warning: INSTALLED_PLUGIN_INDEX_WARNING,
-      hostContractVersion: resolveCompatibilityHostVersion(env),
-      compatRegistryVersion: resolveCompatRegistryVersion(),
-      migrationVersion: INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION,
-      policyHash: resolveInstalledPluginIndexPolicyHash(params.config, env, {
-        artifactPreservingReadOnly: params.artifactPreservingReadOnly,
-      }),
-      generatedAtMs,
-      ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
-      ...(params.refreshReason ? { refreshReason: params.refreshReason } : {}),
-      installRecords,
-      plugins,
-      diagnostics,
-    },
+    index,
     discovery: params.candidates ? undefined : discovery,
     manifestRegistry: registry,
   };

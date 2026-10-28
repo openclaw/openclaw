@@ -20,6 +20,7 @@ import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts
 import { registerActivityEnglish } from "../../i18n/locales/en-activity.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { observeIntersection } from "../../lib/reactive/observers.ts";
 import { ChatImageLightbox } from "../chat/components/chat-image-lightbox-view.tsx";
 import { MessageImages } from "../chat/components/chat-message-deferred.tsx";
 import {
@@ -120,7 +121,6 @@ function SessionMedia(
   const mediaOwner = {};
   const [revision, setRevision] = createSignal(0);
   let visible = false;
-  let observer: IntersectionObserver | undefined;
   let entry: ImageEntry | undefined;
   let settledEntry: ImageEntry | undefined;
   let displayedImages: ImageBlock[] = [];
@@ -373,20 +373,21 @@ function SessionMedia(
     refresh,
   );
   onSettled(() => {
+    let stopObserving: (() => void) | undefined;
     // Visibility is required before transcript discovery; never fall back to an eager scan.
     if (typeof IntersectionObserver !== "undefined") {
-      observer = new IntersectionObserver(
+      stopObserving = observeIntersection(
+        [host],
         (entries) => {
           visible = entries.some((observation) => observation.isIntersecting);
           refresh();
         },
         { rootMargin: "200px" },
       );
-      observer.observe(host);
     }
     return () => {
       disposed = true;
-      observer?.disconnect();
+      stopObserving?.();
       visible = false;
       closeImage(false);
       releaseChatMediaResourceOwner(mediaOwner);

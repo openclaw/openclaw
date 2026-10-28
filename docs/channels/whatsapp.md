@@ -438,6 +438,7 @@ A liveness check sent to your own number can therefore become agent input with `
 
   <Accordion title="Outbound media behavior">
     - supports image, video, audio (PTT voice-note), and document payloads
+    - a successful message-tool send to the current chat counts as the reply for both text and attachments, including contacts with a known LID-to-phone mapping; the agent can finish with `NO_REPLY` without a false failure notice
     - audio is sent as the Baileys `audio` payload with `ptt: true`, rendering as a push-to-talk voice note; `audioAsVoice` is preserved on reply payloads so TTS voice-note output stays on this path regardless of the provider's source format
     - native Ogg/Opus audio sends as `audio/ogg; codecs=opus`; anything else (including Microsoft Edge TTS MP3/WebM output) is transcoded with `ffmpeg` to 48 kHz mono Ogg/Opus before PTT delivery
     - `/tts latest` sends the latest assistant reply as one voice note and suppresses repeat sends for the same reply; `/tts chat on|off|default` controls auto-TTS for the current chat
@@ -580,6 +581,8 @@ opt-in status surface described above.
 
 ## Troubleshooting
 
+Policy and allowlist denials appear in normal Gateway logs as `Inbound message blocked (reason=...)`. Each account listener logs a given reason at most once per minute, without sender identifiers or message content.
+
 <AccordionGroup>
   <Accordion title="Not linked (QR required)">
     Symptom: channel status reports not linked.
@@ -644,7 +647,7 @@ openclaw channels status
   </Accordion>
 
   <Accordion title="Bun runtime warning">
-    Node remains the primary and recommended Gateway runtime. Bun 1.4.3+ builds with WAL-reset-safe `node:sqlite` are supported as an explicit opt-in; doctor migrates only unsupported Bun services to Node.
+    Node remains the primary and recommended Gateway runtime. Bun 1.4.4+ builds with WAL-reset-safe `node:sqlite` are supported as an explicit opt-in; doctor migrates only unsupported Bun services to Node.
   </Accordion>
 </AccordionGroup>
 

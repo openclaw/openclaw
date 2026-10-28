@@ -206,11 +206,7 @@ async function buildDaemonStatusSummary(serviceLabel: "gateway" | "node", timeou
       ...(wrapperPath ? { wrapperPath } : {}),
       ...(installationDrift
         ? {
-            installationDrift: formatGatewayServiceInstallationDrift(
-              installationDrift,
-              undefined,
-              state.env,
-            ),
+            installationDrift: formatGatewayServiceInstallationDrift(installationDrift, state.env),
           }
         : {}),
     };

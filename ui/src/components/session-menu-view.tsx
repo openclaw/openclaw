@@ -1,6 +1,10 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, Show } from "solid-js";
 import { EDITOR_IDS, EDITOR_LABELS } from "../lib/editor-links.ts";
+import {
+  KEYBOARD_SHORTCUT_COMBOS,
+  type KeyboardShortcutCombo,
+} from "../lib/keyboard-shortcut-contract.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { formatSessionSnoozeWakeTime, isSessionSnoozed } from "../lib/sessions/session-snooze.ts";
 import { useSessionMenuAppearance } from "./session-icon-picker-solid.tsx";
@@ -11,16 +15,12 @@ import type {
 } from "./session-menu-actions.ts";
 import type { CompactSessionMenuView } from "./session-menu-compact.ts";
 import { useSessionMenuDetails } from "./session-menu-details-solid.tsx";
-import { sessionArchiveShortcut } from "./session-menu-options.ts";
 import { useSessionSnoozeEntries } from "./session-menu-snooze.tsx";
 import { Icon, type IconName } from "./solid/icon.tsx";
 import { Kbd, KeyboardShortcut } from "./solid/kbd.tsx";
 import type { MenuControls, MenuEntry, MenuItem } from "./solid/menu.tsx";
 
-export function SessionMenuShortcut(props: {
-  shortcut: string;
-  alias?: ReturnType<typeof sessionArchiveShortcut>;
-}) {
+export function SessionMenuShortcut(props: { shortcut: string; alias?: KeyboardShortcutCombo }) {
   return (
     <span class="session-menu__shortcut" aria-hidden="true">
       <Kbd keys={props.shortcut.toUpperCase()} inline />
@@ -67,6 +67,10 @@ export function useSessionMenuEntries(
   options: { openInExtra?: () => readonly MenuEntry[]; controls?: MenuControls } = {},
 ) {
   const state = readState();
+  const archiveShortcut = () =>
+    state.archiveShortcut && state.selectionCount === 1 && !state.session.archived
+      ? KEYBOARD_SHORTCUT_COMBOS.archiveSession
+      : undefined;
   const batch = () => state.selectionCount > 1;
   const count = () => String(state.selectionCount);
   const disabled = (kind: SessionManagementActionKind) =>
@@ -115,7 +119,7 @@ export function useSessionMenuEntries(
     details: entry.shortcut ? (
       <SessionMenuShortcut
         shortcut={entry.shortcut}
-        alias={entry.kind === "toggle-archived" ? sessionArchiveShortcut(state) : undefined}
+        alias={entry.kind === "toggle-archived" ? archiveShortcut() : undefined}
       />
     ) : undefined,
   });
@@ -318,6 +322,25 @@ export function useSessionMenuEntries(
         return [content("appearance", appearanceContent())];
       case "group":
         return groupOptions();
+      case "collections":
+        return [
+          ...actions.personalGroups.map((group): MenuItem => ({
+            id: "personal-collection:" + group.id,
+            label: group.label,
+            class: "session-menu__item",
+            labelClass: "session-menu__text",
+            disabled: state.disabled || group.sessionKeys.includes(state.session.target?.key ?? ""),
+            icon: icon("layers"),
+          })),
+          {
+            id: "personal-collection:new",
+            label: t("sessionsView.personalGroupNew"),
+            class: "session-menu__item",
+            labelClass: "session-menu__text",
+            disabled: state.disabled,
+            icon: icon("plus"),
+          },
+        ];
       case "assign-owner":
         return details.ownerOptions();
       case "root":
@@ -414,6 +437,16 @@ export function useSessionMenuEntries(
         disabled: actions.actionDisabled("move-to-group"),
         title: state.actionDisabledReasons["move-to-group"],
       }),
+      ...(actions.collectionTarget
+        ? [
+            submenu({
+              view: "collections",
+              label: t("sessionsView.personalGroupAdd"),
+              icon: "layers",
+              disabled: state.disabled,
+            }),
+          ]
+        : []),
       ...(!batch() && state.session.isChild
         ? [
             item({

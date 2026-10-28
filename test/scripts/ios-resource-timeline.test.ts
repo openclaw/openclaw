@@ -10,10 +10,16 @@ const script = path.resolve("scripts/ios-resource-timeline.mjs");
 const moduleUrl = JSON.stringify(pathToFileURL(script).href);
 const posixIt = process.platform === "win32" ? it.skip : it;
 
-function run(output: string, source: string, env: NodeJS.ProcessEnv = {}) {
+function run(
+  output: string,
+  source: string,
+  env: NodeJS.ProcessEnv = {},
+  preload?: string,
+  command = [process.execPath, "--input-type=module", "-e", source],
+) {
   return spawnSync(
     process.execPath,
-    [script, "--output", output, "--", process.execPath, "--input-type=module", "-e", source],
+    [...(preload ? ["--import", preload] : []), script, "--output", output, "--", ...command],
     {
       encoding: "utf8",
       timeout: 5_000,
@@ -21,12 +27,18 @@ function run(output: string, source: string, env: NodeJS.ProcessEnv = {}) {
     },
   );
 }
+const recordsAt = (file: string) =>
+  readFileSync(file, "utf8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+const endRecord = (output: string, code: number | null, signal: string | null = null) =>
+  expect(recordsAt(output).at(-1)).toMatchObject({ type: "end", code, signal });
 
 describe("iOS resource timeline workload boundary", () => {
   it.each([
     ["private-api-token", "other"],
     ["qualification-native-build", "qualification-native-build"],
-    ["screenshot-iphone-capture", "screenshot-iphone-capture"],
   ])("preserves workload exit and output while sanitizing phase %s", (phase, expected) => {
     const output = path.join(tempDirs.make("ios-resource-timeline-"), "timeline.jsonl");
     const result = run(
@@ -44,10 +56,7 @@ describe("iOS resource timeline workload boundary", () => {
     expect(existsSync(result.stdout.trim())).toBe(false);
     const raw = readFileSync(output, "utf8");
     expect(raw).not.toMatch(/private-api-token|--input-type|OPENCLAW_IOS_RESOURCE_PHASE_PATH/u);
-    const records = raw
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line));
+    const records = recordsAt(output);
     expect(records[0]).toMatchObject({
       type: "start",
       collectorCpuScope: "node-only-excludes-observation-subprocesses",
@@ -77,18 +86,10 @@ describe("iOS resource timeline workload boundary", () => {
   it("reports a failed workload spawn without waiting on diagnostics", () => {
     const root = tempDirs.make("ios-resource-timeline-");
     const output = path.join(root, "timeline.jsonl");
-    const result = spawnSync(
-      process.execPath,
-      [script, "--output", output, "--", path.join(root, "missing-workload")],
-      { encoding: "utf8", timeout: 5_000 },
-    );
+    const result = run(output, "", {}, undefined, [path.join(root, "missing-workload")]);
     expect(result.status).toBe(127);
     expect(result.error).toBeUndefined();
-    expect(JSON.parse(readFileSync(output, "utf8").trim().split("\n").at(-1)!)).toMatchObject({
-      type: "end",
-      code: 127,
-      signal: null,
-    });
+    endRecord(output, 127);
   });
 
   posixIt(
@@ -157,19 +158,9 @@ describe("iOS resource timeline workload boundary", () => {
       syncBuiltinESMExports();
     `,
       );
-      const result = spawnSync(
-        process.execPath,
-        [
-          "--import",
-          preload,
-          script,
-          "--output",
-          output,
-          "--",
-          process.execPath,
-          "--input-type=module",
-          "-e",
-          `
+      const result = run(
+        output,
+        `
         import { existsSync, watch } from "node:fs";
         const finish = () => {
           if (existsSync(${JSON.stringify(complete)})) { watcher.close(); process.exit(23); }
@@ -177,12 +168,8 @@ describe("iOS resource timeline workload boundary", () => {
         const watcher = watch(${JSON.stringify(root)}, finish);
         finish();
       `,
-        ],
-        {
-          encoding: "utf8",
-          timeout: 5_000,
-          env: { ...process.env, OPENCLAW_IOS_RESOURCE_DIAGNOSTICS: "1" },
-        },
+        { OPENCLAW_IOS_RESOURCE_DIAGNOSTICS: "1" },
+        preload,
       );
       expect(result.error).toBeUndefined();
       expect(result.status).toBe(23);
@@ -194,10 +181,7 @@ describe("iOS resource timeline workload boundary", () => {
       expect(raw).not.toMatch(
         /private-api-token|private-runtime|private-device-token|private-container-token|private-app-token|private-non-ascii|private-oversize|app-container|iOS_private|RuntimeRoot|\/usr\/|\/Applications\//u,
       );
-      const records = raw
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line));
+      const records = recordsAt(output);
       const samples = records.filter((record) => record.type === "sample");
       expect(records[0]).toMatchObject({ intervalMs: 15_000, processSampleIntervalMs: 60_000 });
       expect(samples).toHaveLength(24);
@@ -209,19 +193,19 @@ describe("iOS resource timeline workload boundary", () => {
         ["ok", "unavailable", "timeout"].includes(sample.probes.ps.outcome),
       );
       expect(
-        attempted.map((sample) =>
+        attempted.map((sample) => [
           sample.processes
             .filter((row: { pid: number }) => row.pid === 42)
             .map((row: { cpuPercent: number | null }) => row.cpuPercent),
-        ),
-      ).toEqual([[null], [100], [100], [], [null], []]);
-      expect(attempted.map((sample) => sample.processIntervalMs)).toEqual([
-        null,
-        90_000,
-        60_000,
-        60_000,
-        null,
-        60_000,
+          sample.processIntervalMs,
+        ]),
+      ).toEqual([
+        [[null], null],
+        [[100], 90_000],
+        [[100], 60_000],
+        [[], 60_000],
+        [[null], null],
+        [[], 60_000],
       ]);
       for (const index of [2, 3, 4, 6, 7, 8, 10, 11, 12, 14, 15, 16, 18, 19, 20, 21, 22, 23]) {
         expect(samples[index]).toMatchObject({
@@ -231,62 +215,49 @@ describe("iOS resource timeline workload boundary", () => {
           processIntervalMs: null,
         });
       }
-      expect(samples[1].processes.find((row: { pid: number }) => row.pid === 81)).toMatchObject({
-        role: "CoreSpotlightService",
-        origin: "simulator-runtime",
-        parentRole: "launchd_sim",
-      });
-      expect(samples[1].processes.find((row: { pid: number }) => row.pid === 82)).toMatchObject({
-        role: "other",
-        origin: "simulator-runtime",
-        parentRole: "launchd_sim",
-      });
+      for (const [pid, role] of [
+        [81, "CoreSpotlightService"],
+        [82, "other"],
+      ] as const) {
+        expect(samples[1].processes.find((row: { pid: number }) => row.pid === pid)).toMatchObject({
+          role,
+          origin: "simulator-runtime",
+          parentRole: "launchd_sim",
+        });
+      }
       expect(samples[1].processes.map((row: { pid: number }) => row.pid)).not.toContain(83);
       expect(samples[1].processSummary).toMatchObject({
         count: 21,
         runnableCount: 2,
         uninterruptibleCount: 1,
-        groups: expect.arrayContaining([
-          {
-            origin: "simulator-runtime",
-            role: "CoreSpotlightService",
-            count: 2,
-            cpuObservedCount: 2,
-            cpuDeltaMs: 45_900,
-          },
-          {
-            origin: "simulator-runtime",
-            role: "modelcatalogd",
-            count: 1,
-            cpuObservedCount: 1,
-            cpuDeltaMs: 90,
-          },
-          { origin: "xcode", role: "launchd_sim", count: 1, cpuObservedCount: 1, cpuDeltaMs: 0 },
-        ]),
       });
-      expect(
-        samples[1].processSummary.groups.filter(
-          (group: { role: string }) => group.role === "duetexpertd",
-        ),
-      ).toEqual([
-        {
-          origin: "simulator-runtime",
-          role: "duetexpertd",
-          count: 1,
-          cpuObservedCount: 1,
-          cpuDeltaMs: 36_000,
-        },
-      ]);
-      expect(attempted[3].probes.ps.outcome).toBe("unavailable");
-      expect(attempted[3].processSummary).toBeNull();
-      expect(attempted[5].probes.ps.outcome).toBe("timeout");
-      expect(attempted[5].processSummary).toBeNull();
+      const groups = samples[1].processSummary.groups;
+      for (const [role, count, cpuDeltaMs, origin] of [
+        ["CoreSpotlightService", 2, 45_900, "simulator-runtime"],
+        ["modelcatalogd", 1, 90, "simulator-runtime"],
+        ["launchd_sim", 1, 0, "xcode"],
+        ["duetexpertd", 1, 36_000, "simulator-runtime"],
+      ]) {
+        expect(groups).toContainEqual({ role, count, cpuDeltaMs, origin, cpuObservedCount: count });
+      }
+      expect(groups.filter((group: { role: string }) => group.role === "duetexpertd")).toHaveLength(
+        1,
+      );
+      for (const [index, outcome] of [
+        [3, "unavailable"],
+        [5, "timeout"],
+      ] as const) {
+        expect(attempted[index]).toMatchObject({
+          probes: { ps: { outcome } },
+          processSummary: null,
+        });
+      }
       expect(
         attempted[4].processSummary.groups.every(
           (group: { cpuObservedCount: number }) => group.cpuObservedCount === 0,
         ),
       ).toBe(true);
-      expect(records.at(-1)).toMatchObject({ type: "end", code: 23, signal: null });
+      endRecord(output, 23);
     },
   );
 
@@ -295,11 +266,7 @@ describe("iOS resource timeline workload boundary", () => {
     const result = run(output, `process.kill(process.pid, "SIGTERM");`);
     expect(result.signal).toBe("SIGTERM");
     expect(result.status).toBeNull();
-    expect(JSON.parse(readFileSync(output, "utf8").trim().split("\n").at(-1)!)).toMatchObject({
-      type: "end",
-      code: null,
-      signal: "SIGTERM",
-    });
+    endRecord(output, null, "SIGTERM");
   });
 
   posixIt("forwards cancellation without changing the workload's handled exit", async () => {

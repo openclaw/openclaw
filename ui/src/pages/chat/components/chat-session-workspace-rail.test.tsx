@@ -4,11 +4,11 @@ import { createSignal, flush, onSettled } from "solid-js";
 import { afterEach, assert, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { stubTargetRetainingObserver } from "../../../test-helpers/resize-observer.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import {
-  createGatewayBrowserClientFixture,
-  createSessionCapabilityFixture,
-} from "../chat-pane.test-support.ts";
+import { createGatewayBrowserClientFixture } from "../chat-application-context.test-support.ts";
+import { createSessionCapabilityFixture } from "../chat-session-capability.test-support.ts";
+import { createSessionWorkspaceHost } from "./chat-session-workspace-host.test-support.ts";
 import { SessionWorkspaceRail } from "./chat-session-workspace-rail-solid.tsx";
 import {
   getSessionWorkspace,
@@ -110,17 +110,13 @@ it("keeps Files search usable during a failed owner read and retries without dup
   const first = createDeferred<List>();
   const retry = createDeferred<List>();
   const listFiles = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(retry.promise);
-  const state: SessionWorkspaceHost = {
+  const state: SessionWorkspaceHost = createSessionWorkspaceHost({
     sessionKey: "agent:main:workspace",
-    connected: true,
-    connectionEpoch: 1,
-    hello: null,
     agentsList: { defaultId: "main", mainKey: "main", scope: "global", agents: [] },
     client: createGatewayBrowserClientFixture({ request: () => ({ artifacts: [] }) }),
     sessions: createSessionCapabilityFixture({ listFiles }),
-    sidebarContent: null,
     handleOpenSidebar: () => {},
-  };
+  });
   const props = () =>
     createSessionWorkspaceProps(state, { expanded: true, presentation: "desktop" });
   const [current, setCurrent] = createSignal(props());
@@ -244,6 +240,9 @@ describe("session workspace path actions", () => {
     clipboard();
     const entry = file("README.md");
     const result = { sessionKey: "agent:main:current", root: "/workspace", files: [entry] };
+    const fileRequested = createDeferred();
+    const fileRead = createDeferred();
+    onTestFinished(() => fileRead.resolve());
     const state = {
       client: { request: vi.fn().mockResolvedValue({ artifacts: [] }) },
       connected: true,
@@ -254,9 +253,13 @@ describe("session workspace path actions", () => {
       sidebarContent: null,
       sessions: {
         listFiles: vi.fn().mockResolvedValue(result),
-        getFile: vi.fn().mockResolvedValue({
-          ...result,
-          file: { ...entry, previewKind: "text", contentEncoding: "utf8", content: "# Readme" },
+        getFile: vi.fn(async () => {
+          fileRequested.resolve();
+          await fileRead.promise;
+          return {
+            ...result,
+            file: { ...entry, previewKind: "text", contentEncoding: "utf8", content: "# Readme" },
+          };
         }),
       },
     } as unknown as SessionWorkspaceHost;
@@ -271,9 +274,16 @@ describe("session workspace path actions", () => {
     assert(preview);
     preview.focus();
     preview.click();
-    await vi.waitFor(() =>
-      expect(state.sessionWorkspaceState?.previews[0]?.content.kind).toBe("file"),
-    );
+    const opened = state.sessionWorkspaceState?.previews[0];
+    assert(opened?.readResult);
+    await fileRequested.promise;
+    expect(opened.content.kind).toBe("loading");
+    fileRead.resolve();
+    // This receipt includes the lazy content import, file read, and current-preview publication.
+    await opened.readResult;
+    expect(state.sessionWorkspaceState?.previews[0]).toBe(opened);
+    expect(opened.content.kind).toBe("file");
+    expect(state.sessions.getFile).toHaveBeenCalledOnce();
     renderRows();
     expect(container.querySelector(".chat-workspace-rail__file--active")?.textContent).toContain(
       "README.md",
@@ -507,13 +517,7 @@ describe("session workspace path actions", () => {
 function setupDesktopLayout() {
   // JSDOM has no layout observation or font loading. These tests exercise the
   // workspace owner; real-browser proof owns overflow and disclosure motion.
-  vi.stubGlobal(
-    "ResizeObserver",
-    class {
-      observe() {}
-      disconnect() {}
-    },
-  );
+  stubTargetRetainingObserver("ResizeObserver");
   vi.stubGlobal("matchMedia", (media: string) => ({
     media,
     matches: false,
@@ -534,8 +538,10 @@ function setupDesktopLayout() {
   });
 }
 
-it("desktop browses lazy directories and restores activity after global search closes", async () => {
+it("desktop browses lazy directories and restores activity after an incomplete search", async () => {
   setupDesktopLayout();
+  const incompleteNotice = "Search is incomplete. Some files may not appear in these results.";
+  const directoryNotice = "Showing the first matching files. Refine the search to narrow results.";
   const listFiles = vi.fn(
     async (_sessionKey: string, options?: { path?: string; search?: string }) => ({
       sessionKey: "agent:main:workspace",
@@ -547,10 +553,12 @@ it("desktop browses lazy directories and restores activity after global search c
       ],
       browser: {
         path: options?.path ?? "",
-        truncated: options?.path === "docs",
+        truncated: options?.search !== "absent",
         ...(options?.search ? { search: options.search } : {}),
         entries: options?.search
-          ? [{ path: "docs/read.md", name: "read.md", kind: "file" as const }]
+          ? options.search === "read"
+            ? [{ path: "docs/read.md", name: "read.md", kind: "file" as const }]
+            : []
           : options?.path === "docs"
             ? [{ path: "docs/untouched.md", name: "untouched.md", kind: "file" as const }]
             : [
@@ -560,17 +568,13 @@ it("desktop browses lazy directories and restores activity after global search c
       },
     }),
   );
-  const state: SessionWorkspaceHost = {
+  const state: SessionWorkspaceHost = createSessionWorkspaceHost({
     sessionKey: "agent:main:workspace",
-    connected: true,
-    connectionEpoch: 1,
-    hello: null,
     agentsList: { defaultId: "main", mainKey: "main", scope: "global", agents: [] },
     client: createGatewayBrowserClientFixture({ request: () => ({ artifacts: [] }) }),
     sessions: createSessionCapabilityFixture({ listFiles }),
-    sidebarContent: null,
     handleOpenSidebar: () => {},
-  };
+  });
   const props = () =>
     createSessionWorkspaceProps(state, { expanded: true, presentation: "desktop" });
   const mounted = await mountWorkspace(props());
@@ -580,8 +584,26 @@ it("desktop browses lazy directories and restores activity after global search c
     button(mounted.container, "docs")!.click();
     await vi.waitFor(() => expect(button(mounted.container, "docs/untouched.md")).not.toBeNull());
     expect(listFiles.mock.calls.map(([, options]) => options?.path)).toEqual(["", "docs"]);
-    expect(mounted.container.textContent).toContain(
-      "Showing the first matching files. Refine the search to narrow results.",
+    expect(
+      [
+        ...mounted.container.querySelectorAll(".workspace-desktop__project-scroll [role=status]"),
+      ].filter((node) => node.textContent === directoryNotice),
+    ).toHaveLength(2);
+    const directory = getSessionWorkspace(state).directories!.docs!;
+    directory.browser = {
+      ...directory.browser!,
+      entries: [{ path: "docs/refreshed.md", name: "refreshed.md", kind: "file" }],
+    };
+    sessionWorkspaceForHost(state).publish();
+    await vi.waitFor(() => expect(button(mounted.container, "docs/refreshed.md")).not.toBeNull());
+    expect(button(mounted.container, "docs/untouched.md")).toBeNull();
+    directory.browser = {
+      ...directory.browser,
+      entries: [{ path: "docs/refreshed.md", name: "renamed.md", kind: "file" }],
+    };
+    sessionWorkspaceForHost(state).publish();
+    await vi.waitFor(() =>
+      expect(button(mounted.container, "docs/refreshed.md")?.textContent).toContain("renamed.md"),
     );
     props().onSetFilter("changed");
     flush();
@@ -594,93 +616,51 @@ it("desktop browses lazy directories and restores activity after global search c
       ),
     );
     expect(getSessionWorkspace(state).filter).toBe("changed");
-    button(mounted.container, "Close file search")!.click();
+    await vi.waitFor(() =>
+      expect(mounted.queryByRole("button", { name: "Browse files" })).not.toBeNull(),
+    );
+    search(mounted.container, "different");
+    flush();
+    expect(
+      mounted.container.querySelector(".workspace-desktop__results")?.textContent,
+    ).not.toContain(incompleteNotice);
+    search(mounted.container, "read");
+    flush();
+    mounted.getByRole("button", { name: "Browse files" }).click();
     flush();
     expect(getSessionWorkspace(state).browserSearch).toBe("");
     expect(getSessionWorkspace(state).tree?.searchOpen).toBe(false);
     expect(getSessionWorkspace(state).tree?.expandedPaths).toContain("docs");
     expect(getSessionWorkspace(state).filter).toBe("changed");
+    await waitForSolid(() =>
+      expect(document.activeElement).toBe(button(mounted.container, "Search files")),
+    );
+    for (const [query, incomplete] of [
+      ["missing", true],
+      ["absent", false],
+    ] as const) {
+      button(mounted.container, "Search files")!.click();
+      flush();
+      search(mounted.container, query);
+      const results = () => mounted.container.querySelector(".workspace-desktop__results");
+      await vi.waitFor(() => {
+        expect(getSessionWorkspace(state).list?.browser?.search).toBe(query);
+        expect(results()?.textContent).toContain(
+          incomplete ? incompleteNotice : "No matching files.",
+        );
+      });
+      expect(Boolean(mounted.queryByRole("button", { name: "Browse files" }))).toBe(incomplete);
+      if (incomplete) {
+        expect(results()?.textContent).not.toContain("No matching files.");
+        mounted.getByRole("button", { name: "Browse files" }).click();
+      } else {
+        button(mounted.container, "Close file search")!.click();
+      }
+      flush();
+      expect(getSessionWorkspace(state).browserSearch).toBe("");
+    }
   } finally {
     unsubscribe();
-    mounted.unmount();
-  }
-});
-
-it("desktop distinguishes incomplete matching searches from empty complete results", async () => {
-  setupDesktopLayout();
-  const warning = "Showing the first matching files. Refine the search to narrow results.";
-  const navigation = {
-    browserPath: "",
-    browserSearch: "",
-    filter: "all" as const,
-    expandedPaths: ["", "docs"],
-    searchOpen: false,
-    sessionExpanded: true,
-    treeVisible: true,
-    treeScroll: 0,
-    sessionScroll: 0,
-  };
-  const workspace = createWorkspace({
-    presentation: "desktop",
-    navigation,
-    list: {
-      root: "/workspace",
-      files: [],
-      browser: { path: "", search: "report", entries: [], truncated: true },
-    },
-    directories: {
-      "": {
-        loading: false,
-        error: null,
-        browser: {
-          path: "",
-          entries: [{ path: "docs", name: "docs", kind: "directory" }],
-          truncated: true,
-        },
-      },
-      docs: {
-        loading: false,
-        error: null,
-        browser: { path: "docs", entries: [], truncated: true },
-      },
-    },
-  });
-  const mounted = await mountWorkspace(workspace);
-  try {
-    expect(
-      [
-        ...mounted.container.querySelectorAll(".workspace-desktop__project-scroll [role=status]"),
-      ].filter((node) => node.textContent === warning),
-    ).toHaveLength(2);
-    mounted.update({
-      ...workspace,
-      browserSearch: "different",
-      navigation: { ...navigation, searchOpen: true },
-    });
-    expect(
-      mounted.container.querySelector(".workspace-desktop__results")?.textContent,
-    ).not.toContain(warning);
-    mounted.update({
-      ...workspace,
-      browserSearch: "report",
-      navigation: { ...navigation, searchOpen: true },
-    });
-    const results = () =>
-      mounted.container.querySelector(".workspace-desktop__results")?.textContent;
-    expect(results()).toContain(warning);
-    expect(results()).not.toContain("No matching files.");
-    mounted.update({
-      ...workspace,
-      browserSearch: "report",
-      navigation: { ...navigation, searchOpen: true },
-      list: {
-        ...workspace.list!,
-        browser: { path: "", search: "report", entries: [] },
-      },
-    });
-    expect(results()).not.toContain(warning);
-    expect(results()).toContain("No matching files.");
-  } finally {
     mounted.unmount();
   }
 });
@@ -725,27 +705,27 @@ it("mobile restores folder search and root groups without mixing global search r
     browser: {
       path: options?.path ?? "",
       ...(options?.search ? { search: options.search } : {}),
-      entries: options?.search
-        ? [
-            { path: "docs/report.txt", name: "report.txt", kind: "file" as const, size: 1536 },
-            { path: "outside/report.txt", name: "report.txt", kind: "file" as const },
-          ]
-        : options?.path === "docs"
-          ? [{ path: "docs/report.txt", name: "report.txt", kind: "file" as const, size: 1536 }]
-          : [{ path: "docs", name: "docs", kind: "directory" as const }],
+      truncated: Boolean(options?.search) && options?.search !== "absent",
+      entries:
+        options?.search === "docs/report.txt" || options?.search === "absent"
+          ? []
+          : options?.search
+            ? [
+                { path: "docs/report.txt", name: "report.txt", kind: "file" as const, size: 1536 },
+                { path: "outside/report.txt", name: "report.txt", kind: "file" as const },
+              ]
+            : options?.path === "docs"
+              ? [{ path: "docs/report.txt", name: "report.txt", kind: "file" as const, size: 1536 }]
+              : [{ path: "docs", name: "docs", kind: "directory" as const }],
     },
   }));
-  const state: SessionWorkspaceHost = {
+  const state: SessionWorkspaceHost = createSessionWorkspaceHost({
     sessionKey: "agent:main:workspace",
-    connected: true,
-    connectionEpoch: 1,
-    hello: null,
     agentsList: { defaultId: "main", mainKey: "main", scope: "global", agents: [] },
     client: createGatewayBrowserClientFixture({ request: () => ({ artifacts: [] }) }),
     sessions: createSessionCapabilityFixture({ listFiles }),
-    sidebarContent: null,
     handleOpenSidebar: () => {},
-  };
+  });
   const props = () =>
     createSessionWorkspaceProps(state, { expanded: true, presentation: "mobile" });
   const mounted = await mountWorkspace(props());
@@ -792,4 +772,28 @@ it("mobile restores folder search and root groups without mixing global search r
   expect(searchInput(mounted.container).value).toBe("report");
   expect(button(mounted.container, "docs/report.txt")).not.toBeNull();
   expect(button(mounted.container, "outside/report.txt")).toBeNull();
+  for (const query of ["report", "docs/report.txt"]) {
+    search(mounted.container, query);
+    await vi.advanceTimersByTimeAsync(160);
+    await ready();
+    expect(mounted.container.textContent).toContain(
+      "Search is incomplete. Some files may not appear in these results.",
+    );
+    expect(mounted.container.textContent).not.toContain("No matching files.");
+    expect(Boolean(button(mounted.container, "docs/report.txt"))).toBe(query === "report");
+    mounted.getByRole("button", { name: "Browse files" }).click();
+    await ready();
+    expect(searchInput(mounted.container).value).toBe("");
+    expect(document.activeElement).toBe(searchInput(mounted.container));
+    expect(getSessionWorkspace(state).browserPath).toBe("docs");
+    expect(getSessionWorkspace(state).tree?.searchOpen).toBe(false);
+    expect(button(mounted.container, "docs/report.txt")).not.toBeNull();
+    expect(button(mounted.container, "outside/report.txt")).toBeNull();
+    expect(mounted.queryByRole("button", { name: "Browse files" })).toBeNull();
+  }
+  search(mounted.container, "absent");
+  await vi.advanceTimersByTimeAsync(160);
+  await ready();
+  expect(mounted.container.textContent).toContain("No matching files.");
+  expect(mounted.queryByRole("button", { name: "Browse files" })).toBeNull();
 });

@@ -26,7 +26,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { formatExactDuration } from "../infra/format-time/format-duration-exact.js";
 import { formatDurationCompact } from "../infra/format-time/format-duration.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { buildChannelAccountBindings, resolvePreferredAccountId } from "../routing/bindings.js";
+import { buildChannelAccountBindings } from "../routing/bindings.js";
 import { ExitError, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { waitForGatewayDiagnostic } from "./gateway-diagnostic-readiness.js";
 import {
@@ -99,6 +99,19 @@ export async function emitReachableGatewayAuthDiagnostic(params: {
   return true;
 }
 
+export function emitGatewayHealthErrorJson(error: unknown, runtime: RuntimeEnv): boolean {
+  const payload =
+    formatGatewayAuthErrorJson(error) ??
+    formatGatewayClientRequestErrorJson(error) ??
+    formatGatewayTransportErrorJson(error);
+  if (!payload) {
+    return false;
+  }
+  writeRuntimeJson(runtime, payload);
+  runtime.exit(1);
+  return true;
+}
+
 function formatEventLoopHealthLine(summary: HealthSummary): string | null {
   const eventLoop = summary.eventLoop;
   if (!eventLoop) {
@@ -168,16 +181,8 @@ export async function healthCommand(
     ) {
       return;
     }
-    if (opts.json) {
-      const payload =
-        formatGatewayAuthErrorJson(error) ??
-        formatGatewayClientRequestErrorJson(error) ??
-        formatGatewayTransportErrorJson(error);
-      if (payload) {
-        writeRuntimeJson(runtime, payload);
-        runtime.exit(1);
-        return;
-      }
+    if (opts.json && emitGatewayHealthErrorJson(error, runtime)) {
+      return;
     }
     throw error;
   }
@@ -272,10 +277,7 @@ export async function healthCommand(
         cfg,
         accountIds,
       });
-      const accountId = resolvePreferredAccountId({
-        defaultAccountId,
-        boundAccounts,
-      });
+      const accountId = boundAccounts[0] ?? defaultAccountId;
       const accountContext = await resolveHealthAccountContext({
         plugin,
         cfg,

@@ -17,7 +17,7 @@ import { discordInboundEventDelivery } from "../inbound-event-delivery.js";
 import type { RequestClient } from "../internal/discord.js";
 import { buildDiscordMessageProcessContext } from "./message-handler.context.js";
 import { createDiscordDraftPreviewController } from "./message-handler.draft-preview.js";
-import type { DiscordMessagePreflightContext } from "./message-handler.preflight.js";
+import type { DiscordMessagePreflightContext } from "./message-handler.preflight.types.js";
 import { formatDiscordReplySkip } from "./reply-delivery.js";
 import { sendTyping } from "./typing.js";
 

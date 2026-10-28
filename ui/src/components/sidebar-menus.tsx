@@ -9,7 +9,6 @@ import {
 import { isSessionRouteId, pathForRoute } from "../app-route-paths.ts";
 import { createIdentityAvatars } from "../lib/identity-avatar-loader.ts";
 import { projectOwner } from "../lib/reactive/projection.ts";
-import { cancelRoutePreload, scheduleRoutePreload } from "../lib/route-preload.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { PendingSessionCreate } from "../pages/chat/pending-session-create-lazy.ts";
 import type { ControlUiRegistration } from "../plugins/control-ui-capability.ts";
@@ -115,7 +114,6 @@ export function createSidebarMenus(deps: {
   const menuHandles = new Map<"catalogView" | "agent", MenuHandle>();
   let focusAgentRoster: (() => void) | undefined;
   const agentMenuAvatars = createIdentityAvatars();
-  const routePreloadTimers = new Map<EventTarget, ReturnType<typeof globalThis.setTimeout>>();
   let sessionMenuWork: ReturnType<SidebarMenusRenderer["createSessionMenuWork"]> | undefined;
   let agentMenuHoverOpenTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   let agentMenuHoverCloseTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
@@ -303,10 +301,6 @@ export function createSidebarMenus(deps: {
       menuRendererImport.dispose();
       sessionMenuWork?.release();
       clearAgentMenuHoverTimers();
-      for (const timer of routePreloadTimers.values()) {
-        globalThis.clearTimeout(timer);
-      }
-      routePreloadTimers.clear();
     },
 
     async preloadMenuRenderer() {
@@ -348,17 +342,6 @@ export function createSidebarMenus(deps: {
       menus.closeSessionGroupMenu();
       menus.closeAgentMenu();
       return hadTransientMenu;
-    },
-
-    preloadRoute(routeId: NavigationRouteId, event: Event, immediate = false) {
-      scheduleRoutePreload(
-        routePreloadTimers,
-        routeId,
-        event,
-        (nextRouteId) => host.onPreloadRoute?.(nextRouteId),
-        routeId === host.activeRouteId || !menus.isRouteEnabled(routeId),
-        immediate,
-      );
     },
 
     isRouteEnabled(routeId: NavigationRouteId): boolean {
@@ -661,13 +644,10 @@ export function createSidebarMenus(deps: {
           href={sessionTarget()?.href ?? pathForRoute(routeId, view.basePath)}
           active={isSidebarRouteActive(view.activeRouteId, routeId)}
           onNavigate={() => view.onNavigate?.(routeId, sessionTarget()?.options)}
-          onPreload={(event, immediate) => menus.preloadRoute(routeId, event, immediate)}
-          onCancelPreload={menus.cancelPreload}
         />
       );
       return <Show when={view.enabledRouteIds?.includes(routeId) ?? true}>{link}</Show>;
     },
-    cancelPreload: (event: Event) => cancelRoutePreload(routePreloadTimers, event),
   });
   return menus;
 }

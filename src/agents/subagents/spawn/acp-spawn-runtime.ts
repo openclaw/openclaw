@@ -204,9 +204,7 @@ export async function bindPreparedAcpThread(params: {
   params.assertActive?.();
   if (!binding.conversation.conversationId) {
     throw new Error(
-      params.preparedBinding.placement === "child"
-        ? `Failed to create and bind a ${params.preparedBinding.channel} thread for this ACP session.`
-        : `Failed to bind the current ${params.preparedBinding.channel} conversation for this ACP session.`,
+      `Failed to create and bind a ${params.preparedBinding.channel} thread for this ACP session.`,
     );
   }
 

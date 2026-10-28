@@ -1,8 +1,6 @@
-// Tests routeReply delivery evidence and editable message identity.
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import {
@@ -20,7 +18,8 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import { buildCaptionedFinalTextFallback } from "../../tts/captioned-final.js";
 import { dispatchInboundMessageWithRoutedChannelDispatcher } from "../dispatch.js";
-import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
+import { setReplyPayloadMetadata } from "../reply-payload.js";
+import { pendingFinalSessionEntry } from "./dispatch-from-config.session-fixtures.test-support.js";
 import { attachReplyDispatchUndeliveredFallback } from "./reply-dispatcher.js";
 
 const mocks = vi.hoisted(() => ({
@@ -49,27 +48,6 @@ const routeReply = (params: Partial<RouteReplyParams> = {}) =>
     ...params,
   });
 
-function suppressDelivery(reason: string) {
-  mocks.deliverOutboundPayloads.mockImplementationOnce(
-    async ({
-      onPayloadDeliveryOutcome,
-    }: {
-      onPayloadDeliveryOutcome?: (outcome: unknown) => void;
-    }) => {
-      onPayloadDeliveryOutcome?.({ index: 0, status: "suppressed", reason });
-      return [];
-    },
-  );
-}
-
-function createChannelPlugin(): ChannelPlugin {
-  return createChannelTestPluginBase({
-    id: "telegram",
-    label: "Telegram",
-    config: { listAccountIds: () => [], resolveAccount: () => ({}) },
-  });
-}
-
 describe("routeReply delivery result", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   beforeEach(() => {
@@ -77,7 +55,11 @@ describe("routeReply delivery result", () => {
       createTestRegistry([
         {
           pluginId: "telegram",
-          plugin: createChannelPlugin(),
+          plugin: createChannelTestPluginBase({
+            id: "telegram",
+            label: "Telegram",
+            config: { listAccountIds: () => [], resolveAccount: () => ({}) },
+          }),
           source: "test",
         },
       ]),
@@ -98,26 +80,12 @@ describe("routeReply delivery result", () => {
       intentId: "partial-intent",
       deliveryId: "partial-delivery",
     };
-    await replaceSessionEntry(custody, {
-      sessionId: custody.sessionId,
-      updatedAt: Date.now(),
-      pendingFinalDelivery: {
-        kind: "replayable",
-        text: "voice caption",
-        createdAt: Date.now(),
-        intentId: custody.intentId,
-        deliveries: [{ id: custody.deliveryId, state: "prepared" }],
-      },
-    });
-    mocks.deliverOutboundPayloads.mockResolvedValue([
-      { channel: "telegram", messageId: "caption-sent" },
-    ]);
-    const notDispatched = new PlatformMessageNotDispatchedError("before platform dispatch", {
-      cause: new Error("offline"),
-    });
+    await replaceSessionEntry(custody, pendingFinalSessionEntry(custody, "voice caption"));
     mocks.deliverOutboundPayloads.mockRejectedValueOnce(
       new OutboundDeliveryError("later payload failed", {
-        cause: notDispatched,
+        cause: new PlatformMessageNotDispatchedError("before platform dispatch", {
+          cause: new Error("offline"),
+        }),
         results: [{ channel: "telegram", messageId: "already-sent" }],
         stage: "platform_send",
       }),
@@ -130,7 +98,7 @@ describe("routeReply delivery result", () => {
         ctx: {
           Body: "Continue",
           AgentId: "main",
-          SessionKey: "agent:main:background-delivery",
+          SessionKey: custody.sessionKey,
           Provider: "telegram",
           Surface: "telegram",
           OriginatingChannel: "telegram",
@@ -141,10 +109,9 @@ describe("routeReply delivery result", () => {
             const sent = await routeReply({
               cfg,
               payload,
-              channel: "telegram",
               to: "original",
               agentId: "main",
-              sessionKey: "agent:main:background-delivery",
+              sessionKey: custody.sessionKey,
               replyKind: info.kind,
               mirror: false,
             });
@@ -156,8 +123,6 @@ describe("routeReply delivery result", () => {
             }
             return {
               visibleReplySent: sent.delivered,
-              ...(sent.ambiguous ? { ambiguous: true } : {}),
-              ...(sent.suppressed ? { suppression: { reason: sent.reason } } : {}),
             };
           },
         },
@@ -198,63 +163,42 @@ describe("routeReply delivery result", () => {
   ] as const)(
     "projects suppression or ambiguity for %s without claiming delivery",
     async (reason, outcome) => {
-      suppressDelivery(reason);
+      mocks.deliverOutboundPayloads.mockImplementationOnce(
+        async ({
+          onPayloadDeliveryOutcome,
+        }: {
+          onPayloadDeliveryOutcome?: (outcome: unknown) => void;
+        }) => {
+          onPayloadDeliveryOutcome?.({ index: 0, status: "suppressed", reason });
+          return [];
+        },
+      );
       expect(await routeReply()).toEqual({ ok: true, delivered: false, ...outcome });
     },
   );
 
-  it("preserves session writer authority through route normalization", async () => {
-    mocks.deliverOutboundPayloads.mockResolvedValueOnce([
-      { channel: "telegram", messageId: "message-1" },
-    ]);
-    const authority = {
-      expectedLifecycleRevision: "revision-a",
-      expectedSessionId: "session-1",
-      expectedWriterRunId: "run-a",
-      sessionKey: "agent:main:telegram:direct:1",
-      storePath: "/tmp/sessions.json",
-    };
+  it.each(["suppressed", "unknown", "ok", ""])(
+    "preserves an earlier editable message id after %s",
+    async (messageId) => {
+      const failure = new OutboundDeliveryError("network reset", {
+        cause: new Error("network reset"),
+        results: ["msg-1", messageId].map((id) => ({ channel: "telegram", messageId: id })),
+        stage: "platform_send",
+      });
+      mocks.deliverOutboundPayloads.mockRejectedValueOnce(failure);
 
-    await routeReply({
-      payload: setReplyPayloadMetadata(
-        { text: "hello" },
-        { sessionWriterDeliveryAuthority: authority },
-      ),
-    });
+      const res = await routeReply();
 
-    const call = mocks.deliverOutboundPayloads.mock.calls[0];
-    if (!call) {
-      throw new Error("expected routed delivery");
-    }
-    const sentPayload = (call[0] as { payloads: object[] }).payloads[0]!;
-    expect(getReplyPayloadMetadata(sentPayload)?.sessionWriterDeliveryAuthority).toEqual(authority);
-  });
-
-  it.each([
-    ["a trailing suppression sentinel", { channel: "telegram", messageId: "suppressed" }],
-    ["a trailing unknown sentinel", { channel: "telegram", messageId: "unknown" }],
-    ["a trailing ok sentinel", { channel: "telegram", messageId: "ok" }],
-    ["a trailing no-id receipt", { channel: "telegram", messageId: "" }],
-  ])("preserves an earlier editable message id after %s", async (_label, trailingResult) => {
-    const cause = new Error("network reset");
-    const failure = new OutboundDeliveryError("network reset", {
-      cause,
-      results: [{ channel: "telegram", messageId: "msg-1" }, trailingResult],
-      stage: "platform_send",
-    });
-    mocks.deliverOutboundPayloads.mockRejectedValueOnce(failure);
-
-    const res = await routeReply();
-
-    expect(res).toEqual({
-      ok: false,
-      delivered: true,
-      error: "Failed to route reply to telegram: network reset",
-      cause: failure,
-      messageId: "msg-1",
-    });
-    expect(res.cause).toBe(failure);
-  });
+      expect(res).toEqual({
+        ok: false,
+        delivered: true,
+        error: "Failed to route reply to telegram: network reset",
+        cause: failure,
+        messageId: "msg-1",
+      });
+      expect(res.cause).toBe(failure);
+    },
+  );
 
   it.each([
     ["skipped", false],

@@ -24,8 +24,16 @@ const register = (...plugins: ChannelPlugin[]) =>
   setActivePluginRegistry(
     createTestRegistry(plugins.map((plugin) => ({ pluginId: plugin.id, source: "test", plugin }))),
   );
-const runSend = (params: Record<string, unknown>) =>
-  runMessageAction({ cfg: workspaceConfig, action: "send", params: { ...target, ...params } });
+const runSend = (
+  params: Record<string, unknown>,
+  options: Partial<Parameters<typeof runMessageAction>[0]> = {},
+) =>
+  runMessageAction({
+    cfg: workspaceConfig,
+    action: "send",
+    params: { ...target, ...params },
+    ...options,
+  });
 
 function captureWorkspaceSend(messageId = "workspace-test-message") {
   const sentText: string[] = [];
@@ -55,9 +63,7 @@ describe("runMessageAction send validation", () => {
   });
 
   it("allows send when only a portable location is provided", async () => {
-    const result = await runDrySend({ location: portableLocation });
-
-    expect(result.kind).toBe("send");
+    expect((await runDrySend({ location: portableLocation })).kind).toBe("send");
   });
 
   it.each([{ message: "caption" }, { mediaUrl: "https://example.com/photo.jpg" }])(
@@ -74,19 +80,14 @@ describe("runMessageAction send validation", () => {
     { image: "https://example.com/photo.jpg" },
     { buffer: "aGVsbG8=", filename: "hello.txt" },
   ])("repairs incidental location for model-authored %j sends", async (content) => {
-    const result = await runMessageAction({
-      cfg: workspaceConfig,
-      action: "send",
-      actionOrigin: "message-tool",
-      params: {
-        channel: "workspace",
-        target: "channel:C99999999",
-        ...content,
-        location: portableLocation,
+    const result = await runSend(
+      { target: "channel:C99999999", ...content, location: portableLocation },
+      {
+        actionOrigin: "message-tool",
+        toolContext: crossContext,
+        dryRun: true,
       },
-      toolContext: crossContext,
-      dryRun: true,
-    });
+    );
 
     expect(result).toMatchObject({
       kind: "send",
@@ -102,10 +103,7 @@ describe("runMessageAction send validation", () => {
 
     const result = await runSend({ message: "v2026.5.20 release note citeturn2view0" });
 
-    expect(result).toMatchObject({
-      kind: "send",
-      channel: "workspace",
-    });
+    expect(result).toMatchObject({ kind: "send", channel: "workspace" });
     expect(sentText).toEqual(["v2026.5.20 release note"]);
     expect(JSON.stringify(result.payload)).not.toContain("turn2view0");
   });
@@ -161,11 +159,7 @@ describe("runMessageAction send validation", () => {
 
     expect(result).toMatchObject({
       kind: "send",
-      payload: {
-        sourceReply: {
-          text: "Visible answer",
-        },
-      },
+      payload: { sourceReply: { text: "Visible answer" } },
     });
   });
 });

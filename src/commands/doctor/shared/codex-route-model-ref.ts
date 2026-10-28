@@ -175,7 +175,6 @@ export function resolveRuntimeModelRef(params: {
     resolveConfiguredBareModelRef({
       cfg: params.cfg,
       modelRef: effectiveModelRef,
-      agentId: params.agentId,
     }) ??
     normalizeDefaultProviderModelRef(
       effectiveModelRef,
@@ -246,7 +245,6 @@ function resolveDefaultProviderForAliasContext(params: {
         resolveConfiguredBareModelRef({
           cfg: params.cfg,
           modelRef: effectivePrimaryModelRef,
-          agentId: params.agentId,
         }) ?? "",
       );
     return normalizeProviderId(parsed?.provider ?? DEFAULT_PROVIDER) || DEFAULT_PROVIDER;
@@ -292,7 +290,6 @@ function resolveAliasFromModelsMap(
 function resolveConfiguredBareModelRef(params: {
   cfg: OpenClawConfig;
   modelRef: string;
-  agentId?: string;
 }): string | undefined {
   const modelId = params.modelRef.trim();
   if (!modelId || modelId.includes("/")) {

@@ -11,6 +11,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getPluginServiceSchedulerBinding } from "../../plugins/service-scheduler-binding.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { waitForAgentDatabaseWriteAdmission } from "../../state/agent-database-preparation-context.js";
+import { waitForAgentInputRecovery } from "../../state/agent-input-recovery-context.js";
 import { isRecentOutboundMessageIdentity } from "../message/outbound-echo.js";
 import { recordChannelBotPairLoopAndCheckSuppression } from "./bot-loop-protection.js";
 import {
@@ -178,9 +179,13 @@ export async function runPreparedChannelTurnCore<
           ...(event === "error" ? { error } : {}),
         });
       try {
-        const agentId =
+        const sourceAgentId =
           params.ctxPayload.AgentId ?? parseAgentSessionKey(params.routeSessionKey)?.agentId;
-        if (agentId) {
+        const recordAgentId = parseAgentSessionKey(recordSessionKey)?.agentId ?? sourceAgentId;
+        for (const agentId of new Set([sourceAgentId, recordAgentId])) {
+          if (!agentId) {
+            continue;
+          }
           const preparation = waitForAgentDatabaseWriteAdmission(agentId, {
             signal: getPluginServiceSchedulerBinding()?.().signal,
           });
@@ -197,12 +202,19 @@ export async function runPreparedChannelTurnCore<
             });
             await preparation;
           }
+          const recovery = waitForAgentInputRecovery(agentId, {
+            signal: getPluginServiceSchedulerBinding()?.().signal,
+          });
+          if (recovery) {
+            await recovery;
+          }
         }
+        params.assertAuthority?.();
         if (params.ctxPayload.SessionTranscriptContext) {
           const { mergeSessionTranscriptContext } =
             await import("../inbound-event/session-transcript-context.runtime.js");
           await mergeSessionTranscriptContext({
-            agentId: params.ctxPayload.AgentId,
+            agentId: recordAgentId,
             ctx: params.ctxPayload,
             sessionKey: recordSessionKey,
             storePath: params.storePath,
@@ -223,7 +235,7 @@ export async function runPreparedChannelTurnCore<
         });
         emitStage("record", "done");
         await params.afterRecord?.();
-        await deliverPendingDeliveryNotice(recordSessionKey, params.storePath);
+        await deliverPendingDeliveryNotice(recordSessionKey, params.storePath, recordAgentId);
       } catch (err) {
         emitStage("record", "error", err);
         try {

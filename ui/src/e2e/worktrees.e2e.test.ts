@@ -61,7 +61,7 @@ suite.define(() => {
             defaultBranch: "main",
             headBranch: "old-feature",
           },
-          "worktrees.create": { ...restorableWorktree, removedAt: undefined },
+          "worktrees.create": {},
         },
       });
       await page.goto(`${suite.server.baseUrl}settings/worktrees`);
@@ -79,8 +79,11 @@ suite.define(() => {
         await base.waitFor({ state: "hidden" });
       }
       const requests = await gateway.getRequests("worktrees.create");
-      const expected = [{ repoRoot }, { repoRoot, baseRef: "main" }, { repoRoot }];
-      expect(requests.map(({ params }) => params)).toEqual(expected);
+      expect(requests.map(({ params }) => params)).toEqual([
+        { repoRoot },
+        { repoRoot, baseRef: "main" },
+        { repoRoot },
+      ]);
     }));
 
   it("keeps a restore failure visible after the automatic list refresh succeeds", () =>

@@ -36,23 +36,11 @@ type ImageRuntimeParams = Omit<
   "buffer" | "fileName" | "mime" | "prompt" | "maxTokens" | "timeoutMs"
 >;
 
-type PreparedImageRuntime = {
-  runtimeValue: string;
-  model: Model;
-  cfg: ImageRuntimeParams["cfg"];
-  agentDir: string;
-  workspaceDir?: string;
-};
-
 type ImageRuntimeResources = AsyncDisposable & {
   assertResourcesOpen?: () => void;
 };
 
-function bindResolvedImageRuntime(
-  params: ImageRuntimeParams,
-  apiKey: string,
-  model: Model,
-): PreparedImageRuntime {
+function bindResolvedImageRuntime(params: ImageRuntimeParams, apiKey: string, model: Model) {
   return {
     runtimeValue: apiKey,
     model,
@@ -92,7 +80,7 @@ function requireImageCapableModel(params: {
 export async function resolveImageRuntime(
   params: ImageRuntimeParams,
   onAcquired: (resources: ImageRuntimeResources) => void,
-): Promise<PreparedImageRuntime> {
+) {
   const workspaceDir =
     params.workspaceDir ??
     (params.agentId ? resolveAgentWorkspaceDir(params.cfg ?? {}, params.agentId) : undefined);
@@ -124,6 +112,7 @@ export async function resolveImageRuntime(
           config: params.cfg ?? {},
           ...(runtimeParams.workspaceDir ? { workspaceDir: runtimeParams.workspaceDir } : {}),
           loadRuntimePlugins: true,
+          runtimePluginPurpose: "isolated-completion",
         },
         // The request already chose a model; full inventory discovery must stay outside setup.
         {

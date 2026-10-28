@@ -6,11 +6,9 @@ import {
 } from "../../../config/sessions/session-accessor.sqlite-entry.js";
 import { memorySessionActorOwners } from "../../../config/sessions/session-actor-memory-owner.js";
 import * as sessionReads from "../../../config/sessions/session-entry-read-runtime.js";
-import { withPluginRuntimePluginScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import * as paths from "../../../state/openclaw-agent-db.paths.js";
 import { createOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import {
-  combineNativeSessionBindingAuthority,
   combinePreparedNativeSessionBindingAuthority,
   createNativeSessionBindingAuthority,
   createNativeSessionBindingScope,
@@ -33,27 +31,12 @@ async function createIncognitoBinding(previousSessionId?: string) {
   return { scope, entry, read };
 }
 
-it.each([
-  ["createNativeSessionBindingAuthority", "createPreparedNativeSessionBindingAuthority"],
-  ["combineNativeSessionBindingAuthority", "combinePreparedNativeSessionBindingAuthority"],
-] as const)("warns once for %s without warning on prepared authority", (method, replacement) => {
+it("does not warn on prepared authority", () => {
   const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
-  withPluginRuntimePluginScope({ pluginId: `native-authority-${method.toLowerCase()}` }, () => {
-    const scope = createNativeSessionBindingScope(() => {});
-    combinePreparedNativeSessionBindingAuthority(scope).assertCurrent();
-    expect(warning).not.toHaveBeenCalled();
-    const create = () =>
-      method === "createNativeSessionBindingAuthority"
-        ? createNativeSessionBindingAuthority([], () => {})
-        : combineNativeSessionBindingAuthority(scope);
-    create().assertCurrent();
-    create().assertCurrent();
-  });
-  expect(warning).toHaveBeenCalledOnce();
-  expect(warning.mock.calls[0]?.[0]).toContain(`${method} is deprecated`);
-  expect(warning.mock.calls[0]?.[0]).toContain(replacement);
-  expect(warning.mock.calls[0]?.[0]).toContain("Final compatibility day: 2026-12-31");
-  expect(warning.mock.calls[0]?.[0]).toContain("first January 2027 stable release");
+  combinePreparedNativeSessionBindingAuthority(
+    createNativeSessionBindingScope(() => {}),
+  ).assertCurrent();
+  expect(warning).not.toHaveBeenCalled();
 });
 
 it("admits incognito predecessor lineage without SQL and rejects changed lineage", async () => {

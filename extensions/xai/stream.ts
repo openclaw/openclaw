@@ -3,6 +3,7 @@ import { streamSimple } from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   composeProviderStreamWrappers,
+  mergeTransportHeaders,
   createPayloadPatchStreamWrapper,
   createPlainTextToolCallCompatWrapper,
   createToolStreamWrapper,
@@ -31,15 +32,15 @@ function createXaiGrokOAuthHeadersWrapper(
     ) {
       return underlying(model, context, options);
     }
-    const headers = new Headers(options?.headers);
     // The Grok OAuth proxy requires its CLI identity and a concrete catalog model.
     // Keep these proxy-only so ordinary xAI API-key traffic retains its public contract.
-    headers.set("X-XAI-Token-Auth", "xai-grok-cli");
-    headers.set("x-grok-client-version", normalizedClientVersion);
-    headers.set("x-grok-model-override", model.id);
     return underlying(model, context, {
       ...options,
-      headers: Object.fromEntries(headers.entries()),
+      headers: mergeTransportHeaders(options?.headers, {
+        "X-XAI-Token-Auth": "xai-grok-cli",
+        "x-grok-client-version": normalizedClientVersion,
+        "x-grok-model-override": model.id,
+      }),
     });
   };
 }

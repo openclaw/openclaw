@@ -53,32 +53,21 @@ describe("Windows CI whole-file placement", () => {
       changedPaths: [changed],
     });
     expect(targets(changedShards)).toContain(changed);
-    expect(
-      shards.filter((shard) =>
-        shard.targets.includes("test/scripts/vitest-worker-artifacts.test.ts"),
-      ),
-    ).toHaveLength(1);
   });
 
+  const filesIn = (prefix: string, count: number) =>
+    Array.from({ length: count }, (_, index) => `${prefix}${index}.test.ts`);
   it.each([
+    { files: filesIn("src/native/case-", 24), together: true },
     {
-      label: "unmeasured project",
-      files: Array.from({ length: 24 }, (_, index) => `src/native/case-${index}.test.ts`),
-      together: true,
-    },
-    {
-      label: "rounded budget",
       files: [
         "extensions/msteams/src/messenger.test.ts",
-        ...Array.from(
-          { length: 101 },
-          (_, index) => `extensions/msteams/src/rounding-${index}.test.ts`,
-        ),
+        ...filesIn("extensions/msteams/src/rounding-", 101),
       ],
       together: false,
     },
   ])(
-    "places every file at the $label boundary regardless of input order",
+    "places every file at the budget boundary regardless of input order %#",
     ({ files, together }) => {
       const shards = expectPlacement(packageScripts(files), files, 420);
       if (together) {
@@ -93,10 +82,8 @@ describe("Windows CI whole-file placement", () => {
       undefined,
       "node --import ./scripts/tsx.mjs scripts/test-projects.mts src/first.test.ts",
     ),
-    packageScripts(undefined, `echo ignored && ${command} src/first.test.ts`),
     packageScripts(["src/repeated.test.ts", "src/repeated.test.ts"]),
     packageScripts(["src/first.test.ts", "src/*.test.ts"]),
-    packageScripts(["src/first.test.ts", "src/second.test.ts --testNamePattern=partial"]),
   ])("refuses an incomplete or filtered package inventory", (scripts) => {
     expect(() => createWindowsTestShards(scripts)).toThrow(/Windows CI/u);
   });

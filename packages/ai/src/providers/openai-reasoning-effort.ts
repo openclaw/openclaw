@@ -1,4 +1,5 @@
 import { resolveOpenAIThinkingApi } from "@openclaw/model-catalog-core/model-catalog-types";
+import { asRecord } from "@openclaw/normalization-core/record-coerce";
 /**
  * OpenAI-compatible reasoning-effort normalization. Different GPT families
  * expose different accepted effort enums, so callers map requested values here
@@ -6,6 +7,7 @@ import { resolveOpenAIThinkingApi } from "@openclaw/model-catalog-core/model-cat
  */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import { resolveOpenAIReasoningEffortMap } from "../transports/openai-reasoning-compat.js";
 
 const ENABLED_REASONING_EFFORTS = ["minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
@@ -20,6 +22,7 @@ type OpenAIReasoningModel = {
   api?: unknown;
   baseUrl?: unknown;
   compat?: unknown;
+  thinkingLevelMap?: unknown;
 };
 
 const GPT_5_REASONING_EFFORTS = ["minimal", "low", "medium", "high"] as const;
@@ -90,20 +93,6 @@ export function normalizeOpenAIReasoningEffort(effort: string): string {
   return CANONICAL_REASONING_EFFORTS.has(folded) ? folded : trimmed;
 }
 
-function readCompatReasoningEfforts(compat: unknown): OpenAIApiReasoningEffort[] | undefined {
-  if (!compat || typeof compat !== "object") {
-    return undefined;
-  }
-  if ((compat as { supportsReasoningEffort?: unknown }).supportsReasoningEffort === false) {
-    return [];
-  }
-  const raw = (compat as { supportedReasoningEfforts?: unknown }).supportedReasoningEfforts;
-  if (!Array.isArray(raw)) {
-    return undefined;
-  }
-  return normalizeUniqueTrimmedStringList(raw);
-}
-
 function isDisabledReasoningEffort(effort: string): boolean {
   return effort === "none" || effort === "off";
 }
@@ -119,9 +108,15 @@ export function resolveOpenAISupportedReasoningEfforts(
 export function resolveOpenAIModelReasoningEfforts(
   model: OpenAIReasoningModel,
 ): readonly OpenAIApiReasoningEffort[] | undefined {
-  const compatEfforts = readCompatReasoningEfforts(model.compat);
-  if (compatEfforts) {
-    return compatEfforts;
+  const compat = model.compat;
+  if (compat && typeof compat === "object") {
+    if ((compat as { supportsReasoningEffort?: unknown }).supportsReasoningEffort === false) {
+      return [];
+    }
+    const raw = (compat as { supportedReasoningEfforts?: unknown }).supportedReasoningEfforts;
+    if (Array.isArray(raw)) {
+      return normalizeUniqueTrimmedStringList(raw);
+    }
   }
 
   const id = normalizeModelId(typeof model.id === "string" ? model.id : undefined);
@@ -189,8 +184,18 @@ export function supportsOpenAIReasoningEffort(
   model: OpenAIReasoningModel,
   effort: string,
 ): boolean {
-  return resolveOpenAISupportedReasoningEfforts(model).includes(
-    normalizeOpenAIReasoningEffort(effort) as OpenAIApiReasoningEffort,
+  const requested = normalizeOpenAIReasoningEffort(effort);
+  const supported = resolveOpenAIModelReasoningEfforts(model);
+  if (supported !== undefined) {
+    return supported.includes(requested);
+  }
+  // A partial mapping declares its wire values without claiming a complete ladder.
+  return (
+    GENERIC_REASONING_EFFORTS.some((value) => value === requested) ||
+    [
+      ...Object.values(resolveOpenAIReasoningEffortMap({ compat: model.compat })),
+      ...Object.values(asRecord(model.thinkingLevelMap)),
+    ].some((value) => typeof value === "string" && value.trim() === requested)
   );
 }
 

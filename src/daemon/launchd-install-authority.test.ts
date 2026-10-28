@@ -4,6 +4,7 @@ import { PassThrough } from "node:stream";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import { installLaunchAgent } from "./launchd-install.js";
 import {
   resolveLaunchAgentEnvironmentReadOptions,
@@ -115,14 +116,11 @@ it.each<[string, boolean, string | null | undefined, string[], number]>([
     if (action === boundary || (boundary === "snapshot-read" && action === "print")) {
       current = false;
     }
-    return {
+    return createCommandResult({
       code: action === "print" && !loaded ? 1 : 0,
       stdout: action === "print" && loaded ? `${target} = {\n\tstate = waiting\n}` : "",
       stderr: action === "print" && !loaded ? "Could not find service" : "",
-      signal: null,
-      killed: false,
-      termination: "exit",
-    };
+    });
   });
   if (boundary === "before-write") {
     native.ownership.mockImplementationOnce(async () => {

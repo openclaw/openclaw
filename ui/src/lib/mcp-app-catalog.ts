@@ -10,6 +10,7 @@ import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { t } from "../i18n/index.ts";
 import { canCallGatewayMethod } from "./gateway-methods.ts";
 import { projectAgentSelection, projectGateway } from "./reactive/application.ts";
+import { parseAgentSessionKey } from "./sessions/session-key.ts";
 
 const discoveryRequests = new WeakMap<
   GatewayBrowserClient,
@@ -19,11 +20,16 @@ const discoveryRequests = new WeakMap<
 /** Presentation cache only. The Gateway remains the discovery and authorization owner. */
 export function createMcpAppCatalog(
   context: ApplicationContext,
-  target: () => McpAppExtensionTarget,
+  readTarget: () => McpAppExtensionTarget,
   prepareSession: () => boolean = () => false,
 ) {
   const gateway = projectGateway(context.gateway);
   const selection = projectAgentSelection(context.agentSelection);
+  const target = () => {
+    const value = readTarget();
+    // A qualified session owns its agent, independently of the current selection.
+    return { ...value, agentId: parseAgentSessionKey(value.sessionKey)?.agentId ?? value.agentId };
+  };
   // Retain accepted rows independently so a failed read does not replace focused controls.
   const [state, setState] = createStore<{
     servers: McpAppDiscoveredServer[];
@@ -37,10 +43,7 @@ export function createMcpAppCatalog(
   let targetRequest = new AbortController();
   const available = () => {
     const snapshot = gateway.read().snapshot;
-    return (
-      canCallGatewayMethod(snapshot, "mcp.app.discover", "operator.write") ||
-      canCallGatewayMethod(snapshot, "mcp.app.discover", "operator.sessions.write")
-    );
+    return canCallGatewayMethod(snapshot, "mcp.app.discover", "operator.write");
   };
   const discoveryIdentity = createMemo(() => {
     gateway.read();
@@ -189,6 +192,7 @@ export function createMcpAppCatalog(
       : { servers: [], onboarding: [] };
   };
   return {
+    target,
     snapshot,
     request,
     available,

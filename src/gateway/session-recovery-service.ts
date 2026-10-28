@@ -18,6 +18,7 @@ import {
 } from "../agents/main-session-recovery/main-session-recovery-state.js";
 import { commitMainSessionRecovery } from "../agents/main-session-recovery/main-session-recovery-store.js";
 import { resolveMainSessionResumePolicy } from "../agents/main-session-recovery/main-session-restart-recovery-resume-policy.js";
+import { readInterruptedRunId } from "../agents/main-session-recovery/main-session-restart-recovery-shared.js";
 import { isCliProvider } from "../agents/model-selection-cli.js";
 import { createAgentRunDirectAbortError } from "../agents/run-termination.js";
 import type { SessionRestartResume } from "../config/sessions/restart-resume.js";
@@ -56,7 +57,7 @@ import {
 } from "./session-recovery-source.js";
 import { invalidSessionRequest } from "./session-request-error.js";
 import { SessionMutationFactsUnavailableError } from "./session-sharing-preparation.js";
-import { prepareRestartInterruptedSubagentRecovery } from "./session-subagent-reactivation.js";
+import { prepareSubagentRestartRecovery } from "./session-subagent-reactivation.js";
 import { readSessionMessagesAsync } from "./session-transcript-readers.js";
 import { findCanonicalStoreMatch } from "./session-utils-store-selection.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
@@ -133,7 +134,7 @@ export async function recoverGatewaySession(params: {
   const recovery = initialSource.mainRestartRecovery;
   const subagentRecovery =
     !recovery && params.mode !== "new-session"
-      ? await prepareRestartInterruptedSubagentRecovery({
+      ? await prepareSubagentRestartRecovery({
           sessionKey: sourceTarget.canonicalKey,
           agentId: sourceTarget.agentId,
           entry: initialSource,
@@ -154,7 +155,19 @@ export async function recoverGatewaySession(params: {
   ) {
     return { ok: false, error: recoveryConflictError("source-changed") };
   }
-  if (isMainSessionRecoveryReconciliationCandidate(initialSource)) {
+  const { getPrivateRequesterSettleRecoveryOwner } =
+    await import("../agents/subagents/registry/subagent-registry.js");
+  const privateOwner = await getPrivateRequesterSettleRecoveryOwner(
+    { ...sourceTarget, entry: initialSource },
+    initialSource.restartRecoveryDeliverySourceRunId ?? readInterruptedRunId(initialSource),
+  );
+  params.commitGuard?.();
+  if (privateOwner === "owned") {
+    return invalidSessionRequest(
+      "This interrupted turn is queued for automatic recovery. Wait for its result before resuming it manually.",
+    );
+  }
+  if (!subagentRecovery && isMainSessionRecoveryReconciliationCandidate(initialSource)) {
     const repaired = await reconcileOrphanedGatewaySessionRecovery({
       ...params,
       target: sourceTarget,
@@ -165,13 +178,6 @@ export async function recoverGatewaySession(params: {
         "Session recovery is unavailable while the source still has active work.",
       );
     }
-    const continuation = await params.launchContinuation({
-      agentId: sourceTarget.agentId,
-      idempotencyKey: `restart-recovery-reconcile:${repaired.sessionId}:${repaired.mainRestartRecovery?.cycleId}`,
-      sessionId: repaired.sessionId,
-      sessionKey: sourceTarget.canonicalKey,
-      storePath: sourceTarget.storePath,
-    });
     return {
       ok: true,
       agentId: sourceTarget.agentId,
@@ -179,7 +185,13 @@ export async function recoverGatewaySession(params: {
       sourceKey: sourceTarget.canonicalKey,
       successorEntry: repaired,
       successorKey: sourceTarget.canonicalKey,
-      continuation,
+      continuation: await params.launchContinuation({
+        agentId: sourceTarget.agentId,
+        idempotencyKey: `restart-recovery-reconcile:${repaired.sessionId}:${repaired.mainRestartRecovery?.cycleId}`,
+        sessionId: repaired.sessionId,
+        sessionKey: sourceTarget.canonicalKey,
+        storePath: sourceTarget.storePath,
+      }),
     };
   }
   if (!subagentRecovery && (!recovery || (!pendingRecovery && !recovery.tombstone))) {
@@ -218,8 +230,8 @@ export async function recoverGatewaySession(params: {
             current.lifecycleRevision !== initialSource.lifecycleRevision ||
             (subagentRecovery
               ? current.lastRunId !== subagentRecovery.runId ||
-                current.status !== "interrupted" ||
-                current.abortedLastRun !== true ||
+                current.status !== initialSource.status ||
+                current.abortedLastRun !== initialSource.abortedLastRun ||
                 current.mainRestartRecovery !== undefined
               : !recovery ||
                 current.mainRestartRecovery?.cycleId !== recovery.cycleId ||
@@ -390,17 +402,6 @@ export async function recoverGatewaySession(params: {
         };
         // The input actor commits this patch with the pending operator input. Never clear first:
         // a crash between clearing and accepting would otherwise lose the unfinished task.
-        const continuation = await params.launchContinuation({
-          agentId: sourceTarget.agentId,
-          ...(subagentRecovery ? { assertRecoveryCurrent: subagentRecovery.assertCurrent } : {}),
-          idempotencyKey: subagentRecovery
-            ? `subagent-restart-recovery:${subagentRecovery.runId}`
-            : `restart-recovery-resume:${initialSource.sessionId}:${recovery?.cycleId}`,
-          sessionId: initialSource.sessionId,
-          sessionKey: sourceTarget.canonicalKey,
-          storePath: sourceTarget.storePath,
-          resume,
-        });
         return {
           ok: true as const,
           agentId: sourceTarget.agentId,
@@ -408,7 +409,17 @@ export async function recoverGatewaySession(params: {
           sourceKey: sourceTarget.canonicalKey,
           successorEntry: initialSource,
           successorKey: sourceTarget.canonicalKey,
-          continuation,
+          continuation: await params.launchContinuation({
+            agentId: sourceTarget.agentId,
+            ...(subagentRecovery ? { assertRecoveryCurrent: subagentRecovery.assertCurrent } : {}),
+            idempotencyKey: subagentRecovery
+              ? `subagent-restart-recovery:${subagentRecovery.runId}`
+              : `restart-recovery-resume:${initialSource.sessionId}:${recovery?.cycleId}`,
+            sessionId: initialSource.sessionId,
+            sessionKey: sourceTarget.canonicalKey,
+            storePath: sourceTarget.storePath,
+            resume,
+          }),
         };
       },
     }).catch((error: unknown) => {
@@ -668,39 +679,40 @@ export async function recoverGatewaySession(params: {
       release();
     }
   };
-  // Only recovery takes this queue: Move/reclaim can acquire their lifecycle fences.
-  // Publish the successor before another recovery checks it; launch outside the queue.
-  const committed = await runQueuedStoreWrite({
+  // Serialize recovery through its ACK, after commitRecovery releases lifecycle fences.
+  // Move/reclaim never take this queue, and continuation does not wait for the turn to finish.
+  return await runQueuedStoreWrite({
     queues: recoveryQueues,
     storePath: normalizeSessionIdentities(sourceTarget.storePath, [sourceTarget.canonicalKey])[0]!,
     label: "recoverGatewaySession",
-    fn: commitRecovery,
-  });
-  if (!committed.ok) {
-    return committed;
-  }
+    fn: async () => {
+      const committed = await commitRecovery();
+      if (!committed.ok) {
+        return committed;
+      }
 
-  if (committed.created) {
-    await recordSessionCreated(params.cfg, {
-      sessionKey: committed.successorKey,
-      entry: committed.successorEntry,
-      agentId: sourceTarget.agentId,
-    });
-  }
-  const continuation = await params.launchContinuation({
-    agentId: sourceTarget.agentId,
-    idempotencyKey: `restart-recovery-rollover:${committed.successorEntry.sessionId}`,
-    sessionId: committed.successorEntry.sessionId,
-    sessionKey: committed.successorKey,
-    storePath: sourceTarget.storePath,
+      if (committed.created) {
+        await recordSessionCreated(params.cfg, {
+          sessionKey: committed.successorKey,
+          entry: committed.successorEntry,
+          agentId: sourceTarget.agentId,
+        });
+      }
+      return {
+        ok: true as const,
+        agentId: sourceTarget.agentId,
+        created: committed.created,
+        sourceKey: sourceTarget.canonicalKey,
+        successorEntry: committed.successorEntry,
+        successorKey: committed.successorKey,
+        continuation: await params.launchContinuation({
+          agentId: sourceTarget.agentId,
+          idempotencyKey: `restart-recovery-rollover:${committed.successorEntry.sessionId}`,
+          sessionId: committed.successorEntry.sessionId,
+          sessionKey: committed.successorKey,
+          storePath: sourceTarget.storePath,
+        }),
+      };
+    },
   });
-  return {
-    ok: true,
-    agentId: sourceTarget.agentId,
-    created: committed.created,
-    sourceKey: sourceTarget.canonicalKey,
-    successorEntry: committed.successorEntry,
-    successorKey: committed.successorKey,
-    continuation,
-  };
 }

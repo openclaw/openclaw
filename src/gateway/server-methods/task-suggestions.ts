@@ -44,6 +44,7 @@ import {
 } from "../task-suggestion-registry.js";
 import { handleChatSend } from "./chat-send-handler.js";
 import { listWorkerProfiles } from "./environments.profiles.js";
+import { respondError } from "./response.js";
 import {
   retainForwardedSessionMutationAuthorization,
   withSessionMutationCommitGuard,
@@ -400,8 +401,14 @@ export const taskSuggestionsHandlers: GatewayRequestHandlers = {
         const visibilityFilter = createSessionListEntryFilter({ client, cfg: currentConfig });
         const visible = visibilityFilter
           ? suggestions.filter((suggestion) => {
-              const target = reads.get(sourceKey(suggestion))?.readCurrent(currentConfig).target;
-              return Boolean(target && visibilityFilter(target.storeKey, target.entry));
+              const facts = reads.get(sourceKey(suggestion))?.readCurrent(currentConfig);
+              const target = facts?.target;
+              const currentFilter = createSessionListEntryFilter({
+                client,
+                cfg: currentConfig,
+                membership: facts?.membership,
+              });
+              return Boolean(target && currentFilter?.(target.storeKey, target.entry) !== false);
             })
           : suggestions;
         respond(true, { suggestions: visible }, undefined);
@@ -417,11 +424,7 @@ export const taskSuggestionsHandlers: GatewayRequestHandlers = {
     validateTaskSuggestionsCreateParams,
     ({ params, respond, context }) => {
       if (!path.isAbsolute(params.cwd)) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "task suggestion cwd must be absolute"),
-        );
+        respondError(respond, ErrorCodes.INVALID_REQUEST, "task suggestion cwd must be absolute");
         return;
       }
       const requestedAgentId = params.agentId ? normalizeAgentId(params.agentId) : undefined;
@@ -471,13 +474,10 @@ export const taskSuggestionsHandlers: GatewayRequestHandlers = {
       // clients always send local; retain this wire contract for those callers.
       const mode = params.mode ?? "worktree";
       if (params.cwd !== undefined && (mode !== "worktree" || !path.isAbsolute(params.cwd))) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            "task suggestion cwd correction requires worktree mode and an absolute repository path",
-          ),
+        respondError(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          "task suggestion cwd correction requires worktree mode and an absolute repository path",
         );
         return;
       }
@@ -508,24 +508,17 @@ export const taskSuggestionsHandlers: GatewayRequestHandlers = {
       if (mode === "cloud") {
         const profiles = listWorkerProfiles(options.context);
         if (profiles.length === 0) {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.INVALID_REQUEST, "no cloud worker profiles configured"),
-          );
+          respondError(respond, ErrorCodes.INVALID_REQUEST, "no cloud worker profiles configured");
           return;
         }
         cloudProfileId = params.cloudProfileId;
         if (!cloudProfileId || !profiles.some((profile) => profile.id === cloudProfileId)) {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              cloudProfileId
-                ? `unknown cloud worker profile: ${cloudProfileId}`
-                : "cloudProfileId is required for cloud mode",
-            ),
+          respondError(
+            respond,
+            ErrorCodes.INVALID_REQUEST,
+            cloudProfileId
+              ? `unknown cloud worker profile: ${cloudProfileId}`
+              : "cloudProfileId is required for cloud mode",
           );
           return;
         }
@@ -541,13 +534,10 @@ export const taskSuggestionsHandlers: GatewayRequestHandlers = {
         return;
       }
       if (acceptance.status !== "claimed") {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            acceptance.status === "accepting" ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST,
-            `task suggestion cannot be accepted: ${acceptance.status}`,
-          ),
+        respondError(
+          respond,
+          acceptance.status === "accepting" ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST,
+          `task suggestion cannot be accepted: ${acceptance.status}`,
         );
         return;
       }

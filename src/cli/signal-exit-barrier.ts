@@ -1,7 +1,8 @@
 import { resolveGlobalSet, resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 type SignalExitBarrier = () => Promise<void>;
-type CliExitSignal = "SIGINT" | "SIGTERM";
+const cliSignalExitCodes = { SIGINT: 130, SIGTERM: 143, SIGHUP: 129 };
+type CliExitSignal = keyof typeof cliSignalExitCodes;
 
 type SignalExitOwner = (code: number | string, reason?: string) => void;
 // Process custody outlives the Gateway generations that reset ordinary barriers.
@@ -33,7 +34,7 @@ const activeBarriers = resolveGlobalSet<SignalExitBarrier>(
 );
 const activeGates = resolveGlobalSet<{
   finished: Promise<void>;
-  interrupt?: (signal?: CliExitSignal) => void;
+  interrupt?: (signal?: CliExitSignal, reason?: string) => void;
 }>(Symbol.for("openclaw.signalExitGates"), "close-and-restart");
 const activeFinalizers = resolveGlobalSet<SignalExitBarrier>(
   Symbol.for("openclaw.signalExitFinalizers"),
@@ -42,7 +43,7 @@ const activeFinalizers = resolveGlobalSet<SignalExitBarrier>(
 
 export function registerSignalExitGate(
   finished: Promise<void>,
-  interrupt?: (signal?: CliExitSignal) => void,
+  interrupt?: (signal?: CliExitSignal, reason?: string) => void,
 ): () => void {
   const gate = { finished, interrupt };
   activeGates.add(gate);
@@ -77,7 +78,7 @@ export function exitAfterSignalExitBarriers(code: number | string, reason?: stri
     pendingProcessExit = Promise.resolve(code);
     return;
   }
-  pendingProcessExit = waitForSignalExitBarriers()
+  pendingProcessExit = waitForSignalExitBarriers(undefined, reason)
     .then(() => code)
     // The output stream may itself be broken; cleanup owners report their own failures.
     .catch(() => (code === 0 || code === "0" ? 1 : code))
@@ -94,12 +95,13 @@ export function exitAfterSignalExitBarriers(code: number | string, reason?: stri
     });
 }
 
-export function waitForSignalExitBarriers(signal?: CliExitSignal): Promise<void> {
-  pendingSignalExitDrain ??= drainSignalExitBarriers(signal).finally(() => {
+export function waitForSignalExitBarriers(signal?: CliExitSignal, reason?: string): Promise<void> {
+  // The first drain owns cancellation's cause; a later signal can still own the exit code.
+  pendingSignalExitDrain ??= drainSignalExitBarriers(signal, reason).finally(() => {
     pendingSignalExitDrain = undefined;
   });
   if (signal && !cliSignalExit) {
-    const code = signal === "SIGINT" ? 130 : 143;
+    const code = cliSignalExitCodes[signal];
     // Specialized update owners share this accepted outcome with the outer
     // finalizer, even when cancellation unwinds through a later command error.
     cliSignalExit = pendingSignalExitDrain.then(
@@ -110,10 +112,10 @@ export function waitForSignalExitBarriers(signal?: CliExitSignal): Promise<void>
   return pendingSignalExitDrain;
 }
 
-async function drainSignalExitBarriers(signal?: CliExitSignal): Promise<void> {
+async function drainSignalExitBarriers(signal?: CliExitSignal, reason?: string): Promise<void> {
   const gates = [...activeGates];
   for (const gate of gates) {
-    gate.interrupt?.(signal);
+    gate.interrupt?.(signal, reason);
   }
   const gateResults = await Promise.allSettled(gates.map((gate) => gate.finished));
   const barrierResults = await Promise.allSettled(
@@ -138,16 +140,16 @@ function handleCliSignal(signal: CliExitSignal): void {
   if (cliSignalExit) {
     return;
   }
-  const listener = signal === "SIGINT" ? onCliSigint : onCliSigterm;
   if (
     !cliDoctorSignalOwner &&
-    process.listeners(signal).some((existing) => existing !== listener)
+    process.listeners(signal).some((existing) => existing !== cliSignalListeners[signal])
   ) {
     // Run first and relinquish the fallback synchronously: signal-exit observers
     // must see their original listener count, and custom owners retain their drain.
     detachCliSignalExitHandlers();
     return;
   }
+  process.stderr.write(`Command interrupted by ${signal}. Waiting for cleanup before exiting.\n`);
   cliSignalExit = waitForSignalExitBarriers(signal)
     .catch(() => {
       process.stderr.write(
@@ -155,30 +157,34 @@ function handleCliSignal(signal: CliExitSignal): void {
       );
     })
     .then(() => {
-      const code = signal === "SIGINT" ? 130 : 143;
+      const code = cliSignalExitCodes[signal];
       process.exitCode = code;
       return code;
     });
 }
 
-const onCliSigint = () => handleCliSignal("SIGINT");
-const onCliSigterm = () => handleCliSignal("SIGTERM");
+const cliSignalListeners = {
+  SIGINT: () => handleCliSignal("SIGINT"),
+  SIGTERM: () => handleCliSignal("SIGTERM"),
+  SIGHUP: () => handleCliSignal("SIGHUP"),
+};
 // Any EPIPE write raises SIGPIPE, including a child's closed stdin, so the
 // signal only keeps Node's ignore disposition; EPIPE on our output decides exit.
 const onCliSigpipe = () => {};
 const onCliOutputError = (error: NodeJS.ErrnoException) => {
   if (error.code === "EPIPE" && cliSignalOwners > 0) {
-    exitAfterSignalExitBarriers(141);
+    exitAfterSignalExitBarriers(141, "output pipe closed (EPIPE)");
   }
 };
 
 /** Doctor keeps termination custody when progress spinners observe signals.
  * Retain SIGPIPE until exit: removing its last listener restores SIG_DFL, not SIG_IGN. */
 export function installCliDoctorSignalExitHandlers(): void {
-  if (cliSignalOwners === 0) {
+  if (cliSignalOwners === 0 || cliDoctorSignalOwner) {
     return;
   }
   cliDoctorSignalOwner = true;
+  process.prependListener("SIGHUP", cliSignalListeners.SIGHUP);
   if (!process.listeners("SIGPIPE").includes(onCliSigpipe)) {
     process.on("SIGPIPE", onCliSigpipe);
     // Run before console capture's generic EPIPE exit so closed output reports 141.
@@ -188,16 +194,17 @@ export function installCliDoctorSignalExitHandlers(): void {
 }
 
 function detachCliSignalExitHandlers(): void {
-  process.off("SIGINT", onCliSigint);
-  process.off("SIGTERM", onCliSigterm);
+  for (const [signal, listener] of Object.entries(cliSignalListeners)) {
+    process.off(signal, listener);
+  }
 }
 
 /** Executable CLI commands share one signal owner; Gateway and update handlers
  * keep their specialized lifecycle and use these same barriers. */
 export function installCliSignalExitHandlers(): () => void {
   if (cliSignalOwners++ === 0) {
-    process.prependListener("SIGINT", onCliSigint);
-    process.prependListener("SIGTERM", onCliSigterm);
+    process.prependListener("SIGINT", cliSignalListeners.SIGINT);
+    process.prependListener("SIGTERM", cliSignalListeners.SIGTERM);
   }
   const lifetime = new DisposableStack();
   lifetime.defer(() => {

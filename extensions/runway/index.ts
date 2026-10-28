@@ -86,17 +86,6 @@ function readRunwayFailureMessage(failure: unknown): string | undefined {
   return undefined;
 }
 
-function readRunwayOutputUrls(payload: RunwayTaskDetailResponse): string[] {
-  if (!Array.isArray(payload.output)) {
-    throw new Error("Runway video generation completed with malformed output URLs");
-  }
-  const outputUrls = normalizeTrimmedStringList(payload.output);
-  if (!outputUrls.length) {
-    throw new Error("Runway video generation completed without output URLs");
-  }
-  return outputUrls;
-}
-
 function resolveSourceUri(
   asset: RunwaySourceAsset | undefined,
   fallbackMimeType: string,
@@ -336,7 +325,14 @@ export default definePluginEntry({
               : undefined;
           },
         });
-        const outputUrls = readRunwayOutputUrls(completed);
+        if (!Array.isArray(completed.output)) {
+          throw new Error("Runway video generation completed with malformed output URLs");
+        }
+        const outputUrls = normalizeTrimmedStringList(completed.output);
+        if (!outputUrls.length) {
+          throw new Error("Runway video generation completed without output URLs");
+        }
+
         const timeoutMs = createProviderOperationTimeoutResolver({
           deadline,
           defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
@@ -357,6 +353,7 @@ export default definePluginEntry({
               maxBytes,
               validateBinaryResponse: true,
               metadata: { sourceUrl: url },
+              dispatcherPolicy,
             }),
           );
         }

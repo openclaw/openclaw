@@ -27,45 +27,41 @@ const MEMORY_WIKI_PLUGIN_ID = "memory-wiki";
 type DreamingStatus = NonNullable<DoctorMemoryStatusPayload["dreaming"]>;
 export type DreamingEntry = DreamingStatus["shortTermEntries"][number];
 
-type WikiImportInsightItem = {
-  pagePath: string;
-  title: string;
-  riskLevel: "low" | "medium" | "high" | "unknown";
-  riskReasons: string[];
-  labels: string[];
-  topicKey: string;
-  topicLabel: string;
-  digestStatus: "available" | "withheld";
-  activeBranchMessages: number;
-  userMessageCount: number;
-  assistantMessageCount: number;
-  firstUserLine?: string;
-  lastUserLine?: string;
-  assistantOpener?: string;
-  summary: string;
-  candidateSignals: string[];
-  correctionSignals: string[];
-  preferenceSignals: string[];
-  createdAt?: string;
-  updatedAt?: string;
-};
-
-type WikiImportInsightCluster = {
-  key: string;
-  label: string;
-  itemCount: number;
-  highRiskCount: number;
-  withheldCount: number;
-  preferenceSignalCount: number;
-  updatedAt?: string;
-  items: WikiImportInsightItem[];
-};
-
 export type WikiImportInsights = {
   sourceType: "chatgpt";
   totalItems: number;
   totalClusters: number;
-  clusters: WikiImportInsightCluster[];
+  clusters: {
+    key: string;
+    label: string;
+    itemCount: number;
+    highRiskCount: number;
+    withheldCount: number;
+    preferenceSignalCount: number;
+    updatedAt?: string;
+    items: {
+      pagePath: string;
+      title: string;
+      riskLevel: "low" | "medium" | "high" | "unknown";
+      riskReasons: string[];
+      labels: string[];
+      topicKey: string;
+      topicLabel: string;
+      digestStatus: "available" | "withheld";
+      activeBranchMessages: number;
+      userMessageCount: number;
+      assistantMessageCount: number;
+      firstUserLine?: string;
+      lastUserLine?: string;
+      assistantOpener?: string;
+      summary: string;
+      candidateSignals: string[];
+      correctionSignals: string[];
+      preferenceSignals: string[];
+      createdAt?: string;
+      updatedAt?: string;
+    }[];
+  }[];
   truncated: boolean;
 };
 
@@ -85,27 +81,23 @@ type WikiOverviewItem = {
   snippet?: string;
 };
 
-type WikiOverviewCluster = {
-  key: WikiOverviewItem["kind"];
-  label: string;
-  itemCount: number;
-  claimCount: number;
-  questionCount: number;
-  contradictionCount: number;
-  updatedAt?: string;
-  items: WikiOverviewItem[];
-};
-
-type WikiOverviewPageCounts = Record<WikiOverviewItem["kind"], number>;
-
 export type WikiOverview = {
   totalItems: number;
   totalPages: number;
-  pageCounts: WikiOverviewPageCounts;
+  pageCounts: Record<WikiOverviewItem["kind"], number>;
   totalClaims: number;
   totalQuestions: number;
   totalContradictions: number;
-  clusters: WikiOverviewCluster[];
+  clusters: {
+    key: WikiOverviewItem["kind"];
+    label: string;
+    itemCount: number;
+    claimCount: number;
+    questionCount: number;
+    contradictionCount: number;
+    updatedAt?: string;
+    items: WikiOverviewItem[];
+  }[];
   truncated: boolean;
 };
 
@@ -340,13 +332,11 @@ type DreamingResourcePayloads = {
   wikiOverview: WikiOverview;
 };
 
-type DreamingResourceSpec<Key extends DreamingResourceKey> = {
-  method: string;
-  apply: (state: DreamingState, payload: DreamingResourcePayloads[Key]) => void;
-};
-
 const DREAMING_RESOURCES: {
-  [Key in DreamingResourceKey]: DreamingResourceSpec<Key>;
+  [Key in DreamingResourceKey]: {
+    method: string;
+    apply: (state: DreamingState, payload: DreamingResourcePayloads[Key]) => void;
+  };
 } = {
   dreamingStatus: {
     method: "doctor.memory.status",

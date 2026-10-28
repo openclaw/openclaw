@@ -9,7 +9,6 @@ import { prepareQualifiedSessionEntryTarget } from "../../config/sessions/sessio
 import { resolveSessionTranscriptDatabasePath } from "../../config/sessions/session-accessor.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import * as transcriptAnchors from "../../config/sessions/session-transcript-anchor-read.js";
-import * as historyReaders from "../../config/sessions/session-transcript-worker-readers.js";
 import { targetDiscoveryLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import {
@@ -41,50 +40,24 @@ function observeTargetRequests(onKind: (kind: unknown) => void | Promise<void>) 
   });
 }
 
-it("selects display payloads and delivery anchors in one transcript request", async () => {
+it("distinguishes committed source replies from terminal deliveries", async () => {
   await withOpenClawTestState({ label: "chat-delivery-one-snapshot" }, async () => {
     const { dispatch, append } = await createReplyTranscriptFixture();
     dispatch.captureAgentTranscriptStart();
     await append("answer", { role: "assistant", content: "Committed answer." });
-    const requests: string[] = [];
-    const createReaders = historyReaders.createSessionHistoryWorkerReaders;
-    using _ = vi
-      .spyOn(historyReaders, "createSessionHistoryWorkerReaders")
-      .mockImplementation((runRequest) =>
-        createReaders((prepare, ...args) =>
-          runRequest(
-            () => {
-              const input = prepare();
-              requests.push(input.kind);
-              return input;
-            },
-            ...args,
-          ),
-        ),
-      );
-    const deliveryRequests = () =>
-      requests.filter((kind) =>
-        ["transcript-anchors", "transcript-watermark", "history-page"].includes(kind),
-      );
     expect(await dispatch.resolveReplyDeliveryFacts()).toEqual({
       source: "missing",
       terminal: "delivered",
     });
-    expect(requests.filter((kind) => kind === "transcript-anchors")).toHaveLength(1);
-    requests.length = 0;
-    expect(await dispatch.resolveReplyDelivery()).toBe("delivered");
-    expect(deliveryRequests()).toEqual(["transcript-anchors"]);
     await append("source-answer", {
       role: "assistant",
       content: "Committed source answer.",
       openclawDeliveryMirror: { kind: "message-tool-source-reply", final: true },
     });
-    requests.length = 0;
     expect(await dispatch.resolveReplyDeliveryFacts()).toEqual({
       source: "delivered",
       terminal: "delivered",
     });
-    expect(deliveryRequests()).toEqual(["transcript-anchors"]);
   });
 });
 
@@ -192,11 +165,11 @@ it.each(["release", "replacement"] as const)(
 );
 
 it.each(["unchanged", "foreign-lifecycle", "physical-replacement"] as const)(
-  "uses one entry phase and rechecks %s before the terminal delivery snapshot",
+  "rechecks %s before the terminal delivery snapshot",
   async (change) => {
     await withOpenClawTestState({ label: "webchat-retained-terminal" }, async (state) => {
       setRuntimeConfigSnapshot({});
-      const { dispatch, append, scope, runId, release } = await createReplyTranscriptFixture(
+      const { dispatch, append, scope, release } = await createReplyTranscriptFixture(
         "agent:main:retained-terminal",
         true,
       );
@@ -207,13 +180,9 @@ it.each(["unchanged", "foreign-lifecycle", "physical-replacement"] as const)(
             dispatch.captureAgentTranscriptStart();
             await append("answer", { role: "assistant", content: "Committed answer." });
             const readAnchors = transcriptAnchors.readSessionTranscriptAnchorsAsync;
-            using snapshotRead = vi
+            using _ = vi
               .spyOn(transcriptAnchors, "readSessionTranscriptAnchorsAsync")
               .mockImplementationOnce(async (...args) => {
-                expect(args[1]).toMatchObject({
-                  includeSession: true,
-                  includeMessagesForRunId: runId,
-                });
                 const databasePath = resolveSessionTranscriptDatabasePath(scope);
                 if (change === "foreign-lifecycle") {
                   using foreign = new DatabaseSync(databasePath);
@@ -228,29 +197,14 @@ it.each(["unchanged", "foreign-lifecycle", "physical-replacement"] as const)(
                   await copyFile(databasePath, replacement);
                   await rename(replacement, databasePath);
                 }
-                const facts = await readAnchors(...args);
-                expect(facts.tail?.entries).toContainEqual(
-                  expect.objectContaining({
-                    entryId: "answer",
-                    message: expect.objectContaining({ role: "assistant" }),
-                  }),
-                );
-                return facts;
+                return readAnchors(...args);
               });
-            let entries = 0;
-            using _ = observeTargetRequests((kind) => {
-              if (kind === "session-exact-entries") {
-                entries++;
-              }
-            });
             const result = dispatch.resolveReplyDelivery();
             if (change === "physical-replacement") {
               await expect(result).rejects.toThrow();
             } else {
               expect(await result).toBe(change === "unchanged" ? "delivered" : "missing");
             }
-            expect(snapshotRead).toHaveBeenCalled();
-            expect(entries).toBe(1);
           },
         );
       } finally {

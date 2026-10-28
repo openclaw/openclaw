@@ -1,5 +1,20 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type, type TSchema } from "typebox";
+import { freezeJsonSnapshot, isDeeplyFrozenPlainData } from "../../shared/immutable-data.js";
+
+type ToolOutputSchemaVariants = {
+  inputProperty: string;
+  mapping: ReadonlyMap<string, number>;
+  variants: readonly unknown[];
+  canNarrow: boolean;
+};
+
+// Publications own metadata; weak views leave validator retention with the content LRU.
+// Mutable schemas must still be read on every call.
+const immutableOutputSchemas = new WeakMap<
+  object,
+  { variants: ToolOutputSchemaVariants; selected: Map<number, WeakRef<object>> }
+>();
 
 const INPUT_DISCRIMINATOR = "x-openclaw-input-discriminator";
 const MAX_REFERENCE_SCAN_NODES = 4096;
@@ -114,16 +129,15 @@ export function defineToolOutputSchema(options: {
 }
 
 /** Read the annotation and conservatively determine whether its branches can be narrowed. */
-export function readToolOutputSchemaVariants(schema: unknown):
-  | {
-      inputProperty: string;
-      mapping: ReadonlyMap<string, number>;
-      variants: readonly unknown[];
-      canNarrow: boolean;
-    }
-  | undefined {
+export function readToolOutputSchemaVariants(
+  schema: unknown,
+): ToolOutputSchemaVariants | undefined {
   if (!isRecord(schema) || !Object.hasOwn(schema, INPUT_DISCRIMINATOR)) {
     return undefined;
+  }
+  const cached = immutableOutputSchemas.get(schema);
+  if (cached) {
+    return cached.variants;
   }
   const annotation = schema[INPUT_DISCRIMINATOR];
   if (
@@ -152,12 +166,16 @@ export function readToolOutputSchemaVariants(schema: unknown):
   if (mapping.size === 0) {
     throw new TypeError("Tool output input-discriminator mapping must not be empty.");
   }
-  return {
+  const variants = {
     inputProperty: annotation.inputProperty,
     mapping,
     variants: schema.anyOf,
     canNarrow: canNarrowOutputSchema(schema),
   };
+  if (isDeeplyFrozenPlainData(schema)) {
+    immutableOutputSchemas.set(schema, { variants, selected: new Map() });
+  }
+  return variants;
 }
 
 export type ToolOutputSelection = { inputProperty: string; value: string | undefined };
@@ -185,10 +203,19 @@ export function selectToolOutputSchema(schema: unknown, input: unknown): unknown
   if (index === undefined) {
     return schema;
   }
+  const selections = immutableOutputSchemas.get(schema)?.selected;
+  const cachedSelection = selections?.get(index)?.deref();
+  if (cachedSelection) {
+    return cachedSelection;
+  }
   if (schema.allOf !== undefined && !Array.isArray(schema.allOf)) {
     throw new TypeError("Invalid tool output allOf constraint.");
   }
   // Reference-bearing schemas retain their original root, including recursive alternatives.
   // Reference-free schemas can be narrowed while preserving every other root constraint.
-  return { ...schema, allOf: [...(schema.allOf ?? []), { $ref: `#/anyOf/${index}` }] };
+  const selected = { ...schema, allOf: [...(schema.allOf ?? []), { $ref: `#/anyOf/${index}` }] };
+  if (selections) {
+    selections.set(index, new WeakRef(freezeJsonSnapshot(selected)));
+  }
+  return selected;
 }

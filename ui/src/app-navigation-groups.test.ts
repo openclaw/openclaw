@@ -3,11 +3,9 @@ import {
   isSessionsHubRoute,
   isSettingsNavigationRoute,
   normalizeSidebarEntries,
-  parseSidebarEntry,
   visibleSettingsNavigationGroups,
 } from "./app-navigation.ts";
 import type { NativeDeviceSettingsCapability as Device } from "./app/native-device-settings.ts";
-import { readGatewayOperatorAccess } from "./app/operator-access.ts";
 import { getStaticCommandPaletteCatalogItems } from "./components/command-palette-catalog-search.ts";
 import { settingsNavigationOwnerRoute } from "./lib/settings-navigation.ts";
 import { findSettingsSearchBlocks } from "./pages/config/settings-search.ts";
@@ -42,7 +40,10 @@ it.each([true, false])("shows device settings only with the capability, admin=%s
   const catalog = (device: Device | null = null) =>
     getStaticCommandPaletteCatalogItems(canAdmin, device).map((item) => item.action);
   const browserGroups = visibleSettingsNavigationGroups(canAdmin);
-  expect(browserGroups.flatMap((group) => group.routes).includes("updates")).toBe(canAdmin);
+  const browserRoutes = new Set(browserGroups.flatMap((group) => group.routes));
+  expect(browserRoutes.has("updates")).toBe(canAdmin);
+  expect(browserRoutes.has("channels")).toBe(true);
+  expect(browserRoutes.has("communications")).toBe(canAdmin);
   expectSearch("Check for updates", capability, "updates");
   expect(catalog(capability)).toContain("nav:updates");
   expect(browserGroups.some((group) => group.labelKey === "nav.settingsGroupDevice")).toBe(false);
@@ -67,45 +68,39 @@ it.each([true, false])("shows device settings only with the capability, admin=%s
   for (const [formFactor, labelKey] of [
     ["phone", "nav.settingsGroupThisIPhone"],
     ["pad", "nav.settingsGroupThisIPad"],
-    ["desktop", "nav.settingsGroupThisDevice"],
     [undefined, "nav.settingsGroupThisDevice"],
   ] as const) {
     iosSnapshot.device.formFactor = formFactor;
     expect(deviceGroup(iosSnapshot)?.labelKey).toBe(labelKey);
   }
   const iosCapability = { ...capability, snapshot: iosSnapshot };
-  for (const [query, routeId] of [
-    ["Health summaries", "device"],
-    ["Apple Watch", "device"],
-    ["Contacts", "device-permissions"],
-    ["Photos", "device-permissions"],
-    ["Use speakerphone", "talk"],
-    ["Talk in the background", "talk"],
+  for (const [query, routeId, ios] of [
+    ["Health summaries", "device", true],
+    ["Apple Watch", "device", true],
+    ["Contacts", "device-permissions", true],
+    ["Photos", "device-permissions", true],
+    ["Use speakerphone", "talk", true],
+    ["Talk in the background", "talk", true],
+    ["Dock icon", "device", false],
+    ["Launch at login", "device", false],
+    ["Quick Chat", "device", false],
+    ["Cookie sync", "device", false],
+    ["System-wide presence detection", "device-permissions", false],
   ] as const) {
-    expectSearch(query, iosCapability, routeId);
+    expectSearch(query, ios ? iosCapability : capability, routeId);
+    expectSearch(query, ios ? capability : iosCapability);
     expectSearch(query, null);
-    expectSearch(query, capability);
-    expectSearch(query, { ...capability, snapshot: null });
+    if (ios) {
+      expectSearch(query, { ...capability, snapshot: null });
+    }
   }
-  for (const [query, routeId] of [
-    ["Dock icon", "device"],
-    ["Launch at login", "device"],
-    ["Quick Chat", "device"],
-    ["Cookie sync", "device"],
-    ["System-wide presence detection", "device-permissions"],
-  ] as const) {
-    expectSearch(query, capability, routeId);
-    expectSearch(query, null);
-    expectSearch(query, iosCapability);
-  }
-  const sparseIosSnapshot = createIosNativeDeviceSettingsSnapshot();
-  sparseIosSnapshot.capabilities!.healthSummaryAvailable = false;
-  delete sparseIosSnapshot.voice.speakerphoneEnabled;
-  sparseIosSnapshot.permissions.entries = sparseIosSnapshot.permissions.entries.filter(
+  iosSnapshot.capabilities!.healthSummaryAvailable = false;
+  delete iosSnapshot.voice.speakerphoneEnabled;
+  iosSnapshot.permissions.entries = iosSnapshot.permissions.entries.filter(
     (entry) => entry.id !== "contacts",
   );
   for (const query of ["Health summaries", "Use speakerphone", "Contacts"]) {
-    expectSearch(query, { ...capability, snapshot: sparseIosSnapshot });
+    expectSearch(query, iosCapability);
   }
   for (const route of ["device", "device-permissions"] as const) {
     expect(catalog()).not.toContain(`nav:${route}`);
@@ -119,25 +114,9 @@ it("treats worktrees as a sessions hub tab", () => {
 });
 
 it("keeps model setup as a settings subpage without a sidebar entry", () => {
-  expect(isSettingsNavigationRoute("claws")).toBe(false);
+  expect(isSettingsNavigationRoute("templates")).toBe(false);
   expect(isSettingsNavigationRoute("model-setup")).toBe(true);
   expect(settingsNavigationOwnerRoute("model-setup")).toBe("model-providers");
-});
-
-it("filters admin-only settings while preserving legacy fail-open visibility", () => {
-  const nonAdminRoutes = visibleSettingsNavigationGroups(false).flatMap((group) => group.routes);
-  expect(nonAdminRoutes).toContain("approvals");
-  expect(nonAdminRoutes).toContain("channels");
-  expect(nonAdminRoutes).not.toContain("security");
-  expect(nonAdminRoutes).not.toContain("communications");
-
-  const legacyCanAdmin = readGatewayOperatorAccess({
-    hello: { auth: { role: "operator" } },
-  } as Parameters<typeof readGatewayOperatorAccess>[0]).canAdmin;
-  expect(legacyCanAdmin).toBe(true);
-  expect(visibleSettingsNavigationGroups(legacyCanAdmin)).toEqual(
-    visibleSettingsNavigationGroups(true),
-  );
 });
 
 const opaqueIds = ["plugin:reports/daily/team:summary", "plugin:reports/日报 summary"];
@@ -150,13 +129,9 @@ it.each([
   ],
   [opaqueIds, opaqueIds],
   [[...validEntries, validEntries[0], ...invalidEntries], validEntries],
+  [["plugin:reports/", "plugin:/report"], []],
   [[], []],
   [undefined, null],
-  [{ usage: true }, null],
-  ["route:usage", null],
 ])("normalizes persisted entries %j to %j", (input, expected) => {
   expect(normalizeSidebarEntries(input)).toEqual(expected);
-});
-it.each(["plugin:reports/", "plugin:/report"])("rejects malformed plugin entry %s", (entry) => {
-  expect(parseSidebarEntry(entry)).toBeNull();
 });

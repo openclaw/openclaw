@@ -75,6 +75,12 @@ export function AppearancePicker(props: AppearancePickerProps) {
       }),
     );
   });
+  const noShortcutHint = () =>
+    t(
+      props.allowSvg
+        ? "sessionsView.customIconHintNoShortcut"
+        : "sessionsView.customEmojiHintNoShortcut",
+    );
   const accepted = () => {
     const normalized = normalizeSessionIconValue(props.customIconValue);
     return (
@@ -291,6 +297,7 @@ export function AppearancePicker(props: AppearancePickerProps) {
           <div class="session-menu__icon-custom-hint">
             {sessionEmojiPickerShortcut() ? (
               <ShortcutText
+                fallback={noShortcutHint()}
                 text={t(
                   props.allowSvg ? "sessionsView.customIconHint" : "sessionsView.customEmojiHint",
                   { shortcut: "{shortcut}" },
@@ -298,11 +305,7 @@ export function AppearancePicker(props: AppearancePickerProps) {
                 shortcut={() => <Kbd keys={sessionEmojiPickerShortcut()!} inline />}
               />
             ) : (
-              t(
-                props.allowSvg
-                  ? "sessionsView.customIconHintNoShortcut"
-                  : "sessionsView.customEmojiHintNoShortcut",
-              )
+              noShortcutHint()
             )}
           </div>
         </div>
@@ -396,6 +399,10 @@ export function useSessionMenuAppearance(
     setMode("grid");
     setCustomValue("");
   };
+  const selectAppearance = (event: Event, action: AppearanceAction) => {
+    event.stopPropagation();
+    runAction(action);
+  };
   const showIconGrid = (event?: Event) => {
     event?.stopPropagation();
     prepare();
@@ -420,21 +427,12 @@ export function useSessionMenuAppearance(
         currentColor={readState().session.color}
         colorDisabled={actionDisabled("set-color")}
         colorDisabledReason={readState().actionDisabledReasons["set-color"]}
-        onSelectColor={(event, color) => {
-          event.stopPropagation();
-          runAction({ kind: "set-color", color });
-        }}
-        onReset={(event) => {
-          event.stopPropagation();
-          runAction({ kind: "reset-appearance" });
-        }}
+        onSelectColor={(event, color) => selectAppearance(event, { kind: "set-color", color })}
+        onReset={(event) => selectAppearance(event, { kind: "reset-appearance" })}
         customIconValue={customValue()}
         disabled={actionDisabled("set-icon")}
         disabledReason={readState().actionDisabledReasons["set-icon"]}
-        onSelect={(event, icon) => {
-          event.stopPropagation();
-          runAction({ kind: "set-icon", icon });
-        }}
+        onSelect={(event, icon) => selectAppearance(event, { kind: "set-icon", icon })}
         onShowCustom={(event) => {
           event.stopPropagation();
           setMode("custom");

@@ -10,6 +10,8 @@ import {
   parseCommandArgs,
   resolveCommandArgMenuAsync,
   serializeCommandArgs,
+  type ChatCommandDefinition,
+  type CommandArgValues,
   type CommandArgs,
   type NativeCommandSpec,
 } from "openclaw/plugin-sdk/native-command-registry";
@@ -64,7 +66,6 @@ import {
 } from "./native-command-reply.js";
 import { resolveDiscordNativeInteractionRouteState } from "./native-command-route.js";
 import type { DiscordCommandArgContext } from "./native-command-ui.types.js";
-import { createNativeCommandDefinition, readDiscordCommandArgs } from "./native-command.args.js";
 import {
   buildDiscordCommandOptions,
   truncateDiscordCommandDescriptionLocalizations,
@@ -76,6 +77,19 @@ import { resolveDiscordSenderIdentity } from "./sender-identity.js";
 const log = createSubsystemLogger("discord/native-command");
 
 const NON_PLUGIN_COMMAND_DISPATCH = Object.freeze({ kind: "non-plugin" as const });
+
+function createNativeCommandDefinition(command: NativeCommandSpec): ChatCommandDefinition {
+  return {
+    key: command.name,
+    nativeName: command.name,
+    description: command.description,
+    textAliases: [],
+    acceptsArgs: command.acceptsArgs,
+    args: command.args,
+    argsParsing: "none",
+    scope: "native",
+  };
+}
 
 export function createDiscordNativeCommand(
   params: DiscordCommandArgContext & {
@@ -155,11 +169,28 @@ export function createDiscordNativeCommand(
       if (deferred === null) {
         return;
       }
-      const commandArgs = argDefinitions?.length
-        ? readDiscordCommandArgs(interaction, argDefinitions)
-        : command.acceptsArgs
-          ? parseCommandArgs(commandDefinition, interaction.options.getString("input") ?? "")
-          : undefined;
+      let commandArgs: CommandArgs | undefined;
+      if (argDefinitions?.length) {
+        const values: CommandArgValues = {};
+        for (const definition of argDefinitions) {
+          const getter =
+            definition.type === "number"
+              ? "getNumber"
+              : definition.type === "boolean"
+                ? "getBoolean"
+                : "getString";
+          const value = interaction.options[getter](definition.name);
+          if (value != null) {
+            values[definition.name] = value;
+          }
+        }
+        commandArgs = Object.keys(values).length > 0 ? { values } : undefined;
+      } else if (command.acceptsArgs) {
+        commandArgs = parseCommandArgs(
+          commandDefinition,
+          interaction.options.getString("input") ?? "",
+        );
+      }
       const commandArgsWithRaw = commandArgs
         ? ({
             ...commandArgs,

@@ -151,37 +151,36 @@ describe("telegram ingress supersede policy", () => {
   });
 
   it("honors disabled topic group policy for an allowlisted sender", async () => {
-    const groupConfig = {
-      allowFrom: [OWNER_ID],
-      topics: { "10": { groupPolicy: "disabled" as const } },
-    };
-    const account = {
-      groupAllowFrom: [OWNER_ID],
-      groupPolicy: "open" as const,
-      groups: { "-1001": groupConfig },
-    };
-    const topicAuth = authFor({ accounts: { default: account } });
+    const topicAuth = authFor({
+      accounts: {
+        default: {
+          groupAllowFrom: [OWNER_ID],
+          groupPolicy: "open",
+          groups: {
+            "-1001": {
+              allowFrom: [OWNER_ID],
+              topics: { "10": { groupPolicy: "disabled" } },
+            },
+          },
+        },
+      },
+    });
     expect(
       await isTelegramSpooledUpdateSenderAuthorized(
-        messageUpdate({
-          updateId: 1,
-          text: "hello",
-          senderId: OWNER_ID,
-          ...topic,
-        }),
+        messageUpdate({ updateId: 1, text: "hello", ...topic }),
         topicAuth,
       ),
     ).toBe(false);
   });
 
   it("gates command supersede on authorized sender", async () => {
-    const authorized = await shouldSupersede(candidate("/new"), pending());
-    const unauthorized = await shouldSupersede(
-      candidate("/new", STRANGER_ID, { ...group, updateId: 3 }),
-      pending(OWNER_ID, group),
-    );
-    expect(authorized).toBe(true);
-    expect(unauthorized).toBe(false);
+    expect(await shouldSupersede(candidate("/new"), pending())).toBe(true);
+    expect(
+      await shouldSupersede(
+        candidate("/new", STRANGER_ID, { ...group, updateId: 3 }),
+        pending(OWNER_ID, group),
+      ),
+    ).toBe(false);
   });
 
   it.each([
@@ -219,10 +218,7 @@ describe("telegram ingress supersede policy", () => {
     ["/stop", true],
     ["/reset", true],
   ])("only cancellation commands supersede pending input: %s", async (text, expected) => {
-    const predicate = supersedeFor({
-      ...auth,
-      botUsername: "mybot",
-    });
+    const predicate = supersedeFor({ ...auth, botUsername: "mybot" });
     for (const target of ["", "@mybot", "@otherbot"]) {
       const commandText = `${text}${target}`;
       for (const entities of [
@@ -240,20 +236,15 @@ describe("telegram ingress supersede policy", () => {
   });
 
   it("keeps identityless targeted aborts pessimistic", async () => {
-    const text = "/stop@OtherBot!";
-    const entityText = "/stop@OtherBot";
-    const update = candidate(text, OWNER_ID, {
-      entities: [{ type: "bot_command", offset: 0, length: entityText.length }],
+    const update = candidate("/stop@OtherBot!", OWNER_ID, {
+      entities: [{ type: "bot_command", offset: 0, length: "/stop@OtherBot".length }],
     });
 
     expect(await shouldSupersede(update, pending())).toBe(true);
   });
 
   it("does not supersede when a bot_command entity appears inside ordinary text", async () => {
-    const shouldSupersedeOurBot = supersedeFor({
-      ...auth,
-      botUsername: "mybot",
-    });
+    const shouldSupersedeOurBot = supersedeFor({ ...auth, botUsername: "mybot" });
     const commandText = "/deploy@mybot";
     const ordinaryText = `Please run ${commandText} after this finishes`;
     const entities = [
@@ -267,10 +258,11 @@ describe("telegram ingress supersede policy", () => {
     const ordinaryCaption = {
       update_id: 3,
       message: {
+        ...ordinaryMessage.message,
+        text: undefined,
+        entities: undefined,
         caption: ordinaryText,
         caption_entities: entities,
-        from: { id: Number(OWNER_ID) },
-        chat: { id: Number(OWNER_ID), type: "private" },
       },
     };
 
@@ -311,14 +303,14 @@ describe("telegram ingress supersede policy", () => {
         },
       },
     });
-    const update = messageUpdate({
+    const update = candidate("stop", OWNER_ID, {
       ...group,
       isDirectMessages: true,
       directMessagesTopicId: 77,
       messageThreadId: 999,
     });
 
-    expect(await supersedeFor(channelDmAuth)(record("2", update), pending())).toBe(false);
+    expect(await supersedeFor(channelDmAuth)(update, pending())).toBe(false);
   });
 
   it("authorizes paired DM senders via the pairing store under dmPolicy pairing", async () => {

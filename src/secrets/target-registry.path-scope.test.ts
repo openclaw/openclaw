@@ -37,7 +37,7 @@ function plugin(id: string, channels: string[] = []): PluginManifestRecord {
     channels,
     origin: "config",
     rootDir: `/plugins/${id}`,
-    configContracts: { secretInputs: { paths: [{ path: "token" }] } },
+    configContracts: { secretInputs: { paths: [{ path: "token" }, { path: "token" }] } },
   });
 }
 
@@ -178,7 +178,7 @@ describe("secret target path ownership", () => {
     ]);
   });
 
-  it("loads only the selected plugin's manifest targets, preserving literal IDs", () => {
+  it("deduplicates the selected plugin's manifest targets, preserving literal IDs", () => {
     const segments = ["plugins", "entries", "example.plugin", "config", "token"];
     expect(resolvePath(segments)?.pathSegments).toEqual(segments);
     expect(

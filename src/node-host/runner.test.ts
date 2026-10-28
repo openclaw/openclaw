@@ -1,12 +1,10 @@
 import { PassThrough } from "node:stream";
 import { setImmediate } from "node:timers/promises";
-/** Tests node-host runner startup, connection configuration, and lifecycle. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildGatewayConnectAuth,
   selectGatewayConnectAuth,
 } from "../../packages/gateway-client/src/connect-auth.js";
-import type { EventLoopReadyResult } from "../../packages/gateway-client/src/event-loop-ready.js";
 import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import * as oneShotExit from "../cli/one-shot-exit.js";
@@ -24,7 +22,6 @@ import {
   lastCapturedOptions,
   loadResumableNodeHostGateway,
   mocks,
-  readyNodeHost,
   receiveHello,
   resetRunnerTestState,
   runNodeHost,
@@ -37,9 +34,20 @@ const deviceIdentity = {
   publicKeyPem: "public-key-test",
   privateKeyPem: "private-key-test",
 };
-const failedReadiness = { ready: false, aborted: false, elapsedMs: 0, maxDriftMs: 0, checks: 0 };
+const pairedToken = { role: "node", token: "paired-node-token", scopes: [], updatedAtMs: 1 };
 const connectAuth = (storedToken: string | undefined = "paired-node-token") =>
   buildGatewayConnectAuth(selectGatewayConnectAuth({ ...lastCapturedOptions(), storedToken }));
+const remoteConfig = (
+  remote: { token: string; password?: string; url?: string },
+  mode: "remote" | "local" = "remote",
+) => ({
+  gateway: { mode, remote },
+});
+const upgradeError = (details: Record<string, unknown>) =>
+  new GatewayClientRequestError({
+    code: "UNAVAILABLE",
+    details: { reason: "websocket-upgrade-rejected", ...details },
+  });
 
 const NODE_PLUGIN_TOOLS_UPDATE_METHOD = "node.pluginTools.update";
 const NODE_SKILLS_UPDATE_METHOD = "node.skills.update";
@@ -113,60 +121,48 @@ describe("runNodeHost", () => {
 
   it("retains managed state admission while an external signal closes the runtime", async () => {
     mocks.useFakeRuntime = true;
-    readyNodeHost();
     const statePath = resolveOpenClawStateSqlitePath();
     let cleanupStatePath: string | undefined;
     mocks.activeRuntime.close.mockImplementationOnce(async () => {
       cleanupStatePath = getExistingOpenClawStateSchemaPath();
     });
-    const on = vi.spyOn(process, "on");
-    const previousExitCode = process.exitCode;
-    const running = withExistingOpenClawStateSchema({ path: statePath }, () =>
-      runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789 }),
+    await withReadyNodeHost(
+      async ({ running, stop }) => {
+        expect(getExistingOpenClawStateSchemaPath()).toBeUndefined();
+        stop();
+        await running;
+        expect(cleanupStatePath).toBe(statePath);
+        expect(mocks.activeRuntime.close).toHaveBeenCalledOnce();
+        expect(getExistingOpenClawStateSchemaPath()).toBeUndefined();
+      },
+      {},
+      undefined,
+      (options) => withExistingOpenClawStateSchema({ path: statePath }, () => runNodeHost(options)),
     );
-    const stop = () => on.mock.calls.find(([event]) => event === "SIGTERM")?.[1]?.("SIGTERM");
-    try {
-      await vi.waitFor(() => expect(on).toHaveBeenCalledWith("SIGTERM", expect.any(Function)));
-      expect(getExistingOpenClawStateSchemaPath()).toBeUndefined();
-      stop();
-      await running;
-      expect(cleanupStatePath).toBe(statePath);
-      expect(mocks.activeRuntime.close).toHaveBeenCalledOnce();
-      expect(getExistingOpenClawStateSchemaPath()).toBeUndefined();
-    } finally {
-      stop();
-      await running;
-      process.exitCode = previousExitCode;
-      on.mockRestore();
-    }
   });
 
   it("joins the source node runtime when its companion stdin closes", async () => {
     mocks.useFakeRuntime = true;
-    readyNodeHost();
     const input = new PassThrough();
     const previous = Object.getOwnPropertyDescriptor(process, "stdin");
-    const previousExit = process.exitCode;
     Object.defineProperty(process, "stdin", { configurable: true, value: input });
-    const running = runNodeHost({
-      gatewayHost: "127.0.0.1",
-      gatewayPort: 18789,
-      parentStdin: true,
-    });
     try {
-      await vi.waitFor(() => expect(input.listenerCount("end")).toBe(1));
-      input.end();
-      await running;
-      expect(mocks.activeRuntime.close).toHaveBeenCalledOnce();
-      expect(mocks.capturedGatewayClients[0]?.stopAndWait).toHaveBeenCalledOnce();
-      expect(input.listenerCount("end")).toBe(0);
+      await withReadyNodeHost(
+        async ({ running, client }) => {
+          await vi.waitFor(() => expect(input.listenerCount("end")).toBe(1));
+          input.end();
+          await running;
+          expect(mocks.activeRuntime.close).toHaveBeenCalledOnce();
+          expect(client.stopAndWait).toHaveBeenCalledOnce();
+          expect(input.listenerCount("end")).toBe(0);
+        },
+        { parentStdin: true },
+        () => input.end(),
+      );
     } finally {
-      input.end();
-      await running;
       if (previous) {
         Object.defineProperty(process, "stdin", previous);
       }
-      process.exitCode = previousExit;
     }
   });
 
@@ -236,12 +232,7 @@ describe("runNodeHost", () => {
   });
 
   it("strips remote credentials before resolving local node-host auth", async () => {
-    const config = {
-      gateway: {
-        mode: "local",
-        remote: { token: "remote-token", password: "remote-password" },
-      },
-    };
+    const config = remoteConfig({ token: "remote-token", password: "remote-password" }, "local");
     setConfigResolutionFacts(
       config,
       new Set(["gateway.auth.token", "gateway.remote.token", "gateway.remote.password"]),
@@ -263,12 +254,9 @@ describe("runNodeHost", () => {
   });
 
   it("does not inherit credentials from another Gateway for a companion", async () => {
-    mocks.getRuntimeConfig.mockReturnValue({
-      gateway: {
-        mode: "remote",
-        remote: { token: "other-gateway-token", password: "other-gateway-password" },
-      },
-    });
+    mocks.getRuntimeConfig.mockReturnValue(
+      remoteConfig({ token: "other-gateway-token", password: "other-gateway-password" }),
+    );
     vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", undefined);
     vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", undefined);
     await expectStartupTimeout({
@@ -296,7 +284,7 @@ describe("runNodeHost", () => {
       vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", undefined);
       mocks.loadNodeHostConfig.mockResolvedValue({ version: 1, nodeId: "node-test", gateway });
       mocks.loadDeviceAuthTokenReadOnly.mockImplementation(async ({ role }) =>
-        role === "node" ? { role, token: "paired-node-token", scopes: [], updatedAtMs: 1 } : null,
+        role === "node" ? pairedToken : null,
       );
       mocks.getRuntimeConfig.mockReturnValue({
         gateway: {
@@ -340,12 +328,7 @@ describe("runNodeHost", () => {
 
       it("never falls back to shared auth if the saved token disappears before connect", async () => {
         mocks.loadDeviceAuthTokenReadOnly
-          .mockResolvedValueOnce({
-            role: "node",
-            token: "paired-node-token",
-            scopes: [],
-            updatedAtMs: 1,
-          })
+          .mockResolvedValueOnce(pairedToken)
           .mockResolvedValue(null);
         vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "shared-test-token");
 
@@ -398,8 +381,7 @@ describe("runNodeHost", () => {
       vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "unrelated-gateway-password");
       await expectStartupTimeout(runOptions);
 
-      const auth = connectAuth();
-      expect(auth).toMatchObject({
+      expect(connectAuth()).toMatchObject({
         deviceToken: "paired-node-token",
         token: undefined,
         password: undefined,
@@ -422,12 +404,9 @@ describe("runNodeHost", () => {
     });
 
     it("keeps remote-mode credentials when selecting another Gateway", async () => {
-      mocks.getRuntimeConfig.mockReturnValue({
-        gateway: {
-          mode: "remote",
-          remote: { url: "wss://another.example:443", token: "remote-token" },
-        },
-      });
+      mocks.getRuntimeConfig.mockReturnValue(
+        remoteConfig({ url: "wss://another.example:443", token: "remote-token" }),
+      );
       mocks.resolveGatewayCredentialsWithSecretInputs.mockResolvedValue({ token: "remote-token" });
 
       await expectStartupTimeout({ ...runOptions, gatewayHost: "another.example" });
@@ -437,76 +416,57 @@ describe("runNodeHost", () => {
     });
   });
 
-  it("keeps a ref'd lifetime handle until a ready foreground host stops", async () => {
-    const unref = vi.fn();
-    const interval = { unref } as unknown as ReturnType<typeof setInterval>;
-    const setIntervalSpy = vi.spyOn(global, "setInterval").mockReturnValue(interval);
-    const clearIntervalSpy = vi.spyOn(global, "clearInterval").mockImplementation(() => {});
-    const mcpClose = createDeferred<undefined>();
-    mocks.closeMcpManager.mockReturnValueOnce(mcpClose.promise);
-    await withReadyNodeHost(
-      async ({ running, stop }) => {
-        await vi.waitFor(() => expect(startNodeHostMcpManager).toHaveBeenCalled());
-
-        expect(setIntervalSpy).toHaveBeenCalledOnce();
-        expect(unref).not.toHaveBeenCalled();
-        expect(clearIntervalSpy).not.toHaveBeenCalledWith(interval);
-
-        expect(stop()).toBeTypeOf("function");
-        await expectCalls(mocks.capturedGatewayClients[0]?.stopAndWait);
-
-        expect(clearIntervalSpy).not.toHaveBeenCalledWith(interval);
-        await expectCalls(mocks.closeMcpManager);
-        mcpClose.resolve(undefined);
-        await running;
-
-        expect(clearIntervalSpy).toHaveBeenCalledWith(interval);
-      },
-      {},
-      () => mcpClose.resolve(undefined),
-    );
-  });
-
-  it("closes MCP clients before exiting on a terminal reconnect pause", async () => {
-    const readiness = createDeferred<EventLoopReadyResult>();
-    const mcpClose = createDeferred<undefined>();
-    mocks.startGatewayClientWhenEventLoopReady.mockReturnValueOnce(readiness.promise);
-    mocks.closeMcpManager.mockReturnValueOnce(mcpClose.promise);
-    const exit = vi.spyOn(oneShotExit, "requestExitAfterOneShotOutput").mockReturnValue(true);
-    const previousExitCode = process.exitCode;
-    const running = runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789 });
-    const stopped = expect(running).resolves.toBeUndefined();
-    try {
-      await vi.waitFor(() => expect(startNodeHostMcpManager).toHaveBeenCalled());
-      lastCapturedOptions()?.onReconnectPaused?.({
-        code: 1008,
-        reason: "connect failed",
-        detailCode: ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH,
-      });
-      await expectCalls(mocks.closeMcpManager);
-      expect(mocks.capturedGatewayClients[0]?.stopAndWait).toHaveBeenCalled();
-      expect(exit).not.toHaveBeenCalled();
-
-      mcpClose.resolve(undefined);
-      await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(undefined, 1));
-
-      readiness.resolve(failedReadiness);
-      await stopped;
-      expect(process.exitCode).toBe(1);
-      expect(mocks.closeMcpManager).toHaveBeenCalledOnce();
-      expect(mocks.capturedGatewayClients[0]?.stopAndWait).toHaveBeenCalledOnce();
-    } finally {
-      mcpClose.resolve(undefined);
-      readiness.resolve(failedReadiness);
-      try {
-        // Shutdown owns the exit callback; keep it intercepted until the run settles.
-        await stopped;
-      } finally {
-        process.exitCode = previousExitCode;
-        exit.mockRestore();
-      }
-    }
-  });
+  it.each(["signal", "terminal reconnect pause"])(
+    "drains MCP before exit on %s",
+    async (reason) => {
+      const unref = vi.fn();
+      const interval = { unref } as unknown as ReturnType<typeof setInterval>;
+      const setIntervalSpy = vi.spyOn(global, "setInterval").mockReturnValue(interval);
+      const clearIntervalSpy = vi.spyOn(global, "clearInterval").mockImplementation(() => {});
+      const readiness = createDeferred<ReturnType<typeof mocks.readiness>>();
+      const mcpClose = createDeferred<undefined>();
+      mocks.startGatewayClientWhenEventLoopReady.mockReturnValueOnce(readiness.promise);
+      mocks.closeMcpManager.mockReturnValueOnce(mcpClose.promise);
+      const exit = vi.spyOn(oneShotExit, "requestExitAfterOneShotOutput").mockReturnValue(true);
+      await withReadyNodeHost(
+        async ({ running, stop, client, options }) => {
+          await vi.waitFor(() => expect(startNodeHostMcpManager).toHaveBeenCalled());
+          expect(setIntervalSpy).toHaveBeenCalledOnce();
+          expect(unref).not.toHaveBeenCalled();
+          expect(clearIntervalSpy).not.toHaveBeenCalledWith(interval);
+          if (reason === "signal") {
+            readiness.resolve(mocks.readiness(true));
+            expect(stop()).toBeTypeOf("function");
+          } else {
+            options.onReconnectPaused?.({
+              code: 1008,
+              reason: "connect failed",
+              detailCode: ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH,
+            });
+          }
+          await expectCalls(client.stopAndWait);
+          expect(clearIntervalSpy).not.toHaveBeenCalledWith(interval);
+          await expectCalls(mocks.closeMcpManager);
+          expect(exit).not.toHaveBeenCalled();
+          mcpClose.resolve(undefined);
+          if (reason !== "signal") {
+            await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(undefined, 1));
+          }
+          readiness.resolve(mocks.readiness(false));
+          await expect(running).resolves.toBeUndefined();
+          expect(clearIntervalSpy).toHaveBeenCalledWith(interval);
+          expect(mocks.closeMcpManager).toHaveBeenCalledOnce();
+          expect(client.stopAndWait).toHaveBeenCalledOnce();
+          expect(process.exitCode).toBe(reason === "signal" ? 143 : 1);
+        },
+        {},
+        () => {
+          mcpClose.resolve(undefined);
+          readiness.resolve(mocks.readiness(false));
+        },
+      );
+    },
+  );
 
   it("keeps pairing reconnect pauses visible without stopping the foreground host", async () => {
     await expectStartupTimeout();
@@ -536,42 +496,13 @@ describe("runNodeHost", () => {
     expect(mocks.capturedConfiguredGatewayConfigs.at(-1)?.contextPath).toBe(gatewayContextPath);
   });
 
-  it("exits after three identical permanent Gateway upgrade rejections", async () => {
+  it("resets permanent rejection streaks on transient failures and hello, exiting only at three", async () => {
     await withReadyNodeHost(async ({ client, options }) => {
       const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-      const rejection = new GatewayClientRequestError({
-        code: "UNAVAILABLE",
-        message: "gateway rejected websocket upgrade (HTTP 403)",
-        details: {
-          reason: "websocket-upgrade-rejected",
-          httpStatus: 403,
-          gatewayErrorType: "proxy_attribution_required",
-          gatewayErrorMessage: "Configure gateway.trustedProxies narrowly",
-        },
-      });
-      options?.onConnectError?.(rejection);
-      options?.onConnectError?.(rejection);
-      expect(client.stopAndWait).not.toHaveBeenCalled();
-      options?.onConnectError?.(rejection);
-      await vi.waitFor(() => expect(process.exitCode).toBe(1));
-      expect(client.stopAndWait).toHaveBeenCalledOnce();
-      expect(mocks.closeMcpManager).toHaveBeenCalledOnce();
-      expect(stderr).toHaveBeenCalledWith(
-        "node host gateway permanently rejected connection (proxy_attribution_required): Configure gateway.trustedProxies narrowly; exiting\n",
-      );
-    });
-  });
-
-  it("keeps retrying transient upgrade failures and resets permanent rejection streaks", async () => {
-    await withReadyNodeHost(async ({ client, options }) => {
-      const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-      const permanentRejection = new GatewayClientRequestError({
-        code: "UNAVAILABLE",
-        details: {
-          reason: "websocket-upgrade-rejected",
-          httpStatus: 403,
-          gatewayErrorType: "proxy_attribution_required",
-        },
+      const permanentRejection = upgradeError({
+        httpStatus: 403,
+        gatewayErrorType: "proxy_attribution_required",
+        gatewayErrorMessage: "Configure gateway.trustedProxies narrowly",
       });
       const rejectTwice = () => {
         options?.onConnectError?.(permanentRejection);
@@ -584,13 +515,7 @@ describe("runNodeHost", () => {
           { httpStatus: 503, gatewayErrorType: "proxy_attribution_required" },
           { httpStatus: 403 },
           { httpStatus: 403, gatewayErrorType: "another_rejection" },
-        ].map(
-          (details) =>
-            new GatewayClientRequestError({
-              code: "UNAVAILABLE",
-              details: { reason: "websocket-upgrade-rejected", ...details },
-            }),
-        ),
+        ].map(upgradeError),
       ];
       for (const transientError of transientErrors) {
         rejectTwice();
@@ -602,6 +527,13 @@ describe("runNodeHost", () => {
       rejectTwice();
       expect(client.stopAndWait).not.toHaveBeenCalled();
       expect(stderr).not.toHaveBeenCalledWith(expect.stringContaining("permanently rejected"));
+      options?.onConnectError?.(permanentRejection);
+      await vi.waitFor(() => expect(process.exitCode).toBe(1));
+      expect(client.stopAndWait).toHaveBeenCalledOnce();
+      expect(mocks.closeMcpManager).toHaveBeenCalledOnce();
+      expect(stderr).toHaveBeenCalledWith(
+        "node host gateway permanently rejected connection (proxy_attribution_required): Configure gateway.trustedProxies narrowly; exiting\n",
+      );
     });
   });
 
@@ -610,7 +542,7 @@ describe("runNodeHost", () => {
     await withReadyNodeHost(async ({ client, options }) => {
       rejectPublications(client, "unauthorized role: node");
       receiveHello(options, 3);
-      await vi.waitFor(() => expect(getPublications(client)).toHaveLength(1));
+      await expectPublications(client, 1);
       mocks.availabilityChanged?.();
       await settlePublications();
       for (const method of optionalMethods) {
@@ -631,7 +563,7 @@ describe("runNodeHost", () => {
     await withReadyNodeHost(async ({ client, options }) => {
       rejectPublications(client, "unauthorized role: node", [NODE_PLUGIN_TOOLS_UPDATE_METHOD]);
       receiveHello(options);
-      await vi.waitFor(() => expect(getPublications(client)).toHaveLength(1));
+      await expectPublications(client, 1);
       for (let index = 0; index < 10; index += 1) {
         mocks.availabilityChanged?.();
       }
@@ -642,20 +574,6 @@ describe("runNodeHost", () => {
       mocks.availabilityChanged?.();
       await settlePublications();
       expect(getPublications(client)).toHaveLength(2);
-    });
-  });
-
-  it("publishes the latest inventory queued during a failed optional publication", async () => {
-    await withReadyNodeHost(async ({ client, options }) => {
-      const initial = createDeferred<unknown>();
-      queuePluginResponses(client, initial.promise);
-      receiveHello(options, 3);
-      await vi.waitFor(() => expect(getPublications(client)).toHaveLength(1));
-      changeTools([]);
-      initial.reject(new Error("temporary publish failure"));
-      await vi.waitFor(() =>
-        expect(client.request).toHaveBeenCalledWith(NODE_PLUGIN_TOOLS_UPDATE_METHOD, { tools: [] }),
-      );
     });
   });
 
@@ -697,36 +615,40 @@ describe("runNodeHost", () => {
     });
   });
 
-  it("retains the latest inventory when it returns to a previously rejected value", async () => {
-    await withReadyNodeHost(async ({ client, options }) => {
-      const initialPluginTools = [...mocks.nodePluginTools];
-      const initial = createDeferred<unknown>();
-      const second = createDeferred<unknown>();
-      await beginPublication(client, options, initial.promise, second.promise);
-      changeTools([]);
-      initial.reject(
-        new GatewayClientRequestError({
-          code: "INVALID_REQUEST",
-          message: "temporary validation failure",
-        }),
-      );
-      await expectPublications(client, 2);
-      changeTools(initialPluginTools);
-      second.resolve({});
-      await vi.waitFor(() => {
-        const publications = getPublications(client);
-        expect(publications).toHaveLength(3);
-        expect(publications.at(-1)?.[1]).toEqual({ tools: initialPluginTools });
+  it.each([
+    [3, new Error("temporary publish failure")],
+    [4, new GatewayClientRequestError({ code: "INVALID_REQUEST", message: "validation failure" })],
+  ] as const)(
+    "retains queued inventory across a v%s publication failure: %s",
+    async (protocol, error) => {
+      await withReadyNodeHost(async ({ client, options }) => {
+        const initialPluginTools = [...mocks.nodePluginTools];
+        const initial = createDeferred<unknown>();
+        const second = createDeferred<unknown>();
+        queuePluginResponses(client, initial.promise, second.promise);
+        receiveHello(options, protocol);
+        await expectPublications(client, 1);
+        changeTools([]);
+        initial.reject(error);
+        await expectPublications(client, 2);
+        expect(client.request).toHaveBeenCalledWith(NODE_PLUGIN_TOOLS_UPDATE_METHOD, { tools: [] });
+        changeTools(initialPluginTools);
+        second.resolve({});
+        await vi.waitFor(() => {
+          const publications = getPublications(client);
+          expect(publications).toHaveLength(3);
+          expect(publications.at(-1)?.[1]).toEqual({ tools: initialPluginTools });
+        });
       });
-    });
-  });
+    },
+  );
 
   it("retires in-flight inventory before manifest reconnect", async () => {
     await withReadyNodeHost(async ({ client, options }) => {
       const initial = createDeferred<unknown>();
       queuePluginResponses(client, initial.promise);
       receiveHello(options, 3);
-      await vi.waitFor(() => expect(getPublications(client)).toHaveLength(1));
+      await expectPublications(client, 1);
       await settlePublications();
       Object.assign(mocks, { nodePluginTools: [], nodeHostCaps: ["canvas"] });
       mocks.availabilityChanged?.();
@@ -734,7 +656,7 @@ describe("runNodeHost", () => {
       await settlePublications();
       expect(getPublications(client)).toHaveLength(1);
       receiveHello(options, 3);
-      await vi.waitFor(() => expect(getPublications(client)).toHaveLength(2));
+      await expectPublications(client, 2);
       expect(client.request).toHaveBeenLastCalledWith(NODE_PLUGIN_TOOLS_UPDATE_METHOD, {
         tools: [],
       });

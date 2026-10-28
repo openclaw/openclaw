@@ -219,7 +219,19 @@ function validateTalkProviderSelection(
 const TalkRealtimeSchema = z
   .strictObject({
     provider: z.string().optional(),
-    providers: z.record(z.string(), TalkProviderEntrySchema).optional(),
+    providers: z
+      .record(
+        z.string(),
+        TalkProviderEntrySchema.extend({
+          inputTranscriptionModel: z
+            .string()
+            .optional()
+            .describe(
+              "Input transcription model or deployment name. Omit to keep the provider default.",
+            ),
+        }),
+      )
+      .optional(),
     model: z.string().optional(),
     speakerVoice: z.string().optional(),
     speakerVoiceId: z.string().optional(),

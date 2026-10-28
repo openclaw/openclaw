@@ -8,8 +8,8 @@ import * as temporaryRoot from "../../infra/tmp-openclaw-dir.js";
 import { buildUpdateRestartSentinelPayload } from "../../infra/update-restart-sentinel-payload.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import { defaultRuntime } from "../../runtime.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import type { UpdateCommandOptions } from "./shared.js";
+import { cleanupUpdateCommandTest } from "./update-command-cleanup.test-support.js";
 import {
   finishSuccessfulPackageSwitch,
   validConfigSnapshot,
@@ -71,11 +71,7 @@ beforeEach(async () => {
   );
 });
 
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
-  vi.restoreAllMocks();
-  vi.unstubAllEnvs();
-});
+afterEach(cleanupUpdateCommandTest);
 
 it.each(["cli", "api"] as const)(
   "uses the admitted %s run for deferred notification policy and storage",

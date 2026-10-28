@@ -3,6 +3,10 @@
   "description": "Self-hosted gateway that connects Discord, Google Chat, iMessage, Matrix, Microsoft Teams, Signal, Slack, Telegram, WhatsApp, Zalo, and more to AI coding agents. Run one Gateway process on your own machine and message your AI assistant from anywhere.",
   "redirects": [
     {
+      "source": "/cli/claws",
+      "destination": "/cli/templates"
+    },
+    {
       "source": "/cli/commitments",
       "destination": "/automation#retired-inferred-commitments"
     },
@@ -1836,6 +1840,24 @@
                     "group": "Models and memory",
                     "pages": [
                       "plugins/apple-fm",
+                      "plugins/knowledge",
+                      {
+                        "group": "Knowledge",
+                        "pages": [
+                          "plugins/knowledge/stores-and-access",
+                          "plugins/knowledge/memory-provider",
+                          "plugins/knowledge/tools",
+                          "plugins/knowledge/records-and-ontology",
+                          "plugins/knowledge/retrieval",
+                          "plugins/knowledge/evidence",
+                          "plugins/knowledge/ingestion",
+                          "plugins/knowledge/corrections",
+                          "plugins/knowledge/local-history",
+                          "plugins/knowledge/maintenance",
+                          "plugins/knowledge/scribes",
+                          "plugins/knowledge/control-ui"
+                        ]
+                      },
                       "plugins/llama-cpp",
                       "plugins/memory-lancedb",
                       "plugins/memory-wiki",
@@ -1872,6 +1894,7 @@
                 "group": "Building plugins",
                 "pages": [
                   "plugins/building-plugins",
+                  "plugins/runtime-compatibility",
                   "plugins/feature-plugins",
                   "plugins/tool-plugins",
                   "plugins/sdk-channel-plugins",
@@ -2204,6 +2227,7 @@
                   {
                     "group": "Chat and coding models",
                     "pages": [
+                      "providers/abliteration",
                       "providers/alibaba",
                       "providers/anthropic",
                       "plugins/reference/anthropic-vertex",
@@ -2267,6 +2291,10 @@
                     ]
                   },
                   {
+                    "group": "Decision models",
+                    "pages": ["providers/liquid-ai"]
+                  },
+                  {
                     "group": "Speech and audio",
                     "pages": [
                       "providers/azure-speech",
@@ -2297,9 +2325,11 @@
                       "providers/clawrouter",
                       "providers/cloudflare-ai-gateway",
                       "providers/kilocode",
+                      "providers/liquid-inference",
                       "providers/litellm",
                       "providers/neon",
                       "providers/openrouter",
+                      "providers/requesty",
                       "providers/vercel-ai-gateway"
                     ]
                   },
@@ -2831,7 +2861,7 @@
                     "pages": [
                       "cli/agent",
                       "cli/agents",
-                      "cli/claws",
+                      "cli/templates",
                       "cli/infer",
                       "cli/memory",
                       "cli/models",
@@ -3225,6 +3255,8 @@
                 "group": "Release notes",
                 "pages": [
                   "releases/index",
+                  "releases/2026.10.8",
+                  "releases/2026.10.7",
                   "releases/2026.10.6",
                   "releases/2026.10.5",
                   "releases/2026.10.4",

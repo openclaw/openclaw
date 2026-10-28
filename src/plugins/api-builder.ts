@@ -1,10 +1,11 @@
 import { attachPluginApiFacades, type OpenClawPluginApiWithoutFacades } from "./api-facades.js";
+import { createPluginInlineViewResult } from "./inline-view.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import type { OpenClawPluginApi } from "./types.js";
 
 type BuildPluginApiParams = Omit<
   OpenClawPluginApiWithoutFacades,
-  keyof typeof noops | "registerNodeCliFeature" | "runtimeSource"
+  keyof typeof noops | "registerNodeCliFeature" | "runtimeSource" | "inlineView"
 > & {
   runtimeSource?: string;
   handlers?: Partial<Pick<OpenClawPluginApiWithoutFacades, keyof typeof noops>>;
@@ -64,7 +65,6 @@ const noops = {
   registerTrustedToolPolicy: () => {},
   registerToolMetadata: () => {},
   registerControlUiDescriptor: () => {},
-  registerBoardWidgetContentKind: () => {},
   registerRuntimeLifecycle: () => {},
   registerAgentEventSubscription: () => {},
   emitAgentEvent: () => ({
@@ -126,6 +126,8 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
   ) as Pick<OpenClawPluginApiWithoutFacades, keyof typeof noops>;
   const api: OpenClawPluginApiWithoutFacades = {
     id: params.id,
+    inlineView: (viewId, payload, options) =>
+      createPluginInlineViewResult(params.id, viewId, payload, options),
     name: params.name,
     version: params.version,
     description: params.description,

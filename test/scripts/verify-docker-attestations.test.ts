@@ -24,7 +24,6 @@ function createIndex() {
           "vnd.docker.reference.digest": imageDigest,
           "vnd.docker.reference.type": "attestation-manifest",
         },
-        platform: { architecture: "unknown", os: "unknown" },
       },
     ],
   };
@@ -54,19 +53,15 @@ describe("verify-docker-attestations", () => {
   it("bounds docker manifest inspection calls", () => {
     const execFileSyncImpl = vi.fn(() => "{}");
     expect(inspectRaw(imageRef, { execFileSyncImpl })).toBe("{}");
-    expect(execFileSyncImpl.mock.calls).toStrictEqual([
-      [
-        "docker",
-        ["buildx", "imagetools", "inspect", "--raw", imageRef],
-        {
-          encoding: "utf8",
-          killSignal: "SIGKILL",
-          maxBuffer: 20 * 1024 * 1024,
-          stdio: ["ignore", "pipe", "pipe"],
-          timeout: 120_000,
-        },
-      ],
-    ]);
+    expect(execFileSyncImpl).toHaveBeenCalledExactlyOnceWith(
+      "docker",
+      ["buildx", "imagetools", "inspect", "--raw", imageRef],
+      expect.objectContaining({
+        killSignal: "SIGKILL",
+        maxBuffer: 20 * 1024 * 1024,
+        timeout: 120_000,
+      }),
+    );
   });
 
   it("parses required platforms and image refs", () => {
@@ -90,9 +85,6 @@ describe("verify-docker-attestations", () => {
   });
 
   it("resolves digest refs from tagged image refs", () => {
-    expect(imageRefForDigest("ghcr.io/openclaw/openclaw:2026.4.26", imageDigest)).toBe(
-      `ghcr.io/openclaw/openclaw@${imageDigest}`,
-    );
     expect(imageRefForDigest("localhost:5000/openclaw:main", imageDigest)).toBe(
       `localhost:5000/openclaw@${imageDigest}`,
     );

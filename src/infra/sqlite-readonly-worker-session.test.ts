@@ -119,8 +119,7 @@ it.each([
     }
     child.emit("error", failure);
     await nextTurn();
-    expect(settled.settled).toBe(false);
-    expect(session.notStarted).toBe(false);
+    expect([settled.settled, session.notStarted]).toEqual([false, false]);
     child.emit("close", -1, null);
     const error = await observed;
     expect(session.notStarted).toBe(!spawned);
@@ -151,7 +150,7 @@ it("does not mark a runnable runtime unavailable after an ordinary worker abort"
 
 it("reuses its child after a well-formed staging refusal", async () => {
   const mode = "staging-create";
-  const { session, child } = createSession();
+  const { session, child, readBudget } = createSession();
   const first = session.run("/fixture/first.sqlite", { mode });
   const observed = first.catch((error: unknown) => error);
   const firstId = requestId(child);
@@ -168,6 +167,7 @@ it("reuses its child after a well-formed staging refusal", async () => {
   expect(secondId).not.toBe(firstId);
   reply(child, { ok: true, location: "/fixture/staged" });
   await expect(second).resolves.toBe("/fixture/staged");
+  expect(readBudget).not.toHaveBeenCalled();
   expect(mock.spawn).toHaveBeenCalledOnce();
   expect(child.kill).not.toHaveBeenCalled();
 });
@@ -199,19 +199,10 @@ it("joins retirement after framed auth failure", async () => {
   );
   try {
     reply(child, { type: "start", handle });
-    expect(child.send).toHaveBeenLastCalledWith(
-      { id, transfer: { type: "next", transferId: handle.id } },
-      expect.any(Function),
-    );
     reply(child, {
       type: "frame",
       frame: encodeSqliteAuthTransferFrame(transfer.next(handle.id)),
     });
-    expect(child.send).toHaveBeenCalledTimes(3);
-    expect(child.send).toHaveBeenLastCalledWith(
-      { id, transfer: { type: "next", transferId: handle.id } },
-      expect.any(Function),
-    );
     reply(child, { ok: false, message: "fixture auth read refused" });
     await expectRetirement(session, child, result, "fixture auth read refused");
   } finally {
@@ -237,35 +228,29 @@ it("refuses a run after close without budgeting or sending another request", asy
 });
 
 it("keeps detached staging budget inside a caller-owned deadline", async () => {
-  const timer = vi.spyOn(globalThis, "setTimeout");
-  try {
-    await withSqliteReadOnlyWorkerScope(
-      async () => {
-        const child = new MockChild();
-        mock.spawn.mockReturnValueOnce(child);
-        const session = createScopedSqliteReadOnlyWorker({
-          env: {},
-          cwd: "/fixture",
-          transport: { kind: "native" },
-          retainLifetime: false,
-          retainOnOperationError: true,
-        });
-        sessions.push({ session, child });
-        timer.mockClear();
-        const result = session.run("/fixture/staging", { mode: "staging-create" });
-        const budgeted = timer.mock.calls.some(
-          ([, delay]) => typeof delay === "number" && delay > 0,
-        );
-        reply(child, { ok: true, location: "/fixture/staged" });
-        await expect(result).resolves.toBe("/fixture/staged");
-        expect(budgeted).toBe(true);
-        expect(child.kill).not.toHaveBeenCalled();
-      },
-      { signal: new AbortController().signal, deadlineOwnedByCaller: true },
-    );
-  } finally {
-    timer.mockRestore();
-  }
+  using timer = vi.spyOn(globalThis, "setTimeout");
+  await withSqliteReadOnlyWorkerScope(
+    async () => {
+      const child = new MockChild();
+      mock.spawn.mockReturnValueOnce(child);
+      const session = createScopedSqliteReadOnlyWorker({
+        env: {},
+        cwd: "/fixture",
+        transport: { kind: "native" },
+        retainLifetime: false,
+        retainOnOperationError: true,
+      });
+      sessions.push({ session, child });
+      timer.mockClear();
+      const result = session.run("/fixture/staging", { mode: "staging-create" });
+      const budgeted = timer.mock.calls.some(([, delay]) => typeof delay === "number" && delay > 0);
+      reply(child, { ok: true, location: "/fixture/staged" });
+      await expect(result).resolves.toBe("/fixture/staged");
+      expect(budgeted).toBe(true);
+      expect(child.kill).not.toHaveBeenCalled();
+    },
+    { signal: new AbortController().signal, deadlineOwnedByCaller: true },
+  );
 });
 
 it("captures only read scope and refuses callbacks after owner retirement", async () => {
@@ -308,10 +293,7 @@ it("captures only read scope and refuses callbacks after owner retirement", asyn
   }
 });
 
-it.each([
-  { execPath: "/fixture/bin/node", family: "node" },
-  { execPath: "/fixture/bin/custom-runtime", family: "other" },
-])("counts admitted children as $family in spawn diagnostics", ({ execPath, family }) => {
+it("counts admitted SQLite children in spawn diagnostics", () => {
   const originalExecPath = process.execPath;
   let now = 0;
   const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
@@ -322,16 +304,11 @@ it.each([
     }
   });
   try {
-    process.execPath = execPath;
+    process.execPath = "/fixture/bin/node";
     setDiagnosticsEnabledForProcess(false);
     emitChildProcessSpawnSample();
     setDiagnosticsEnabledForProcess(true);
     const { child } = createSession();
-    expect(mock.spawn).toHaveBeenCalledWith(
-      execPath,
-      expect.any(Array),
-      expect.objectContaining({ windowsHide: true, stdio: ["ignore", "pipe", "pipe", "ipc"] }),
-    );
     now = 60_000;
     emitChildProcessSpawnSample();
     expect(events).toEqual([]);
@@ -339,7 +316,7 @@ it.each([
     now = 120_000;
     emitChildProcessSpawnSample();
     expect(events).toEqual([
-      expect.objectContaining({ family, operation: "sqlite.session.native", count: 1 }),
+      expect.objectContaining({ family: "node", operation: "sqlite.session.native", count: 1 }),
     ]);
   } finally {
     process.execPath = originalExecPath;

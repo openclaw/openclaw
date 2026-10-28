@@ -4,15 +4,13 @@ import { createDeferred, withinTest } from "../../../../test/helpers/promise.js"
 import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 import { dispatchGatewayMethodInProcess } from "../../../gateway/server-plugin-in-process-dispatch.js";
 import { normalizeAcceptedSessionSpawnResult as acceptedSpawn } from "../../accepted-session-spawn.js";
-import {
-  readAdmittedRunOperatorAuthority,
-  resolvePreparedRunAdmission,
-} from "../../admitted-run-context.js";
+import { readAdmittedRunOperatorAuthority } from "../../admitted-run-context.js";
 import type { EmbeddedAgentRunResult } from "../../embedded-agent.js";
 import { buildAgentInternalEventContext, type AgentInternalEvent } from "../../internal-events.js";
 import { RUNTIME_EVENT_USER_PROMPT } from "../../internal-runtime-context.js";
 import { runSubagentAnnounceFlow } from "../announce/subagent-announce.js";
 import { settleRequesterAfterSessionSpawns } from "../registry/subagent-registry.js";
+import { admitEmbeddedRun, recordFinal } from "./subagent-spawn.boundary-run.test-support.js";
 import {
   collectFailure,
   sessionReader,
@@ -22,7 +20,6 @@ import {
 } from "./subagent-spawn.fixtures.test-support.js";
 import {
   createBoundSpawnInvocation,
-  recordSpawnBoundaryFinal,
   type createSpawnOperatorSource,
   type RequestCustodySpawnCaseOptions,
 } from "./subagent-spawn.production-boundary.test-support.js";
@@ -62,12 +59,7 @@ export function registerGuestSpawnCases(
       const modelResult = createDeferred<EmbeddedAgentRunResult>();
       const parentTurns: { prompt: string; internalEvents?: AgentInternalEvent[] }[] = [];
       options.runEmbeddedAgent.mockImplementation(async (params) => {
-        const admitted = await resolvePreparedRunAdmission({
-          runId: params.runId,
-          runtimeKind: "embedded",
-          admittedRunContext: params.admittedRunContext,
-          preparedRunAdmission: params.preparedRunAdmission,
-        });
+        const admitted = await admitEmbeddedRun(params);
         const authority = readAdmittedRunOperatorAuthority(admitted);
         expect(authority?.profileId).toBe(source.authority.profileId);
         expect(authority?.scopes).toEqual(scopes);
@@ -84,12 +76,7 @@ export function registerGuestSpawnCases(
         }
         const text = parentTurn ? "Parent received the result" : "guest child complete";
         const result = parentTurn ? visibleResult(text) : await modelResult.promise;
-        await recordSpawnBoundaryFinal({
-          storePath: bound.storePath,
-          sessionKey: expectDefined(params.sessionKey, "child session"),
-          runId: params.runId,
-          text,
-        });
+        await recordFinal(bound, params, text);
         return result;
       });
       let childRunId: string | undefined;

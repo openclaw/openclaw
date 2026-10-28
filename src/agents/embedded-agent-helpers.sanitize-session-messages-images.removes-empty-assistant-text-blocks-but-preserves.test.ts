@@ -1,6 +1,7 @@
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { expect, it } from "vitest";
 import { createNoisyPngBuffer } from "../../test/helpers/image-fixtures.js";
+import { normalizeTranscriptJsonValue } from "../config/sessions/transcript-json.js";
 import { sanitizeSessionMessagesImages } from "./embedded-agent-helpers/images.js";
 import {
   castAgentMessages,
@@ -24,6 +25,42 @@ async function check(input: unknown[], expected: unknown[], options?: Options) {
   const actual = await sanitizeSessionMessagesImages(castAgentMessages(input), "test", options);
   expect(actual).toEqual(expected);
 }
+
+it("reuses owned text cleanup across rebuilt envelopes without mixing replay policies", async () => {
+  const content = [
+    { ...text(" "), textSignature: "signed" },
+    { ...text("visible"), thought_signature: "msg_private", thoughtSignature: "msg_camel" },
+  ];
+  const message = assistant(content);
+  normalizeTranscriptJsonValue({ message }, "entry");
+  const sanitize = async (options?: Options) =>
+    (await sanitizeSessionMessagesImages([{ ...message }], "test", options)).find(
+      (entry) => entry.role === "assistant",
+    )?.content;
+  const strict = { sanitizeThoughtSignatures: { allowBase64Only: true, includeCamelCase: true } };
+  const first = await sanitize(strict);
+  expect(first).toEqual([{ ...text(" "), textSignature: "signed" }, text("visible")]);
+  expect(await sanitize({ preserveSignatures: true })).toBe(content);
+  expect(await sanitize(strict)).toBe(first);
+  expect(Object.isFrozen(first)).toBe(true);
+  const user = { role: "user" as const, content, timestamp: 0 };
+  expect((await sanitizeSessionMessagesImages([user], "test"))[0]).toHaveProperty("content", [
+    content[1],
+  ]);
+  expect(await sanitize(strict)).toBe(first);
+});
+
+it("sanitizes mutable content again after an in-place edit", async () => {
+  const block = text("first");
+  const message = { role: "user" as const, content: [block], timestamp: 0 };
+  expect((await sanitizeSessionMessagesImages([message], "test"))[0]).toHaveProperty("content", [
+    text("first"),
+  ]);
+  block.text = " ";
+  expect((await sanitizeSessionMessagesImages([message], "test"))[0]).toHaveProperty("content", [
+    text("[empty content omitted]"),
+  ]);
+});
 const replay = {
   v: 1,
   type: "openai-responses-compaction",
@@ -117,6 +154,9 @@ it("keeps corrupt history images omitted after error and a recovered reply", asy
     assistant([text("interrupted")], { stopReason: "error" }),
   ]);
   const original = structuredClone(stored);
+  for (const message of stored) {
+    normalizeTranscriptJsonValue({ message }, "entry");
+  }
   const expected = castAgentMessages([
     { ...stored[0], content: [text("inspect these"), omitted, image(valid)] },
     stored[1],

@@ -16,12 +16,7 @@ export function maskToken(token: string): string {
   return `${start}…${end}`;
 }
 
-export function splitSecretValueForMask(token: string): {
-  maskable: string;
-  suffix: string;
-  maskStart: number;
-  maskEnd: number;
-} {
+export function splitSecretValueForMask(token: string) {
   const openingQuote = token[0] ?? "";
   const contentStart = SECRET_VALUE_QUOTE_CHARS.has(openingQuote) ? 1 : 0;
   if (contentStart) {

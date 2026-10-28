@@ -8,17 +8,15 @@ type OperatorAuth = {
   scopes?: readonly string[];
   sessionCap?: NonNullable<ApplicationGatewaySnapshot["hello"]>["auth"]["sessionCap"];
 } | null;
-type OperatorScope =
-  | "operator.read"
-  | "operator.sessions.read"
-  | "operator.write"
-  | "operator.admin"
-  | "operator.pairing"
-  | "operator.approvals";
-
 function hasOperatorScope(
   auth: OperatorAuth,
-  requestedScope: OperatorScope,
+  requestedScope:
+    | "operator.read"
+    | "operator.sessions.read"
+    | "operator.write"
+    | "operator.admin"
+    | "operator.pairing"
+    | "operator.approvals",
   missingAuthHasAccess: boolean,
 ): boolean {
   if (!auth) {
@@ -67,6 +65,15 @@ export function hasOperatorPairingAccess(auth: OperatorAuth): boolean {
 
 export function hasOperatorApprovalsAccess(auth: OperatorAuth): boolean {
   return hasOperatorScope(auth, "operator.approvals", false);
+}
+
+/**
+ * Guests: session-only operators who can view, not write, other people's sessions.
+ * Matches the restricted role shape Visitor Access requires. Presentation defaults
+ * only; the Gateway still owns every authorization decision.
+ */
+export function isRestrictedSessionGuest(auth: OperatorAuth): boolean {
+  return auth?.sessionCap === "view" && !hasOperatorReadAccess(auth);
 }
 
 export function hasOperatorSelfReadAccess(auth: OperatorAuth): boolean {

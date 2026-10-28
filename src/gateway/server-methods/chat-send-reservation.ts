@@ -77,9 +77,6 @@ export function createPendingChatSendReservationAccess(params: {
       }
     },
     markInputAccepted: () => {
-      if (params.requestIdentity === undefined) {
-        return;
-      }
       const accepted = params.context.dedupe.get("chat:" + runId);
       if (
         accepted?.ok !== true ||
@@ -100,12 +97,7 @@ export function readChatSendDedupeResponse(
   runId: string,
 ): DedupeEntry | undefined {
   const entry = dedupe.get(`chat:${runId}`);
-  return entry?.requestIdentity &&
-    entry.ok &&
-    entry.payload === undefined &&
-    entry.error === undefined
-    ? undefined
-    : entry;
+  return entry?.ok && entry.payload === undefined && entry.error === undefined ? undefined : entry;
 }
 
 /** Consume prepared receipts and current RAM ownership without yielding before reservation. */

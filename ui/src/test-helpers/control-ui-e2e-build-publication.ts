@@ -93,3 +93,40 @@ export function createControlUiE2eBuildPublication(outDir: string): {
     },
   };
 }
+
+export type ControlUiE2eBuildOptions = { includeBootGroups?: boolean; protocolVersion?: number };
+
+export async function controlUiE2eBuildPlugins(
+  options: ControlUiE2eBuildOptions,
+): Promise<Plugin[]> {
+  const plugins: Plugin[] = [];
+  if (options.includeBootGroups === false) {
+    const { createControlUiCodeSplitting } = await import("../../config/control-ui-chunking.ts");
+    plugins.push({
+      name: "control-ui-e2e-individual-boot-modules",
+      outputOptions(output) {
+        return {
+          ...output,
+          codeSplitting: createControlUiCodeSplitting({ includeBootGroups: false }),
+        };
+      },
+    });
+  }
+  if (options.protocolVersion !== undefined) {
+    plugins.push({
+      name: "control-ui-e2e-obsolete-protocol",
+      enforce: "pre",
+      transform(source, id) {
+        if (!id.endsWith("/packages/gateway-protocol/src/version.ts")) {
+          return null;
+        }
+        // Compile a genuinely incompatible bundle without changing shared source files.
+        return source.replace(
+          /(export const (?:MIN_CLIENT_PROTOCOL_VERSION|PROTOCOL_VERSION) = )\d+/gu,
+          (_match, prefix: string) => `${prefix}${options.protocolVersion}`,
+        );
+      },
+    });
+  }
+  return plugins;
+}

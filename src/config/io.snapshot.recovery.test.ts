@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as deferredMigrations from "../infra/deferred-plugin-migrations.js";
+import { listDirectoryTreeStrictSync } from "../infra/directory-walk.js";
 import { acquireStartupMigrationLeaseWithWait } from "../infra/startup-migration-checkpoint.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
@@ -19,6 +20,7 @@ import {
   readConfigHealthStateFromStore,
 } from "./io.health-state.js";
 import * as healthOwner from "./io.health-state.js";
+import { createRecoveryConfigEnv } from "./io.observe-recovery.test-support.js";
 import { observeConfigSnapshotSync } from "./io.observe.js";
 import { normalizeConfigIoDeps } from "./io.read-helpers.js";
 import type { ConfigIoFactoryOptions } from "./io.types.js";
@@ -33,8 +35,8 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 );
 
 function manifest(root: string) {
-  return fs
-    .readdirSync(root, { recursive: true, encoding: "utf8" })
+  return listDirectoryTreeStrictSync(root)
+    .map((walkEntry) => walkEntry.relativePath)
     .toSorted()
     .filter((entry) => fs.statSync(path.join(root, entry)).isFile())
     .map((entry) => [
@@ -79,14 +81,7 @@ function fixture(
   });
   fs.writeFileSync(configPath, original);
   fs.writeFileSync(`${configPath}.bak`, backup);
-  const env = {
-    HOME: root,
-    USERPROFILE: root,
-    OPENCLAW_CONFIG_PATH: configPath,
-    OPENCLAW_STATE_DIR: root,
-    OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-    VITEST: "true",
-  };
+  const env = createRecoveryConfigEnv(root, configPath, root);
   const databasePath = openOpenClawStateDatabase({ env }).path;
   closeOpenClawStateDatabaseForTest();
   const io = createConfigIO({

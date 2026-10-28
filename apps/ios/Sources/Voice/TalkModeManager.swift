@@ -1743,6 +1743,7 @@ final class TalkModeManager {
             let acknowledgement = try await sendChat(
                 prompt,
                 context: context,
+                transcriptProcessingGeneration: generation,
                 idempotencyKey: runId)
             guard self.isCurrentTranscriptProcessing(generation) else { return }
             guard acknowledgement.runId == runId else {
@@ -2598,6 +2599,7 @@ final class TalkModeManager {
     private func sendChat(
         _ message: String,
         context: TalkGatewayContext,
+        transcriptProcessingGeneration generation: UInt64,
         idempotencyKey: String) async throws -> OpenClawChatSendResponse
     {
         let request = OpenClawChatGatewayRequests.sendMessage(
@@ -2609,9 +2611,10 @@ final class TalkModeManager {
             idempotencyKey: idempotencyKey,
             attachments: [],
             runTimeoutMs: 30000)
-        let res = try await context.gateway.request(
-            request,
-            ifCurrentRoute: context.route)
+        let res = try await withGatewayStartupAdmission(method: request.method) {
+            guard self.isCurrentTranscriptProcessing(generation) else { throw CancellationError() }
+            return try await context.gateway.request(request, ifCurrentRoute: context.route)
+        }
         guard await context.gateway.currentRoute() == context.route else { throw CancellationError() }
         return try JSONDecoder().decode(OpenClawChatSendResponse.self, from: res)
     }

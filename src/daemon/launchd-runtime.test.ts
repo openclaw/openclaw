@@ -1,7 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { execLaunchctl } from "./launchd-exec.js";
 import { LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS } from "./launchd-plist.js";
 import { bootstrapLaunchAgentOrThrow, probeLaunchAgentState } from "./launchd-runtime.js";
+import { nativeExit } from "./systemd-exec.test-support.js";
 
 vi.mock("./launchd-exec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./launchd-exec.js")>()),
@@ -10,77 +11,48 @@ vi.mock("./launchd-exec.js", async (importOriginal) => ({
 
 const target = "gui/501/ai.openclaw.fixture";
 
+const job = (fields: string, name = target) => `${name} = {\n${fields}\n}`;
+const unknownJob = { state: "unknown", detail: expect.any(String) };
 it.each([
-  {
-    name: "selected job state, ignoring nested coalitions",
-    output: `${target} = {
-\tstate =  running \t
-\tpid = 4242
-\tlast exit status = 1
-\tlast exit reason =  exited \t
-\tresource coalition = {
-\t\tstate = active
-\t}
-\tjetsam coalition = {
-\t\tstate = active
-\t}
-}`,
-    expected: {
+  [
+    "selected job state, ignoring nested coalitions",
+    job(
+      "\tstate =  running \t\n\tpid = 4242\n\tlast exit status = 1\n\tlast exit reason =  exited \t\n\tresource coalition = {\n\t\tstate = active\n\t}\n\tjetsam coalition = {\n\t\tstate = active\n\t}",
+    ),
+    {
       state: "running",
       runtime: { state: "running", pid: 4242, lastExitStatus: 1, lastExitReason: "exited" },
     },
-  },
-  {
-    name: "invalid integer suffixes",
-    output: `${target} = {\n\tstate = waiting\n\tpid = 123abc\n\tlast exit status = 7ms\n\tlast exit reason = exited\n}`,
-    expected: { state: "stopped", runtime: { state: "waiting", lastExitReason: "exited" } },
-  },
-  ...[
-    "gui/501/ai.openclaw.other = {\n\tstate = running\n\tpid = 4242\n}",
-    `${target} = {\n\tstate = running\n\tstate = waiting\n}`,
-  ].map((output) => ({
-    name: `unrecognized output: ${output}`,
-    output,
-    expected: { state: "unknown", detail: expect.any(String) },
-  })),
-])("reports $name", async ({ output: stdout, expected }) => {
-  vi.mocked(execLaunchctl).mockResolvedValue({ code: 0, termination: "exit", stderr: "", stdout });
+  ],
+  [
+    "invalid integer suffixes",
+    job("\tstate = waiting\n\tpid = 123abc\n\tlast exit status = 7ms\n\tlast exit reason = exited"),
+    { state: "stopped", runtime: { state: "waiting", lastExitReason: "exited" } },
+  ],
+  ["foreign job", job("\tstate = running\n\tpid = 4242", "gui/501/ai.openclaw.other"), unknownJob],
+  ["duplicate state", job("\tstate = running\n\tstate = waiting"), unknownJob],
+] as const)("reports %s", async (_name, stdout, expected) => {
+  vi.mocked(execLaunchctl).mockResolvedValue(nativeExit(stdout));
   await expect(probeLaunchAgentState(target)).resolves.toEqual(expected);
 });
 
-describe("bootstrapLaunchAgentOrThrow teardown retry deadline", () => {
-  const plistPath = "/tmp/ai.openclaw.fixture.plist";
-  const teardownTimeoutMs = (LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS + 10) * 1_000;
-  const pollMs = 500;
-
-  it.each([
-    {
-      name: "a forward wall-clock jump does not truncate the retry budget",
-      wallJumpMs: 1_000_000,
-      advanceMs: pollMs,
-      bootstrapKeepsFailing: false,
-    },
-    {
-      name: "a backward wall-clock jump does not inflate the retry budget",
-      wallJumpMs: -5_000,
-      advanceMs: teardownTimeoutMs,
-      bootstrapKeepsFailing: true,
-    },
-  ])("$name", async ({ wallJumpMs, advanceMs, bootstrapKeepsFailing }) => {
+it.each([
+  ["forward", 1_000_000, 500, false],
+  ["backward", -5_000, (LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS + 10) * 1_000, true],
+] as const)(
+  "keeps the monotonic retry budget on a %s clock jump",
+  async (_name, wallJumpMs, advanceMs, bootstrapKeepsFailing) => {
     let bootCalls = 0;
     vi.mocked(execLaunchctl).mockImplementation(async (args) => {
       if (args[0] !== "bootstrap") {
-        return { code: 0, termination: "exit", stdout: "", stderr: "" };
+        return nativeExit();
       }
       if (bootCalls++ === 0) {
         // The wall clock jumps between the deadline seed and the remaining read.
         vi.setSystemTime(Date.now() + wallJumpMs);
-        return { code: 1, termination: "exit", stdout: "", stderr: "bootstrap failed: 5" };
+        return nativeExit("", "bootstrap failed: 5", 1);
       }
-      if (bootstrapKeepsFailing) {
-        return { code: 1, termination: "exit", stdout: "", stderr: "bootstrap failed: 5" };
-      }
-      return { code: 0, termination: "exit", stdout: "", stderr: "" };
+      return bootstrapKeepsFailing ? nativeExit("", "bootstrap failed: 5", 1) : nativeExit();
     });
     vi.useFakeTimers();
 
@@ -88,22 +60,17 @@ describe("bootstrapLaunchAgentOrThrow teardown retry deadline", () => {
     const result = bootstrapLaunchAgentOrThrow({
       domain: "gui/501",
       serviceTarget: target,
-      plistPath,
+      plistPath: "/tmp/ai.openclaw.fixture.plist",
       actionHint: "test",
       retryPendingTeardown: true,
     });
-    void result.then(
-      () => {
-        settled = true;
-      },
-      () => {
-        settled = true;
-      },
-    );
+    const markSettled = () => {
+      settled = true;
+    };
+    void result.then(markSettled, markSettled);
 
     await vi.advanceTimersByTimeAsync(advanceMs);
     await Promise.resolve();
-    // The loop must settle within the monotonic budget regardless of the wall clock.
     expect(settled).toBe(true);
 
     if (wallJumpMs > 0) {
@@ -112,5 +79,5 @@ describe("bootstrapLaunchAgentOrThrow teardown retry deadline", () => {
       await expect(result).rejects.toThrow("launchctl bootstrap failed");
     }
     vi.useRealTimers();
-  });
-});
+  },
+);

@@ -185,9 +185,11 @@ describe("describeImageWithModelCore", () => {
         "User-Agent": "GitHubCopilotChat/0.35.0",
       },
     });
-    expect(Object.values(model.headers ?? {}).some((value) => looksLikeSecretSentinel(value))).toBe(
-      false,
-    );
+    expect(
+      Object.values(model.headers ?? {}).some(
+        (value) => value !== null && looksLikeSecretSentinel(value),
+      ),
+    ).toBe(false);
     expect(options).toMatchObject({
       apiKey: storedValue,
       headers: { "Copilot-Vision-Request": "true", "x-initiator": "user" },

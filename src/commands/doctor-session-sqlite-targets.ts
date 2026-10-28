@@ -57,11 +57,7 @@ export async function prepareDoctorSessionSqliteTargets(
   }
   const resolved = resolveDoctorSessionSqliteTargets(params);
   if (isDestructiveDoctorSessionSqliteMode(params.mode)) {
-    assertDoctorSqliteMaintenancePathsNotAliased(
-      `session SQLite ${params.mode}`,
-      resolveDoctorSessionSqliteMaintenancePaths(resolved.targets),
-      resolveDoctorSessionSqliteMaintenanceRoots(resolved.targets, params.env),
-    );
+    assertDoctorSessionSqliteTargetsNotAliased({ ...params, ...resolved });
   }
   const repairEntryStates = async (targets: readonly SessionStoreTarget[]) => {
     params.authority?.assertCurrent();
@@ -81,6 +77,29 @@ export async function prepareDoctorSessionSqliteTargets(
   }
   // Recovery reuses this preparation only after restoring or repairing each physical target.
   return { ...resolved, repairEntryStates };
+}
+
+export function assertDoctorSessionSqliteTargetsNotAliased(
+  params: Pick<DoctorSessionSqliteOptions, "agent" | "allAgents" | "mode" | "store"> & {
+    env: NodeJS.ProcessEnv;
+    targets: readonly SessionStoreTarget[];
+    knownTargets?: readonly SessionStoreTarget[];
+  },
+): void {
+  assertDoctorSqliteMaintenancePathsNotAliased(
+    `session SQLite ${params.mode}`,
+    resolveDoctorSessionSqliteMaintenancePaths(params.targets),
+    resolveDoctorSessionSqliteMaintenanceRoots(params.targets, params.env),
+    params.allAgents && !params.agent && !params.store && params.knownTargets
+      ? {
+          paths: resolveDoctorSessionSqliteMaintenancePaths(params.knownTargets),
+          ownershipRoots: resolveDoctorSessionSqliteMaintenanceRoots(
+            params.knownTargets,
+            params.env,
+          ),
+        }
+      : undefined,
+  );
 }
 
 export function createMigrationTargetInput(

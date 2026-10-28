@@ -596,28 +596,7 @@ extension ChatMessageBubble {
 
     private var toolActivityItems: [ChatToolActivityItem] {
         guard self.displayOptions.contains(.toolActivity) else { return [] }
-        // Results normally reach us merged into the calling assistant message
-        // (ChatTranscriptRow.mergeToolResults); this branch is the orphan
-        // fallback for results whose call is not in the preceding message.
-        if self.message.isToolResult {
-            return [ChatToolActivityItem(
-                id: self.message.content.first?.id ?? "result-0",
-                name: self.message.toolName,
-                arguments: nil,
-                details: self.message.details,
-                resultText: self.primaryText,
-                state: ChatToolActivity
-                    .resultIsError(self.message.isError, text: self.primaryText) ? .failed : .finished,
-                liveDiffStat: nil,
-                activity: self.message.activity?.first,
-                activityPrepared: self.message.activity != nil)]
-        }
-        guard self.message.role.lowercased() == "assistant" else { return [] }
-        return ChatToolActivity.items(
-            calls: self.message.content.filter(\.isToolCall),
-            results: self.message.content.filter(\.isToolResult),
-            activity: self.message.activity,
-            liveTools: self.liveToolCalls)
+        return ChatToolActivity.items(message: self.message, liveTools: self.liveToolCalls)
     }
 
     private var linkPreviewURL: URL? {
@@ -940,16 +919,24 @@ struct ChatSpeechStatusChip: View {
     }
 }
 
-/// Status footer for a user bubble backed by the durable offline outbox.
+/// Status footer for a user bubble awaiting durable delivery or confirmation.
 @MainActor
 struct ChatOutboxStatusLabel: View {
     let state: OpenClawChatOutboxMessageState
+    var queueMode: OpenClawChatQueueMode?
 
     var body: some View {
         let presentation = self.presentation
         HStack(spacing: 4) {
             Image(systemName: presentation.iconName)
                 .font(.system(size: 10, weight: .semibold))
+            if let modeTitle {
+                Text(modeTitle)
+                    .font(OpenClawChatTypography.caption)
+                Text("·")
+                    .font(OpenClawChatTypography.caption)
+                    .accessibilityHidden(true)
+            }
             Text(presentation.title)
                 .font(OpenClawChatTypography.caption)
         }
@@ -958,6 +945,15 @@ struct ChatOutboxStatusLabel: View {
         .accessibilityLabel(
             Text(presentation.accessibilityText)
                 .font(OpenClawChatTypography.caption))
+        .accessibilityValue(Text(self.modeTitle ?? LocalizedStringResource("")))
+    }
+
+    private var modeTitle: LocalizedStringResource? {
+        switch self.queueMode {
+        case .steer: "Steer"
+        case .followup: "Queue next"
+        case nil: nil
+        }
     }
 
     private var presentation: (
@@ -967,7 +963,7 @@ struct ChatOutboxStatusLabel: View {
     {
         switch self.state {
         case .queued:
-            ("Queued", "clock", "Queued, sends when reconnected")
+            ("Queued", "clock", "Queued, waiting to send")
         case .sending:
             ("Sending…", "arrow.up.circle", "Sending")
         case .confirming:

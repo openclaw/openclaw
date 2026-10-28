@@ -347,9 +347,9 @@ export function resolveFinalDoctorHealthContributions(params: {
         },
         async run(ctx) {
           const { maybeMigrateHeartbeatCadenceToCron } =
-            await import("../commands/doctor-heartbeat-cadence-migration.js");
+            await import("../commands/doctor-heartbeat-retirement.js");
           await maybeMigrateHeartbeatCadenceToCron({
-            cfg: ctx.cfg,
+            cfg: ctx.configResult.heartbeatMigrationSource ?? ctx.cfg,
             shouldRepair: ctx.prompter.shouldRepair,
             env: ctx.env,
           });
@@ -366,14 +366,14 @@ export function resolveFinalDoctorHealthContributions(params: {
           async detect(ctx) {
             const { collectHeartbeatScratchMigrationFindings } =
               await import("../commands/doctor-heartbeat-scratch-migration.js");
-            return collectHeartbeatScratchMigrationFindings(ctx.cfg);
+            return collectHeartbeatScratchMigrationFindings(ctx.cfg, ctx.env);
           },
         },
         async run(ctx) {
-          const { maybeMigrateHeartbeatFilesToScratch } =
-            await import("../commands/doctor-heartbeat-scratch-migration.js");
-          await maybeMigrateHeartbeatFilesToScratch({
-            cfg: ctx.cfg,
+          const { maybeMigrateHeartbeatCadenceToCron } =
+            await import("../commands/doctor-heartbeat-retirement.js");
+          await maybeMigrateHeartbeatCadenceToCron({
+            cfg: ctx.configResult.heartbeatMigrationSource ?? ctx.cfg,
             shouldRepair: ctx.prompter.shouldRepair,
             env: ctx.env,
           });

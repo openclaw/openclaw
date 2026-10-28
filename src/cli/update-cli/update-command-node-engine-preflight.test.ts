@@ -17,14 +17,15 @@ const { fixture } = installFreshUpdateFixture();
 const engine = ">=24.22.1 <25 || >=26.12.1";
 
 it.each([
-  ["npm", "26.5.0"],
+  ["npm", "24.20.0"],
+  ["npm", "26.4.0"],
   ["pnpm", "24.21.0"],
   ["bun", "26.10.0"],
 ] as const)(
   "refuses %s before fresh-profile staging under service Node %s",
   async (manager, version) => {
     stubNodeRuntime();
-    const serviceNode = path.join(fixture.root, "service-node");
+    const serviceNode = path.join(path.dirname(fixture.root), "nix/store/old-nodejs/bin/node");
     fixture.managedServiceNodeRunner = serviceNode;
     vi.spyOn(shared, "resolveGlobalManager").mockResolvedValue(manager);
     vi.mocked(updateGlobal.resolveGlobalInstallTarget).mockResolvedValue({

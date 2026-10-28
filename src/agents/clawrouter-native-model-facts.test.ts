@@ -8,7 +8,9 @@ import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { catalogProvider } from "./clawrouter-catalog.test-support.js";
 import { isCodeModeEngagedForModel, resolveCodeModeConfig } from "./code-mode-runtime.js";
+import { createEmptyPreparedModelRuntimeFixture } from "./embedded-agent-runner/model.fixture.test-support.js";
 import {
   createEmptyAgentDiscoveryStores,
   resolveModelAsync,
@@ -21,22 +23,6 @@ import { ModelRegistry } from "./sessions/model-registry.js";
 afterEach(() => {
   clearLiveCatalogCacheForTests();
   vi.restoreAllMocks();
-});
-
-const catalogProvider = (id: string, upstreams: string[], capability: string) => ({
-  id,
-  displayName: id,
-  openaiCompatible: id === "openai",
-  nativeBaseUrl: `/v1/native/${id}`,
-  routes:
-    id === "anthropic"
-      ? [{ path: "/v1/messages", requestFormat: "anthropic.messages", methods: ["POST"] }]
-      : [],
-  models: upstreams.map((upstream) => ({
-    id: `${id}/${upstream}`,
-    upstream,
-    capabilities: [capability],
-  })),
 });
 
 // Real ClawRouter catalog, model registry, provider runtime hooks, and runtime decisions.
@@ -111,26 +97,20 @@ it("resolves routed GPT and Claude models with the native runtime decisions", as
       model,
     }));
     const preparedModelRuntime: PreparedModelRuntimeSnapshot = {
-      catalogOwner: undefined,
+      ...createEmptyPreparedModelRuntimeFixture({
+        agentDir: state.agentDir(),
+        config: cfg,
+        metadataSnapshot,
+        createStores: () => stores,
+      }),
       agentId: "main",
-      agentDir: state.agentDir(),
       workspaceDir: state.workspaceDir,
-      activeProjectKeys: [],
-      config: cfg,
-      observationConfig: cfg,
-      isCurrent: () => true,
-      authModes: {},
-      metadataSnapshot,
       pluginRegistry,
-      allowGatewaySubagentBinding: false,
-      modelCatalog: { entries: [], routeVariants: [] },
       configuredRuntimeModels,
       findConfiguredRuntimeModel: createPreparedConfiguredRuntimeModelLookup(
         configuredRuntimeModels,
         metadataSnapshot,
       ),
-      inlineProviderModels: [],
-      createStores: () => stores,
     };
     const decisions = async (target: "clawrouter" | "openai" | "anthropic", modelId: string) => {
       const routed = target === "clawrouter";

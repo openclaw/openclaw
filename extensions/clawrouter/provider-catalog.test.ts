@@ -1,9 +1,7 @@
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
-import {
-  clearLiveCatalogCacheForTests,
-  type LiveModelCatalogFetchGuard,
-} from "openclaw/plugin-sdk/provider-catalog-live-runtime";
-import { beforeEach, describe, expect, it, vi, type MockedFunction } from "vitest";
+import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildClawRouterProviderConfig,
   normalizeClawRouterResolvedModel,
@@ -86,8 +84,8 @@ const CATALOG = {
   ],
 };
 
-function buildFetchGuard(): MockedFunction<LiveModelCatalogFetchGuard> {
-  return vi.fn(async () => ({
+function buildFetchGuard() {
+  return vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard").mockImplementation(async () => ({
     response: Response.json(CATALOG),
     finalUrl: "https://clawrouter.example/v1/catalog",
     release: async () => undefined,
@@ -98,13 +96,13 @@ describe("ClawRouter provider catalog", () => {
   beforeEach(() => {
     clearLiveCatalogCacheForTests();
   });
+  afterEach(() => vi.restoreAllMocks());
 
   it("maps every supported catalog protocol to its OpenClaw transport", async () => {
     const fetchGuard = buildFetchGuard();
     const provider = await buildClawRouterProviderConfig({
       apiKey: "clawrouter-test-key",
       baseUrl: "https://clawrouter.example/v1",
-      fetchGuard,
     });
 
     expect(fetchGuard).toHaveBeenCalledOnce();
@@ -169,7 +167,7 @@ describe("ClawRouter provider catalog", () => {
       "gpt-4.1-nano",
       "gpt-6-unknown",
     ];
-    const fetchGuard: LiveModelCatalogFetchGuard = async () => ({
+    vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard").mockImplementation(async () => ({
       response: Response.json({
         providers: [
           ...upstreamIds.map((id) => catalogProvider("openai", "OpenAI", id, ["llm.responses"])),
@@ -178,8 +176,8 @@ describe("ClawRouter provider catalog", () => {
       }),
       finalUrl: "https://clawrouter.example/v1/catalog",
       release: async () => undefined,
-    });
-    const provider = await buildClawRouterProviderConfig({ apiKey: "fixture-key", fetchGuard });
+    }));
+    const provider = await buildClawRouterProviderConfig({ apiKey: "fixture-key" });
     expect(Object.fromEntries(provider.models.map((model) => [model.id, model.input]))).toEqual({
       "openai/gpt-6.1-sol": ["text", "image"],
       "openai/gpt-6-sol": ["text", "image"],
@@ -204,7 +202,7 @@ describe("ClawRouter provider catalog", () => {
       { id: "object-modality", upstream: "gpt-6.1-sol", input: ["image", {}] },
       { id: "null-modality", upstream: "gpt-6.1-sol", input: null },
     ];
-    const fetchGuard: LiveModelCatalogFetchGuard = async () => ({
+    vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard").mockImplementation(async () => ({
       response: Response.json({
         providers: rows.map(({ upstream, ...model }) =>
           catalogProvider("openai", "OpenAI", upstream, ["llm.responses"], [], model),
@@ -212,8 +210,8 @@ describe("ClawRouter provider catalog", () => {
       }),
       finalUrl: "https://clawrouter.example/v1/catalog",
       release: async () => undefined,
-    });
-    const provider = await buildClawRouterProviderConfig({ apiKey: "fixture-key", fetchGuard });
+    }));
+    const provider = await buildClawRouterProviderConfig({ apiKey: "fixture-key" });
     expect(Object.fromEntries(provider.models.map((model) => [model.id, model.input]))).toEqual({
       "declared-vision": ["text", "image"],
       "image-only": ["image"],
@@ -228,10 +226,10 @@ describe("ClawRouter provider catalog", () => {
   });
 
   it("rewrites only native protocol model ids at the request boundary", async () => {
+    buildFetchGuard();
     const provider = await buildClawRouterProviderConfig({
       apiKey: "clawrouter-test-key",
       baseUrl: "https://clawrouter.example",
-      fetchGuard: buildFetchGuard(),
     });
     const normalize = (id: string) =>
       normalizeClawRouterResolvedModel({
@@ -257,7 +255,7 @@ describe("ClawRouter provider catalog", () => {
   });
 
   it("validates catalog prices and limits while retaining the first supported duplicate", async () => {
-    const fetchGuard: LiveModelCatalogFetchGuard = async () => ({
+    vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard").mockImplementation(async () => ({
       response: Response.json({
         providers: [
           null,
@@ -300,9 +298,9 @@ describe("ClawRouter provider catalog", () => {
       }),
       finalUrl: "https://clawrouter.example/v1/catalog",
       release: async () => undefined,
-    });
+    }));
 
-    const provider = await buildClawRouterProviderConfig({ apiKey: "fixture-key", fetchGuard });
+    const provider = await buildClawRouterProviderConfig({ apiKey: "fixture-key" });
 
     expect(provider.models.map((model) => model.id)).toEqual(["defaults", "duplicate"]);
     expect(provider.models[1]).toMatchObject({
@@ -326,7 +324,6 @@ describe("ClawRouter provider catalog", () => {
     const params = {
       apiKey: "catalog-key-a",
       baseUrl: "https://clawrouter.example",
-      fetchGuard,
     };
     try {
       const first = await buildClawRouterProviderConfig(params);
@@ -334,7 +331,16 @@ describe("ClawRouter provider catalog", () => {
       expect(await buildClawRouterProviderConfig(params)).toEqual(first);
       expect(fetchGuard).toHaveBeenCalledOnce();
 
-      await buildClawRouterProviderConfig({ ...params, discoveryApiKey: "catalog-key-b" });
+      fetchGuard.mockResolvedValueOnce({
+        response: Response.json({ providers: [] }),
+        finalUrl: "https://clawrouter.example/v1/catalog",
+        release: async () => undefined,
+      });
+      const otherScope = await buildClawRouterProviderConfig({
+        ...params,
+        discoveryApiKey: "catalog-key-b",
+      });
+      expect(otherScope.models).toEqual([]);
       await buildClawRouterProviderConfig({ ...params, baseUrl: "https://other.example" });
       expect(fetchGuard).toHaveBeenCalledTimes(3);
       const headers = fetchGuard.mock.calls[1]?.[0].init?.headers;

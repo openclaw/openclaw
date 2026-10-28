@@ -1,14 +1,13 @@
 // Control UI tests cover event-reactive custodian presence against a mocked Gateway.
-import path from "node:path";
 import type { Locator, Page } from "playwright";
-import { beforeEach, expect, it } from "vitest";
-import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/index.js";
+import { expect, it } from "vitest";
+import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/server-capabilities.js";
 import type { ChannelsStatusSnapshot, WizardStep } from "../api/types.ts";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   installMockGateway,
   type ControlUiMockGatewayScenario,
 } from "../test-helpers/control-ui-e2e.ts";
+import { polledCount } from "./chat-presentation.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -18,14 +17,6 @@ const suite = createControlUiE2eSuite({
   name: "Control UI custodian event nudge mocked Gateway E2E",
   startServerBeforeBrowser: true,
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
-});
-
-const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-let uiProofArtifactDir: string;
-beforeEach(() => {
-  if (captureUiProofEnabled) {
-    uiProofArtifactDir = createControlUiE2eArtifactDir("custodian-event-nudge");
-  }
 });
 
 function install(page: Page, scenario: ControlUiMockGatewayScenario = {}) {
@@ -47,15 +38,6 @@ function wizardReply(reply: string, step: WizardStep) {
     step,
     ...(step.sensitive ? { sensitive: true } : {}),
   };
-}
-async function capture(page: Page, name: string, fullPage = false) {
-  if (captureUiProofEnabled) {
-    await page.screenshot({
-      animations: "disabled",
-      fullPage,
-      path: path.join(uiProofArtifactDir, `${name}.png`),
-    });
-  }
 }
 async function disconnected(
   gateway: Awaited<ReturnType<typeof install>>,
@@ -138,9 +120,6 @@ suite.define(() => {
         locale: "en-US",
         serviceWorkers: "block",
         viewport: { height: 900, width: 1280 },
-        ...(captureUiProofEnabled
-          ? { recordVideo: { dir: uiProofArtifactDir, size: { height: 900, width: 1280 } } }
-          : {}),
       },
       async ({ page }) => {
         const gateway = await install(page, {
@@ -158,8 +137,6 @@ suite.define(() => {
         await page.getByRole("heading", { name: "OpenClaw", exact: true }).waitFor();
         await expect.poll(async () => (await gateway.getRequests("openclaw.chat")).length).toBe(1);
 
-        await capture(page, "01-before-event");
-
         await gateway.emitGatewayEvent("config.changed", {
           hash: "config-hash",
           path: "/tmp/openclaw.json",
@@ -174,7 +151,6 @@ suite.define(() => {
           name: "Telegram just disconnected — ask me what happened",
         });
         await nudge.waitFor();
-        await capture(page, "02-disconnected-nudge");
 
         await gateway.deferNext("openclaw.chat");
         await nudge.click();
@@ -204,7 +180,7 @@ suite.define(() => {
           reply: "I'm watching the system.",
           action: "none",
         });
-        await expect.poll(() => page.locator(".chat-group.assistant").count()).toBe(2);
+        await polledCount(page.locator(".chat-group.assistant")).toBe(2);
         expect(await nudge.count()).toBe(0);
 
         await gateway.emitGatewayEvent("health", {
@@ -212,8 +188,6 @@ suite.define(() => {
         });
         await settleUi(page);
         expect(await page.locator(".custodian__nudge").count()).toBe(0);
-
-        await capture(page, "03-message-sent");
       },
     );
   });
@@ -249,8 +223,6 @@ suite.define(() => {
         ]);
         expect(alertBox).not.toBeNull();
         expect(composerBox).not.toBeNull();
-
-        await capture(page, "04-inference-error");
 
         const verticalGap = composerBox!.y - (alertBox!.y + alertBox!.height);
         expect(verticalGap).toBeLessThanOrEqual(32);
@@ -350,7 +322,7 @@ suite.define(() => {
         });
         const channelPicker = page.getByRole("button", { name: "Which channel?", exact: true });
         await channelPicker.click();
-        await expect.poll(() => page.getByRole("option").count()).toBe(5);
+        await polledCount(page.getByRole("option")).toBe(5);
         await gateway.setMethodResponse(
           "openclaw.chat",
           wizardReply("Choose features.", {
@@ -425,7 +397,6 @@ suite.define(() => {
               () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
             ),
           ).toBe(true);
-          await capture(page, `05-rich-wizard-actions-${viewport.name}`, true);
         }
 
         await gateway.setMethodResponse(

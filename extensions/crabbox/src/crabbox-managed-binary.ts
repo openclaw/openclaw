@@ -8,7 +8,7 @@ import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { runCrabboxProcess } from "./crabbox-process.js";
 import { crabboxExecutionError, type CrabboxCommandRunner } from "./crabbox-worker-command.js";
 
-export const CRABBOX_MIN_VERSION = "0.77.0";
+export const CRABBOX_MIN_VERSION = "0.79.2";
 export const CRABBOX_NONBLOCKING_CAPTURE_VERSION = "0.79.0";
 const RELEASE_URL = `https://github.com/openclaw/crabbox/releases/download/v${CRABBOX_MIN_VERSION}`;
 const MAX_ARCHIVE_BYTES = 128 * 1024 * 1024;

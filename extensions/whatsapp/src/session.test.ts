@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { setImmediate as flushCredsUpdate } from "node:timers/promises";
 import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
 import {
   afterEach,
@@ -29,12 +30,6 @@ let waitForWaConnection: typeof import("./session.js").waitForWaConnection;
 let waitForCredsSaveQueue: typeof import("./session.js").waitForCredsSaveQueue;
 let writeCredsJsonAtomically: typeof import("./session.js").writeCredsJsonAtomically;
 let DEFAULT_WHATSAPP_SOCKET_TIMING: typeof import("./socket-timing.js").DEFAULT_WHATSAPP_SOCKET_TIMING;
-
-async function flushCredsUpdate() {
-  await new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
-}
 
 async function emitCredsUpdate(authDir?: string) {
   const sock = getLastSocket();
@@ -518,7 +513,7 @@ describe("web session", () => {
   });
 
   it("formatError prints Boom-like payload message", () => {
-    const err = {
+    const result = formatError({
       error: {
         isBoom: true,
         output: {
@@ -530,10 +525,10 @@ describe("web session", () => {
           },
         },
       },
-    };
-    expect(formatError(err)).toContain("status=408");
-    expect(formatError(err)).toContain("Request Time-out");
-    expect(formatError(err)).toContain("QR refs attempts ended");
+    });
+    for (const detail of ["status=408", "Request Time-out", "QR refs attempts ended"]) {
+      expect(result).toContain(detail);
+    }
   });
 
   it("formatError keeps truncated object details free of lone surrogates", () => {

@@ -1,6 +1,8 @@
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
+import { resolveExternalPackageRuntimeEntrypointUrl } from "../infra/runtime-process-url.js";
 import { createPluginRequesterModels } from "../plugins/requester-models.js";
 import type { OpenClawPluginToolContext } from "../plugins/tool-types.js";
 import { runOutsideCommandProcessScope } from "../process/exec-spawn.js";
@@ -106,7 +108,9 @@ export function preparePluginToolExecutionCapabilities(params: {
     ...(authority && hostRoot
       ? {
           modelExecution: {
-            cliEntryPath: path.join(hostRoot, "openclaw.mjs"),
+            cliEntryPath: fileURLToPath(
+              resolveExternalPackageRuntimeEntrypointUrl("cliLauncher", hostRoot),
+            ),
             async run(selection, action, signal) {
               const callerSignal = AbortSignal.any(
                 [params.signal, pluginSignal, signal, authority.signal].filter(

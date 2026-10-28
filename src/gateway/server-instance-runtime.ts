@@ -3,6 +3,7 @@ import type { AgentWaitParams } from "../../packages/gateway-protocol/src/index.
 import { assertAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { withoutGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
+import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import {
   GATEWAY_NATIVE_APPROVAL_METHODS,
   type GatewayNativeApprovalMethod,
@@ -36,6 +37,7 @@ import {
   WRITE_SCOPE,
 } from "./method-scopes.js";
 import type { GatewayMethodRegistry } from "./methods/registry.js";
+import type { RecoveryGoalContinuation } from "./recovery-goal-continuation.js";
 import { createRecoveryTypingManager } from "./recovery-typing.js";
 import { dispatchGatewayRequestInProcess } from "./server-in-process-dispatch.js";
 import type {
@@ -48,10 +50,12 @@ import type { AgentRunRequest } from "./server-methods/agent-request-types.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import { registerGatewayRecoveryRuntime } from "./server-recovery-runtime-context.js";
+import { readSessionSendDeliveryAdmission } from "./session-send-delivery.js";
 import {
   cancelSubagentCompletionToolHandoff,
   registerSubagentCompletionToolHandoff,
 } from "./subagent-completion-tool-handoff.js";
+import { prepareFailedWorkerPlacement } from "./worker-environments/session-placement-lifecycle.js";
 
 const loadRecoveryTypingAdapter = createLazyRuntimeModule(
   () => import("../channels/plugins/index.js"),
@@ -62,6 +66,7 @@ const loadOutboundMessageRuntime = createLazyRuntimeModule(
 );
 const loadOperatorRecovery = createLazyRuntimeModule(() => import("./operator-run-recovery.js"));
 const loadChatInputRecovery = createLazyRuntimeModule(() => import("./chat-input-recovery.js"));
+const loadGoalRecovery = createLazyRuntimeModule(() => import("./recovery-goal-continuation.js"));
 
 const RECOVERY_NOTICE_COMPLETION_RETENTION = {
   idPrefix: "main-session-restart-recovery:",
@@ -173,6 +178,20 @@ export function createGatewayInstanceRuntime(
     "sessions.delete",
   ]);
   const recovery: GatewayRecoveryRuntime = {
+    prepareFailedWorkerPlacement: async (target) => {
+      assertDispatchAvailable("restart recovery");
+      const context = options.getContext();
+      return prepareFailedWorkerPlacement({
+        ...target,
+        context,
+        assertCurrent: () => {
+          assertDispatchAvailable("restart recovery");
+          if (options.getContext() !== context) {
+            throw new GatewayDispatchUnavailableError("restart recovery", true);
+          }
+        },
+      });
+    },
     prepareRestartRecovery: (signal) => {
       signal?.throwIfAborted();
       assertDispatchAvailable("restart recovery");
@@ -261,9 +280,19 @@ export function createGatewayInstanceRuntime(
         throw new Error("Recovery dispatch cannot combine different source owners.");
       }
       const context = options.getContext();
+      const assertContextCurrent = () => {
+        assertDispatchAvailable("agent");
+        if (options.getContext() !== context) {
+          throw new Error("Gateway recovery context changed.");
+        }
+      };
       let startOwner: AgentTurnStartOwner | undefined;
+      const onStartOwner = (owner: AgentTurnStartOwner) => {
+        startOwner ??= owner;
+        dispatchOptions.onStartOwner?.(owner);
+      };
       let ownerLost = false;
-      const assertRecoveryCurrent = () => {
+      const assertRecoveryOwnerCurrent = () => {
         assertDispatchAvailable("agent");
         assertRecoveryTarget();
         dispatchOptions.signal?.throwIfAborted();
@@ -286,13 +315,24 @@ export function createGatewayInstanceRuntime(
           ).restoreGatewayRunRecovery({
             target,
             context,
-            assertCurrent: assertRecoveryCurrent,
+            assertCurrent: assertRecoveryOwnerCurrent,
             restoreOperator: recoveryTarget !== undefined,
             restoreRequester: requesterTarget !== undefined,
           })
         : undefined;
+      const assertRecoveryCurrent = () => {
+        assertRecoveryOwnerCurrent();
+        restored?.parentSource?.source();
+      };
       let releaseOperatorAuthority: (() => void) | undefined;
       let delegatedToolPolicyHandoffId: string | undefined;
+      let goalContinuation: RecoveryGoalContinuation | undefined;
+      const executionSource = restored?.parentSource
+        ? composeSessionSourceAssertion([
+            dispatchOptions.executionSource,
+            restored.parentSource.source,
+          ])
+        : dispatchOptions.executionSource;
       try {
         const operatorAuthority =
           restored?.operator?.authority ?? dispatchOptions.operatorRunAuthority;
@@ -349,6 +389,7 @@ export function createGatewayInstanceRuntime(
                         agentId: requesterTarget.agentId,
                         sessionKey: requesterTarget.sessionKey,
                         requesterOrigin,
+                        assertCurrent: restored?.parentSource?.source,
                       }
                     : undefined),
                 allowModelOverride:
@@ -364,24 +405,60 @@ export function createGatewayInstanceRuntime(
               }),
               // The start owner's observe closure calls this assertion. Keep it
               // independent of assertRecoveryCurrent to avoid a recursive owner check.
-              assertContextCurrent: () => {
-                if (options.getContext() !== context) {
-                  throw new Error("Gateway recovery context changed.");
-                }
-              },
+              assertContextCurrent,
             })
           : recoveryAgentTurns;
+        const savedPeer =
+          payload.agentId && payload.expectedExistingSessionId && payload.idempotencyKey
+            ? readSessionSendDeliveryAdmission({
+                agentId: payload.agentId,
+                sessionKey: payload.sessionKey,
+                sessionId: payload.expectedExistingSessionId,
+                runId: payload.idempotencyKey,
+              })
+            : undefined;
+        const recoveryInput = target
+          ? {
+              agentId: target.agentId,
+              sessionKey: target.sessionKey,
+              sessionId: target.sessionId,
+              runId: target.recoveryRunId,
+              assertCurrent: assertRecoveryCurrent,
+            }
+          : savedPeer?.acceptedMessage
+            ? {
+                ...savedPeer.delivery.target,
+                runId: savedPeer.delivery.runId,
+                assertCurrent: assertRecoveryCurrent,
+              }
+            : undefined;
+        if (recoveryTarget && restored?.operator) {
+          goalContinuation = await (
+            await loadGoalRecovery()
+          ).prepareRecoveryGoalContinuation({
+            target: recoveryTarget,
+            request: payload,
+            options: { ...dispatchOptions, onStartOwner },
+            operator: restored.operator,
+            requesterOrigin,
+            parentSource: executionSource,
+            context,
+            assertCurrent: assertRecoveryCurrent,
+            assertGatewayCurrent: assertContextCurrent,
+          });
+          if (goalContinuation) {
+            return await goalContinuation.dispatch<T>(recovery.waitForAgent);
+          }
+        }
         return await agentTurns.dispatch<T>(payload, {
+          recoveryInput,
           controllerInput: dispatchOptions.controllerInput,
           replyExpectation: dispatchOptions.replyExpectation,
           assertAdmissionCurrent: assertRecoveryCurrent,
           assertCancellationCurrent: () => {
-            assertDispatchAvailable("agent");
             assertRecoveryTarget();
             dispatchOptions.signal?.throwIfAborted();
-            if (options.getContext() !== context) {
-              throw new Error("Gateway recovery context changed.");
-            }
+            assertContextCurrent();
             dispatchOptions.assertAdmissionCurrent?.();
             if (restored?.operator) {
               restored.operator.assertPolicyCurrent();
@@ -389,14 +466,11 @@ export function createGatewayInstanceRuntime(
               operatorAuthority?.assertCurrent();
             }
           },
-          executionSource: dispatchOptions.executionSource,
+          executionSource,
           prepareDispatchCurrent: dispatchOptions.prepareDispatchCurrent,
           expectFinal: dispatchOptions.expectFinal,
           onAccepted: dispatchOptions.onAccepted,
-          onStartOwner: (owner) => {
-            startOwner ??= owner;
-            dispatchOptions.onStartOwner?.(owner);
-          },
+          onStartOwner,
           onExecutionStarted: dispatchOptions.onExecutionStarted,
           onSignalAbort: dispatchOptions.onSignalAbort,
           signal: dispatchOptions.signal,
@@ -404,8 +478,10 @@ export function createGatewayInstanceRuntime(
         });
       } finally {
         cancelSubagentCompletionToolHandoff(delegatedToolPolicyHandoffId);
+        goalContinuation?.release();
         releaseOperatorAuthority?.();
         restored?.operator?.release();
+        restored?.parentSource?.release();
       }
     },
     waitForAgent: async <T>(payload: AgentWaitParams, timeoutMs?: number, signal?: AbortSignal) => {
@@ -428,31 +504,35 @@ export function createGatewayInstanceRuntime(
       };
       assertNoticeCurrent();
       const context = options.getContext();
-      const result = await sendMessage({
-        cfg: context.getRuntimeConfig(),
-        deps: createOutboundSendDeps(context.deps),
-        channel: payload.channel,
-        to: payload.to,
-        accountId: payload.accountId,
-        threadId: payload.threadId,
-        content: payload.text,
-        gatewayOwnedDelivery: true,
-        bestEffort: true,
-        idempotencyKey: payload.idempotencyKey,
-        // Only an explicitly live-only announcement declines durable custody.
-        // Existing guarded callers still need deduplication across owner retries.
-        ...(payload.liveOnly
-          ? { skipQueue: true }
-          : {
-              deliveryIntentId: payload.idempotencyKey,
-              reusePendingDeliveryIntent: true,
-              completionRetention: RECOVERY_NOTICE_COMPLETION_RETENTION,
-            }),
-        onPlatformSendDispatch: async () => assertNoticeCurrent(),
-        // Provider throttles may wait after the asynchronous dispatch check.
-        assertDirectAdapterHandoff: assertNoticeCurrent,
-        abortSignal: AbortSignal.timeout(10_000),
-      });
+      const result = await sendMessage(
+        {
+          cfg: context.getRuntimeConfig(),
+          deps: createOutboundSendDeps(context.deps),
+          channel: payload.channel,
+          to: payload.to,
+          accountId: payload.accountId,
+          threadId: payload.threadId,
+          content: payload.text,
+          gatewayOwnedDelivery: true,
+          bestEffort: true,
+          idempotencyKey: payload.idempotencyKey,
+          agentId: payload.generation.agentId,
+          // Recovery has no producing model turn; policyKey carries destination ownership only.
+          session: {
+            agentId: payload.generation.agentId,
+            policyKey: payload.generation.sessionKey,
+          },
+          transcriptProvenance: payload.provenance,
+          deliveryIntentId: payload.idempotencyKey,
+          reusePendingDeliveryIntent: true,
+          completionRetention: RECOVERY_NOTICE_COMPLETION_RETENTION,
+          onPlatformSendDispatch: async () => assertNoticeCurrent(),
+          // Provider throttles may wait after the asynchronous dispatch check.
+          assertDirectAdapterHandoff: assertNoticeCurrent,
+          abortSignal: AbortSignal.timeout(10_000),
+        },
+        payload.generation,
+      );
       if (result.deliveryStatus === "failed" || result.deliveryStatus === "partial_failed") {
         throw new Error(result.error ?? "recovery notice delivery failed");
       }
@@ -585,6 +665,12 @@ export function createGatewayInstanceRuntime(
       },
     },
     nativeApprovals: {
+      getRuntimeConfig: () => {
+        if (closed) {
+          throw new Error("Gateway instance approval runtime is closed");
+        }
+        return options.getContext().getRuntimeConfig();
+      },
       request: async <T>(
         method: GatewayNativeApprovalMethod,
         payload: Record<string, unknown>,

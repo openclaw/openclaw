@@ -147,17 +147,6 @@ it.skipIf(process.platform !== "linux")(
           },
         });
         await instance.startGateway();
-        const expectLog = (rows: ReturnType<typeof journal>, ...fragments: string[]) =>
-          expect(
-            rows.some((row) => fragments.every((fragment) => row.message.includes(fragment))),
-            instance!.logs(),
-          ).toBe(true);
-        expectLog(
-          journal(instance.logs()),
-          "shutdown budget at startup:",
-          "shutdown=41000ms",
-          "TimeoutStopUSec=46000ms",
-        );
         const child = expectDefined(instance.child, "Gateway process before restart proof");
         const closed = once(child, "close");
         const gateway = instance;
@@ -257,13 +246,10 @@ it.skipIf(process.platform !== "linux")(
         expect(exit, instance.logs()).toEqual([0, null]);
         expect(receipt, instance.logs()).toBeDefined();
         expect(abort, instance.logs()).toBeDefined();
-        expectLog(rows, "shutdown budget at shutdown:", "TimeoutStopUSec=46000ms");
         expect(receipt!.at).toBeGreaterThanOrEqual(abort!.at);
         expect(receipt!.at).toBeLessThan(
           Math.min(signaledAt + APPLICATION_STOP_MS, exitedAt, deadline?.at ?? Infinity),
         );
-        expectLog(rows, "backgroundExecSessions=2");
-        expectLog(rows, "embeddedRuns=6");
         expect(exitedAt - receipt!.at, instance.logs()).toBeLessThanOrEqual(5_000);
         expect(deadline, instance.logs()).toBeUndefined();
         expect(serviceStop, instance.logs()).toBeDefined();

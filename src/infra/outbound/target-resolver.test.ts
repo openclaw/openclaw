@@ -82,7 +82,14 @@ function setPlugin(
   messaging: ChannelPlugin["messaging"],
   directoryMethods?: ChannelPlugin["directory"],
 ) {
-  mocks.getChannelPlugin.mockReturnValue({ directory: directoryMethods, messaging });
+  mocks.getChannelPlugin.mockReturnValue({
+    ...createChannelTestPluginBase({
+      id: "richchat",
+      capabilities: { chatTypes: ["direct", "group"] },
+    }),
+    directory: directoryMethods,
+    messaging,
+  } satisfies ChannelPlugin);
 }
 
 function resolve(input: string, params: ResolutionOverrides = {}) {

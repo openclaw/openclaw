@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import { statSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -8,10 +7,17 @@ import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion"
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { resolveStateDir } from "../config/paths.js";
 import { LruCache } from "../infra/lru-cache.js";
+import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
+import { resolveRuntimeWorkerArgv } from "../infra/runtime-worker-url.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { killProcessTree } from "../process/kill-tree.js";
 import { withChildProcessOperation } from "../process/spawn-diagnostics.js";
 import { spawnProcess } from "../process/spawn-utils.js";
+import {
+  captureShellSnapshotEnvironment,
+  SAFE_ENV_NAMES,
+  SECRET_ENV_PATTERN,
+} from "./shell-snapshot-env.js";
 
 const SNAPSHOT_VERSION = 1;
 const SNAPSHOT_REFRESH_MS = 5 * 60 * 1000;
@@ -23,27 +29,6 @@ const ENV_MARKER = "__OPENCLAW_SHELL_SNAPSHOT_ENV__";
 const EXEC_SHELL_SNAPSHOT_ENV = "OPENCLAW_EXEC_SHELL_SNAPSHOT";
 const SNAPSHOT_SHELLS = new Set(["bash", "zsh"]);
 const SNAPSHOT_DISABLE_VALUES = new Set(["0", "false", "no", "off"]);
-const SAFE_ENV_NAMES = new Set([
-  "ASDF_DIR",
-  "BUN_INSTALL",
-  "CARGO_HOME",
-  "CDPATH",
-  "GOPATH",
-  "GOROOT",
-  "GOENV_ROOT",
-  "HOMEBREW_CELLAR",
-  "HOMEBREW_PREFIX",
-  "HOMEBREW_REPOSITORY",
-  "INFOPATH",
-  "MANPATH",
-  "NVM_DIR",
-  "PATH",
-  "PNPM_HOME",
-  "PYENV_ROOT",
-  "RBENV_ROOT",
-  "RUSTUP_HOME",
-  "VOLTA_HOME",
-]);
 const CAPTURE_ENV_NAMES = new Set([
   ...SAFE_ENV_NAMES,
   "HOME",
@@ -52,7 +37,6 @@ const CAPTURE_ENV_NAMES = new Set([
   "USERPROFILE",
   "ZDOTDIR",
 ]);
-const SECRET_ENV_PATTERN = /(secret|token|password|passwd|credential|cookie|session|auth|key)/i;
 const SECRET_SHELL_STATE_PATTERNS = [
   /\b(authorization|api[_-]?key|access[_-]?token|refresh[_-]?token|secret|password|passwd|credential)\b\s*[:=]/i,
   /\b[A-Z][A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASSWD|CREDENTIAL|API_KEY|ACCESS_KEY|SESSION)[A-Z0-9_]*\s*[:=]/,
@@ -139,7 +123,7 @@ function buildSnapshotKey(opts: ShellSnapshotWrapOptions): string {
         home: getTrustedShellHome(),
         stateDir: resolveStateDir(process.env),
         env: buildSafeEnvSignature(process.env),
-        startup: buildStartupSignature(opts.shell),
+        zdotdir: process.env.ZDOTDIR?.trim() || getTrustedShellHome(),
       }),
     )
     .digest("hex");
@@ -151,26 +135,6 @@ function buildSafeEnvSignature(
   return [...SAFE_ENV_NAMES]
     .toSorted()
     .map((key): [string, string | null] => [key, env[key] ?? null]);
-}
-
-function buildStartupSignature(shell: string): Array<[string, number, number] | [string, null]> {
-  const shellName = path.basename(shell);
-  const home = getTrustedShellHome();
-  const zdotdir = process.env.ZDOTDIR?.trim() || home;
-  const candidates =
-    shellName === "zsh"
-      ? [path.join(zdotdir, ".zshrc")]
-      : shellName === "bash"
-        ? [path.join(home, ".bashrc")]
-        : [];
-  return candidates.map((candidate) => {
-    try {
-      const stat = statSync(candidate);
-      return [candidate, stat.mtimeMs, stat.size];
-    } catch {
-      return [candidate, null];
-    }
-  });
 }
 
 function getTrustedShellHome(): string {
@@ -254,6 +218,13 @@ async function captureShellSnapshot(opts: ShellSnapshotWrapOptions): Promise<str
     },
     async (workspace) => {
       const captureOutputPath = await workspace.writeText("snapshot.out", "");
+      const environmentArgv = [
+        process.execPath,
+        ...resolveRuntimeWorkerArgv(
+          resolveRuntimeProcessEntrypointUrl("shellSnapshotEnvironment"),
+          process.execPath,
+        ),
+      ];
       const captureCommand = [
         "{",
         shellName === "zsh"
@@ -263,7 +234,7 @@ async function captureShellSnapshot(opts: ShellSnapshotWrapOptions): Promise<str
         shellName === "zsh" ? "alias -L 2>/dev/null || true" : "alias 2>/dev/null || true",
         "(typeset -f 2>/dev/null || declare -f 2>/dev/null || true)",
         `printf '\\n%s\\n' ${shQuote(ENV_MARKER)}`,
-        `${shQuote(process.execPath)} -e ${shQuote(ENV_CAPTURE_NODE_SCRIPT)}`,
+        environmentArgv.map(shQuote).join(" "),
         `} > ${shQuote(captureOutputPath)}`,
       ].join("\n");
 
@@ -307,17 +278,6 @@ function buildTrustedSnapshotCaptureEnv(
   return env;
 }
 
-const ENV_CAPTURE_NODE_SCRIPT = `
-const safe = new Set(${JSON.stringify([...SAFE_ENV_NAMES].toSorted())});
-const blocked = ${SECRET_ENV_PATTERN.toString()};
-const out = {};
-for (const [key, value] of Object.entries(process.env)) {
-  if (!safe.has(key) || blocked.test(key)) continue;
-  out[key] = value;
-}
-process.stdout.write(JSON.stringify(out));
-`.trim();
-
 function buildSnapshotFile(stdout: string): string | null {
   const captureIndex = stdout.indexOf(CAPTURE_MARKER);
   const envIndex = stdout.indexOf(ENV_MARKER);
@@ -353,13 +313,7 @@ function parseSafeEnvExports(envJson: string): string {
   if (!parsed) {
     return "";
   }
-  return Object.entries(parsed)
-    .filter(
-      (entry): entry is [string, string] =>
-        SAFE_ENV_NAMES.has(entry[0]) &&
-        !SECRET_ENV_PATTERN.test(entry[0]) &&
-        typeof entry[1] === "string",
-    )
+  return Object.entries(captureShellSnapshotEnvironment(parsed))
     .toSorted(([a], [b]) => a.localeCompare(b))
     .map(([key, value]) => `export ${key}=${shQuote(value)}`)
     .join("\n");

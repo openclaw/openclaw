@@ -17,8 +17,7 @@ import {
   resolveGatewayOperatorRoleActor,
 } from "./operator-role-policy.js";
 import type { SessionMutationAuthorization } from "./server-methods/types.js";
-import { isSessionCreatorProfile } from "./session-creator.js";
-import { isRequiredSessionTargetMethod, mayCreateSessionTarget } from "./session-method-policy.js";
+import * as methods from "./session-method-policy.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
@@ -109,19 +108,18 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
   }
   const { params, authorizesAgentRun, bindsProgressLifecycle, adminBypass, targetOwnership } =
     requestPreparation;
+  const admission =
+    params.databaseAdmission ?? methods.sessionMethodDatabaseAdmission(params.method);
   const memoryBinding = getSessionActorStorageBinding({});
   const withSelectedStorage = <T>(run: () => T): T =>
     memoryBinding ? runWithSessionActorStorage(memoryBinding, run) : run();
   const authorizesRead =
     resolveSessionMethodScope(params.method, params.requestParams) === "operator.sessions.read";
-  if (!requestPreparation.requiresSessionFacts) {
+  if (!requestPreparation.requiresSessionFacts || params.method === "sessions.list") {
     return { error: null };
   }
   if (params.method === "sessions.describe") {
     return { error: sessionSharingDescribe.authorizeSessionDescribe(params) };
-  }
-  if (params.method === "sessions.list") {
-    return { error: null };
   }
   let cachedCfg: OpenClawConfig | undefined;
   const getCfg = (): OpenClawConfig => (cachedCfg ??= params.context.getRuntimeConfig());
@@ -172,9 +170,14 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
       const entryFilter = policy
         ? policy.entryFilter
         : createSessionListEntryFilter({ cfg, client: params.client });
-      return entryFilter?.(target.storeKey, target.entry) === false
-        ? hiddenSessionNotFound(target.canonicalKey)
-        : null;
+      const visible = policy
+        ? policy.canReadTarget(target)
+        : entryFilter?.(
+            target.storeKey,
+            target.entry,
+            resolveSessionSharingMembership(target, identity?.id, members, projection),
+          ) !== false;
+      return !visible ? hiddenSessionNotFound(target.canonicalKey) : null;
     }
     return policy
       ? authorizeSessionSharingTarget(
@@ -242,11 +245,17 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
       hidesForeignSessions &&
       target &&
       !(
-        preparedPolicy(getPolicyConfig())?.isCreator(target.entry.createdActor) ??
-        isSessionCreatorProfile(
-          target.entry.createdActor,
-          params.client?.authenticatedUserProfile?.profileId,
-        )
+        preparedPolicy(getPolicyConfig())?.canReadTarget(target) ??
+        createSessionListEntryFilter({ cfg: getPolicyConfig(), client: params.client })?.(
+          target.storeKey,
+          target.entry,
+          resolveSessionSharingMembership(
+            target,
+            sharingIdentity(params.client, resolveGatewayOperatorRoleActor(params.client))?.id,
+            undefined,
+            "projection" in resolved ? resolved.projection : undefined,
+          ),
+        ) !== false
       )
     ) {
       return { error: hiddenSessionNotFound(targetRef.sessionKey) };
@@ -271,14 +280,14 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
       requestParams: params.requestParams,
       context: params.context,
     }) ??
-    (bindsOwnProfile && !isRequiredSessionTargetMethod(params.method) ? [] : undefined);
+    (bindsOwnProfile && !methods.isRequiredSessionTargetMethod(params.method) ? [] : undefined);
   if (params.expectedTarget && targetRefs?.length !== 1) {
     return {
       error: sessionMutationTargetChanged(params.method, params.expectedTarget.sessionKey).error,
     };
   }
   if (!targetRefs) {
-    if (isRequiredSessionTargetMethod(params.method)) {
+    if (methods.isRequiredSessionTargetMethod(params.method)) {
       return {
         error: errorShape(ErrorCodes.INVALID_REQUEST, "session mutation target is unavailable", {
           details: { code: "SESSION_MUTATION_TARGET_REQUIRED", method: params.method },
@@ -345,7 +354,7 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
         : null,
       sessionId: target?.entry.sessionId?.trim() || null,
       ...(!target &&
-      (mayCreateSessionTarget(params.method) || (talkSessionTarget && authorizesAgentRun))
+      (methods.mayCreateSessionTarget(params.method) || (talkSessionTarget && authorizesAgentRun))
         ? {
             absentTarget: {
               ...(consuming.sharing
@@ -419,7 +428,7 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
     const currentProjection = expected?.projection ?? getSessionRowProjection(params.context);
     const projected =
       !prepared && !consuming.sharing && currentProjection
-        ? readProjectedSessionMutationTarget(targetRef, currentCfg, currentProjection)
+        ? readProjectedSessionMutationTarget(targetRef, currentCfg, currentProjection, admission)
         : undefined;
     if (expected?.projection && projected?.status === "unavailable") {
       throw targetChanged(targetRef.sessionKey);

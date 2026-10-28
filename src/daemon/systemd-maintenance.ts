@@ -1,8 +1,6 @@
 import { GATEWAY_SERVICE_STOP_TIMEOUT_MS } from "../infra/gateway-shutdown-budget.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
-import { parseKeyValueOutput } from "./runtime-parse.js";
 import { auditGatewayServiceConfig } from "./service-audit.js";
-import { withServiceInspectionBudget } from "./service-inspection-budget.js";
 import { withGatewayServiceOperationLock } from "./service-operation-lock.js";
 import { reconcileGatewayServiceDefinition } from "./service-reconciliation.js";
 import { resolveManagedGatewayServiceCommand, type GatewayServiceState } from "./service-types.js";
@@ -12,30 +10,11 @@ import {
   withGatewayServiceUpdateAuthority,
 } from "./service-update-authority.js";
 import { withSystemdDefinitionMutation } from "./systemd-definition-mutation.js";
-import { execSystemctlUser, reloadSystemdUserManager } from "./systemd-exec.js";
+import { reloadSystemdUserManager } from "./systemd-exec.js";
 import { assertNoSystemGatewayOwnership } from "./systemd-scope.js";
-import { resolveSystemdServiceName, resolveSystemdUnitPath } from "./systemd-service-files.js";
-import { parseSystemdTimeSpanMs } from "./systemd-time-span.js";
+import { resolveSystemdUnitPath } from "./systemd-service-files.js";
+import { readSystemdGatewayStopTimeout } from "./systemd-stop-policy.js";
 import { preserveSystemdUnitPolicy, refreshSystemdUnitPolicy } from "./systemd-unit.js";
-
-/** Read the effective native policy; absence is a diagnostic, not a stop refusal. */
-export async function readSystemdGatewayStopTimeout(state: GatewayServiceState) {
-  const unit = `${resolveSystemdServiceName(state.env)}.service`;
-  const result = await withServiceInspectionBudget(() =>
-    execSystemctlUser(
-      state.env,
-      ["show", unit, "--no-page", "--property", "LoadState,TimeoutStopUSec"],
-      10_000,
-    ),
-  );
-  const properties = parseKeyValueOutput(result.stdout, "=");
-  const timeout = parseSystemdTimeSpanMs(properties.timeoutstopusec ?? "");
-  return result.code === 0 && properties.loadstate === "loaded" && timeout !== undefined
-    ? timeout === 0
-      ? Infinity
-      : timeout
-    : undefined;
-}
 
 type SystemdGatewayMaintenanceResult =
   | { kind: "unchanged" }

@@ -6,6 +6,7 @@ import { afterAll, afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runCliProcessChild } from "../../cli/cli-process-child.test-helpers.js";
+import { listDirectoryTreeStrict } from "../../infra/directory-walk.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import {
   resolveRuntimeWorkerArgv,
@@ -32,7 +33,7 @@ const entrypoint = resolveRuntimeWorkerArgv(
 
 async function snapshot(root: string) {
   const rows: [string, string][] = [];
-  for (const entry of await fs.readdir(root, { recursive: true, withFileTypes: true })) {
+  for (const entry of (await listDirectoryTreeStrict(root)).map((walkEntry) => walkEntry.dirent)) {
     const file = path.join(entry.parentPath, entry.name);
     const bytes = entry.isFile() ? await fs.readFile(file) : undefined;
     // Read-only SQLite opens may rebuild SHM or create an empty WAL.

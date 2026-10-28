@@ -33,6 +33,8 @@ type ConfigViewOptions = Partial<
     ConfigData,
     | "schemaRead"
     | "onRetrySchema"
+    | "appearanceDisplayReady"
+    | "onAppearanceDataNeeded"
     | "mutationAllowed"
     | "openFileAllowed"
     | "rawDraftPending"
@@ -45,6 +47,7 @@ type ConfigViewOptions = Partial<
     | "onRetryThemeCatalog"
     | "customThemeImportExpanded"
     | "onOpenCustomThemeImport"
+    | "onCustomThemeImportFocus"
     | "terminalFontFamily"
     | "forceShowAdvanced"
     | "forceAdvancedSection"

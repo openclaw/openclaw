@@ -1,15 +1,11 @@
 import { expect, it } from "vitest";
 import { readSessionActorBoundedHistory } from "./session-actor-bounded-history.js";
 import type { SessionActorHotState } from "./session-actor-state.types.js";
+import { timedMessageEvent } from "./transcript-message.test-support.js";
 
 const timestamp = "2026-10-12T00:00:00.000Z";
-const message = (id: string, parentId: string | null, content = id) => ({
-  type: "message",
-  id,
-  parentId,
-  timestamp,
-  message: { role: "user", content },
-});
+const message = (id: string, parentId: string | null, content = id) =>
+  timedMessageEvent(id, parentId, timestamp, { role: "user", content });
 
 it.each(["compaction", "reset"] as const)(
   "hydrates the complete current window after %s without copying obsolete history",

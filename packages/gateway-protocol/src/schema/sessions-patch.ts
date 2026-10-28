@@ -5,7 +5,11 @@ import { closedObject } from "./closed-object.js";
 import { ErrorShapeSchema } from "./error-shape.js";
 import { NonEmptyString, SessionLabelString } from "./primitives.js";
 import { SessionCommunicationPatchSchema } from "./sessions-communication.js";
-import { SessionPermissionModeSchema, SessionToolOverridesSchema } from "./sessions-row.js";
+import {
+  CyberAccessProgramSchema,
+  SessionPermissionModeSchema,
+  SessionToolOverridesSchema,
+} from "./sessions-row.js";
 import { stringLiteralUnion } from "./string-literal-union.js";
 
 export const SESSIONS_PATCH_MANY_MAX_TARGETS = 100;
@@ -55,6 +59,7 @@ const SessionsPatchMutationProperties = {
   ),
   contextWindow: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   thinkingLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+  cyberAccessProgram: Type.Optional(Type.Union([CyberAccessProgramSchema, Type.Null()])),
   fastMode: Type.Optional(
     Type.Union([Type.Boolean(), Type.Literal("auto"), Type.Literal("ultrafast"), Type.Null()]),
   ),
@@ -146,6 +151,7 @@ export const SessionsPatchMutationSchema = Type.Object(SessionsPatchMutationProp
 
 export const SessionsPatchManyTargetSchema = closedObject({
   key: NonEmptyString,
+  expectedMarkedUnreadAt: ExpectedMarkedUnreadAt,
   ...SessionOrganizationExpectations,
   agentId: Type.Optional(NonEmptyString),
   expectedSessionId: Type.Optional(NonEmptyString),

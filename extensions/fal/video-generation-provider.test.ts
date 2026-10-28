@@ -1,7 +1,7 @@
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import * as providerAuth from "openclaw/plugin-sdk/provider-auth-runtime";
-import * as providerHttp from "openclaw/plugin-sdk/provider-http";
 import type { VideoGenerationRequest } from "openclaw/plugin-sdk/video-generation";
+import { generateVideo as generateRuntimeVideo } from "openclaw/plugin-sdk/video-generation-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildFalVideoGenerationProvider } from "./video-generation-provider.js";
 
@@ -52,19 +52,50 @@ describe("fal video generation provider", () => {
     expect(fetchGuardMock).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { model: "fal-ai/minimax/video-01-live", ignored: ["aspectRatio", "resolution", "audio"] },
+    { model: "fal-ai/heygen/v2/video-agent", ignored: ["aspectRatio", "resolution", "audio"] },
+    { model: "fal-ai/kling-video/v2.1/master/text-to-video", ignored: ["audio"] },
+    { model: "fal-ai/wan/v2.2-a14b/text-to-video", ignored: ["audio"] },
+    { model: "bytedance/seedance-2.0/text-to-video", ignored: [] },
+  ])("reports ignored overrides through the runtime for $model", async ({ model, ignored }) => {
+    mockCompletedFalVideoJob();
+    const provider = buildFalVideoGenerationProvider();
+    const result = await generateRuntimeVideo(
+      {
+        cfg: { agents: { defaults: { mediaModels: { video: `fal/${model}` } } } },
+        prompt: "Animate this",
+        aspectRatio: "16:9",
+        resolution: "1080P",
+        audio: true,
+      },
+      {
+        getProvider: (id) => (id === provider.id ? provider : undefined),
+        listProviders: () => [provider],
+        getProviderEnvVars: () => [],
+        log: { debug: vi.fn(), warn: vi.fn() },
+      },
+    );
+    expect(result.ignoredOverrides.map((override) => override.key)).toEqual(ignored);
+    const body = getSubmitBody();
+    if (ignored.includes("aspectRatio")) {
+      expect(body).toEqual({ prompt: "Animate this" });
+    } else {
+      expect(body).toMatchObject({ aspect_ratio: "16:9" });
+      if (ignored.includes("audio")) {
+        expect(body).not.toHaveProperty("generate_audio");
+      } else {
+        expect(body).toMatchObject({ resolution: "1080p", generate_audio: true });
+      }
+    }
+  });
+
   function mockFalProviderRuntime() {
     vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
       apiKey: "fal-key",
       source: "env",
       mode: "api-key",
     });
-    vi.spyOn(providerHttp, "resolveProviderHttpRequestConfig").mockReturnValue({
-      baseUrl: "https://fal.run",
-      allowPrivateNetwork: false,
-      headers: new Headers({ Authorization: "Key fal-key", "Content-Type": "application/json" }),
-      dispatcherPolicy: undefined,
-    });
-    vi.spyOn(providerHttp, "assertOkOrThrowHttpError").mockResolvedValue(undefined);
   }
 
   function releasedJson(value: unknown) {
@@ -197,14 +228,14 @@ describe("fal video generation provider", () => {
 
   it("caps oversized fal queue operation deadlines", async () => {
     mockFalProviderRuntime();
-    const nowSpy = vi.spyOn(Date, "now");
-    nowSpy
-      .mockReturnValueOnce(0)
-      .mockReturnValueOnce(0)
-      .mockReturnValueOnce(MAX_TIMER_TIMEOUT_MS + 1);
+    let monotonicMs = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => monotonicMs);
     fetchGuardMock
       .mockResolvedValueOnce(releasedJson(queueSubmission))
-      .mockResolvedValueOnce(releasedJson({ status: "IN_PROGRESS" }));
+      .mockImplementationOnce(async () => {
+        monotonicMs = MAX_TIMER_TIMEOUT_MS + 1;
+        return releasedJson({ status: "IN_PROGRESS" });
+      });
 
     await expectRejected(
       { timeoutMs: Number.MAX_SAFE_INTEGER },

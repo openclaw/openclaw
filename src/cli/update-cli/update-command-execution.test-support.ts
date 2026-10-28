@@ -5,6 +5,7 @@ import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import type * as schema from "./schema-preflight.js";
 import type { executeMutableUpdate } from "./update-command-execution.js";
+import { resultFixture } from "./update-command-fixtures.test-support.js";
 import type * as managed from "./update-command-managed-context.js";
 import type * as serviceCommand from "./update-command-service-command.js";
 import type { PreManagedServiceStop } from "./update-command-service.js";
@@ -135,15 +136,11 @@ vi.mock("./update-command-service.js", async () => {
   };
 });
 
-export const successfulUpdate: UpdateRunResult = {
-  status: "ok",
-  mode: "npm",
-  root: "/opt/openclaw",
+export const successfulUpdate: UpdateRunResult = resultFixture("/opt/openclaw", {
   before: { version: "1.0.0" },
   after: { version: "1.0.1" },
-  steps: [],
   durationMs: 1,
-};
+});
 
 export function executionParams(
   updateInstallKind: "git" | "package",

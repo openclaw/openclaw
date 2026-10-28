@@ -3,6 +3,7 @@ import { getAgentRunLifecycleGeneration } from "../infra/agent-run-registry.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { notifyListeners, registerListener } from "../shared/listeners.js";
 
 /** Process-owned provider work. Completion delivery belongs to the durable session queue. */
 export type MediaGenerationOperation = {
@@ -10,6 +11,9 @@ export type MediaGenerationOperation = {
   runId?: string;
   taskKind: string;
   sourceId?: string;
+  /** Successful generation result; sourceId retains the submission identity. */
+  provider?: string;
+  model?: string;
   requestKey?: string;
   requesterSessionKey: string;
   requesterAgentId?: string;
@@ -36,6 +40,7 @@ const state = resolveGlobalSingleton(Symbol.for("openclaw.mediaGenerationOperati
   admissions: new Map<string, string>(),
   // Process-local like the channel transport that renders the retained card.
   drafts: new Map<string, MediaProgressDraft>(),
+  listeners: new Set<(operation: MediaGenerationOperation) => void>(),
 }));
 const RECENT_COMPLETION_MS = 2 * 60_000;
 
@@ -159,6 +164,7 @@ export function createMediaGenerationOperation(
     operation.requesterSessionKey,
     operation.requesterAgentId,
   );
+  notifyListeners(state.listeners, operation);
   return operation;
 }
 export function updateMediaGenerationOperation(
@@ -170,6 +176,8 @@ export function updateMediaGenerationOperation(
       | "status"
       | "endedAt"
       | "progressSummary"
+      | "provider"
+      | "model"
       | "completionDelivery"
       | "terminalOutcome"
     >
@@ -180,6 +188,14 @@ export function updateMediaGenerationOperation(
     return;
   }
   Object.assign(operation, update);
+  if (update.status !== undefined || update.completionDelivery !== undefined) {
+    notifyListeners(state.listeners, operation);
+  }
+}
+export function onMediaGenerationOperationChanged(
+  listener: (operation: MediaGenerationOperation) => void,
+): () => void {
+  return registerListener(state.listeners, listener);
 }
 export function findMediaGenerationOperation(runId: string): MediaGenerationOperation | undefined {
   return isMediaGenerationOperationCurrent(runId) ? state.operations.get(runId) : undefined;
@@ -189,15 +205,16 @@ export function listMediaGenerationOperations(
   requesterAgentId?: string,
 ): MediaGenerationOperation[] {
   pruneCompletedOperations();
-  const agentId = requesterAgentId ?? parseAgentSessionKey(sessionKey)?.agentId;
+  let keyAgentId: string | undefined;
+  const agentId = requesterAgentId ?? (keyAgentId = parseAgentSessionKey(sessionKey)?.agentId);
   if (!agentId) {
     return [];
   }
   return [...state.operations.values()].filter(
     (operation) =>
       operation.requesterSessionKey === sessionKey &&
-      (operation.requesterAgentId ??
-        parseAgentSessionKey(operation.requesterSessionKey)?.agentId) === agentId &&
+      (operation.requesterAgentId ?? (keyAgentId ??= parseAgentSessionKey(sessionKey)?.agentId)) ===
+        agentId &&
       Boolean(operation.runId && isMediaGenerationOperationCurrent(operation.runId)),
   );
 }

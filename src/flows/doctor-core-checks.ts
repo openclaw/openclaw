@@ -698,6 +698,22 @@ export function createCoreHealthChecks(): readonly DoctorHealthCheck[] {
     },
     nodeRuntimeCheck,
     {
+      id: "core/doctor/runtime-capabilities",
+      description: "Report capabilities of the Doctor process without executing optional features.",
+      async detect() {
+        const { collectRuntimeCapabilities, formatRuntimeCapabilities } =
+          await import("../infra/runtime-capabilities.js");
+        return [
+          {
+            checkId: "core/doctor/runtime-capabilities",
+            severity: "info",
+            source: "doctor-process",
+            message: `Runtime capabilities (Doctor process)\n${formatRuntimeCapabilities(collectRuntimeCapabilities())}`,
+          },
+        ];
+      },
+    },
+    {
       id: "core/doctor/security",
       updateReadiness: "post-plugin",
       description: "Security posture checks produce structured findings.",

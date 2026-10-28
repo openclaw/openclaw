@@ -30,6 +30,10 @@ export const cliRecoveryEntrypoints = {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "../../extensions/memory-core/doctor-health-api",
   }),
+  openaiDoctorHealth: worker({
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../../extensions/openai/doctor-health-api",
+  }),
   signalExitBarrier: worker({
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "signal-exit-barrier",

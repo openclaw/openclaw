@@ -1,3 +1,4 @@
+import "../test/helpers/postgres-pool-roots-preload.mjs";
 import { setEnvironmentData } from "node:worker_threads";
 
 const connection = new URL(import.meta.url).searchParams.get("connection");

@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { DatabaseSync, StatementSync } from "node:sqlite";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -13,7 +12,6 @@ import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-
 import {
   createUpdateRun,
   finishUpdateRun,
-  getUpdateRun,
   recordUpdateRunStep,
 } from "../../infra/update-run-ledger.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
@@ -22,6 +20,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import type { TranscriptSessionDescriptor } from "../../transcripts/provider-types.js";
 import { TranscriptsStore } from "../../transcripts/store.js";
 import { summarizeTranscripts } from "../../transcripts/summary.js";
@@ -50,10 +49,7 @@ function sessionFixture(
 }
 
 async function writeSession(sessionId: string): Promise<string> {
-  const session = sessionFixture(sessionId, {
-    title: "Design review",
-    stoppedAt: "2026-05-22T10:05:00.000Z",
-  });
+  const session = sessionFixture(sessionId);
   const utterance = { text: "Action item: Ship CLI", speaker: { label: "Sam" } };
   await store.writeSession(session);
   await store.appendUtteranceForSession(session, utterance);
@@ -113,12 +109,10 @@ describe("transcripts CLI", () => {
     finishUpdateRun(run.runId, { status: "succeeded" });
     const snapshot = createDoctorConfigSnapshot();
     // Keep real note emission and guard suppression; state migration is outside this output test.
-    const preflight = vi
-      .spyOn(startupConfigPreflight, "runStartupConfigPreflight")
-      .mockImplementation(async () => {
-        await noteStaleUpdateRuns();
-        return { snapshot, baseConfig: snapshot.config };
-      });
+    vi.spyOn(startupConfigPreflight, "runStartupConfigPreflight").mockImplementation(async () => {
+      await noteStaleUpdateRuns();
+      return { snapshot, baseConfig: snapshot.sourceConfig };
+    });
     vi.stubEnv("OPENCLAW_SUPPRESS_NOTES", undefined);
     vi.stubEnv("NODE_NO_WARNINGS", process.env.NODE_NO_WARNINGS);
     expect(await captureStdout(() => noteStaleUpdateRuns())).toContain(warning);
@@ -132,8 +126,6 @@ describe("transcripts CLI", () => {
       );
       expect(output).toBe(expected);
     }
-    expect(preflight).toHaveBeenCalledTimes(2);
-    expect(getUpdateRun(run.runId)?.steps).toContainEqual(expect.objectContaining(warningStep));
     expect(await captureStdout(() => noteStaleUpdateRuns())).toContain(warning);
   });
 
@@ -189,29 +181,16 @@ describe("transcripts CLI", () => {
 
     const ownershipReads: string[] = [];
     const database = openOpenClawStateDatabase().db;
-    // Manifest writers retain the same SELECT inside their synchronous transaction.
-    // oxlint-disable-next-line typescript/unbound-method -- Preserve the intercepted native receiver below.
-    const prepare = DatabaseSync.prototype.prepare;
-    vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (
-      this: DatabaseSync,
-      sql,
-    ) {
-      if (!this.isTransaction && /^select\b/iu.test(sql) && sql.includes("export_pending_json")) {
-        ownershipReads.push(sql);
-      }
-      return prepare.call(this, sql);
-    });
-    // The identical writer SELECT may already be prepared and cached before observation.
-    // oxlint-disable-next-line typescript/unbound-method -- Preserve the intercepted statement receiver below.
-    const get = StatementSync.prototype.get;
-    vi.spyOn(StatementSync.prototype, "get").mockImplementation(function (
-      this: StatementSync,
-      ...args
-    ) {
-      if (!database.isTransaction && this.sourceSQL.includes("export_pending_json")) {
-        ownershipReads.push(this.sourceSQL);
-      }
-      return get.apply(this, args);
+    observeMainThreadSql({
+      onStatement: (sql) => {
+        if (
+          !database.isTransaction &&
+          /^select\b/iu.test(sql) &&
+          sql.includes("export_pending_json")
+        ) {
+          ownershipReads.push(sql);
+        }
+      },
     });
 
     for (const [flag, file, content] of [

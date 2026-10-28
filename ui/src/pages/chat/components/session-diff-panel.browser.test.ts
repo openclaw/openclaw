@@ -1,10 +1,16 @@
 import { createComponent } from "solid-js";
 import "../../../styles.css";
 import "../../../styles/chat.ts";
+import "../../../styles/chat/side-panel.css";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
+import type { SessionWorkspaceGetResult } from "../../../api/types.ts";
+import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { createSessionCapabilityFixture } from "../chat-session-capability.test-support.ts";
+import { createSessionWorkspaceHost } from "./chat-session-workspace-host.test-support.ts";
+import { resolveSessionDiffSidebarContent } from "./chat-session-workspace.ts";
 import { SessionDiffPanel } from "./session-diff-panel.tsx";
 
 const browserMode = "__vitest_browser__" in globalThis;
@@ -14,6 +20,77 @@ const root = "/workspace/investigating-why-a-pr-was-not-merged";
 afterEach(() => document.body.replaceChildren());
 
 describe.runIf(browserMode)("Review header layout", () => {
+  it("keeps keyboard focus and activation when file edit eligibility settles", async () => {
+    const { page, userEvent } = await import("vitest/browser");
+    await page.viewport(1200, 800);
+    const pending = Promise.withResolvers<SessionWorkspaceGetResult>();
+    const getFile = vi.fn(() => pending.promise);
+    const host = createSessionWorkspaceHost({
+      hello: gatewayHelloForMethods(["sessions.diff", "sessions.files.get", "sessions.files.set"]),
+      sessions: createSessionCapabilityFixture({ getFile }),
+    });
+    const content = resolveSessionDiffSidebarContent(host);
+    if (content?.kind !== "session-diff") {
+      throw new Error("Expected Review content");
+    }
+    const result: SessionWorkspaceGetResult = {
+      sessionKey: host.sessionKey,
+      root: "/workspace",
+      file: {
+        kind: "modified",
+        path: "report.md",
+        name: "report.md",
+        missing: false,
+        previewKind: "text",
+        contentEncoding: "utf8",
+        content: "# Report\n",
+        hash: "a".repeat(64),
+      },
+    };
+    onTestFinished(() => pending.resolve(result));
+    const mounted = mountSolid(() =>
+      createComponent(SessionDiffPanel, {
+        mobile: false,
+        owner: content.owner,
+        execNode: null,
+        loader: async () => ({
+          sessionKey: host.sessionKey,
+          branch,
+          baseRef: "main",
+          additions: 1,
+          deletions: 0,
+          files: [{ path: "report.md", status: "modified", additions: 1, deletions: 0 }],
+        }),
+        loadFileText: null,
+        openFile: content.openFile ?? null,
+        revealFile: null,
+        openFileView: vi.fn(),
+        canEditFile: content.canEditFile,
+      }),
+    );
+    const panel = mounted.container.querySelector<HTMLElement>("openclaw-session-diff")!;
+    await waitForSolid(() =>
+      expect(panel.querySelector(".session-diff__file-menu")).not.toBeNull(),
+    );
+    await userEvent.click(panel.querySelector<HTMLButtonElement>(".session-diff__file-menu")!);
+    await waitForSolid(() => expect(getFile).toHaveBeenCalledOnce());
+    const surface = panel.querySelector<HTMLElement>(".session-diff-menu__surface")!;
+    const copy = surface.querySelector<HTMLButtonElement>('button[aria-label="Copy Path"]')!;
+    const toggle = surface.querySelector<HTMLButtonElement>('button[value="toggle-file"]')!;
+    await waitForSolid(() => expect(document.activeElement).toBe(copy));
+    await userEvent.keyboard("{ArrowDown}{ArrowDown}");
+    expect(document.activeElement).toBe(toggle);
+    pending.resolve(result);
+    await waitForSolid(() => expect(surface.querySelector('button[value="edit"]')).not.toBeNull());
+    expect.soft(document.activeElement).toBe(toggle);
+    await userEvent.keyboard("{Enter}");
+    await waitForSolid(() =>
+      expect(panel.querySelector(".session-diff__file")?.getAttribute("data-collapsed")).toBe(
+        "false",
+      ),
+    );
+  });
+
   it("settles Review navigation before focusing and scrolling its destination", async () => {
     const { page, userEvent } = await import("vitest/browser");
     await page.viewport(1200, 800);

@@ -65,11 +65,14 @@ it("keeps folded letter-second ids as ids when a namesake channel exists", async
   ]);
 });
 
-it("keeps a Slack DM conversation id unresolved instead of accepting it as a channel id", async () => {
-  const res = await lookup(["D0AFBKXS3CP"]);
+it.each(["D0AFBKXS3CP", "", " \t\n "])(
+  "keeps %j unresolved instead of accepting it as a channel id",
+  async (input) => {
+    const res = await lookup([input]);
 
-  expect(res[0]?.resolved).toBe(false);
-});
+    expect(res[0]?.resolved).toBe(false);
+  },
+);
 
 it.each(["team:T11111111:user:U01234567", "team:T11111111:channel:%ZZ"])(
   "keeps qualified target ordering and lookup boundaries for %s",

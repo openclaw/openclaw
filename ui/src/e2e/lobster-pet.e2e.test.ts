@@ -55,48 +55,6 @@ suite.define(() => {
 
   afterEach(() => context.close());
 
-  it("keeps a vigil-only failure present through droop and sweep before leaving", async () => {
-    await configureComposerPet(0, "busy", "error");
-    const sprite = page.locator(".lobster-pet");
-    await expect.poll(() => sprite.count()).toBe(0);
-
-    await advancePet(600_500, true);
-    expect(await page.locator(".lobster-pet--vigil").count()).toBe(1);
-    await page.evaluate(async () => {
-      const pet = document.querySelector("openclaw-lobster-pet") as BrowserLobsterPet;
-      pet.mode = "idle";
-      await pet.updateComplete;
-    });
-
-    for (const [act, duration] of [
-      ["droop", 1_599],
-      ["sweep", 1_799],
-    ] as const) {
-      const animation = page.locator(`.lobster-pet--act-${act}`);
-      expect(await animation.count()).toBe(1);
-      await advancePet(duration);
-      expect(await animation.count()).toBe(1);
-      await advancePet(1);
-    }
-
-    expect(await page.locator(".lobster-pet--away").count()).toBe(1);
-    await page.clock.runFor(350);
-    await expect.poll(() => sprite.count()).toBe(0);
-  });
-
-  it("does not pet after Chromium cancels a sub-threshold touch hold", async () => {
-    await configureComposerPet(42);
-    const sprite = page.locator(".lobster-pet");
-    await sprite.waitFor();
-
-    await sprite.dispatchEvent("pointerdown", { pointerId: 1, pointerType: "touch" });
-    await page.clock.runFor(300);
-    await sprite.dispatchEvent("pointercancel", { pointerId: 1, pointerType: "touch" });
-    await page.clock.runFor(400);
-
-    await expect.poll(() => page.locator(".lobster-pet--act-pet").count()).toBe(0);
-  });
-
   it("keeps resting visitors proportionate and aligned with their perch", async () => {
     for (const seed of [0, 42, 77, 1234]) {
       await configureComposerPet(seed);

@@ -1,7 +1,7 @@
 import { createMemo, createSignal } from "solid-js";
 import { isStaleChunkImportError } from "../../../app/stale-chunk-reload.ts";
 import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
-import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
+import type { EmbedSandboxMode } from "../../../lib/chat/canvas-embed-policy.ts";
 import { registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import { readFileDraft } from "./chat-file-drafts.ts";
 import type {

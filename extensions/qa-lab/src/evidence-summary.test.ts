@@ -18,6 +18,7 @@ import {
   validateQaEvidenceSummaryJson,
 } from "./evidence-summary.js";
 import type { QaProviderMode } from "./providers/index.js";
+import { makeQaSuiteTestLaunch } from "./suite-test-helpers.js";
 
 const providerIdentityCases: {
   name: string;
@@ -587,14 +588,7 @@ describe("evidence summary", () => {
   });
 });
 
-const unknownIdentity: QaEvidenceIdentity = {
-  source: { ref: null, integrity: null },
-  runtime: { id: null, version: null },
-  package: null,
-  protocol: null,
-  accountRef: null,
-  proofClass: null,
-};
+const unknownIdentity: QaEvidenceIdentity = makeQaSuiteTestLaunch();
 
 function occurrenceFixture(instanceId = "scheduled-first") {
   const anchor: QaEvidenceOccurrence = {
@@ -627,7 +621,7 @@ function occurrenceFixture(instanceId = "scheduled-first") {
     binding: { occurrenceId: observation.id, assertionId: "delivers-reply", receiptId: null },
     effective: true,
   };
-  return { anchor, observation, entry };
+  return { anchor, observation, entry, occurrences: [anchor, observation], entries: [entry] };
 }
 
 function occurrenceSummary(
@@ -847,53 +841,27 @@ describe("occurrence evidence", () => {
     expect(projectQaEvidenceScenarioOutcomes(summary)).toEqual([]);
   });
 
-  it.each([
-    "missing occurrence",
-    "anchor row",
-    "missing assertion",
-    "extra coverage",
-    "unknown receipt",
-    "mixed effectiveness",
-    "wrong instance",
-    "duplicate occurrence",
-    "stale selection",
-    "retry cycle",
-  ])("rejects corrupt ownership: %s", (failure) => {
-    const { anchor, observation, entry } = occurrenceFixture();
-    const occurrences = [anchor, observation];
-    const entries = [entry];
-    switch (failure) {
-      case "missing occurrence":
-        entry.binding.occurrenceId = "absent";
-        break;
-      case "anchor row":
-        entry.binding.occurrenceId = anchor.id;
-        break;
-      case "missing assertion":
-        entry.binding.assertionId = "undeclared";
-        break;
-      case "extra coverage":
-        entry.coverage = [{ id: "channels.rooms", role: "primary" }];
-        break;
-      case "unknown receipt":
-        entry.binding.receiptId = "another-target";
-        break;
-      case "mixed effectiveness":
-        entries.push({ ...entry, effective: false });
-        break;
-      case "wrong instance":
-        observation.parentCell = { ...observation.parentCell!, scenarioId: "other" };
-        break;
-      case "duplicate occurrence":
-        occurrences.push(observation);
-        break;
-      case "stale selection":
-        anchor.scenario = { kind: "instance", resultOccurrenceId: "absent" };
-        break;
-      case "retry cycle":
-        observation.retryOf = observation.id;
-        break;
-    }
+  const corruptions: Record<string, (fixture: ReturnType<typeof occurrenceFixture>) => unknown> = {
+    "missing occurrence": ({ entry }) => Object.assign(entry.binding, { occurrenceId: "absent" }),
+    "anchor row": ({ entry, anchor }) => Object.assign(entry.binding, { occurrenceId: anchor.id }),
+    "missing assertion": ({ entry }) => Object.assign(entry.binding, { assertionId: "undeclared" }),
+    "extra coverage": ({ entry }) =>
+      Object.assign(entry, { coverage: [{ id: "channels.rooms", role: "primary" }] }),
+    "unknown receipt": ({ entry }) => Object.assign(entry.binding, { receiptId: "another-target" }),
+    "mixed effectiveness": ({ entries, entry }) => entries.push({ ...entry, effective: false }),
+    "wrong instance": ({ observation }) =>
+      Object.assign(observation, {
+        parentCell: { ...observation.parentCell, scenarioId: "other" },
+      }),
+    "duplicate occurrence": ({ occurrences, observation }) => occurrences.push(observation),
+    "stale selection": ({ anchor }) =>
+      Object.assign(anchor, { scenario: { kind: "instance", resultOccurrenceId: "absent" } }),
+    "retry cycle": ({ observation }) => Object.assign(observation, { retryOf: observation.id }),
+  };
+  it.each(Object.entries(corruptions))("rejects corrupt ownership: %s", (_failure, corrupt) => {
+    const fixture = occurrenceFixture();
+    corrupt(fixture);
+    const { occurrences, entries } = fixture;
     expect(() => occurrenceSummary(occurrences, entries)).toThrow();
   });
 

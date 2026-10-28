@@ -37,18 +37,6 @@ async function withModelsRuntime(
   return runtime.runModelsCommand(() => action(runtime));
 }
 
-function runAgentModelCommand<T extends object>(
-  command: Command,
-  options: (agent: string | undefined) => T,
-  load: () => Promise<(opts: T, runtime: ModelsCliRuntime["defaultRuntime"]) => Promise<void>>,
-): Promise<void> {
-  return withModelsRuntime(async ({ defaultRuntime, resolveModelAgentOption }) => {
-    const agent = resolveModelAgentOption(command);
-    const run = await load();
-    await run(options(agent), defaultRuntime);
-  });
-}
-
 // Ownership is selected before loading any mutation-capable auth runtime.
 function runAuthModelCommand<T extends object>(
   command: Command,
@@ -348,11 +336,11 @@ export function registerModelsCli(program: Command) {
     .option("--probe-max-tokens <n>", "Maximum tokens per check (best-effort)")
     .option("--agent <id>", "Agent id to inspect (overrides OPENCLAW_AGENT_DIR)")
     .action((opts: ModelsStatusOptions, command) =>
-      runAgentModelCommand(
-        command,
-        (agent) => ({ ...opts, json: hasJsonOutput(opts), agent }),
-        async () => (await import("../commands/models/list.status-command.js")).modelsStatusCommand,
-      ),
+      withModelsRuntime(async ({ defaultRuntime, resolveModelAgentOption }) => {
+        const agent = resolveModelAgentOption(command);
+        const { modelsStatusCommand } = await import("../commands/models/list.status-command.js");
+        await modelsStatusCommand({ ...opts, json: hasJsonOutput(opts), agent }, defaultRuntime);
+      }),
     );
 
   models

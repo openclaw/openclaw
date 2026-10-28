@@ -1,8 +1,9 @@
-import { execFileSync, spawnSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { git as repoGit, initGit } from "./mobile-release-git.test-support.js";
 
 const SCRIPT_PATH = "scripts/github/resolve-openclaw-ref.sh";
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
@@ -11,18 +12,9 @@ let remoteSha: string;
 
 beforeAll(() => {
   const repo = tempDirs.make("openclaw-ref-remote-");
-  const git = (...args: string[]) =>
-    execFileSync("git", args, {
-      cwd: repo,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    }).trim();
-  git("init", "-q", "-b", "main");
-  git("config", "user.email", "test-user");
-  git("config", "user.name", "Test User");
-  writeFileSync(join(repo, "seed.txt"), "seed");
-  git("add", "seed.txt");
-  git("commit", "-qm", "seed");
+  const git = (...args: string[]) => repoGit(repo, ...args);
+  initGit(repo, { name: "Test User", email: "test-user" });
+  git("commit", "--allow-empty", "-qm", "seed");
   for (const ref of ["release/test", "ambiguous"]) {
     git("branch", ref);
   }
@@ -52,6 +44,13 @@ function expectOutput(output: string, kind: string, fallback = false) {
     `ref_kind=${kind}`,
     `sha=${remoteSha}`,
   ]);
+}
+function expectFailure(result: ReturnType<typeof runResolver>, stderr: string | RegExp) {
+  expect(result).toMatchObject({
+    status: 1,
+    stdout: "",
+    stderr: typeof stderr === "string" ? stderr : expect.stringMatching(stderr),
+  });
 }
 
 it.each([
@@ -90,29 +89,17 @@ it("does not let fallback mode hide remote lookup failures", () => {
     "--fallback-ok",
   ]);
 
-  expect(result).toMatchObject({
-    status: 1,
-    stdout: "",
-    stderr: expect.stringContaining("does not appear to be a git repository"),
-  });
+  expectFailure(result, /does not appear to be a git repository/);
 });
 
 it("rejects ambiguous branch and tag names before emitting outputs", () => {
   const result = runResolver(remoteRepo, ["--ref", "ambiguous"]);
 
-  expect(result).toMatchObject({
-    status: 1,
-    stdout: "",
-    stderr: expect.stringContaining("Ref resolved ambiguously as both branch and tag: ambiguous"),
-  });
+  expectFailure(result, /Ref resolved ambiguously as both branch and tag: ambiguous/);
 });
 
 it("rejects a branch whose resolved SHA differs from expected_sha before emitting outputs", () => {
   const expectedSha = "b".repeat(40);
   const result = runResolver(remoteRepo, ["--ref", "release/test", "--expected-sha", expectedSha]);
-  expect(result).toMatchObject({
-    status: 1,
-    stdout: "",
-    stderr: `Ref release/test resolved to ${remoteSha}, expected ${expectedSha}.\n`,
-  });
+  expectFailure(result, `Ref release/test resolved to ${remoteSha}, expected ${expectedSha}.\n`);
 });

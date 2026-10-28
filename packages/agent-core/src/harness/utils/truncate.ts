@@ -27,8 +27,6 @@ export interface TruncationResult {
   maxBytes: number;
 }
 
-type ResolvedTruncationInput = ReturnType<typeof resolveTruncationInput>;
-
 interface RuntimeBuffer {
   byteLength(content: string, encoding: "utf8"): number;
   from(content: string, encoding: "utf16le"): { toString(encoding: "utf16le"): string };
@@ -108,7 +106,7 @@ function resolveTruncationInput(content: string, maxBytes: number) {
 }
 
 function buildTruncationResult(
-  input: ResolvedTruncationInput,
+  input: ReturnType<typeof resolveTruncationInput>,
   params: {
     content: string;
     truncatedBy?: TruncationResult["truncatedBy"];

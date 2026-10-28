@@ -33,29 +33,12 @@ it("keeps known unavailable choices visible but disabled", () => {
 });
 
 it("lets an explicit empty agent alias disable the inherited alias", () => {
-  const model = "openai/gpt-5.6-luna";
-  const catalog = [
-    {
-      id: "gpt-5.6-luna",
-      name: "GPT 5.6 Luna",
-      provider: "openai",
-      alias: "gateway-alias",
-      tags: ["default", "configured"],
-    },
-  ];
-  const config = {
-    agents: {
-      defaults: { models: { [model]: { alias: "global-luna" } } },
-      entries: { worker: { models: { [model]: { alias: "" } } } },
-    },
-  };
+  const catalog = [{ id: "model-a", name: "Model A", provider: "custom", alias: "gateway" }];
+  const config = aliases({ [lower]: "global" }, { [lower]: "" });
 
-  expect(buildModelOptions(config, null, catalog, "worker")).toContainEqual({
-    value: model,
-    label: "GPT 5.6 Luna",
-    provider: "openai",
-    tags: ["default", "configured"],
-  });
+  expect(
+    buildModelOptions(config, null, catalog, "worker").find(({ value }) => value === lower)?.label,
+  ).toBe("Model A");
 });
 
 it("keeps case-distinct catalog identities, configured aliases, and current values", () => {
@@ -78,65 +61,34 @@ it("keeps case-distinct catalog identities, configured aliases, and current valu
   );
 });
 const [lower, upper, other] = ["custom/model-a", "custom/Model-A", "other/model-a"];
-type AliasCase = {
-  name: string;
-  primary: string;
-  models: Record<string, { alias?: string } | null>;
-  agentModels?: Record<string, { alias?: string } | null> | Array<{ alias?: string }>;
-  providers?: Record<string, { api?: string; models?: unknown }>;
-  excluded: string[];
-  allowed: string[];
-};
-const cases: AliasCase[] = [
-  {
-    name: "respects an explicitly disabled inherited alias",
-    primary: "fast",
-    models: { [lower]: { alias: "fast" } },
-    agentModels: { [lower]: { alias: "" } },
-    excluded: ["fast"],
-    allowed: [lower],
-  },
-  {
-    name: "tolerates null editable metadata without replacing inherited aliases",
-    primary: "fast",
-    models: { [lower]: null, [upper]: { alias: "fast" } },
-    agentModels: { [upper]: null },
-    excluded: [upper],
-    allowed: [lower],
-  },
-  {
-    name: "keeps an explicit configured-provider ref ahead of a slash alias",
-    primary: lower,
-    models: { [other]: { alias: lower }, [lower]: { alias: "original" } },
-    providers: { custom: { api: "openai-completions" } },
-    excluded: ["original"],
-    allowed: [lower, other],
-  },
-  {
-    name: "resolves a slash alias when no explicit provider owns the input",
-    primary: lower,
-    models: { [other]: { alias: lower } },
-    excluded: [other, lower, upper],
-    allowed: ["custom/unrelated"],
-  },
-  {
-    name: "resolves profile-qualified aliases",
-    primary: "fast@work",
-    models: { [lower]: { alias: "fast" } },
-    excluded: [lower, `${lower}@work`],
-    allowed: [`${lower}@other`, `${lower}@Work`],
-  },
-];
-
-it.each(cases)("$name", ({ primary, models, agentModels, providers, excluded, allowed }) => {
-  const config = {
-    agents: {
-      defaults: { models },
-      entries: { worker: { models: agentModels } },
+it.each([
+  ["disabled alias", "fast", aliases({ [lower]: "fast" }, { [lower]: "" }), ["fast"], [lower]],
+  [
+    "null metadata",
+    "fast",
+    aliases({ [lower]: null, [upper]: "fast" }, { [upper]: null }),
+    [upper],
+    [lower],
+  ],
+  [
+    "provider precedence",
+    lower,
+    {
+      ...aliases({ [other]: lower, [lower]: "original" }),
+      models: { providers: { custom: { api: "openai-completions" } } },
     },
-    models: { providers },
-  };
-
+    ["original"],
+    [lower, other],
+  ],
+  ["slash alias", lower, aliases({ [other]: lower }), [other, lower, upper], ["custom/unrelated"]],
+  [
+    "profile-qualified alias",
+    "fast@work",
+    aliases({ [lower]: "fast" }),
+    [lower, `${lower}@work`],
+    [`${lower}@other`, `${lower}@Work`],
+  ],
+] as const)("resolves %s", (_name, primary, config, excluded, allowed) => {
   const isExcluded = createPrimaryModelExclusion(config, primary, "worker");
   expect(excluded.filter(isExcluded)).toEqual(excluded);
   expect(allowed.filter(isExcluded)).toEqual([]);
@@ -243,12 +195,8 @@ it("uses configured defaults when agent-specific overrides are absent", () => {
 });
 
 it("prefers per-agent configured identity over runtime global identity in agent panels", () => {
-  const agent = {
-    id: "fs-daying",
-    name: "File-system agent",
-    identity: { name: "大颖", emoji: "⚙️" },
-  };
-  const identity = { agentId: "fs-daying", name: "AI大管家", avatar: "M", emoji: "🤖" };
+  const agent = { id: "worker", name: "Roster", identity: { name: "大颖", emoji: "⚙️" } };
+  const identity = { agentId: "worker", name: "Runtime", avatar: "M", emoji: "🤖" };
   const context = buildAgentContext(agent, null, null, "main", identity);
 
   expect(context).toMatchObject({ identityName: "大颖", identityAvatar: "⚙️" });
@@ -257,4 +205,17 @@ it("prefers per-agent configured identity over runtime global identity in agent 
 const avatarAgent = { identity: { avatarUrl: "/avatar/main" } };
 function agentConfig(defaults: Record<string, unknown>, main = {}) {
   return { agents: { defaults, entries: { main } } };
+}
+
+function aliases(defaults: Record<string, string | null>, worker = {}) {
+  const metadata = (values: Record<string, string | null>) =>
+    Object.fromEntries(
+      Object.entries(values).map(([model, alias]) => [model, alias === null ? null : { alias }]),
+    );
+  return {
+    agents: {
+      defaults: { models: metadata(defaults) },
+      entries: { worker: { models: metadata(worker) } },
+    },
+  };
 }

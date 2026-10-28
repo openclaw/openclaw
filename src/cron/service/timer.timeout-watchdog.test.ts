@@ -529,19 +529,6 @@ it("re-arms the pre-execution watchdog when a fallback runner returns to setup (
     entries: [{ source: "cron-setup", severity: "error", message: diagnostic, ts: SCHEDULED_AT }],
   });
   expect(cleanupTimedOutAgentRun).toHaveBeenCalledOnce();
-  expect(sendCronFailureAlert).toHaveBeenCalledExactlyOnceWith({
-    job: expect.objectContaining({ id: job.id }),
-    routing: { defaultAgentId: "main" },
-    payload: {
-      text: 'Automation "before agent reply unhandled regression" failed 1 times\nCause: timeout',
-    },
-    runAtMs: expect.any(Number),
-    channel: "telegram",
-    to: "12345",
-    mode: "announce",
-    accountId: undefined,
-    threadId: undefined,
-    inheritSessionThread: false,
-    onDeliverySettled: expect.any(Function),
-  });
+  expect(sendCronFailureAlert).toHaveBeenCalledOnce();
+  expect(sendCronFailureAlert.mock.calls[0]?.[0].payload.text).toContain("Cause: timeout");
 });

@@ -23,9 +23,9 @@ async function listWorkspaceSkillMarkdownFiles(
   workspaceDir: string,
 ): Promise<{ skillFilePaths: string[]; truncated: boolean }> {
   const skillsRoot = path.join(workspaceDir, "skills");
-  let rootStat: Awaited<ReturnType<typeof fs.lstat>>;
+  let rootStat: Awaited<ReturnType<typeof fs.stat>>;
   try {
-    rootStat = await fs.lstat(skillsRoot);
+    rootStat = await fs.stat(skillsRoot);
   } catch (error) {
     return { skillFilePaths: [], truncated: !isNotFoundPathError(error) };
   }

@@ -1,5 +1,6 @@
 import type { RouteMatch } from "@openclaw/uirouter";
 import { For, Match, Switch } from "solid-js";
+import { HomeSessionUnavailable } from "../../components/home-session-unavailable.tsx";
 import { PanelErrorState } from "../../components/solid/lazy-view-error.tsx";
 import { registerSessionNavigationEnglish } from "../../i18n/locales/en-session-navigation.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
@@ -31,6 +32,10 @@ export function ChatRouteView(props: { data?: unknown; presented?: boolean }) {
   const missing = () => {
     const value = routeData();
     return value?.kind === "missing-session" ? value : undefined;
+  };
+  const unavailableHome = () => {
+    const value = routeData();
+    return value?.kind === "unavailable-home" ? value : undefined;
   };
   const session = () => {
     const value = routeData();
@@ -96,6 +101,9 @@ export function ChatRouteView(props: { data?: unknown; presented?: boolean }) {
             }
           />
         )}
+      </Match>
+      <Match when={unavailableHome()}>
+        {(data) => <HomeSessionUnavailable agentId={data().agentId} />}
       </Match>
       <Match when={session()}>
         {(data) => (

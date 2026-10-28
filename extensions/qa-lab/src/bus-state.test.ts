@@ -1,4 +1,8 @@
-import type { QaBusInboundMessageInput } from "openclaw/plugin-sdk/qa-channel-protocol";
+import type {
+  QaBusInboundMessageInput,
+  QaBusOutboundMessageInput,
+  QaBusSearchMessagesInput,
+} from "openclaw/plugin-sdk/qa-channel-protocol";
 import { beforeEach, describe, expect, it } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 
@@ -17,9 +21,9 @@ describe("qa-bus state", () => {
     const thread = outbound("thread:CaseSensitive/ThreadCase", "thread");
     expect(thread.conversation).toEqual({ id: "CaseSensitive", kind: "channel" });
     expect(thread.threadId).toBe("ThreadCase");
-    expect(() =>
-      state.addOutboundMessage({ to: "CHANNEL:CaseSensitive", text: "invalid" }),
-    ).toThrow("qa-channel target prefixes must be lowercase");
+    expect(() => outbound("CHANNEL:CaseSensitive", "invalid")).toThrow(
+      "qa-channel target prefixes must be lowercase",
+    );
   });
 
   it("records inbound and outbound traffic in cursor order", () => {
@@ -45,15 +49,10 @@ describe("qa-bus state", () => {
 
     expect(received.id).toBe(providerMessageId);
     expect(snapshot.messages[0]?.id).toBe(providerMessageId);
-    expect(snapshot.events[0]).toMatchObject({
-      kind: "inbound-message",
-      message: { id: providerMessageId },
-    });
-    expect(state.poll().events[0]).toMatchObject({
-      kind: "inbound-message",
-      message: { id: providerMessageId },
-    });
-    expect(state.readMessage({ messageId: providerMessageId })).toMatchObject({
+    for (const event of [snapshot.events[0], state.poll().events[0]]) {
+      expect(event).toMatchObject({ kind: "inbound-message", message: { id: providerMessageId } });
+    }
+    expect(read(providerMessageId)).toMatchObject({
       id: providerMessageId,
       text: "provider-native identity",
     });
@@ -75,8 +74,14 @@ describe("qa-bus state", () => {
     );
   const outbound = (to: string, text: string, accountId?: string) =>
     state.addOutboundMessage({ to, text, accountId });
+  const send = (input: Partial<QaBusOutboundMessageInput>) =>
+    state.addOutboundMessage({ to: "dm:alice", text: "artifact", ...input });
   const read = (messageId: string, accountId?: string) =>
     state.readMessage({ messageId, accountId });
+  const searchIds = (input: QaBusSearchMessagesInput) =>
+    state.searchMessages(input).map((message) => message.id);
+  const react = (messageId: string, emoji: string, senderId: string) =>
+    state.reactToMessage({ messageId, emoji, senderId });
   function expectRejectedMutations(
     input: { messageId: string; accountId?: string },
     error: string,
@@ -113,11 +118,9 @@ describe("qa-bus state", () => {
         id: messageId,
         text: `${accountId} original`,
       });
-      expect(state.searchMessages({ accountId })).toEqual([
-        expect.objectContaining({ accountId, id: messageId }),
-      ]);
-      expect(state.poll({ accountId }).events).toEqual([
-        expect.objectContaining({ accountId, message: expect.objectContaining({ id: messageId }) }),
+      expect(state.searchMessages({ accountId })).toMatchObject([{ accountId, id: messageId }]);
+      expect(state.poll({ accountId }).events).toMatchObject([
+        { accountId, message: { id: messageId } },
       ]);
     }
 
@@ -155,11 +158,8 @@ describe("qa-bus state", () => {
     ]);
     expect(originalSnapshot.events.map((event) => event.accountId)).toEqual([accountId, accountId]);
     for (const conversationId of ["first-room", "second-room"]) {
-      expect(state.searchMessages({ accountId, conversationId })).toEqual([
-        expect.objectContaining({
-          id: messageId,
-          conversation: expect.objectContaining({ id: conversationId }),
-        }),
+      expect(state.searchMessages({ accountId, conversationId })).toMatchObject([
+        { id: messageId, conversation: { id: conversationId } },
       ]);
     }
 
@@ -170,22 +170,16 @@ describe("qa-bus state", () => {
   });
 
   it("normalizes the dm ingress alias before channel routing", () => {
-    const message = inbound({
-      conversation: { id: "alice", kind: "dm" as never },
-    });
+    const message = inbound({ conversation: { id: "alice", kind: "dm" as never } });
 
     expect(message.conversation).toEqual({ id: "alice", kind: "direct" });
-    expect(state.getSnapshot().conversations).toEqual([
-      expect.objectContaining({ id: "alice", kind: "direct" }),
-    ]);
+    expect(state.getSnapshot().conversations).toMatchObject([{ id: "alice", kind: "direct" }]);
   });
 
   it("rejects unknown inbound conversation kinds instead of treating them as groups", () => {
-    expect(() =>
-      inbound({
-        conversation: { id: "alice", kind: "private" as never },
-      }),
-    ).toThrow("invalid qa-channel conversation kind: private");
+    expect(() => inbound({ conversation: { id: "alice", kind: "private" as never } })).toThrow(
+      "invalid qa-channel conversation kind: private",
+    );
   });
 
   it("creates threads and mutates message state", () => {
@@ -195,13 +189,13 @@ describe("qa-bus state", () => {
       text: "inside thread",
       threadId: thread.id,
     });
-    state.reactToMessage({ messageId: message.id, emoji: "eyes", senderId: "alice" });
+    react(message.id, "eyes", "alice");
     state.editMessage({ messageId: message.id, text: "inside thread (edited)" });
     state.deleteMessage({ messageId: message.id });
 
     const snapshot = state.getSnapshot();
-    expect(snapshot.threads).toEqual([
-      expect.objectContaining({ id: thread.id, conversationId: "qa-room", title: "QA thread" }),
+    expect(snapshot.threads).toMatchObject([
+      { id: thread.id, conversationId: "qa-room", title: "QA thread" },
     ]);
     expect(snapshot.messages).toEqual([
       expect.objectContaining({
@@ -225,9 +219,7 @@ describe("qa-bus state", () => {
       live.id,
       deleted.id,
     ]);
-    expect(state.searchMessages({ query: "needle", limit: 1 })).toEqual([
-      expect.objectContaining({ id: live.id }),
-    ]);
+    expect(state.searchMessages({ query: "needle", limit: 1 })).toMatchObject([{ id: live.id }]);
 
     expectRejectedMutations({ messageId: deleted.id }, "qa-bus message was deleted");
     expect(state.getSnapshot().cursor).toBe(cursorAfterDelete);
@@ -236,23 +228,19 @@ describe("qa-bus state", () => {
   it("adds each sender and emoji reaction at most once", () => {
     const message = outbound("channel:qa-room", "react once");
 
-    state.reactToMessage({ messageId: message.id, emoji: "eyes", senderId: " alice " });
+    react(message.id, "eyes", " alice ");
     const cursorAfterReaction = state.getSnapshot().cursor;
 
-    const repeated = state.reactToMessage({
-      messageId: message.id,
-      emoji: "eyes",
-      senderId: "alice",
-    });
+    const repeated = react(message.id, "eyes", "alice");
     expect(repeated.reactions).toHaveLength(1);
     expect(state.getSnapshot().cursor).toBe(cursorAfterReaction);
 
-    state.reactToMessage({ messageId: message.id, emoji: "eyes", senderId: "bob" });
-    state.reactToMessage({ messageId: message.id, emoji: "wave", senderId: "alice" });
-    expect(read(message.id).reactions).toEqual([
-      expect.objectContaining({ emoji: "eyes", senderId: "alice" }),
-      expect.objectContaining({ emoji: "eyes", senderId: "bob" }),
-      expect.objectContaining({ emoji: "wave", senderId: "alice" }),
+    react(message.id, "eyes", "bob");
+    react(message.id, "wave", "alice");
+    expect(read(message.id).reactions).toMatchObject([
+      { emoji: "eyes", senderId: "alice" },
+      { emoji: "eyes", senderId: "bob" },
+      { emoji: "wave", senderId: "alice" },
     ]);
     expect(state.getSnapshot().cursor).toBe(cursorAfterReaction + 2);
   });
@@ -328,15 +316,13 @@ describe("qa-bus state", () => {
       ["direct", direct.id],
     ] as const) {
       expect(
-        state
-          .searchMessages({
-            query: "needle",
-            conversationId: "shared",
-            conversationKind,
-            threadId: null,
-            limit: 2,
-          })
-          .map((message) => message.id),
+        searchIds({
+          query: "needle",
+          conversationId: "shared",
+          conversationKind,
+          threadId: null,
+          limit: 2,
+        }),
       ).toEqual([id]);
     }
     expect(state.searchMessages({ conversationId: "", limit: 2 })).toEqual([]);
@@ -385,9 +371,9 @@ describe("qa-bus state", () => {
   });
 
   it("keeps account-scoped cursor waits blocked on unrelated account traffic", async () => {
-    const pending = state.waitForCursorAdvance(0, 500, (snapshot) => {
-      return snapshot.events.some((event) => event.accountId === "acct-a" && event.cursor > 0);
-    });
+    const pending = state.waitForCursorAdvance(0, 500, (snapshot) =>
+      snapshot.events.some((event) => event.accountId === "acct-a" && event.cursor > 0),
+    );
 
     inbound({ accountId: "acct-b" });
 
@@ -405,9 +391,9 @@ describe("qa-bus state", () => {
   });
 
   it("wakes default-account cursor waits when accountId is omitted", async () => {
-    const pending = state.waitForCursorAdvance(0, 500, (snapshot) => {
-      return snapshot.events.some((event) => event.accountId === "default" && event.cursor > 0);
-    });
+    const pending = state.waitForCursorAdvance(0, 500, (snapshot) =>
+      snapshot.events.some((event) => event.accountId === "default" && event.cursor > 0),
+    );
 
     inbound({
       conversation: { id: "target", kind: "direct" },
@@ -427,30 +413,24 @@ describe("qa-bus state", () => {
       altText: "QA dashboard screenshot",
       contentBase64: "aGVsbG8=",
     };
-    const message = state.addOutboundMessage({
-      to: "dm:alice",
-      text: "artifact attached",
-      attachments: [attachment],
-    });
+    const message = send({ attachments: [attachment] });
 
     expect(read(message.id).attachments).toEqual([attachment]);
     for (const query of ["screenshot", "dashboard"]) {
-      expect(state.searchMessages({ query }).map((entry) => entry.id)).toContain(message.id);
+      expect(searchIds({ query })).toContain(message.id);
     }
   });
 
   it("preserves tool-call argument text and returns isolated copies", () => {
     const args = { command: "pwd", apiToken: "secret-token" };
-    const message = state.addOutboundMessage({
-      to: "dm:alice",
-      text: "used a tool",
+    const message = send({
       toolCalls: [{ name: " exec ", arguments: { ...args, omitted: undefined } }],
     });
 
     const readback = read(message.id);
     // Payload text stays intact; secret masking belongs to diagnostic output.
     expect(readback.toolCalls).toEqual([{ name: "exec", arguments: args }]);
-    expect(state.searchMessages({ query: "exec" }).map((entry) => entry.id)).toContain(message.id);
+    expect(searchIds({ query: "exec" })).toContain(message.id);
 
     const readbackArguments = readback.toolCalls?.[0]?.arguments;
     if (!readbackArguments) {

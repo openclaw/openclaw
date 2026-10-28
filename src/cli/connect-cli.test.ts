@@ -88,6 +88,13 @@ function savedAccessGateway(
   });
 }
 
+function expectBootstrap() {
+  expect(mocks.runNodeHost).toHaveBeenCalledWith(
+    expect.objectContaining({ stopAfterFirstConnect: true }),
+  );
+  expect(mocks.runNodeHost.mock.calls[0]?.[0]).not.toHaveProperty("forceWorkerRuns");
+}
+
 async function runConnect(args: string[]): Promise<void> {
   const program = new Command();
   program.exitOverride();
@@ -107,28 +114,19 @@ describe("connect cli", () => {
     mocks.runtime.exit.mockImplementation(() => {});
   });
 
-  it.each([
-    ["Application/JSON; charset=utf-8", true],
-    ["APPLICATION/JSON", true],
-    ["text/html", false],
-    ["application/json-seq", false],
-  ])("recognizes the join response media type %s", async (contentType, accepted) => {
-    const release = joinResponse(contentType);
-
-    await runConnect([`https://gateway.example/j/${"a".repeat(22)}`]);
-
-    if (accepted) {
-      expect(mocks.runNodeHost).toHaveBeenCalledOnce();
-      expect(mocks.runtime.error).not.toHaveBeenCalled();
-    } else {
+  it.each(["text/html", "application/json-seq"])(
+    "rejects join media type %s",
+    async (contentType) => {
+      const release = joinResponse(contentType);
+      await runConnect([`https://gateway.example/j/${"a".repeat(22)}`]);
       expectFailure("Gateway join code was not found or has expired.");
-    }
-    expect(release).toHaveBeenCalledOnce();
-  });
+      expect(release).toHaveBeenCalledOnce();
+    },
+  );
 
   it("maps an HTTPS join URL into the existing node foreground runtime", async () => {
     const target = `https://gateway.example/openclaw-gw/j/${"a".repeat(22)}`;
-    joinResponse("application/json; charset=utf-8", target);
+    const release = joinResponse("Application/JSON; charset=utf-8", target);
 
     await runConnect([target, "--display-name", "Build Node"]);
 
@@ -152,7 +150,8 @@ describe("connect cli", () => {
       preferGatewayBootstrapToken: true,
       displayName: "Build Node",
     });
-    expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(1);
+    expect(release).toHaveBeenCalledOnce();
+    expect(mocks.runtime.error).not.toHaveBeenCalled();
     expect(mocks.fetchWithSsrFGuard.mock.calls[0]?.[0]).not.toHaveProperty("init");
     expect(mocks.runNodeDaemonInstall).not.toHaveBeenCalled();
   });
@@ -283,12 +282,7 @@ describe("connect cli", () => {
   it("authenticates before persisting hosting consent and installing the service", async () => {
     await runConnect([setupCode(), "--service", "--session-host", "--display-name", "Runner Node"]);
 
-    expect(mocks.runNodeHost).toHaveBeenCalledWith(
-      expect.objectContaining({
-        stopAfterFirstConnect: true,
-      }),
-    );
-    expect(mocks.runNodeHost.mock.calls[0]?.[0]).not.toHaveProperty("forceWorkerRuns");
+    expectBootstrap();
     expect(mocks.mutateConfigFileWithRetry).toHaveBeenCalledWith({
       writeOptions: {
         auditOrigin: "cli",
@@ -332,10 +326,7 @@ describe("connect cli", () => {
 
     await runConnect([setupCode(), "--service", "--session-host"]);
 
-    expect(mocks.runNodeHost).toHaveBeenCalledWith(
-      expect.objectContaining({ stopAfterFirstConnect: true }),
-    );
-    expect(mocks.runNodeHost.mock.calls[0]?.[0]).not.toHaveProperty("forceWorkerRuns");
+    expectBootstrap();
     expect(mocks.mutateConfigFileWithRetry).toHaveBeenCalledTimes(mutationCalls);
     expect(mocks.runtime.error).toHaveBeenCalledWith(error);
     expect(mocks.runtime.exit).toHaveBeenCalledWith(1);

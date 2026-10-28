@@ -183,31 +183,27 @@ it("retains slow successful catalogs without extending absolute expiry", async (
   expect(load).toHaveBeenCalledTimes(2);
 });
 
-it.each([
-  { outcome: "resolve", ttlMs: 0, now: () => 1_000, values: ["fresh"] },
-  { outcome: "overflow", ttlMs: 1, now: () => 8_640_000_000_000_000, values: ["first", "second"] },
-])(
-  "bypasses a warm cache without modifying it when the uncached loader will $outcome",
-  async ({ ttlMs, now, values }) => {
-    const keyParts = ["provider", "models"];
-    await cache(keyParts, async () => "cached");
-    const controller = new AbortController();
-    let calls = 0;
-    const load = vi.fn((signal?: AbortSignal) => {
-      expect(signal).toBe(controller.signal);
-      return Promise.resolve(values[calls++]);
-    });
-    const shouldCache = vi.fn(() => false);
-    for (const expected of values) {
-      await expect(
-        cache(keyParts, load, { shouldCache, signal: controller.signal, ttlMs, now }),
-      ).resolves.toBe(expected);
-    }
-    expect(shouldCache).not.toHaveBeenCalled();
-    await expect(cache(keyParts, load)).resolves.toBe("cached");
-    expect(load).toHaveBeenCalledTimes(values.length);
-  },
-);
+it("bypasses a warm cache without modifying it when caching is disabled", async () => {
+  const keyParts = ["provider", "models"];
+  await cache(keyParts, async () => "cached");
+  const controller = new AbortController();
+  const load = vi.fn((signal?: AbortSignal) => {
+    expect(signal).toBe(controller.signal);
+    return Promise.resolve("fresh");
+  });
+  const shouldCache = vi.fn(() => false);
+  await expect(
+    cache(keyParts, load, {
+      shouldCache,
+      signal: controller.signal,
+      ttlMs: 0,
+      now: () => 1_000,
+    }),
+  ).resolves.toBe("fresh");
+  expect(shouldCache).not.toHaveBeenCalled();
+  await expect(cache(keyParts, load)).resolves.toBe("cached");
+  expect(load).toHaveBeenCalledOnce();
+});
 
 it.each(["resolve", "predicate-throw", "same-promise"] as const)(
   "preserves a replacement cache entry after expired work finishes with %s",

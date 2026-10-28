@@ -20,6 +20,7 @@ import {
   closeOpenClawStateDatabaseByPathAsync,
   publishOpenClawStateDatabaseWorkerAdmission,
   registerOpenClawStateDatabaseAsyncResource,
+  registerOpenClawStatePathAsyncResource,
 } from "./openclaw-state-db-cache.js";
 import { openOpenClawStateReadConnection } from "./openclaw-state-db-read-connection.js";
 import { withExistingOpenClawStateSchema } from "./openclaw-state-db-schema-policy.js";
@@ -192,25 +193,37 @@ describe("canonical shared-state resource drainage", () => {
     },
   );
 
-  it("publishes replacement identity without renewing revoked read authority", () => {
+  it("publishes replacement identity without renewing revoked read authority", async () => {
     const pathname = databasePath();
     writeFileSync(pathname, "original");
     const original = captureOpenClawStateDatabaseReadAdmission(pathname);
     const originalKey = original.identity.key;
     const coordinationKey = original.coordinationKey;
-    clearOpenClawStateDatabaseOpenFailure(pathname);
-    expect(original.assertCurrent).toThrow(/admission changed/);
-    renameSync(pathname, `${pathname}.retired`);
-    writeFileSync(pathname, "created");
-    const physical = databaseIdentity.readDatabasePathIdentitySync(pathname);
-    expect(physical.key).not.toBe(originalKey);
-    expect(() => publishOpenClawStateDatabaseWorkerAdmission(original)).toThrow(
-      /admission changed/,
-    );
-    expect(original.assertCurrent).toThrow(/admission changed/);
-    expect(original.coordinationKey).toBe(coordinationKey);
-    expect(original.identity.key).toBe(originalKey);
-    expect(original.identity.key).not.toBe(physical.key);
+    const close = vi.fn(async () => {});
+    const unregister = registerOpenClawStatePathAsyncResource(original, close);
+    try {
+      const unrelated = databasePath("unrelated");
+      writeFileSync(unrelated, "");
+      await closeOpenClawStateDatabaseByPathAsync(unrelated);
+      expect(close).not.toHaveBeenCalled();
+      clearOpenClawStateDatabaseOpenFailure(pathname);
+      expect(original.assertCurrent).toThrow(/admission changed/);
+      renameSync(pathname, `${pathname}.retired`);
+      writeFileSync(pathname, "created");
+      const physical = databaseIdentity.readDatabasePathIdentitySync(pathname);
+      expect(physical.key).not.toBe(originalKey);
+      expect(() => publishOpenClawStateDatabaseWorkerAdmission(original)).toThrow(
+        /admission changed/,
+      );
+      expect(original.assertCurrent).toThrow(/admission changed/);
+      expect(original.coordinationKey).toBe(coordinationKey);
+      expect(original.identity.key).toBe(originalKey);
+      expect(original.identity.key).not.toBe(physical.key);
+      await closeOpenClawStateDatabaseByPathAsync(pathname);
+      expect(close).toHaveBeenCalledExactlyOnceWith();
+    } finally {
+      unregister();
+    }
   });
 
   it("normalizes relative paths for identity, invalidation, exclusion, and closure", async () => {

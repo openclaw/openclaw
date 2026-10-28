@@ -1,7 +1,22 @@
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
-import { latestSubagentRun, recordLatestSubagentRun } from "./subagent-run-generation.js";
+import {
+  compareSubagentRunGeneration,
+  latestSubagentRun,
+  recordLatestSubagentRun,
+} from "./subagent-run-generation.js";
 
 const NO_DESCENDANTS: readonly never[] = Object.freeze([]);
+
+type RunMembership = {
+  keys: string[];
+  snapshotPosition: number | undefined;
+  controllerPosition: number | undefined;
+  swarmPosition: number | undefined;
+  memoryPosition: number | undefined;
+  // Live entries can move in place before their patch reaches this index.
+  memoryChildKey: string | undefined;
+};
+type PositionKey = Exclude<keyof RunMembership, "keys" | "memoryChildKey">;
 
 function updateIndex<T>(index: Map<string, T>, key: string, value: T | undefined): void {
   if (value === undefined) {
@@ -29,46 +44,61 @@ export function buildSubagentRunReadTopology<T extends SubagentRunReadRecord>(pa
   const runsByControllerSessionKey = new Map<string, T[]>();
   const swarmRunsByRequesterSessionKey = new Map<string, T[]>();
   const latestRunByRequesterAndChildSessionKey = new Map<string, Map<string, T>>();
-  const descendantsBySessionKey = new Map<string, readonly T[]>();
+  const descendantsBySessionKey = new Map<string, readonly string[]>();
   let revision = {};
   const snapshotRunsByChildSessionKey = new Map<string, T[]>();
   const memoryRunsByChildSessionKey = new Map<string, T[]>();
-  const memoryChildKeys = new Map<string, string>();
-  const runKeys = new Map<string, string[]>();
+  const memberships = new Map<string, RunMembership>();
+  const membershipFor = (runId: string): RunMembership => {
+    let membership = memberships.get(runId);
+    if (!membership) {
+      membership = {
+        keys: [],
+        snapshotPosition: undefined,
+        controllerPosition: undefined,
+        swarmPosition: undefined,
+        memoryPosition: undefined,
+        memoryChildKey: undefined,
+      };
+      memberships.set(runId, membership);
+    }
+    return membership;
+  };
   const groupingKeys = (entry: T) => [
     entry.childSessionKey.trim(),
     resolveControllerSessionKey(entry),
     entry.collect && entry.groupId ? (entry.swarmRequesterSessionKey ?? "") : "",
     entry.requesterSessionKey,
   ];
-  const positionsByIndex = new Map<Map<string, T[]>, Map<string, number>>();
-  const updateBucket = (index: Map<string, T[]>, key: string, runId: string, entry?: T) => {
+  const updateBucket = (
+    index: Map<string, T[]>,
+    positionKey: PositionKey,
+    key: string,
+    runId: string,
+    entry?: T,
+  ) => {
     if (!key) {
       return;
     }
     const rows = index.get(key) ?? [];
-    let positions = positionsByIndex.get(index);
-    if (!positions) {
-      positions = new Map();
-      positionsByIndex.set(index, positions);
-    }
-    const position = positions.get(runId);
+    const membership = membershipFor(runId);
+    const position = membership[positionKey];
     if (position !== undefined) {
       if (entry) {
         rows[position] = entry;
       } else {
         rows.splice(position, 1);
-        positions.delete(runId);
+        membership[positionKey] = undefined;
         // Preserve published group order and repair only positions shifted by removal.
         for (let next = position; next < rows.length; next++) {
           const row = rows[next];
           if (row) {
-            positions.set(row.runId, next);
+            memberships.get(row.runId)![positionKey] = next;
           }
         }
       }
     } else if (entry) {
-      positions.set(runId, rows.length);
+      membership[positionKey] = rows.length;
       rows.push(entry);
     }
     updateIndex(index, key, rows.length ? rows : undefined);
@@ -76,8 +106,14 @@ export function buildSubagentRunReadTopology<T extends SubagentRunReadRecord>(pa
 
   for (const entry of params.inMemoryRuns ?? []) {
     const childSessionKey = entry.childSessionKey.trim();
-    memoryChildKeys.set(entry.runId, childSessionKey);
-    updateBucket(memoryRunsByChildSessionKey, childSessionKey, entry.runId, entry);
+    membershipFor(entry.runId).memoryChildKey = childSessionKey;
+    updateBucket(
+      memoryRunsByChildSessionKey,
+      "memoryPosition",
+      childSessionKey,
+      entry.runId,
+      entry,
+    );
     if (!childSessionKey) {
       continue;
     }
@@ -88,12 +124,17 @@ export function buildSubagentRunReadTopology<T extends SubagentRunReadRecord>(pa
     runs,
     inMemoryRuns: new Set(inMemoryDisplayByChildSessionKey.values()),
   };
+  const groups = [
+    [snapshotRunsByChildSessionKey, "snapshotPosition"],
+    [runsByControllerSessionKey, "controllerPosition"],
+    [swarmRunsByRequesterSessionKey, "swarmPosition"],
+  ] as const;
   function patch(
     changes: ReadonlyMap<string, T | undefined>,
     inMemoryChanges: ReadonlyMap<string, T | undefined>,
-  ): void {
-    descendantsBySessionKey.clear();
+  ): { affected: Iterable<string>; membershipChanged: boolean } {
     revision = {};
+    let membershipChanged = false;
     const affected = new Map<string, Set<string>>();
     const touch = (child: string) => {
       if (child && !affected.has(child)) {
@@ -101,49 +142,66 @@ export function buildSubagentRunReadTopology<T extends SubagentRunReadRecord>(pa
           child,
           new Set(
             (snapshotRunsByChildSessionKey.get(child) ?? []).map(
-              (entry) => runKeys.get(entry.runId)?.[3] ?? entry.requesterSessionKey,
+              (entry) => memberships.get(entry.runId)?.keys[3] ?? entry.requesterSessionKey,
             ),
           ),
         );
       }
     };
-    const groups = [
-      snapshotRunsByChildSessionKey,
-      runsByControllerSessionKey,
-      swarmRunsByRequesterSessionKey,
-    ];
     for (const [runId, entry] of changes) {
-      const previous = runKeys.get(runId) ?? [];
+      const membership = membershipFor(runId);
+      const previous = membership.keys;
       const next = entry ? groupingKeys(entry) : [];
+      const previousPosition = membership.snapshotPosition;
+      const observed =
+        previousPosition === undefined
+          ? undefined
+          : snapshotRunsByChildSessionKey.get(previous[0] ?? "")?.[previousPosition];
+      if (
+        !observed ||
+        !entry ||
+        compareSubagentRunGeneration(observed, entry) !== 0 ||
+        previous.length !== next.length ||
+        previous.some((key, position) => key !== next[position])
+      ) {
+        descendantsBySessionKey.clear();
+        membershipChanged = true;
+      }
       touch(previous[0] ?? "");
       touch(next[0] ?? "");
-      groups.forEach((index, position) => {
+      groups.forEach(([index, positionKey], position) => {
         if (previous[position] && previous[position] !== next[position]) {
-          updateBucket(index, previous[position], runId);
+          updateBucket(index, positionKey, previous[position], runId);
         }
-        updateBucket(index, next[position] ?? "", runId, entry);
+        updateBucket(index, positionKey, next[position] ?? "", runId, entry);
       });
+      membership.keys = next;
       if (entry) {
         // Initialization reads the caller's Map; only patches write new facts.
         if (changes !== runs) {
           runs.set(runId, entry);
         }
-        runKeys.set(runId, next);
       } else {
         runs.delete(runId);
-        runKeys.delete(runId);
+        if (membership.memoryChildKey === undefined) {
+          memberships.delete(runId);
+        }
       }
     }
     for (const [runId, entry] of inMemoryChanges) {
-      const previous = memoryChildKeys.get(runId) ?? "";
+      const membership = membershipFor(runId);
+      const previous = membership.memoryChildKey ?? "";
       const next = entry?.childSessionKey.trim() ?? "";
       touch(previous);
       touch(next);
       if (previous !== next) {
-        updateBucket(memoryRunsByChildSessionKey, previous, runId);
+        updateBucket(memoryRunsByChildSessionKey, "memoryPosition", previous, runId);
       }
-      updateBucket(memoryRunsByChildSessionKey, next, runId, entry);
-      updateIndex(memoryChildKeys, runId, entry ? next : undefined);
+      updateBucket(memoryRunsByChildSessionKey, "memoryPosition", next, runId, entry);
+      membership.memoryChildKey = entry ? next : undefined;
+      if (!entry && !membership.keys.length) {
+        memberships.delete(runId);
+      }
     }
     for (const [child, previousRequesters] of affected) {
       const rows = snapshotRunsByChildSessionKey.get(child) ?? [];
@@ -164,7 +222,7 @@ export function buildSubagentRunReadTopology<T extends SubagentRunReadRecord>(pa
       ] as const) {
         updateIndex(index, child, entry);
       }
-      const candidates = [...new Set([...rows, ...(memory ? [memory] : [])])];
+      const candidates = memory && !rows.includes(memory) ? [...rows, memory] : rows.slice();
       updateIndex(runsByChildSessionKey, child, candidates.length ? candidates : undefined);
       const byRequester = new Map<string, T>();
       for (const row of rows) {
@@ -184,6 +242,7 @@ export function buildSubagentRunReadTopology<T extends SubagentRunReadRecord>(pa
         );
       }
     }
+    return { affected: affected.keys(), membershipChanged };
   }
   patch(runs, new Map());
   for (const [key, entry] of inMemoryDisplayByChildSessionKey) {
@@ -191,7 +250,7 @@ export function buildSubagentRunReadTopology<T extends SubagentRunReadRecord>(pa
       runsByChildSessionKey.set(key, [entry]);
     }
   }
-  function getDescendantRuns(rootSessionKey: string): readonly T[] {
+  function getDescendantKeys(rootSessionKey: string): readonly string[] {
     const root = rootSessionKey.trim();
     if (!root || !latestRunByRequesterAndChildSessionKey.has(root)) {
       return NO_DESCENDANTS;
@@ -200,7 +259,7 @@ export function buildSubagentRunReadTopology<T extends SubagentRunReadRecord>(pa
     if (cached) {
       return cached;
     }
-    const descendants: T[] = [];
+    const descendants: string[] = [];
     const pending = [root];
     const visited = new Set(pending);
     for (const requester of pending) {
@@ -211,7 +270,8 @@ export function buildSubagentRunReadTopology<T extends SubagentRunReadRecord>(pa
         if (latestRunsByChildSessionKey.get(childSessionKey) !== entry) {
           continue;
         }
-        descendants.push(entry);
+        // Status updates retain membership; child keys resolve rows from the retained index.
+        descendants.push(childSessionKey);
         if (!visited.has(childSessionKey)) {
           visited.add(childSessionKey);
           pending.push(childSessionKey);
@@ -227,7 +287,7 @@ export function buildSubagentRunReadTopology<T extends SubagentRunReadRecord>(pa
     get revision() {
       return revision;
     },
-    getDescendantRuns,
+    getDescendantKeys,
     inMemoryDisplayByChildSessionKey,
     runsByChildSessionKey,
     latestRunsByChildSessionKey,

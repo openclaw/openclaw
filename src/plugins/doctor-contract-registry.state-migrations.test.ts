@@ -153,31 +153,14 @@ function modernLegacyFixture(source = directDetector) {
 }
 
 describe("doctor-contract-registry state migrations", () => {
-  it("freezes dynamic and declared live actions in stable owner order", () => {
-    const pluginRoot = makeTempDir();
-    writeMigrations(pluginRoot, "dynamic-action");
-    mockDoctorPlugins(
-      pluginRecord(pluginRoot, { id: "dynamic-owner" }),
-      pluginRecord(pluginRoot, {
-        id: "declared-owner",
-        doctorContract: { stateMigrations: [{ id: "declared-action" }] },
-      }),
-    );
-
-    expect(
-      harness.registry.resolveLivePluginDoctorStateMigrationInventory({ config: {}, env: {} })
-        .descriptors,
-    ).toEqual([
-      { pluginId: "declared-owner", id: "declared-action" },
-      { pluginId: "dynamic-owner", id: "dynamic-action" },
-    ]);
-  });
-
-  it("uses stable owner order while preserving each owner's declaration order", () => {
+  it("orders dynamic and declared owners while preserving each owner's action order", () => {
     const acpxRoot = makeTempDir();
     const codexRoot = makeTempDir();
+    const dynamicRoot = makeTempDir();
     writeMigrations(acpxRoot, "z-prepare", "a-finalize");
     writeMigrations(codexRoot, "codex-only");
+    writeMigrations(dynamicRoot, "dynamic-action");
+    const dynamicRecord = pluginRecord(dynamicRoot, { id: "dynamic-owner" });
     const codexRecord = pluginRecord(codexRoot, {
       id: "codex",
       origin: "config",
@@ -189,7 +172,7 @@ describe("doctor-contract-registry state migrations", () => {
         stateMigrations: [{ id: "z-prepare" }, { id: "a-finalize" }],
       },
     });
-    let discoveryOrder = [codexRecord, acpxRecord];
+    let discoveryOrder = [dynamicRecord, codexRecord, acpxRecord];
     mocks.loadPluginManifestRegistry.mockImplementation(() => ({
       plugins: discoveryOrder,
       diagnostics: [],
@@ -198,13 +181,14 @@ describe("doctor-contract-registry state migrations", () => {
       { pluginId: "acpx", id: "z-prepare" },
       { pluginId: "acpx", id: "a-finalize" },
       { pluginId: "codex", id: "codex-only" },
+      { pluginId: "dynamic-owner", id: "dynamic-action" },
     ];
     expect(
       harness.registry.resolveLivePluginDoctorStateMigrationInventory({ config: {}, env: {} })
         .descriptors,
     ).toEqual(expected);
 
-    discoveryOrder = [acpxRecord, codexRecord];
+    discoveryOrder = [acpxRecord, codexRecord, dynamicRecord];
     expect(
       migrationEntries().map(({ pluginId, migration }) => ({
         pluginId,
@@ -395,24 +379,16 @@ describe("doctor-contract-registry state migrations", () => {
     ).toEqual(["alpha-state"]);
   });
 
-  it("prefers modern migrations without loading the same owner's legacy setup entry", () => {
-    const { pluginRoot, events } = modernLegacyFixture(
-      "throw new Error('obsolete setup entry loaded');",
-    );
-    writeMigrations(pluginRoot, "alpha-modern");
-    expect(migrationIds()).toEqual(["alpha-modern"]);
-    expect(events()).toEqual([]);
-    expect(doctorContractWarnMock).not.toHaveBeenCalled();
-  });
-
-  it("does not fall back to legacy when an explicit modern declaration yields no migrations", () => {
-    const { pluginRoot, events } = modernLegacyFixture();
-    writeMigrations(pluginRoot);
-
-    expect(migrationEntries()).toEqual([]);
-    expect(events()).toEqual([]);
-    expect(doctorContractWarnMock).not.toHaveBeenCalled();
-  });
+  it.each([{ ids: [] }, { ids: ["alpha-modern"] }])(
+    "never falls back to legacy for an explicit modern declaration: $ids",
+    ({ ids }) => {
+      const { pluginRoot, events } = modernLegacyFixture();
+      writeMigrations(pluginRoot, ...ids);
+      expect(migrationIds()).toEqual(ids);
+      expect(events()).toEqual([]);
+      expect(doctorContractWarnMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps bundled non-channel state migrations available when plugins are globally disabled", () => {
     const pluginRoot = makeTempDir();

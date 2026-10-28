@@ -85,14 +85,21 @@ it("sanitizes DM, group, and media-caption text before the Urbit poke", async ()
     },
   } as OpenClawConfig;
 
-  const send = (to: string, text: string, mediaUrl?: string) =>
-    sendDurableMessageBatch({
+  const send = async (to: string, text: string, mediaUrl?: string) => {
+    const result = await sendDurableMessageBatch({
       cfg,
       channel: "tlon",
       to,
       payloads: [{ text, ...(mediaUrl ? { mediaUrl } : {}) }],
       skipQueue: true,
     });
+    expect(result.status).toBe("sent");
+    if (result.status !== "sent") {
+      throw new Error(`Unexpected send status: ${result.status}`);
+    }
+    expect(result.receipt.parts).toMatchObject([{ kind: mediaUrl ? "media" : "text" }]);
+    expect(result.receipt.platformMessageIds).toEqual([result.results[0]?.messageId]);
+  };
   await send(
     "~sampel-palnet",
     "**Done.**\n⚠️ 🛠️ `search private repos (agent)` failed\n\n```text\n⚠️ 🛠️ `documented example (agent)` failed\n```",
@@ -111,12 +118,6 @@ it("sanitizes DM, group, and media-caption text before the Urbit poke", async ()
     expect.objectContaining({ shipUrl: baseUrl, shipName: "~zod" }),
     1024 * 1024,
   );
-
-  expect(pokes.map(({ app, mark }) => ({ app, mark }))).toEqual([
-    { app: "chat", mark: "chat-dm-action" },
-    { app: "channels", mark: "channel-action-1" },
-    { app: "chat", mark: "chat-dm-action" },
-  ]);
 
   const expectText = (index: number, included: string[], excluded: string[]) => {
     const json = JSON.stringify(expectDefined(pokes[index], `poke ${index}`).json);

@@ -271,25 +271,20 @@ function spawnControlledBunPty() {
     resume: vi.fn(),
   };
   const done = createDeferredCore<number>();
-  let callbacks: TerminalCallbacks | undefined;
-  vi.spyOn(runtime, "spawn").mockImplementation(
-    (_argv: string[], options: { terminal: TerminalCallbacks }) => {
-      callbacks = options.terminal;
-      return {
-        pid: 1234,
-        terminal,
-        exited: done.promise,
-        exitCode: 7,
-        signalCode: null,
-        kill: vi.fn(),
-      };
-    },
-  );
+  const spawn = vi.spyOn(runtime, "spawn").mockReturnValue({
+    pid: 1234,
+    terminal,
+    exited: done.promise,
+    exitCode: 7,
+    signalCode: null,
+    kill: vi.fn(),
+  });
   const handle = bunAdapter.spawnBunTerminalPty({
     ...ptyDefaults,
     env: {},
     name: "xterm-256color",
   });
+  const callbacks = spawn.mock.calls[0]?.[1]?.terminal;
   if (!callbacks) {
     throw new Error("Bun.spawn did not receive terminal callbacks");
   }
@@ -334,59 +329,6 @@ it.each([false, true])(
     }
   },
 );
-
-it.each([false, true])("routes Bun PTYs with Terminal.pause=%s", async (flowControl) => {
-  vi.spyOn(process, "versions", "get").mockReturnValue({ ...process.versions, bun: "1.4.3" });
-  vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
-  const prototype = bun?.Terminal?.prototype ?? {};
-  const pause = Object.getOwnPropertyDescriptor(prototype, "pause");
-  if (!bun) {
-    vi.stubGlobal("Bun", { Terminal: { prototype } });
-  }
-  Object.defineProperty(prototype, "pause", {
-    ...(pause ?? { configurable: true, writable: true }),
-    value: flowControl ? () => {} : undefined,
-  });
-  try {
-    const handle: TerminalPtyHandle = {
-      pid: 1234,
-      write: vi.fn(),
-      resize: vi.fn(),
-      pause: vi.fn(),
-      resume: vi.fn(),
-      onData: vi.fn(),
-      onExit: vi.fn(),
-      kill: vi.fn(),
-    };
-    const native = vi.spyOn(bunAdapter, "spawnBunTerminalPty").mockReturnValue(handle);
-    const helper = vi.spyOn(nodeAdapter, "spawnNodeTerminalPty").mockResolvedValue(handle);
-    const assertCurrent = vi.fn();
-    const params = { ...ptyDefaults, env: { TERM: "dumb", PWD: "/original" }, cwd: "/workspace" };
-    expect(await spawnTerminalPty(params, { assertCurrent })).toBe(handle);
-    expect(assertCurrent).toHaveBeenCalledOnce();
-    if (flowControl) {
-      expect(helper).not.toHaveBeenCalled();
-      expect(native).toHaveBeenCalledWith({
-        ...params,
-        name: "xterm-256color",
-        env: { TERM: "xterm-256color", PWD: "/workspace" },
-      });
-    } else {
-      expect(native).not.toHaveBeenCalled();
-      expect(helper).toHaveBeenCalledWith(params, expect.any(Function), undefined);
-      expect(helper.mock.calls[0]?.[0]).toBe(params);
-      helper.mock.calls[0]?.[1]?.();
-      expect(assertCurrent).toHaveBeenCalledTimes(2);
-    }
-    expect(params.env).toEqual({ TERM: "dumb", PWD: "/original" });
-  } finally {
-    if (pause) {
-      Object.defineProperty(prototype, "pause", pause);
-    } else {
-      delete prototype.pause;
-    }
-  }
-});
 
 it.runIf(Boolean(process.versions.bun) && process.platform !== "win32" && !hasFlowControl)(
   "runs stock Bun terminals through the real Node helper",

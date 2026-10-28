@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { For, Show } from "solid-js";
+import { For, Repeat, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import type { MessageContentItem } from "../../../lib/chat/chat-types.ts";
@@ -143,5 +143,36 @@ export function AssistantAttachmentStatusCard(
         </button>
       </Show>
     </div>
+  );
+}
+
+export function PairingQrNotices(props: { count: number }) {
+  return (
+    <Show when={props.count > 0}>
+      <div class="chat-pairing-qr-notices">
+        <Repeat count={props.count}>
+          {() => (
+            <div class="chat-assistant-attachment-card chat-assistant-attachment-card--blocked chat-pairing-qr-expired">
+              <span class="chat-pairing-qr-expired__icon" aria-hidden="true">
+                <Icon name="alertTriangle" />
+              </span>
+              <div class="chat-pairing-qr-expired__content">
+                <div class="chat-pairing-qr-expired__heading">
+                  <span class="chat-pairing-qr-expired__title">
+                    {t("chat.pairingQrExpired.title")}
+                  </span>
+                  <span class="chat-pairing-qr-expired__badge">
+                    {t("chat.pairingQrExpired.badge")}
+                  </span>
+                </div>
+                <div class="chat-assistant-attachment-card__reason">
+                  {t("chat.pairingQrExpired.reason")}
+                </div>
+              </div>
+            </div>
+          )}
+        </Repeat>
+      </div>
+    </Show>
   );
 }

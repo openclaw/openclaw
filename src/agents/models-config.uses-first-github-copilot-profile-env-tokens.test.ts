@@ -21,7 +21,8 @@ vi.mock("./model-auth-env-vars.js", () => ({
   }),
 }));
 
-vi.mock("../plugins/provider-runtime.js", () => ({
+vi.mock("../plugins/provider-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/provider-runtime.js")>()),
   resolveProviderSyntheticAuthWithPlugin: () => undefined,
 }));
 
@@ -34,11 +35,6 @@ vi.mock("./models-config.providers.catalog.js", async (importOriginal) => ({
 vi.mock("./models-config.providers.source-managed.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./models-config.providers.source-managed.js")>()),
   enforceSourceManagedProviderSecrets: ({ providers }: { providers: unknown }) => providers,
-}));
-
-vi.mock("./models-config.providers.normalize.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./models-config.providers.normalize.js")>()),
-  normalizeProviders: ({ providers }: { providers: unknown }) => providers,
 }));
 
 vi.mock("./models-config.providers.implicit.js", async (importOriginal) => ({

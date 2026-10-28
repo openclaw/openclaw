@@ -75,10 +75,16 @@ function apiKeyAuth(apiKey: string | undefined, source = "env", profileId?: stri
   return { apiKey, mode: "api-key" as const, source, ...(profileId ? { profileId } : {}) };
 }
 
-function runtimeAuth(apiKey: string, value: string, baseUrl?: string, expiresAt?: number) {
+function runtimeAuth(
+  apiKey: string,
+  value: string,
+  baseUrl?: string,
+  expiresAt?: number,
+  headerName = "api-key",
+) {
   return {
     apiKey,
-    request: { auth: { mode: "header" as const, headerName: "api-key", value } },
+    request: { auth: { mode: "header" as const, headerName, value } },
     ...(baseUrl ? { baseUrl } : {}),
     ...(expiresAt ? { expiresAt } : {}),
   };
@@ -92,27 +98,14 @@ function keyProfile(key: string) {
   return { type: "api_key" as const, provider: "custom-openai", key };
 }
 
-function expectProtected(value: string | undefined, plaintext: string): void {
+function expectProtected(value: string | null | undefined, plaintext: string): void {
   expect(value).not.toBe(plaintext);
   expect(looksLikeSecretSentinel(value ?? "")).toBe(true);
   expect(resolveSecretSentinel(value ?? "")).toBe(plaintext);
 }
 
-function createController(
-  params: Partial<
-    Pick<
-      Parameters<typeof createEmbeddedRunAuthController>[0],
-      | "profileCandidates"
-      | "authStore"
-      | "fallbackConfigured"
-      | "lockedProfileId"
-      | "allowTransientCooldownProbe"
-      | "agentDir"
-      | "prepareModelForAuthProfile"
-    >
-  > & { warn?: (message: string) => void } = {},
-) {
-  const { warn, ...overrides } = params;
+type ControllerParams = Parameters<typeof createEmbeddedRunAuthController>[0];
+function createController(params: Partial<ControllerParams> = {}) {
   return createEmbeddedRunAuthController({
     config: undefined,
     agentDir: "/tmp/agent",
@@ -127,12 +120,12 @@ function createController(
     provider: harness.models.runtime.provider,
     modelId: "test-model",
     state: harness,
-    ...overrides,
     log: {
       debug: () => undefined,
       info: () => undefined,
-      warn: warn ?? (() => undefined),
+      warn: () => undefined,
     },
+    ...params,
   });
 }
 
@@ -349,17 +342,13 @@ it("clears prior runtime-auth transport overrides when rotating profiles", async
   );
   mocks.prepareProviderRuntimeAuth.mockImplementation(async ({ context }) =>
     context.profileId === "default"
-      ? {
-          apiKey: "default-runtime-key",
-          baseUrl: "https://default-runtime.example.com/v1",
-          request: {
-            auth: {
-              mode: "header" as const,
-              headerName: "x-profile-token",
-              value: "default-profile-token",
-            },
-          },
-        }
+      ? runtimeAuth(
+          "default-runtime-key",
+          "default-profile-token",
+          "https://default-runtime.example.com/v1",
+          undefined,
+          "x-profile-token",
+        )
       : undefined,
   );
 
@@ -451,7 +440,7 @@ it.each([
       profileCandidates,
       authStore,
       agentDir,
-      warn,
+      log: { debug() {}, info() {}, warn },
     });
 
     await controller.initializeAuthProfile();
@@ -824,7 +813,10 @@ it.each([false, true])(
     } else {
       mocks.prepareProviderRuntimeAuth.mockResolvedValue(null);
     }
-    const controller = createController({ profileCandidates: [undefined], warn });
+    const controller = createController({
+      profileCandidates: [undefined],
+      log: { debug() {}, info() {}, warn },
+    });
     await controller.initializeAuthProfile();
     expect(setRuntimeApiKey).toHaveBeenCalledWith("custom-openai", "__aws_sdk_auth__");
     expect(harness.runtimeAuthState).toBeNull();
@@ -872,22 +864,13 @@ it.each([
     mocks.getApiKeyForModelCore.mockImplementation(async () =>
       manager.resolveOAuthAccess({ store: authStore, profileId, credential, agentDir }),
     );
-    const controller = createEmbeddedRunAuthController({
-      config: undefined,
+    const controller = createController({
       agentDir,
       workspaceDir: stateDir,
       authStore,
-      authStorage: { setRuntimeApiKey },
       profileCandidates: [profileId],
-      initialThinkLevel: "medium",
-      attemptedThinking: new Set(),
       fallbackConfigured: true,
-      allowTransientCooldownProbe: false,
-      provider: credential.provider,
-      modelId: "test-model",
-      state: harness,
       ...policy,
-      log: { debug() {}, info() {}, warn() {} },
     });
     try {
       await expect(controller.initializeAuthProfile()).rejects.toThrow();

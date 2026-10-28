@@ -6,11 +6,14 @@ import type {
 } from "../../../../../src/gateway/control-ui-contract.js";
 import type { ApplicationGateway } from "../../../app/gateway.ts";
 import type { GitHubPublicationView } from "../../../lib/sessions/github-publication-owner.ts";
+import type { ChatDetailsSnapshot, DetailsSnapshotPatch } from "../chat-details-snapshot.ts";
 import type { ChatSessionProgressProps } from "./chat-composer-types.ts";
-import type { ChatOutputsDesktopProps } from "./chat-outputs.tsx";
+import type { ChatOutputsDesktopProps } from "./chat-outputs-data.ts";
 import type { ChatPanePlacementProps } from "./chat-pane-placement.tsx";
 import type { ChatPullRequestsProps } from "./chat-pull-request-shared.tsx";
 import type { ChatThreadProps } from "./chat-thread-interactions.ts";
+
+export type ChatProcessShowRequest = { instanceId: string | null; fromDetails: boolean };
 
 type ChatDetailsWorkspace = { root: string | null; label: string | null; branch?: string };
 
@@ -81,12 +84,13 @@ export type ChatDetailsProps = ChatSessionProgressProps &
     | "subagentSessions"
     | "subagentParentKey"
     | "subagentSessionsHydrated"
-    | "subagentSessionsRead"
     | "onOpenSubagent"
     | "onOpenSubagents"
     | "personActivity"
     | "onScrollPortRef"
   > & {
+    cachedDetails?: ChatDetailsSnapshot;
+    onDetailsSnapshot?: (patch: DetailsSnapshotPatch) => void;
     desktopPresentation?: ChatDetailsDesktopPresentation;
     desktopDisclosures?: ChatDetailsDesktopDisclosures;
     environment?: ChatDetailsEnvironmentData;
@@ -95,6 +99,7 @@ export type ChatDetailsProps = ChatSessionProgressProps &
     retainOutputs?: () => (() => void) | undefined;
     /** Details consumes the unfiltered progress projection, independently of Show in chat. */
     progressCardError?: "access-denied" | "unavailable";
+    progressCardRefreshReserved?: boolean;
     showTaskProgress?: boolean;
     onShowTaskProgressChange?: (shown: boolean) => void;
     onSessionSelect?: (sessionKey: string) => void;
@@ -111,7 +116,7 @@ export type ChatDetailsProps = ChatSessionProgressProps &
     onOpenSessionDiff?: () => void;
     onOpenWorkspace?: () => void;
     /** Opens this pane's Processes panel; absent where the pane has none. */
-    onOpenProcesses?: () => void;
+    onOpenProcesses?: (instanceId?: string) => void;
     onCompact?: () => void | Promise<unknown>;
     onDismissPullRequest?: (pullRequest: ControlUiSessionPullRequest) => void;
     onDismissPullRequestsBranch?: (branch: ControlUiSessionBranch) => void;

@@ -1,5 +1,3 @@
-// Exercises a child turn after its launching parent has closed, through the real
-// run loop, harness selection, active-run registration, and transcript writer.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
@@ -108,13 +106,6 @@ it.each(
     let finalizerRuns = 0;
     // Each attempt, including the tool-free finalizer, must arrive under the child's own turn.
     const attemptTurns: Array<EmbeddedRunAttemptParams["replyOperation"]> = [];
-    const expectFinalizerBorrowsChildTurn = () => {
-      expect(attemptTurns).toHaveLength(finalization === "empty" ? 3 : 2);
-      expect(attemptTurns[0]).toBeDefined();
-      for (const turn of attemptTurns) {
-        expect(turn).toBe(attemptTurns[0]);
-      }
-    };
     runAttempt.mockImplementation(async (params: EmbeddedRunAttemptParams) => {
       attemptTurns.push(params.replyOperation);
       const handle = runtime.handle({
@@ -245,7 +236,9 @@ it.each(
           : await child;
       expect(toolRuns).toBe(1);
       expect(finalizerRuns).toBe(finalization === "empty" ? 2 : 1);
-      expectFinalizerBorrowsChildTurn();
+      expect(attemptTurns).toHaveLength(finalization === "empty" ? 3 : 2);
+      expect(attemptTurns[0]).toBeDefined();
+      expect(new Set(attemptTurns).size).toBe(1);
       const transcript = await readMessages(target);
       if (finalization === "answer") {
         expect(result?.payloads).toEqual([

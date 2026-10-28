@@ -49,6 +49,7 @@ import {
   resolveReplyScheduledToolPolicy,
   resolveRunModelHasVision,
 } from "./agent-runner-run-params.js";
+import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { hasInboundAudio } from "./inbound-media.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import type { FollowupRun } from "./queue.js";
@@ -327,6 +328,21 @@ export function buildModelResolveContext(
   };
 }
 
+const MESSAGE_ACTION_SOURCE = Symbol.for("openclaw.replyMessageActionSource");
+type MessageActionSourceOwner = object & {
+  [MESSAGE_ACTION_SOURCE]?: InternalGetReplyOptions["prepareMessageActionTurnCapability"];
+};
+
+/** Transcript successors copy their source; unrelated queued input never borrows runner options. */
+export function bindReplyMessageActionSource(
+  run: MessageActionSourceOwner,
+  source: InternalGetReplyOptions["prepareMessageActionTurnCapability"],
+): void {
+  if (source) {
+    run[MESSAGE_ACTION_SOURCE] = source;
+  }
+}
+
 /** Bind either runtime to the same trusted source turn and requester. */
 export function mintReplyMessageActionTurnCapability(
   turn: Pick<AgentTurnParams, "followupRun" | "sessionCtx" | "opts" | "runtimePolicySessionKey">,
@@ -335,6 +351,20 @@ export function mintReplyMessageActionTurnCapability(
   // An event's captured delivery route is not a new trusted channel turn.
   if (turn.followupRun.run.internalEventExecution) {
     return undefined;
+  }
+  const run: MessageActionSourceOwner = turn.followupRun.run;
+  const prepareSourceCapability = run[MESSAGE_ACTION_SOURCE];
+  if (prepareSourceCapability) {
+    const { agentId, sessionId, sessionKey } = turn.followupRun.run;
+    return agentId && sessionKey
+      ? prepareSourceCapability({
+          agentId,
+          sessionId,
+          sessionKey,
+          runId,
+          runtimePolicySessionKey: turn.runtimePolicySessionKey,
+        })
+      : undefined;
   }
   const channelIngress = isTrustedMessageActionTurnIngress(turn.sessionCtx.Provider);
   const dashboardAdmission = turn.opts?.dashboardReadAdmission;
@@ -479,6 +509,7 @@ export async function buildEmbeddedRunExecutionParams(params: {
     providerReviewAcknowledgment: params.run.providerReviewAcknowledgment,
     permissionMode: params.run.permissionMode,
     sessionRoot: params.run.sessionRoot,
+    blindPrompt: params.run.blindPrompt,
     agentDir: params.run.agentDir,
     config,
     trustedInternalHandoff: params.run.trustedInternalHandoff,
@@ -508,6 +539,7 @@ export async function buildEmbeddedRunExecutionParams(params: {
     ...authProfile,
     thinkLevel: params.run.thinkLevel,
     thinkingExplicit: params.run.thinkingExplicit,
+    cyberAccessProgram: params.run.cyberAccessProgram,
     fastMode: params.run.fastMode,
     fastModeAutoOnSeconds: params.run.fastModeAutoOnSeconds,
     verboseLevel: params.run.verboseLevel,

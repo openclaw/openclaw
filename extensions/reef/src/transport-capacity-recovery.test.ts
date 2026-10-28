@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { generateIdentity, seal } from "../protocol/index.js";
-import { MemoryAuditStore } from "../protocol/memory-stores.test-support.js";
+import { openReefAuditStore } from "./audit-state.js";
 import { ReefMessageFlow } from "./flow.js";
 import {
   allow,
@@ -69,7 +69,7 @@ async function fixture(peers = ["alice"], deliveredMaxEntries = REEF_DELIVERED_M
       keys,
       transport: relay as unknown as ReefTransportClient, // SAFETY: ack-recording mock satisfies the client contract
       guard: guard(allow),
-      audit: new MemoryAuditStore(new Uint8Array(32).fill(30)),
+      audit: openReefAuditStore(runtime, new Uint8Array(32).fill(30)),
       replay,
       reviews,
       delivered,

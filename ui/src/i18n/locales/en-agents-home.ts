@@ -11,12 +11,11 @@ const enAgentsHome = {
       "Its workspace, agent state, and session transcripts move to Trash. Its channel accounts remain configured.",
     agentOptions: "Options for {agent}",
     working: "Working now",
-    loadFailed: "Could not load agents. Try again.",
   },
-  clawsDraft: {
-    title: "Create Claw",
-    railHint: "Turn this agent into a shareable Claw",
-    reviewTitle: "Review your Claw",
+  templatesDraft: {
+    title: "Create Template",
+    railHint: "Turn this agent into a shareable Template",
+    reviewTitle: "Review your Template",
     intro: "Choose what to include. The archive below is rebuilt before publication.",
     name: "Name",
     description: "Description",
@@ -43,15 +42,16 @@ const enAgentsHome = {
     pending: "Submitted to ClawHub. Publication pending security review.",
     viewPublication: "View on ClawHub",
     retryReview: "Retry review",
-    reopen: "Review Claw package",
+    reopen: "Review Template package",
     openingChat: "Opening the agent’s main chat…",
-    sendFailed: "The main chat did not accept the Create Claw message.",
+    sendFailed: "The main chat did not accept the Create Template message.",
   },
 } satisfies TranslationMap;
 
 export const registerAgentsHomeEnglish = Object.assign(
   () => {
-    Object.assign(en, enAgentsHome);
+    Object.assign(en.agentsHome, enAgentsHome.agentsHome);
+    Object.assign(en, { templatesDraft: enAgentsHome.templatesDraft });
   },
   { catalog: enAgentsHome },
 );

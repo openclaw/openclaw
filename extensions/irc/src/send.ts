@@ -26,11 +26,6 @@ type SendIrcOptions = {
   onPlatformSendDispatch?: () => Promise<void>;
 };
 
-type SendIrcMessage = {
-  text: string;
-  replyTo?: string;
-};
-
 export type SendIrcResult = {
   messageId: string;
   target: string;
@@ -41,9 +36,10 @@ export async function sendIrcMessages(
   to: string,
   text: string,
   opts: SendIrcOptions,
-  planMessages: (preparedText: string) => readonly SendIrcMessage[] = (preparedText) => [
-    { text: preparedText, replyTo: opts.replyTo },
-  ],
+  planMessages: (preparedText: string) => readonly {
+    text: string;
+    replyTo?: string;
+  }[] = (preparedText) => [{ text: preparedText, replyTo: opts.replyTo }],
   onDeliveryResult?: (result: SendIrcResult) => Promise<void> | void,
 ): Promise<SendIrcResult[]> {
   const effect = captureEffectAuthority();

@@ -21,9 +21,10 @@ import {
   type CronUpdatePrecondition,
   type CronUpdateOptions,
   createCronServiceState,
+  prepareCronServiceStore,
 } from "./service/state.js";
-import type { DeferredHookWake } from "./service/wake.js";
 import type { CronJob, CronJobCreate, CronJobPatch, CronStoredJob } from "./types.js";
+import type { DeferredHookWake } from "./wake-contract.js";
 
 export type { CronEvent } from "./types.js";
 
@@ -198,6 +199,17 @@ export class CronService implements CronServiceContract {
 
   getJob(id: string): CronStoredJob | undefined {
     return this.state.store?.jobs.find((job) => job.id === id);
+  }
+
+  /** Prepare the selected partition without loading jobs for diagnostics. */
+  async prepareStoreKey() {
+    await prepareCronServiceStore(this.state);
+    return this.getStoreKey();
+  }
+
+  /** Selected opaque partition after a service read prepares the store. */
+  getStoreKey() {
+    return this.state.deps.storeKey;
   }
 
   /** In-memory job snapshot; undefined until the store is loaded. */

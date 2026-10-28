@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { once } from "node:events";
 import { createServer } from "node:http";
 import { promisify } from "node:util";
 import { isHttpUrl } from "@openclaw/net-policy/url-protocol";
@@ -42,12 +43,6 @@ type ProxyValidationCheck = {
 };
 
 type ProxyValidationOutcome = Omit<ProxyValidationCheck, "kind" | "url">;
-
-export type ProxyValidationResult = {
-  ok: boolean;
-  config: ProxyValidationResolvedConfig;
-  checks: ProxyValidationCheck[];
-};
 
 type ProxyValidationFetchCheckParams = {
   proxyUrl: string;
@@ -169,13 +164,9 @@ type ProxyValidationDeniedTarget = {
   expectedCanaryToken?: string;
 };
 
-type LoopbackValidationCanary = {
-  url: string;
-  token: string;
-  close: () => Promise<void>;
-};
+type LoopbackValidationCanary = Awaited<ReturnType<typeof createLoopbackValidationCanary>>;
 
-async function createLoopbackValidationCanary(): Promise<LoopbackValidationCanary> {
+async function createLoopbackValidationCanary() {
   const token = randomUUID();
   // Only the per-probe token distinguishes our listener from a proxy response.
   const server = createServer((_request, response) => {
@@ -186,13 +177,7 @@ async function createLoopbackValidationCanary(): Promise<LoopbackValidationCanar
     response.end();
   });
 
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      resolve();
-    });
-  });
+  await once(server.listen(0, "127.0.0.1"), "listening");
 
   const address = server.address();
   if (typeof address === "string" || address === null) {
@@ -242,9 +227,7 @@ async function runValidationCheck(
   }
 }
 
-export async function runProxyValidation(
-  options: RunProxyValidationOptions,
-): Promise<ProxyValidationResult> {
+export async function runProxyValidation(options: RunProxyValidationOptions) {
   const config = resolveProxyValidationConfig(options);
   if (config.errors.length > 0 || !config.proxyUrl) {
     return { ok: false, config, checks: [] };

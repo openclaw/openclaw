@@ -25,6 +25,7 @@ import {
 import { resolveSandboxToolPolicyForAgent } from "./sandbox/tool-policy.js";
 import { withPreparedSessionCapabilityRead } from "./subagents/spawn/subagent-session-store.js";
 import { createAgentToolsSandboxContext } from "./test-helpers/agent-tools-sandbox-context.js";
+import { createOpenClawOnlyToolConstructionPlan } from "./test-helpers/tool-construction-plan.js";
 import { resolveCoreToolFactoryFamily } from "./tool-catalog.js";
 import {
   getGatewayToolCallerIdentity,
@@ -196,28 +197,20 @@ describe("openclaw-tools progress_card gating", () => {
     ).toBe(false);
     // ask_user must not depend on the TUI embedded-host flag; normal gateway
     // runs are the primary consumer.
-    expect(
-      createFastToolNames({
-        runSessionKey: "agent:main:non-embedded",
-        questionInputMode: "native",
-      }),
-    ).toEqual(expect.arrayContaining(["ask_user", "secrets"]));
-    setEmbeddedMode(true);
-
-    expect(
-      await withPreparedSessionCapabilityRead(() =>
-        createFastToolNames({
-          agentSessionKey: "agent:main:subagent:worker",
-          questionInputMode: "native",
-        }),
-      ),
-    ).not.toContain("ask_user");
-    expect(
-      createFastToolNames({
-        runSessionKey: "agent:main:run",
-        questionInputMode: "native",
-      }),
-    ).toContain("ask_user");
+    for (const [embedded, sessionOptions, available] of [
+      [false, { runSessionKey: "agent:main:non-embedded" }, true],
+      [true, { agentSessionKey: "agent:main:subagent:worker" }, false],
+      [true, { runSessionKey: "agent:main:run" }, true],
+    ] as const) {
+      setEmbeddedMode(embedded);
+      const names = await withPreparedSessionCapabilityRead(() =>
+        createFastToolNames({ ...sessionOptions, questionInputMode: "native" }),
+      );
+      expect(names.includes("ask_user")).toBe(available);
+      if (!embedded) {
+        expect(names).toContain("secrets");
+      }
+    }
   });
 
   it("keeps message tool in embedded message-tool-only completions", () => {
@@ -433,27 +426,24 @@ describe("gateway client capability tool filtering", () => {
   it("retains the requesting browser through coding tool assembly", async () => {
     const gatewayUiCommandTarget = { connId: "requester-tab", profileId: "requester" };
     const targets: unknown[] = [];
-    const call = vi
+    using _ = vi
       .spyOn(inProcessGateway, "callInProcessGatewayTool")
       .mockImplementation(async () => {
         targets.push(getGatewayToolCallerIdentity()?.gatewayUiCommandTarget);
         return { ok: true } as never;
       });
-    try {
-      const tools = createOpenClawCodingTools({
-        config: withDefaultRoster(undefined),
-        sessionKey: "agent:main:main",
-        clientCaps: ["ui-commands"],
-        gatewayUiCommandTarget,
-      });
-      await expectToolNamed(tools, "screen").execute("select", {
-        action: "navigate",
-        sessionKey: "agent:main:other",
-      });
-      expect(targets).toEqual([gatewayUiCommandTarget]);
-    } finally {
-      call.mockRestore();
-    }
+
+    const tools = createOpenClawCodingTools({
+      config: withDefaultRoster(undefined),
+      sessionKey: "agent:main:main",
+      clientCaps: ["ui-commands"],
+      gatewayUiCommandTarget,
+    });
+    await expectToolNamed(tools, "screen").execute("select", {
+      action: "navigate",
+      sessionKey: "agent:main:other",
+    });
+    expect(targets).toEqual([gatewayUiCommandTarget]);
   });
 
   it("exposes GitHub publication only from a prepared session capability", () => {
@@ -461,7 +451,7 @@ describe("gateway client capability tool filtering", () => {
     expect(hasTool(createOpenClawTools(), "github_identity_status")).toBe(false);
     expect(
       hasTool(createOpenClawTools({ githubPublicationAvailable: false }), "github_publish"),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       hasTool(createOpenClawTools({ githubPublicationAvailable: false }), "github_identity_status"),
     ).toBe(true);
@@ -476,8 +466,7 @@ describe("gateway client capability tool filtering", () => {
       publishing: false,
       deny: false,
       managed: true,
-      expected: false,
-      actions: false,
+      expected: true,
     },
     {
       scope: "operator.write",
@@ -485,7 +474,6 @@ describe("gateway client capability tool filtering", () => {
       deny: false,
       managed: true,
       expected: true,
-      actions: true,
     },
     {
       scope: "operator.admin",
@@ -493,7 +481,6 @@ describe("gateway client capability tool filtering", () => {
       deny: false,
       managed: true,
       expected: true,
-      actions: true,
     },
     {
       scope: "operator.write",
@@ -501,7 +488,6 @@ describe("gateway client capability tool filtering", () => {
       deny: true,
       managed: true,
       expected: false,
-      actions: false,
     },
     {
       scope: "operator.write",
@@ -509,7 +495,6 @@ describe("gateway client capability tool filtering", () => {
       deny: false,
       managed: false,
       expected: false,
-      actions: false,
     },
     {
       scope: "operator.sessions.write",
@@ -517,7 +502,6 @@ describe("gateway client capability tool filtering", () => {
       deny: false,
       managed: true,
       expected: true,
-      actions: false,
     },
     {
       scope: "operator.write",
@@ -525,7 +509,6 @@ describe("gateway client capability tool filtering", () => {
       deny: false,
       managed: true,
       expected: true,
-      actions: true,
     },
     {
       scope: "operator.admin",
@@ -533,11 +516,10 @@ describe("gateway client capability tool filtering", () => {
       deny: false,
       managed: true,
       expected: true,
-      actions: true,
     },
   ])(
     "projects PR actions for $scope, publishing=$publishing, deny=$deny, managed=$managed",
-    async ({ scope, publishing, deny, managed, expected, actions }) => {
+    async ({ scope, publishing, deny, managed, expected }) => {
       const cfg = withDefaultRoster(deny ? { tools: { deny: ["github_publish"] } } : {});
       const sessionKey = "agent:main:nonpublishing-parent";
       const additionalInheritedToolNamesRef: string[] = [];
@@ -564,13 +546,7 @@ describe("gateway client capability tool filtering", () => {
             additionalInheritedToolNamesRef,
             senderIsOwner: false,
             wrapBeforeToolCallHook: false,
-            toolConstructionPlan: {
-              includeBaseCodingTools: false,
-              includeShellTools: false,
-              includeChannelTools: false,
-              includeOpenClawTools: true,
-              includePluginTools: false,
-            },
+            toolConstructionPlan: createOpenClawOnlyToolConstructionPlan(),
           }),
       );
       expect(additionalInheritedToolNamesRef.includes("github_publish")).toBe(
@@ -587,7 +563,7 @@ describe("gateway client capability tool filtering", () => {
           action: "inspect",
           publishingSessionKey: "agent:main:child",
         }),
-      ).toBe(actions);
+      ).toBe(true);
       expect(Value.Check(tool.parameters, { title: "Publish workspace" })).toBe(publishing);
       expect(Value.Check(tool.parameters, { action: "publish" })).toBe(publishing);
       expect(
@@ -598,28 +574,13 @@ describe("gateway client capability tool filtering", () => {
       ).toBe(false);
       expect(Value.Check(tool.parameters, { action: "refresh_base" })).toBe(false);
       expect(Value.Check(tool.parameters, { action: "edit" })).toBe(publishing);
-      expect(Value.Check(tool.parameters, { action: "ready" })).toBe(publishing || actions);
+      expect(Value.Check(tool.parameters, { action: "ready" })).toBe(true);
       expect(
         Value.Check(tool.parameters, { action: "ready", publishingSessionKey: "agent:main:child" }),
-      ).toBe(actions);
+      ).toBe(true);
       expect(Value.Check(tool.parameters, { action: "upload_evidence" })).toBe(false);
       if (!publishing) {
         expect(tool.description).toContain("cannot publish its own workspace");
-      } else if (!actions) {
-        expect(tool.parameters).toHaveProperty("properties", {
-          action: expect.any(Object),
-          pullRequestUrl: expect.any(Object),
-          draft: expect.any(Object),
-          title: expect.any(Object),
-          body: expect.any(Object),
-          requestId: expect.any(Object),
-          expectedHeadCommit: expect.any(Object),
-          expectedTitle: expect.any(Object),
-          expectedBody: expect.any(Object),
-        });
-        expect(tool.parameters).toHaveProperty("additionalProperties", false);
-        expect(tool.description).not.toContain("use inspect");
-        expect(tool.description).toContain("expectedHeadCommit");
       }
     },
   );
@@ -650,7 +611,7 @@ describe("gateway client capability tool filtering", () => {
       available: true,
       expected: false,
     },
-    { name: "unavailable publication", config: {}, available: false, expected: false },
+    { name: "unavailable publication", config: {}, available: false, expected: true },
     { name: "unprepared publication", config: {}, available: undefined, expected: false },
   ] satisfies {
     name: string;
@@ -666,44 +627,35 @@ describe("gateway client capability tool filtering", () => {
       tools: resolveSandboxToolPolicyForAgent(cfg, "main"),
     });
     const callers: unknown[] = [];
-    const call = vi
+    using call = vi
       .spyOn(inProcessGateway, "callInProcessGatewayTool")
       .mockImplementation(async () => {
         callers.push(getGatewayToolCallerIdentity()?.sessionKey);
         return { requestId: "publication-1", status: "requested" } as never;
       });
-    try {
-      const tools = createOpenClawCodingTools({
-        config: cfg,
-        sessionKey,
-        sandbox,
-        githubPublicationAvailable: available,
-        senderIsOwner: false,
-        wrapBeforeToolCallHook: false,
-        toolConstructionPlan: {
-          includeBaseCodingTools: false,
-          includeShellTools: false,
-          includeChannelTools: false,
-          includeOpenClawTools: true,
-          includePluginTools: false,
-        },
+
+    const tools = createOpenClawCodingTools({
+      config: cfg,
+      sessionKey,
+      sandbox,
+      githubPublicationAvailable: available,
+      senderIsOwner: false,
+      wrapBeforeToolCallHook: false,
+      toolConstructionPlan: createOpenClawOnlyToolConstructionPlan(),
+    });
+    expect(hasTool(tools, "github_publish")).toBe(expected);
+    if (expected && available) {
+      await expectToolNamed(tools, "github_publish").execute("publish-1", {
+        title: "Publish fix",
       });
-      expect(hasTool(tools, "github_publish")).toBe(expected);
-      if (expected) {
-        await expectToolNamed(tools, "github_publish").execute("publish-1", {
-          title: "Publish fix",
-        });
-        expect(call).toHaveBeenCalledWith("sessions.github.publish", {
-          sessionKey,
-          idempotencyKey: "publish-1",
-          title: "Publish fix",
-        });
-        expect(callers).toEqual([sessionKey]);
-      } else {
-        expect(call).not.toHaveBeenCalled();
-      }
-    } finally {
-      call.mockRestore();
+      expect(call).toHaveBeenCalledWith("sessions.github.publish", {
+        sessionKey,
+        idempotencyKey: "publish-1",
+        title: "Publish fix",
+      });
+      expect(callers).toEqual([sessionKey]);
+    } else {
+      expect(call).not.toHaveBeenCalled();
     }
   });
 

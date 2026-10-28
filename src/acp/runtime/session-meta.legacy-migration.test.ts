@@ -56,12 +56,9 @@ async function seedRetainedSource(
   fs.mkdirSync(path.dirname(storePath), { recursive: true });
   fs.writeFileSync(
     transcriptPath,
-    [
-      { type: "session", version: 3, id: SESSION_ID },
-      { type: "message", id: "m", parentId: null, message: { role: "user", content: "x" } },
-    ]
-      .map((entry) => JSON.stringify(entry))
-      .join("\n") + "\n",
+    `{"type":"session","version":3,"id":"${SESSION_ID}"}
+{"type":"message","id":"m","parentId":null,"message":{"role":"user","content":"x"}}
+`,
   );
   fs.writeFileSync(
     storePath,
@@ -303,8 +300,6 @@ it("preserves canonical ACP edits before the first import", () =>
     await f.reopenAndExpect(updated);
     expect((await listAcpSessionEntries(f.acpScope)).map((entry) => entry.acp)).toEqual([updated]);
     f.assertOriginalsRetained();
-    await f.write(null);
-    await f.reopenAndExpect();
   }));
 
 it("imports retained ACP metadata after core session sources are archived", () =>

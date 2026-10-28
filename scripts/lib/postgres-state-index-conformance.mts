@@ -44,6 +44,11 @@ export async function checkStateTaskIndexMigration(
     await client.query("CREATE INDEX idx_task_runs_conformance_local ON task_runs(label)");
     const retained = (await client.query("SELECT * FROM task_runs ORDER BY task_id")).rows;
     const catalogSql = postgresCatalogQuery(namespace, true);
+    // Compare the historical v24 destination, not later index-ordering migrations.
+    for (const name of TASK_RUN_INDEX_REPLACEMENTS_V24) {
+      await client.query(`DROP INDEX ${quote(name)}`);
+    }
+    await client.query(forwardSql);
     const fresh = readPostgresCatalog((await client.query(catalogSql)).rows[0].catalog);
 
     for (const name of TASK_RUN_INDEX_REPLACEMENTS_V24) {

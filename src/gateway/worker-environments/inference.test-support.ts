@@ -1,4 +1,3 @@
-import { vi } from "vitest";
 import type {
   WorkerInferenceStartParams,
   WorkerInferenceTerminalFrame,
@@ -7,13 +6,11 @@ import type {
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createZeroUsageFixture } from "../../agents/test-helpers/usage-fixtures.js";
 import type { WorkerConnectionIdentity, WorkerInferenceExecutor } from "./connection-identity.js";
+import { createWorkerConnectionIdentity } from "./connection-identity.test-support.js";
 import type { WorkerInferenceStore } from "./inference-store.js";
 import { createWorkerInferenceManager, type WorkerInferenceSink } from "./inference.js";
 
-export const waitForFast = <T>(
-  callback: () => T | Promise<T>,
-  options: { timeout?: number; interval?: number } = {},
-) => vi.waitFor(callback, { interval: 1, ...options });
+export { waitForFast } from "../../../test/helpers/vitest-wait.js";
 
 export const REQUEST: WorkerInferenceStartParams = {
   runEpoch: 3,
@@ -55,24 +52,18 @@ export function identityFor({
   sessionId,
   runId,
 }: WorkerInferenceStartParams): WorkerConnectionIdentity {
-  return {
-    environmentId: "w",
-    credentialHash: "d",
-    bundleHash: "b",
+  const turnClaim: NonNullable<WorkerConnectionIdentity["turnClaim"]> = {
     sessionId,
     runId,
-    turnClaim: {
-      sessionId,
-      runId,
-      claimId: `claim-${runId}`,
-      placementGeneration: 4,
-      owner: { kind: "worker", environmentId: "w", ownerEpoch: runEpoch },
-    },
-    ownerEpoch: runEpoch,
-    rpcSetVersion: 1,
-    protocolFeatures: ["worker-inference-v1"],
-    credentialExpiresAtMs: 10_000,
+    claimId: `claim-${runId}`,
+    placementGeneration: 4,
+    owner: { kind: "worker", environmentId: "w", ownerEpoch: runEpoch },
   };
+  return createWorkerConnectionIdentity(turnClaim, {
+    credentialHash: "d",
+    bundleHash: "b",
+    protocolFeatures: ["worker-inference-v1"],
+  });
 }
 
 export type Manager = ReturnType<typeof createWorkerInferenceManager>;
@@ -109,6 +100,19 @@ export const terminalFrames = (frames: Parameters<WorkerInferenceSink["send"]>[0
   frames.filter(
     (frame): frame is WorkerInferenceTerminalFrame => frame.event === "worker.inference.terminal",
   );
+
+export function startInference(
+  instance: Manager,
+  overrides: Partial<Parameters<Manager["start"]>[0]> = {},
+) {
+  return instance.start({
+    identity: IDENTITY,
+    request: REQUEST,
+    sessionTarget: SESSION_TARGET,
+    sink: overrides.sink ?? createSink().sink,
+    ...overrides,
+  });
+}
 
 export async function accept(manager: Manager, overrides: StartOverrides = {}, launch = true) {
   const result = await manager.start({

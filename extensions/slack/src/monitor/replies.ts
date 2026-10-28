@@ -430,6 +430,7 @@ export async function deliverSlackSlashReplies(params: {
     const materializeAuthoredText = hasSlackReplyStructuredContent(payload);
     const { authoredTextPlacement, segments } = resolveSlackReplyBlockResolution(payload, {
       materializeAuthoredText,
+      tableMode: params.tableMode,
     });
     if (segments.length > 0) {
       const messages: PlannedSlashReplyMessage[] = [];

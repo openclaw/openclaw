@@ -165,6 +165,24 @@ An isolated agent-turn job created from a conversation also captures that conver
   </Accordion>
 </AccordionGroup>
 
+### Binding older jobs to their conversation
+
+Jobs created before OpenClaw recorded the creating conversation's incarnation name
+their conversation only by session key. They keep their existing behavior, with
+the run session's board, memory, and workspace, until someone binds them. To bind
+one, ask the agent in that conversation to bind it (the automations tool's `bind`
+action) from an authenticated owner turn: a Control UI administrator or the
+configured channel owner. The binding records the
+conversation's current incarnation, and later runs use that conversation's
+resources as a linked child run. Bind refuses a job whose recorded conversation is
+another one, a job that is already bound or is not linked by key alone, and turns
+without owner authority. Run from a shell, `openclaw automations bind` has no
+conversation and is refused with that instruction.
+
+A bind from an authenticated Control UI turn also stores that turn's operator
+source, as creation from that turn would, so each occurrence rechecks the device
+and access grant. Other owner turns keep the job's recorded requester.
+
 When an operator removes an automation with an active run, OpenClaw requests cancellation of that run. An admitted automation can remove its own job without cancelling the active run. If the caller cannot be confirmed as the job's exact live run, self-removal fails without deleting the job or cancelling the active run. The JSON removal response includes `activeRunCancellationRequested: true` when cancellation was requested. For an isolated automation, reusable-session cleanup then waits for the active run to stop and reports `sessionCleanup: "pending"` while cleanup is deferred. Run history is retained.
 
 If session cleanup fails, the error is logged. A removal with no active run also returns the cleanup error to the caller. Use `openclaw sessions list --json` to find the remaining session, then `openclaw sessions delete <key> --yes` to retry cleanup after the Gateway or worker recovers.
@@ -297,6 +315,8 @@ openclaw automations run <job-id> --wait --wait-timeout 10m --poll-interval 2s
 
 With `--wait`, the CLI calls `cron.run` first, then polls the durable `cron.runs` row for the returned `runId`. It does not reread mutable job delivery settings. JSON reports payload execution as `status` and whole-run completion as `completionStatus`. The command exits `0` only for `completionStatus: "succeeded"`. `failed`, `unknown`, execution errors or skips, a missing `runId`, and timeout expiry exit non-zero (default `10m`, polled every `2s` by default). `--poll-interval` must be greater than zero. Completed JSON output, including the run summary, is flushed before the command exits, so it can be piped to a JSON reader.
 
+Interrupting the CLI stops waiting for the result. The queued run continues in the Gateway.
+
 <Note>
 Use `--due` to test the condition gate when the job is currently due, or wait for its scheduled evaluation. Unlike a forced run, `--due` honors `trigger.script`; it does not make a job due early. If `--due --wait` does not enqueue a run, the command returns the normal non-run response instead of polling. An enqueued run skipped by the gate exits non-zero with `--wait`.
 </Note>
@@ -384,7 +404,7 @@ later Doctor runs do not overwrite edits or recreate a deleted migrated job.
 Use `automations show`, `runs`, `enable`, and `disable` to manage the jobs.
 Legacy `system heartbeat` controls apply only to converted/default jobs. See [Heartbeat migration](/gateway/heartbeat).
 
-The `cron.*` Gateway methods and protocol v4 remain compatible. The deprecated
+The `cron.*` Gateway methods remain compatible. The deprecated
 `--wake now|next-heartbeat` field remains accepted, but scheduled jobs execute
 their payload through ordinary session execution when the job is due. It does
 not add another wake or deferral step. Use the job's schedule to control timing.
@@ -482,16 +502,19 @@ openclaw automations runs <job-id> --sort asc --offset 200 --limit 50
 Run-history filters are applied by the Gateway before paging. Use `--status`
 with `all`, `ok`, `error`, or `skipped`; use `--delivery-status` with
 `delivered`, `not-delivered`, `unknown`, or `not-requested`. `--query <text>`
-searches run summaries and errors. `--sort asc|desc` selects oldest-first or
-newest-first order, and `--offset <n>` advances through the result set using the
-page metadata returned by the previous command.
+searches run summaries and errors. Matching is case-insensitive and compares
+canonically equivalent Unicode forms as the same text without rewriting stored
+run history. `--sort asc|desc` selects oldest-first or newest-first order, and
+`--offset <n>` advances through the result set using the page metadata returned
+by the previous command.
 
 `openclaw automations list` shows enabled jobs across agents by default, including jobs whose owner cannot be resolved. Pass `--all` to include disabled jobs, or `--agent <id>` to filter by the effective normalized agent ID. Ownership resolves from the job's declared agent, its agent-scoped session key, then the configured system-agent owner. Unresolved jobs do not match an agent filter. The `cron list` alias has the same behavior.
 
 Use `--query <text>` to search job IDs, names, descriptions, declared agent IDs,
-and display names. Matching is case-insensitive and uses the Gateway's existing
-inventory filter before paging; the CLI reads every bounded matching page with
-the same query. It combines with `--all`, `--agent`, and either text or `--json`
+and display names. Matching is case-insensitive and compares canonically equivalent
+Unicode forms as the same text without rewriting stored metadata. The Gateway filters
+before paging; the CLI reads every bounded matching page with the same query. It
+combines with `--all`, `--agent`, and either text or `--json`
 output. Omitting the flag or passing only whitespace keeps the existing listing.
 This searches job metadata, not message or script payloads; use `automations runs
 <job-id> --query <text>` to search run summaries and errors instead.

@@ -2,6 +2,7 @@ import type { SessionPermissionMode } from "../../../../packages/gateway-protoco
 import { messageToolOwnsVisibleReply } from "../../../auto-reply/source-reply-delivery-mode.js";
 import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import { isEmbeddedMode } from "../../../infra/embedded-mode.js";
+import { materializeErrorStack } from "../../../infra/error-graph-internal.js";
 import {
   isCodeModeDiagnosticEnabled,
   logCodeModeDiagnostic,
@@ -117,8 +118,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
   const requireExplicitMessageTarget =
     attempt.requireExplicitMessageTarget ?? isSubagentSessionKey(attempt.sessionKey);
   const forceDirectMessageTool = messageToolOwnsVisibleReply(attempt);
-  const toolRunContext = buildEmbeddedAttemptToolRunContext({
-    ...attempt,
+  const toolRunContext = buildEmbeddedAttemptToolRunContext(attempt, {
     forceMessageTool: forceDirectMessageTool,
     trace: params.runTrace,
   });
@@ -162,6 +162,9 @@ export async function prepareEmbeddedAttemptToolBase(params: {
   if (isCodeModeDiagnosticEnabled()) {
     logCodeModeDiagnostic(log, "activation", {
       runId: attempt.runId,
+      modelProvider: attempt.provider,
+      modelId: attempt.modelId,
+      modelCodeMode: extractModelCompat(attempt.model)?.codeMode ?? "unflagged",
       active: codeModeControlsEnabledForRun,
       toolsEnabled,
       rawRun: isRawModelRun,
@@ -461,6 +464,8 @@ export async function prepareEmbeddedAttemptToolBase(params: {
   };
   const releaseTools = async (reason: string) => {
     toolAbortController.abort();
+    // Retained cancellation signals must not keep this run's lazy stack frames alive.
+    materializeErrorStack(toolAbortController.signal.reason);
     retireToolGeneration(reason);
     await Promise.all(retiringGenerations);
     if (retiredCleanupFailed) {
@@ -501,6 +506,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
         // Revoke prepared calls before resolving approval waiters; their old
         // signal must already be closed when an allowed decision wakes them.
         toolAbortController.abort(createCodeModePermissionChangeReason());
+        materializeErrorStack(toolAbortController.signal.reason);
         revokeApprovals();
         retireToolGeneration("cancel");
         params.runAbortController.signal.throwIfAborted();

@@ -9,11 +9,6 @@ type CustomThemeImportViewState = {
   completion?: Promise<void>;
 };
 
-type ImportMessages = {
-  blocked: (reason: "loading" | "unsaved") => string;
-  imported: (label: string) => string;
-};
-
 /** Keeps delayed imports scoped to their page and the latest import URL. */
 export class CustomThemeImportOwner {
   private currentImport: { resolve: () => void } | null = null;
@@ -73,7 +68,10 @@ export class CustomThemeImportOwner {
     readTheme: () => ThemeName;
     load: (url: string) => Promise<ImportedCustomTheme>;
     apply: (theme: ImportedCustomTheme, activate: boolean) => void;
-    messages: ImportMessages;
+    messages: {
+      blocked: (reason: "loading" | "unsaved") => string;
+      imported: (label: string) => string;
+    };
   }): Promise<void> | undefined {
     const blockedReason = this.blockedReason(params.config);
     if (blockedReason) {

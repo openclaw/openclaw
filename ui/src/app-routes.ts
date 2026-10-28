@@ -36,7 +36,6 @@ import { page as appsPage } from "./pages/apps/route.tsx";
 import { page as channelsPage } from "./pages/channels/route.ts";
 import { pages as chatPages } from "./pages/chat/route.ts";
 import type { ChatRouteData } from "./pages/chat/session-route-data.ts";
-import { page as clawsPage } from "./pages/claws/route.ts";
 import { page as cloudWorkersPage } from "./pages/cloud-workers/route.tsx";
 import { pages as configPages } from "./pages/config/route.ts";
 import { page as connectionPage } from "./pages/connection/route.ts";
@@ -58,6 +57,7 @@ import { page as modelProvidersPage } from "./pages/model-providers/route.ts";
 import { page as modelSetupPage } from "./pages/model-setup/route.ts";
 import { page as newSessionPage } from "./pages/new-session/route.ts";
 import { page as pluginPage } from "./pages/plugin/route.tsx";
+import { canonicalPluginsRouteLocation } from "./pages/plugins/route-data.ts";
 import { pages as pluginsPages } from "./pages/plugins/route.tsx";
 import { page as portalsPage } from "./pages/portals/route.ts";
 import { page as profilePage } from "./pages/profile/route.ts";
@@ -67,6 +67,7 @@ import { page as sessionsPage } from "./pages/sessions/route.ts";
 import { page as skillWorkshopPage } from "./pages/skill-workshop/route.ts";
 import { pages as skillsPages } from "./pages/skills/route.ts";
 import { page as systemsPage } from "./pages/systems/route.ts";
+import { page as clawsPage } from "./pages/templates/route.ts";
 import { page as terminalPage } from "./pages/terminal/route.tsx";
 import { page as usagePage } from "./pages/usage/route.tsx";
 import { resolveWorkboardRouteLocation } from "./pages/workboard/route-location.ts";
@@ -171,7 +172,9 @@ function canonicalRouteLocation(
     ? (resolveWorkboardRouteLocation(location, basePath).canonicalLocation ?? location)
     : routeId === "plugin"
       ? canonicalPluginTabLocation(location, basePath)
-      : location;
+      : routeId === "plugins" || routeId === "plugin-settings"
+        ? (canonicalPluginsRouteLocation(location, basePath) ?? location)
+        : location;
 }
 
 export function createApplicationRouter(): ApplicationRouter {

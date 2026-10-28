@@ -3,19 +3,8 @@ import { readProcessIdentity } from "@openclaw/proc-safe/identity";
 import { listProcesses } from "@openclaw/proc-safe/inspect";
 import { PinnedProcess } from "@openclaw/proc-safe/windows-job";
 
-type WindowsProcessObservation = {
-  pid: number;
-  parentPid?: number;
-  startIdentity?: string;
-  commandLine?: string;
-  executable?: string;
-  cwd?: string;
-  foreignOwner?: true;
-  accessDenied?: true;
-};
-
 /** Missing fields never establish absence for same-user or unknown-owner work. */
-export function readWindowsProcessCensus(timeoutMs: number): WindowsProcessObservation[] {
+export function readWindowsProcessCensus(timeoutMs: number) {
   return listProcesses({ timeoutMs, includeCommand: true }).flatMap(
     ({ pid, owner, identity, command }) => {
       if (pid === 0 || pid === 4 || identity?.exited) {

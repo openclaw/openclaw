@@ -78,11 +78,7 @@ const PROVIDER_AUTH_RELEVANT_AGENT_SUBFIELDS = new Set([
 ]);
 
 // Nested model selectors can change providers; unrelated scheduling/compaction knobs cannot.
-function isAuthRelevantAgentSubfield(
-  field: string | undefined,
-  next: string | undefined,
-  nested: string | undefined,
-): boolean {
+function isAuthRelevantAgentSubfield(field: string | undefined, next: string | undefined): boolean {
   if (field === undefined) {
     return true;
   }
@@ -92,13 +88,7 @@ function isAuthRelevantAgentSubfield(
   if (field === "subagents") {
     return next === undefined || next === "model";
   }
-  return (
-    field === "compaction" &&
-    (next === undefined ||
-      next === "model" ||
-      next === "provider" ||
-      (next === "memoryFlush" && (nested === undefined || nested === "model")))
-  );
+  return field === "compaction" && (next === undefined || next === "model" || next === "provider");
 }
 
 export function isProviderAuthRelevantReloadPath(path: string): boolean {
@@ -115,10 +105,10 @@ export function isProviderAuthRelevantReloadPath(path: string): boolean {
     return true;
   }
   if (second === "defaults") {
-    return isAuthRelevantAgentSubfield(third, segments[3], segments[4]);
+    return isAuthRelevantAgentSubfield(third, segments[3]);
   }
   if (second === "entries") {
-    return isAuthRelevantAgentSubfield(fourth, segments[4], segments[5]);
+    return isAuthRelevantAgentSubfield(fourth, segments[4]);
   }
   return false;
 }

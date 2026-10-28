@@ -34,19 +34,12 @@ type LegacyWorkspaceSourcePaths = {
   siblingAttestationPaths: string[];
 };
 
-type LegacyWorkspaceResetCleanup = {
-  removedPaths: string[];
-  warnings: string[];
-};
-
-type LegacyWorkspaceResetCandidate = {
-  rootDir: string;
-  sourcePath: string;
-  requireAttestationHeader: boolean;
-};
-
 type LegacyWorkspaceResetPlan = {
-  candidates: LegacyWorkspaceResetCandidate[];
+  candidates: {
+    rootDir: string;
+    sourcePath: string;
+    requireAttestationHeader: boolean;
+  }[];
 };
 
 function uniqueSiblingPaths(paths: readonly string[]): string[] {
@@ -254,7 +247,10 @@ export async function removeLegacyWorkspaceStateForReset(
     assertCurrent?: () => void;
     assertCurrentAsync?: () => Promise<void>;
   },
-): Promise<LegacyWorkspaceResetCleanup> {
+): Promise<{
+  removedPaths: string[];
+  warnings: string[];
+}> {
   const removedPaths: string[] = [];
   const warnings: string[] = [];
   for (const candidate of plan.candidates) {

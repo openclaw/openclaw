@@ -1,5 +1,6 @@
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { cloneTranscriptEnvelope } from "../../config/sessions/transcript-json.js";
 import { LruCache } from "../../infra/lru-cache.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { FileEntry } from "./session-manager-types.js";
@@ -7,7 +8,7 @@ import type { FileEntry } from "./session-manager-types.js";
 // Content is the immutable revision. Eviction only ends sharing, never changes a live prompt.
 const prefixes = resolveGlobalSingleton(
   Symbol.for("openclaw.systemPromptPrefixes"),
-  () => new LruCache<string>(64, { maxBytes: 8 * 1024 * 1024, sizeOf: (text) => text.length * 2 }),
+  () => new LruCache<string>(128, { maxBytes: 32 * 1024 ** 2, sizeOf: (text) => text.length * 2 }),
   (cache) => cache.clear(),
 );
 
@@ -36,14 +37,15 @@ export function shareSessionSystemPrompt<T extends FileEntry>(entry: T): T {
   if (!isRecord(data)) {
     return entry;
   }
+  const shared = cloneTranscriptEnvelope(data);
+  if (typeof shared.prefix === "string") {
+    shared.prefix = shareSystemPromptPrefix(shared.prefix);
+  }
+  if (typeof shared.renderedPrefix === "string") {
+    shared.renderedPrefix = shareSystemPromptPrefix(shared.renderedPrefix);
+  }
   return {
     ...entry,
-    data: Object.freeze({
-      ...data,
-      ...(typeof data.prefix === "string" ? { prefix: shareSystemPromptPrefix(data.prefix) } : {}),
-      ...(typeof data.renderedPrefix === "string"
-        ? { renderedPrefix: shareSystemPromptPrefix(data.renderedPrefix) }
-        : {}),
-    }),
+    data: Object.freeze(shared),
   };
 }

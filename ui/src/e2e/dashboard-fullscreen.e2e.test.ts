@@ -1,10 +1,11 @@
 import type { Server as HttpServer } from "node:http";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
-import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/index.js";
+import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/server-capabilities.js";
 import { SANDBOX_HOST_PATH } from "../../../src/agents/sandbox-host.js";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
 import { createSandboxHostHttpServer } from "../../../src/gateway/mcp-app-sandbox-http.js";
+import { createDeferred } from "../../../test/helpers/promise.ts";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import {
   controlUiBundledSettingsStorageKey,
@@ -317,10 +318,7 @@ suite.define(() => {
               },
             ],
           };
-          let releaseDocument!: () => void;
-          const documentGate = new Promise<void>((resolve) => {
-            releaseDocument = resolve;
-          });
+          const { promise: documentGate, resolve: releaseDocument } = createDeferred();
           await page.route(widgetUrl, async (route) => {
             await documentGate;
             await route.fulfill({

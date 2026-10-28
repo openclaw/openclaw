@@ -112,6 +112,7 @@ it("packs equal fields by their recipient rows without changing the input or wir
   ];
   const original = structuredClone(rows);
   const { rowsRevision, ...packed } = shareSidebarSessionRows(rows);
+  const packedBytes = wire(packed);
   expect(rowsRevision).toEqual(expect.any(String));
   expect(shareSidebarSessionRows(rows).sessions).toBe(packed.sessions);
   expect(shareSidebarSessionRows(rows, rowsRevision)).toEqual({
@@ -123,9 +124,15 @@ it("packs equal fields by their recipient rows without changing the input or wir
   expect(expandSessionRowFacts(packed.sessions, packed.sharedFacts)).toEqual(original);
   // A changed page must not reuse the previous page's recipient groups or fact indexes.
   const changed = { ...rows[1]!, pinned: true, label: "Changed" };
-  for (const page of [[rows[0]!, changed, rows[2]!], [rows[2]!, rows[0]!], rows]) {
+  for (const page of [
+    [rows[0]!, changed, rows[2]!],
+    [rows[2]!, rows[0]!],
+    [rows[0]!, rows[0]!],
+    [...rows],
+  ]) {
     const next = shareSidebarSessionRows(page);
     expect(expandSessionRowFacts(next.sessions, next.sharedFacts)).toEqual(page);
+    expect(wire(packed)).toBe(packedBytes);
   }
   expect(packed.sharedFacts).toEqual([
     { label: "Shared", origin: { provider: "fixture" } },
@@ -134,6 +141,65 @@ it("packs equal fields by their recipient rows without changing the input or wir
   expect(packed.sessions.map((row) => row.sharedFacts)).toEqual([[0, 1], [0, 1], [1]]);
   for (const row of packed.sessions) {
     expectAbsent(row, row.key === "three" ? ["pinned"] : ["label", "origin", "pinned"]);
+  }
+});
+
+it("reuses packed row bytes across sibling changes without retaining another viewer's layout", () => {
+  const row = (key: string, label: string, sharingRole: "owner" | "viewer") =>
+    Object.freeze({
+      key,
+      kind: "direct" as const,
+      updatedAt: 1,
+      rowMode: "sidebar" as const,
+      label,
+      visibility: "shared" as const,
+      sharingRole,
+    });
+  const ownerRows = [row("a", "A", "owner"), row("b", "B", "owner"), row("c", "C", "owner")];
+  const viewerRows = ownerRows.map((value) => row(value.key, value.label, "viewer"));
+  const first = shareSidebarSessionRows(ownerRows);
+  const viewer = shareSidebarSessionRows(viewerRows);
+  expect(JSON.stringify(first.sessions)).toBe(
+    '[{"key":"a","kind":"direct","updatedAt":1,"rowMode":"sidebar","label":"A","sharedFacts":[0]},{"key":"b","kind":"direct","updatedAt":1,"rowMode":"sidebar","label":"B","sharedFacts":[0]},{"key":"c","kind":"direct","updatedAt":1,"rowMode":"sidebar","label":"C","sharedFacts":[0]}]',
+  );
+  expect(first.sharedFacts).toEqual([{ visibility: "shared", sharingRole: "owner" }]);
+  expect(viewer.sharedFacts).toEqual([{ visibility: "shared", sharingRole: "viewer" }]);
+  using stringify = vi.spyOn(JSON, "stringify");
+  const changed = shareSidebarSessionRows([row("a", "Changed", "owner"), ...ownerRows.slice(1)]);
+  expect(changed.sessions[0]).not.toBe(first.sessions[0]);
+  expect(changed.sessions[1]).toBe(first.sessions[1]);
+  expect(changed.sessions[2]).toBe(first.sessions[2]);
+  expect(
+    stringify.mock.calls.filter(([value]) => value && typeof value === "object" && "key" in value),
+  ).toHaveLength(2);
+  stringify.mockRestore();
+  // A sibling joining a singleton fact changes the unchanged row's reference layout.
+  const regrouped = shareSidebarSessionRows([row("a", "B", "owner"), ...ownerRows.slice(1)]);
+  expect(regrouped.sessions[1]).not.toBe(first.sessions[1]);
+  expect(regrouped.sharedFacts).toEqual([
+    { label: "B" },
+    { visibility: "shared", sharingRole: "owner" },
+  ]);
+  expect(regrouped.sessions[1]?.sharedFacts).toEqual([0, 1]);
+  expect(shareSidebarSessionRows([...viewerRows]).sessions[1]).toBe(viewer.sessions[1]);
+  shareSidebarSessionRows([...ownerRows]);
+  using movedStringify = vi.spyOn(JSON, "stringify");
+  const moved = shareSidebarSessionRows([
+    row("d", "D", "owner"),
+    row("e", "D", "owner"),
+    ...ownerRows,
+  ]);
+  expect(moved.sessions[2]?.sharedFacts).toEqual([1]);
+  expect(
+    movedStringify.mock.calls.filter(
+      ([value]) => value && typeof value === "object" && ["a", "b", "c"].includes(value.key),
+    ),
+  ).toHaveLength(0);
+  movedStringify.mockRestore();
+  expect(wire(moved)).toBe(JSON.stringify({ type: "res", id: "list", ok: true, payload: moved }));
+  for (const payload of [first, viewer, changed, regrouped]) {
+    const frame = { type: "res", id: "rows", ok: true, payload };
+    expect(serializeGatewayFrame(frame).toString()).toBe(JSON.stringify(frame));
   }
 });
 

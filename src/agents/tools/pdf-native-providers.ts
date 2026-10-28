@@ -134,8 +134,12 @@ export async function anthropicAnalyzePdf(
 
   const request = params.requestConfig?.request;
   const headers = new Headers(params.requestConfig?.headers);
-  for (const [name, value] of new Headers(request?.headers)) {
-    headers.set(name, value);
+  for (const [name, value] of Object.entries(request?.headers ?? {})) {
+    if (value === null) {
+      headers.delete(name);
+    } else {
+      headers.set(name, value);
+    }
   }
   const hasExplicitAuthOverride =
     (request?.auth?.mode !== undefined && request.auth.mode !== "provider-default") ||

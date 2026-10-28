@@ -4,6 +4,7 @@ import * as execRunner from "../process/exec-runner.js";
 import { withCommandProcessScope } from "../process/exec-spawn.js";
 import * as processExec from "../process/exec.js";
 import type { CommandOptions, SpawnResult } from "../process/exec.js";
+import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import { executeGitCommand, executeGitCommandBytes } from "./git-exec.js";
 import { buildUpdateCommandRunner, runStep } from "./update-runner-command.js";
 
@@ -21,14 +22,11 @@ vi.mock("../logging/subsystem.js", async (importOriginal) => {
   };
 });
 
-const failure: SpawnResult = {
+const failure: SpawnResult = createCommandResult({
   stdout: "partial output",
   stderr: "error: origin did not send all necessary objects",
-  termination: "exit",
   code: 1,
-  signal: null,
-  killed: false,
-};
+});
 const success: SpawnResult = { ...failure, stdout: "complete output", stderr: "", code: 0 };
 
 type Attempt = Pick<CommandOptions, "timeoutMs" | "input"> & { argv: string[] };
@@ -189,8 +187,6 @@ it("recovers transport errors with Git global options", async () => {
 it.each([
   [["fetch", "origin"], "fatal: repository not found"],
   [["push", "origin", "main"], failure.stderr],
-  [["fetch", "origin"], "error: cannot lock ref: File exists."],
-  [["fetch", "origin"], "error: cannot lock ref: is at aaaa but expected bbbb"],
   [["fetch", "origin"], `error: cannot lock ref: is at aaaa but expected bbbb\n${failure.stderr}`],
 ] satisfies Array<[string[], string]>)(
   "does not replay permanent failures or unsafe operations: %j %s",

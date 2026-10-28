@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import type { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -88,19 +87,18 @@ describe("maintenance table integrity", () => {
     const { database, count } = fixture;
     const check = () => assertSqliteTableIntegrity(database, "items", "items");
     await withMaintenanceCheck("quick", () => {
-      database.exec("BEGIN");
-      check();
-      check();
-      expect(count("PRAGMA integrity_check('items');")).toBe(1);
-      database.exec("INSERT INTO items VALUES (1)");
-      check();
-      expect(count("PRAGMA integrity_check('items');")).toBe(2);
-      database.exec("CREATE INDEX idx_items ON items(value)");
-      check();
-      expect(count("PRAGMA integrity_check('items');")).toBe(3);
-      database.exec("ROLLBACK");
-      check();
-      expect(count("PRAGMA integrity_check('items');")).toBe(4);
+      const mutations = [
+        "BEGIN",
+        "INSERT INTO items VALUES (1)",
+        "CREATE INDEX idx_items ON items(value)",
+        "ROLLBACK",
+      ];
+      for (const [index, mutation] of mutations.entries()) {
+        database.exec(mutation);
+        check();
+        check();
+        expect(count("PRAGMA integrity_check('items');"), mutation).toBe(index + 1);
+      }
       expect(database.prepare("SELECT * FROM items").all()).toEqual([]);
     });
   });
@@ -120,10 +118,15 @@ describe("maintenance table integrity", () => {
   });
 });
 
-function withDatabase(sql: string, run: (database: DatabaseSync) => void) {
-  using database = new (requireNodeSqlite().DatabaseSync)(":memory:");
-  database.exec(sql);
-  run(database);
+function memoryDatabase(sql: string) {
+  const database = new (requireNodeSqlite().DatabaseSync)(":memory:");
+  try {
+    database.exec(sql);
+    return database;
+  } catch (error) {
+    database.close();
+    throw error;
+  }
 }
 
 function caught(run: () => unknown): unknown {
@@ -150,29 +153,24 @@ function taskOrphans(parent = "task_id", child = "task_id", action = "CASCADE", 
 
 describe("assertSqliteIntegrity", () => {
   it("retains every finding for offline repair without repeating the check", () => {
-    withDatabase(
+    using database = memoryDatabase(
       `CREATE TABLE damaged (value INTEGER CHECK(value > 0));
        PRAGMA ignore_check_constraints = ON;
        WITH RECURSIVE rows(n) AS (VALUES(1) UNION ALL SELECT n + 1 FROM rows WHERE n < 105)
        INSERT INTO damaged SELECT -n FROM rows;
        PRAGMA ignore_check_constraints = OFF;`,
-      (database) => {
-        const observer = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
-        try {
-          const failure = caught(() =>
-            assertSqliteIntegrity(database, "offline repair", { allFindings: true }),
-          );
-          expect(failure).toBeInstanceOf(SqliteIntegrityError);
-          if (!(failure instanceof SqliteIntegrityError)) {
-            throw new Error("Expected captured integrity findings");
-          }
-          expect(failure.findings).toHaveLength(105);
-          expect(observer.queries).toEqual(["PRAGMA integrity_check(2147483647);"]);
-        } finally {
-          observer.restore();
-        }
-      },
     );
+    const observer = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
+    try {
+      const failure = caught(() =>
+        assertSqliteIntegrity(database, "offline repair", { allFindings: true }),
+      );
+      expect(failure).toBeInstanceOf(SqliteIntegrityError);
+      expect(failure).toHaveProperty("findings.length", 105);
+      expect(observer.queries).toEqual(["PRAGMA integrity_check(2147483647);"]);
+    } finally {
+      observer.restore();
+    }
   });
 
   it.each([
@@ -208,25 +206,24 @@ describe("assertSqliteIntegrity", () => {
   );
 
   it("classifies cascade-owned task delivery orphans without admitting writes", () => {
-    withDatabase(taskOrphans(), (database) => {
-      const failure = caught(() => assertSqliteIntegrity(database, "test database"));
-      expect(failure).toMatchObject({
-        name: "SqliteRepairableForeignKeyError",
-        repair: {
-          kind: "task-delivery-orphans",
-          relation: "task_delivery_state.task_id",
-          parentTable: "task_runs",
-          orphanCount: 6,
-        },
-        message: expect.stringMatching(/foreign_key_check failed.*openclaw doctor --fix/u),
-      });
-      if (!(failure instanceof Error)) {
-        throw new Error("Expected integrity admission to refuse unrepaired rows");
-      }
-      expect(isTerminalSqliteIntegrityError(failure)).toBe(false);
-      expect(database.prepare("SELECT count(*) AS count FROM task_delivery_state").get()).toEqual({
-        count: 6,
-      });
+    using database = memoryDatabase(taskOrphans());
+    const failure = caught(() => assertSqliteIntegrity(database, "test database"));
+    expect(failure).toMatchObject({
+      name: "SqliteRepairableForeignKeyError",
+      repair: {
+        kind: "task-delivery-orphans",
+        relation: "task_delivery_state.task_id",
+        parentTable: "task_runs",
+        orphanCount: 6,
+      },
+      message: expect.stringMatching(/foreign_key_check failed.*openclaw doctor --fix/u),
+    });
+    if (!(failure instanceof Error)) {
+      throw new Error("Expected integrity admission to refuse unrepaired rows");
+    }
+    expect(isTerminalSqliteIntegrityError(failure)).toBe(false);
+    expect(database.prepare("SELECT count(*) AS count FROM task_delivery_state").get()).toEqual({
+      count: 6,
     });
   });
 
@@ -253,15 +250,14 @@ describe("assertSqliteIntegrity", () => {
               PRAGMA ignore_check_constraints = OFF;`,
     },
   ])("refuses task delivery violations with $label", ({ parent, child, action, extra }) => {
-    withDatabase(taskOrphans(parent, child, action, extra), (database) => {
-      expect(() => assertSqliteIntegrity(database, "test database")).toThrow(
-        expect.objectContaining({ name: "SqliteIntegrityError" }),
-      );
-    });
+    using database = memoryDatabase(taskOrphans(parent, child, action, extra));
+    expect(() => assertSqliteIntegrity(database, "test database")).toThrow(
+      expect.objectContaining({ name: "SqliteIntegrityError" }),
+    );
   });
 
   it("does not classify a component of a composite foreign key as repairable", () => {
-    withDatabase(
+    using database = memoryDatabase(
       `
         PRAGMA foreign_keys = OFF;
         CREATE TABLE task_runs (task_id TEXT, revision INTEGER, PRIMARY KEY (task_id, revision));
@@ -272,11 +268,9 @@ describe("assertSqliteIntegrity", () => {
         );
         INSERT INTO task_delivery_state (task_id, revision) VALUES ('missing', 1);
       `,
-      (database) => {
-        expect(() => assertSqliteIntegrity(database, "test database")).toThrow(
-          expect.objectContaining({ name: "SqliteIntegrityError" }),
-        );
-      },
+    );
+    expect(() => assertSqliteIntegrity(database, "test database")).toThrow(
+      expect.objectContaining({ name: "SqliteIntegrityError" }),
     );
   });
 
@@ -299,22 +293,20 @@ describe("assertSqliteIntegrity", () => {
   ] as const)("reports foreign key violations with %s", (variant, rows, expected) => {
     const withoutRowid = variant === "WITHOUT ROWID tables";
     const type = withoutRowid ? "TEXT" : "INTEGER";
-    withDatabase(
+    using database = memoryDatabase(
       `PRAGMA foreign_keys = OFF;
        CREATE TABLE parents (id ${type} PRIMARY KEY);
        CREATE TABLE children (id ${type} PRIMARY KEY, parent_id ${type} NOT NULL REFERENCES parents(id))
          ${withoutRowid ? "WITHOUT ROWID" : ""};
        INSERT INTO children (id, parent_id) VALUES ${rows};`,
-      (database) => {
-        if (variant === "a shadowing schema object") {
-          database.exec(
-            'CREATE TABLE pragma_foreign_key_check ("table" TEXT NOT NULL, rowid INTEGER, parent TEXT NOT NULL, fkid INTEGER NOT NULL)',
-          );
-          expect(database.prepare("SELECT * FROM pragma_foreign_key_check").all()).toEqual([]);
-        }
-        expect(() => assertSqliteIntegrity(database, "test database")).toThrow(expected);
-      },
     );
+    if (variant === "a shadowing schema object") {
+      database.exec(
+        'CREATE TABLE pragma_foreign_key_check ("table" TEXT NOT NULL, rowid INTEGER, parent TEXT NOT NULL, fkid INTEGER NOT NULL)',
+      );
+      expect(database.prepare("SELECT * FROM pragma_foreign_key_check").all()).toEqual([]);
+    }
+    expect(() => assertSqliteIntegrity(database, "test database")).toThrow(expected);
   });
 });
 
@@ -358,7 +350,19 @@ describe("integrity gate attribution", () => {
       }
       return statement;
     });
-    return { database, advance };
+    const diagnostics: SqliteIntegrityDiagnostics = {};
+    const steps = () => sqliteIntegrityCheckSteps(database, "timed database", diagnostics);
+    return {
+      database,
+      advance,
+      diagnostics,
+      steps,
+      sync() {
+        runSqliteIntegrityOperationSync(steps());
+        expect(diagnostics).toEqual(syncDiagnostics);
+      },
+      [Symbol.dispose]: () => database.close(),
+    };
   }
 
   it.each([
@@ -367,11 +371,11 @@ describe("integrity gate attribution", () => {
   ])(
     "splits a $label without changing the gate outcome or error",
     ({ checkMs, foreignKeyViolation, gateMs, syncMs }) => {
-      const { database, advance } = createTimedDatabase(checkMs, foreignKeyViolation);
-      const diagnostics: SqliteIntegrityDiagnostics = {};
+      using fixture = createTimedDatabase(checkMs, foreignKeyViolation);
+      const { advance, diagnostics, steps } = fixture;
       let suppliedError: unknown;
       function* operation(): SqliteIntegrityOperation<void> {
-        const gate = sqliteIntegrityCheckSteps(database, "timed database", diagnostics);
+        const gate = steps();
         const step = gate.next();
         if (step.done) {
           throw new Error("Integrity check did not yield");
@@ -389,27 +393,23 @@ describe("integrity gate attribution", () => {
         gate.next();
       }
 
-      try {
-        const failure = caught(() => runSqliteIntegrityOperationSync(operation()));
-        if (foreignKeyViolation) {
-          expect(failure).toMatchObject({
-            name: "SqliteIntegrityError",
-            message: expect.stringContaining("foreign_key_check failed for timed database"),
-          });
-          expect(failure).toBe(suppliedError);
-        } else {
-          expect(failure).toBeUndefined();
-        }
-        expect(diagnostics).toEqual({
-          integrityGateMode: "full",
-          integrityGateMs: gateMs,
-          integrityGateOutcome: foreignKeyViolation ? "failed" : "healthy",
-          integrityCheckSyncMs: syncMs,
-          integrityOutsideCheckMs: gateMs - syncMs,
+      const failure = caught(() => runSqliteIntegrityOperationSync(operation()));
+      if (foreignKeyViolation) {
+        expect(failure).toMatchObject({
+          name: "SqliteIntegrityError",
+          message: expect.stringContaining("foreign_key_check failed for timed database"),
         });
-      } finally {
-        database.close();
+        expect(failure).toBe(suppliedError);
+      } else {
+        expect(failure).toBeUndefined();
       }
+      expect(diagnostics).toEqual({
+        integrityGateMode: "full",
+        integrityGateMs: gateMs,
+        integrityGateOutcome: foreignKeyViolation ? "failed" : "healthy",
+        integrityCheckSyncMs: syncMs,
+        integrityOutsideCheckMs: gateMs - syncMs,
+      });
     },
   );
 
@@ -420,65 +420,52 @@ describe("integrity gate attribution", () => {
   ] as const)(
     "attributes $label worker time without leaking measurements into later gates",
     ({ checkMs, lifetimeMs, outcome }) => {
-      const { database, advance } = createTimedDatabase(4.75);
-      const diagnostics: SqliteIntegrityDiagnostics = {};
+      using fixture = createTimedDatabase(4.75);
+      const { advance, diagnostics, steps } = fixture;
       const failure = new Error("external integrity driver failed");
-      try {
-        for (const nextDriver of ["sync", "unmeasured"] as const) {
-          runSqliteIntegrityOperationSync(
-            sqliteIntegrityCheckSteps(database, "timed database", diagnostics),
-          );
-          expect(diagnostics).toEqual(syncDiagnostics);
-
-          const worker = sqliteIntegrityCheckSteps(database, "timed database", diagnostics);
-          const step = worker.next();
-          if (step.done || !step.value.timing) {
-            throw new Error("Integrity check did not yield a timing owner");
-          }
-          step.value.timing.workerLifetimeElapsedMs = lifetimeMs;
-          if (checkMs !== undefined) {
-            step.value.timing.workerCheckElapsedMs = checkMs;
-          }
-          advance(lifetimeMs + 4.5);
-          if (outcome === "failed") {
-            expect(caught(() => worker.throw(failure))).toBe(failure);
-          } else {
-            expect(worker.next().done).toBe(true);
-          }
-          expect(diagnostics).toEqual({
-            integrityGateMode: "full",
-            integrityGateMs: Math.floor(lifetimeMs + 4.5),
-            integrityGateOutcome: outcome,
-            ...(checkMs === undefined ? {} : { integrityWorkerCheckMs: Math.floor(checkMs) }),
-            integrityWorkerLifetimeMs: Math.floor(lifetimeMs),
-            integrityOutsideWorkerMs: Math.floor(lifetimeMs + 4.5) - Math.floor(lifetimeMs),
-          });
-
-          if (nextDriver === "sync") {
-            runSqliteIntegrityOperationSync(
-              sqliteIntegrityCheckSteps(database, "timed database", diagnostics),
-            );
-            expect(diagnostics).toEqual(syncDiagnostics);
-            continue;
-          }
-          const manual = sqliteIntegrityCheckSteps(database, "timed database", diagnostics);
-          expect(manual.next().done).toBe(false);
-          advance(12.5);
-          if (outcome === "failed") {
-            expect(caught(() => manual.throw(failure))).toBe(failure);
-          } else {
-            expect(manual.next().done).toBe(true);
-          }
-          expect(diagnostics).toEqual({
-            integrityGateMode: "full",
-            integrityGateMs: 12,
-            integrityGateOutcome: outcome,
-          });
-          expect(diagnostics).not.toHaveProperty("integrityCheckSyncMs");
-          expect(diagnostics).not.toHaveProperty("integrityOutsideCheckMs");
+      const finish = (operation: SqliteIntegrityOperation<void>) => {
+        if (outcome === "failed") {
+          expect(caught(() => operation.throw(failure))).toBe(failure);
+        } else {
+          expect(operation.next().done).toBe(true);
         }
-      } finally {
-        database.close();
+      };
+      for (const nextDriver of ["sync", "unmeasured"] as const) {
+        fixture.sync();
+
+        const worker = steps();
+        const step = worker.next();
+        if (step.done || !step.value.timing) {
+          throw new Error("Integrity check did not yield a timing owner");
+        }
+        step.value.timing.workerLifetimeElapsedMs = lifetimeMs;
+        if (checkMs !== undefined) {
+          step.value.timing.workerCheckElapsedMs = checkMs;
+        }
+        advance(lifetimeMs + 4.5);
+        finish(worker);
+        expect(diagnostics).toEqual({
+          integrityGateMode: "full",
+          integrityGateMs: Math.floor(lifetimeMs + 4.5),
+          integrityGateOutcome: outcome,
+          ...(checkMs === undefined ? {} : { integrityWorkerCheckMs: Math.floor(checkMs) }),
+          integrityWorkerLifetimeMs: Math.floor(lifetimeMs),
+          integrityOutsideWorkerMs: Math.floor(lifetimeMs + 4.5) - Math.floor(lifetimeMs),
+        });
+
+        if (nextDriver === "sync") {
+          fixture.sync();
+          continue;
+        }
+        const manual = steps();
+        expect(manual.next().done).toBe(false);
+        advance(12.5);
+        finish(manual);
+        expect(diagnostics).toEqual({
+          integrityGateMode: "full",
+          integrityGateMs: 12,
+          integrityGateOutcome: outcome,
+        });
       }
     },
   );

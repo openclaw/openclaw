@@ -1,6 +1,9 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import type { Page } from "playwright";
 import { expect as expectBrowser } from "playwright/test";
 import { afterEach, expect, it } from "vitest";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionUrl,
   installMockGateway,
@@ -36,7 +39,7 @@ const suite = createControlUiE2eSuite({
 
 let activePage: Page | undefined;
 
-function ownerSessions(visibility: "draft" | "shared", single = false) {
+function ownerSessions(visibility: "draft" | "shared" | "read-only", single = false) {
   const sessions = visibility === "draft" ? draftSessionsList() : sessionsList();
   const active = sessions.sessions[0];
   if (!active) {
@@ -52,7 +55,7 @@ function ownerSessions(visibility: "draft" | "shared", single = false) {
 }
 
 async function newPage(width = 1200) {
-  const context = await suite.browser.newContext({ viewport: { height: 800, width } });
+  const context = await suite.newBrowserContext({ viewport: { height: 800, width } });
   activePage = await context.newPage();
   return activePage;
 }
@@ -118,19 +121,22 @@ function geometry(element: Element) {
 
 suite.define(() => {
   afterEach(async () => {
-    await activePage
-      ?.context()
-      .close()
-      .catch(() => {});
-    activePage = undefined;
+    if (activePage) {
+      await suite.closeBrowserContext(activePage.context());
+      activePage = undefined;
+    }
   });
 
   it("keeps collaborative owner stacks legible without shifting session rows", async () => {
+    const sessions = collaborativeSessionsList();
+    for (const session of sessions.sessions.slice(0, 2)) {
+      Object.assign(session, { hasActiveRun: true, status: "running" });
+    }
     const { page } = await openSession(
-      collaborativeSessionsList(),
+      sessions,
       {
         hasMultipleSessionSharingIdentities: true,
-        sessionKey: "agent:main:collaboration",
+        sessionKey: "agent:main:single-owner",
       },
       {
         avatars: [
@@ -204,15 +210,50 @@ suite.define(() => {
     );
     expect(collaborative?.height).toBeCloseTo(single?.height ?? 0, 5);
     expect(collaborative?.titleLeft).toBeCloseTo(single?.titleLeft ?? 0, 5);
+    for (const row of [collaborativeRow, overflowRow]) {
+      const [trace, title] = await Promise.all([
+        row.locator(".session-glyph__trace").evaluate(geometry),
+        row.locator(".sidebar-recent-session__text").evaluate(geometry),
+      ]);
+      expect(trace.width).toBe(32);
+      expect(trace.right).toBeLessThanOrEqual(title.left);
+    }
+    const frame = await takeControlUiScreenshotFrame(
+      page,
+      page.locator("body"),
+      [collaborativeRow],
+      {
+        animations: "disabled",
+        elements: [page.locator(".sidebar-shell")],
+      },
+    );
+    await writeFile(
+      path.join(suite.artifactDir, "shared-activity-sidebar.png"),
+      frame.elements[0]!.png,
+    );
   });
 
-  it.each([1200, 390])("keeps inline-owner activity last at %ipx", async (width) => {
+  it.each([
+    { width: 1200, grouping: "None" },
+    { width: 1200, grouping: "Custom groups" },
+    { width: 1200, grouping: "Person" },
+    { width: 390, grouping: "None" },
+    { width: 390, grouping: "Custom groups" },
+    { width: 390, grouping: "Person" },
+  ])("aligns $grouping left status at $width px", async ({ width, grouping }) => {
     const patrick = sessionPerson("profile-patrick", "Patrick");
     const mira = sessionPerson("profile-mira", "Mira");
     const states: Array<[string, Record<string, unknown>]> = [
       ["idle", {}],
+      // Owner filtering admits older actor IDs without Person-group identity metadata.
+      [
+        "legacy-owner",
+        { owner: { actor: { type: "human", id: patrick.id, label: patrick.label } } },
+      ],
       ["unread", { unread: true }],
       ["running", { hasActiveRun: true, status: "running", activeRunIds: ["run-1"] }],
+      ["artwork", { icon: "🔧" }],
+      ["draft", { visibility: "draft", sharingRole: "owner" }],
       ["parent", { hasActiveRun: true, status: "running", childSessions: ["agent:main:child"] }],
     ];
     const rows = states.map(([id, state], index) =>
@@ -220,7 +261,8 @@ suite.define(() => {
         {
           key: `agent:main:${id}`,
           kind: "direct",
-          label: `Inline ${id} session`,
+          label: `Review ${id} session`,
+          category: "Release readiness",
           createdActor: patrick,
           owner: { actor: patrick },
           updatedAt: 10 - index,
@@ -231,7 +273,11 @@ suite.define(() => {
     rows.push({
       key: "agent:main:child",
       kind: "direct",
-      label: "Inline child session",
+      label: "Verify release checks",
+      // A nonempty category makes this an explicit root instead of a nested child.
+      category: "",
+      hasActiveRun: true,
+      status: "running",
       createdActor: patrick,
       owner: { actor: patrick },
       spawnedBy: "agent:main:parent",
@@ -241,6 +287,7 @@ suite.define(() => {
       key: "agent:main:mira",
       kind: "direct",
       label: "Mira session",
+      category: "",
       createdActor: mira,
       owner: { actor: mira },
       updatedAt: 1,
@@ -256,16 +303,24 @@ suite.define(() => {
     if (width === 390) {
       await navigationDrawerToggle(page).click();
     }
-    await page.getByText("Inline idle session", { exact: true }).waitFor();
-    await chooseSidebarMenuOption(page, "Group by", "Person");
+    await page.getByText("Review idle session", { exact: true }).waitFor();
+    await chooseSidebarMenuOption(page, "Group by", grouping);
     await closeSidebarMenu(page);
     await chooseOwner(page, "owner:profile-patrick");
-    // The picker helper's Escape also dismisses the mobile drawer.
+    // Escape may close only the picker, leaving the mobile drawer open.
     if (width === 390) {
-      await navigationDrawerToggle(page).click();
+      const toggle = navigationDrawerToggle(page);
+      if ((await toggle.getAttribute("aria-expanded")) !== "true") {
+        await toggle.click();
+      }
       await waitForMobileSidebarDrawerOpen(page);
     }
-    const group = page.locator(".sidebar-recent-sessions__group--inline-owner");
+    const group = page.locator(".sidebar-recent-sessions");
+    if (grouping === "Person") {
+      await group
+        .locator('.sidebar-recent-sessions__group--inline-owner[data-session-section^="person:"]')
+        .waitFor();
+    }
     const row = (id: string) => group.locator(`[data-session-key="agent:main:${id}"]`);
     await row("running").locator(".session-glyph__ring").waitFor();
     await row("unread").locator(".session-unread-dot").waitFor();
@@ -274,68 +329,115 @@ suite.define(() => {
 
     const rowGeometry = (id: string) =>
       row(id).evaluate((element) => {
-        const box = (selector: string) => element.querySelector(selector)?.getBoundingClientRect();
+        // Compare row-owned padding, not the mobile drawer's viewport transform.
+        const origin = element.getBoundingClientRect().left;
+        const box = (selector: string) => {
+          const bounds = element.querySelector(selector)?.getBoundingClientRect();
+          return bounds
+            ? { left: bounds.left - origin, right: bounds.right - origin, width: bounds.width }
+            : undefined;
+        };
+        const link = element.querySelector(".sidebar-recent-session__link")!;
         return {
+          link: box(".sidebar-recent-session__link")!,
+          gap: Number.parseFloat(getComputedStyle(link).columnGap),
           top: element.getBoundingClientRect().top,
-          right: element.getBoundingClientRect().right,
           text: box(".sidebar-recent-session__text"),
           indicator: box(".sidebar-session-indicator:not(:empty)"),
-          actions: box(".session-row-actions"),
           toggle: box("[data-child-session-toggle]"),
         };
       });
     const header = await page
-      .locator("#sidebar-session-owner-title")
+      .locator(".personal-session-groups__heading")
       .evaluate((element) => element.getBoundingClientRect().bottom);
-    const [idle, unread, running] = await Promise.all([
+    const [idle, legacyOwner, unread, running, artwork, draft] = await Promise.all([
       rowGeometry("idle"),
+      rowGeometry("legacy-owner"),
       rowGeometry("unread"),
       rowGeometry("running"),
+      rowGeometry("artwork"),
+      rowGeometry("draft"),
     ]);
-    expect(idle.top - header).toBeLessThanOrEqual(12);
-    expect(idle.indicator).toBeUndefined();
-    for (const status of [unread, running]) {
+    expect(legacyOwner.text?.left).toBeCloseTo(idle.text?.left ?? 0, 5);
+    if (grouping === "Person") {
+      expect(idle.top - header).toBeLessThanOrEqual(12);
+    }
+    if (width === 1200 || grouping === "Person") {
+      const frame = await takeControlUiScreenshotFrame(
+        page,
+        page.locator("body"),
+        [row("running")],
+        {
+          animations: "disabled",
+          elements: [page.locator(".sidebar-shell")],
+        },
+      );
+      await writeFile(path.join(suite.artifactDir, `my-sessions-${grouping}.png`), frame.png);
+      await writeFile(
+        path.join(suite.artifactDir, `my-sessions-${grouping}-sidebar.png`),
+        frame.elements[0]!.png,
+      );
+    }
+    for (const status of [running, unread, artwork, draft]) {
       expect(status.text?.left).toBeCloseTo(idle.text?.left ?? 0, 5);
-      expect(status.indicator?.left).toBeGreaterThanOrEqual(status.text?.right ?? Infinity);
+      expect(status.indicator?.right).toBeLessThanOrEqual(status.text?.left ?? 0);
     }
 
-    // Hover actions must appear before the fixed trailing status, not push it left.
+    // Revealing actions must not move the leading state or the title column.
     await row("running").hover();
     await expectBrowser(row("running").locator(".session-row-actions button").first()).toHaveCSS(
       "opacity",
       "1",
     );
     const hovered = await rowGeometry("running");
-    expect(hovered.indicator?.left).toBeGreaterThanOrEqual(hovered.actions?.right ?? Infinity);
-    expect(hovered.right - (hovered.indicator?.right ?? 0)).toBeCloseTo(
-      running.right - (running.indicator?.right ?? 0),
-      5,
-    );
+    expect(hovered.indicator?.left).toBeCloseTo(running.indicator?.left ?? 0, 5);
+    expect(hovered.text?.left).toBeCloseTo(running.text?.left ?? 0, 5);
     await page.mouse.move(1100, 700);
     await row("running").locator("a").focus();
     const focused = await rowGeometry("running");
-    expect(focused.indicator?.left).toBeGreaterThanOrEqual(focused.actions?.right ?? Infinity);
-    expect(focused.right - (focused.indicator?.right ?? 0)).toBeCloseTo(
-      running.right - (running.indicator?.right ?? 0),
-      5,
-    );
+    expect(focused.indicator?.left).toBeCloseTo(running.indicator?.left ?? 0, 5);
+    expect(focused.text?.left).toBeCloseTo(running.text?.left ?? 0, 5);
     await page.locator("#sidebar-session-owner-title").focus();
     await page.mouse.move(width - 10, 700);
     await expectBrowser(page.locator(".session-progress-hovercard")).toBeHidden();
     await row("parent").hover();
     const parent = await rowGeometry("parent");
     expect(parent.toggle).toBeDefined();
-    expect(parent.indicator?.left).toBeGreaterThanOrEqual(parent.toggle?.right ?? Infinity);
-    expect(parent.right - (parent.indicator?.right ?? 0)).toBeCloseTo(
-      running.right - (running.indicator?.right ?? 0),
-      5,
-    );
+    expect(parent.indicator?.right).toBeLessThanOrEqual(parent.text?.left ?? 0);
+    expect(parent.text?.left).toBeCloseTo(idle.text?.left ?? 0, 5);
     const toggle = row("parent").locator("[data-child-session-toggle]");
     await toggle.click();
     await expectBrowser(group.locator('[data-session-key="agent:main:child"]')).toContainText(
-      "Inline child session",
+      "Verify release checks",
     );
     await expectBrowser(toggle).toHaveAttribute("aria-expanded", "true");
+    await row("child").locator(".session-glyph__ring").waitFor();
+    await row("child").hover({ position: { x: 2, y: 10 } });
+    const child = await rowGeometry("child");
+    // Child actions already take their width in flow. The title should fill
+    // the link to within its normal inter-item gap, not lose an action reserve again.
+    expect(child.text?.width).toBeGreaterThanOrEqual(
+      child.link.right - child.text!.left - child.gap,
+    );
+    await row("child").locator("a").focus();
+    const focusedChild = await rowGeometry("child");
+    expect(focusedChild.text?.width).toBeGreaterThanOrEqual(
+      focusedChild.link.right - focusedChild.text!.left - focusedChild.gap,
+    );
+    expect(child.indicator?.right).toBeLessThanOrEqual(child.text?.left ?? 0);
+    await row("running").hover();
+    if (width === 390) {
+      await row("running").locator("[data-sidebar-session-menu]").click();
+      await page.getByRole("menuitem", { name: "Pin session", exact: true }).click();
+    } else {
+      await row("running").getByRole("button", { name: "Pin session", exact: true }).click();
+    }
+    await expectBrowser(page.locator('[data-session-section="pinned"]')).toContainText(
+      "Review running session",
+    );
+    await row("running").hover();
+    const pinned = await rowGeometry("running");
+    expect(pinned.indicator?.right).toBeLessThanOrEqual(pinned.text?.left ?? 0);
   });
 
   it("derives People controls and owner filtering from current session owners", async () => {
@@ -567,7 +669,7 @@ suite.define(() => {
     await page.getByText("Ada research", { exact: true }).first().waitFor();
     await page.getByText("Bob operations", { exact: true }).first().waitFor();
 
-    const filterAndSort = page.getByRole("button", { name: "Filter & sort", exact: true });
+    const filterAndSort = page.getByRole("button", { name: /^Filter & sort · /, exact: true });
     await filterAndSort.focus();
     await page.keyboard.press("Enter");
 
@@ -681,7 +783,7 @@ suite.define(() => {
   });
 
   it("lets a read-scoped owner inspect sharing but blocks mutations", async () => {
-    const { page, gateway } = await openSession(ownerSessions("draft"), {
+    const { page, gateway } = await openSession(ownerSessions("read-only"), {
       featureMethods: [...visibilityMethods, ...memberMethods],
       operatorScopes: ["operator.read"],
       methodResponses: {
@@ -689,6 +791,7 @@ suite.define(() => {
           sessionKey: "agent:main:ada",
           members: [],
           identities: [{ type: "human", id: "profile-bob", label: "Bob" }],
+          permissions: [{ identityId: "profile-bob", level: "read", options: ["read", "send"] }],
           role: "owner",
           allowedVisibilities: ["shared", "draft"],
         },
@@ -699,7 +802,7 @@ suite.define(() => {
     await page.getByRole("button", { name: "Session sharing", exact: true }).click();
     await gateway.waitForRequest("session.members.listEvidence");
     const dropdown = page.locator(".chat-pane__sharing-menu");
-    const member = dropdown.getByRole("menuitemcheckbox", { name: "Bob", exact: true });
+    const member = dropdown.getByRole("menuitem", { name: "Bob, Can read", exact: true });
     await expectBrowser(member).toBeVisible();
     await expectBrowser(member).toBeDisabled();
     await member.evaluate((element) => (element as HTMLButtonElement).click());
@@ -731,7 +834,7 @@ suite.define(() => {
       { type: "system" as const, id: "system-operations", label: "Operations" },
     ];
     const { page, gateway } = await openSession(
-      ownerSessions("shared", true),
+      ownerSessions("read-only", true),
       {
         hasMultipleSessionSharingIdentities: true,
         featureMethods: [...chatMethods, ...memberMethods, "session.visibility.set"],
@@ -741,6 +844,11 @@ suite.define(() => {
             sessionKey: "agent:main:ada",
             members: [{ identityId: longMemberId, addedBy: "profile-ada", addedAt: 1 }],
             identities: [...humanIdentities, ...nonHumanIdentities],
+            permissions: humanIdentities.map((identity) => ({
+              identityId: identity.id,
+              level: identity.id === longMemberId ? "send" : "read",
+              options: ["read", "send"],
+            })),
             role: "owner",
             allowedVisibilities: ["shared", "read-only", "suggest", "draft"],
           },
@@ -755,26 +863,20 @@ suite.define(() => {
     const dropdown = page.locator(".chat-pane__sharing-menu");
     const roster = dropdown.locator(".chat-pane__sharing-roster");
     const people = roster.locator(".chat-pane__sharing-person");
-    await expectBrowser(people).toHaveCount(32);
-    const longNameItem = dropdown.getByRole("menuitemcheckbox", {
-      name: longMemberLabel,
-      exact: true,
-    });
-    const longIdItem = dropdown.getByRole("menuitemcheckbox", {
-      name: longMemberId,
-      exact: true,
-    });
+    await expectBrowser(people).toHaveCount(30);
+    const longNameItem = people.filter({ hasText: longMemberLabel });
+    const longIdItem = people.filter({ hasText: longMemberId });
     await longIdItem.scrollIntoViewIfNeeded();
-    await expectBrowser(longIdItem).toBeChecked();
-    const selectedIndicator = longIdItem.locator(".chat-pane__sharing-member-check");
-    await expectBrowser(selectedIndicator).toBeVisible();
-    await expectBrowser(selectedIndicator).toHaveAttribute("aria-label", "Member");
+    const selectedControl = longIdItem.getByRole("menuitem", {
+      name: `${longMemberId}, Can send`,
+      exact: true,
+    });
+    await expectBrowser(selectedControl).toBeVisible();
     expect(
-      await longIdItem.evaluate((item) => {
-        const indicator = item.querySelector<HTMLElement>(".chat-pane__sharing-member-check")!;
-        const itemRect = item.getBoundingClientRect();
-        const indicatorRect = indicator.getBoundingClientRect();
-        return indicatorRect.left >= itemRect.left && indicatorRect.right <= itemRect.right;
+      await selectedControl.evaluate((control) => {
+        const row = control.closest(".chat-pane__sharing-person")!.getBoundingClientRect();
+        const rect = control.getBoundingClientRect();
+        return rect.left >= row.left && rect.right <= row.right;
       }),
     ).toBe(true);
 
@@ -839,8 +941,7 @@ suite.define(() => {
     expect(afterScroll.accessTop).toBeCloseTo(beforeScroll.accessTop, 1);
     expect(afterScroll.permissionsTop).toBeCloseTo(beforeScroll.permissionsTop, 1);
     await expectBrowser(roster.locator("openclaw-session-owner-chip")).toHaveCount(30);
-    // All identities share one list; owner-chip presentation remains human-only.
-    await expectBrowser(roster.locator(".chat-pane__sharing-member-icon > svg")).toHaveCount(2);
+    await expectBrowser(roster.locator(".chat-pane__sharing-member-icon > svg")).toHaveCount(0);
     await expectBrowser(dropdown.getByRole("button", { name: "Next", exact: true })).toHaveCount(0);
     await expectBrowser(
       dropdown.getByRole("button", { name: "Previous", exact: true }),

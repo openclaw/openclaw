@@ -26,6 +26,7 @@ import { rethrowIncognitoSessionError } from "../../state/incognito-session-erro
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { parseSqliteSessionFileMarker } from "./legacy-sqlite-marker.js";
 import { resolveDefaultSessionStorePath, resolveSessionStorePathCore } from "./paths.js";
+import type { RecoveryNoticeMirror } from "./recovery-notice.js";
 import {
   createSessionEntryWithTranscript,
   isSessionTranscriptProjectionUnavailableError,
@@ -42,10 +43,10 @@ import type {
   LatestTranscriptAssistantText,
   SessionTranscriptReadScope,
 } from "./session-accessor.types.js";
+import { withSessionActorStorage } from "./session-actor-storage-acquisition.js";
 import {
   captureSessionActorStorageOwner,
   getSessionActorStorageBinding,
-  withSessionActorStorage,
 } from "./session-actor-storage-binding.js";
 import { withSessionEntryReadOnlyInWorker } from "./session-entry-read-runtime.js";
 import { readActiveTranscriptEntryAnchorAsync } from "./session-transcript-anchor-read.js";
@@ -71,6 +72,8 @@ import {
 } from "./transcript-mirror.js";
 import type {
   ReadRecentSessionConversationTextOptions,
+  ReadRecentSessionConversationTurnOptions,
+  SessionRecentConversationTurn,
   SessionRecentConversationText,
 } from "./transcript-recent-text.js";
 import { streamSessionTranscriptLinesReverse } from "./transcript-stream.js";
@@ -110,7 +113,8 @@ type InternalSessionTranscriptDeliveryMirror =
       kind: typeof CRON_DIRECT_DELIVERY_CONTEXT_KIND;
     }
   | SkillWorkshopChangeNotice
-  | ModelFallbackNotice;
+  | ModelFallbackNotice
+  | RecoveryNoticeMirror;
 
 export type SessionTranscriptAssistantMessage = Parameters<SessionManager["appendMessage"]>[0] & {
   role: "assistant";
@@ -155,8 +159,8 @@ function parseAssistantTranscriptText(line: string): LatestAssistantTranscriptTe
 async function readRecentUserAssistantTextFromSqliteTranscript(
   scope: SessionTranscriptReadScope,
   assertCurrent: () => void,
-  options: ReadRecentSessionConversationTextOptions = {},
-): Promise<SessionRecentConversationText[]> {
+  options: ReadRecentSessionConversationTurnOptions = {},
+): Promise<SessionRecentConversationTurn[]> {
   try {
     const { readRecentSessionConversationTextAsync } =
       await import("../../gateway/session-transcript-readers.js");
@@ -174,9 +178,17 @@ async function readRecentUserAssistantTextFromSqliteTranscript(
   }
 }
 
-export async function readRecentUserAssistantTextForSession(
+export function readRecentUserAssistantTextForSession(
   params: ReadRecentSessionConversationTextParams,
 ): Promise<SessionRecentConversationText[]> {
+  return readRecentUserAssistantTurnsForSession(params, false);
+}
+
+/** Internal channel reconciliation projection; the SDK reader above stays text-only. */
+export async function readRecentUserAssistantTurnsForSession(
+  params: ReadRecentSessionConversationTextParams,
+  includeTurnIdentity = true,
+): Promise<SessionRecentConversationTurn[]> {
   const sessionKey = params.sessionKey.trim();
   if (!sessionKey) {
     return [];
@@ -212,7 +224,7 @@ export async function readRecentUserAssistantTextForSession(
           env: owner.scope?.env,
         },
         owner.assertCurrent,
-        params,
+        { ...params, includeTurnIdentity },
       );
       owner.assertCurrent();
       return result;

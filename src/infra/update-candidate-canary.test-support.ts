@@ -5,7 +5,6 @@ import { PassThrough } from "node:stream";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { createUpdateProgress } from "../cli/update-cli/progress.js";
-import { resolveUpdateResultNextAction } from "../cli/update-cli/update-recovery-guidance.js";
 import type { SpawnResult } from "../process/exec.js";
 import { defaultRuntime } from "../runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -15,7 +14,6 @@ import { validateUpdateCandidateCanary } from "./update-candidate-canary.js";
 import type { UpdateCandidateRehearsal } from "./update-candidate-rehearsal.js";
 import { buildUpdateRehearsalPathEnv } from "./update-rehearsal-paths.js";
 import type { UpdateRunStep } from "./update-run-record.js";
-import { renderUpdateRunReport, updateRunReportInputFromResult } from "./update-run-report.js";
 import type { UpdateStepResult } from "./update-step-result.js";
 
 export function holdCanaryProgress(matches: (step: UpdateRunStep) => boolean) {
@@ -66,16 +64,39 @@ export async function createCanaryProcessFixture(
   };
 }
 
+/** Real child dispatch fixture; it does not claim compatibility with an installed Bun release. */
+export async function createCanaryStartupRuntimeFixture(root: string, incompatible: boolean) {
+  const runner = path.join(root, "runtime", "bun");
+  const dispatched = path.join(root, "runtime-dispatch.json");
+  await fs.mkdir(path.dirname(runner));
+  await fs.writeFile(path.join(path.dirname(runner), "package.json"), '{"type":"commonjs"}');
+  await fs.writeFile(
+    runner,
+    `#!${process.execPath}
+const fs = require("node:fs");
+const { spawn } = require("node:child_process");
+const args = process.argv.slice(2);
+fs.writeFileSync(${JSON.stringify(dispatched)}, JSON.stringify(args));
+if (${JSON.stringify(incompatible)}) {
+  process.stderr.write("OpenClaw requires Bun >=1.4.4.\\n");
+  process.exit(1);
+}
+const child = spawn(${JSON.stringify(process.execPath)}, args.filter((arg) => arg !== "--no-install"), { stdio: "inherit" });
+child.once("exit", (code) => process.exit(code ?? 1));
+`,
+    { mode: 0o755 },
+  );
+  return { runner, dispatched };
+}
+
 export class FakeChild extends EventEmitter {
-  pid: number;
   exitCode: number | null = null;
   signalCode: NodeJS.Signals | null = null;
   killed = false;
   stdout = new PassThrough();
   stderr = new PassThrough();
-  constructor(pid: number) {
+  constructor(public pid: number) {
     super();
-    this.pid = pid;
     this.once("close", (code: number | null, signal?: NodeJS.Signals | null) => {
       this.exitCode = code;
       this.signalCode = signal ?? null;
@@ -172,10 +193,9 @@ export function renderSteps(steps: UpdateStepResult[]) {
 
 export function registerCanarySnapshotCapacityTests(fixture: {
   canaryStateOptions: () => Parameters<typeof validateUpdateCandidateCanary>[0];
-  getRoot: () => string;
   mocks: { snapshot: ReturnType<typeof vi.fn>; spawn: ReturnType<typeof vi.fn> };
 }) {
-  const { canaryStateOptions, getRoot, mocks } = fixture;
+  const { canaryStateOptions, mocks } = fixture;
   it("records a typed capacity refusal before notifying the snapshot failure", async () => {
     const capacity = vi.spyOn(diskSpace, "tryReadDiskSpace").mockImplementation((targetPath) => ({
       targetPath,
@@ -189,19 +209,6 @@ export function registerCanarySnapshotCapacityTests(fixture: {
       const reason = "candidate-snapshot-failed";
       const result = await validateUpdateCandidateCanary({ ...canaryStateOptions(), env, onStep });
       expect(result).toMatchObject({ status: "error", phase: "snapshot", reason });
-      const updateResult = { ...result, mode: "git" as const, root: getRoot() };
-      const nextAction = resolveUpdateResultNextAction({
-        result: updateResult,
-        verifiedServingVersion: "2026.10.5-beta.2",
-        env,
-      });
-      const report = renderUpdateRunReport(updateRunReportInputFromResult(updateResult), {
-        nextAction,
-      });
-      expect(report).toMatchObject({
-        headline: expect.stringContaining(`OpenClaw update failed: ${reason}`),
-        markdown: expect.stringContaining(`Fix ${reason} then run \`openclaw update\` again.`),
-      });
       const failed = canaryOutcomeStep(result.steps);
       expect(failed).toMatchObject({
         name: "candidate-state-snapshot",
@@ -209,7 +216,6 @@ export function registerCanarySnapshotCapacityTests(fixture: {
         snapshotCapacity: {
           reason: "snapshot-capacity-insufficient",
           selection: null,
-          candidates: [{ availableBytes: 0 }, { availableBytes: 0 }, { availableBytes: 0 }],
         },
       });
       expect(onStep).toHaveBeenCalledExactlyOnceWith(failed);

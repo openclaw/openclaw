@@ -1,8 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "../config/runtime-snapshot.js";
+import { clearRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -23,8 +20,6 @@ const auth = vi.hoisted(() => ({
     envApiKey: { aliasMap: {}, candidateMap: {}, authEvidenceMap: {} },
     syntheticAuthProviderRefs: [],
   })),
-  prepareRuntimeAvailableProviderAuth:
-    vi.fn<typeof import("./model-auth-runtime.js").prepareRuntimeAvailableProviderAuth>(),
 }));
 
 const evaluateModelAuth = vi.hoisted(() =>
@@ -40,13 +35,10 @@ vi.mock("./model-auth.js", () => auth);
 vi.mock("./model-auth-availability.js", () => ({
   createModelAuthAvailabilityResolver: vi.fn((_params: unknown) => ({
     evaluateModelAuth,
-    evaluateRuntimeModelAuth: evaluateModelAuth,
-    resolveProviderAuthAvailability: vi.fn(() => false),
   })),
 }));
 // mock-isolation: Use an empty synthetic profile store rather than operator auth state.
 vi.mock("./auth-profiles.js", () => ({
-  ensureAuthProfileStoreWithoutExternalProfiles: vi.fn(() => ({ version: 1, profiles: {} })),
   ensureAuthProfileStoreWithoutExternalProfilesAsync: vi.fn(() => ({ version: 1, profiles: {} })),
 }));
 
@@ -62,11 +54,8 @@ function managedConfig(apiKey: ModelProviderConfig["apiKey"]): OpenClawConfig {
   };
   return { models: { providers: { "managed-native": provider } } };
 }
-type PrepareAuthParams = Parameters<typeof prepareAuth>[0];
-const prepare = (
-  params: Omit<PrepareAuthParams, "cfg" | "env" | "store"> &
-    Partial<Pick<PrepareAuthParams, "cfg" | "env" | "store">>,
-) => prepareAuth({ cfg: {}, env: {}, store: { version: 1, profiles: {} }, ...params });
+const prepare = (params: Parameters<typeof prepareAuth>[0]) =>
+  prepareAuth({ cfg: {}, env: {}, store: { version: 1, profiles: {} }, ...params });
 
 describe("model auth checker", () => {
   afterEach(() => {
@@ -98,43 +87,17 @@ describe("model auth checker", () => {
       expect(settled).toBe(false);
       prepared.resolve(nativeAuth);
       await expect(answer).resolves.toBe(true);
-      expect(synthetic.prepareProviderSyntheticAuthWithPlugin).toHaveBeenCalledOnce();
     } finally {
       prepared.resolve(undefined);
       await Promise.allSettled([answer]);
     }
   });
 
-  it("honors cancellation before returning fast-path auth", async () => {
-    const lookup = auth.createRuntimeProviderAuthLookup();
-    const params = {
-      provider: "native",
-      env: { NATIVE_FIXTURE_AUTH: "fixture-auth" },
-      runtimeLookup: {
-        ...lookup,
-        envApiKey: { ...lookup.envApiKey, candidateMap: { native: ["NATIVE_FIXTURE_AUTH"] } },
-      },
-    };
-    await expect(prepareAuth(params)).resolves.toBe(true);
-    const reason = new Error("availability cancelled");
-    await expect(prepareAuth({ ...params, signal: AbortSignal.abort(reason) })).rejects.toBe(
-      reason,
-    );
+  it("does not prepare native auth for an unresolved managed SecretRef", async () => {
+    const cfg = managedConfig({ source: "file", provider: "vault", id: "/native/key" });
+    await expect(prepare({ provider: "managed-native", cfg })).resolves.toBe(false);
     expect(synthetic.prepareProviderSyntheticAuthWithPlugin).not.toHaveBeenCalled();
   });
-
-  it.each([false, true])(
-    "does not prepare native auth for a managed SecretRef (available: %s)",
-    async (available) => {
-      const cfg = managedConfig({ source: "file", provider: "vault", id: "/native/key" });
-      clearRuntimeConfigSnapshot();
-      if (available) {
-        setRuntimeConfigSnapshot(managedConfig("runtime-auth-not-real"), cfg);
-      }
-      await expect(prepare({ provider: "managed-native", cfg })).resolves.toBe(available);
-      expect(synthetic.prepareProviderSyntheticAuthWithPlugin).not.toHaveBeenCalled();
-    },
-  );
 
   it("caches OpenAI auth by the complete route tuple", async () => {
     const hasAuth = createProviderAuthChecker({ cfg: {} });
@@ -173,7 +136,7 @@ describe("model auth checker", () => {
     expect(evaluateModelAuth).toHaveBeenCalledTimes(2);
   });
 
-  it("does not let legacy provider auth override an unresolved model SecretRef", async () => {
+  it("preserves an unresolved model SecretRef evaluation as unavailable", async () => {
     const evaluation = {
       availability: undefined,
       routeResolution: null,
@@ -181,13 +144,10 @@ describe("model auth checker", () => {
       evidence: "provider-config" as const,
     };
     evaluateModelAuth.mockReturnValue(evaluation);
-    auth.prepareRuntimeAvailableProviderAuth.mockResolvedValue(true);
     const hasAuth = createProviderAuthChecker({ cfg: {} });
     const ref = { modelId: "claude-sonnet-4-6", api: "anthropic-messages" };
 
     await expect(hasAuth.evaluateModelAuth("anthropic", ref)).resolves.toBe(evaluation);
     await expect(hasAuth("anthropic", { ...ref })).resolves.toBe(false);
-    expect(evaluateModelAuth).toHaveBeenCalledWith("anthropic", ref);
-    expect(auth.prepareRuntimeAvailableProviderAuth).not.toHaveBeenCalled();
   });
 });

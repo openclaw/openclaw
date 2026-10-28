@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
 import { createUsageAccumulator, mergeUsageIntoAccumulator } from "../usage-accumulator.js";
-import { createEmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
 import {
   assistantMessage,
   attemptResult,
+  createTerminalPreparationInput,
   type OuterContextTokenMeta,
   type TerminalStatsInput,
 } from "./terminal-preparation.test-support.js";
@@ -33,177 +33,82 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
     }
     usageAccumulator.assistantTurns = statsInput.assistantTurns ?? 0;
     usageAccumulator.bridgeCalls = statsInput.bridgeCalls;
-    return prepareEmbeddedRunTerminal({
-      runParams: {
+    return prepareEmbeddedRunTerminal(
+      createTerminalPreparationInput({
         admittedRunContext: createTestAdmittedRunContext("run-1"),
-        sessionId: "session-1",
-        runId: "run-1",
-        workspaceDir: "/tmp/openclaw-test",
-        prompt: "hi",
-        trigger: "user",
-        timeoutMs: 60_000,
-        ...(statsInput.config ? { config: statsInput.config as never } : {}),
-      },
-      attempt: attemptResult({
-        lastAssistant: assistant,
-        currentAttemptAssistant: assistant,
+        runParams: {
+          sessionId: "session-1",
+          runId: "run-1",
+          ...(statsInput.config ? { config: statsInput.config as never } : {}),
+        },
+        attempt: attemptResult({
+          lastAssistant: assistant,
+          currentAttemptAssistant: assistant,
+          currentAttemptCompletedAssistant: assistant,
+          ...statsInput.attempt,
+        }),
         currentAttemptCompletedAssistant: assistant,
-        ...statsInput.attempt,
+        provider,
+        model,
+        activeErrorContext: { provider, model },
+        outerContextTokenMeta: statsInput.outerContextTokenMeta ?? {},
+        usageAccumulator,
       }),
-      currentAttemptCompletedAssistant: assistant,
-      provider,
-      model,
-      activeErrorContext: { provider, model },
-      authProfileStore: { version: 1, profiles: {} },
-      sessionIdUsed: "session-1",
-      outerContextTokenMeta: statsInput.outerContextTokenMeta ?? {},
-      usageAccumulator,
-      contextRecoveryState: createEmbeddedRunContextRecoveryState(),
-      resolvedToolResultFormat: "markdown",
-      terminalState: {
-        outcome: { reason: "completed", status: "ok", stopReason: "stop" },
-        signalOwnedInterruption: false,
-      },
-    });
+    );
   }
 
-  const COST_CONFIG = {
-    models: {
-      providers: {
-        "cost-test-provider": {
-          models: [
-            {
-              id: "cost-model",
-              cost: { input: 1, output: 2, cacheRead: 0.5, cacheWrite: 4 },
-            },
-          ],
-        },
-      },
-    },
+  const modelConfig = <T extends object>(fields: T) => ({
+    models: { providers: { "cost-test-provider": { models: [{ id: "cost-model", ...fields }] } } },
+  });
+  const cost = { input: 1, output: 2, cacheRead: 0.5, cacheWrite: 4 };
+  const COST_CONFIG = modelConfig({ cost });
+  const trustedWindow: OuterContextTokenMeta = {
+    contextTokens: 1_000_000,
+    contextTokensSource: "resolved-v1",
   };
 
-  it.each([
-    { name: "engaged", codeModeEngaged: true, expected: true },
-    { name: "not engaged", codeModeEngaged: false, expected: false },
-    { name: "unreported (harness route)", codeModeEngaged: undefined, expected: false },
-  ])("stamps codeModeEngaged when $name", async ({ codeModeEngaged, expected }) => {
-    const prepared = await prepareStats({ attempt: { codeModeEngaged } });
-    expect(prepared.agentMeta.codeModeEngaged).toBe(expected);
-  });
+  it.each`
+    name               | input                                                                                                                                                                  | expected
+    ${"runtime"}       | ${{ attempt: { contextTokens: 1_000_000, contextTokensSource: "runtime" }, outerContextTokenMeta: { contextTokens: 272_000 } }}                                        | ${{ contextTokens: 1_000_000, contextTokensSource: "runtime" }}
+    ${"configured"}    | ${{ attempt: { contextTokens: 272_000, contextTokensSource: "runtime-configured" }, outerContextTokenMeta: { contextTokens: 1_000_000 } }}                             | ${{ contextTokens: 272_000, contextTokensSource: "runtime-configured" }}
+    ${"resolved"}      | ${{ outerContextTokenMeta: { contextTokens: 272_000 } }}                                                                                                               | ${{ contextTokens: 272_000, contextTokensSource: "resolved" }}
+    ${"trusted"}       | ${{ outerContextTokenMeta: trustedWindow }}                                                                                                                            | ${trustedWindow}
+    ${"routed"}        | ${{ assistantProvider: "routed-provider", outerContextTokenMeta: trustedWindow }}                                                                                      | ${{ provider: "routed-provider", model: "cost-model", contextTokens: 1_000_000, contextTokensSource: "resolved" }}
+    ${"selected"}      | ${{ attempt: { runtimeModelSelection: { provider: "native-provider", model: "native-model" } }, assistantProvider: "openclaw", outerContextTokenMeta: trustedWindow }} | ${{ provider: "native-provider", model: "native-model", contextTokensSource: "resolved" }}
+    ${"attempt owned"} | ${{ assistantProvider: "routed-provider", attempt: { contextTokens: 400_000, contextTokensSource: "runtime" }, outerContextTokenMeta: trustedWindow }}                 | ${{ contextTokens: 400_000, contextTokensSource: "runtime" }}
+  `(
+    "attributes the context window for $name",
+    async ({ input, expected }: { input: TerminalStatsInput; expected: object }) => {
+      expect((await prepareStats(input)).agentMeta).toMatchObject(expected);
+    },
+  );
 
-  it("records whether the context window came from the harness or prepared resolution", async () => {
-    const observed = await prepareStats({
-      attempt: { contextTokens: 1_000_000, contextTokensSource: "runtime" },
-      outerContextTokenMeta: { contextTokens: 272_000 },
-    });
-    expect(observed.agentMeta).toMatchObject({
-      contextTokens: 1_000_000,
-      contextTokensSource: "runtime",
-    });
-
-    const configured = await prepareStats({
-      attempt: { contextTokens: 272_000, contextTokensSource: "runtime-configured" },
-      outerContextTokenMeta: { contextTokens: 1_000_000 },
-    });
-    expect(configured.agentMeta).toMatchObject({
-      contextTokens: 272_000,
-      contextTokensSource: "runtime-configured",
-    });
-
-    const resolved = await prepareStats({
-      outerContextTokenMeta: { contextTokens: 272_000 },
-    });
-    expect(resolved.agentMeta).toMatchObject({
-      contextTokens: 272_000,
-      contextTokensSource: "resolved",
-    });
-
-    const verified = await prepareStats({
-      outerContextTokenMeta: { contextTokens: 1_000_000, contextTokensSource: "resolved-v1" },
-    });
-    expect(verified.agentMeta).toMatchObject({
-      contextTokens: 1_000_000,
-      contextTokensSource: "resolved-v1",
-    });
-  });
-
-  it("keeps a prepared trusted window legacy when another model identity is reported", async () => {
-    const outerContextTokenMeta: OuterContextTokenMeta = {
-      contextTokens: 1_000_000,
-      contextTokensSource: "resolved-v1",
-    };
-    const routed = await prepareStats({
-      assistantProvider: "routed-provider",
-      outerContextTokenMeta,
-    });
-    expect(routed.agentMeta).toMatchObject({
-      provider: "routed-provider",
-      model: "cost-model",
-      contextTokens: 1_000_000,
-      contextTokensSource: "resolved",
-    });
-
-    const selected = await prepareStats({
-      attempt: { runtimeModelSelection: { provider: "native-provider", model: "native-model" } },
-      assistantProvider: "openclaw",
-      outerContextTokenMeta,
-    });
-    expect(selected.agentMeta).toMatchObject({
-      provider: "native-provider",
-      model: "native-model",
-      contextTokensSource: "resolved",
-    });
-
-    const attemptOwned = await prepareStats({
-      assistantProvider: "routed-provider",
-      attempt: { contextTokens: 400_000, contextTokensSource: "runtime" },
-      outerContextTokenMeta,
-    });
-    expect(attemptOwned.agentMeta).toMatchObject({
-      contextTokens: 400_000,
-      contextTokensSource: "runtime",
-    });
-  });
-
-  it("reports the terminal physical attempt's redacted credential source", async () => {
-    const prepared = await prepareStats({
-      attempt: {
-        modelAttempt: {
-          provider: "openai",
-          model: "gpt-5.6-luna",
-          credentialSource: {
-            kind: "direct",
-            evidence: "environment",
-            authorization: "declared",
-          },
-        },
-      },
-    });
-
-    expect(prepared.agentMeta.credentialSource).toEqual({
-      kind: "direct",
-      evidence: "environment",
-      authorization: "declared",
-    });
-  });
-
-  it("stamps assistantTurns from the run accumulator and omits zero", async () => {
-    const counted = await prepareStats({ assistantTurns: 3 });
-    expect(counted.agentMeta.assistantTurns).toBe(3);
-
-    const empty = await prepareStats({ assistantTurns: 0 });
-    expect(empty.agentMeta).not.toHaveProperty("assistantTurns");
-  });
-
-  it("stamps run-accumulated bridge call counts and omits them when absent", async () => {
-    const withBridge = await prepareStats({
-      bridgeCalls: { search: 2, describe: 1, call: 5 },
-    });
-    expect(withBridge.agentMeta.bridgeCalls).toEqual({ search: 2, describe: 1, call: 5 });
-
-    const withoutBridge = await prepareStats({});
-    expect(withoutBridge.agentMeta).not.toHaveProperty("bridgeCalls");
-  });
+  it.each`
+    name                     | input                                                                                                                                                                     | expected                                                                                          | absent
+    ${"engaged counters"}    | ${{ attempt: { codeModeEngaged: true }, assistantTurns: 3, bridgeCalls: { search: 2, describe: 1, call: 5 } }}                                                            | ${{ codeModeEngaged: true, assistantTurns: 3, bridgeCalls: { search: 2, describe: 1, call: 5 } }} | ${[]}
+    ${"disabled code mode"}  | ${{ attempt: { codeModeEngaged: false } }}                                                                                                                                | ${{ codeModeEngaged: false }}                                                                     | ${[]}
+    ${"unreported counters"} | ${{ assistantTurns: 0 }}                                                                                                                                                  | ${{ codeModeEngaged: false }}                                                                     | ${["assistantTurns", "bridgeCalls"]}
+    ${"credential source"}   | ${{ attempt: { modelAttempt: { provider: "openai", model: "gpt-5.6-luna", credentialSource: { kind: "direct", evidence: "environment", authorization: "declared" } } } }} | ${{ credentialSource: { kind: "direct", evidence: "environment", authorization: "declared" } }}   | ${[]}
+  `(
+    "$name",
+    async ({
+      input,
+      expected,
+      absent,
+    }: {
+      input: TerminalStatsInput;
+      expected: object;
+      absent: string[];
+    }) => {
+      const { agentMeta } = await prepareStats(input);
+      for (const [field, value] of Object.entries(expected)) {
+        expect(agentMeta).toHaveProperty(field, value);
+      }
+      for (const field of absent) {
+        expect(agentMeta).not.toHaveProperty(field);
+      }
+    },
+  );
 
   it("computes costUsd from accumulated usage including cache pricing", async () => {
     const prepared = await prepareStats({
@@ -239,51 +144,13 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
     },
   );
 
-  it("omits tiered aggregate cost when an observed call has no price", async () => {
-    const prepared = await prepareStats({
-      config: {
-        models: {
-          providers: {
-            "cost-test-provider": {
-              models: [
-                {
-                  id: "cost-model",
-                  cost: {
-                    input: 1,
-                    output: 2,
-                    cacheRead: 0.5,
-                    cacheWrite: 4,
-                    tieredPricing: [
-                      { range: [200_000], input: 2, output: 4, cacheRead: 1, cacheWrite: 8 },
-                    ],
-                  },
-                },
-              ],
-            },
-          },
-        },
-      },
-      attempts: [
-        { input: 150_000, output: 100, cost: { total: 0.125 } },
-        { input: 150_000, output: 100 },
-      ],
-    });
-    expect(prepared.agentMeta).not.toHaveProperty("costUsd");
-  });
-
-  it("omits costUsd when the model has no cost data", async () => {
-    const prepared = await prepareStats({
-      provider: "no-cost-provider",
-      model: "uncosted-model",
-      config: COST_CONFIG,
-      usage: { input: 1_000_000, output: 500_000, total: 1_500_000 },
-    });
-    expect(prepared.agentMeta).not.toHaveProperty("costUsd");
-  });
-
-  it("omits costUsd when the run reported no usage", async () => {
-    const prepared = await prepareStats({ config: COST_CONFIG });
-    expect(prepared.agentMeta).not.toHaveProperty("costUsd");
+  it.each`
+    name                               | input
+    ${"partially priced tiered calls"} | ${{ config: modelConfig({ cost: { ...cost, tieredPricing: [{ range: [200_000], input: 2, output: 4, cacheRead: 1, cacheWrite: 8 }] } }), attempts: [{ input: 150_000, output: 100, cost: { total: 0.125 } }, { input: 150_000, output: 100 }] }}
+    ${"unpriced model"}                | ${{ provider: "no-cost-provider", model: "uncosted-model", config: COST_CONFIG, usage: { input: 1_000_000, output: 500_000, total: 1_500_000 } }}
+    ${"no usage"}                      | ${{ config: COST_CONFIG }}
+  `("omits costUsd for $name", async ({ input }: { input: TerminalStatsInput }) => {
+    expect((await prepareStats(input)).agentMeta).not.toHaveProperty("costUsd");
   });
 
   it("keeps response identity in the terminal receipt without replacing the run model", async () => {
@@ -323,15 +190,7 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
   it("keeps a configured row's declared response model out of the reroute fact", async () => {
     const prepared = await prepareStats({
       responseModel: "upstream-model",
-      config: {
-        models: {
-          providers: {
-            "cost-test-provider": {
-              models: [{ id: "cost-model", responseModelEquivalent: true }],
-            },
-          },
-        },
-      },
+      config: modelConfig({ responseModelEquivalent: true }),
     });
 
     expect(prepared.agentMeta.terminalReceipt).toMatchObject({

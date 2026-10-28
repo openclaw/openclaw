@@ -1,14 +1,38 @@
-.agent-chat__header--mobile .mobile-header__actions .chat-header-session-menu__trigger {
-  width: 44px;
-  height: 44px;
-  min-height: 44px;
-  padding: 0;
-  border: 0;
-  border-radius: 50%;
-  background: transparent;
-}
-
-.agent-chat__header--mobile .mobile-header__actions .chat-header-session-menu__trigger svg {
-  width: 20px;
-  height: 20px;
+.agent-chat__header--mobile {
+  & .chat-pane__workspace-menu {
+    min-width: 0;
+    max-width: 100%;
+  }
+  & .chat-pane__workspace-chip {
+    display: block;
+    max-width: 100%;
+    min-height: 18px;
+    padding: 0;
+    /* Desktop draws its hover padding outside the crumb; mobile has no padding. */
+    margin-inline: 0;
+    border: 0;
+    background: transparent;
+    color: var(--muted);
+    font: 500 12px/18px var(--font-body);
+    text-align: start;
+  }
+  & .chat-pane__workspace-chip > span {
+    display: block;
+    overflow: hidden;
+    text-overflow: clip;
+    white-space: nowrap;
+  }
+  & .mobile-header__actions .chat-header-session-menu__trigger {
+    width: 40px;
+    height: 40px;
+    min-height: 40px;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+  }
+  & .mobile-header__actions .chat-header-session-menu__trigger svg {
+    width: 20px;
+    height: 20px;
+  }
 }

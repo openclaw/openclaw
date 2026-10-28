@@ -1,17 +1,23 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { resolveManagedUnsetPathsForWrite } from "../config/config-path-mutation.js";
+import { assertConfigWriteAllowedInCurrentMode } from "../config/config-write-guard.js";
 import { replaceConfigFile } from "../config/config.js";
 import { getDeferredPluginMigrationConfigFacts } from "../config/deferred-plugin-migration-config.js";
 import { AUTO_MANAGED_CONFIG_META_PATHS } from "../config/io.meta.js";
 import { coerceConfig } from "../config/io.read-helpers.js";
-import { isConfigValidationFailedError } from "../config/io.write-errors.js";
+import {
+  ConfigWritePostCommitError,
+  isConfigValidationFailedError,
+} from "../config/io.write-errors.js";
 import { prepareConfigWriteValues } from "../config/io.write-prepare.js";
 import { prepareConfigWriteTopology } from "../config/io.write-topology.js";
 import { ConfigMutationConflictError } from "../config/mutation-conflict.js";
 import { resolveConfigPath } from "../config/paths.js";
 import { REDACTED_SENTINEL, restoreRedactedValues } from "../config/redact-snapshot.js";
 import type { ConfigSchemaResponse } from "../config/schema.js";
+import type { OpenClawConfig } from "../config/types.js";
 import { visitConfigValueTree } from "../config/value-tree.js";
 import { diffConfigPaths } from "../gateway/config-diff.js";
 import { buildGatewayReloadPlan } from "../gateway/config-reload-plan.js";
@@ -110,6 +116,14 @@ export async function runConfigOperations(params: {
   currentExpectation?: ConfigSetCurrentExpectation;
   beforePersistentApply?: () => void;
   databaseOnly?: true;
+  /**
+   * Replaces the local file write when another process owns the state root.
+   * Receives the authored config before and after the change; may return a reload hint.
+   */
+  commit?: (change: {
+    previous: OpenClawConfig;
+    next: OpenClawConfig;
+  }) => Promise<string | undefined>;
 }) {
   const { runtime, operations, options } = params;
   if (
@@ -213,6 +227,7 @@ export async function runConfigOperations(params: {
       .catch(() => undefined));
   const roster = new ConfigMutationAgentRoster(next, snapshot.sourceConfigBeforeMigrations);
   let unsetPaths: PathSegment[][] = [];
+  const allowedAgentRosterRemovals: string[] = [];
   let explicitSetPaths: PathSegment[][] = [];
   let suppliedValuePaths: PathSegment[][] = [];
   const appliedOperations: ConfigSetOperation[] = [];
@@ -288,6 +303,10 @@ export async function runConfigOperations(params: {
         unsetPaths.push(writePath);
       }
       if (unsetResult.removed) {
+        // Deleting a keyed agent entry is the explicit removal the roster-loss guard requires.
+        if (writePath.length === 3 && writePath[0] === "agents" && writePath[1] === "entries") {
+          allowedAgentRosterRemovals.push(String(writePath[2]));
+        }
         // Canonical agent IDs (even numeric IDs) are keys, not list indices.
         const arrayIndex =
           unsetResult.leafContainer === "array" &&
@@ -482,32 +501,58 @@ export async function runConfigOperations(params: {
     return;
   }
 
-  await replaceConfigFile({
-    sourceConfig: authoredNextConfig,
-    snapshot,
-    ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
-    writeOptions: {
-      ...mutationStart.writeOptions,
-      auditOrigin: "cli",
-      ...(assertCurrentExpectation || params.beforePersistentApply
-        ? {
-            assertConfigPathForWrite: () => {
-              mutationStart.writeOptions.assertConfigPathForWrite?.();
-              assertCurrentExpectation?.();
-              params.beforePersistentApply?.();
-            },
-          }
-        : {}),
-      ...(unsetPaths.length > 0 ? { unsetPaths } : {}),
-      ...(normalizedExplicitSetPaths.length > 0
-        ? { explicitSetPaths: normalizedExplicitSetPaths }
-        : {}),
-    },
-  });
+  let committedHint: string | undefined;
+  if (params.commit) {
+    // The local writer enforces immutable config at its write; a routed commit checks here.
+    assertConfigWriteAllowedInCurrentMode({ configPath: snapshot.path });
+    assertCurrentExpectation?.();
+    params.beforePersistentApply?.();
+    const { prepareConfigOwnerChange } = await import("./config-cli-owner-patch.js");
+    const change = await prepareConfigOwnerChange({
+      snapshot,
+      pluginMetadataSnapshot: mutationStart.writeOptions.basePluginMetadataSnapshot,
+      previous: authoredPreviousConfig,
+      next: authoredNextConfig,
+      explicitSetPaths: normalizedExplicitSetPaths,
+      unsetPaths: resolveManagedUnsetPathsForWrite(unsetPaths),
+      env: resolutionEnv,
+    });
+    committedHint = await params.commit(change);
+    if (change.clearedSessionStoreOwner) {
+      // The local writer reports this itself; the Gateway's writer reports only to its own log.
+      runtime.error(
+        "Cleared agents.defaults.sessionStore.agentId because session.store changed. Set that owner path explicitly to assign the destination store's owner.",
+      );
+    }
+  } else {
+    await replaceConfigFile({
+      sourceConfig: authoredNextConfig,
+      snapshot,
+      ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
+      writeOptions: {
+        ...mutationStart.writeOptions,
+        auditOrigin: "cli",
+        ...(assertCurrentExpectation || params.beforePersistentApply
+          ? {
+              assertConfigPathForWrite: () => {
+                mutationStart.writeOptions.assertConfigPathForWrite?.();
+                assertCurrentExpectation?.();
+                params.beforePersistentApply?.();
+              },
+            }
+          : {}),
+        ...(unsetPaths.length > 0 ? { unsetPaths } : {}),
+        ...(allowedAgentRosterRemovals.length > 0 ? { allowedAgentRosterRemovals } : {}),
+        ...(normalizedExplicitSetPaths.length > 0
+          ? { explicitSetPaths: normalizedExplicitSetPaths }
+          : {}),
+      },
+    });
+  }
   if (removedGatewayAuthPaths.length > 0) {
     runtime.log(
       info(
-        `Removed inactive ${removedGatewayAuthPaths.join(", ")} for gateway.auth.mode=${nextConfig.gateway?.auth?.mode ?? "<unset>"}.`,
+        terminalText`Removed inactive ${removedGatewayAuthPaths.join(", ")} for gateway.auth.mode=${nextConfig.gateway?.auth?.mode ?? "<unset>"}.`,
       ),
     );
   }
@@ -533,8 +578,8 @@ export async function runConfigOperations(params: {
     paths.forEach((entry) => expanded.add(entry));
   }
   const paths = [...expanded];
-  let hint = "No gateway restart needed.";
-  if (paths.length > 0) {
+  let hint = committedHint ?? "No gateway restart needed.";
+  if (!committedHint && paths.length > 0) {
     const plan = buildGatewayReloadPlan(paths, { candidateConfig: nextConfig });
     if (
       plan.restartGateway ||
@@ -553,11 +598,11 @@ export async function runConfigOperations(params: {
       operation?.pathTokens,
       nextConfig,
     );
-    runtime.log(info(`${action} ${requestedPath}. ${hint}`));
+    runtime.log(info(terminalText`${action} ${requestedPath}. ${hint}`));
   } else if (params.successMode === "set") {
-    runtime.log(info(`Updated ${operations.length} config paths. ${hint}`));
+    runtime.log(info(terminalText`Updated ${operations.length} config paths. ${hint}`));
   } else {
-    runtime.log(info(`Applied ${operations.length} config update(s). ${hint}`));
+    runtime.log(info(terminalText`Applied ${operations.length} config update(s). ${hint}`));
   }
 }
 
@@ -594,7 +639,7 @@ export function handleConfigMutationError(params: {
       errors: [{ kind: conflict ? "conflict" : "schema", message }],
     };
     writeRuntimeJson(params.runtime, result);
-    params.runtime.error(danger(message));
+    params.runtime.error(danger(terminalText`${message}`));
     exitCliAfterOutput(params.runtime, 1);
   }
   if (params.jsonOutput) {
@@ -602,12 +647,19 @@ export function handleConfigMutationError(params: {
   }
   if (isConfigValidationFailedError(params.err)) {
     params.runtime.error("Config change declined. No settings were saved.");
-    params.runtime.error(message);
+    params.runtime.error(terminalText`${message}`);
     params.runtime.error(
       `Correct the setting above and retry. Run ${formatCliCommand("openclaw config schema")} to inspect supported settings and values.`,
     );
   } else {
-    params.runtime.error(danger(message));
+    params.runtime.error(
+      danger(
+        params.err instanceof ConfigSetDryRunValidationError ||
+          params.err instanceof ConfigWritePostCommitError
+          ? params.err.humanOutput
+          : terminalText`${message}`,
+      ),
+    );
   }
   exitCliAfterOutput(params.runtime, 1);
 }

@@ -27,7 +27,6 @@ import {
 } from "./substrate/topology.js";
 
 type AdapterFactory = NonNullable<QaRunnerCliRegistration["adapterFactory"]>;
-type FactoryContext = Parameters<AdapterFactory["create"]>[0];
 type AdapterDefinition = Awaited<ReturnType<AdapterFactory["create"]>>;
 
 const MATRIX_SHARED_FLOW_TOPOLOGY = {
@@ -133,7 +132,7 @@ function resolveMatrixQaAdapterRoom(
 }
 
 export async function createMatrixQaTransportAdapter(
-  context: FactoryContext,
+  context: Parameters<AdapterFactory["create"]>[0],
 ): Promise<AdapterDefinition> {
   const options = context.adapterOptions ?? {};
   const repoRoot = options.repoRoot?.trim() || process.cwd();

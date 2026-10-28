@@ -1,17 +1,13 @@
-import fs from "node:fs/promises";
-import path from "node:path";
-import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { createRequireRecord } from "../../../test/helpers/record.js";
 import type { CronJob } from "../api/types.ts";
-import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
-import { cronJob as makeCronJob, cronList } from "./cron-fixtures.test-support.ts";
+import { cronJob, cronList } from "./cron-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI cron saved descriptions E2E",
@@ -19,23 +15,8 @@ const suite = createControlUiE2eSuite({
     `Playwright Chromium is not installed or cannot start at ${executablePath}.`,
 });
 
-function cronJob(id: string, name: string): CronJob {
-  return makeCronJob(id, name, {
-    createdAtMs: Date.parse("2026-05-29T08:00:00.000Z"),
-    updatedAtMs: Date.parse("2026-05-29T08:05:00.000Z"),
-    payload: { kind: "systemEvent", text: `${name} fired` },
-  });
-}
-
-const captureDurationProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const requireDurationRecord = createRequireRecord("record", "expected-object-value");
 const pageOptions = createControlUiE2eContextOptions();
-const durationPageOptions = () => ({
-  ...pageOptions,
-  ...(captureDurationProofEnabled
-    ? { recordVideo: { dir: suite.artifactDir, size: { width: 1_280, height: 900 } } }
-    : {}),
-});
 
 function durationResponses(jobs: CronJob[]) {
   const list = (entries: CronJob[]) => cronList(entries, "exact-duration-fixture");
@@ -47,17 +28,6 @@ function durationResponses(jobs: CronJob[]) {
     "cron.runs": { entries: [], total: 0, offset: 0, limit: 50, hasMore: false },
     "cron.status": { enabled: true, jobs: jobs.length, nextWakeAtMs: null },
   };
-}
-
-async function captureDurationProof(page: Page, name: string, content: Locator) {
-  if (!captureDurationProofEnabled) {
-    return;
-  }
-  await content.scrollIntoViewIfNeeded();
-  await fs.writeFile(
-    path.join(suite.artifactDir, `${name}.png`),
-    await takeControlUiViewportScreenshot(page, page.locator(".cron-page"), [content]),
-  );
 }
 
 suite.define(() => {
@@ -100,7 +70,6 @@ suite.define(() => {
         }
         const previous = (await gateway.getRequests("cron.update")).length;
         await at.fill("2027-03-14T02:30");
-        await captureDurationProof(page, "dst-gap", at);
         expect(await at.getAttribute("aria-invalid")).toBe("true");
         expect(await submit.isDisabled()).toBe(true);
         expect(await page.locator(".cron-schedule-summary").count()).toBe(0);
@@ -124,17 +93,12 @@ suite.define(() => {
           schedule: { kind: "every", everyMs },
         }) satisfies CronJob,
     );
-    await suite.withPage(durationPageOptions(), async ({ page }) => {
+    await suite.withPage(pageOptions, async ({ page }) => {
       const gateway = await installMockGateway(page, {
         methodResponses: durationResponses(jobs),
       });
       await page.goto(`${suite.server.baseUrl}cron`);
       await page.locator(`[data-test-id="cron-row-${cases[0].id}"]`).waitFor();
-      await captureDurationProof(
-        page,
-        "interval-list",
-        page.locator(`[data-test-id="cron-row-${cases[0].id}"]`),
-      );
       for (const [index, job] of jobs.entries()) {
         const row = page.locator(`[data-test-id="cron-row-${job.id}"]`);
         expect(await row.locator(".cron-table__description").count()).toBe(0);
@@ -148,7 +112,6 @@ suite.define(() => {
         const detail = (await subtitle.textContent())?.trim();
         const text = cases[index]?.text;
         expect({ row: rowText, detail }).toEqual({ row: text, detail: text });
-        await captureDurationProof(page, job.id, subtitle);
         await page.locator('[data-test-id="cron-back"]').click();
         await row.waitFor();
       }

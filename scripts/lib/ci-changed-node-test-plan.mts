@@ -110,7 +110,6 @@ const CHANGED_FILE_SECONDS_HINTS = new Map<string, number>([
   ["test/e2e/qa-lab/runtime/gateway-node-control-plane.e2e.test.ts", 144],
   ["test/e2e/qa-lab/runtime/gateway-node-mcp.stress.e2e.test.ts", 133],
   ["test/e2e/qa-lab/runtime/telegram-recovered-artifact.e2e.test.ts", 127],
-  ["test/e2e/qa-lab/runtime/gateway-node-mcp.e2e.test.ts", 121],
   ["test/e2e/qa-lab/runtime/gateway-node-exec-routing.e2e.test.ts", 119],
   ["test/e2e/qa-lab/runtime/gateway-node-pending-work.e2e.test.ts", 111],
   ["test/e2e/qa-lab/runtime/node-worker-launch-wire.e2e.test.ts", 104],
@@ -262,6 +261,7 @@ const BUILT_ARTIFACT_TEST_INPUTS = new Set([
   "extensions/browser/chrome-extension/relay-key.test-support.ts",
   "extensions/browser/src/browser/extension-install.native-host.e2e.test.ts",
   "extensions/browser/src/browser/extension-install.test-support.ts",
+  "scripts/test-built-source-verifiers.mts",
 ]);
 
 /**
@@ -416,6 +416,9 @@ const AGGRESSIVE_PR_SMOKE_TEST_FILES = [
   "src/plugins/loader.runtime-registry.test.ts",
 ];
 const protectedRuntimeTestFiles = new Set(PR_PROTECTED_RUNTIME_TEST_FILES);
+// Roots whose tests have ordinary PR Vitest owners. Tests elsewhere, such as the
+// opt-in scripts/control-ui-retention census, keep their own config and command.
+const CHANGED_TEST_ROOTS = ["src", "test", "extensions", "packages", "ui"];
 
 /** Resolve owner areas and transitive consumers once, before projecting platform jobs. */
 export function resolveChangedNodeTestTargets(
@@ -424,6 +427,7 @@ export function resolveChangedNodeTestTargets(
 ): string[] {
   const cwd = options.cwd ?? process.cwd();
   const paths = changedPaths.filter((file) => !isIndependentlyCheckedDocumentation(file, cwd));
+  const policyTargets = resolvePolicyTestTargets(changedPaths, { cwd, baseRef: options.baseRef });
   const aggressive = options.selectionMode === "aggressive";
   const smoke = aggressive ? AGGRESSIVE_PR_SMOKE_TEST_FILES : PR_SMOKE_TEST_FILES;
   const selections: { rule: string; input: string; targets: string[] }[] = [];
@@ -467,8 +471,8 @@ export function resolveChangedNodeTestTargets(
   recordSelection({ rule: "protected-owner", input: paths.join(", "), targets: ownerOptIns });
   recordSelection({
     rule: "policy-watch",
-    input: paths.join(", "),
-    targets: resolvePolicyTestTargets(paths),
+    input: changedPaths.join(", "),
+    targets: policyTargets,
   });
   recordSelection({ rule: "fixed-smoke", input: "PR", targets: smoke });
   const owners = [
@@ -487,15 +491,11 @@ export function resolveChangedNodeTestTargets(
       ...(paths.some((file) => listRunnableVitestConfigTargets().includes(file))
         ? ["test/vitest-projects-config.test.ts"]
         : []),
-      ...resolvePolicyTestTargets(paths),
+      ...policyTargets,
     ]),
   ];
   let inventory: string[] | undefined;
-  const allFiles = () =>
-    (inventory ??= listExtensionTestFilesForRoots(
-      ["src", "test", "extensions", "packages", "ui"],
-      cwd,
-    ));
+  const allFiles = () => (inventory ??= listExtensionTestFilesForRoots(CHANGED_TEST_ROOTS, cwd));
   const optInTargets = new Set([...paths, ...smoke, ...ownerOptIns]);
   const expandTarget = (target: string): string[] => {
     if (isTestFileTarget(target)) {
@@ -537,6 +537,7 @@ export function resolveChangedNodeTestTargets(
       (file) =>
         isTestFileTarget(file) &&
         !file.endsWith(".live.test.ts") &&
+        CHANGED_TEST_ROOTS.some((root) => file.startsWith(`${root}/`)) &&
         (optInTargets.has(file) ||
           ((options.includePrExemptRuntimeTests !== false || !isPrExemptRuntimeTestFile(file)) &&
             (options.includeReleaseOnlyRuntimeTests !== false ||
@@ -1030,7 +1031,7 @@ export function createChangedNodeTestShards(
   const selectedTargets =
     options.selectedTestTargets ?? resolveChangedNodeTestTargets(changedPaths, options);
   const livePaths = changedPaths.filter((file) => existsSync(path.join(cwd, file)));
-  const policyTargets = new Set(resolvePolicyTestTargets(changedPaths));
+  const policyTargets = new Set(resolvePolicyTestTargets(changedPaths, { cwd }));
   const resolvedTargetPlans = resolvePreciseChangedTargets(selectedTargets, cwd);
   if (resolvedTargetPlans.some(({ plans }) => plans.length === 0)) {
     return fallback("selected test lacks an executable owner");

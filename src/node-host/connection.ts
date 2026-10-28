@@ -7,6 +7,7 @@ import { GatewayClientRequestError } from "../gateway/client.js";
 import {
   NODE_RUNNER_INVENTORY_UPDATE_METHOD,
   NODE_WORKER_BUNDLE_RETENTION_VERSION,
+  NODE_WORKER_BUNDLE_PREFETCH_VERSION,
   NODE_WORKER_BUNDLE_STATUS_VERSION,
   NODE_WORKER_HOST_DISABLED_REASON_MAX_LENGTH,
   NODE_WORKER_ENVIRONMENT_SESSION_VERSION,
@@ -17,6 +18,7 @@ import {
   NODE_WORKER_PROMPT_CONTEXT_VERSION,
   NODE_WORKER_WORKSPACE_QUIESCENCE_VERSION,
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
+  NODE_WORKSPACE_RESULT_VERSION,
   type NodeWorkerCapacitySnapshot,
 } from "../infra/node-runner-inventory.js";
 import { redactSensitiveText } from "../logging/redact.js";
@@ -324,6 +326,10 @@ export function startNodeHostConnection({
                 ? { preparedWorkspace: NODE_WORKER_PREPARED_WORKSPACE_VERSION }
                 : {}),
               bundlePrewarm: WORKER_BUNDLE_PREWARM_VERSION,
+              ...(!prepared.preparedWorkspacesEnabled &&
+              gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_PREFETCH)
+                ? { bundlePrefetch: NODE_WORKER_BUNDLE_PREFETCH_VERSION }
+                : {}),
               ...(gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_RETENTION)
                 ? { bundleRetention: NODE_WORKER_BUNDLE_RETENTION_VERSION }
                 : {}),
@@ -341,6 +347,9 @@ export function startNodeHostConnection({
               !process.versions.bun &&
               gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_WORKSPACE_QUIESCENCE)
                 ? { workspaceQuiescence: NODE_WORKER_WORKSPACE_QUIESCENCE_VERSION }
+                : {}),
+              ...(gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_WORKSPACE_RESULT)
+                ? { workspaceResultVersion: NODE_WORKSPACE_RESULT_VERSION }
                 : {}),
               ...(gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_STATUS_WAIT)
                 ? { statusWait: NODE_WORKER_STATUS_WAIT_VERSION }

@@ -67,6 +67,15 @@ const seed = async (sessionId: string) => {
   await replaceSessionEntry(scope, { sessionId, updatedAt: Date.now() });
   return scope;
 };
+const seedProof = async (sessionId: string, content: string) => {
+  const scope = await seed(sessionId);
+  appendTranscriptEventSync(scope, { type: "proof", content });
+  return scope;
+};
+function expectRetained(scope: ReturnType<typeof sessionScope>) {
+  expect(loadSessionEntry(scope)).toMatchObject({ sessionId: scope.sessionId });
+  expect(archives()).toEqual([]);
+}
 
 beforeEach(() => {
   const tempDir = sessionDirs.make();
@@ -125,8 +134,7 @@ it.each([true, false])(
     const result = await cleanup();
 
     expect(result.appliedSummaries[0]?.missing).toBe(0);
-    expect(loadSessionEntry(scope)).toMatchObject({ sessionId });
-    expect(archives()).toEqual([]);
+    expectRetained(scope);
   },
 );
 
@@ -135,11 +143,7 @@ it("recreates every derived file from pending canonical archives after commit", 
   const rawEventJson = (sessionId: string) =>
     `{  "content": "recover after commit ${sessionId}", "type": "proof"  }`;
   for (const sessionId of sessionIds) {
-    const scope = await seed(sessionId);
-    appendTranscriptEventSync(scope, {
-      type: "proof",
-      content: `recover after commit ${sessionId}`,
-    });
+    await seedProof(sessionId, `recover after commit ${sessionId}`);
     sql("UPDATE transcript_events SET event_json = ? WHERE session_id = ?").run(
       rawEventJson(sessionId),
       sessionId,
@@ -184,9 +188,8 @@ it("recreates every derived file from pending canonical archives after commit", 
 });
 
 it("never overwrites a different derived-file collision", async () => {
-  const scope = await seed("collision");
+  const scope = await seedProof("collision", "canonical bytes");
   const { sessionId } = scope;
-  appendTranscriptEventSync(scope, { type: "proof", content: "canonical bytes" });
   await cleanup();
   const archivePath = archives()[0];
   expect(archivePath).toBeTruthy();
@@ -215,17 +218,15 @@ it("rolls back the canonical archive when lifecycle deletion fails", async () =>
     sessionId,
     message: "injected lifecycle delete failure",
   });
-  const scope = await seed(sessionId);
-  appendTranscriptEventSync(scope, { type: "proof", content: "must remain live" });
+  const scope = await seedProof(sessionId, "must remain live");
 
   await expect(cleanup()).rejects.toThrow("injected lifecycle delete failure");
 
-  expect(loadSessionEntry(scope)).toMatchObject({ sessionId });
+  expectRetained(scope);
   expect(sql("SELECT 1 FROM transcript_events WHERE session_id = ?").get(sessionId)).toEqual({
     1: 1,
   });
   expect(archiveRow(sessionId)).toBeUndefined();
-  expect(archives()).toEqual([]);
 });
 
 it("keeps a foreign append after worker classification through lifecycle commit", async () => {
@@ -251,8 +252,7 @@ it("keeps a foreign append after worker classification through lifecycle commit"
   expect(inspectTranscriptEventsSync(scope).events).toEqual(
     expect.arrayContaining([expect.objectContaining({ id: "foreign-message-after-inspection" })]),
   );
-  expect(loadSessionEntry(scope)).toMatchObject({ sessionId: scope.sessionId });
-  expect(archives()).toEqual([]);
+  expectRetained(scope);
 });
 
 it("reclassifies a rewritten generation after a warmed message-bearing inspection", async () => {
@@ -335,19 +335,17 @@ it.each([false, true])(
   },
 );
 
-it("drops a retained canonical row only after retention removes its derived file", async () => {
-  const scope = await seed("retention");
+it("expires a retained canonical row and its derived file in one retention pass", async () => {
+  const scope = await seedProof("retention", "expire together");
   const { sessionId } = scope;
-  appendTranscriptEventSync(scope, { type: "proof", content: "expire together" });
   await cleanup();
   const archivePath = archives()[0];
   expect(archivePath).toBeTruthy();
   sql("UPDATE session_transcript_archives SET created_at = 1 WHERE session_id = ?").run(sessionId);
 
-  expect(await pruneArchives()).toBe(0);
   expect(archiveRow(sessionId)).toEqual({ 1: 1 });
-
-  fs.rmSync(archivePath ?? "");
   expect(await pruneArchives()).toBe(1);
+  expect(fs.existsSync(archivePath!)).toBe(false);
   expect(archiveRow(sessionId)).toBeUndefined();
+  expect(await pruneArchives()).toBe(0);
 });

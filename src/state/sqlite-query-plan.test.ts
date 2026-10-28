@@ -97,7 +97,6 @@ describe("sqlite hot query plans", () => {
         false,
       );
       expect(migrateSessionWatchCursorProvenance(requireNativeSqliteDatabase(db))).toEqual({
-        addedColumn: false,
         migratedAmbientWatches: 0,
         removedLegacySentinels: 0,
       });

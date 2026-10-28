@@ -13,8 +13,6 @@ import { resolveFutureConfigActionBlock } from "../../config/future-version-guar
 import { readConfigFileSnapshotForWrite } from "../../config/io.js";
 import { replaceConfigFile } from "../../config/mutate.js";
 import { resolveGatewayPort } from "../../config/paths.js";
-import type { GatewayBindMode } from "../../config/types.gateway.js";
-import type { OpenClawConfig } from "../../config/types.js";
 import { OPENCLAW_WRAPPER_ENV_KEY, resolveOpenClawWrapperPath } from "../../daemon/program-args.js";
 import { isNodeRuntime } from "../../daemon/runtime-binary.js";
 import {
@@ -72,10 +70,6 @@ import { buildDaemonServiceSnapshot, installDaemonServiceAndEmit } from "./respo
 import { createDaemonInstallActionContext, resolveDaemonInstallBlockMessage } from "./shared.js";
 import type { DaemonInstallOptions } from "./types.js";
 
-function resolveGatewayInstallBindMode(cfg: OpenClawConfig): GatewayBindMode {
-  return cfg.gateway?.bind ?? defaultGatewayBindMode(cfg.gateway?.tailscale?.mode ?? "off");
-}
-
 /** Merge safe existing service environment into the current install invocation environment. */
 export function mergeInstallInvocationEnv(params: {
   env: NodeJS.ProcessEnv;
@@ -121,6 +115,8 @@ export function mergeInstallInvocationEnv(params: {
     }
     // An installed CA file is additive, operator-owned Node startup trust; retain it on reinstall.
     // Never replay service-owned TLS-disable, proxy, or loader overrides from the old environment.
+    // The stale legacy darwin bundle is the exception: resolveNodeStartupTlsEnvironment treats
+    // that exact value as unset and the drift check flags installs carrying it for refresh.
     if (
       isDangerousHostEnvVarName(key) ||
       (isDangerousHostEnvOverrideVarName(key) && upper !== "NODE_EXTRA_CA_CERTS")
@@ -268,9 +264,12 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     fail(formatInvalidConfigPort("gateway.port"));
     return;
   }
-  const runtimeRaw = opts.runtime || resolveGatewayDaemonRuntime([pinnedRuntimePath ?? ""]);
+  const runtimeRaw =
+    opts.runtime ||
+    pinSnapshot.pin?.runtime ||
+    resolveGatewayDaemonRuntime([pinnedRuntimePath ?? ""]);
   if (!isGatewayDaemonRuntime(runtimeRaw)) {
-    fail('Invalid --runtime (use "node" or "bun")');
+    fail('Invalid --runtime (use "node", "bun", or "standalone")');
     return;
   }
   let runtime = runtimeRaw;
@@ -311,7 +310,8 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     );
     return;
   }
-  const installBind = resolveGatewayInstallBindMode(cfg);
+  const installBind =
+    cfg.gateway?.bind ?? defaultGatewayBindMode(cfg.gateway?.tailscale?.mode ?? "off");
   const installBindHost = await resolveGatewayBindHost(installBind, cfg.gateway?.customBindHost);
   function formatNoAuthNonLoopbackInstallBlock(): string | undefined {
     const auth = resolveGatewayAuth({
@@ -486,6 +486,17 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
         }
         const currentEnvironment = currentCommand.environment ?? {};
         const currentNodeExtraCaCerts = currentEnvironment.NODE_EXTRA_CA_CERTS?.trim();
+        if (
+          currentNodeExtraCaCerts &&
+          !resolveNodeStartupTlsEnvironment({
+            env: currentEnvironment,
+            execPath: currentExecPath,
+          }).NODE_EXTRA_CA_CERTS
+        ) {
+          // Only the exact legacy darwin bundle resolves to nothing; every operator-chosen
+          // custom CA path survives, so this cannot fire for a deliberate Linux bundle.
+          return "Gateway service trusts the outdated macOS CA bundle; refreshing the install.";
+        }
         const expectedNodeExtraCaCerts = resolveNodeStartupTlsEnvironment({
           env: {
             ...autoRefreshEnv,

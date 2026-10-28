@@ -7,6 +7,17 @@ import type {
 } from "../../../src/plugin-sdk/control-ui.js";
 import type { ApplicationContext } from "../app/context.ts";
 
+export function createInertViewHost(signal: AbortSignal): ControlUiHost {
+  return {
+    signal,
+    sessions: {},
+    agents: {},
+    navigation: {},
+    ui: {},
+    components: {},
+  } as unknown as ControlUiHost;
+}
+
 type Surface = "workspace" | "composer";
 type ViewContext<S extends Surface> = ControlUiViewContext<ControlUiSurfaceProps[S]>;
 
@@ -68,14 +79,10 @@ export function createViewRuntime(
   const invalidate = () => listeners.forEach((listener) => listener());
   // SAFETY: these fixtures exercise only view mounting and scoped host requests.
   const host = {
-    signal: abort.signal,
+    ...createInertViewHost(abort.signal),
     request,
-    sessions: {},
-    agents: {},
-    navigation: {},
     ui: options.hostInvalidation === false ? {} : { invalidate },
-    components: {},
-  } as unknown as ControlUiHost;
+  };
   const reportError = vi.fn();
   // SAFETY: the views read only this plugin capability, not other app owners.
   const context = {

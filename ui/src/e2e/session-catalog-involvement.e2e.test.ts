@@ -50,43 +50,25 @@ suite.define(() => {
         canArchive: false,
         createdActor: other,
       });
-      const catalog = (
-        id: string,
-        label: string,
-        hostId: string,
-        hostLabel: string,
-        sessions: ReturnType<typeof entry>[],
-        continueSession = false,
-      ) => ({
-        id,
-        label,
-        capabilities: { continueSession, archive: false },
-        hosts: [
-          {
-            hostId,
-            label: hostLabel,
-            kind: hostId.startsWith("node:") ? "node" : "gateway",
-            connected: true,
-            sessions,
-          },
-        ],
-      });
       const catalogs = [
-        catalog("session-share", "OpenClaw sessions", "node:remote", "Remote", [
-          entry("shared", "Remote shared conversation"),
-        ]),
-        catalog("beam", "Beam", "gateway", "Imported", [entry("imported", "Imported meeting")]),
-        catalog(
-          "codex",
-          "Coding",
-          "gateway:local",
-          "Local",
-          [
-            entry("involved", involved.label, involved.key),
-            entry("unrelated", unrelated.label, unrelated.key),
+        {
+          id: "codex",
+          label: "Coding",
+          capabilities: { continueSession: true, archive: false },
+          hosts: [
+            {
+              hostId: "gateway:local",
+              label: "Local",
+              kind: "gateway",
+              connected: true,
+              sessions: [
+                entry("unlinked", "Unlinked conversation"),
+                entry("involved", involved.label, involved.key),
+                entry("unrelated", unrelated.label, unrelated.key),
+              ],
+            },
           ],
-          true,
-        ),
+        },
       ];
       const gateway = await installMockGateway(page, {
         sessionKey: native.key,
@@ -117,20 +99,18 @@ suite.define(() => {
       await selectAllSidebarSessions(page);
       await chooseSidebarMenuOption(page, "Status", "All");
       await closeSidebarMenu(page);
-      // Coding starts collapsed; open each source so filter assertions inspect actual rows.
+      // Open the source so filter assertions inspect actual rows.
       const coding = page.getByRole("button", { name: "Coding", exact: true });
       if (await coding.count()) {
         await coding.click();
       }
-      for (const id of ["session-share", "beam", "codex"]) {
-        const toggle = page
-          .locator(`[data-session-section="catalog:${id}"] .sidebar-session-group-toggle`)
-          .first();
-        if ((await toggle.count()) && (await toggle.getAttribute("aria-expanded")) === "false") {
-          await toggle.click();
-        }
+      const toggle = page
+        .locator('[data-session-section="catalog:codex"] .sidebar-session-group-toggle')
+        .first();
+      if ((await toggle.count()) && (await toggle.getAttribute("aria-expanded")) === "false") {
+        await toggle.click();
       }
-      await expectVisible("Remote shared conversation", "Imported meeting", involved.label);
+      await expectVisible("Unlinked conversation", involved.label);
       await chooseSidebarOwner(page, "involving-me");
       await expect
         .poll(
@@ -149,11 +129,10 @@ suite.define(() => {
         );
         await writeFile(path.join(directory, "involving-me.png"), frame.png);
       }
-      await expectBrowser(text("Remote shared conversation")).toHaveCount(0);
-      await expectBrowser(text("Imported meeting")).toHaveCount(0);
+      await expectBrowser(text("Unlinked conversation")).toHaveCount(0);
       await expectBrowser(text(unrelated.label)).toHaveCount(0);
       await selectAllSidebarSessions(page);
-      await expectVisible("Remote shared conversation", "Imported meeting", unrelated.label);
+      await expectVisible("Unlinked conversation", unrelated.label);
     });
   });
 });

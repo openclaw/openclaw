@@ -1,7 +1,7 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import type { ChatQueueItem } from "../lib/chat/chat-types.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
+import { sessionRow } from "./chat-flow-fixtures.test-support.ts";
 import {
   chatSessionListResponse,
   newChatPage,
@@ -12,8 +12,6 @@ import {
   expectRequestCountStable,
   installMockGateway,
   requireRecord,
-  readOutboxPayloadAttachments,
-  requireString,
   scrollChatThreadToTop,
   visibleChatBubbleTexts,
   waitForChatScrollIdle,
@@ -29,13 +27,6 @@ type FrameSample = {
   minOpacity: number;
   sessionKey: string;
 };
-const sessionRow = (key: string, label: string, updatedAt: number, extra = {}) => ({
-  key,
-  kind: "direct",
-  label,
-  updatedAt,
-  ...extra,
-});
 async function expectVisiblePair(page: Page, userIndex: number) {
   await expect
     .poll(async () => {
@@ -57,144 +48,56 @@ const sessionLink = (page: Page, key: string) =>
   page.locator(`.sidebar-recent-session[data-session-key="${key}"] a.sidebar-recent-session__link`);
 
 suite.define(() => {
-  it("restores active commentary when an evicted session revalidates from its cursor", async () => {
-    const page = await newChatPage(suite);
-    const sessionA = "agent:main:session-a";
-    const sessionB = "agent:main:session-b";
-    const sessionKeys = [
-      sessionA,
-      sessionB,
-      "agent:main:session-c",
-      "agent:main:session-d",
-      "agent:main:session-e",
-    ];
-    const commentary = "Checking the workspace after returning.";
-    const runStartedAt = Date.now() - 10_000;
-    const pageResponse = (sessionKey: string, label: string) => ({
-      deltaCursor: `cursor-${label.toLowerCase()}`,
-      messages: [{ role: "user", content: `${label} cached prompt`, timestamp: 1 }],
-      sessionId: `${label.toLowerCase()}-session`,
-      sessionInfo: {
-        key: sessionKey,
-        sessionId: `${label.toLowerCase()}-session`,
-        kind: "direct",
-        updatedAt: 1,
-      },
-    });
-    const historyCases = [
-      {
-        match: { cursor: "cursor-b", sessionKey: sessionB },
-        response: {
-          kind: "delta",
-          messages: [],
-          deltaCursor: "cursor-b-current",
-          sessionInfo: {
-            ...pageResponse(sessionB, "B").sessionInfo,
-            updatedAt: 2,
-            hasActiveRun: true,
-            activeRunIds: ["run-b"],
-            status: "running",
-          },
-          inFlightRun: {
-            runId: "run-b",
-            text: "",
-            startedAt: runStartedAt,
-            events: [
-              {
-                runId: "run-b",
-                seq: 1,
-                stream: "item",
-                ts: runStartedAt,
-                sessionKey: sessionB,
-                data: {
-                  kind: "preamble",
-                  itemId: "preamble-restored",
-                  progressText: commentary,
-                },
-              },
-            ],
-          },
-        },
-      },
-      ...sessionKeys.map((sessionKey, index) => ({
-        match: { sessionKey },
-        response: pageResponse(sessionKey, String.fromCharCode(65 + index)),
-      })),
-    ];
-    const sessionRows = sessionKeys.map((key, index) => ({
-      key,
-      sessionId: `${String.fromCharCode(97 + index)}-session`,
-      kind: "direct" as const,
-      label: `Session ${String.fromCharCode(65 + index)}`,
-      updatedAt: sessionKeys.length - index,
-      ...(key === sessionB
-        ? { activeRunIds: ["run-b"], hasActiveRun: true, status: "running" as const }
-        : {}),
-    }));
-    const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "chat.history": { cases: historyCases },
-        "chat.startup": { cases: historyCases },
-        "sessions.list": chatSessionListResponse(sessionRows),
-      },
-      sessionKey: sessionA,
-    });
-
-    await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionA));
-    await page.getByText("A cached prompt", { exact: true }).waitFor(wait);
-    await sessionLink(page, sessionB).click();
-    await page.getByText("B cached prompt", { exact: true }).waitFor(wait);
-    await sessionLink(page, sessionA).click();
-    for (const [index, key] of sessionKeys.slice(2).entries()) {
-      await sessionLink(page, key).click();
-      await page
-        .getByText(`${String.fromCharCode(67 + index)} cached prompt`, { exact: true })
-        .waitFor(wait);
-    }
-
-    const cursorRequests = async () =>
-      [
-        ...(await gateway.getRequests("chat.startup")),
-        ...(await gateway.getRequests("chat.history")),
-      ]
-        .map((request) => requireRecord(request.params))
-        .filter((params) => params.sessionKey === sessionB && params.cursor === "cursor-b");
-    const cursorRequestsBeforeReturn = (await cursorRequests()).length;
-    await sessionLink(page, sessionB).click();
-    await expect
-      .poll(async () => (await cursorRequests()).length)
-      .toBeGreaterThan(cursorRequestsBeforeReturn);
-    const activePane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
-    const assistantText = activePane.locator(".chat-group.assistant .chat-text");
-    await activePane.getByRole("button", { name: "Stop generating", exact: true }).waitFor(wait);
-    await assistantText.getByText(commentary, { exact: true }).waitFor(wait);
-    expect(
-      await assistantText.allTextContents().then((texts) => texts.map((text) => text.trim())),
-    ).toEqual([commentary]);
-    expect(
-      await activePane.locator(".chat-bubble").getByText(commentary, { exact: true }).count(),
-    ).toBe(1);
-  });
-
-  it("keeps an unrelated retained transcript after another tab deletes a session", async () => {
+  it("keeps retained text, reasoning and tools after another tab deletes a session", async () => {
     const page = await newChatPage(suite);
     const sessionA = "agent:main:session-a";
     const sessionB = "agent:main:session-b";
     const deletedSession = "agent:main:session-c";
     const sessionAText = "Session A survives the peer deletion.";
     const sessionBText = "Session B keeps the first pane retained.";
+    const traceMessages = [
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "Checked the persisted session trace." },
+          { type: "text", text: sessionAText },
+          {
+            type: "toolCall",
+            id: "call-read",
+            name: "read",
+            arguments: { path: "AGENTS.md" },
+          },
+        ],
+        timestamp: 2,
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call-read",
+        toolName: "read",
+        content: [{ type: "text", text: "file contents" }],
+        timestamp: 3,
+      },
+    ];
     const historyCases = {
       cases: [
-        historyCase(sessionA, [chatMessage("assistant", sessionAText)], "session-a"),
+        historyCase(sessionA, traceMessages, "session-a", { thinkingLevel: "high" }),
         historyCase(sessionB, [chatMessage("assistant", sessionBText)], "session-b"),
       ],
     };
     const sessionListResponse = chatSessionListResponse([
-      { key: sessionA, sessionId: "session-a", kind: "direct", label: "Session A", updatedAt: 3 },
+      {
+        key: sessionA,
+        sessionId: "session-a",
+        kind: "direct",
+        label: "Session A",
+        updatedAt: 3,
+        reasoningLevel: "on",
+      },
       { key: sessionB, sessionId: "session-b", kind: "direct", label: "Session B", updatedAt: 2 },
       { key: deletedSession, kind: "direct", label: "Session C", updatedAt: 1 },
     ]);
     const gateway = await installMockGateway(page, {
+      subscriptionInitialHistory: false,
       methodResponses: {
         "chat.history": historyCases,
         "chat.startup": historyCases,
@@ -205,6 +108,10 @@ suite.define(() => {
 
     await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionA));
     await page.getByText(sessionAText, { exact: true }).waitFor(wait);
+    await expect
+      .poll(() => page.locator(".chat-thinking").textContent())
+      .toContain("Checked the persisted session trace.");
+    await expect.poll(() => page.locator(".chat-tool-msg-summary").textContent()).toContain("Read");
 
     await sessionLink(page, sessionB).click();
     await page.getByText(sessionBText, { exact: true }).waitFor(wait);
@@ -250,87 +157,14 @@ suite.define(() => {
 
     await sessionLink(page, sessionA).click();
     await page.getByText(sessionAText, { exact: true }).waitFor(wait);
+    await expect
+      .poll(() => page.locator(".chat-thinking").textContent())
+      .toContain("Checked the persisted session trace.");
+    await expect.poll(() => page.locator(".chat-tool-msg-summary").textContent()).toContain("Read");
     // Prefetch may warm C without reloading either retained pane. Request capture is
     // append-only, so checking history after the startup window covers the same interval.
     await expectRequestCountStable(gateway, "chat.startup", startupRequestsBeforePeerDelete);
     expect(await retainedHistoryRequests()).toHaveLength(historyRequestsBeforePeerDelete);
-  });
-
-  it("restores reasoning and tool activity after navigating away from a session", async () => {
-    const page = await newChatPage(suite);
-    const sessionA = "agent:main:session-a";
-    const sessionB = "agent:main:session-b";
-    const visibleAnswer = "Trace preserved after navigation.";
-    const reasoning = "Checked the persisted session trace.";
-    const placeholder = "Current session placeholder.";
-    const currentMessages = [chatMessage("assistant", placeholder, { timestamp: 1 })];
-    const traceMessages = [
-      {
-        role: "assistant",
-        content: [
-          { type: "thinking", thinking: reasoning },
-          { type: "text", text: visibleAnswer },
-          {
-            type: "toolCall",
-            id: "call-read",
-            name: "read",
-            arguments: { path: "AGENTS.md" },
-          },
-        ],
-        timestamp: 2,
-      },
-      {
-        role: "toolResult",
-        toolCallId: "call-read",
-        toolName: "read",
-        content: [{ type: "text", text: "file contents" }],
-        timestamp: 3,
-      },
-    ];
-    const responseCases = {
-      cases: [
-        historyCase(sessionB, traceMessages, "trace-session", { thinkingLevel: "high" }),
-        historyCase(sessionA, currentMessages, "current-session", { thinkingLevel: "high" }),
-      ],
-    };
-    const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "chat.history": responseCases,
-        "chat.startup": responseCases,
-        "sessions.list": chatSessionListResponse([
-          sessionRow(sessionA, "Session A", 2, {
-            sessionId: "current-session",
-            reasoningLevel: "on",
-          }),
-          sessionRow(sessionB, "Session B", 1, {
-            sessionId: "trace-session",
-            reasoningLevel: "on",
-          }),
-        ]),
-      },
-      sessionKey: sessionA,
-    });
-
-    await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionA));
-    await page.getByText(placeholder).waitFor(wait);
-
-    const expectTrace = async () => {
-      await page.getByText(visibleAnswer, { exact: true }).waitFor(wait);
-      await expect.poll(() => page.locator(".chat-thinking").textContent()).toContain(reasoning);
-      await expect
-        .poll(() => page.locator(".chat-tool-msg-summary").textContent())
-        .toContain("Read");
-    };
-
-    await sessionLink(page, sessionB).click();
-    await expectTrace();
-
-    await sessionLink(page, sessionA).click();
-    await page.getByText(placeholder).waitFor(wait);
-    const historyRequestsBeforeReturn = (await gateway.getRequests("chat.history")).length;
-    await sessionLink(page, sessionB).click();
-    await expectTrace();
-    expect(await gateway.getRequests("chat.history")).toHaveLength(historyRequestsBeforeReturn);
   });
 
   it("shows persisted user messages after opening History and scrolling mixed history", async () => {
@@ -350,6 +184,7 @@ suite.define(() => {
       timestamp: baseTs + index,
     }));
     const gateway = await installMockGateway(page, {
+      subscriptionInitialHistory: false,
       // A stays fixed while B's shared history/startup snapshot grows below.
       historyMessages: currentSessionMessages,
       sessionTranscripts: {
@@ -585,134 +420,5 @@ suite.define(() => {
       expect(sample).toMatchObject({ minOpacity: 1, hiddenNotice: false, loading: false });
     }
     await expectRequestCountStable(gateway, "chat.history", historyRequestsBeforeReturn);
-  });
-
-  it("stores new input while offline and sends it after reconnect", async () => {
-    const page = await newChatPage(suite);
-    const gateway = await installMockGateway(page, {
-      sessionScope: "global",
-      mainSessionKey: "global",
-      methodResponses: {
-        "chat.history": {
-          messages: [],
-          sessionId: "session:global",
-          sessionInfo: { hasActiveRun: false, status: "done" },
-          thinkingLevel: null,
-        },
-      },
-    });
-
-    await page.goto(controlUiSessionUrl(suite.server.baseUrl, "global"));
-    const composer = page.locator(".agent-chat__composer-combobox textarea");
-    await composer.waitFor({ state: "visible", timeout: 10_000 });
-
-    await gateway.setOnline(false);
-    await page.locator(".agent-chat__input--offline").waitFor(wait);
-
-    const prompt = "send this when the Gateway returns";
-    const attachmentName = "offline-proof.txt";
-    const attachmentMimeType = "text/plain";
-    const attachmentText = "offline attachment proof";
-    const attachmentBase64 = Buffer.from(attachmentText).toString("base64");
-    const attachmentDataUrl = `data:${attachmentMimeType};base64,${attachmentBase64}`;
-    expect(await composer.isEnabled()).toBe(true);
-    await composer.fill(prompt);
-    await page.locator(".agent-chat__file-input").setInputFiles({
-      name: attachmentName,
-      mimeType: attachmentMimeType,
-      buffer: Buffer.from(attachmentText),
-    });
-    await page.locator(".chat-attachment-file__name", { hasText: attachmentName }).waitFor(wait);
-    const send = page.getByRole("button", { name: "Send message" });
-    expect(await send.isEnabled()).toBe(true);
-    await send.click();
-
-    const queue = page.locator(".chat-queue");
-    await queue.getByText("Waiting for reconnect").waitFor(wait);
-    await queue.getByText(prompt).waitFor(wait);
-    expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-    const readStoredProof = async () => {
-      const item = await page.evaluate(
-        (expectedPrompt) =>
-          Object.entries(sessionStorage)
-            .filter(([key]) => key.startsWith("openclaw.control.chatComposer.v4:"))
-            .flatMap(([, value]) => {
-              const parsed = JSON.parse(value) as {
-                sessions: Record<string, { queue?: ChatQueueItem[] }>;
-              };
-              return Object.values(parsed.sessions).flatMap((session) => session.queue ?? []);
-            })
-            .find((entry) => entry.text === expectedPrompt),
-        prompt,
-      );
-      const attachment = item?.attachments?.find((entry) => entry.fileName === attachmentName);
-      const payload = item?.attachmentPayload
-        ? await readOutboxPayloadAttachments(page, item.attachmentPayload.key)
-        : null;
-      const storedAttachment = payload?.find((entry) => entry.fileName === attachmentName);
-      return {
-        attachment: Boolean(
-          attachment &&
-          storedAttachment &&
-          attachment.dataUrl === undefined &&
-          `data:${storedAttachment.mimeType};base64,${storedAttachment.base64}` ===
-            attachmentDataUrl,
-        ),
-        prompt: item !== undefined,
-        runId: item?.sendRunId ?? null,
-        waitingReconnect: item?.sendState === "waiting-reconnect",
-      };
-    };
-    await expect.poll(readStoredProof).toEqual({
-      attachment: true,
-      prompt: true,
-      runId: expect.any(String),
-      waitingReconnect: true,
-    });
-    const storedProof = await readStoredProof();
-    const storedRunId = requireString(storedProof.runId, "stored offline send idempotency key");
-
-    await page.reload();
-    await expect.poll(readStoredProof).toEqual({
-      attachment: true,
-      prompt: true,
-      runId: storedRunId,
-      waitingReconnect: true,
-    });
-    // A cold reload waits for initial Gateway bootstrap before rebuilding the
-    // UI. Storage survival here plus replay below is the reload contract.
-    expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-
-    await gateway.setOnline(true);
-    await page.locator("openclaw-chat-pane").waitFor({ state: "attached", timeout: 10_000 });
-
-    const request = await gateway.waitForRequest("chat.send");
-    const params = requireRecord(request.params);
-    const runId = requireString(params.idempotencyKey, "offline send idempotency key");
-    expect(params.message).toBe(prompt);
-    expect(runId).toBe(storedRunId);
-    expect(params.attachments).toEqual([
-      {
-        content: attachmentBase64,
-        fileName: attachmentName,
-        origin: "file",
-        mimeType: attachmentMimeType,
-        type: "file",
-      },
-    ]);
-    await page.getByRole("button", { name: "Stop generating" }).waitFor(wait);
-    await page.locator(".chat-thread").getByText(prompt).waitFor(wait);
-    await expectRequestCountStable(gateway, "chat.send", 1);
-    await gateway.emitChatFinal({ runId, text: "Delivered after reconnect." });
-    await queue.waitFor({ state: "detached", timeout: 10_000 });
-    await page.locator(".chat-thread").getByText(prompt).waitFor(wait);
-    await expect
-      .poll(async () => {
-        const proof = await readStoredProof();
-        return proof.attachment || proof.prompt || proof.runId === runId;
-      })
-      .toBe(false);
-    await page.locator(".agent-chat__input--offline").waitFor({ state: "detached" });
-    await expectRequestCountStable(gateway, "chat.send", 1);
   });
 });

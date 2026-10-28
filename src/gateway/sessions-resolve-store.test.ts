@@ -10,6 +10,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withStateDirEnv as withRawStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { fixedStoreOwnershipConfig } from "./server-methods/sessions-fixed-store.test-support.js";
 import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
 import {
   resolveSessionKeyFromResolveParams as resolveSessionKeyFromResolveParamsWithClient,
@@ -97,14 +98,7 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
   it("rejects an exact bare key scoped to a different fixed-store owner", async () => {
     await withStateDirEnv("openclaw-sessions-resolve-owner-conflict-", async ({ stateDir }) => {
       const storePath = path.join(stateDir, "shared-sessions.sqlite");
-      const cfg = {
-        session: { store: storePath, scope: "global" },
-        agents: {
-          ownership: "explicit",
-          defaults: { sessionStore: { agentId: "ops" } },
-          entries: { ops: {}, research: {} },
-        },
-      } satisfies OpenClawConfig;
+      const cfg = fixedStoreOwnershipConfig(storePath) satisfies OpenClawConfig;
       await seedSessionStore(storePath, {
         global: entry("sess-owned-global"),
       });

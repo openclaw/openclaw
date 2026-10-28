@@ -1,12 +1,5 @@
 import { bucketRelativeTimeMs } from "@openclaw/normalization-core";
 
-type FormatTimeAgoOptions = {
-  /** Append "ago" suffix. Default: true. When false, returns bare unit: "5m", "2h" */
-  suffix?: boolean;
-  /** Return value for invalid/null/negative input. Default: "unknown" */
-  fallback?: string;
-};
-
 /**
  * Format a duration (in ms) as a human-readable relative time.
  *
@@ -17,7 +10,12 @@ type FormatTimeAgoOptions = {
  */
 export function formatTimeAgo(
   durationMs: number | null | undefined,
-  options?: FormatTimeAgoOptions,
+  options?: {
+    /** Append "ago" suffix. Default: true. When false, returns bare unit: "5m", "2h" */
+    suffix?: boolean;
+    /** Return value for invalid/null/negative input. Default: "unknown" */
+    fallback?: string;
+  },
 ): string {
   const suffix = options?.suffix !== false;
   const fallback = options?.fallback ?? "unknown";

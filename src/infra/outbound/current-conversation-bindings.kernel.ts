@@ -377,7 +377,7 @@ function readCurrentConversationBindingRows(
 export function updateCurrentConversationBindingRecordInDatabase(
   db: EngineConnection,
   ref: ConversationRef,
-  update: (current: SessionBindingRecord | null) => SessionBindingRecord | null,
+  update: (current: SessionBindingRecord | null) => SessionBindingRecord | null | undefined,
 ): { previous: SessionBindingRecord | null; current: SessionBindingRecord | null } {
   const conversation = normalizeConversationRef(ref);
   const bindingKey = buildConversationKey(conversation);
@@ -385,6 +385,10 @@ export function updateCurrentConversationBindingRecordInDatabase(
   const existing = existingRow ? bindingRowToRecord(existingRow) : null;
   const previous = existing && !isBindingExpired(existing) ? existing : null;
   const current = update(previous);
+  // Returning a record still requests repair; only an explicit decline skips persistence.
+  if (current === undefined) {
+    return { previous, current: previous };
+  }
   if (!current) {
     if (existingRow) {
       getCurrentConversationBindingQueries(db).remove(existingRow.binding_key);
@@ -607,7 +611,11 @@ export function removeCurrentConversationBindingsInDatabase(
       input.conversation,
       (latest) => {
         assertExpectedCurrentBinding(latest, input.expected);
-        return !input.bindingId || latest?.bindingId === input.bindingId ? null : latest;
+        return !input.bindingId || latest?.bindingId === input.bindingId
+          ? null
+          : latest
+            ? undefined
+            : null;
       },
     );
     return previous && !current ? [previous] : [];

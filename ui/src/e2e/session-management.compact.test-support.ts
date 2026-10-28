@@ -2,8 +2,10 @@ import path from "node:path";
 import type { BrowserContextOptions, Locator, Page } from "playwright";
 import { expect } from "vitest";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
+import { bounds } from "./new-session-page.scenario.test-support.ts";
 import * as support from "./session-management.test-support.ts";
 
+export { bounds };
 export { expectAttribute, expectCount, expectText } from "./session-page.test-support.ts";
 
 type GatewayOptions = NonNullable<Parameters<typeof support.installMockGateway>[1]>;
@@ -76,8 +78,6 @@ export const pollText = (locator: Locator) => expect.poll(() => locator.textCont
 export const pollValue = (locator: Locator) => expect.poll(() => locator.inputValue());
 export const pollAttribute = (locator: Locator, name: string) =>
   expect.poll(() => locator.getAttribute(name));
-export const pollCount = (locator: Locator, options?: { timeout: number }) =>
-  expect.poll(() => locator.count(), options);
 export async function expectNoRequests(gateway: Gateway, ...methods: string[]) {
   for (const method of methods) {
     expect(await gateway.getRequests(method)).toEqual([]);
@@ -118,13 +118,6 @@ export const menuItem = (root: Page | Locator, name: string | RegExp, exact = tr
 export const visible = (locator: Locator, timeout?: number) =>
   locator.waitFor({ state: "visible", timeout });
 
-export async function bounds(locator: Locator) {
-  const rect = await locator.boundingBox();
-  if (!rect) {
-    throw new Error("Expected visible session geometry");
-  }
-  return rect;
-}
 type Rect = Awaited<ReturnType<typeof bounds>>;
 export const centerX = (rect: Rect) => rect.x + rect.width / 2;
 export const centerY = (rect: Rect) => rect.y + rect.height / 2;

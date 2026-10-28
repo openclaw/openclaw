@@ -4,13 +4,13 @@ import {
   type Model,
 } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, vi } from "vitest";
+import { createQueuedAssistantStream } from "../test-helpers/assistant-event-stream.test-support.js";
 import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import { createResourceLoader } from "./agent-session-loop-resource-loader.test-support.js";
 import type { AgentSessionEvent } from "./agent-session-types.js";
 import { AgentSession } from "./agent-session.js";
 import { AuthStorage } from "./auth-storage.js";
-import { DEFAULT_THINKING_LEVEL } from "./defaults.js";
 import type { ExtensionEvent, ThinkingLevelSelectEvent } from "./extensions/types.js";
 import { ModelRegistry, type ProviderConfigInput } from "./model-registry.js";
 import { createAgentSession, type CreateAgentSessionOptions } from "./sdk.js";
@@ -23,7 +23,7 @@ const hoistedStreamMocks = vi.hoisted(() => ({
 }));
 export const streamMocks = hoistedStreamMocks;
 
-export const testModel: Model = makeProviderModelFixture({
+export const testModel = makeProviderModelFixture({
   id: "test-model",
   name: "Test Model",
   api: "openai-responses",
@@ -64,16 +64,23 @@ export function createAssistant(
 }
 
 export function createAssistantResultStream(message: AssistantMessage) {
-  const stream = createAssistantMessageEventStream();
-  queueMicrotask(() => {
+  return createQueuedAssistantStream((push) => {
     if (message.stopReason === "error" || message.stopReason === "aborted") {
-      stream.push({ type: "error", reason: message.stopReason, error: message });
+      push({ type: "error", reason: message.stopReason, error: message });
     } else {
-      stream.push({ type: "done", reason: message.stopReason, message });
+      push({ type: "done", reason: message.stopReason, message });
     }
-    stream.end();
   });
-  return stream;
+}
+
+export function mockToolTurn(content: AssistantMessage["content"]) {
+  streamMocks.streamSimple
+    .mockImplementationOnce((model: Model) =>
+      createAssistantResultStream(createAssistant(model, content, "toolUse")),
+    )
+    .mockImplementation((model: Model) =>
+      createAssistantResultStream(createAssistant(model, "Done.")),
+    );
 }
 
 export function holdAssistantResponse(text: string | (() => AssistantMessage)) {
@@ -168,7 +175,7 @@ export async function createTestSession(options: TestSessionOptions = {}) {
     ...sessionOptions,
     systemPrompt: options.systemPrompt ?? "Test session prompt",
     model,
-    thinkingLevel: settingsManager.getDefaultThinkingLevel() ?? DEFAULT_THINKING_LEVEL,
+    thinkingLevel: settingsManager.getDefaultThinkingLevel() ?? "medium",
     tools: options.customTools?.map((tool) => tool.name) ?? [],
     resourceLoader: options.resourceLoader ?? (await createResourceLoader(extension)),
     sessionManager,

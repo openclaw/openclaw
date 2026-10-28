@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
+import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context-store.js";
 import { retainGatewayDeviceRevocation } from "../../gateway/device-revocation.js";
 import {
   createAbortError,

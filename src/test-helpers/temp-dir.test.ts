@@ -11,97 +11,75 @@ import { withTempDirSync, withTestDir } from "./temp-dir.js";
 
 const parentRoots = useAutoCleanupTempDirTracker(afterEach);
 
-describe("withTestDir", () => {
-  it("keeps the cached async prefix root while another case is active", async () => {
-    const parentDir = parentRoots.make("openclaw-temp-dir-helper-test-");
-    const firstCanFinish = Promise.withResolvers<void>();
-
-    const first = withTestDir({ prefix: "openclaw-shared-root-", parentDir }, async (dir) => {
-      await fs.writeFile(path.join(dir, "first.txt"), "ok");
-      await firstCanFinish.promise;
+it("keeps the cached async prefix root while another case is active", async () => {
+  const parentDir = parentRoots.make("openclaw-temp-dir-helper-test-");
+  const options = { prefix: "openclaw-shared-root-", parentDir };
+  const firstCanFinish = Promise.withResolvers<void>();
+  const first = withTestDir(options, async () => firstCanFinish.promise);
+  const firstSettled = first.catch(() => {});
+  try {
+    await withTestDir(options, async () => {
+      await expect(fs.readdir(parentDir)).resolves.toHaveLength(1);
     });
+  } finally {
+    // Release and join the owned case even when the sibling assertion fails.
+    firstCanFinish.resolve();
+    await firstSettled;
+  }
+  await first;
+  await expect(fs.readdir(parentDir)).resolves.toStrictEqual([]);
+});
 
-    const firstSettled = first.catch(() => {});
-    try {
-      await withTestDir({ prefix: "openclaw-shared-root-", parentDir }, async (dir) => {
-        await fs.writeFile(path.join(dir, "second.txt"), "ok");
-        await expect(fs.readdir(parentDir)).resolves.toHaveLength(1);
-      });
+it("removes the cached sync prefix root when the case finishes", async () => {
+  const parentDir = parentRoots.make("openclaw-temp-dir-helper-test-");
 
-      firstCanFinish.resolve();
-      await first;
-
-      await expect(fs.readdir(parentDir)).resolves.toStrictEqual([]);
-    } finally {
-      // Release and join the owned case even when the sibling assertion fails.
-      firstCanFinish.resolve();
-      await firstSettled;
-    }
+  withTempDirSync({ prefix: "openclaw-leak-check-sync-", parentDir }, (dir) => {
+    fsSync.writeFileSync(path.join(dir, "marker.txt"), "ok");
   });
 
-  it("removes the cached sync prefix root when the case finishes", async () => {
-    const parentDir = parentRoots.make("openclaw-temp-dir-helper-test-");
-
-    withTempDirSync({ prefix: "openclaw-leak-check-sync-", parentDir }, (dir) => {
-      fsSync.writeFileSync(path.join(dir, "marker.txt"), "ok");
-    });
-
-    await expect(fs.readdir(parentDir)).resolves.toStrictEqual([]);
-  });
+  await expect(fs.readdir(parentDir)).resolves.toStrictEqual([]);
 });
 
 describe.skipIf(process.platform === "win32")("private temporary case directories", () => {
-  it.each(["async", "sync", "suite"])(
-    "admits a private workspace under a group-writable umask (%s)",
-    async (kind) => {
-      const parentDir = parentRoots.make("openclaw-temp-dir-helper-test-");
-      const tempDirUrl = resolveRuntimeWorkerUrl(tempDirEntrypoint);
-      const nodeExecutable = resolveTestNodeExecPath();
-      // umask is process-wide and cannot be changed in a Vitest worker thread.
-      const stdout = execFileSync(
-        nodeExecutable,
-        [
-          ...resolveRuntimeWorkerArgv(tempDirUrl, nodeExecutable).slice(0, -1),
-          "--input-type=module",
-          "--eval",
-          `import fs from "node:fs";
-import { tempWorkspaceSync } from "@openclaw/fs-safe/temp";
+  it.each([
+    ["async", "result = await withTestDir(options, async (dir) => exercise(dir));"],
+    ["sync", "result = withTempDirSync(options, exercise);"],
+    [
+      "suite",
+      `const tracker = createSuiteTempRootTracker(options);
+await tracker.setup();
+try {
+  result = exercise(await tracker.make("nested/case"));
+} finally {
+  await tracker.cleanup();
+}`,
+    ],
+  ])("admits a private workspace under a group-writable umask (%s)", (_kind, run) => {
+    const parentDir = parentRoots.make("openclaw-temp-dir-helper-test-");
+    const tempDirUrl = resolveRuntimeWorkerUrl(tempDirEntrypoint);
+    const nodeExecutable = resolveTestNodeExecPath();
+    // umask is process-wide and cannot be changed in a Vitest worker thread.
+    const stdout = execFileSync(
+      nodeExecutable,
+      [
+        ...resolveRuntimeWorkerArgv(tempDirUrl, nodeExecutable).slice(0, -1),
+        "--input-type=module",
+        "--eval",
+        `import fs from "node:fs";
+import { withTempWorkspaceSync } from "@openclaw/fs-safe/temp";
 import { withTestDir, withTempDirSync, createSuiteTempRootTracker } from ${JSON.stringify(tempDirUrl.href)};
 process.umask(0o002);
-const options = { prefix: "private-case-", parentDir: ${JSON.stringify(parentDir)} };
-function exercise(dir) {
-  const workspace = tempWorkspaceSync({ rootDir: dir, prefix: "private-workspace-" });
-  try {
-    workspace.write("marker", "private");
-    return workspace.read("marker").toString();
-  } finally {
-    workspace.cleanup();
-  }
-}
+const options = { prefix: "private-case-", parentDir: ${JSON.stringify(parentDir)}, subdir: "nested/leaf" };
+const exercise = (dir) => withTempWorkspaceSync({ rootDir: dir, prefix: "private-workspace-" }, (workspace) => {
+  workspace.write("marker", "private");
+  return workspace.read("marker").toString();
+});
 let result;
-if (${JSON.stringify(kind)} === "async") {
-  result = await withTestDir({ ...options, subdir: "nested/leaf" }, async (dir) => exercise(dir));
-} else if (${JSON.stringify(kind)} === "sync") {
-  result = withTempDirSync({ ...options, subdir: "nested/leaf" }, exercise);
-} else {
-  const tracker = createSuiteTempRootTracker(options);
-  await tracker.setup();
-  try {
-    result = exercise(await tracker.make("nested/case"));
-  } finally {
-    await tracker.cleanup();
-  }
-}
+${run}
 console.log(JSON.stringify({ result, remaining: fs.readdirSync(options.parentDir) }));`,
-        ],
-        {
-          cwd: process.cwd(),
-          encoding: "utf8",
-          timeout: 10_000,
-          killSignal: "SIGKILL",
-        },
-      );
-      expect(JSON.parse(stdout)).toEqual({ result: "private", remaining: [] });
-    },
-  );
+      ],
+      { cwd: process.cwd(), encoding: "utf8", timeout: 10_000, killSignal: "SIGKILL" },
+    );
+    expect(JSON.parse(stdout)).toEqual({ result: "private", remaining: [] });
+  });
 });

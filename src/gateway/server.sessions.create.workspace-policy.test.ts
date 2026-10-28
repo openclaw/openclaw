@@ -96,10 +96,19 @@ async function setupResetWorktree(prefix: string, model?: { primary: string }) {
   testState.sessionConfig = { dmScope: "main" };
   const { storePath } = await createSessionStoreDir();
   await writeSessionStore({ entries: { main: sessionStoreEntry("sess-reset-parent") } });
+  const scope = { agentId: "main", sessionKey: "agent:main:main", storePath };
   let worktreeId: string | undefined;
   return {
     workspace,
     storePath,
+    scope,
+    readEntry: () => loadSessionEntry(scope),
+    async createWorktree(params: Record<string, unknown> = {}) {
+      const created = await mainSession({ worktree: true, ...params });
+      expect(created).toMatchObject({ ok: true, payload: { key: "agent:main:main" } });
+      worktreeId = created.payload!.worktree.id;
+      return created.payload!;
+    },
     track(id: string | undefined) {
       worktreeId = id;
     },
@@ -116,6 +125,39 @@ async function setupResetWorktree(prefix: string, model?: { primary: string }) {
       testState.sessionConfig = undefined;
       await state.cleanup();
     },
+  };
+}
+
+async function openWorkspaceEditor(fixture: Awaited<ReturnType<typeof setupResetWorktree>>) {
+  const { worktree } = await fixture.createWorktree();
+  const request = { sessionKey: "agent:main:main", path: "README.md" };
+  const options = { client: { connect: { scopes: ["operator.admin"] } } as never };
+  const read = () =>
+    directSessionReq<SessionsFilesGetResult>("sessions.files.get", request, options);
+  const opened = await read();
+  expect(opened.ok, JSON.stringify(opened.error)).toBe(true);
+  expect(opened.payload).toMatchObject({
+    source: { workspaceId: worktree.id },
+    file: { content: "base\n" },
+  });
+  return {
+    worktree,
+    opened,
+    read,
+    save(content: string, version = opened.payload!, includeSource = true) {
+      return directSessionReq<SessionsFilesGetResult>(
+        "sessions.files.set",
+        {
+          ...request,
+          content,
+          expectedHash: version.file.hash,
+          ...(includeSource ? { expectedSource: version.source } : {}),
+        },
+        options,
+      );
+    },
+    expectContent: (root: string, content = "base\n") =>
+      expect(fs.readFile(path.join(root, "README.md"), "utf8")).resolves.toBe(content),
   };
 }
 
@@ -347,15 +389,11 @@ test.each([
   "sessions.create reset-in-place reports cleanup truth for $name",
   async ({ outcome }) => {
     await using fixture = await setupResetWorktree("openclaw-reset-retained-worktree-");
-    const { storePath } = fixture;
     using warnSpy = vi.spyOn(sessionLog, "warn").mockImplementation(() => {});
     const originalRemoveIfLossless = captureMethodCall("removeIfLossless")(
       ManagedWorktreeService.prototype,
     );
-    const created = await mainSession({ worktree: true });
-    expect(created.ok).toBe(true);
-    const worktree = created.payload!.worktree;
-    fixture.track(worktree.id);
+    const { worktree } = await fixture.createWorktree();
     const dirtyFile = path.join(worktree.path, "retained-work.txt");
     if (outcome === "dirty") {
       await fs.writeFile(dirtyFile, "preserve my work\n");
@@ -375,9 +413,7 @@ test.each([
 
     const reset = await mainSession({}, "operator.write");
     expectDetached(reset);
-    expect(
-      loadSessionEntry({ sessionKey: "agent:main:main", storePath })?.worktree,
-    ).toBeUndefined();
+    expect(fixture.readEntry()?.worktree).toBeUndefined();
     if (outcome === "dirty") {
       expect(getRegistryWorktree(process.env, worktree.id)).toMatchObject({
         runEndCleanup: { outcome: "retained-dirty" },
@@ -408,36 +444,33 @@ test("sessions.create reset-in-place detaches the prior worktree permission boun
   await using fixture = await setupResetWorktree("openclaw-reset-session-worktree-", {
     primary: "openai/current-model",
   });
-  const { workspace, storePath } = fixture;
+  const { workspace, storePath, scope } = fixture;
   using warnSpy = vi.spyOn(sessionLog, "warn").mockImplementation(() => {});
   const resolved = { modelProvider: "openai", model: "current-model" };
-  const created = await mainSession({ worktree: true, permissionMode: "workspace" });
-  expect(created).toMatchObject({ ok: true, payload: { key: "agent:main:main" } });
-  expect(created.payload?.resolved).toEqual(resolved);
-  const worktree = created.payload?.worktree;
-  fixture.track(worktree?.id);
-  expect(created.payload?.entry.spawnedCwd).toBe(worktree?.path);
-  expect(created.payload?.entry.sessionRoot).toBe(worktree?.path);
-  expect(created.payload?.entry.permissionMode).toBe("workspace");
-  expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })?.spawnedCwd).toBe(
-    worktree?.path,
-  );
+  const created = await fixture.createWorktree({ permissionMode: "workspace" });
+  expect(created.resolved).toEqual(resolved);
+  const { worktree } = created;
+  expect(created.entry).toMatchObject({
+    spawnedCwd: worktree.path,
+    sessionRoot: worktree.path,
+    permissionMode: "workspace",
+  });
+  expect(fixture.readEntry()?.spawnedCwd).toBe(worktree.path);
 
-  const scope = { agentId: "main", sessionKey: "agent:main:main", storePath };
   const priorWorkspace = {
     worktreeId: worktree!.id,
-    sessionId: created.payload!.entry.sessionId,
+    sessionId: created.entry.sessionId,
     workspaceDir: workspace,
     fileRoot: workspace,
     through: { generation: "before-adoption", maxSeq: 1 },
   };
-  await upsertSessionEntryCore(scope, { ...loadSessionEntry(scope)!, priorWorkspace });
+  await upsertSessionEntryCore(scope, { ...fixture.readEntry()!, priorWorkspace });
   const ordinaryReset = await directSessionReq("sessions.reset", {
     key: scope.sessionKey,
     reason: "reset",
   });
   expect(ordinaryReset.ok).toBe(true);
-  expect(loadSessionEntry(scope)?.priorWorkspace).toEqual(priorWorkspace);
+  expect(fixture.readEntry()?.priorWorkspace).toEqual(priorWorkspace);
 
   // Pause the exact old-binding removal before destructive work. A same-key
   // worktree reset must remain fenced until that prior generation is gone.
@@ -488,7 +521,7 @@ test("sessions.create reset-in-place detaches the prior worktree permission boun
   expect(successorWorktree.id).not.toBe(worktree?.id);
   fixture.track(successorWorktree.id);
   await fs.access(successorWorktree.path);
-  expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
+  expect(fixture.readEntry()).toMatchObject({
     spawnedCwd: successorWorktree.path,
     worktree: {
       id: successorWorktree.id,
@@ -497,84 +530,35 @@ test("sessions.create reset-in-place detaches the prior worktree permission boun
     },
   });
   expect(getRegistryWorktree(process.env, successorWorktree.id)?.removedAt).toBeUndefined();
-  expect(loadSessionEntry(scope)?.priorWorkspace).toBeUndefined();
+  expect(fixture.readEntry()?.priorWorkspace).toBeUndefined();
 });
 
 test("an open Files editor cannot save into a replacement managed workspace", async () => {
   await using fixture = await setupResetWorktree("openclaw-files-source-reset-");
-  const created = await mainSession({ worktree: true });
-  expect(created).toMatchObject({ ok: true, payload: { key: "agent:main:main" } });
-  const original = created.payload!.worktree;
-  fixture.track(original.id);
-  const request = { sessionKey: "agent:main:main", path: "README.md" };
-  const options = { client: { connect: { scopes: ["operator.admin"] } } as never };
-  const read = () =>
-    directSessionReq<SessionsFilesGetResult>("sessions.files.get", request, options);
-  const opened = await read();
-  expect(opened.ok, JSON.stringify(opened.error)).toBe(true);
-  expect(opened.payload).toMatchObject({
-    source: { workspaceId: original.id },
-    file: { content: "base\n" },
-  });
-  const staleSave = () =>
-    directSessionReq(
-      "sessions.files.set",
-      {
-        ...request,
-        content: "draft from the original workspace\n",
-        expectedHash: opened.payload!.file.hash,
-        expectedSource: opened.payload!.source,
-      },
-      options,
-    );
+  const editor = await openWorkspaceEditor(fixture);
+  const staleSave = () => editor.save("draft from the original workspace\n");
   const sourceChanged = { error: { details: { type: "session_file_source_changed" } } };
 
   expectDetached(await mainSession({}, "operator.write"));
   await expect(staleSave()).rejects.toMatchObject(sourceChanged);
-  await expect(fs.readFile(path.join(fixture.workspace, "README.md"), "utf8")).resolves.toBe(
-    "base\n",
-  );
-  const replacement = await mainSession({ worktree: true });
-  expect(replacement.ok, JSON.stringify(replacement.error)).toBe(true);
-  const current = replacement.payload!.worktree;
-  fixture.track(current.id);
-  expect(current.id).not.toBe(original.id);
+  await editor.expectContent(fixture.workspace);
+  const { worktree: current } = await fixture.createWorktree();
+  expect(current.id).not.toBe(editor.worktree.id);
   await expect(staleSave()).rejects.toMatchObject(sourceChanged);
-  await expect(fs.readFile(path.join(current.path, "README.md"), "utf8")).resolves.toBe("base\n");
+  await editor.expectContent(current.path);
 
-  const fresh = await read();
+  const fresh = await editor.read();
   expect(fresh.payload).toMatchObject({
     source: { workspaceId: current.id },
     file: { content: "base\n" },
   });
-  const saved = await directSessionReq<SessionsFilesGetResult>(
-    "sessions.files.set",
-    {
-      ...request,
-      content: "fresh edit\n",
-      expectedHash: fresh.payload!.file.hash,
-      expectedSource: fresh.payload!.source,
-    },
-    options,
-  );
+  const saved = await editor.save("fresh edit\n", fresh.payload!);
   expect(saved.ok, JSON.stringify(saved.error)).toBe(true);
   expect(saved.payload?.source?.workspaceId).toBe(current.id);
-  await expect(fs.readFile(path.join(current.path, "README.md"), "utf8")).resolves.toBe(
-    "fresh edit\n",
-  );
-  const legacy = await directSessionReq(
-    "sessions.files.set",
-    {
-      ...request,
-      content: "legacy client edit\n",
-      expectedHash: saved.payload!.file.hash,
-    },
-    options,
-  );
+  await editor.expectContent(current.path, "fresh edit\n");
+  const legacy = await editor.save("legacy client edit\n", saved.payload!, false);
   expect(legacy.ok, JSON.stringify(legacy.error)).toBe(true);
-  await expect(fs.readFile(path.join(current.path, "README.md"), "utf8")).resolves.toBe(
-    "legacy client edit\n",
-  );
+  await editor.expectContent(current.path, "legacy client edit\n");
 });
 
 test("sessions.create rejects worktrees for agent workspaces without a commit", async () => {
@@ -594,21 +578,8 @@ test("sessions.create rejects worktrees for agent workspaces without a commit", 
 
 test("an explicit cwd reset refuses the previous managed file source", async () => {
   await using fixture = await setupResetWorktree("openclaw-files-explicit-cwd-");
-  const created = await mainSession({ worktree: true });
-  expect(created.ok, JSON.stringify(created.error)).toBe(true);
-  const original = created.payload!.worktree;
-  fixture.track(original.id);
-  const request = { sessionKey: "agent:main:main", path: "README.md" };
-  const options = { client: { connect: { scopes: ["operator.admin"] } } as never };
-  const opened = await directSessionReq<SessionsFilesGetResult>(
-    "sessions.files.get",
-    request,
-    options,
-  );
-  expect(opened.payload).toMatchObject({
-    source: { workspaceId: original.id },
-    file: { content: "base\n" },
-  });
+  const editor = await openWorkspaceEditor(fixture);
+  const { worktree: original, opened } = editor;
   const replacement = path.join(fixture.workspace, "replacement");
   await fs.mkdir(replacement);
   await fs.writeFile(path.join(replacement, "README.md"), "base\n");
@@ -616,41 +587,17 @@ test("an explicit cwd reset refuses the previous managed file source", async () 
   expect(reset.ok, JSON.stringify(reset.error)).toBe(true);
   expect(reset.payload?.entry.spawnedCwd).toBe(replacement);
   expect(reset.payload?.entry.worktree?.id).toBe(original.id);
-  const fresh = await directSessionReq<SessionsFilesGetResult>(
-    "sessions.files.get",
-    request,
-    options,
-  );
+  const fresh = await editor.read();
   expect(fresh.payload).toMatchObject({
     source: { workspaceId: original.id },
     file: { content: "base\n" },
   });
-  await expect(
-    directSessionReq(
-      "sessions.files.set",
-      {
-        ...request,
-        content: "draft from A\n",
-        expectedHash: opened.payload!.file.hash,
-        expectedSource: opened.payload!.source,
-      },
-      options,
-    ),
-  ).rejects.toMatchObject({ error: { details: { type: "session_file_source_changed" } } });
-  await expect(fs.readFile(path.join(replacement, "README.md"), "utf8")).resolves.toBe("base\n");
+  await expect(editor.save("draft from A\n")).rejects.toMatchObject({
+    error: { details: { type: "session_file_source_changed" } },
+  });
+  await editor.expectContent(replacement);
   expect(fresh.payload?.source).not.toEqual(opened.payload?.source);
-  const saved = await directSessionReq(
-    "sessions.files.set",
-    {
-      ...request,
-      content: "fresh edit in B\n",
-      expectedHash: fresh.payload!.file.hash,
-      expectedSource: fresh.payload!.source,
-    },
-    options,
-  );
+  const saved = await editor.save("fresh edit in B\n", fresh.payload!);
   expect(saved.ok, JSON.stringify(saved.error)).toBe(true);
-  await expect(fs.readFile(path.join(replacement, "README.md"), "utf8")).resolves.toBe(
-    "fresh edit in B\n",
-  );
+  await editor.expectContent(replacement, "fresh edit in B\n");
 });

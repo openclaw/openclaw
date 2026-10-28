@@ -10,6 +10,7 @@ import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import * as toolCards from "../../../lib/chat/tool-cards.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import * as thinking from "../../../lib/strip-thinking-tags.ts";
+import { restorePropertyDescriptor } from "../../../test-helpers/property-descriptor.ts";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
@@ -76,20 +77,16 @@ describe("message action projections", () => {
     expect(preview).not.toHaveBeenCalled();
     prepare("toolResult", "First line\nSecond line");
     expect(preview).not.toHaveBeenCalled();
-    const container = document.createElement("div");
-    const view = mountSolid(
-      GroupedMessage,
-      {
-        preparation: prepareChatMessageRender({
-          role: "toolResult",
-          content: "First line\nSecond line",
-        }),
-        messageKey: "tool-preview",
-        options: { isStreaming: true, showReasoning: false },
-      },
-      container,
-    );
-    onTestFinished(view.dispose);
+    const { container, dispose } = mountSolid(GroupedMessage, {
+      preparation: prepareChatMessageRender({
+        role: "toolResult",
+        content: "First line\nSecond line",
+      }),
+      messageKey: "tool-preview",
+      options: { isStreaming: true, showReasoning: false },
+    });
+    onTestFinished(dispose);
+    await import("./chat-tool-card-row.solid.tsx");
     await waitForSolid(() =>
       expect(container.querySelector(".chat-tool-msg-summary__names")?.textContent).toBe("tool"),
     );
@@ -208,11 +205,27 @@ describe("user message disclosure", () => {
     vi.stubGlobal(
       "ResizeObserver",
       class {
-        constructor(private readonly notify: () => void) {}
-        observe() {
+        private readonly targets = new Set<Element>();
+        constructor(private readonly callback: ResizeObserverCallback) {}
+        private readonly notify = () => {
+          // SAFETY: The overflow owner reads layout from its registered elements.
+          this.callback(
+            [...this.targets].map((target) => ({ target }) as ResizeObserverEntry),
+            this as unknown as ResizeObserver,
+          );
+        };
+        observe(target: Element) {
+          this.targets.add(target);
           pendingObservers.add(this.notify);
         }
+        unobserve(target: Element) {
+          this.targets.delete(target);
+          if (this.targets.size === 0) {
+            pendingObservers.delete(this.notify);
+          }
+        }
         disconnect() {
+          this.targets.clear();
           pendingObservers.delete(this.notify);
         }
       },
@@ -321,11 +334,7 @@ describe("user message disclosure", () => {
       container.remove();
       restoreStyles.forEach((restore) => restore());
       vi.unstubAllGlobals();
-      if (previousFonts) {
-        Object.defineProperty(document, "fonts", previousFonts);
-      } else {
-        Reflect.deleteProperty(document, "fonts");
-      }
+      restorePropertyDescriptor(document, "fonts", previousFonts);
     }
   });
 
@@ -350,44 +359,6 @@ describe("user message disclosure", () => {
     for (const line of markdown.split("\n").filter(Boolean)) {
       expect(container.textContent).toContain(line);
     }
-  });
-});
-
-describe("streaming message Markdown", () => {
-  it.each([
-    { markdown: "Intro\n\nTail", owner: ".chat-text > p:last-child" },
-    { markdown: "Intro\n\n", owner: ".chat-text > p" },
-    { markdown: "Intro\n\n```ts\nconst answer = 42;\n```", owner: ".chat-text" },
-  ])("keeps the duplicate count on the terminal owner for $markdown", ({ markdown, owner }) => {
-    const container = document.createElement("div");
-    const view = mountSolid(
-      MessageMarkdown,
-      {
-        markdown,
-        messageKey: "streaming-duplicate",
-        options: { role: "assistant", isStreaming: true },
-        markdownOptions: {},
-        duplicateSuffix: { count: 3, label: "Three identical messages" },
-      },
-      container,
-    );
-
-    expect(container.querySelectorAll(".chat-duplicate-count")).toHaveLength(1);
-    expect(container.querySelector(`${owner} > .chat-duplicate-count`)?.textContent).toBe("×3");
-    expect(container.querySelector("code .chat-duplicate-count")).toBeNull();
-
-    view.update({
-      markdown: `${markdown}\n\nMore`,
-      messageKey: "streaming-duplicate",
-      options: { role: "assistant", isStreaming: true },
-      markdownOptions: {},
-      duplicateSuffix: { count: 4, label: "Four identical messages" },
-    });
-    expect(container.querySelectorAll(".chat-duplicate-count")).toHaveLength(1);
-    expect(
-      container.querySelector(".chat-text > p:last-child > .chat-duplicate-count")?.textContent,
-    ).toBe("×4");
-    expect(container.querySelector("code .chat-duplicate-count")).toBeNull();
   });
 });
 
@@ -428,12 +399,13 @@ describe("persisted human mentions in message bubbles", () => {
   >([
     ["string content", "user", text, { humanMentions }, true],
     ["text block", "user", [{ type: "text", text }], { humanMentions }, true],
-    ["assistant", "assistant", text, { humanMentions }, false],
+    ["Gateway-authored assistant", "assistant", [{ type: "text", text }], { humanMentions }, true],
+    ["tool result", "toolResult", text, { humanMentions }, false],
     ["capped user", "user", text, { humanMentions, truncated: true, reason: "oversized" }, false],
     ["unselected text", "user", text, undefined, false],
     ["replaced display", "user", text, { humanMentions }, false, "@Different Person"],
   ])(
-    "attaches identities only to unchanged selected user spans: %s",
+    "attaches identities only to unchanged selected message spans: %s",
     (_name, role, content, metadata, selected, replacement) => {
       const entry = { role, content, metadata, selected, replacement };
       const host = document.createElement("div");

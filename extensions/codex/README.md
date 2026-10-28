@@ -44,6 +44,8 @@ When assembled context bootstraps a Codex thread, redacted tool payloads retain 
 
 Settled-turn finalization uses the same configured Codex App Server transport as the supervised conversation. Remote websocket App Server configurations stay on their configured transport. Managed user-home stdio launches running inside an Agent home, and not through the proxy launcher, use a private stdio side turn for native-tool isolation. The bounded finalizer preserves the selected model, provider, and native authorization returned by Codex, and rejects native tool evidence outside the finalization contract. It may mirror a final answer after completed tool work; it does not diagnose why a model omitted a visible final message.
 
+An internal system turn that mirrors no prompt and has no transcript recorder, such as the stranded-reply retry after a `message_tool_only` final, anchors its evidence at the turn's first mirrored row; the user turn that produced it stays prior context and is never borrowed as the turn's prompt.
+
 When settled-turn recovery rejects history, the `codex settled-turn finalization context capture failed` warning includes a stable `reason`, such as `item_limit`, `byte_limit`, `field_limit`, `unsupported_user_image`, or `snapshot_invalidated`. Unknown failures use `history_read_failed`. The warning excludes transcript content and exception text. Rejected history remains unavailable for finalization, and completed actions are never replayed.
 
 The `codex_app_server.item` agent-event stream includes native item lifecycle events

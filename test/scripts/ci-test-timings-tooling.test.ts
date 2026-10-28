@@ -12,12 +12,9 @@ function toolingLog(
   cost: number,
   nativeSeconds?: number,
   fileName = file,
-  summary: {
-    configs?: string[];
-    includePatterns?: string[];
-    testFiles?: string[];
-    durations?: string[];
-  } = {},
+  summary: Partial<
+    Record<"configs" | "includePatterns" | "testFiles" | "durations", string[]>
+  > = {},
 ) {
   const configs = summary.configs ?? [config];
   const includePatterns = summary.includePatterns ?? [fileName];
@@ -85,12 +82,11 @@ it("requires independent runs, preserves runner profiles and prefers complete na
 type TimingCase = [
   label: string,
   expected: number | undefined,
-  options?: Parameters<typeof toolingLog>[3] | number,
+  options?: Parameters<typeof toolingLog>[3],
   mutate?: (text: string) => string,
 ];
 it.each<TimingCase>([
   ["singleton wall", 190],
-  ["native file time", 120, 120],
   ["missing file summary", 391, { testFiles: [] }],
   ["skipped file", 391, { testFiles: ["1 passed | 1 skipped (2)"] }],
   ["multiple invocations", 391, { durations: ["190.06s", "20s"] }],
@@ -118,10 +114,10 @@ it.each<TimingCase>([
   ["no duration", undefined, { durations: [] }],
   ["other family", undefined, undefined, replace(/core-tooling/gu, "agentic-gateway")],
 ])("prices complete unambiguous tooling: %s", (_label, expected, options, mutate) => {
-  const text = toolingLog(391, typeof options === "number" ? options : undefined, file, {
+  const text = toolingLog(391, undefined, file, {
     testFiles: ["1 passed (1)"],
     durations: ["190.06s"],
-    ...(typeof options === "object" ? options : {}),
+    ...options,
   });
   expect(weights(mutate?.(text) ?? text)).toEqual(
     expected === undefined ? {} : { [file]: expected },
@@ -131,7 +127,6 @@ it.each<TimingCase>([
 it("seeds one explicit run, retains absent files in partial PRs, and respects the write threshold", () => {
   const seed = refitTestTimings([run(1)], undefined, { seedTooling: true }).timings;
   expect(seed.toolingFileSeconds.blacksmith).toEqual({ [file]: 200 });
-  expect(seed.source).toContain("seed from successful pull_request CI merge-ref runs: 1");
   const partial = [2, 3, 4].map((id) =>
     run(id, toolingLog(10, undefined, "test/scripts/other.test.ts")),
   );

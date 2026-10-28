@@ -9,6 +9,7 @@ import * as processExec from "../process/exec.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { hasErrnoCode } from "./errno.js";
 import { resolveExecutableFromPathEnv } from "./executable-path.js";
+import { writeFixtureTree } from "./fixture-tree.test-support.js";
 import { verifyGitUpdateRecovery } from "./update-git-runtime.js";
 import {
   createGitUpdateFixture,
@@ -19,7 +20,6 @@ import {
   resolveCandidateNodeRuntimeForTest,
   runtimeImports,
   writeGitFixtureManifest,
-  writeFixtureTree,
   type GitUpdateFixture,
   expectHead,
   expectMissing,
@@ -234,6 +234,81 @@ describe("Git candidate activation", () => {
     expect(built && exposed).toBe(true);
     expect(process.env.OPENCLAW_DEV_SOURCE_ROOT).toBe(root);
     expect(process.env.PATH).toBe(inheritedPath);
+  });
+
+  it.each(["exact", "fallback", "latest"] as const)(
+    "qualifies attempted Git candidates before preparation (%s)",
+    async (mode) => {
+      const compatible = await advanceRemote();
+      await writeGitFixtureManifest(remote, {
+        ...packageMetadata,
+        engines: { node: ">=999.0.0" },
+      });
+      await git(remote, "add", "package.json");
+      const incompatible = await commitFiles({ "next.txt": "incompatible\n" }, remote);
+      let selected = compatible;
+      if (mode === "latest") {
+        await writeGitFixtureManifest(remote, packageMetadata);
+        await git(remote, "add", "package.json");
+        selected = await commitFiles({ "newest.txt": "compatible\n" }, remote);
+      }
+      const checkouts: string[] = [];
+      observeCommands((argv) => {
+        if (argv.includes("checkout") || argv.includes("worktree")) {
+          checkouts.push(argv.join(" "));
+        }
+      });
+      const beforeGitStaging = vi.fn<NonNullable<UpdateRunnerOptions["beforeGitStaging"]>>(
+        async () => {
+          if (mode === "exact") {
+            throw new Error("incompatible target reached staging");
+          }
+          return {
+            step: { name: "staging", command: "staging", cwd: root, durationMs: 0, exitCode: 0 },
+            failureReason: "snapshot-capacity-insufficient",
+          };
+        },
+      );
+      const result = await update({
+        ...(mode === "exact" ? { devTarget: { mode: "detached", ref: incompatible } } : {}),
+        beforeGitStaging,
+      });
+      expect(checkouts.every((command) => !command.includes(incompatible))).toBe(true);
+      if (mode === "exact") {
+        expect(result).toMatchObject({
+          status: "error",
+          reason: "preflight-node-runtime-incompatible",
+        });
+        expect(beforeGitStaging).not.toHaveBeenCalled();
+        expect(state.events).toEqual([]);
+        await expectOriginalServing();
+      } else {
+        expect(result.status, result.reason).toBe("ok");
+        await expectInstalled(selected);
+        if (mode === "latest") {
+          expect(result.steps.some((step) => step.name === "preflight-node-runtime")).toBe(false);
+        }
+      }
+    },
+  );
+
+  it("uses the rebased Node requirement when local commits relax it", async () => {
+    await writeGitFixtureManifest(remote, { ...packageMetadata, engines: { node: ">=999.0.0" } });
+    await git(remote, "add", "package.json");
+    await git(remote, "commit", "-m", "upstream engine");
+    await git(root, "fetch", "origin");
+    await git(root, "merge", "--ff-only", "origin/main");
+    await writeGitFixtureManifest(root, { ...packageMetadata, engines: { node: ">=24.0.0" } });
+    await git(root, "add", "package.json");
+    await git(root, "commit", "-m", "local engine");
+    state.beforeSha = await git(root, "rev-parse", "HEAD");
+    await state.writeRuntime();
+    await advanceRemote();
+    const result = await update();
+    expect(result.status, result.reason).toBe("ok");
+    expect(JSON.parse(await readText(path.join(root, "package.json"))).engines.node).toBe(
+      ">=24.0.0",
+    );
   });
 
   it("rejects after all bounded rebased dev candidates require an incompatible Node runtime", async () => {

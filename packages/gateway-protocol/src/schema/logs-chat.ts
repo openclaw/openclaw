@@ -125,7 +125,18 @@ export const ChatInputConsumptionsSchema = Type.Array(
 );
 export type ChatInputConsumptions = Static<typeof ChatInputConsumptionsSchema>;
 
+/** Legacy persisted activity receipts; retained so existing history still validates. */
+export const AgentActivityDelegationSchema = closedObject({
+  runId: Type.String({ minLength: 1, maxLength: 256 }),
+  childSessionKey: Type.String({ minLength: 1, maxLength: 1024 }),
+  label: Type.Optional(Type.String({ minLength: 1, maxLength: 512 })),
+  groupId: Type.Optional(Type.String({ minLength: 1, maxLength: 512 })),
+  runtimeMs: Type.Optional(Type.Number({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER })),
+  status: stringLiteralUnion(["accepted", "done", "failed", "killed", "timeout"]),
+});
+export type AgentActivityDelegation = Static<typeof AgentActivityDelegationSchema>;
 export const AgentActivityItemSchema = closedObject({
+  delegation: Type.Optional(Type.Array(AgentActivityDelegationSchema, { maxItems: 32 })),
   itemId: NonEmptyString,
   phase: stringLiteralUnion(["start", "update", "end"]),
   kind: Type.String(),
@@ -234,7 +245,25 @@ export const ChatPredictResultSchema = closedObject({
   text: Type.Union([Type.String({ maxLength: 500 }), Type.Null()]),
 });
 
+/** Dismiss displayed pending inputs that ended interrupted or cancelled. */
+export const ChatPendingInputsDismissParamsSchema = closedObject({
+  sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
+  sessionId: NonEmptyString,
+  inputIds: Type.Array(NonEmptyString, { minItems: 1, maxItems: 100, uniqueItems: true }),
+});
+
+export const ChatPendingInputsDismissResultSchema = closedObject({
+  dismissedIds: Type.Array(NonEmptyString, { maxItems: 100 }),
+  runIds: Type.Array(Type.String({ minLength: 1, maxLength: CHAT_INPUT_RUN_ID_MAX_CHARS }), {
+    maxItems: 100,
+  }),
+  missingIds: Type.Array(NonEmptyString, { maxItems: 100 }),
+});
+
 export type ChatPredictParams = Static<typeof ChatPredictParamsSchema>;
+export type ChatPendingInputsDismissParams = Static<typeof ChatPendingInputsDismissParamsSchema>;
+export type ChatPendingInputsDismissResult = Static<typeof ChatPendingInputsDismissResultSchema>;
 export type ChatPredictResult = Static<typeof ChatPredictResultSchema>;
 
 /** Batched purpose-title request for tool calls rendered in the Control UI. */

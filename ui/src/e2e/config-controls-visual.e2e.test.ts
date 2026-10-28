@@ -4,6 +4,7 @@ import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { createEmptyCostUsageTotals } from "../../../src/infra/session-cost-usage-totals.ts";
+import { buildAggregatesFromSessions } from "../pages/usage/view.test-support.ts";
 import {
   takeControlUiElementScreenshot,
   waitForControlUiProofSurface,
@@ -147,20 +148,7 @@ suite.define(() => {
                 sessions: [],
                 totals: createEmptyCostUsageTotals(),
                 aggregates: {
-                  messages: {
-                    total: 0,
-                    user: 0,
-                    assistant: 0,
-                    toolCalls: 0,
-                    toolResults: 0,
-                    errors: 0,
-                  },
-                  tools: { totalCalls: 0, uniqueTools: 0, tools: [] },
-                  byModel: [],
-                  byProvider: [],
-                  byAgent: [],
-                  byChannel: [],
-                  daily: [],
+                  ...buildAggregatesFromSessions([]),
                   costDaily: [],
                 },
               },

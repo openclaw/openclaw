@@ -14,16 +14,14 @@ import type { FeishuToolsConfig, ResolvedFeishuAccount } from "./types.js";
 
 type AccountAwareParams = { accountId?: string };
 type FeishuToolFamily = keyof FeishuToolsConfig;
-type FeishuToolRequirement = {
-  family: FeishuToolFamily;
-  label: string;
-};
-
 type FeishuToolAccountParams = {
   cfg: OpenClawConfig;
   executeParams?: AccountAwareParams;
   defaultAccountId?: string;
-  requiredTool: FeishuToolRequirement;
+  requiredTool: {
+    family: FeishuToolFamily;
+    label: string;
+  };
 };
 
 function resolveImplicitToolAccountId(params: FeishuToolAccountParams): string {

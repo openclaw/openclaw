@@ -1,7 +1,12 @@
 // Bind one auth selection policy to either the host runtime or the cold SDK entrypoint.
 import { resolveDefaultAgentDir } from "openclaw/plugin-sdk/agent-harness-registration";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { AuthProfileStore } from "openclaw/plugin-sdk/provider-auth";
+
+const loadProviderAuthRuntime = createLazyRuntimeModule(
+  () => import("openclaw/plugin-sdk/provider-auth-runtime"),
+);
 
 type ProfileAuth = Pick<
   PluginRuntime["modelAuth"],
@@ -60,8 +65,7 @@ export function createCodexAuthProfileSelection({
       return consume({ read: async () => requested, assertCurrent() {} });
     }
     const agentDir = params.agentDir?.trim() || resolveDefaultAgentDir(params.config ?? {});
-    const { withAuthProfileStoreAtEffect } =
-      await import("openclaw/plugin-sdk/provider-auth-runtime");
+    const { withAuthProfileStoreAtEffect } = await loadProviderAuthRuntime();
     return withAuthProfileStoreAtEffect(agentDir, storeOptions(params), (reader) =>
       consume({
         read: async () =>

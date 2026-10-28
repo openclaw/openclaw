@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import * as board from "./board-layout.js";
 
 type BoardLayout = Parameters<typeof board.normalizeBoardLayout>[0];
@@ -32,8 +32,32 @@ function widgetOrder(state: BoardLayout, tabId: string): string[] {
     .map((widget) => widget.name);
 }
 
+it("sorts owned layouts without copying their arrays again", () => {
+  const original = Object.assign(layout(), { revision: 99 });
+  const copySort = vi.spyOn(Array.prototype, "toSorted");
+  const ownedSort = vi.spyOn(Array.prototype, "sort");
+  let copies: number;
+  let sorts: number;
+  try {
+    board.normalizeBoardLayout(original);
+    board.applyBoardOps(original, [
+      { kind: "tab_update", tabId: "two", position: 0 },
+      { kind: "widget_move", name: "alpha", tabId: "two", position: 0 },
+      { kind: "tab_delete", tabId: "one" },
+    ]);
+    board.insertBoardWidget(original, { ...original.widgets[0]!, name: "new" }, { tabId: "two" });
+    copies = copySort.mock.calls.length;
+    sorts = ownedSort.mock.calls.length;
+  } finally {
+    copySort.mockRestore();
+    ownedSort.mockRestore();
+  }
+  expect(copies).toBe(0);
+  expect(sorts).toBeLessThanOrEqual(15);
+});
+
 it("keeps nested widget metadata caller-owned across layout operations", () => {
-  const original = layout();
+  const original = Object.assign(layout(), { revision: 99 });
   const widget = findWidget(original);
   widget.props = { series: [1, 2] };
   widget.declared = { tools: ["sessions"] };
@@ -53,6 +77,7 @@ it("keeps nested widget metadata caller-owned across layout operations", () => {
     emptyBatch,
   ];
   for (const result of results) {
+    expect(Object.keys(result).toSorted()).toEqual(["tabs", "widgets"]);
     const copied = findWidget(result);
     copied.props!.series = [9];
     copied.declared!.tools!.push("usage");

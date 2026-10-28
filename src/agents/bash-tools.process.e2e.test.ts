@@ -11,6 +11,7 @@ import {
   test,
   vi,
 } from "vitest";
+import { acknowledgeInternalToolResult } from "../../packages/agent-core/src/internal-hooks.js";
 import { withinTest } from "../../test/helpers/promise.js";
 import * as sessionEvents from "../auto-reply/reply/session-event-handoff.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
@@ -37,9 +38,7 @@ import {
   runningSession,
 } from "./bash-tools.lifecycle.test-support.js";
 import { createProcessTool } from "./bash-tools.process.js";
-import type { RunEmbeddedAgentParams } from "./embedded-agent-runner/run/params.js";
 import { runEmbeddedAgent } from "./embedded-agent.js";
-import { acknowledgeInternalToolResult } from "./runtime/internal-hooks.js";
 import { isToolResultError } from "./tool-result-error.js";
 
 // mock-isolation: Only model inference is synthetic; process and session-event custody are real.
@@ -69,22 +68,16 @@ beforeAll(async () => {
   openOpenClawStateDatabase();
 });
 
-async function admitEvent(params: RunEmbeddedAgentParams) {
-  await expectDefined(params.preparedRunAdmission, "real event admission").admit(
-    "gateway",
-    params.runId,
-  );
-  params.onExecutionPhase?.({ phase: "model_call_started" });
-  await params.onExecutionStarted?.();
-  await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
-}
-
-const silentReply = () => ({ payloads: [{ text: "NO_REPLY" }], meta: { durationMs: 1 } });
-
 beforeEach(() => {
   model.mockReset().mockImplementation(async (params) => {
-    await admitEvent(params);
-    return silentReply();
+    await expectDefined(params.preparedRunAdmission, "real event admission").admit(
+      "gateway",
+      params.runId,
+    );
+    params.onExecutionPhase?.({ phase: "model_call_started" });
+    await params.onExecutionStarted?.();
+    await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
+    return { payloads: [{ text: "NO_REPLY" }], meta: { durationMs: 1 } };
   });
   observe = vi
     .spyOn(sessionEvents, "enqueueSessionEventForHost")
@@ -152,10 +145,9 @@ function runSandboxProcess({
   command,
   containerName = command,
   child,
-  finalizeExec = async () => {},
+  finalizeExec,
   maxOutput = 1000,
   timeoutSec = 10,
-  notifyOnExit = true,
   stdinMode = "pipe-closed",
   ...options
 }: Pick<
@@ -165,15 +157,14 @@ function runSandboxProcess({
   child: string;
   stdinMode?: "pipe-open" | "pipe-closed";
   containerName?: string;
-  finalizeExec?: () => Promise<void>;
+  finalizeExec: () => Promise<void>;
   maxOutput?: number;
   timeoutSec?: number;
-  notifyOnExit?: boolean;
 }) {
   return runExecProcess({
     command,
     timeoutSec,
-    notifyOnExit,
+    notifyOnExit: true,
     workdir: process.cwd(),
     env: {},
     sandbox: {
@@ -238,6 +229,10 @@ function processActions(scopeKey: string, sessionId: string) {
     extra: Omit<Params, "action"> = {},
     signal?: AbortSignal,
   ) => tool.execute(`process-${action}`, { action, sessionId, ...extra }, signal);
+  const checkDetails = (result: Awaited<ReturnType<typeof call>>, details: object) => {
+    expect(result.details).toMatchObject(details);
+    expect(Value.Check(tool.outputSchema!, result.details)).toBe(true);
+  };
   const checkRunning = async (action: Params["action"], extra: Omit<Params, "action"> = {}) => {
     const result = await call(action, extra);
     expect(result.details).toMatchObject({ status: "running", sessionId });
@@ -255,7 +250,7 @@ function processActions(scopeKey: string, sessionId: string) {
         { timeout: 5_000, interval: 25 },
       )
       .toContain(expected);
-  return { tool, call, waitFor, checkRunning };
+  return { tool, call, waitFor, checkRunning, checkDetails };
 }
 
 const FINALIZER_SECRET = ["sk", "synthetic", "fixture", "never", "real"].join("-");
@@ -284,20 +279,19 @@ test.skipIf(process.platform === "win32")(
       },
       scopeKey,
     });
-    const { tool: processTool, call } = processActions(scopeKey, run.session.id);
+    const { tool: processTool, call, checkDetails } = processActions(scopeKey, run.session.id);
     try {
       await withinTest(ready.promise, signal);
       markBackgrounded(run.session);
       const requested = await call("kill");
       await withinTest(finalizerEntered.promise, signal);
-      expect(requested.details).toMatchObject({
+      checkDetails(requested, {
         status: "completed",
         sessionId: run.session.id,
         cancellationRequested: true,
         terminationConfirmed: false,
         followUp: { action: "poll", sessionId: run.session.id },
       });
-      expect(Value.Check(processTool.outputSchema!, requested.details)).toBe(true);
       const pending = await call("poll");
       expect(pending.details).toMatchObject({ status: "running", sessionId: run.session.id });
       expect(textContent(pending)).toContain("STOP_PROOF_READY");
@@ -318,9 +312,8 @@ test.skipIf(process.platform === "win32")(
       expect.soft(textContent(listed)).not.toContain("[stopped by request]");
       for (const action of ["kill", "poll", "log"] as const) {
         const observed = await call(action);
-        expect(observed.details).toMatchObject(terminal);
+        checkDetails(observed, terminal);
         expect(isToolResultError(observed)).toBe(true);
-        expect(Value.Check(processTool.outputSchema!, observed.details)).toBe(true);
         if (action === "kill") {
           expect(observed.details).not.toHaveProperty("cancellationRequested");
           expect(observed.details).not.toHaveProperty("aggregated");
@@ -384,7 +377,7 @@ test.skipIf(process.platform === "win32").for([
     });
     markBackgrounded(run.session);
 
-    const { tool: processTool, call } = processActions(scopeKey, run.session.id);
+    const { call, checkDetails } = processActions(scopeKey, run.session.id);
     const pendingPoll = call("poll", { timeout: 2_000 });
 
     const outcome = await run.promise;
@@ -399,12 +392,9 @@ test.skipIf(process.platform === "win32").for([
       expect(textContent(poll)).toContain("REAL_CHILD_OUTPUT");
       poll = await call("poll");
     }
-    const details = poll.details as { status?: string; exitCode?: number };
-
     expect(outcome.status).toBe("failed");
-    expect(details.status).toBe("failed");
-    expect(Value.Check(processTool.outputSchema!, poll.details)).toBe(true);
-    expect(details.exitCode).toBe(code);
+    checkDetails(poll, { status: "failed" });
+    expect((poll.details as { exitCode?: number }).exitCode).toBe(code);
     expect(getFinishedSession(run.session.id)?.terminalStatus).toBe("failed");
     expect(textContent(poll)).toContain(`Process exited with ${label}.`);
     expect(notification).toContain(label);
@@ -475,20 +465,14 @@ test.skipIf(process.platform === "win32")(
       'process.stdin.setEncoding("utf8");',
       "process.stdin.setRawMode?.(true);",
       'let pending = "";',
-      "let lineCount = 0;",
       'process.stdout.write("READY\\n");',
       'process.stdin.on("data", (chunk) => {',
       "  for (const char of chunk) {",
-      '    if (char === "\\u0003") {',
-      "      process.stdout.write(`CONTROL:CTRL-C:${lineCount}\\n`);",
-      "      continue;",
-      "    }",
       '    if (char !== "\\r" && char !== "\\n") {',
       "      pending += char;",
       "      continue;",
       "    }",
       "    if (!pending) continue;",
-      "    lineCount += 1;",
       "    process.stdout.write(`LINE:${pending}\\n`);",
       '    pending = "";',
       "  }",
@@ -500,7 +484,7 @@ test.skipIf(process.platform === "win32")(
     try {
       const started = await startBackground(scopeKey, source, { notifyOnExit: false, pty: true });
       sessionId = started.sessionId;
-      const { tool: processTool, call, waitFor, checkRunning } = started;
+      const { call, waitFor, checkRunning, checkDetails } = started;
 
       await waitFor("log", "READY");
       expect(await checkRunning("write", { data: "alpha" })).toContain("Wrote 5 bytes");
@@ -513,8 +497,7 @@ test.skipIf(process.platform === "win32")(
         `Termination requested for session ${sessionId}. Use process poll to confirm exit and cleanup before reporting it stopped.`,
       );
       // A performed kill must not read as a failed tool call.
-      expect(killed.details).toMatchObject({ status: "completed" });
-      expect(Value.Check(processTool.outputSchema!, killed.details)).toBe(true);
+      checkDetails(killed, { status: "completed" });
 
       await waitForExecScope(scopeKey);
       const finalPoll = await call("poll", { timeout: 250 });
@@ -525,8 +508,7 @@ test.skipIf(process.platform === "win32")(
       });
 
       const completedLog = await call("log");
-      expect(completedLog.details).toMatchObject({ status: "completed", sessionId });
-      expect(Value.Check(processTool.outputSchema!, completedLog.details)).toBe(true);
+      checkDetails(completedLog, { status: "completed", sessionId });
       expect(textContent(completedLog)).toContain("LINE:alpha");
     } finally {
       if (sessionId && getSession(sessionId)) {

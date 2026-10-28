@@ -101,13 +101,7 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     return { handled: false };
   }
 
-  const sessionState = await initFastReplySessionState({
-    ctx: params.ctx,
-    cfg: params.cfg,
-    agentId: params.agentId,
-    commandAuthorized: params.commandAuthorized,
-    workspaceDir: params.workspaceDir,
-  });
+  const sessionState = await initFastReplySessionState(params);
   if (params.commandAuthorized) {
     const creatingSession = sessionState.initialSessionEntry === undefined;
     const initializationEntry = sessionState.initialSessionEntry ?? sessionState.sessionEntry;

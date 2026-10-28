@@ -3,10 +3,15 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { getEnvironmentData } from "node:worker_threads";
-import { withEngineStoreAdmission } from "openclaw/plugin-sdk/database-engine-worker-runtime";
+import {
+  openEngineStore,
+  withEngineStoreAdmission,
+} from "openclaw/plugin-sdk/database-engine-worker-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { Client } from "pg";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { logbookEngineSchema } from "./store-engine-schema.js";
+import { createLogbookDatabase } from "./store-schema-admission.js";
 import { createSqliteWorkerBackend } from "./store.worker.js";
 import type { LogbookCardDraft } from "./types.js";
 
@@ -64,6 +69,160 @@ describe.skipIf(!connection)("PostgreSQL logbook operations", () => {
       }
     } finally {
       await observer?.end();
+    }
+  });
+
+  it("upgrades version 1 index ordering once while retaining standups and nullable indexes", async () => {
+    const pathname = path.join(tempDirs.make("logbook-index-upgrade-"), "logbook.sqlite");
+    const input = { connection: connection!, schemaPrefix: "logbook_upgrade" };
+    const schema = withEngineStoreAdmission(() => {
+      using anchor = new DatabaseSync(pathname);
+      const db = openEngineStore({
+        anchor,
+        input,
+        schema: {
+          ...logbookEngineSchema,
+          ...logbookEngineSchema.postgresMigrations![0]!.fromSchema,
+          version: 1,
+        },
+        prepareAnchor: () => {},
+        inspectSqlite: () => ({ hasEngineAnchor: false, hasExistingData: false }),
+        openSqlite: () => {},
+      });
+      try {
+        db.prepare("INSERT INTO standups VALUES (?, ?, ?)").run(DAY, "Retained standup", 1);
+        return String(anchor.prepare("SELECT schema FROM openclaw_engine_anchor").get()?.schema);
+      } finally {
+        db.close();
+      }
+    });
+    const indexes = async () =>
+      (
+        await observer.query(
+          `SELECT relname AS name, oid::text, pg_get_indexdef(oid) AS definition
+       FROM pg_class WHERE relnamespace = $1::regnamespace
+       AND relname IN ('idx_logbook_frames_captured_at', 'idx_logbook_frames_unbatched')
+       ORDER BY relname`,
+          [schema],
+        )
+      ).rows;
+    try {
+      const before = await indexes();
+      await withEngineStoreAdmission(() => createLogbookDatabase(pathname, input)).close();
+      const after = await indexes();
+      expect(after[0]!.definition).not.toContain("NULLS FIRST");
+      expect(after[0]!.oid).not.toBe(before[0]!.oid);
+      expect(after[1]).toEqual(before[1]);
+      expect((await observer.query(`SELECT text FROM "${schema}".standups`)).rows).toEqual([
+        { text: "Retained standup" },
+      ]);
+      expect(
+        (await observer.query(`SELECT version::integer FROM "${schema}".openclaw_schema_meta`))
+          .rows,
+      ).toEqual([{ version: 3 }]);
+      await withEngineStoreAdmission(() => createLogbookDatabase(pathname, input)).close();
+      expect(await indexes()).toEqual(after);
+    } finally {
+      await observer.query(`DROP SCHEMA "${schema}" CASCADE`);
+    }
+  });
+
+  it("upgrades version 2 by rebuilding only the two non-null partial indexes", async () => {
+    const pathname = path.join(tempDirs.make("logbook-partial-index-upgrade-"), "logbook.sqlite");
+    const input = { connection: connection!, schemaPrefix: "logbook_partial_upgrade" };
+    const migration = logbookEngineSchema.postgresMigrations!.find((step) => step.version === 3)!;
+    const schema = withEngineStoreAdmission(() => {
+      using anchor = new DatabaseSync(pathname);
+      const db = openEngineStore({
+        anchor,
+        input,
+        schema: {
+          ...logbookEngineSchema,
+          ...migration.fromSchema,
+          version: 2,
+          postgresMigrations: [],
+        },
+        prepareAnchor: () => {},
+        inspectSqlite: () => ({ hasEngineAnchor: false, hasExistingData: false }),
+        openSqlite: () => {},
+      });
+      try {
+        db.prepare(
+          "INSERT INTO batches (id, day, start_ms, end_ms, created_ms, updated_ms) VALUES (1, ?, 0, 1000, 1, 1)",
+        ).run(DAY);
+        db.prepare(
+          `INSERT INTO frames (id, captured_at_ms, day, path, content_hash, batch_id)
+           VALUES (1, 100, ?, 'retained.jpg', 'retained-hash', 1),
+             (2, 200, ?, 'unbatched.jpg', 'unbatched-hash', NULL)`,
+        ).run(DAY, DAY);
+        db.prepare(
+          `INSERT INTO cards (id, day, start_ms, end_ms, title, summary, keyframe_id, updated_ms)
+           VALUES (1, ?, 0, 1000, 'Retained', 'Retained summary', 1, 1),
+             (2, ?, 1000, 2000, 'No keyframe', 'Nullable summary', NULL, 1)`,
+        ).run(DAY, DAY);
+        return String(anchor.prepare("SELECT schema FROM openclaw_engine_anchor").get()?.schema);
+      } finally {
+        db.close();
+      }
+    });
+    const indexes = async () =>
+      (
+        await observer.query<{ name: string; oid: string; options: string }>(
+          `SELECT c.relname AS name, c.oid::text AS oid, i.indoption::text AS options
+           FROM pg_class c JOIN pg_index i ON i.indexrelid = c.oid
+           WHERE c.relnamespace = $1::regnamespace ORDER BY c.relname`,
+          [schema],
+        )
+      ).rows;
+    const changedNames = ["idx_logbook_cards_keyframe", "idx_logbook_frames_batch"];
+    try {
+      const before = await indexes();
+      // Genuine v2 has native NOT NULL keys but still gives these nullable keys NULLS FIRST.
+      expect(before.find((index) => index.name === "idx_logbook_frames_captured_at")?.options).toBe(
+        "0",
+      );
+      expect(
+        before.filter((index) => changedNames.includes(index.name)).map((index) => index.options),
+      ).toEqual(["2", "2 0"]);
+      await withEngineStoreAdmission(() => createLogbookDatabase(pathname, input)).close();
+      const after = await indexes();
+      expect(after.map((index) => index.name)).toEqual(before.map((index) => index.name));
+      expect(
+        after
+          .filter((index) => index.oid !== before.find((prior) => prior.name === index.name)?.oid)
+          .map((index) => index.name),
+      ).toEqual(changedNames);
+      expect(
+        after.filter((index) => changedNames.includes(index.name)).map((index) => index.options),
+      ).toEqual(["0", "0 0"]);
+      expect(after.filter((index) => !changedNames.includes(index.name))).toEqual(
+        before.filter((index) => !changedNames.includes(index.name)),
+      );
+      expect(
+        (await observer.query(`SELECT path, batch_id::integer FROM "${schema}".frames ORDER BY id`))
+          .rows,
+      ).toEqual([
+        { path: "retained.jpg", batch_id: 1 },
+        { path: "unbatched.jpg", batch_id: null },
+      ]);
+      expect(
+        (
+          await observer.query(
+            `SELECT title, summary, keyframe_id::integer FROM "${schema}".cards ORDER BY id`,
+          )
+        ).rows,
+      ).toEqual([
+        { title: "Retained", summary: "Retained summary", keyframe_id: 1 },
+        { title: "No keyframe", summary: "Nullable summary", keyframe_id: null },
+      ]);
+      expect(
+        (await observer.query(`SELECT version::integer FROM "${schema}".openclaw_schema_meta`))
+          .rows,
+      ).toEqual([{ version: 3 }]);
+      await withEngineStoreAdmission(() => createLogbookDatabase(pathname, input)).close();
+      expect(await indexes()).toEqual(after);
+    } finally {
+      await observer.query(`DROP SCHEMA "${schema}" CASCADE`);
     }
   });
 

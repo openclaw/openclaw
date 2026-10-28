@@ -6,14 +6,10 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import type { SessionState } from "../../lib/sessions/session-capability.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import {
-  createGatewayBrowserClientFixture,
-  createSessionCapabilityFixture,
-  createSessionContext,
-  createTestChatPane,
-  nativeHistoryMessage,
-} from "./chat-pane.test-support.ts";
-import { createPageState } from "./chat-state-page.ts";
+import { createGatewayBrowserClientFixture } from "./chat-application-context.test-support.ts";
+import { chatSessionPresentationTitle } from "./chat-pane-session-presentation.ts";
+import { createTestChatPane, nativeHistoryMessage } from "./chat-pane.test-support.ts";
+import { createSessionCapabilityFixture } from "./chat-session-capability.test-support.ts";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -95,32 +91,37 @@ const presentationChanges: Record<
 };
 
 describe("chat pane session presentation", () => {
-  it.each([undefined, { agentId: "research" }])(
-    "initializes projected page state from an empty or partial session fixture (%s)",
-    (stateOverride) => {
-      const sessions = createSessionCapabilityFixture({ state: stateOverride });
-      const context = createSessionContext(createGatewayBrowserClientFixture(), sessions);
-      const state = createPageState(
-        context,
-        { afterCommit: () => () => {} },
-        { dispatchEvent: () => true },
-      );
-      const rendered = vi.fn();
-      const view = mountSolid(() => {
-        createEffect(() => state.sessionsResult?.sessions[0]?.label, rendered);
-        return null;
-      });
-      rendered.mockClear();
-      state.sessionsResult = sessionsResult(
-        [{ key: state.sessionKey, kind: "direct", label: "Projected page title" }],
-        1,
-      );
-      flush();
-      expect(rendered).toHaveBeenCalledWith("Projected page title", undefined);
-      view.unmount();
-    },
-  );
-
+  it("uses create metadata only until the title owner has a session row", () => {
+    const f = fixture();
+    Object.assign(f.state.sessions.presentation, { result: null });
+    expect(chatSessionPresentationTitle(f.state, undefined, "", true, "Created title")).toBe(
+      "Created title",
+    );
+    const canonical = { ...f.selected, label: "Renamed after creation" };
+    Object.assign(f.state.sessions.presentation, { result: sessionsResult([canonical], 2) });
+    expect(chatSessionPresentationTitle(f.state, undefined, "", false, "Created title")).toBe(
+      canonical.label,
+    );
+    Object.assign(f.state.sessions.presentation, { result: null });
+    expect(
+      chatSessionPresentationTitle(
+        f.state,
+        { ...f.selected, label: undefined, derivedTitle: "Derived title" },
+        "",
+        false,
+        "Created title",
+      ),
+    ).toBe("Derived title");
+    expect(
+      chatSessionPresentationTitle(
+        undefined,
+        { key: "agent:main:main", kind: "direct" },
+        "",
+        false,
+        "Created title",
+      ),
+    ).toBe("Main Session");
+  });
   it.each(Object.entries(presentationChanges))(
     "redraws when the visible %s presentation changes",
     (_change, change) => {
@@ -166,28 +167,13 @@ describe("chat pane session presentation", () => {
       }
       f.publish(f.publication);
       f.rendered.mockClear();
-      for (const updatedAt of [2, 3, 4]) {
-        const result = sessionsResult(
-          [
-            f.selected,
-            f.parent,
-            {
-              ...f.foreign,
-              ...(surface === "transcript" ? { updatedAt } : {}),
-              label: `Other ${updatedAt}`,
-            },
-          ],
-          updatedAt,
-        );
-        f.publish({ ...f.publication, result });
-        expect(f.state.sessionsResult).toBe(result);
-        if (surface === "transcript") {
-          expect(f.rendered).not.toHaveBeenCalled();
-        } else {
-          expect(f.rendered).toHaveBeenCalledOnce();
-          f.rendered.mockClear();
-        }
-      }
+      const result = sessionsResult(
+        [f.selected, f.parent, { ...f.foreign, label: "Changed", updatedAt: 2 }],
+        2,
+      );
+      f.publish({ ...f.publication, result });
+      expect(f.state.sessionsResult).toBe(result);
+      expect(f.rendered).toHaveBeenCalledTimes(surface === "transcript" ? 0 : 1);
     },
   );
 

@@ -1,5 +1,9 @@
 import { sql, type InsertObject, type OperandExpression } from "kysely";
-import { createSqliteQueryCache, prepareSqliteQuerySync } from "../../infra/kysely-sync.js";
+import {
+  createSqliteQueryCache,
+  prepareSqliteQuerySync,
+  prepareSqliteTerminalWrite,
+} from "../../infra/kysely-sync.js";
 import { isPostgresSqlConnection, type EngineConnection } from "../../infra/sql-connection.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
@@ -260,6 +264,14 @@ export const getSessionEntryWriteQueries = createSqliteQueryCache((database: Eng
     nodeWithLegacySources: prepareSqliteQuerySync<SessionNodeWriteRow>(database, (parameter) =>
       node(parameter, true),
     ),
+    terminalNode: !isPostgresSqlConnection(database)
+      ? {
+          database,
+          write: prepareSqliteTerminalWrite<SessionNodeWriteRow>(database, (parameter) =>
+            node(parameter, false),
+          ),
+        }
+      : undefined,
     claimWindow: prepareSqliteQuerySync<SessionWindowWriteRow>(database, (parameter) =>
       window(parameter, false),
     ),

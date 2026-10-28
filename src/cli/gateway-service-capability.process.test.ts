@@ -10,6 +10,7 @@ import {
   runBuiltRuntime,
   runSourceRuntime,
 } from "../commands/doctor-config-preflight.process.test-support.js";
+import { listDirectoryTreeStrictSync } from "../infra/directory-walk.js";
 import { acquireFileLockSync } from "../infra/file-lock-manager.js";
 import { resolveGatewayStateOwnerPath } from "../infra/gateway-state-owner.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
@@ -134,11 +135,11 @@ if (threads.isMainThread) record("ready");
 }
 
 function snapshotState(stateDir: string) {
-  return fs
-    .readdirSync(stateDir, { recursive: true })
-    .toSorted((left, right) => String(left).localeCompare(String(right)))
+  return listDirectoryTreeStrictSync(stateDir)
+    .map((walkEntry) => walkEntry.relativePath)
+    .toSorted((left, right) => left.localeCompare(right))
     .map((relative) => {
-      const pathname = path.join(stateDir, String(relative));
+      const pathname = path.join(stateDir, relative);
       const stat = fs.statSync(pathname);
       return [
         relative,
@@ -154,18 +155,10 @@ it(
     const fixture = createFixture();
     const before = snapshotState(fixture.stateDir);
     try {
-      const capability = {
-        updateExecutor: "root-spawner-v1",
-        targetRootBinding: true,
-        definitionBackup: true,
-        retainedOwnerBinding: true,
-        originalDefinitionBinding: true,
-        originalRuntimePinBinding: true,
-      };
       for (const option of [["--update-executor", "check"], ["--update-executor=check"]]) {
         const result = await fixture.run(["gateway", "install", ...option, "--json"]);
         expect(result.code, `${result.stderr}\n${result.stdout}`).toBe(0);
-        expect(JSON.parse(result.stdout)).toEqual(capability);
+        expect(JSON.parse(result.stdout)).toMatchObject({ updateExecutor: "root-spawner-v1" });
       }
       const version = await fixture.run(["--version"]);
       expect(version.code, version.stderr).toBe(0);

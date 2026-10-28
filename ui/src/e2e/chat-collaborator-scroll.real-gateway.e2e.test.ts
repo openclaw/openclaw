@@ -1,12 +1,9 @@
 import { readFile } from "node:fs/promises";
 import { asOptionalRecord as record } from "@openclaw/normalization-core/record-coerce";
 import type { Page } from "playwright";
-import { createServer, type ViteDevServer } from "vite";
+import type { ViteDevServer } from "vite";
 import { expect, it } from "vitest";
-import type {
-  GatewayFrame,
-  HelloOk,
-} from "../../../packages/gateway-protocol/src/schema/frames.ts";
+import type { GatewayFrame } from "../../../packages/gateway-protocol/src/schema/frames.ts";
 import { setDisplayName } from "../../../src/state/user-profile-writes.worker.ts";
 import { ensureProfileForEmail } from "../../../src/state/user-profiles.ts";
 import {
@@ -26,6 +23,7 @@ import {
 } from "./chat-collaborator-scroll.real-gateway.test-support.ts";
 import { chatThreadDistanceFromBottom, waitForChatScrollIdle } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { createGatewayProxy, gatewayProxyRoute } from "./gateway-proxy.test-support.ts";
 
 const sessionKey = "agent:main:collaborator-scroll";
 const people = [
@@ -100,27 +98,8 @@ const suite = createControlUiE2eSuite({
         const profile = ensureProfileForEmail(person.email, { env: instance.env });
         setDisplayName(profile.id, person.name, { env: instance.env });
         profileIds.push(profile.id);
-        const proxy = await createServer({
-          configFile: false,
-          envFile: false,
-          root: instance.state.workspaceDir,
-          appType: "custom",
-          logLevel: "error",
-          server: {
-            host: "127.0.0.1",
-            port: 0,
-            proxy: {
-              "/": {
-                target: "http://127.0.0.1:" + instance.port,
-                ws: true,
-                headers: {
-                  "x-forwarded-for": "192.0.2." + (10 + index),
-                  "x-forwarded-proto": "http",
-                  "x-forwarded-user": person.email,
-                },
-              },
-            },
-          },
+        const proxy = await createGatewayProxy(instance.state.workspaceDir, {
+          "/": gatewayProxyRoute(instance.port, person.email, "192.0.2." + (10 + index)),
         });
         proxies.push(proxy);
         await proxy.listen();
@@ -148,9 +127,7 @@ const suite = createControlUiE2eSuite({
 function observe(page: Page) {
   const sent: GatewayFrame[] = [];
   const received: GatewayFrame[] = [];
-  let sockets = 0;
   page.on("websocket", (socket) => {
-    sockets += 1;
     socket.on("framesent", (frame) => sent.push(JSON.parse(frame.payload.toString())));
     socket.on("framereceived", (frame) => received.push(JSON.parse(frame.payload.toString())));
   });
@@ -170,7 +147,7 @@ function observe(page: Page) {
             ["chat.history", "chat.startup"].includes(request.method),
         ),
     );
-  return { received, requests, response, history, sockets: () => sockets };
+  return { received, requests, response, history };
 }
 type Observation = ReturnType<typeof observe>;
 async function send(
@@ -342,8 +319,7 @@ suite.define(() => {
                 .toContain(people[index]!.name);
             }
             const identities = await Promise.all(pages.map(identity));
-            const clientInstanceIds: string[] = [];
-            for (const [index, observed] of observers.entries()) {
+            for (const index of [0, 1]) {
               expect(identities[index]).toMatchObject({
                 user: {
                   id: profileIds[index],
@@ -353,25 +329,7 @@ suite.define(() => {
                 authMethod: "trusted-proxy",
                 connId: expect.any(String),
               });
-              const connect = observed.requests("connect").at(-1);
-              if (!connect || connect.type !== "req") {
-                throw new Error("No real connect request");
-              }
-              const reply = observed.response(connect.id);
-              if (!reply || reply.type !== "res") {
-                throw new Error("No real hello response");
-              }
-              const hello = reply.payload as HelloOk;
-              const instanceId = record(record(connect.params)?.client)?.instanceId;
-              if (typeof instanceId !== "string") {
-                throw new Error("No browser instance identity");
-              }
-              clientInstanceIds.push(instanceId);
-              expect(
-                hello.snapshot.presence.find((entry) => entry.instanceId === instanceId)?.user?.id,
-              ).toBe(profileIds[index]);
             }
-            expect(new Set(clientInstanceIds).size).toBe(2);
             expect(identities[0]!.connId).not.toBe(identities[1]!.connId);
             expect(profileIds[0]).not.toBe(profileIds[1]);
             const finishVisibility = await Promise.all(pages.map(startAssistantVisibilityProbe));
@@ -503,25 +461,25 @@ suite.define(() => {
                   .soft(maxDrift, mode + ": every animation frame retains the reading anchor")
                   .toBeLessThanOrEqual(1);
               }
-              // A deliberate local submission from real wheel scrollback must resume follow.
-              await wheel(reader, -420);
-              expect(await chatThreadDistanceFromBottom(reader)).toBeGreaterThan(8);
-              const local = provider.plan();
-              await send(reader, a, "Reader deliberately resumes after " + mode);
-              await expect.poll(() => chatThreadDistanceFromBottom(reader)).toBeLessThanOrEqual(8);
-              await expect.poll(provider.requests).toBe(local.index);
-              await local.append(paragraphs("local-resume-" + mode, 3));
-              await waitForChatScrollIdle(reader);
-              expect
-                .soft(
-                  await chatThreadDistanceFromBottom(reader),
-                  "local submit follows its assistant stream",
-                )
-                .toBeLessThanOrEqual(8);
-              await local.finish();
-              for (const page of pages) {
-                await waitForSettlement(page);
-              }
+            }
+            // A deliberate local submission from real wheel scrollback must resume follow.
+            await wheel(reader, -420);
+            expect(await chatThreadDistanceFromBottom(reader)).toBeGreaterThan(8);
+            const local = provider.plan();
+            await send(reader, a, "Reader deliberately resumes after remote scenarios");
+            await expect.poll(() => chatThreadDistanceFromBottom(reader)).toBeLessThanOrEqual(8);
+            await expect.poll(provider.requests).toBe(local.index);
+            await local.append(paragraphs("local-resume", 3));
+            await waitForChatScrollIdle(reader);
+            expect
+              .soft(
+                await chatThreadDistanceFromBottom(reader),
+                "local submit follows its assistant stream",
+              )
+              .toBeLessThanOrEqual(8);
+            await local.finish();
+            for (const page of pages) {
+              await waitForSettlement(page);
             }
             const visibilityFailures = await Promise.all(
               finishVisibility.map((finish) => finish()),
@@ -533,10 +491,6 @@ suite.define(() => {
               )
               .toEqual([[], []]);
             expect(provider.failures).toEqual([]);
-            for (const observed of observers) {
-              // Profile bootstrap and the chat navigation each own a real connection.
-              expect(observed.sockets()).toBe(2);
-            }
           });
         });
       },

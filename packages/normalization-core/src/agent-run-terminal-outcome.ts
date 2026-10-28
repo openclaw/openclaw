@@ -46,10 +46,6 @@ type AgentRunWaitTerminalFactInput = Omit<AgentRunTerminalFactInput, "status"> &
   status?: unknown;
 };
 
-type AgentRunLifecycleTerminalFactInput = AgentRunWaitTerminalFactInput & {
-  aborted?: unknown;
-};
-
 const HARD_TIMEOUT_PHASES = new Set<AgentRunTimeoutPhase>(["preflight", "provider", "post_turn"]);
 const AGENT_RUN_TERMINAL_CLASSIFICATION = {
   completed: "success",
@@ -145,7 +141,9 @@ export function resolveAgentRunTerminalFacts(
 /** Applies lifecycle flags before interpreting the same canonical terminal metadata. */
 export function resolveAgentRunLifecycleTerminalFacts(input: {
   phase: "end" | "error";
-  data?: AgentRunLifecycleTerminalFactInput;
+  data?: AgentRunWaitTerminalFactInput & {
+    aborted?: unknown;
+  };
   abortFields?: { aborted?: true; stopReason?: string };
 }): AgentRunTerminalFacts {
   const { data, abortFields } = input;

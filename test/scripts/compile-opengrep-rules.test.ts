@@ -1,9 +1,10 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync } from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { parse, stringify } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { fixtureFiles } from "./script-fixture-files.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const compiler = path.resolve("security/opengrep/compile-rules.mjs");
@@ -16,50 +17,40 @@ const rule = (id: string, pattern = "old($VALUE)") => ({
   metadata: { "advisory-id": "TEST-REPORT", "advisory-url": "https://example.com/report" },
 });
 
-// Preserve this text byte-for-byte while replacing the middle rule, including YAML style/comments.
 const prefix =
   '# retained header\nrules:\n  - id: untouched.before\n    pattern: "before(...)" # retained comment\n';
 const suffix =
   "  # retained separator\n  - id: untouched.after\n    pattern: |\n      after(...)\n";
 const original = `${prefix}  - id: test-report.target\n    pattern: old(...)\n${suffix}`;
 
-let rulesDir: string;
-let outDir: string;
-let binDir: string;
+let files: ReturnType<typeof fixtureFiles>;
 beforeEach(() => {
-  const directory = tempDirs.make("opengrep-compiler-test-");
-  rulesDir = path.join(directory, "rules");
-  outDir = path.join(directory, "out");
-  binDir = path.join(directory, "bin");
-  for (const dir of [rulesDir, outDir, binDir]) {
-    mkdirSync(dir);
-  }
+  files = fixtureFiles(tempDirs.make("opengrep-compiler-test-"));
   writeOutput(original);
   source([rule("target", "new($VALUE)")]);
-  const validator = path.join(binDir, "opengrep");
-  writeFileSync(
-    validator,
+  const validator = files.write(
+    "bin/opengrep",
     `#!${process.execPath}\nconst fs = require("node:fs");\nconst args = process.argv.slice(2);\nconst input = fs.readFileSync(args[args.indexOf("--config") + 1], "utf8");\nconst invalid = input.includes("invalid-fixture-pattern");\nconsole.log(JSON.stringify({errors: invalid ? [{rule_id: "test-report.target", type: "PatternParseError"}] : []}));\nprocess.exitCode = invalid ? 2 : 0;\n`,
-    { mode: 0o700 },
   );
+  chmodSync(validator, 0o700);
 });
 
 function source(rules: ReturnType<typeof rule>[], file = "source.yml") {
-  writeFileSync(path.join(rulesDir, file), stringify({ rules }));
+  files.write(`rules/${file}`, stringify({ rules }));
 }
-const writeSource = (text: string) => writeFileSync(path.join(rulesDir, "source.yml"), text);
-const writeOutput = (text: string) => writeFileSync(path.join(outDir, "precise.yml"), text);
+const writeSource = (text: string) => files.write("rules/source.yml", text);
+const writeOutput = (text: string) => files.write("out/precise.yml", text);
 function compile(...args: string[]) {
   return spawnSync(
     process.execPath,
-    [compiler, "--rules-dir", rulesDir, "--out-dir", outDir, ...args],
+    [compiler, "--rules-dir", files.file("rules"), "--out-dir", files.file("out"), ...args],
     {
       encoding: "utf8",
-      env: { PATH: `${binDir}${path.delimiter}${path.dirname(process.execPath)}` },
+      env: { PATH: `${files.file("bin")}${path.delimiter}${path.dirname(process.execPath)}` },
     },
   );
 }
-const output = () => readFileSync(path.join(outDir, "precise.yml"), "utf8");
+const output = () => files.read("out/precise.yml");
 
 it("updates the selected rule while preserving all unrelated bytes", () => {
   const result = compile("--update-existing");

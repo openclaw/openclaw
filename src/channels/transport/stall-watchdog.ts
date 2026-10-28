@@ -51,9 +51,6 @@ export function createArmableStallWatchdog(params: {
   };
 
   const stop = () => {
-    if (stopped) {
-      return;
-    }
     stopped = true;
     disarm();
     clearTimer();

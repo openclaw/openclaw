@@ -56,10 +56,7 @@ export async function prepareImageCompressionPolicy(params: {
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
   operatorAuthority?: AdmittedRunOperatorAuthority;
 }): Promise<ImageCompressionPolicy> {
-  const overrideConfig = resolveImageModelConfigForOverride({
-    cfg: params.cfg,
-    modelOverride: params.modelOverride,
-  });
+  const overrideConfig = resolveImageModelConfigForOverride(params);
   const configuredImageModelConfig = params.imageModelConfig
     ? resolveConfiguredImageModelRefs({
         cfg: params.cfg,
@@ -108,10 +105,7 @@ function matchesImageTimeoutEntry(params: {
   if (
     !configuredProvider ||
     configuredProvider !== selectedProvider ||
-    !matchesImageEntryCapability({
-      entry: params.entry,
-      providerRegistry: params.providerRegistry,
-    })
+    !matchesImageEntryCapability(params)
   ) {
     return false;
   }
@@ -140,12 +134,7 @@ export async function runImagePrompt(params: {
   signal?: AbortSignal;
   operatorAuthority?: AdmittedRunOperatorAuthority;
   assertCurrent?: () => void;
-}): Promise<{
-  text: string;
-  provider: string;
-  model: string;
-  attempts: Array<{ provider: string; model: string; error: string }>;
-}> {
+}) {
   const effectiveCfg = applyAgentDefaultModelConfig(
     params.cfg,
     "imageModel",

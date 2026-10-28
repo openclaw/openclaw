@@ -27,7 +27,7 @@ authorization, and platform-specific side effects.
 
 Use `createChannelIngressMonitor(...)` when a channel must persist accepted
 transport events before dispatch. It composes a channel ingress queue and drain
-with the shared admission, polling, pruning, delivery, and shutdown lifecycle.
+with the shared admission, recovery, pruning, delivery, and shutdown lifecycle.
 Use the lower-level `createChannelIngressDrain(...)` only when the transport
 owns a materially different admission or pump contract.
 
@@ -39,8 +39,17 @@ The required options are:
 | `inspect(raw, context)`          | Returns the stable `eventId` and serialized `laneKey`, or `null` for an ignored event. Claim-time facts must match the persisted id and lane.                                                                                                                                                                    |
 | `payload`                        | Supplies the payload version plus body serialization/deserialization. Use `storage: "raw-event"` for the standard `{ version, rawEvent }` string envelope, or provide custom encode/decode callbacks for an existing channel-specific shape. `createClaimError` classifies invalid versions or changed identity. |
 | `deliver(raw, lifecycle, claim)` | Dispatches one decoded event and receives the complete adoption lifecycle. It may return `completed`, `deferred`, `failed-retryable`, or nothing.                                                                                                                                                                |
-| `pollIntervalMs`                 | Schedules recovery/drain polls while the monitor is running.                                                                                                                                                                                                                                                     |
+| `pollIntervalMs`                 | Schedules abandoned-claim and external-enqueue recovery sweeps, with a minimum interval of five minutes. Admissions and retry deadlines wake the drain directly.                                                                                                                                                 |
 | `retention`                      | Supplies the prune cadence and completed/failed TTL and entry caps.                                                                                                                                                                                                                                              |
+
+Startup recovery runs immediately. External queue writes, including
+`openclaw channels dead-letters resubmit`, do not signal the running monitor.
+External enqueues and dead-owner claims can wait up to the recovery interval plus
+scheduling and execution time. An unrefreshed claim from a still-live remote process
+first expires its lease: with the default 30-minute lease and minimum five-minute
+sweep, that bound is 35 minutes from the last refresh, plus scheduling and execution time. A larger
+`pollIntervalMs` increases the bound. Active local claims keep their existing
+protection, including claims held after a settlement write fails.
 
 The monitor serializes admissions so append backoff cannot invert a lane. The
 default bounded append delays are `0`, `100`, and `300` ms; exhaustion rejects
@@ -105,6 +114,16 @@ no-dispatch event adopted. `admission` is always `exclusive`. A deferred handoff
 keeps the claim held, while shutdown or abort leaves unadopted work retryable.
 The monitor tracks delivery independently from claim settlement because
 adoption can tombstone a row before the channel's delivery promise returns.
+
+Use optional `drain.onDeadLetter(claim, { reason, message }, signal)` for a transport-owned
+failure reply or reaction. It runs only after this claim's failure write commits;
+ordinary retries and rejected claim writes do not invoke it. Notices are best
+effort: a rejection or a 15-second notice timeout is logged without replaying the
+failed event. The signal aborts on timeout; check it and current transport access
+authority immediately before sending, including queued dispatch and transport
+retries. An already dispatched request may still settle after abort. Durable
+receipt alone does not authorize a reply. A crash between commit and notification
+can lose the notice.
 
 ### One turn, several durable claims
 

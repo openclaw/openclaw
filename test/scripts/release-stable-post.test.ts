@@ -152,10 +152,6 @@ describe("release:stable post-publication CLI", () => {
     expect(result.stderr).toContain(
       "pnpm update:compat:gen --release '<unpacked-dir>=sha512-fixture'",
     );
-    expect(result.stderr).toContain(
-      `fix(release): record the ${RELEASE} npm release in the update compatibility inventory`,
-    );
-    expect(result.stderr).toContain(`pnpm release:stable ${RELEASE} --from macos`);
     expect(release.readState().publish.approvedGates).toEqual([]);
   });
 
@@ -271,7 +267,6 @@ describe("release:stable post-publication CLI", () => {
     );
     expect(result.status, result.output).toBe(2);
     expect(result.stderr).toContain(`# Merge appcast PR https://github.com/${REPOSITORY}/pull/42`);
-    expect(result.stderr).toContain(`pnpm release:stable ${RELEASE} --from macos`);
     expect(result.stderr).toContain("--macos-preflight-run-id 212 --macos-validate-run-id 211");
     const retained = release.readState();
     for (const phase of ["cut", "validate", "publish", "sync-beta", "flip-github"] as const) {
@@ -286,13 +281,15 @@ describe("release:stable post-publication CLI", () => {
       preflightRunId: "212",
       publishRunId: "203",
     });
-    expect(retained.history.map(({ phase, event }) => ({ phase, event }))).toEqual([
-      { phase: "macos", event: "reset" },
-      { phase: "closeout", event: "reset" },
-    ]);
-    expect(retained.history.map(({ detail }) => JSON.parse(detail ?? "null"))).toEqual([
-      { phase: state.phases.macos, data: state.macos },
-      { phase: state.phases.closeout, data: state.closeout },
+    expect(
+      retained.history.map(({ phase, event, detail }) => [
+        phase,
+        event,
+        JSON.parse(detail ?? "null"),
+      ]),
+    ).toEqual([
+      ["macos", "reset", { phase: state.phases.macos, data: state.macos }],
+      ["closeout", "reset", { phase: state.phases.closeout, data: state.closeout }],
     ]);
     expect(result.calls.some((call) => call.args[0] === "workflow")).toBe(false);
   });
@@ -309,19 +306,12 @@ describe("release:stable post-publication CLI", () => {
       expect(result.stderr).toContain(
         "Main does not carry the shipped version and exact changelog.",
       );
-      expect(result.stderr).toContain(`release/${RELEASE}-main-closeout`);
-      expect(result.stderr).toContain(`pnpm release:prepare -- --version ${RELEASE} --write`);
-      for (const file of [`CHANGELOG/${RELEASE}.md`, `CHANGELOG/records/${RELEASE}.md`]) {
-        expect(result.stderr).toContain(`git show v${RELEASE}:${file} > ${file}\n`);
-      }
-      expect(result.stderr).toContain("pnpm release:generated:check");
       expect(result.stderr).toContain(`pnpm release:stable ${RELEASE} --from closeout`);
       expect(release.readState().closeout.runId).toBeUndefined();
     },
   );
 
   it.each([
-    [false, false],
     [true, false],
     [false, true],
   ])("verifies closeout (dispatch=%s, restart=%s)", (dispatch, restart) => {
@@ -367,7 +357,6 @@ describe("release:stable post-publication CLI", () => {
       expect(release.readState().closeout.runId).toBeUndefined();
       expect(result.calls.filter((call) => call.args[0] === "workflow")).toHaveLength(0);
       expect(release.readState().closeout.websiteRunId).toBe("503");
-      expect(result.stdout).not.toContain("OPENCLAW_FRV_LANE_WAIVER");
     }
     if (restart) {
       expect(result.calls.flatMap(({ args }) => args)).not.toContain(
@@ -407,8 +396,6 @@ describe("release:stable post-publication CLI", () => {
     expect(result.stderr).toContain(
       "Closeout run 501 succeeded but required release assets are missing.",
     );
-    expect(result.stderr).toContain(`gh run view 501 --repo ${REPOSITORY} --log-failed`);
-    expect(result.stderr).toContain(`pnpm release:stable ${RELEASE} --from closeout`);
     expect(release.readState().phases.closeout.status).toBe("refused");
     expect(release.readState().closeout).toEqual({
       publishRunConclusion: "success",

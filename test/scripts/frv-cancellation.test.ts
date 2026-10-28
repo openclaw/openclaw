@@ -42,11 +42,9 @@ function cancellationFixture(
   const entry = child("releaseChecks", "303");
   const plan = executionPlanArtifact({ children: [entry] });
   if (options.borrowed) {
-    plan.evidenceReuse = { ...plan.evidenceReuse, requested: true };
     for (const planned of plan.children) {
       planned.source = "reused";
     }
-    plan.evidenceReuse.requested = false;
     plan.sha256 = releaseExecutionPlanSha256(plan);
   }
   const runs = new Map<string, Record<string, unknown>>([

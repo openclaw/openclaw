@@ -1,15 +1,11 @@
 import { randomUUID } from "node:crypto";
-import { createServer } from "node:http";
 import { expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../src/config/types.openclaw.js";
-import { buildMockOpenAiResponsesProvider } from "../src/gateway/test-openai-responses-model.js";
 import { withBuiltGateway } from "./helpers/built-gateway-proof.js";
+import { readRequestText } from "./helpers/gateway-integration-fixtures.js";
 import {
-  closeHttpServer,
-  listenLoopback,
-  readRequestText,
-  respondJson,
-} from "./helpers/gateway-integration-fixtures.js";
+  createOpenAiResponsesModelConfig,
+  startOpenAiResponsesModelServer,
+} from "./helpers/openai-responses-model-fixture.js";
 import { awaitGateBeforeSettlement, createDeferred } from "./helpers/promise.js";
 import { runQaGatewayFixture } from "./helpers/qa-gateway-cleanup.js";
 
@@ -24,59 +20,38 @@ it(
     const providerReceived = createDeferred<Record<string, unknown>>();
     let providerRequests = 0;
     let providerAborted = false;
-    const server = createServer((request, response) => {
-      void (async () => {
-        if (request.method === "GET" && request.url === "/v1/models") {
-          respondJson(response, { data: [{ id: modelId, object: "model" }] });
-          return;
+    const server = await startOpenAiResponsesModelServer({
+      modelId,
+      bindError: "Cold abort provider did not bind",
+      onRequest: async (request, response) => {
+        try {
+          const body = JSON.parse(await readRequestText(request)) as Record<string, unknown>;
+          providerRequests += 1;
+          // Keep the provider response open: only cancellation may close it before cleanup.
+          response.once("close", () => {
+            providerAborted = !response.writableFinished;
+          });
+          providerReceived.resolve(body);
+        } catch (error) {
+          providerReceived.reject(error);
+          response.destroy(error instanceof Error ? error : new Error(String(error)));
         }
-        if (request.method !== "POST" || request.url !== "/v1/responses") {
-          response.writeHead(404).end();
-          return;
-        }
-        const body = JSON.parse(await readRequestText(request)) as Record<string, unknown>;
-        providerRequests += 1;
-        // Keep the provider response open: only cancellation may close it before cleanup.
-        response.once("close", () => {
-          providerAborted = !response.writableFinished;
-        });
-        providerReceived.resolve(body);
-      })().catch((error: unknown) => {
-        providerReceived.reject(error);
-        response.destroy(error instanceof Error ? error : new Error(String(error)));
-      });
+      },
     });
     let final: Promise<unknown> | undefined;
     await runQaGatewayFixture(
       async () => {
-        const provider = buildMockOpenAiResponsesProvider(
-          `${await listenLoopback(server)}/v1`,
+        const config = createOpenAiResponsesModelConfig({
+          baseUrl: server.baseUrl,
+          providerId: "mock-openai",
           modelId,
-        );
+          reasoning: false,
+          toolProfile: "minimal",
+        });
         await withBuiltGateway(
           {
             name: "cold-agent-abort",
-            config: {
-              plugins: { slots: { memory: "none" } },
-              agents: {
-                entries: { main: {} },
-                defaults: {
-                  model: { primary: provider.modelRef, fallbacks: [] },
-                  models: { [provider.modelRef]: { agentRuntime: { id: "openclaw" } } },
-                  skills: [],
-                },
-              },
-              tools: { profile: "minimal" },
-              models: {
-                mode: "replace",
-                providers: {
-                  [provider.providerId]: {
-                    ...provider.config,
-                    request: { allowPrivateNetwork: true },
-                  },
-                },
-              },
-            } satisfies OpenClawConfig,
+            config,
             env: {
               OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
               OPENCLAW_SKIP_PROVIDERS: undefined,
@@ -126,7 +101,7 @@ it(
           },
         );
       },
-      () => server.listening && closeHttpServer(server),
+      server.close,
       () => Promise.allSettled(final ? [final] : []),
     );
   },

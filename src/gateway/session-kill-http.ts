@@ -3,7 +3,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { killSubagentRunAdmin } from "../agents/subagents/registry/subagent-control.js";
 import { getRuntimeConfig } from "../config/io.js";
-import { withSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
+import { withSessionActorStorage } from "../config/sessions/session-actor-storage-acquisition.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { normalizeSessionKeyPreservingOpaquePeerIds } from "../sessions/session-key-utils.js";

@@ -12,7 +12,7 @@ import {
 } from "../../app/notifications-auto-prompt.ts";
 import { loadLocalUserIdentity, loadSettings, patchSettings } from "../../app/settings.ts";
 import { retryStaleChunkReloadWhenReachable } from "../../app/stale-chunk-reload.ts";
-import { hasSameOriginGatewayTransport } from "../../dev-gateway.ts";
+import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { parseSlashCommand } from "../../lib/chat/commands.ts";
 import { currentDisplaySpeechConfig } from "../../lib/config/config-state-model.ts";
 import { hasUnrestrictedModelCatalogSnapshot } from "../../lib/model-catalog-cache.ts";
@@ -20,8 +20,9 @@ import { resolveSafeExternalUrl } from "../../lib/open-external-url.ts";
 import { projectOwner, projectSource } from "../../lib/reactive/projection.ts";
 import { canonicalUiSessionKeyForPersistence } from "../../lib/sessions/session-key.ts";
 import { resolveSpeechTextLimit } from "../../lib/speech-playback.ts";
+import { DraftPreferenceState } from "../new-session/draft-preference-state.ts";
 import { loadPageAssistantIdentity } from "./chat-assistant-identity.ts";
-import { resolveAgentIdForSession } from "./chat-avatar.ts";
+import { cachedChatAssistantIdentity } from "./chat-avatar.ts";
 import { createChatErrorState } from "./chat-error-state.ts";
 import { projectChatFields } from "./chat-field-projection.ts";
 import { cancelPendingQueuedChatInput } from "./chat-history-actions.ts";
@@ -31,6 +32,7 @@ import {
 } from "./chat-history-events.ts";
 import { chatHistoryRequests, setChatError } from "./chat-history-state.ts";
 import { subscribeChatOutboxQueue } from "./chat-outbox-queue.ts";
+import { ChatPaneComposerHandoff } from "./chat-pane-attachment-handoff.ts";
 import { chatSessionPresentationKey } from "./chat-pane-session-presentation.ts";
 import { chatProviderReviewRow } from "./chat-provider-review.ts";
 import { removeQueuedMessage } from "./chat-queue.ts";
@@ -118,27 +120,23 @@ export function createPageState(
   );
   const identity = loadLocalUserIdentity();
   const appConfig = context.config.current;
-  const bootstrapIdentity =
-    hasSameOriginGatewayTransport(context.gateway.connection.gatewayUrl) &&
-    appConfig.assistantIdentity.agentId ===
-      resolveAgentIdForSession({
-        sessionKey: initialSessionKey,
-        assistantAgentId: context.agentSelection.state.selectedId,
-        agentsList: context.agents.state.agentsList,
-        hello: context.gateway.snapshot.hello,
-      })
-      ? appConfig.assistantIdentity
-      : null;
+  const assistantIdentity = cachedChatAssistantIdentity(
+    {
+      sessionKey: initialSessionKey,
+      assistantAgentId: context.agentSelection.state.selectedId,
+      agentsList: context.agents.state.agentsList,
+      hello: context.gateway.snapshot.hello,
+    },
+    context,
+  );
   const errors = createChatErrorState();
   const presentedFields = {
     settings,
-    // Unscoped names retain the gateway-wide fallback.
-    assistantName:
-      bootstrapIdentity?.name ??
-      (appConfig.assistantIdentity.agentId ? "" : appConfig.assistantIdentity.name),
-    assistantAvatar: bootstrapIdentity?.avatar ?? null,
-    assistantAvatarStatus: bootstrapIdentity?.avatarStatus ?? null,
-    assistantAvatarReason: bootstrapIdentity?.avatarReason ?? null,
+    accessPreferenceRevision: 0,
+    assistantName: assistantIdentity.name,
+    assistantAvatar: assistantIdentity.avatar,
+    assistantAvatarStatus: assistantIdentity.avatarStatus ?? null,
+    assistantAvatarReason: assistantIdentity.avatarReason ?? null,
     embedSandboxMode: appConfig.embedSandboxMode,
     allowExternalEmbedUrls: appConfig.allowExternalEmbedUrls,
     automaticallyFetchFavicons: appConfig.automaticallyFetchFavicons,
@@ -199,6 +197,11 @@ export function createPageState(
   } satisfies Partial<ChatPageHost>;
   const state = Object.assign(errors, presentedFields, {
     uploadConfig: context.config,
+    outboxRecovery: {
+      gateway: context.gateway,
+      retainedAttachmentIds: (attachments: readonly ChatAttachment[]) =>
+        ChatPaneComposerHandoff.retainedAttachmentIds(context, attachments),
+    },
     captureComposerRecoveryReload: () => {
       const options = createGatewayControlUiReloadOptions(context.gateway);
       return () => retryStaleChunkReloadWhenReachable({ timeoutMs: 0, ...options });
@@ -315,13 +318,25 @@ export function createPageState(
     async () => {
       let config = currentDisplaySpeechConfig(context.runtimeConfig.state);
       if (!config || !Object.hasOwn(config, "tts")) {
-        await context.runtimeConfig.ensureLoaded();
+        await context.runtimeConfig.ensureDisplayLoaded();
         config = currentDisplaySpeechConfig(context.runtimeConfig.state);
       }
       return resolveSpeechTextLimit(config);
     },
   );
-  state.loadAssistantIdentity = () => loadPageAssistantIdentity(state);
+  state.accessPreferences = DraftPreferenceState.forChat(context, () => {
+    state.accessPreferenceRevision = (state.accessPreferenceRevision ?? 0) + 1;
+  });
+  state.loadAssistantIdentity = () => {
+    if (!state.connected) {
+      const cachedIdentity = cachedChatAssistantIdentity(state, context);
+      state.assistantName = cachedIdentity.name;
+      state.assistantAvatar = cachedIdentity.avatar;
+      state.assistantAvatarStatus = cachedIdentity.avatarStatus ?? null;
+      state.assistantAvatarReason = cachedIdentity.avatarReason ?? null;
+    }
+    return loadPageAssistantIdentity(state);
+  };
   state.handleSendChat = (messageOverride, options, submissionAction) => {
     const message = messageOverride ?? state.chatMessage;
     const isCommand =
@@ -407,7 +422,7 @@ export function createPageState(
       transientResources.clear();
       transientResourceScope = scope;
     }
-    const normalized = normalizeSidebarLayout(layout);
+    let normalized = normalizeSidebarLayout(layout);
     // New tab is a live layout fact, not a saved resource or settings schema.
     // The persistence normalizer deliberately strips it again below.
     if (layout.newTab && normalized.columns[0]) {
@@ -434,6 +449,12 @@ export function createPageState(
       if (!panel || panel.environmentId !== undefined) {
         transientResources.delete(resource);
       }
+    }
+    const retiringResource = options?.retireAutomaticResource;
+    if (retiringResource && transientResources.has(retiringResource)) {
+      // Discovery can retire only its own transient tab, never an explicit target.
+      normalized = closeSlot(normalized, retiringResource);
+      transientResources.delete(retiringResource);
     }
     if (
       previous.resourceAutoOpenDismissed ||

@@ -93,6 +93,64 @@ describe("prepared reply routing", () => {
     expect(visible).toEqual([{ text: "Reasoning for the report. transformed" }]);
   });
 
+  it.each([
+    ["generation", "raw"],
+    ["generation", "prepared"],
+    ["writer", "prepared"],
+  ] as const)("rejects a replaced %s after awaited %s channel work", async (owner, operation) => {
+    const { replaceSessionEntry } = await import("../../config/sessions/session-accessor.js");
+    const session = {
+      agentId: "main",
+      storePath: path.join(fixtures.tmpDir(), "sessions.json"),
+      sessionKey: "agent:main:route-authority",
+    };
+    const entry = { sessionId: "original-session", updatedAt: 1 };
+    const authority =
+      owner === "generation"
+        ? { lifecycleRevision: "original-generation" }
+        : { activeWriterRunId: "original-writer" };
+    await replaceSessionEntry(session, { ...entry, ...authority });
+    beforeDelivery = async () => {
+      await replaceSessionEntry(session, {
+        ...entry,
+        ...(owner === "generation"
+          ? { lifecycleRevision: "reset" }
+          : { activeWriterRunId: "replacement-writer" }),
+      });
+    };
+    const payload = { text: "old answer", mediaUrl: "https://example.invalid/clip.ogg" };
+    if (owner === "writer") {
+      setReplyPayloadMetadata(payload, {
+        sessionWriterDeliveryAuthority: {
+          ...session,
+          expectedSessionId: entry.sessionId,
+          expectedWriterRunId: "original-writer",
+        },
+      });
+    }
+    const params = {
+      ...destination,
+      cfg: { session: { store: session.storePath } },
+      sessionKey: session.sessionKey,
+      ...(owner === "generation"
+        ? {
+            sessionGeneration: { ...session, ...entry, lifecycleRevision: "original-generation" },
+          }
+        : {}),
+    };
+    const result =
+      operation === "prepared"
+        ? await routePreparedReply({ ...params, plan: prepare(payload) })
+        : await routeReply({ ...params, payload });
+    expect(result).toMatchObject({ ok: false, delivered: false });
+    expect(result.error).toContain(
+      owner === "generation"
+        ? "original session generation no longer accepts"
+        : "Session writer changed before final reply delivery",
+    );
+    expect(visible).toEqual([]);
+  });
+
   it("rejects a producer retired during its final delivery preparation", async () => {
     let current = true;
     const beforeDeliver = vi.fn(async () => {
@@ -108,51 +166,8 @@ describe("prepared reply routing", () => {
         }
       },
     });
-    expect(beforeDeliver).toHaveBeenCalledOnce();
     expect(result).toMatchObject({ ok: false, delivered: false });
     expect(result.error).toContain("event producer retired");
-    expect(visible).toEqual([]);
-  });
-
-  it("rejects a writer retired after prepared routing and awaited channel work", async () => {
-    const { replaceSessionEntry } = await import("../../config/sessions/session-accessor.js");
-    const session = {
-      storePath: path.join(fixtures.tmpDir(), "sessions.json"),
-      sessionKey: "agent:main:prepared-route",
-    };
-    const setWriter = (activeWriterRunId: string) =>
-      replaceSessionEntry(session, {
-        sessionId: "current-session",
-        activeWriterRunId,
-        updatedAt: Date.now(),
-      });
-    await setWriter("original-writer");
-    const payload = setReplyPayloadMetadata(
-      { text: "caption", mediaUrl: "https://example.invalid/clip.ogg" },
-      {
-        sessionWriterDeliveryAuthority: {
-          ...session,
-          expectedSessionId: "current-session",
-          expectedWriterRunId: "original-writer",
-        },
-      },
-    );
-    const plan = prepare(payload);
-    const replaceWriter = vi.fn(async () => {
-      await setWriter("replacement-writer");
-    });
-    beforeDelivery = replaceWriter;
-
-    const result = await routePreparedReply({
-      ...destination,
-      cfg: { session: { store: session.storePath } },
-      plan,
-      sessionKey: session.sessionKey,
-    });
-
-    expect(result).toMatchObject({ ok: false, delivered: false });
-    expect(result.error).toContain("Session writer changed before final reply delivery");
-    expect(replaceWriter).toHaveBeenCalledOnce();
     expect(visible).toEqual([]);
   });
 });

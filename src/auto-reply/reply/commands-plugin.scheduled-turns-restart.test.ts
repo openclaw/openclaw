@@ -111,41 +111,59 @@ async function acceptAndRunOnce(fixture: Fixture) {
   return id;
 }
 
-describe("requester-admitted scheduled commands across a Gateway restart", () => {
-  it("re-arms an accepted schedule onto the restarted plugin and still ends at its budget", async () => {
-    await withCommandPlugin(async (fixture) => {
-      const id = await acceptAndRunOnce(fixture);
-      const original = fixture.pluginIncarnation();
-      await restartGateway(fixture);
-      expect(fixture.pluginIncarnation()).toBeDefined();
-      expect(fixture.pluginIncarnation()).not.toBe(original);
-      fixture.handler.mockImplementation((ctx) => ({ text: "after restart: " + ctx.args }));
-      await expect(fixture.cron.run(id, "force")).resolves.toMatchObject({ ok: true, ran: true });
-      expect(fixture.handler).toHaveBeenCalledTimes(1);
-      expect(fixture.scheduledResults).toMatchObject([
-        { status: "ok", outputText: "before restart" },
-        { status: "ok", outputText: "after restart: undefined" },
-      ]);
-      expect(JSON.stringify(await fixture.assistantOutputs())).toContain("after restart");
-      // The final allowed attempt retires it under the instance the claim re-armed it onto.
-      const [completed] = await fixture.readJobs();
-      expect(completed).toMatchObject({
-        enabled: false,
-        state: {
-          pluginCommandRuns: 2,
-          pluginCommandBinding: {
-            hostProcessId: "restarted-gateway-1",
-            pluginIncarnation: fixture.pluginIncarnation(),
-          },
-        },
-      });
-      // A completed schedule stays completed across another restart.
-      await restartGateway(fixture);
-      await expect(fixture.cron.run(id, "force")).resolves.toMatchObject({ ran: false });
-      expect(fixture.handler).toHaveBeenCalledTimes(1);
-      expect(fixture.scheduledResults).toHaveLength(2);
-    });
+async function expectRetired(fixture: Fixture) {
+  expect(fixture.handler).not.toHaveBeenCalled();
+  expect(fixture.scheduledResults).toEqual([]);
+  expect((await fixture.readJobs())[0]).toMatchObject({
+    enabled: false,
+    state: { pluginCommandRuns: 0 },
   });
+}
+
+describe("requester-admitted scheduled commands across a Gateway restart", () => {
+  it.each([false, true])(
+    "re-arms the same code and exhausts its budget (bundled=%s)",
+    async (bundled) => {
+      const withPlugin = bundled ? withBundledCommandPlugin : withCommandPlugin;
+      await withPlugin(async (fixture) => {
+        const id = await acceptAndRunOnce(fixture);
+        if (bundled) {
+          expect((await fixture.readJobs())[0]?.state.pluginCommandBinding?.sourceDigest).toMatch(
+            /^bundled-build:/u,
+          );
+        }
+        const original = fixture.pluginIncarnation();
+        await restartGateway(fixture);
+        expect(fixture.pluginIncarnation()).toBeDefined();
+        expect(fixture.pluginIncarnation()).not.toBe(original);
+        fixture.handler.mockImplementation((ctx) => ({ text: "after restart: " + ctx.args }));
+        await expect(fixture.cron.run(id, "force")).resolves.toMatchObject({ ok: true, ran: true });
+        expect(fixture.handler).toHaveBeenCalledTimes(1);
+        expect(fixture.scheduledResults).toMatchObject([
+          { status: "ok", outputText: "before restart" },
+          { status: "ok", outputText: "after restart: undefined" },
+        ]);
+        expect(JSON.stringify(await fixture.assistantOutputs())).toContain("after restart");
+        // The final allowed attempt retires it under the instance the claim re-armed it onto.
+        const [completed] = await fixture.readJobs();
+        expect(completed).toMatchObject({
+          enabled: false,
+          state: {
+            pluginCommandRuns: 2,
+            pluginCommandBinding: {
+              hostProcessId: "restarted-gateway-1",
+              pluginIncarnation: fixture.pluginIncarnation(),
+            },
+          },
+        });
+        // A completed schedule stays completed across another restart.
+        await restartGateway(fixture);
+        await expect(fixture.cron.run(id, "force")).resolves.toMatchObject({ ran: false });
+        expect(fixture.handler).toHaveBeenCalledTimes(1);
+        expect(fixture.scheduledResults).toHaveLength(2);
+      });
+    },
+  );
 
   it("never resurrects a schedule cancelled before the restart", async () => {
     await withCommandPlugin(async (fixture) => {
@@ -220,43 +238,12 @@ describe("requester-admitted scheduled commands across a Gateway restart", () =>
         // A changed plugin loads, but a new instance whose code no longer matches the schedule.
         expect(fixture.pluginIncarnation() !== undefined).toBe(loaded);
         await fixture.cron.run(id, "force");
-        expect(fixture.handler).not.toHaveBeenCalled();
-        expect(fixture.scheduledResults).toEqual([]);
-        // The claim retired it without spending an attempt.
-        const [retired] = await fixture.readJobs();
-        expect(retired).toMatchObject({ enabled: false, state: { pluginCommandRuns: 0 } });
+        await expectRetired(fixture);
       });
     },
   );
 
   describe("core-bundled plugins", () => {
-    it("re-arms a schedule onto the same build after the restart", async () => {
-      await withBundledCommandPlugin(async (fixture) => {
-        const id = await acceptAndRunOnce(fixture);
-        // The loaded build is the code identity of host-owned bundled modules.
-        const [accepted] = await fixture.readJobs();
-        expect(accepted?.state.pluginCommandBinding?.sourceDigest).toMatch(/^bundled-build:/u);
-        const original = fixture.pluginIncarnation();
-        await restartGateway(fixture);
-        expect(fixture.pluginIncarnation()).toBeDefined();
-        expect(fixture.pluginIncarnation()).not.toBe(original);
-        fixture.handler.mockImplementation(() => ({ text: "after restart" }));
-        await expect(fixture.cron.run(id, "force")).resolves.toMatchObject({ ok: true, ran: true });
-        expect(fixture.handler).toHaveBeenCalledTimes(1);
-        expect(fixture.scheduledResults).toMatchObject([
-          { status: "ok", outputText: "before restart" },
-          { status: "ok", outputText: "after restart" },
-        ]);
-        expect((await fixture.readJobs())[0]).toMatchObject({
-          enabled: false,
-          state: {
-            pluginCommandRuns: 2,
-            pluginCommandBinding: { hostProcessId: "restarted-gateway-1" },
-          },
-        });
-      });
-    });
-
     it.each([
       [
         "upgraded or downgraded to another build",
@@ -287,13 +274,7 @@ describe("requester-admitted scheduled commands across a Gateway restart", () =>
           fixture.handler.mockClear();
           await restartGateway(fixture, change);
           await fixture.cron.run(id, "force");
-          expect(fixture.handler).not.toHaveBeenCalled();
-          expect(fixture.scheduledResults).toEqual([]);
-          // The claim retired it without spending an attempt.
-          expect((await fixture.readJobs())[0]).toMatchObject({
-            enabled: false,
-            state: { pluginCommandRuns: 0 },
-          });
+          await expectRetired(fixture);
           // Returning to the accepting build and plugin later does not revive it.
           await restartGateway(fixture, (cfg) => {
             loadedBuild.buildId = acceptedBuild.buildId;

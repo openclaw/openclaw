@@ -85,7 +85,7 @@ import {
 } from "./ci-node-test-plan.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const { uiE2ePrebuiltParallelTestFiles, uiE2eRealGatewayTestFiles } = uiPaths;
+const { uiE2eRealGatewayTestFiles } = uiPaths;
 const { getUnitFastIsolatedTestFiles, getUnitFastTimerTestFiles } = unitFastPaths;
 
 function required<T>(value: T | null | undefined) {
@@ -335,24 +335,29 @@ describe("Control UI release-only inventories", () => {
     );
     // Array equality also catches duplicate ownership between jobs or desktop proof.
     expectSameEntries(files, expectedFiles);
-    // Only qualified fixtures may move off the job owning desktop and serial proof.
-    expect(
-      shards[1]?.groups[0]?.includePatterns.every((file) =>
-        uiE2ePrebuiltParallelTestFiles.includes(file),
-      ),
-    ).toBe(true);
   }
 
-  it("balances qualified real-Gateway work around the serial and desktop proof", () => {
+  it("balances serial and qualified real-Gateway work around desktop proof", () => {
     const desktop = "ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts";
-    const serial = "ui/src/e2e/mcp-app-conformance.e2e.test.ts";
+    const serial = [
+      "ui/src/e2e/mcp-app-conformance.e2e.test.ts",
+      "ui/src/e2e/chat-daybreak.real-gateway.e2e.test.ts",
+      "ui/src/e2e/quiet-automations.real-gateway.e2e.test.ts",
+      "ui/src/e2e/plugin-inline-view.real-gateway.e2e.test.ts",
+    ];
     const parallel = [
       "ui/src/e2e/activity-run-inspector.real-gateway.e2e.test.ts",
       "ui/src/e2e/agent-file-lifecycle.real-gateway.e2e.test.ts",
       "ui/src/e2e/chat-agent-avatar.real-gateway.e2e.test.ts",
       "ui/src/e2e/chat-loading-performance.real-gateway.e2e.test.ts",
     ];
-    const fileSeconds: Record<string, number> = { [desktop]: 20, [serial]: 40 };
+    const fileSeconds: Record<string, number> = {
+      [desktop]: 80,
+      [serial[0]!]: 60,
+      [serial[1]!]: 50,
+      [serial[2]!]: 40,
+      [serial[3]!]: 10,
+    };
     for (const file of parallel) {
       fileSeconds[file] = 100;
     }
@@ -361,7 +366,7 @@ describe("Control UI release-only inventories", () => {
       perFileOverheadSeconds: 0,
     });
     onTestFinished(() => timings.mockRestore());
-    const selected = [desktop, serial, ...parallel];
+    const selected = [desktop, ...serial, ...parallel];
     const shards = createUiRealGatewayTestShards([
       { configs: [configPath("ui-e2e")], shard_name: "ui", includePatterns: selected },
     ]);
@@ -374,14 +379,76 @@ describe("Control UI release-only inventories", () => {
     );
     const first = shards[0]!;
     expect(first.run_desktop).toBe(true);
-    expect(first.groups[0]!.includePatterns).toContain(serial);
     const work = shards.map((shard) => {
       const files = shard.groups[0]!.includePatterns;
+      const serialSeconds = files
+        .filter((file) => serial.includes(file))
+        .reduce((sum, file) => sum + fileSeconds[file]!, 0);
       // Whole 100s files occupy two workers; an odd final file still costs 100s.
       const parallelWaves = Math.ceil(files.filter((file) => parallel.includes(file)).length / 2);
-      return (shard.run_desktop ? 20 : 0) + (files.includes(serial) ? 40 : 0) + parallelWaves * 100;
+      return Math.max(shard.run_desktop ? 80 : 0, serialSeconds) + parallelWaves * 100;
     });
-    expect(Math.max(...work)).toBeLessThanOrEqual(160);
+    expect(Math.max(...work)).toBeLessThanOrEqual(190);
+  });
+
+  it.each([
+    { name: "disabled proofs", env: {}, activeIndex: -1 },
+    { name: "disabled peer flag", env: { OPENCLAW_PEER_RESTART_LIVE: "0" }, activeIndex: -1 },
+    { name: "enabled peer", env: { OPENCLAW_PEER_RESTART_LIVE: "1" }, activeIndex: 1 },
+    { name: "empty steering variant", env: { OPENCLAW_STEER_CUSTODY_PROOF: "" }, activeIndex: -1 },
+    { name: "enabled steering", env: { OPENCLAW_STEER_CUSTODY_PROOF: "fixed" }, activeIndex: 2 },
+    {
+      name: "invalid nonempty steering variant",
+      env: { OPENCLAW_STEER_CUSTODY_PROOF: "invalid" },
+      activeIndex: 2,
+    },
+    { name: "disabled DeepSeek flag", env: { OPENCLAW_DEEPSEEK_UI_LIVE: "0" }, activeIndex: -1 },
+    {
+      name: "enabled DeepSeek without preflight credentials",
+      env: { OPENCLAW_DEEPSEEK_UI_LIVE: "1" },
+      activeIndex: 0,
+    },
+  ])("prices $name without removing selected opt-in files", ({ env, activeIndex }) => {
+    const optInFiles = [
+      "ui/src/e2e/deepseek-search.real-gateway.e2e.test.ts",
+      "ui/src/e2e/peer-followup-restart.real-gateway.e2e.test.ts",
+      "ui/src/e2e/chat-steer-deferred-custody.real-gateway.e2e.test.ts",
+    ];
+    const parallel = [
+      "ui/src/e2e/activity-run-inspector.real-gateway.e2e.test.ts",
+      "ui/src/e2e/agent-file-lifecycle.real-gateway.e2e.test.ts",
+      "ui/src/e2e/chat-agent-avatar.real-gateway.e2e.test.ts",
+      "ui/src/e2e/chat-loading-performance.real-gateway.e2e.test.ts",
+    ];
+    const timings = vi.spyOn(testTimings, "readUiE2eFileTimings").mockReturnValue({
+      // Disabled proofs must ignore even a retained timing from an opted-in run.
+      fileSeconds: Object.fromEntries([
+        ...optInFiles.map((file) => [file, 60]),
+        ...parallel.map((file) => [file, 20]),
+      ]),
+      perFileOverheadSeconds: 1,
+    });
+    onTestFinished(() => timings.mockRestore());
+    const selected = [...optInFiles, ...parallel];
+    const shards = createUiRealGatewayTestShards(
+      [{ configs: [configPath("ui-e2e")], shard_name: "ui", includePatterns: selected }],
+      env,
+    );
+    expectSameEntries(
+      shards.flatMap((shard) => shard.groups.flatMap((group) => group.includePatterns)),
+      selected,
+    );
+    const work = shards.map((shard) => {
+      const files = shard.groups[0]!.includePatterns;
+      const serialSeconds = optInFiles.reduce(
+        (sum, file, index) => sum + (files.includes(file) ? (index === activeIndex ? 61 : 1) : 0),
+        0,
+      );
+      const parallelWaves = Math.ceil(files.filter((file) => parallel.includes(file)).length / 2);
+      return serialSeconds + parallelWaves * 21;
+    });
+    expect(Math.max(...work)).toBeLessThanOrEqual(activeIndex < 0 ? 23 : 61);
+    expect(shards.every((shard) => !shard.run_desktop)).toBe(true);
   });
 
   it("retains PR-exempt entries while omitting release-only UI matrices", () => {
@@ -3726,7 +3793,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     "config/ci-budget.md",
     configPath("tooling"),
     "package.json",
-    "patches/vitest@5.0.3.patch",
+    "patches/vitest@5.0.5.patch",
     ".github/workflows/ci.yml",
     "apps/ios/fastlane/Fastfile",
     "extensions/matrix/scripts/build.mjs",

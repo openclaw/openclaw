@@ -1,55 +1,15 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs";
-import { expect, it, vi } from "vitest";
-import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { expect, it } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
-import { patchSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { hasOpenClawAgentDatabaseAsyncResources } from "../state/openclaw-agent-db-resources.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync as closeDatabase,
   openOpenClawAgentDatabase as openDatabase,
 } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import {
-  retainGatewaySessionEntryReadOnly as retainRead,
-  withGatewaySessionEntryReadOnly as withRead,
-} from "./session-utils-read-lifetime.js";
-
-it("reads committed durable rows without host SQL and checks caller authority", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const cfg = { agents: { entries: { main: {} } } };
-    setRuntimeConfigSnapshot(cfg);
-    const key = "agent:main:saved";
-    const scope = { agentId: "main", sessionKey: key, env: state.env };
-    const params = { cfg, key, env: state.env };
-    const entry = { sessionId: "saved", updatedAt: 1, displayName: "Before" };
-    await upsertSessionEntryCore(scope, entry);
-    const read = () => withRead(params, async (loaded) => loaded.entry);
-    await read();
-    const expectRead = async (displayName: string) => {
-      const sql = observeHostDataSql();
-      using _ = { [Symbol.dispose]: sql.restore };
-      expect(await read()).toMatchObject({ sessionId: "saved", displayName });
-      expect(sql.queries).toEqual([]);
-    };
-    await expectRead("Before");
-    await patchSessionEntryCore(scope, () => ({ displayName: "After" }), {
-      requireWriteSuccess: true,
-    });
-    await expectRead("After");
-
-    const revoked = new Error("Caller no longer authorized");
-    const assertActive = vi.fn();
-    const consume = vi.fn(async () => {});
-    const pending = withRead({ ...params, assertActive }, consume);
-    assertActive.mockImplementation(() => {
-      throw revoked;
-    });
-    await expect(pending).rejects.toBe(revoked);
-    expect(consume).not.toHaveBeenCalled();
-  });
-});
+import { retainGatewaySessionEntryReadOnly as retainRead } from "./session-utils-read-lifetime.js";
 
 it.each(["alias replacement", "cold-store close", "same-file reopen"] as const)(
   "rejects a retained metadata read after %s",

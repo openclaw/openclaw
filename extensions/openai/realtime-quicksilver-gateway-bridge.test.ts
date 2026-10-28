@@ -318,7 +318,7 @@ describe("GPT-Live gateway relay bridge", () => {
     expect(
       parseSent(connectedSocket).filter((event) => event.type === "session.context.append"),
     ).toHaveLength(2);
-    expect(connectedSocket.sent[1]).toContain("I’ll check that request.");
+    expect(connectedSocket.sent[1]).toContain("in your own words");
 
     await bridge.close();
     expect(peer.close).toHaveBeenCalledOnce();

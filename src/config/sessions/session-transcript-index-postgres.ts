@@ -1,4 +1,4 @@
-import { sql } from "kysely";
+import { sql, type UpdateQueryBuilder, type UpdateResult } from "kysely";
 import { getNodeSqliteKysely, prepareSqliteQuerySync } from "../../infra/kysely-sync.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import {
@@ -17,6 +17,13 @@ import type {
 import type { PreparedSessionTranscriptProjection } from "./session-transcript-projection-rebuild.js";
 import { TRANSCRIPT_INSERT_BATCH_SIZE } from "./transcript-payload.js";
 
+export type TranscriptWindowUpdate = UpdateQueryBuilder<
+  DB,
+  "session_windows",
+  "session_windows",
+  UpdateResult
+>;
+
 /** Writes each bounded PG projection chunk within the caller's existing transaction. */
 export function createPostgresProjectionFlusher(db: EngineConnection, sessionId: string) {
   type Chunk = {
@@ -32,6 +39,7 @@ export function createPostgresProjectionFlusher(db: EngineConnection, sessionId:
     activeCount: number,
     ftsCount: number,
     watermarkMode: "none" | "insert" | "update",
+    windowUpdate?: TranscriptWindowUpdate,
   ) =>
     prepareSqliteQuerySync<Chunk>(db, (parameter) => {
       const query =
@@ -94,16 +102,19 @@ export function createPostgresProjectionFlusher(db: EngineConnection, sessionId:
                     .returning("session_id");
             })
           : withActive;
+      const withWindow = windowUpdate
+        ? withWatermark.with("projection_window", () => windowUpdate.returning("session_id"))
+        : withWatermark;
       // All writes target distinct tables and use prepared values. Only FTS content
       // depends on a sibling write, through the allocation owner's RETURNING rows.
-      return withWatermark.selectNoFrom(sql.lit(1).as("written"));
+      return withWindow.selectNoFrom(sql.lit(1).as("written"));
     });
   const writes = new Map<string, ReturnType<typeof prepare>>();
-  return (pending: Chunk, persisted: boolean) => {
+  return (pending: Chunk, persisted: boolean, windowUpdate?: TranscriptWindowUpdate) => {
     const count = Math.max(
       pending.activeRows.length,
       pending.ftsRows.length,
-      pending.watermark ? 1 : 0,
+      pending.watermark || windowUpdate ? 1 : 0,
     );
     for (let offset = 0; offset < count; offset += TRANSCRIPT_INSERT_BATCH_SIZE) {
       const chunk = {
@@ -113,7 +124,11 @@ export function createPostgresProjectionFlusher(db: EngineConnection, sessionId:
       };
       const mode = chunk.watermark ? (persisted ? "update" : "insert") : "none";
       const key = `${chunk.activeRows.length}:${chunk.ftsRows.length}:${mode}`;
-      let write = writes.get(key);
+      const finalWindow = offset + TRANSCRIPT_INSERT_BATCH_SIZE >= count ? windowUpdate : undefined;
+      // The supplied mutation contains this append's values; never cache those bindings.
+      let write = finalWindow
+        ? prepare(chunk.activeRows.length, chunk.ftsRows.length, mode, finalWindow)
+        : writes.get(key);
       if (!write) {
         write = prepare(chunk.activeRows.length, chunk.ftsRows.length, mode);
         writes.set(key, write);

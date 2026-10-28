@@ -1,6 +1,6 @@
 import type { HumanMention } from "@openclaw/gateway-protocol";
 import type { MarkdownIt, Token } from "markdown-it";
-import { findMarkdownCodeSpans } from "../../../packages/markdown-core/src/reasoning-tags.js";
+import { findMarkdownCodeSpans } from "../../../packages/markdown-core/src/markdown-code-regions.js";
 import { escapeHtml } from "../../../src/shared/html-escape.js";
 import { readHumanMentions } from "../lib/chat/human-mentions.ts";
 import type { MarkdownHumanMentionToken, MarkdownRenderEnv } from "./markdown-render-options.ts";

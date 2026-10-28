@@ -35,18 +35,6 @@ const TWILIO_MMS_MAX_OUTBOUND_MEDIA_COUNT = 10;
 export const TWILIO_MMS_MAX_BYTES = 5 * 1024 * 1024;
 const SMS_MAX_INBOUND_MEDIA_DOWNLOADS = 10;
 
-type ParsedTwilioApiError = {
-  code?: number;
-  message?: string;
-};
-
-type TwilioMessagePayload = {
-  sid?: string;
-  to?: string;
-  from?: string;
-  status?: string;
-};
-
 const TWILIO_CHANNEL_ADDRESS_RE = /^([a-z][a-z0-9-]*):(.*)$/i;
 
 export type TwilioIncomingPhoneNumber = ReturnType<typeof parseTwilioIncomingPhoneNumber>;
@@ -72,18 +60,7 @@ function firstStringish(value: unknown): string {
   return typeof first === "number" ? String(first) : "";
 }
 
-function parseTwilioApiError(text: string): ParsedTwilioApiError {
-  const record = asNullableObjectRecord(safeParseJson<unknown>(text));
-  if (!record) {
-    return {};
-  }
-  return {
-    code: typeof record.code === "number" ? record.code : undefined,
-    message: typeof record.message === "string" ? record.message : undefined,
-  };
-}
-
-function parseTwilioSuccessPayload(text: string): TwilioMessagePayload {
+function parseTwilioSuccessPayload(text: string) {
   if (!text.trim()) {
     return {};
   }
@@ -125,21 +102,14 @@ export function resolveTwilioWebhookSignatureUrl(params: {
 }
 
 class TwilioSmsApiError extends Error {
-  readonly httpStatus: number;
-  readonly responseText: string;
-  readonly twilioCode?: number;
-
   constructor(httpStatus: number, responseText: string, operation = "send") {
-    // Remote error bodies can reflect request credentials. Redact once before
-    // exposing the body through either the message or the structured field.
+    // Remote error bodies can reflect request credentials. Redact before formatting diagnostics.
     const redactedResponseText = redactToolPayloadText(responseText);
-    const parsed = parseTwilioApiError(redactedResponseText);
-    const detail = parsed.message ?? (redactedResponseText || "unknown");
+    const record = asNullableObjectRecord(safeParseJson<unknown>(redactedResponseText));
+    const detail =
+      typeof record?.message === "string" ? record.message : redactedResponseText || "unknown";
     super(`Twilio SMS ${operation} failed (${httpStatus}): ${detail}`);
     this.name = "TwilioSmsApiError";
-    this.httpStatus = httpStatus;
-    this.responseText = redactedResponseText;
-    this.twilioCode = parsed.code;
   }
 }
 

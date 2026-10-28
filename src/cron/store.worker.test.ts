@@ -22,7 +22,7 @@ import {
   noteCronJobsStoreCommit,
   saveCronJobsStore,
   saveCronJobsStoreChanges,
-  saveCronJobsStoreWithRevision,
+  saveCronJobsStoreWithRevisionByKey,
 } from "./store.js";
 import { expectPathMissing } from "./store.test-support.js";
 import { withCronStore } from "./store.worker.test-support.js";
@@ -127,6 +127,7 @@ it.each([
                   configJobIndexes: [],
                   configJobRuntimeEntries: [],
                   invalidConfigRows: [],
+                  configRevisions: new Map(),
                 },
               }
             : { ok: false as const, error: serializeCronLoadError(failure) }),
@@ -180,7 +181,9 @@ it.each(["load", "save", "default"])(
   async (operation) => {
     const storePath = `/synthetic/cron-unavailable-${operation}/jobs.json`;
     const failure = new Error("worker result unavailable");
-    vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation").mockRejectedValue(failure);
+    vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation").mockImplementation(
+      async (_context, execute) => execute({ execute: vi.fn().mockRejectedValue(failure) }),
+    );
     if (operation === "default") {
       noteCronJobsStoreCommit(storePath);
     }
@@ -311,18 +314,30 @@ it("preserves the cron conflict error class across an actual worker save", async
   });
 });
 
-it.each([false, true])(
-  "publishes native saves with ordered hooks before observer failure=%s",
-  async (fail) => {
+it.each([
+  { incremental: false, fail: false },
+  { incremental: false, fail: true },
+  { incremental: true, fail: false },
+  { incremental: true, fail: true },
+])(
+  "publishes native saves with ordered hooks incremental=$incremental before observer failure=$fail",
+  async ({ incremental, fail }) => {
     await withCronStore("cron-native-save-hooks", async (state) => {
       const { storePath } = state;
-      const store = cronWorkerFixture();
+      const previous = cronWorkerFixture();
+      if (incremental) {
+        await saveCronJobsStore(storePath, previous);
+      }
+      const store = structuredClone(previous);
+      if (incremental) {
+        store.jobs[0]!.name = "pending incremental change";
+      }
       const order: string[] = [];
       let beforeDatabase: EngineConnection | undefined;
       let afterDatabase: EngineConnection | undefined;
       const before = getCronJobsStoreRevision(storePath);
       const failure = new Error("post-commit observer failed");
-      const save = saveCronJobsStore(storePath, store, {
+      const options: NonNullable<Parameters<typeof saveCronJobsStore>[2]> = {
         transactionHooks: {
           beforeWrite: (db) => {
             beforeDatabase = db;
@@ -340,7 +355,10 @@ it.each([false, true])(
             }
           },
         },
-      });
+      };
+      const save = incremental
+        ? saveCronJobsStoreChanges(storePath, previous, store, options)
+        : saveCronJobsStore(storePath, store, options);
       if (fail) {
         await expect(save).rejects.toBe(failure);
       } else {
@@ -755,9 +773,15 @@ it.each(["unchanged", "intervening", "evicted before reply", "evicted after repl
   async (change) => {
     const storePath = `/synthetic/cron-save-revision-${change}/jobs.json`;
     const pending = createDeferred<CronStoreSaveWorkerOperations["cron.save"]["output"]>();
+    const admitted = createDeferred();
     vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation").mockImplementation(
       async (_context, operation) =>
-        operation({ execute: vi.fn().mockReturnValue(pending.promise) }),
+        operation({
+          execute: vi.fn().mockImplementation(() => {
+            admitted.resolve();
+            return pending.promise;
+          }),
+        }),
     );
     const evictPartition = () => {
       for (let index = 0; index < 65; index += 1) {
@@ -765,7 +789,8 @@ it.each(["unchanged", "intervening", "evicted before reply", "evicted after repl
       }
     };
     const before = getCronJobsStoreRevision(storePath);
-    const save = saveCronJobsStoreWithRevision(storePath, { version: 1, jobs: [] });
+    const save = saveCronJobsStoreWithRevisionByKey(storePath, { version: 1, jobs: [] });
+    await admitted.promise;
     if (change !== "unchanged") {
       noteCronJobsStoreCommit(storePath);
     }

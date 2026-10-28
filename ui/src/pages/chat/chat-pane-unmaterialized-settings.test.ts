@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow, ModelCatalogEntry } from "../../api/types.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
+import { withSessionMutationOperations } from "../../lib/sessions/session-mutation-operations.ts";
 import type { GatewayRequestHandler } from "../../test-helpers/gateway-client.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { renderPaneModelControl } from "./chat-pane-model-control.test-support.ts";
@@ -163,13 +164,14 @@ it.each([
       ).toBe(false);
     }
     operation = select(props);
-    expect(patch).toHaveBeenCalledOnce();
-    expect(patch.mock.calls[0]?.[1]).not.toHaveProperty("expectedSessionId");
     // The RPC is still held; a real render must keep the admitted selection.
     const pendingProps = draw();
     expect.soft(controlValues()).toMatchObject(pending);
     expect(selectedChatSessionRow(pane.state)?.sessionId).toBeUndefined();
     expect(sessions.state.result?.sessions).toHaveLength(initialState === "placeholder" ? 1 : 0);
+    await withSessionMutationOperations(() => undefined);
+    expect(patch).toHaveBeenCalledOnce();
+    expect(patch.mock.calls[0]?.[1]).not.toHaveProperty("expectedSessionId");
     if (returnToInitial) {
       latestOperation = select(pendingProps, true);
       expect(patch).toHaveBeenCalledOnce();

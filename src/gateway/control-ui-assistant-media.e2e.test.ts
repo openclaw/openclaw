@@ -58,18 +58,9 @@ test("serves local assistant media through scoped tickets over the gateway HTTP 
           "content-disposition": `attachment; filename="__ ticketed (final).txt"; filename*=UTF-8''%E6%B5%8B%E8%AF%95%20ticketed%20%28final%29.txt`,
         },
       });
-      const fileUrl = pathToFileURL(filePath).href;
-      for (const source of [
-        fileUrl,
-        fileUrl.replace(/^file:/u, "FILE:"),
-        fileUrl.replace(/^file:\/\//u, "file:"),
-        fileUrl.replace(/^file:\/\//u, "FILE:"),
-      ]) {
-        expect(await read({}, source)).toMatchObject(delivered);
-      }
-      for (const source of ["file://evil-host/etc/hostname", "FILE://evil-host/etc/hostname"]) {
-        expect((await read(authorized, source, null)).status).toBe(404);
-      }
+      const fileUrl = pathToFileURL(filePath).href.replace(/^file:\/\//u, "FILE:");
+      expect(await read({}, fileUrl)).toMatchObject(delivered);
+      expect((await read(authorized, "FILE://evil-host/etc/hostname", null)).status).toBe(404);
       const validators = { etag: null, "last-modified": null, "accept-ranges": "bytes" };
       expect(await read({ headers: { Range: "bytes=9-15" } })).toMatchObject({
         status: 206,

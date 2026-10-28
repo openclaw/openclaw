@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Command } from "commander";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { registerNodesCli } from "../../cli/nodes-cli/register.js";
 import { executeNodeMediaAction } from "./nodes-tool-media.js";
@@ -15,10 +15,10 @@ const mocks = vi.hoisted(() => ({
   remove: vi.fn(),
 }));
 
-vi.mock("node:fs/promises", async () => {
-  const actual = await vi.importActual<
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<
     typeof import("node:fs/promises") & { default: typeof import("node:fs/promises") }
-  >("node:fs/promises");
+  >();
   const rm = async (
     filePath: Parameters<typeof actual.rm>[0],
     options?: Parameters<typeof actual.rm>[1],
@@ -28,10 +28,8 @@ vi.mock("node:fs/promises", async () => {
   };
   return { ...actual, rm, default: actual.default };
 });
-vi.mock("../../cli/nodes-camera.js", async () => {
-  const actual = await vi.importActual<typeof import("../../cli/nodes-camera.js")>(
-    "../../cli/nodes-camera.js",
-  );
+vi.mock("../../cli/nodes-camera.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../cli/nodes-camera.js")>();
   return {
     ...actual,
     cameraTempPath: (opts: Parameters<typeof actual.cameraTempPath>[0]) =>
@@ -52,19 +50,15 @@ vi.mock("./nodes-tool-invoke.js", () => ({
 vi.mock("../tool-images.js", () => ({
   sanitizeToolResultImages: (...args: unknown[]) => mocks.sanitize(...args),
 }));
-vi.mock("../../cli/nodes-cli/cli-utils.js", async () => {
-  const actual = await vi.importActual<typeof import("../../cli/nodes-cli/cli-utils.js")>(
-    "../../cli/nodes-cli/cli-utils.js",
-  );
+vi.mock("../../cli/nodes-cli/cli-utils.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../cli/nodes-cli/cli-utils.js")>();
   return {
     ...actual,
     runNodesCommand: async (_label: string, action: () => Promise<void>) => action(),
   };
 });
-vi.mock("../../cli/nodes-cli/rpc.js", async () => {
-  const actual = await vi.importActual<typeof import("../../cli/nodes-cli/rpc.js")>(
-    "../../cli/nodes-cli/rpc.js",
-  );
+vi.mock("../../cli/nodes-cli/rpc.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../cli/nodes-cli/rpc.js")>();
   return {
     ...actual,
     resolveCliNode: async () => ({ nodeId: "test-node", platform: "ios" }),
@@ -89,6 +83,14 @@ const photo = {
 };
 type Owner = "camera_snap" | "photos_latest" | "cli";
 const owners: Owner[] = ["camera_snap", "photos_latest", "cli"];
+const readText = (file: string) => fs.readFile(file, "utf8");
+const readPhotos = (files: string[]) => Promise.all(files.map(readText));
+const expectMissing = (file: string) =>
+  expect(fs.stat(file)).rejects.toMatchObject({ code: "ENOENT" });
+const expectUntouched = async () => {
+  expect(await fs.readdir(mocks.root)).toEqual(["unrelated.jpg"]);
+  expect(await readText(path.join(mocks.root, "unrelated.jpg"))).toBe("keep me");
+};
 
 function requireFixture<T>(value: T | null | undefined): T {
   if (value === undefined || value === null) {
@@ -132,157 +134,141 @@ async function run(owner: Owner) {
   });
 }
 
-describe("node photo batch filesystem ownership", () => {
-  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-  beforeEach(async () => {
-    vi.clearAllMocks();
-    mocks.root = tempDirs.make("node-media-rollback-");
-    mocks.nextPath = 0;
-    mocks.sanitize.mockImplementation(async (result) => result);
-    mocks.output.mockImplementation(() => {});
-    mocks.remove.mockResolvedValue(undefined);
-    await fs.writeFile(path.join(mocks.root, "unrelated.jpg"), "keep me");
-  });
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
+beforeEach(async () => {
+  vi.clearAllMocks();
+  mocks.root = tempDirs.make("node-media-rollback-");
+  mocks.nextPath = 0;
+  mocks.sanitize.mockImplementation(async (result) => result);
+  mocks.output.mockImplementation(() => {});
+  mocks.remove.mockResolvedValue(undefined);
+  await fs.writeFile(path.join(mocks.root, "unrelated.jpg"), "keep me");
+});
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
-  it.each(owners)(
-    "rolls back the successful prefix after a later atomic write fails: %s",
-    async (owner) => {
-      configure(owner);
-      const failure = new Error("second publication failed");
-      const rename = fs.rename.bind(fs);
-      const destinations: string[] = [];
-      vi.spyOn(fs, "rename").mockImplementation(async (source, destination) => {
-        const target = String(destination);
-        if (path.basename(target).startsWith("openclaw-camera-snap")) {
-          destinations.push(target);
-          if (destinations.length === 2) {
-            expect(await fs.readFile(requireFixture(destinations[0]), "utf8")).toBe(
-              "private photo",
-            );
-            throw failure;
-          }
+it.each(owners)(
+  "rolls back the successful prefix after a later atomic write fails: %s",
+  async (owner) => {
+    configure(owner);
+    const failure = new Error("second publication failed");
+    const rename = fs.rename.bind(fs);
+    const destinations: string[] = [];
+    vi.spyOn(fs, "rename").mockImplementation(async (source, destination) => {
+      const target = String(destination);
+      if (path.basename(target).startsWith("openclaw-camera-snap")) {
+        destinations.push(target);
+        if (destinations.length === 2) {
+          expect(await readText(requireFixture(destinations[0]))).toBe("private photo");
+          throw failure;
         }
-        return await rename(source, destination);
-      });
-      await expect(run(owner)).rejects.toBe(failure);
-      expect(destinations).toHaveLength(2);
-      await expect(fs.stat(requireFixture(destinations[0]))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
-      expect(await fs.readdir(mocks.root)).toEqual(["unrelated.jpg"]);
-      expect(await fs.readFile(path.join(mocks.root, "unrelated.jpg"), "utf8")).toBe("keep me");
-    },
-  );
-
-  it.each(["camera_snap", "photos_latest"] as const)(
-    "rolls back after final result sanitizer rejects: %s",
-    async (owner) => {
-      configure(owner);
-      const failure = new Error("sanitizer failed");
-      let paths: string[] = [];
-      mocks.sanitize.mockImplementation(async (result) => {
-        paths = result.details.media.mediaUrls;
-        expect(await Promise.all(paths.map((p) => fs.readFile(p, "utf8")))).toEqual([
-          "private photo",
-          "private photo",
-        ]);
-        throw failure;
-      });
-      await expect(run(owner)).rejects.toBe(failure);
-      expect(paths).toHaveLength(2);
-      for (const p of paths) {
-        await expect(fs.stat(p)).rejects.toMatchObject({ code: "ENOENT" });
       }
-      expect(await fs.readdir(mocks.root)).toEqual(["unrelated.jpg"]);
-    },
-  );
-
-  it.each(owners)(
-    "retains all successful returned files without overwriting preexisting paths: %s",
-    async (owner) => {
-      configure(owner);
-      const name =
-        owner === "photos_latest"
-          ? "openclaw-camera-snap-batch-1.jpg"
-          : "openclaw-camera-snap-front-batch-1.jpg";
-      const existing = path.join(mocks.root, name);
-      await fs.writeFile(existing, "preexisting");
-      const result = await run(owner);
-      const paths: string[] =
-        owner === "cli"
-          ? requireFixture(mocks.output.mock.calls[0])[0].files.map(
-              (file: { path: string }) => file.path,
-            )
-          : (requireFixture(result).details as { media: { mediaUrls: string[] } }).media.mediaUrls;
-      expect(paths).toHaveLength(2);
-      expect(new Set(paths).size).toBe(2);
-      expect(await Promise.all(paths.map((p) => fs.readFile(p, "utf8")))).toEqual([
-        "private photo",
-        "private photo",
-      ]);
-      expect(await fs.readFile(existing, "utf8")).toBe("preexisting");
-      expect(await fs.readFile(path.join(mocks.root, "unrelated.jpg"), "utf8")).toBe("keep me");
-    },
-  );
-
-  it("preserves foreign entries inside a failed batch directory without sweeping", async () => {
-    configure("photos_latest");
-    const failure = new Error("sanitize");
-    let foreign = "";
-    mocks.sanitize.mockImplementation(async (result) => {
-      foreign = path.join(path.dirname(result.details.media.mediaUrls[0]), "foreign.txt");
-      await fs.writeFile(foreign, "foreign");
-      throw failure;
+      return await rename(source, destination);
     });
-    await expect(run("photos_latest")).rejects.toBe(failure);
-    expect(await fs.readFile(foreign, "utf8")).toBe("foreign");
-    expect(await fs.readdir(path.dirname(foreign))).toEqual(["foreign.txt"]);
-  });
+    await expect(run(owner)).rejects.toBe(failure);
+    expect(destinations).toHaveLength(2);
+    await expectMissing(requireFixture(destinations[0]));
+    await expectUntouched();
+  },
+);
 
-  it("continues cleanup after one unlink failure and rethrows the original error", async () => {
-    configure("photos_latest");
-    const primary = new Error("sanitize");
-    const cleanup = new Error("unlink denied");
+it.each(["camera_snap", "photos_latest"] as const)(
+  "rolls back after final result sanitizer rejects: %s",
+  async (owner) => {
+    configure(owner);
+    const failure = new Error("sanitizer failed");
     let paths: string[] = [];
     mocks.sanitize.mockImplementation(async (result) => {
       paths = result.details.media.mediaUrls;
-      mocks.remove.mockImplementation(async (p) => {
-        if (String(p) === paths[0]) {
-          throw cleanup;
-        }
-      });
-      throw primary;
+      expect(await readPhotos(paths)).toEqual(["private photo", "private photo"]);
+      throw failure;
     });
-    await expect(run("photos_latest")).rejects.toBe(primary);
-    expect(await fs.readFile(requireFixture(paths[0]), "utf8")).toBe("private photo");
-    await expect(fs.stat(requireFixture(paths[1]))).rejects.toMatchObject({ code: "ENOENT" });
-    expect(mocks.remove.mock.calls.filter(([p]) => paths.includes(String(p)))).toHaveLength(2);
-  });
+    await expect(run(owner)).rejects.toBe(failure);
+    expect(paths).toHaveLength(2);
+    for (const p of paths) {
+      await expectMissing(p);
+    }
+    await expectUntouched();
+  },
+);
 
-  it.each(owners)(
-    "keeps complete input validation before any artifact write: %s",
-    async (owner) => {
-      configure(owner);
-      const invalid = { ...photo, base64: "not base64!" };
-      if (owner === "photos_latest") {
-        mocks.invoke.mockResolvedValue({ payload: { photos: [photo, invalid] } });
-      } else {
-        mocks.invoke
-          .mockResolvedValueOnce({ payload: photo })
-          .mockResolvedValueOnce({ payload: invalid });
+it.each(owners)(
+  "retains all successful returned files without overwriting preexisting paths: %s",
+  async (owner) => {
+    configure(owner);
+    const name =
+      owner === "photos_latest"
+        ? "openclaw-camera-snap-batch-1.jpg"
+        : "openclaw-camera-snap-front-batch-1.jpg";
+    const existing = path.join(mocks.root, name);
+    await fs.writeFile(existing, "preexisting");
+    const result = await run(owner);
+    const paths: string[] =
+      owner === "cli"
+        ? requireFixture(mocks.output.mock.calls[0])[0].files.map(
+            (file: { path: string }) => file.path,
+          )
+        : (requireFixture(result).details as { media: { mediaUrls: string[] } }).media.mediaUrls;
+    expect(paths).toHaveLength(2);
+    expect(new Set(paths).size).toBe(2);
+    expect(await readPhotos(paths)).toEqual(["private photo", "private photo"]);
+    expect(await readText(existing)).toBe("preexisting");
+    expect(await readText(path.join(mocks.root, "unrelated.jpg"))).toBe("keep me");
+  },
+);
+
+it("preserves foreign entries inside a failed batch directory without sweeping", async () => {
+  configure("photos_latest");
+  const failure = new Error("sanitize");
+  let foreign = "";
+  mocks.sanitize.mockImplementation(async (result) => {
+    foreign = path.join(path.dirname(result.details.media.mediaUrls[0]), "foreign.txt");
+    await fs.writeFile(foreign, "foreign");
+    throw failure;
+  });
+  await expect(run("photos_latest")).rejects.toBe(failure);
+  expect(await readText(foreign)).toBe("foreign");
+  expect(await fs.readdir(path.dirname(foreign))).toEqual(["foreign.txt"]);
+});
+
+it("continues cleanup after one unlink failure and rethrows the original error", async () => {
+  configure("photos_latest");
+  const primary = new Error("sanitize");
+  const cleanup = new Error("unlink denied");
+  let paths: string[] = [];
+  mocks.sanitize.mockImplementation(async (result) => {
+    paths = result.details.media.mediaUrls;
+    mocks.remove.mockImplementation(async (p) => {
+      if (String(p) === paths[0]) {
+        throw cleanup;
       }
-      await expect(run(owner)).rejects.toThrow(/invalid base64/i);
-      expect(await fs.readdir(mocks.root)).toEqual(["unrelated.jpg"]);
-    },
-  );
-
-  it("does not create an output directory for an empty library", async () => {
-    mocks.invoke.mockResolvedValue({ payload: { photos: [] } });
-    await run("photos_latest");
-    expect(await fs.readdir(mocks.root)).toEqual(["unrelated.jpg"]);
+    });
+    throw primary;
   });
+  await expect(run("photos_latest")).rejects.toBe(primary);
+  expect(await readText(requireFixture(paths[0]))).toBe("private photo");
+  await expectMissing(requireFixture(paths[1]));
+  expect(mocks.remove.mock.calls.filter(([p]) => paths.includes(String(p)))).toHaveLength(2);
+});
+
+it.each(owners)("keeps complete input validation before any artifact write: %s", async (owner) => {
+  configure(owner);
+  const invalid = { ...photo, base64: "not base64!" };
+  if (owner === "photos_latest") {
+    mocks.invoke.mockResolvedValue({ payload: { photos: [photo, invalid] } });
+  } else {
+    mocks.invoke
+      .mockResolvedValueOnce({ payload: photo })
+      .mockResolvedValueOnce({ payload: invalid });
+  }
+  await expect(run(owner)).rejects.toThrow(/invalid base64/i);
+  await expectUntouched();
+});
+
+it("does not create an output directory for an empty library", async () => {
+  mocks.invoke.mockResolvedValue({ payload: { photos: [] } });
+  await run("photos_latest");
+  await expectUntouched();
 });

@@ -116,6 +116,11 @@ export async function flushDeferredRowPrune(): Promise<void> {
   await new Promise((resolve) => {
     setTimeout(resolve, 0);
   });
+  if (!vi.isFakeTimers() && !vi.isMockFunction(requestAnimationFrame)) {
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+    });
+  }
 }
 
 export function installTranscriptDomMocks(): void {
@@ -126,6 +131,10 @@ export function installTranscriptDomMocks(): void {
   vi.stubGlobal("ResizeObserver", RecordingResizeObserver);
   // These geometry fixtures publish native offsets and observer receipts explicitly.
   vi.spyOn(Element.prototype, "scrollTo").mockImplementation(() => {});
+  const clientHeight = Object.getOwnPropertyDescriptor(Element.prototype, "clientHeight")!;
+  vi.spyOn(Element.prototype, "clientHeight", "get").mockImplementation(function (this: Element) {
+    return this.classList.contains("chat-thread") ? 600 : clientHeight.get!.call(this);
+  });
   vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (
     this: HTMLElement,
   ) {

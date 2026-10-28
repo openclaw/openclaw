@@ -4,20 +4,20 @@ import {
   validateSafeBinSemantics,
 } from "./exec-safe-bin-semantics.js";
 
-function expectDenied(binName: string, program: string) {
-  expect(validateSafeBinSemantics({ binName, positional: [program] })).toBe(false);
+function expectDenied(binName: string) {
+  expect(validateSafeBinSemantics(binName)).toBe(false);
 }
 
 it("rejects jq programs even when configured via path-like entries", () => {
-  expectDenied("jq", ".foo");
-  expectDenied("/usr/local/bin/jq", "{include: .foo, import : .bar}");
+  expectDenied("jq");
+  expectDenied("/usr/local/bin/jq");
 });
 
 it("rejects awk and sed variants even when configured via path-like entries", () => {
-  expectDenied("/opt/homebrew/bin/gawk", 'BEGIN { system("id") }');
-  expectDenied("C:\\Tools\\mawk.exe", 'BEGIN { print ENVIRON["HOME"] }');
-  expectDenied("nawk", 'BEGIN { print "hi" > "/tmp/out" }');
-  expectDenied("/usr/local/bin/gsed", "e");
+  expectDenied("/opt/homebrew/bin/gawk");
+  expectDenied("C:\\Tools\\mawk.exe");
+  expectDenied("nawk");
+  expectDenied("/usr/local/bin/gsed");
 });
 
 it("reports normalized risky configured safe bins once per executable family member", () => {

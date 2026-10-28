@@ -29,34 +29,9 @@ const LINE_WEBHOOK_MAX_CONCURRENT_DELIVERIES = 8;
 const LINE_WEBHOOK_DRAIN_SCAN_LIMIT = 100;
 const LINE_WEBHOOK_ACTIVE_DELIVERY_STOP_GRACE_MS = 5_000;
 
-type LineWebhookIngressEvent = {
-  event: webhook.Event;
-  destination: string;
-};
-
-type LineWebhookSpoolBody = {
-  rawEvent: string;
-  destination: string;
-};
-
 export type LineWebhookTurnAdoptionLifecycle = ReturnType<
   typeof bindIngressLifecycleToReplyOptions
 >["turnAdoptionLifecycle"];
-
-type LineWebhookSpoolOptions = {
-  accountId: string;
-  runtime: RuntimeEnv;
-  deliver: (
-    events: readonly webhook.Event[],
-    destination: string,
-    control: {
-      turnAdoptionLifecycle: LineWebhookTurnAdoptionLifecycle;
-      /** Parts LINE announced for this send but never delivered. */
-      missingParts?: number;
-    },
-  ) => Promise<void>;
-  queue?: ChannelIngressQueue<LineWebhookSpoolPayload>;
-};
 
 export class LineWebhookTerminalDeliveryError extends Error {
   readonly reason = "delivery-side-effects-committed" as const;
@@ -115,7 +90,20 @@ function resolveLineInboundImageSet(
     : undefined;
 }
 
-export function createLineWebhookSpool(options: LineWebhookSpoolOptions) {
+export function createLineWebhookSpool(options: {
+  accountId: string;
+  runtime: RuntimeEnv;
+  deliver: (
+    events: readonly webhook.Event[],
+    destination: string,
+    control: {
+      turnAdoptionLifecycle: LineWebhookTurnAdoptionLifecycle;
+      /** Parts LINE announced for this send but never delivered. */
+      missingParts?: number;
+    },
+  ) => Promise<void>;
+  queue?: ChannelIngressQueue<LineWebhookSpoolPayload>;
+}) {
   // Parts of one multi-image send arrive as separate claims; they are grouped
   // here so the whole set becomes one delivery with one fanned-in ownership.
   const imageSets = createLineImageSetIngressBuffer<
@@ -130,8 +118,14 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions) {
   const activeDeliveries = new Set<Promise<void>>();
   let acceptsDeferredClaims = true;
   const monitor = createChannelIngressMonitor<
-    LineWebhookIngressEvent,
-    LineWebhookSpoolBody,
+    {
+      event: webhook.Event;
+      destination: string;
+    },
+    {
+      rawEvent: string;
+      destination: string;
+    },
     LineWebhookSpoolPayload
   >({
     queue,

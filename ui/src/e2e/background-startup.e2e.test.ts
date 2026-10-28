@@ -19,55 +19,18 @@ const backgroundKind = (element: Locator) =>
 
 const preferences = (entries: Record<string, unknown>) => ({ status: "ok", entries });
 
-function installPreferences(page: Page, dark = false) {
+function installPreferences(page: Page) {
   return installMockGateway(page, {
     presenceUsers: [{ id: "background-viewer", name: "Background demo", self: true }],
     deferredMethods: ["users.prefs.get"],
-    ...(dark ? { featureMethods: [...defaultControlUiFeatureMethods, "users.prefs.get"] } : {}),
+    featureMethods: [...defaultControlUiFeatureMethods, "users.prefs.get"],
     methodResponses: {
-      "config.get": configResponse(dark ? { themeMode: "dark" } : {}, "background"),
+      "config.get": configResponse({ themeMode: "dark" }, "background"),
     },
   });
 }
 
 suite.define(() => {
-  it.each(["none", "custom"] as const)(
-    "keeps an old custom mirror hidden until the saved %s choice loads",
-    (choice) =>
-      suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
-        const custom = selectBackgroundSource({ kind: "custom", assetId: "previous-image" });
-        const gateway = await installPreferences(page);
-        const reads: string[] = [];
-        await page.route("**/__openclaw__/users/background/*", async (route) => {
-          reads.push(route.request().url());
-          await route.fulfill({ status: 404 });
-        });
-        await page.goto(suite.server.baseUrl + "new");
-        await gateway.waitForRequest("users.prefs.get");
-        await gateway.resolveDeferred("users.prefs.get", preferences({ "ui.background": custom }));
-        await expect.poll(() => reads.length).toBe(1);
-        reads.length = 0;
-        await page.reload();
-        await gateway.waitForRequest("users.prefs.get");
-        const background = backgroundOf(page);
-        await expect.poll(() => backgroundKind(background)).toBe("custom");
-        await background.evaluate(async (element) => {
-          await (element as SessionBackground).updateComplete;
-        });
-        expect([await background.getAttribute("data-custom"), reads]).toEqual([null, []]);
-        const saved = choice === "none" ? selectBackgroundSource({ kind: "none" }) : custom;
-        await gateway.resolveDeferred("users.prefs.get", preferences({ "ui.background": saved }));
-        if (choice === "none") {
-          await expect.poll(() => backgroundKind(background)).toBe("none");
-          expect([await background.getAttribute("data-custom"), reads]).toEqual([null, []]);
-        } else {
-          // Unchanged preferences must still release the private read.
-          await expect.poll(() => reads.length).toBe(1);
-          expect(await background.getAttribute("data-custom")).not.toBeNull();
-        }
-      }),
-  );
-
   it.each(["none", "absent"] as const)(
     "waits for the saved %s choice before any initial shell image request",
     (choice) =>
@@ -76,7 +39,7 @@ suite.define(() => {
         async ({ page }) => {
           const entries =
             choice === "none" ? { "ui.background": selectBackgroundSource({ kind: "none" }) } : {};
-          const gateway = await installPreferences(page, true);
+          const gateway = await installPreferences(page);
           const imageRequests: string[] = [];
           page.on("request", (request) => {
             const pathname = new URL(request.url()).pathname;

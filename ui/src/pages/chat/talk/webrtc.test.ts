@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { waitForFast } from "../../../test-helpers/wait-for.ts";
+import { consultRunResult } from "./consult.test-support.ts";
 import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   type RealtimeTalkWebRtcSdpSessionResult,
@@ -66,12 +67,7 @@ function pendingAnswer() {
   return Object.assign(pending, { fetchMock });
 }
 
-const consultRun = {
-  runId: "run-1",
-  idempotencyKey: "run-1",
-  agentId: "main",
-  agentSessionKey: "agent:main:main",
-};
+const consultRun = consultRunResult();
 
 const spokenStatus = {
   ok: true,

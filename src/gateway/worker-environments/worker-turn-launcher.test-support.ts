@@ -1,7 +1,6 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { vi } from "vitest";
-import { WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
@@ -12,7 +11,6 @@ import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { CORE_WORKER_LAUNCH_TOOL_NAMES } from "../../agents/tool-catalog.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
-import { captureRuntimeConfigAsyncReader } from "../../config/io.runtime.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { readTranscriptStorageRows } from "../../config/sessions/session-accessor.sqlite-read.js";
 import {
@@ -30,6 +28,7 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -201,18 +200,13 @@ export async function acknowledgeCompletedWorkerTurn(
     transcriptSeq: 2,
     liveSeq: 1,
   });
-  return {
+  return createCommandResult({
     stdout: JSON.stringify({
       status: "completed",
       transcriptLeafId: leafId,
       transcriptNextSeq: (placements.get(SESSION_ID)?.lastTranscriptAckCursor ?? 0) + 1,
     }),
-    stderr: "",
-    code: 0,
-    signal: null,
-    killed: false,
-    termination: "exit",
-  };
+  });
 }
 
 let testState: OpenClawTestState;
@@ -229,7 +223,6 @@ export async function setupWorkerTurnLauncherTest(): Promise<void> {
     label: "worker-turn",
     layout: "state-only",
   });
-  await captureRuntimeConfigAsyncReader()();
   root = testState.root;
   database = openOpenClawStateDatabase({ env: testState.env });
   placements = createWorkerSessionPlacementStore({ database });
@@ -239,6 +232,7 @@ export async function setupWorkerTurnLauncherTest(): Promise<void> {
     sessionKey: SESSION_KEY,
     storePath: path.join(root, "sessions.json"),
   };
+  setRuntimeConfigSnapshot({ session: { store: sessionTarget.storePath } });
   const entry = {
     sessionId: SESSION_ID,
     updatedAt: Date.now(),
@@ -249,7 +243,6 @@ export async function setupWorkerTurnLauncherTest(): Promise<void> {
     skipMaintenance: true,
   });
   await SessionManager.openAsync(sessionTarget);
-  setRuntimeConfigSnapshot({ session: { store: sessionTarget.storePath } });
   sessionFile = SESSION_KEY;
 }
 
@@ -483,10 +476,6 @@ export function attachedEnvironment(): WorkerTurnEnvironmentRecord {
     leaseId: "lease-worker-turn",
     bootstrapReceipt: {
       ...attached.bootstrapReceipt,
-      protocolFeatures: [
-        ...attached.bootstrapReceipt.protocolFeatures,
-        WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE,
-      ],
       installKind: "bundle",
     },
     sshEndpoint: {

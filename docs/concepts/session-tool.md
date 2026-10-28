@@ -80,9 +80,10 @@ do not yield expecting one.
   succeeds but startup fails, `runError` reports the failure and the session remains
   available. Inspect that session before retrying creation.
 
-Creation is exposed only with live admitted `operator.sessions.write` authority.
-The existing `sessions` management tool does not create sessions, and senderless
-runs do not gain the separate creation capability. The default sandbox surface for an
+The `sessions_create` definition stays in the session's tool catalog across turns;
+execution requires live admitted `operator.sessions.write` authority. The existing
+`sessions` management tool does not create sessions, and senderless runs do not
+gain creation authority. The default sandbox surface for an
 admitted non-owner with session-write authority includes creation and renaming.
 Tool policy and execution-time authority checks still apply.
 
@@ -250,13 +251,19 @@ Supply the message body in the required `message` argument. Hidden aliases such 
 
 `sessions_send` runs another session on the same Gateway and optionally waits for the response. Its `sessionKey`, `label`, or `agentId` selects local model context, not an external destination. A peer's reply reaches the requester once, either inline or as a later inter-session input. Continue the conversation with another `sessions_send`. To post to a channel, use `message` with an explicit channel and target.
 
-Waiting sends recover long inline replies from the accepted run's stored answer instead
-of returning its 4,096-character lifecycle preview. If that answer is unavailable,
-`replyTruncated: true` and a note identify the possibly incomplete reply. The normal
-model tool-result budget still applies and reports truncation explicitly. Ask the
-target for the missing section or a file containing the full reply; `sessions_history`
-also caps individual messages and cannot always recover their tail. Delayed
-inter-session replies still use the bounded lifecycle preview.
+Waiting and delayed inter-session replies recover the accepted run's full answer
+instead of returning its 4,096-character lifecycle preview. If the full answer is
+unavailable under the requester's current access, inline results include
+`replyTruncated: true` and a note; delayed replies include the same guidance for the
+requesting agent. The normal model tool-result budget still applies and reports
+truncation explicitly. Ask the target for the missing section or a file containing
+the full reply; `sessions_history` also caps individual messages and cannot always
+recover their tail.
+
+[Swarm collector children](/tools/swarm#how-collector-children-behave) (spawned with
+`collect: true`) are one-shot and do not accept `sessions_send`, including after they
+finish or time out. The send fails with an error explaining how to collect the result
+with `agents_wait` or start a new child, and no run starts.
 
 Sessions keep their addresses when execution moves between the Gateway, a paired device, and a cloud worker. An OpenClaw worker can send to an authorized parent, child, or sibling using its exact session key, including a target running on the Gateway. The Gateway validates the current session identities, visibility, and any per-agent send-only policy before admitting the target turn; target placement does not grant messaging access. Targets outside both the configured visibility scope and an authorized send-only rule, archived targets, and replaced targets remain denied.
 
@@ -498,7 +505,7 @@ Key options:
 - `runTimeoutSeconds` to override the configured child-run timeout; `0` disables it.
 - `thread: true` to bind the spawn to a chat thread (Discord, Slack, etc.).
 - `sandbox: "require"` to enforce sandboxing on the child.
-- `worktree: true` to give a native child its own [managed checkout](/concepts/managed-worktrees), with optional `projectId`, `worktreeName`, and `worktreeBaseRef`. Hidden children support these fields without `visible: true`; hidden `projectId` and all worktree names/base refs require `worktree: true`. The first turn waits for asynchronous preparation. `cleanup: "delete"` uses session deletion to snapshot and remove the checkout; `"keep"` retains it under the usual idle and archive lifecycle. ACP does not support managed-worktree parameters. Sidebar `group`, `projectGitUrl`, and cloud placement profiles remain visible-only.
+- `worktree: true` to give a native child its own [managed checkout](/concepts/managed-worktrees), with optional `projectId`, `worktreeName`, and `worktreeBaseRef`. Hidden native children ignore these selectors when `worktree` is false or omitted. The first turn waits for asynchronous preparation. `cleanup: "delete"` uses session deletion to snapshot and remove the checkout; `"keep"` retains it under the usual idle and archive lifecycle. ACP does not support managed-worktree parameters. Sidebar `group`, `projectGitUrl`, and cloud placement profiles remain visible-only.
 - `context: "fork"` when the child needs the current requester transcript; this requires `runtime: "subagent"` and the same agent as the requester, whether the child is hidden or visible. Use `context: "isolated"` explicitly for a clean child. Omission means isolated context for non-thread spawns; thread-bound native sub-agents follow `threadBindings.defaultSpawnContext`, which defaults to `fork`.
 - `visible: true` to create a persistent visible supervised child instead of a hidden sub-agent session. For an independent human-requested session, use `sessions_create` as described above. Visible spawns support an explicit sidebar `group`, model, working directory, same-agent transcript fork, and an optional [managed worktree](/concepts/managed-worktrees); see [Sub-agents](/tools/subagents#tool-parameters) for the exact compatibility limits. The accepted result is a receipt: it includes the child session key, run id, a Control UI `sessionUrl` (omitted when the Control UI is disabled), and an `owner` record naming the stored owner. When the active human requester matches the requesting session's verified human owner, a new visible child inherits that person as owner. Otherwise, the owner falls back to the requesting agent. The requesting agent is normally the immutable creator; a required sandbox instead preserves the parent's creator provenance as an isolation policy. When acknowledging the spawn in a channel, put the session URL on the first line and `Owner: <label>` on the second. Ownership controls responsibility and display, not creator-based access; see [Multi-user mode](/concepts/multi-user#agent-spawned-sessions).
 
@@ -527,6 +534,21 @@ cross-agent access or use `allow` to restrict permitted agent pairs; requester-o
 access, or `tree` for current plus spawned scope; its primary main-session
 exception still covers all same-agent sessions. Set `self` for strict
 current-session access, including main.
+
+A retained native child keeps its verified parent relationship after its run
+finishes, including beyond the 30-minute recent-run display window. Under `tree`,
+that relationship supports listing, history, transcript search, status, and
+follow-up messages without making unrelated sessions visible. Recency filters and
+active-run status remain separate from this durable relationship. Archiving still
+hides a child from ordinary lists; it does not erase its parent relationship.
+
+Current execution control is not inherited from old run records. A parent cannot
+steer, resume, or continue a child controlled by another active session. Modern
+explicit parent lineage remains readable during that work; a legacy
+`spawnedBy`-only link yields to the verified active controller. When that work
+ends, the retained parent can continue the child under its current authority.
+Incognito, sharing revocation, sandbox, agent-policy, and exact-session identity
+checks still apply. Watching requires status visibility independently of send access.
 
 These scopes remain the read and control boundary. An explicit per-agent
 `tools.agentToAgent.send` match can permit only cross-agent sends under `self`,

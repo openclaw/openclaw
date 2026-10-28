@@ -93,6 +93,15 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
+it("reports an unavailable inspector method as unsupported heap sampling", async () => {
+  native.post.mockRejectedValue(
+    new Error("Inspector error -32601: 'HeapProfiler.enable' wasn't found"),
+  );
+  expect(await capture()).toMatchObject({ status: "unavailable", reason: "unsupported" });
+  const { collectRuntimeCapabilities } = await import("../infra/runtime-capabilities.js");
+  expect(collectRuntimeCapabilities().capabilities.heapSampling.state).toBe("unavailable");
+});
+
 describe("diagnostic heap profile owner", () => {
   it("preserves the sanitized bytes of a recorded synthetic native profile", async () => {
     const { sanitizeDiagnosticHeapProfile } = await import("./diagnostic-heap-profile.js");
@@ -179,6 +188,7 @@ describe("diagnostic heap profile owner", () => {
       ["/fixture/node_modules/ws/lib/buffer-util.js", "ws"],
       ["/fixture/openclaw/node_modules/undici/lib/core/util.js", "undici"],
       ["/fixture/openclaw/src/node_modules/undici/lib/core/util.js", "undici"],
+      ["/fixture/openclaw/packages/ai/node_modules/undici/lib/core/util.js", "undici"],
       ["file:///fixture/node_modules/.pnpm/ws@8.18.0/node_modules/ws/lib/buffer-util.js", "ws"],
       ["/fixture/node_modules/@scope/pkg/lib/private.js", "@scope/pkg"],
       [
@@ -189,10 +199,32 @@ describe("diagnostic heap profile owner", () => {
     ];
     const locations: [Partial<ReturnType<typeof frame>>, string][] = [
       [{ scriptId: "0", url: "", lineNumber: -1 }, "[native]"],
+      ...[
+        "(V8 API)",
+        "(GC)",
+        "(PARSER)",
+        "(COMPILER)",
+        "(BYTECODE_COMPILER)",
+        "(EXTERNAL)",
+        "(LOGGING)",
+        "(IDLE_EXTERNAL)",
+        "(IDLE)",
+        "(JS)",
+        "(deopt)",
+      ].map((functionName): [Partial<ReturnType<typeof frame>>, string] => [
+        { functionName, scriptId: "0", url: "", lineNumber: -1 },
+        functionName,
+      ]),
       [{ scriptId: "0", url: "", lineNumber: 0 }, "[redacted]"],
       [{ scriptId: "2", url: "", lineNumber: -1 }, "[redacted]"],
       [{ scriptId: "0", url: "/private/user/secret.js", lineNumber: -1 }, "[redacted]"],
       [{ url: "/private/user/secret.js" }, "[redacted]"],
+      [{ url: "/private/plugins/packages/ai/dist/secret.mjs" }, "[redacted]"],
+      [{ url: "/fixture/openclaw-other/packages/ai/dist/secret.mjs" }, "[redacted]"],
+      [{ url: "/fixture/openclaw/packages/ai/private/secret.js" }, "[redacted]"],
+      [{ url: "/fixture/openclaw/packages/private package/dist/secret.js" }, "[redacted]"],
+      [{ url: "/fixture/openclaw/packages/ai/dist/secret.mjs?private=query" }, "[redacted]"],
+      [{ url: "file:///fixture/openclaw/packages/ai/dist/secret.mjs#private" }, "[redacted]"],
       [{ url: "https://private.example/node_modules/ws/secret.js" }, "[redacted]"],
       [
         { url: "/private/user/secret.js?next=/../node_modules/suffix-only/secret.js" },
@@ -240,6 +272,33 @@ describe("diagnostic heap profile owner", () => {
         expect(JSON.stringify(outcome)).not.toContain("node_modules");
       }
     }
+  });
+
+  it.each([
+    ["packages/ai/dist/openai-responses-shared-abc.mjs", "allocateRows", "allocateRows"],
+    ["packages/gateway-protocol/dist/schema.cjs", "Schema.parse", "Schema.parse"],
+    ["packages/ai/src/providers/openai.ts", "allocateRows", "allocateRows"],
+    ["packages/ai/src/providers/openai.js", "private payload", "[redacted]"],
+  ])("attributes workspace package %s with safe symbols", async (relative, name, expectedName) => {
+    const root = "/fixture/node_modules/openclaw";
+    native.resolveRoot.mockResolvedValue(root);
+    native.post.mockResolvedValue({
+      profile: profile({ ...frame(name), url: `file://${root}/${relative}` }),
+    });
+    expect(await capture()).toMatchObject({
+      status: "complete",
+      result: {
+        redactedNodeCount: expectedName === "[redacted]" ? 2 : 1,
+        profile: {
+          head: {
+            children: [
+              { callFrame: { ...frame(expectedName), url: `openclaw:${relative}` } },
+              { id: 3, callFrame: { functionName: "[redacted]", url: "" } },
+            ],
+          },
+        },
+      },
+    });
   });
 
   it.each([

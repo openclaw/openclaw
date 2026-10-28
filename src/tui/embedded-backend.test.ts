@@ -1,6 +1,7 @@
 // Covers embedded backend behavior used by the TUI runtime.
 import fs from "node:fs/promises";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../test/helpers/promise.js";
 import { QuestionAnswerUnconfirmedError } from "../agents/harness/gateway-question-dispatch.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import { resolveThinkingDefault } from "../agents/model-thinking-default.js";
@@ -32,7 +33,6 @@ import {
   registerEmbeddedBackendStreamTests,
 } from "./embedded-backend.stream.test-support.js";
 import {
-  deferred,
   flushMicrotasks,
   localSessionEntry,
   sendMainChat,
@@ -295,18 +295,15 @@ vi.mock("../gateway/chat-display-projection.js", () => ({
   resolveEffectiveChatHistoryMaxChars: () => 100_000,
 }));
 
-vi.mock("../gateway/server-constants.js", () => ({
+vi.mock("../gateway/chat-history-budget.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../gateway/chat-history-budget.js")>()),
   getMaxChatHistoryMessagesBytes: () => 100_000,
-}));
-
-vi.mock("../gateway/server-methods/chat-history-budget.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../gateway/server-methods/chat-history-budget.js")>()),
   CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES: 100_000,
   replaceOversizedChatHistoryMessages: ({ messages }: { messages: unknown[] }) => ({ messages }),
 }));
 
 // mock-isolation: The embedded backend fixture bypasses Gateway history presentation.
-vi.mock("../gateway/server-methods/chat-history-response-page.js", () => ({
+vi.mock("../gateway/chat-history-response-page.js", () => ({
   enrichChatHistoryCompactionMarkers: (messages: unknown[]) => messages,
 }));
 
@@ -611,98 +608,90 @@ describe("EmbeddedTuiBackend", () => {
     expect(buildModelsListResultMock).not.toHaveBeenCalled();
   });
 
-  it("bridges assistant and lifecycle events into chat events", async () => {
-    const pending = deferred<EmbeddedAgentResult>();
-    agentCommandFromIngressMock.mockReturnValueOnce(pending.promise);
+  it.each(["assistant", "tool"] as const)(
+    "bridges %s-first runs into ordered agent and chat events",
+    async (stream) => {
+      const pending = deferred<EmbeddedAgentResult>();
+      agentCommandFromIngressMock.mockReturnValueOnce(pending.promise);
+      const backend = new EmbeddedTuiBackend();
+      const events = captureBackendEvents(backend);
+      const onConnected = vi.fn();
+      backend.onConnected = onConnected;
+      backend.start();
+      await flushMicrotasks();
+      expect(onConnected).toHaveBeenCalledTimes(1);
 
-    const backend = new EmbeddedTuiBackend();
-    const events: Array<{ event: string; payload: unknown }> = [];
-    const onConnected = vi.fn();
-    backend.onConnected = onConnected;
-    backend.onEvent = (evt) => {
-      events.push({ event: evt.event, payload: evt.payload });
-    };
+      const scope = { runId: "run-local-1", sessionKey: "agent:main:main", agentId: "main" };
+      await backend.sendChat({
+        sessionKey: scope.sessionKey,
+        runId: scope.runId,
+        message: "hello",
+        timeoutMs: 300_000,
+      });
+      expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1);
+      expect(agentCommandFromIngressMock.mock.calls[0]?.[0].timeout).toBe("300");
 
-    backend.start();
-    await flushMicrotasks();
-    expect(onConnected).toHaveBeenCalledTimes(1);
+      const data =
+        stream === "assistant"
+          ? { delta: "hello" }
+          : { phase: "start", toolCallId: "tc-tool-first", name: "exec" };
+      registeredListener?.({ runId: scope.runId, stream, data });
+      const lifecycle = { phase: "end", stopReason: "stop" };
+      if (stream === "assistant") {
+        registeredListener?.({ runId: scope.runId, stream: "lifecycle", data: lifecycle });
+      }
+      const finalText = stream === "assistant" ? "hello" : "done";
+      pending.resolve({ payloads: [{ text: finalText }], meta: {} });
+      await flushMicrotasks();
 
-    await backend.sendChat({
-      sessionKey: "agent:main:main",
-      message: "hello",
-      runId: "run-local-1",
-      timeoutMs: 300_000,
-    });
-    expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1);
-    expect(agentCommandFromIngressMock.mock.calls[0]?.[0].timeout).toBe("300");
-
-    registeredListener?.({
-      runId: "run-local-1",
-      stream: "assistant",
-      data: { delta: "hello" },
-    });
-    registeredListener?.({
-      runId: "run-local-1",
-      stream: "lifecycle",
-      data: { phase: "end", stopReason: "stop" },
-    });
-
-    pending.resolve({ payloads: [{ text: "hello" }], meta: {} });
-    await flushMicrotasks();
-
-    expect(events).toEqual([
-      {
+      const message = (text: string) => ({
+        role: "assistant",
+        content: [{ type: "text", text }],
+        timestamp: embeddedEventTimestamp,
+      });
+      const deltaText = stream === "assistant" ? "hello" : "";
+      const delta = {
+        event: "chat",
+        payload: { ...scope, state: "delta", deltaText, message: message(deltaText) },
+      };
+      const agent = {
         event: "agent",
         payload: {
-          runId: "run-local-1",
-          sessionKey: "agent:main:main",
-          agentId: "main",
-          stream: "assistant",
-          data: { delta: "hello" },
+          ...scope,
+          stream,
+          data:
+            stream === "assistant"
+              ? { delta: "hello" }
+              : { phase: "start", toolCallId: "tc-tool-first", name: "exec" },
         },
-      },
-      {
-        event: "chat",
-        payload: {
-          runId: "run-local-1",
-          sessionKey: "agent:main:main",
-          agentId: "main",
-          state: "delta",
-          deltaText: "hello",
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text: "hello" }],
-            timestamp: embeddedEventTimestamp,
+      };
+      expect(events).toEqual([
+        ...(stream === "assistant"
+          ? [
+              agent,
+              delta,
+              {
+                event: "agent",
+                payload: {
+                  ...scope,
+                  stream: "lifecycle",
+                  data: { phase: "end", stopReason: "stop" },
+                },
+              },
+            ]
+          : [delta, agent]),
+        {
+          event: "chat",
+          payload: {
+            ...scope,
+            state: "final",
+            ...(stream === "assistant" ? { stopReason: "stop" } : {}),
+            message: message(finalText),
           },
         },
-      },
-      {
-        event: "agent",
-        payload: {
-          runId: "run-local-1",
-          sessionKey: "agent:main:main",
-          agentId: "main",
-          stream: "lifecycle",
-          data: { phase: "end", stopReason: "stop" },
-        },
-      },
-      {
-        event: "chat",
-        payload: {
-          runId: "run-local-1",
-          sessionKey: "agent:main:main",
-          agentId: "main",
-          state: "final",
-          stopReason: "stop",
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text: "hello" }],
-            timestamp: embeddedEventTimestamp,
-          },
-        },
-      },
-    ]);
-  });
+      ]);
+    },
+  );
 
   it("isolates TUI event consumer failures in the agent event bus", async () => {
     const pending = deferred<EmbeddedAgentResult>();
@@ -960,7 +949,7 @@ describe("EmbeddedTuiBackend", () => {
     backend.start();
     await vi.waitFor(() => expect(refreshPreparedModelRuntimeSnapshotsMock).toHaveBeenCalledOnce());
 
-    const replacement = deferred<void>();
+    const replacement = deferred();
     refreshPreparedModelRuntimeSnapshotsMock.mockReturnValueOnce(replacement.promise);
     configWriteListener?.({ runtimeConfig: nextConfig });
 
@@ -983,9 +972,9 @@ describe("EmbeddedTuiBackend", () => {
     const middleConfig = { agents: { defaults: { model: "openai/middle" } } };
     const latestConfig = { agents: { defaults: { model: "openai/latest" } } };
     getRuntimeConfigMock.mockReturnValue(initialConfig);
-    const initial = deferred<void>();
-    const middle = deferred<void>();
-    const latest = deferred<void>();
+    const initial = deferred();
+    const middle = deferred();
+    const latest = deferred();
     refreshPreparedModelRuntimeSnapshotsMock
       .mockReturnValueOnce(initial.promise)
       .mockReturnValueOnce(middle.promise)
@@ -1027,7 +1016,7 @@ describe("EmbeddedTuiBackend", () => {
     await sendMainChat(backend, "first", "runtime-refresh-first");
     await sendMainChat(backend, "queued second", "runtime-refresh-second");
 
-    const replacement = deferred<void>();
+    const replacement = deferred();
     refreshPreparedModelRuntimeSnapshotsMock.mockReturnValueOnce(replacement.promise);
     configWriteListener?.({
       runtimeConfig: { agents: { defaults: { model: "openai/next" } } },
@@ -1447,8 +1436,8 @@ describe("EmbeddedTuiBackend", () => {
   });
 
   it("waits for the newest publication before returning model choices", async () => {
-    const initial = deferred<void>();
-    const replacement = deferred<void>();
+    const initial = deferred();
+    const replacement = deferred();
     refreshPreparedModelRuntimeSnapshotsMock
       .mockReturnValueOnce(initial.promise)
       .mockReturnValueOnce(replacement.promise);
@@ -1472,8 +1461,8 @@ describe("EmbeddedTuiBackend", () => {
   });
 
   it("reports publication failure instead of returning stale model choices", async () => {
-    const publishing = deferred<void>();
-    const publication = deferred<void>();
+    const publishing = deferred();
+    const publication = deferred();
     refreshPreparedModelRuntimeSnapshotsMock.mockImplementationOnce(() => {
       publishing.resolve();
       return publication.promise;
@@ -1707,35 +1696,17 @@ describe("EmbeddedTuiBackend", () => {
     await sendMainChat(backend, "second", "queue-second");
     await sendMainChat(backend, "third", "queue-third");
     await sendMainChat(backend, "fourth", "queue-fourth");
-    await backend.abortChat({ sessionKey: "agent:main:main", runId: "queue-second" });
-    await flushMicrotasks();
-
-    expect(events).toContainEqual({
-      event: "chat",
-      payload: {
-        runId: "queue-second",
-        sessionKey: "agent:main:main",
-        agentId: "main",
-        state: "aborted",
-      },
-    });
-    await vi.advanceTimersByTimeAsync(100);
-    expect(activeSignal?.aborted).toBe(false);
-    expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1);
-
-    await backend.abortChat({ sessionKey: "agent:main:main", runId: "queue-third" });
-    await vi.advanceTimersByTimeAsync(100);
-    expect(events).toContainEqual({
-      event: "chat",
-      payload: {
-        runId: "queue-third",
-        sessionKey: "agent:main:main",
-        agentId: "main",
-        state: "aborted",
-      },
-    });
-    expect(activeSignal?.aborted).toBe(false);
-    expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1);
+    for (const runId of ["queue-second", "queue-third"]) {
+      await backend.abortChat({ sessionKey: "agent:main:main", runId });
+      await flushMicrotasks();
+      expect(events).toContainEqual({
+        event: "chat",
+        payload: { runId, sessionKey: "agent:main:main", agentId: "main", state: "aborted" },
+      });
+      await vi.advanceTimersByTimeAsync(100);
+      expect(activeSignal?.aborted).toBe(false);
+      expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1);
+    }
 
     active.resolve({ payloads: [{ text: "the active turn completed" }], meta: {} });
     await vi.waitFor(() => expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(2));
@@ -3067,67 +3038,6 @@ describe("EmbeddedTuiBackend", () => {
           sessionKey: "agent:main:main",
           agentId: "main",
           state: "final",
-        },
-      },
-    ]);
-  });
-
-  it("registers tool-first local runs before forwarding agent events", async () => {
-    const pending = deferred<EmbeddedAgentResult>();
-    agentCommandFromIngressMock.mockReturnValueOnce(pending.promise);
-
-    const backend = new EmbeddedTuiBackend();
-    const events = captureBackendEvents(backend);
-
-    backend.start();
-    await sendMainChat(backend, "run tool first", "run-tool-first");
-
-    registeredListener?.({
-      runId: "run-tool-first",
-      stream: "tool",
-      data: { phase: "start", toolCallId: "tc-tool-first", name: "exec" },
-    });
-    pending.resolve({ payloads: [{ text: "done" }], meta: {} });
-    await flushMicrotasks();
-
-    expect(events).toEqual([
-      {
-        event: "chat",
-        payload: {
-          runId: "run-tool-first",
-          sessionKey: "agent:main:main",
-          agentId: "main",
-          state: "delta",
-          deltaText: "",
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text: "" }],
-            timestamp: embeddedEventTimestamp,
-          },
-        },
-      },
-      {
-        event: "agent",
-        payload: {
-          runId: "run-tool-first",
-          sessionKey: "agent:main:main",
-          agentId: "main",
-          stream: "tool",
-          data: { phase: "start", toolCallId: "tc-tool-first", name: "exec" },
-        },
-      },
-      {
-        event: "chat",
-        payload: {
-          runId: "run-tool-first",
-          sessionKey: "agent:main:main",
-          agentId: "main",
-          state: "final",
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text: "done" }],
-            timestamp: embeddedEventTimestamp,
-          },
         },
       },
     ]);

@@ -1,3 +1,4 @@
+import { createDeferred as deferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AgentsApiClient,
@@ -595,14 +596,6 @@ function artifact(overrides: Partial<AgentsApiArtifact> = {}): AgentsApiArtifact
     size_bytes: 4,
     ...overrides,
   };
-}
-
-function deferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  const promise = new Promise<T>((settle) => {
-    resolve = settle;
-  });
-  return { promise, resolve };
 }
 
 function serverError(status: number, headers?: HeadersInit) {
