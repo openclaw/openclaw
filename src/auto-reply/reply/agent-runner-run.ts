@@ -657,6 +657,7 @@ export async function runReplyAgent(
           returnWithQueuedFollowupDrain,
           runFollowupTurn,
           preflightCompactionApplied: turn.preflightCompactionApplied,
+          recoveryMemoryFlushAttempted: turn.memoryFlushAttempted,
           setRunFollowupTurn: (runner) => {
             runFollowupTurn = runner;
           },

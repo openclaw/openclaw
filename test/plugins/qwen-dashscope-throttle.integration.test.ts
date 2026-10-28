@@ -122,17 +122,13 @@ async function runThroughFailureRecovery(
             fallbackConfigured: false,
           });
           const { runInput, preparedRuntime, runtime, normalizedAttempt } = input;
-          Object.assign(runInput.runParams, {
-            sessionFile: `${agentDir}/session.jsonl`,
-            config: {},
-          });
+          runInput.runParams.sessionFile = `${agentDir}/session.jsonl`;
+          runInput.runParams.config = {};
           const suspensionReasons: string[] = [];
-          Object.assign(runInput, {
-            agentDir,
-            suspendForFailure: ({ reason }: { reason: string }) => {
-              suspensionReasons.push(reason);
-            },
-          });
+          runInput.agentDir = agentDir;
+          runInput.suspendForFailure = ({ reason }) => {
+            suspensionReasons.push(reason);
+          };
           runtime.thinkLevel = "off";
           const controllerRuntime = Object.assign(preparedRuntime, {
             attemptedThinking: new Set([runtime.thinkLevel]),
@@ -146,7 +142,11 @@ async function runThroughFailureRecovery(
           input.providerOwner = providerOwner;
           input.getThinkLevel = () => "off";
           input.failover = createEmbeddedRunFailoverRetryController({
-            runInput: { ...runInput, globalLane: "qwen-dashscope-throttle-test" },
+            runInput: {
+              ...runInput,
+              startedAtMs: Date.now(),
+              globalLane: "qwen-dashscope-throttle-test",
+            },
             preparedRuntime: controllerRuntime,
             getSessionId: () => runInput.runParams.sessionId,
           });
