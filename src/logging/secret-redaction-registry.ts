@@ -12,16 +12,19 @@ const state = resolveGlobalSingleton<{
   revision: number;
   registeredValues: Map<string, true>;
   registeredValueRedactor: SecretValueRedactor | undefined;
+  longestRegisteredValueLength: number | undefined;
 }>(Symbol.for("openclaw.secretRedactionRegistry"), () => ({
   revision: 0,
   registeredValues: new Map<string, true>(),
   registeredValueRedactor: undefined,
+  longestRegisteredValueLength: undefined,
 }));
 
 type SecretRedactionRegistrySnapshot = { values: readonly string[] };
 function invalidateMatcher(): void {
   state.revision += 1;
   state.registeredValueRedactor = undefined;
+  state.longestRegisteredValueLength = undefined;
 }
 
 /** Invalidates prepared redacted facts when exact secret membership changes. */
@@ -67,6 +70,23 @@ export function isSecretValueRegisteredForRedaction(value: string): boolean {
 
 export function hasRegisteredSecretValuesForRedaction(): boolean {
   return state.registeredValues.size > 0;
+}
+
+/**
+ * Length of the longest registered surface form, or 0. Registered values only match whole, so
+ * text redacted without its tail must keep this much past a cut to mask a value that starts before it.
+ */
+export function getLongestRegisteredSecretLength(): number {
+  state.longestRegisteredValueLength ??= longestValueLength(state.registeredValues.keys());
+  return state.longestRegisteredValueLength;
+}
+
+function longestValueLength(values: Iterable<string>): number {
+  let longest = 0;
+  for (const value of values) {
+    longest = Math.max(longest, value.length);
+  }
+  return longest;
 }
 
 /** Exact surface forms are already expanded; snapshots must not register them again. */

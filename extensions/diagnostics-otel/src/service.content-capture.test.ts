@@ -2,7 +2,8 @@ import {
   emitTrustedDiagnosticEventWithPrivateData as emit,
   waitForDiagnosticEventsDrained,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
-import { expect, test } from "vitest";
+import { generateSecureToken } from "openclaw/plugin-sdk/secure-random-runtime";
+import { expect, test, vi } from "vitest";
 import { installRealOtelSdkTestHarness } from "./service.real-sdk.test-support.js";
 import { CHILD_SPAN_ID, createTestTrace, startOtelService } from "./service.test-helpers.js";
 
@@ -77,3 +78,38 @@ test.each([
     }
   },
 );
+
+test("masks a registered prefix in emitted log content after earlier masks shrink it", async () => {
+  const secret = generateSecureToken({
+    bytes: 16,
+    redact: true,
+    prefix: 'synthetic-private-prefix password="',
+  });
+  const head = `${Array.from({ length: 5 }, () => `sk-${"A1b2C3d4".repeat(124)}`).join(" ")} `;
+  const message = `${head}${"x".repeat(8152 - head.length)}${secret}${"z".repeat(100_000)}`;
+  const { service, ctx } = await startOtelService({
+    logs: true,
+    logsExporter: "stdout",
+    captureContent: true,
+  });
+  const writes: string[] = [];
+  const stdout = vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+    writes.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8"));
+    return true;
+  });
+  try {
+    emit({ type: "log.record", level: "INFO", message }, undefined);
+    await waitForDiagnosticEventsDrained();
+    await service.stop?.(ctx);
+
+    expect(writes).toHaveLength(1);
+    const record = JSON.parse(writes.join(""));
+    expect(record.signal).toBe("openclaw.diagnostic.log");
+    expect(record.body).not.toContain("private-prefix");
+    expect(record.body).toContain(`synthe…${secret.slice(-4)}`);
+    expect(record.body).toContain("x".repeat(100));
+    expect(record.body.length).toBeLessThanOrEqual(4096 + "...(truncated)".length);
+  } finally {
+    stdout.mockRestore();
+  }
+});

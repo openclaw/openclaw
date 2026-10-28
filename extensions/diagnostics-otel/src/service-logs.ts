@@ -20,7 +20,7 @@ import { errorCategory, formatError } from "./service-exporter.js";
 import { contextForTraceContext, normalizedTrustedTraceContext } from "./service-trace-context.js";
 import type { OtelHttpAgentFactory, OtelHttpAgentOptions, OtelLogger } from "./service-types.js";
 
-const MAX_OTEL_LOG_BODY_CHARS = 4 * 1024;
+export const MAX_OTEL_LOG_BODY_CHARS = 4 * 1024;
 const LOG_RECORD_EXPORT_FAILURE_REPORT_INTERVAL_MS = 60_000;
 
 const LOG_SEVERITY_MAP: Record<string, SeverityNumber> = {
