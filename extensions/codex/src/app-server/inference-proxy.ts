@@ -11,6 +11,7 @@ import {
   fetchWithSsrFGuard,
   isBlockedHostnameOrIp,
   resolvePinnedHostnameWithPolicy,
+  type SsrFPolicy,
 } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   type RawData,
@@ -59,6 +60,20 @@ type ResidentTicket = {
   release: (() => void) | null;
   retiring: boolean;
 };
+
+function inferenceFakeIpPolicy(target: URL): SsrFPolicy | undefined {
+  const isChatGptHttps = target.protocol === "https:" && target.origin === "https://chatgpt.com";
+  if (!isChatGptHttps || target.username || target.password) {
+    return undefined;
+  }
+  // The exact HTTPS origin permits 198.18.0.0/15 and fc00::/7, including real ULA
+  // destinations. Other private and metadata addresses remain blocked; DNS stays pinned.
+  return {
+    hostnameAllowlist: ["chatgpt.com"],
+    allowRfc2544BenchmarkRange: true,
+    allowIpv6UniqueLocalRange: true,
+  };
+}
 
 /** Private, fixed-destination relay. Upstream credentials are never retained. */
 export async function createCodexInferenceProxy(params: {
@@ -299,6 +314,7 @@ export async function createCodexInferenceProxy(params: {
             signal: upload.signal,
             // Refresh and DNS/proxy preparation await; revalidate both owners at physical I/O.
             beforeRequest: assertAuthorized,
+            policy: inferenceFakeIpPolicy(target),
             requireHttps: true,
             maxRedirects: 0,
             capture: false,
@@ -473,7 +489,12 @@ export async function createCodexInferenceProxy(params: {
         proxyAgent = createNodeProxyAgent({ mode: "env", targetUrl: target.href });
         const lookup = proxyAgent
           ? undefined
-          : (await resolvePinnedHostnameWithPolicy(target.hostname, { signal })).lookup;
+          : (
+              await resolvePinnedHostnameWithPolicy(target.hostname, {
+                signal,
+                policy: inferenceFakeIpPolicy(target),
+              })
+            ).lookup;
         assertHandshakeCurrent();
         target.protocol = "wss:";
         const headers = relayHeaders(req.headers);
