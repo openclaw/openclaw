@@ -81,6 +81,24 @@ it.each([
   expect(link?.textContent).toBe("Read file");
 });
 
+it.each(["周报 2026 #1.md", "café notes.md", "literal%20name.txt"])(
+  "decodes only a repeated plain destination for %s",
+  (path) => {
+    const href = `${encodeURIComponent(path)}:17-20`;
+    const links = fileLinks(
+      render(`[${href}](${href}) [Read ${href}](${href}) [**${href}**](${href})`),
+    );
+    expect(
+      links.map((link) => [link.textContent, link.dataset.filePath, link.dataset.fileLine]),
+    ).toEqual([
+      [`${path}:17-20`, path, "17"],
+      [`Read ${href}`, path, "17"],
+      [href, path, "17"],
+    ]);
+    expect(links[2]?.querySelector("strong")?.textContent).toBe(href);
+  },
+);
+
 it("keeps authored URL and session destinations out of workspace file handling", () => {
   const destinations = [
     "https://example.com/caf%C3%A9%20note.md",

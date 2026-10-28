@@ -393,7 +393,16 @@ export function createMarkdownParser(): MarkdownItParser {
               if (target) {
                 token.attrs = token.attrs?.filter(([name]) => name !== "href") ?? null;
                 decorateFileLink(token, target);
-                // Keep authored labels; expose their reference only when different.
+                const label = children[index + 1];
+                if (
+                  label?.type === "text" &&
+                  children[index + 2]?.type === "link_close" &&
+                  label.content === href &&
+                  href !== decodedHref
+                ) {
+                  label.content = decodedHref;
+                }
+                // Expose the reference when it differs from the displayed label.
                 const reference = decodedHref.trim();
                 if (linkLabelText(children, index) !== reference) {
                   token.attrSet("title", reference);
