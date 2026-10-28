@@ -13,7 +13,7 @@ import { createStorageMock } from "../../test-helpers/storage.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { admitQueuedMessageForSession } from "./chat-outbox-admission.test-support.ts";
-import { applyChatPendingInputs, buildPendingInputItems } from "./chat-pending-inputs.ts";
+import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
 import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
 import {
   createTestTranscript,
@@ -79,6 +79,8 @@ async function setup(
     canSend?: boolean;
     canDismissPendingInputs?: boolean;
     retained?: ChatPendingInputsPage;
+    messages?: unknown[];
+    noticeCount?: number;
   } = {},
 ) {
   const initial = options.retained ?? page;
@@ -109,7 +111,7 @@ async function setup(
     transcript,
     historyState,
     sessionKey,
-    messages: [{ role: "assistant", content: "Earlier reply", timestamp: 50 }],
+    messages: options.messages ?? [{ role: "assistant", content: "Earlier reply", timestamp: 50 }],
     ...(options.canSend === undefined ? {} : { canSend: options.canSend }),
     ...(options.canDismissPendingInputs === undefined
       ? {}
@@ -124,7 +126,9 @@ async function setup(
   }
   await vi.dynamicImportSettled();
   await vi.waitFor(() =>
-    expect(container.querySelectorAll(".chat-notice")).toHaveLength(initial.items.length),
+    expect(container.querySelectorAll(".chat-notice")).toHaveLength(
+      options.noticeCount ?? initial.items.length,
+    ),
   );
   const rerender = () => renderChatInto(container, overrides);
   const named = (label: string) =>
@@ -153,6 +157,7 @@ async function setup(
     );
   return {
     historyState,
+    container,
     rerender,
     named,
     admitCopy,
@@ -175,6 +180,55 @@ const interruptedLabel = "Dismiss interrupted message: Draft the release notes";
 const cancelledLabel = "Dismiss cancelled message: Rename the staging bucket";
 
 describe("retired pending input dismissal", () => {
+  it("does not offer bulk dismissal for inputs already represented in history", async () => {
+    const view = await setup(() => dismissed([]), {
+      messages: page.items.map((input) => ({
+        role: "user",
+        content: "Already in the conversation",
+        __openclaw: { id: input.id },
+      })),
+      noticeCount: 0,
+    });
+    expect(view.dismissButtons()).toHaveLength(0);
+    expect(view.named(dismissAllLabel)).toBeNull();
+    expect(view.text()).toContain("Already in the conversation");
+  });
+
+  it("bulk dismisses only search-visible rows and restores them after failure", async () => {
+    const reply = createDeferred<ChatPendingInputsDismissResult>();
+    const view = await setup(() => reply.promise);
+    expectDefined(view.container.querySelector(".chat"), "chat").dispatchEvent(
+      new KeyboardEvent("keydown", { key: "f", ctrlKey: true, bubbles: true }),
+    );
+    await vi.waitFor(() =>
+      expect(view.container.querySelector(".agent-chat__search-bar input")).not.toBeNull(),
+    );
+    const search = expectDefined(
+      view.container.querySelector<HTMLInputElement>(".agent-chat__search-bar input"),
+      "transcript search",
+    );
+    search.value = "release notes";
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+    await vi.waitFor(() => expect(view.dismissButtons()).toHaveLength(1));
+    view.rowButton(dismissAllLabel).click();
+    view.rerender();
+    view.expectDismiss(["interrupted-input"]);
+    expect(view.named(dismissAllLabel)).toBeNull();
+    reply.reject(new Error("Dismissal unavailable"));
+    await vi.waitFor(() => {
+      view.rerender();
+      expect(view.text()).toContain("Dismissal unavailable");
+      expect(view.named(interruptedLabel)).not.toBeNull();
+    });
+    search.value = "no matching input";
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+    await vi.waitFor(() => expect(view.dismissButtons()).toHaveLength(0));
+    expect(view.named(dismissAllLabel)).toBeNull();
+    search.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await vi.waitFor(() => expect(view.dismissButtons()).toHaveLength(2));
+    expect(view.named(dismissAllLabel)).not.toBeNull();
+  });
+
   it("hides every dismissal control from a viewer who cannot mutate the session", async () => {
     const view = await setup(() => dismissed([]), { canDismissPendingInputs: false });
     expect(view.hasRow("interrupted-input")).toBe(true);
@@ -207,23 +261,42 @@ describe("retired pending input dismissal", () => {
     expect(view.named("Dismiss interrupted message: Image (1)")).not.toBeNull();
   });
 
-  it("marks only visible retired custody as dismissable", () => {
-    const items = buildPendingInputItems(
-      [
-        ...page.items,
-        tombstone(retained("dismissed-input", "cancelled", "Already dismissed", 102)),
-        retained("queued-input", "queued", "Summarize the open pull requests", 103),
+  it("excludes hidden, queued, canonical, and non-dismissable notice projections from a batch", async () => {
+    const canonical = retained("canonical-input", "cancelled", "Already saved", 102);
+    const steer = retained("steered-input", "interrupted", "Already steered", 103);
+    const modelChange = {
+      ...retained("model-change", "interrupted", "", 104),
+      message: {
+        role: "custom",
+        customType: "session-model-change",
+        details: { from: "example/old", to: "example/new" },
+      },
+    };
+    const view = await setup(() => dismissed(["interrupted-input", "cancelled-input"]), {
+      retained: {
+        total: 7,
+        items: [
+          ...page.items,
+          canonical,
+          steer,
+          modelChange,
+          tombstone(retained("dismissed-input", "cancelled", "Already dismissed", 105)),
+          { ...retained("queued-input", "queued", "Future request", 106), queued: true },
+        ],
+      },
+      messages: [
+        { role: "user", content: "Already saved", __openclaw: { id: canonical.id } },
+        {
+          role: "user",
+          content: "Already steered",
+          __openclaw: { idempotencyKey: steer.runId, steerTargetRunId: "original-run" },
+        },
       ],
-      [],
-    );
-    expect(
-      items.flatMap((item) =>
-        item.kind === "notice" && item.retiredPendingInput ? [item.retiredPendingInput] : [],
-      ),
-    ).toEqual([
-      { id: "interrupted-input", status: "interrupted", preview: "Draft the release notes" },
-      { id: "cancelled-input", status: "cancelled", preview: "Rename the staging bucket" },
-    ]);
+      noticeCount: 3,
+    });
+    expect(view.dismissButtons()).toHaveLength(2);
+    view.rowButton(dismissAllLabel).click();
+    view.expectDismiss(["interrupted-input", "cancelled-input"]);
   });
 
   it("hides a dismissed row at once and keeps it hidden after the Gateway confirms", async () => {
