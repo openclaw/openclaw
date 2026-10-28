@@ -78,6 +78,27 @@ it("shows skipped audit text when fast status omits the security audit", async (
   );
 });
 
+it("shows the audit suppression marker among important findings", async () => {
+  const output = await report({
+    securityAudit: {
+      ts: Date.now(),
+      summary: { critical: 0, warn: 0, info: 2 },
+      findings: [
+        { checkId: "other-info", severity: "info", title: "Other info", detail: "info detail" },
+        {
+          checkId: "security.audit.suppressions.active",
+          severity: "info",
+          title: "Security audit suppressions configured",
+          detail: "1 configured suppression(s)",
+        },
+      ],
+    },
+  });
+  expect(output).toContain("INFO Security audit suppressions configured");
+  expect(output).not.toContain("Other info");
+  expect(output).not.toContain("No critical or warn findings detected.");
+});
+
 it.each([false, true])(
   "reports auxiliary health warnings only when degraded=%s",
   async (degraded) => {

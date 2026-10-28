@@ -430,4 +430,18 @@ describe("security audit exec surface findings", () => {
       expect.objectContaining({ checkId: "security.audit.suppressions.active" }),
     );
   });
+
+  it("does not report configured suppressions as a dangerous flag", async () => {
+    const report = await auditConfig({
+      agents: { entries: { main: {} } },
+      security: { audit: { suppressions: [{ checkId: "plugins.code_safety" }] } },
+    });
+
+    expect(report.findings).not.toContainEqual(
+      expect.objectContaining({ checkId: "config.insecure_or_dangerous_flags" }),
+    );
+    expect(report.findings).toContainEqual(
+      expect.objectContaining({ checkId: "security.audit.suppressions.active" }),
+    );
+  });
 });

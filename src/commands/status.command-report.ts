@@ -103,8 +103,12 @@ export async function buildStatusCommandReportLines(
       ].join(" · ");
     };
     securityAuditLines = [theme.muted(`Summary: ${fmtSummary(securityAudit.summary)}`)];
+    // The suppression marker is info, but status must still say the audit was filtered.
     const importantFindings = securityAudit.findings.filter(
-      (f) => f.severity === "critical" || f.severity === "warn",
+      (f) =>
+        f.severity === "critical" ||
+        f.severity === "warn" ||
+        f.checkId === "security.audit.suppressions.active",
     );
     if (importantFindings.length === 0) {
       securityAuditLines.push(theme.muted("No critical or warn findings detected."));

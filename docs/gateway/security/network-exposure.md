@@ -218,7 +218,6 @@ The Control UI generates device identity with pure-JS Ed25519, so pairing works 
 <AccordionGroup>
   <Accordion title="Flags tracked by the audit today">
     - `gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true`
-    - `security.audit.suppressions configured (<count>)`
     - `hooks.gmail.allowUnsafeExternalContent=true`
     - `hooks.mappings[<index>].allowUnsafeExternalContent=true`
     - `tools.exec.applyPatch.workspaceOnly=false`

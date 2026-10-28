@@ -131,6 +131,17 @@ describe("gateway startup log", () => {
     ]);
   });
 
+  it("warns when security audit suppressions are configured", async () => {
+    const { warn } = await startup({
+      cfg: { security: { audit: { suppressions: [{ checkId: "plugins.code_safety" }] } } },
+    });
+
+    expect(warn.mock.calls).toContainEqual([
+      "security warning: security.audit.suppressions configured (1); audit output is filtered. Run `openclaw security audit --json` to review suppressedFindings.",
+    ]);
+    expect(warn.mock.calls.flat().join("\n")).not.toContain("dangerous config flags enabled");
+  });
+
   it("warns when a configured channel has no owning plugin", async () => {
     const { warn } = await startup({
       cfg: { channels: { "missing-chat": { enabled: true, token: "configured" } } },

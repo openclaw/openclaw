@@ -151,6 +151,15 @@ export async function logGatewayStartup(params: {
       "Run `openclaw security audit`.";
     params.log.warn(warning);
   }
+  // Not a dangerous flag; the audit owns its marker (security.audit.suppressions.active),
+  // and this keeps hidden findings visible in the startup log.
+  const auditSuppressionCount = params.cfg.security?.audit?.suppressions?.length ?? 0;
+  if (auditSuppressionCount > 0) {
+    params.log.warn(
+      `security warning: security.audit.suppressions configured (${auditSuppressionCount}); ` +
+        "audit output is filtered. Run `openclaw security audit --json` to review suppressedFindings.",
+    );
+  }
 }
 
 /** Format the startup model line from the model ref already selected by the caller. */
