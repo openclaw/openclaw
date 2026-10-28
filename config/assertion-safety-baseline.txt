@@ -309,7 +309,7 @@ extensions/google/provider-registration.ts	2
 extensions/google/realtime-voice-provider.ts	3
 extensions/google/transport-stream.ts	10
 extensions/google/vertex-adc.ts	3
-extensions/google/video-generation-provider.ts	13
+extensions/google/video-generation-provider.ts	4
 extensions/googlechat/src/approval-card-actions.ts	1
 extensions/googlechat/src/approval-handler.runtime.ts	1
 extensions/googlechat/src/google-auth.runtime.ts	1

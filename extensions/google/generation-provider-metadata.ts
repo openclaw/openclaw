@@ -24,9 +24,7 @@ export const DEFAULT_GOOGLE_MUSIC_MODEL = "lyria-3-clip-preview";
 export const GOOGLE_PRO_MUSIC_MODEL = "lyria-3-pro-preview";
 export const GOOGLE_MAX_INPUT_IMAGES = 10;
 
-export const DEFAULT_GOOGLE_VIDEO_MODEL = "veo-3.1-fast-generate-preview";
-export const GOOGLE_VIDEO_ALLOWED_DURATION_SECONDS = [4, 6, 8] as const;
-const GOOGLE_VIDEO_MAX_DURATION_SECONDS = GOOGLE_VIDEO_ALLOWED_DURATION_SECONDS[2];
+export const DEFAULT_GOOGLE_VIDEO_MODEL = "gemini-omni-1.1-flash";
 
 function isGoogleProviderConfiguredAsync(
   ctx: VideoGenerationProviderConfiguredContext,
@@ -36,14 +34,12 @@ function isGoogleProviderConfiguredAsync(
 
 function createGoogleVideoCommonCapabilities() {
   return {
-    maxDurationSeconds: GOOGLE_VIDEO_MAX_DURATION_SECONDS,
-    supportedDurationSeconds: [...GOOGLE_VIDEO_ALLOWED_DURATION_SECONDS],
     aspectRatios: ["16:9", "9:16"],
-    resolutions: ["720P", "1080P"],
+    resolutions: ["360P", "720P", "1080P", "4K"],
     supportsAspectRatio: true,
     supportsResolution: true,
     supportsSize: true,
-    supportsAudio: false,
+    supportsAudio: true,
   } satisfies VideoGenerationModeCapabilities;
 }
 
@@ -134,11 +130,7 @@ export function createGoogleVideoGenerationProviderMetadata(): Omit<
     id: "google",
     label: "Google",
     defaultModel: DEFAULT_GOOGLE_VIDEO_MODEL,
-    models: [
-      DEFAULT_GOOGLE_VIDEO_MODEL,
-      "veo-3.1-generate-preview",
-      "veo-3.1-lite-generate-preview",
-    ],
+    models: [DEFAULT_GOOGLE_VIDEO_MODEL],
     isConfiguredAsync: isGoogleProviderConfiguredAsync,
     capabilities: {
       generate: {
@@ -148,13 +140,16 @@ export function createGoogleVideoGenerationProviderMetadata(): Omit<
       imageToVideo: {
         enabled: true,
         maxVideos: 1,
-        maxInputImages: 1,
+        maxInputImages: 2,
         ...createGoogleVideoCommonCapabilities(),
       },
       videoToVideo: {
         enabled: true,
         maxVideos: 1,
         maxInputVideos: 1,
+        // Mixed image+video references are admitted through the video-to-video
+        // mode; the shared runtime requires a positive image limit here.
+        maxInputImages: 2,
         ...createGoogleVideoCommonCapabilities(),
       },
     },

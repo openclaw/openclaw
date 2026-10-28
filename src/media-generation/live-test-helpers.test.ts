@@ -20,12 +20,10 @@ describe("media-generation live-test helpers", () => {
 
   it("parses provider model overrides by provider id", () => {
     expect(
-      parseProviderModelMap(
-        "google/veo-3.1-fast-generate-preview, xai/grok-imagine-video, invalid",
-      ),
+      parseProviderModelMap("google/gemini-omni-1.1-flash, xai/grok-imagine-video, invalid"),
     ).toEqual(
       new Map([
-        ["google", "google/veo-3.1-fast-generate-preview"],
+        ["google", "google/gemini-omni-1.1-flash"],
         ["xai", "xai/grok-imagine-video"],
       ]),
     );

@@ -1,4 +1,5 @@
-// Google tests cover video generation provider plugin behavior.
+// Google tests cover video generation provider plugin behavior (Gemini Omni
+// Flash through the Interactions API).
 import { ApiError } from "@google/genai";
 import { formatErrorMessage, toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
 import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
@@ -6,45 +7,33 @@ import { oversizedJsonResponse } from "openclaw/plugin-sdk/test-fixtures";
 import type { VideoGenerationRequest } from "openclaw/plugin-sdk/video-generation";
 import { afterAll, afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { createGoogleGenAIMock, downloadMock, generateVideosMock, getVideosOperationMock } =
-  vi.hoisted(() => {
-    const generateVideosMockLocal = vi.fn();
-    const getVideosOperationMockLocal = vi.fn();
-    const downloadMockLocal = vi.fn();
-    const createGoogleGenAIMockLocal = vi.fn(() => {
-      return {
-        models: {
-          generateVideos: generateVideosMockLocal,
-        },
-        operations: {
-          getVideosOperation: getVideosOperationMockLocal,
-        },
-        files: {
-          download: downloadMockLocal,
-        },
-      };
-    });
+const { createGoogleGenAIMock, interactionsCreateMock } = vi.hoisted(() => {
+  const interactionsCreateMockLocal = vi.fn();
+  const createGoogleGenAIMockLocal = vi.fn(() => {
     return {
-      createGoogleGenAIMock: createGoogleGenAIMockLocal,
-      downloadMock: downloadMockLocal,
-      generateVideosMock: generateVideosMockLocal,
-      getVideosOperationMock: getVideosOperationMockLocal,
+      interactions: {
+        create: interactionsCreateMockLocal,
+      },
     };
   });
+  return {
+    createGoogleGenAIMock: createGoogleGenAIMockLocal,
+    interactionsCreateMock: interactionsCreateMockLocal,
+  };
+});
 
 vi.mock("./google-genai-runtime.js", () => ({
   createGoogleGenAI: createGoogleGenAIMock,
 }));
 
+import * as providerAuth from "openclaw/plugin-sdk/provider-auth";
 import * as providerAuthRuntime from "openclaw/plugin-sdk/provider-auth-runtime";
 import { expectExplicitVideoGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
+import { generateVideo as generateRuntimeVideo } from "openclaw/plugin-sdk/video-generation-runtime";
 import * as googleBase64 from "./base64.js";
 import { googleVideoGenerationProvider } from "./video-generation-provider.js";
-import {
-  completedRestVideoResponse,
-  completedVideo,
-  videoDownloadResponse,
-} from "./video-generation.test-support.js";
+
+const GOOGLE_FILES_BASE = "https://generativelanguage.googleapis.com/v1beta/files";
 
 function mockGoogleApiKeyAuth(apiKey = "google-key") {
   vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
@@ -57,11 +46,23 @@ function mockGoogleApiKeyAuth(apiKey = "google-key") {
 function generateVideo(overrides: Partial<VideoGenerationRequest> = {}) {
   return googleVideoGenerationProvider.generateVideo({
     provider: "google",
-    model: "veo-3.1-fast-generate-preview",
+    model: "gemini-omni-1.1-flash",
     prompt: "A tiny robot watering a windowsill garden",
     cfg: {},
     ...overrides,
   });
+}
+
+function completedInteraction(
+  outputVideo: { data?: string; uri?: string; mime_type?: string } | undefined,
+  fields: { id?: string; status?: string } = {},
+): Record<string, unknown> {
+  return {
+    id: "v1_interaction-123",
+    status: "completed",
+    ...(outputVideo === undefined ? {} : { output_video: outputVideo }),
+    ...fields,
+  };
 }
 
 type MockWithCalls = {
@@ -102,15 +103,6 @@ function requireFetchCall(
   return call as [RequestInfo | URL, RequestInit | undefined];
 }
 
-function parseFetchJsonBody(fetchMock: ReturnType<typeof vi.fn>, index: number): unknown {
-  const [, init] = requireFetchCall(fetchMock, index);
-  const body = init?.body;
-  if (typeof body !== "string") {
-    throw new Error(`expected Google video fetch body ${index}`);
-  }
-  return JSON.parse(body) as unknown;
-}
-
 function fetchInputUrl(fetchMock: ReturnType<typeof vi.fn>, index: number): string {
   const [input] = requireFetchCall(fetchMock, index);
   if (typeof input === "string") {
@@ -125,15 +117,6 @@ function fetchInputUrl(fetchMock: ReturnType<typeof vi.fn>, index: number): stri
 let ssrfMock: { mockRestore: () => void } | undefined;
 
 describe("google video generation provider", () => {
-  it("rejects a duration that rounds to zero before submission", async () => {
-    mockGoogleApiKeyAuth();
-    await expect(generateVideo({ durationSeconds: 0.4 })).rejects.toThrow(
-      "durationSeconds must be a positive duration",
-    );
-    expect(generateVideosMock).not.toHaveBeenCalled();
-    expect(createGoogleGenAIMock).not.toHaveBeenCalled();
-  });
-
   beforeEach(() => {
     ssrfMock = mockPinnedHostnameResolution();
   });
@@ -143,9 +126,7 @@ describe("google video generation provider", () => {
     ssrfMock = undefined;
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
-    downloadMock.mockReset();
-    generateVideosMock.mockReset();
-    getVideosOperationMock.mockReset();
+    interactionsCreateMock.mockReset();
     createGoogleGenAIMock.mockClear();
     vi.useRealTimers();
   });
@@ -155,108 +136,82 @@ describe("google video generation provider", () => {
     vi.resetModules();
   });
 
-  it("declares explicit mode capabilities", () => {
+  it("declares explicit mode capabilities with native audio output", () => {
     const provider = googleVideoGenerationProvider;
     expectExplicitVideoGenerationCapabilities(provider);
-    expect(provider.capabilities.generate?.supportsAudio).toBe(false);
-    expect(provider.capabilities.imageToVideo?.supportsAudio).toBe(false);
-    expect(provider.capabilities.videoToVideo?.supportsAudio).toBe(false);
+    expect(provider.capabilities.generate?.supportsAudio).toBe(true);
+    expect(provider.capabilities.imageToVideo?.supportsAudio).toBe(true);
+    expect(provider.capabilities.videoToVideo?.supportsAudio).toBe(true);
   });
 
-  it.each([
-    "sdk-create",
-    "sdk-poll",
-    "sdk-operation",
-    "rest-body",
-    "rest-status",
-    "rest-operation",
-    "download-status",
-  ] as const)("redacts the active credential from %s diagnostics", async (path) => {
-    const credential = "opaque-video-key42";
-    const diagnostic = `provider diagnostic ${credential}`;
-    mockGoogleApiKeyAuth(path === "download-status" ? "google-key" : credential);
-    if (path === "sdk-create") {
-      generateVideosMock.mockRejectedValue(new ApiError({ status: 403, message: diagnostic }));
-    } else if (path === "sdk-poll") {
-      vi.useFakeTimers();
-      generateVideosMock.mockResolvedValue({ done: false, name: "operations/pending" });
-      getVideosOperationMock.mockRejectedValue(new ApiError({ status: 403, message: diagnostic }));
-    } else if (path === "sdk-operation") {
-      generateVideosMock.mockResolvedValue({ done: true, error: { message: diagnostic } });
-    } else if (path === "download-status") {
-      generateVideosMock.mockResolvedValue(
-        completedVideo({
-          uri: `https://generativelanguage.googleapis.com/v1beta/files/video:download?key=${credential}`,
-          mimeType: "video/mp4",
-        }),
-      );
-      vi.stubGlobal(
-        "fetch",
-        vi.fn(async () => new Response(null, { status: 403, statusText: diagnostic })),
-      );
-    } else {
-      generateVideosMock.mockRejectedValue(new ApiError({ status: 404, message: "sdk 404" }));
-      vi.stubGlobal(
-        "fetch",
-        vi.fn(async () => {
-          if (path === "rest-body") {
-            return Response.json({ error: { message: diagnostic } }, { status: 403 });
-          }
-          if (path === "rest-status") {
-            return new Response(null, { status: 403, statusText: diagnostic });
-          }
-          return Response.json({ done: true, error: { message: diagnostic } });
-        }),
-      );
-    }
-
-    const result = generateVideo().catch((error: unknown) => error);
-    if (path === "sdk-poll") {
-      await vi.advanceTimersByTimeAsync(10_000);
-    }
-    const error = await result;
-    assert(error instanceof Error);
-    expect(formatErrorMessage(error)).not.toContain(credential);
-    expect(error.message).toContain("provider diagnostic");
-    if (path === "sdk-create" || path === "sdk-poll") {
-      expect(error).toMatchObject({ name: "ApiError", status: 403 });
-    } else if (path === "rest-body" || path === "rest-status") {
-      expect(error).toMatchObject({ status: 403, statusCode: 403 });
-    }
+  it("advertises Gemini Omni Flash as the only Google video model", () => {
+    const provider = googleVideoGenerationProvider;
+    expect(provider.defaultModel).toBe("gemini-omni-1.1-flash");
+    expect(provider.models).toEqual(["gemini-omni-1.1-flash"]);
   });
 
-  it("submits generation and returns inline video bytes", async () => {
+  it("rejects a duration that rounds to zero before submission", async () => {
+    mockGoogleApiKeyAuth();
+    await expect(generateVideo({ durationSeconds: 0.4 })).rejects.toThrow(
+      "durationSeconds must be a positive duration",
+    );
+    expect(interactionsCreateMock).not.toHaveBeenCalled();
+    expect(createGoogleGenAIMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects more than two input images before submission", async () => {
+    mockGoogleApiKeyAuth();
+    await expect(
+      generateVideo({
+        inputImages: [
+          { buffer: Buffer.from("a") },
+          { buffer: Buffer.from("b") },
+          { buffer: Buffer.from("c") },
+        ],
+      }),
+    ).rejects.toThrow("Google video generation supports at most two input images.");
+    expect(interactionsCreateMock).not.toHaveBeenCalled();
+    expect(createGoogleGenAIMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects more than one input video before submission", async () => {
+    mockGoogleApiKeyAuth();
+    await expect(
+      generateVideo({
+        inputVideos: [{ buffer: Buffer.from("a") }, { buffer: Buffer.from("b") }],
+      }),
+    ).rejects.toThrow("Google video generation supports at most one input video.");
+    expect(interactionsCreateMock).not.toHaveBeenCalled();
+    expect(createGoogleGenAIMock).not.toHaveBeenCalled();
+  });
+
+  it("routes the default video model through the Omni Interactions transport", async () => {
     mockGoogleApiKeyAuth();
     const videoBytes = Buffer.from([0xfb, 0xff, 0x6d, 0x70, 0x34]);
-    generateVideosMock.mockResolvedValue(
-      completedVideo(
-        {
-          videoBytes: videoBytes.toString("base64url"),
-          mimeType: "video/mp4",
-        },
-        { name: "operations/123" },
-      ),
+    interactionsCreateMock.mockResolvedValue(
+      completedInteraction({
+        data: videoBytes.toString("base64"),
+        mime_type: "video/mp4",
+      }),
     );
-    const result = await generateVideo({
-      aspectRatio: "16:9",
-      resolution: "720P",
-      durationSeconds: 3,
-      audio: true,
-    });
+    const result = await generateVideo({ model: undefined });
 
-    expect(generateVideosMock).toHaveBeenCalledTimes(1);
-    const request = firstObjectArg(generateVideosMock);
-    expect(request.model).toBe("veo-3.1-fast-generate-preview");
-    expect(request.prompt).toBe("A tiny robot watering a windowsill garden");
-    const config = recordField(request.config, "config");
-    expect(config.durationSeconds).toBe(4);
-    expect(config.aspectRatio).toBe("16:9");
-    expect(config.resolution).toBe("720p");
-    expect(config).not.toHaveProperty("generateAudio");
-    expect(config).not.toHaveProperty("numberOfVideos");
+    expect(interactionsCreateMock).toHaveBeenCalledTimes(1);
+    const request = firstObjectArg(interactionsCreateMock);
+    expect(request.model).toBe("gemini-omni-1.1-flash");
+    expect(request.input).toEqual([
+      { type: "text", text: "A tiny robot watering a windowsill garden" },
+    ]);
+    expect(request.response_format).toEqual({ type: "video", delivery: "uri" });
+    expect(request.background).toBe(false);
+    expect(request.store).toBe(false);
+    expect(request.stream).toBe(false);
     expect(result.videos).toHaveLength(1);
     expect(result.videos[0]?.buffer).toEqual(videoBytes);
     expect(result.videos[0]?.mimeType).toBe("video/mp4");
+    expect(result.videos[0]?.fileName).toBe("video-1.mp4");
+    expect(result.model).toBe("gemini-omni-1.1-flash");
+    expect(result.metadata).toEqual({ interactionId: "v1_interaction-123" });
     const clientOptions = firstObjectArg(createGoogleGenAIMock);
     expect(clientOptions.apiKey).toBe("google-key");
     const httpOptions = recordField(clientOptions.httpOptions, "httpOptions");
@@ -266,76 +221,280 @@ describe("google video generation provider", () => {
 
   it.each([
     {
-      name: "image default MIME",
+      name: "aspect ratio and resolution",
+      input: { aspectRatio: "9:16", resolution: "1080P" },
+      expected: { aspect_ratio: "9:16", resolution: "1080p" },
+    },
+    {
+      name: "4K resolution label",
+      input: { resolution: "4K" },
+      expected: { resolution: "4k" },
+    },
+    {
+      name: "360p resolution label",
+      input: { resolution: "360P" },
+      expected: { resolution: "360p" },
+    },
+    {
+      name: "4K landscape size",
+      input: { size: "3840x2160" },
+      expected: { aspect_ratio: "16:9", resolution: "4k" },
+    },
+    {
+      name: "720p landscape size",
+      input: { size: "1280x720" },
+      expected: { aspect_ratio: "16:9", resolution: "720p" },
+    },
+    {
+      name: "360p landscape size",
+      input: { size: "640x360" },
+      expected: { aspect_ratio: "16:9", resolution: "360p" },
+    },
+    {
+      name: "portrait size",
+      input: { size: "720x1280" },
+      expected: { aspect_ratio: "9:16", resolution: "720p" },
+    },
+  ])("maps $name onto the video response format", async ({ input, expected }) => {
+    mockGoogleApiKeyAuth();
+    interactionsCreateMock.mockResolvedValue(completedInteraction({ data: "b3V0" }));
+
+    await generateVideo(input);
+
+    const request = firstObjectArg(interactionsCreateMock);
+    expect(request.response_format).toEqual({
+      type: "video",
+      delivery: "uri",
+      ...expected,
+    });
+  });
+
+  it("does not forward a duration to the Omni Interactions API", async () => {
+    mockGoogleApiKeyAuth();
+    interactionsCreateMock.mockResolvedValue(completedInteraction({ data: "b3V0" }));
+
+    await generateVideo({ durationSeconds: 8 });
+
+    const request = firstObjectArg(interactionsCreateMock);
+    expect(request.response_format).not.toHaveProperty("duration");
+    expect(request).not.toHaveProperty("duration");
+    expect(request).not.toHaveProperty("generation_config");
+  });
+
+  it.each(["google/gemini-omni-1.1-flash", "google/models/gemini-omni-1.1-flash"])(
+    "normalizes %s for submission while preserving the result model",
+    async (model) => {
+      mockGoogleApiKeyAuth();
+      interactionsCreateMock.mockResolvedValue(
+        completedInteraction({ data: Buffer.from("mp4").toString("base64") }),
+      );
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+
+      const result = await generateVideo({ model });
+
+      expect(interactionsCreateMock).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ model: model.slice("google/".length) }),
+        { maxRetries: 0 },
+      );
+      expect(result.model).toBe(model);
+      expect(result.videos[0]?.buffer).toEqual(Buffer.from("mp4"));
+      expect(fetchMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    {
+      name: "single image default MIME",
       input: { inputImages: [{ buffer: Buffer.from([0, 255, 128]) }] },
-      image: { imageBytes: "AP+A", mimeType: "image/png" },
-      video: undefined,
+      contents: [
+        { type: "image", data: "AP+A", mime_type: "image/png" },
+        { type: "text", text: "A tiny robot watering a windowsill garden" },
+      ],
+    },
+    {
+      name: "two images with explicit MIME",
+      input: {
+        inputImages: [
+          { buffer: Buffer.from([0, 255, 128]), mimeType: " image/WebP " },
+          { buffer: Buffer.from([1, 2, 3]) },
+        ],
+      },
+      contents: [
+        { type: "image", data: "AP+A", mime_type: "image/WebP" },
+        { type: "image", data: "AQID", mime_type: "image/png" },
+        { type: "text", text: "A tiny robot watering a windowsill garden" },
+      ],
     },
     {
       name: "video default MIME",
       input: { inputVideos: [{ buffer: Buffer.from([0, 255, 128]), mimeType: " " }] },
-      image: undefined,
-      video: { videoBytes: "AP+A", mimeType: "video/mp4" },
-    },
-    {
-      name: "image explicit MIME",
-      input: { inputImages: [{ buffer: Buffer.from([0, 255, 128]), mimeType: " image/WebP " }] },
-      image: { imageBytes: "AP+A", mimeType: "image/WebP" },
-      video: undefined,
+      contents: [
+        { type: "video", data: "AP+A", mime_type: "video/mp4" },
+        { type: "text", text: "A tiny robot watering a windowsill garden" },
+      ],
     },
     {
       name: "video empty buffer",
       input: { inputVideos: [{ buffer: Buffer.alloc(0), mimeType: " video/WebM " }] },
-      image: undefined,
-      video: { videoBytes: "", mimeType: "video/WebM" },
+      contents: [
+        { type: "video", data: "", mime_type: "video/WebM" },
+        { type: "text", text: "A tiny robot watering a windowsill garden" },
+      ],
     },
     {
       name: "URL-only image",
       input: { inputImages: [{ url: "https://example.com/reference.png" }] },
-      image: undefined,
-      video: undefined,
+      contents: [{ type: "text", text: "A tiny robot watering a windowsill garden" }],
     },
-  ])("encodes $name at the SDK boundary", async ({ input, image, video }) => {
+  ])("encodes $name as interaction contents", async ({ input, contents }) => {
     mockGoogleApiKeyAuth();
-    generateVideosMock.mockResolvedValue(completedVideo({ videoBytes: "b3V0" }));
+    interactionsCreateMock.mockResolvedValue(completedInteraction({ data: "b3V0" }));
 
     const result = await generateVideo(input);
 
-    expect(generateVideosMock).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ image, video }),
+    expect(interactionsCreateMock).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ input: contents }),
+      { maxRetries: 0 },
     );
     expect(result.videos[0]?.buffer).toEqual(Buffer.from("out"));
+  });
+
+  it("accepts image and video reference inputs together", async () => {
+    mockGoogleApiKeyAuth();
+    interactionsCreateMock.mockResolvedValue(completedInteraction({ data: "b3V0" }));
+
+    const result = await generateVideo({
+      prompt: "Extend this clip: keep the motion coherent",
+      inputImages: [{ buffer: Buffer.from("img"), mimeType: "image/png" }],
+      inputVideos: [{ buffer: Buffer.from("vid"), mimeType: "video/mp4" }],
+    });
+
+    expect(interactionsCreateMock).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        input: [
+          { type: "image", data: Buffer.from("img").toString("base64"), mime_type: "image/png" },
+          { type: "video", data: Buffer.from("vid").toString("base64"), mime_type: "video/mp4" },
+          { type: "text", text: "Extend this clip: keep the motion coherent" },
+        ],
+      }),
+      { maxRetries: 0 },
+    );
+    expect(result.videos[0]?.buffer).toEqual(Buffer.from("out"));
+  });
+
+  it("admits mixed image and video references through the shared runtime", async () => {
+    mockGoogleApiKeyAuth();
+    vi.spyOn(providerAuth, "isProviderApiKeyConfiguredAsync").mockResolvedValue(true);
+    interactionsCreateMock.mockResolvedValue(completedInteraction({ data: "b3V0" }));
+
+    const result = await generateRuntimeVideo(
+      {
+        cfg: {},
+        prompt: "Extend this clip: keep the motion coherent",
+        inputImages: [{ buffer: Buffer.from("img"), mimeType: "image/png" }],
+        inputVideos: [{ buffer: Buffer.from("vid"), mimeType: "video/mp4" }],
+      },
+      {
+        getProvider: (id) => (id === "google" ? googleVideoGenerationProvider : undefined),
+        listProviders: () => [googleVideoGenerationProvider],
+        getProviderEnvVars: () => [],
+        log: { debug: vi.fn(), warn: vi.fn() },
+      },
+    );
+
+    expect(result.provider).toBe("google");
+    expect(result.videos[0]?.buffer).toEqual(Buffer.from("out"));
+  });
+
+  it("keeps a stored retired Veo model pin loadable and recovers via the new default", async () => {
+    mockGoogleApiKeyAuth();
+    vi.spyOn(providerAuth, "isProviderApiKeyConfiguredAsync").mockResolvedValue(true);
+    const warn = vi.fn();
+    interactionsCreateMock.mockImplementation(async (request: { model?: string }) => {
+      if (request?.model?.includes("veo-")) {
+        throw new ApiError({ status: 404, message: "model not found: retired" });
+      }
+      return completedInteraction({ data: "b3V0" });
+    });
+
+    // Stored user data (mediaModels.video pinned to a retired Veo id) still
+    // loads after the upgrade: the pin is submitted as-is (single-shot), the
+    // server-side rejection is surfaced with the model ref, and the shared
+    // runtime's auto provider fallback recovers with the new default model.
+    const result = await generateRuntimeVideo(
+      {
+        cfg: {
+          agents: {
+            defaults: {
+              mediaModels: { video: "google/veo-3.1-fast-generate-preview" },
+            },
+          },
+        },
+        prompt: "A tiny robot watering a windowsill garden",
+      },
+      {
+        getProvider: (id) => (id === "google" ? googleVideoGenerationProvider : undefined),
+        listProviders: () => [googleVideoGenerationProvider],
+        getProviderEnvVars: () => [],
+        log: { debug: vi.fn(), warn },
+      },
+    );
+
+    expect(interactionsCreateMock).toHaveBeenCalledTimes(2);
+    expect(interactionsCreateMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ model: "veo-3.1-fast-generate-preview" }),
+      { maxRetries: 0 },
+    );
+    expect(interactionsCreateMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ model: "gemini-omni-1.1-flash" }),
+      { maxRetries: 0 },
+    );
+    expect(result.provider).toBe("google");
+    expect(result.videos[0]?.buffer).toEqual(Buffer.from("out"));
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("google/veo-3.1-fast-generate-preview"),
+    );
+  });
+
+  it("disables SDK-internal retries for the paid generation creation", async () => {
+    mockGoogleApiKeyAuth();
+    interactionsCreateMock.mockResolvedValue(completedInteraction({ data: "b3V0" }));
+
+    await generateVideo();
+
+    expect(interactionsCreateMock).toHaveBeenCalledWith(
+      expect.objectContaining({ model: "gemini-omni-1.1-flash" }),
+      { maxRetries: 0 },
+    );
   });
 
   it.each([
     ["non-canonical pad bits", "ZE=="],
     ["mixed alphabet", "aGVsbG8+_"],
-  ])("rejects %s in inline video bytes", async (_scenario, videoBytes) => {
+  ])("rejects %s in inline video bytes", async (_scenario, data) => {
     mockGoogleApiKeyAuth();
-    generateVideosMock.mockResolvedValue(completedVideo({ videoBytes, mimeType: "video/mp4" }));
+    interactionsCreateMock.mockResolvedValue(
+      completedInteraction({ data, mime_type: "video/mp4" }),
+    );
 
-    await expect(
-      generateVideo({
-        durationSeconds: 3,
-      }),
-    ).rejects.toThrow("Google video generation returned malformed base64 video data");
+    await expect(generateVideo()).rejects.toThrow(
+      "Google video generation returned malformed base64 video data",
+    );
   });
 
   it("rejects oversized inline video before canonicalization or decoding", async () => {
     mockGoogleApiKeyAuth();
-    const videoBytes = " -_9tcDQ\n";
-    generateVideosMock.mockResolvedValue(
-      completedVideo({
-        videoBytes,
-        mimeType: "video/mp4",
-      }),
+    interactionsCreateMock.mockResolvedValue(
+      completedInteraction({ data: " -_9tcDQ\n", mime_type: "video/mp4" }),
     );
     const canonicalize = vi.spyOn(googleBase64, "canonicalizeGoogleProviderBase64");
     const decode = vi.spyOn(Buffer, "from");
     await expect(
       generateVideo({
         cfg: { agents: { defaults: { mediaMaxMb: 0.000001 } } },
-        durationSeconds: 3,
       }),
     ).rejects.toThrow("Google generated video download exceeds 1 bytes");
     expect(canonicalize).not.toHaveBeenCalled();
@@ -343,11 +502,11 @@ describe("google video generation provider", () => {
   });
 
   it.each([
-    { videoBytes: "YQ==", expected: [0x61], maxBytes: 1 },
-    { videoBytes: " -_8\n", expected: [0xfb, 0xff], maxBytes: 2 },
+    { data: "YQ==", expected: [0x61], maxBytes: 1 },
+    { data: " -_8\n", expected: [0xfb, 0xff], maxBytes: 2 },
   ])("accepts inline video exactly at the $maxBytes-byte cap", async (fixture) => {
     mockGoogleApiKeyAuth();
-    generateVideosMock.mockResolvedValue(completedVideo({ videoBytes: fixture.videoBytes }));
+    interactionsCreateMock.mockResolvedValue(completedInteraction({ data: fixture.data }));
 
     const result = await generateVideo({
       cfg: { agents: { defaults: { mediaMaxMb: fixture.maxBytes / (1024 * 1024) } } },
@@ -377,272 +536,230 @@ describe("google video generation provider", () => {
     },
   ])("$name", async ({ baseUrl, expectedBaseUrl, prompt }) => {
     mockGoogleApiKeyAuth();
-    generateVideosMock.mockResolvedValue(
-      completedVideo({ videoBytes: Buffer.from("mp4").toString("base64"), mimeType: "video/mp4" }),
+    interactionsCreateMock.mockResolvedValue(
+      completedInteraction({ data: Buffer.from("mp4").toString("base64") }),
     );
 
     await generateVideo({
       prompt,
       cfg: { models: { providers: { google: { baseUrl, models: [] } } } },
-      durationSeconds: 3,
     });
 
     expect(firstGoogleClientHttpOptions().baseUrl).toBe(expectedBaseUrl);
   });
 
-  it("downloads MLDev direct video uri responses without routing through the Files API", async () => {
+  it("reports a completed interaction without video output", async () => {
     mockGoogleApiKeyAuth();
-    generateVideosMock.mockResolvedValue(completedVideo());
-    const fetchMock = vi.fn(async () => {
-      return videoDownloadResponse("direct-mp4");
+    interactionsCreateMock.mockResolvedValue(completedInteraction(undefined));
+    const fetchMock = vi.fn(() => {
+      throw new Error("Unexpected second generation request");
     });
     vi.stubGlobal("fetch", fetchMock);
-    const result = await generateVideo({
-      durationSeconds: 3,
-    });
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [[downloadUrl]] = fetchMock.mock.calls as unknown as [[string, RequestInit?]];
-    expect(downloadUrl).toBe(
-      "https://generativelanguage.googleapis.com/v1beta/files/generated-video:download?alt=media&key=google-key",
+    await expect(generateVideo()).rejects.toThrow(
+      "Google video generation response missing generated videos",
     );
-    expect(downloadMock).not.toHaveBeenCalled();
-    expect(result.videos[0]?.buffer).toEqual(Buffer.from("direct-mp4"));
-    expect(result.videos[0]?.mimeType).toBe("video/mp4");
+
+    expect(interactionsCreateMock).toHaveBeenCalledOnce();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("rejects direct video uri downloads that exceed the configured media cap", async () => {
+  it("downloads uri-delivered videos through the Files API after the file becomes ACTIVE", async () => {
     mockGoogleApiKeyAuth();
-    generateVideosMock.mockResolvedValue(completedVideo());
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => videoDownloadResponse("too-large")),
+    interactionsCreateMock.mockResolvedValue(
+      completedInteraction({ uri: "files/generated-video", mime_type: "video/mp4" }),
     );
-    await expect(
-      generateVideo({
-        cfg: { agents: { defaults: { mediaMaxMb: 0.000001 } } },
-        durationSeconds: 3,
-      }),
-    ).rejects.toThrow("Google generated video download exceeds 1 bytes");
-  });
-
-  it.each([
-    { name: "JSON error", contentType: "application/json", body: '{"error":"denied"}' },
-    { name: "problem JSON", contentType: "application/problem+json", body: '{"title":"denied"}' },
-    { name: "HTML", contentType: "text/html; charset=utf-8", body: "<html>sign in</html>" },
-    { name: "empty video", contentType: "video/mp4", body: "" },
-  ])("rejects a successful $name direct video uri response", async ({ contentType, body }) => {
-    mockGoogleApiKeyAuth();
-    generateVideosMock.mockResolvedValue(completedVideo());
-    const fetchMock = vi.fn(async () => {
-      return videoDownloadResponse(body, contentType);
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
-    await expect(
-      generateVideo({
-        durationSeconds: 3,
-      }),
-    ).rejects.toThrow("Google generated video download: malformed video response");
-  });
-
-  it("cancels each captured failed video download without waiting for its cloned stream", async () => {
-    mockGoogleApiKeyAuth();
-    generateVideosMock.mockResolvedValue(completedVideo());
-
-    const capturedResponses: Response[] = [];
-    const canceledBodies: ReadableStream<Uint8Array>[] = [];
-    const fetchMock = vi.fn(async () => {
-      const body = new ReadableStream<Uint8Array>({
-        start(controller) {
-          controller.enqueue(new Uint8Array([1]));
-        },
-      });
-      const response = new Response(body, {
-        status: 503,
-        statusText: "Service Unavailable",
-      });
-      capturedResponses.push(response.clone());
-      const responseBody = response.body;
-      if (!responseBody) {
-        throw new Error("expected a streaming video download response");
-      }
-      const cancel = responseBody.cancel.bind(responseBody);
-      vi.spyOn(responseBody, "cancel").mockImplementation((reason) => {
-        canceledBodies.push(responseBody);
-        return cancel(reason);
-      });
-      return response;
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
-    try {
-      await expect(
-        generateVideo({
-          durationSeconds: 3,
-        }),
-      ).rejects.toThrow("Failed to download Google generated video: 503 Service Unavailable");
-
-      expect(fetchMock).toHaveBeenCalledTimes(2);
-      expect(canceledBodies).toHaveLength(2);
-      expect(canceledBodies[0]).not.toBe(canceledBodies[1]);
-    } finally {
-      await Promise.all(
-        capturedResponses.map(async (response) => {
-          await response.body?.cancel();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json({ name: "files/generated-video", state: "ACTIVE" }))
+      .mockResolvedValueOnce(
+        new Response("uri-video", {
+          status: 200,
+          statusText: "OK",
+          headers: { "content-type": "video/mp4" },
         }),
       );
-    }
-  });
-
-  it("preserves the video download error when a failed response has no body", async () => {
-    mockGoogleApiKeyAuth();
-    generateVideosMock.mockResolvedValue(completedVideo());
-    const fetchMock = vi.fn(
-      async () => new Response(null, { status: 503, statusText: "Service Unavailable" }),
-    );
     vi.stubGlobal("fetch", fetchMock);
+    const result = await generateVideo();
 
-    await expect(
-      generateVideo({
-        durationSeconds: 3,
-      }),
-    ).rejects.toThrow("Failed to download Google generated video: 503 Service Unavailable");
     expect(fetchMock).toHaveBeenCalledTimes(2);
-  });
-
-  it("downloads SDK file handles through the bounded REST media endpoint", async () => {
-    mockGoogleApiKeyAuth();
-    generateVideosMock.mockResolvedValue(
-      completedVideo({
-        uri: "files/generated-video",
-        mimeType: "video/mp4",
-      }),
+    expect(fetchInputUrl(fetchMock, 0)).toBe(`${GOOGLE_FILES_BASE}/generated-video`);
+    expect(fetchInputUrl(fetchMock, 1)).toBe(
+      `${GOOGLE_FILES_BASE}/generated-video:download?alt=media&key=google-key`,
     );
-    const fetchMock = vi.fn(async () => {
-      return videoDownloadResponse("sdk-video");
-    });
-    vi.stubGlobal("fetch", fetchMock);
-    const result = await generateVideo({
-      durationSeconds: 3,
-    });
-
-    expect(fetchInputUrl(fetchMock, 0)).toBe(
-      "https://generativelanguage.googleapis.com/v1beta/files/generated-video:download?alt=media&key=google-key",
-    );
-    expect(downloadMock).not.toHaveBeenCalled();
-    expect(result.videos[0]?.buffer).toEqual(Buffer.from("sdk-video"));
+    expect(result.videos[0]?.buffer).toEqual(Buffer.from("uri-video"));
+    expect(result.videos[0]?.mimeType).toBe("video/mp4");
     expect(result.videos[0]?.fileName).toBe("video-1.mp4");
   });
 
-  it("rejects SDK file-handle downloads that exceed the configured media cap", async () => {
+  it("downloads full-url uri-delivered videos after polling the file state", async () => {
     mockGoogleApiKeyAuth();
-    generateVideosMock.mockResolvedValue(
-      completedVideo({
-        uri: "files/generated-video",
-        mimeType: "video/mp4",
+    interactionsCreateMock.mockResolvedValue(
+      completedInteraction({
+        uri: "https://generativelanguage.googleapis.com/v1beta/files/full-uri-video:download?alt=media",
+        mime_type: "video/mp4",
       }),
     );
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => videoDownloadResponse("too-large")),
-    );
-    await expect(
-      generateVideo({
-        cfg: { agents: { defaults: { mediaMaxMb: 0.000001 } } },
-        durationSeconds: 3,
-      }),
-    ).rejects.toThrow("Google generated video download exceeds 1 bytes");
-    expect(downloadMock).not.toHaveBeenCalled();
-  });
-
-  it.each(["google/veo-3.1-fast-generate-preview", "google/models/veo-3.1-fast-generate-preview"])(
-    "normalizes %s for SDK submission while preserving the result model",
-    async (model) => {
-      mockGoogleApiKeyAuth();
-      generateVideosMock.mockResolvedValue(
-        completedVideo({
-          videoBytes: Buffer.from("mp4").toString("base64"),
-          mimeType: "video/mp4",
-        }),
-      );
-      const fetchMock = vi.fn();
-      vi.stubGlobal("fetch", fetchMock);
-
-      const result = await generateVideo({ model });
-
-      expect(generateVideosMock).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ model: model.slice("google/".length) }),
-      );
-      expect(result.model).toBe(model);
-      expect(result.videos[0]?.buffer).toEqual(Buffer.from("mp4"));
-      expect(fetchMock).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each([
-    { name: "empty", response: { generatedVideos: [] } },
-    {
-      name: "filtered",
-      response: {
-        generatedVideos: [],
-        raiMediaFilteredCount: 1,
-        raiMediaFilteredReasons: ["Synthetic content filter"],
-      },
-    },
-  ])(
-    "reports a completed $name result without submitting another generation",
-    async ({ response }) => {
-      mockGoogleApiKeyAuth();
-      generateVideosMock.mockResolvedValue({ done: true, name: "operations/empty", response });
-      const fetchMock = vi.fn(() => {
-        throw new Error("Unexpected second generation request");
-      });
-      vi.stubGlobal("fetch", fetchMock);
-
-      await expect(generateVideo()).rejects.toThrow(
-        "Google video generation response missing generated videos",
-      );
-
-      expect(generateVideosMock).toHaveBeenCalledOnce();
-      expect(fetchMock).not.toHaveBeenCalled();
-    },
-  );
-
-  it("falls back to REST predictLongRunning when text-only SDK video generation returns 404", async () => {
-    mockGoogleApiKeyAuth();
-    generateVideosMock.mockRejectedValue(Object.assign(new Error("sdk 404"), { status: 404 }));
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce(completedRestVideoResponse())
-      .mockResolvedValueOnce(videoDownloadResponse("rest-video"));
+      .mockResolvedValueOnce(Response.json({ name: "files/full-uri-video", state: "ACTIVE" }))
+      .mockResolvedValueOnce(
+        new Response("full-uri-video", {
+          status: 200,
+          statusText: "OK",
+          headers: { "content-type": "video/mp4" },
+        }),
+      );
     vi.stubGlobal("fetch", fetchMock);
-    const result = await generateVideo({
-      model: "google/models/veo-3.1-fast-generate-preview",
-      durationSeconds: 3,
-    });
+    const result = await generateVideo();
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(fetchInputUrl(fetchMock, 0)).toBe(
-      "https://generativelanguage.googleapis.com/v1beta/models/veo-3.1-fast-generate-preview:predictLongRunning",
-    );
-    expect(parseFetchJsonBody(fetchMock, 0)).toEqual({
-      instances: [{ prompt: "A tiny robot watering a windowsill garden" }],
-      parameters: { durationSeconds: 4 },
-    });
+    expect(fetchInputUrl(fetchMock, 0)).toBe(`${GOOGLE_FILES_BASE}/full-uri-video`);
     expect(fetchInputUrl(fetchMock, 1)).toBe(
-      "https://generativelanguage.googleapis.com/v1beta/files/rest-video:download?alt=media&key=google-key",
+      `${GOOGLE_FILES_BASE}/full-uri-video:download?alt=media&key=google-key`,
     );
-    expect(downloadMock).not.toHaveBeenCalled();
+    expect(result.videos[0]?.buffer).toEqual(Buffer.from("full-uri-video"));
+  });
+
+  it("polls until a uri-delivered file becomes ACTIVE", async () => {
+    vi.useFakeTimers();
+    mockGoogleApiKeyAuth();
+    interactionsCreateMock.mockResolvedValue(
+      completedInteraction({ uri: "files/generated-video" }),
+    );
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json({ state: "PROCESSING" }))
+      .mockResolvedValueOnce(Response.json({ state: "ACTIVE" }))
+      .mockResolvedValueOnce(
+        new Response("polled-video", {
+          status: 200,
+          statusText: "OK",
+          headers: { "content-type": "video/mp4" },
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const resultPromise = generateVideo();
+    await vi.advanceTimersByTimeAsync(10_000);
+    const result = await resultPromise;
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchInputUrl(fetchMock, 0)).toBe(`${GOOGLE_FILES_BASE}/generated-video`);
+    expect(fetchInputUrl(fetchMock, 1)).toBe(`${GOOGLE_FILES_BASE}/generated-video`);
+    expect(fetchInputUrl(fetchMock, 2)).toBe(
+      `${GOOGLE_FILES_BASE}/generated-video:download?alt=media&key=google-key`,
+    );
+    expect(result.videos[0]?.buffer).toEqual(Buffer.from("polled-video"));
+  });
+
+  it("rejects when a uri-delivered file fails processing", async () => {
+    mockGoogleApiKeyAuth();
+    interactionsCreateMock.mockResolvedValue(
+      completedInteraction({ uri: "files/generated-video" }),
+    );
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json({ name: "files/generated-video", state: "FAILED" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(generateVideo()).rejects.toThrow("Google generated video file processing failed");
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("retries transient file-state poll failures with empty bodies", async () => {
+    vi.useFakeTimers();
+    mockGoogleApiKeyAuth();
+    interactionsCreateMock.mockResolvedValue(
+      completedInteraction({ uri: "files/generated-video" }),
+    );
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("", { status: 503, statusText: "Service Unavailable" }))
+      .mockResolvedValueOnce(Response.json({ state: "PROCESSING" }))
+      .mockResolvedValueOnce(Response.json({ state: "ACTIVE" }))
+      .mockResolvedValueOnce(
+        new Response("rest-video", {
+          status: 200,
+          statusText: "OK",
+          headers: { "content-type": "video/mp4" },
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const resultPromise = generateVideo();
+    await vi.advanceTimersByTimeAsync(10_250);
+    const result = await resultPromise;
+
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(fetchInputUrl(fetchMock, 0)).toBe(`${GOOGLE_FILES_BASE}/generated-video`);
+    expect(fetchInputUrl(fetchMock, 1)).toBe(`${GOOGLE_FILES_BASE}/generated-video`);
+    expect(fetchInputUrl(fetchMock, 2)).toBe(`${GOOGLE_FILES_BASE}/generated-video`);
+    expect(fetchInputUrl(fetchMock, 3)).toBe(
+      `${GOOGLE_FILES_BASE}/generated-video:download?alt=media&key=google-key`,
+    );
     expect(result.videos[0]?.buffer).toEqual(Buffer.from("rest-video"));
   });
 
+  it.each(["create", "file-poll", "download"] as const)(
+    "redacts the active credential from %s diagnostics",
+    async (path) => {
+      const credential = "opaque-video-key42";
+      const diagnostic = `provider diagnostic ${credential}`;
+      mockGoogleApiKeyAuth(credential);
+      if (path === "create") {
+        interactionsCreateMock.mockRejectedValue(
+          new ApiError({ status: 403, message: diagnostic }),
+        );
+      } else {
+        interactionsCreateMock.mockResolvedValue(
+          completedInteraction({ uri: "files/generated-video" }),
+        );
+        vi.stubGlobal(
+          "fetch",
+          vi.fn(async (input: RequestInfo | URL) => {
+            const requestUrl =
+              typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+            if (path === "download" && !requestUrl.includes(":download")) {
+              // The download row must reach the failing download: the first
+              // file-state poll succeeds so only the download stage fails.
+              return Response.json({ state: "ACTIVE" });
+            }
+            if (path === "file-poll") {
+              return new Response(null, { status: 403, statusText: diagnostic });
+            }
+            return new Response("video-bytes", {
+              status: 403,
+              statusText: diagnostic,
+              headers: { "content-type": "video/mp4" },
+            });
+          }),
+        );
+      }
+
+      const error: unknown = await generateVideo().catch((cause: unknown) => cause);
+      assert(error instanceof Error);
+      expect(formatErrorMessage(error)).not.toContain(credential);
+      expect(error.message).toContain("provider diagnostic");
+      if (path === "create") {
+        expect(error).toMatchObject({ name: "ApiError", status: 403 });
+      } else if (path === "file-poll") {
+        expect(error).toMatchObject({ status: 403, statusCode: 403 });
+      } else {
+        // Download-stage failures surface as a plain provider error whose
+        // message carries the redacted diagnostic.
+        expect(error.message).toContain("Failed to download Google generated video: 403");
+        expect(error).not.toHaveProperty("status");
+      }
+    },
+  );
+
   it.each(["headers", "body"] as const)(
-    "bounds REST %s waits by the operation deadline",
+    "bounds file-state polling %s waits by the operation deadline",
     async (phase) => {
       vi.useFakeTimers();
       mockGoogleApiKeyAuth();
-      generateVideosMock.mockRejectedValue(Object.assign(new Error("sdk 404"), { status: 404 }));
+      interactionsCreateMock.mockResolvedValue(
+        completedInteraction({ uri: "files/generated-video" }),
+      );
       const started = Promise.withResolvers<void>();
       const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
         const signal = init?.signal;
@@ -670,141 +787,136 @@ describe("google video generation provider", () => {
         return Promise.resolve(response);
       });
       vi.stubGlobal("fetch", fetchMock);
+      // The file-state poll stage retries one transient timeout attempt; on the
+      // retry the already-exhausted deadline surfaces as the operation error.
       const rejection = expect(generateVideo({ timeoutMs: 1_000 })).rejects.toMatchObject({
-        name: "TimeoutError",
-        message: "request timed out",
+        message: "Google video generation timed out after 1000ms",
       });
       await started.promise;
-      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.advanceTimersByTimeAsync(2_500);
       await rejection;
       expect(fetchMock).toHaveBeenCalledOnce();
     },
   );
 
-  it("bounds successful Google REST operation JSON bodies instead of buffering the whole response", async () => {
+  it("bounds successful file-state JSON bodies instead of buffering the whole response", async () => {
     mockGoogleApiKeyAuth();
-    generateVideosMock.mockRejectedValue(Object.assign(new Error("sdk 404"), { status: 404 }));
+    interactionsCreateMock.mockResolvedValue(
+      completedInteraction({ uri: "files/generated-video" }),
+    );
     const streamed = oversizedJsonResponse({ chunkCount: 64, chunkSize: 1024 * 1024 });
     const fetchMock = vi.fn(async () => streamed.response);
     vi.stubGlobal("fetch", fetchMock);
-    await expect(
-      generateVideo({
-        durationSeconds: 3,
-      }),
-    ).rejects.toThrow("Google video operation response: JSON response exceeds 16777216 bytes");
+    await expect(generateVideo()).rejects.toThrow(
+      "Google video operation response: JSON response exceeds 16777216 bytes",
+    );
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(streamed.getReadCount()).toBeLessThan(64);
     expect(streamed.wasCanceled()).toBe(true);
   });
 
-  it("reports malformed Google REST operation JSON with a stable provider error", async () => {
+  it("reports malformed file-state JSON with a stable provider error", async () => {
     const credential = "opaque-video-key42";
     mockGoogleApiKeyAuth(credential);
-    generateVideosMock.mockRejectedValue(Object.assign(new Error("sdk 404"), { status: 404 }));
+    interactionsCreateMock.mockResolvedValue(
+      completedInteraction({ uri: "files/generated-video" }),
+    );
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(credential, { status: 200 })));
 
-    const error: unknown = await generateVideo({ durationSeconds: 3 }).catch(
-      (cause: unknown) => cause,
-    );
+    const error: unknown = await generateVideo().catch((cause: unknown) => cause);
     assert(error instanceof Error);
     expect(error.message).toBe("Google video operation response: malformed JSON response");
     expect(formatErrorMessage(error)).not.toContain(credential);
     expect(error.cause).toBeUndefined();
   });
 
-  it("rejects invalid UTF-8 in Google REST operation JSON before parsing", async () => {
+  it("rejects invalid UTF-8 in file-state JSON before parsing", async () => {
     mockGoogleApiKeyAuth();
-    generateVideosMock.mockRejectedValue(Object.assign(new Error("sdk 404"), { status: 404 }));
+    interactionsCreateMock.mockResolvedValue(
+      completedInteraction({ uri: "files/generated-video" }),
+    );
     const invalidUtf8Json = new Uint8Array([
-      ...Buffer.from('{"done":true,"name":"operations/'),
+      ...Buffer.from('{"state":"'),
       0xff,
       ...Buffer.from('"}'),
     ]);
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(invalidUtf8Json)));
 
-    await expect(
-      generateVideo({
-        durationSeconds: 3,
-      }),
-    ).rejects.toThrow("Google video operation response: malformed JSON response");
+    await expect(generateVideo()).rejects.toThrow(
+      "Google video operation response: malformed JSON response",
+    );
   });
 
-  it("retries transient Google REST poll failures with empty bodies", async () => {
-    vi.useFakeTimers();
+  it("rejects uri-delivered downloads that exceed the configured media cap", async () => {
     mockGoogleApiKeyAuth();
-    generateVideosMock.mockRejectedValue(Object.assign(new Error("sdk 404"), { status: 404 }));
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(
-        new Response(
-          JSON.stringify({
-            done: false,
-            name: "operations/rest-123",
-          }),
-        ),
-      )
-      .mockResolvedValueOnce(new Response("", { status: 503, statusText: "Service Unavailable" }))
-      .mockResolvedValueOnce(completedRestVideoResponse())
-      .mockResolvedValueOnce(videoDownloadResponse("rest-video"));
-    vi.stubGlobal("fetch", fetchMock);
-    const resultPromise = generateVideo({
-      durationSeconds: 3,
+    interactionsCreateMock.mockResolvedValue(
+      completedInteraction({ uri: "files/generated-video" }),
+    );
+    let callCount = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        callCount += 1;
+        if (callCount === 1) {
+          return Response.json({ state: "ACTIVE" });
+        }
+        return new Response("too-large", {
+          status: 200,
+          statusText: "OK",
+          headers: { "content-type": "video/mp4" },
+        });
+      }),
+    );
+    await expect(
+      generateVideo({
+        cfg: { agents: { defaults: { mediaMaxMb: 0.000001 } } },
+      }),
+    ).rejects.toThrow("Google generated video download exceeds 1 bytes");
+  });
+
+  it.each([
+    { name: "JSON error", contentType: "application/json", body: '{"error":"denied"}' },
+    { name: "problem JSON", contentType: "application/problem+json", body: '{"title":"denied"}' },
+    { name: "HTML", contentType: "text/html; charset=utf-8", body: "<html>sign in</html>" },
+    { name: "empty video", contentType: "video/mp4", body: "" },
+  ])("rejects a successful $name video download response", async ({ contentType, body }) => {
+    mockGoogleApiKeyAuth();
+    interactionsCreateMock.mockResolvedValue(
+      completedInteraction({ uri: "files/generated-video" }),
+    );
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (typeof input === "string" && !input.includes(":download")) {
+        return Response.json({ state: "ACTIVE" });
+      }
+      return new Response(body, {
+        status: 200,
+        statusText: "OK",
+        headers: { "content-type": contentType },
+      });
     });
-    await vi.advanceTimersByTimeAsync(10_250);
-    const result = await resultPromise;
-
-    expect(fetchMock).toHaveBeenCalledTimes(4);
-    expect(fetchInputUrl(fetchMock, 1)).toBe(
-      "https://generativelanguage.googleapis.com/v1beta/operations/rest-123",
-    );
-    expect(fetchInputUrl(fetchMock, 2)).toBe(
-      "https://generativelanguage.googleapis.com/v1beta/operations/rest-123",
-    );
-    expect(result.videos[0]?.buffer).toEqual(Buffer.from("rest-video"));
-  });
-
-  it("does not fall back to REST when SDK video generation with reference inputs returns 404", async () => {
-    mockGoogleApiKeyAuth();
-    generateVideosMock.mockRejectedValue(Object.assign(new Error("sdk 404"), { status: 404 }));
-    const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
-    await expect(
-      generateVideo({
-        prompt: "Animate this sketch",
-        inputImages: [{ buffer: Buffer.from("img"), mimeType: "image/png" }],
-      }),
-    ).rejects.toThrow("sdk 404");
 
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it("rejects mixed image and video inputs", async () => {
-    mockGoogleApiKeyAuth();
-
-    await expect(
-      generateVideo({
-        prompt: "Animate",
-        inputImages: [{ buffer: Buffer.from("img"), mimeType: "image/png" }],
-        inputVideos: [{ buffer: Buffer.from("vid"), mimeType: "video/mp4" }],
-      }),
-    ).rejects.toThrow("Google video generation does not support image and video inputs together.");
-  });
-
-  it("rounds unsupported durations to the nearest Veo value", async () => {
-    mockGoogleApiKeyAuth();
-    generateVideosMock.mockResolvedValue(
-      completedVideo({
-        videoBytes: Buffer.from("mp4-bytes").toString("base64"),
-        mimeType: "video/mp4",
-      }),
+    await expect(generateVideo()).rejects.toThrow(
+      "Google generated video download: malformed video response",
     );
-    await generateVideo({
-      durationSeconds: 5,
-    });
+  });
 
-    const request = firstObjectArg(generateVideosMock);
-    const config = recordField(request.config, "config");
-    expect(config.durationSeconds).toBe(6);
+  it("preserves the video download error when a failed response has no body", async () => {
+    mockGoogleApiKeyAuth();
+    interactionsCreateMock.mockResolvedValue(
+      completedInteraction({ uri: "files/generated-video" }),
+    );
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (typeof input === "string" && !input.includes(":download")) {
+        return Response.json({ state: "ACTIVE" });
+      }
+      return new Response(null, { status: 503, statusText: "Service Unavailable" });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(generateVideo()).rejects.toThrow(
+      "Failed to download Google generated video: 503 Service Unavailable",
+    );
   });
 });

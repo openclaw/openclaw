@@ -21,6 +21,7 @@ import {
   normalizeVideoGenerationDuration,
   type GeneratedVideoAsset,
   type VideoGenerationProvider,
+  type VideoGenerationRequest,
 } from "openclaw/plugin-sdk/video-generation";
 import { canonicalizeGoogleProviderBase64 } from "./base64.js";
 import { parseGeminiAuth } from "./gemini-auth.js";
@@ -28,10 +29,9 @@ import { resolveGoogleGenerationApiKey } from "./generation-auth.js";
 import {
   createGoogleVideoGenerationProviderMetadata,
   DEFAULT_GOOGLE_VIDEO_MODEL,
-  GOOGLE_VIDEO_ALLOWED_DURATION_SECONDS,
 } from "./generation-provider-metadata.js";
 import { resolveGoogleApiClientHeaders } from "./google-api-client-header.js";
-import { createGoogleGenAI, type GoogleGenAIClient } from "./google-genai-runtime.js";
+import { createGoogleGenAI } from "./google-genai-runtime.js";
 import { stripGoogleProviderPrefix } from "./model-id.js";
 import { resolveGoogleGenerativeAiApiOrigin } from "./provider-policy.js";
 
@@ -41,6 +41,18 @@ const MAX_POLL_ATTEMPTS = 120;
 const GOOGLE_VIDEO_OPERATION_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 const GOOGLE_VIDEO_EMPTY_RESULT_MESSAGE =
   "Google video generation response missing generated videos";
+const GOOGLE_VIDEO_FILE_FAILED_MESSAGE = "Google generated video file processing failed";
+
+type GoogleInteractionVideoContent = {
+  data?: string;
+  uri?: string;
+  mime_type?: string;
+};
+
+type GoogleInteraction = {
+  id?: string;
+  output_video?: GoogleInteractionVideoContent;
+};
 
 function resolveGoogleVideoRestBaseUrl(configuredBaseUrl?: string): string {
   return `${configuredBaseUrl ?? "https://generativelanguage.googleapis.com"}/v1beta`;
@@ -81,36 +93,29 @@ function resolveAspectRatio(params: {
 function resolveResolution(params: {
   resolution?: string;
   size?: string;
-}): "720p" | "1080p" | undefined {
-  if (params.resolution === "720P") {
-    return "720p";
-  }
-  if (params.resolution === "1080P") {
-    return "1080p";
+}): "360p" | "720p" | "1080p" | "4k" | undefined {
+  const direct = normalizeOptionalString(params.resolution)?.toLowerCase();
+  if (direct === "360p" || direct === "720p" || direct === "1080p" || direct === "4k") {
+    return direct;
   }
   const parsedSize = parseVideoSize(params.size);
   if (!parsedSize) {
     return undefined;
   }
   const maxEdge = Math.max(parsedSize.width, parsedSize.height);
-  return maxEdge >= 1920 ? "1080p" : maxEdge >= 1280 ? "720p" : undefined;
-}
-
-function resolveGoogleGeneratedVideoFileDownloadUrl(params: {
-  file: unknown;
-  apiKey: string;
-  configuredBaseUrl?: string;
-}): string | undefined {
-  const resource = params.file as { name?: unknown; uri?: unknown } | undefined;
-  const name = normalizeOptionalString(resource?.name) ?? normalizeOptionalString(resource?.uri);
-  if (!name || !/^files\/[^/?#]+$/u.test(name)) {
-    return undefined;
+  if (maxEdge >= 3840) {
+    return "4k";
   }
-  const baseUrl = resolveGoogleVideoRestBaseUrl(params.configuredBaseUrl);
-  const url = new URL(`${baseUrl}/${name}:download`);
-  url.searchParams.set("alt", "media");
-  url.searchParams.set("key", params.apiKey);
-  return url.toString();
+  if (maxEdge >= 1920) {
+    return "1080p";
+  }
+  if (maxEdge >= 1280) {
+    return "720p";
+  }
+  if (maxEdge >= 640) {
+    return "360p";
+  }
+  return undefined;
 }
 
 function extractGoogleApiErrorCode(error: unknown): number | undefined {
@@ -126,17 +131,6 @@ function extractGoogleApiErrorCode(error: unknown): number | undefined {
   } catch {
     return /\b404\b/u.test(message) ? 404 : undefined;
   }
-}
-
-function extractGeneratedVideos(operation: unknown): Array<{ video?: unknown }> {
-  const response = (operation as { response?: Record<string, unknown> }).response;
-  const generatedVideos = response?.generatedVideos;
-  if (Array.isArray(generatedVideos) && generatedVideos.length > 0) {
-    return generatedVideos as Array<{ video?: unknown }>;
-  }
-  const generatedSamples = (response?.generateVideoResponse as { generatedSamples?: unknown })
-    ?.generatedSamples;
-  return Array.isArray(generatedSamples) ? (generatedSamples as Array<{ video?: unknown }>) : [];
 }
 
 function redactGoogleVideoSdkError(error: unknown, headers: Record<string, string>): Error {
@@ -223,18 +217,63 @@ async function requestGoogleVideoJson(params: {
   });
 }
 
+type GoogleInteractionContent =
+  | { type: "image"; data: string; mime_type: string }
+  | { type: "video"; data: string; mime_type: string }
+  | { type: "text"; text: string };
+
+function buildGoogleInteractionInput(req: VideoGenerationRequest): GoogleInteractionContent[] {
+  const contents: GoogleInteractionContent[] = [];
+  for (const image of req.inputImages ?? []) {
+    if (!image.buffer) {
+      continue;
+    }
+    contents.push({
+      type: "image",
+      data: image.buffer.toString("base64"),
+      mime_type: normalizeOptionalString(image.mimeType) || "image/png",
+    });
+  }
+  for (const video of req.inputVideos ?? []) {
+    if (!video.buffer) {
+      continue;
+    }
+    contents.push({
+      type: "video",
+      data: video.buffer.toString("base64"),
+      mime_type: normalizeOptionalString(video.mimeType) || "video/mp4",
+    });
+  }
+  contents.push({ type: "text", text: req.prompt });
+  return contents;
+}
+
+function extractGoogleVideoFileId(uri: string | undefined): string | undefined {
+  const trimmed = normalizeOptionalString(uri);
+  if (!trimmed) {
+    return undefined;
+  }
+  const match = /files\/([^/:?#]+)/u.exec(trimmed);
+  return match?.[1] || undefined;
+}
+
+function readGoogleVideoFileState(file: unknown): string | undefined {
+  const state = (file as { state?: unknown } | undefined)?.state;
+  return typeof state === "string" ? state : undefined;
+}
+
 export const googleVideoGenerationProvider: VideoGenerationProvider = {
   ...createGoogleVideoGenerationProviderMetadata(),
   async generateVideo(req) {
-    if ((req.inputImages?.length ?? 0) > 1) {
-      throw new Error("Google video generation supports at most one input image.");
+    if ((req.inputImages?.length ?? 0) > 2) {
+      throw new Error("Google video generation supports at most two input images.");
     }
     if ((req.inputVideos?.length ?? 0) > 1) {
       throw new Error("Google video generation supports at most one input video.");
     }
-    if ((req.inputImages?.length ?? 0) > 0 && (req.inputVideos?.length ?? 0) > 0) {
-      throw new Error("Google video generation does not support image and video inputs together.");
-    }
+    // Validate the requested duration even though the Omni Interactions API has
+    // no duration parameter; the generated length is model-controlled.
+    normalizeVideoGenerationDuration({ durationSeconds: req.durationSeconds });
     const apiKey = await resolveGoogleGenerationApiKey(req);
 
     const configuredUrl = normalizeOptionalString(req.cfg?.models?.providers?.google?.baseUrl);
@@ -251,15 +290,9 @@ export const googleVideoGenerationProvider: VideoGenerationProvider = {
         transport: "http",
       }),
     };
-    const durationSeconds = normalizeVideoGenerationDuration({
-      durationSeconds: req.durationSeconds,
-      supportedDurationSeconds: GOOGLE_VIDEO_ALLOWED_DURATION_SECONDS,
-    });
     const model = normalizeOptionalString(req.model) || DEFAULT_GOOGLE_VIDEO_MODEL;
     const aspectRatio = resolveAspectRatio({ aspectRatio: req.aspectRatio, size: req.size });
     const resolution = resolveResolution({ resolution: req.resolution, size: req.size });
-    const hasReferenceInputs =
-      (req.inputImages?.length ?? 0) > 0 || (req.inputVideos?.length ?? 0) > 0;
     const deadline = createProviderOperationDeadline({
       timeoutMs: req.timeoutMs,
       label: "Google video generation",
@@ -274,235 +307,130 @@ export const googleVideoGenerationProvider: VideoGenerationProvider = {
         }),
       },
     });
-    const generateViaRest = async (): Promise<unknown> => {
-      const prompt = req.prompt;
-      const id = stripGoogleProviderPrefix(
-        normalizeOptionalString(model) || DEFAULT_GOOGLE_VIDEO_MODEL,
-      );
-      const modelPath = id.startsWith("models/") ? id : `models/${id}`;
-      let restOperation = await requestGoogleVideoJson({
-        url: `${restBaseUrl}/${modelPath}:predictLongRunning`,
-        method: "POST",
-        headers: authHeaders,
-        deadline,
-        stage: "create",
-        body: {
-          instances: [{ prompt }],
-          parameters: {
-            ...(durationSeconds !== undefined ? { durationSeconds } : {}),
-            ...(aspectRatio ? { aspectRatio } : {}),
-            ...(resolution ? { resolution } : {}),
+    const interaction = (await executeProviderOperationWithRetry({
+      provider: "google",
+      stage: "create",
+      operation: () =>
+        client.interactions.create(
+          {
+            model: stripGoogleProviderPrefix(model),
+            input: buildGoogleInteractionInput(req),
+            response_format: {
+              type: "video",
+              ...(aspectRatio ? { aspect_ratio: aspectRatio } : {}),
+              ...(resolution ? { resolution } : {}),
+              delivery: "uri",
+            },
+            background: false,
+            store: false,
+            stream: false,
           },
-        },
-      });
+          {
+            // Paid generation creation must stay single-shot: the SDK's default
+            // retry policy would resubmit the billed request after lost
+            // responses or transient 5xx. Retry ownership stays with the shared
+            // operation wrapper, which does not retry the create stage.
+            maxRetries: 0,
+          },
+        ),
+    }).catch((error: unknown) => {
+      throw redactGoogleVideoSdkError(error, authHeaders);
+    })) as GoogleInteraction;
 
-      for (let attempt = 0; !((restOperation as { done?: boolean }).done ?? false); attempt += 1) {
-        if (attempt >= MAX_POLL_ATTEMPTS) {
-          throw new Error("Google video generation did not finish in time");
-        }
-        await waitProviderOperationPollInterval({ deadline, pollIntervalMs: POLL_INTERVAL_MS });
-        const operationName = (restOperation as { name?: unknown }).name;
-        if (typeof operationName !== "string" || !operationName) {
-          throw new Error("Google video operation response missing name for polling");
-        }
-        restOperation = await requestGoogleVideoJson({
-          url: `${restBaseUrl}/${operationName}`,
+    const outputVideo = interaction.output_video;
+    if (!outputVideo || (!outputVideo.data && !outputVideo.uri)) {
+      throw new Error(GOOGLE_VIDEO_EMPTY_RESULT_MESSAGE);
+    }
+    const maxVideoBytes = resolveGeneratedMediaMaxBytes(req.cfg, "video");
+    const mimeType = normalizeOptionalString(outputVideo.mime_type) || "video/mp4";
+    let video: GeneratedVideoAsset;
+    if (outputVideo.data) {
+      if (estimateBase64DecodedBytes(outputVideo.data) > maxVideoBytes) {
+        throw new Error(`Google generated video download exceeds ${maxVideoBytes} bytes`);
+      }
+      const canonicalVideo = canonicalizeGoogleProviderBase64(outputVideo.data);
+      if (!canonicalVideo) {
+        throw new Error("Google video generation returned malformed base64 video data");
+      }
+      video = {
+        buffer: Buffer.from(canonicalVideo, "base64"),
+        mimeType,
+        fileName: "video-1.mp4",
+      };
+    } else {
+      const fileId = extractGoogleVideoFileId(outputVideo.uri);
+      if (!fileId) {
+        throw new Error(GOOGLE_VIDEO_EMPTY_RESULT_MESSAGE);
+      }
+      const readState = async () =>
+        requestGoogleVideoJson({
+          url: `${restBaseUrl}/files/${fileId}`,
           method: "GET",
           headers: authHeaders,
           deadline,
           stage: "poll",
         });
-      }
-      const error = (restOperation as { error?: unknown }).error;
-      if (error) {
-        throw new Error(redactProviderResponseErrorText(JSON.stringify(error), authHeaders));
-      }
-      return restOperation;
-    };
-    let usedRestFallback = false;
-    let operation;
-    try {
-      const inputImage = req.inputImages?.[0];
-      const inputVideo = req.inputVideos?.[0];
-      operation = await client.models.generateVideos({
-        model: stripGoogleProviderPrefix(model),
-        prompt: req.prompt,
-        image: inputImage?.buffer
-          ? {
-              imageBytes: inputImage.buffer.toString("base64"),
-              mimeType: normalizeOptionalString(inputImage.mimeType) || "image/png",
-            }
-          : undefined,
-        video: inputVideo?.buffer
-          ? {
-              videoBytes: inputVideo.buffer.toString("base64"),
-              mimeType: normalizeOptionalString(inputVideo.mimeType) || "video/mp4",
-            }
-          : undefined,
-        config: {
-          ...(durationSeconds !== undefined ? { durationSeconds } : {}),
-          ...(aspectRatio ? { aspectRatio } : {}),
-          ...(resolution ? { resolution } : {}),
-        },
-      });
-    } catch (error) {
-      if (hasReferenceInputs || extractGoogleApiErrorCode(error) !== 404) {
-        throw redactGoogleVideoSdkError(error, authHeaders);
-      }
-      usedRestFallback = true;
-      operation = await generateViaRest();
-    }
-
-    if (!usedRestFallback) {
-      let sdkOperation = operation as Awaited<
-        ReturnType<GoogleGenAIClient["models"]["generateVideos"]>
-      >;
-      for (let attempt = 0; !(sdkOperation.done ?? false); attempt += 1) {
+      let file = await readState();
+      for (let attempt = 0; readGoogleVideoFileState(file) !== "ACTIVE"; attempt += 1) {
+        if (readGoogleVideoFileState(file) === "FAILED") {
+          throw new Error(GOOGLE_VIDEO_FILE_FAILED_MESSAGE);
+        }
         if (attempt >= MAX_POLL_ATTEMPTS) {
           throw new Error("Google video generation did not finish in time");
         }
         await waitProviderOperationPollInterval({ deadline, pollIntervalMs: POLL_INTERVAL_MS });
-        resolveProviderOperationTimeoutMs({ deadline, defaultTimeoutMs: DEFAULT_TIMEOUT_MS });
-        sdkOperation = await executeProviderOperationWithRetry({
-          provider: "google",
-          stage: "poll",
-          operation: () => client.operations.getVideosOperation({ operation: sdkOperation }),
-        }).catch((error: unknown) => {
-          throw redactGoogleVideoSdkError(error, authHeaders);
-        });
+        file = await readState();
       }
-      if (sdkOperation.error) {
-        throw new Error(
-          redactProviderResponseErrorText(JSON.stringify(sdkOperation.error), authHeaders),
-        );
-      }
-      operation = sdkOperation;
-    }
-    const generatedVideos = extractGeneratedVideos(operation);
-    if (generatedVideos.length === 0) {
-      throw new Error(GOOGLE_VIDEO_EMPTY_RESULT_MESSAGE);
-    }
-    const finalOperation = operation as { name?: string };
-    const maxVideoBytes = resolveGeneratedMediaMaxBytes(req.cfg, "video");
-    const videos = await Promise.all(
-      generatedVideos.map(async (entry, index) => {
-        const inline = entry.video as
-          | { videoBytes?: string; uri?: string; mimeType?: string }
-          | undefined;
-        if (inline?.videoBytes) {
-          if (estimateBase64DecodedBytes(inline.videoBytes) > maxVideoBytes) {
-            throw new Error(`Google generated video download exceeds ${maxVideoBytes} bytes`);
-          }
-          const canonicalVideo = canonicalizeGoogleProviderBase64(inline.videoBytes);
-          if (!canonicalVideo) {
-            throw new Error("Google video generation returned malformed base64 video data");
-          }
-          const buffer = Buffer.from(canonicalVideo, "base64");
-          return {
-            buffer,
-            mimeType: normalizeOptionalString(inline.mimeType) || "video/mp4",
-            fileName: `video-${index + 1}.mp4`,
-          };
-        }
-        const download = async (
-          uri: string | undefined,
-        ): Promise<GeneratedVideoAsset | undefined> => {
-          const mimeType = inline?.mimeType;
-          const timeoutMs = resolveProviderOperationTimeoutMs({
-            deadline,
-            defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
+      const downloadUrl = new URL(`${restBaseUrl}/files/${fileId}:download`);
+      downloadUrl.searchParams.set("alt", "media");
+      downloadUrl.searchParams.set("key", apiKey);
+      const downloadLabel = "Google generated video download";
+      const timeoutMs = resolveProviderOperationTimeoutMs({
+        deadline,
+        defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
+      });
+      video = await executeProviderOperationWithRetry({
+        provider: "google",
+        stage: "download",
+        operation: async () => {
+          const { response, release } = await fetchWithSsrFGuard({
+            url: downloadUrl.toString(),
+            timeoutMs,
           });
-          const trimmed = normalizeOptionalString(uri);
-          if (!trimmed) {
-            return undefined;
+          try {
+            if (!response.ok) {
+              // A debug-capture clone can keep the tee open, so waiting for cancel
+              // would hang before the HTTP error and dispatcher can be released.
+              void response.body?.cancel().catch(() => undefined);
+              throw new Error(
+                redactProviderResponseErrorText(
+                  `Failed to download Google generated video: ${response.status} ${response.statusText}`,
+                  { "x-goog-api-key": apiKey },
+                ),
+              );
+            }
+            const buffer = await readProviderBinaryResponse(response, downloadLabel, "video", {
+              maxBytes: maxVideoBytes,
+              chunkTimeoutMs: timeoutMs,
+              onOverflow: ({ maxBytes }) => new Error(`${downloadLabel} exceeds ${maxBytes} bytes`),
+              onIdleTimeout: ({ chunkTimeoutMs }) =>
+                new Error(`${downloadLabel} stalled after ${chunkTimeoutMs}ms`),
+            });
+            return {
+              buffer,
+              mimeType: normalizeOptionalString(response.headers.get("content-type")) || mimeType,
+              fileName: "video-1.mp4",
+            };
+          } finally {
+            await release();
           }
-          const url = URL.parse(trimmed);
-          if (url?.protocol !== "https:") {
-            return undefined;
-          }
-          const allowedOrigins = new Set(["https://generativelanguage.googleapis.com"]);
-          const configuredOrigin = URL.parse(configuredBaseUrl ?? "")?.origin;
-          if (configuredOrigin?.startsWith("https://")) {
-            allowedOrigins.add(configuredOrigin);
-          }
-          if (!allowedOrigins.has(url.origin)) {
-            return undefined;
-          }
-          if (!url.searchParams.has("key")) {
-            url.searchParams.set("key", apiKey);
-          }
-          const downloadUrl = url.toString();
-          return await executeProviderOperationWithRetry({
-            provider: "google",
-            stage: "download",
-            operation: async () => {
-              const { response, release } = await fetchWithSsrFGuard({
-                url: downloadUrl,
-                timeoutMs,
-              });
-              try {
-                if (!response.ok) {
-                  // A debug-capture clone can keep the tee open, so waiting for cancel
-                  // would hang before the HTTP error and dispatcher can be released.
-                  void response.body?.cancel().catch(() => undefined);
-                  throw new Error(
-                    redactProviderResponseErrorText(
-                      `Failed to download Google generated video: ${response.status} ${response.statusText}`,
-                      { "x-goog-api-key": url.searchParams.get("key") ?? apiKey },
-                    ),
-                  );
-                }
-                const downloadLabel = "Google generated video download";
-                const buffer = await readProviderBinaryResponse(response, downloadLabel, "video", {
-                  maxBytes: maxVideoBytes,
-                  chunkTimeoutMs: timeoutMs,
-                  onOverflow: ({ maxBytes }) =>
-                    new Error(`${downloadLabel} exceeds ${maxBytes} bytes`),
-                  onIdleTimeout: ({ chunkTimeoutMs }) =>
-                    new Error(`${downloadLabel} stalled after ${chunkTimeoutMs}ms`),
-                });
-                return {
-                  buffer,
-                  mimeType:
-                    normalizeOptionalString(response.headers.get("content-type")) ||
-                    normalizeOptionalString(mimeType) ||
-                    "video/mp4",
-                  fileName: `video-${index + 1}.mp4`,
-                };
-              } finally {
-                await release();
-              }
-            },
-          });
-        };
-        const directDownload = await download(inline?.uri);
-        if (directDownload) {
-          return directDownload;
-        }
-        if (!inline) {
-          throw new Error("Google generated video missing file handle");
-        }
-        const fileDownload = await download(
-          resolveGoogleGeneratedVideoFileDownloadUrl({
-            file: inline,
-            apiKey,
-            configuredBaseUrl,
-          }),
-        );
-        if (!fileDownload) {
-          throw new Error("Google generated video missing bounded download URL");
-        }
-        return fileDownload;
-      }),
-    );
+        },
+      });
+    }
     return {
-      videos,
+      videos: [video],
       model,
-      metadata: finalOperation.name
-        ? {
-            operationName: finalOperation.name,
-          }
-        : undefined,
+      metadata: interaction.id ? { interactionId: interaction.id } : undefined,
     };
   },
 };

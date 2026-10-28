@@ -43,7 +43,7 @@ active mode before submission and reports supported modes in `action=list`.
   </Step>
   <Step title="Pick a default model (optional)">
     ```bash
-    openclaw config set agents.defaults.mediaModels.video.primary "google/veo-3.1-fast-generate-preview"
+    openclaw config set agents.defaults.mediaModels.video.primary "google/gemini-omni-1.1-flash"
     ```
   </Step>
   <Step title="Ask the agent">
@@ -98,27 +98,27 @@ of failing the task if local persistence rejects an oversized file.
 
 ## Supported providers
 
-| Provider              | Default model                   | Text | Image ref                                            | Video ref                                       | Auth                                     |
-| --------------------- | ------------------------------- | :--: | ---------------------------------------------------- | ----------------------------------------------- | ---------------------------------------- |
-| Alibaba               | `wan2.6-t2v`                    |  ✓   | Local or remote (i2v and Wan 2.7)                    | Yes (remote URL)                                | `MODELSTUDIO_API_KEY`                    |
-| BytePlus plugin       | `seedance-1-0-pro-250528`       |  ✓   | Up to 2 images (first + last frame)                  | -                                               | `BYTEPLUS_API_KEY`                       |
-| BytePlus 1.5 plugin   | `seedance-1-5-pro-251215`       |  ✓   | Up to 2 images (first + last frame via role)         | -                                               | `BYTEPLUS_API_KEY`                       |
-| BytePlus Seedance 2.0 | `dreamina-seedance-2-0-260128`  |  ✓   | Up to 9 reference images                             | Up to 3 videos                                  | `BYTEPLUS_API_KEY`                       |
-| ComfyUI               | `workflow`                      |  ✓   | 1 image                                              | -                                               | `COMFY_API_KEY` or `COMFY_CLOUD_API_KEY` |
-| DeepInfra             | `Pixverse/Pixverse-T2V`         |  ✓   | -                                                    | -                                               | `DEEPINFRA_API_KEY`                      |
-| fal                   | `fal-ai/minimax/video-01-live`  |  ✓   | 1 image; up to 9 with Seedance reference-to-video    | Up to 3 videos with Seedance reference-to-video | `FAL_KEY`                                |
-| Google                | `veo-3.1-fast-generate-preview` |  ✓   | 1 image                                              | 1 video                                         | `GEMINI_API_KEY`                         |
-| Kie AI                | `kling-2.6/text-to-video`       |  ✓   | 1 local or remote image                              | -                                               | `KIE_API_KEY`                            |
-| MiniMax               | `MiniMax-Hailuo-2.3`            |  ✓   | 1 image                                              | -                                               | `MINIMAX_API_KEY` or MiniMax OAuth       |
-| Novita                | `wan2.6-t2v`                    |  ✓   | 1 image (URL or local file)                          | -                                               | `NOVITA_API_KEY`                         |
-| OpenRouter            | `google/veo-3.1-fast`           |  ✓   | Up to 4 images (first/last frame or references)      | -                                               | `OPENROUTER_API_KEY`                     |
-| PixVerse              | `v6`                            |  ✓   | 1 local or remote image                              | -                                               | `PIXVERSE_API_KEY`                       |
-| Qwen                  | `wan2.6-t2v`                    |  ✓   | Local or remote (i2v and Wan 2.7)                    | Yes (remote URL)                                | `QWEN_API_KEY`                           |
-| Runway                | `gen4.5`                        |  ✓   | 1 image                                              | 1 video                                         | `RUNWAYML_API_SECRET`                    |
-| Together              | `Wan-AI/wan2.7-t2v`             |  ✓   | `Wan-AI/wan2.7-i2v` only                             | -                                               | `TOGETHER_API_KEY`                       |
-| Vydra                 | `veo3`                          |  ✓   | 1 image (`kling`)                                    | -                                               | `VYDRA_API_KEY`                          |
-| xAI                   | `grok-imagine-video`            |  ✓   | Classic: 1 first frame or 7 references; 1.5: 1 frame | Classic: 1 video                                | `XAI_API_KEY`                            |
-| Z.AI                  | `cogvideox-3`                   |  ✓   | 1 image (URL or local file)                          | -                                               | `ZAI_API_KEY`                            |
+| Provider              | Default model                  | Text | Image ref                                            | Video ref                                       | Auth                                     |
+| --------------------- | ------------------------------ | :--: | ---------------------------------------------------- | ----------------------------------------------- | ---------------------------------------- |
+| Alibaba               | `wan2.6-t2v`                   |  ✓   | Local or remote (i2v and Wan 2.7)                    | Yes (remote URL)                                | `MODELSTUDIO_API_KEY`                    |
+| BytePlus plugin       | `seedance-1-0-pro-250528`      |  ✓   | Up to 2 images (first + last frame)                  | -                                               | `BYTEPLUS_API_KEY`                       |
+| BytePlus 1.5 plugin   | `seedance-1-5-pro-251215`      |  ✓   | Up to 2 images (first + last frame via role)         | -                                               | `BYTEPLUS_API_KEY`                       |
+| BytePlus Seedance 2.0 | `dreamina-seedance-2-0-260128` |  ✓   | Up to 9 reference images                             | Up to 3 videos                                  | `BYTEPLUS_API_KEY`                       |
+| ComfyUI               | `workflow`                     |  ✓   | 1 image                                              | -                                               | `COMFY_API_KEY` or `COMFY_CLOUD_API_KEY` |
+| DeepInfra             | `Pixverse/Pixverse-T2V`        |  ✓   | -                                                    | -                                               | `DEEPINFRA_API_KEY`                      |
+| fal                   | `fal-ai/minimax/video-01-live` |  ✓   | 1 image; up to 9 with Seedance reference-to-video    | Up to 3 videos with Seedance reference-to-video | `FAL_KEY`                                |
+| Google                | `gemini-omni-1.1-flash`        |  ✓   | Up to 2 images (first/last frame or references)      | 1 video (edit or extend)                        | `GEMINI_API_KEY`                         |
+| Kie AI                | `kling-2.6/text-to-video`      |  ✓   | 1 local or remote image                              | -                                               | `KIE_API_KEY`                            |
+| MiniMax               | `MiniMax-Hailuo-2.3`           |  ✓   | 1 image                                              | -                                               | `MINIMAX_API_KEY` or MiniMax OAuth       |
+| Novita                | `wan2.6-t2v`                   |  ✓   | 1 image (URL or local file)                          | -                                               | `NOVITA_API_KEY`                         |
+| OpenRouter            | `google/veo-3.1-fast`          |  ✓   | Up to 4 images (first/last frame or references)      | -                                               | `OPENROUTER_API_KEY`                     |
+| PixVerse              | `v6`                           |  ✓   | 1 local or remote image                              | -                                               | `PIXVERSE_API_KEY`                       |
+| Qwen                  | `wan2.6-t2v`                   |  ✓   | Local or remote (i2v and Wan 2.7)                    | Yes (remote URL)                                | `QWEN_API_KEY`                           |
+| Runway                | `gen4.5`                       |  ✓   | 1 image                                              | 1 video                                         | `RUNWAYML_API_SECRET`                    |
+| Together              | `Wan-AI/wan2.7-t2v`            |  ✓   | `Wan-AI/wan2.7-i2v` only                             | -                                               | `TOGETHER_API_KEY`                       |
+| Vydra                 | `veo3`                         |  ✓   | 1 image (`kling`)                                    | -                                               | `VYDRA_API_KEY`                          |
+| xAI                   | `grok-imagine-video`           |  ✓   | Classic: 1 first frame or 7 references; 1.5: 1 frame | Classic: 1 video                                | `XAI_API_KEY`                            |
+| Z.AI                  | `cogvideox-3`                  |  ✓   | 1 image (URL or local file)                          | -                                               | `ZAI_API_KEY`                            |
 
 Some providers accept additional or alternate API key env vars. See
 individual [provider pages](#related) for details.
@@ -131,25 +131,25 @@ runtime modes at runtime.
 The explicit mode contract used by `video_generate`, contract tests, and
 the shared live sweep:
 
-| Provider   | `generate` | `imageToVideo` | `videoToVideo` | Shared live lanes                                                                                                                       |
-| ---------- | :--------: | :------------: | :------------: | --------------------------------------------------------------------------------------------------------------------------------------- |
-| Alibaba    |     ✓      |       ✓        |       ✓        | `generate`, local `imageToVideo` (default routes to `wan2.6-i2v`); `videoToVideo` needs remote `http(s)` video URLs                     |
-| BytePlus   |     ✓      |       ✓        |       -        | `generate`, `imageToVideo`                                                                                                              |
-| ComfyUI    |     ✓      |       ✓        |       -        | Not in the shared sweep; workflow-specific coverage lives with Comfy tests                                                              |
-| DeepInfra  |     ✓      |       -        |       -        | `generate`; native DeepInfra video schemas are text-to-video in the plugin contract                                                     |
-| fal        |     ✓      |       ✓        |       ✓        | `generate`, `imageToVideo`; `videoToVideo` only when using Seedance reference-to-video                                                  |
-| Google     |     ✓      |       ✓        |       ✓        | `generate`, `imageToVideo`; shared `videoToVideo` skipped because the current buffer-backed Gemini/Veo sweep does not accept that input |
-| Kie AI     |     ✓      |       ✓        |       -        | `generate`, `imageToVideo`                                                                                                              |
-| MiniMax    |     ✓      |       ✓        |       -        | `generate`, `imageToVideo`                                                                                                              |
-| Novita     |     ✓      |       ✓        |       -        | `generate`, `imageToVideo`                                                                                                              |
-| OpenRouter |     ✓      |       ✓        |       -        | `generate`, `imageToVideo`                                                                                                              |
-| PixVerse   |     ✓      |       ✓        |       -        | `generate`, `imageToVideo`                                                                                                              |
-| Qwen       |     ✓      |       ✓        |       ✓        | `generate`, local `imageToVideo` (default routes to `wan2.6-i2v`); `videoToVideo` needs remote `http(s)` video URLs                     |
-| Runway     |     ✓      |       ✓        |       ✓        | `generate`, `imageToVideo`; `videoToVideo` runs only when the selected model is `runway/gen4_aleph`                                     |
-| Together   |     ✓      |       ✓        |       -        | `generate`, `imageToVideo`                                                                                                              |
-| Vydra      |     ✓      |       ✓        |       -        | `generate`; shared `imageToVideo` skipped because `veo3` is text-only and `kling` requires a remote image URL                           |
-| xAI        |     ✓      |       ✓        |       ✓        | Classic supports all modes; Video 1.5 is image-to-video only; remote MP4 input keeps `videoToVideo` out of the shared sweep             |
-| Z.AI       |     ✓      |       ✓        |       -        | `generate`, `imageToVideo`                                                                                                              |
+| Provider   | `generate` | `imageToVideo` | `videoToVideo` | Shared live lanes                                                                                                           |
+| ---------- | :--------: | :------------: | :------------: | --------------------------------------------------------------------------------------------------------------------------- |
+| Alibaba    |     ✓      |       ✓        |       ✓        | `generate`, local `imageToVideo` (default routes to `wan2.6-i2v`); `videoToVideo` needs remote `http(s)` video URLs         |
+| BytePlus   |     ✓      |       ✓        |       -        | `generate`, `imageToVideo`                                                                                                  |
+| ComfyUI    |     ✓      |       ✓        |       -        | Not in the shared sweep; workflow-specific coverage lives with Comfy tests                                                  |
+| DeepInfra  |     ✓      |       -        |       -        | `generate`; native DeepInfra video schemas are text-to-video in the plugin contract                                         |
+| fal        |     ✓      |       ✓        |       ✓        | `generate`, `imageToVideo`; `videoToVideo` only when using Seedance reference-to-video                                      |
+| Google     |     ✓      |       ✓        |       ✓        | `generate`, `imageToVideo`, `videoToVideo` via Gemini Omni Flash buffer-backed references                                   |
+| Kie AI     |     ✓      |       ✓        |       -        | `generate`, `imageToVideo`                                                                                                  |
+| MiniMax    |     ✓      |       ✓        |       -        | `generate`, `imageToVideo`                                                                                                  |
+| Novita     |     ✓      |       ✓        |       -        | `generate`, `imageToVideo`                                                                                                  |
+| OpenRouter |     ✓      |       ✓        |       -        | `generate`, `imageToVideo`                                                                                                  |
+| PixVerse   |     ✓      |       ✓        |       -        | `generate`, `imageToVideo`                                                                                                  |
+| Qwen       |     ✓      |       ✓        |       ✓        | `generate`, local `imageToVideo` (default routes to `wan2.6-i2v`); `videoToVideo` needs remote `http(s)` video URLs         |
+| Runway     |     ✓      |       ✓        |       ✓        | `generate`, `imageToVideo`; `videoToVideo` runs only when the selected model is `runway/gen4_aleph`                         |
+| Together   |     ✓      |       ✓        |       -        | `generate`, `imageToVideo`                                                                                                  |
+| Vydra      |     ✓      |       ✓        |       -        | `generate`; shared `imageToVideo` skipped because `veo3` is text-only and `kling` requires a remote image URL               |
+| xAI        |     ✓      |       ✓        |       ✓        | Classic supports all modes; Video 1.5 is image-to-video only; remote MP4 input keeps `videoToVideo` out of the shared sweep |
+| Z.AI       |     ✓      |       ✓        |       -        | `generate`, `imageToVideo`                                                                                                  |
 
 ## Tool parameters
 
@@ -328,7 +328,7 @@ OpenClaw does not append auto-detected providers.
     defaults: {
       mediaModels: {
         video: {
-          primary: "google/veo-3.1-fast-generate-preview",
+          primary: "google/gemini-omni-1.1-flash",
           fallbacks: ["runway/gen4.5", "qwen/wan2.6-t2v"],
           timeoutMs: 180000, // optional per-tool provider request timeout override
         },
@@ -410,10 +410,13 @@ OpenClaw does not append auto-detected providers.
     models accept up to 9 images, 3 videos, and 3 audio references, with
     at most 12 total reference files.
   </Accordion>
-  <Accordion title="Google (Gemini / Veo)">
-    Supports one image or one video reference. Generated-audio requests are
-    ignored with a warning on the Gemini API path because that API rejects
-    the `generateAudio` parameter for current Veo video generation.
+  <Accordion title="Google (Gemini Omni Flash)">
+    Uses the Gemini API Interactions endpoint with `gemini-omni-1.1-flash`.
+    Accepts up to 2 image references (including first/last frame interpolation)
+    and 1 video reference for edit or extend flows, with image references
+    allowed alongside the video. Generated videos include audio, so the `audio`
+    parameter has no effect. Resolutions `360P`/`720P`/`1080P`/`4K`; there is no
+    duration parameter (the generated length is model-controlled).
   </Accordion>
   <Accordion title="Kie AI">
     Uses Kie's market task API for Kling, Grok Imagine, Wan, Hailuo, and

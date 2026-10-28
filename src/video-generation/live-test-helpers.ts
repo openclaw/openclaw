@@ -8,7 +8,7 @@ export const DEFAULT_LIVE_VIDEO_MODELS: Record<string, string> = {
   byteplus: "byteplus/seedance-1-0-lite-t2v-250428",
   deepinfra: "deepinfra/Pixverse/Pixverse-T2V",
   fal: "fal/fal-ai/minimax/video-01-live",
-  google: "google/veo-3.1-fast-generate-preview",
+  google: "google/gemini-omni-1.1-flash",
   kie: "kie/kling-2.6/text-to-video",
   minimax: "minimax/MiniMax-Hailuo-2.3",
   novita: "novita/wan2.6-t2v",
@@ -22,7 +22,7 @@ export const DEFAULT_LIVE_VIDEO_MODELS: Record<string, string> = {
   zai: "zai/cogvideox-3",
 };
 
-const REMOTE_URL_VIDEO_TO_VIDEO_PROVIDERS = new Set(["alibaba", "google", "qwen", "xai"]);
+const REMOTE_URL_VIDEO_TO_VIDEO_PROVIDERS = new Set(["alibaba", "qwen", "xai"]);
 
 type LiveVideoModel = { providerId: string; modelRef: string };
 
@@ -37,7 +37,7 @@ export function resolveLiveVideoResolution(
   ) {
     return "768P";
   }
-  if (["novita", "openrouter", "alibaba", "qwen"].includes(providerId)) {
+  if (["novita", "openrouter", "alibaba", "qwen", "google"].includes(providerId)) {
     return "720P";
   }
   return providerId === "pixverse" ? "540P" : "480P";

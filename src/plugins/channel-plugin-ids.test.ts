@@ -602,7 +602,7 @@ describe("resolveGatewayStartupPluginPlanFromRegistry", () => {
                 primary: "openai/gpt-image-2",
                 fallbacks: ["google/gemini-3-pro-image-preview"],
               },
-              video: { primary: "google/veo-3.1-fast-generate-preview" },
+              video: { primary: "google/gemini-omni-1.1-flash" },
               music: { primary: "google/lyria-3-clip-preview" },
             },
           },
