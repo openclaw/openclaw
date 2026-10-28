@@ -637,6 +637,7 @@
   "ui/src/components/solid/shadow-styles.ts",
   "ui/src/components/solid/sidebar-community-invite.tsx",
   "ui/src/components/solid/stroke-icon.tsx",
+  "ui/src/components/solid/tabs.tsx",
   "ui/src/components/solid/viewer-facepile.tsx",
   "ui/src/components/theme-brand-icon.css",
   "ui/src/components/theme-brand-icon.tsx",
@@ -796,10 +797,12 @@
   "ui/src/lib/reactive/observers.ts",
   "ui/src/lib/reactive/overlay-anchor.ts",
   "ui/src/lib/reactive/parked-projection.ts",
+  "ui/src/lib/reactive/pending-focus.ts",
   "ui/src/lib/reactive/platform.ts",
   "ui/src/lib/reactive/pointer-drag.ts",
   "ui/src/lib/reactive/projection.ts",
   "ui/src/lib/reactive/scroll-state.ts",
+  "ui/src/lib/reactive/shadow-styles.ts",
   "ui/src/lib/reactive/shared-application-projections.ts",
   "ui/src/lib/reactive/shared-owner-projection.ts",
   "ui/src/lib/reactive/theme-branding.ts",
@@ -882,6 +885,7 @@
   "ui/src/lib/speech-playback.ts",
   "ui/src/lib/strip-thinking-tags.ts",
   "ui/src/lib/system-info.ts",
+  "ui/src/lib/tabs.ts",
   "ui/src/lib/terminal-availability.ts",
   "ui/src/lib/toast-host.tsx",
   "ui/src/lib/toast.ts",
@@ -1061,7 +1065,8 @@
   "ui/src/styles/sidebar-attention-floating.css",
   "ui/src/styles/sidebar-pinned-agents.css",
   "ui/src/styles/sidebar-rail.css",
-  "ui/src/styles/sidebar-reorder.css"
+  "ui/src/styles/sidebar-reorder.css",
+  "ui/src/styles/tabs.css"
  ],
  "new": [
   "packages/gateway-protocol/src/worker-capacity.ts",

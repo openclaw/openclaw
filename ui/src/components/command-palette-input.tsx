@@ -1,7 +1,41 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, onSettled } from "solid-js";
+import { t } from "../lib/reactive/i18n.ts";
 import { createLayoutMeasurement } from "../lib/reactive/layout-measurement.ts";
 import { liveValue as createLiveValue } from "../lib/reactive/live-value.ts";
+import type { CommandPaletteMode } from "./command-palette-contract.ts";
+import { Kbd } from "./solid/kbd.tsx";
+import { Tabs } from "./solid/tabs.tsx";
+
+export function CommandPaletteModes(props: {
+  mode: CommandPaletteMode;
+  disabled?: boolean;
+  onChange: (mode: CommandPaletteMode) => void;
+}) {
+  return (
+    <Tabs
+      class="cmd-palette__modes"
+      ariaLabel={t("palette.modeLabel")}
+      active={props.mode}
+      onSelect={(mode) => props.onChange(mode === "compose" ? "compose" : "search")}
+      items={(["search", "compose"] as const).map((mode) => ({
+        value: mode,
+        id: `cmd-palette-tab-${mode}`,
+        panelId: "cmd-palette-panel",
+        className: "cmd-palette__mode",
+        disabled: props.disabled,
+        label: (
+          <>
+            {t(`palette.modes.${mode}`)}
+            <span class="cmd-palette__mode-key" aria-hidden="true">
+              <Kbd keys="Tab" />
+            </span>
+          </>
+        ),
+      }))}
+    />
+  );
+}
 
 export const COMMAND_PALETTE_INPUT_ID = "cmd-palette-input";
 

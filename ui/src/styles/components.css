@@ -2481,6 +2481,47 @@ td.data-table-key-col {
   display: none;
 }
 
+/* Outside the card so switching content never moves the palette's top anchor. */
+.cmd-palette__modes {
+  position: absolute;
+  bottom: calc(100% + 12px);
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: var(--card);
+  box-shadow: var(--shadow-sm);
+}
+
+.cmd-palette__mode {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-width: 112px;
+  min-height: 28px;
+  padding: 4px 10px;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+}
+
+.cmd-palette__mode[aria-selected="true"] {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+/* Both labels keep their width when the shortcut changes sides. */
+.cmd-palette__mode[aria-selected="true"] .cmd-palette__mode-key {
+  visibility: hidden;
+}
+
 .cmd-palette {
   display: flex;
   flex-direction: column;

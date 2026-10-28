@@ -4,12 +4,15 @@ import { matchesShortcutCombo } from "../lib/keyboard-shortcut-contract.ts";
 export const COMMAND_PALETTE_DIALOG_STYLE =
   "--openclaw-modal-width: min(740px, calc(100vw - 32px));";
 
+export type CommandPaletteMode = "search" | "compose";
+
 export type CommandPaletteInputSnapshot = Pick<
   HTMLTextAreaElement,
   "value" | "selectionStart" | "selectionEnd" | "selectionDirection"
 >;
 
 export type CommandPaletteOpenInput = CommandPaletteInputSnapshot & {
+  mode?: CommandPaletteMode;
   returnFocus?: HTMLElement | null;
   submitRequested?: true;
   /** Position of an explicitly typed @ retained only during the cold-input handoff. */

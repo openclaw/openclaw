@@ -260,6 +260,9 @@ type EnglishCatalog = TranslationMap & {
   palette: TranslationMap & {
     placeholder: string;
     attachmentPrompt: string;
+    composePlaceholder: string;
+    modeLabel: string;
+    modes: { search: string; compose: string };
     categories: TranslationMap & { navigation: string };
   };
   sessionsView: TranslationMap &
@@ -1403,6 +1406,9 @@ const startupEnglish = {
   commandPalette: {},
   palette: {
     placeholder: "Search or start a task…",
+    modeLabel: "Command palette mode",
+    modes: { search: "Search", compose: "Compose" },
+    composePlaceholder: "Write a message…",
     attachmentPrompt: "What would you like to do with these files?",
     categories: { navigation: "Navigation" },
   },

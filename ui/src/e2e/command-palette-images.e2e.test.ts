@@ -70,6 +70,7 @@ suite.define(() => {
             page,
             suite.server.baseUrl,
           );
+          await input.press("Tab");
           await page.evaluate(() => document.fonts.ready);
           const images = palette.locator(".chat-attachment-thumb img");
           const start = palette.getByRole("button", {

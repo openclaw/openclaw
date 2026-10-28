@@ -43,7 +43,7 @@ export function createCommandPaletteMatches(
         snapshot.desktopAvailable,
         snapshot.custodianAvailable,
         snapshot.primaryModelSearch,
-        snapshot.promptMode || snapshot.mentionMenu.open || snapshot.draft.mentions.length > 0,
+        snapshot.mode === "compose",
       ] as const;
     },
     { equals: (a, b) => a.every((value, index) => value === b[index]) },

@@ -7,6 +7,7 @@ import {
   type CommandPaletteInputSnapshot,
   type CommandPaletteInputHandoff,
   type CommandPaletteOpenInput,
+  type CommandPaletteMode,
 } from "../components/command-palette-contract.ts";
 import type { OpenClawModalDialog } from "../components/modal-dialog.tsx";
 import { keepMobileReturnNative } from "../lib/browser-platform.ts";
@@ -141,11 +142,12 @@ export class ShellCommandPaletteOwner {
 /** In-memory custody outlives the loading view, until the real palette accepts it. */
 function createCommandPaletteLoading(host: Pick<CommandPaletteShellHost, "context">) {
   type Presentation = {
+    mode: CommandPaletteMode;
     draft?: CommandPaletteInputSnapshot;
     returnFocus?: HTMLElement | null;
     submitRequested: boolean;
   };
-  let current: Presentation = { submitRequested: false };
+  let current: Presentation = { mode: "search", submitRequested: false };
   // Reentrant shell events can publish during a rendering computation.
   const [read, write] = createSignal(current, { ownedWrite: true });
   // Imperative custody reads the same receipt before Solid commits its publication.
@@ -175,7 +177,7 @@ function createCommandPaletteLoading(host: Pick<CommandPaletteShellHost, "contex
     }
   }
   function reset() {
-    current = { submitRequested: false };
+    current = { mode: current.mode, submitRequested: false };
     generation += 1;
     handoffPending = false;
     cancelCompositionFrame();
@@ -214,7 +216,7 @@ function createCommandPaletteLoading(host: Pick<CommandPaletteShellHost, "contex
       selectionEnd: 0,
       selectionDirection: "none" as const,
     };
-    const { returnFocus, submitRequested } = current;
+    const { returnFocus, submitRequested, mode } = current;
     const files = attachmentFiles;
     const trigger = mentionTrigger;
     // Transfer the original focus target without restoring it between the two inputs.
@@ -222,6 +224,7 @@ function createCommandPaletteLoading(host: Pick<CommandPaletteShellHost, "contex
     loading.clear();
     return {
       ...draft,
+      mode,
       returnFocus,
       ...(submitRequested ? { submitRequested: true as const } : {}),
       ...(files.length ? { attachmentFiles: files } : {}),
@@ -234,6 +237,15 @@ function createCommandPaletteLoading(host: Pick<CommandPaletteShellHost, "contex
       return active();
     },
     value: () => presentation().draft?.value ?? "",
+    mode: () => presentation().mode,
+    setMode(mode: CommandPaletteMode): void {
+      if (composing || current.submitRequested) {
+        return;
+      }
+      mentionTrigger = undefined;
+      publish({ ...current, mode });
+      input?.focus({ preventScroll: true });
+    },
     hasAttachments: () => {
       presentation();
       return attachmentFiles.length > 0;
@@ -255,6 +267,7 @@ function createCommandPaletteLoading(host: Pick<CommandPaletteShellHost, "contex
         return;
       }
       if (
+        current.mode === "compose" &&
         !composing &&
         !event?.isComposing &&
         event?.inputType === "insertText" &&
@@ -339,7 +352,7 @@ function createCommandPaletteLoading(host: Pick<CommandPaletteShellHost, "contex
           return;
         }
         attachmentFiles.push(...files);
-        publish({ ...current });
+        publish({ ...current, mode: "compose" });
       }
     },
     handleDragOver(event: DragEvent): void {
@@ -373,7 +386,7 @@ function createCommandPaletteLoading(host: Pick<CommandPaletteShellHost, "contex
       }
       // Keep raw Files in memory until the canonical draft owns admission/reads.
       attachmentFiles.push(...event.dataTransfer.files);
-      publish({ ...current });
+      publish({ ...current, mode: "compose" });
     },
     handleKeydown(event: KeyboardEvent): void {
       if (keepMobileReturnNative(event)) {
@@ -383,10 +396,26 @@ function createCommandPaletteLoading(host: Pick<CommandPaletteShellHost, "contex
         event.stopPropagation();
         return;
       }
+      if (
+        event.target === input &&
+        event.key === "Tab" &&
+        !event.shiftKey &&
+        !event.altKey &&
+        !event.metaKey &&
+        !event.ctrlKey
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!event.repeat) {
+          loading.setMode(current.mode === "search" ? "compose" : "search");
+        }
+        return;
+      }
       if (event.key === "Enter" && !event.shiftKey && !event.altKey) {
         event.preventDefault();
         event.stopPropagation();
         if (
+          current.mode === "compose" &&
           !event.repeat &&
           (current.draft?.value.trim() || attachmentFiles.length > 0) &&
           matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.modifiedEnter, event)

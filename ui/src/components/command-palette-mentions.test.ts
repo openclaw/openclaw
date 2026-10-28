@@ -9,6 +9,7 @@ import { createDraftFixture } from "../pages/new-session/draft-submission-flow.t
 import { installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import {
+  createSessionResult,
   mountPalette,
   openPalette,
   prepareDraftContext,
@@ -81,6 +82,8 @@ async function mount(
   const getInput = () => palette.querySelector<HTMLTextAreaElement>(".cmd-palette__input")!;
   await openPalette(palette);
   getInput().focus();
+  pressKey(getInput(), "Tab", { cancelable: true });
+  await palette.updateComplete;
   const edit = async (start: number, end: number, text: string, inputType = "insertText") => {
     const input = getInput();
     const previous = input.value;
@@ -207,25 +210,47 @@ describe("command palette people mentions", () => {
     expect(f.recipients()).toHaveLength(0);
   });
 
-  it("resumes search after removing a recipient without deleting its visible text", async () => {
+  it("preserves recipients across mode switches and sends after removing them", async () => {
     const f = await mount();
     await f.choose();
     await f.choose("End");
     await f.edit(3, 4, "", "deleteContentForward");
     expect(f.recipients()).toHaveLength(1);
     const value = f.input.value;
-    vi.mocked(f.context.sessions.list).mockClear();
+    const search = vi.mocked(f.context.sessions.list);
+    search.mockClear();
+    search.mockResolvedValueOnce(createSessionResult("agent:main:matching", value));
+    await f.key("Tab");
+    await vi.advanceTimersByTimeAsync(200);
+    await f.palette.updateComplete;
+    expect(search).toHaveBeenCalledWith(expect.objectContaining({ search: value.trim() }));
+    expect(f.query('[role="option"]')?.textContent).toContain(value.trim());
+    await f.key("Tab");
+    expect(f.input.value).toBe(value);
+    expect(f.recipients()).toHaveLength(1);
     f.query<HTMLButtonElement>('button[aria-label="Remove mention"]')!.click();
     await f.palette.updateComplete;
     expect(f.input.value).toBe(value);
     expect(f.recipients()).toHaveLength(0);
-    await vi.advanceTimersByTimeAsync(200);
-    expect(f.context.sessions.list).toHaveBeenCalledWith(
-      expect.objectContaining({ search: value.trim() }),
-    );
     await f.send();
     const create = f.request.mock.calls.find(([method]) => method === "sessions.create")?.[1];
     expect(create).not.toHaveProperty("mentions");
+  });
+
+  it("searches when clicking Search while mention suggestions are open", async () => {
+    const f = await mount();
+    await f.append("Review @");
+    await f.search("Al");
+    expect(f.menu()).not.toBeNull();
+    const search = vi.mocked(f.context.sessions.list);
+    search.mockClear();
+    f.query<HTMLButtonElement>('[role="tab"][id="cmd-palette-tab-search"]')!.click();
+    await vi.advanceTimersByTimeAsync(200);
+    await f.palette.updateComplete;
+    expect(f.menu()).toBeNull();
+    expect(search).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ search: "Review @Al" }),
+    );
   });
 
   it("keeps name selections but closes when the selection leaves the invocation", async () => {
@@ -242,6 +267,8 @@ describe("command palette people mentions", () => {
     expect(f.menu()).not.toBeNull();
     await f.select(0, 0);
     expect(f.menu()).toBeNull();
+    expect(searchSessions).not.toHaveBeenCalled();
+    await f.key("Tab");
     await vi.advanceTimersByTimeAsync(200);
     expect(searchSessions).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ search: "Review @Al" }),

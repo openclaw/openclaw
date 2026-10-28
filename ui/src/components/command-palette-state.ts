@@ -27,6 +27,7 @@ import {
 import {
   isCommandPaletteShortcut,
   type CommandPaletteOpenInput,
+  type CommandPaletteMode,
   type CommandPaletteInputHandoff,
 } from "./command-palette-contract.ts";
 import {
@@ -38,8 +39,6 @@ import type { OpenClawModalDialog } from "./modal-dialog.tsx";
 
 const SEARCH_DEBOUNCE_MS = 200;
 const SESSION_SEARCH_MIN_CHARS = 2;
-const PROMPT_ENTER_CHARS = 60;
-const PROMPT_EXIT_CHARS = 50;
 const CATALOG_CACHE_TTL_MS = 30_000;
 
 export type PaletteFilter = "all" | "sessions" | "messages";
@@ -101,7 +100,7 @@ export class CommandPaletteState {
   };
   // Menu transitions arrive before Solid publishes the new store value.
   private readonly notifyMentionChange = (nextOpen = this.mentionMenu.open) => {
-    if (nextOpen || this.draft.mentions.length > 0) {
+    if (this.mode === "compose" || nextOpen) {
       this.clearSessionSearch();
       this.clearCatalogSearch();
     } else {
@@ -114,10 +113,7 @@ export class CommandPaletteState {
   readonly draft: PaletteSessionDraft;
 
   private searchQuery = "";
-  private textPromptMode = false;
-  private get promptMode(): boolean {
-    return this.textPromptMode || this.draft.attachmentMode;
-  }
+  private mode: CommandPaletteMode = "search";
   private activeId: string | null = null;
   private sessionItems: readonly CommandPaletteItem[] = [];
   private catalogItems: readonly CommandPaletteItem[] = [];
@@ -169,16 +165,13 @@ export class CommandPaletteState {
         changed: this.changed,
         updateComplete: rendered,
         onClose: () => this.closePalette(),
-        onAttachmentModeChange: () => this.scheduleSessionSearch(this.draft.message),
+        onAttachmentModeChange: () => {
+          if (this.draft.attachmentMode) {
+            this.setMode("compose");
+          }
+        },
         onMessageChange: (query) => {
-          const text = query.trim();
-          const length = Array.from(text).length;
-          // Separate entry/exit thresholds keep edits near the boundary from
-          // repeatedly collapsing and reopening search. Draft resets pass here too.
-          this.textPromptMode =
-            text.includes("\n") ||
-            (this.textPromptMode ? length > PROMPT_EXIT_CHARS : length >= PROMPT_ENTER_CHARS);
-          if (!text) {
+          if (!query.trim()) {
             this.filter = "all";
           }
           this.scheduleSessionSearch(query);
@@ -279,6 +272,8 @@ export class CommandPaletteState {
       returnFocus,
     };
     if (typeof this.initialInput !== "function") {
+      this.mode =
+        this.initialInput.mode ?? (this.initialInput.submitRequested ? "compose" : this.mode);
       this.draft.setMessage(this.initialInput.value);
     }
     this.activeId = null;
@@ -316,6 +311,17 @@ export class CommandPaletteState {
     } else if (!this.draft.submitting) {
       this.closePalette();
     }
+  };
+
+  private readonly setMode = (mode: CommandPaletteMode) => {
+    if (this.mode === mode || this.composing || this.draft.submitting) {
+      return;
+    }
+    this.mode = mode;
+    this.mentionMenu.close();
+    this.activeId = null;
+    this.scheduleSessionSearch(this.draft.message, false, false);
+    this.inputElement?.focus({ preventScroll: true });
   };
 
   private closePalette() {
@@ -359,6 +365,7 @@ export class CommandPaletteState {
         return;
       }
       this.initialInput = input;
+      this.setMode(input.mode ?? (input.submitRequested ? "compose" : this.mode));
       this.draft.setMessage(input.value);
       // The dialog has accepted focus. Publish the captured value synchronously
       // before the next key, then let the normal binding retain that same value.
@@ -427,9 +434,8 @@ export class CommandPaletteState {
     if (
       !this.open ||
       document.visibilityState === "hidden" ||
-      this.promptMode ||
+      this.mode === "compose" ||
       this.mentionMenu.open ||
-      this.draft.mentions.length > 0 ||
       !this.gateway.connected ||
       !client
     ) {
@@ -492,7 +498,7 @@ export class CommandPaletteState {
     // Retire in-flight results immediately, but keep the settled search visible
     // until the typing burst ends. The view disables selection during this pause.
     this.invalidateSessionSearch();
-    if (this.promptMode || mentionOpen || this.draft.mentions.length > 0) {
+    if (this.mode === "compose" || mentionOpen) {
       // Retire catalog generations too: late results and refresh events must not
       // revive search while the same field is being used as a session draft.
       this.clearSessionSearch();
@@ -608,6 +614,9 @@ export class CommandPaletteState {
   };
 
   private updateMentionMenu(event?: InputEvent) {
+    if (this.mode !== "compose") {
+      return;
+    }
     this.mentionMenu.syncDirectory(this.draft.mentionDirectory);
     if (!this.mentionMenu.open && !event) {
       return;
@@ -643,7 +652,8 @@ export class CommandPaletteState {
       searchQuery: this.searchQuery,
       searchDebouncing: this.composing || this.draft.message !== this.searchQuery,
       onFlushSearch: () => this.scheduleSessionSearch(this.draft.message, true),
-      promptMode: this.promptMode,
+      mode: this.mode,
+      onModeChange: this.setMode,
       mentionMenu: this.mentionMenu,
       mentionHost: this.mentionHost,
       onMentionChange: this.notifyMentionChange,

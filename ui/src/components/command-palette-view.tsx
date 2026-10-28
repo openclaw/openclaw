@@ -47,7 +47,11 @@ import {
   type CommandPaletteItem,
 } from "./command-palette-catalog-search.ts";
 import { COMMAND_PALETTE_DIALOG_STYLE } from "./command-palette-contract.ts";
-import { COMMAND_PALETTE_INPUT_ID, CommandPaletteInput } from "./command-palette-input.tsx";
+import {
+  COMMAND_PALETTE_INPUT_ID,
+  CommandPaletteInput,
+  CommandPaletteModes,
+} from "./command-palette-input.tsx";
 import { createCommandPaletteMatches } from "./command-palette-matches.ts";
 import { CommandPaletteResult } from "./command-palette-result.tsx";
 import { SESSION_ACTION_PREFIX } from "./command-palette-session-search.ts";
@@ -79,6 +83,10 @@ const paletteListboxId = "cmd-palette-listbox";
 
 function selectItem(item: CommandPaletteItem, props: CommandPaletteProps) {
   if (props.draft.submitting || props.searchDebouncing) {
+    return;
+  }
+  if (item.action === "nav:new-session") {
+    props.onModeChange("compose");
     return;
   }
   if (item.action.startsWith("nav:")) {
@@ -152,10 +160,20 @@ function handleKeydown(
     event.stopPropagation();
     return;
   }
+  if (event.key === "Tab" && !event.shiftKey && !event.altKey && !event.metaKey && !event.ctrlKey) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!event.repeat) {
+      props.onModeChange(props.mode === "search" ? "compose" : "search");
+    }
+    return;
+  }
   if (matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.modifiedEnter, event)) {
     event.preventDefault();
     event.stopPropagation();
-    void props.draft.submit();
+    if (props.mode === "compose") {
+      void props.draft.submit();
+    }
     return;
   }
   if (event.shiftKey || event.altKey || event.metaKey || event.ctrlKey) {
@@ -207,8 +225,7 @@ function matchesFilter(item: CommandPaletteItem, filter: PaletteFilter) {
 }
 
 function resolvePaletteResults(snapshot: CommandPaletteProps, prepared?: CommandPaletteItem[]) {
-  const hideSearch =
-    snapshot.promptMode || snapshot.mentionMenu.open || snapshot.draft.mentions.length > 0;
+  const hideSearch = snapshot.mode === "compose";
   const matches =
     prepared ??
     (hideSearch
@@ -278,7 +295,7 @@ function PaletteSearch(props: {
   // A cold receipt can suspend a pending probe; owner facts keep filtering live.
   const catalogSearchPending = () =>
     Boolean(current().searchQuery.trim()) &&
-    !current().promptMode &&
+    current().mode !== "compose" &&
     current().catalogSearchPending;
   const readCatalog = () => {
     latest(props.catalogRead);
@@ -435,9 +452,7 @@ function PaletteSearch(props: {
             <p>
               <ShortcutText
                 text={t("palette.noResultsStart", { shortcut: "{shortcut}" })}
-                shortcut={() => (
-                  <KeyboardShortcut combo={KEYBOARD_SHORTCUT_COMBOS.modifiedEnter} inline />
-                )}
+                shortcut={() => <Kbd keys="Tab" />}
               />
             </p>
           </Show>
@@ -469,8 +484,7 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
     error,
     (failure) => readCurrent().draft.setSubmissionError(failure),
   );
-  const hideSearch = () =>
-    current().promptMode || current().mentionMenu.open || current().draft.mentions.length > 0;
+  const hideSearch = () => current().mode === "compose";
   // The collapsing search remains mounted with its last presented projection.
   const search = createParkedProjection(current, () => !hideSearch());
   const matches = createCommandPaletteMatches(search);
@@ -520,7 +534,15 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
           snapshot.onToggle();
         }}
       >
+        <CommandPaletteModes
+          mode={current().mode}
+          onChange={current().onModeChange}
+          disabled={current().composing || current().draft.submitting}
+        />
         <div
+          id="cmd-palette-panel"
+          role="tabpanel"
+          aria-labelledby={`cmd-palette-tab-${current().mode}`}
           class={["cmd-palette", { "cmd-palette--prompt": hideSearch() }]}
           onClick={(event) => event.stopPropagation()}
           onKeyDown={(event) => handleKeydown(event, readCurrent, activeElement)}
@@ -535,7 +557,11 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
             }}
             value={current().query}
             placeholder={t(
-              current().draft.attachmentMode ? "palette.attachmentPrompt" : "palette.placeholder",
+              current().mode === "compose"
+                ? current().draft.attachmentMode
+                  ? "palette.attachmentPrompt"
+                  : "palette.composePlaceholder"
+                : "palette.placeholder",
             )}
             onInputRef={current().onInputRef}
             onValueChange={current().onQueryChange}
@@ -572,7 +598,7 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
                   : "cmd-palette-keys"
             }
             actions={
-              <>
+              <Show when={current().mode === "compose"}>
                 <openclaw-tooltip prop:content={reason() ?? t("palette.startSessionBackground")}>
                   <button
                     type="button"
@@ -598,10 +624,10 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
                   </button>
                 </openclaw-tooltip>
                 <PaletteSessionControls draft={current().draft} revision={current()} />
-              </>
+              </Show>
             }
           />
-          <Show when={current().draft.mentions.length > 0}>
+          <Show when={current().mode === "compose" && current().draft.mentions.length > 0}>
             <div class="cmd-palette__mentions" inert={current().draft.messageLocked}>
               <SelectedHumanMentions
                 text={current().query}
@@ -616,7 +642,9 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
               />
             </div>
           </Show>
-          <PaletteSessionAttachments draft={current().draft} revision={current()} />
+          <Show when={current().mode === "compose"}>
+            <PaletteSessionAttachments draft={current().draft} revision={current()} />
+          </Show>
           <HumanMentionMenuView args={[current().mentionMenu, current().mentionHost]} />
           <span
             id={mentionAnnouncementId()}
@@ -660,7 +688,7 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
               </Errored>
             </div>
           </div>
-          <Show when={current().draft.attachmentMode}>
+          <Show when={current().mode === "compose" && current().draft.attachmentMode}>
             <div class="cmd-palette__footer">
               <Show when={!isMobileBrowserPlatform()}>
                 <PaletteHint
@@ -671,12 +699,12 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
               <PaletteNewlineHint />
             </div>
           </Show>
-          <Show when={error()}>
+          <Show when={current().mode === "compose" && error()}>
             <div class="cmd-palette__creation-error" role="alert">
               {error()}
             </div>
           </Show>
-          <Show when={recovery()}>
+          <Show when={current().mode === "compose" && recovery()}>
             <div class="cmd-palette__footer">
               <PaletteSessionRecovery onOpen={() => recovery()?.()} />
             </div>

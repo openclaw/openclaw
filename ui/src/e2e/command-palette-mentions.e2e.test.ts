@@ -95,6 +95,7 @@ suite.define(() => {
         await page.keyboard.press("ControlOrMeta+K");
         const cold = page.locator(".cmd-palette[aria-busy=true] textarea");
         await cold.waitFor({ state: "visible" });
+        await cold.press("Tab");
         await cold.pressSequentially("@Al");
         heldModule.release();
         const palette = page.locator("openclaw-command-palette");
@@ -122,6 +123,7 @@ suite.define(() => {
         page,
         suite.server.baseUrl,
       );
+      await input.press("Tab");
       await page.evaluate(() => document.fonts.ready);
       const widths = [1280, 390];
       const before = new Map<number, Awaited<ReturnType<typeof anchors>>>();

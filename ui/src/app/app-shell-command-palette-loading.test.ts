@@ -160,6 +160,7 @@ describe("cold command palette input custody", () => {
           }),
         );
       };
+      keydown(input, { key: "Tab" });
       edit("Ask @", mode === "pasted" ? "insertFromPaste" : "insertText", "Ask @");
       edit("Ask @Al", "insertText", "Al");
       if (mode === "replaced") {
@@ -229,6 +230,7 @@ describe("cold command palette input custody", () => {
     async ({ modifier, submit, value }) => {
       const { state, input, close } = await mountLoader();
       type(input, value);
+      keydown(input, { key: "Tab" });
       const event = keydown(input, modifier);
       keydown(input, { ...modifier, repeat: true });
       flush();
@@ -279,6 +281,7 @@ describe("cold command palette input custody", () => {
         await Promise.resolve();
       }
       expect(take()).toEqual({
+        mode: "search",
         value,
         selectionStart: start,
         selectionEnd: end,

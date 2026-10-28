@@ -66,7 +66,7 @@ describe("CommandPalette pending searches", () => {
     },
   );
 
-  it("cancels a pending search when the query becomes a multiline prompt", async () => {
+  it("cancels a pending search when switching to Compose", async () => {
     const request = vi.fn(async (method: string) =>
       method === "sessions.search" ? { results: [], sessions: [] } : { models: [] },
     );
@@ -78,6 +78,7 @@ describe("CommandPalette pending searches", () => {
 
     const input = paletteInput(palette);
     const prompt = "plugins\nReview the available integrations and explain how to configure them.";
+    pressKey(input, "Tab", { cancelable: true });
     setInputValue(input, prompt);
     await settlePalette(palette, 100);
 
@@ -90,7 +91,7 @@ describe("CommandPalette pending searches", () => {
     expect(input.value).toBe(prompt);
   });
 
-  it("does not restore late session, transcript, or catalog results after entering a prompt", async () => {
+  it("does not restore late session, transcript, or catalog results after switching to Compose", async () => {
     const metadata = createDeferred<SessionsListResult | null>();
     const transcript = createDeferred<SessionsSearchResult>();
     const catalog = createDeferred<{
@@ -111,6 +112,7 @@ describe("CommandPalette pending searches", () => {
     expect(request).toHaveBeenCalledTimes(2);
 
     const input = paletteInput(palette);
+    pressKey(input, "Tab", { cancelable: true });
     setInputValue(input, prompt);
     await palette.updateComplete;
     const stale = createSessionResult("agent:main:stale", "zzfixtureunique stale session");
@@ -130,6 +132,7 @@ describe("CommandPalette pending searches", () => {
     expect(input.value).toBe(prompt);
 
     setInputValue(input, "zzfixtureunique");
+    pressKey(input, "Tab", { cancelable: true });
     await palette.updateComplete;
     expect(query('[inert][aria-hidden="true"]')).toBeNull();
     expect(queryAll('[role="option"]')).toHaveLength(0);
@@ -171,7 +174,7 @@ describe("CommandPalette pending searches", () => {
       } else {
         const empty = query(".cmd-palette__no-results")!;
         expect(empty.querySelector("h2")?.textContent).toBe("No results found");
-        expect(empty.textContent).toContain("to start a new session.");
+        expect(empty.textContent).toContain("to compose a new session.");
         expect(empty.querySelector("button")).toBeNull();
       }
     },

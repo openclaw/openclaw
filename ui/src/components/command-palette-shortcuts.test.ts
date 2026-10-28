@@ -70,6 +70,10 @@ describe("CommandPalette platform shortcuts", () => {
       expect(open.defaultPrevented).toBe(true);
       expect(palette.isOpen).toBe(true);
       const input = palette.querySelector<HTMLTextAreaElement>(".cmd-palette__input")!;
+      input.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true }),
+      );
+      await palette.updateComplete;
       const start = palette.querySelector<HTMLButtonElement>(
         ".cmd-palette__input-actions .cmd-palette__create",
       )!;
