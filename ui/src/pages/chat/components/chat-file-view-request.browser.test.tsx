@@ -31,7 +31,7 @@ function file(name = "report.md", editable = true): FileSidebarContent {
     name,
     path: name,
     draftKey: crypto.randomUUID(),
-    content: "# Report\nReady for review.\n",
+    content: `# Report\nReady for review: ${name}.\n`,
     ...(editable ? { edit: { hash: "original", save: vi.fn(), fetchLatest: vi.fn() } } : {}),
   };
   files.push(content);
@@ -56,10 +56,17 @@ function mountRequest(content: FileSidebarContent, requestedFile = content) {
   const pane = createTestChatPane({ client: createGatewayBrowserClientFixture() });
   const chat = createChatProps();
   const context = createInitializationContext();
+  const onFileInteraction = vi.fn();
   // The slot publishes the loaded file and its identity-bound view request together.
   const view = mountSolid(() => (
     <ApplicationProvider value={context}>
-      <ChatDetailSlot host={pane.state} chat={chat} content={selected()} presentation="desktop" />
+      <ChatDetailSlot
+        host={pane.state}
+        chat={chat}
+        content={selected()}
+        presentation="desktop"
+        onFileInteraction={onFileInteraction}
+      />
     </ApplicationProvider>
   ));
   function select(next: FileSidebarContent) {
@@ -72,7 +79,7 @@ function mountRequest(content: FileSidebarContent, requestedFile = content) {
     select(current);
   }
   select(content);
-  return { ...view, select, navigate };
+  return { ...view, select, navigate, onFileInteraction };
 }
 
 describe.runIf(browserMode)("file view request delivery", () => {
@@ -83,10 +90,16 @@ describe.runIf(browserMode)("file view request delivery", () => {
       view.container.querySelector<HTMLElement>('.cm-content[contenteditable="true"]');
     await expect.poll(editable).not.toBeNull();
     const editor = editable()!;
+    const edits = () =>
+      view.onFileInteraction.mock.calls.filter(([, interaction]) => interaction === "edit");
+    expect(edits()).toEqual([[content, "edit"]]);
     await userEvent.fill(editor, "Unsaved report draft");
     for (const mode of ["reading", "edit"] as const) {
       view.navigate({ view: { file: content, view: mode } });
-      await expect.poll(editable).toBe(editor);
+      // Request delivery uses commit microtasks; observe after their native frame boundary.
+      await new Promise(requestAnimationFrame);
+      expect(edits()).toHaveLength(mode === "edit" ? 2 : 1);
+      expect(editable()).toBe(editor);
       expect(editor.textContent).toBe("Unsaved report draft");
       expect(view.getByRole("button", { name: "Save" })).toHaveProperty("disabled", false);
     }
@@ -100,8 +113,10 @@ describe.runIf(browserMode)("file view request delivery", () => {
     await expect.poll(() => view.container.querySelector(".sidebar-markdown")).not.toBeNull();
     view.select(second);
     await expect
-      .poll(() => view.container.querySelector("openclaw-chat-detail-panel")?.content)
-      .toBe(second);
+      .poll(() => view.container.querySelector(".sidebar-markdown")?.textContent)
+      .toContain("other.md");
+    await new Promise(requestAnimationFrame);
+    expect(view.onFileInteraction).not.toHaveBeenCalledWith(second, "edit");
     expect(view.container.querySelector('.cm-content[contenteditable="true"]')).toBeNull();
     view.navigate({ view: { file: second, view: "edit" } });
     await expect
@@ -112,6 +127,8 @@ describe.runIf(browserMode)("file view request delivery", () => {
   it("keeps a file without edit capability readonly", async () => {
     const view = mountRequest(file("report.md", false));
     await expect.poll(() => view.container.querySelector(".sidebar-markdown")).not.toBeNull();
+    await new Promise(requestAnimationFrame);
+    expect(view.onFileInteraction).not.toHaveBeenCalled();
     expect(view.container.querySelector('.cm-content[contenteditable="true"]')).toBeNull();
     expect(view.queryByRole("button", { name: "Save" })).toBeNull();
   });
