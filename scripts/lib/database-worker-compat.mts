@@ -1145,28 +1145,31 @@ export function inspectDatabaseWorkerBoundaries(
             const name = enclosingNames.join(".");
             const tier = classifyEntry(file, name);
             const consumer = expression.parent;
-            const receiver =
-              ts.isCallExpression(consumer) &&
-              resolveSymbol(
-                checker.getSymbolAtLocation(consumer.expression),
-              )?.valueDeclaration?.resolve();
             const reviewedForward =
+              !directCall &&
               tier === "T3" &&
               ts.isCallExpression(consumer) &&
-              receiver &&
-              ts.isFunctionDeclaration(receiver) &&
-              path.relative(root, receiver.getSourceFile().fileName).split(path.sep).join("/") ===
-                file &&
               nonRuntimeMemberForwards
                 .get(file)
-                ?.some(
-                  (forward) =>
+                ?.some((forward) => {
+                  // Receiver identity needs a compiler round trip only after the
+                  // local facts select an exact reviewed forwarding contract.
+                  const receiver =
                     forward.caller === name &&
                     callee.file === file &&
                     forward.member === callee.name &&
-                    forward.receiver === operationName(receiver) &&
-                    consumer.arguments[forward.argument] === expression,
-                );
+                    consumer.arguments[forward.argument] === expression &&
+                    resolveSymbol(
+                      checker.getSymbolAtLocation(consumer.expression),
+                    )?.valueDeclaration?.resolve();
+                  return (
+                    receiver &&
+                    ts.isFunctionDeclaration(receiver) &&
+                    path.relative(root, receiver.getSourceFile().fileName).split(path.sep).join("/") ===
+                      file &&
+                    forward.receiver === operationName(receiver)
+                  );
+                });
             nonRuntime = Boolean(
               (directCall || reviewedForward) &&
               (tier !== undefined ||
