@@ -119,6 +119,11 @@ export async function createBrowserMeetingRealtimeAudioTransport(params: {
       inputStarted = true;
       // The native bus contains assistant injection. Keep it solely for waveform verification.
       params.nativeTransport.startInput(() => {});
+      // Like the node transport, tolerate transient pull errors: a browser request can miss its
+      // deadline while the capture lives on (for example, a slow host DNS lookup in the browser's
+      // URL check). The page keeps only the newest audio and closes a capture that goes 10 s
+      // without a pull, so a second consecutive failure ends the call.
+      let consecutiveInputErrors = 0;
       const pull = async () => {
         if (stopped) {
           return;
@@ -144,11 +149,21 @@ export async function createBrowserMeetingRealtimeAudioTransport(params: {
               params.audioFormat === "pcm16-24khz" ? pcm : convertPcmToMulaw8k(pcm, 24_000);
             onAudio(audio);
           }
+          // Reset only once the pull and any audio processing completed without an error.
+          consecutiveInputErrors = 0;
           if (!stopped) {
             timer = setTimeout(() => void pull(), 50);
           }
         } catch (error) {
-          fail(error);
+          consecutiveInputErrors += 1;
+          if (stopped || consecutiveInputErrors >= 2) {
+            fail(error);
+            return;
+          }
+          params.logger.warn(
+            `Meeting browser audio input failed (${consecutiveInputErrors}/2): ${formatErrorMessage(error)}`,
+          );
+          timer = setTimeout(() => void pull(), 50);
         }
       };
       void pull();
