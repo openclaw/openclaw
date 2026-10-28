@@ -30,7 +30,7 @@ function markdown(path: string, body: string, expected = body, mode: "text" | "m
 }
 
 const MARKDOWN_CODE =
-  '# Example\n\n- Read [the guide](https://example.com).\n\n```text\n# comment\n- literal\n1. literal\n[label](https://example.com)\n![alt](image.png)\n`value`\n    if enabled:\n        print("two  spaces")\n\n\n\treturn True\n```';
+  '# Example\n\n- Read [the guide](https://example.com), \\![important](note.md), \\\\![diagram](image.png), and ![icon](icon.png).\n\n```text\n# comment\n- literal\n1. literal\n[label](https://example.com)\n![alt](image.png)\n`value`\n    if enabled:\n        print("two  spaces")\n\n\n\treturn True\n```';
 const UNCLOSED_CODE =
   '# literal\n- literal\n    if enabled:\n        print("two  spaces")\n\n\n\treturn True';
 const INLINE_FENCE = "Use ``` to start a code block.\nNext paragraph.";
@@ -59,15 +59,10 @@ const RESPONSES = [
   markdown(
     "/markdown-code-text",
     MARKDOWN_CODE,
-    'Example\n\nRead the guide.\n\n# comment\n- literal\n1. literal\n[label](https://example.com)\n![alt](image.png)\n`value`\n    if enabled:\n        print("two  spaces")\n\n\n\treturn True',
+    'Example\n\nRead the guide, \\!important, \\\\, and .\n\n# comment\n- literal\n1. literal\n[label](https://example.com)\n![alt](image.png)\n`value`\n    if enabled:\n        print("two  spaces")\n\n\n\treturn True',
   ),
   markdown("/markdown-unclosed", `\`\`\`text\n${UNCLOSED_CODE}`, UNCLOSED_CODE),
   markdown("/markdown-inline-fence-prose", INLINE_FENCE),
-  markdown(
-    "/markdown-escaped-bang",
-    String.raw`Read \![important](https://example.com) and \\![diagram](image.png).`,
-    String.raw`Read \!important and \\.`,
-  ),
   ...(["markdown", "text"] as const).map((mode) =>
     response(
       `/zero-scale-${mode}`,
