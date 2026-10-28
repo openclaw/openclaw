@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SecretProviderConfig, SecretRef, SecretRefSource } from "../config/types.secrets.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { FsSafeError, readSecureFile } from "../infra/fs-safe.js";
+import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import {
   loadPluginManifestRegistryCore,
@@ -454,6 +455,22 @@ async function resolveProviderRefs({
   }
 }
 
+/**
+ * Registers resolved secret values for exact-value redaction.
+ *
+ * Registration belongs to the resolver, not to the owner-assignment layer, so
+ * every consumer of a SecretRef value gets exact-value redaction. Values whose
+ * shape the pattern redactor does not recognise would otherwise reach a log
+ * line, a console line or a diagnostic event verbatim.
+ */
+function registerResolvedValuesForRedaction(resolved: ReadonlyMap<string, unknown>): void {
+  for (const value of resolved.values()) {
+    if (typeof value === "string") {
+      registerSecretValueForRedaction(value);
+    }
+  }
+}
+
 async function resolveSecretRefProviderGroups(params: {
   refs: SecretRef[];
   options: ResolveSecretRefOptions;
@@ -551,6 +568,7 @@ async function resolveSecretRefProviderGroups(params: {
       failures.push({ group, error: errorsByIndex.get(index) });
     }
   }
+  registerResolvedValuesForRedaction(resolved);
   return {
     resolved,
     failures,
