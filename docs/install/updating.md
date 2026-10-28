@@ -90,6 +90,13 @@ The delegated executor admits its grant data separately and still checks live pr
 installation ownership before effects. Callbacks and live deadline objects stay in the
 initiating process; only serializable options cross the migrated-update handoff.
 
+Native `openclaw update migrate` reports progress while inspecting configuration
+and schemas, capturing its database backup, and verifying the migrated schemas.
+Update Doctor omits the standalone pre-shutdown transcript archive warmup because
+the updater already owns the stopped-Gateway window. Required archive migrations
+and their integrity and recovery checks still run under maintenance custody.
+The candidate must contain this change; older installed updater work is unchanged.
+
 Stopped update and Doctor database snapshots tolerate concurrent read-only SQLite
 probes. The transient `-shm` WAL index is rebuilt privately, never copied or used
 to detect durable changes. Empty WAL files created by readers count as absent.
