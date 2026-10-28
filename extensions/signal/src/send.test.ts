@@ -1,4 +1,7 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import type { ServerResponse } from "node:http";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   signalAccountConfig as accountConfig,
@@ -7,10 +10,26 @@ import {
   type SignalRpcEnvelope,
 } from "./signal-rpc.test-support.js";
 
-const signalRpcRequestMock = vi.hoisted(() => vi.fn());
-const resolveOutboundAttachmentFromUrlMock = vi.hoisted(() =>
-  vi.fn(async (..._args: unknown[]) => ({ path: "/tmp/image.png", contentType: "image/png" })),
+const TINY_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=",
+  "base64",
 );
+
+const { outboundAttachment, resolveOutboundAttachmentFromUrlMock, signalRpcRequestMock } =
+  vi.hoisted(() => {
+    const stagedAttachment = {
+      path: "/tmp/image.png",
+      contentType: "image/png" as string | undefined,
+    };
+    return {
+      outboundAttachment: stagedAttachment,
+      resolveOutboundAttachmentFromUrlMock: vi.fn(async (..._args: unknown[]) => ({
+        path: stagedAttachment.path,
+        contentType: stagedAttachment.contentType,
+      })),
+      signalRpcRequestMock: vi.fn(),
+    };
+  });
 
 vi.mock("./client-adapter.js", () => ({
   signalRpcRequest: (...args: unknown[]) => signalRpcRequestMock(...args),
@@ -54,6 +73,38 @@ function receiptAt(timestamp: number) {
   };
 }
 
+function sentAttachment(callIndex = 0): string {
+  const params = signalRpcRequestMock.mock.calls[callIndex]?.[1] as
+    | { attachments?: unknown }
+    | undefined;
+  const attachment = Array.isArray(params?.attachments) ? params.attachments[0] : undefined;
+  if (typeof attachment !== "string") {
+    throw new Error("Missing Signal attachment");
+  }
+  return attachment;
+}
+
+function inlineAttachmentBytes(attachment: string): Buffer {
+  const marker = ";base64,";
+  const markerAt = attachment.indexOf(marker);
+  if (markerAt === -1) {
+    throw new Error("Missing base64 marker");
+  }
+  return Buffer.from(attachment.slice(markerAt + marker.length), "base64");
+}
+
+async function withStagedPng(run: () => Promise<void>): Promise<void> {
+  const dir = await mkdtemp(path.join(tmpdir(), "signal-send-"));
+  const filePath = path.join(dir, "image.png");
+  await writeFile(filePath, TINY_PNG);
+  outboundAttachment.path = filePath;
+  try {
+    await run();
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
 async function realRpc(
   kind: "container" | "external-native",
   respond: (payload: SignalRpcEnvelope, index: number, response: ServerResponse) => void,
@@ -79,6 +130,8 @@ describe("sendMessageSignal receipts", () => {
   beforeEach(() => {
     signalRpcRequestMock.mockReset();
     resolveOutboundAttachmentFromUrlMock.mockClear();
+    outboundAttachment.path = "/tmp/image.png";
+    outboundAttachment.contentType = "image/png";
   });
 
   it("routes a named container account across send, typing, and receipt RPCs", async () => {
@@ -105,25 +158,83 @@ describe("sendMessageSignal receipts", () => {
   it("attaches a media receipt for attachment sends", async () => {
     signalRpcRequestMock.mockResolvedValueOnce({ timestamp: 1234567891 });
     const maxBytes = 12 * 1024 * 1024;
-    const result = await sendMessageSignal("group:group-1", "", {
-      cfg: SIGNAL_TEST_CFG,
-      mediaUrl: "/tmp/image.png",
-      mediaLocalRoots: ["/tmp"],
-      maxBytes,
+    await withStagedPng(async () => {
+      const result = await sendMessageSignal("group:group-1", "", {
+        cfg: SIGNAL_TEST_CFG,
+        mediaUrl: "/tmp/image.png",
+        mediaLocalRoots: ["/tmp"],
+        maxBytes,
+      });
+      expect(resolveOutboundAttachmentFromUrlMock).toHaveBeenCalledWith(
+        "/tmp/image.png",
+        maxBytes,
+        expect.objectContaining({ localRoots: ["/tmp"] }),
+      );
+      const attachment = sentAttachment();
+      expect(attachment).toMatch(/^data:image\/png;filename=image\.png;base64,/);
+      expect(inlineAttachmentBytes(attachment)).toEqual(TINY_PNG);
+      expectSend(
+        { attachments: [attachment], message: "" },
+        { maxAttachmentBytes: maxBytes, transportKind: "external-native" },
+      );
+      expect(result).toMatchObject(receiptAt(1234567891));
+      expect(result.receipt).toMatchObject({
+        platformMessageIds: ["1234567891"],
+        parts: [{ kind: "media", platformMessageId: "1234567891" }],
+        raw: [{ chatId: "group-1", meta: { targetType: "group" } }],
+      });
+      expect(result.receipt.sentAt).toBeGreaterThan(0);
     });
-    expect(resolveOutboundAttachmentFromUrlMock).toHaveBeenCalledWith(
-      "/tmp/image.png",
-      maxBytes,
-      expect.objectContaining({ localRoots: ["/tmp"] }),
-    );
-    expectSend({ attachments: ["/tmp/image.png"], message: "" }, { maxAttachmentBytes: maxBytes });
-    expect(result).toMatchObject(receiptAt(1234567891));
-    expect(result.receipt).toMatchObject({
-      platformMessageIds: ["1234567891"],
-      parts: [{ kind: "media", platformMessageId: "1234567891" }],
-      raw: [{ chatId: "group-1", meta: { targetType: "group" } }],
+  });
+
+  it.each(["managed-native", "container"] as const)(
+    "keeps the staged path for %s attachments",
+    async (kind) => {
+      signalRpcRequestMock.mockResolvedValueOnce({ timestamp: 1234567891 });
+
+      await sendMessageSignal("group:group-1", "", {
+        cfg: SIGNAL_TEST_CFG,
+        transportKind: kind,
+        mediaUrl: "/tmp/image.png",
+        mediaLocalRoots: ["/tmp"],
+      });
+
+      expectSend({ attachments: ["/tmp/image.png"] }, { transportKind: kind });
+    },
+  );
+
+  it("replays the same inline attachment when native quote metadata is rejected", async () => {
+    signalRpcRequestMock
+      .mockRejectedValueOnce(new Error("Signal RPC -32602: quote metadata invalid"))
+      .mockResolvedValueOnce({ timestamp: 1234567892 });
+
+    await withStagedPng(async () => {
+      await sendMessageSignal("+15551234567", "caption", {
+        cfg: SIGNAL_TEST_CFG,
+        mediaUrl: "/tmp/image.png",
+        replyToId: "1700000000001",
+        replyToAuthor: "+15550002222",
+        replyToBody: "original",
+      });
+
+      expect(signalRpcRequestMock).toHaveBeenCalledTimes(2);
+      const first = sentAttachment(0);
+      const second = sentAttachment(1);
+      expect(second).toBe(first);
+      expect(first).toMatch(/^data:image\/png;filename=image\.png;base64,/);
+      expect(inlineAttachmentBytes(first)).toEqual(TINY_PNG);
+      expect(signalRpcRequestMock.mock.calls[0]?.[1]).toEqual(
+        expect.objectContaining({
+          attachments: [first],
+          quoteTimestamp: 1700000000001,
+          quoteAuthor: "+15550002222",
+        }),
+      );
+      expect(signalRpcRequestMock.mock.calls[1]?.[1]).toEqual(
+        expect.objectContaining({ attachments: [first], message: "caption" }),
+      );
+      expect(signalRpcRequestMock.mock.calls[1]?.[1]).not.toHaveProperty("quoteTimestamp");
     });
-    expect(result.receipt.sentAt).toBeGreaterThan(0);
   });
 
   it("does not invent platform ids when signal-cli omits a timestamp", async () => {
