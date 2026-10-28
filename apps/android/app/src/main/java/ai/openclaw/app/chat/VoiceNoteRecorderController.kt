@@ -145,18 +145,13 @@ internal class VoiceNoteRecorderController(
 
         val durationMs =
           try {
-            engine.stop().coerceIn(0L, VOICE_NOTE_MAX_DURATION_MS)
+            val duration = engine.stop().coerceIn(0L, VOICE_NOTE_MAX_DURATION_MS)
+            normalizeM4aContainerBrand(file)
+            duration
           } catch (_: Throwable) {
             failLocked("Could not finish voice-note recording.")
             return false
           }
-
-        try {
-          normalizeM4aContainerBrand(file)
-        } catch (_: Throwable) {
-          failLocked("Could not finish voice-note recording.")
-          return false
-        }
 
         if (file.length() > VOICE_NOTE_MAX_BYTES) {
           failLocked("Voice note is too large. Record a shorter message.")
@@ -264,7 +259,6 @@ internal fun normalizeM4aContainerBrand(file: File) {
 /** Android AAC/m4a engine kept behind [VoiceNoteRecordingEngine] for JVM tests. */
 internal class AndroidVoiceNoteRecordingEngine(
   private val context: Context,
-  private val elapsedRealtime: () -> Long = SystemClock::elapsedRealtime,
 ) : VoiceNoteRecordingEngine {
   private var recorder: MediaRecorder? = null
   private var startedAtElapsedMs = 0L
@@ -282,7 +276,7 @@ internal class AndroidVoiceNoteRecordingEngine(
       next.setOutputFile(outputFile.absolutePath)
       next.prepare()
       next.start()
-      startedAtElapsedMs = elapsedRealtime()
+      startedAtElapsedMs = SystemClock.elapsedRealtime()
       recorder = next
     } catch (error: Throwable) {
       next.release()
@@ -295,7 +289,7 @@ internal class AndroidVoiceNoteRecordingEngine(
     recorder = null
     return try {
       active.stop()
-      (elapsedRealtime() - startedAtElapsedMs).coerceAtLeast(0L)
+      (SystemClock.elapsedRealtime() - startedAtElapsedMs).coerceAtLeast(0L)
     } finally {
       active.release()
     }

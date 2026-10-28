@@ -1,0 +1,525 @@
+# Adapted from gbrain-base-v2 at 7cdc3e30a; see docs/ONTOLOGY.md and THIRD_PARTY_NOTICES.md.
+format: knowledge-ontology-v1
+name: knowledge-default
+version: 1.0.0
+description: Default Knowledge ontology. Behavior flags are declarations only;
+  no extraction or expert services are enabled.
+extends: null
+definitions:
+  - name: person
+    label: Person
+    description: Someone you know, work with, or want to learn about.
+    kind: page
+    primitive: entity
+    directory: people/
+    path_prefixes:
+      - people/
+      - person/
+    aliases:
+      - people
+      - contact
+      - individual
+      - founder
+      - partner
+      - partner-profile
+    behaviors:
+      extractable: false
+      expert_routing: true
+    fields:
+      - name: role
+        label: Role
+        type: string
+        required: false
+  - name: company
+    label: Company
+    description: A business or organization. This broad type also includes products
+      in the current vocabulary.
+    kind: page
+    primitive: entity
+    directory: companies/
+    path_prefixes:
+      - companies/
+      - company/
+      - products/
+      - orgs/
+    aliases:
+      - yc-company
+      - product
+      - org
+      - people-org
+      - organization
+      - startup
+      - business
+    behaviors:
+      extractable: false
+      expert_routing: true
+    fields: []
+  - name: media
+    label: Media
+    description: Articles, books, videos, podcasts, and other content you consume.
+    kind: page
+    primitive: media
+    directory: media/
+    path_prefixes:
+      - media/
+      - videos/
+      - articles/
+      - essays/
+      - books/
+      - podcasts/
+      - blog/
+      - posts/
+    aliases:
+      - article
+      - video
+      - essay
+      - book
+      - podcast
+      - blog-post
+      - youtube-video
+      - podcast-episode
+    behaviors:
+      extractable: true
+      expert_routing: false
+    fields: []
+  - name: tweet
+    label: Tweet
+    description: A social post or thread worth keeping and referring back to.
+    kind: page
+    primitive: media
+    directory: tweets/
+    path_prefixes:
+      - tweets/
+      - twitter/
+    aliases:
+      - tweet-single
+      - tweet-thread
+      - tweet-bundle
+      - tweet-stub
+      - twitter-post
+    behaviors:
+      extractable: true
+      expert_routing: false
+    fields: []
+  - name: social-digest
+    label: Social Digest
+    description: A collected view of social activity over a period of time.
+    kind: page
+    primitive: temporal
+    directory: digests/social/
+    path_prefixes:
+      - digests/social/
+    aliases:
+      - social-digest-daily
+      - social-digest-monthly
+    behaviors:
+      extractable: false
+      expert_routing: false
+    fields: []
+  - name: analysis
+    label: Analysis
+    description: Research and interpretation that help you make sense of a subject.
+    kind: page
+    primitive: media
+    directory: wiki/analysis/
+    path_prefixes:
+      - wiki/analysis/
+      - analysis/
+    aliases:
+      - pricing-analysis
+      - hiring-analysis
+      - market-analysis
+      - competitive-analysis
+      - research
+      - organization-research
+    behaviors:
+      extractable: true
+      expert_routing: false
+    fields: []
+  - name: atom
+    label: Atom
+    description: A small, standalone annotation. Separate from an evidence-backed claim.
+    kind: page
+    primitive: annotation
+    directory: atoms/
+    path_prefixes:
+      - atoms/
+    aliases:
+      - atom-extraction
+      - atom-manual
+      - atom-lore
+      - content-atom
+      - lore
+    behaviors:
+      extractable: false
+      expert_routing: false
+    fields: []
+  - name: concept
+    label: Concept
+    description: An idea, topic, or definition you want to understand.
+    kind: page
+    primitive: concept
+    directory: wiki/concepts/
+    path_prefixes:
+      - wiki/concepts/
+      - wiki/concept/
+    aliases:
+      - concept-stub
+      - definition
+    behaviors:
+      extractable: true
+      expert_routing: false
+    fields: []
+  - name: source
+    label: Source
+    description: Reference material or a transcript that other knowledge draws on.
+    kind: page
+    primitive: media
+    directory: sources/
+    path_prefixes:
+      - sources/
+      - source/
+    aliases:
+      - sources/article
+      - source/article
+      - transcript
+      - ref
+    behaviors:
+      extractable: true
+      expert_routing: false
+    fields:
+      - name: source_role
+        label: Source role
+        type: string
+        required: false
+        values:
+          - canonical
+          - snapshot
+      - name: provider
+        label: Provider
+        type: string
+        required: false
+      - name: source_key
+        label: Source key
+        type: string
+        required: false
+      - name: coverage_start
+        label: Coverage start
+        type: string
+        required: false
+      - name: coverage_end
+        label: Coverage end
+        type: string
+        required: false
+      - name: observed_at
+        label: Observed at
+        type: string
+        required: false
+      - name: source_revision
+        label: Source revision
+        type: string
+        required: false
+      - name: manifest_sha256
+        label: Manifest SHA-256
+        type: string
+        required: false
+      - name: item_count
+        label: Item count
+        type: number
+        required: false
+      - name: completeness
+        label: Completeness
+        type: string
+        required: false
+        values:
+          - complete
+          - partial
+          - unknown
+      - name: watermark
+        label: Watermark
+        type: string
+        required: false
+  - name: deal
+    label: Deal
+    description: An investment opportunity, agreement, or transaction in progress.
+    kind: page
+    primitive: temporal
+    directory: deals/
+    path_prefixes:
+      - deals/
+      - deal/
+    aliases:
+      - investment
+      - term-sheet
+    behaviors:
+      extractable: false
+      expert_routing: false
+    fields: []
+  - name: email
+    label: Email
+    description: An email message or thread, preserved with its context.
+    kind: page
+    primitive: temporal
+    directory: emails/
+    path_prefixes:
+      - emails/
+      - email/
+    aliases:
+      - email-thread
+    behaviors:
+      extractable: true
+      expert_routing: false
+    fields: []
+  - name: slack
+    label: Slack
+    description: A Slack message or conversation worth keeping.
+    kind: page
+    primitive: temporal
+    directory: slack/
+    path_prefixes:
+      - slack/
+    aliases:
+      - slack-message
+      - slack-thread
+    behaviors:
+      extractable: true
+      expert_routing: false
+    fields: []
+  - name: meeting
+    label: Meeting
+    description: A meeting and the discussion, context, and notes around it.
+    kind: page
+    primitive: temporal
+    directory: meetings/
+    path_prefixes:
+      - meetings/
+      - meeting/
+    aliases: []
+    behaviors:
+      extractable: true
+      expert_routing: false
+    fields:
+      - name: occurred_at
+        label: Occurred at
+        type: string
+        required: false
+  - name: conversation
+    label: Conversation
+    description: An exchange between people, from an interview to an informal chat.
+    kind: page
+    primitive: temporal
+    directory: conversations/
+    path_prefixes:
+      - conversations/
+    aliases: []
+    behaviors:
+      extractable: true
+      expert_routing: false
+    fields: []
+  - name: writing
+    label: Writing
+    description: Something you are authoring, from an early draft to a finished piece.
+    kind: page
+    primitive: media
+    directory: writing/
+    path_prefixes:
+      - writing/
+    aliases:
+      - draft
+      - post-draft
+    behaviors:
+      extractable: true
+      expert_routing: false
+    fields: []
+  - name: project
+    label: Project
+    description: An ongoing initiative with a purpose, context, and work to follow.
+    kind: page
+    primitive: concept
+    directory: projects/
+    path_prefixes:
+      - projects/
+      - project/
+    aliases:
+      - initiative
+      - workstream
+    behaviors:
+      extractable: false
+      expert_routing: false
+    fields:
+      - name: status
+        label: Project status
+        type: string
+        required: false
+        values:
+          - active
+          - paused
+          - completed
+          - cancelled
+  - name: note
+    label: Note
+    description: A thought, observation, or useful piece of knowledge to keep.
+    kind: page
+    primitive: concept
+    directory: notes/
+    path_prefixes:
+      - notes/
+      - note/
+    aliases:
+      - memo
+      - anecdote
+      - insight
+      - principle
+      - framework
+    behaviors:
+      extractable: true
+      expert_routing: false
+    fields: []
+  - name: event
+    label: Event
+    description: Something that happened at a particular point in your life or work.
+    kind: page
+    primitive: temporal
+    directory: life/events/
+    path_prefixes:
+      - life/events/
+    aliases: []
+    behaviors:
+      extractable: false
+      expert_routing: false
+    fields: []
+  - name: diary
+    label: Diary
+    description: A personal journal entry capturing a day or a moment.
+    kind: page
+    primitive: temporal
+    directory: life/diary/
+    path_prefixes:
+      - life/diary/
+    aliases: []
+    behaviors:
+      extractable: false
+      expert_routing: false
+    fields: []
+  - name: partner_of
+    label: Partner Of
+    description: Connects partners or collaborators.
+    kind: relationship
+    directory: relationships/
+    fields: []
+  - name: relates_to
+    label: Relates To
+    description: A general connection between two pages.
+    kind: relationship
+    directory: relationships/
+    fields: []
+  - name: mentions
+    label: Mentions
+    description: One page refers to another without necessarily discussing it in depth.
+    kind: relationship
+    directory: relationships/
+    fields: []
+  - name: discusses
+    label: Discusses
+    description: One page explores or talks about the subject of another.
+    kind: relationship
+    directory: relationships/
+    fields: []
+  - name: owes_to
+    label: Owes To
+    description: Connects an obligation with the person or organization it is owed to.
+    kind: relationship
+    directory: relationships/
+    fields: []
+  - name: awaiting_reply_from
+    label: Awaiting Reply From
+    description: Records whose response is still awaited.
+    kind: relationship
+    directory: relationships/
+    fields: []
+  - name: founded
+    label: Founded
+    description: Connects a founder to what they established.
+    kind: relationship
+    directory: relationships/
+    fields: []
+  - name: works_at
+    label: Works At
+    description: Connects a person to the organization where they work.
+    kind: relationship
+    directory: relationships/
+    fields: []
+  - name: invested_in
+    label: Invested In
+    description: Connects an investor to what they invested in.
+    kind: relationship
+    directory: relationships/
+    fields: []
+  - name: advises
+    label: Advises
+    description: Connects an advisor to whom or what they advise.
+    kind: relationship
+    directory: relationships/
+    fields: []
+  - name: sourced_from
+    label: Sourced From
+    description: Points to the source behind a page.
+    kind: relationship
+    directory: relationships/
+    fields: []
+  - name: derived_from
+    label: Derived From
+    description: Shows which earlier material a page builds on.
+    kind: relationship
+    directory: relationships/
+    fields: []
+  - name: supersedes
+    label: Supersedes
+    description: Indicates that one page takes the place of another.
+    kind: relationship
+    directory: relationships/
+    fields: []
+  - name: redirects_to
+    label: Redirects To
+    description: Points from one page toward its intended destination.
+    kind: relationship
+    directory: relationships/
+    fields: []
+  - name: attended
+    label: Attended
+    description: Connects a participant to a meeting or event.
+    kind: relationship
+    directory: relationships/
+    fields: []
+  - name: authored
+    label: Authored
+    description: Connects a creator to their work.
+    kind: relationship
+    directory: relationships/
+    fields: []
+  - name: attributed_to
+    label: Attributed To
+    description: Connects material to the person or source it is credited to.
+    kind: relationship
+    directory: relationships/
+    fields: []
+  - name: leads
+    label: Leads
+    description: A person leads a project.
+    kind: relationship
+    directory: relationships/
+    fields: []
+    from_types:
+      - person
+    to_types:
+      - project
+  - name: supports
+    label: Supports
+    description: A company or organization supports a project.
+    kind: relationship
+    directory: relationships/
+    fields: []
+    from_types:
+      - company
+    to_types:
+      - project

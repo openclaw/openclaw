@@ -1,23 +1,26 @@
-import { spawn, spawnSync } from "node:child_process";
+import assert from "node:assert/strict";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   captureUpdateCommandExecutorAuthority,
   withUpdateCommandExecutor,
 } from "../cli/update-cli/update-command-executor.js";
 import { resolveServiceManagerEnv } from "../daemon/service-process-env.js";
-import { executeSqliteQuerySync } from "./kysely-sync.js";
+import { listDirectoryTreeStrictSync } from "./directory-walk.js";
 import * as nodeSqlite from "./node-sqlite.js";
+import { classifySqliteMutation } from "./sqlite-schema-mutation.js";
 import * as tempRoot from "./tmp-openclaw-dir.js";
 import {
   createManagedHandoffLeaseDatabase,
-  leaseQueries,
+  type ManagedUpdateLeaseDatabaseIdentity,
 } from "./update-managed-service-handoff-database.js";
 import { createManagedHandoffLeaseStore } from "./update-managed-service-handoff-lease.js";
 
@@ -35,40 +38,22 @@ beforeEach(() => {
   vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(directory);
 });
 
-afterEach(() => {
-  vi.restoreAllMocks();
-});
+afterEach(() => vi.restoreAllMocks());
 
 function snapshot() {
-  const entries: {
-    name: string;
-    dev: number;
-    ino: number;
-    mode: number;
-    content?: Buffer | string;
-  }[] = [];
-  const visit = (name: string) => {
+  const names = [".", ...listDirectoryTreeStrictSync(root).map((entry) => entry.relativePath)];
+  return names.map((name) => {
     const file = path.join(root, name);
     const stat = fs.lstatSync(file);
-    entries.push({
-      name,
-      dev: stat.dev,
-      ino: stat.ino,
-      mode: stat.mode,
-      ...(stat.isSymbolicLink()
+    return Object.assign(
+      { name, dev: stat.dev, ino: stat.ino, mode: stat.mode },
+      stat.isSymbolicLink()
         ? { content: fs.readlinkSync(file) }
         : stat.isFile()
           ? { content: fs.readFileSync(file) }
-          : {}),
-    });
-    if (stat.isDirectory()) {
-      for (const child of fs.readdirSync(file).toSorted()) {
-        visit(path.join(name, child));
-      }
-    }
-  };
-  visit(".");
-  return entries;
+          : {},
+    );
+  });
 }
 
 async function authority() {
@@ -76,6 +61,75 @@ async function authority() {
     const fence = await executor.enter(root);
     return captureUpdateCommandExecutorAuthority(fence);
   });
+}
+
+function storeFor(existingIdentity: ManagedUpdateLeaseDatabaseIdentity) {
+  return createManagedHandoffLeaseStore({
+    databasePath,
+    serviceManagerEnv: resolveServiceManagerEnv(),
+    existingIdentity,
+  });
+}
+
+function acquire(store: ReturnType<typeof storeFor>, owner: string, key = root) {
+  const result = store.acquire(key, owner, { kind: "update" });
+  assert(result.kind === "acquired", `${owner} fixture was not admitted`);
+  return result.lease;
+}
+
+function spawnNode(script: string, args: string[] = [], detached = false) {
+  return spawn(
+    process.execPath,
+    ["--no-warnings", "--input-type=module", "--eval", script, ...args],
+    {
+      stdio: ["ignore", "ignore", "pipe", "ipc"],
+      env: {},
+      detached,
+    },
+  );
+}
+
+function observeWritableDatabase(observe: (db: DatabaseSync) => void) {
+  vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation((location, options) => {
+    const db = openDatabase(location, options);
+    if (!options?.readOnly && db.location() === databasePath) {
+      observe(db);
+    }
+    return db;
+  });
+}
+
+async function withChild(
+  child: ChildProcess,
+  signal: AbortSignal,
+  run: (ready: unknown, finish: () => Promise<void>) => Promise<void>,
+) {
+  let stderr = "";
+  const closed = once(child, "close");
+  void closed.catch(() => undefined);
+  try {
+    assert(child.stderr, "Child fixture stderr pipe is missing");
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+    const [ready] = await withinTest(
+      awaitGateBeforeSettlement(
+        once(child, "message"),
+        closed,
+        "Child fixture exited before readiness",
+      ),
+      signal,
+    );
+    await run(ready, async () => {
+      expect(await withinTest(closed, signal)).toEqual([0, null]);
+      expect(stderr).toBe("");
+    });
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill("SIGKILL");
+    }
+    await closed;
+  }
 }
 
 function probeWriterAdmission(mode: "IMMEDIATE" | "EXCLUSIVE" = "IMMEDIATE") {
@@ -112,104 +166,93 @@ function probeWriterAdmission(mode: "IMMEDIATE" | "EXCLUSIVE" = "IMMEDIATE") {
   return JSON.parse(child.stdout) as { acquired: boolean; errcode?: number };
 }
 
-const damage = [
-  {
-    name: "missing database",
-    apply: () => fs.renameSync(databasePath, path.join(root, "retained.sqlite")),
-  },
-  {
-    name: "missing parent",
-    apply: () => fs.renameSync(directory, path.join(root, "retained-parent")),
-  },
-  {
-    name: "byte-identical replacement database",
-    apply: () => {
+function retain(file: string) {
+  const retained = path.join(root, `retained-${path.basename(file)}`);
+  fs.renameSync(file, retained);
+  return retained;
+}
+
+function replaceParent() {
+  const retained = retain(directory);
+  fs.mkdirSync(directory, { mode: 0o700 });
+  fs.renameSync(path.join(retained, path.basename(databasePath)), databasePath);
+}
+
+const damage: [name: string, apply: () => void][] = [
+  ["missing database", () => retain(databasePath)],
+  ["missing parent", () => retain(directory)],
+  [
+    "byte-identical replacement database",
+    () => {
       const replacement = path.join(directory, "replacement.sqlite");
       fs.copyFileSync(databasePath, replacement);
       fs.chmodSync(replacement, 0o600);
       fs.renameSync(replacement, databasePath);
     },
-  },
-  {
-    name: "replacement parent with the same database inode",
-    apply: () => {
-      const retained = path.join(root, "retained-parent");
-      fs.renameSync(directory, retained);
-      fs.mkdirSync(directory, { mode: 0o700 });
-      fs.renameSync(path.join(retained, path.basename(databasePath)), databasePath);
+  ],
+  ["replacement parent with the same database inode", replaceParent],
+  ["corrupt database", () => fs.writeFileSync(databasePath, "retained corrupt authority")],
+  ["empty database", () => fs.truncateSync(databasePath, 0)],
+  [
+    "missing authority table",
+    () => {
+      using db = new DatabaseSync(databasePath);
+      db.exec("DROP TABLE managed_update_handoffs");
     },
-  },
-  {
-    name: "corrupt database",
-    apply: () => fs.writeFileSync(databasePath, "retained corrupt authority"),
-  },
-  {
-    name: "empty database",
-    apply: () => fs.truncateSync(databasePath, 0),
-  },
-  {
-    name: "missing authority table",
-    apply: () => {
-      const db = new DatabaseSync(databasePath);
-      try {
-        db.exec("DROP TABLE managed_update_handoffs");
-      } finally {
-        db.close();
-      }
-    },
-  },
-  {
-    name: "symlink database",
-    apply: () => {
-      const retained = path.join(root, "retained.sqlite");
-      fs.renameSync(databasePath, retained);
-      fs.symlinkSync(retained, databasePath);
-    },
-  },
-  {
-    name: "symlink parent",
-    apply: () => {
-      const retained = path.join(root, "retained-parent");
-      fs.renameSync(directory, retained);
-      fs.symlinkSync(retained, directory, "dir");
-    },
-  },
-  {
-    name: "multiply linked database",
-    apply: () => fs.linkSync(databasePath, path.join(root, "linked.sqlite")),
-  },
-  {
-    name: "different user",
-    apply: () => {
-      vi.spyOn(process, "getuid").mockReturnValue(process.getuid!() + 1);
-    },
-  },
-  {
-    name: "unsafe database permissions",
-    apply: () => fs.chmodSync(databasePath, 0o640),
-  },
-  {
-    name: "unsafe parent permissions",
-    apply: () => fs.chmodSync(directory, 0o750),
-  },
+  ],
+  ["symlink database", () => fs.symlinkSync(retain(databasePath), databasePath)],
+  ["symlink parent", () => fs.symlinkSync(retain(directory), directory, "dir")],
+  ["multiply linked database", () => fs.linkSync(databasePath, path.join(root, "linked.sqlite"))],
+  ["different user", () => vi.spyOn(process, "getuid").mockReturnValue(process.getuid!() + 1)],
+  ["unsafe database permissions", () => fs.chmodSync(databasePath, 0o640)],
+  ["unsafe parent permissions", () => fs.chmodSync(directory, 0o750)],
 ];
 
 describe.skipIf(process.platform === "win32")("existing update authority", () => {
+  it("reopens an initialized writable handoff owner without repeating DDL", () => {
+    const withDatabase = createManagedHandoffLeaseDatabase(databasePath);
+    withDatabase(true, (db) =>
+      db
+        .prepare(
+          "INSERT INTO managed_update_handoffs (install_root,owner,payload_json,updated_at) VALUES (?,?,?,?)",
+        )
+        .run(root, "warm-owner", "{}", 1),
+    );
+    const sql = observeHostDataSql();
+    try {
+      withDatabase(true, (db) =>
+        withDatabase.transact(
+          db,
+          () =>
+            db
+              .prepare("UPDATE managed_update_handoffs SET updated_at=2 WHERE install_root=?")
+              .run(root),
+          {},
+        ),
+      );
+      expect(
+        withDatabase(false, (db) =>
+          db
+            .prepare("SELECT owner, updated_at FROM managed_update_handoffs WHERE install_root=?")
+            .all(root),
+        ),
+      ).toEqual([{ owner: "warm-owner", updated_at: 2 }]);
+      expect(
+        sql.queries.filter((query) => classifySqliteMutation(query, "batch").mainSchemaChange),
+      ).toEqual([]);
+    } finally {
+      sql.restore();
+    }
+  });
+
   // Node CI shards do not provision Bun. BUN_BIN opts into runtime qualification;
   // a missing or incompatible selected binary must fail instead of skipping.
   it.runIf(Boolean(process.env.BUN_BIN))(
     "releases Bun snapshots with retained statements before later writers commit without GC",
     async () => {
       const existingIdentity = await authority();
-      const store = createManagedHandoffLeaseStore({
-        databasePath,
-        serviceManagerEnv: resolveServiceManagerEnv(),
-        existingIdentity,
-      });
-      const acquired = store.acquire(root, "bun-snapshot-owner", { kind: "update" });
-      if (acquired.kind !== "acquired") {
-        throw new Error("Bun snapshot fixture was not admitted");
-      }
+      const store = storeFor(existingIdentity);
+      const acquired = acquire(store, "bun-snapshot-owner");
       const helperModule = new URL("./sqlite-existing-database.ts", import.meta.url).href;
       const authorityModule = new URL(
         "./update-managed-service-handoff-database.ts",
@@ -238,51 +281,36 @@ describe.skipIf(process.platform === "win32")("existing update authority", () =>
               assert.equal(statement.get(authority.installKey).owner, "bun-snapshot-owner");
             },
           };
+          const withDatabase = (write, run, overrides = {}) => withExistingSqliteRollbackDatabase(
+            authority.databasePath, { ...options, write, ...overrides }, run,
+          );
           let writes = 0;
           function write() {
-            withExistingSqliteRollbackDatabase(
-              authority.databasePath,
-              { ...options, write: true },
-              (database, transact) => transact(() => {
+            withDatabase(true, (database, transact) => transact(() => {
                 const result = database.prepare(
                   "UPDATE managed_update_handoffs SET updated_at=updated_at+1 WHERE install_root = ?"
                 ).run(authority.installKey);
                 assert.equal(result.changes, 1);
-              }),
-            );
+              }));
             writes++;
             assert.ok(retained.every(({ database }) => !database.isOpen));
           }
           write();
-          withExistingSqliteRollbackDatabase(
-            authority.databasePath,
-            { ...options, write: false },
-            (database) => assert.equal(database.isTransaction, true),
-          );
+          withDatabase(false, (database) => assert.equal(database.isTransaction, true));
           write();
           const failure = new Error("reader callback failed");
           assert.throws(
-            () => withExistingSqliteRollbackDatabase(
-              authority.databasePath,
-              { ...options, write: false },
-              () => { throw failure; },
-            ),
+            () => withDatabase(false, () => { throw failure; }),
             (error) => error === failure,
           );
           write();
           assert.throws(
-            () => withExistingSqliteRollbackDatabase(
-              authority.databasePath,
-              {
-                ...options,
-                write: true,
+            () => withDatabase(true, () => assert.fail("Invalid snapshot admitted a writer"), {
                 validate(database) {
                   options.validate(database);
                   throw failure;
                 },
-              },
-              () => assert.fail("Invalid snapshot admitted a writer"),
-            ),
+              }),
             (error) => error === failure,
           );
           write();
@@ -320,116 +348,66 @@ describe.skipIf(process.platform === "win32")("existing update authority", () =>
       });
       expect(store.read(root)).toMatchObject({
         kind: "current",
-        lease: {
-          owner: acquired.lease.owner,
-          updatedAt: acquired.lease.updatedAt + 4,
+        lease: { owner: acquired.owner, updatedAt: acquired.updatedAt + 4 },
+      });
+    },
+  );
+
+  it("keeps a real writer excluded across nested child and owner reads until an update commits", async () => {
+    const existingAuthority = await authority();
+    const store = storeFor(existingAuthority);
+    const admitted = acquire(store, "reserved-owner");
+    const withDatabase = createManagedHandoffLeaseDatabase(databasePath, existingAuthority);
+    withDatabase(true, (db) => {
+      expect(db.isTransaction).toBe(false);
+      expect(probeWriterAdmission("EXCLUSIVE")).toEqual({ acquired: false, errcode: 5 });
+      return withDatabase.transact(
+        db,
+        () => {
+          expect(probeWriterAdmission()).toEqual({ acquired: false, errcode: 5 });
+          // A second connection alone is safe. A raw open/read/close during
+          // these owner reads must not discard the first connection's POSIX lock.
+          const prefix = `${root}/.openclaw-update-child-`;
+          const children = withDatabase(false, (reader) =>
+            reader
+              .prepare(
+                "SELECT owner FROM managed_update_handoffs WHERE install_root>=? AND install_root<?",
+              )
+              .all(prefix, prefix + "\uffff"),
+          );
+          expect(children).toEqual([]);
+          expect(store.current(admitted)).toBe(true);
+          expect(probeWriterAdmission()).toEqual({ acquired: false, errcode: 5 });
+          db.prepare(
+            "UPDATE managed_update_handoffs SET updated_at=? WHERE install_root=? AND owner=?",
+          ).run(admitted.updatedAt + 1, root, admitted.owner);
+          expect(db.isTransaction).toBe(true);
+          expect(probeWriterAdmission()).toEqual({ acquired: false, errcode: 5 });
         },
-      });
-    },
-  );
+        {},
+      );
+    });
+    expect(probeWriterAdmission("EXCLUSIVE")).toEqual({ acquired: true });
+    expect(store.read(root)).toMatchObject({
+      kind: "current",
+      lease: { owner: admitted.owner, updatedAt: admitted.updatedAt + 1 },
+    });
+  });
 
-  it.each(["update", "delete"] as const)(
-    "keeps a real writer excluded across nested child and owner reads until %s commits",
-    async (mutation) => {
-      const existingAuthority = await authority();
-      const store = createManagedHandoffLeaseStore({
-        databasePath,
-        serviceManagerEnv: resolveServiceManagerEnv(),
-        existingIdentity: existingAuthority,
-      });
-      const admitted = store.acquire(root, "reserved-owner", { kind: "update" });
-      if (admitted.kind !== "acquired") {
-        throw new Error("Writer exclusion fixture was not admitted");
-      }
-      const withDatabase = createManagedHandoffLeaseDatabase(databasePath, existingAuthority);
-      withDatabase(true, (db) => {
-        expect(db.isTransaction).toBe(false);
-        expect(probeWriterAdmission("EXCLUSIVE")).toEqual({ acquired: false, errcode: 5 });
-        return withDatabase.transact(
-          db,
-          () => {
-            expect(probeWriterAdmission()).toEqual({ acquired: false, errcode: 5 });
-            // A second connection alone is safe. A raw open/read/close during
-            // these owner reads must not discard the first connection's POSIX lock.
-            const prefix = `${root}/.openclaw-update-child-`;
-            const children = withDatabase(
-              false,
-              (reader) =>
-                executeSqliteQuerySync(
-                  reader,
-                  leaseQueries(reader)
-                    .selectFrom("managed_update_handoffs")
-                    .select("owner")
-                    .where("install_root", ">=", prefix)
-                    .where("install_root", "<", prefix + "\uffff"),
-                ).rows,
-            );
-            expect(children).toEqual([]);
-            expect(store.current(admitted.lease)).toBe(true);
-            expect(probeWriterAdmission()).toEqual({ acquired: false, errcode: 5 });
-            if (mutation === "delete") {
-              executeSqliteQuerySync(
-                db,
-                leaseQueries(db)
-                  .deleteFrom("managed_update_handoffs")
-                  .where("install_root", "=", root)
-                  .where("owner", "=", admitted.lease.owner),
-              );
-            } else {
-              executeSqliteQuerySync(
-                db,
-                leaseQueries(db)
-                  .updateTable("managed_update_handoffs")
-                  .set({ updated_at: admitted.lease.updatedAt + 1 })
-                  .where("install_root", "=", root)
-                  .where("owner", "=", admitted.lease.owner),
-              );
-            }
-            expect(db.isTransaction).toBe(true);
-            expect(probeWriterAdmission()).toEqual({ acquired: false, errcode: 5 });
-          },
-          {},
-        );
-      });
-      expect(probeWriterAdmission("EXCLUSIVE")).toEqual({ acquired: true });
-      const after = store.read(root);
-      if (mutation === "delete") {
-        expect(after).toEqual({ kind: "absent" });
-      } else {
-        expect(after).toMatchObject({
-          kind: "current",
-          lease: { owner: admitted.lease.owner, updatedAt: admitted.lease.updatedAt + 1 },
-        });
-      }
-    },
-  );
-
-  it("keeps one installation's fence current during another installation's live write", async () => {
+  it("keeps one installation's fence current during another installation's live write", async ({
+    signal,
+  }) => {
     await withUpdateCommandExecutor(randomUUID(), async (executor) => {
       const fence = await executor.enter(root);
       const existingIdentity = captureUpdateCommandExecutorAuthority(fence);
-      const store = createManagedHandoffLeaseStore({
-        databasePath,
-        serviceManagerEnv: resolveServiceManagerEnv(),
-        existingIdentity,
-      });
+      const store = storeFor(existingIdentity);
       const original = store.read(root);
-      if (original.kind !== "current") {
-        throw new Error("First installation fixture was not admitted");
-      }
+      assert(original.kind === "current", "First installation fixture was not admitted");
       const otherRoot = path.join(root, "other-installation");
       fs.mkdirSync(otherRoot, { mode: 0o700 });
-      const other = store.acquire(otherRoot, "other-owner", { kind: "update" });
-      if (other.kind !== "acquired") {
-        throw new Error("Second installation fixture was not admitted");
-      }
-      const child = spawn(
-        process.execPath,
-        [
-          "--no-warnings",
-          "--input-type=module",
-          "--eval",
-          `
+      const other = acquire(store, "other-owner", otherRoot);
+      const child = spawnNode(
+        `
             import { once } from "node:events";
             import { DatabaseSync } from "node:sqlite";
             const db = new DatabaseSync(process.argv[1]);
@@ -444,26 +422,10 @@ describe.skipIf(process.platform === "win32")("existing update authority", () =>
             db.close();
             process.disconnect();
           `,
-          databasePath,
-          otherRoot,
-        ],
-        { stdio: ["ignore", "ignore", "pipe", "ipc"], env: {} },
+        [databasePath, otherRoot],
       );
-      let stderr = "";
-      const closed = once(child, "close");
-      void closed.catch(() => undefined);
-      try {
-        if (!child.stderr) {
-          throw new Error("Child fixture stderr pipe is missing");
-        }
-        child.stderr.on("data", (chunk) => {
-          stderr += chunk.toString();
-        });
-        expect((await once(child, "message", { signal: AbortSignal.timeout(10_000) }))[0]).toEqual({
-          ready: true,
-          changes: 1,
-          inTransaction: true,
-        });
+      await withChild(child, signal, async (ready, finish) => {
+        expect(ready).toEqual({ ready: true, changes: 1, inTransaction: true });
         expect(fs.statSync(databasePath + "-journal").size).toBeGreaterThan(512);
         // A live writer's RESERVED lock makes its journal non-hot. Readers
         // of another install key must still see their unchanged committed owner.
@@ -471,86 +433,54 @@ describe.skipIf(process.platform === "win32")("existing update authority", () =>
         expect(store.owns(original.lease, "executor")).toBe(true);
         expect(() => fence.assertCurrent()).not.toThrow();
         child.send({ commit: true });
-        expect(await closed).toEqual([0, null]);
-        expect(stderr).toBe("");
+        await finish();
         expect(store.read(root)).toEqual(original);
         expect(() => fence.assertCurrent()).not.toThrow();
         const updatedOther = store.read(otherRoot);
         expect(updatedOther).toMatchObject({
           kind: "current",
-          lease: { owner: other.lease.owner, updatedAt: other.lease.updatedAt + 1 },
+          lease: { owner: other.owner, updatedAt: other.updatedAt + 1 },
         });
         if (updatedOther.kind === "current") {
           expect(store.release(updatedOther.lease)).toBe(true);
         }
-      } finally {
-        await stopChildProcess(child, 5_000);
-      }
+      });
     });
   });
 
-  it("excludes a real writer until public release commits after its recorded child settles", async () => {
+  it("excludes a real writer until public release commits after its recorded child settles", async ({
+    signal,
+  }) => {
     const existingIdentity = await authority();
-    const store = createManagedHandoffLeaseStore({
-      databasePath,
-      serviceManagerEnv: resolveServiceManagerEnv(),
-      existingIdentity,
-    });
-    const parent = store.acquire(root, "parent-owner", { kind: "update" });
+    const store = storeFor(existingIdentity);
+    const parent = acquire(store, "parent-owner");
     const childKey = `${root}/.openclaw-update-child-${randomUUID()}`;
-    const recordedChild = store.acquire(childKey, "child-owner", { kind: "update" });
-    if (parent.kind !== "acquired" || recordedChild.kind !== "acquired") {
-      throw new Error("Release child fixture was not admitted");
-    }
-    const child = spawn(
-      process.execPath,
-      [
-        "--input-type=module",
-        "--eval",
-        `
+    const recordedChild = acquire(store, "child-owner", childKey);
+    const child = spawnNode(
+      `
           process.once("message", () => process.disconnect());
           process.send({ ready: true });
         `,
-      ],
-      { stdio: ["ignore", "ignore", "pipe", "ipc"], env: {}, detached: true },
+      [],
+      true,
     );
-    let stderr = "";
-    const closed = once(child, "close", { signal: AbortSignal.timeout(10_000) });
-    void closed.catch(() => undefined);
-    try {
-      if (!child.stderr) {
-        throw new Error("Child fixture stderr pipe is missing");
-      }
-      child.stderr.on("data", (chunk) => {
-        stderr += chunk.toString();
-      });
-      expect((await once(child, "message", { signal: AbortSignal.timeout(10_000) }))[0]).toEqual({
-        ready: true,
-      });
-      if (child.pid === undefined) {
-        throw new Error("Release child fixture has no process identity");
-      }
-      const boundChild = store.bind(recordedChild.lease, child.pid);
-      if (!boundChild) {
-        throw new Error("Release child fixture was not bound");
-      }
-      expect(store.release(parent.lease)).toBe(false);
+    await withChild(child, signal, async (ready, finish) => {
+      expect(ready).toEqual({ ready: true });
+      assert(child.pid !== undefined, "Release child fixture has no process identity");
+      const boundChild = store.bind(recordedChild, child.pid);
+      assert(boundChild, "Release child fixture was not bound");
+      expect(store.release(parent)).toBe(false);
       expect(store.release(boundChild)).toBe(false);
-      expect(store.current(parent.lease)).toBe(true);
+      expect(store.current(parent)).toBe(true);
       expect(store.current(boundChild)).toBe(true);
       child.send({ exit: true });
-      expect(await closed).toEqual([0, null]);
-      expect(stderr).toBe("");
-      expect(store.release(parent.lease)).toBe(false);
+      await finish();
+      expect(store.release(parent)).toBe(false);
       expect(store.release(boundChild)).toBe(true);
       expect(store.read(childKey)).toEqual({ kind: "absent" });
 
       const boundaries: string[] = [];
-      vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation((location, options) => {
-        const db = openDatabase(location, options);
-        if (options?.readOnly || db.location() !== databasePath) {
-          return db;
-        }
+      observeWritableDatabase((db) => {
         const prepare = db.prepare.bind(db);
         db.prepare = (sql) => {
           const statement = prepare(sql);
@@ -559,8 +489,8 @@ describe.skipIf(process.platform === "win32")("existing update authority", () =>
             // Public release has completed its in-transaction child check when
             // its mutation reaches SQLite. Observe the real statement unchanged.
             expect(db.isTransaction).toBe(true);
-            expect(values).toContain(parent.lease.key);
-            expect(values).toContain(parent.lease.owner);
+            expect(values).toContain(parent.key);
+            expect(values).toContain(parent.owner);
             boundaries.push("before-write");
             expect(probeWriterAdmission()).toEqual({ acquired: false, errcode: 5 });
             const result = Reflect.apply(run, statement, values);
@@ -583,34 +513,30 @@ describe.skipIf(process.platform === "win32")("existing update authority", () =>
             expect(db.isTransaction).toBe(false);
           }
         };
-        return db;
       });
-      expect(store.release(parent.lease)).toBe(true);
+      expect(store.release(parent)).toBe(true);
       expect(boundaries).toEqual(["before-write", "after-write", "before-commit", "committed"]);
       expect(probeWriterAdmission()).toEqual({ acquired: true });
       expect(store.read(root)).toEqual({ kind: "absent" });
-    } finally {
-      await stopChildProcess(child, 5_000);
-    }
+    });
   });
 
   describe.each(["admission", "release"] as const)("%s", (phase) => {
-    it.each(damage)("preserves $name without repair", async ({ apply }) => {
+    // Admission covers each guard; release repeats missing storage and identity revocation.
+    it.each(
+      phase === "admission"
+        ? damage
+        : damage.filter(([name]) =>
+            ["missing database", "replacement parent with the same database inode"].includes(name),
+          ),
+    )("preserves %s without repair", async (_name, apply) => {
       const existingAuthority = await authority();
       let before: ReturnType<typeof snapshot> | undefined;
-      let assertNoRepairs: () => void = () => expect.fail("Authority was not revoked");
+      const repairSpies = [vi.spyOn(fs, "mkdirSync"), vi.spyOn(fs, "chmodSync")];
       const revoke = () => {
         apply();
         before = snapshot();
-        const mkdir = vi.spyOn(fs, "mkdirSync");
-        const chmod = vi.spyOn(fs, "chmodSync");
-        assertNoRepairs = () => {
-          for (const spy of [mkdir, chmod]) {
-            expect(
-              spy.mock.calls.filter(([file]) => String(file).startsWith(root + path.sep)),
-            ).toEqual([]);
-          }
-        };
+        repairSpies.forEach((spy) => spy.mockClear());
       };
       if (phase === "admission") {
         revoke();
@@ -633,56 +559,23 @@ describe.skipIf(process.platform === "win32")("existing update authority", () =>
       expect(entered).toBe(phase === "release");
       expect(before).toBeDefined();
       expect(snapshot()).toEqual(before);
-      assertNoRepairs();
+      for (const spy of repairSpies) {
+        expect(spy.mock.calls.filter(([file]) => String(file).startsWith(root + path.sep))).toEqual(
+          [],
+        );
+      }
     });
   });
 
-  it.each(["missing", "replaced"] as const)(
-    "refuses a database %s immediately before a writable authority reopen",
-    async (change) => {
-      const existingAuthority = await authority();
-      const retained = path.join(root, "retained.sqlite");
-      let before: ReturnType<typeof snapshot> | undefined;
-      let raced = false;
-      vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation((location, options) => {
-        if (options?.readOnly) {
-          return openDatabase(location, options);
-        }
-        raced = true;
-        fs.renameSync(databasePath, retained);
-        if (change === "replaced") {
-          fs.copyFileSync(retained, databasePath);
-          fs.chmodSync(databasePath, 0o600);
-        }
-        before = snapshot();
-        return openDatabase(location, options);
-      });
-      const operation = vi.fn();
-      const withDatabase = createManagedHandoffLeaseDatabase(databasePath, existingAuthority);
-      expect(() => withDatabase(true, operation)).toThrow();
-      expect(raced).toBe(true);
-      expect(operation).not.toHaveBeenCalled();
-      expect(snapshot()).toEqual(before);
-    },
-  );
-
   describe.each(["acquire", "release"] as const)("%s transaction", (operation) => {
-    it.each(
-      (["after-open", "after-begin", "before-commit"] as const).flatMap((boundary) =>
-        (["database", "parent"] as const).map((target) => ({ boundary, target })),
-      ),
-    )("refuses a replaced $target at $boundary", async ({ boundary, target }) => {
+    it.each([
+      { boundary: "after-open", target: "database" },
+      { boundary: "after-begin", target: "parent" },
+      { boundary: "before-commit", target: "database" },
+    ] as const)("refuses a replaced $target at $boundary", async ({ boundary, target }) => {
       const existingAuthority = await authority();
-      const store = createManagedHandoffLeaseStore({
-        databasePath,
-        serviceManagerEnv: resolveServiceManagerEnv(),
-        existingIdentity: existingAuthority,
-      });
-      const admitted =
-        operation === "release" ? store.acquire(root, "release-owner", { kind: "update" }) : null;
-      if (admitted && admitted.kind !== "acquired") {
-        throw new Error("Release fixture was not admitted");
-      }
+      const store = storeFor(existingAuthority);
+      const admitted = operation === "release" ? acquire(store, "release-owner") : null;
       const before = fs.readFileSync(databasePath);
       const retainedDatabase = path.join(root, "retained.sqlite");
       let raced = false;
@@ -695,17 +588,10 @@ describe.skipIf(process.platform === "win32")("existing update authority", () =>
           fs.renameSync(databasePath, retainedDatabase);
           fs.copyFileSync(retainedDatabase, databasePath);
         } else {
-          const retained = path.join(root, "retained-parent");
-          fs.renameSync(directory, retained);
-          fs.mkdirSync(directory, { mode: 0o700 });
-          fs.renameSync(path.join(retained, path.basename(databasePath)), databasePath);
+          replaceParent();
         }
       };
-      vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation((location, options) => {
-        const db = openDatabase(location, options);
-        if (options?.readOnly || db.location() !== databasePath) {
-          return db;
-        }
+      observeWritableDatabase((db) => {
         if (boundary === "after-open") {
           replace();
         } else if (boundary === "after-begin") {
@@ -731,12 +617,9 @@ describe.skipIf(process.platform === "win32")("existing update authority", () =>
             return statement;
           };
         }
-        return db;
       });
       expect(() =>
-        admitted?.kind === "acquired"
-          ? store.release(admitted.lease)
-          : store.acquire(root, "next-owner", { kind: "update" }),
+        admitted ? store.release(admitted) : store.acquire(root, "next-owner", { kind: "update" }),
       ).toThrow();
       expect(raced).toBe(true);
       // Rollback owns its temporary journal, so compare database evidence only

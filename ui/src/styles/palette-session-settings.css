@@ -17,7 +17,7 @@
   color: var(--text);
 }
 
-.palette-session-settings::part(body) {
+.oc-popover.palette-session-settings {
   padding: 5px;
   border: 1px solid var(--border);
   border-radius: 12px;
@@ -36,12 +36,6 @@
 .palette-session-settings__title,
 .palette-session-settings__machine {
   padding-inline: 10px;
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  line-height: 1.2;
-  text-transform: uppercase;
 }
 
 .palette-session-settings__title {
@@ -80,6 +74,15 @@
   opacity: 0.5;
 }
 
+.palette-session-settings__row[aria-disabled="true"],
+.palette-session-settings__row[aria-disabled="true"] .palette-session-settings__icon {
+  color: var(--warn);
+}
+
+.palette-session-settings__reason {
+  --openclaw-tooltip-max-width: min(280px, calc(100vw - 24px));
+}
+
 .palette-session-settings__icon,
 .palette-session-settings__chevron,
 .palette-session-settings__check {
@@ -108,13 +111,6 @@
   gap: 1px;
 }
 
-.palette-session-settings__label,
-.palette-session-settings__secondary {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .palette-session-settings__secondary,
 .palette-session-settings__unavailable {
   color: var(--muted);
@@ -127,8 +123,7 @@
 }
 
 .palette-session-settings__agent .new-session-page__select,
-.palette-session-settings__agent openclaw-agent-select,
-.palette-session-settings__agent wa-dropdown {
+.palette-session-settings__agent openclaw-agent-select {
   display: block;
   width: 100%;
   max-width: none;

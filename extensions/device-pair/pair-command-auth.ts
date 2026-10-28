@@ -1,4 +1,3 @@
-// Device Pair plugin module implements pair command auth behavior.
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
@@ -13,14 +12,6 @@ type PairingCommandAuthParams = {
   senderIsOwner?: boolean;
 };
 
-type PairingCommandAuthState = {
-  isInternalGatewayCaller: boolean;
-  isMissingPairingPrivilege: boolean;
-  isMissingSetupHandoffPrivilege: boolean;
-  canIssueFullAccessSetup: boolean;
-  approvalCallerScopes?: readonly string[];
-};
-
 const COMMAND_OWNER_PAIRING_SCOPES = ["operator.pairing"] as const;
 const PAIRING_SCOPE = "operator.pairing";
 const ADMIN_SCOPE = "operator.admin";
@@ -29,10 +20,11 @@ const TALK_SECRETS_SCOPE = "operator.talk.secrets";
 export function resolveAuthLabel(cfg: OpenClawPluginApi["config"]): ResolveAuthLabelResult {
   const mode = cfg.gateway?.auth?.mode;
   const token =
-    pickFirstDefined([process.env.OPENCLAW_GATEWAY_TOKEN, cfg.gateway?.auth?.token]) ?? undefined;
+    normalizeOptionalString(process.env.OPENCLAW_GATEWAY_TOKEN) ??
+    normalizeOptionalString(cfg.gateway?.auth?.token);
   const password =
-    pickFirstDefined([process.env.OPENCLAW_GATEWAY_PASSWORD, cfg.gateway?.auth?.password]) ??
-    undefined;
+    normalizeOptionalString(process.env.OPENCLAW_GATEWAY_PASSWORD) ??
+    normalizeOptionalString(cfg.gateway?.auth?.password);
 
   if (mode === "token" || mode === "password") {
     return resolveRequiredAuthLabel(mode, { token, password });
@@ -50,28 +42,13 @@ export function resolveAuthLabel(cfg: OpenClawPluginApi["config"]): ResolveAuthL
   return { error: "Gateway auth is not configured (no token or password)." };
 }
 
-function pickFirstDefined(candidates: Array<unknown>): string | null {
-  for (const value of candidates) {
-    const trimmed = normalizeOptionalString(value);
-    if (trimmed) {
-      return trimmed;
-    }
-  }
-  return null;
-}
-
 function resolveRequiredAuthLabel(
   mode: "token" | "password",
   values: { token?: string; password?: string },
 ): ResolveAuthLabelResult {
-  if (mode === "token") {
-    return values.token
-      ? { label: "token" }
-      : { error: "Gateway auth is set to token, but no token is configured." };
-  }
-  return values.password
-    ? { label: "password" }
-    : { error: "Gateway auth is set to password, but no password is configured." };
+  return values[mode]
+    ? { label: mode }
+    : { error: `Gateway auth is set to ${mode}, but no ${mode} is configured.` };
 }
 
 function isInternalGatewayPairingCaller(params: PairingCommandAuthParams): boolean {
@@ -86,9 +63,7 @@ function hasSetupHandoffPrivilege(scopes: readonly string[]): boolean {
   return scopes.includes(TALK_SECRETS_SCOPE) || scopes.includes(ADMIN_SCOPE);
 }
 
-export function resolvePairingCommandAuthState(
-  params: PairingCommandAuthParams,
-): PairingCommandAuthState {
+export function resolvePairingCommandAuthState(params: PairingCommandAuthParams) {
   const isInternalGatewayCaller = isInternalGatewayPairingCaller(params);
   if (isInternalGatewayCaller) {
     const approvalCallerScopes = Array.isArray(params.gatewayClientScopes)
@@ -119,17 +94,5 @@ export function resolvePairingCommandAuthState(
     isMissingSetupHandoffPrivilege: true,
     canIssueFullAccessSetup: false,
     approvalCallerScopes: undefined,
-  };
-}
-
-export function buildMissingPairingScopeReply(): { text: string } {
-  return {
-    text: "⚠️ This command requires operator.pairing.",
-  };
-}
-
-export function buildMissingSetupHandoffScopeReply(): { text: string } {
-  return {
-    text: "⚠️ Setup code handoff includes Talk secrets and requires operator.talk.secrets.",
   };
 }

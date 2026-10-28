@@ -1,4 +1,4 @@
-import crypto from "node:crypto";
+import { sha256Hex } from "../../infra/crypto-digest.js";
 import { extractMessagingToolSend } from "../embedded-agent-messaging-extraction.js";
 import { isMessagingToolTargetEvidenceAction } from "../embedded-agent-messaging.js";
 import type { MessagingToolSend } from "../embedded-agent-messaging.types.js";
@@ -11,17 +11,12 @@ import type { PreparedCliRunContext } from "./types.js";
 
 export const CLI_MESSAGING_EVIDENCE_MAX_CALLS = 64;
 
-// One canonical prefix-strip implementation: the loopback transport prefix is
-// a tool-policy concept shared with the embedded CLI-dispatch bridge, and
-// drifting copies would desync tool-name correlation across those surfaces.
-export const normalizeCliMessagingToolName = stripOpenClawMcpToolPrefix;
-
 export function extractCliMessagingTarget(
   context: PreparedCliRunContext,
   toolName: string,
   args: Record<string, unknown>,
 ): MessagingToolSend | undefined {
-  const normalizedToolName = normalizeCliMessagingToolName(toolName);
+  const normalizedToolName = stripOpenClawMcpToolPrefix(toolName);
   const currentProvider = context.params.messageChannel ?? context.params.messageProvider;
   const hasExplicitProvider =
     (typeof args.provider === "string" && args.provider.trim().length > 0) ||
@@ -42,22 +37,19 @@ export function extractCliMessagingTarget(
 }
 
 export function buildMessagingToolSendEvidenceKey(send: MessagingToolSend): string {
-  return crypto
-    .createHash("sha256")
-    .update(
-      JSON.stringify([
-        send.tool,
-        send.provider,
-        send.accountId,
-        send.to,
-        send.threadId,
-        send.threadImplicit,
-        send.threadSuppressed,
-        send.text,
-        send.mediaUrls,
-      ]),
-    )
-    .digest("hex");
+  return sha256Hex(
+    JSON.stringify([
+      send.tool,
+      send.provider,
+      send.accountId,
+      send.to,
+      send.threadId,
+      send.threadImplicit,
+      send.threadSuppressed,
+      send.text,
+      send.mediaUrls,
+    ]),
+  );
 }
 
 export function extractCliMessagingContent(
@@ -78,21 +70,19 @@ export function extractCliMessagingContent(
 }
 
 export function appendUniqueCliMessagingEvidence(
-  values: string[],
-  valueKeys: Set<string>,
+  values: Set<string>,
   additions: readonly string[],
 ): void {
   for (const addition of additions) {
-    if (!addition || valueKeys.has(addition)) {
+    if (!addition || values.has(addition)) {
       continue;
     }
-    if (values.length >= CLI_MESSAGING_EVIDENCE_MAX_CALLS) {
-      const removed = values.shift();
-      if (removed) {
-        valueKeys.delete(removed);
+    if (values.size >= CLI_MESSAGING_EVIDENCE_MAX_CALLS) {
+      for (const oldest of values) {
+        values.delete(oldest);
+        break;
       }
     }
-    values.push(addition);
-    valueKeys.add(addition);
+    values.add(addition);
   }
 }

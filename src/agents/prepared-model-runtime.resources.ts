@@ -1,5 +1,9 @@
+import { throwSettledAggregate } from "../infra/error-graph-internal.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
-import { hasRetainedPluginRuntimeCloseError } from "../plugins/runtime-close-error.js";
+import {
+  aggregatePluginRuntimeCloseErrors,
+  hasRetainedPluginRuntimeCloseError,
+} from "../plugins/runtime-close-error.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { capturePreparedModelRuntimeLifetime } from "./prepared-model-runtime.lifecycle.js";
@@ -36,10 +40,6 @@ class PreparedRegistryResources {
   ) {
     state.views.add(this);
     state.registries.set(acquired.registry, this);
-    void this.completion.promise.then(
-      () => state.views.delete(this),
-      () => {},
-    );
   }
 
   get primaryRegistry(): PluginRegistry {
@@ -89,9 +89,13 @@ class PreparedRegistryResources {
         }
         if (this.failures.length > 0) {
           this.completion.reject(
-            new AggregateError(this.failures, "Prepared plugin resources failed to close"),
+            aggregatePluginRuntimeCloseErrors(
+              this.failures,
+              "Prepared plugin resources failed to close",
+            ),
           );
         } else {
+          state.views.delete(this);
           this.completion.resolve();
         }
       })();
@@ -145,7 +149,7 @@ export class PreparedModelRuntimeBuildResources {
     // External registry owners keep physical custody, but construction still owns finite work.
     this.releases.defer(releaseClaim);
     try {
-      releaseWork = retainRuntimePluginWork([registry]);
+      releaseWork = retainRuntimePluginWork([registry], "prepared-construction");
     } catch (error) {
       // Acquisition cleanup may wait for this claim; start it now and let the stack join it.
       void releaseClaim().catch(() => {});
@@ -221,10 +225,5 @@ export async function closeEphemeralPreparedModelRuntimeResources(): Promise<voi
       }
     }),
   );
-  const failures = results.flatMap((result) =>
-    result.status === "rejected" ? [result.reason] : [],
-  );
-  if (failures.length > 0) {
-    throw new AggregateError(failures, "Prepared plugin resources failed to close");
-  }
+  throwSettledAggregate(results, "Prepared plugin resources failed to close");
 }

@@ -1,3 +1,4 @@
+import { activeDiagnosticOwners } from "../logging/diagnostic-run-activity-state.js";
 import {
   emitTrustedDiagnosticEventWithPrivateData,
   type DiagnosticEventInput,
@@ -28,6 +29,15 @@ export function emitCoreModelRequestStartedDiagnosticEvent(
   requestTimeoutMs?: number,
   privateData?: DiagnosticEventPrivateData,
 ): void {
+  // Publish the active request's allowance before optional/asynchronous diagnostics.
+  // Retries retain semantic history while their actual request deadlines remain distinct.
+  if (generation) {
+    activeDiagnosticOwners.get(generation)?.owner.watchdogAttempt?.requestEvent({
+      phase: "start",
+      callId: event.callId,
+      requestTimeoutMs,
+    });
+  }
   const startedEvent = {
     ...event,
     type: "model.call.started" as const,
@@ -56,6 +66,11 @@ export function emitCoreModelRequestEndedDiagnosticEvent(
   generation?: CoreModelRequestOwnerGeneration,
   privateData?: DiagnosticEventPrivateData,
 ): void {
+  if (generation) {
+    activeDiagnosticOwners
+      .get(generation)
+      ?.owner.watchdogAttempt?.requestEvent({ phase: "end", callId: event.callId });
+  }
   emitTrustedDiagnosticEventWithPrivateData(
     generation
       ? markCoreModelRequestLifecycleDiagnosticEvent(event, { generation, phase: "ended" })

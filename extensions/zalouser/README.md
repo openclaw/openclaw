@@ -112,8 +112,15 @@ Available actions: `send`, `image`, `link`, `friends`, `groups`, `me`, `status`
 ## Troubleshooting
 
 - Login not persisted: `openclaw channels logout --channel zalouser && openclaw channels login --channel zalouser`
-- Probe status: `openclaw channels status --probe`
+- Check status: `openclaw channels status --probe`
 - Name resolution issues (allowlist/groups): use numeric IDs or exact Zalo names
+
+## Runtime lifetime
+
+Managed registrations isolate restored API sessions, pending logins, and cached group
+information. Retirement releases that instance's in-memory state after admitted
+channel calls settle; it does not delete saved credentials. Standalone helper use
+retains process-local session reuse until explicit logout or process exit.
 
 ## Credits
 

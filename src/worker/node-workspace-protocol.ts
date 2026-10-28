@@ -3,15 +3,18 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
 import type { SpawnResult } from "../process/exec.js";
 import { NodeWorkerWorkspaceTransferInputSchema } from "./node-workspace-transfer-protocol.js";
-import { hasExactOwnKeys, workerProtocolObject } from "./protocol-record.js";
+import {
+  decodeWorkerRequest,
+  WorkerGatewayNamespace,
+  workerProtocolIdentifier as identifier,
+  workerProtocolObject,
+} from "./protocol-record.js";
 import {
   isWorkspaceInspectionCommand,
   WORKSPACE_INSPECTION_COMMAND,
   WORKSPACE_INSPECTION_MAX_BYTES,
 } from "./workspace-inspection-protocol.js";
 
-const IDENTIFIER_MAX_CHARS = 256;
-const GATEWAY_NAMESPACE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 const REQUEST_MAX_BYTES = 256 * 1024;
 export const NODE_WORKER_WORKSPACE_STDIN_MAX_BYTES = 128 * 1024;
 const OUTPUT_MAX_BYTES = 64 * 1024;
@@ -21,12 +24,38 @@ const ARGV_MAX_ITEMS = 128;
 // REQUEST_MAX_BYTES; the canonical manifest script is larger than an ordinary argv item.
 const ARG_MAX_BYTES = 128 * 1024;
 const TIMEOUT_MAX_MS = 10 * 60 * 1000;
+export const NODE_WORKSPACE_VALIDATE_DEVICE_FOLDER_COMMAND =
+  "openclaw-internal-workspace-validate-device-folder";
 export const NODE_WORKSPACE_DRAIN_COMMAND = "openclaw-internal-workspace-drain";
+export const NODE_WORKSPACE_QUIESCENCE_COMMAND = "openclaw-internal-workspace-quiescence";
+
+const QuiescenceNonce = z.string().regex(/^[a-f0-9]{32}$/u);
+const QuiescenceTimeout = z
+  .number()
+  .int()
+  .min(1)
+  .max(12 * 60 * 1000);
+const WorkspaceQuiescence = z.union([
+  workerProtocolObject({
+    action: z.literal("acquire"),
+    nonce: QuiescenceNonce,
+    timeoutMs: QuiescenceTimeout,
+  }),
+  workerProtocolObject({
+    action: z.literal("renew"),
+    nonce: QuiescenceNonce,
+    timeoutMs: QuiescenceTimeout,
+    validationMode: z.enum(["heartbeat", "final"]),
+  }),
+  workerProtocolObject({ action: z.literal("release"), nonce: QuiescenceNonce }),
+]);
+export type NodeWorkerWorkspaceQuiescenceInput = z.infer<typeof WorkspaceQuiescence>;
 
 const SeedKey = z.string().regex(/^[a-f0-9]{64}$/u);
+const WorkspaceProcessId = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u);
 const WorkspaceProcess = workerProtocolObject({
   action: z.enum(["start", "status", "stop"]),
-  processId: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u),
+  processId: WorkspaceProcessId,
 });
 export type NodeWorkerWorkspaceProcessInput = z.infer<typeof WorkspaceProcess>;
 type NodeWorkerWorkspaceProcessResult = {
@@ -41,23 +70,11 @@ const SeedInput = z.union([
     maxAgeMs: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
   }),
 ]);
-const identifier = (label: string, maxChars = IDENTIFIER_MAX_CHARS) =>
-  z.custom<string>(
-    (value) =>
-      typeof value === "string" &&
-      value.length > 0 &&
-      value.length <= maxChars &&
-      value.trim() === value &&
-      !value.includes("\0"),
-    { error: `INVALID_REQUEST: ${label} must be a bounded non-empty identifier` },
-  );
 const WorkspaceInput = workerProtocolObject({
-  gatewayNamespace: identifier("gatewayNamespace").refine(
-    (value) => typeof value === "string" && GATEWAY_NAMESPACE_PATTERN.test(value),
-    { error: "INVALID_REQUEST: gatewayNamespace must be a safe bounded path component" },
-  ),
+  gatewayNamespace: WorkerGatewayNamespace,
   environmentId: identifier("environmentId"),
   sessionId: identifier("sessionId"),
+  deviceFolder: identifier("deviceFolder", 4_096).optional(),
   sessionKey: identifier("sessionKey", 1_024).optional(),
   preparationKey: z
     .custom<string>((value) => typeof value === "string" && /^[a-f0-9]{64}$/u.test(value), {
@@ -74,10 +91,10 @@ const WorkspaceInput = workerProtocolObject({
         Array.isArray(value) &&
         value.length > 0 &&
         value.length <= ARGV_MAX_ITEMS &&
+        value[0] !== "" &&
         value.every(
           (arg) =>
             typeof arg === "string" &&
-            arg.length > 0 &&
             !arg.includes("\0") &&
             Buffer.byteLength(arg, "utf8") <= ARG_MAX_BYTES,
         ),
@@ -103,6 +120,8 @@ const WorkspaceInput = workerProtocolObject({
   transfer: NodeWorkerWorkspaceTransferInputSchema.optional(),
   seed: SeedInput.optional(),
   process: WorkspaceProcess.optional(),
+  quiescence: WorkspaceQuiescence.optional(),
+  nativeProcessOwner: z.literal(true).optional(),
 });
 export type NodeWorkerWorkspaceSeedInput = z.infer<typeof SeedInput>;
 export type NodeWorkerWorkspaceExecInput = z.infer<typeof WorkspaceInput>;
@@ -112,21 +131,44 @@ export type NodeWorkerWorkspaceExecResult = SpawnResult & {
   process?: NodeWorkerWorkspaceProcessResult;
 };
 
-function parseJson(raw?: string | null): unknown {
-  if (!raw || Buffer.byteLength(raw, "utf8") > WORKSPACE_INSPECTION_MAX_BYTES * 2) {
-    throw new Error("INVALID_REQUEST: invalid node worker workspace request");
+/** Device folders cannot receive staged files; chat ingress and worker media preparation refuse them. */
+export const DEVICE_FOLDER_ATTACHMENTS_UNSUPPORTED =
+  "Attachments are not supported in sessions that use an existing device folder. Send the message without attachments.";
+
+/** User-owned folders only run commands; ingress parsing and direct node execution share this rule. */
+export function assertNodeWorkspaceDeviceFolderCommand(input: NodeWorkerWorkspaceExecInput): void {
+  if (
+    input.deviceFolder !== undefined &&
+    (input.preparationKey !== undefined ||
+      input.resetWorkspace !== undefined ||
+      input.transfer ||
+      input.seed ||
+      input.quiescence)
+  ) {
+    throw new Error(
+      "INVALID_REQUEST: device folders cannot be prepared, reset, transferred, seeded, or quiesced",
+    );
   }
-  try {
-    return JSON.parse(raw) as unknown;
-  } catch {
-    throw new Error("INVALID_REQUEST: malformed node worker workspace request");
+  if (
+    input.argv[0] === NODE_WORKSPACE_VALIDATE_DEVICE_FOLDER_COMMAND &&
+    (input.deviceFolder === undefined ||
+      input.argv.length !== 1 ||
+      input.input !== undefined ||
+      input.process ||
+      input.nativeProcessOwner)
+  ) {
+    throw new Error("INVALID_REQUEST: device folder validation owns its operation");
   }
 }
 
 export function parseNodeWorkerWorkspaceExecInput(
   raw?: string | null,
 ): NodeWorkerWorkspaceExecInput {
-  const value = parseJson(raw);
+  const value = decodeWorkerRequest(
+    raw,
+    WORKSPACE_INSPECTION_MAX_BYTES * 2,
+    "node worker workspace",
+  );
   const parsed = WorkspaceInput.safeParse(value);
   if (!parsed.success) {
     const issue = parsed.error.issues[0];
@@ -150,6 +192,25 @@ export function parseNodeWorkerWorkspaceExecInput(
     );
   }
   const input = parsed.data;
+  assertNodeWorkspaceDeviceFolderCommand(input);
+  if (input.quiescence || input.argv[0] === NODE_WORKSPACE_QUIESCENCE_COMMAND) {
+    if (
+      !input.quiescence ||
+      input.argv[0] !== NODE_WORKSPACE_QUIESCENCE_COMMAND ||
+      input.argv.length !== 2 ||
+      input.input !== undefined ||
+      input.transfer ||
+      input.seed ||
+      input.process ||
+      input.resetWorkspace !== undefined ||
+      input.nativeProcessOwner
+    ) {
+      throw new Error("INVALID_REQUEST: workspace quiescence owns its operation");
+    }
+  }
+  if (input.nativeProcessOwner && (input.process || input.seed || input.transfer)) {
+    throw new Error("INVALID_REQUEST: native process ownership requires a foreground command");
+  }
   if (input.process && (input.seed || input.transfer || input.resetWorkspace !== undefined)) {
     throw new Error("INVALID_REQUEST: workspace process owns its operation");
   }
@@ -205,79 +266,38 @@ export function parseNodeWorkerWorkspaceExecInput(
   return input;
 }
 
-function isBoundedText(value: unknown, maxBytes: number): value is string {
-  return typeof value === "string" && Buffer.byteLength(value, "utf8") <= maxBytes;
-}
-
-function isAbsoluteHostPath(value: string): boolean {
-  return path.posix.isAbsolute(value) || path.win32.isAbsolute(value);
-}
+const TruncatedBytes = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional();
+const WorkspaceResult = workerProtocolObject({
+  workspaceDir: z
+    .string()
+    .max(4_096)
+    .refine((value) => path.posix.isAbsolute(value) || path.win32.isAbsolute(value)),
+  stdout: z.string(),
+  stderr: z.string().refine((value) => Buffer.byteLength(value, "utf8") <= STDERR_MAX_BYTES),
+  code: z.number().int().min(Number.MIN_SAFE_INTEGER).max(Number.MAX_SAFE_INTEGER).nullable(),
+  signal: z.string().min(1).max(32).nullable(),
+  killed: z.boolean(),
+  termination: z.enum(["exit", "timeout", "no-output-timeout", "signal"]),
+  stdoutTruncatedBytes: TruncatedBytes,
+  stderrTruncatedBytes: TruncatedBytes,
+  noOutputTimedOut: z.boolean().optional(),
+  outputLimitExceeded: z.boolean().optional(),
+  outputErrorStream: z.enum(["stdout", "stderr"]).optional(),
+  process: workerProtocolObject({
+    processId: WorkspaceProcessId,
+    state: z.enum(["running", "exited"]),
+  }).optional(),
+});
 
 export function parseNodeWorkerWorkspaceExecResult(
   value: unknown,
   argv: readonly string[] = [],
 ): NodeWorkerWorkspaceExecResult | null {
+  const parsed = WorkspaceResult.safeParse(value);
   if (
-    !isRecord(value) ||
-    !hasExactOwnKeys(
-      value,
-      ["workspaceDir", "stdout", "stderr", "code", "signal", "killed", "termination"],
-      [
-        "stdoutTruncatedBytes",
-        "stderrTruncatedBytes",
-        "noOutputTimedOut",
-        "outputLimitExceeded",
-        "outputErrorStream",
-        "process",
-      ],
-    ) ||
-    typeof value.workspaceDir !== "string" ||
-    !isAbsoluteHostPath(value.workspaceDir) ||
-    value.workspaceDir.length > 4_096 ||
-    !isBoundedText(
-      value.stdout,
-      isWorkspaceInspectionCommand(argv) ? WORKSPACE_INSPECTION_MAX_BYTES : OUTPUT_MAX_BYTES,
-    ) ||
-    !isBoundedText(value.stderr, STDERR_MAX_BYTES) ||
-    (value.code !== null &&
-      (!Number.isSafeInteger(value.code) || typeof value.code !== "number")) ||
-    (value.signal !== null &&
-      (typeof value.signal !== "string" ||
-        value.signal.length === 0 ||
-        value.signal.length > 32)) ||
-    typeof value.killed !== "boolean" ||
-    (value.termination !== "exit" &&
-      value.termination !== "timeout" &&
-      value.termination !== "no-output-timeout" &&
-      value.termination !== "signal")
-  ) {
-    return null;
-  }
-  if (
-    value.process !== undefined &&
-    (!isRecord(value.process) ||
-      !hasExactOwnKeys(value.process, ["processId", "state"], []) ||
-      typeof value.process.processId !== "string" ||
-      !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(value.process.processId) ||
-      (value.process.state !== "running" && value.process.state !== "exited"))
-  ) {
-    return null;
-  }
-  for (const key of ["stdoutTruncatedBytes", "stderrTruncatedBytes"] as const) {
-    const count = value[key];
-    if (
-      count !== undefined &&
-      (typeof count !== "number" || !Number.isSafeInteger(count) || count < 0)
-    ) {
-      return null;
-    }
-  }
-  if (
-    (value.noOutputTimedOut !== undefined && typeof value.noOutputTimedOut !== "boolean") ||
-    (value.outputLimitExceeded !== undefined && typeof value.outputLimitExceeded !== "boolean") ||
-    (value.outputErrorStream !== undefined &&
-      value.outputErrorStream !== "stdout" &&
-      value.outputErrorStream !== "stderr")
+    !parsed.success ||
+    Buffer.byteLength(parsed.data.stdout, "utf8") >
+      (isWorkspaceInspectionCommand(argv) ? WORKSPACE_INSPECTION_MAX_BYTES : OUTPUT_MAX_BYTES)
   ) {
     return null;
   }

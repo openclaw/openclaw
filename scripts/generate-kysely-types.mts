@@ -1,26 +1,16 @@
 #!/usr/bin/env node
 
 // Generates Kysely database types from the SQLite schema.
+import { createHash } from "node:crypto";
 import fs from "node:fs";
+import path from "node:path";
 import process from "node:process";
-import { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync } from "node:sqlite";
+import { fileURLToPath } from "node:url";
+import { isDirectRunUrl } from "./lib/direct-run.mjs";
 
-const SCHEMAS = [
-  {
-    name: "openclaw-state",
-    schema: "src/state/openclaw-state-schema.sql",
-    outFile: "src/state/openclaw-state-db.generated.d.ts",
-  },
-  {
-    name: "openclaw-agent",
-    schema: "src/state/openclaw-agent-schema.sql",
-    outFile: "src/state/openclaw-agent-db.generated.d.ts",
-  },
-];
-
-const verify = process.argv.includes("--verify") || process.argv.includes("--check");
-
-type SchemaTarget = (typeof SCHEMAS)[number];
+const SCHEMAS = ["openclaw-state", "openclaw-agent"];
+const REPO_ROOT = fileURLToPath(new URL("../", import.meta.url));
 
 function toInterfaceName(tableName: string): string {
   return tableName
@@ -95,7 +85,7 @@ function generateTypes(db: DatabaseSync): string {
       .prepare(`PRAGMA table_xinfo(${quoteSqliteIdentifier(table)});`)
       .all()
       .filter((column) => Number(column.hidden) === 0)
-      .toSorted((left, right) => String(left.name).localeCompare(String(right.name)));
+      .toSorted((left, right) => String(left.name).localeCompare(String(right.name), "en"));
     const primaryKeyColumnCount = columns.filter((column) => Number(column.pk) > 0).length;
     for (const column of columns) {
       lines.push(`  ${String(column.name)}: ${columnType(column, primaryKeyColumnCount)};`);
@@ -111,29 +101,84 @@ function generateTypes(db: DatabaseSync): string {
   return lines.join("\n");
 }
 
-function readUtf8(file: string): string {
-  return fs.readFileSync(file, "utf8");
-}
-
-function generate(schema: SchemaTarget): void {
+async function generateKyselyTypes(schemaSource: string): Promise<string> {
+  const { DatabaseSync } = await import("node:sqlite");
   const db = new DatabaseSync(":memory:");
   try {
-    db.exec(readUtf8(schema.schema));
-    const typesSource = generateTypes(db);
-
-    if (verify) {
-      if (typesSource !== readUtf8(schema.outFile)) {
-        console.error(`${schema.outFile} is out of date. Run pnpm db:kysely:gen.`);
-        process.exitCode = 1;
-      }
-    } else {
-      fs.writeFileSync(schema.outFile, typesSource);
-    }
+    db.exec(schemaSource);
+    return generateTypes(db);
   } finally {
     db.close();
   }
 }
 
-for (const schema of SCHEMAS) {
-  generate(schema);
+export async function ensureKyselyTypes(
+  cwd = REPO_ROOT,
+  verify = false,
+  options: { allowPartialCheckout?: boolean } = {},
+): Promise<void> {
+  const outputDir = path.join(cwd, ".artifacts/kysely");
+  const stampFile = path.join(outputDir, "inputs.sha256");
+  const inputs = SCHEMAS.map((name) => ({
+    name,
+    input: path.join(cwd, "src/state", `${name}-schema.sql`),
+    output: path.join(outputDir, `${name}-db.generated.ts`),
+  }));
+  const available = inputs.filter((schema) => fs.existsSync(schema.input));
+  const partial = !verify && options.allowPartialCheckout === true;
+  if (partial) {
+    // Sparse lint must not consume a previous projection whose source is now omitted.
+    for (const schema of inputs.filter((input) => !available.includes(input))) {
+      fs.rmSync(schema.output, { force: true });
+    }
+  }
+  // Packaged installs and dependency-only Docker stages have no source schemas.
+  if (!verify && available.length === 0) {
+    if (partial) {
+      fs.rmSync(stampFile, { force: true });
+    }
+    return;
+  }
+  const schemas = (partial ? available : inputs).map((schema) => ({
+    name: schema.name,
+    source: fs.readFileSync(schema.input, "utf8"),
+    output: schema.output,
+  }));
+  const fingerprint = () => {
+    const hash = createHash("sha256").update(fs.readFileSync(fileURLToPath(import.meta.url)));
+    for (const schema of schemas) {
+      hash.update(schema.name).update("\0").update(schema.source).update("\0");
+      hash.update(fs.existsSync(schema.output) ? fs.readFileSync(schema.output) : "missing");
+    }
+    return hash.digest("hex");
+  };
+  if (!verify && fs.existsSync(stampFile) && fs.readFileSync(stampFile, "utf8") === fingerprint()) {
+    return;
+  }
+  for (const schema of schemas) {
+    const source = await generateKyselyTypes(schema.source);
+    const existing = fs.existsSync(schema.output)
+      ? fs.readFileSync(schema.output, "utf8")
+      : undefined;
+    if (verify) {
+      if (existing !== source) {
+        throw new Error(`${schema.output} is out of date. Run pnpm db:kysely:gen.`);
+      }
+    } else if (existing !== source) {
+      fs.mkdirSync(outputDir, { recursive: true });
+      const temporary = `${schema.output}.${process.pid}.tmp`;
+      fs.writeFileSync(temporary, source);
+      fs.renameSync(temporary, schema.output);
+    }
+  }
+  if (!verify) {
+    fs.writeFileSync(stampFile, fingerprint());
+  }
+}
+
+if (isDirectRunUrl(process.argv[1], import.meta.url)) {
+  await ensureKyselyTypes(
+    REPO_ROOT,
+    process.argv.includes("--verify") || process.argv.includes("--check"),
+  );
 }

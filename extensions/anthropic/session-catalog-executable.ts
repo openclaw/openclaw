@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { resolveNodeHostExecutable } from "openclaw/plugin-sdk/node-host";
+import { readDirectoryEntriesSync } from "openclaw/plugin-sdk/path-existence-runtime";
 import { resolveClaudeCatalogHomeDir } from "./session-catalog-home.js";
 
 const BROKEN_NPM_SHIM_MARKER = "Error: claude native binary not installed.";
@@ -9,14 +10,9 @@ const CLAUDE_PACKAGE_SHIM_TARGET =
   /(?:\$basedir|%dp0%)\/([^"'\r\n]*?node_modules\/@anthropic-ai\/claude-code\/bin\/claude\.exe)/giu;
 const MAX_SHIM_PROBE_BYTES = 4096;
 
-let cachedNativeReplacement: { key: string; executable: string | null } | undefined;
+let cachedNativeReplacement: { key: string; executable: string | undefined } | undefined;
 
-function readSmallExecutableSource(executable: string):
-  | {
-      realPath: string;
-      source: string;
-    }
-  | undefined {
+function readSmallExecutableSource(executable: string) {
   try {
     const realPath = fs.realpathSync(executable);
     if (fs.statSync(realPath).size > MAX_SHIM_PROBE_BYTES) {
@@ -87,12 +83,7 @@ function resolveClaudeDesktopExecutable(
     "Claude",
     "claude-code",
   );
-  let versions: fs.Dirent[];
-  try {
-    versions = fs.readdirSync(versionsRoot, { withFileTypes: true });
-  } catch {
-    return undefined;
-  }
+  const versions = readDirectoryEntriesSync(versionsRoot);
   versions.sort((left, right) =>
     right.name.localeCompare(left.name, undefined, { numeric: true, sensitivity: "base" }),
   );
@@ -115,14 +106,14 @@ function resolveNativeReplacement(env: NodeJS.ProcessEnv): string | undefined {
   const homeDir = resolveClaudeCatalogHomeDir(env);
   const cacheKey = `${process.platform}\0${homeDir}`;
   if (cachedNativeReplacement?.key === cacheKey) {
-    return cachedNativeReplacement.executable ?? undefined;
+    return cachedNativeReplacement.executable;
   }
   // Claude installations are process-stable metadata. Cache the lookup so
   // catalog requests do not poll the filesystem; installs take effect on restart.
   const executable =
     resolveExecutableFromDirectory(path.join(homeDir, ".local", "bin"), env) ??
     resolveClaudeDesktopExecutable(homeDir, env);
-  cachedNativeReplacement = { key: cacheKey, executable: executable ?? null };
+  cachedNativeReplacement = { key: cacheKey, executable };
   return executable;
 }
 

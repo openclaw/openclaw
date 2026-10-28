@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { beforeAll, beforeEach, expect, it } from "vitest";
 import { clearAgentHarnesses } from "../../agents/harness/registry.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
@@ -13,111 +13,81 @@ import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 let dispatchReplyFromConfig: typeof import("./dispatch-from-config.js").dispatchReplyFromConfig;
+beforeAll(async () => {
+  ({ dispatchReplyFromConfig } = await import("./dispatch-from-config.js"));
+});
+beforeEach(() => {
+  clearAgentHarnesses();
+  resetInboundDedupe();
+  resetPluginTtsAndThreadMocks();
+  setDiscordTestRegistry();
+  hookMocks.runner.hasHooks.mockReset().mockReturnValue(false);
+  mocks.tryFastAbortFromMessage.mockReset().mockResolvedValue({ handled: false, aborted: false });
+});
 
-describe("dispatch-owned reply scaffolding provenance", () => {
-  beforeAll(async () => {
-    ({ dispatchReplyFromConfig } = await import("./dispatch-from-config.js"));
+it("sanitizes reasoning snapshots and copied inbound context at final dispatch without mutating source payloads", async () => {
+  const conversationContext = [
+    "[Chat messages since your last reply - for context]",
+    "[Telegram] Alice: private history",
+    "",
+    "[Current message - respond to this]",
+    '<function_calls><invoke name="exec">private XML</invoke></function_calls>',
+    "private inbound paragraph",
+  ].join("\n");
+  const internal =
+    "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nprivate metadata\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>";
+  const visible: Array<Parameters<NonNullable<GetReplyOptions["onReasoningStream"]>>[0]> = [
+    {
+      text: "Checking files.",
+      isReasoning: true,
+      isReasoningSnapshot: true,
+      requiresReasoningProgressOptIn: true,
+    },
+    { text: "Reading config.\n\nChecking files.", isReasoningSnapshot: true },
+    { text: "", mediaUrls: ["https://example.com/reasoning.png"] },
+  ];
+  const source = [
+    { text: internal },
+    ...visible.map((payload) => ({
+      ...payload,
+      text: payload.text ? `${internal}\n\n${payload.text}` : internal,
+    })),
+  ];
+  const original = structuredClone(source);
+  const observed: typeof visible = [];
+  const delivered: ReplyPayload[] = [];
+  const dispatcher = createReplyDispatcher({
+    deliver: async (payload) => {
+      delivered.push(payload);
+    },
   });
-
-  beforeEach(() => {
-    clearAgentHarnesses();
-    resetInboundDedupe();
-    resetPluginTtsAndThreadMocks();
-    setDiscordTestRegistry();
-    hookMocks.runner.hasHooks.mockReset().mockReturnValue(false);
-    mocks.tryFastAbortFromMessage.mockReset().mockResolvedValue({
-      handled: false,
-      aborted: false,
-    });
+  const result = await dispatchReplyFromConfig({
+    ctx: buildTestCtx({
+      Body: conversationContext,
+      BodyForAgent: conversationContext,
+      From: "user1",
+      Surface: "telegram",
+      SessionKey: "agent:test:scaffolding",
+    }),
+    cfg: emptyConfig,
+    dispatcher,
+    replyResolver: async (_ctx, options) => {
+      for (const payload of source) {
+        await options?.onReasoningStream?.(payload);
+      }
+      return { text: `${conversationContext}\n\nVisible answer.` };
+    },
+    replyOptions: {
+      onReasoningStream: (payload) => {
+        observed.push(payload);
+        return false;
+      },
+    },
   });
-
-  it("sanitizes reasoning snapshots without changing source payloads or presentation metadata", async () => {
-    const internal =
-      "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nprivate metadata\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>";
-    const source: Array<Parameters<NonNullable<GetReplyOptions["onReasoningStream"]>>[0]> = [
-      { text: internal },
-      {
-        text: `${internal}\n\nChecking files.`,
-        isReasoning: true,
-        isReasoningSnapshot: true,
-        requiresReasoningProgressOptIn: true,
-      },
-      { text: `${internal}\n\nReading config.\n\nChecking files.`, isReasoningSnapshot: true },
-      { text: internal, mediaUrls: ["https://example.com/reasoning.png"] },
-    ];
-    const original = structuredClone(source);
-    const observed: typeof source = [];
-    const dispatcher = createReplyDispatcher({ deliver: async () => undefined });
-    await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        Body: "Show status.",
-        BodyForAgent: "Show status.",
-        From: "user1",
-        Surface: "telegram",
-        SessionKey: "agent:test:reasoning-scaffolding",
-      }),
-      cfg: emptyConfig,
-      dispatcher,
-      replyOptions: {
-        onReasoningStream: (payload) => {
-          observed.push(payload);
-          return false;
-        },
-      },
-      replyResolver: async (_ctx, options) => {
-        for (const payload of source) {
-          await options?.onReasoningStream?.(payload);
-        }
-        return { text: "Visible answer." };
-      },
-    });
-    dispatcher.markComplete();
-    await dispatcher.waitForIdle();
-    expect(source).toEqual(original);
-    expect(observed).toEqual([
-      {
-        text: "Checking files.",
-        isReasoning: true,
-        isReasoningSnapshot: true,
-        requiresReasoningProgressOptIn: true,
-      },
-      { text: "Reading config.\n\nChecking files.", isReasoningSnapshot: true },
-      { text: "", mediaUrls: ["https://example.com/reasoning.png"] },
-    ]);
-  });
-
-  it("binds the finalized inbound prompt before raw final replies reach the dispatcher", async () => {
-    const conversationContext = [
-      "[Chat messages since your last reply - for context]",
-      "[Telegram] Alice: private history",
-      "",
-      "[Current message - respond to this]",
-      '<function_calls><invoke name="exec">private XML</invoke></function_calls>',
-      "private inbound paragraph",
-    ].join("\n");
-    const delivered: ReplyPayload[] = [];
-    const dispatcher = createReplyDispatcher({
-      deliver: async (payload) => {
-        delivered.push(payload);
-      },
-    });
-
-    const result = await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        Body: conversationContext,
-        BodyForAgent: conversationContext,
-        From: "user1",
-        Surface: "telegram",
-        SessionKey: "agent:test:scaffolding-provenance",
-      }),
-      cfg: emptyConfig,
-      dispatcher,
-      replyResolver: async () => ({ text: `${conversationContext}\n\nVisible answer.` }),
-    });
-    dispatcher.markComplete();
-    await dispatcher.waitForIdle();
-
-    expect(result.queuedFinal).toBe(true);
-    expect(delivered).toEqual([expect.objectContaining({ text: "Visible answer." })]);
-  });
+  dispatcher.markComplete();
+  await dispatcher.waitForIdle();
+  expect(source).toEqual(original);
+  expect(observed).toEqual(visible);
+  expect(result.queuedFinal).toBe(true);
+  expect(delivered).toEqual([expect.objectContaining({ text: "Visible answer." })]);
 });

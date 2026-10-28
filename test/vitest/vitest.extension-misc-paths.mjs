@@ -1,5 +1,6 @@
 // Test routing roots for miscellaneous provider/tool extension suites.
 export const miscExtensionTestRoots = [
+  "extensions/abliteration",
   "extensions/arcee",
   "extensions/brave",
   "extensions/device-pair",
@@ -17,11 +18,11 @@ export const miscExtensionTestRoots = [
   "extensions/openshell",
   "extensions/parallel",
   "extensions/perplexity",
+  "extensions/requesty",
   "extensions/searxng",
   "extensions/synthetic",
   "extensions/tavily",
   "extensions/vercel-ai-gateway",
-  "extensions/webhooks",
 ];
 
 export function isMiscExtensionRoot(root) {

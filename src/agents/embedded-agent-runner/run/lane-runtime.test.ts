@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { enqueueCommandInLane, setCommandLaneConcurrency } from "../../../process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../../../process/command-queue.test-support.js";
 import { MAIN_SESSION_RESTART_RECOVERY_SOURCE_TOOL } from "../../../sessions/input-provenance.js";
@@ -12,10 +13,7 @@ describe("embedded run lane priority", () => {
   it("runs a foreground user turn before queued restart recovery and inter-session work", async () => {
     const lane = "test:restart-recovery-priority";
     setCommandLaneConcurrency(lane, 1);
-    let releaseBlocker: () => void = () => {};
-    const blockerGate = new Promise<void>((resolve) => {
-      releaseBlocker = resolve;
-    });
+    const { promise: blockerGate, resolve: releaseBlocker } = createDeferred();
     const blocker = enqueueCommandInLane(lane, async () => {
       await blockerGate;
     });

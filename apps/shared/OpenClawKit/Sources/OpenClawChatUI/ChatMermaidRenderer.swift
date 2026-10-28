@@ -26,7 +26,6 @@ final class ChatMermaidRenderer: NSObject, WKNavigationDelegate {
         let id = UUID()
         let request: ChatMermaidRequest
         var completions: [UUID: Completion]
-        var generation = UUID()
         var phase = Phase.loading
 
         init(request: ChatMermaidRequest, token: UUID, completion: @escaping Completion) {
@@ -47,7 +46,6 @@ final class ChatMermaidRenderer: NSObject, WKNavigationDelegate {
     private var active: Job?
     private var timeout: Task<Void, Never>?
     private var webView: WKWebView?
-    private var generation = UUID()
     private var documentReady = false
 
     override init() {
@@ -121,7 +119,6 @@ final class ChatMermaidRenderer: NSObject, WKNavigationDelegate {
             self.finish(job, result: .failure(.unavailable))
             return
         }
-        job.generation = self.generation
         // Native cancellation can replace WebKit even if synchronous diagram
         // layout prevents the JavaScript watchdog from running.
         self.timeout = Task { [weak self, weak job] in
@@ -152,7 +149,6 @@ final class ChatMermaidRenderer: NSObject, WKNavigationDelegate {
         webView.backgroundColor = .clear
         webView.scrollView.isScrollEnabled = false
         #endif
-        self.generation = UUID()
         self.documentReady = false
         self.webView = webView
         webView.load(URLRequest(url: ChatMermaidResources.documentURL))
@@ -255,8 +251,7 @@ final class ChatMermaidRenderer: NSObject, WKNavigationDelegate {
     }
 
     private func isCurrent(_ job: Job, webView: WKWebView) -> Bool {
-        self.active === job && self.webView === webView &&
-            self.generation == job.generation && webView.url == ChatMermaidResources.documentURL
+        self.active === job && self.webView === webView && webView.url == ChatMermaidResources.documentURL
     }
 
     private func finish(_ job: Job, result: Result<ChatMermaidRenderedImage, ChatMermaidFailure>) {
@@ -281,7 +276,6 @@ final class ChatMermaidRenderer: NSObject, WKNavigationDelegate {
     }
 
     private func retireDocument() {
-        self.generation = UUID()
         self.documentReady = false
         guard let webView = self.webView else { return }
         self.webView = nil

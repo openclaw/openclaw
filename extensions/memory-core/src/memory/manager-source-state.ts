@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "openclaw/plugin-sdk/database-engine-worker-runtime";
 import type { ResolvedMemorySearchConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   buildFileEntry,
@@ -12,8 +12,7 @@ import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
   sqliteStringSet,
-} from "openclaw/plugin-sdk/sqlite-runtime";
-import { readMemorySourceHash } from "./manager-source-index-kernel.js";
+} from "openclaw/plugin-sdk/sqlite-worker-runtime";
 
 export type MemorySourceFileStateRow = {
   path: string;
@@ -62,20 +61,8 @@ export async function resolveMemorySourceFileEntries(params: {
   ).filter((entry): entry is MemoryFileEntry => entry !== null);
 }
 
-/** Compare a resolved source snapshot with the persisted index without writing either side. */
-function hasMemorySourceDrift(params: {
-  entries: readonly MemoryFileEntry[];
-  indexedRows: readonly MemorySourceFileStateRow[];
-}): boolean {
-  const indexedByPath = new Map(params.indexedRows.map((row) => [row.path, row]));
-  if (indexedByPath.size !== params.entries.length) {
-    return true;
-  }
-  return params.entries.some((entry) => indexedByPath.get(entry.path)?.hash !== entry.hash);
-}
-
 export async function inspectMemorySourceState(params: {
-  db: DatabaseSync;
+  readIndexedRows: () => Promise<MemorySourceFileStateRow[]>;
   workspaceDir: string;
   settings: Pick<ResolvedMemorySearchConfig, "extraPaths" | "multimodal">;
   concurrency: number;
@@ -86,24 +73,33 @@ export async function inspectMemorySourceState(params: {
     ...params,
     onSkippedSymlinkRoot: (root) => skippedRoots.add(root),
   });
-  const indexedRows = loadMemorySourceFileState({ db: params.db, source: "memory" });
+  const indexedByPath = new Map((await params.readIndexedRows()).map((row) => [row.path, row]));
   return {
     source: "memory",
-    dirty: hasMemorySourceDrift({ entries, indexedRows }),
+    dirty:
+      indexedByPath.size !== entries.length ||
+      entries.some((entry) => {
+        const indexed = indexedByPath.get(entry.path);
+        return (
+          indexed?.hash !== entry.hash ||
+          indexed.mtime !== entry.mtimeMs ||
+          indexed.size !== entry.size
+        );
+      }),
     eligible: entries.length,
     issues: [
       ...(entries.length === 0 ? ["no eligible memory files found"] : []),
       ...Array.from(
         skippedRoots,
         (root) =>
-          `extra path "${root}" is a symlink root; symlinked roots are not traversed, so configure its canonical absolute directory instead`,
+          `extra path "${root}" is a symlink root; symlinked roots are not traversed, so configure its resolved absolute directory instead`,
       ),
     ],
   };
 }
 
 export function loadMemorySourceFileState(params: {
-  db: DatabaseSync;
+  db: EngineConnection;
   source: MemorySource;
   paths?: readonly string[];
 }): MemorySourceFileStateRow[] {
@@ -117,14 +113,21 @@ export function loadMemorySourceFileState(params: {
   return executeSqliteQuerySync(params.db, query).rows;
 }
 
-export function resolveMemorySourceExistingHash(params: {
-  db: DatabaseSync;
-  source: MemorySource;
-  path: string;
-  existingHashes?: Map<string, string> | null;
-}): string | undefined {
-  if (params.existingHashes) {
-    return params.existingHashes.get(params.path);
-  }
-  return readMemorySourceHash(params.db, params.source, params.path);
+export function refreshMemorySessionSourceState(
+  db: EngineConnection,
+  input: { path: string; hash: string; mtime: number; size: number; expectedHash: string },
+): boolean {
+  return (
+    Number(
+      executeSqliteQuerySync(
+        db,
+        getNodeSqliteKysely<MemorySourceDatabase>(db)
+          .updateTable("memory_index_sources")
+          .set({ hash: input.hash, mtime: input.mtime, size: input.size })
+          .where("path", "=", input.path)
+          .where("source", "=", "sessions")
+          .where("hash", "=", input.expectedHash),
+      ).numAffectedRows,
+    ) === 1
+  );
 }

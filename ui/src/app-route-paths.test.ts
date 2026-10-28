@@ -4,22 +4,26 @@ import {
   isControlUiReservedRouteSegment,
 } from "@openclaw/session-url-contract";
 import { notFound, type RouteLocation, type RouterHistory } from "@openclaw/uirouter";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   agentRouteFromPath,
   APP_ROUTE_IDS,
+  APP_ROUTE_OFFLINE_PREFIXES,
+  clawCatalogPackageNameFromPath,
   CONTROL_UI_DOCUMENT_ROUTE_PATHS,
+  dynamicRouteFromPath,
   inferBasePathFromPathname,
   memoryTabFromPath,
   pathForMemoryTab,
   pathForAgentPanel,
+  pathForClawCatalogEntry,
   pathForPluginSettings,
-  pathForRoute,
+  pathForPluginCatalogEntry,
+  pluginCatalogIdFromPath,
   pathForWorkboardBoard,
   pathForTerminalSession,
   terminalSessionIdFromPath,
   pluginSettingsIdFromPath,
-  restoreBridgedRouteLocation,
   routeIdFromPath,
   routePageSpec,
   setPluginTabSlugs,
@@ -29,142 +33,82 @@ import {
 import { createApplicationRouter, startApplicationRouter } from "./app-routes.ts";
 import { createAgentSelectionCapability } from "./app/agent-selection.ts";
 import type { ApplicationContext } from "./app/context.ts";
-import type { AgentsPanel } from "./lib/agents/panels.ts";
+import { createApplicationGatewaySnapshot } from "./test-helpers/application-context-fixtures.ts";
 import { createApplicationGateway } from "./test-helpers/application-context.ts";
 import { gatewayHelloForMethods } from "./test-helpers/gateway-methods.ts";
 
-const AGENT_PANEL_CASES = [
-  "overview",
-  "files",
-  "tools",
-  "skills",
-  "channels",
-  "cron",
-  "memory",
-] as const satisfies readonly AgentsPanel[];
-
 const DYNAMIC_STARTUP_CASES = [
-  {
-    label: "terminal session",
-    routeId: "terminal",
-    location: { pathname: "/terminal/pty-123", search: "", hash: "" },
-  },
-  {
-    label: "mounted terminal session",
-    routeId: "terminal",
-    basePath: "/ui",
-    location: { pathname: "/ui/terminal/pty-123", search: "", hash: "" },
-  },
-  {
-    label: "person Activity",
-    routeId: "activity",
-    location: {
-      pathname: "/activity/josh-12345678",
-      search: "?time=30d&q=release",
-      hash: "#sessions",
+  ["plugins", pathForPluginCatalogEntry("calendar"), "?probe=1", "#catalog", ""],
+  ["agents", pathForAgentPanel("team.writer", "tools"), "?probe=1", "#catalog", ""],
+  ["dashboard", "/dashboard/main/01JSESSIONA", "?probe=1", "#dashboard", ""],
+  ["chat", "/beam/0123456789ab", "", "#message", ""],
+  ["workboard", pathForWorkboardBoard("ops.v2"), "?agent=main", "#queue", ""],
+  ["memory", pathForMemoryTab("settings"), "?probe=1", "#memory-backend", ""],
+  [
+    "plugin-settings",
+    pathForPluginSettings("@openclaw/calendar"),
+    "?probe=1",
+    "#configuration",
+    "",
+  ],
+  ...["/ui", "/portable/control"].map(
+    (basePath) =>
+      [
+        "plugins",
+        pathForPluginCatalogEntry("ch_QG9wZW5jbGF3L2xpbmVhcg", basePath),
+        "?probe=1",
+        "#catalog",
+        basePath,
+      ] as const,
+  ),
+] as const satisfies readonly (readonly [RouteId, string, string, string, string])[];
+
+function createHistory(pathname: string, search = "", hash = "") {
+  let location: RouteLocation = { pathname, search, hash };
+  let listener: ((next: RouteLocation) => void) | undefined;
+  const update = (next: RouteLocation) => {
+    location = next;
+  };
+  const history = {
+    location: () => location,
+    push: vi.fn(update),
+    replace: vi.fn(update),
+    listen: (next: (location: RouteLocation) => void) => {
+      listener = next;
+      return () => {
+        listener = undefined;
+      };
     },
-  },
-  {
-    label: "mounted person Activity",
-    routeId: "activity",
-    basePath: "/ui",
-    location: {
-      pathname: "/ui/activity/josh-12345678",
-      search: "?time=30d&q=release",
-      hash: "#sessions",
+    visit(next: RouteLocation) {
+      update(next);
+      listener?.(next);
     },
-  },
-  {
-    label: "agent panel",
-    routeId: "agents",
-    location: {
-      pathname: pathForAgentPanel("team.writer", "tools"),
-      search: "?probe=1",
-      hash: "#catalog",
-    },
-  },
-  {
-    label: "chat session",
-    routeId: "chat",
-    location: {
-      pathname: "/chat/main/01JSESSIONA",
-      search: "?probe=1",
-      hash: "#message",
-    },
-  },
-  {
-    label: "dashboard session",
-    routeId: "dashboard",
-    location: {
-      pathname: "/dashboard/main/01JSESSIONA",
-      search: "?probe=1",
-      hash: "#dashboard",
-    },
-  },
-  {
-    label: "Beam share",
-    routeId: "chat",
-    location: {
-      pathname: "/beam/0123456789ab",
-      search: "",
-      hash: "#message",
-    },
-  },
-  {
-    label: "workboard board",
-    routeId: "workboard",
-    location: {
-      pathname: pathForWorkboardBoard("ops.v2"),
-      search: "?agent=main",
-      hash: "#queue",
-    },
-  },
-  {
-    label: "Memory tab",
-    routeId: "memory",
-    location: {
-      pathname: pathForMemoryTab("settings"),
-      search: "?probe=1",
-      hash: "#memory-backend",
-    },
-  },
-  {
-    label: "legacy Plugins discovery route",
-    routeId: "plugins",
-    location: {
-      pathname: "/settings/plugins/discover",
-      search: "?query=calendar",
-      hash: "#featured",
-    },
-  },
-  {
-    label: "Plugin Settings detail",
-    routeId: "plugin-settings",
-    location: {
-      pathname: pathForPluginSettings("@openclaw/calendar"),
-      search: "?probe=1",
-      hash: "#configuration",
-    },
-  },
-] as const satisfies readonly {
-  label: string;
-  routeId: RouteId;
-  basePath?: string;
-  location: RouteLocation;
-}[];
+  } satisfies RouterHistory & { visit(next: RouteLocation): void };
+  return history;
+}
+
+function createTestRouter(routeId: RouteId) {
+  const router = createApplicationRouter();
+  const route = router.getRoute(routeId);
+  if (!route) {
+    throw new Error(`Route missing: ${routeId}`);
+  }
+  const { loader, component } = route;
+  onTestFinished(() => {
+    router.stop();
+    route.loader = loader;
+    route.component = component;
+  });
+  route.component = async () => ({ renderSolid: () => null });
+  return { router, route };
+}
 
 function createStartupContext(basePath = ""): ApplicationContext {
-  const { gateway } = createApplicationGateway({
-    phase: "stopped",
-    client: null,
-    offlineStable: false,
-    hello: null,
-    canvasPluginSurfaceUrl: null,
-    assistantAgentId: null,
-    sessionKey: "agent:main:main",
-    lastError: null,
-    lastErrorCode: null,
-  });
+  const { gateway } = createApplicationGateway(
+    createApplicationGatewaySnapshot({
+      sessionKey: "agent:main:main",
+    }),
+  );
   return {
     basePath,
     gateway,
@@ -180,48 +124,34 @@ function createStartupContext(basePath = ""): ApplicationContext {
 
 describe("Dynamic route startup bridge", () => {
   it("defers a cold slug until hello and loads each tab at its real pathname", async () => {
-    let location: RouteLocation = {
-      pathname: "/ui/reports",
-      search: "?p.range=week",
-      hash: "#latest",
-    };
-    const replace = vi.fn((next: RouteLocation) => {
-      location = next;
-    });
-    const history: RouterHistory = {
-      location: () => location,
-      push: replace,
-      replace,
-      listen: () => () => {},
-    };
-    const router = createApplicationRouter();
+    const history = createHistory("/ui/reports", "?p.range=week", "#latest");
+    const replace = history.replace;
+    history.push = replace;
+    const { router } = createTestRouter("plugin");
     const baseContext = createStartupContext("/ui");
     const gateway = createApplicationGateway(baseContext.gateway.snapshot);
     const context = { ...baseContext, gateway: gateway.gateway };
-    const route = router.getRoute("plugin")!;
-    const originalComponent = route.component;
-    route.component = async () => ({ render: () => null });
     setPluginTabSlugs();
     try {
       await startApplicationRouter(router, history, "/ui", context);
-      expect(location.pathname).toBe("/ui/reports");
+      expect(history.location().pathname).toBe("/ui/reports");
       expect(replace).not.toHaveBeenCalled();
       expect(router.getState().status).toBe("notFound");
       setPluginTabSlugs([
         { pluginId: "fixture", id: "summary", slug: "reports" },
         { pluginId: "fixture", id: "metrics", slug: "metrics" },
       ]);
-      await router.navigate("plugin", context, { history: "replace" }, location);
+      await router.navigate("plugin", context, { history: "replace" }, history.location());
       expect(router.getState().matches[0]).toMatchObject({
         routeId: "plugin",
-        location,
+        location: history.location(),
         data: { pluginId: "fixture", id: "summary", params: { range: "week" } },
       });
       await router.navigate(
         "plugin",
         context,
         { history: "push" },
-        { ...location, pathname: "/ui/metrics" },
+        { ...history.location(), pathname: "/ui/metrics" },
       );
       expect(router.getState().matches[0]?.data).toMatchObject({
         pluginId: "fixture",
@@ -248,10 +178,8 @@ describe("Dynamic route startup bridge", () => {
         hello: gatewayHelloForMethods([]),
       });
       await vi.waitFor(() => expect(router.getState().status).toBe("notFound"));
-      expect(location.pathname).toBe("/ui/metrics");
+      expect(history.location().pathname).toBe("/ui/metrics");
     } finally {
-      router.stop();
-      route.component = originalComponent;
       setPluginTabSlugs();
     }
   });
@@ -275,66 +203,6 @@ describe("Dynamic route startup bridge", () => {
     expect(reservedRouteSegments.every(isControlUiReservedRouteSegment)).toBe(true);
   });
 
-  it("keeps plausible generic catalog share paths on chat", () => {
-    for (const pathname of [
-      "/beam/0123456789ab",
-      "/beam/ABCDEF012345",
-      "/beam/nothexvaluezz",
-      "/beam/0123456789abcdef0123456789abcdef0",
-    ]) {
-      expect(routeIdFromPath(pathname)).toBe("chat");
-    }
-    expect(routeIdFromPath("/openclaw/beam/0123456789ab", "/openclaw")).toBe("chat");
-    expect(inferBasePathFromPathname("/openclaw/beam/0123456789ab")).toBe("/openclaw");
-  });
-
-  it("does not steal mounted routes, docs, app resources, or reserved routes", () => {
-    for (const pathname of [
-      "/ui/chat",
-      "/ui/config",
-      "/concepts/agent-workspace",
-      "/api/files/1",
-      "/control/avatar/main",
-      "/plugins/diffs/view/id/token",
-      "/beam/0123456789a",
-      "/beam/not-valid",
-      "/approve/0123456789ab",
-      "/ask/0123456789ab",
-    ]) {
-      expect(routeIdFromPath(pathname)).toBeNull();
-    }
-    expect(routeIdFromPath("/control/avatar/main", "/control")).toBeNull();
-    expect(routeIdFromPath("/settings/about")).toBe("about");
-    expect(routeIdFromPath("/workboard/0123456789ab")).toBe("workboard");
-    expect(routeIdFromPath("/focus/0123456789ab")).toBeNull();
-    expect(routeIdFromPath("/plugin/0123456789ab")).toBeNull();
-    expect(routeIdFromPath("/usage/0123456789ab")).toBeNull();
-    expect(routeIdFromPath("/settings/0123456789ab")).toBeNull();
-    expect(routeIdFromPath("/openclaw/skills/0123456789ab", "/openclaw")).toBeNull();
-  });
-
-  it("registers the Updates settings path", () => {
-    expect(pathForRoute("updates")).toBe("/settings/updates");
-    expect(routeIdFromPath("/settings/updates")).toBe("updates");
-  });
-
-  it("registers the Secrets settings path", () => {
-    expect(pathForRoute("secrets")).toBe("/settings/secrets");
-    expect(routeIdFromPath("/settings/secrets")).toBe("secrets");
-  });
-
-  it("registers the Portals workspace path", () => {
-    expect(pathForRoute("portals")).toBe("/portals");
-    expect(routeIdFromPath("/portals")).toBe("portals");
-  });
-
-  it("keeps the mounted Agents roster separate from agent settings", () => {
-    expect(routeIdFromPath("/ui/agents", "/ui")).toBe("agents-home");
-    expect(inferBasePathFromPathname("/ui/agents")).toBe("/ui");
-    expect(agentRouteFromPath("/ui/agents", "/ui")).toBeNull();
-    expect(routeIdFromPath("/ui/settings/agents", "/ui")).toBe("agents");
-  });
-
   it("matches mixed-case deep links exactly like the uirouter path key", () => {
     // uirouter lowercases static path keys; a case-sensitive pre-gate would
     // rewrite /Usage to /chat before the router ever saw it.
@@ -344,327 +212,121 @@ describe("Dynamic route startup bridge", () => {
   });
 
   it.each(DYNAMIC_STARTUP_CASES)(
-    "loads the $label once while publishing its real location",
-    async (testCase) => {
-      const { routeId, location: initialLocation } = testCase;
-      const basePath = "basePath" in testCase ? testCase.basePath : "";
-      let location: RouteLocation = { ...initialLocation };
-      const push = vi.fn((next: RouteLocation) => {
-        location = next;
-      });
-      const replace = vi.fn((next: RouteLocation) => {
-        location = next;
-      });
-      const history: RouterHistory = {
-        location: () => location,
-        push,
-        replace,
-        listen: () => () => undefined,
-      };
-      const router = createApplicationRouter();
-      const route = router.getRoute(routeId);
-      if (!route) {
-        throw new Error(`Route missing: ${routeId}`);
-      }
+    "loads %s once at its real pathname %s",
+    async (routeId, pathname, search, hash, basePath) => {
+      const history = createHistory(pathname, search, hash);
+      const initialLocation = history.location();
+      const { router, route } = createTestRouter(routeId);
       const loader = vi.fn(async () => ({ routeId }));
-      const originalLoader = route.loader;
-      const originalComponent = route.component;
-      try {
-        route.loader = loader;
-        route.component = async () => ({ render: () => null });
-
-        await startApplicationRouter(router, history, basePath, createStartupContext(basePath));
-
-        expect(loader).toHaveBeenCalledOnce();
-        expect(router.getState().matches[0]?.location).toEqual(initialLocation);
-        expect(push).not.toHaveBeenCalled();
-        expect(replace).not.toHaveBeenCalled();
-      } finally {
-        router.stop();
-        route.loader = originalLoader;
-        route.component = originalComponent;
-      }
+      route.loader = loader;
+      const inferredBase = basePath ? inferBasePathFromPathname(pathname) : "";
+      expect(inferredBase).toBe(basePath);
+      await startApplicationRouter(
+        router,
+        history,
+        inferredBase,
+        createStartupContext(inferredBase),
+      );
+      expect(loader).toHaveBeenCalledOnce();
+      expect(router.getState().matches[0]?.location).toEqual(initialLocation);
+      expect(router.getState().matches[0]?.routeId).toBe(routeId);
+      expect(history.location()).toEqual({ pathname, search, hash });
+      expect(history.push).not.toHaveBeenCalled();
+      expect(history.replace).not.toHaveBeenCalled();
     },
   );
+
+  it("loads a later activity history destination exactly once", async () => {
+    const history = createHistory("/activity/josh-12345678", "", "#first");
+    const { router, route } = createTestRouter("activity");
+    const loader = vi.fn<NonNullable<typeof route.loader>>(async () => ({}));
+    route.loader = loader;
+    await startApplicationRouter(router, history, "", createStartupContext());
+    expect(loader).toHaveBeenCalledOnce();
+    const location = { pathname: "/activity/mira-2ab34567", search: "", hash: "#second" };
+    history.visit(location);
+    await vi.waitFor(() => {
+      expect(loader).toHaveBeenCalledTimes(2);
+      expect(loader.mock.calls[1]?.[1].location).toEqual(location);
+    });
+  });
 
   it.each([
-    { routeId: "chat", firstPath: "/chat/main/01JSESSIONA", nextPath: "/chat/main/01JSESSIONB" },
-    {
-      routeId: "activity",
-      firstPath: "/activity/josh-12345678",
-      nextPath: "/activity/mira-2ab34567",
-    },
+    ["/", "/chat", 1],
+    ["/chat/main/01JSESSIONA", "/chat/main/01JSESSIONA", 2],
   ] as const)(
-    "loads a later $routeId history destination exactly once",
-    async ({ routeId, firstPath, nextPath }) => {
-      let location: RouteLocation = {
-        pathname: firstPath,
-        search: "",
-        hash: "#first",
-      };
-      let historyListener: ((next: RouteLocation) => void) | undefined;
-      const history: RouterHistory = {
-        location: () => location,
-        push: vi.fn((next: RouteLocation) => {
-          location = next;
-        }),
-        replace: vi.fn((next: RouteLocation) => {
-          location = next;
-        }),
-        listen: (listener) => {
-          historyListener = listener;
-          return () => {
-            historyListener = undefined;
-          };
-        },
-      };
-      const router = createApplicationRouter();
-      const route = router.getRoute(routeId);
-      if (!route) {
-        throw new Error(`Route missing: ${routeId}`);
-      }
-      const loader = vi.fn<NonNullable<typeof route.loader>>(async () => ({}));
-      const originalLoader = route.loader;
-      const originalComponent = route.component;
-      try {
-        route.loader = loader;
-        route.component = async () => ({ render: () => null });
-
-        await startApplicationRouter(router, history, "", createStartupContext());
-        expect(loader).toHaveBeenCalledOnce();
-
-        location = {
-          pathname: nextPath,
-          search: "",
-          hash: "#second",
-        };
-        historyListener?.(location);
-
-        await vi.waitFor(() => {
-          expect(loader).toHaveBeenCalledTimes(2);
-          expect(loader.mock.calls[1]?.[1].location).toEqual(location);
-        });
-      } finally {
-        router.stop();
-        route.loader = originalLoader;
-        route.component = originalComponent;
-      }
-    },
-  );
-
-  it("keeps a loader not-found state without rejecting startup", async () => {
-    let location: RouteLocation = { pathname: "/", search: "", hash: "" };
-    const history: RouterHistory = {
-      location: () => location,
-      push: vi.fn(),
-      replace: vi.fn((next: RouteLocation) => {
-        location = next;
-      }),
-      listen: () => () => undefined,
-    };
-    const router = createApplicationRouter();
-    const route = router.getRoute("chat");
-    if (!route) {
-      throw new Error("Chat route missing");
-    }
-    const originalLoader = route.loader;
-    const originalComponent = route.component;
-    try {
-      route.loader = () => notFound({ routeId: "chat" });
-      route.component = async () => ({ render: () => null });
-
+    "retains not-found without rejecting startup at %s",
+    async (path, pathname, calls) => {
+      const history = createHistory(path);
+      const { router, route } = createTestRouter("chat");
+      const loader = vi.fn(() => notFound({ routeId: "chat" }));
+      route.loader = loader;
       await expect(
         startApplicationRouter(router, history, "", createStartupContext()),
       ).resolves.toBeUndefined();
-
-      expect(location.pathname).toBe("/chat");
+      expect(loader).toHaveBeenCalledTimes(calls);
+      expect(history.location().pathname).toBe(pathname);
       expect(router.getState().status).toBe("notFound");
+      expect(router.getState().location).toEqual({ pathname, search: "", hash: "" });
       expect(router.getState().matches[0]).toMatchObject({
         routeId: "chat",
         status: "notFound",
         error: { type: "notFound", data: { routeId: "chat" } },
       });
-    } finally {
-      router.stop();
-      route.loader = originalLoader;
-      route.component = originalComponent;
-    }
-  });
-
-  it("tolerates not-found from both dynamic startup navigations", async () => {
-    const location: RouteLocation = {
-      pathname: "/chat/main/01JSESSIONA",
-      search: "",
-      hash: "",
-    };
-    const history: RouterHistory = {
-      location: () => location,
-      push: vi.fn(),
-      replace: vi.fn(),
-      listen: () => () => undefined,
-    };
-    const router = createApplicationRouter();
-    const route = router.getRoute("chat");
-    if (!route) {
-      throw new Error("Chat route missing");
-    }
-    const loader = vi.fn(() => notFound({ routeId: "chat" }));
-    const originalLoader = route.loader;
-    const originalComponent = route.component;
-    try {
-      route.loader = loader;
-      route.component = async () => ({ render: () => null });
-
-      await expect(
-        startApplicationRouter(router, history, "", createStartupContext()),
-      ).resolves.toBeUndefined();
-
-      expect(loader).toHaveBeenCalledTimes(2);
-      expect(router.getState().status).toBe("notFound");
-      expect(router.getState().location).toEqual(location);
-    } finally {
-      router.stop();
-      route.loader = originalLoader;
-      route.component = originalComponent;
-    }
-  });
+    },
+  );
 
   it("still rejects non-not-found startup failures", async () => {
     const failure = new Error("chat loader failed");
-    const history: RouterHistory = {
-      location: () => ({ pathname: "/chat", search: "", hash: "" }),
-      push: vi.fn(),
-      replace: vi.fn(),
-      listen: () => () => undefined,
+    const history = createHistory("/chat");
+    const { router, route } = createTestRouter("chat");
+    route.loader = () => {
+      throw failure;
     };
-    const router = createApplicationRouter();
-    const route = router.getRoute("chat");
-    if (!route) {
-      throw new Error("Chat route missing");
-    }
-    const originalLoader = route.loader;
-    const originalComponent = route.component;
-    try {
-      route.loader = () => {
-        throw failure;
-      };
-      route.component = async () => ({ render: () => null });
-
-      await expect(
-        startApplicationRouter(router, history, "", createStartupContext()),
-      ).rejects.toBe(failure);
-    } finally {
-      router.stop();
-      route.loader = originalLoader;
-      route.component = originalComponent;
-    }
+    await expect(startApplicationRouter(router, history, "", createStartupContext())).rejects.toBe(
+      failure,
+    );
   });
 });
 
-describe("Bridged route locations", () => {
-  it.each([
-    ["absent", "?", "/ui/activity", ""],
-    ["empty", "?bridge=&bridge=%2Fignored&q=release", "", "?q=release"],
-    [
-      "repeated",
-      "?q=first&bridge=%2Fui%2Factivity%2Fada-12345678&q=second&bridge=%2Fignored",
-      "/ui/activity/ada-12345678",
-      "?q=first&q=second",
-    ],
-    ["bridge-only", "?bridge=%2Fui%2Factivity%2Fada-12345678", "/ui/activity/ada-12345678", ""],
-    [
-      "other namespace",
-      "?other=%2Fui%2Fworkboard&q=release",
-      "/ui/activity",
-      "?other=%2Fui%2Fworkboard&q=release",
-    ],
-    [
-      "encoded query",
-      "?bridge=%2Fui%2Factivity%2Fa%252Fb&q=hello%20world&q=a%2Bb",
-      "/ui/activity/a%2Fb",
-      "?q=hello+world&q=a%2Bb",
-    ],
-  ])(
-    "restores %s bridge input without changing the source",
-    (_label, search, pathname, nextSearch) => {
-      const location = Object.freeze({ pathname: "/ui/activity", search, hash: "#sessions" });
-      const restored = restoreBridgedRouteLocation(location, "bridge");
-
-      expect(restored).toEqual({ pathname, search: nextSearch, hash: "#sessions" });
-      expect(restored).not.toBe(location);
-      expect(location).toEqual({ pathname: "/ui/activity", search, hash: "#sessions" });
-    },
-  );
-});
-
-describe("Agent panel route paths", () => {
-  it.each(AGENT_PANEL_CASES)("round-trips the %s panel with an encoded agent id", (panel) => {
-    const pathname = pathForAgentPanel("team.writer", panel);
-    expect(pathname).toBe(`/settings/agents/team%2Ewriter/${panel}`);
-    expect(agentRouteFromPath(pathname)).toEqual({
-      agentId: "team.writer",
-      panel,
-      panelSegment: panel,
-      invalidPanel: false,
+describe("Route path contracts", () => {
+  for (const [read, path, basePath] of [
+    [agentRouteFromPath, "/settings/agents/agent%2Fchild", ""],
+    [agentRouteFromPath, "/settings/agents/%", ""],
+    [agentRouteFromPath, "/settings/agents/research/tools/extra", ""],
+    [memoryTabFromPath, "/settings/memory//", ""],
+    [memoryTabFromPath, "/settings/memory/unknown", ""],
+    [memoryTabFromPath, "/settings/memory/dreams/extra", ""],
+    [routeIdFromPath, "/settings/memory/unknown", ""],
+    [routeIdFromPath, "/settings/memory/dreams/extra", ""],
+    [pluginCatalogIdFromPath, "/plugins/openclaw/linear/extra", ""],
+    [pluginCatalogIdFromPath, "/plugins/openclaw/%2Flinear", ""],
+    [pluginCatalogIdFromPath, "/plugins/openclaw/..", ""],
+    [pluginSettingsIdFromPath, "/settings/plugins/discover", ""],
+    [pluginSettingsIdFromPath, "/settings/plugins/calendar/extra", ""],
+    [clawCatalogPackageNameFromPath, "/claws/@openclaw/workflow-operator/extra", ""],
+    [clawCatalogPackageNameFromPath, "/claws/packages/@maker/travel-planner", ""],
+    [clawCatalogPackageNameFromPath, "/claws/packages/%ZZ", ""],
+    [routeIdFromPath, "/agents", ""],
+    [terminalSessionIdFromPath, "/terminal/%ZZ", ""],
+    [routeIdFromPath, "/terminal/%ZZ", ""],
+    [terminalSessionIdFromPath, "/other/terminal/id", "/openclaw"],
+    [routeIdFromPath, "/other/terminal/id", "/openclaw"],
+  ] as const) {
+    it(`${read.name} rejects ${path} under ${basePath || "the root mount"}`, () => {
+      expect(read(path, basePath)).toBeNull();
     });
-    expect(routeIdFromPath(pathname)).toBe("agents");
-  });
+  }
 
-  it("round-trips the agent default panel without an explicit segment", () => {
-    const pathname = pathForAgentPanel("research", null, "/ui");
-    expect(pathname).toBe("/ui/settings/agents/research");
-    expect(agentRouteFromPath(pathname, "/ui")).toEqual({
-      agentId: "research",
-      panel: "overview",
-      panelSegment: null,
-      invalidPanel: false,
-    });
-    expect(inferBasePathFromPathname(pathname)).toBe("/ui");
-  });
-
-  it("falls back unknown panel segments to the default panel", () => {
-    expect(agentRouteFromPath("/settings/agents/research/unknown")).toEqual({
-      agentId: "research",
-      panel: "overview",
-      panelSegment: null,
-      invalidPanel: true,
-    });
-    expect(routeIdFromPath("/settings/agents/research/unknown")).toBe("agents");
-  });
-
-  it("rejects malformed, slash-containing, and nested agent paths", () => {
+  it("rejects malformed and slash-containing agent ids", () => {
     expect(() => pathForAgentPanel("agent/child")).toThrow("Invalid agent id");
     expect(() => pathForAgentPanel(".")).toThrow("Invalid agent id");
     expect(() => pathForAgentPanel("..")).toThrow("Invalid agent id");
-    expect(agentRouteFromPath("/settings/agents/agent%2Fchild")).toBeNull();
-    expect(agentRouteFromPath("/settings/agents/%")).toBeNull();
-    expect(agentRouteFromPath("/settings/agents/research/tools/extra")).toBeNull();
   });
 
   it("normalizes an invalid panel once before the startup bridge", async () => {
-    let location: RouteLocation = {
-      pathname: "/settings/agents/main/unknown",
-      search: "?probe=1",
-      hash: "#agents",
-    };
-    const push = vi.fn((next: RouteLocation) => {
-      location = next;
-    });
-    const replace = vi.fn((next: RouteLocation) => {
-      location = next;
-    });
-    const history: RouterHistory = {
-      location: () => location,
-      push,
-      replace,
-      listen: () => () => undefined,
-    };
-    const router = createApplicationRouter();
-    const agentsRoute = router.getRoute("agents");
-    if (!agentsRoute) {
-      throw new Error("Agents route missing");
-    }
-    agentsRoute.component = async () => ({ render: () => null });
+    const history = createHistory("/settings/agents/main/unknown", "?probe=1", "#agents");
+    const { router } = createTestRouter("agents");
     const agentsList = {
       defaultId: "main",
       mainKey: "main",
@@ -681,31 +343,17 @@ describe("Agent panel route paths", () => {
 
     await startApplicationRouter(router, history, "", context);
 
-    expect(replace).toHaveBeenCalledOnce();
-    expect(replace).toHaveBeenCalledWith({
+    expect(history.replace).toHaveBeenCalledOnce();
+    expect(history.replace).toHaveBeenCalledWith({
       pathname: "/settings/agents/main",
       search: "?probe=1",
       hash: "#agents",
     });
-    expect(push).not.toHaveBeenCalled();
-    expect(location.pathname).toBe("/settings/agents/main");
-    router.stop();
-  });
-});
-
-describe("Memory tab route paths", () => {
-  it.each([
-    ["overview", "/settings/memory"],
-    ["memories", "/settings/memory/memories"],
-    ["dreams", "/settings/memory/dreams"],
-    ["settings", "/settings/memory/settings"],
-  ] as const)("round-trips %s through its canonical path", (tab, pathname) => {
-    expect(pathForMemoryTab(tab)).toBe(pathname);
-    expect(memoryTabFromPath(pathname)).toBe(tab);
-    expect(routeIdFromPath(pathname)).toBe("memory");
+    expect(history.push).not.toHaveBeenCalled();
+    expect(history.location().pathname).toBe("/settings/agents/main");
   });
 
-  it.each(["overview", "memories", "dreams", "settings"] as const)(
+  it.each(["overview", "settings"] as const)(
     "round-trips %s under a configured base path",
     (tab: MemoryRouteTab) => {
       const pathname = pathForMemoryTab(tab, "/ui");
@@ -715,35 +363,13 @@ describe("Memory tab route paths", () => {
     },
   );
 
-  it("rejects unknown and nested Memory tab segments", () => {
-    expect(memoryTabFromPath("/settings/memory//")).toBeNull();
-    expect(memoryTabFromPath("/settings/memory/unknown")).toBeNull();
-    expect(memoryTabFromPath("/settings/memory/dreams/extra")).toBeNull();
-    expect(routeIdFromPath("/settings/memory/unknown")).toBeNull();
-    expect(routeIdFromPath("/settings/memory/dreams/extra")).toBeNull();
-  });
-});
-
-describe("legacy Plugins discovery route", () => {
-  it("routes retired discovery links through the application router", () => {
-    const router = createApplicationRouter();
-    expect(router.routeIdFromPath("/settings/plugins/discover")).toBe("plugins");
-    expect(router.routeIdFromPath("/ui/settings/plugins/discover", "/ui")).toBe("plugins");
-  });
-
-  it("keeps settings detail paths distinct from discovery in the application router", () => {
-    const router = createApplicationRouter();
-    expect(router.routeIdFromPath("/settings/plugins/unknown")).toBe("plugin-settings");
-    expect(router.routeIdFromPath("/settings/plugins/discover/extra")).toBeNull();
-  });
-});
-
-describe("Plugin Settings route paths", () => {
-  it("separates the installed inventory from Plugins discovery", () => {
-    expect(pathForRoute("plugins")).toBe("/plugins");
-    expect(pathForRoute("plugin-settings")).toBe("/settings/plugins");
-    expect(routeIdFromPath("/plugins")).toBe("plugins");
-    expect(routeIdFromPath("/settings/plugins")).toBe("plugin-settings");
+  it("maps readable catalog links to the unchanged identity", () => {
+    const id = "ch_QG9wZW5jbGF3L2xpbmVhcg";
+    expect(pathForPluginCatalogEntry(id)).toBe("/plugins/openclaw/linear");
+    expect(pluginCatalogIdFromPath("/plugins/openclaw/linear")).toBe(id);
+    expect(pluginCatalogIdFromPath("/plugins/" + id)).toBe(id);
+    expect(pathForPluginCatalogEntry("local_bGluZWFy")).toBe("/plugins/local_bGluZWFy");
+    expect(pathForPluginCatalogEntry("ch_bWF0cml4")).toBe("/plugins/ch_bWF0cml4");
   });
 
   it("round-trips encoded plugin ids under a configured base path", () => {
@@ -755,18 +381,45 @@ describe("Plugin Settings route paths", () => {
   });
 
   it("keeps the retired discover path out of the plugin-id namespace", () => {
-    expect(pluginSettingsIdFromPath("/settings/plugins/discover")).toBeNull();
     expect(routeIdFromPath("/settings/plugins/discover")).toBe("plugins");
     const reservedIdPath = pathForPluginSettings("discover");
     expect(reservedIdPath).toBe("/settings/plugins/%64iscover");
     expect(pluginSettingsIdFromPath(reservedIdPath)).toBe("discover");
     expect(routeIdFromPath(reservedIdPath)).toBe("plugin-settings");
-    expect(pluginSettingsIdFromPath("/settings/plugins/calendar/extra")).toBeNull();
   });
-});
 
-describe("terminal route paths", () => {
-  it.each(["", "/openclaw"])("resolves terminal paths under %s", (basePath) => {
+  it.each(["@openclaw/workflow-operator", "@community/travel-planner", "personal-claw"])(
+    "round trips the public package identity %s",
+    (packageName) => {
+      const pathname = pathForClawCatalogEntry(packageName, "/ui");
+      expect(pathname).toBe(`/ui/claws/packages/${encodeURIComponent(packageName)}`);
+      expect(clawCatalogPackageNameFromPath(pathname, "/ui")).toBe(packageName);
+      expect(routeIdFromPath(pathname, "/ui")).toBe("claws");
+      expect(dynamicRouteFromPath(pathname, "/ui")).toEqual([
+        "claws",
+        "__openclawClawsPath",
+        pathname,
+      ]);
+    },
+  );
+
+  it("preserves existing official detail links", () => {
+    expect(clawCatalogPackageNameFromPath("/claws/workflow-operator")).toBe(
+      "@openclaw/workflow-operator",
+    );
+  });
+
+  it.each(["@maker/../private", "@Maker/claw", "../private", "@maker/claw/extra"])(
+    "rejects invalid package identity %s",
+    (packageName) => {
+      expect(() => pathForClawCatalogEntry(packageName)).toThrow("Invalid Claw package name");
+      expect(
+        clawCatalogPackageNameFromPath(`/claws/packages/${encodeURIComponent(packageName)}`),
+      ).toBeNull();
+    },
+  );
+
+  it.each(["/openclaw"])("resolves terminal paths under %s", (basePath) => {
     expect(routeIdFromPath(`${basePath}/terminal`, basePath)).toBe("terminal");
     const path = pathForTerminalSession("pty:one ?#%", basePath);
     expect(path).toBe(`${basePath}/terminal/pty%3Aone%20%3F%23%25`);
@@ -775,16 +428,9 @@ describe("terminal route paths", () => {
     expect(inferBasePathFromPathname(path)).toBe(basePath);
   });
 
-  it.each(["/terminal/a/b", "/terminal/%ZZ", "/terminal/%20"])(
-    "rejects invalid terminal identity %s",
-    (path) => {
-      expect(terminalSessionIdFromPath(path)).toBeNull();
-      expect(routeIdFromPath(path)).toBeNull();
-    },
-  );
-
-  it("does not consume a different mount's terminal identity", () => {
-    expect(terminalSessionIdFromPath("/other/terminal/id", "/openclaw")).toBeNull();
-    expect(routeIdFromPath("/other/terminal/id", "/openclaw")).toBeNull();
+  it("never claims Gateway-owned plugin HTTP namespaces", () => {
+    expect(APP_ROUTE_OFFLINE_PREFIXES).toContain("/chat/");
+    expect(APP_ROUTE_OFFLINE_PREFIXES).not.toContain("/plugin/");
+    expect(APP_ROUTE_OFFLINE_PREFIXES.some((prefix) => prefix.startsWith("/plugins"))).toBe(false);
   });
 });

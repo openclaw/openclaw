@@ -6,6 +6,10 @@ export type SessionLifecycleRevisionExpectation = string | null;
 
 /** Authoritative lifecycle snapshot required for an atomic transcript admission. */
 export type SessionTranscriptTurnExpectedState = {
+  /** When supplied, fences a goal mutation committed with the transcript. */
+  goal?: SessionEntry["goal"];
+  /** When supplied, fences exact pending-final custody; null requires its absence. */
+  pendingFinalDelivery?: SessionEntry["pendingFinalDelivery"] | null;
   /** Rejects a run-owned turn after another admitted run takes writer ownership. */
   expectedWriterRunId?: string;
   abortedLastRun: boolean | undefined;
@@ -21,7 +25,10 @@ export type SessionTranscriptTurnExpectedState = {
   restartRecoveryRequesterAccountId: SessionRestartRecoveryState["restartRecoveryRequesterAccountId"];
   restartRecoveryRequesterSenderId: SessionRestartRecoveryState["restartRecoveryRequesterSenderId"];
   restartRecoverySameChannelThreadRequired: SessionRestartRecoveryState["restartRecoverySameChannelThreadRequired"];
+  restartRecoveryOperatorSource: SessionEntry["restartRecoveryOperatorSource"];
+  restartRecoveryRequesterSource?: SessionEntry["restartRecoveryRequesterSource"];
   restartRecoverySourceIngress: SessionRestartRecoveryState["restartRecoverySourceIngress"];
+  restartRecoverySourceMessageChannel?: SessionRestartRecoveryState["restartRecoverySourceMessageChannel"];
   restartRecoverySourceReplyDeliveryMode: SessionRestartRecoveryState["restartRecoverySourceReplyDeliveryMode"];
   restartRecoveryTerminalRunIds: SessionRestartRecoveryState["restartRecoveryTerminalRunIds"];
   status: PersistedSessionRunStatus | undefined;
@@ -29,11 +36,13 @@ export type SessionTranscriptTurnExpectedState = {
 
 /** Lifecycle fields committed with an accepted transcript turn. */
 export type SessionTranscriptTurnLifecyclePatch = {
+  goal?: SessionEntry["goal"];
   abortedLastRun?: boolean;
   endedAt?: number;
   lifecycleRunId?: SessionEntry["lifecycleRunId"];
   lastRunId?: SessionEntry["lastRunId"];
   lastRunError?: SessionEntry["lastRunError"];
+  lastInteractionAt?: number;
   pendingFinalDelivery?: SessionEntry["pendingFinalDelivery"];
   mainRestartRecovery?: SessionEntry["mainRestartRecovery"];
   restartRecoveryBeforeAgentReplyState?: SessionRestartRecoveryState["restartRecoveryBeforeAgentReplyState"];
@@ -46,7 +55,10 @@ export type SessionTranscriptTurnLifecyclePatch = {
   restartRecoveryRequesterAccountId?: SessionRestartRecoveryState["restartRecoveryRequesterAccountId"];
   restartRecoveryRequesterSenderId?: SessionRestartRecoveryState["restartRecoveryRequesterSenderId"];
   restartRecoverySameChannelThreadRequired?: SessionRestartRecoveryState["restartRecoverySameChannelThreadRequired"];
+  restartRecoveryOperatorSource?: SessionEntry["restartRecoveryOperatorSource"];
+  restartRecoveryRequesterSource?: SessionEntry["restartRecoveryRequesterSource"];
   restartRecoverySourceIngress?: SessionRestartRecoveryState["restartRecoverySourceIngress"];
+  restartRecoverySourceMessageChannel?: SessionRestartRecoveryState["restartRecoverySourceMessageChannel"];
   restartRecoverySourceReplyDeliveryMode?: SessionRestartRecoveryState["restartRecoverySourceReplyDeliveryMode"];
   restartRecoveryForceSafeTools?: SessionEntry["restartRecoveryForceSafeTools"];
   restartRecoveryRuns?: SessionEntry["restartRecoveryRuns"];

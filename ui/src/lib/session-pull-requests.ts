@@ -9,11 +9,14 @@ import type {
 import {
   CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT,
   CONTROL_UI_SESSION_PULL_REQUESTS_MAX_KEYS,
+  SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
 } from "../../../src/gateway/control-ui-contract.js";
+import { operatorScopeSatisfied } from "../../../src/shared/operator-scope-compat.js";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { createGatewayConnectionLifecycle } from "./gateway-connection-lifecycle.ts";
-import { isGatewayMethodAdvertised } from "./gateway-methods.ts";
+import { canCallGatewayMethod } from "./gateway-methods.ts";
 import { createGatewaySetSyncLifecycle } from "./gateway-set-sync-lifecycle.ts";
+import { primarySessionPullRequest } from "./session-pull-request-presentation.ts";
 import { readSessionChangedEvent } from "./sessions/reconcile.ts";
 import { uiSessionEventMatches } from "./sessions/session-key.ts";
 
@@ -28,12 +31,7 @@ export function summarizeSessionPullRequests(
   pullRequests: readonly ControlUiSessionPullRequest[],
   previous?: SessionCatalogPullRequestSummary,
 ): SessionCatalogPullRequestSummary | undefined {
-  // Keep active work ahead of newer merged/closed history, as the sidebar and PR menu do.
-  const current =
-    pullRequests.find(({ state }) => state === "open") ??
-    pullRequests.find(({ state }) => state === "draft") ??
-    pullRequests.find(({ state }) => state === "merged") ??
-    pullRequests[0];
+  const current = primarySessionPullRequest(pullRequests);
   if (!current) {
     return undefined;
   }
@@ -44,8 +42,6 @@ export function summarizeSessionPullRequests(
     ? previous
     : { numbers, state: current.state };
 }
-
-export const SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD = "controlUi.sessionPullRequests.subscribe";
 
 const STRUCTURAL_SESSION_REASONS = new Set<unknown>([
   "new",
@@ -59,7 +55,7 @@ export type SessionPullRequestSnapshotStore = {
   watch: (
     owner: object,
     sessionKeys: readonly string[],
-    options?: { foreground?: boolean },
+    options?: { foreground?: boolean; passive?: boolean },
   ) => void;
   unwatch: (owner: object) => void;
   load: (
@@ -83,8 +79,20 @@ function readChangedSessions(
   return asNullableRecord(sessions) as ControlUiSessionPullRequestsChanged["sessions"] | null;
 }
 
-function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotStore {
-  const watchedByOwner = new Map<object, { keys: Set<string>; foreground: boolean }>();
+export function sessionPullRequestsForGateway(
+  gateway: ApplicationGateway,
+): SessionPullRequestSnapshotStore {
+  const existing = stores.get(gateway);
+  if (existing) {
+    return existing;
+  }
+  const watchedByOwner = new Map<
+    object,
+    { keys: Set<string>; foreground: boolean; passive: boolean }
+  >();
+  let orderedWatchedKeys: string[] | undefined;
+  let orderedRequestedKeys: string[] = [];
+  let orderedPassiveKeys: string[] = [];
   const loadTokens = new WeakMap<object, object>();
   const snapshots = new Map<string, ControlUiSessionPullRequestSnapshot>();
   const listeners = new Set<() => void>();
@@ -95,17 +103,16 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
   const pendingRefreshKeys = new Set<string>();
   const automaticRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const connection = createGatewayConnectionLifecycle(gateway.snapshot);
-  let lastHello: object | null = null;
-  let lastSignature: string | null = null;
-  let syncRequestGeneration = 0;
-  let refreshingGeneration: number | null = null;
-  let refreshingKeys: readonly string[] = [];
+  let subscriptionMayExist = false;
+  let refreshing: readonly string[] | null = null;
 
-  const notify = () => {
-    for (const listener of Array.from(listeners)) {
-      listener();
-    }
-  };
+  const canReadPullRequests = () =>
+    canCallGatewayMethod(gateway.snapshot, SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, "operator.read");
+  const canReadAllPullRequests = () =>
+    operatorScopeSatisfied("operator.read", gateway.snapshot.hello?.auth?.scopes ?? []);
+  let broadRead = canReadAllPullRequests();
+
+  const notify = () => Array.from(listeners).forEach((listener) => listener());
 
   const settle = (sessionKey: string, snapshot?: ControlUiSessionPullRequestSnapshot) => {
     const pending = waiters.get(sessionKey);
@@ -118,64 +125,7 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
     }
   };
 
-  const watchedKeys = (): string[] => {
-    const keys = new Map<string, boolean>();
-    for (const watched of watchedByOwner.values()) {
-      for (const key of watched.keys) {
-        keys.set(key, (keys.get(key) ?? false) || watched.foreground);
-      }
-    }
-    return [...keys]
-      .toSorted(
-        ([leftKey, leftForeground], [rightKey, rightForeground]) =>
-          Number(rightForeground) - Number(leftForeground) || leftKey.localeCompare(rightKey),
-      )
-      .slice(0, CONTROL_UI_SESSION_PULL_REQUESTS_MAX_KEYS)
-      .map(([key]) => key);
-  };
-
-  const pruneUnwatched = () => {
-    const watched = new Set(watchedKeys());
-    for (const [key, timer] of automaticRefreshTimers) {
-      if (!watched.has(key)) {
-        clearTimeout(timer);
-        automaticRefreshTimers.delete(key);
-      }
-    }
-    for (const key of pendingRefreshKeys) {
-      if (!watched.has(key)) {
-        pendingRefreshKeys.delete(key);
-      }
-    }
-    for (const key of waiters.keys()) {
-      if (!watched.has(key)) {
-        settle(key);
-      }
-    }
-    for (const key of snapshots.keys()) {
-      if (!watched.has(key)) {
-        snapshots.delete(key);
-      }
-    }
-  };
-
-  const isActive = () => watchedByOwner.size > 0 || listeners.size > 0 || waiters.size > 0;
-
-  const retainRefreshIntent = (keys: readonly string[]) => {
-    for (const key of refreshingKeys) {
-      if (keys.includes(key)) {
-        pendingRefreshKeys.add(key);
-      }
-    }
-  };
-
-  const retireConnection = () => {
-    retainRefreshIntent(watchedKeys());
-    syncRequestGeneration += 1;
-    refreshingGeneration = null;
-    refreshingKeys = [];
-    lastHello = null;
-    lastSignature = null;
+  const clearSnapshotsAndWaiters = () => {
     const hadSnapshots = snapshots.size > 0;
     snapshots.clear();
     for (const key of waiters.keys()) {
@@ -186,34 +136,158 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
     }
   };
 
+  const matchesSession = (sessionKey: string, eventKey: string, agentId?: string | null) =>
+    uiSessionEventMatches(
+      {
+        assistantAgentId: gateway.snapshot.assistantAgentId,
+        hello: gateway.snapshot.hello,
+        sessionKey,
+      },
+      eventKey,
+      agentId,
+    );
+
+  const watchedKeys = (): string[] => {
+    if (orderedWatchedKeys) {
+      return orderedWatchedKeys;
+    }
+    const keys = new Map<string, number>();
+    for (const watched of watchedByOwner.values()) {
+      if (watched.passive && !canReadAllPullRequests()) {
+        continue;
+      }
+      for (const key of watched.keys) {
+        const priority = watched.passive ? 0 : watched.foreground ? 2 : 1;
+        keys.set(key, Math.max(keys.get(key) ?? 0, priority));
+      }
+    }
+    const ordered = [...keys]
+      .toSorted(
+        ([leftKey, leftPriority], [rightKey, rightPriority]) =>
+          rightPriority - leftPriority || leftKey.localeCompare(rightKey),
+      )
+      .slice(0, CONTROL_UI_SESSION_PULL_REQUESTS_MAX_KEYS);
+    orderedWatchedKeys = ordered.map(([key]) => key);
+    orderedRequestedKeys = ordered.filter(([, priority]) => priority > 0).map(([key]) => key);
+    orderedPassiveKeys = ordered.filter(([, priority]) => priority === 0).map(([key]) => key);
+    return orderedWatchedKeys;
+  };
+
+  // Passive rows request only durable receipts; active viewers also poll Git/GitHub.
+  const requestedKeys = () => {
+    watchedKeys();
+    return orderedRequestedKeys;
+  };
+
+  const pruneUnwatched = () => {
+    const watched = new Set(watchedKeys());
+    const requested = new Set(requestedKeys());
+    let removed = false;
+    for (const [key, timer] of automaticRefreshTimers) {
+      if (!requested.has(key)) {
+        clearTimeout(timer);
+        automaticRefreshTimers.delete(key);
+      }
+    }
+    for (const key of pendingRefreshKeys) {
+      if (!requested.has(key)) {
+        pendingRefreshKeys.delete(key);
+      }
+    }
+    for (const key of waiters.keys()) {
+      if (!requested.has(key)) {
+        settle(key);
+      }
+    }
+    for (const key of snapshots.keys()) {
+      if (!watched.has(key)) {
+        snapshots.delete(key);
+        removed = true;
+      }
+    }
+    if (removed) {
+      notify();
+    }
+  };
+
+  const isActive = () => watchedByOwner.size > 0 || listeners.size > 0 || waiters.size > 0;
+
+  const retainRefreshIntent = (keys: readonly string[]) => {
+    for (const key of refreshing ?? []) {
+      if (keys.includes(key)) {
+        pendingRefreshKeys.add(key);
+      }
+    }
+  };
+
+  const retireConnection = () => {
+    subscriptionMayExist = false;
+    retainRefreshIntent(watchedKeys());
+    lifecycle.clearRequest();
+    refreshing = null;
+    clearSnapshotsAndWaiters();
+  };
+
   const handleGatewaySnapshot = (snapshot: ApplicationGateway["snapshot"]) => {
     const changed = connection.transition(snapshot);
-    if (changed) {
+    const nextBroadRead = canReadAllPullRequests();
+    const readScopeChanged = broadRead !== nextBroadRead;
+    broadRead = nextBroadRead;
+    if (changed || readScopeChanged) {
+      orderedWatchedKeys = undefined;
       retireConnection();
     }
-    if (changed || snapshot.hello !== lastHello) {
-      retry.reset();
+    if (changed || readScopeChanged || snapshot.hello !== lifecycle.requestHello) {
+      lifecycle.resetRetry();
       lifecycle.schedule();
     }
   };
 
   const handleGatewayEvent: Parameters<ApplicationGateway["subscribeEvents"]>[0] = (event) => {
+    if (event.event === "agent" || event.event === "session.tool") {
+      const payload = asNullableRecord(event.payload);
+      const data = asNullableRecord(payload?.data);
+      if (
+        typeof payload?.sessionKey !== "string" ||
+        !(
+          (payload.stream === "tool" && data?.phase === "result") ||
+          (payload.stream === "lifecycle" && (data?.phase === "end" || data?.phase === "error"))
+        )
+      ) {
+        return;
+      }
+      for (const sessionKey of requestedKeys()) {
+        if (
+          matchesSession(
+            sessionKey,
+            payload.sessionKey,
+            typeof payload.agentId === "string" ? payload.agentId : undefined,
+          )
+        ) {
+          refresh(sessionKey, { automatic: true });
+        }
+      }
+      return;
+    }
     if (event.event === "sessions.changed") {
       const changed = readSessionChangedEvent(event.payload);
       const reason = asNullableRecord(event.payload)?.reason;
+      if (
+        !changed &&
+        ["delete", "sharing", "profile-identity"].includes(String(reason)) &&
+        !operatorScopeSatisfied("operator.read", gateway.snapshot.hello?.auth?.scopes ?? [])
+      ) {
+        clearSnapshotsAndWaiters();
+        for (const key of watchedKeys()) {
+          refresh(key);
+        }
+        return;
+      }
       if (!changed || !STRUCTURAL_SESSION_REASONS.has(reason)) {
         return;
       }
       const matchingKeys = watchedKeys().filter((sessionKey) =>
-        uiSessionEventMatches(
-          {
-            assistantAgentId: gateway.snapshot.assistantAgentId,
-            hello: gateway.snapshot.hello,
-            sessionKey,
-          },
-          changed.key,
-          changed.agentId,
-        ),
+        matchesSession(sessionKey, changed.key, changed.agentId),
       );
       if (matchingKeys.length === 0) {
         return;
@@ -253,8 +327,11 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
       let next = snapshot;
       if (
         current &&
+        !snapshot.discardPrevious &&
         canRetainCurrent &&
-        (snapshot.status === "rate-limited" || snapshot.status === "unavailable") &&
+        (snapshot.branchRead === false ||
+          snapshot.status === "rate-limited" ||
+          snapshot.status === "unavailable") &&
         snapshot.pullRequests.length === 0
       ) {
         next = {
@@ -262,6 +339,18 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
           pullRequests: current.pullRequests,
           branch: snapshot.branch ?? current.branch,
           repository: snapshot.repository ?? current.repository,
+        };
+      }
+      if (snapshot.branchRead === false && current?.taskPullRequests) {
+        const retained = new Map(
+          current.taskPullRequests.map((task) => [task.url, task.pullRequest]),
+        );
+        next = {
+          ...next,
+          // Membership is authoritative even when passive reads omit GitHub metadata.
+          taskPullRequests: snapshot.taskPullRequests?.map((task) =>
+            Object.assign({}, task, { pullRequest: task.pullRequest ?? retained.get(task.url) }),
+          ),
         };
       }
       snapshots.set(sessionKey, next);
@@ -278,18 +367,11 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
     onSnapshot: handleGatewaySnapshot,
     onEvent: handleGatewayEvent,
     onAttach: () => {
-      if (connection.transition(gateway.snapshot)) {
-        retireConnection();
-      }
-      lastHello = null;
-      lastSignature = null;
+      handleGatewaySnapshot(gateway.snapshot);
+      lifecycle.clearRequest();
     },
     onDetach: () => {
-      syncRequestGeneration += 1;
-      refreshingGeneration = null;
-      refreshingKeys = [];
-      lastHello = null;
-      lastSignature = null;
+      refreshing = null;
       snapshots.clear();
       for (const timer of automaticRefreshTimers.values()) {
         clearTimeout(timer);
@@ -297,46 +379,40 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
       automaticRefreshTimers.clear();
     },
   });
-  const { retry } = lifecycle;
 
   function sync() {
     const snapshot = gateway.snapshot;
     const client = snapshot.client;
-    const available =
-      snapshot.phase === "connected" &&
-      client !== null &&
-      snapshot.hello !== null &&
-      isGatewayMethodAdvertised(snapshot, SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD) === true;
-    if (!available) {
-      lastHello = null;
-      lastSignature = null;
-      for (const key of waiters.keys()) {
-        settle(key);
-      }
+    if (!canReadPullRequests() || !client) {
+      retainRefreshIntent(watchedKeys());
+      lifecycle.clearRequest();
+      clearSnapshotsAndWaiters();
       if (!isActive()) {
         lifecycle.detach();
       }
       return;
     }
-    const desiredKeys = watchedKeys();
-    const sessionKeys =
-      typeof document !== "undefined" && document.visibilityState === "hidden" ? [] : desiredKeys;
-    const signature = JSON.stringify(sessionKeys.toSorted());
-    if (
-      refreshingGeneration !== null &&
-      (signature !== lastSignature || snapshot.hello !== lastHello)
-    ) {
+    const desiredKeys = requestedKeys();
+    const hidden = typeof document !== "undefined" && document.visibilityState === "hidden";
+    const sessionKeys = hidden ? [] : desiredKeys;
+    const passiveSessionKeys = hidden ? [] : orderedPassiveKeys;
+    const signature = JSON.stringify([sessionKeys.toSorted(), passiveSessionKeys.toSorted()]);
+    // Capability changes do not clear a subscription already sent on this connection.
+    if (sessionKeys.length === 0 && passiveSessionKeys.length === 0 && !subscriptionMayExist) {
+      if (!isActive()) {
+        lifecycle.detach();
+      }
+      return;
+    }
+    const sameRequest = lifecycle.matchesRequest(signature);
+    if (refreshing !== null && !sameRequest) {
       // A replacement retires the old acknowledgement, not its retained intent.
       // Hidden tabs keep desired keys so their refresh resumes when shown again.
       retainRefreshIntent(desiredKeys);
     }
     const sessionKeySet = new Set(sessionKeys);
     const refreshSessionKeys = [...pendingRefreshKeys].filter((key) => sessionKeySet.has(key));
-    if (
-      snapshot.hello === lastHello &&
-      signature === lastSignature &&
-      refreshSessionKeys.length === 0
-    ) {
+    if (sameRequest && refreshSessionKeys.length === 0) {
       if (!isActive()) {
         lifecycle.detach();
       }
@@ -344,48 +420,32 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
     }
     // Repeated hints for the same watched union coalesce behind its current
     // request. Membership changes still supersede immediately (notably hide).
-    if (
-      refreshingGeneration !== null &&
-      snapshot.hello === lastHello &&
-      signature === lastSignature
-    ) {
+    if (refreshing !== null && sameRequest) {
       return;
     }
-    lastHello = snapshot.hello;
-    lastSignature = signature;
-    const requestGeneration = ++syncRequestGeneration;
-    const isCurrentRequest = () =>
-      lifecycle.attached &&
-      isActive() &&
-      requestGeneration === syncRequestGeneration &&
-      snapshot.hello === lastHello &&
-      signature === lastSignature;
-    retry.cancel();
-    refreshingGeneration = requestGeneration;
-    refreshingKeys = refreshSessionKeys;
+    refreshing = refreshSessionKeys;
     for (const key of refreshSessionKeys) {
       pendingRefreshKeys.delete(key);
     }
-    const request = client.request(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, {
-      sessionKeys,
-      ...(refreshSessionKeys.length > 0 ? { refreshSessionKeys } : {}),
-    });
-    if (!isActive()) {
-      lifecycle.detach();
-    }
-    void request
-      .then(() => {
-        if (isCurrentRequest()) {
-          retry.reset();
-        }
-      })
-      .catch(() => {
-        if (isCurrentRequest()) {
+    subscriptionMayExist ||= sessionKeys.length > 0 || passiveSessionKeys.length > 0;
+    lifecycle.send(
+      client,
+      SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+      {
+        sessionKeys,
+        ...(passiveSessionKeys.length > 0 ? { passiveSessionKeys } : {}),
+        ...(refreshSessionKeys.length > 0 ? { refreshSessionKeys } : {}),
+      },
+      signature,
+      {
+        onSuccess: () => {
+          subscriptionMayExist = sessionKeys.length > 0 || passiveSessionKeys.length > 0;
+        },
+        onError: () => {
           for (const key of refreshSessionKeys) {
             pendingRefreshKeys.add(key);
           }
-          lastSignature = null;
-          retry.schedule(() => {
+          lifecycle.scheduleRetry(() => {
             if (lifecycle.attached && isActive()) {
               lifecycle.schedule();
             }
@@ -393,23 +453,24 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
           for (const key of sessionKeys) {
             settle(key);
           }
-        }
-      })
-      .finally(() => {
-        if (refreshingGeneration === requestGeneration) {
-          refreshingGeneration = null;
-          refreshingKeys = [];
-          if (isCurrentRequest() && pendingRefreshKeys.size > 0) {
+        },
+        onSettled: (acknowledged) => {
+          refreshing = null;
+          if (acknowledged && pendingRefreshKeys.size > 0) {
             lifecycle.schedule();
           }
-        }
-      });
+        },
+      },
+    );
+    if (!isActive()) {
+      lifecycle.detach();
+    }
   }
 
   const watch = (
     owner: object,
     sessionKeys: readonly string[],
-    options: { foreground?: boolean } = {},
+    options: { foreground?: boolean; passive?: boolean } = {},
   ) => {
     const wasActive = isActive();
     const next = new Set(sessionKeys.map((key) => key.trim()).filter(Boolean));
@@ -419,6 +480,7 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
         ? next.size === 0
         : current.keys.size === next.size &&
           current.foreground === (options.foreground === true) &&
+          current.passive === (options.passive === true) &&
           [...next].every((sessionKey) => current.keys.has(sessionKey));
     if (unchanged) {
       return;
@@ -426,14 +488,18 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
     if (next.size === 0) {
       watchedByOwner.delete(owner);
     } else {
-      watchedByOwner.set(owner, { keys: next, foreground: options.foreground === true });
+      watchedByOwner.set(owner, {
+        keys: next,
+        foreground: options.foreground === true,
+        passive: options.passive === true,
+      });
     }
-    retry.reset();
+    orderedWatchedKeys = undefined;
+    lifecycle.resetRetry();
     pruneUnwatched();
     if (isActive()) {
       if (!wasActive) {
-        lastHello = null;
-        lastSignature = null;
+        lifecycle.clearRequest();
       }
       lifecycle.attach();
       lifecycle.schedule();
@@ -444,7 +510,7 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
 
   function refresh(sessionKey: string, options: { automatic?: boolean } = {}): boolean {
     const key = sessionKey.trim();
-    if (!key || !watchedKeys().includes(key)) {
+    if (!key || !requestedKeys().includes(key)) {
       return false;
     }
     clearTimeout(automaticRefreshTimers.get(key));
@@ -456,13 +522,13 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
       );
     } else {
       pendingRefreshKeys.add(key);
-      retry.reset();
+      lifecycle.resetRetry();
       lifecycle.schedule();
     }
     return true;
   }
 
-  return {
+  const store: SessionPullRequestSnapshotStore = {
     watch,
     unwatch: (owner) => {
       loadTokens.delete(owner);
@@ -475,20 +541,20 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
       }
       const loadToken = {};
       loadTokens.set(owner, loadToken);
+      const alreadyRequested = requestedKeys().includes(key);
       // A one-shot load owns a foreground watch until it settles, which attaches the store
       // before the waiter is registered and keeps gateway events available for resolution.
       watch(owner, [key], { foreground: true });
       try {
+        if (!canReadPullRequests()) {
+          return undefined;
+        }
         const current = snapshots.get(key);
-        if (current) {
+        if (current && alreadyRequested) {
           return current;
         }
-        if (
-          gateway.snapshot.phase !== "connected" ||
-          isGatewayMethodAdvertised(gateway.snapshot, SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD) !==
-            true
-        ) {
-          return undefined;
+        if (current) {
+          refresh(key);
         }
         return await new Promise((resolve) => {
           const pending = waiters.get(key) ?? new Set();
@@ -509,13 +575,12 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
       }
     },
     refresh,
-    get: (sessionKey) => snapshots.get(sessionKey),
+    get: (sessionKey) => (canReadPullRequests() ? snapshots.get(sessionKey) : undefined),
     subscribe: (listener) => {
       const wasActive = isActive();
       listeners.add(listener);
       if (!wasActive) {
-        lastHello = null;
-        lastSignature = null;
+        lifecycle.clearRequest();
       }
       lifecycle.attach();
       return () => {
@@ -529,16 +594,6 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
       };
     },
   };
-}
-
-export function sessionPullRequestsForGateway(
-  gateway: ApplicationGateway,
-): SessionPullRequestSnapshotStore {
-  const existing = stores.get(gateway);
-  if (existing) {
-    return existing;
-  }
-  const store = createStore(gateway);
   stores.set(gateway, store);
   return store;
 }

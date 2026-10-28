@@ -156,6 +156,7 @@ the separate `tavily_extract` cache.
 
   <Accordion title="Custom base URL">
     Override `plugins.entries.tavily.config.webSearch.baseUrl`, or set `TAVILY_BASE_URL`, if you front Tavily through a proxy. Config takes priority over the env var. The default is `https://api.tavily.com`.
+    An invalid custom URL fails before sending a request; it does not fall back to hosted Tavily.
   </Accordion>
 
   <Accordion title="`chunks_per_source` requires `query`">

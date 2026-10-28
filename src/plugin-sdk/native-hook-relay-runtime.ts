@@ -1,5 +1,5 @@
 // Private retained native-hook relay capability for bundled runtime owners.
-import { registerOwnedNativeHookRelay } from "../agents/harness/native-hook-relay.js";
+import type { registerOwnedNativeHookRelay } from "../agents/harness/native-hook-relay.js";
 
 export {
   buildNativeHookRelayCommandPlan,
@@ -9,6 +9,4 @@ export {
 export type OwnedNativeHookRelayParams = Parameters<typeof registerOwnedNativeHookRelay>[0];
 
 /** Bundled owners retain child policy and record execution custody after host admission. */
-export function registerNativeHookRelayForBundledRuntime(params: OwnedNativeHookRelayParams) {
-  return registerOwnedNativeHookRelay(params);
-}
+export { registerOwnedNativeHookRelay as registerNativeHookRelayForBundledRuntime } from "../agents/harness/native-hook-relay.js";

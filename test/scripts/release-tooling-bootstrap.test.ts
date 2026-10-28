@@ -21,7 +21,8 @@ it("installs with the tooling cwd while retaining the release source root", () =
   writeFileSync(join(bin, "pnpm"), '#!/bin/sh\npwd > "$INSTALL_CWD"\nmkdir -p node_modules\n', {
     mode: 0o755,
   });
-  const result = spawnSync("bash", ["-c", `${install.run}\npwd`], {
+  // Match Actions shell startup: host rc files must not replace fixture commands.
+  const result = spawnSync("bash", ["--noprofile", "--norc", "-c", `${install.run}\npwd`], {
     cwd: source,
     encoding: "utf8",
     env: { PATH: `${bin}:/usr/bin:/bin`, INSTALL_CWD: receipt },

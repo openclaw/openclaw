@@ -1,4 +1,3 @@
-// Deepseek provider module implements model/runtime integration.
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { DEEPSEEK_BASE_URL, DEEPSEEK_MODEL_CATALOG } from "./models.js";
 
@@ -6,6 +5,6 @@ export function buildDeepSeekProvider(): ModelProviderConfig {
   return {
     baseUrl: DEEPSEEK_BASE_URL,
     api: "openai-completions",
-    models: structuredClone(DEEPSEEK_MODEL_CATALOG),
+    models: DEEPSEEK_MODEL_CATALOG,
   };
 }

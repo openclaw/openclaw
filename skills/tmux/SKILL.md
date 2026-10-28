@@ -82,7 +82,19 @@ tmux send-keys -t worker-3 Enter
 ## Helpers
 
 - `scripts/find-sessions.sh`: discover sessions.
-- `scripts/wait-for-text.sh`: wait until pane output contains text.
+- `scripts/wait-for-text.sh`: wait until captured pane contents contain text.
+
+`wait-for-text.sh` searches echoed input and scrollback as well as process output. For command completion, use a unique marker whose full text is split across arguments in the command sent to tmux:
+
+```bash
+nonce="$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
+marker="OPENCLAW_DONE_${nonce}"
+tmux send-keys -t shared:0.0 -l -- "sleep 4; printf '%s%s\n' 'OPENCLAW_DONE_' '$nonce'"
+tmux send-keys -t shared:0.0 Enter
+scripts/wait-for-text.sh -t shared:0.0 -p "$marker" -F -T 30
+```
+
+The echoed command never contains the complete marker, and the nonce prevents an older completion line from matching.
 
 ## Notes
 

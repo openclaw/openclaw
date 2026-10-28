@@ -1,6 +1,3 @@
-/**
- * Public SDK subpath for embedding provider registration and runtime access.
- */
 export {
   getEmbeddingProvider,
   listEmbeddingProviders,
@@ -15,4 +12,5 @@ export type {
   EmbeddingProviderCreateResult,
   EmbeddingProviderIndexIdentity,
   EmbeddingProviderRuntime,
+  EmbeddingUsage,
 } from "../plugins/embedding-providers.js";

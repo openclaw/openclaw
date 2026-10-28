@@ -9,19 +9,33 @@ import type { ConfigSnapshot, ConfigUiHints } from "../../api/types.ts";
 import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
 import { normalizeAgentId } from "../sessions/session-key.ts";
 
-export type ConfigAutoSaveStatus = "idle" | "saving" | "saved" | "error" | "conflict" | "paused";
+export type ConfigAutoSaveStatus =
+  | "idle"
+  | "saving"
+  | "saved"
+  | "rejected"
+  | "error"
+  | "conflict"
+  | "paused";
 
 type RuntimeConfigGatewaySnapshot = {
   client: GatewayBrowserClient | null;
   phase: ApplicationGatewayPhase;
   sessionKey: string;
   hello?: GatewayHelloOk | null;
+  pluginCapabilities?: { generation?: number } | null;
 };
 
 const initialConfigValue = <T>(value: T): T => value;
 
-export function createInitialConfigState(snapshot?: Partial<RuntimeConfigGatewaySnapshot>) {
+export function createInitialConfigState(
+  snapshot?: Partial<RuntimeConfigGatewaySnapshot>,
+  getBootstrapConfig?: () => Record<string, unknown> | null,
+) {
   return {
+    get bootstrapConfig() {
+      return getBootstrapConfig?.() ?? null;
+    },
     client: snapshot?.client ?? null,
     connected: snapshot?.phase === "connected",
     applySessionKey: snapshot?.sessionKey ?? "main",
@@ -47,23 +61,20 @@ export function createInitialConfigState(snapshot?: Partial<RuntimeConfigGateway
     configFormOriginal: initialConfigValue<Record<string, unknown> | null>(null),
     configFormDirty: false,
     configFormMode: initialConfigValue<"form" | "raw">("form"),
-    configSearchQuery: "",
-    configActiveSection: initialConfigValue<string | null>(null),
-    configActiveSubsection: initialConfigValue<string | null>(null),
     lastError: initialConfigValue<string | null>(null),
   };
 }
 
 type ProducedRuntimeConfigState = ReturnType<typeof createInitialConfigState>;
-export type RuntimeConfigState = Omit<ProducedRuntimeConfigState, "configDraftBaseHash"> &
-  Partial<Pick<ProducedRuntimeConfigState, "configDraftBaseHash">> & {
+export type RuntimeConfigState = Omit<
+  ProducedRuntimeConfigState,
+  "configDraftBaseHash" | "bootstrapConfig"
+> &
+  Partial<Pick<ProducedRuntimeConfigState, "configDraftBaseHash" | "bootstrapConfig">> & {
     chatError?: string | null;
   };
 
-const requestVersionsByState = new WeakMap<
-  RuntimeConfigState,
-  { config: number; schema: number }
->();
+const requestVersionsByState = new WeakMap<RuntimeConfigState, number>();
 const connectionEpochsByState = new WeakMap<object, number>();
 const staleConfigSnapshots = new WeakSet<object>();
 export type ConfigRead = {
@@ -72,6 +83,7 @@ export type ConfigRead = {
   connectionEpoch: number;
   completion: Deferred<Result<void, string>>;
   invalidated: Deferred<Result<void, string>>;
+  settled: Promise<Result<void, string>>;
 };
 const configReadsByState = new WeakMap<object, ConfigRead>();
 
@@ -89,12 +101,16 @@ export function beginConfigRead(
   state: RuntimeConfigState,
   client: GatewayBrowserClient,
 ): ConfigRead {
+  const completion = createDeferredCore<Result<void, string>>();
+  const invalidated = createDeferredCore<Result<void, string>>();
   const read: ConfigRead = {
-    version: nextRequestVersion(state, "config"),
+    version: nextRequestVersion(state),
     client,
     connectionEpoch: currentConfigConnectionEpoch(state),
-    completion: createDeferredCore(),
-    invalidated: createDeferredCore(),
+    completion,
+    invalidated,
+    // Share the race: per-view races retain disposed views on the losing promise.
+    settled: Promise.race([completion.promise, invalidated.promise]),
   };
   // Register before request dispatch can synchronously start a successor read.
   configReadsByState.set(state, read);
@@ -107,6 +123,7 @@ export type RuntimeConfigGateway = {
 };
 
 export type LoadConfigOptions = {
+  preservePendingChanges?: boolean;
   discardPendingChanges?: boolean;
 };
 
@@ -114,19 +131,11 @@ export type ConfigGatewayClient = {
   request<T = unknown>(method: string, params?: unknown): Promise<T>;
 };
 
-type ConfigConnectionState = {
-  client: ConfigGatewayClient | null;
-  connected: boolean;
-};
-
-export function nextRequestVersion(state: RuntimeConfigState, key: "config" | "schema"): number {
-  if (key === "config") {
-    invalidateConfigRead(state);
-  }
-  const current = requestVersionsByState.get(state) ?? { config: 0, schema: 0 };
-  const next = { ...current, [key]: current[key] + 1 };
+export function nextRequestVersion(state: RuntimeConfigState): number {
+  invalidateConfigRead(state);
+  const next = (requestVersionsByState.get(state) ?? 0) + 1;
   requestVersionsByState.set(state, next);
-  return next[key];
+  return next;
 }
 
 export function clearConfigRequestVersions(state: RuntimeConfigState): void {
@@ -150,7 +159,7 @@ export function invalidateConfigConnection(state: object): void {
 }
 
 export function isCurrentConfigConnection(
-  state: ConfigConnectionState,
+  state: { client: ConfigGatewayClient | null; connected: boolean },
   client: ConfigGatewayClient,
   connectionEpoch: number,
 ): boolean {
@@ -163,14 +172,13 @@ export function isCurrentConfigConnection(
 
 export function isCurrentRequest(
   state: RuntimeConfigState,
-  key: "config" | "schema",
   version: number,
   client: GatewayBrowserClient,
   connectionEpoch: number,
 ): boolean {
   return (
     isCurrentConfigConnection(state, client, connectionEpoch) &&
-    requestVersionsByState.get(state)?.[key] === version
+    requestVersionsByState.get(state) === version
   );
 }
 
@@ -190,6 +198,33 @@ export function currentConfigObject(
   return !staleConfigSnapshots.has(state)
     ? (state.configForm ?? resolveEditableSnapshotConfig(state.configSnapshot))
     : null;
+}
+
+/** Read-only display facts cannot become an editor's base or write revision. */
+export function currentDisplayConfig(state: RuntimeConfigState): Record<string, unknown> | null {
+  return (
+    (!staleConfigSnapshots.has(state) ? asConfigRecord(state.configSnapshot?.config) : null) ??
+    state.bootstrapConfig ??
+    null
+  );
+}
+
+export function currentDisplayRuntimeConfig(
+  state: RuntimeConfigState,
+): Record<string, unknown> | null {
+  return (
+    (!staleConfigSnapshots.has(state) ? state.configSnapshot?.runtimeConfig : null) ??
+    state.bootstrapConfig ??
+    null
+  );
+}
+
+/** Speech's full-read fallback also accepts config-only snapshots. */
+export function currentDisplaySpeechConfig(
+  state: RuntimeConfigState,
+): Record<string, unknown> | null {
+  const snapshot = !staleConfigSnapshots.has(state) ? state.configSnapshot : null;
+  return snapshot?.runtimeConfig ?? snapshot?.config ?? state.bootstrapConfig ?? null;
 }
 export type AgentConfigEntryTarget = {
   path: ["agents", "entries", string];
@@ -223,11 +258,8 @@ export function resolveAgentConfigEntryTarget(
       AGENT_CONFIG_ENTRY_ID_PATTERN.test(candidate) &&
       normalizeAgentId(candidate) === normalizedAgentId,
   );
-  if (!entries || !authoredAgentId) {
-    return null;
-  }
-  const entry = entries[authoredAgentId];
-  if (!isRecord(entry)) {
+  const entry = authoredAgentId ? entries?.[authoredAgentId] : undefined;
+  if (!authoredAgentId || !isRecord(entry)) {
     return null;
   }
   return {
@@ -253,6 +285,5 @@ export function agentConfigEntry(
   if (!options.ensure) {
     return null;
   }
-  const path = ["agents", "entries", normalizedAgentId] as const;
-  return { path: [...path], entry: {} };
+  return { path: ["agents", "entries", normalizedAgentId], entry: {} };
 }

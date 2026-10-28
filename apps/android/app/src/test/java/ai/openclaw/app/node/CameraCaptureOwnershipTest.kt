@@ -66,7 +66,7 @@ class CameraCaptureOwnershipTest {
         }
       try {
         entered.await()
-        val handler = CameraHandler(app, camera, { true }, ::invokeErrorFromThrowable)
+        val handler = CameraHandler(app, camera, { true })
         assertEquals("CAMERA_BUSY", handler.handleSnap(null).error?.code)
         assertEquals("CAMERA_BUSY", handler.handleClip("""{"includeAudio":false}""").error?.code)
         val replacement = runCatching { otherRuntimeCamera.snap(null) }.exceptionOrNull()
@@ -75,6 +75,22 @@ class CameraCaptureOwnershipTest {
       } finally {
         release.complete(Unit)
         active.await()
+      }
+      val manualCapture = checkNotNull(CameraCaptureManager.tryAcquireCamera())
+      try {
+        val handler = CameraHandler(app, camera, { true })
+        assertEquals("CAMERA_BUSY", handler.handleSnap(null).error?.code)
+        assertEquals("CAMERA_BUSY", handler.handleClip("""{"includeAudio":false}""").error?.code)
+      } finally {
+        manualCapture.close()
+      }
+      val nextCapture = checkNotNull(CameraCaptureManager.tryAcquireCamera())
+      try {
+        // A late close from the old Activity must not release a newer camera owner.
+        manualCapture.close()
+        assertEquals(null, CameraCaptureManager.tryAcquireCamera())
+      } finally {
+        nextCapture.close()
       }
       assertEquals(
         "released",

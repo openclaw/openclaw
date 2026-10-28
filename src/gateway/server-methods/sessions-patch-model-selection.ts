@@ -5,6 +5,11 @@ import {
   type ErrorShape,
   type SessionsPatchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  assertOperatorAccessProgramAllowed,
+  assertOperatorModelAllowed,
+  type AdmittedRunOperatorAuthority,
+} from "../../agents/admitted-run-context.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveAgentHarnessSessionExecutionRestriction } from "../../agents/harness/execution-environment.js";
 import type { AgentHarness } from "../../agents/harness/types.js";
@@ -16,19 +21,46 @@ import {
   resolveDefaultModelForAgent,
   type ModelRef,
 } from "../../agents/model-selection.js";
+import { createModelVisibilityPolicy } from "../../agents/model-visibility-policy.js";
+import { resolveOperatorModelDefault } from "../../agents/operator-model-policy.js";
 import { resolveSessionModelRef } from "../../agents/session-model-ref.js";
 import { persistStickyModelSelectionBestEffort } from "../../agents/sticky-model-selection.js";
+import { prepareSessionCapabilityRead } from "../../agents/subagents/spawn/subagent-session-store.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { applyModelRuntimeDirective } from "../../auto-reply/reply/directive-handling.model-runtime.js";
 import { prepareModelSelectionRuntime } from "../../auto-reply/reply/model-runtime-normalization.js";
 import { refreshQueuedFollowupSession } from "../../auto-reply/reply/queue.js";
+import { hasRememberedNativeRuntimeConsent } from "../../config/native-runtime-consent.js";
+import { assertRequiredWorkerSelection } from "../../config/required-worker-profile.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { isSessionStatusModelPatchOrigin } from "../session-model-patch-origin.js";
+import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
 import type { SessionWorkerPlacementContext } from "../worker-environments/session-placement-lifecycle.js";
 import { resolveGatewayModelSelectionPolicy } from "./session-model-selection-policy.js";
-import { resolveSessionWorkerPlacementPatchError } from "./sessions-shared.js";
+import { prepareSessionWorkerPlacementPatchValidation } from "./sessions-shared.js";
+
+/** Recheck the composed model and Access selection immediately before its effect. */
+export function createSessionAccessProgramValidation(params: {
+  operatorAuthority: AdmittedRunOperatorAuthority | undefined;
+  entry: SessionEntry;
+  validateModelSelection?: () => ErrorShape | undefined;
+}): () => ErrorShape | undefined {
+  return () => {
+    const modelError = params.validateModelSelection?.();
+    if (modelError) {
+      return modelError;
+    }
+    try {
+      assertOperatorAccessProgramAllowed(params.operatorAuthority, params.entry.cyberAccessProgram);
+      return undefined;
+    } catch (error) {
+      return errorShape(ErrorCodes.FORBIDDEN, formatErrorMessage(error));
+    }
+  };
+}
 
 export function persistSessionPatchModelSelection(params: {
   callerScopes: readonly string[];
@@ -78,32 +110,45 @@ export function refreshSessionPatchQueuedSelection(params: {
   agentId: string;
   catalog?: ModelCatalogEntry[];
 }): void {
-  if (!("agentRuntime" in params.patch) && typeof params.patch.model !== "string") {
+  const modelSelectionChanged = "agentRuntime" in params.patch || params.patch.model !== undefined;
+  const thinkingChanged = modelSelectionChanged || params.patch.thinkingLevel !== undefined;
+  if (!thinkingChanged && params.patch.cyberAccessProgram === undefined) {
     return;
   }
   const { cfg, entry, sessionKey, agentId } = params;
   const model = resolveSessionModelRef(cfg, entry, agentId);
   refreshQueuedFollowupSession({
     key: sessionKey,
-    nextProvider: model.provider,
-    nextModel: model.model,
-    nextRouteResolution: entry.modelOverrideRouteResolution,
-    nextModelOverrideSource:
-      entry.modelOverrideSource === "default" ? undefined : entry.modelOverrideSource,
-    nextAuthProfileId: entry.authProfileOverride,
-    nextAuthProfileIdSource: resolveCollapsedSessionAuthPinSource(entry),
-    nextThinking: {
-      level: entry.thinkingLevel,
-      catalog: params.catalog,
-      agentRuntime: resolveEffectiveAgentRuntime({
-        cfg,
-        provider: model.provider,
-        modelId: model.model,
-        agentId,
-        sessionKey,
-        sessionEntry: entry,
-      }),
-    },
+    // A preference-only edit must not replace a queued route/account or clear its
+    // fallback provenance. Model changes still retarget waiting work as before.
+    ...(modelSelectionChanged
+      ? {
+          nextProvider: model.provider,
+          nextModel: model.model,
+          nextRouteResolution: entry.modelOverrideRouteResolution,
+          nextModelOverrideSource:
+            entry.modelOverrideSource === "default" ? undefined : entry.modelOverrideSource,
+          nextAuthProfileId: entry.authProfileOverride,
+          nextAuthProfileIdSource: resolveCollapsedSessionAuthPinSource(entry),
+        }
+      : {}),
+    ...(params.patch.cyberAccessProgram !== undefined
+      ? { nextCyberAccessProgram: entry.cyberAccessProgram ?? null }
+      : {}),
+    nextThinking: thinkingChanged
+      ? {
+          level: entry.thinkingLevel,
+          catalog: params.catalog,
+          agentRuntime: resolveEffectiveAgentRuntime({
+            cfg,
+            provider: model.provider,
+            modelId: model.model,
+            agentId,
+            sessionKey,
+            sessionEntry: entry,
+          }),
+        }
+      : undefined,
   });
 }
 
@@ -119,44 +164,37 @@ export function resolveSessionPatchModelSelection(params: {
 }):
   | { ok: true; provider: string; model: string; profile?: string; isDefault: boolean }
   | { ok: false; error: string } {
+  const { cfg, agentId } = params;
   const { model: modelWithoutProfile, profile } = splitTrailingAuthProfile(params.raw);
-  const statusDefault = isSessionStatusModelPatchOrigin()
-    ? resolveDefaultModelForAgent({ cfg: params.cfg, agentId: params.agentId })
-    : undefined;
+  const configuredDefault = resolveDefaultModelForAgent({ cfg, agentId });
   const isDefault = (ref: ModelRef) =>
-    statusDefault !== undefined &&
-    ref.provider === statusDefault.provider &&
-    ref.model === statusDefault.model;
+    ref.provider === configuredDefault.provider && ref.model === configuredDefault.model;
+  const policy = {
+    cfg,
+    agentId,
+    catalog: params.catalog,
+    defaultProvider: params.defaultProvider,
+    defaultModel: params.subagentModelHint ?? {
+      provider: params.defaultProvider,
+      model: params.defaultModel,
+    },
+  };
   if (params.preparedModelSelection) {
     const ref = params.preparedModelSelection;
     if (modelWithoutProfile !== `${ref.provider}/${ref.model}`) {
       return { ok: false, error: "Resolved spawn model does not match the requested model." };
     }
     const status = getModelRefStatus({
-      cfg: params.cfg,
-      agentId: params.agentId,
-      catalog: params.catalog,
+      ...policy,
       ref,
-      defaultProvider: params.defaultProvider,
-      defaultModel: params.subagentModelHint ?? {
-        provider: params.defaultProvider,
-        model: params.defaultModel,
-      },
     });
     return status.allowed
       ? { ok: true, ...ref, ...(profile ? { profile } : {}), isDefault: isDefault(ref) }
       : { ok: false, error: `model not allowed: ${status.key}` };
   }
   const resolved = resolveAllowedModelRef({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    catalog: params.catalog,
+    ...policy,
     raw: modelWithoutProfile,
-    defaultProvider: params.defaultProvider,
-    defaultModel: params.subagentModelHint ?? {
-      provider: params.defaultProvider,
-      model: params.defaultModel,
-    },
   });
   if ("error" in resolved) {
     return { ok: false, error: resolved.error };
@@ -166,9 +204,56 @@ export function resolveSessionPatchModelSelection(params: {
     provider: resolved.ref.provider,
     model: resolved.ref.model,
     ...(profile ? { profile } : {}),
-    // Direct patches pin concrete models; status retains its configured-default reset contract.
     isDefault: isDefault(resolved.ref),
   };
+}
+
+/** Bind a canonical selection to the original operator through preparation and commit. */
+export function prepareSessionPatchModelSelection(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  selection: ModelRef & { profile?: string; isDefault: boolean };
+  resetToDefault: boolean;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
+}):
+  | { ok: true; selection: typeof params.selection; validate: () => ErrorShape | undefined }
+  | { ok: false; error: ErrorShape } {
+  const selected =
+    params.resetToDefault && params.operatorAuthority?.modelPolicy
+      ? resolveOperatorModelDefault({
+          cfg: params.cfg,
+          agentId: params.agentId,
+          policy: params.operatorAuthority.modelPolicy,
+          model: params.selection,
+          allows: createModelVisibilityPolicy({
+            cfg: params.cfg,
+            agentId: params.agentId,
+            catalog: [],
+            defaultProvider: params.selection.provider,
+            defaultModel: params.selection,
+          }).allows,
+        })
+      : params.selection;
+  const validate = () => {
+    try {
+      assertOperatorModelAllowed(params.operatorAuthority, selected);
+      return undefined;
+    } catch (error) {
+      return error instanceof SessionMutationAuthorizationChangedError
+        ? error.error
+        : errorShape(ErrorCodes.FORBIDDEN, formatErrorMessage(error));
+    }
+  };
+  const error = validate();
+  if (error || !selected) {
+    return {
+      ok: false,
+      error:
+        error ??
+        errorShape(ErrorCodes.FORBIDDEN, "No model is available for this operator role and agent."),
+    };
+  }
+  return { ok: true, selection: { ...params.selection, ...selected }, validate };
 }
 
 /** Native selection and session operations expose the same per-chat recovery contract. */
@@ -178,6 +263,9 @@ export function resolveSessionNativeRuntimeRestriction(params: {
   agentId: string;
   sessionKey: string;
   entry: Parameters<typeof resolveAgentHarnessSessionExecutionRestriction>[0]["entry"];
+  preparedSessionCapabilityEntry?: Parameters<
+    typeof resolveAgentHarnessSessionExecutionRestriction
+  >[0]["preparedSessionCapabilityEntry"];
   persistedEntry: SessionEntry | undefined;
   harness: AgentHarness;
   provider: string;
@@ -230,16 +318,30 @@ export async function prepareSessionPatchRuntimeSelection(params: {
   catalog?: readonly ModelCatalogEntry[];
   callerCanConsent?: boolean;
   expectedEntry?: SessionEntry;
+  hydrateThinkingCatalog?: boolean;
+  prepareNativeCatalog?: <T>(operation: () => Promise<T>) => Promise<T>;
+  validateModelSelection?: () => ErrorShape | undefined;
 }): Promise<
-  { ok: true; validate?: () => ErrorShape | undefined } | { ok: false; error: ErrorShape }
+  | { ok: true; validate?: () => ErrorShape | undefined; release?: () => void }
+  | { ok: false; error: ErrorShape }
 > {
   const invalid = (message: string) => ({
     ok: false as const,
     error: errorShape(ErrorCodes.INVALID_REQUEST, message),
   });
+  try {
+    assertRequiredWorkerSelection(params.cfg, params.patch);
+  } catch (error) {
+    return invalid(formatErrorMessage(error));
+  }
   let validateRuntime: (() => string | undefined) | undefined;
   let validateEnvironment: (() => ErrorShape | undefined) | undefined;
+  let releaseEnvironment: (() => void) | undefined;
   const grantingConsent = typeof params.patch.nativeRuntimeConsent === "string";
+  const modelError = params.validateModelSelection?.();
+  if (modelError) {
+    return { ok: false, error: modelError };
+  }
   if (
     typeof params.patch.agentRuntime === "string" ||
     typeof params.patch.model === "string" ||
@@ -267,6 +369,8 @@ export async function prepareSessionPatchRuntimeSelection(params: {
         workspaceDir: params.entry.spawnedWorkspaceDir,
         ...model,
         catalog: params.catalog ?? [],
+        hydrateThinkingCatalog: params.hydrateThinkingCatalog,
+        prepareNativeCatalog: params.prepareNativeCatalog,
         rawRuntime:
           typeof params.patch.agentRuntime === "string" ? params.patch.agentRuntime : undefined,
         sessionEntry: {
@@ -280,6 +384,15 @@ export async function prepareSessionPatchRuntimeSelection(params: {
       applyModelRuntimeDirective(params.entry, choice.runtime);
       validateRuntime = choice.validateRuntimeSelection;
       const harness = choice.harness;
+      if (
+        choice.runtime.kind === "set" &&
+        choice.runtime.runtime !== "openclaw" &&
+        params.callerCanConsent === true &&
+        hasRememberedNativeRuntimeConsent(params.cfg, params.agentId, choice.runtime.runtime)
+      ) {
+        params.entry.permissionMode = "full";
+        params.entry.sandboxMode = "off";
+      }
       if (grantingConsent) {
         if (
           !harness ||
@@ -291,7 +404,7 @@ export async function prepareSessionPatchRuntimeSelection(params: {
         params.entry.nativeRuntimeConsent = harness.id;
       }
       if (harness) {
-        validateEnvironment = () =>
+        const environment = await prepareSessionCapabilityRead(() =>
           resolveSessionNativeRuntimeRestriction({
             operation: "selection",
             cfg: params.cfg,
@@ -303,40 +416,67 @@ export async function prepareSessionPatchRuntimeSelection(params: {
             provider: model.provider,
             modelId: model.model,
             callerCanConsent: params.callerCanConsent === true,
-          });
+          }),
+        );
+        validateEnvironment = environment.read;
+        releaseEnvironment = environment.release;
       }
     }
   }
+  const placementParams = params.placement && {
+    cfg: params.cfg,
+    agentId: params.agentId,
+    context: params.placement.context,
+    entry: params.entry,
+    key: params.patch.key,
+    sessionKey: params.placement.sessionKey,
+    patch: params.patch,
+    validateModelRuntime: true,
+  };
+  let placementValidation:
+    | Awaited<ReturnType<typeof prepareSessionWorkerPlacementPatchValidation>>
+    | undefined;
+  const release = () => {
+    releaseEnvironment?.();
+    placementValidation?.release();
+  };
   const validate = () => {
-    const environmentError = validateEnvironment?.();
-    if (environmentError) {
-      return environmentError;
+    try {
+      assertRequiredWorkerSelection(params.cfg, {
+        agentRuntime: params.entry.agentRuntimeOverride,
+        execNode: params.entry.execNode,
+      });
+    } catch (error) {
+      return errorShape(ErrorCodes.INVALID_REQUEST, formatErrorMessage(error));
     }
-    const message =
-      validateRuntime?.() ??
-      (params.placement
-        ? resolveSessionWorkerPlacementPatchError({
-            cfg: params.cfg,
-            agentId: params.agentId,
-            context: params.placement.context,
-            entry: params.entry,
-            key: params.patch.key,
-            sessionKey: params.placement.sessionKey,
-            patch: params.patch,
-            validateModelRuntime: true,
-          })
-        : undefined);
+    const policyError = params.validateModelSelection?.() || validateEnvironment?.();
+    if (policyError) {
+      return policyError;
+    }
+    const message = validateRuntime?.() ?? placementValidation?.validate();
     return message ? errorShape(ErrorCodes.INVALID_REQUEST, message) : undefined;
   };
-  const error = validate();
-  return error
-    ? { ok: false, error }
-    : {
-        ok: true,
-        ...(params.patch.agentRuntime !== undefined ||
-        params.patch.model !== undefined ||
-        grantingConsent
-          ? { validate }
-          : {}),
-      };
+  try {
+    placementValidation = placementParams
+      ? await prepareSessionWorkerPlacementPatchValidation(placementParams)
+      : undefined;
+    const error = validate();
+    if (error) {
+      release();
+      return { ok: false, error };
+    }
+    return {
+      ok: true,
+      ...(params.validateModelSelection ||
+      params.patch.agentRuntime !== undefined ||
+      params.patch.model !== undefined ||
+      grantingConsent
+        ? { validate }
+        : {}),
+      ...(releaseEnvironment || placementValidation ? { release } : {}),
+    };
+  } catch (error) {
+    release();
+    throw error;
+  }
 }

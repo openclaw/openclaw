@@ -127,7 +127,7 @@ Primary reference: [Configuration reference - Discord](/gateway/config-channels#
 - media: `mediaMaxMb` (caps outbound Discord uploads, default `100`)
 - actions: `actions.*`
 - presence: `activity`, `status`, `activityType`, `activityUrl`, `autoPresence.*`
-- features: `threadBindings`, top-level `bindings[]` (`type: "acp"`), `pluralkit`, `execApprovals`, `intents`, `agentComponents.enabled`, `agentComponents.ttlMs`, `activities`, `heartbeatVisibility`, `responsePrefix`
+- features: `threadBindings`, top-level `bindings[]` (`type: "acp"`), `pluralkit`, `execApprovals`, `intents`, `agentComponents.enabled`, `agentComponents.ttlMs`, `activities`, `responsePrefix`
 
 </Accordion>
 
@@ -149,6 +149,14 @@ Set `channels.discord.activities` to let the core `show_widget` tool post self-c
   environment or global runtime dotenv, not a workspace `.env`.
 - Grant least-privilege Discord permissions.
 - If command deploy/state is stale, restart the gateway and re-check with `openclaw channels status --probe`.
+
+Discord model-picker preferences and thread bindings use SQLite. Their old
+`discord/model-picker-preferences.json` and `discord/thread-bindings.json` files
+predate the July 2026 upgrade support window. Doctor preserves these files and
+reports recovery guidance instead of importing them. Keep a pre-update backup,
+[upgrade through OpenClaw 2026.9.5](/install/updating#upgrading-very-old-versions),
+and run `openclaw doctor --fix` before installing the latest version.
+July SQLite state and the July command-deployment cache remain supported.
 
 ## Related
 

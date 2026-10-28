@@ -4,20 +4,11 @@ import type { ContextEngineHostSupport } from "./host-compat.js";
 import type {
   ContextEngineRuntimeReasonCode,
   ContextEngineSelectionSource,
-  ContextEngineRuntimeMode,
   ContextEngineRuntimeSettings,
 } from "./types.js";
 
 type OptionalString = string | null | undefined;
 
-const RUNTIME_REASON_CODES = new Set<ContextEngineRuntimeReasonCode>([
-  "provider_timeout",
-  "provider_unavailable",
-  "rate_limited",
-  "context_overflow",
-  "runtime_unavailable",
-  "unknown",
-]);
 const RUNTIME_REASON_PATTERNS: Array<[ContextEngineRuntimeReasonCode, RegExp]> = [
   ["provider_timeout", /timeout/iu],
   ["rate_limited", /rate|limit|429/iu],
@@ -31,15 +22,10 @@ function normalizeReasonCode(value: OptionalString): ContextEngineRuntimeReasonC
   if (!normalized) {
     return null;
   }
-  if (RUNTIME_REASON_CODES.has(normalized as ContextEngineRuntimeReasonCode)) {
-    return normalized as ContextEngineRuntimeReasonCode;
-  }
-
   return RUNTIME_REASON_PATTERNS.find(([, pattern]) => pattern.test(normalized))?.[0] ?? "unknown";
 }
 
 export function buildContextEngineRuntimeSettings(params: {
-  mode?: ContextEngineRuntimeMode;
   harnessId?: OptionalString;
   runtimeId?: OptionalString;
   requestedModel?: OptionalString;
@@ -65,9 +51,11 @@ export function buildContextEngineRuntimeSettings(params: {
   const degradedReason = normalizeReasonCode(params.degradedReason);
   const resolvedViaFallback =
     requestedModel !== null && resolvedModel !== null && requestedModel !== resolvedModel;
-  const mode =
-    params.mode ??
-    (degradedReason ? "degraded" : fallbackReason || resolvedViaFallback ? "fallback" : "normal");
+  const mode = degradedReason
+    ? "degraded"
+    : fallbackReason || resolvedViaFallback
+      ? "fallback"
+      : "normal";
 
   return {
     schemaVersion: 1,

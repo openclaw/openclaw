@@ -5,7 +5,6 @@ export function analyzeArgvCommand(params: {
   argv: string[];
   cwd?: string;
   env?: NodeJS.ProcessEnv;
-  platform?: string | null;
 }): ExecCommandAnalysis {
   const argv = params.argv.filter((entry) => entry.trim().length > 0);
   if (argv.length === 0) {
@@ -18,12 +17,7 @@ export function analyzeArgvCommand(params: {
         raw: argv.join(" "),
         argv,
         sourceArgv: [...params.argv],
-        resolution: resolveCommandResolutionFromArgv(
-          argv,
-          params.cwd,
-          params.env,
-          (params.platform ?? undefined) as NodeJS.Platform | undefined,
-        ),
+        resolution: resolveCommandResolutionFromArgv(argv, params.cwd, params.env),
       },
     ],
   };

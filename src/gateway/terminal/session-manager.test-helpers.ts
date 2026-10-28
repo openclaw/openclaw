@@ -15,20 +15,6 @@ export function agentTerminalOwner(
   return { kind: "agent", agentSessionKey, agentSessionId, agentId };
 }
 
-/** Builds the manager-private task binding while preserving the agent owner identity. */
-export function taskAgentOwner(
-  agentSessionKey: string,
-  taskId: string,
-  agentSessionId = "agent-session-id",
-  agentId = "main",
-): AgentTerminalOwner {
-  const owner = {
-    ...agentTerminalOwner(agentSessionKey, agentSessionId, agentId),
-    taskId,
-  };
-  return owner;
-}
-
 export type FakeTerminalPty = TerminalPtyHandle & {
   writes: string[];
   resizes: Array<[number, number]>;

@@ -12,7 +12,6 @@ type MutableHost = ToolStreamHost & {
   compactionClearTimer?: number | null;
   fallbackStatus?: FallbackStatus | null;
   fallbackClearTimer?: number | null;
-  requestUpdate?: () => void;
 };
 
 export const TOOL_STREAM_TEST_NOW = new Date("2026-05-09T00:00:00.000Z").getTime();

@@ -1,21 +1,11 @@
-/* ======================================}
-
-   CHAT TEXT STYLING
-   ============================================= */
-
 .chat-thinking {
   padding: 10px 12px;
   border-radius: var(--radius-md);
-  border: 1px dashed rgba(255, 255, 255, 0.18);
-  background: rgba(255, 255, 255, 0.04);
+  border: 1px dashed color-mix(in srgb, var(--text) 18%, transparent);
+  background: color-mix(in srgb, var(--text) 4%, transparent);
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
   line-height: 1.4;
-}
-
-:root[data-theme-mode="light"] .chat-thinking {
-  border-color: rgba(16, 24, 40, 0.25);
-  background: rgba(16, 24, 40, 0.04);
 }
 
 .chat-message-disclosure {
@@ -92,7 +82,6 @@
   height: 14px;
 }
 
-/* Exhausted full-message load: quiet inline error + manual retry. */
 .chat-message-load-error {
   display: flex;
   align-items: center;
@@ -123,6 +112,29 @@
 .chat-message-load-error__retry:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
+}
+
+.markdown-hex-color {
+  margin-inline: 0.2em;
+  white-space: nowrap;
+
+  &:not(:is(strong, b) *) {
+    font-weight: 500;
+  }
+}
+
+.markdown-hex-color__swatch {
+  display: inline-block;
+  width: 0.85em;
+  height: 0.85em;
+  margin-inline-end: 0.3em;
+  vertical-align: -0.05em;
+  border: 1px solid var(--muted);
+  border-radius: 3px;
+  background: repeating-conic-gradient(var(--bg-elevated) 0% 25%, var(--border) 0% 50%) 50% / 8px
+    8px;
+  pointer-events: none;
+  user-select: none;
 }
 
 .chat-text :where(p, ul, ol, pre, blockquote, table, details, .markdown-table) {
@@ -164,48 +176,35 @@
   overflow: visible;
 }
 
-.markdown-table :where(th, td) {
-  overflow-wrap: normal;
-  word-break: normal;
-}
-
 .markdown-table__viewport {
   max-width: 100%;
   overflow-x: auto;
 }
 
 .markdown-table--can-scroll-right .markdown-table__viewport {
-  -webkit-mask-image: linear-gradient(to right, black calc(100% - 28px), transparent);
   mask-image: linear-gradient(to right, black calc(100% - 28px), transparent);
 }
 
 .markdown-table--can-scroll-left .markdown-table__viewport {
-  -webkit-mask-image: linear-gradient(to right, transparent, black 28px);
   mask-image: linear-gradient(to right, transparent, black 28px);
 }
 
 .markdown-table--can-scroll-left.markdown-table--can-scroll-right .markdown-table__viewport {
-  -webkit-mask-image: linear-gradient(
+  --markdown-table-scroll-mask: linear-gradient(
     to right,
     transparent,
     black 28px,
     black calc(100% - 28px),
     transparent
   );
-  mask-image: linear-gradient(
-    to right,
-    transparent,
-    black 28px,
-    black calc(100% - 28px),
-    transparent
-  );
+  mask-image: var(--markdown-table-scroll-mask);
 }
 
 .markdown-table__actions {
   display: flex;
   justify-content: flex-end;
   gap: 4px;
-  margin-block: 4px 8px;
+  margin-top: 4px;
 }
 
 .markdown-table__actions button,
@@ -216,9 +215,18 @@
   padding: 10px;
   border: 0;
   background: transparent;
-  color: var(--text);
+  color: color-mix(in srgb, var(--muted) 94%, transparent);
   cursor: var(--cursor-action);
   place-items: center;
+}
+
+.markdown-table__actions .markdown-table__expand {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: auto;
+  font: inherit;
+  font-size: 12px;
 }
 
 .markdown-table__actions button:hover,
@@ -246,13 +254,12 @@
 .markdown-table-modal {
   --openclaw-modal-width: min(1200px, calc(100vw - 64px));
   --openclaw-modal-backdrop-filter: blur(3px);
-  --wa-color-overlay-modal: color-mix(in srgb, var(--bg) 92%, transparent);
 }
 
 .markdown-table-dialog {
   width: 100%;
   max-height: calc(100dvh - 64px);
-  padding: 20px 28px;
+  padding: 0 28px 20px;
   border: 0;
   border-radius: var(--radius-xl);
   background: color-mix(in srgb, var(--bg) 96%, transparent);
@@ -270,6 +277,7 @@
 }
 
 .markdown-table-dialog__close {
+  color: var(--text);
   position: fixed;
   top: 8px;
   right: 8px;
@@ -325,51 +333,160 @@
   font-weight: 500;
 }
 
-:is(.markdown-table, .markdown-table-dialog.chat-text) :where(table) {
-  display: table;
-  margin: 0;
-  border: 0;
-  border-collapse: collapse;
-  background: transparent;
-  box-shadow: none;
-  overflow: visible;
+/* Auto layout gives prose more space than short values, then wraps it. */
+.markdown-table,
+.markdown-table-dialog.chat-text {
+  :where(table) {
+    display: table;
+    width: 100%;
+    table-layout: auto;
+    margin: 0;
+    border: 0;
+    border-collapse: collapse;
+    background: transparent;
+    box-shadow: none;
+    overflow: visible;
+  }
+
+  /* Many-column comparisons keep useful column widths instead of wrapping a
+   notes column into a word per line. Markdown body rows have the header's column
+   count, so inspecting the header avoids searching every row. */
+  table:has(> :where(thead) > tr > :nth-child(5)) {
+    width: max-content;
+    min-width: 100%;
+  }
+
+  :where(table),
+  :where(thead),
+  :where(tbody),
+  :where(tr),
+  :where(th),
+  :where(td) {
+    background: transparent;
+  }
+
+  :where(th),
+  :where(td) {
+    padding-block: 12px;
+    border-right: 0;
+    border-bottom-color: color-mix(in srgb, var(--border) 42%, transparent);
+    min-width: 0;
+    /* Preserve short tokens' intrinsic width; long hashes still wrap at the cap. */
+    max-width: 24rem;
+    overflow-wrap: break-word;
+    white-space: normal;
+    word-break: normal;
+    vertical-align: top;
+  }
+
+  :where(th:first-child),
+  :where(td:first-child) {
+    padding-inline-start: 0;
+  }
+
+  :where(th) {
+    border-bottom-color: var(--border-strong);
+    background: transparent;
+  }
+
+  :where(tbody tr) {
+    transition: none;
+  }
+
+  @media (hover: hover) {
+    :where(tbody tr:nth-child(even)),
+    :where(tbody tr:hover) {
+      background: transparent;
+    }
+  }
 }
 
-.chat-thread .chat-bubble .chat-text :where(table) {
-  width: max-content;
-  min-width: 100%;
+.markdown-table-dialog.chat-text :where(thead) {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg);
+  box-shadow: 0 1px var(--border-strong);
 }
 
-:is(.markdown-table, .markdown-table-dialog.chat-text) :where(table, thead, tbody, tr, th, td) {
-  background: transparent;
-}
+/* The transcript, excluding reserved Details space, owns spare width.
+   Only top-level assistant tables borrow it; prose and nested tables stay put. */
+@container chat-transcript (min-width: 900px) {
+  .chat-virtual-row {
+    --chat-table-outset: max(
+      0px,
+      min(
+        12rem,
+        calc(
+          (
+              100cqw - var(--chat-table-reserved-space, 0px) -
+                var(--chat-transcript-column-width, 100cqw) - 2 * var(--chat-thread-gutter) - 2 *
+                var(--chat-thread-side-inset)
+            ) /
+            2
+        )
+      )
+    );
+  }
 
-:is(.markdown-table, .markdown-table-dialog.chat-text) :where(th, td) {
-  padding-block: 12px;
-  border-right: 0;
-  border-bottom-color: color-mix(in srgb, var(--border) 42%, transparent);
-  overflow-wrap: break-word;
-  white-space: normal;
-  word-break: normal;
-}
+  .chat-virtual-row:has(.chat-group.assistant .chat-bubble > .chat-text > .markdown-table) {
+    /* Match the maximum outset: overflow-clip-margin does not support calc(). */
+    overflow-clip-margin: 12rem;
+  }
 
-:is(.markdown-table, .markdown-table-dialog.chat-text) :where(th:first-child, td:first-child) {
-  padding-inline-start: 0;
-}
+  .chat-group.assistant .chat-bubble > .chat-text > .markdown-table {
+    width: calc(100% + 2 * var(--chat-table-outset, 0px));
+    max-width: none;
+    margin-inline: calc(-1 * var(--chat-table-outset, 0px));
+  }
 
-:is(.markdown-table, .markdown-table-dialog.chat-text) :where(th) {
-  border-bottom-color: var(--border-strong);
-  background: transparent;
-  white-space: nowrap;
-}
+  /* Keep the existing phone-landscape layout, including its touch controls. */
+  @media not all and (max-width: 932px) and (max-height: 500px) {
+    .chat-group.assistant .chat-bubble > .chat-text > .markdown-table {
+      width: max-content;
+      min-width: 100%;
+      max-width: calc(100% + 2 * var(--chat-table-outset, 0px));
+      margin-inline: 0;
+      margin-bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%);
 
-:is(.markdown-table, .markdown-table-dialog.chat-text) :where(tbody tr) {
-  transition: none;
-}
+      &:dir(rtl) {
+        left: auto;
+        right: 50%;
+        transform: translateX(50%);
+      }
 
-:is(.markdown-table, .markdown-table-dialog.chat-text)
-  :where(tbody tr:nth-child(even), tbody tr:hover) {
-  background: transparent;
+      /* Intrinsic content chooses the width; the pane cap then lets cells wrap. */
+      table {
+        width: 100%;
+        min-width: 100%;
+      }
+
+      .markdown-table__actions {
+        margin-top: 0;
+      }
+
+      .markdown-table__actions button {
+        width: 32px;
+        height: 32px;
+        padding: 8px;
+      }
+
+      .markdown-table__expand > span {
+        display: none;
+      }
+    }
+  }
+
+  @supports not (overflow-clip-margin: 12rem) {
+    .chat-virtual-row:has(.chat-group.assistant .chat-bubble > .chat-text > .markdown-table) {
+      /* WebKit lacks an adjustable paint clip. Let wide tables extend beyond
+         the row; transcript virtualization still bounds mounted content. */
+      content-visibility: visible;
+      contain: none;
+    }
+  }
 }
 
 :is(.chat-text, .chat-thinking) {
@@ -456,13 +573,44 @@
   inset-inline-start: 0;
   inline-size: var(--space-4);
   block-size: var(--space-4);
-  background: var(--select-chevron) center / var(--space-4) no-repeat;
+  background-image: var(--select-chevron);
+  background-position:
+    3px center,
+    7px center;
+  background-size: 5px 5px;
+  background-repeat: no-repeat;
   transform: rotate(-90deg);
   transition: transform var(--duration-normal) var(--ease-out);
 }
 
 :is(.chat-text, .chat-thinking) :where(details[open] > summary)::before {
   transform: rotate(0deg);
+}
+
+@media (forced-colors: active) {
+  :is(.chat-text, .chat-thinking) :where(details > summary)::before {
+    background-image: none;
+    background-position: initial;
+    background-size: auto;
+    border-inline-end: 2px solid ButtonText;
+    border-block-end: 2px solid ButtonText;
+    inline-size: 7px;
+    block-size: 7px;
+    inset-inline-start: 3px;
+    transform: rotate(-45deg);
+  }
+
+  :is(.chat-text, .chat-thinking) :where(details[open] > summary)::before {
+    transform: rotate(45deg);
+  }
+
+  :is(.chat-text, .chat-thinking) :where(details > summary):dir(rtl)::before {
+    transform: rotate(45deg);
+  }
+
+  :is(.chat-text, .chat-thinking) :where(details[open] > summary):dir(rtl)::before {
+    transform: rotate(-45deg);
+  }
 }
 
 :is(.chat-text, .chat-thinking) :where(.task-list-item-checkbox) {
@@ -480,10 +628,30 @@
 }
 
 :is(.chat-text, .chat-thinking) :where(.task-list-item-checkbox:checked) {
-  border-color: color-mix(in srgb, var(--accent) 72%, var(--border));
-  background: color-mix(in srgb, var(--accent) 72%, var(--bg))
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='white' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m3 8 3 3 7-7'/%3E%3C/svg%3E")
+  border-color: var(--primary);
+  background: var(--primary);
+  color: var(--primary-foreground);
+}
+
+:is(.chat-text, .chat-thinking) :where(.task-list-item-checkbox:checked)::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: currentColor;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m3 8 3 3 7-7'/%3E%3C/svg%3E")
     center / 13px no-repeat;
+}
+
+@media (forced-colors: active) {
+  :is(.chat-text, .chat-thinking) :where(.task-list-item-checkbox) {
+    appearance: auto;
+    background: none;
+    border: initial;
+  }
+
+  :is(.chat-text, .chat-thinking) :where(.task-list-item-checkbox:checked)::after {
+    content: none;
+  }
 }
 
 :is(.chat-text, .chat-thinking) :where(details[open] > summary) {
@@ -496,23 +664,40 @@
   }
 }
 
-/* --link, not --accent: user bubbles are filled with --accent-subtle (and peer
-   bubbles with the sender tint), so an accent-colored link sits on its own hue
-   and drops to 4.1:1 on the chocolate palette — 3.95:1 at the worst sender hue —
-   while the body text beside it holds 9:1. Hover shifts color instead of fading
-   opacity, which composited the link toward its background and cost another 1.1. */
+:is(.chat-thread, .chat-session-rail__thread) {
+  --chat-text-link: var(--chat-canvas-link, var(--link));
+  --chat-text-link-hover: var(--chat-canvas-link-hover, var(--link-hover));
+}
+
+/* Paired surfaces keep their own link contract. */
+.chat-bubble--tool-shell,
+.chat-text :is(table, pre) {
+  --chat-text-link: var(--link);
+  --chat-text-link-hover: var(--link-hover);
+}
+
 .chat-text :where(a) {
-  color: var(--link);
+  color: var(--chat-text-link, var(--link));
   text-decoration-color: color-mix(in srgb, currentColor 45%, transparent);
   text-underline-offset: 2px;
 }
 
 .chat-text :where(a:hover) {
+  color: var(--chat-text-link-hover, var(--link-hover));
+}
+
+/* Inline code has its own fill; file links explicitly remove that chip surface. */
+.chat-text a:not(.markdown-file-link, .markdown-github-item, .markdown-session-link) > code {
+  color: var(--link);
+}
+
+.chat-text a:not(.markdown-file-link, .markdown-github-item, .markdown-session-link):hover > code {
   color: var(--link-hover);
 }
 
 .chat-text :where(.markdown-link-favicon) {
-  display: none;
+  display: inline-block;
+  visibility: hidden;
   width: 1em;
   height: 1em;
   margin-inline-end: 0.3em;
@@ -520,7 +705,7 @@
 }
 
 .chat-text :where(.markdown-link-favicon.is-loaded) {
-  display: inline-block;
+  visibility: visible;
 }
 
 .chat-text :where(a:has(> .markdown-link-favicon.is-loaded)) {
@@ -545,7 +730,6 @@
   height: 1em;
   background: currentColor;
   mask: var(--github-mark) center / contain no-repeat;
-  -webkit-mask: var(--github-mark) center / contain no-repeat;
 }
 
 .chat-text :where(a.markdown-github-link) {
@@ -568,49 +752,61 @@
   line-break: anywhere;
 }
 
-/* Item references share the titled session chip's surface. The whole chip is
-   atomic so its in-flow icon cannot wrap away from the number. */
+/* Keep status in the ink, not competing fills inside tinted user/sender bubbles.
+   The opaque neutral surface stays independent of its host, while mixing the
+   ink toward strong text protects light and dark palettes. Chips stay atomic. */
 .chat-text a.markdown-github-item {
+  --github-item-tone: var(--muted);
+
   display: inline-block;
-  position: static;
-  padding: 0.08em 0.45em 0.08em 0.4em;
+  max-inline-size: 100%;
+  padding: 0.08em 0.45em;
+  padding-inline-start: 1.7em;
   border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--accent-subtle) 72%, var(--bg-muted));
-  /* Unknown state must not imply an open pull request. */
-  color: var(--muted);
+  background: var(--github-item-bg);
+  /* Unknown, unavailable and draft states remain neutral, not disabled. */
+  color: color-mix(in srgb, var(--github-item-tone) 65%, var(--text-strong));
   font-weight: 600;
   line-height: 1.25;
   text-decoration: none;
   vertical-align: baseline;
-  white-space: nowrap;
+  /* Short references remain atomic; qualified repository names can wrap when
+     the chip itself is wider than its mobile or enlarged-text container. */
+  white-space: normal;
+  overflow-wrap: anywhere;
   line-break: auto;
 }
 
 .chat-text a.markdown-github-item[data-link-reader-tone="positive"] {
-  color: var(--ok);
+  --github-item-tone: var(--ok);
 }
 
 .chat-text a.markdown-github-item[data-link-reader-tone="accent"] {
-  color: var(--pr-merged);
+  --github-item-tone: var(--pr-merged);
 }
 
 .chat-text a.markdown-github-item[data-link-reader-tone="negative"] {
-  color: var(--danger);
+  --github-item-tone: var(--danger);
+}
+
+.chat-text a.markdown-github-item[data-link-reader-tone="attention"] {
+  --github-item-tone: var(--warn);
 }
 
 .chat-text a.markdown-github-item:hover,
 .chat-text a.markdown-github-item:focus-visible {
-  background: color-mix(in srgb, var(--accent-subtle) 92%, var(--bg-muted));
+  background: var(--github-item-hover-bg);
   text-decoration: underline;
 }
 
+.chat-text a.markdown-github-item:focus-visible {
+  outline-color: var(--text-strong);
+}
+
 .chat-text a.markdown-github-item::before {
-  position: static;
-  display: inline-block;
-  margin-inline-end: 0.3em;
-  vertical-align: -0.12em;
-  mask: var(--github-item-icon) center / contain no-repeat;
-  -webkit-mask: var(--github-item-icon) center / contain no-repeat;
+  --github-mark: var(--github-item-icon);
+
+  inset-inline-start: 0.4em;
 }
 
 /* GitHub Octicons issue-opened-16 and git-pull-request-16 (MIT). */
@@ -648,7 +844,6 @@
   content: "";
   background: currentColor;
   mask: var(--session-link-mark) center / contain no-repeat;
-  -webkit-mask: var(--session-link-mark) center / contain no-repeat;
 }
 
 :is(.chat-text, .sidebar-markdown, .chat-reply-attribution) a.markdown-session-link::before,
@@ -752,6 +947,7 @@
   margin: 0;
   border: 0;
   border-radius: 50%;
+  outline: 0;
   box-shadow: none;
 }
 
@@ -778,7 +974,7 @@
    source order, and sidebar-markdown.css is imported after this file. */
 :is(.chat-text, .sidebar-markdown) a.markdown-file-link {
   position: relative;
-  color: var(--link);
+  color: var(--chat-text-link, var(--link));
   /* File links are href-less anchors (driven by data-file-path), so the UA
      link pointer does not apply; they are content links and keep the hand. */
   cursor: pointer;
@@ -814,7 +1010,6 @@
   height: 1em;
   background: currentColor;
   mask: var(--file-glyph) center / contain no-repeat;
-  -webkit-mask: var(--file-glyph) center / contain no-repeat;
 }
 
 :is(.chat-text, .sidebar-markdown) a.markdown-file-link[data-file-kind="code"]::before {
@@ -922,14 +1117,13 @@
   color: var(--link-hover);
 }
 
-/* Code surfaces must lift off the host bubble in every theme. --secondary equals
-   --card on every dark palette, so chips painted with it vanished inside user
-   bubbles; --bg-muted/--border-strong separate in both modes without an override. */
+/* Inline-code overrides let palettes separate chips from their host without
+   changing the muted surfaces and strong borders of other components. */
 .chat-text :where(:not(pre, a.markdown-file-link) > code) {
-  background: var(--bg-muted);
+  background: var(--inline-code-bg, var(--bg-muted));
   padding: 0.1em 0.2em;
   border-radius: var(--radius-sm);
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--inline-code-border, var(--border-strong));
   overflow-wrap: anywhere;
   word-break: break-word;
 }
@@ -942,7 +1136,7 @@
    rather than resetting them here, so no theme override has to be out-specified;
    this rule only has to undo the separate mono-font declarations. */
 :is(.chat-text, .sidebar-markdown) a.markdown-file-link > code {
-  color: var(--link);
+  color: var(--chat-text-link, var(--link));
   font-family: inherit;
   font-size: inherit;
 }
@@ -980,7 +1174,9 @@
   overscroll-behavior-inline: contain;
 }
 
-.code-block-viewport :where(pre) {
+/* Outrank passive code and sidebar pre rules: the focused viewport must own
+   horizontal scrolling, not a nested pre that keyboard input cannot reach. */
+.code-block-wrapper .code-block-viewport pre {
   overflow: visible;
 }
 
@@ -1024,14 +1220,12 @@
 }
 
 .code-block-chevron,
-.code-block-wrap__enable,
-.code-block-wrap__disable {
+.code-block-wrap__icon {
   display: block;
   width: 16px;
   height: 16px;
   background: currentColor;
   mask: var(--code-block-icon) center / contain no-repeat;
-  -webkit-mask: var(--code-block-icon) center / contain no-repeat;
 }
 
 .code-block-chevron {
@@ -1059,24 +1253,12 @@
   display: inline-flex;
 }
 
-.code-block-wrap__enable {
+.code-block-wrap__icon {
   --code-block-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 6h18M3 12h15a3 3 0 1 1 0 6h-4m2-2-2 2 2 2M3 18h7'/%3E%3C/svg%3E");
 }
 
-.code-block-wrap__disable {
-  --code-block-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 12h14m-4-4 4 4-4 4'/%3E%3C/svg%3E");
-  display: none;
-}
-
-.code-block-wrapper.is-wrapped .code-block-wrap__enable {
-  display: none;
-}
-
-.code-block-wrapper.is-wrapped .code-block-wrap__disable {
-  display: block;
-}
-
-.code-block-wrapper.is-wrapped .code-block-viewport :where(pre code) {
+.code-block-wrapper.is-wrapped .code-block-viewport :where(pre code),
+.chat-group.user .chat-text :where(pre code, pre code *) {
   width: auto;
   min-width: 0;
   overflow-wrap: anywhere;
@@ -1093,12 +1275,14 @@
 }
 
 .code-block-expand:focus-visible,
+.code-block-viewport:focus-visible,
 .code-block-wrap:focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: 2px;
 }
 
-.code-block-expand:focus-visible {
+.code-block-expand:focus-visible,
+.code-block-viewport:focus-visible {
   /* Keep the bottom edge inside the clipped code wrapper. */
   outline-offset: -2px;
 }
@@ -1121,12 +1305,8 @@
 /* A user fence carries no code chrome, so it reads as the message it was typed
    into rather than as a rendered code surface. */
 .chat-group.user .chat-text :where(pre code, pre code *) {
-  width: auto;
-  min-width: 0;
   color: inherit;
   font: inherit;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
   word-break: break-word;
 }
 
@@ -1138,7 +1318,8 @@
 }
 
 .chat-text :where(pre code.markdown-block-art),
-.chat-group.user .chat-text :where(pre code.markdown-block-art) {
+.chat-group.user .chat-text :where(pre code.markdown-block-art),
+.chat-tool-card__block-content code.markdown-block-art {
   display: block;
   min-width: 100%;
   width: max-content;
@@ -1181,11 +1362,6 @@
   border-top: 1px solid var(--border);
   margin: 1em 0;
 }
-
-/* ======================================}
-
-   RTL (Right-to-Left) SUPPORT
-   ============================================= */
 
 .chat-text[dir="rtl"] {
   text-align: right;
@@ -1265,16 +1441,21 @@
   margin-block-start: inherit;
 }
 
-.chat-text > * + *,
-.chat-text > * + .markdown-external-image {
+.chat-text > :where(:not(:first-child)),
+.chat-text > .markdown-external-image:where(:not(:first-child)) {
   margin-block-start: var(--chat-block-gap);
 }
 
-.chat-text > * + :where(h1, h2, h3, h4) {
+.chat-text > :where(h1, h2, h3, h4):where(:not(:first-child)) {
   margin-block-start: calc(var(--chat-block-gap) * 1.5);
 }
 
 /* Contain the preview's reserved toolbar space within its message block. */
 .chat-bubble > .chat-tool-card__widget-host {
   display: flow-root;
+}
+
+/* Sticky insets start inside the transcript's top padding. */
+.chat-thread .code-block-wrapper--long :is(.code-block-copy, .code-block-wrap) {
+  top: calc(4px - var(--chat-thread-padding-top));
 }

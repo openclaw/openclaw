@@ -1,8 +1,8 @@
-import { abortableSleep } from "./transport.js";
+import type { PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
+import { isRetryableReefRelayFailure } from "./transport.js";
 
 const REEF_RECONCILE_INTERVAL_MS = 30_000;
 const CONTINUE_AFTER_RECONCILE_ERROR = () => true;
-const STOP_AFTER_RECONCILE_ERROR = () => false;
 
 async function runReconcileStep(params: {
   reconcile: (signal: AbortSignal) => Promise<void>;
@@ -23,56 +23,34 @@ async function runReconcileStep(params: {
   }
 }
 
-// One abort scope owns both account loops. If either branch throws, the inbox
-// loop must be torn down and awaited before startAccount settles: a leaked
+// One abort scope owns both account loops. On account exit, the inbox loop
+// must be torn down and awaited before startAccount settles: a leaked
 // loop keeps reconnecting as this handle, fights the replacement instance for
 // the single relay inbox socket, and drives the relay into rate limiting.
 export async function runReefChannelLifecycle(params: {
-  parentSignal: AbortSignal;
+  scheduler: PluginServiceSchedulerV1;
   startInbox: (signal: AbortSignal) => Promise<void>;
   reconcile: (signal: AbortSignal) => Promise<void>;
   onReconcileError: (error: unknown) => void;
-  // Startup may continue only for errors the channel classifies as retryable.
+  // Startup may continue only for retryable relay errors.
   // Periodic reconcile remains best-effort once the account is already active.
-  shouldContinueAfterStartupReconcileError?: (error: unknown) => boolean;
   // Runs after the startup reconcile either refreshes peer keys or reports a
   // classified retryable failure, before the inbox can dispatch a turn.
   onReady?: () => Promise<void>;
-  reconcileIntervalMs?: number;
 }): Promise<void> {
-  const lifecycle = new AbortController();
-  const onParentAbort = () => lifecycle.abort();
-  params.parentSignal.addEventListener("abort", onParentAbort, { once: true });
-  if (params.parentSignal.aborted) {
-    // Listeners added after an abort never fire; inherit the abort directly.
-    lifecycle.abort();
+  if (params.scheduler.signal.aborted) {
+    return;
   }
-  const intervalMs = params.reconcileIntervalMs ?? REEF_RECONCILE_INTERVAL_MS;
-  const reconciliationLoop = async () => {
-    while (!lifecycle.signal.aborted) {
-      await abortableSleep(intervalMs, lifecycle.signal);
-      if (lifecycle.signal.aborted) {
-        return;
-      }
-      await runReconcileStep({
-        ...params,
-        shouldContinueAfterError: CONTINUE_AFTER_RECONCILE_ERROR,
-        signal: lifecycle.signal,
-      });
-    }
-  };
+  const lifecycle = params.scheduler.scope();
   // Declared outside the try so the finally can await it even when the startup
   // steps below throw before the inbox is started.
   let inboxTask: Promise<void> | undefined;
   try {
-    if (!lifecycle.signal.aborted) {
-      await runReconcileStep({
-        ...params,
-        shouldContinueAfterError:
-          params.shouldContinueAfterStartupReconcileError ?? STOP_AFTER_RECONCILE_ERROR,
-        signal: lifecycle.signal,
-      });
-    }
+    await runReconcileStep({
+      ...params,
+      shouldContinueAfterError: isRetryableReefRelayFailure,
+      signal: lifecycle.signal,
+    });
     if (lifecycle.signal.aborted) {
       return;
     }
@@ -80,13 +58,22 @@ export async function runReefChannelLifecycle(params: {
     if (lifecycle.signal.aborted) {
       return;
     }
+    lifecycle.schedule({
+      id: "reconcile",
+      delayMs: REEF_RECONCILE_INTERVAL_MS,
+      everyMs: REEF_RECONCILE_INTERVAL_MS,
+      run: () =>
+        runReconcileStep({
+          ...params,
+          shouldContinueAfterError: CONTINUE_AFTER_RECONCILE_ERROR,
+          signal: lifecycle.signal,
+        }),
+    });
     inboxTask = params.startInbox(lifecycle.signal);
-    await Promise.all([inboxTask, reconciliationLoop()]);
-  } finally {
-    lifecycle.abort();
-    params.parentSignal.removeEventListener("abort", onParentAbort);
-    // startInbox resolves (never rejects) once its socket work is quiescent,
-    // so no reconnect loop can outlive this account instance.
     await inboxTask;
+  } finally {
+    lifecycle.beginClose();
+    // Neither branch may outlive the account, including a failed inbox drain.
+    await Promise.allSettled([inboxTask, lifecycle.stop()]);
   }
 }

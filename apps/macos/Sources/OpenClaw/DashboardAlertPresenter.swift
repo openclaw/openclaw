@@ -64,17 +64,26 @@ final class DashboardAlertPresenter {
         completion: ((NSApplication.ModalResponse) -> Void)? = nil)
     {
         if alert.buttons.count <= 1,
-           self.pending.values.contains(where: {
+           let existing = self.pending.values.first(where: {
                $0.alert.buttons.count <= 1 && $0.alert.messageText == alert.messageText &&
                    $0.alert.informativeText == alert.informativeText
            })
         {
+            // Coalescing must also settle callers awaiting the same informational alert.
+            let previous = existing.completion
+            existing.completion = { response in
+                previous?(response)
+                completion?(response)
+            }
             return
         }
 
         let id = UUID()
+        alert.window.sharingType = .none
+        ApprovalPromptState.shared.setPending(alert.buttons.count > 1, source: id)
         let pending = PendingAlert(alert: alert) { [weak self] response in
             self?.pending.removeValue(forKey: id)
+            ApprovalPromptState.shared.setPending(false, source: id)
             completion?(response)
         }
         self.pending[id] = pending
@@ -91,6 +100,7 @@ final class DashboardAlertPresenter {
             backing: .buffered,
             defer: false)
         panel.title = "OpenClaw"
+        panel.sharingType = .none
         panel.isReleasedWhenClosed = false
         panel.isRestorable = false
         panel.level = .floating
@@ -104,6 +114,7 @@ final class DashboardAlertPresenter {
         let hostingView = NSHostingView(rootView: DashboardAlertContent(
             message: alert.messageText,
             information: alert.informativeText,
+            accessoryView: alert.accessoryView,
             buttonTitles: buttonTitles,
             onResponse: { [weak pending] response in
                 pending?.response = response
@@ -112,8 +123,8 @@ final class DashboardAlertPresenter {
         panel.contentView = hostingView
         panel.setContentSize(hostingView.fittingSize)
         panel.center()
-        NSApp.activate(ignoringOtherApps: true)
-        panel.makeKeyAndOrderFront(nil)
+        AppActivation.shared.activate()
+        AppActivation.shared.makeKeyAndOrderFront(window: panel)
     }
 
     func dismissAll() {
@@ -144,6 +155,7 @@ private final class DashboardAlertPanel: NSPanel {
 private struct DashboardAlertContent: View {
     let message: String
     let information: String
+    let accessoryView: NSView?
     let buttonTitles: [String]
     let onResponse: (NSApplication.ModalResponse) -> Void
 
@@ -164,6 +176,10 @@ private struct DashboardAlertContent: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
+            if let accessoryView {
+                DashboardAlertAccessory(view: accessoryView)
+                    .frame(height: accessoryView.fittingSize.height)
+            }
             HStack {
                 Spacer()
                 ForEach(self.buttonTitles.indices, id: \.self) { index in
@@ -173,8 +189,6 @@ private struct DashboardAlertContent: View {
                     }
                     if index == 0 {
                         button.keyboardShortcut(.defaultAction)
-                    } else if index == self.buttonTitles.count - 1 {
-                        button.keyboardShortcut(.cancelAction)
                     } else {
                         button
                     }
@@ -184,4 +198,15 @@ private struct DashboardAlertContent: View {
         .padding(20)
         .frame(width: 420)
     }
+}
+
+@MainActor
+private struct DashboardAlertAccessory: NSViewRepresentable {
+    let view: NSView
+
+    func makeNSView(context _: Context) -> NSView {
+        self.view
+    }
+
+    func updateNSView(_: NSView, context _: Context) {}
 }

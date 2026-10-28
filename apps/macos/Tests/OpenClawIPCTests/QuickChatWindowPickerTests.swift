@@ -1,4 +1,5 @@
 import CoreGraphics
+import PeekabooAutomationKit
 import Testing
 @testable import OpenClaw
 
@@ -89,7 +90,7 @@ struct QuickChatWindowPickerTests {
     private func input(
         id: Int,
         processID: Int32,
-        policy: QuickChatWindowActivationPolicy,
+        policy: ServiceApplicationActivationPolicy,
         isRenderable: Bool = true) -> QuickChatWindowCandidateInput
     {
         QuickChatWindowCandidateInput(

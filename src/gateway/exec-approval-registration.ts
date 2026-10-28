@@ -4,8 +4,7 @@ import {
   resolveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
-import { buildApprovalPresentation } from "../infra/approval-presentation.js";
-import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
+import type { ApprovalPresentation } from "../../packages/gateway-protocol/src/index.js";
 import type {
   ExecApprovalManagerOptions,
   ExecApprovalRecord,
@@ -58,31 +57,6 @@ export function createExecApprovalRecord<TPayload>(
   };
 }
 
-export function prepareExecApprovalPresentation(
-  kind: OperatorApprovalKind,
-  request: unknown,
-  decisions: readonly ExecApprovalDecision[] | undefined,
-) {
-  const normalized: ExecApprovalDecision[] = [];
-  for (const decision of decisions ?? ["allow-once", "allow-always", "deny"]) {
-    if (
-      (decision === "allow-once" || decision === "allow-always" || decision === "deny") &&
-      !normalized.includes(decision)
-    ) {
-      normalized.push(decision);
-    }
-  }
-  // Denial remains valid even when the request supplies malformed allowed decisions.
-  if (!normalized.includes("deny")) {
-    normalized.push("deny");
-  }
-  const presentation = buildApprovalPresentation({ kind, request, allowedDecisions: normalized });
-  if (!presentation) {
-    throw new Error("approval cannot be persisted without a valid reviewer presentation");
-  }
-  return presentation;
-}
-
 function readRequestString(request: unknown, key: string): string | null {
   const value = asOptionalObjectRecord(request)?.[key];
   return typeof value === "string" && value.trim() ? value.trim() : null;
@@ -91,7 +65,7 @@ function readRequestString(request: unknown, key: string): string | null {
 export async function prepareExecApprovalRegistration<TPayload>(params: {
   record: ExecApprovalRecord<TPayload>;
   kind: OperatorApprovalKind;
-  presentation: ReturnType<typeof prepareExecApprovalPresentation>;
+  presentation: ApprovalPresentation;
   runtimeEpoch: string;
   resolveAudienceSessionKeys?: ExecApprovalManagerOptions<TPayload>["resolveAudienceSessionKeys"];
 }): Promise<Parameters<typeof insertOperatorApproval>[0]["approval"]> {

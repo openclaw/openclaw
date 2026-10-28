@@ -1,12 +1,14 @@
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import { createSessionActivityNoteState } from "../agents/session-activity-notes.js";
+import { resolveSessionObserverDigestForLifecycle } from "../config/sessions/observer-digest.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { SessionObserverEvent } from "./session-observer-contract.js";
 import {
   isSameSessionObserverLifecycle,
   markSessionObserverRunSuperseded,
   rememberSessionObserverRevisionFloor,
-  resolveSessionObserverDigestForLifecycle,
+  snapshotSessionObserverRevisionFloor,
 } from "./session-observer-model.js";
 import type {
   DormantSessionObserverRun,
@@ -17,12 +19,13 @@ import type {
 import { onGatewaySessionReset } from "./session-reset-notifications.js";
 import { resolveSessionSubscriptionKey } from "./session-subscription-keys.js";
 
-type ReadSession = NonNullable<SessionObserverDeps["readSession"]>;
-
 export function createSessionObserverLifecycle(params: {
   getConfig: SessionObserverDeps["getConfig"];
-  readSession: ReadSession;
-  now: () => number;
+  refreshAfterReset: (
+    sessionKey: string,
+    agentId: string,
+    consume: (session: SessionEntry | undefined) => void,
+  ) => void;
   isTerminal: (runId: string) => boolean;
   clearPendingTerminalError: (runId: string) => void;
   releaseState: (state: SessionObserverState) => void;
@@ -46,40 +49,47 @@ export function createSessionObserverLifecycle(params: {
         !supersededRuns.has(state.runId) &&
         state.previousDigest
       ) {
-        rememberSessionObserverRevisionFloor(revisionFloors, scopeKey, {
-          sessionId: state.sessionId,
-          lifecycleRevision: state.lifecycleRevision,
-          revision: state.revision,
-          previousDigest: state.previousDigest,
-        });
+        rememberSessionObserverRevisionFloor(
+          revisionFloors,
+          scopeKey,
+          snapshotSessionObserverRevisionFloor(state),
+        );
       }
       states.delete(scopeKey);
     }
   };
 
   const retireRun = (runId: string) => {
-    markSessionObserverRunSuperseded(supersededRuns, runId, params.now());
+    markSessionObserverRunSuperseded(supersededRuns, runId, Date.now());
     params.clearPendingTerminalError(runId);
     dormantRuns.delete(runId);
     disabledRuns.delete(runId);
   };
 
-  const retireObsolete = (scopeKey: string, session: ReturnType<ReadSession>): void => {
+  const retireObsolete = (scopeKey: string, session: SessionEntry | undefined): void => {
+    const matches = (owner: SessionObserverRevisionFloor) => {
+      try {
+        owner.reader?.assertCurrent();
+        return isSameSessionObserverLifecycle(owner, session);
+      } catch {
+        return false;
+      }
+    };
     const state = states.get(scopeKey);
-    if (state && !isSameSessionObserverLifecycle(state, session)) {
+    if (state && !matches(state)) {
       retireRun(state.runId);
       dropState(state);
     }
     for (const run of dormantRuns.values()) {
       if (
         resolveSessionSubscriptionKey(run.sessionKey, run.agentId) === scopeKey &&
-        !isSameSessionObserverLifecycle(run, session)
+        !matches(run)
       ) {
         retireRun(run.runId);
       }
     }
     const floor = revisionFloors.get(scopeKey);
-    if (floor && !isSameSessionObserverLifecycle(floor, session)) {
+    if (floor && !matches(floor)) {
       if (floor.previousDigest?.runId) {
         retireRun(floor.previousDigest.runId);
       }
@@ -87,8 +97,13 @@ export function createSessionObserverLifecycle(params: {
     }
   };
 
-  const acceptPublication = (state: SessionObserverState): boolean => {
-    const session = params.readSession(state.sessionKey, state.agentId);
+  const acceptPublication = (
+    state: SessionObserverState,
+    session: SessionEntry | undefined,
+  ): boolean => {
+    if (!isTracked(state)) {
+      return false;
+    }
     if (isSameSessionObserverLifecycle(state, session)) {
       return true;
     }
@@ -100,7 +115,7 @@ export function createSessionObserverLifecycle(params: {
     event: SessionObserverEvent,
     sessionKey: string,
     agentId: string,
-    session: ReturnType<ReadSession>,
+    session: SessionEntry | undefined,
     utilityModelRef: string | undefined,
   ): SessionObserverState => {
     const scopeKey = resolveSessionSubscriptionKey(sessionKey, agentId);
@@ -116,7 +131,7 @@ export function createSessionObserverLifecycle(params: {
           : {}),
         ...(utilityModelRef ? { utilityModelRef } : {}),
         lastActivityAt: event.ts,
-        lastRunAt: params.now(),
+        lastRunAt: Date.now(),
         lastDigestNoteSequence: 0,
         inFlight: false,
         finalPending: false,
@@ -129,7 +144,7 @@ export function createSessionObserverLifecycle(params: {
       session,
     );
     const startedAt =
-      asFiniteNumber(event.data.startedAt) ?? session?.startedAt ?? event.ts ?? params.now();
+      asFiniteNumber(event.data.startedAt) ?? session?.startedAt ?? event.ts ?? Date.now();
     const state: SessionObserverState = {
       ...createSessionActivityNoteState(),
       sessionKey,
@@ -158,9 +173,8 @@ export function createSessionObserverLifecycle(params: {
     const agentId =
       suppliedAgentId ?? resolveSessionAgentId({ sessionKey, config: params.getConfig() });
     // Reset notification can follow awaited cleanup. Preserve a newer admitted owner.
-    retireObsolete(
-      resolveSessionSubscriptionKey(sessionKey, agentId),
-      params.readSession(sessionKey, agentId),
+    params.refreshAfterReset(sessionKey, agentId, (session) =>
+      retireObsolete(resolveSessionSubscriptionKey(sessionKey, agentId), session),
     );
   });
 

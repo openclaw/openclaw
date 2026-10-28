@@ -1,4 +1,3 @@
-// Matrix helper module resolves spoiler delimiters in ordinary Markdown inline blocks.
 import MarkdownIt, { type Env } from "markdown-it";
 import { findCodeRegions, isInsideCode, tokenizeHtmlTags } from "openclaw/plugin-sdk/text-chunking";
 import { isMarkdownEscaped, projectMatrixMarkdown } from "./format-profile.js";
@@ -96,16 +95,12 @@ function findInlineMetadataRanges(
       labelStack.pop();
     }
     if (markdown[index] === "<") {
-      const autolink = /^<[A-Za-z][A-Za-z0-9+.-]{1,31}:[^<>\s]*>/u.exec(markdown.slice(index));
+      const autolink = /^<(?:[A-Za-z][A-Za-z0-9+.-]{1,31}:[^<>\s]*|[^<>\s@]+@[^<>\s@]+)>/u.exec(
+        markdown.slice(index),
+      );
       if (autolink && !isMarkdownEscaped(markdown, index)) {
         ranges.push({ start: index, end: index + autolink[0].length });
         index += autolink[0].length - 1;
-        continue;
-      }
-      const emailAutolink = /^<[^<>\s@]+@[^<>\s@]+>/u.exec(markdown.slice(index));
-      if (emailAutolink && !isMarkdownEscaped(markdown, index)) {
-        ranges.push({ start: index, end: index + emailAutolink[0].length });
-        index += emailAutolink[0].length - 1;
       }
     }
   }

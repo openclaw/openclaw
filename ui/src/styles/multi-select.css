@@ -83,13 +83,6 @@ openclaw-multi-select {
   color: var(--text);
 }
 
-.multi-select__chip-label {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .multi-select__chip-icon {
   width: 16px;
   height: 16px;
@@ -125,14 +118,13 @@ openclaw-multi-select {
   height: 12px;
 }
 
-.multi-select__chip .chip-remove:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.08);
+.multi-select__chip .chip-remove:hover:not(:disabled),
+.multi-select__chip .chip-remove:focus-visible:not(:disabled) {
+  background: color-mix(in srgb, var(--text) 8%, transparent);
   color: var(--text);
 }
 
 .multi-select__chip .chip-remove:focus-visible:not(:disabled) {
-  background: rgba(255, 255, 255, 0.08);
-  color: var(--text);
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
@@ -142,12 +134,13 @@ openclaw-multi-select {
   cursor: default;
 }
 
-.multi-select__popup::part(popup) {
-  z-index: var(--z-dropdown);
+.multi-select__popup {
+  width: anchor-size(width);
+  --oc-overlay-max-height: 320px;
 }
 
 .multi-select__menu {
-  max-height: min(320px, var(--auto-size-available-height, calc(100vh - 48px)));
+  max-height: min(320px, var(--oc-overlay-available-height, calc(100dvh - 48px)));
   overflow: auto;
   padding: 6px;
   border: 1px solid var(--overlay-border);

@@ -1,4 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { throwSettledAggregate } from "../infra/error-graph-internal.js";
+import type { ActiveTranscriptsSession } from "./capture-types.js";
 import type { TranscriptSessionDescriptor } from "./provider-types.js";
 
 export class TranscriptStartError extends Error {
@@ -6,7 +8,12 @@ export class TranscriptStartError extends Error {
     readonly code: "id-conflict" | "admitted-start-failed",
     cause: unknown,
     // Only failed provider startup retains an admission that its owning service may retry.
-    readonly retry?: { session: TranscriptSessionDescriptor; revision: string },
+    readonly retry?: {
+      session: TranscriptSessionDescriptor;
+      revision: string;
+      // Only an inserted, never accepted candidate can be discarded on abandonment.
+      discardOnAbandon: boolean;
+    },
   ) {
     super(cause instanceof Error ? cause.message : String(cause), { cause });
     this.name = "TranscriptStartError";
@@ -27,6 +34,7 @@ export function retainTranscriptStartRetry(
   return {
     session: retry.session,
     revision: retry.revision,
+    discardOnAbandon: retry.discardOnAbandon,
     assertCurrent: () => {
       if (!pendingStartRetries.has(owner)) {
         throw new TranscriptStartError(
@@ -38,6 +46,8 @@ export function retainTranscriptStartRetry(
     release: () => pendingStartRetries.delete(owner),
   };
 }
+
+export type TranscriptStartRetry = ReturnType<typeof retainTranscriptStartRetry>;
 
 export function revokeTranscriptStartRetries(
   stateDir: string,
@@ -56,7 +66,13 @@ export function revokeTranscriptStartRetries(
   }
 }
 
-export const capturePolicyTransitions = new Map<string, symbol>();
+// Capture ownership and admission stay available without loading provider or summary code.
+export const activeSessions = new Map<string, ActiveTranscriptsSession>();
+// Reserve ids across asynchronous provider startup so overlapping starts cannot
+// replace the cleanup owner of a still-starting capture.
+export const startingSessions = new Map<string, ActiveTranscriptsSession>();
+
+const capturePolicyTransitions = new Map<string, symbol>();
 
 export function assertTranscriptCaptureEnabled(ctx: { config?: OpenClawConfig; stateDir: string }) {
   if (ctx.config?.transcripts?.enabled === false || capturePolicyTransitions.has(ctx.stateDir)) {
@@ -78,5 +94,30 @@ export function createStartupAbortScope(parent?: AbortSignal) {
     // Provider startup owns this scoped signal only until start settles.
     // Detaching prevents a later agent-run abort from ending live capture.
     detach: () => parent?.removeEventListener("abort", abortFromParent),
+  };
+}
+
+export function prepareTranscriptCaptureDisable(stateDir: string) {
+  const transition = Symbol("capture-policy");
+  capturePolicyTransitions.set(stateDir, transition);
+  const entries = [...new Set([...startingSessions.values(), ...activeSessions.values()])].filter(
+    (entry) => entry.directCapture?.stateDir === stateDir,
+  );
+  for (const entry of entries) {
+    entry.cleanupPending = true;
+    entry.abortStartup?.();
+  }
+  return {
+    async drain() {
+      const results = await Promise.allSettled(
+        entries.map(async (entry) => entry.directCapture?.drain()),
+      );
+      throwSettledAggregate(results, "Transcript capture policy drainage failed");
+    },
+    resume: () => {
+      if (capturePolicyTransitions.get(stateDir) === transition) {
+        capturePolicyTransitions.delete(stateDir);
+      }
+    },
   };
 }

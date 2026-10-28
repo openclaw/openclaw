@@ -3,6 +3,19 @@
 live_docker_stage_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$live_docker_stage_dir/frozen-target-compat.sh"
 unset live_docker_stage_dir
+export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"
+export COREPACK_HOME="${COREPACK_HOME:-$XDG_CACHE_HOME/node/corepack}"
+export NPM_CONFIG_CACHE="${NPM_CONFIG_CACHE:-$XDG_CACHE_HOME/npm}"
+export npm_config_cache="$NPM_CONFIG_CACHE"
+
+openclaw_live_stage_workspace() {
+  local dest_dir="${1:?destination directory required}"
+  openclaw_live_stage_source_tree "$dest_dir"
+  openclaw_live_stage_node_modules "$dest_dir"
+  openclaw_live_link_runtime_tree "$dest_dir"
+  openclaw_live_stage_state_dir "$dest_dir/.openclaw-state"
+  openclaw_live_prepare_staged_config
+}
 
 openclaw_live_stage_mounted_auth() {
   if [ "${OPENCLAW_DOCKER_AUTH_PRESTAGED:-0}" = "1" ]; then
@@ -174,10 +187,6 @@ NODE
   )" || return $?
 
   if [[ "$capability" == "missing-export" ]]; then
-    if [[ "${OPENCLAW_FROZEN_TARGET_LIVE_CLI_BACKEND_PACKAGE_MODE:-current}" == "legacy" ]]; then
-      echo "Staged target does not export resolveCliBackendDockerPackages; preserving historical no-package-setup behavior."
-      return 0
-    fi
     echo "staged target does not export resolveCliBackendDockerPackages" >&2
     return 1
   fi
@@ -321,6 +330,7 @@ openclaw_live_stage_node_modules() {
     mkdir -p "$staged_modules"
     cp -aRs "$source_modules/." "$staged_modules"
   done
+  # Vite needs a writable config-artifact directory; /app/node_modules is root-owned.
   rm -rf "$target_dir/.vite-temp"
   mkdir -p "$target_dir/.vite-temp"
 }

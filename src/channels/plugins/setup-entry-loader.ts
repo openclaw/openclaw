@@ -8,7 +8,7 @@ import {
 import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 import { preparePluginModule } from "../../plugins/plugin-module-loader-cache.js";
 import { getPluginSetupModuleLoader } from "../../plugins/plugin-setup-module.js";
-import type { ChannelPlugin } from "./types.plugin.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "./types.plugin.js";
 
 const log = createSubsystemLogger("channels");
 

@@ -16,7 +16,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const openAiApiKey = process.env.OPENAI_API_KEY?.trim() ?? "";
 const describeLive = isLiveTestEnabled() && openAiApiKey.length > 0 ? describe : describe.skip;
 
-describeLive("agent exec Code Mode with environment authentication", () => {
+describeLive("agent exec Codex runtime with environment authentication", () => {
   it("starts without configuration and completes dependent filesystem calls", async () => {
     const root = tempDirs.make("openclaw-agent-exec-code-mode-live-");
     const home = path.join(root, "home");
@@ -74,15 +74,12 @@ describeLive("agent exec Code Mode with environment authentication", () => {
           path.join(installedRoot, "dist", "entry.js"),
           "agent",
           "exec",
-          "Use Code Mode and the filesystem read and write tools to read input.txt, then write " +
+          "Use the filesystem read and write tools to read input.txt, then write " +
             "output.txt containing exactly the input bytes followed by processed and a newline. " +
             "Do not use a shell command. Reply with exactly DONE after the write completes.",
           "--auth-env-only",
           "--model",
           "openai/gpt-5.6-luna",
-          "--code-mode",
-          "code",
-          "--local-model-lean",
           "--thinking",
           "low",
           "--cwd",
@@ -116,11 +113,12 @@ describeLive("agent exec Code Mode with environment authentication", () => {
       status: "ok",
       provider: "openai",
       model: "gpt-5.6-luna",
-      codeModeEngaged: true,
+      // OpenClaw Code Mode is not the Codex harness's tool surface.
+      codeModeEngaged: false,
       final: "DONE",
     });
-    expect(result.toolSummary?.tools).toContain("exec");
-    expect(result.bridgeCalls?.call).toBeGreaterThanOrEqual(2);
+    expect(result.toolSummary?.tools).toEqual(expect.arrayContaining(["read", "write"]));
+    expect(result.toolSummary?.failures).toBe(0);
     await expect(fs.readFile(path.join(workspace, "output.txt"), "utf8")).resolves.toBe(
       `${input}processed\n`,
     );

@@ -98,7 +98,7 @@ export function registerControlUiDeviceTokenSuite(): void {
         }
       }
       const paired = await getPairedDevice(identity.deviceId);
-      expect(paired?.lastSeenReason).toBe("connect");
+      expect(paired?.lastSeenReason).toBe("device-token-auth");
       expect(typeof paired?.lastSeenAtMs).toBe("number");
     } finally {
       await server.close();

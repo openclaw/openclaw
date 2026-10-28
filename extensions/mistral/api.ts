@@ -22,14 +22,7 @@ export const MISTRAL_MODEL_TRANSPORT_PATCH = {
   maxTokensField: "max_tokens",
 } as const;
 
-export function resolveMistralCompatPatch(model: { id?: string }): {
-  supportsStore: boolean;
-  supportsPromptCacheKey: boolean;
-  supportsLongCacheRetention: boolean;
-  supportsReasoningEffort: boolean;
-  maxTokensField: "max_tokens";
-  reasoningEffortMap?: Record<string, string>;
-} {
+export function resolveMistralCompatPatch(model: { id?: string }) {
   const reasoningEffortMap = resolveMistralReasoningEffortMap(model.id);
   return {
     ...MISTRAL_MODEL_TRANSPORT_PATCH,

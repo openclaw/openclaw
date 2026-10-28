@@ -105,3 +105,5 @@ See [Pairing](/channels/pairing) for the shared DM pairing flow and storage layo
 Slash commands (`/new`, `/reset`, `/model`, `/agents`, `/session`, `/acp`, `/approve`, etc.) work directly in DMs. In rooms, OpenClaw also recognizes commands prefixed with the bot's own Matrix mention, so `@bot:server /new` triggers the command path without a custom mention regex - this keeps the bot responsive to the room-style `@mention /command` posts that Element and similar clients emit when a user tab-completes the bot before typing the command.
 
 Authorization rules still apply: command senders must satisfy the same DM or room allowlist/owner policies as plain messages.
+
+Command authorization does not make ordinary messages commands. Plain room messages still follow the configured [visible-reply and silence policies](/gateway/config-channels/mention-gating-and-history).

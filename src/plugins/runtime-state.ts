@@ -1,7 +1,7 @@
 import type { PluginInstanceAdmission } from "./plugin-instance.types.js";
 import { PLUGIN_REGISTRY_STATE } from "./runtime-state-key.js";
 // Stores plugin runtime registry state for the current process lifecycle.
-import { getActivePluginRegistryWorkspaceDirFromStateCore } from "./runtime-workspace-state.js";
+export { getActivePluginRegistryWorkspaceDirFromStateCore as getActivePluginRegistryWorkspaceDirFromState } from "./runtime-workspace-state.js";
 
 export { PLUGIN_REGISTRY_STATE };
 
@@ -24,7 +24,6 @@ export type RegistryState = {
     registerMemoryCapability?: MemoryCapabilityRegistrar;
   };
   commandRegistryClearTail?: Promise<void>;
-  commandRegistryClearRegistries?: Map<PluginRegistry, number>;
   retiredRegistryCleanups?: Map<
     Promise<void>,
     { registry: PluginRegistry; work: import("../shared/async-work-scope.js").AsyncWorkScope }
@@ -47,8 +46,4 @@ export function getPluginRegistryVersion(registry: PluginRegistry | null): numbe
 /** Policy reads the process-active registry, independently of request or registration scopes. */
 export function getActivePluginGatewayNodePolicyRegistry(): PluginRegistry | null {
   return getPluginRegistryState()?.activeRegistry ?? null;
-}
-
-export function getActivePluginRegistryWorkspaceDirFromState(): string | undefined {
-  return getActivePluginRegistryWorkspaceDirFromStateCore();
 }

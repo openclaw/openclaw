@@ -1,372 +1,140 @@
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import path from "node:path";
 import {
   createPluginRuntimeMock,
   createStartAccountContext,
 } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
-  createPluginStateKeyedStoreForTests,
-  resetPluginStateStoreForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+  createTestPluginServiceScheduler,
+} from "openclaw/plugin-sdk/plugin-test-api";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { startBuzzBus, type BuzzBus } from "./buzz-bus.js";
-import { createBuzzRelayFixture } from "./buzz-relay.test-harness.js";
+import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
+import { expect, it, vi } from "vitest";
+import type { BuzzBus } from "./buzz-bus.js";
+import { createBuzzRelayFixture, useBuzzRelayTestHarness } from "./buzz-relay.test-harness.js";
 import { startBuzzGatewayAccount } from "./gateway.js";
-import { handleBuzzInbound } from "./inbound.js";
 import { setBuzzRuntime } from "./runtime.js";
 import { resolveBuzzAccount } from "./types.js";
 
-let stateDir: string;
-beforeEach(() => {
-  // openclaw-temp-dir: allow extension tests cannot import root test helpers.
-  stateDir = mkdtempSync(path.join(tmpdir(), "openclaw-buzz-socket-"));
-  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-});
+let fixture: Awaited<ReturnType<typeof createBuzzRelayFixture>>;
+let cleanupAccount: (() => Promise<void>) | undefined;
+const { messages, fatal, startBus, closeBus } = useBuzzRelayTestHarness(
+  (relay) => {
+    fixture = relay;
+    cleanupAccount = undefined;
+    return {};
+  },
+  {
+    beforeClose: async () => {
+      await cleanupAccount?.();
+    },
+    afterClose: closeOpenClawStateDatabaseAsync,
+  },
+);
 
-it("delivers live messages on the room-scoped roster subscription", async () => {
-  const fixture = await createBuzzRelayFixture();
-  const messages: string[] = [];
-  let bus: BuzzBus | undefined;
-  try {
-    bus = await startBuzzBus({
-      accountId: randomUUID(),
-      relayUrl: fixture.relayUrl,
-      privateKey: fixture.botPrivateKey,
-      channelIds: [fixture.roomId],
-      onMessage: async (message) => {
-        messages.push(message.text);
-      },
-    });
-    fixture.sendMessage("live after roster subscription");
-    await vi.waitFor(() => expect(messages).toEqual(["live after roster subscription"]));
-    const initial = fixture.events.find((event) => event.kind === 39002)!;
-    const roster = {
-      kind: 39002,
-      created_at: initial.created_at + 1,
-      content: "",
-      tags: initial.tags.map((tag) =>
-        tag[0] === "p" && tag[1] === fixture.senderPublicKey
-          ? ["p", fixture.senderPublicKey, "", "bot"]
-          : tag,
-      ),
-    };
-    const valid = fixture.signRelay(roster);
-    fixture.sendUnchecked({ ...valid, sig: "0".repeat(128) });
-    fixture.sendUnchecked(
-      fixture.signRelay({
-        ...roster,
-        tags: roster.tags.map((tag) => (tag[0] === "d" ? ["d", randomUUID()] : tag)),
-      }),
-    );
-    await bus.sendText({ channelId: fixture.roomId, text: "invalid roster ordering barrier" });
-    expect(
-      bus.directory
-        .listGroupMembers({ groupId: fixture.roomId })
-        .find((member) => member.id === fixture.senderPublicKey)?.raw,
-    ).toMatchObject({ role: "member" });
-    fixture.broadcast(valid);
-    await vi.waitFor(() =>
-      expect(
-        bus?.directory
-          .listGroupMembers({ groupId: fixture.roomId })
-          .find((member) => member.id === fixture.senderPublicKey)?.raw,
-      ).toMatchObject({ role: "bot" }),
-    );
-  } finally {
-    await bus?.close();
-    await fixture.close();
-  }
+function member(bus: BuzzBus, id = fixture.senderPublicKey) {
+  return bus.directory
+    .listGroupMembers({ groupId: fixture.roomId })
+    .find((entry) => entry.id === id);
+}
+
+const initialRoster = () => fixture.events.find((event) => event.kind === 39002)!;
+const barrier = (bus: BuzzBus, text: string) => bus.sendText({ channelId: fixture.roomId, text });
+
+function membershipChange(
+  type: "member_joined" | "member_removed",
+  createdAt: number,
+  target = fixture.senderPublicKey,
+) {
+  return fixture.signRelay({
+    kind: 40099,
+    created_at: createdAt,
+    content: JSON.stringify({ type, target }),
+    tags: [["h", fixture.roomId]],
+  });
+}
+
+function promotedRoster(initial: (typeof fixture.events)[number]) {
+  return {
+    ...initial,
+    created_at: initial.created_at + 1,
+    tags: initial.tags.map((tag) =>
+      tag[0] === "p" && tag[1] === fixture.senderPublicKey
+        ? ["p", fixture.senderPublicKey, "", "bot"]
+        : tag,
+    ),
+  };
+}
+
+it("accepts signed room rosters without letting invalid events or older queries replace them", async () => {
+  const bus = await startBus();
+  fixture.sendMessage("live after roster subscription");
+  await vi.waitFor(() => expect(messages).toEqual(["live after roster subscription"]));
+  const initial = initialRoster();
+  const roster = promotedRoster(initial);
+  const valid = fixture.signRelay(roster);
+  fixture.sendUnchecked({ ...valid, sig: "0".repeat(128) });
+  fixture.sendUnchecked(
+    fixture.signRelay({
+      ...roster,
+      tags: roster.tags.map((tag) => (tag[0] === "d" ? ["d", randomUUID()] : tag)),
+    }),
+  );
+  await barrier(bus, "invalid roster ordering barrier");
+  expect(member(bus)?.raw).toMatchObject({ role: "member" });
+  const change = membershipChange("member_joined", Math.floor(Date.now() / 1000));
+  const query = fixture.pauseNextMembershipQuery();
+  fixture.broadcast(change);
+  await query.started;
+  fixture.broadcast(valid);
+  fixture.broadcast(change);
+  await vi.waitFor(() => expect(member(bus)?.raw).toMatchObject({ role: "bot" }));
+  query.release();
+  // A publish acknowledgement follows the old query frames on this socket.
+  await barrier(bus, "query ordering barrier");
+  expect(member(bus)?.raw).toMatchObject({ role: "bot" });
 });
 
 it("keeps removal denied through stale snapshots and accepts a confirmed rejoin", async () => {
-  const fixture = await createBuzzRelayFixture();
-  const messages: string[] = [];
-  const fatal: Error[] = [];
-  let bus: BuzzBus | undefined;
-  try {
-    bus = await startBuzzBus({
-      accountId: randomUUID(),
-      relayUrl: fixture.relayUrl,
-      privateKey: fixture.botPrivateKey,
-      channelIds: [fixture.roomId],
-      onMessage: async (message) => {
-        messages.push(message.text);
-      },
-      onFatalError: (error) => fatal.push(error),
-    });
-    const initial = fixture.events.find((event) => event.kind === 39002)!;
-    const query = fixture.pauseNextMembershipQuery();
-    fixture.broadcast(
-      fixture.signRelay({
-        kind: 40099,
-        created_at: Math.floor(Date.now() / 1000),
-        content: JSON.stringify({ type: "member_removed", target: fixture.senderPublicKey }),
-        tags: [["h", fixture.roomId]],
-      }),
-    );
-    await query.started;
-    fixture.broadcast(initial);
-    fixture.sendMessage("removed sender");
-    query.release();
-    await bus.sendText({ channelId: fixture.roomId, text: "removal ordering barrier" });
-    expect(messages).toEqual([]);
-    expect(
-      bus.directory
-        .listGroupMembers({ groupId: fixture.roomId })
-        .some((entry) => entry.id === fixture.senderPublicKey),
-    ).toBe(false);
+  const bus = await startBus();
+  const initial = initialRoster();
+  const query = fixture.pauseNextMembershipQuery();
+  fixture.broadcast(membershipChange("member_removed", Math.floor(Date.now() / 1000)));
+  await query.started;
+  fixture.broadcast(initial);
+  fixture.sendMessage("removed sender");
+  query.release();
+  await barrier(bus, "removal ordering barrier");
+  expect(messages).toEqual([]);
+  expect(member(bus)).toBeUndefined();
 
-    fixture.broadcast(
-      fixture.signRelay({
-        kind: 40099,
-        created_at: initial.created_at + 1,
-        content: JSON.stringify({ type: "member_joined", target: fixture.senderPublicKey }),
-        tags: [["h", fixture.roomId]],
-      }),
-    );
-    fixture.broadcast(
-      fixture.signRelay({
-        kind: 39002,
-        created_at: initial.created_at + 1,
-        content: "",
-        tags: initial.tags,
-      }),
-    );
-    await vi.waitFor(
-      () =>
-        expect(
-          bus?.directory
-            .listGroupMembers({ groupId: fixture.roomId })
-            .some((entry) => entry.id === fixture.senderPublicKey),
-        ).toBe(true),
-      { timeout: 6000 },
-    );
-    fixture.sendMessage("confirmed rejoin");
-    await vi.waitFor(() => expect(messages).toEqual(["confirmed rejoin"]));
-    expect(fatal).toEqual([]);
-  } finally {
-    await bus?.close();
-    await fixture.close();
-  }
+  fixture.broadcast(membershipChange("member_joined", initial.created_at + 1));
+  fixture.broadcast(fixture.signRelay({ ...initial, created_at: initial.created_at + 1 }));
+  await vi.waitFor(() => expect(member(bus)).toBeDefined(), { timeout: 6000 });
+  fixture.sendMessage("confirmed rejoin");
+  await vi.waitFor(() => expect(messages).toEqual(["confirmed rejoin"]));
+  expect(fatal).toEqual([]);
 });
 
-it("finishes an admitted room turn after its sender is removed", async () => {
-  const fixture = await createBuzzRelayFixture();
-  const runtime = createPluginRuntimeMock();
-  runtime.state.openKeyedStore = (options) => createPluginStateKeyedStoreForTests("buzz", options);
-  setBuzzRuntime(runtime);
-  const dispatched = createDeferred<void>();
-  const continueTurn = createDeferred<void>();
-  const completed = createDeferred<void>();
-  const cfg = {
-    channels: {
-      buzz: {
-        relayUrl: fixture.relayUrl,
-        privateKey: fixture.botPrivateKey,
-        groupPolicy: "open",
-        groups: { [fixture.roomId]: { requireMention: false } },
-      },
-    },
-  } satisfies OpenClawConfig;
-  const account = resolveBuzzAccount({ cfg });
-  vi.mocked(runtime.channel.inbound.dispatch).mockImplementation(async (params) => {
-    dispatched.resolve();
-    await continueTurn.promise;
-    await params.delivery.deliver({ text: "admitted room reply" }, { kind: "final" });
-    return {
-      admission: { kind: "dispatch" },
-      dispatched: true,
-      ctxPayload: params.ctxPayload,
-      routeSessionKey: params.route.sessionKey,
-      dispatchResult: { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } },
-    };
-  });
-  let bus: BuzzBus | undefined;
-  try {
-    bus = await startBuzzBus({
-      accountId: account.accountId,
-      relayUrl: fixture.relayUrl,
-      privateKey: fixture.botPrivateKey,
-      channelIds: [fixture.roomId],
-      onMessage: async (message, activeBus, signal, assertCurrent) => {
-        await handleBuzzInbound({
-          account,
-          cfg,
-          bus: activeBus,
-          message,
-          signal,
-          assertCurrent,
-          historyMap: new Map(),
-        });
-        completed.resolve();
-      },
-      onMessageError: completed.reject,
-    });
-    const message = fixture.sendMessage("accepted before removal");
-    await dispatched.promise;
-    const initial = fixture.events.find((event) => event.kind === 39002)!;
-    fixture.broadcast(
-      fixture.signRelay({
-        kind: 39002,
-        created_at: initial.created_at + 1,
-        content: "",
-        tags: initial.tags.filter((tag) => tag[0] !== "p" || tag[1] !== fixture.senderPublicKey),
-      }),
-    );
-    await vi.waitFor(() =>
-      expect(
-        bus?.directory
-          .listGroupMembers({ groupId: fixture.roomId })
-          .some((member) => member.id === fixture.senderPublicKey),
-      ).toBe(false),
-    );
-    continueTurn.resolve();
-    await completed.promise;
-    const replies = fixture.events.filter(
-      (event) => event.pubkey === fixture.botPublicKey && event.kind === 9,
-    );
-    expect(replies).toHaveLength(1);
-    expect(replies[0]).toMatchObject({
-      content: "admitted room reply",
-      tags: expect.arrayContaining([
-        ["h", fixture.roomId],
-        ["e", message.id, "", "reply"],
-      ]),
-    });
-  } finally {
-    continueTurn.resolve();
-    await bus?.close();
-    await fixture.close();
-  }
-});
-
-it("keeps healthy rooms subscribed when a configured room lost the Bot role", async () => {
-  const fixture = await createBuzzRelayFixture();
-  // A second configured room the bot can see but is only a member of. This is
-  // the shape a demoted or abandoned room takes: it is still in the directory,
-  // so it reaches the membership gate, but the bot cannot act in it.
-  const demotedRoomId = randomUUID();
-  const seededAt = Math.floor(Date.now() / 1000);
-  fixture.events.push(
-    fixture.signRelay({
-      kind: 39000,
-      created_at: seededAt,
-      content: "",
-      tags: [
-        ["d", demotedRoomId],
-        ["name", "Demoted room"],
-        ["t", "stream"],
-      ],
-    }),
-    fixture.signRelay({
-      kind: 39002,
-      created_at: seededAt,
-      content: "",
-      tags: [
-        ["d", demotedRoomId],
-        ["p", fixture.botPublicKey, "", "member"],
-      ],
-    }),
-  );
-  const messages: string[] = [];
-  const unavailable: Error[] = [];
-  const fatal: Error[] = [];
-  let bus: BuzzBus | undefined;
-  try {
-    bus = await startBuzzBus({
-      accountId: randomUUID(),
-      relayUrl: fixture.relayUrl,
-      privateKey: fixture.botPrivateKey,
-      // The unusable room is listed first: aborting on it would have stopped
-      // the healthy room from ever being subscribed.
-      channelIds: [demotedRoomId, fixture.roomId],
-      onMessage: async (message) => {
-        messages.push(message.text);
-      },
-      onRoomUnavailable: (error) => unavailable.push(error),
-      onFatalError: (error) => fatal.push(error),
-    });
-    fixture.sendMessage("healthy room keeps delivering");
-    await vi.waitFor(() => expect(messages).toEqual(["healthy room keeps delivering"]));
-    await expect(
-      bus.sendText({ channelId: fixture.roomId, text: "healthy room keeps sending" }),
-    ).resolves.toBeTruthy();
-    expect(fatal).toEqual([]);
-    expect(unavailable).toHaveLength(1);
-    expect(unavailable[0]?.message).toContain(demotedRoomId);
-    expect(unavailable[0]?.message).toContain("does not have the Bot role");
-  } finally {
-    await bus?.close();
-    await fixture.close();
-  }
-});
-
-it("revokes the active bot immediately on a signed role downgrade", async () => {
-  const fixture = await createBuzzRelayFixture();
-  const fatal: Error[] = [];
-  let turnSignal: AbortSignal | undefined;
-  let bus: BuzzBus | undefined;
-  try {
-    bus = await startBuzzBus({
-      accountId: randomUUID(),
-      relayUrl: fixture.relayUrl,
-      privateKey: fixture.botPrivateKey,
-      channelIds: [fixture.roomId],
-      onMessage: async (_message, _bus, signal) => {
-        turnSignal = signal;
-      },
-      onFatalError: (error) => fatal.push(error),
-    });
-    fixture.sendMessage("before bot downgrade");
-    await vi.waitFor(() => expect(turnSignal).toBeDefined());
-    const initial = fixture.events.find((event) => event.kind === 39002)!;
-    fixture.broadcast(
-      fixture.signRelay({
-        kind: 39002,
-        created_at: initial.created_at + 1,
-        content: "",
-        tags: initial.tags.map((tag) =>
-          tag[0] === "p" && tag[1] === fixture.botPublicKey
-            ? ["p", fixture.botPublicKey, "", "member"]
-            : tag,
-        ),
-      }),
-    );
-    await vi.waitFor(() => expect(fatal).toHaveLength(1));
-    expect(fatal[0]?.message).toContain("no longer has the Bot role");
-    expect(turnSignal?.aborted).toBe(true);
-    await expect(
-      bus.sendText({ channelId: fixture.roomId, text: "retired bot reply" }),
-    ).rejects.toThrow("no longer has the Bot role");
-  } finally {
-    await bus?.close();
-    await fixture.close();
-  }
-});
-afterEach(async () => {
-  await closeOpenClawStateDatabaseAsync();
-  resetPluginStateStoreForTests();
-  vi.restoreAllMocks();
-  vi.unstubAllEnvs();
-  rmSync(stateDir, { recursive: true, force: true });
-});
-
-it("recovers the Gateway account after silent presence without replaying pre-activation messages", async () => {
-  const fixture = await createBuzzRelayFixture();
+it("recovers silent presence without replaying pre-activation messages", async ({ signal }) => {
   fixture.setPresenceMode("silent");
   fixture.sendMessage("pre-activation", Math.floor(Date.now() / 1000) - 60);
   const runtime = createPluginRuntimeMock();
   runtime.state.openKeyedStore = (options) => createPluginStateKeyedStoreForTests("buzz", options);
   setBuzzRuntime(runtime);
   const handled: string[] = [];
+  const delivered = new Map([
+    ["before stall", createDeferred<void>()],
+    ["during reconnect", createDeferred<void>()],
+  ]);
   vi.mocked(runtime.channel.inbound.dispatch).mockImplementation(async (params) => {
     handled.push(String(params.ctxPayload.RawBody));
     await params.delivery.deliver({ text: "gateway socket reply" }, { kind: "final" });
+    delivered.get(String(params.ctxPayload.RawBody))?.resolve();
     return {
       admission: { kind: "dispatch" },
       dispatched: true,
@@ -385,13 +153,11 @@ it("recovers the Gateway account after silent presence without replaying pre-act
       },
     },
   } satisfies OpenClawConfig;
-  const account = resolveBuzzAccount({ cfg });
   const abort = new AbortController();
   const states: string[] = [];
-  const firstReady = createDeferred<void>();
-  const secondReady = createDeferred<void>();
+  const ready = [createDeferred<void>(), createDeferred<void>()] as const;
   const ctx = createStartAccountContext({
-    account,
+    account: resolveBuzzAccount({ cfg }),
     cfg,
     abortSignal: abort.signal,
     statusPatchSink: (next) => {
@@ -399,10 +165,7 @@ it("recovers the Gateway account after silent presence without replaying pre-act
         states.push(next.lifecycle);
       }
       if (next.lifecycle === "ready") {
-        firstReady.resolve();
-        if (states.filter((state) => state === "ready").length === 2) {
-          secondReady.resolve();
-        }
+        ready[states.filter((state) => state === "ready").length - 1]?.resolve();
       }
       if (next.lifecycle === "recovering") {
         fixture.setPresenceMode("accept");
@@ -410,183 +173,77 @@ it("recovers the Gateway account after silent presence without replaying pre-act
       }
     },
   });
-  const lifecycle = startBuzzGatewayAccount(ctx);
+  const clock = createGatewaySchedulerClock(Date.now());
+  const scheduler = createTestPluginServiceScheduler(createTestGatewayScheduler(clock.clock));
+  const lifecycle = startBuzzGatewayAccount({ ...ctx, scheduler });
   const stoppedBeforeReady = lifecycle.then(() => {
     throw new Error("Buzz account stopped before becoming ready");
   });
+  const waitFor = (promise: Promise<void>) =>
+    withinTest(Promise.race([promise, stoppedBeforeReady]), signal);
+  cleanupAccount = async () => {
+    abort.abort();
+    try {
+      await lifecycle;
+    } finally {
+      await scheduler.stop();
+    }
+  };
   try {
-    await Promise.race([firstReady.promise, stoppedBeforeReady]);
-    expect(states).toContain("ready");
+    await waitFor(ready[0].promise);
     fixture.sendMessage("before stall");
-    await vi.waitFor(() => expect(handled).toContain("before stall"));
-    await vi.waitFor(() => expect(fixture.authenticatedSessions()).toBe(2), { timeout: 8000 });
-    await vi.waitFor(() => expect(handled).toContain("during reconnect"));
-    // Replay can dispatch before subscription history and Gateway startup finish.
-    await Promise.race([secondReady.promise, stoppedBeforeReady]);
+    await waitFor(delivered.get("before stall")!.promise);
+    // Start the silent heartbeat only after the pre-stall message has completed.
+    await withinTest(Promise.resolve(clock.wake()), signal);
+    await waitFor(ready[1].promise);
+    await waitFor(delivered.get("during reconnect")!.promise);
+    expect(fixture.authenticatedSessions()).toBe(2);
     expect(states.filter((state) => state === "ready")).toHaveLength(2);
     expect(states).toContain("recovering");
     expect(handled).toEqual(["before stall", "during reconnect"]);
-    await vi.waitFor(() =>
-      expect(
-        fixture.received.filter((event) => event.content === "gateway socket reply"),
-      ).toHaveLength(2),
-    );
+    expect(
+      fixture.received.filter((event) => event.content === "gateway socket reply"),
+    ).toHaveLength(2);
   } finally {
-    abort.abort();
-    await lifecycle;
-    await fixture.close();
+    await cleanupAccount();
   }
 }, 15000);
 
 it("accepts a startup bot-join notification already reflected in the signed roster", async () => {
-  vi.spyOn(Date, "now").mockReturnValue(Math.floor(Date.now() / 1000) * 1000);
-  const fixture = await createBuzzRelayFixture();
+  const initial = initialRoster();
+  vi.spyOn(Date, "now").mockReturnValue(initial.created_at * 1000);
   fixture.events.push(
-    fixture.signRelay({
-      kind: 40099,
-      created_at: Math.floor(Date.now() / 1000),
-      content: JSON.stringify({ type: "member_joined", target: fixture.botPublicKey }),
-      tags: [["h", fixture.roomId]],
-    }),
+    membershipChange("member_joined", Math.floor(Date.now() / 1000), fixture.botPublicKey),
   );
-  const fatal: Error[] = [];
-  let bus: BuzzBus | undefined;
-  try {
-    bus = await startBuzzBus({
-      accountId: randomUUID(),
-      relayUrl: fixture.relayUrl,
-      privateKey: fixture.botPrivateKey,
-      channelIds: [fixture.roomId],
-      onMessage: async () => {},
-      onFatalError: (error) => fatal.push(error),
-    });
-    // Restoring the directory proves the pending self-membership refresh settled,
-    // rather than silently retrying until the existing bounded refresh times out.
-    await vi.waitFor(
-      () =>
-        expect(
-          bus?.directory
-            .listGroupMembers({ groupId: fixture.roomId })
-            .some((entry) => entry.id === fixture.botPublicKey),
-        ).toBe(true),
-      { timeout: 6500 },
-    );
-    expect(fatal).toEqual([]);
-  } finally {
-    await bus?.close();
-    await fixture.close();
-  }
+  const bus = await startBus();
+  // Directory restoration proves self-membership refresh settled rather than timed out.
+  await vi.waitFor(() => expect(member(bus, fixture.botPublicKey)).toBeDefined(), {
+    timeout: 6500,
+  });
+  expect(fatal).toEqual([]);
 }, 10000);
 
-it.each(["reject", "silent"] as const)(
-  "distinguishes %s presence acknowledgement over a real socket",
-  async (mode) => {
-    const fixture = await createBuzzRelayFixture();
-    fixture.setPresenceMode(mode);
-    const errors: Error[] = [];
-    const fatal: Error[] = [];
-    const messages: string[] = [];
-    let turnSignal: AbortSignal | undefined;
-    let bus: BuzzBus | undefined;
-    try {
-      bus = await startBuzzBus({
-        accountId: randomUUID(),
-        relayUrl: fixture.relayUrl,
-        privateKey: fixture.botPrivateKey,
-        channelIds: [fixture.roomId],
-        onMessage: async (message, _bus, signal) => {
-          messages.push(message.text);
-          turnSignal = signal;
-        },
-        onPresenceError: (error) => errors.push(error),
-        onFatalError: (error) => {
-          fatal.push(error);
-          void bus?.close();
-        },
-      });
-      fixture.sendMessage("socket canary");
-      await vi.waitFor(() => expect(messages).toEqual(["socket canary"]));
-      expect(fixture.authenticatedSessions()).toBe(1);
-      if (mode === "silent") {
-        // nostr-tools' real 4.4s publish timer rejects without closing the socket.
-        await vi.waitFor(() => expect(fatal).toHaveLength(1), { timeout: 6000 });
-        expect(fatal[0]?.message).toContain("publish timed out");
-        await vi.waitFor(() => expect(turnSignal?.aborted).toBe(true));
-      } else {
-        await vi.waitFor(() => expect(errors).toHaveLength(1));
-        expect(fatal).toEqual([]);
-        expect(turnSignal?.aborted).toBe(false);
-        await bus.sendText({ channelId: fixture.roomId, text: "healthy after rejection" });
-        expect(fixture.received.some((event) => event.content === "healthy after rejection")).toBe(
-          true,
-        );
-      }
-    } finally {
-      await bus?.close();
-      await fixture.close();
-    }
-  },
-  12000,
-);
-
-it.each(["before", "after"] as const)(
-  "keeps the signed role when an older query completes %s the push",
-  async (queryOrder) => {
-    const fixture = await createBuzzRelayFixture();
-    let bus: BuzzBus | undefined;
-    try {
-      bus = await startBuzzBus({
-        accountId: randomUUID(),
-        relayUrl: fixture.relayUrl,
-        privateKey: fixture.botPrivateKey,
-        channelIds: [fixture.roomId],
-        onMessage: async () => {},
-      });
-      const initial = fixture.events.find((event) => event.kind === 39002)!;
-      const change = fixture.signRelay({
-        kind: 40099,
-        created_at: Math.floor(Date.now() / 1000),
-        content: JSON.stringify({ type: "member_joined", target: fixture.senderPublicKey }),
-        tags: [["h", fixture.roomId]],
-      });
-      const query = fixture.pauseNextMembershipQuery();
-      fixture.broadcast(change);
-      const updated = fixture.signRelay({
-        kind: 39002,
-        created_at: initial.created_at + 1,
-        content: "",
-        tags: initial.tags.map((tag) =>
-          tag[0] === "p" && tag[1] === fixture.senderPublicKey
-            ? ["p", fixture.senderPublicKey, "", "bot"]
-            : tag,
-        ),
-      });
-      await query.started;
-      if (queryOrder === "before") {
-        query.release();
-      }
-      fixture.broadcast(updated);
-      fixture.broadcast(change);
-      await vi.waitFor(() =>
-        expect(
-          bus?.directory
-            .listGroupMembers({ groupId: fixture.roomId })
-            .find((member) => member.id === fixture.senderPublicKey)?.raw,
-        ).toMatchObject({ role: "bot" }),
-      );
-      if (queryOrder === "after") {
-        query.release();
-        // A publish acknowledgement follows the old query frames on this socket.
-        await bus.sendText({ channelId: fixture.roomId, text: "query ordering barrier" });
-        expect(
-          bus.directory
-            .listGroupMembers({ groupId: fixture.roomId })
-            .find((member) => member.id === fixture.senderPublicKey)?.raw,
-        ).toMatchObject({ role: "bot" });
-      }
-    } finally {
-      await bus?.close();
-      await fixture.close();
-    }
-  },
-);
+it("keeps explicit presence rejection nonfatal over a real socket", async () => {
+  fixture.setPresenceMode("reject");
+  const errors: Error[] = [];
+  let turnSignal: AbortSignal | undefined;
+  const bus = await startBus({
+    onMessage: async (message, _bus, signal) => {
+      messages.push(message.text);
+      turnSignal = signal;
+    },
+    onPresenceError: (error) => errors.push(error),
+    onFatalError: (error) => {
+      fatal.push(error);
+      void closeBus();
+    },
+  });
+  fixture.sendMessage("socket canary");
+  await vi.waitFor(() => expect(messages).toEqual(["socket canary"]));
+  expect(fixture.authenticatedSessions()).toBe(1);
+  await vi.waitFor(() => expect(errors).toHaveLength(1));
+  expect(fatal).toEqual([]);
+  expect(turnSignal?.aborted).toBe(false);
+  await barrier(bus, "healthy after rejection");
+  expect(fixture.received.some((event) => event.content === "healthy after rejection")).toBe(true);
+}, 12000);

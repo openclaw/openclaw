@@ -1,4 +1,3 @@
-// Diffs type declarations define plugin contracts.
 import type { FileContents, FileDiffMetadata, SupportedLanguages } from "@pierre/diffs";
 
 export const DIFF_LAYOUTS = ["unified", "split"] as const;
@@ -9,9 +8,9 @@ export const DIFF_IMAGE_QUALITY_PRESETS = ["standard", "hq", "print"] as const;
 export const DIFF_OUTPUT_FORMATS = ["png", "pdf"] as const;
 
 export type DiffLayout = (typeof DIFF_LAYOUTS)[number];
-export type DiffMode = (typeof DIFF_MODES)[number];
+type DiffMode = (typeof DIFF_MODES)[number];
 export type DiffTheme = (typeof DIFF_THEMES)[number];
-export type DiffIndicators = (typeof DIFF_INDICATORS)[number];
+type DiffIndicators = (typeof DIFF_INDICATORS)[number];
 export type DiffImageQualityPreset = (typeof DIFF_IMAGE_QUALITY_PRESETS)[number];
 export type DiffOutputFormat = (typeof DIFF_OUTPUT_FORMATS)[number];
 export type DiffRenderTarget = "viewer" | "image" | "both";
@@ -41,22 +40,20 @@ export type DiffToolDefaults = DiffPresentationDefaults &
     ttlSeconds: number;
   };
 
-type BeforeAfterDiffInput = {
-  kind: "before_after";
-  before: string;
-  after: string;
-  path?: string;
-  lang?: string;
-  title?: string;
-};
-
-type PatchDiffInput = {
-  kind: "patch";
-  patch: string;
-  title?: string;
-};
-
-export type DiffInput = BeforeAfterDiffInput | PatchDiffInput;
+export type DiffInput =
+  | {
+      kind: "before_after";
+      before: string;
+      after: string;
+      path?: string;
+      lang?: string;
+      title?: string;
+    }
+  | {
+      kind: "patch";
+      patch: string;
+      title?: string;
+    };
 
 export type DiffRenderOptions = {
   presentation: DiffPresentationDefaults;
@@ -95,15 +92,6 @@ export type DiffViewerPayload = {
   fileDiff?: FileDiffMetadata;
 };
 
-export type RenderedDiffDocument = {
-  html?: string;
-  imageHtml?: string;
-  title: string;
-  fileCount: number;
-  inputKind: DiffInput["kind"];
-  viewerRuntime: "base" | "language-pack";
-};
-
 export type DiffArtifactContext = {
   agentId?: string;
   sessionId?: string;
@@ -133,18 +121,6 @@ export type DiffRenderedFileArtifactMetadata = {
 export type DiffArtifactBlobMetadata =
   | DiffViewerArtifactMetadata
   | DiffRenderedFileArtifactMetadata;
-
-export type DiffArtifactMeta = {
-  id: string;
-  token: string;
-  createdAt: string;
-  expiresAt: string;
-  title: string;
-  inputKind: DiffInput["kind"];
-  fileCount: number;
-  viewerPath: string;
-  context?: DiffArtifactContext;
-};
 
 export const DIFF_ARTIFACT_ID_PATTERN = /^[0-9a-f]{20}$/;
 export const DIFF_ARTIFACT_TOKEN_PATTERN = /^[0-9a-f]{48}$/;

@@ -1,15 +1,10 @@
-/**
- * Response-body retrieval for Playwright-backed browser tools.
- */
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { Response } from "playwright-core";
-import { toErrorObject } from "../infra/errors.js";
-import { ensurePageState, getPageForTargetId } from "./pw-session.js";
+import { getPageForTargetId } from "./pw-session.js";
 import { normalizeTimeoutMs } from "./pw-tools-core.shared.js";
 import { matchBrowserUrlPattern } from "./url-pattern.js";
 
-/** Waits for a response URL pattern and returns a bounded text body. */
 export async function responseBodyViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -24,21 +19,14 @@ export async function responseBodyViaPlaywright(opts: {
   body: string;
   truncated?: boolean;
 }> {
-  const pattern = normalizeOptionalString(opts.url) ?? "";
-  if (!pattern) {
-    throw new Error("url is required");
-  }
-  const maxChars =
-    typeof opts.maxChars === "number" && Number.isFinite(opts.maxChars)
-      ? Math.max(1, Math.min(5_000_000, Math.floor(opts.maxChars)))
-      : 200_000;
+  const pattern = opts.url;
+  const maxChars = Math.max(1, Math.min(5_000_000, Math.floor(opts.maxChars ?? 200_000)));
   const timeout = normalizeTimeoutMs(opts.timeoutMs, 20_000);
   const maxBytes = maxChars * 4;
 
   opts.signal?.throwIfAborted();
   const page = await getPageForTargetId(opts);
   opts.signal?.throwIfAborted();
-  ensurePageState(page);
 
   let cleanup!: () => void;
   const promise = new Promise<{ response: Response; buffer: Buffer }>((resolve, reject) => {

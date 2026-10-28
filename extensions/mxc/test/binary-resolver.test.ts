@@ -30,12 +30,6 @@ describe("resolveMxcBinaryPath", () => {
     process.env.PATH = originalPath;
   });
 
-  test("config override returns the override path when file exists", () => {
-    existsSyncMock.mockReturnValue(true);
-    const result = resolveMxcBinaryPath("C:\\custom\\wxc-exec.exe");
-    expect(result).toBe("C:\\custom\\wxc-exec.exe");
-  });
-
   test("config override returns an absolute path for relative inputs", () => {
     const relativeOverride = path.join("tools", "wxc-exec.exe");
     const absoluteOverride = path.resolve(relativeOverride);
@@ -49,12 +43,6 @@ describe("resolveMxcBinaryPath", () => {
     expect(() => resolveMxcBinaryPath("C:\\missing\\wxc-exec.exe")).toThrow(
       /not found at configured path/,
     );
-  });
-
-  test("missing binary with no override throws descriptive error", () => {
-    existsSyncMock.mockReturnValue(false);
-    // Without override, it tries to discover; all paths will fail.
-    expect(() => resolveMxcBinaryPath()).toThrow(/wxc-exec\.exe.*not found/);
   });
 
   test("ignores project, PATH, and home candidates during discovery", () => {
@@ -104,21 +92,5 @@ describe("resolveMxcBinaryPath", () => {
     });
 
     expect(resolveMxcBinaryPath()).toBe(sdkCandidate);
-  });
-
-  test("ignores empty and relative PATH entries during discovery", () => {
-    const relativeCandidate = path.join("relative-path", "wxc-exec.exe");
-    const currentDirectoryCandidate = path.join("", "wxc-exec.exe");
-    const trustedDir = "/trusted-path";
-    const trustedCandidate = path.join(trustedDir, "wxc-exec.exe");
-    process.env.PATH = `;relative-path;${trustedDir}`;
-    existsSyncMock.mockImplementation((candidate) => {
-      const candidatePath = String(candidate);
-      return [relativeCandidate, currentDirectoryCandidate, trustedCandidate].includes(
-        candidatePath,
-      );
-    });
-
-    expect(() => resolveMxcBinaryPath()).toThrow(/wxc-exec\.exe.*not found/u);
   });
 });

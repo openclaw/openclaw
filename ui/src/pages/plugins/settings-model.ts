@@ -1,7 +1,10 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ConfigUiHints } from "../../api/types.ts";
 import type { JsonSchema } from "../../lib/config-form-utils.ts";
+import type { ConfigRead } from "../../lib/config/config-state-model.ts";
+import type { RuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import type { PluginListResult } from "../../lib/plugins/index.ts";
+export const PLUGIN_SETTINGS_VISIBLE_KEYS = ["enabled", "allow", "deny", "load", "slots"] as const;
 
 export type PluginSettingsEditorModel = {
   pluginId: string;
@@ -15,6 +18,8 @@ export type PluginSettingsEditorModel = {
   configBusy: boolean;
   configSchemaLoading: boolean;
   configError: string | null;
+  configRead: ConfigRead | undefined;
+  configSchemaRead: RuntimeConfigCapability["schemaRead"] | undefined;
   onConfigPatch: (path: Array<string | number>, value: unknown) => boolean | void;
   onConfigRemove: (path: Array<string | number>) => boolean | void;
   onConfigReadRetry: () => void;
@@ -45,6 +50,15 @@ export function pluginConfigSchema(
   return schemaProperty(pluginEntrySchema(rootSchema, pluginId), "config");
 }
 
+function selectSchemaProperties(schema: JsonSchema, keys: readonly string[]) {
+  return Object.fromEntries(
+    keys.flatMap((key) => {
+      const property = schema.properties?.[key];
+      return property ? [[key, property] as const] : [];
+    }),
+  );
+}
+
 export function pluginHostControlsSchema(
   rootSchema: JsonSchema | null,
   pluginId: string,
@@ -54,12 +68,7 @@ export function pluginHostControlsSchema(
     return null;
   }
   const keys = ["hooks", "llm", "subagent"];
-  const properties = Object.fromEntries(
-    keys.flatMap((key) => {
-      const schema = entry.properties?.[key];
-      return schema ? [[key, schema] as const] : [];
-    }),
-  );
+  const properties = selectSchemaProperties(entry, keys);
   return Object.keys(properties).length > 0
     ? {
         ...entry,
@@ -75,12 +84,7 @@ export function pluginAdvancedSchema(rootSchema: JsonSchema | null): JsonSchema 
   if (!plugins?.properties) {
     return null;
   }
-  const properties = Object.fromEntries(
-    ["enabled", "allow", "deny", "load", "slots"].flatMap((key) => {
-      const schema = plugins.properties?.[key];
-      return schema ? [[key, schema] as const] : [];
-    }),
-  );
+  const properties = selectSchemaProperties(plugins, PLUGIN_SETTINGS_VISIBLE_KEYS);
   return { ...plugins, properties };
 }
 

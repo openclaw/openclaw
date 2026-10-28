@@ -1,4 +1,3 @@
-// Device Pair plugin module implements pair command approve behavior.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -9,7 +8,6 @@ import { formatPendingRequests } from "./notify.js";
 type PendingPairingEntry = Awaited<ReturnType<typeof listDevicePairing>>["pending"][number];
 type ApprovePairingResult = Awaited<ReturnType<typeof approveDevicePairing>>;
 type ApprovedPairingEntry = Exclude<ApprovePairingResult, null | { status: "forbidden" }>;
-type ForbiddenPairingEntry = Extract<ApprovePairingResult, { status: "forbidden" }>;
 
 function buildMultiplePendingApprovalReply(pending: PendingPairingEntry[]): { text: string } {
   return {
@@ -49,7 +47,6 @@ export function selectPendingApprovalRequest(params: {
 
   return {
     pending: params.pending.find((entry) => entry.requestId === params.requested),
-    reply: undefined,
   };
 }
 
@@ -58,10 +55,6 @@ function formatApprovedPairingReply(approved: ApprovedPairingEntry): { text: str
   const platform = normalizeOptionalString(approved.device.platform);
   const platformLabel = platform ? ` (${platform})` : "";
   return { text: `✅ Paired ${label}${platformLabel}.` };
-}
-
-function formatForbiddenPairingRequirement(approved: ForbiddenPairingEntry): string {
-  return approved.scope ?? approved.role ?? "additional approval";
 }
 
 export async function approvePendingPairingRequest(params: {
@@ -88,7 +81,7 @@ export async function approvePendingPairingRequest(params: {
   }
   if (approved.status === "forbidden") {
     return {
-      text: `⚠️ This command requires ${formatForbiddenPairingRequirement(approved)} to approve this pairing request.`,
+      text: `⚠️ This command requires ${approved.scope ?? approved.role ?? "additional approval"} to approve this pairing request.`,
     };
   }
   return formatApprovedPairingReply(approved);

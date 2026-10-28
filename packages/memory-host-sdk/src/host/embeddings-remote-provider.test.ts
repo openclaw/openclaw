@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { EmbeddingProviderCallOptions } from "./embeddings.types.js";
 
 const mocks = vi.hoisted(() => ({
   fetchRemoteEmbeddingVectors: vi.fn(),
@@ -10,7 +11,7 @@ vi.mock("./embeddings-remote-fetch.js", () => ({
 
 import { createRemoteEmbeddingProvider } from "./embeddings-remote-provider.js";
 
-function createProvider(batchQueryInputs?: boolean) {
+function createProvider(batchQueryInputs?: boolean, maxInputsPerRequest?: number) {
   return createRemoteEmbeddingProvider({
     id: "fixture",
     client: {
@@ -20,20 +21,35 @@ function createProvider(batchQueryInputs?: boolean) {
     },
     errorPrefix: "fixture embeddings failed",
     batchQueryInputs,
+    maxInputsPerRequest,
   });
 }
 
 beforeEach(() => {
   mocks.fetchRemoteEmbeddingVectors.mockReset();
-  mocks.fetchRemoteEmbeddingVectors.mockImplementation(async ({ body }: { body: unknown }) => {
-    const input = (body as { input: string[] }).input;
-    return input.map((_, index) => [index]);
-  });
+  mocks.fetchRemoteEmbeddingVectors.mockImplementation(
+    async ({
+      body,
+      onUsage,
+    }: {
+      body: unknown;
+      onUsage?: EmbeddingProviderCallOptions["onUsage"];
+    }) => {
+      const input = (body as { input: string[] }).input;
+      onUsage?.({ promptTokens: input.length, totalTokens: input.length });
+      return input.map((_, index) => [index]);
+    },
+  );
 });
 
 describe("remote embedding provider request grouping", () => {
   it("runs query batches as one request per input by default", async () => {
-    await createProvider().embedBatch(["first", "second"], { inputType: "query" });
+    const onUsage = vi.fn();
+    await createProvider().embedBatch(["first", "second"], { inputType: "query", onUsage });
+    expect(onUsage.mock.calls).toEqual([
+      [{ promptTokens: 1, totalTokens: 1 }],
+      [{ promptTokens: 1, totalTokens: 1 }],
+    ]);
 
     expect(
       mocks.fetchRemoteEmbeddingVectors.mock.calls.map(([request]) => request.body.input),
@@ -55,5 +71,10 @@ describe("remote embedding provider request grouping", () => {
       "first",
       "second",
     ]);
+  });
+
+  it("exposes the declared per-request input cap on the provider", () => {
+    expect(createProvider(undefined, 2048).maxInputsPerRequest).toBe(2048);
+    expect(createProvider().maxInputsPerRequest).toBeUndefined();
   });
 });

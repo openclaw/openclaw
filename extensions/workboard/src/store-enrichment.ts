@@ -1,21 +1,16 @@
-import { randomUUID } from "node:crypto";
 import type {
+  WorkboardArtifact,
   WorkboardAttachment,
   WorkboardCard,
+  WorkboardMetadata,
   WorkboardNotification,
-  WorkboardWorkerLog,
+  WorkboardProof,
 } from "@openclaw/workboard-contract";
 import type { PersistedWorkboardAttachment } from "./persistence-types.js";
-import {
-  assertCanMutateClaimedCard,
-  cardRunId,
-  cardSessionKey,
-  closeRunningAttempts,
-} from "./store-card-helpers.js";
+import { assertCanMutateClaimedCard, cardRunId, cardSessionKey } from "./store-card-helpers.js";
 import {
   MAX_CARD_ARTIFACTS,
   MAX_CARD_ATTACHMENTS,
-  MAX_CARD_NOTIFICATIONS,
   MAX_CARD_PROOF,
   MAX_CARD_WORKER_LOGS,
 } from "./store-constants.js";
@@ -35,28 +30,25 @@ import {
   normalizeAttachmentInput,
   normalizeBoundedString,
   normalizeProofInput,
+  workerLogEntry,
 } from "./store-normalizers.js";
+import { appendCardNotification, finishRun } from "./store-status-write.js";
 
 export class WorkboardEnrichmentStore extends WorkboardCoreStore {
+  protected appendNotification(
+    metadata: WorkboardMetadata | undefined,
+    now: number,
+    notification: Omit<WorkboardNotification, "id" | "createdAt" | "sequence">,
+  ): WorkboardNotification[] {
+    return appendCardNotification(metadata, now, this.nextNotificationSequence(now), notification);
+  }
+
   async addProof(
     id: string,
     input: WorkboardProofInput,
     scope?: WorkboardMutationScope,
   ): Promise<WorkboardCard> {
-    const now = Date.now();
-    const proof = normalizeProofInput(input, now);
-    return await this.updateMetadata(
-      id,
-      (existing) => {
-        assertCanMutateClaimedCard(existing, scope);
-        const metadata = clearDiagnostics(existing.metadata, ["missing_proof"]);
-        return {
-          ...metadata,
-          proof: [...(metadata.proof ?? []), proof].slice(-MAX_CARD_PROOF),
-        };
-      },
-      { preserveProofId: proof.id },
-    );
+    return await this.addEvidence(id, scope, normalizeProofInput(input, Date.now()));
   }
 
   async addProofWithArtifact(
@@ -71,19 +63,7 @@ export class WorkboardEnrichmentStore extends WorkboardCoreStore {
     if (!artifact) {
       throw new Error("artifact url or path is required.");
     }
-    return await this.updateMetadata(
-      id,
-      (existing) => {
-        assertCanMutateClaimedCard(existing, scope);
-        const metadata = clearDiagnostics(existing.metadata, ["missing_proof"]);
-        return {
-          ...metadata,
-          proof: [...(metadata.proof ?? []), proof].slice(-MAX_CARD_PROOF),
-          artifacts: [...(metadata.artifacts ?? []), artifact].slice(-MAX_CARD_ARTIFACTS),
-        };
-      },
-      { preserveProofId: proof.id },
-    );
+    return await this.addEvidence(id, scope, proof, artifact);
   }
 
   async addArtifact(
@@ -95,45 +75,68 @@ export class WorkboardEnrichmentStore extends WorkboardCoreStore {
     if (!artifact) {
       throw new Error("artifact url or path is required.");
     }
-    return await this.updateMetadata(id, (existing) => {
-      assertCanMutateClaimedCard(existing, scope);
-      const metadata = clearDiagnostics(existing.metadata, ["missing_proof"]);
-      return {
-        ...metadata,
-        artifacts: [...(metadata.artifacts ?? []), artifact].slice(-MAX_CARD_ARTIFACTS),
-      };
-    });
+    return await this.addEvidence(id, scope, undefined, artifact);
+  }
+
+  private addEvidence(
+    id: string,
+    scope: WorkboardMutationScope | undefined,
+    proof?: WorkboardProof,
+    artifact?: WorkboardArtifact,
+  ): Promise<WorkboardCard> {
+    return this.updateMetadata(
+      id,
+      (existing) => {
+        assertCanMutateClaimedCard(existing, scope);
+        const metadata = { ...clearDiagnostics(existing.metadata, ["missing_proof"]) };
+        if (proof) {
+          metadata.proof = [...(metadata.proof ?? []), proof].slice(-MAX_CARD_PROOF);
+        }
+        if (artifact) {
+          metadata.artifacts = [...(metadata.artifacts ?? []), artifact].slice(-MAX_CARD_ARTIFACTS);
+        }
+        return metadata;
+      },
+      { preserveProofId: proof?.id },
+    );
   }
 
   async addAttachment(
     id: string,
     input: WorkboardAttachmentInput,
     scope?: WorkboardMutationScope,
+    assertCurrent?: () => void,
   ): Promise<WorkboardCard> {
     return await this.enqueueMutation(async () => {
-      const existing = await this.get(id);
-      if (!existing) {
-        throw new Error(`card not found: ${id}`);
-      }
+      const existing = await this.requireCard(id);
       assertCanMutateClaimedCard(existing, scope);
       const now = Date.now();
       const { attachment, contentBase64 } = normalizeAttachmentInput(id, input, now);
-      await this.attachmentStore.register(attachment.id, {
-        version: 1,
-        attachment,
-        contentBase64,
-      });
+      // Blob storage and metadata publication are separate accepted writes. Each
+      // needs live upload authority; rejection cleanup must not require it.
+      await this.withMutationAuthority(
+        () =>
+          this.attachmentStore.register(attachment.id, {
+            version: 1,
+            attachment,
+            contentBase64,
+          }),
+        assertCurrent,
+      );
       try {
-        const updated = await this.updateCard(id, {
-          metadata: {
-            ...clearDiagnostics(existing.metadata, ["missing_proof"]),
-            attachments: [...(existing.metadata?.attachments ?? []), attachment].slice(
-              -MAX_CARD_ATTACHMENTS,
-            ),
-          },
-        });
+        const updated = await this.withMutationAuthority(
+          async () =>
+            this.updateCard(existing, {
+              metadata: {
+                ...clearDiagnostics(existing.metadata, ["missing_proof"]),
+                attachments: [...(existing.metadata?.attachments ?? []), attachment].slice(
+                  -MAX_CARD_ATTACHMENTS,
+                ),
+              },
+            }),
+          assertCurrent,
+        );
         if (!updated.metadata?.attachments?.some((entry) => entry.id === attachment.id)) {
-          await this.attachmentStore.delete(attachment.id);
           throw new Error("attachment metadata was trimmed before it could be indexed.");
         }
         return updated;
@@ -148,17 +151,13 @@ export class WorkboardEnrichmentStore extends WorkboardCoreStore {
     card: WorkboardCard;
     attachments: WorkboardAttachment[];
   }> {
-    const card = await this.get(id);
-    if (!card) {
-      throw new Error(`card not found: ${id}`);
-    }
+    const card = await this.requireCard(id);
     return { card, attachments: card.metadata?.attachments ?? [] };
   }
 
   async getAttachment(id: string): Promise<PersistedWorkboardAttachment | undefined> {
     const attachmentId = id.trim();
-    const entry = await this.attachmentStore.lookup(attachmentId);
-    return entry?.version === 1 ? entry : undefined;
+    return await this.attachmentStore.lookup(attachmentId);
   }
 
   async deleteAttachment(
@@ -167,17 +166,14 @@ export class WorkboardEnrichmentStore extends WorkboardCoreStore {
     scope?: WorkboardMutationScope,
   ): Promise<WorkboardCard> {
     return await this.enqueueMutation(async () => {
-      const existing = await this.get(cardId);
-      if (!existing) {
-        throw new Error(`card not found: ${cardId}`);
-      }
+      const existing = await this.requireCard(cardId);
       assertCanMutateClaimedCard(existing, scope);
       const attachments = existing.metadata?.attachments ?? [];
       if (!attachments.some((attachment) => attachment.id === attachmentId)) {
         throw new Error(`attachment not found: ${attachmentId}`);
       }
       await this.attachmentStore.delete(attachmentId);
-      return await this.updateCard(cardId, {
+      return await this.updateCard(existing, {
         metadata: {
           ...existing.metadata,
           attachments: attachments.filter((attachment) => attachment.id !== attachmentId),
@@ -196,20 +192,7 @@ export class WorkboardEnrichmentStore extends WorkboardCoreStore {
     if (!message) {
       throw new Error("worker log message is required.");
     }
-    const level =
-      input.level === "warning" || input.level === "error" || input.level === "info"
-        ? input.level
-        : "info";
-    const sessionKey = normalizeBoundedString(input.sessionKey, undefined, 240, "session key");
-    const runId = normalizeBoundedString(input.runId, undefined, 160, "run id");
-    const log: WorkboardWorkerLog = {
-      id: randomUUID(),
-      level,
-      message,
-      createdAt: now,
-      ...(sessionKey ? { sessionKey } : {}),
-      ...(runId ? { runId } : {}),
-    };
+    const log = workerLogEntry(input, message, now);
     return await this.updateMetadata(id, (existing) => {
       assertCanMutateClaimedCard(existing, scope);
       return {
@@ -225,58 +208,35 @@ export class WorkboardEnrichmentStore extends WorkboardCoreStore {
     scope?: WorkboardMutationScope,
   ): Promise<WorkboardCard> {
     return await this.enqueueMutation(async () => {
-      const card = await this.get(id);
-      if (!card) {
-        throw new Error(`card not found: ${id}`);
-      }
+      const card = await this.requireCard(id);
       assertCanMutateClaimedCard(card, scope);
       const now = Date.now();
       const detail =
         normalizeBoundedString(input.detail, undefined, 800, "protocol violation detail") ??
         "Worker stopped without completing or blocking the card.";
-      const sessionKey = normalizeBoundedString(input.sessionKey, undefined, 240, "session key");
-      const runId = normalizeBoundedString(input.runId, undefined, 160, "run id");
-      const log: WorkboardWorkerLog = {
-        id: randomUUID(),
-        level: "error",
-        message: detail,
-        createdAt: now,
-        ...(sessionKey ? { sessionKey } : {}),
-        ...(runId ? { runId } : {}),
-      };
-      const execution =
-        card.execution?.status === "running"
-          ? { ...card.execution, status: "blocked" as const, updatedAt: now }
-          : card.execution;
-      const attempts = closeRunningAttempts(card.metadata?.attempts, now, "blocked", detail);
-      const notification: WorkboardNotification = {
-        id: randomUUID(),
+      const log = workerLogEntry({ ...input, level: "error" }, detail, now);
+      const { sessionKey, runId } = log;
+      const finished = finishRun(card, "blocked", now, detail);
+      const notifications = this.appendNotification(card.metadata, now, {
         kind: "failed",
-        createdAt: now,
-        sequence: this.nextNotificationSequence(now),
         message: capText(detail, 240) ?? "Worker protocol violation.",
         ...(sessionKey || cardSessionKey(card)
           ? { sessionKey: sessionKey ?? cardSessionKey(card) }
           : {}),
         ...(runId || cardRunId(card) ? { runId: runId ?? cardRunId(card) } : {}),
-      };
-      return await this.updateCard(card.id, {
+      });
+      return await this.updateCard(card, {
+        ...finished,
         status: card.status === "done" ? card.status : "blocked",
-        ...(execution ? { execution } : {}),
         metadata: {
-          ...card.metadata,
+          ...finished.metadata,
           workerLogs: [...(card.metadata?.workerLogs ?? []), log].slice(-MAX_CARD_WORKER_LOGS),
           workerProtocol: {
             state: "violated",
             updatedAt: now,
             detail,
           },
-          claim: undefined,
-          ...(attempts ? { attempts } : {}),
-          failureCount: (card.metadata?.failureCount ?? 0) + 1,
-          notifications: [...(card.metadata?.notifications ?? []), notification].slice(
-            -MAX_CARD_NOTIFICATIONS,
-          ),
+          notifications,
         },
       });
     });

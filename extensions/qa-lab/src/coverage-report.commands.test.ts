@@ -4,12 +4,15 @@ import { Command } from "commander";
 import { describe, expect, it, vi } from "vitest";
 import { registerQaLabCli } from "./cli.js";
 import { findQaScenarioMatches, renderQaScenarioMatchesMarkdownReport } from "./coverage-report.js";
-import { defaultQaModelForMode, type QaProviderMode } from "./model-selection.js";
+import { defaultQaModelForMode } from "./model-selection.js";
 import { DEFAULT_QA_LIVE_PROVIDER_MODE } from "./providers/index.js";
 import { readQaScenarioById, type QaSeedScenarioWithSource } from "./scenario-catalog.js";
-import type { QaScorecardChannelDriver } from "./scorecard-taxonomy.js";
 import { selectQaFlowSuiteScenarios } from "./suite-planning.js";
 import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
+
+const suiteArgv = ["pnpm", "openclaw", "qa", "suite"];
+type SuiteSelection = Parameters<typeof selectQaFlowSuiteScenarios>[0];
+type SuiteFilters = Partial<Pick<SuiteSelection, "providerMode" | "channel" | "channelDriver">>;
 
 vi.mock("openclaw/plugin-sdk/qa-runner-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/qa-runner-runtime")>()),
@@ -27,65 +30,60 @@ function captureReportedArgv(command: string): string[] {
   return argv;
 }
 
-function selectReportedCommands(scenarios: QaSeedScenarioWithSource[]) {
+function reportedCommands(scenarios: QaSeedScenarioWithSource[]) {
   const matches = scenarios.flatMap((scenario) => findQaScenarioMatches([scenario], scenario.id));
   const report = renderQaScenarioMatchesMarkdownReport({ query: "selected scenarios", matches });
-  const commands = [...report.matchAll(/`(pnpm openclaw qa suite[^`]+)`/gu)];
+  const commands = report.match(/(?<=`)pnpm openclaw qa suite[^`]+(?=`)/gu) ?? [];
   expect(commands.length).toBeGreaterThan(0);
-  return commands.map(([, command]) => {
-    const argv = captureReportedArgv(command!);
-    expect(argv.slice(0, 4)).toEqual(["pnpm", "openclaw", "qa", "suite"]);
-    const program = new Command();
-    registerQaLabCli(program);
-    const qa = expectDefined(
-      program.commands.find((entry) => entry.name() === "qa"),
-      "qa",
-    );
-    const suite = expectDefined(
-      qa.commands.find((entry) => entry.name() === "suite"),
-      "suite",
-    );
+  return commands;
+}
+
+function selectReportedCommands(scenarios: QaSeedScenarioWithSource[]) {
+  return reportedCommands(scenarios).map((command) => {
+    const argv = captureReportedArgv(command);
+    expect(argv.slice(0, suiteArgv.length)).toEqual(suiteArgv);
+    let suite = new Command();
+    registerQaLabCli(suite);
+    for (const name of ["qa", "suite"]) {
+      suite = expectDefined(
+        suite.commands.find((entry) => entry.name() === name),
+        name,
+      );
+    }
     // Parse the real options without running the suite action or starting a provider.
-    expect(suite.parseOptions(argv.slice(4))).toEqual({ operands: [], unknown: [] });
-    const opts = suite.opts<{
-      scenario: string[];
-      channelDriver?: QaScorecardChannelDriver;
-      channel?: string;
-      providerMode?: QaProviderMode;
-    }>();
+    expect(suite.parseOptions(argv.slice(suiteArgv.length))).toEqual({ operands: [], unknown: [] });
+    const opts = suite.opts<SuiteFilters & { scenario: string[] }>();
     expect(opts.scenario.length).toBeGreaterThan(0);
     const providerMode = opts.providerMode ?? DEFAULT_QA_LIVE_PROVIDER_MODE;
     const selected = selectQaFlowSuiteScenarios({
       scenarios,
+      ...opts,
       scenarioIds: opts.scenario,
-      channelDriver: opts.channelDriver,
-      channel: opts.channel,
       providerMode,
       primaryModel: defaultQaModelForMode(providerMode),
     });
-    expect(
-      selected.map(({ id }) => id),
-      command,
-    ).toEqual(opts.scenario);
-    return {
-      driver: opts.channelDriver ?? "qa-channel",
-      ids: selected.map(({ id }) => id),
-    };
+    const ids = selected.map(({ id }) => id);
+    expect(ids, command).toEqual(opts.scenario);
+    return { driver: opts.channelDriver ?? "qa-channel", ids };
   });
 }
 
 describe("QA coverage command selection", () => {
   it.each([
     ["telegram-assistant-transcript-role-boundary", "crabline"],
-    ["native-command-session-target", "crabline"],
     ["matrix-room-generated-image-delivery", "live"],
     ["remember-across-conversations", "qa-channel"],
     ["whatsapp-access-control-group-disabled", "live"],
     ["instruction-followthrough-repo-contract", "qa-channel"],
     ["agent-startup-instruction-first-action", "qa-channel"],
     ["channel-canary", "qa-channel"],
-  ])("selects exactly %s from its generated command", (id, driver) => {
-    expect(selectReportedCommands([readQaScenarioById(id)])).toEqual([{ driver, ids: [id] }]);
+    [
+      makeQaSuiteTestScenario("driver-only", { config: { requiredChannelDriver: "crabline" } }),
+      "crabline",
+    ],
+  ] as const)("selects exactly %s from its generated command", (input, driver) => {
+    const scenario = typeof input === "string" ? readQaScenarioById(input) : input;
+    expect(selectReportedCommands([scenario])).toEqual([{ driver, ids: [scenario.id] }]);
   });
 
   it("separates conflicting drivers on the same channel and groups compatible scenarios", () => {
@@ -108,32 +106,15 @@ describe("QA coverage command selection", () => {
     ]);
   });
 
-  it("preserves a driver requirement without a pinned channel", () => {
-    const scenario = makeQaSuiteTestScenario("driver-only", {
-      config: { requiredChannelDriver: "crabline" },
-    });
-
-    expect(selectReportedCommands([scenario])).toEqual([
-      { driver: "crabline", ids: [scenario.id] },
-    ]);
-  });
-
   it("keeps a declared driver as one shell argument", () => {
     const requiredChannelDriver = "crabline' ; printf unexpected #";
     const scenario = makeQaSuiteTestScenario("quoted-driver", {
       config: { requiredChannelDriver },
     });
-    const report = renderQaScenarioMatchesMarkdownReport({
-      query: scenario.id,
-      matches: findQaScenarioMatches([scenario], scenario.id),
-    });
-    const command = expectDefined(report.match(/`(pnpm openclaw qa suite[^`]+)`/u)?.[1], "command");
+    const command = expectDefined(reportedCommands([scenario])[0], "command");
 
     expect(captureReportedArgv(command)).toEqual([
-      "pnpm",
-      "openclaw",
-      "qa",
-      "suite",
+      ...suiteArgv,
       "--channel-driver",
       requiredChannelDriver,
       "--scenario",

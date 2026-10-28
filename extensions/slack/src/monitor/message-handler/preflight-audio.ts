@@ -1,4 +1,3 @@
-// Slack plugin module implements captionless audio mention preflight behavior.
 import fs from "node:fs/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { mimeTypeFromFilePath } from "openclaw/plugin-sdk/media-mime";
@@ -76,15 +75,8 @@ export async function resolveSlackPreflightAudioTranscript(params: {
   return transcript ? { transcript, mediaIndex } : null;
 }
 
-export async function sendSlackPreflightAudioTranscriptEcho(params: {
-  transcript: string;
-  cfg: OpenClawConfig;
-  accountId: string;
-  originatingTo: string;
-  messageThreadId?: string;
-}): Promise<void> {
-  await slackPreflightAudio.send(params);
-}
+export const sendSlackPreflightAudioTranscriptEcho =
+  slackPreflightAudio.send.bind(slackPreflightAudio);
 
 export async function discardSlackPreflightMedia(
   media: readonly SlackMediaResult[] | null | undefined,

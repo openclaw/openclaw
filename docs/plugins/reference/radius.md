@@ -15,7 +15,7 @@ Radius model gateway provider.
 ## Distribution
 
 - Package: `@openclaw/radius-provider`
-- Install route: npm or ClawHub: `clawhub:@openclaw/radius-provider`
+- Install route: npm or ClawHub: `@openclaw/radius-provider`
 
 ## Surface
 

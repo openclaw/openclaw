@@ -19,7 +19,7 @@ describe("connection user profile helpers", () => {
     expect(resolveSelfPresenceUser(entries, undefined)).toBeNull();
   });
 
-  it("prefers locally refreshed identity state over the presence snapshot", () => {
+  it("preserves refreshed or cleared identity over the presence snapshot", () => {
     const presenceEntries = [{ instanceId: "self", user: { id: "profile-1", name: "Ada" }, ts: 1 }];
 
     expect(
@@ -29,6 +29,13 @@ describe("connection user profile helpers", () => {
         presenceInstanceId: "self",
       }),
     ).toEqual({ id: "profile-1", name: "Augusta Ada" });
+    expect(
+      resolveCurrentSelfUser({
+        snapshotUser: null,
+        presenceEntries,
+        presenceInstanceId: "self",
+      }),
+    ).toBeNull();
     expect(resolveCurrentSelfUser({ presenceEntries, presenceInstanceId: "self" })).toEqual({
       id: "profile-1",
       name: "Ada",

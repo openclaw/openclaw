@@ -4,8 +4,8 @@ import { sanitizeExecApprovalDisplayTextWithStatus } from "../../infra/exec-appr
 import { DEFAULT_EXEC_APPROVAL_TIMEOUT_MS } from "../../infra/exec-approvals.js";
 import { createAgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import type { WorkerEnvironmentAttachment } from "../worker-environments/session-attachment.js";
+import { handlePendingApprovalRequestWithDelivery } from "./approval-request-delivery.js";
 import { bindApprovalRequesterMetadata } from "./approval-shared.js";
-import { handlePendingExecApprovalRequest } from "./exec-approval-request-delivery.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 /** Reuses operator approval custody; a decision authorizes this exact admitted invocation only. */
@@ -77,7 +77,8 @@ export async function approveSessionEnvironmentCommand(params: {
   const { decision } = await manager.register(record, DEFAULT_EXEC_APPROVAL_TIMEOUT_MS);
   void decision.catch(() => undefined);
   let approved = false;
-  await handlePendingExecApprovalRequest({
+  await handlePendingApprovalRequestWithDelivery({
+    approvalKind: "exec",
     manager,
     record,
     context: options.context,

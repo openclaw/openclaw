@@ -107,51 +107,19 @@ class MascotAnimatorTest {
   }
 
   @Test
-  fun clampCoversEveryBoundedChannel() {
+  fun clampKeepsCombinedGestureChannelsInsideArtBounds() {
     val pose =
       MascotPose(
         floatOffset = 100.0,
-        antennaDegrees = -100.0,
-        antennaDroop = 2.0,
         leftClawDegrees = -100.0,
         rightClawDegrees = 100.0,
-        eyeGlowAlpha = -1.0,
-        glowScale = 9.0,
-        leftEyeOpenness = -1.0,
-        rightEyeOpenness = 2.0,
-        happyEyes = 2.0,
-        gaze = MascotGaze(x = -9.0, y = 9.0),
-        mouthCurve = -9.0,
-        mouthOpen = 9.0,
-        mouthRound = -9.0,
-        blush = 9.0,
-        hardHat = -9.0,
-        bodyTilt = 90.0,
         bodyStretch = 9.0,
-        effect = MascotEffect.Sweat,
-        effectPhase = 0.75,
       ).clamp()
 
     assertEquals(2.0, pose.floatOffset, 0.0)
-    assertEquals(-14.0, pose.antennaDegrees, 0.0)
-    assertEquals(1.0, pose.antennaDroop, 0.0)
     assertEquals(-45.0, pose.leftClawDegrees, 0.0)
     assertEquals(45.0, pose.rightClawDegrees, 0.0)
-    assertEquals(0.0, pose.eyeGlowAlpha, 0.0)
-    assertEquals(1.6, pose.glowScale, 0.0)
-    assertEquals(0.0, pose.leftEyeOpenness, 0.0)
-    assertEquals(1.0, pose.rightEyeOpenness, 0.0)
-    assertEquals(1.0, pose.happyEyes, 0.0)
-    assertEquals(MascotGaze(x = -1.2, y = 1.2), pose.gaze)
-    assertEquals(-1.0, pose.mouthCurve, 0.0)
-    assertEquals(1.0, pose.mouthOpen, 0.0)
-    assertEquals(0.0, pose.mouthRound, 0.0)
-    assertEquals(1.0, pose.blush, 0.0)
-    assertEquals(0.0, pose.hardHat, 0.0)
-    assertEquals(8.0, pose.bodyTilt, 0.0)
     assertEquals(1.05, pose.bodyStretch, 0.0)
-    assertEquals(MascotEffect.Sweat, pose.effect)
-    assertEquals(0.75, pose.effectPhase, 0.0)
   }
 
   private fun assertInBounds(

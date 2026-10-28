@@ -1,21 +1,30 @@
-// Pairing CLI for listing and approving channel DM pairing requests.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
-import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
-import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
+import type {
+  ChannelsPairingCliListResult,
+  ChannelsPairingCodeApproveResult,
+} from "../../packages/gateway-protocol/src/schema/channel-pairing.js";
+import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
+import {
+  getTerminalTableWidth,
+  renderTerminalSafeTable,
+} from "../../packages/terminal-core/src/table.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
 import { listPairingChannels, notifyPairingApproved } from "../channels/plugins/pairing.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { bootstrapCommandOwnerFromPairing } from "../pairing/command-owner.js";
 import { resolvePairingIdLabel } from "../pairing/pairing-labels.js";
 import { approveChannelPairingCode, listChannelPairingRequests } from "../pairing/pairing-store.js";
 import type { PairingChannel } from "../pairing/pairing-store.types.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatCliCommand } from "./command-format.js";
+import { formatDocsHelp } from "./help-format.js";
+import { runWithLocalStateOwner } from "./local-state-owner.js";
 
 /** Parse channel, allowing extension channels not in core registry. */
 function parseChannel(raw: unknown, channels: PairingChannel[]): PairingChannel {
@@ -45,22 +54,6 @@ function parseChannel(raw: unknown, channels: PairingChannel[]): PairingChannel 
   );
 }
 
-async function notifyApproved(
-  channel: PairingChannel,
-  id: string,
-  accountId?: string,
-  meta?: Record<string, string>,
-) {
-  const cfg = getRuntimeConfig();
-  await notifyPairingApproved({
-    channelId: channel,
-    id,
-    cfg,
-    ...(accountId ? { accountId } : {}),
-    ...(meta ? { meta } : {}),
-  });
-}
-
 function resolveAccountId(raw: unknown): string | undefined {
   const accountId = normalizeStringifiedOptionalString(raw);
   // Omission intentionally leaves pairing unscoped; an explicit blank must not
@@ -78,11 +71,7 @@ export function registerPairingCli(program: Command) {
   const pairing = program
     .command("pairing")
     .description("Secure DM pairing (approve inbound requests)")
-    .addHelpText(
-      "after",
-      () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/pairing", "docs.openclaw.ai/cli/pairing")}\n`,
-    );
+    .addHelpText("after", () => formatDocsHelp("/cli/pairing"));
 
   pairing
     .command("list")
@@ -114,15 +103,20 @@ export function registerPairingCli(program: Command) {
         }
       }
       const accountId = resolveAccountId(opts.account);
-      const requests = accountId
-        ? await listChannelPairingRequests(channel, process.env, accountId)
-        : await listChannelPairingRequests(channel);
+      const requests = await runWithLocalStateOwner<ChannelsPairingCliListResult>({
+        method: "channels.pairing.list",
+        params: { channel, format: "cli", ...(accountId ? { accountId } : {}) },
+        target: `${channel} pairing requests`,
+        requiredCapabilities: [GATEWAY_SERVER_CAPS.CHANNELS_PAIRING_LIST_OWNER],
+        runLocal: async ({ env, assertCurrent }) =>
+          await listChannelPairingRequests(channel, env, accountId, assertCurrent),
+      });
       if (opts.json) {
         defaultRuntime.writeJson({ channel, requests });
         return;
       }
       if (requests.length === 0) {
-        defaultRuntime.log(theme.muted(`No pending ${channel} pairing requests.`));
+        defaultRuntime.log(theme.muted(terminalText`No pending ${channel} pairing requests.`));
         return;
       }
       const idLabel = resolvePairingIdLabel(channel);
@@ -131,11 +125,11 @@ export function registerPairingCli(program: Command) {
         `${theme.heading("Pairing requests")} ${theme.muted(`(${requests.length})`)}`,
       );
       defaultRuntime.log(
-        renderTable({
+        renderTerminalSafeTable({
           width: tableWidth,
           columns: [
             { key: "Code", header: "Code", minWidth: 10 },
-            { key: "ID", header: idLabel, minWidth: 12, flex: true },
+            { key: "ID", header: terminalText`${idLabel}`, minWidth: 12, flex: true },
             { key: "Meta", header: "Meta", minWidth: 8, flex: true },
             { key: "Requested", header: "Requested", minWidth: 12 },
           ],
@@ -159,18 +153,9 @@ export function registerPairingCli(program: Command) {
     .option("--notify", "Notify the requester on the same channel", false)
     .action(async (codeOrChannel, code, opts) => {
       const defaultChannel = channels.length === 1 ? channels[0] : "";
-      const usingExplicitChannel = Boolean(opts.channel);
-      const hasPositionalCode = code != null;
-      const channelRaw = usingExplicitChannel
-        ? opts.channel
-        : hasPositionalCode
-          ? codeOrChannel
-          : defaultChannel;
-      const resolvedCode = usingExplicitChannel
-        ? codeOrChannel
-        : hasPositionalCode
-          ? code
-          : codeOrChannel;
+      const usingPositionalChannel = !opts.channel && code != null;
+      const channelRaw = opts.channel || (usingPositionalChannel ? codeOrChannel : defaultChannel);
+      const resolvedCode = usingPositionalChannel ? code : codeOrChannel;
       if (!channelRaw || !resolvedCode) {
         throw new Error(
           `Usage: ${formatCliCommand("openclaw pairing approve <channel> <code>")} (or: ${formatCliCommand("openclaw pairing approve --channel <channel> <code>")})`,
@@ -183,16 +168,16 @@ export function registerPairingCli(program: Command) {
       }
       const channel = parseChannel(channelRaw, channels);
       const accountId = resolveAccountId(opts.account);
-      const approved = accountId
-        ? await approveChannelPairingCode({
-            channel,
-            code: String(resolvedCode),
-            accountId,
-          })
-        : await approveChannelPairingCode({
-            channel,
-            code: String(resolvedCode),
-          });
+      const params = { channel, code: String(resolvedCode), ...(accountId ? { accountId } : {}) };
+      const approved = await runWithLocalStateOwner<ChannelsPairingCodeApproveResult>({
+        method: "channels.pairing.approve",
+        params,
+        target: `${channel} pairing request`,
+        recoveryCommand: `openclaw pairing list --channel ${channel}`,
+        requiredCapabilities: [GATEWAY_SERVER_CAPS.CHANNELS_PAIRING_APPROVE_OWNER],
+        runLocal: async ({ env, assertCurrent }) =>
+          await approveChannelPairingCode({ ...params, env, assertCurrent }),
+      });
       if (!approved) {
         throw new Error(
           `No pending pairing request found for code "${String(resolvedCode)}". Run ${formatCliCommand(`openclaw pairing list --channel ${channel}`)} to list pending requests.`,
@@ -200,7 +185,7 @@ export function registerPairingCli(program: Command) {
       }
 
       defaultRuntime.log(
-        `${theme.success("Approved")} ${theme.muted(channel)} sender ${theme.command(approved.entry.meta?.senderId ?? approved.id)}.`,
+        `${theme.success("Approved")} ${theme.muted(terminalText`${channel}`)} sender ${theme.command(terminalText`${approved.entry.meta?.senderId ?? approved.id}`)}.`,
       );
       const ownerBootstrap = await bootstrapCommandOwnerFromPairing({
         channel,
@@ -208,7 +193,7 @@ export function registerPairingCli(program: Command) {
       });
       if (ownerBootstrap.status === "configured" && ownerBootstrap.ownerEntry) {
         defaultRuntime.log(
-          `${theme.success("Command owner configured")} ${theme.command(ownerBootstrap.ownerEntry)} ${theme.muted("(commands.ownerAllowFrom was empty).")}`,
+          `${theme.success("Command owner configured")} ${theme.command(terminalText`${ownerBootstrap.ownerEntry}`)} ${theme.muted("(commands.ownerAllowFrom was empty).")}`,
         );
       }
 
@@ -217,10 +202,16 @@ export function registerPairingCli(program: Command) {
       }
       const approvedAccountId =
         accountId || normalizeStringifiedOptionalString(approved.entry?.meta?.accountId);
-      await notifyApproved(channel, approved.id, approvedAccountId, approved.entry.meta).catch(
-        (err: unknown) => {
-          defaultRuntime.log(theme.warn(`Failed to notify requester: ${String(err)}`));
-        },
-      );
+      try {
+        await notifyPairingApproved({
+          channelId: channel,
+          id: approved.id,
+          cfg: await captureRuntimeConfigAsyncReader()(),
+          ...(approvedAccountId ? { accountId: approvedAccountId } : {}),
+          ...(approved.entry.meta ? { meta: approved.entry.meta } : {}),
+        });
+      } catch (err) {
+        defaultRuntime.log(theme.warn(terminalText`Failed to notify requester: ${String(err)}`));
+      }
     });
 }

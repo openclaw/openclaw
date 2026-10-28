@@ -1,29 +1,45 @@
-/**
- * Defines the narrow set of tool instances that blind attempt retries may repeat.
- */
+import { PluginHostObject } from "../plugins/plugin-instance-owned-values.js";
+import { resolveCoreToolFacts, TOOL_CALL_RAW_TOOL_NAME } from "./tool-catalog.js";
 import { normalizeToolPolicyName } from "./tool-policy-shared.js";
 
-const UNCONDITIONALLY_REPLAY_SAFE_TOOL_NAMES = new Set([
-  "read",
-  "search",
-  "find",
-  "grep",
-  "glob",
-  "ls",
-  "web_search",
-  "web_fetch",
-  "x_search",
-  "memory_get",
-  "sessions_list",
-  "sessions_history",
-  "sessions_search",
-  "agents_list",
-  "conversations_list",
-  "get_goal",
-  "tool_search",
-  "tool_describe",
-  "view_image",
-]);
+type AgentToolReplaySafety = "bounded-read" | "dispatcher";
+
+/** Private source-instance metadata survives only the host's canonical tool copies. */
+class ToolReplaySafety extends PluginHostObject {
+  #kind: AgentToolReplaySafety;
+
+  constructor(tool: object, kind: AgentToolReplaySafety) {
+    super(tool);
+    this.#kind = kind;
+  }
+
+  static get(tool: object): AgentToolReplaySafety | undefined {
+    return #kind in tool ? tool.#kind : undefined;
+  }
+
+  static set(tool: object, kind: AgentToolReplaySafety): void {
+    if (#kind in tool) {
+      tool.#kind = kind;
+    } else {
+      void new ToolReplaySafety(tool, kind);
+    }
+  }
+}
+
+export function bindAgentToolReplaySafety<T extends object>(
+  tool: T,
+  kind: AgentToolReplaySafety,
+): T {
+  ToolReplaySafety.set(tool, kind);
+  return tool;
+}
+
+export function copyAgentToolReplaySafety(source: object, target: object): void {
+  const kind = ToolReplaySafety.get(source);
+  if (kind) {
+    ToolReplaySafety.set(target, kind);
+  }
+}
 
 type NamedTool = { name?: string };
 
@@ -50,7 +66,8 @@ export function isAgentToolReplaySafe(
   if (options?.declaredReplaySafe?.(tool) === false) {
     return false;
   }
-  return UNCONDITIONALLY_REPLAY_SAFE_TOOL_NAMES.has(normalizeToolPolicyName(tool.name ?? ""));
+  const safety = resolveCoreToolFacts(normalizeToolPolicyName(tool.name ?? ""))?.replay;
+  return ToolReplaySafety.get(tool) === "bounded-read" || safety === "both" || safety === "blind";
 }
 
 /**
@@ -66,7 +83,12 @@ export function isAgentToolRestartSafe(
   if (declaredReplaySafe !== undefined) {
     return declaredReplaySafe;
   }
-  return UNCONDITIONALLY_REPLAY_SAFE_TOOL_NAMES.has(normalizeToolPolicyName(tool.name ?? ""));
+  // Tool Search can dispatch only into the catalog built after this filter.
+  // Do not infer safety for other dispatchers or name-only interrupted calls.
+  return (
+    isAgentToolReplaySafe(tool) ||
+    (tool.name === TOOL_CALL_RAW_TOOL_NAME && ToolReplaySafety.get(tool) === "dispatcher")
+  );
 }
 
 /**

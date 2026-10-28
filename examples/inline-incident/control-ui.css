@@ -1,0 +1,25 @@
+.incident-tools-card {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px;
+  background: var(--bg-elevated);
+}
+.incident-tools-eyebrow {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  letter-spacing: 0.04em;
+}
+.incident-tools-card h3 {
+  margin: 10px 0;
+  font-size: 20px;
+}
+.incident-tools-status {
+  color: var(--muted);
+}
+.incident-tools-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 16px;
+}

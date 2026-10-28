@@ -10,9 +10,6 @@ import { log } from "./embedded-agent-runner/logger.js";
 export type OpenAITextVerbosity = "low" | "medium" | "high";
 
 function normalizeOpenAITextVerbosity(value: unknown): OpenAITextVerbosity | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
   const normalized = normalizeOptionalLowercaseString(value);
   if (normalized === "low" || normalized === "medium" || normalized === "high") {
     return normalized;

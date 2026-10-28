@@ -1,10 +1,12 @@
-// Launches the TUI process with resolved environment and arguments.
 import { spawn } from "node:child_process";
-import path from "node:path";
+import {
+  isStandaloneRuntimeExecutable,
+  resolveOpenClawCliInvocation,
+} from "../../cli-invocation.mjs";
 import { formatErrorMessage } from "../infra/errors.js";
 import { filterOpenClawChildExecArgv } from "../infra/openclaw-cli-invocation.js";
 import { attachChildProcessBridge } from "../process/child-process-bridge.js";
-import type { TuiOptions } from "./tui.js";
+import type { TuiOptions } from "./tui-types.js";
 
 function appendOption(args: string[], flag: string, value: string | number | undefined): void {
   if (value === undefined) {
@@ -13,20 +15,12 @@ function appendOption(args: string[], flag: string, value: string | number | und
   args.push(flag, String(value));
 }
 
-function buildCurrentCliEntryArgs(): string[] {
+export async function launchTuiCli(opts: TuiOptions): Promise<void> {
   const entry = process.argv[1]?.trim();
-  if (!entry) {
+  if (!entry && !isStandaloneRuntimeExecutable()) {
     throw new Error("unable to relaunch TUI: current CLI entry path is unavailable");
   }
-  return path.isAbsolute(entry) ? [entry] : [];
-}
-
-function buildTuiCliArgs(opts: TuiOptions): string[] {
-  const args = [
-    ...filterOpenClawChildExecArgv(process.execArgv),
-    ...buildCurrentCliEntryArgs(),
-    "tui",
-  ];
+  const args = ["tui"];
   if (opts.local) {
     args.push("--local");
   }
@@ -42,18 +36,16 @@ function buildTuiCliArgs(opts: TuiOptions): string[] {
   if (opts.deliver) {
     args.push("--deliver");
   }
-  return args;
-}
-
-/** Launches a child TUI process with inherited stdio. */
-export async function launchTuiCli(opts: TuiOptions): Promise<void> {
-  const args = buildTuiCliArgs(opts);
+  const invocation = resolveOpenClawCliInvocation({
+    args,
+    execArgv: filterOpenClawChildExecArgv(process.execArgv),
+  });
   // Pause parent stdin while the inherited-stdio child owns the terminal.
   // Keep it paused afterward so setup/container parents with stdin_open can exit.
   process.stdin.pause();
 
   await new Promise<void>((resolve, reject) => {
-    const child = spawn(process.execPath, args, {
+    const child = spawn(invocation.command, invocation.args, {
       stdio: "inherit",
       env: process.env,
     });

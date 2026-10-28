@@ -1,6 +1,8 @@
 import type { IncomingMessage } from "node:http";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { readTailscaleWhoisIdentity, type TailscaleWhoisIdentity } from "../infra/tailscale.js";
+import { createDedupeCache } from "../infra/dedupe.js";
+import type { TailscaleWhoisIdentity } from "../infra/tailscale.js";
+import { firstHeaderValue } from "./http-header-value.js";
 import {
   hasForwardedRequestHeaders,
   isLoopbackAddress,
@@ -8,10 +10,16 @@ import {
   resolveClientIp,
   resolveRequestClientIpFromHeaders,
 } from "./net.js";
+import type { RemoteControlUiIngressContext } from "./server/client-identity-types.js";
 
 export const PROXY_ATTRIBUTION_REQUIRED_REASON = "proxy_attribution_required";
 export const PROXY_ATTRIBUTION_GUIDANCE =
   "Configure gateway.trustedProxies narrowly and make the proxy overwrite or safely rebuild forwarded client headers.";
+// Surface a small fleet's distinct peers while capping hostile unique-source log growth.
+// Each source waits out its own window before warning again, so long-lived Gateways keep
+// reporting later incidents without one noisy peer spending the whole budget.
+const UNATTRIBUTABLE_PROXY_WARNING_WINDOW_MS = 5 * 60_000;
+const UNATTRIBUTABLE_PROXY_WARNING_MAX_SOURCES = 16;
 
 export type GatewayTailscaleIngressMode = "serve" | "funnel";
 
@@ -22,6 +30,7 @@ export type GatewayTailscaleIngressEndpoint = {
 
 export type GatewayIngressTransport =
   | { kind: "ordinary" }
+  | { kind: "remote-forwarded"; context: RemoteControlUiIngressContext }
   | { kind: "managed-tailscale"; mode: GatewayTailscaleIngressMode };
 
 export type VerifiedTailscaleIngressIdentity = {
@@ -45,6 +54,7 @@ type AttributedGatewayIngress = {
 export type GatewayIngressAttribution =
   | (AttributedGatewayIngress & { kind: "direct-local" })
   | (AttributedGatewayIngress & { kind: "direct-remote" })
+  | (AttributedGatewayIngress & { kind: "remote-forwarded" })
   | (AttributedGatewayIngress & {
       kind: "trusted-proxy";
       /** Deny-only observation; this never grants managed Tailscale provenance. */
@@ -81,6 +91,9 @@ export function markGatewayIngressTransport(
   if (existing) {
     if (
       existing.kind !== transport.kind ||
+      (existing.kind === "remote-forwarded" &&
+        transport.kind === "remote-forwarded" &&
+        existing.context !== transport.context) ||
       (existing.kind === "managed-tailscale" &&
         transport.kind === "managed-tailscale" &&
         existing.mode !== transport.mode)
@@ -89,11 +102,41 @@ export function markGatewayIngressTransport(
     }
     return;
   }
-  requestTransport.set(req, transport);
+  if (preparedAttribution.has(req)) {
+    throw new Error("Gateway ingress policy already prepared before transport assignment");
+  }
+  requestTransport.set(req, Object.freeze({ ...transport }));
 }
 
-function headerValue(value: string | string[] | undefined): string | undefined {
-  return Array.isArray(value) ? value[0] : value;
+export function readGatewayIngressTransport(
+  req: IncomingMessage,
+): GatewayIngressTransport | undefined {
+  return requestTransport.get(req);
+}
+
+export function getRemoteControlUiIngressContext(
+  req: IncomingMessage,
+): RemoteControlUiIngressContext | undefined {
+  const transport = readGatewayIngressTransport(req);
+  return transport?.kind === "remote-forwarded" ? transport.context : undefined;
+}
+
+export function assertRemoteControlUiIngressCurrent(
+  context: RemoteControlUiIngressContext | undefined,
+): void {
+  context?.signal.throwIfAborted();
+  context?.assertCurrent();
+}
+
+export function hasCurrentRemoteControlUiIngress(
+  context: RemoteControlUiIngressContext | undefined,
+): boolean {
+  try {
+    assertRemoteControlUiIngressCurrent(context);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function unattributableProxy(remoteAddress: string): GatewayIngressAttribution {
@@ -141,7 +184,7 @@ function hasTailscaleOwnedHeaders(req: IncomingMessage): boolean {
 function resolveTailscaleClientIp(req: IncomingMessage): string | undefined {
   return resolveClientIp({
     remoteAddr: req.socket?.remoteAddress,
-    forwardedFor: headerValue(req.headers?.["x-forwarded-for"]),
+    forwardedFor: firstHeaderValue(req.headers?.["x-forwarded-for"]),
     trustedProxies: ["127.0.0.1", "::1"],
   });
 }
@@ -160,7 +203,7 @@ function resolveManagedTailscaleIngress(params: {
   if (!clientIp || isLoopbackAddress(clientIp)) {
     return unattributableProxy(remoteAddress);
   }
-  const funnelMarker = headerValue(req.headers?.["tailscale-funnel-request"]);
+  const funnelMarker = firstHeaderValue(req.headers?.["tailscale-funnel-request"]);
   if (mode === "funnel") {
     return !funnelMarker || funnelMarker === "?1"
       ? attributed("tailscale-funnel", clientIp)
@@ -211,12 +254,28 @@ function resolveGatewayIngressAttribution(params: {
     "unknown";
   const transport = requestTransport.get(req) ?? { kind: "ordinary" as const };
 
+  if (transport.kind === "remote-forwarded") {
+    return Object.freeze({
+      kind: "remote-forwarded",
+      clientIp: remoteAddress,
+      rateLimit: Object.freeze({
+        subject: Object.freeze({ key: `remote-control-ui:${transport.context.pluginId}` }),
+        resetOnSuccess: true as const,
+      }),
+    });
+  }
+
   if (transport.kind === "managed-tailscale") {
     return resolveManagedTailscaleIngress({
       req,
       mode: transport.mode,
       remoteAddress,
-      tailscaleWhois: params.tailscaleWhois ?? readTailscaleWhoisIdentity,
+      tailscaleWhois:
+        params.tailscaleWhois ??
+        (async (ip) => {
+          const { readTailscaleWhoisIdentity } = await import("../infra/tailscale.js");
+          return readTailscaleWhoisIdentity(ip);
+        }),
     });
   }
 
@@ -236,7 +295,7 @@ function resolveGatewayIngressAttribution(params: {
     }
     return {
       ...attributed("trusted-proxy", clientIp),
-      ...(headerValue(req.headers?.["tailscale-funnel-request"]) === "?1"
+      ...(firstHeaderValue(req.headers?.["tailscale-funnel-request"]) === "?1"
         ? { externalTailscaleExposure: "funnel" as const }
         : {}),
     };
@@ -271,16 +330,40 @@ export type GatewayUnattributableProxyReporter = (
   attribution: Extract<GatewayIngressAttribution, { kind: "unattributable-proxy" }>,
 ) => void;
 
-/** Emits one actionable warning per runtime without attacker-controlled log growth. */
+/** Emits bounded, per-source warnings so one rejected peer cannot hide every later peer. */
 export function createGatewayUnattributableProxyReporter(log: {
   warn: (message: string) => void;
 }): GatewayUnattributableProxyReporter {
-  let emitted = false;
+  const reportedSources = createDedupeCache({
+    ttlMs: UNATTRIBUTABLE_PROXY_WARNING_WINDOW_MS,
+    // A source TTL can straddle an aggregate reset, so retain both adjacent budgets.
+    maxSize: UNATTRIBUTABLE_PROXY_WARNING_MAX_SOURCES * 2,
+  });
+  let windowStartedAt = Date.now();
+  let lastObservedAt = windowStartedAt;
+  let emittedInWindow = 0;
   return (attribution) => {
-    if (emitted) {
+    const now = Date.now();
+    // Reset the aggregate budget on expiry or rollback. Only rollback invalidates
+    // per-source TTLs; an ordinary refill must retain peers warned beside it.
+    if (now < lastObservedAt || now - windowStartedAt >= UNATTRIBUTABLE_PROXY_WARNING_WINDOW_MS) {
+      windowStartedAt = now;
+      emittedInWindow = 0;
+      if (now < lastObservedAt) {
+        reportedSources.clear();
+      }
+    }
+    lastObservedAt = now;
+    if (
+      emittedInWindow >= UNATTRIBUTABLE_PROXY_WARNING_MAX_SOURCES ||
+      // Peek rather than check: continued traffic from a suppressed peer must not keep
+      // refreshing its record, or a persistent source would never be reported again.
+      reportedSources.peek(attribution.remoteAddress, now)
+    ) {
       return;
     }
-    emitted = true;
+    reportedSources.check(attribution.remoteAddress, now);
+    emittedInWindow += 1;
     log.warn(
       `gateway: observed unattributable proxy-shaped traffic from ${attribution.remoteAddress}; Gateway-authenticated routes reject it, while plugin-authenticated routes ignore forwarded claims. ${attribution.guidance}`,
     );

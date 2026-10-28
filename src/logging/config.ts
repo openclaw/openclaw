@@ -1,4 +1,3 @@
-// Logging config helpers read and normalize logger configuration.
 import fs from "node:fs";
 import { isRecord as isObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveConfigEnvVars } from "../config/env-substitution.js";
@@ -118,8 +117,7 @@ export function readLoggingConfig(): LoggingConfig | undefined {
           allowedRoots,
         });
       } catch {
-        const logging = resolvePartialDiagnosticLoggingConfig(directLogging);
-        return logging;
+        return resolvePartialDiagnosticLoggingConfig(directLogging);
       }
     }
     let resolvedConfig: unknown;
@@ -127,8 +125,7 @@ export function readLoggingConfig(): LoggingConfig | undefined {
       resolvedConfig = resolveConfigEnvVars(includedConfig);
     } catch {
       const includedLogging = isObjectRecord(includedConfig) ? includedConfig.logging : undefined;
-      const logging = resolvePartialDiagnosticLoggingConfig(includedLogging);
-      return logging;
+      return resolvePartialDiagnosticLoggingConfig(includedLogging);
     }
     const logging = isObjectRecord(resolvedConfig) ? resolvedConfig.logging : undefined;
     const resolvedLogging = isObjectRecord(logging) ? (logging as LoggingConfig) : undefined;

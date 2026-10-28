@@ -1,11 +1,17 @@
+import {
+  assertOperatorModelAllowed,
+  createOperatorModelSelectionAssertion,
+  type AdmittedRunOperatorAuthority,
+} from "../agents/admitted-run-context.js";
 import { resolveAgentDir, type AgentModelPrimaryWriteTarget } from "../agents/agent-scope.js";
+import { prepareAuthProfileProvider } from "../agents/auth-profiles/store-runtime.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { modelKey, resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import {
   createModelVisibilityPolicy,
   type ModelVisibilityPolicy,
 } from "../agents/model-visibility-policy.js";
-import { resolveContextConfigProviderForRuntime } from "../agents/openai-routing.js";
+import { resolveOperatorModelDefault } from "../agents/operator-model-policy.js";
 import {
   persistStickyModelSelectionBestEffort,
   type StickyModelSelectionDispatchOutcome,
@@ -18,8 +24,8 @@ import {
 } from "../auto-reply/reply/model-runtime-normalization.js";
 import { resolveContextTokens } from "../auto-reply/reply/model-selection-context.js";
 import { refreshQueuedFollowupSession } from "../auto-reply/reply/queue.js";
+import { hasPendingFollowupQueueWork } from "../auto-reply/reply/queue/state.js";
 import { persistReplySessionEntry } from "../auto-reply/reply/session-entry-persistence.js";
-import { resolveSupportedThinkingLevel } from "../auto-reply/thinking.js";
 import type { ThinkLevel } from "../auto-reply/thinking.shared.js";
 import { resolveCollapsedSessionAuthPinSource } from "../config/sessions/auth-profile-override-provenance.js";
 import {
@@ -27,11 +33,14 @@ import {
   SESSION_MODEL_OVERRIDE_TRANSACTION_FIELDS,
   sessionModelOverrideChangesApplied,
 } from "../config/sessions/session-snapshot-merge.js";
+import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { triggerSessionPatchHook } from "../gateway/session-patch-hooks.js";
 import { resolveSessionWorkerPlacementContext } from "../gateway/session-worker-placement-context.js";
-import { resolveWorkerPlacementSessionRuntimeCapabilities } from "../gateway/worker-environments/placement-session-runtime.js";
+import { prepareWorkerPlacementSessionRuntime } from "../gateway/worker-environments/placement-session-runtime-preparation.js";
+import { resolveWorkerPlacementCapabilities } from "../gateway/worker-environments/placement-session-runtime.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { resolveSystemEventQueueKey } from "../infra/system-event-ownership.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { applyModelOverrideWithAuthProfileCompatibility } from "../sessions/auth-profile-preservation.js";
@@ -75,6 +84,12 @@ export type ApplySessionModelSelectionParams = {
   markLiveSwitchPending: true;
 };
 
+export type InternalApplySessionModelSelectionParams = ApplySessionModelSelectionParams & {
+  operatorAuthority?: AdmittedRunOperatorAuthority;
+  /** Set only by the released SDK adapter for its opaque synchronous validator. */
+  nativeCommitValidation?: true;
+};
+
 export type ApplySessionModelSelectionResult =
   | {
       status: "applied";
@@ -86,6 +101,7 @@ export type ApplySessionModelSelectionResult =
       contextTokens: number;
       configuredDefaultUpdate?: StickyModelSelectionDispatchOutcome;
       runtimeChange?: { kind: "clear" } | { kind: "set"; runtime: string };
+      /** @deprecated No longer emitted; retained for source compatibility until the next SDK major. */
       thinkingRemap?: {
         from: ThinkLevel;
         to: ThinkLevel;
@@ -100,45 +116,6 @@ export type ApplySessionModelSelectionResult =
     }
   | { status: "conflict"; message: string };
 
-type AppliedRuntimeDirective = Exclude<
-  Parameters<typeof applyModelRuntimeDirective>[1],
-  { kind: "invalid" }
->;
-
-type ApplySessionModelSelectionToEntryResult = {
-  changed: boolean;
-  runtimeChange?: { kind: "clear" } | { kind: "set"; runtime: string };
-};
-
-/** Applies the model transaction field family to one caller-owned snapshot. */
-function applySessionModelSelectionToEntry(params: {
-  cfg: OpenClawConfig;
-  agentDir: string;
-  entry: SessionEntry;
-  currentProvider: string;
-  request: SessionModelSelectionRequest;
-  runtime: AppliedRuntimeDirective;
-  markLiveSwitchPending?: boolean;
-}): ApplySessionModelSelectionToEntryResult {
-  const modelChange = applyModelOverrideWithAuthProfileCompatibility({
-    cfg: params.cfg,
-    agentDir: params.agentDir,
-    entry: params.entry,
-    currentProvider: params.currentProvider,
-    selection: params.request,
-    explicitDefaultSelection: params.request.isDefault,
-    profileOverride: params.request.profileOverride,
-    markLiveSwitchPending: params.markLiveSwitchPending,
-  });
-  const runtimeChange = applyModelRuntimeDirective(params.entry, params.runtime);
-  return {
-    changed: modelChange.updated || runtimeChange.updated,
-    ...(params.runtime.kind === "clear" || params.runtime.kind === "set"
-      ? { runtimeChange: params.runtime }
-      : {}),
-  };
-}
-
 function formatModelSwitchEvent(provider: string, model: string, alias?: string): string {
   const label = `${provider}/${model}`;
   return alias ? `Model switched to ${alias} (${label}).` : `Model switched to ${label}.`;
@@ -152,43 +129,9 @@ function rejectNotAllowed(provider: string, model: string): ApplySessionModelSel
   };
 }
 
-/**
- * Rejects a model selection when the candidate runtime is incompatible with an
- * active cloud-worker placement. Mirrors the sessions.patch guard so directive
- * model changes are validated before they persist.
- */
-function resolveActivePlacementModelSelectionError(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  sessionKey: string;
-  entry: SessionEntry;
-}): string | undefined {
-  const sessionId = params.entry.sessionId;
-  if (!sessionId) {
-    return undefined;
-  }
-  const placementService = resolveSessionWorkerPlacementContext().workerSessionPlacementService;
-  const placement = placementService?.getMany([sessionId]).get(sessionId);
-  if (!placement || placement.state === "local") {
-    return undefined;
-  }
-  const { executionMode } = resolveWorkerPlacementSessionRuntimeCapabilities({
-    cfg: params.cfg,
-    entry: params.entry,
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-  });
-  if (executionMode === placement.executionMode) {
-    return undefined;
-  }
-  return executionMode
-    ? `Session cannot change cloud placement execution mode while placement is ${placement.state}.`
-    : `Session cannot select a runtime without cloud placement support while cloud worker placement is ${placement.state}.`;
-}
-
 /** Applies one validated picker selection to the authoritative live session. */
-export async function applySessionModelSelection(
-  params: ApplySessionModelSelectionParams,
+export async function applySessionModelSelectionInternal(
+  params: InternalApplySessionModelSelectionParams,
 ): Promise<ApplySessionModelSelectionResult> {
   const startingStoreEntry = params.sessionStore[params.sessionKey];
   const startingEntry = params.storePath
@@ -198,20 +141,14 @@ export async function applySessionModelSelection(
   if (isModelSelectionLocked(startingEntry)) {
     return { status: "rejected", reason: "locked", message: MODEL_SELECTION_LOCKED_MESSAGE };
   }
+  const operatorScope = params.operatorAuthority
+    ? undefined
+    : (
+        await import("../gateway/operator-invocation-authority.js")
+      ).captureOperatorToolGatewayAuthority();
+  const operatorAuthority = params.operatorAuthority ?? operatorScope?.authority;
 
   const resetToDefault = params.request.resetToDefault === true;
-  const selectedRef = resetToDefault
-    ? resolveDefaultModelForAgent({ cfg: params.cfg, agentId: params.agentId })
-    : params.request;
-  const normalizedModelKey = modelKey(selectedRef.provider, selectedRef.model);
-  const request: SessionModelSelectionRequest = {
-    ...params.request,
-    provider: selectedRef.provider,
-    model: selectedRef.model,
-    isDefault:
-      resetToDefault ||
-      normalizedModelKey === modelKey(params.defaultProvider, params.defaultModel),
-  };
   const policy =
     params.modelPolicy ??
     createModelVisibilityPolicy({
@@ -221,6 +158,41 @@ export async function applySessionModelSelection(
       defaultModel: { provider: params.defaultProvider, model: params.defaultModel },
       agentId: params.agentId,
     });
+  const selectedRef = resetToDefault
+    ? resolveOperatorModelDefault({
+        cfg: params.cfg,
+        agentId: params.agentId,
+        policy: operatorAuthority?.modelPolicy,
+        model: resolveDefaultModelForAgent({ cfg: params.cfg, agentId: params.agentId }),
+        allows: policy.allows,
+      })
+    : params.request;
+  const validateOperatorSelection = () => {
+    try {
+      operatorScope?.assertCurrent();
+      assertOperatorModelAllowed(operatorAuthority, selectedRef);
+      return undefined;
+    } catch (error) {
+      return formatErrorMessage(error);
+    }
+  };
+  const operatorError = validateOperatorSelection();
+  if (operatorError || !selectedRef) {
+    return {
+      status: "rejected",
+      reason: "not-allowed",
+      message: operatorError ?? "No model is available for this operator role and agent.",
+    };
+  }
+  const normalizedModelKey = modelKey(selectedRef.provider, selectedRef.model);
+  const request: SessionModelSelectionRequest = {
+    ...params.request,
+    provider: selectedRef.provider,
+    model: selectedRef.model,
+    isDefault:
+      resetToDefault ||
+      normalizedModelKey === modelKey(params.defaultProvider, params.defaultModel),
+  };
   if (!resetToDefault && !policy.allows(request)) {
     return rejectNotAllowed(request.provider, request.model);
   }
@@ -234,6 +206,7 @@ export async function applySessionModelSelection(
     provider: request.provider,
     model: request.model,
     catalog: params.thinkingCatalog ?? params.modelCatalog,
+    thinkingPolicyRequired: hasPendingFollowupQueueWork([params.sessionKey]),
     rawRuntime:
       request.runtime.kind === "set"
         ? request.runtime.runtime
@@ -244,99 +217,96 @@ export async function applySessionModelSelection(
   if (prepared.status === "rejected") {
     return prepared;
   }
+  const agentDir = resolveAgentDir(params.cfg, params.agentId);
+  const pinnedProfile = !request.profileOverride && startingEntry.authProfileOverride?.trim();
+  const recordedProvider = pinnedProfile
+    ? await prepareAuthProfileProvider({ agentDir, profileId: pinnedProfile })
+    : undefined;
   const validateSelection = () =>
-    params.validateAuthProfileSelection?.() ?? prepared.validateRuntimeSelection?.();
+    validateOperatorSelection() ??
+    params.validateAuthProfileSelection?.() ??
+    prepared.validateRuntimeSelection?.();
   const authProfileError = validateSelection();
   if (authProfileError) {
     return { status: "rejected", reason: "not-allowed", message: authProfileError };
-  }
-  // Metadata preparation can yield. Memory-only sessions need the same lock and
-  // replacement fence that persisted sessions enforce in their atomic write.
-  const currentEntry = params.storePath
-    ? startingEntry
-    : (params.sessionStore[params.sessionKey] ?? params.sessionEntry);
-  if (isModelSelectionLocked(currentEntry)) {
-    return { status: "rejected", reason: "locked", message: MODEL_SELECTION_LOCKED_MESSAGE };
-  }
-  if (
-    !params.storePath &&
-    (params.sessionStore[params.sessionKey] !== startingStoreEntry ||
-      currentEntry.sessionId !== initialEntry.sessionId)
-  ) {
-    return {
-      status: "conflict",
-      message: "Model change was not applied because the session changed. Retry.",
-    };
   }
   const runtime = prepared.runtime;
   const thinkingCatalog = prepared.catalog;
   const selectedCatalogEntry = findSelectedCatalogEntry({ catalog: thinkingCatalog, ...request });
   const nextEntry = { ...startingEntry };
-  const applied = applySessionModelSelectionToEntry({
+  const modelChange = applyModelOverrideWithAuthProfileCompatibility({
     cfg: params.cfg,
-    agentDir: resolveAgentDir(params.cfg, params.agentId),
+    agentDir,
     entry: nextEntry,
     currentProvider: params.currentProvider,
-    request,
-    runtime,
+    selection: request,
+    explicitDefaultSelection: request.isDefault,
+    profileOverride: request.profileOverride,
+    recordedProvider,
     markLiveSwitchPending: params.markLiveSwitchPending,
   });
-  const thinkingRuntime = resolveEffectiveAgentRuntime({
-    cfg: params.cfg,
-    provider: request.provider,
-    modelId: request.model,
-    modelApi: selectedCatalogEntry?.api,
-    modelBaseUrl: selectedCatalogEntry?.baseUrl,
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-    sessionEntry: nextEntry,
-  });
-  const currentThinkingLevel = nextEntry.thinkingLevel as ThinkLevel | undefined;
-  let thinkingRemap: Extract<
-    ApplySessionModelSelectionResult,
-    { status: "applied" }
-  >["thinkingRemap"];
-  if (currentThinkingLevel) {
-    const remapped = resolveSupportedThinkingLevel({
-      provider: request.provider,
-      model: request.model,
-      level: currentThinkingLevel,
-      catalog: [...thinkingCatalog],
-      agentRuntime: thinkingRuntime,
-    });
-    if (remapped !== currentThinkingLevel) {
-      nextEntry.thinkingLevel = remapped;
-      thinkingRemap = {
-        from: currentThinkingLevel,
-        to: remapped,
-        provider: request.provider,
-        model: request.model,
-      };
-    }
+  const runtimeChange = applyModelRuntimeDirective(nextEntry, runtime);
+  const selectionChanged = modelChange.updated || runtimeChange.updated;
+  const placementService = resolveSessionWorkerPlacementContext().workerSessionPlacementService;
+  if (nextEntry.sessionId && placementService && !placementService.prepareRuntimeRefresh) {
+    return {
+      status: "rejected",
+      reason: "invalid-runtime",
+      message: "Session runtime is unavailable; retry model selection.",
+    };
   }
-  const placementError = resolveActivePlacementModelSelectionError({
+  const placementAuthority = nextEntry.sessionId
+    ? await placementService?.prepareRuntimeRefresh?.(nextEntry.sessionId)
+    : undefined;
+  using _ = { [Symbol.dispose]: () => placementAuthority?.release() };
+  const placement = placementAuthority?.placement;
+  const placementRuntime = await prepareWorkerPlacementSessionRuntime({
     cfg: params.cfg,
     agentId: params.agentId,
     sessionKey: params.sessionKey,
     entry: nextEntry,
   });
-  if (placementError) {
-    return { status: "rejected", reason: "invalid-runtime", message: placementError };
+  const readRuntimeCapabilities = () =>
+    resolveWorkerPlacementCapabilities(placementRuntime(params.cfg, nextEntry));
+  /**
+   * Rejects a model selection when the candidate runtime is incompatible with an
+   * active cloud-worker placement. Mirrors the sessions.patch guard so directive
+   * model changes are validated before they persist.
+   */
+  function resolveActivePlacementModelSelectionError(): string | undefined {
+    const sessionId = nextEntry.sessionId;
+    if (!sessionId) {
+      return undefined;
+    }
+    if (!placement || placement.state === "local") {
+      return undefined;
+    }
+    const { executionMode } = readRuntimeCapabilities();
+    if (executionMode === placement.executionMode) {
+      return undefined;
+    }
+    return executionMode
+      ? `Session cannot change cloud placement execution mode while placement is ${placement.state}.`
+      : `Session cannot select a runtime without cloud placement support while cloud worker placement is ${placement.state}.`;
   }
   // An explicit selection retains the existing persistence and conflict semantics even when idempotent.
   nextEntry.updatedAt = Date.now();
   let persistedEntry: SessionEntry;
-  // The pre-persistence read above can be overtaken by placement activation before the
-  // durable write commits. Revalidate placement inside the synchronous commit boundary so an
-  // override that became incompatible during that window is rejected without mutating state.
-  const validateCommit = () =>
-    validateSelection() ??
-    resolveActivePlacementModelSelectionError({
-      cfg: params.cfg,
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-      entry: nextEntry,
-    });
+  let placementError: string | undefined;
+  const validateCommit = () => {
+    try {
+      placementAuthority?.assertCurrent();
+    } catch {
+      placementError = "Session placement changed; retry model selection.";
+      return placementError;
+    }
+    placementError = resolveActivePlacementModelSelectionError();
+    return (
+      params.validateAuthProfileSelection?.() ??
+      prepared.validateRuntimeSelection?.() ??
+      placementError
+    );
+  };
   if (params.storePath) {
     const persistence = await persistReplySessionEntry({
       storePath: params.storePath,
@@ -344,10 +314,15 @@ export async function applySessionModelSelection(
       initialEntry,
       entry: nextEntry,
       allowCreate: params.allowCreate,
-      reassertLiveModelSwitchPending: applied.changed && nextEntry.liveModelSwitchPending === true,
+      reassertLiveModelSwitchPending: selectionChanged && nextEntry.liveModelSwitchPending === true,
       requireModelSelectionUnlocked: true,
       touchedFields: SESSION_MODEL_OVERRIDE_TRANSACTION_FIELDS,
+      commitGuard: composeSessionSourceAssertion([
+        operatorScope?.assertCurrent,
+        createOperatorModelSelectionAssertion(operatorAuthority, selectedRef),
+      ]),
       validateCommit,
+      nativeCommitValidation: params.nativeCommitValidation,
     });
     if (persistence.entry) {
       params.sessionStore[params.sessionKey] = persistence.entry;
@@ -357,7 +332,11 @@ export async function applySessionModelSelection(
       return { status: "rejected", reason: "locked", message: MODEL_SELECTION_LOCKED_MESSAGE };
     }
     if (persistence.status === "commit-rejected") {
-      return { status: "rejected", reason: "not-allowed", message: persistence.error };
+      return {
+        status: "rejected",
+        reason: placementError ? "invalid-runtime" : "not-allowed",
+        message: persistence.error,
+      };
     }
     if (
       persistence.status !== "current" ||
@@ -366,7 +345,7 @@ export async function applySessionModelSelection(
         next: nextEntry,
         current: persistence.entry,
         reassertLiveModelSwitchPending:
-          applied.changed && nextEntry.liveModelSwitchPending === true,
+          selectionChanged && nextEntry.liveModelSwitchPending === true,
       })
     ) {
       return {
@@ -376,6 +355,29 @@ export async function applySessionModelSelection(
     }
     persistedEntry = persistence.entry;
   } else {
+    const commitError = validateOperatorSelection() ?? validateCommit();
+    if (commitError) {
+      return {
+        status: "rejected",
+        reason: placementError ? "invalid-runtime" : "not-allowed",
+        message: commitError,
+      };
+    }
+    // Both metadata and placement preparation can yield. Fence the in-memory
+    // write here, where persisted sessions enforce their lock and identity.
+    const currentEntry = params.sessionStore[params.sessionKey] ?? params.sessionEntry;
+    if (isModelSelectionLocked(currentEntry)) {
+      return { status: "rejected", reason: "locked", message: MODEL_SELECTION_LOCKED_MESSAGE };
+    }
+    if (
+      params.sessionStore[params.sessionKey] !== startingStoreEntry ||
+      currentEntry.sessionId !== initialEntry.sessionId
+    ) {
+      return {
+        status: "conflict",
+        message: "Model change was not applied because the session changed. Retry.",
+      };
+    }
     adoptPersistedSessionSnapshot(params.sessionEntry, nextEntry);
     params.sessionStore[params.sessionKey] = params.sessionEntry;
     persistedEntry = params.sessionEntry;
@@ -395,7 +397,8 @@ export async function applySessionModelSelection(
   const provider = request.provider;
   const model = request.model;
   const effectiveModelRef = `${provider}/${model}`;
-  const changed = applied.changed || thinkingRemap !== undefined;
+  operatorScope?.assertCurrent();
+  assertOperatorModelAllowed(operatorAuthority, request);
   const configuredDefaultUpdate =
     params.canPersistStickyModelSelection === true &&
     (!request.isDefault || params.stickyModelSelectionTarget)
@@ -407,7 +410,7 @@ export async function applySessionModelSelection(
           target: params.stickyModelSelectionTarget ?? "effective",
         })
       : undefined;
-  if (changed) {
+  if (selectionChanged) {
     emitSessionLifecycleEvent({
       sessionKey: params.sessionKey,
       agentId: params.agentId,
@@ -443,27 +446,21 @@ export async function applySessionModelSelection(
     });
   }
 
-  const contextProvider = resolveContextConfigProviderForRuntime({
-    provider,
-    runtimeId: agentRuntime,
-    config: params.cfg,
-  });
   return {
     status: "applied",
     provider,
     model,
     effectiveModelRef,
     agentRuntime,
-    changed,
+    changed: selectionChanged,
     contextTokens: resolveContextTokens({
       cfg: params.cfg,
-      provider: contextProvider,
+      provider,
       model,
       modelContextWindow: selectedCatalogEntry?.contextWindow,
       modelContextTokens: selectedCatalogEntry?.contextTokens,
     }),
     ...(configuredDefaultUpdate ? { configuredDefaultUpdate } : {}),
-    ...(applied.runtimeChange ? { runtimeChange: applied.runtimeChange } : {}),
-    ...(thinkingRemap ? { thinkingRemap } : {}),
+    ...(runtime.kind === "clear" || runtime.kind === "set" ? { runtimeChange: runtime } : {}),
   };
 }

@@ -13,7 +13,6 @@ import { createOneTimeTicketStore } from "../../shared/one-time-ticket-store.js"
 
 export const NOVNC_PASSWORD_ENV_KEY = "OPENCLAW_BROWSER_NOVNC_PASSWORD"; // pragma: allowlist secret
 const NOVNC_TOKEN_TTL_MS = 60 * 1000;
-const MAX_NOVNC_TOKEN_TTL_MS = NOVNC_TOKEN_TTL_MS;
 const NOVNC_PASSWORD_LENGTH = 8;
 const NOVNC_PASSWORD_ALPHABET = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
@@ -25,19 +24,6 @@ type NoVncObserverTokenPayload = {
 const NO_VNC_OBSERVER_TOKENS = createOneTimeTicketStore<NoVncObserverTokenPayload>({
   ttlMs: NOVNC_TOKEN_TTL_MS,
 });
-
-function resolveNoVncObserverTokenExpiresAt(params: { ttlMs?: number; nowMs: number }) {
-  return (
-    resolveExpiresAtMsFromDurationMs(params.ttlMs, {
-      nowMs: params.nowMs,
-      minRemainingMs: 1,
-    }) ??
-    resolveExpiresAtMsFromDurationMs(NOVNC_TOKEN_TTL_MS, {
-      nowMs: params.nowMs,
-      minRemainingMs: 1,
-    })
-  );
-}
 
 export function isNoVncEnabled(params: { noVncEnabled: boolean; headless: boolean }) {
   return params.noVncEnabled && !params.headless;
@@ -52,20 +38,11 @@ export function generateNoVncPassword() {
   return out;
 }
 
-export function issueNoVncObserverToken(params: {
-  noVncPort: number;
-  password?: string;
-  ttlMs?: number;
-  nowMs?: number;
-}): string {
-  const now = params.nowMs ?? Date.now();
-  const requestedTtlMs =
-    typeof params.ttlMs === "number" && params.ttlMs <= MAX_NOVNC_TOKEN_TTL_MS
-      ? params.ttlMs
-      : undefined;
-  const expiresAt = resolveNoVncObserverTokenExpiresAt({
-    ttlMs: requestedTtlMs,
+export function issueNoVncObserverToken(params: { noVncPort: number; password?: string }): string {
+  const now = Date.now();
+  const expiresAt = resolveExpiresAtMsFromDurationMs(NOVNC_TOKEN_TTL_MS, {
     nowMs: now,
+    minRemainingMs: 1,
   });
   if (expiresAt === undefined) {
     // An unusable clock yields a token nothing can redeem.
@@ -77,11 +54,8 @@ export function issueNoVncObserverToken(params: {
   ).token;
 }
 
-export function consumeNoVncObserverToken(
-  token: string,
-  nowMs?: number,
-): NoVncObserverTokenPayload | null {
-  const now = asDateTimestampMs(nowMs ?? Date.now());
+export function consumeNoVncObserverToken(token: string): NoVncObserverTokenPayload | null {
+  const now = asDateTimestampMs(Date.now());
   if (now === undefined) {
     return null;
   }

@@ -269,25 +269,32 @@ async function probeHttpHealth(params: {
   localAddress?: string;
   port: number;
 }): Promise<number> {
-  return await new Promise((resolve, reject) => {
-    const request = http.request(
-      {
-        host: params.host,
-        localAddress: params.localAddress,
-        path: "/healthz",
-        port: params.port,
-      },
-      (response) => {
-        response.resume();
-        response.once("end", () => resolve(response.statusCode ?? 0));
-      },
-    );
-    request.once("error", reject);
-    request.setTimeout(PROBE_TIMEOUT_MS, () => {
-      request.destroy(new Error("timed out waiting for Gateway HTTP health"));
+  // Measure the owned listener, not an ambient proxy's response for its address.
+  const agent = new http.Agent();
+  try {
+    return await new Promise((resolve, reject) => {
+      const request = http.request(
+        {
+          agent,
+          host: params.host,
+          localAddress: params.localAddress,
+          path: "/healthz",
+          port: params.port,
+        },
+        (response) => {
+          response.resume();
+          response.once("end", () => resolve(response.statusCode ?? 0));
+        },
+      );
+      request.once("error", reject);
+      request.setTimeout(PROBE_TIMEOUT_MS, () => {
+        request.destroy(new Error("timed out waiting for Gateway HTTP health"));
+      });
+      request.end();
     });
-    request.end();
-  });
+  } finally {
+    agent.destroy();
+  }
 }
 
 async function probeTcpUnreachable(params: {

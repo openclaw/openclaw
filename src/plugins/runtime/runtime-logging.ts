@@ -1,4 +1,3 @@
-// Runtime logging helpers route plugin runtime logs through OpenClaw verbosity controls.
 import { shouldLogVerbose } from "../../globals.js";
 import { getChildLogger, isFileLogLevelEnabled } from "../../logging.js";
 import { normalizeLogLevel } from "../../logging/levels.js";
@@ -19,7 +18,6 @@ export function writeRuntimeLog(
   logger[level](message);
 }
 
-/** Creates the plugin runtime logging facade. */
 export function createRuntimeLogging(): PluginRuntime["logging"] {
   return {
     shouldLogVerbose,

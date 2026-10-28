@@ -1,28 +1,29 @@
-import type { DatabaseSync } from "node:sqlite";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import {
   hasSessionPendingInputsSchema,
   hasPendingInputConsumptionColumn,
 } from "../../state/openclaw-agent-pending-inputs-schema.js";
 import { readLegacyCompactionHistory } from "./legacy-compaction-history.js";
-import { sessionEntryMetadataJson } from "./session-accessor.sqlite-status.js";
-import { parseSqliteSessionEntryRecord } from "./session-entry-json.js";
-import { projectCanonicalSessionEntryShape } from "./store-entry-shape.js";
+import { hasMainSessionRecoveryClaim } from "./restart-recovery-state.js";
+import { parseCanonicalSqliteSessionEntry } from "./session-entry-json.js";
+import type { InternalSessionEntry } from "./types.js";
 
 /** Cold storage preserves logical owners; only activity and explicit cross-generation references protect bytes. */
 export function readSessionColdStorageProtection(
-  database: { db: DatabaseSync },
+  database: { db: EngineConnection },
   beforeMs: number,
+  liveSessionKeys: ReadonlySet<string>,
+  sessionIds?: readonly string[],
 ): Set<string> {
   const db = getNodeSqliteKysely<DB>(database.db);
   const protectedIds = new Set<string>();
-  const busyKeys = new Set<string>();
+  const busyKeys = new Set(liveSessionKeys);
   // Keep only protection facts, not a second store-wide array of serialized metadata.
   for (const row of iterateSqliteQuerySync(
     database.db,
@@ -32,26 +33,40 @@ export function readSessionColdStorageProtection(
         "session_key",
         "current_session_id",
         "updated_at",
-        "status",
         "last_activity_at",
         "last_interaction_at",
-        sessionEntryMetadataJson,
-      ]),
+        "entry_json",
+      ])
+      .$if(sessionIds !== undefined, (query) =>
+        query.where((eb) =>
+          eb.or([
+            eb("has_optional_references", "=", 1),
+            eb("current_session_id", "in", sqliteStringSet(sessionIds!)),
+            eb(
+              "session_key",
+              "in",
+              db
+                .selectFrom("session_windows")
+                .select("session_key")
+                .where("session_id", "in", sqliteStringSet(sessionIds!)),
+            ),
+          ]),
+        ),
+      ),
   )) {
-    const record = parseSqliteSessionEntryRecord(row);
-    const entry = record ? projectCanonicalSessionEntryShape(record) : null;
-    const recovery = record?.mainRestartRecovery;
+    const entry: InternalSessionEntry | undefined =
+      parseCanonicalSqliteSessionEntry(row) ?? undefined;
     const recoveryPending =
-      entry?.restartRecoveryBeforeAgentReplyState === "admitted" ||
-      entry?.restartRecoveryBeforeAgentReplyState === "pending" ||
-      entry?.restartRecoveryBeforeAgentReplyState === "continue" ||
-      entry?.restartRecoveryDeliveryReceiptState === "terminal-pending" ||
-      (isRecord(recovery) && (Boolean(recovery.reservation) || Boolean(recovery.foregroundClaims)));
+      !entry?.mainRestartRecovery?.tombstone &&
+      (entry?.restartRecoveryBeforeAgentReplyState === "admitted" ||
+        entry?.restartRecoveryBeforeAgentReplyState === "pending" ||
+        entry?.restartRecoveryBeforeAgentReplyState === "continue" ||
+        entry?.restartRecoveryDeliveryReceiptState === "terminal-pending" ||
+        hasMainSessionRecoveryClaim(entry));
     if (!entry || recoveryPending) {
       busyKeys.add(row.session_key);
     }
     if (
-      row.status === "running" ||
       Math.max(row.updated_at, row.last_activity_at ?? 0, row.last_interaction_at ?? 0) >= beforeMs
     ) {
       protectedIds.add(row.current_session_id);
@@ -68,14 +83,15 @@ export function readSessionColdStorageProtection(
       }
     }
     for (const checkpoint of readLegacyCompactionHistory(entry)) {
-      if (checkpoint.sessionId) {
-        protectedIds.add(checkpoint.sessionId);
-      }
-      if (checkpoint.preCompaction.sessionId) {
-        protectedIds.add(checkpoint.preCompaction.sessionId);
-      }
-      if (checkpoint.postCompaction.sessionId) {
-        protectedIds.add(checkpoint.postCompaction.sessionId);
+      // A self-reference is not cross-generation; the current window stays governed by activity.
+      for (const id of [
+        checkpoint.sessionId,
+        checkpoint.preCompaction.sessionId,
+        checkpoint.postCompaction.sessionId,
+      ]) {
+        if (id && id !== row.current_session_id) {
+          protectedIds.add(id);
+        }
       }
     }
   }
@@ -84,11 +100,13 @@ export function readSessionColdStorageProtection(
     db
       .selectFrom("session_windows")
       .select("session_id")
-      // Recovery and unreadable nodes protect every window owned by their exact key.
+      .$if(sessionIds !== undefined, (query) =>
+        query.where("session_id", "in", sqliteStringSet(sessionIds!)),
+      )
+      // Live work, recovery, and unreadable nodes protect every generation of their exact key.
       .where((eb) =>
         eb.or([
           ...(busyKeys.size > 0 ? [eb("session_key", "in", sqliteStringSet([...busyKeys]))] : []),
-          eb("status", "=", "running"),
           eb("updated_at", ">=", beforeMs),
           eb(eb.fn.coalesce("transcript_updated_at", eb.val(0)), ">=", beforeMs),
         ]),
@@ -102,6 +120,9 @@ export function readSessionColdStorageProtection(
       db
         .selectFrom("session_pending_inputs")
         .select("session_id")
+        .$if(sessionIds !== undefined, (query) =>
+          query.where("session_id", "in", sqliteStringSet(sessionIds!)),
+        )
         .where("state", "in", ["queued", "interrupted"])
         .$if(hasPendingInputConsumptionColumn(database.db), (query) =>
           query.where("consumed_event_id", "is", null),

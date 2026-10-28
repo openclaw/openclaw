@@ -17,7 +17,7 @@ const { runListeners, runLastActivityMs } = resolveGlobalSingleton(
 );
 
 export function notifyToolActivity(runId: string): void {
-  runLastActivityMs.set(runId, Date.now());
+  runLastActivityMs.set(runId, performance.now());
   const listeners = runListeners.get(runId);
   if (!listeners) {
     return;
@@ -36,7 +36,7 @@ export function onToolActivity(runId: string, listener: () => void): () => void 
   listeners.add(listener);
   return () => {
     listeners.delete(listener);
-    if (listeners.size === 0) {
+    if (listeners.size === 0 && runListeners.get(runId) === listeners) {
       runListeners.delete(runId);
     }
   };

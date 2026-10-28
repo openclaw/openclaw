@@ -1,371 +1,648 @@
+import assert from "node:assert/strict";
 import { constants as bufferConstants } from "node:buffer";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { Readable } from "node:stream";
-import { pipeline } from "node:stream/promises";
+import { buffer as consumeBuffer } from "node:stream/consumers";
 import zlib from "node:zlib";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { isVisibleSubagentResultEventForRun } from "../../agents/subagents/announce/subagent-announce-result.js";
+import { listDirectoryTreeStrictSync } from "../../infra/directory-walk.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
-import { assertOpenClawAgentCurrentRuntimeSchema } from "../../state/openclaw-agent-db-schema-helpers.js";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
-  runOpenClawAgentWriteTransaction,
-} from "../../state/openclaw-agent-db.js";
+import * as agentDb from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import {
-  encodeSessionArchiveContent,
-  readSessionArchiveContentSync,
-} from "./archive-compression.js";
+import * as archiveCompression from "./archive-compression.js";
 import { deleteSessionEntryLifecycle, findTranscriptEvent } from "./session-accessor.js";
+import { withSqliteTranscriptArchiveSession } from "./session-accessor.sqlite-archive-session.js";
+import { MAX_TASK_ARCHIVE_RECORD_BYTES } from "./session-accessor.sqlite-archive-stream.js";
 import { seedUnindexedTranscriptForTest } from "./session-accessor.sqlite-import.test-support.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
-import {
-  findSessionTranscriptArchiveEventReadOnly,
-  listSessionTranscriptArchivesReadOnly,
-} from "./session-history.js";
+import { listSessionTranscriptArchivesReadOnly } from "./session-history-read.js";
+import * as history from "./session-history.js";
+import * as historyReaders from "./session-transcript-worker-readers.js";
+import { messageEvent } from "./transcript-message.test-support.js";
 
 const autoTempDirs = useAutoCleanupTempDirTracker(afterEach);
+const jsonLines = (events: readonly unknown[]) =>
+  events.map((event) => JSON.stringify(event)).join("\n");
+const digest = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
+const expectEntries = (page: { entries: unknown[] } | undefined, entries: [unknown, number][]) =>
+  expect(page?.entries).toEqual(entries.map(([event, seq]) => ({ event, seq })));
+
+function assistantMessage<T>(id: string | undefined, content: T, runId: string, display?: true) {
+  return {
+    type: "message",
+    ...(id === undefined ? {} : { id }),
+    message: { role: "assistant", content, ...(display ? { display } : {}), __openclaw: { runId } },
+  };
+}
+
+function archiveRow(
+  sessionId: string,
+  sessionKey: string,
+  bytes: Buffer,
+  options: { generation?: string; encoding?: "identity" | "zstd"; name: string; createdAt: number },
+) {
+  return {
+    session_id: sessionId,
+    session_key: sessionKey,
+    generation: options.generation ?? "generation",
+    reason: "deleted" as const,
+    encoding: options.encoding ?? "identity",
+    archive_blob: bytes,
+    archive_sha256: digest(bytes),
+    archive_name: options.name,
+    created_at: options.createdAt,
+    published_at: null,
+  };
+}
+
+function createArchiveStore(label: string, filename = "archive.sqlite") {
+  const env = { OPENCLAW_STATE_DIR: autoTempDirs.make(label) };
+  const storePath = path.join(env.OPENCLAW_STATE_DIR, filename);
+  const options = { agentId: "main", env, path: storePath };
+  const database = agentDb.openOpenClawAgentDatabase(options);
+  const sql = getSessionKysely(database.db);
+  const write = (query: Parameters<typeof executeSqliteQuerySync>[1]) =>
+    agentDb.runOpenClawAgentWriteTransaction(
+      () => executeSqliteQuerySync(database.db, query),
+      options,
+    );
+  return {
+    env,
+    storePath,
+    options,
+    database,
+    insert: (rows: ReturnType<typeof archiveRow> | ReturnType<typeof archiveRow>[]) =>
+      write(sql.insertInto("session_transcript_archives").values(rows)),
+    update: (
+      id: string,
+      row: Partial<ReturnType<typeof archiveRow>>,
+      column: "generation" | "session_id" = "generation",
+    ) => write(sql.updateTable("session_transcript_archives").set(row).where(column, "=", id)),
+    remove: (generations: string[]) =>
+      write(sql.deleteFrom("session_transcript_archives").where("generation", "in", generations)),
+  };
+}
 
 afterEach(() => {
-  closeOpenClawAgentDatabasesForTest();
+  vi.restoreAllMocks();
+  agentDb.closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
 });
 
-describe("SQLite transcript archive reads", () => {
-  it("reads a pre-archive store without creating its optional archive table", async () => {
-    await withOpenClawTestState({ label: "optional-archive-read" }, async (state) => {
-      const options = { agentId: "main", env: state.env };
-      const database = openOpenClawAgentDatabase(options);
-      database.db.exec("DROP TABLE session_transcript_archives");
-      assertOpenClawAgentCurrentRuntimeSchema(database.db, {
-        agentId: database.agentId,
-        pathname: database.path,
-      });
-      const storePath = database.path;
-      closeOpenClawAgentDatabasesForTest();
-      const before = fs.readFileSync(storePath);
-      const scope = {
-        ...options,
-        storePath,
-        sessionKey: "agent:main:pre-archive",
-        sessionId: "pre-archive",
-      };
-
-      expect(
-        listSessionTranscriptArchivesReadOnly({ ...scope, sessionIds: [scope.sessionId] }),
-      ).toEqual([]);
-      await expect(
-        findSessionTranscriptArchiveEventReadOnly(scope, "absent-run"),
-      ).resolves.toBeUndefined();
-      const persisted = new DatabaseSync(storePath, { readOnly: true });
-      try {
-        expect(
-          persisted
-            .prepare("SELECT 1 FROM sqlite_schema WHERE name = 'session_transcript_archives'")
-            .get(),
-        ).toBeUndefined();
-      } finally {
-        persisted.close();
-      }
-      expect(fs.readFileSync(storePath)).toEqual(before);
-    });
-  });
-
-  it.each([false, true])(
-    "reads committed archive blobs before file publication (compressed=%s)",
-    async (compressed) => {
-      const env = { OPENCLAW_STATE_DIR: autoTempDirs.make("openclaw-archive-blob-read-") };
-      const storePath = path.join(env.OPENCLAW_STATE_DIR, "shared.sqlite");
-      const database = openOpenClawAgentDatabase({ agentId: "main", env, path: storePath });
-      const sessionKey = "agent:ops:completed";
-      const message = (id: string, content = id, runId = "completed-run") => ({
-        type: "message",
-        id,
-        message: { role: "assistant", content, __openclaw: { runId } },
-      });
-      const answer = message("latest", `${'你好 🦞 {result} "quoted" \\ '.repeat(4_000)}tail`);
-      const archives = [
-        { sessionId: "old", sessionKey, events: [message("old")] },
-        {
-          sessionId: "new",
-          sessionKey,
-          events: [
-            message("earlier"),
-            answer,
-            message("other-run", "unrelated", "other-run"),
-            message("silent", "NO_REPLY"),
-          ],
-        },
-        { sessionId: "foreign", sessionKey: "agent:main:other", events: [answer] },
-        { sessionId: "invalid", sessionKey: "agent:ops:invalid", events: [answer] },
-        {
-          sessionId: "malformed",
-          sessionKey: "agent:ops:malformed",
-          events: [answer],
-          suffix: '\n{\n"message": !\n}\n',
-        },
-        {
-          sessionId: "truncated",
-          sessionKey: "agent:ops:truncated",
-          events: [answer],
-          suffix: '\n{\n"message": {\n',
-        },
-      ];
-      runOpenClawAgentWriteTransaction(
-        () => {
-          for (const [index, archive] of archives.entries()) {
-            const content =
-              [
-                {
-                  type: "session",
-                  id: archive.sessionId === "invalid" ? "wrong" : archive.sessionId,
-                },
-                ...archive.events,
-              ]
-                .map((event) => JSON.stringify(event))
-                .join("\n") + (archive.suffix ?? "");
-            const encoded = compressed
-              ? encodeSessionArchiveContent(content)
-              : { bytes: Buffer.from(content), suffix: "" };
-            executeSqliteQuerySync(
-              database.db,
-              getSessionKysely(database.db)
-                .insertInto("session_transcript_archives")
-                .values({
-                  session_id: archive.sessionId,
-                  session_key: archive.sessionKey,
-                  generation: "generation",
-                  reason: "deleted",
-                  encoding: encoded.suffix ? "zstd" : "identity",
-                  archive_blob: encoded.bytes,
-                  archive_sha256: createHash("sha256").update(encoded.bytes).digest("hex"),
-                  archive_name: `archive-${index}.jsonl${encoded.suffix}`,
-                  created_at: index,
-                  published_at: null,
-                }),
-            );
-          }
-        },
-        { agentId: "main", env, path: storePath },
-      );
-      const scope = { agentId: "ops", env, storePath, sessionKey };
-      const filesBefore = fs
-        .readdirSync(env.OPENCLAW_STATE_DIR, { recursive: true, encoding: "utf8" })
-        .toSorted((left, right) => left.localeCompare(right));
-
-      expect(await findSessionTranscriptArchiveEventReadOnly(scope, "completed-run")).toEqual({
-        event: answer,
-      });
-      expect(
-        await findSessionTranscriptArchiveEventReadOnly(
-          { ...scope, sessionId: "old" },
-          "completed-run",
-        ),
-      ).toEqual({ event: message("old") });
-      expect(
-        await findSessionTranscriptArchiveEventReadOnly(
-          { ...scope, sessionId: "foreign" },
-          "completed-run",
-        ),
-      ).toBeUndefined();
-      expect(await findSessionTranscriptArchiveEventReadOnly(scope, "missing-run")).toBeUndefined();
-      await expect(
-        findSessionTranscriptArchiveEventReadOnly(
-          { ...scope, sessionId: "invalid" },
-          "completed-run",
-        ),
-      ).rejects.toThrow("Archived transcript header does not match its registered session");
-      for (const sessionId of ["malformed", "truncated"]) {
-        await expect(
-          findSessionTranscriptArchiveEventReadOnly({ ...scope, sessionId }, "completed-run"),
-        ).rejects.toThrow();
-      }
-      expect(
-        fs
-          .readdirSync(env.OPENCLAW_STATE_DIR, { recursive: true, encoding: "utf8" })
-          .toSorted((left, right) => left.localeCompare(right)),
-      ).toEqual(filesBefore);
-      expect(
-        executeSqliteQuerySync(
-          database.db,
-          getSessionKysely(database.db)
-            .selectFrom("session_transcript_archives")
-            .select("published_at"),
-        ).rows,
-      ).toEqual(archives.map(() => ({ published_at: null })));
-
-      const changedContent = [
-        { type: "session", id: "new" },
-        message("latest", "changed but valid transcript content"),
-      ]
-        .map((event) => JSON.stringify(event))
-        .join("\n");
-      const changedBytes = compressed
-        ? encodeSessionArchiveContent(changedContent).bytes
-        : Buffer.from(changedContent);
-      runOpenClawAgentWriteTransaction(
-        () => {
-          executeSqliteQuerySync(
-            database.db,
-            getSessionKysely(database.db)
-              .updateTable("session_transcript_archives")
-              .set({ archive_blob: changedBytes })
-              .where("session_id", "=", "new"),
-          );
-        },
-        { agentId: "main", env, path: storePath },
-      );
-      await expect(
-        findSessionTranscriptArchiveEventReadOnly({ ...scope, sessionId: "new" }, "completed-run"),
-      ).rejects.toThrow("Archived transcript bytes do not match their registered hash");
-    },
+it("pages the unique run generation and rejects replaced, deleted, corrupt, or ambiguous continuations", async () => {
+  const { env, storePath, options, insert, update, remove } = createArchiveStore(
+    "openclaw-archive-page-read-",
   );
+  const sessionId = "reused-session";
+  const sessionKey = "agent:main:completed";
+  const scope = { agentId: "main", env, storePath, sessionKey };
+  const runId = "original-run";
+  const readPage = (
+    request: Partial<Parameters<typeof history.readSessionTaskArchivePageReadOnly>[1]> = {},
+  ) => history.readSessionTaskArchivePageReadOnly(scope, { runId, ...request });
+  const readBoundedPage = (cursor?: string) => readPage({ maxBytes: 512, cursor });
+  const user = {
+    type: "message",
+    id: "user",
+    message: { role: "user", content: "Original request" },
+  };
+  const answer = assistantMessage("answer", "Original answer", runId);
+  const answerFor = (nextRunId: string, content = answer.message.content) => ({
+    ...answer,
+    message: { ...answer.message, content, __openclaw: { runId: nextRunId } },
+  });
+  const successorAnswer = (content = "Original answer") => ({
+    ...answerFor("next-run", content),
+    id: "successor-answer",
+    parentId: "user",
+  });
+  const archive = (
+    generation: string,
+    reply: typeof answer & { parentId?: string } = answer,
+    headerId = sessionId,
+    middle: unknown[] = [],
+  ) =>
+    archiveRow(
+      sessionId,
+      sessionKey,
+      Buffer.from(jsonLines([{ type: "session", id: headerId }, user, ...middle, reply])),
+      { generation, name: `${generation}.jsonl`, createdAt: generation === "original" ? 1 : 2 },
+    );
+  const original = archive("original");
+  const successor = archive("successor", successorAnswer("Unrelated successor"), sessionId, [
+    { ...answer, parentId: "user" },
+  ]);
+  const replaceOriginal = (value: ReturnType<typeof archive>) => update("original", value);
+  insert([original, successor]);
+  await withSqliteTranscriptArchiveSession(options, async () => {
+    const page = await readPage({ limit: 1 });
+    expectEntries(page, [[answer, 2]]);
+    expect(page).toMatchObject({ totalMessages: 2, binding: { generation: "original" } });
+    assert(page?.nextCursor, "Expected an older archive page");
+    const continuation = { runId, limit: 1, cursor: page.nextCursor };
+    const verifyBinding = () =>
+      history.verifySessionTranscriptArchivePageBindingReadOnly(scope, runId, page.binding);
+    const expectUnavailable = async (message: string | RegExp, request = {}) => {
+      await expect(readPage(request)).rejects.toThrow(message);
+      await expect(verifyBinding()).rejects.toThrow(message);
+    };
+    const older = await readPage(continuation);
+    expectEntries(older, [[user, 1]]);
+    expect(older?.nextCursor).toBeUndefined();
+    await verifyBinding();
+    update(
+      "successor",
+      archive("successor", answerFor("next-run", "x".repeat(MAX_TASK_ARCHIVE_RECORD_BYTES))),
+    );
+    // The capped candidate cannot establish whether the readable match is unique.
+    await expectUnavailable(
+      "Archived transcript is unavailable because a record exceeds the task-history read capacity.",
+    );
+    update("successor", successor);
+    await expect(readPage({ ...continuation, runId: "next-run" })).rejects.toThrow(
+      "Invalid archived transcript cursor",
+    );
 
-  it("retains exact multiline imported events through deletion and final-answer lookup", async () => {
-    await withOpenClawTestState({ label: "archive-multiline" }, async (state) => {
-      const sessionId = "imported-child";
-      const sessionKey = "agent:main:subagent:imported-child";
-      const runId = "imported-child-run";
-      const scope = {
-        agentId: "main",
-        env: state.env,
-        sessionId,
-        sessionKey,
-        storePath: path.join(state.sessionsDir(), "sessions.json"),
-      };
-      const answer = {
-        type: "message",
-        id: "answer",
-        parentId: "user",
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: 'Complete result: {"answer": "你好 🦞"}.' }],
-          __openclaw: { runId },
-        },
-      };
-      const rows = [
-        { type: "session", version: 3, id: sessionId },
+    replaceOriginal(
+      archive("original", successorAnswer(), sessionId, [{ ...answer, parentId: "user" }]),
+    );
+    await expectUnavailable("run is not on the active branch");
+
+    const replaceBytes = (bytes: Buffer) =>
+      replaceOriginal({ ...original, archive_blob: bytes, archive_sha256: digest(bytes) });
+    const replaceEvents = (events: unknown[]) =>
+      replaceBytes(Buffer.from(jsonLines([{ type: "session", id: sessionId }, ...events])));
+    const root = { ...user, parentId: null };
+    const reply = { ...answer, parentId: user.id };
+    const contextBefore = { ...answer, id: "context-before" };
+    const contextSelected = { ...answer, id: "context-selected" };
+    replaceEvents([user, contextBefore, contextSelected, answer]);
+    const contextTail = await readPage({ limit: 1 });
+    assert(contextTail?.nextCursor, "Expected a bounded projection-context page");
+    const selectedAndNewerBytes = Buffer.byteLength(
+      JSON.stringify(contextSelected) + JSON.stringify(answer),
+    );
+    for (const maxBytes of [4096, selectedAndNewerBytes]) {
+      const pageWithContext = await readPage({
+        limit: 1,
+        contextMaxMessages: 2,
+        maxBytes,
+        cursor: contextTail.nextCursor,
+      });
+      expectEntries(pageWithContext, [[contextSelected, 3]]);
+      expect(pageWithContext?.contextEntries).toEqual([
+        ...(maxBytes === 4096 ? [{ event: contextBefore, seq: 2 }] : []),
+        { event: answer, seq: 4 },
+      ]);
+    }
+    replaceEvents([
+      root,
+      ...Array.from({ length: 1025 }, (_, index) => ({
+        ...reply,
+        id: `side-${index}`,
+        appendMode: "side",
+        message: { role: "assistant", content: "Inactive branch" },
+      })),
+      reply,
+    ]);
+    expectEntries(await readPage(), [
+      [root, 1],
+      [reply, 1027],
+    ]);
+    // Duplicate IDs resolve to the latest node; a cycle discards the whole path.
+    const latest = { ...reply, message: { ...reply.message, content: "Latest" } };
+    replaceEvents([root, reply, latest]);
+    expectEntries(await readPage(), [
+      [root, 1],
+      [latest, 3],
+    ]);
+    replaceEvents([root, reply, { ...root, parentId: answer.id }]);
+    await expect(readPage()).rejects.toThrow("run is not on the active branch");
+
+    for (const invalidControl of [{ appendMode: false }, { appendParentId: { invalid: true } }]) {
+      replaceEvents([
+        root,
+        reply,
         {
-          type: "message",
-          id: "user",
-          parentId: null,
-          message: { role: "user", content: 'Keep braces {}, brackets [] and \\"quotes\\".' },
+          type: "leaf",
+          id: "invalid-leaf",
+          parentId: reply.id,
+          targetId: root.id,
+          ...invalidControl,
         },
-        answer,
-      ].map((event, index) => ({
-        session_id: sessionId,
-        seq: index,
-        created_at: index + 1,
-        event_json: JSON.stringify(event, null, 2),
-      }));
-      await seedUnindexedTranscriptForTest({
-        ...scope,
-        entry: { sessionId, updatedAt: 3 },
-        events: rows,
-      });
-      await expect(
-        findTranscriptEvent(scope, (event) => isVisibleSubagentResultEventForRun(event, runId)),
-      ).resolves.toEqual({ event: answer });
+      ]);
+      expectEntries(await readPage(), [
+        [root, 1],
+        [reply, 2],
+      ]);
+    }
+    replaceEvents([root, { ...reply, parentId: false }]);
+    await expect(readPage()).rejects.toThrow("run is not on the active branch");
 
-      const deletion = await deleteSessionEntryLifecycle({
-        ...scope,
-        archiveTranscript: true,
-        target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
-      });
-      expect(deletion.deleted).toBe(true);
-      expect(deletion.archivedTranscripts).toHaveLength(1);
-      expect(readSessionArchiveContentSync(deletion.archivedTranscripts[0]!.archivedPath)).toBe(
-        `${rows.map((row) => row.event_json).join("\n")}\n`,
+    replaceEvents([user, { ...answerFor(runId, "x".repeat(2048)), id: "large" }, answer]);
+    const tail = await readBoundedPage();
+    expectEntries(tail, [[answer, 3]]);
+    expect(tail?.omittedOversized).toBeUndefined();
+    expect(tail?.nextCursor).toEqual(expect.any(String));
+    const omitted = await readBoundedPage(tail?.nextCursor);
+    expect(omitted?.entries).toEqual([]);
+    expect(omitted?.omittedOversized).toBe(true);
+    expect(omitted?.nextCursor).toEqual(expect.any(String));
+    expect(omitted?.nextCursor).not.toBe(tail?.nextCursor);
+    const beginning = await readBoundedPage(omitted?.nextCursor);
+    expectEntries(beginning, [[user, 1]]);
+    expect(beginning?.nextCursor).toBeUndefined();
+
+    // Raw JSON keeps last-key, Unicode, and whitespace semantics under the page byte budget.
+    const largeText = "x".repeat(2048);
+    const smallAnswer = JSON.stringify(answer);
+    const failure = {
+      type: "custom_message",
+      id: "failure",
+      customType: "run-failed-before-reply",
+      display: true,
+      details: { runId },
+      content: "Original failure",
+    };
+    const failureJson = (content: unknown) => JSON.stringify({ ...failure, content });
+    const answerJson = (content: unknown) =>
+      JSON.stringify({ ...answer, message: { ...answer.message, content } });
+    const rawCases: Array<[string, boolean]> = [
+      [failureJson(largeText), true],
+      [failureJson([{ type: "text", text: largeText }]), true],
+      [
+        failureJson(Array.from({ length: 3 }, () => ({ type: "text", text: "x".repeat(200) }))),
+        true,
+      ],
+      [`{"content":"${largeText}",${JSON.stringify(failure).slice(1)}`, false],
+      [
+        `${JSON.stringify(failure).slice(0, -1)},"content":[{"type":"text","text":"${largeText}","text":"Original failure"}]}`,
+        false,
+      ],
+      [answerJson(largeText), true],
+      [answerJson([{ type: "text", text: largeText }]), true],
+      [`{${" ".repeat(2048)}\n${smallAnswer.slice(1)}`, false],
+      [`{"message":{"content":"${largeText}"},${smallAnswer.slice(1)}`, false],
+      [
+        `{"type":"message","id":"answer","message":{"role":"assistant","content":[{"type":"text","text":"${largeText}","text":"Original answer"}],"__openclaw":{"runId":"original-run"}}}`,
+        false,
+      ],
+      [
+        `{"discarded":"${largeText}","discarded":null,"type":"message","id":"answer","m\\u0065ssage":{"role":"assistant","content":"Original answer","__openclaw":{"runId":"wrong","runId":"original-run"}}}`,
+        false,
+      ],
+      [JSON.stringify({ ...answer, opaque: largeText }), true],
+      [`${smallAnswer.slice(0, -1)},"opaque":"\\u0000\\ud800"}`, false],
+      [`${smallAnswer.slice(0, -1)},"nested":${"[".repeat(1001)}0${"]".repeat(1001)}}`, true],
+    ];
+    for (const [raw, expectsOmission] of rawCases) {
+      replaceBytes(Buffer.from(`${JSON.stringify({ type: "session", id: sessionId })}\n${raw}`));
+      const actual = await readPage({ maxBytes: 512 });
+      expect(actual?.totalMessages).toBe(1);
+      expect(actual?.entries).toEqual(expectsOmission ? [] : [{ event: JSON.parse(raw), seq: 1 }]);
+      expect(actual?.omittedOversized).toBe(expectsOmission ? true : undefined);
+    }
+
+    replaceBytes(
+      Buffer.from(`${JSON.stringify({ type: "session", id: sessionId })}\n{"broken":!}`),
+    );
+    await expect(readPage({ maxBytes: 512 })).rejects.toThrow();
+
+    replaceOriginal(archive("original", answerFor(runId, "Replacement")));
+    await expectUnavailable("identity changed", continuation);
+
+    replaceOriginal({ ...original, archive_blob: Buffer.from("corrupt") });
+    await expectUnavailable("registered hash", continuation);
+
+    replaceOriginal(archive("original", answer, "wrong-session"));
+    await expect(readPage()).rejects.toThrow("header does not match");
+
+    replaceOriginal(original);
+    insert(archive("ambiguous"));
+    await expect(readPage()).rejects.toThrow("Multiple archived transcript generations");
+    await expect(verifyBinding()).rejects.toThrow(
+      /Multiple archived transcript generations|identity changed/,
+    );
+    remove(["original", "ambiguous", "successor"]);
+    await expectUnavailable("no longer available", continuation);
+    await expect(readPage()).resolves.toBeUndefined();
+  });
+});
+
+it("reads a pre-archive store without creating its optional archive table", async () => {
+  await withOpenClawTestState({ label: "optional-archive-read" }, async (state) => {
+    const options = { agentId: "main", env: state.env };
+    const missingPath = state.statePath("missing.sqlite");
+    await expect(
+      history.findSessionTranscriptArchiveEventReadOnly(
+        { ...options, storePath: missingPath, sessionKey: "agent:main:missing" },
+        "absent-run",
+      ),
+    ).resolves.toBeUndefined();
+    expect(fs.existsSync(missingPath)).toBe(false);
+    const database = agentDb.openOpenClawAgentDatabase(options);
+    database.db.exec("DROP TABLE session_transcript_archives");
+    const storePath = database.path;
+    agentDb.closeOpenClawAgentDatabasesForTest();
+    const before = fs.readFileSync(storePath);
+    const scope = {
+      ...options,
+      storePath,
+      sessionKey: "agent:main:pre-archive",
+      sessionId: "pre-archive",
+    };
+
+    expect(
+      listSessionTranscriptArchivesReadOnly({ ...scope, sessionIds: [scope.sessionId] }),
+    ).toEqual([]);
+    await expect(
+      history.findSessionTranscriptArchiveEventReadOnly(scope, "absent-run"),
+    ).resolves.toBeUndefined();
+    expect(fs.readFileSync(storePath)).toEqual(before);
+  });
+});
+
+it.each([false, true])(
+  "reads committed archive blobs before file publication (compressed=%s)",
+  async (compressed) => {
+    const { env, storePath, database, insert, update } = createArchiveStore(
+      "openclaw-archive-blob-read-",
+      "shared.sqlite",
+    );
+    const sessionKey = "agent:ops:completed";
+    const message = (id: string, content = id, runId = "completed-run") =>
+      assistantMessage(id, content, runId);
+    const answer = assistantMessage(
+      "latest",
+      `${'你好 🦞 {result} "quoted" \\ '.repeat(4_000)}tail`,
+      "completed-run",
+      true,
+    );
+    const archives: Array<[string, string, unknown[], string?]> = [
+      ["old", sessionKey, [message("old")]],
+      [
+        "new",
+        sessionKey,
+        [
+          message("earlier"),
+          answer,
+          message("other-run", "unrelated", "other-run"),
+          message("silent", "NO_REPLY"),
+        ],
+      ],
+      ["foreign", "agent:main:other", [answer]],
+      ["invalid", "agent:ops:invalid", [answer]],
+      ["malformed", "agent:ops:malformed", [answer], '\n{\n"message": !\n}\n'],
+      ["truncated", "agent:ops:truncated", [answer], '\n{\n"message": {\n'],
+    ];
+    insert(
+      archives.map(([sessionId, key, events, suffix], index) => {
+        const content =
+          jsonLines([
+            { type: "session", id: sessionId === "invalid" ? "wrong" : sessionId },
+            ...events,
+          ]) + (suffix ?? "");
+        const encoded = compressed
+          ? archiveCompression.encodeSessionArchiveContent(content)
+          : { bytes: Buffer.from(content), suffix: "" };
+        return archiveRow(sessionId, key, encoded.bytes, {
+          encoding: encoded.suffix ? "zstd" : "identity",
+          name: `archive-${index}.jsonl${encoded.suffix}`,
+          createdAt: index,
+        });
+      }),
+    );
+    const scope = { agentId: "ops", env, storePath, sessionKey };
+    const find = (sessionId?: string, runId = "completed-run") =>
+      history.findSessionTranscriptArchiveEventReadOnly(
+        { ...scope, ...(sessionId ? { sessionId } : {}) },
+        runId,
       );
-      await expect(findSessionTranscriptArchiveEventReadOnly(scope, runId)).resolves.toEqual({
-        event: answer,
+    const files = () =>
+      listDirectoryTreeStrictSync(env.OPENCLAW_STATE_DIR)
+        .map((walkEntry) => walkEntry.relativePath)
+        .toSorted((left, right) => left.localeCompare(right));
+    const filesBefore = files();
+
+    const hostSql = observeHostDataSql();
+    try {
+      expect(await find()).toEqual({ event: answer });
+      expect(hostSql.queries).toEqual([]);
+    } finally {
+      hostSql.restore();
+    }
+    expect(await find("old")).toEqual({ event: message("old") });
+    expect(await find("foreign")).toBeUndefined();
+    expect(await find(undefined, "missing-run")).toBeUndefined();
+    await expect(find("invalid")).rejects.toThrow(
+      "Archived transcript header does not match its registered session",
+    );
+    for (const sessionId of ["malformed", "truncated"]) {
+      await expect(find(sessionId)).rejects.toThrow();
+    }
+    expect(files()).toEqual(filesBefore);
+    expect(
+      executeSqliteQuerySync(
+        database.db,
+        getSessionKysely(database.db)
+          .selectFrom("session_transcript_archives")
+          .select("published_at"),
+      ).rows,
+    ).toEqual(archives.map(() => ({ published_at: null })));
+
+    const changedContent = jsonLines([
+      { type: "session", id: "new" },
+      message("latest", "changed but valid transcript content"),
+    ]);
+    const changedBytes = compressed
+      ? archiveCompression.encodeSessionArchiveContent(changedContent).bytes
+      : Buffer.from(changedContent);
+    update("new", { archive_blob: changedBytes }, "session_id");
+    await expect(find("new")).rejects.toThrow(
+      "Archived transcript bytes do not match their registered hash",
+    );
+
+    const entered = createDeferred();
+    const release = createDeferred();
+    const hold = async <T>(value: T) => {
+      entered.resolve();
+      await release.promise;
+      return value;
+    };
+    const replacementPath = `${storePath}.replacement`;
+    const originalPath = `${storePath}.original`;
+    const intercept = async () => {
+      if (!compressed) {
+        const createReaders = historyReaders.createSessionHistoryWorkerReaders;
+        return vi
+          .spyOn(historyReaders, "createSessionHistoryWorkerReaders")
+          .mockImplementation((runRequest) => {
+            const readers = createReaders(runRequest);
+            return {
+              ...readers,
+              readArchivePresence: async (input) => hold(await readers.readArchivePresence(input)),
+            };
+          });
+      }
+      await agentDb.closeOpenClawAgentDatabasesAsync(env.OPENCLAW_STATE_DIR);
+      fs.copyFileSync(storePath, replacementPath);
+      const scopeOwner = await import("./session-accessor.sqlite-scope.js");
+      const prepare = scopeOwner.prepareSqliteScope;
+      return vi
+        .spyOn(scopeOwner, "prepareSqliteScope")
+        .mockImplementation(async (input) => hold(await prepare(input)));
+    };
+    const interception = await intercept();
+    const outcome = find("old").then(
+      (value) => ({ value }),
+      (error: unknown) => ({ error }),
+    );
+    let closing: Promise<void> | undefined;
+    let originalMoved = false;
+    let replacementMoved = false;
+    try {
+      await Promise.race([
+        entered.promise,
+        outcome.then(() => {
+          throw new Error(
+            `Archive lookup settled before its ${compressed ? "scope preparation" : "metadata"} hold`,
+          );
+        }),
+      ]);
+      if (compressed) {
+        fs.renameSync(storePath, originalPath);
+        originalMoved = true;
+        fs.renameSync(replacementPath, storePath);
+        replacementMoved = true;
+      } else {
+        closing = agentDb.closeOpenClawAgentDatabasesAsync(env.OPENCLAW_STATE_DIR);
+      }
+      release.resolve();
+      expect(await outcome).toMatchObject({
+        error: { message: expect.stringMatching(compressed ? /identity changed/ : /revoked/) },
       });
+      await closing;
+    } finally {
+      release.resolve();
+      await Promise.allSettled([outcome, closing]);
+      if (compressed) {
+        await agentDb.closeOpenClawAgentDatabasesAsync(env.OPENCLAW_STATE_DIR);
+        if (replacementMoved) {
+          fs.renameSync(storePath, replacementPath);
+        }
+        if (originalMoved) {
+          fs.renameSync(originalPath, storePath);
+        }
+      }
+      interception.mockRestore();
+    }
+  },
+);
+
+it("retains exact multiline imported events through deletion and final-answer lookup", async () => {
+  await withOpenClawTestState({ label: "archive-multiline" }, async (state) => {
+    const sessionId = "imported-child";
+    const sessionKey = "agent:main:subagent:imported-child";
+    const runId = "imported-child-run";
+    const scope = {
+      agentId: "main",
+      env: state.env,
+      sessionId,
+      sessionKey,
+      storePath: path.join(state.sessionsDir(), "sessions.json"),
+    };
+    const answer = {
+      ...assistantMessage(
+        "answer",
+        [{ type: "text", text: 'Complete result: {"answer": "你好 🦞"}.' }],
+        runId,
+      ),
+      parentId: "user",
+    };
+    const rows = [
+      { type: "session", version: 3, id: sessionId },
+      messageEvent("user", null, {
+        role: "user",
+        content: 'Keep braces {}, brackets [] and \\"quotes\\".',
+      }),
+      answer,
+    ].map((event, index) => ({
+      session_id: sessionId,
+      seq: index,
+      created_at: index + 1,
+      event_json: JSON.stringify(event, null, 2),
+    }));
+    await seedUnindexedTranscriptForTest({
+      ...scope,
+      entry: { sessionId, updatedAt: 3 },
+      events: rows,
+    });
+    await expect(findTranscriptEvent(scope, { kind: "visible-final", runId })).resolves.toEqual({
+      event: answer,
+    });
+
+    const deletion = await deleteSessionEntryLifecycle({
+      ...scope,
+      archiveTranscript: true,
+      target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+    });
+    expect(deletion.deleted).toBe(true);
+    expect(deletion.archivedTranscripts).toHaveLength(1);
+    const archivePath = deletion.archivedTranscripts[0]!.archivedPath;
+    expect(archiveCompression.readSessionArchiveContentSync(archivePath)).toBe(
+      `${rows.map((row) => row.event_json).join("\n")}\n`,
+    );
+    await expect(history.findSessionTranscriptArchiveEventReadOnly(scope, runId)).resolves.toEqual({
+      event: answer,
     });
   });
-
-  it("reads a short final answer beyond the runtime string limit while the caller stays responsive", async () => {
-    const env = { OPENCLAW_STATE_DIR: autoTempDirs.make("openclaw-large-archive-read-") };
-    const storePath = path.join(env.OPENCLAW_STATE_DIR, "archive.sqlite");
-    const sessionId = "large-archive";
-    const sessionKey = "agent:main:completed";
-    const answer = {
-      type: "message",
-      message: {
-        role: "assistant",
-        content: "Complete final answer.",
-        __openclaw: { runId: "completed-run" },
-      },
-    };
-    const historyLine =
-      JSON.stringify({
-        type: "message",
-        message: { role: "user", content: "x".repeat(64 * 1024) },
-      }) + "\n";
-    // The September 2026 failure was the runtime's single-string limit, not an archive byte limit.
-    const historyRows = Math.ceil((bufferConstants.MAX_STRING_LENGTH + 1) / historyLine.length);
-    const chunks: Buffer[] = [];
-    await pipeline(
-      Readable.from(
-        (function* () {
-          yield JSON.stringify({ type: "session", id: sessionId }) + "\n";
-          for (let index = 0; index < historyRows; index += 1) {
-            yield historyLine;
-          }
-          yield JSON.stringify(answer) + "\n";
-        })(),
-      ),
-      zlib.createZstdCompress(),
-      async (source) => {
-        for await (const chunk of source) {
-          chunks.push(Buffer.from(chunk));
-        }
-      },
-    );
-    const bytes = Buffer.concat(chunks);
-    const database = openOpenClawAgentDatabase({ agentId: "main", env, path: storePath });
-    runOpenClawAgentWriteTransaction(
-      () => {
-        executeSqliteQuerySync(
-          database.db,
-          getSessionKysely(database.db)
-            .insertInto("session_transcript_archives")
-            .values({
-              session_id: sessionId,
-              session_key: sessionKey,
-              generation: "generation",
-              reason: "deleted",
-              encoding: "zstd",
-              archive_blob: bytes,
-              archive_sha256: createHash("sha256").update(bytes).digest("hex"),
-              archive_name: "large.jsonl.zst",
-              created_at: 1,
-              published_at: null,
-            }),
-        );
-      },
-      { agentId: "main", env, path: storePath },
-    );
-    let heartbeats = 0;
-    const heartbeat = setInterval(() => {
-      heartbeats += 1;
-    }, 10);
-    try {
-      await expect(
-        findSessionTranscriptArchiveEventReadOnly(
-          { agentId: "main", env, storePath, sessionId, sessionKey },
-          "completed-run",
-        ),
-      ).resolves.toEqual({ event: answer });
-      expect(heartbeats).toBeGreaterThan(0);
-      expect(fs.existsSync(path.join(env.OPENCLAW_STATE_DIR, "large.jsonl.zst"))).toBe(false);
-    } finally {
-      clearInterval(heartbeat);
-    }
-  }, 30_000);
 });
+
+it("reads a short final answer beyond the runtime string limit while the caller stays responsive", async () => {
+  const { env, storePath, insert } = createArchiveStore("openclaw-large-archive-read-");
+  const sessionId = "large-archive";
+  const sessionKey = "agent:main:completed";
+  const answer = assistantMessage(undefined, "Complete final answer.", "completed-run");
+  const historyLine =
+    JSON.stringify({
+      type: "message",
+      message: { role: "user", content: "x".repeat(64 * 1024) },
+    }) + "\n";
+  // The September 2026 failure was the runtime's single-string limit, not an archive byte limit.
+  const historyRows = Math.ceil((bufferConstants.MAX_STRING_LENGTH + 1) / historyLine.length);
+  const compressed = Readable.from([
+    JSON.stringify({ type: "session", id: sessionId }) + "\n",
+    ...Array.from({ length: historyRows }, () => historyLine),
+    JSON.stringify(answer) + "\n",
+  ]).pipe(zlib.createZstdCompress());
+  const bytes = await consumeBuffer(compressed);
+  insert(
+    archiveRow(sessionId, sessionKey, bytes, {
+      encoding: "zstd",
+      name: "large.jsonl.zst",
+      createdAt: 1,
+    }),
+  );
+  let heartbeats = 0;
+  const heartbeat = setInterval(() => {
+    heartbeats += 1;
+  }, 10);
+  try {
+    await expect(
+      history.findSessionTranscriptArchiveEventReadOnly(
+        { agentId: "main", env, storePath, sessionId, sessionKey },
+        "completed-run",
+      ),
+    ).resolves.toEqual({ event: answer });
+    expect(heartbeats).toBeGreaterThan(0);
+    expect(fs.existsSync(path.join(env.OPENCLAW_STATE_DIR, "large.jsonl.zst"))).toBe(false);
+  } finally {
+    clearInterval(heartbeat);
+  }
+}, 30_000);

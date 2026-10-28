@@ -1,11 +1,16 @@
-import type { Page } from "playwright";
-import type { ControlUiSessionPullRequestsChanged } from "../../../src/gateway/control-ui-contract.js";
-import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
+import type { Locator, Page } from "playwright";
+import { expect } from "vitest";
+import {
+  SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+  type ControlUiSessionPullRequestsChanged,
+} from "../../../src/gateway/control-ui-contract.js";
+import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.ts";
 import {
   defaultControlUiFeatureMethods,
   type ControlUiMockGatewayScenario,
 } from "../test-helpers/control-ui-e2e.ts";
 import { TEST_LINK_READER } from "../test-helpers/link-reader.ts";
+import { chatSessionListResponse } from "./chat-flow.test-support.ts";
 
 export const activityPolishKeys = {
   current: "agent:main:polish-current",
@@ -26,53 +31,31 @@ export const activityPolishPullRequest = {
 };
 
 export function activityPolishFixture(now = Date.now()) {
-  const sessions = [
-    {
-      key: activityPolishKeys.current,
-      label: "Repair duplicate notifications",
-      lastActivityAt: now - 40 * 60_000,
-      lastInteractionAt: now - 60_000,
-      text: "Fixed duplicate notifications after reconnecting. Regression checks passed and the pull request was merged.",
-      state: "current",
+  const sessions = (
+    [
+      ["current", "Repair duplicate notifications", 40, "Fixed duplicate notifications."],
+      ["updating", "Improve keyboard navigation", 8, "Testing focus behavior."],
+      ["unavailable", "Investigate slow image previews", 26, "Cache repair ready for review."],
+      ["initial", "Review release checklist", 45, ""],
+    ] as const
+  ).map(([name, label, minutes, text], index) => ({
+    key: activityPolishKeys[name],
+    label,
+    lastActivityAt: now - minutes * 60_000,
+    lastInteractionAt: name === "current" ? now - 60_000 : undefined,
+    kind: "direct" as const,
+    agentId: "main",
+    sessionId: `activity-polish-${index}`,
+    updatedAt: now - (index + 1) * 3_600_000,
+    createdActor: { type: "human", id: "alex-example", label: "Alex Morgan" },
+    activitySummary: {
+      state: name === "initial" ? "updating" : name,
+      canEnsure: true,
+      text,
+      updatedAt: now - 3_600_000,
     },
-    {
-      key: activityPolishKeys.updating,
-      label: "Improve keyboard navigation",
-      lastActivityAt: now - 8 * 60_000,
-      text: "Added keyboard navigation to the project switcher. Testing focus behavior on smaller screens.",
-      state: "updating",
-    },
-    {
-      key: activityPolishKeys.unavailable,
-      label: "Investigate slow image previews",
-      lastActivityAt: now - 26 * 60_000,
-      text: "Found repeated image downloads during navigation. The cache repair is ready for review.",
-      state: "unavailable",
-    },
-    {
-      key: activityPolishKeys.initial,
-      label: "Review release checklist",
-      lastActivityAt: now - 45 * 60_000,
-      text: "",
-      state: "updating",
-    },
-  ].map(({ text, state, ...row }, index) =>
-    Object.assign(row, {
-      kind: "direct" as const,
-      agentId: "main",
-      sessionId: `activity-polish-${index}`,
-      updatedAt: now - (index + 1) * 3_600_000,
-      createdActor: { type: "human", id: "alex-example", label: "Alex Morgan" },
-      activitySummary: { state, canEnsure: true, text, updatedAt: now - 3_600_000 },
-    }),
-  );
-  const list = {
-    count: sessions.length,
-    defaults: { contextTokens: null, model: "gpt-5.5", modelProvider: "openai" },
-    path: "",
-    sessions,
-    ts: now,
-  };
+  }));
+  const list = { ...chatSessionListResponse(sessions), ts: now };
   const scenario: ControlUiMockGatewayScenario = {
     assistantName: "Roboclaw",
     sessionKey: activityPolishKeys.current,
@@ -102,54 +85,34 @@ export function activityPolishFixture(now = Date.now()) {
   return { list, scenario, pullRequests };
 }
 
-export async function activityPolishImages(page: Page) {
-  const urls = await page.evaluate(() =>
-    ["Reconnect check", "Delivery timeline", "Keyboard review", "Preview cache"].map(
-      (title, index) => {
-        const canvas = document.createElement("canvas");
-        canvas.width = 800;
-        canvas.height = 450;
-        const context = canvas.getContext("2d")!;
-        context.fillStyle = ["#eff6ff", "#f0fdf4", "#faf5ff", "#fff7ed"][index]!;
-        context.fillRect(0, 0, 800, 450);
-        context.fillStyle = "#172033";
-        context.font = "600 32px sans-serif";
-        context.fillText(title, 40, 65);
-        context.font = "19px sans-serif";
-        context.fillStyle = "#64748b";
-        context.fillText("Synthetic validation screenshot", 40, 100);
-        for (let row = 0; row < 4; row++) {
-          context.fillStyle = "#ffffff";
-          context.fillRect(40, 130 + row * 65, 720, 50);
-          context.fillStyle = "#15803d";
-          context.font = "22px sans-serif";
-          context.fillText("✓", 58, 164 + row * 65);
-          context.fillStyle = "#334155";
-          context.font = "19px sans-serif";
-          context.fillText(
-            [
-              "Connection restored",
-              "One notification delivered",
-              "No duplicate requests",
-              "Checks passed",
-            ][row]!,
-            96,
-            163 + row * 65,
-          );
-        }
-        return canvas.toDataURL("image/png");
-      },
-    ),
-  );
+export async function activityPolishImages(_page: Page) {
+  const titles = ["Reconnect check", "Delivery timeline", "Keyboard review", "Preview cache"];
   return {
-    artifacts: urls.map((url, index) => ({
+    artifacts: titles.map((title, index) => ({
       id: `screenshot-${index + 1}`,
       type: "image",
-      title: ["Reconnect check", "Delivery timeline", "Keyboard review", "Preview cache"][index]!,
+      title,
       mimeType: "image/png",
       sessionKey: activityPolishKeys.current,
-      image: { url },
+      image: {
+        url: `data:image/png;base64,${createSolidPngBuffer(800, 450, { r: 237 + index, g: 247, b: 247 }).toString("base64")}`,
+      },
       download: { mode: "url" },
     })),
   };
+}
+
+export async function expectActivityImagesLoaded(images: Locator) {
+  await expect
+    .poll(() =>
+      images.evaluateAll(
+        (elements) =>
+          elements.length > 0 &&
+          elements.every(
+            (element) =>
+              element instanceof HTMLImageElement && element.complete && element.naturalWidth > 0,
+          ),
+      ),
+    )
+    .toBe(true);
 }

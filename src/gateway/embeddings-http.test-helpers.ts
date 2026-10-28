@@ -35,6 +35,7 @@ export async function startGenericEmbeddingServer() {
             index,
           })),
           model: body.model,
+          usage: { prompt_tokens: 777, total_tokens: 778 },
         }),
       );
     })().catch((error: unknown) => {

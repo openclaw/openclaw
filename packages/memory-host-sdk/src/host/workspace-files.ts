@@ -39,9 +39,10 @@ export type MemoryWorkspaceMaintenance = {
   commitContent: (params: MemoryFileCommit) => Promise<void>;
   resolveDreamsPath: () => Promise<string>;
   readDreams: (filePath: string) => Promise<string>;
-  writeDreams: (filePath: string, content: string) => Promise<void>;
+  /** Carry caller authority through transport preparation to the remote start boundary. */
+  writeDreams: (filePath: string, content: string, assertCurrent?: () => void) => Promise<void>;
   replaceReport: (filePath: string, content: string) => Promise<void>;
-  appendCorpus: (filePath: string, content: string) => Promise<number>;
+  appendCorpus: (filePath: string, content: string, assertCurrent?: () => void) => Promise<number>;
 };
 
 export type MemoryWorkspaceWatchRequest = {

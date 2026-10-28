@@ -1,5 +1,13 @@
 #!/usr/bin/env bash
 # Shared in-container lifecycle helpers for Docker/Bash E2E lanes.
+OPENCLAW_E2E_INSTANCE_LIB_DIR="${BASH_SOURCE[0]}"
+if [[ "$OPENCLAW_E2E_INSTANCE_LIB_DIR" == */* ]]; then
+  OPENCLAW_E2E_INSTANCE_LIB_DIR="${OPENCLAW_E2E_INSTANCE_LIB_DIR%/*}"
+else
+  OPENCLAW_E2E_INSTANCE_LIB_DIR=.
+fi
+OPENCLAW_E2E_INSTANCE_LIB_DIR="$(cd "$OPENCLAW_E2E_INSTANCE_LIB_DIR" && pwd)"
+
 openclaw_e2e_eval_test_state_from_b64() {
   local encoded="${1:?missing OpenClaw test-state script}"
   local decoded
@@ -102,108 +110,7 @@ openclaw_e2e_maybe_timeout() {
         fi
       fi
       # Keep stdin attached to the child instead of consuming it as watchdog source.
-      node --input-type=module -e '
-const [, timeoutValue, command, ...args] = process.argv;
-const parseTimeoutMs = (value) => {
-  const match = /^([0-9]+(?:\.[0-9]+)?)(ms|s|m|h)?$/u.exec(String(value ?? "").trim());
-  if (!match) {
-    throw new Error(`unsupported timeout value: ${value}`);
-  }
-  const amount = Number(match[1]);
-  const unit = match[2] ?? "s";
-  const multiplier = unit === "ms" ? 1 : unit === "s" ? 1_000 : unit === "m" ? 60_000 : 3_600_000;
-  return Math.max(1, Math.ceil(amount * multiplier));
-};
-if (!command) {
-  console.error("missing command for Node watchdog");
-  process.exit(1);
-}
-const { spawn } = await import("node:child_process");
-let timeoutMs;
-try {
-  timeoutMs = parseTimeoutMs(timeoutValue);
-} catch (error) {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exit(1);
-}
-const child = spawn(command, args, {
-  detached: process.platform !== "win32",
-  env: process.env,
-  stdio: "inherit",
-});
-let timedOut = false;
-let parentSignal = null;
-let parentSignalTimer = null;
-const signalExitCodes = new Map([
-  ["SIGHUP", 129],
-  ["SIGINT", 130],
-  ["SIGTERM", 143],
-]);
-const killGraceMs = Number.parseInt(
-  process.env.OPENCLAW_E2E_TIMEOUT_KILL_GRACE_MS || "30000",
-  10,
-);
-const killTarget = process.platform === "win32" ? child.pid : -child.pid;
-const killChild = (signal) => {
-  if (!child.pid) {
-    return;
-  }
-  try {
-    process.kill(killTarget, signal);
-  } catch {
-    try {
-      child.kill(signal);
-    } catch {}
-  }
-};
-const timer = setTimeout(() => {
-  timedOut = true;
-  console.error(`OpenClaw E2E command timed out after ${timeoutValue}`);
-  killChild("SIGTERM");
-  setTimeout(() => killChild("SIGKILL"), killGraceMs).unref();
-}, timeoutMs);
-const forwardSignal = (signal) => {
-  if (parentSignal) {
-    killChild("SIGKILL");
-    process.exit(signalExitCodes.get(signal) ?? 1);
-  }
-  parentSignal = signal;
-  clearTimeout(timer);
-  killChild(signal);
-  parentSignalTimer = setTimeout(() => {
-    killChild("SIGKILL");
-    process.exit(signalExitCodes.get(signal) ?? 1);
-  }, killGraceMs);
-  parentSignalTimer.unref();
-};
-process.once("SIGINT", forwardSignal);
-process.once("SIGTERM", forwardSignal);
-process.once("SIGHUP", forwardSignal);
-child.on("close", (code, signal) => {
-  clearTimeout(timer);
-  if (parentSignalTimer) {
-    clearTimeout(parentSignalTimer);
-  }
-  if (timedOut) {
-    process.exit(124);
-  }
-  if (parentSignal) {
-    process.exit(signalExitCodes.get(parentSignal) ?? 1);
-  }
-  if (code !== null) {
-    process.exit(code);
-  }
-  if (signal) {
-    process.kill(process.pid, signal);
-  }
-  process.exit(1);
-});
-child.on("error", (error) => {
-  clearTimeout(timer);
-  console.error(error.message);
-  process.exit(127);
-});
-      ' -- "$timeout_value" "$@"
+      node "$OPENCLAW_E2E_INSTANCE_LIB_DIR/docker-e2e-watchdog.mjs" e2e "$timeout_value" "$@"
       return
     fi
     echo "timeout command not found and Node is unavailable; cannot bound OpenClaw E2E command after $timeout_value" >&2
@@ -222,6 +129,7 @@ openclaw_e2e_print_log() {
   max_lines="$(openclaw_e2e_read_nonnegative_int_env OPENCLAW_E2E_LOG_TAIL_LINES 120)" || return $?
   [ -f "$path" ] || return 0
   echo "--- $path ---"
+  [ -s "$path" ] || return 0
   redactor_module="${OPENCLAW_E2E_REDACTOR_MODULE:-$(openclaw_e2e_package_root)/dist/plugin-sdk/logging-core.js}"
   [ -f "$redactor_module" ] || redactor_module="$PWD/dist/plugin-sdk/logging-core.js"
   if [ ! -f "$redactor_module" ]; then
@@ -450,7 +358,7 @@ openclaw_e2e_gateway_log_port_from_text() {
 openclaw_e2e_wait_gateway_ready() {
   local pid="$1" log="$2" attempts="${3:-300}" ready_port="${4:-}" readiness_mode="${5:-strict}" _ saw_ready_log=false
   local ready_scan_offset=0 ready_scan_carry="" ready_scan_carry_chars=256
-  local ready_log_pattern='\[gateway\] ready'
+  local ready_log_pattern='\[gateway\] (ready|http server listening)'
   # Published baselines logged their listener before the modern ready marker existed.
   if [ "$readiness_mode" = "legacy-ready-log-ok" ]; then
     ready_log_pattern='\[gateway\] (ready|listening on)'
@@ -493,11 +401,13 @@ openclaw_e2e_wait_gateway_ready() {
     fi
     if [ "$saw_ready_log" = "true" ]; then
       [ -n "$ready_port" ] || ready_port="${OPENCLAW_E2E_GATEWAY_READY_PORT:-18789}"
-      if [ "$readiness_mode" = "legacy-ready-log-ok" ]; then
-        openclaw_e2e_probe_tcp 127.0.0.1 "$ready_port" 400 && return 0
-      else
-        openclaw_e2e_probe_http "http://127.0.0.1:${ready_port}/readyz" ok 400 && return 0
-      fi
+    fi
+    if [ "$readiness_mode" = "legacy-ready-log-ok" ]; then
+      [ "$saw_ready_log" = "true" ] && openclaw_e2e_probe_tcp 127.0.0.1 "$ready_port" 400 && return 0
+    elif [ -n "$ready_port" ]; then
+      # Deferred admission can settle after the one-time startup log check.
+      # The owned port's modern readiness JSON is authoritative, not any HTTP 200.
+      openclaw_e2e_probe_http "http://127.0.0.1:${ready_port}/readyz" gateway-ready 400 && return 0
     fi
     sleep 0.25
   done
@@ -532,7 +442,9 @@ openclaw_e2e_probe_http() {
     let response;
     try {
       response = await fetch(process.argv[1], { signal: controller.signal });
-      const passed = expected === "ok" ? response.ok : response.status === Number(expected);
+      const passed = expected === "gateway-ready"
+        ? response.status === 200 && (await response.json())?.ready === true
+        : expected === "ok" ? response.ok : response.status === Number(expected);
       exitCode = passed ? 0 : 1;
     } catch {
       exitCode = 1;

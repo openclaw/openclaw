@@ -6,8 +6,13 @@ import {
   setDiagnosticsEnabledForProcess,
 } from "../../infra/diagnostic-events.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
+import {
+  createGatewayUpdateLifecycle,
+  type UpdateCheckLifecycle,
+} from "../../infra/update-check-lifecycle.js";
 import * as ledger from "../../infra/update-run-ledger.js";
 import * as stageTiming from "../../shared/stage-timing.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 
 type TestUpdateAvailable = {
   currentVersion: string;
@@ -30,7 +35,9 @@ const getUpdateEffectiveChannelMock = vi.hoisted(() =>
 );
 const getUpdateScheduleMock = vi.hoisted(() => vi.fn<() => TestUpdateSchedule>(() => null));
 const refreshGatewayUpdateStatusMock = vi.hoisted(() =>
-  vi.fn<typeof import("../../infra/update-startup.js").refreshGatewayUpdateStatus>(async () => {}),
+  vi.fn<typeof import("../../infra/update-status-schedule.js").refreshGatewayUpdateStatus>(
+    async () => {},
+  ),
 );
 const getLatestUpdateRestartSentinelMock = vi.hoisted(() =>
   vi.fn<() => TestUpdateSentinel>(() => null),
@@ -46,25 +53,35 @@ vi.mock("../../infra/update-status-state.js", () => ({
 
 vi.mock("../../infra/update-startup.js", () => ({
   getUpdateEffectiveChannel: getUpdateEffectiveChannelMock,
+}));
+
+vi.mock("../../infra/update-status-schedule.js", () => ({
+  getGatewayUpdateSchedule: () => getUpdateScheduleMock(),
   refreshGatewayUpdateStatus: refreshGatewayUpdateStatusMock,
 }));
 
-vi.mock("../server-restart-sentinel.js", () => ({
+vi.mock("../server-update-sentinel.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../server-update-sentinel.js")>()),
   getLatestUpdateRestartSentinel: getLatestUpdateRestartSentinelMock,
-  refreshLatestUpdateRestartSentinel: refreshLatestUpdateRestartSentinelMock,
+  prepareLatestUpdateRestartSentinel: refreshLatestUpdateRestartSentinelMock,
 }));
 
-vi.mock("./validation.js", () => ({
+vi.mock("./validation.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./validation.js")>()),
   assertValidParams: () => true,
 }));
 
 let previousDiagnostics: boolean;
-afterEach(() => {
+let lifecycle: UpdateCheckLifecycle;
+afterEach(async () => {
+  await lifecycle.stop();
+  await lifecycle.scheduler.stop();
   vi.restoreAllMocks();
   setDiagnosticsEnabledForProcess(previousDiagnostics);
 });
 
 beforeEach(() => {
+  lifecycle = createGatewayUpdateLifecycle(createTestGatewayScheduler());
   previousDiagnostics = areDiagnosticsEnabledForProcess();
   getUpdateAvailableMock.mockReset();
   getUpdateAvailableMock.mockReturnValue(null);
@@ -104,7 +121,7 @@ describe("update.status effective channel", () => {
   });
 
   it("prefers the current config channel over the startup schedule", async () => {
-    getUpdateScheduleMock.mockReturnValueOnce({ channel: "beta", autoEnabled: true });
+    getUpdateScheduleMock.mockReturnValue({ channel: "beta", autoEnabled: true });
     const { updateHandlers } = await import("./update.js");
     const respond = vi.fn();
     const handler = updateHandlers["update.status"];
@@ -144,7 +161,7 @@ describe("update.status effective channel", () => {
     const schedule = { channel: "dev" as const, autoEnabled: false };
     try {
       await vi.waitFor(() => expect(refreshGatewayUpdateStatusMock).toHaveBeenCalledOnce());
-      expect(refreshGatewayUpdateStatusMock.mock.calls[0]?.[0]).toBe(config);
+      expect(refreshGatewayUpdateStatusMock.mock.calls[0]?.[0]).toBe(context.getRuntimeConfig);
       expect(getUpdateScheduleMock).not.toHaveBeenCalled();
       expect(respond).not.toHaveBeenCalled();
       getUpdateScheduleMock.mockReturnValue(schedule);
@@ -174,7 +191,29 @@ describe("update.status effective channel", () => {
     expect(respond).toHaveBeenCalledWith(true, { sentinel: null, updateAvailable: null });
   });
 
-  it("refreshes the latest update sentinel before responding", async () => {
+  it("does not report cached status as a successful explicit refresh after a fetch error", async () => {
+    refreshGatewayUpdateStatusMock.mockRejectedValueOnce(new Error("fetch timed out"));
+    const { updateHandlers } = await import("./update.js");
+    const respond = vi.fn();
+    const handler = updateHandlers["update.status"];
+    if (!handler) {
+      throw new Error("update.status handler is unavailable");
+    }
+    await handler({
+      params: { refreshCheckout: true },
+      respond,
+      context: {
+        getRuntimeConfig: () => ({ update: { channel: "dev" } }),
+        logGateway: { warn: vi.fn() },
+      },
+    } as never);
+    expect(respond).toHaveBeenCalledWith(false, undefined, {
+      code: "UNAVAILABLE",
+      message: "Could not check the latest update. Try again.",
+    });
+  });
+
+  it("prepares the latest update sentinel before responding", async () => {
     getUpdateAvailableMock.mockReturnValueOnce({
       currentVersion: "1.0.0",
       latestVersion: "2.0.0",
@@ -192,7 +231,7 @@ describe("update.status effective channel", () => {
       ts: 2,
       stats: { after: { version: "2.0.0" } },
     });
-    getUpdateScheduleMock.mockReturnValueOnce({ channel: "beta", autoEnabled: true });
+    getUpdateScheduleMock.mockReturnValue({ channel: "beta", autoEnabled: true });
     const { updateHandlers } = await import("./update.js");
     const respond = vi.fn();
 
@@ -319,6 +358,6 @@ it("attributes a failed status history read to its phase and preserves the error
   expect(warn).toHaveBeenCalledExactlyOnceWith("update.status: slow request", {
     operation: "update.status",
     elapsedMs: 40_000,
-    phaseDurationsMs: { sentinel: 0, checkout: 0, identity: 0, reconciliation: 0, history: 40_000 },
+    phaseDurationsMs: { sentinel: 0, checkout: 0, reconciliation: 0, history: 40_000 },
   });
 });

@@ -1,6 +1,9 @@
 import { expect, it } from "vitest";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  createControlUiE2eContextOptions,
+  createControlUiE2eSuite,
+} from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI reasoning visibility" });
 
@@ -13,58 +16,28 @@ suite.define(() => {
     { reasoningLevel: "on", withTools: true },
     { reasoningLevel: "stream", withTools: true },
   ])("keeps reasoning in work: %o", async ({ reasoningLevel, withTools }) => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { width: 1280, height: 900 },
-    });
-    try {
-      const page = await context.newPage();
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const sessionKey = "agent:main:dashboard:reasoning-visibility";
       const reasoningText = "Compare the evidence before answering.";
       const code = 'const label = "*literal*";\n\nconsole.log(label);\n';
       const conclusion = "Compare both outputs.";
       const finalText = "The answer is ready.";
+      const thinking = `${reasoningText}\n\n\`\`\`ts\n${code}\`\`\`\n\n${conclusion}`;
+      const tool = { type: "toolCall", id: "read", name: "read" };
       const gateway = await installMockGateway(page, {
         sessionKey,
         sessionInfo: { reasoningLevel },
-        sessions: [{ key: sessionKey, kind: "direct", reasoningLevel, updatedAt: 4_000 }],
+        sessions: [{ key: sessionKey, kind: "direct", reasoningLevel }],
         historyMessages: [
-          { role: "user", content: "Check the evidence.", timestamp: 1_000 },
-          {
-            role: "assistant",
-            content: [
-              {
-                type: "thinking",
-                thinking: `${reasoningText}\n\n\`\`\`ts\n${code}\`\`\`\n\n${conclusion}`,
-              },
-            ],
-            timestamp: 2_000,
-          },
+          { role: "user", content: "Check the evidence." },
+          { role: "assistant", content: [{ type: "thinking", thinking }] },
           ...(withTools
             ? [
-                {
-                  role: "assistant",
-                  content: [
-                    {
-                      type: "toolCall",
-                      id: "read-evidence",
-                      name: "read",
-                      arguments: { path: "evidence.txt" },
-                    },
-                  ],
-                  timestamp: 2_500,
-                },
-                {
-                  role: "toolResult",
-                  toolCallId: "read-evidence",
-                  toolName: "read",
-                  content: "Evidence checked.",
-                  timestamp: 3_000,
-                },
+                { role: "assistant", content: [tool] },
+                { role: "toolResult", toolCallId: "read", toolName: "read", content: "Read." },
               ]
             : []),
-          { role: "assistant", content: [{ type: "text", text: finalText }], timestamp: 4_000 },
+          { role: "assistant", content: [{ type: "text", text: finalText }] },
         ],
       });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
@@ -79,8 +52,12 @@ suite.define(() => {
         }
         await answer.waitFor();
         await expect.poll(() => reasoning.isVisible()).toBe(false);
-        await worked.click();
-        await expect.poll(() => worked.getAttribute("aria-expanded")).toBe("true");
+        if (withTools || reasoningLevel === "on") {
+          await worked.click();
+          await expect.poll(() => worked.getAttribute("aria-expanded")).toBe("true");
+        } else {
+          expect(await worked.count()).toBe(0);
+        }
         await expect.poll(() => reasoning.isVisible()).toBe(reasoningLevel === "on");
         if (reasoningLevel === "on") {
           expect(await reasoning.locator("pre code").allTextContents()).toEqual([code]);
@@ -94,15 +71,13 @@ suite.define(() => {
       }
 
       const menuTrigger = pane.locator(".chat-header-session-menu__trigger");
-      const menu = pane.locator("wa-dropdown.chat-header-session-menu");
-      const localReasoning = menu.getByRole("menuitemcheckbox", { name: "Reasoning" });
+      const menu = pane.locator("openclaw-chat-header-session-menu > .chat-header-session-menu");
+      const toggle = menu.getByRole("menuitemcheckbox", { name: "Reasoning" });
       for (const showReasoning of [false, true]) {
         await menuTrigger.click();
-        await menu.getByRole("menuitem", { name: "View", exact: true }).hover();
-        await localReasoning.click();
-        await expect
-          .poll(() => localReasoning.getAttribute("aria-checked"))
-          .toBe(String(showReasoning));
+        await menu.getByRole("menuitem", { name: "View", exact: true }).click();
+        await toggle.click();
+        await expect.poll(() => toggle.getAttribute("aria-checked")).toBe(String(showReasoning));
         await menuTrigger.click();
         await expect
           .poll(() => reasoning.isVisible())
@@ -110,8 +85,6 @@ suite.define(() => {
         expect(await answer.isVisible()).toBe(true);
       }
       expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
+    });
   });
 });

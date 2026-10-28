@@ -2,7 +2,7 @@
 
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { lstatSync, readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -43,10 +43,17 @@ const INSTALL_INPUT_FILES = [
   ".github/actions/setup-node-env/dependency-fingerprint.mjs",
   ".github/actions/setup-node-env/install-dependencies.sh",
   "node-version.mjs",
+  "runtime-process-bootstrap.generated.mjs",
+  "runtime-process-scripts.generated.mjs",
   "scripts/lib/pnpm-lockfile-documents.mjs",
   "scripts/check-install-dependency-ownership.mjs",
   "scripts/postinstall-bundled-plugins.mjs",
+  "scripts/lib/fs-safe-prebuild.mjs",
+  "scripts/lib/fs-safe-npm-cli-preload.generated.mjs",
+  "scripts/lib/fs-safe-npm-cli-protocol.mjs",
+  "scripts/windows-cmd-helpers.mjs",
   "scripts/lib/package-dist-imports.mjs",
+  "scripts/lib/javascript-statements.mjs",
   "scripts/lib/package-lifecycle-marker.mjs",
   "scripts/preinstall-package-manager-warning.mjs",
   "scripts/prepare-git-hooks.mjs",
@@ -122,40 +129,158 @@ function addRecord(hash, kind, relativePath, contents) {
   hash.update("\0");
 }
 
-function trackedPackageManifests(workspace) {
-  const result = spawnSync(
-    "git",
-    ["ls-files", "-z", "--", "package.json", ":(glob)**/package.json"],
-    {
+function installSource(workspace) {
+  const git = (args, input) => {
+    const result = spawnSync("git", args, {
       cwd: workspace,
-      encoding: "utf8",
-    },
-  );
-  if (result.status !== 0) {
-    const detail = result.error?.message || result.stderr.trim() || `exit ${result.status}`;
-    throw new Error(`git ls-files failed: ${detail}`);
-  }
-  return result.stdout
+      input,
+      env: { ...process.env, GIT_NO_LAZY_FETCH: "1", GIT_NO_REPLACE_OBJECTS: "1" },
+      maxBuffer: 16 * 1024 * 1024,
+    });
+    if (result.status !== 0) {
+      const detail =
+        result.error?.message || result.stderr?.toString().trim() || `exit ${result.status}`;
+      throw new Error(`git ${args[0]} failed: ${detail}`);
+    }
+    return result.stdout;
+  };
+  const tracked = new Map();
+  for (const record of git([
+    "ls-files",
+    "-t",
+    "--stage",
+    "-z",
+    "--",
+    "package.json",
+    ":(glob)**/package.json",
+    "patches",
+    ...INSTALL_INPUT_FILES,
+  ])
+    .toString("utf8")
     .split("\0")
-    .filter((entry) => entry === "package.json" || entry.endsWith("/package.json"))
-    .toSorted();
+    .filter(Boolean)) {
+    const match = /^([A-Z]) (100644|100755|120000) ([a-f0-9]+) 0\t([\s\S]+)$/u.exec(record);
+    if (!match) {
+      throw new Error("dependency fingerprint requires resolved file index entries");
+    }
+    tracked.set(match[4], { mode: match[2], oid: match[3], sparse: match[1] === "S" });
+  }
+  const physicalFile = (relativePath) => {
+    const absolutePath = path.join(workspace, relativePath);
+    if (lstatSync(absolutePath, { throwIfNoEntry: false })) {
+      if (!statSync(absolutePath).isFile()) {
+        throw new Error(relativePath + " is not a regular file");
+      }
+      return absolutePath;
+    }
+    // Only an absent sparse path may use its index blob. A dangling link or
+    // replaced ancestor is a physical source error, not an omitted Git input.
+    for (
+      let parent = path.dirname(absolutePath);
+      parent !== workspace;
+      parent = path.dirname(parent)
+    ) {
+      const entry = lstatSync(parent, { throwIfNoEntry: false });
+      if (entry && !entry.isDirectory()) {
+        throw new Error(relativePath + " has a non-directory ancestor");
+      }
+    }
+    return null;
+  };
+  const sparseContents = new Map();
+  // Read only absent inputs selected for this phase; unused index objects must
+  // never decide whether valid working-tree bytes can be fingerprinted.
+  const readSparse = (files) => {
+    const sparse = files.flatMap((file) => {
+      const entry = tracked.get(file);
+      if (!entry?.sparse || sparseContents.has(file) || physicalFile(file) !== null) {
+        return [];
+      }
+      if (entry.mode === "120000") {
+        throw new Error("tracked install input is missing: " + file);
+      }
+      return [{ file, oid: entry.oid }];
+    });
+    if (sparse.length === 0) {
+      return;
+    }
+    const output = git(["cat-file", "--batch"], sparse.map(({ oid }) => oid + "\n").join(""));
+    let offset = 0;
+    for (const { file, oid } of sparse) {
+      const headerEnd = output.indexOf(10, offset);
+      const match = /^([a-f0-9]+) blob (\d+)$/u.exec(
+        output.subarray(offset, headerEnd).toString("ascii"),
+      );
+      const size = Number(match?.[2]);
+      const end = headerEnd + 1 + size;
+      if (
+        headerEnd < offset ||
+        match?.[1] !== oid ||
+        !Number.isSafeInteger(size) ||
+        output[end] !== 10
+      ) {
+        throw new Error("could not read sparse install input: " + file);
+      }
+      sparseContents.set(file, output.subarray(headerEnd + 1, end));
+      offset = end + 1;
+    }
+    if (offset !== output.length) {
+      throw new Error("sparse install input stream has unexpected data");
+    }
+  };
+  const read = (relativePath) => {
+    const physical = physicalFile(relativePath);
+    if (physical !== null) {
+      return readFileSync(physical);
+    }
+    const indexed = tracked.get(relativePath);
+    if (!indexed) {
+      return null;
+    }
+    if (!sparseContents.has(relativePath)) {
+      throw new Error("tracked install input is missing: " + relativePath);
+    }
+    return sparseContents.get(relativePath);
+  };
+  const patches = new Set([...tracked.keys()].filter((file) => file.startsWith("patches/")));
+  const collectPatches = (relativePath) => {
+    const absolutePath = path.join(workspace, relativePath);
+    if (!lstatSync(absolutePath, { throwIfNoEntry: false })) {
+      return;
+    }
+    if (statSync(absolutePath).isFile()) {
+      patches.add(relativePath);
+    } else {
+      for (const name of readdirSync(absolutePath)) {
+        collectPatches(path.posix.join(relativePath, name));
+      }
+    }
+  };
+  collectPatches("patches");
+  readSparse(INSTALL_INPUT_FILES);
+  return {
+    readSparse,
+    patches: [...patches].toSorted((left, right) => (left < right ? -1 : left > right ? 1 : 0)),
+    manifests: [...tracked.keys()]
+      .filter((file) => file === "package.json" || file.endsWith("/package.json"))
+      .toSorted((left, right) => (left < right ? -1 : left > right ? 1 : 0)),
+    read,
+  };
 }
 
-function frozenInstallManifests(workspace, manifests) {
+function frozenInstallManifests(read, manifests) {
   // Custom readPackage hooks can inspect manifests outside the locked graph.
   if (
-    PNPM_HOOK_FILES.some((file) => existsSync(path.join(workspace, file))) ||
+    PNPM_HOOK_FILES.some((file) => read(file) !== null) ||
     Object.keys(process.env).some((name) => /^(?:pnpm|npm)_config_.*pnpmfile$/iu.test(name)) ||
     [".npmrc", "pnpm-workspace.yaml"].some((file) => {
-      const config = path.join(workspace, file);
-      return existsSync(config) && /pnpmfile/iu.test(readFileSync(config, "utf8"));
+      const config = read(file);
+      return config !== null && /pnpmfile/iu.test(config.toString("utf8"));
     })
   ) {
     return manifests;
   }
-  const { dependencies } = pnpmLockfileDocuments(
-    readFileSync(path.join(workspace, "pnpm-lock.yaml"), "utf8"),
-  );
+  const { dependencies } = pnpmLockfileDocuments(read("pnpm-lock.yaml").toString("utf8"));
   // Read only pnpm's generated importer keys before dependencies are available.
   // Unknown YAML shapes and local tarballs/directories retain the conservative
   // inventory; frozen reconciliation remains the authority for install validity.
@@ -172,14 +297,14 @@ function frozenInstallManifests(workspace, manifests) {
     if (!line.trim() || line.trimStart().startsWith("#")) {
       continue;
     }
-    if (/^  \S/u.test(line)) {
-      const match = /^  ([a-zA-Z0-9_./-]+):(?: \{\})?$/u.exec(line);
+    if (/^ {2}\S/u.test(line)) {
+      const match = /^ {2}([a-zA-Z0-9_./-]+):(?: \{\})?$/u.exec(line);
       if (!match) {
         return manifests;
       }
       importer = match[1];
       selected.add(path.posix.join(importer, "package.json"));
-    } else if (!/^    /u.test(line)) {
+    } else if (!line.startsWith("    ")) {
       return manifests;
     }
     const link = /^ +version: link:([a-zA-Z0-9_./-]+)$/u.exec(line);
@@ -197,16 +322,15 @@ function computeDependencyFingerprint({ workspace, frozenLockfile }) {
   const hash = createHash("sha256");
   addRecord(hash, "contract", "frozen-lockfile", String(frozenLockfile));
 
-  const trackedManifests = trackedPackageManifests(workspace);
+  const { manifests: trackedManifests, patches, read, readSparse } = installSource(workspace);
   const manifests =
-    frozenLockfile === "true"
-      ? frozenInstallManifests(workspace, trackedManifests)
-      : trackedManifests;
+    frozenLockfile === "true" ? frozenInstallManifests(read, trackedManifests) : trackedManifests;
   if (manifests.length === 0) {
     throw new Error(`no tracked package.json files found under ${workspace}`);
   }
+  readSparse([...manifests, ...patches]);
   const parsedManifests = manifests.map((relativePath) => {
-    const source = readFileSync(path.join(workspace, relativePath), "utf8");
+    const source = read(relativePath).toString("utf8");
     let manifest;
     try {
       manifest = JSON.parse(source);
@@ -227,23 +351,9 @@ function computeDependencyFingerprint({ workspace, frozenLockfile }) {
     addRecord(hash, "manifest", relativePath, JSON.stringify(normalizeManifest(manifest)));
   }
 
-  for (const relativePath of INSTALL_INPUT_FILES) {
-    const absolutePath = path.join(workspace, relativePath);
-    let kind = "missing-file";
-    let contents = "";
-    try {
-      if (statSync(absolutePath).isFile()) {
-        kind = "file";
-        contents = readFileSync(absolutePath);
-      } else {
-        throw new Error(`${relativePath} is not a regular file`);
-      }
-    } catch (error) {
-      if (error.code !== "ENOENT") {
-        throw error;
-      }
-    }
-    addRecord(hash, kind, relativePath, contents);
+  for (const relativePath of [...INSTALL_INPUT_FILES, ...patches]) {
+    const contents = read(relativePath);
+    addRecord(hash, contents === null ? "missing-file" : "file", relativePath, contents ?? "");
   }
 
   return `v2-${hash.digest("hex")}`;

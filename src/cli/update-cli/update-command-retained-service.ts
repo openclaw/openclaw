@@ -31,7 +31,8 @@ export async function withRetainedUpdateServiceAuthority<T>(
       "Retained native recovery requires Windows Job custody.",
     );
   }
-  const { run, root, signal } = params;
+  const { run, root } = params;
+  const signal = run.deadline?.signal ?? params.signal;
   const executor = run.executorFence;
   const assertCaller = params.assertCurrent;
   const assertCurrent = () => {
@@ -60,27 +61,25 @@ export async function withRetainedUpdateServiceAuthority<T>(
           nativeOptions.baseEnv,
           nativeOptions.env,
         ]);
-        const nativeResult = await runCommandWithTimeout(
-          [process.execPath, "--input-type=module", "-e", gate.source, "--", ...command],
-          {
-            ...nativeOptions,
-            baseEnv: {},
-            env: gate.env,
-            signal:
-              signal && nativeOptions.signal
-                ? AbortSignal.any([signal, nativeOptions.signal])
-                : (signal ?? nativeOptions.signal),
-            input: gate.input,
-            beforeInput: (pid) => {
-              signal?.throwIfAborted();
-              // The parent fence is suspended. bind checks the same original A/B
-              // owners internally, then binds both child rows before opening stdin.
-              bind(pid);
-            },
-            killProcessTree: true,
-            requireProcessTreeExtinction: true,
+        const nativeResult = await runCommandWithTimeout([...gate.argv, ...command], {
+          ...nativeOptions,
+          baseEnv: {},
+          env: gate.env,
+          signal:
+            signal && nativeOptions.signal
+              ? AbortSignal.any([signal, nativeOptions.signal])
+              : (signal ?? nativeOptions.signal),
+          input: gate.input,
+          beforeInput: (pid) => {
+            signal?.throwIfAborted();
+            // The parent fence is suspended. bind checks the same original A/B
+            // owners internally, then binds both child rows before opening stdin.
+            bind(pid);
+            nativeOptions.beforeInput?.(pid, command);
           },
-        );
+          killProcessTree: true,
+          requireProcessTreeExtinction: true,
+        });
         // Classify inside child custody: neither root may be released until
         // a failed or successful native writer has settled safely.
         if (nativeResult.cleanup === "uncertain" || nativeResult.cleanup === "forced") {
@@ -100,8 +99,6 @@ export async function withRetainedUpdateServiceAuthority<T>(
       result.termination === "exit" &&
       result.code === 1 &&
       result.stdout === "" &&
-      result.cleanup !== "uncertain" &&
-      result.cleanup !== "forced" &&
       !result.stdoutTruncatedBytes &&
       !result.stderrTruncatedBytes &&
       result.stderr.startsWith(prefix)

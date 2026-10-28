@@ -1,18 +1,20 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { executeSqliteQuerySync, sqliteStringSet } from "../../infra/kysely-sync.js";
+import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { isInternalSessionEffectsKey } from "./internal-session-key.js";
 import { validateDeliveryCanonicalSessionEntry } from "./session-accessor.sqlite-entry-read.js";
 import { participantRecordsBySessionKey } from "./session-accessor.sqlite-participant-projection.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
-import { parseSessionEntryJson, selectSessionEntryRows } from "./session-accessor.sqlite-status.js";
+import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
 import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
 import type {
   SessionMembershipFact,
   SessionMembershipFacts,
+  SessionParticipantProjection,
 } from "./session-membership-facts.types.js";
 
 /** The read-only worker projects a store once, then only keys named by committed publications. */
@@ -24,14 +26,28 @@ export function readSessionMembershipFactsInDatabase(
   if (typeof identity !== "string") {
     throw new Error("Durable session membership requires a physical database");
   }
+  return {
+    kind: "session-membership-facts",
+    identity,
+    birthtime,
+    facts: readSessionMembershipRowsInDatabase(database, sessionKeys),
+  };
+}
+
+/** Connection-bound catalog rows; the transport supplies its own store identity. */
+function readSessionMembershipRowsInDatabase(
+  database: Pick<OpenClawAgentDatabase, "agentId" | "db">,
+  sessionKeys?: readonly string[],
+): SessionMembershipFact[] {
   if (sessionKeys?.length === 0) {
-    return { kind: "session-membership-facts", identity, birthtime, facts: [] };
+    return [];
   }
-  return withSqlitePostCommitPublications(database.db, () =>
-    runSqliteDeferredTransactionSync(database.db, () => {
+  return withSqlitePostCommitPublications(sqlPublicationAnchor(database.db), () =>
+    runSqliteReadSnapshotSync(database.db, () => {
       assertCanonicalSqliteSessionKeysCurrent(database);
-      let entries = selectSessionEntryRows(database, "list")
-        .select("updated_at")
+      let entries = getSessionKysely(database.db)
+        .selectFrom("session_nodes")
+        .select(["session_key", "entry_json", "updated_at"])
         .orderBy("session_key");
       let members = getSessionKysely(database.db)
         .selectFrom("session_members")
@@ -43,6 +59,8 @@ export function readSessionMembershipFactsInDatabase(
         members = members.where("session_key", "in", sqliteStringSet(sessionKeys));
       }
       const facts = new Map<string, SessionMembershipFact>();
+      const noMembership: readonly string[] = [];
+      const noParticipants: SessionParticipantProjection = {};
       const readableKeys: string[] = [];
       for (const row of executeSqliteQuerySync(database.db, entries).rows) {
         const entry = parseSessionEntryJson(row, "list");
@@ -57,8 +75,8 @@ export function readSessionMembershipFactsInDatabase(
         facts.set(row.session_key, [
           row.session_key,
           internal ? null : (normalizeOptionalString(entry.category) ?? null),
-          [],
-          {},
+          noMembership,
+          noParticipants,
           entry.sessionId,
         ]);
       }
@@ -74,34 +92,36 @@ export function readSessionMembershipFactsInDatabase(
           sessionKey,
           current?.[1] ?? null,
           values,
-          current?.[3] ?? {},
+          current?.[3] ?? noParticipants,
           current?.[4] ?? null,
         ]);
       }
+      // Sharing survives worker transport; the Gateway freezes these snapshots before use.
+      // The complete ordered identity key and its lookup live only for this database read.
+      const participants = new Map<string, SessionParticipantProjection>();
       for (const [sessionKey, records] of participantRecordsBySessionKey(
         database.db,
         readableKeys,
       )) {
         const current = facts.get(sessionKey);
+        const key = JSON.stringify(records.map(({ identity }) => identity));
+        let projection = participants.get(key);
+        if (!projection) {
+          projection = {
+            participants: records.map(({ identity }) => ({ identity })),
+            participantCount: records.length,
+          };
+          participants.set(key, projection);
+        }
         facts.set(sessionKey, [
           sessionKey,
           current?.[1] ?? null,
-          current?.[2] ?? [],
-          {
-            participants: records.map(({ identity: participantIdentity }) => ({
-              identity: participantIdentity,
-            })),
-            participantCount: records.length,
-          },
+          current?.[2] ?? noMembership,
+          projection,
           current?.[4] ?? null,
         ]);
       }
-      return {
-        kind: "session-membership-facts" as const,
-        identity,
-        birthtime,
-        facts: [...facts.values()],
-      };
+      return [...facts.values()];
     }),
   );
 }

@@ -1,20 +1,96 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import type { ErrorShape } from "../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
+import {
+  getRpcSourceForGateway,
+  getRpcSourceIdentity,
+} from "../sessions/session-controller.rpc-sources.js";
 import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
 import { resolveAuthorizedBoardViewTicketClaims } from "./board-view-ticket.js";
-import type { GatewayRequestContext } from "./server-methods/types.js";
-import { listSessionGroups, normalizeGroupNames } from "./session-groups.js";
+import type { operatorSessionCap } from "./operator-role-policy.js";
+import { gatewayClientSessionCreator } from "./server-methods/gateway-client-identity.js";
+import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
+import { readSessionGroupCatalog } from "./session-group-catalog.js";
 import {
   isApprovalSessionTargetMethod,
   sessionMutationTargetFields,
 } from "./session-method-policy.js";
-import type { SessionMutationTarget } from "./session-mutation-authorization-error.js";
+import {
+  SessionMutationAuthorizationChangedError,
+  type SessionMutationTarget,
+} from "./session-mutation-authorization-error.js";
+import {
+  resolveChatSendSessionKey,
+  resolveRequestedSessionAgentId,
+} from "./session-request-agent.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { canonicalizeSessionKeyForAgent } from "./session-store-key.js";
 import { resolveUnifiedTalkSessionTarget } from "./talk/session-registry.js";
 
 export type { SessionMutationTarget } from "./session-mutation-authorization-error.js";
+
+function resolveChatSendAuthorizationTarget(
+  cfg: OpenClawConfig,
+  target: SessionMutationTarget,
+): Result<SessionMutationTarget, ErrorShape> {
+  const agent = resolveRequestedSessionAgentId(cfg, target.sessionKey, target.agentId);
+  return agent.ok
+    ? ok({
+        ...target,
+        agentId: agent.agentId,
+        sessionKey: resolveChatSendSessionKey(cfg, target.sessionKey, agent.agentId),
+      })
+    : err(agent.error);
+}
+
+/** Match mutation guards with the normalized identity captured at admission. */
+export function resolveSessionMutationGuardTarget<T extends SessionMutationTarget>(
+  method: string,
+  cfg: OpenClawConfig,
+  targetRef: SessionMutationTarget,
+  targets: readonly T[],
+) {
+  let target: SessionMutationTarget = {
+    sessionKey: normalizeOptionalString(targetRef.sessionKey) ?? targetRef.sessionKey,
+    agentId: normalizeOptionalString(targetRef.agentId),
+  };
+  if (method === "chat.send") {
+    const normalized = resolveChatSendAuthorizationTarget(cfg, target);
+    if (!normalized.ok) {
+      throw new SessionMutationAuthorizationChangedError(normalized.error);
+    }
+    target = normalized.value;
+  }
+  return {
+    target,
+    expected: targets.find(
+      (candidate) =>
+        candidate.sessionKey === target.sessionKey && candidate.agentId === target.agentId,
+    ),
+  };
+}
+
+/** Authorization selects the same chat target without rewriting the raw request's replay aliases. */
+export function resolveChatSendAuthorizationParams(
+  cfg: OpenClawConfig,
+  params: unknown,
+): Result<unknown, ErrorShape> {
+  const record = asOptionalRecord(params);
+  if (typeof record?.sessionKey !== "string") {
+    return ok(params);
+  }
+  const target = resolveChatSendAuthorizationTarget(cfg, {
+    sessionKey: record.sessionKey,
+    agentId: normalizeOptionalString(record.agentId),
+  });
+  return target.ok
+    ? ok({ ...record, sessionKey: target.value.sessionKey, agentId: target.value.agentId })
+    : err(target.error);
+}
 
 export function resolveDirectSessionTargets(
   method: string,
@@ -23,10 +99,10 @@ export function resolveDirectSessionTargets(
   if (method === "sessions.create" || method === "sessions.list") {
     return [];
   }
-  if (!params || typeof params !== "object" || Array.isArray(params)) {
+  const record = asOptionalRecord(params);
+  if (!record) {
     return [];
   }
-  const record = params as Record<string, unknown>;
   const candidates = [record.key, record.sessionKey];
   if (method.startsWith("sessions.") && Array.isArray(record.keys)) {
     candidates.push(...record.keys);
@@ -53,11 +129,31 @@ export function resolveDirectIncognitoTargets(
   );
 }
 
-function readSessionSharingStringParam(params: unknown, key: string): string | undefined {
-  if (!params || typeof params !== "object" || Array.isArray(params)) {
-    return undefined;
-  }
-  return normalizeOptionalString((params as Record<string, unknown>)[key]);
+/** Share the core's non-disclosing read boundary with worker preparation. */
+export function resolveProtectedSessionTargets(params: {
+  client: GatewayClient | null;
+  method: string;
+  requestParams: unknown;
+  adminBypass: boolean;
+  talkTargets?: SessionMutationTarget[];
+  sessionCap: () => ReturnType<typeof operatorSessionCap>;
+}) {
+  const directTargets =
+    params.talkTargets ?? resolveDirectSessionTargets(params.method, params.requestParams);
+  const hidesForeignSessions =
+    !params.adminBypass &&
+    directTargets.length > 0 &&
+    Boolean(gatewayClientSessionCreator(params.client)) &&
+    ["none", "invited"].includes(params.sessionCap() ?? "");
+  const protectedTargets = hidesForeignSessions
+    ? directTargets
+    : (params.talkTargets?.filter((target) => isIncognitoSessionKey(target.sessionKey)) ??
+      resolveDirectIncognitoTargets(params.method, params.requestParams));
+  return { hidesForeignSessions, protectedTargets };
+}
+
+export function readSessionSharingStringParam(params: unknown, key: string): string | undefined {
+  return normalizeOptionalString(asOptionalRecord(params)?.[key]);
 }
 
 function preparedGroupTargets(context: GatewayRequestContext) {
@@ -66,14 +162,6 @@ function preparedGroupTargets(context: GatewayRequestContext) {
     throw new Error("Session group membership is unavailable during Gateway startup");
   }
   return projection.sessionGroupTargets();
-}
-
-function resolveSessionGroupMutationTargets(params: {
-  context: GatewayRequestContext;
-  requestParams: unknown;
-}): SessionMutationTarget[] | undefined {
-  const groupName = readSessionSharingStringParam(params.requestParams, "name");
-  return groupName ? [...(preparedGroupTargets(params.context).get(groupName) ?? [])] : undefined;
 }
 
 function resolveSessionGroupsPutMutationTargets(
@@ -87,9 +175,9 @@ function resolveSessionGroupsPutMutationTargets(
   if (!Array.isArray(names)) {
     return undefined;
   }
-  const requested = new Set(normalizeGroupNames(names.filter((name) => typeof name === "string")));
-  const dropped = listSessionGroups()
-    .map((group) => group.name)
+  const requested = new Set(normalizeUniqueTrimmedStringList(names));
+  const dropped = readSessionGroupCatalog()
+    .groups.map((group) => group.name)
     .filter((name) => !requested.has(name));
   if (dropped.length === 0) {
     return [];
@@ -148,7 +236,8 @@ export function resolveTalkSessionTargetInput(
     method !== "talk.session.create" &&
     method !== "talk.client.transcript" &&
     method !== "talk.client.close" &&
-    method !== "talk.client.steer"
+    method !== "talk.client.steer" &&
+    method !== "talk.client.say"
   ) {
     return undefined;
   }
@@ -173,7 +262,6 @@ export function resolveSessionMutationTargets(params: {
   method: string;
   requestParams: unknown;
   context: GatewayRequestContext;
-  getCfg: () => OpenClawConfig;
 }): SessionMutationTarget[] | undefined {
   if (params.method === "sessions.patchMany") {
     const targets =
@@ -195,10 +283,8 @@ export function resolveSessionMutationTargets(params: {
     params.method === "sessions.groups.delete" ||
     params.method === "sessions.groups.update"
   ) {
-    return resolveSessionGroupMutationTargets({
-      context: params.context,
-      requestParams: params.requestParams,
-    });
+    const groupName = readSessionSharingStringParam(params.requestParams, "name");
+    return groupName ? [...(preparedGroupTargets(params.context).get(groupName) ?? [])] : undefined;
   }
   if (params.method === "sessions.groups.put") {
     return resolveSessionGroupsPutMutationTargets(params.context, params.requestParams);
@@ -248,9 +334,18 @@ export function resolveSessionMutationTargets(params: {
   if (params.method !== "sessions.abort") {
     return undefined;
   }
-  const runId = readSessionSharingStringParam(params.requestParams, "runId");
-  const run = runId ? params.context.chatAbortControllers.get(runId) : undefined;
-  return run
-    ? [{ sessionKey: run.sessionKey, ...(run.agentId ? { agentId: run.agentId } : {}) }]
+  const runId = asOptionalRecord(params.requestParams)?.runId;
+  const run =
+    typeof runId === "string"
+      ? getRpcSourceForGateway(runId, params.context.resolveGatewayContext)
+      : undefined;
+  const identity = run ? getRpcSourceIdentity(run) : undefined;
+  return identity
+    ? [
+        {
+          sessionKey: identity.sessionKey,
+          ...(identity.agentId ? { agentId: identity.agentId } : {}),
+        },
+      ]
     : undefined;
 }

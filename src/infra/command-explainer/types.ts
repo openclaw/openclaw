@@ -48,50 +48,42 @@ export type CommandOperatorKind =
   | "background";
 
 export type CommandOperator = {
-  id: string;
   kind: CommandOperatorKind;
-  text: string;
-  span: SourceSpan;
   fromCommandId: string;
-  toCommandId: string;
   parentCommandId?: string;
 };
 
-export type CommandRisk =
-  | { kind: "inline-eval"; command: string; flag: string; text: string; span: SourceSpan }
+export type CommandRisk = { span: SourceSpan } & (
+  | { kind: "inline-eval"; command: string; flag: string }
   | {
       kind: "shell-wrapper";
       executable: string;
       flag: string;
       payload: string;
-      text: string;
-      span: SourceSpan;
     }
-  | { kind: "shell-wrapper-through-carrier"; command: string; text: string; span: SourceSpan }
-  | { kind: "command-carrier"; command: string; flag?: string; text: string; span: SourceSpan }
-  | { kind: "command-substitution"; text: string; span: SourceSpan }
-  | { kind: "process-substitution"; text: string; span: SourceSpan }
-  | { kind: "dynamic-executable"; text: string; span: SourceSpan }
+  | { kind: "shell-wrapper-through-carrier" }
+  | { kind: "command-carrier"; command: string; flag?: string }
+  | { kind: "command-substitution" }
+  | { kind: "process-substitution" }
+  | { kind: "dynamic-executable" }
   | {
       kind: "dynamic-argument";
       command: string;
-      argumentIndex: number;
       text: string;
-      span: SourceSpan;
     }
-  | { kind: "eval"; text: string; span: SourceSpan }
-  | { kind: "source"; command: string; text: string; span: SourceSpan }
-  | { kind: "alias"; text: string; span: SourceSpan }
-  | { kind: "function-definition"; name: string; text: string; span: SourceSpan }
-  | { kind: "line-continuation"; text: string; span: SourceSpan }
-  | { kind: "heredoc"; text: string; span: SourceSpan }
-  | { kind: "here-string"; text: string; span: SourceSpan }
-  | { kind: "redirect"; text: string; span: SourceSpan }
-  | { kind: "syntax-error"; text: string; span: SourceSpan };
+  | { kind: "eval" }
+  | { kind: "source"; command: string }
+  | { kind: "alias" }
+  | { kind: "function-definition"; name: string }
+  | { kind: "line-continuation" }
+  | { kind: "heredoc" }
+  | { kind: "here-string" }
+  | { kind: "redirect" }
+  | { kind: "syntax-error" }
+);
 
 export type CommandExplanation = {
   ok: boolean;
-  source: string;
   shapes: CommandShape[];
   topLevelCommands: CommandStep[];
   nestedCommands: CommandStep[];

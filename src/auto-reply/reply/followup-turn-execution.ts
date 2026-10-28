@@ -1,8 +1,16 @@
+import {
+  isFreshChannelCronAuthorityTurn,
+  runWithCronCreatorAuthorityCapability,
+} from "../../agents/cron-creator-authority-context.js";
+import { isRequiredReplyExpectation } from "../../agents/reply-completion.js";
+import { isAgentRunDirectAbortReason } from "../../agents/run-termination.js";
+import { isIngressAdoptionLostError } from "../../channels/message/ingress-drain-state.js";
 import { settleProgressVisibilityCallbackResult } from "../../channels/progress-visibility.js";
-import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import { sessionPersonalProfileId } from "../../config/sessions/session-entry-provenance.js";
-import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { captureReplyOperationSessionReader } from "../../sessions/session-controller.state.js";
+import { withCurrentUserTurnInput } from "../../sessions/user-turn-transcript-runtime-context.js";
+import { getCommandOwnerAuthority } from "../command-owner-authority.js";
 import { isFastModeAutoProgressPayload } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
@@ -10,16 +18,18 @@ import type { ReplyPayload } from "../types.js";
 import { executeAgentTurn } from "./agent-runner-execution.js";
 import type { AgentTurnExecutionResult } from "./agent-runner-execution.types.js";
 import { buildTerminalAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
-import { resetReplyRunSession } from "./agent-runner-session-reset.js";
+import { createReplyAgentRestartRecoveryController } from "./agent-runner-restart-recovery.js";
+import { resolveFollowupCurrentMessageId } from "./agent-runner-utils.js";
 import { resolveTurnCommentaryProgressOwner } from "./commentary-progress-owner.js";
 import { requiresDurableToolResultDelivery } from "./dispatch-from-config.payloads.js";
-import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./followup-turn-admission.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
+import { admitFollowupRunLifecycle } from "./queue/lifecycle.js";
+import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./reply-agent-turn-preparation.js";
 import { recordReplyOperationAgentTurn } from "./reply-operation-run-state.js";
-import { hasReplyOperationExecutionStarted } from "./reply-run-registry.js";
-import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
-import { resolveSourceReplyExpectation } from "./source-reply-delivery-mode.js";
+import { prepareReplyRunToolAuthority } from "./reply-tool-authority.js";
+import { resolveFollowupReplyExpectation } from "./source-reply-delivery-mode.js";
+import { resolveReplySourceTurnId, setChannelSourceTurnId } from "./source-turn-id.js";
 import { createTypingSignaler, type TypingSignaler } from "./typing-mode.js";
 
 export type FollowupExecutionResult = {
@@ -38,11 +48,7 @@ function buildFollowupTemplateContext(turn: AdmittedFollowupTurn): TemplateConte
   const run = queued.run;
   const surface = queued.originatingChannel ?? run.messageProvider;
   const sessionKey = turn.session.kind === "session" ? turn.session.key : run.sessionKey;
-  const currentMessageId =
-    run.inputProvenance?.kind === "internal_system" &&
-    run.inputProvenance.sourceTool === "restart-sentinel"
-      ? queued.originatingReplyToId
-      : queued.messageId;
+  const currentMessageId = resolveFollowupCurrentMessageId(queued);
   return {
     Provider: run.messageProvider,
     Surface: surface,
@@ -68,61 +74,31 @@ function buildFollowupTemplateContext(turn: AdmittedFollowupTurn): TemplateConte
     InputProvenance: run.inputProvenance,
     InboundEventKind: queued.currentInboundEventKind,
     media: queued.media,
-  } as TemplateContext;
+  };
 }
 
 /** Adapts an admitted queued turn to the canonical agent execution owner. */
 export async function executeFollowupTurn(params: {
   turn: AdmittedFollowupTurn;
   defaults: FollowupRunnerParams;
-  onToolResult: (payload: ReplyPayload, execution: { runId: string }) => Promise<void>;
-  onCompactionNoticePayload: (payload: ReplyPayload, execution: { runId: string }) => Promise<void>;
+  onToolResult: (payload: ReplyPayload) => Promise<void>;
+  onCompactionNoticePayload: (payload: ReplyPayload) => Promise<void>;
 }): Promise<FollowupExecutionResult> {
   const { turn, defaults } = params;
   const sourceOpts = defaults.opts;
-  const terminalReplyExpectation =
-    turn.queued.run.terminalReplyExpectation ??
-    resolveSourceReplyExpectation({
-      ctx: {
-        InboundEventKind: turn.queued.currentInboundEventKind,
-        InputProvenance: turn.queued.run.inputProvenance,
-      },
-      cfg: turn.config,
-    });
+  const terminalReplyExpectation = resolveFollowupReplyExpectation(turn.queued, turn.config);
   turn.queued.run.terminalReplyExpectation = terminalReplyExpectation;
-  // Heartbeats can refresh a drain callback but never enter its queue.
-  const isHeartbeat = false;
   const roomEvent = turn.queued.currentInboundEventKind === "room_event";
-  const progressAllowed = () => turn.sendPolicy === "allow" && !roomEvent;
+  const deliveryAllowed = () => turn.sendPolicy === "allow" && !roomEvent;
+  const progressAllowed = () =>
+    deliveryAllowed() &&
+    (sourceOpts?.progressRequiresReply !== true ||
+      isRequiredReplyExpectation(terminalReplyExpectation));
   const currentVerboseLevel = (): VerboseLevel => {
-    if (turn.queued.run.verboseLevelOverride !== undefined) {
-      return turn.queued.run.verboseLevelOverride;
-    }
-    const session = turn.session;
-    if (session.kind === "session" && session.storePath) {
-      try {
-        const loadedEntry = loadSessionEntryReadOnly({
-          storePath: session.storePath,
-          sessionKey: session.key,
-        });
-        const ownedEntry = session.current();
-        const loadedGenerationMatches =
-          loadedEntry !== undefined &&
-          ownedEntry !== undefined &&
-          loadedEntry.sessionId === ownedEntry.sessionId &&
-          loadedEntry.lifecycleRevision === ownedEntry.lifecycleRevision &&
-          loadedEntry.updatedAt >= ownedEntry.updatedAt;
-        if (loadedGenerationMatches) {
-          const level = loadedEntry.verboseLevel;
-          if (level === "off" || level === "on" || level === "full") {
-            return level;
-          }
-        }
-      } catch {
-        // A queued turn keeps its admitted snapshot when a read races store maintenance.
-      }
-    }
-    const level = session.current()?.verboseLevel ?? turn.queued.run.verboseLevel;
+    const level =
+      turn.queued.run.verboseLevelOverride ??
+      turn.session.current()?.verboseLevel ??
+      turn.queued.run.verboseLevel;
     return level === "on" || level === "full" ? level : "off";
   };
   const forceToolResultProgress = sourceOpts?.forceToolResultProgress === true;
@@ -142,38 +118,50 @@ export async function executeFollowupTurn(params: {
     progressAllowed() &&
     (shouldEmitStructuredProgress() || sourceOpts?.allowToolLifecycleWhenProgressHidden === true);
   const { commentaryPayloadsEnabled, draftOwnsCommentaryProgress } =
-    resolveTurnCommentaryProgressOwner({
+    await resolveTurnCommentaryProgressOwner({
       commentaryPayloadsEnabled: sourceOpts?.commentaryPayloadsEnabled === true,
       options: sourceOpts,
       resolveVerboseProgressVisibility: () => progressAllowed() && shouldEmitVerboseToolResult(),
+      resolveVerboseProgressVisibilityAsync: async () => {
+        turn.operation.abortSignal.throwIfAborted();
+        turn.queued.operatorAuthority?.assertCurrent();
+        return progressAllowed() && shouldEmitVerboseToolResult();
+      },
     });
+  turn.operation.abortSignal.throwIfAborted();
+  turn.queued.operatorAuthority?.assertCurrent();
   let progressChain: Promise<void> = Promise.resolve();
   let visibleReplyDelivered = false;
-  let pendingProgressTaskFailure: unknown;
+  const pendingTaskFailures: { progress?: unknown; tool?: unknown } = {};
   const pendingWorkTasks = new Set<Promise<void>>();
+  const trackPendingWork = (task: Promise<void>, kind: "progress" | "tool") => {
+    const releaseExecution = turn.operation.retainExecution();
+    const observedTask = task.catch((error: unknown) => {
+      pendingTaskFailures[kind] ??= error;
+      throw error;
+    });
+    const watcher = observedTask.finally(() => {
+      pendingWorkTasks.delete(watcher);
+      releaseExecution();
+    });
+    void watcher.catch(() => undefined);
+    pendingWorkTasks.add(watcher);
+  };
   const enqueueProgress = (deliver: () => Promise<void> | void): Promise<void> => {
     const deliveryTask = progressChain.then(deliver);
     progressChain = deliveryTask.catch(() => undefined);
-    const observedTask = deliveryTask.catch((error: unknown) => {
-      pendingProgressTaskFailure ??= error;
-      throw error;
-    });
-    const trackedTask = observedTask.finally(() => pendingWorkTasks.delete(trackedTask));
-    void trackedTask.catch(() => undefined);
-    pendingWorkTasks.add(trackedTask);
+    trackPendingWork(deliveryTask, "progress");
     return progressChain;
   };
   const enqueueProgressResult = async (
     deliver: () => Promise<boolean | void> | boolean | void,
   ): Promise<boolean | void> => {
-    let completed = false;
     let result: boolean | void = false;
     await enqueueProgress(async () => {
       result = await deliver();
       visibleReplyDelivered ||= result !== false;
-      completed = true;
     });
-    return completed ? result : false;
+    return result;
   };
   const wrap = <T>(callback: ((value: T) => unknown) | undefined, allowed = progressAllowed) =>
     callback
@@ -184,23 +172,22 @@ export async function executeFollowupTurn(params: {
             }
           })
       : undefined;
-  const wrapVisibility = <T>(
-    callback: ((value: T) => Promise<boolean | void> | boolean | void) | undefined,
-    allowed = progressAllowed,
+  const wrapVisibility = <Args extends unknown[]>(
+    callback: ((...args: Args) => Promise<boolean | void> | boolean | void) | undefined,
+    allowed: (...args: Args) => boolean = progressAllowed,
   ) =>
     callback
-      ? (value: T) =>
+      ? (...args: Args) =>
           enqueueProgressResult(async () => {
-            if (!allowed()) {
+            if (!allowed(...args)) {
               return false;
             }
-            return (await settleProgressVisibilityCallbackResult(callback(value))).visible;
+            return (await settleProgressVisibilityCallbackResult(callback(...args))).visible;
           })
       : undefined;
   const baseTypingSignals = createTypingSignaler({
     typing: defaults.typing,
     mode: progressAllowed() ? defaults.typingMode : "never",
-    isHeartbeat,
   });
   const typingSignals: TypingSignaler = {
     ...baseTypingSignals,
@@ -216,12 +203,30 @@ export async function executeFollowupTurn(params: {
   };
   const progressOpts: InternalGetReplyOptions = {
     ...sourceOpts,
-    isHeartbeat,
-    // Queue callbacks are refreshed per session, but authority belongs to the
-    // queued turn. Never let a later callback widen or narrow an older item.
+    // Derived follow-ups take execution capabilities from their queued input.
+    cronCreatorAuthorityCapability: undefined,
+    sourceReplyDeliveryMode: turn.queued.run.sourceReplyDeliveryMode,
+    bootstrapContextMode: turn.queued.run.bootstrapContextMode,
+    cleanupBundleMcpOnRunEnd: undefined,
+    scheduledAutomation: turn.queued.run.scheduledAutomation,
+    internalEventExecution: turn.queued.run.internalEventExecution,
+    userTurnTranscriptRecorder: turn.queued.userTurnTranscriptRecorder,
+    // The source runner owns callbacks; the queued input owns this execution's authority.
     operatorAuthority: turn.queued.operatorAuthority,
+    abortSignal: turn.operation.abortSignal,
     toolsAllow: turn.queued.toolsAllow,
     disableTools: turn.queued.disableTools,
+    forceRestartSafeTools: turn.queued.forceRestartSafeTools,
+    forceCodeModeTools: turn.queued.forceCodeModeTools,
+    awaitSessionDiffBaseline: turn.queued.runObservers?.awaitSessionDiffBaseline,
+    onAgentRunStart: turn.queued.runObservers?.onAgentRunStart,
+    onPreparedAgentRunStart: turn.queued.runObservers?.onPreparedAgentRunStart,
+    onAgentRunTerminalOutcome: turn.queued.runObservers?.onAgentRunTerminalOutcome,
+    onModelSelected: turn.queued.runObservers?.onModelSelected,
+    prepareAssistantTranscriptMessage: turn.queued.runObservers?.prepareAssistantTranscriptMessage,
+    resolveReplyDelivery: turn.queued.runObservers?.resolveReplyDelivery,
+    resolveReplyDeliveryFacts: turn.queued.runObservers?.resolveReplyDeliveryFacts,
+    onDeliberateSilentTerminalReply: turn.queued.runObservers?.onDeliberateSilentTerminalReply,
     commentaryPayloadsEnabled,
     runId: turn.runId,
     onBlockReply: undefined,
@@ -230,66 +235,41 @@ export async function executeFollowupTurn(params: {
     onAssistantMessageStart: undefined,
     onToolStart: wrapVisibility(sourceOpts?.onToolStart, shouldEmitToolLifecycle),
     onCommandOutput: wrapVisibility(sourceOpts?.onCommandOutput, shouldEmitStructuredProgress),
-    onItemEvent: sourceOpts?.onItemEvent
-      ? (item) =>
-          enqueueProgressResult(async () => {
-            // Only an explicit draft-vs-durable owner contract may bypass hidden
-            // tool-progress filtering for queued preambles.
-            const draftOwnsPreamble =
-              progressAllowed() && item.kind === "preamble" && draftOwnsCommentaryProgress;
-            if (!draftOwnsPreamble && !shouldEmitStructuredProgress()) {
-              return false;
-            }
-            const visible = (
-              await settleProgressVisibilityCallbackResult(sourceOpts.onItemEvent!(item))
-            ).visible;
-            return visible;
-          })
-      : undefined,
+    onItemEvent: wrapVisibility<Parameters<NonNullable<InternalGetReplyOptions["onItemEvent"]>>>(
+      sourceOpts?.onItemEvent ? (item) => sourceOpts.onItemEvent!(item) : undefined,
+      (item) =>
+        // Model waits bypass verbosity; preambles still need their explicit draft owner.
+        item.kind === "model-wait"
+          ? progressAllowed()
+          : (progressAllowed() && item.kind === "preamble" && draftOwnsCommentaryProgress) ||
+            shouldEmitStructuredProgress(),
+    ),
     onNarrationUpdate: wrap(sourceOpts?.onNarrationUpdate),
     onPlanUpdate: wrapVisibility(sourceOpts?.onPlanUpdate),
     onApprovalEvent: wrapVisibility(sourceOpts?.onApprovalEvent, shouldEmitStructuredProgress),
     onPatchSummary: wrapVisibility(sourceOpts?.onPatchSummary, shouldEmitStructuredProgress),
-    onCompactionStart: sourceOpts?.onCompactionStart
-      ? () =>
-          enqueueProgressResult(async () =>
-            progressAllowed()
-              ? (await settleProgressVisibilityCallbackResult(sourceOpts.onCompactionStart!()))
-                  .visible
-              : false,
-          )
-      : undefined,
-    onCompactionEnd: sourceOpts?.onCompactionEnd
-      ? (payload) =>
-          enqueueProgressResult(async () =>
-            progressAllowed()
-              ? (await settleProgressVisibilityCallbackResult(sourceOpts.onCompactionEnd!(payload)))
-                  .visible
-              : false,
-          )
-      : undefined,
+    onCompactionStart: wrapVisibility(sourceOpts?.onCompactionStart),
+    onCompactionEnd: wrapVisibility(sourceOpts?.onCompactionEnd),
     onReasoningStream: wrapVisibility(sourceOpts?.onReasoningStream),
     onReasoningProgress: wrap(sourceOpts?.onReasoningProgress),
-    onReasoningEnd: sourceOpts?.onReasoningEnd
-      ? () =>
-          enqueueProgressResult(async () =>
-            progressAllowed()
-              ? (await settleProgressVisibilityCallbackResult(sourceOpts.onReasoningEnd!())).visible
-              : false,
-          )
-      : undefined,
+    onReasoningEnd: wrapVisibility(sourceOpts?.onReasoningEnd),
     onToolResult: async (payload) => {
       return await enqueueProgressResult(async () => {
-        if (!progressAllowed()) {
+        const requiresDurableToolResult = requiresDurableToolResultDelivery(payload);
+        if (!deliveryAllowed() || (!requiresDurableToolResult && !progressAllowed())) {
           return false;
         }
-        const requiresDurableToolResult = requiresDurableToolResultDelivery(payload);
         if (sourceOpts?.suppressToolProgressMessages && !requiresDurableToolResult) {
           return false;
         }
-        const fastModeAutoProgress = isFastModeAutoProgressPayload(payload);
-        if (fastModeAutoProgress && !requiresDurableToolResult) {
-          const verboseToolResult = shouldEmitVerboseToolResult();
+        const fastModeAutoProgress =
+          isFastModeAutoProgressPayload(payload) && !requiresDurableToolResult;
+        const verboseToolResult = !requiresDurableToolResult && shouldEmitVerboseToolResult();
+        const transientToolResultProgress = requiresDurableToolResult
+          ? undefined
+          : channelToolResultProgress;
+        let callback = verboseToolResult ? undefined : transientToolResultProgress;
+        if (fastModeAutoProgress) {
           const lifecycleToolResult = sourceOpts?.allowToolLifecycleWhenProgressHidden === true;
           const sourceDeliverySuppressed =
             turn.queued.run.sourceReplyDeliveryMode === "message_tool_only";
@@ -299,61 +279,40 @@ export async function executeFollowupTurn(params: {
           const callbackAllowed =
             callbackAllowedBySource &&
             (forceToolResultProgress || verboseToolResult || lifecycleToolResult);
-          const callback = callbackAllowed ? sourceOpts?.onToolResult : undefined;
-          if (callback) {
-            const visible = (await settleProgressVisibilityCallbackResult(callback(payload)))
-              .visible;
-            if (visible) {
-              return true;
-            }
-            if (!forceToolResultProgress && !verboseToolResult) {
-              return false;
-            }
-          }
-          if (!forceToolResultProgress && !verboseToolResult) {
-            return false;
-          }
-          await params.onToolResult(payload, { runId: turn.runId });
-          return true;
-        }
-        const verboseToolResult = !requiresDurableToolResult && shouldEmitVerboseToolResult();
-        const transientToolResultProgress = requiresDurableToolResult
-          ? undefined
-          : channelToolResultProgress;
-        const toolResultDeliveryAvailable =
-          Boolean(transientToolResultProgress) || verboseToolResult || requiresDurableToolResult;
-        if (
+          callback = callbackAllowed ? sourceOpts?.onToolResult : undefined;
+        } else if (
           turn.queued.run.sourceReplyDeliveryMode === "message_tool_only" &&
-          !toolResultDeliveryAvailable
+          !transientToolResultProgress &&
+          !verboseToolResult &&
+          !requiresDurableToolResult
         ) {
           return false;
         }
-        const visible =
-          transientToolResultProgress && !verboseToolResult
-            ? (await settleProgressVisibilityCallbackResult(transientToolResultProgress(payload)))
-                .visible
-            : await params.onToolResult(payload, { runId: turn.runId }).then(() => true);
-        return visible;
+        if (callback) {
+          const visible = (await settleProgressVisibilityCallbackResult(callback(payload))).visible;
+          // Ordinary progress delegates completely; fast-mode hints retain a durable fallback.
+          if (visible || !fastModeAutoProgress) {
+            return visible;
+          }
+        }
+        if (fastModeAutoProgress && !forceToolResultProgress && !verboseToolResult) {
+          return false;
+        }
+        await params.onToolResult(payload);
+        return true;
       });
     },
   };
-  let pendingToolTaskFailure: unknown;
   const pendingToolTasks = new (class extends Set<Promise<void>> {
     override add(task: Promise<void>): this {
-      const observedTask = task.catch((error: unknown) => {
-        pendingToolTaskFailure ??= error;
-        throw error;
-      });
-      const watcher = observedTask.finally(() => pendingWorkTasks.delete(watcher));
-      void watcher.catch(() => undefined);
-      pendingWorkTasks.add(watcher);
+      trackPendingWork(task, "tool");
       return super.add(task);
     }
   })();
   let pendingWorkDrain: Promise<void> | undefined;
   const drainPendingWork = () => {
     pendingWorkDrain ??= (async () => {
-      await drainPendingToolTasks({ tasks: pendingWorkTasks, onTimeout: logVerbose });
+      await drainPendingToolTasks({ tasks: pendingWorkTasks });
       // This terminal owner gets one bounded wait. Retire the accounting handoff
       // so timed-out tool delivery cannot start a second idle window.
       pendingToolTasks.clear();
@@ -361,24 +320,70 @@ export async function executeFollowupTurn(params: {
     return pendingWorkDrain;
   };
   const sessionCtx = buildFollowupTemplateContext(turn);
-  if (turn.preflightError) {
+  if (turn.preflightError && !turn.preflightFailurePayload) {
     throw turn.preflightError instanceof Error
       ? turn.preflightError
       : new Error(formatErrorMessage(turn.preflightError));
   }
+  const recorder = turn.queued.userTurnTranscriptRecorder;
+  // Keep ingress retryable through preparation; adoption transfers durable input custody.
+  const sourceMessage = await recorder?.resolveMessage();
+  turn.operation.abortSignal.throwIfAborted();
+  const sourceTurnId = resolveReplySourceTurnId({
+    sourceTurnId: sourceMessage?.idempotencyKey ?? turn.queued.sourceTurnId,
+    // System message IDs deduplicate queue work, not external input admission.
+    admissionRunId:
+      turn.queued.run.inputProvenance?.kind === "internal_system"
+        ? undefined
+        : turn.queued.messageId,
+    ingressProvider: turn.queued.run.messageProvider,
+    entry: turn.session.current(),
+  });
+  const recovery = (turn.restartRecovery = createReplyAgentRestartRecoveryController({
+    activeSessionStore: turn.sessionStore,
+    cfg: turn.config,
+    followupRun: turn.queued,
+    getActiveSessionEntry: turn.session.current,
+    opts: progressOpts,
+    replyOperation: turn.operation,
+    restartRecoverySourceTurnId: sourceTurnId,
+    runtimePolicySessionKey: turn.queued.run.runtimePolicySessionKey,
+    sessionCtx,
+    sessionKey: turn.session.kind === "session" ? turn.session.key : undefined,
+    setActiveSessionEntry: (entry) => turn.session.publish(entry),
+    storePath: turn.session.kind === "session" ? turn.session.storePath : undefined,
+  }));
+  let accepted = false;
   let execution: AgentTurnExecutionResult;
   const runStartedAt = Date.now();
-  if (turn.preflightFailurePayload) {
-    execution = {
-      runId: turn.runId,
-      outcome: { kind: "rejected", payload: turn.preflightFailurePayload },
-    };
-  } else {
-    try {
+  try {
+    // A session event rejected for stale policy is re-admitted by its owner under the
+    // same durable source id; reject it before admission records that source claim.
+    turn.queued.run.internalEventExecution?.assertCurrent?.();
+    const admission = await recovery.admitUserTurn(recorder);
+    accepted = true;
+    await admitFollowupRunLifecycle(turn.queued);
+    turn.operation.abortSignal.throwIfAborted();
+    setChannelSourceTurnId(sessionCtx, sourceTurnId);
+    if (admission === "duplicate-source") {
+      execution = { runId: turn.runId, outcome: { kind: "aborted", reason: "superseded" } };
+    } else if (turn.preflightFailurePayload) {
+      turn.operation.fail("run_failed", turn.preflightError);
+      execution = {
+        runId: turn.runId,
+        outcome: { kind: "rejected", payload: turn.preflightFailurePayload },
+      };
+    } else {
       turn.queued.run.bootstrapUserProfileId = turn.queued.personalBootstrapEligible
         ? sessionPersonalProfileId(turn.session.current())
         : undefined;
-      turn.operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(turn.queued));
+      await turn.operation.bindToolAuthoritySnapshotAsync(
+        prepareReplyRunToolAuthority(
+          turn.queued,
+          turn.session.current(),
+          captureReplyOperationSessionReader(turn.operation),
+        ),
+      );
       turn.operation.setPhase("running");
       const gatewayOwnsCompletion =
         turn.queued.queuedFollowupReplyDisposition?.kind === "deliver" &&
@@ -390,6 +395,7 @@ export async function executeFollowupTurn(params: {
       }
       const execute = () =>
         executeAgentTurn({
+          recoveryMemoryFlushAttempted: turn.memoryFlushAttempted,
           completionSource: gatewayOwnsCompletion ? "reply-dispatch" : undefined,
           commandBody: turn.queued.prompt,
           transcriptCommandBody: turn.queued.transcriptPrompt,
@@ -409,77 +415,79 @@ export async function executeFollowupTurn(params: {
           shouldEmitToolResult,
           shouldEmitToolOutput,
           pendingToolTasks,
-          resetSessionAfterRoleOrderingConflict: async (reason) => {
-            const session = turn.session;
-            if (session.kind !== "session") {
-              return false;
-            }
-            return await resetReplyRunSession({
-              options: {
-                failureLabel: "role ordering conflict",
-                buildLogMessage: (nextSessionId) =>
-                  `Role ordering conflict (${reason}). Restarting session ${session.key} -> ${nextSessionId}.`,
-                cleanupTranscripts: true,
-              },
-              sessionKey: session.key,
-              queueKey: session.key,
-              activeSessionEntry: session.current(),
-              activeSessionStore: turn.sessionStore,
-              storePath: session.storePath,
-              followupRun: turn.queued,
-              onActiveSessionEntry: (entry) => {
-                session.adopt(entry);
-                turn.operation.updateSessionId(entry.sessionId);
-              },
-              onNewSession: () => undefined,
-            });
-          },
-          isHeartbeat,
           sessionKey: turn.session.kind === "session" ? turn.session.key : undefined,
           runtimePolicySessionKey: turn.queued.run.runtimePolicySessionKey,
           getActiveSessionEntry: turn.session.current,
           activeSessionStore: turn.sessionStore,
           storePath: turn.session.kind === "session" ? turn.session.storePath : undefined,
-          resolvedVerboseLevel: currentVerboseLevel() ?? "off",
+          isRestartRecoveryArmed: recovery.isArmed,
+          resolvedVerboseLevel: currentVerboseLevel(),
           toolProgressDetail: defaults.toolProgressDetail,
           onCompactionNoticePayload: async (payload) => {
             await enqueueProgressResult(async () => {
               if (!progressAllowed()) {
                 return false;
               }
-              await params.onCompactionNoticePayload(payload, { runId: turn.runId });
+              await params.onCompactionNoticePayload(payload);
               return true;
             });
           },
         });
-      const recorder = turn.queued.userTurnTranscriptRecorder;
       // Queued execution outlives its ingress scope. Re-enter the exact source
       // custody after lazy collection binds it, so runtime appends consume all sources.
-      await recorder?.resolveMessage();
       turn.operation.abortSignal.throwIfAborted();
-      execution = await (recorder?.withPendingInput
-        ? recorder.withPendingInput(execute)
-        : execute());
-    } catch (error) {
-      await drainPendingWork();
-      if (!hasReplyOperationExecutionStarted(turn.operation)) {
-        throw error;
-      }
-      turn.operation.fail("run_failed", error);
-      execution = {
-        runId: turn.runId,
-        outcome: {
-          kind: "rejected",
-          payload: buildTerminalAgentRunFailureReplyPayload({
-            isHeartbeat,
-            replyExpectation: terminalReplyExpectation,
-            visibleReplyDelivered,
-          }),
-        },
-      };
+      // Only the original fresh ingress can recreate authority for this new run.
+      // Maintenance copies and synthetic turns must not reuse the source factory.
+      const run = turn.queued.run;
+      const capability =
+        run.senderIsOwner &&
+        isFreshChannelCronAuthorityTurn({
+          messageProvider: run.messageProvider,
+          senderId: run.senderId,
+          isRoomEvent: roomEvent,
+          inputProvenance: run.inputProvenance,
+          spawnedBy: run.spawnedBy,
+          suppressNextUserMessagePersistence: run.suppressNextUserMessagePersistence,
+        })
+          ? turn.queued.createChannelCronAuthority?.(
+              turn.runId,
+              getCommandOwnerAuthority(run)?.isCurrent,
+            )
+          : undefined;
+      progressOpts.cronCreatorAuthorityCapability = capability;
+      const runWithInput = () => withCurrentUserTurnInput(recorder, execute);
+      execution = capability
+        ? await runWithCronCreatorAuthorityCapability(
+            capability,
+            runWithInput,
+            turn.operation.abortSignal,
+          )
+        : await runWithInput();
     }
+  } catch (error) {
+    await drainPendingWork();
+    const ingressTimedOut =
+      isIngressAdoptionLostError(error) &&
+      error.code === "guillotined" &&
+      !isAgentRunDirectAbortReason(turn.operation.abortSignal.reason);
+    if (!accepted || (turn.operation.abortSignal.aborted && !ingressTimedOut)) {
+      throw error;
+    }
+    turn.queued.operatorAuthority?.assertCurrent();
+    // Input is already accepted. A setup failure must surface without replaying it.
+    turn.operation.fail("run_failed", error);
+    execution = {
+      runId: turn.runId,
+      outcome: {
+        kind: "rejected",
+        payload: buildTerminalAgentRunFailureReplyPayload({
+          replyExpectation: terminalReplyExpectation,
+          visibleReplyDelivered,
+        }),
+      },
+    };
   }
-  // Runner defaults may be newer; only the queued sources own this execution result.
+  // Only the queued sources own this execution result.
   recordReplyOperationAgentTurn(
     turn.queued.replyOperationRunStates,
     turn.operation,
@@ -494,7 +502,7 @@ export async function executeFollowupTurn(params: {
     progress: {
       drain: async () => {
         await drainPendingWork();
-        const firstFailure: unknown = pendingProgressTaskFailure ?? pendingToolTaskFailure;
+        const firstFailure: unknown = pendingTaskFailures.progress ?? pendingTaskFailures.tool;
         if (firstFailure !== undefined) {
           throw firstFailure instanceof Error
             ? firstFailure

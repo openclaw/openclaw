@@ -1,6 +1,3 @@
-import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
-import { asFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
 import type { CodexThread, CodexThreadListResponse } from "./app-server/protocol.js";
 import type { CodexCatalogPageDiagnostics } from "./session-catalog-diagnostics.js";
 import { codexCatalogRowRecency } from "./session-catalog-index-order.js";
@@ -9,46 +6,20 @@ import type {
   CodexCatalogRolloutFingerprint,
 } from "./session-catalog-index-row.js";
 import { CODEX_CATALOG_MAX_ROWS } from "./session-catalog-limits.js";
-import { projectCodexCatalogNativeThread } from "./session-catalog-native-projection.js";
-import {
-  readControlCursor,
-  selectCodexCatalogPreviewInput,
-  toCatalogSession,
-  truncateCodexCatalogPreview,
-} from "./session-catalog-parsing.js";
+import { readControlCursor, toCatalogSession } from "./session-catalog-parsing.js";
 import { isOpenClawManagedCodexThread } from "./session-catalog-provenance.js";
 import { codexCatalogRolloutLogicalPath } from "./session-catalog-rollouts.js";
 import {
   copyCodexCatalogSource,
   getCodexCatalogSource,
   setCodexCatalogSource,
-  type CodexCatalogSource,
 } from "./session-catalog-source.js";
-import type { CodexSessionCatalogPage } from "./session-catalog-types.js";
+import type { CodexCatalogNativeThread, CodexSessionCatalogPage } from "./session-catalog-types.js";
 
 type CodexCatalogProjectionParams = {
   localSessionsRoot?: string;
   diagnostics?: CodexCatalogPageDiagnostics | null;
-  sanitize: typeof sanitizeTerminalText;
-  source?: CodexCatalogSource;
 };
-
-/** Single-thread responses remain owned by their native consumers. */
-export function projectCodexCatalogThread(thread: CodexThread, localSessionsRoot?: string) {
-  try {
-    const prepared = projectCodexCatalogNativeThread(thread, sanitizeTerminalText);
-    return projectCodexCatalogPage(
-      { data: [prepared] },
-      {
-        localSessionsRoot,
-        sanitize: sanitizeTerminalText,
-        source: getCodexCatalogSource(prepared),
-      },
-    );
-  } catch (error) {
-    return Promise.reject(toErrorObject(error, "Codex catalog projection failed"));
-  }
-}
 
 export class CodexCatalogProjectionCapacityError extends Error {
   constructor() {
@@ -60,41 +31,34 @@ export class CodexCatalogProjectionCapacityError extends Error {
 export class CodexCatalogProjections {
   private active = 0;
 
-  run<T>(work: () => Promise<T>): Promise<T> {
+  hasActiveWork(): boolean {
+    return this.active > 0;
+  }
+
+  async run<T>(work: () => Promise<T>): Promise<T> {
     if (this.active >= CODEX_CATALOG_MAX_ROWS) {
-      return Promise.reject(new CodexCatalogProjectionCapacityError());
+      throw new CodexCatalogProjectionCapacityError();
     }
     this.active++;
     try {
-      return work().finally(() => {
-        this.active--;
-      });
-    } catch (error) {
+      return await work();
+    } finally {
       this.active--;
-      return Promise.reject(toErrorObject(error, "Codex catalog projection failed"));
     }
   }
 }
 
+/** Consumes metadata already bounded by the native transport or rollout projector. */
 export async function projectCodexCatalogPage(
-  response: CodexThreadListResponse,
-  params: CodexCatalogProjectionParams,
+  response: Omit<CodexThreadListResponse, "data"> & { data: CodexCatalogNativeThread[] },
+  params: CodexCatalogProjectionParams = {},
 ) {
-  const { diagnostics, sanitize } = params;
+  const { diagnostics } = params;
   const responseStarted = performance.now();
   const rows: CodexCatalogIndexRow[] = [];
   const excludedThreadIds: string[] = [];
   try {
-    readControlCursor(response.backwardsCursor, "backwards response");
-    // Also bound direct/pinned adapters before the first asynchronous provenance read.
-    for (const thread of response.data) {
-      if (typeof thread.preview === "string" && thread.preview) {
-        thread.preview = truncateCodexCatalogPreview(
-          selectCodexCatalogPreviewInput(thread.preview),
-          sanitize,
-        );
-      }
-    }
+    const backwardsCursor = readControlCursor(response.backwardsCursor, "backwards response");
     for (const thread of response.data) {
       if (thread.ephemeral === true) {
         excludedThreadIds.push(thread.id);
@@ -108,12 +72,10 @@ export async function projectCodexCatalogPage(
           diagnostics ?? undefined,
         )
       ) {
-        const rolloutPath = typeof thread.path === "string" ? thread.path.trim() : "";
+        const rolloutPath = thread.path?.trim();
         page.managedThreads = [{ threadId: thread.id, ...(rolloutPath ? { rolloutPath } : {}) }];
       } else {
-        const session = toCatalogSession(thread, false, sanitize, {
-          value: typeof thread.preview === "string" ? thread.preview : undefined,
-        });
+        const session = toCatalogSession(thread, thread.preview);
         if (session) {
           page.sessions.push(session);
         }
@@ -124,13 +86,13 @@ export async function projectCodexCatalogPage(
             threadId: thread.id,
             archived: false,
             nativeMetadata: true,
-            ...(typeof thread.preview === "string" ? { preview: thread.preview } : {}),
+            ...(thread.preview != null ? { preview: thread.preview } : {}),
             ...(thread.path ? { rolloutPath: thread.path } : {}),
-            updatedAt: asFiniteNumber(thread.updatedAt) ?? null,
-            recencyAt: asFiniteNumber(thread.recencyAt) ?? null,
+            updatedAt: thread.updatedAt ?? null,
+            recencyAt: thread.recencyAt ?? null,
             page,
           },
-          params.source ?? getCodexCatalogSource(thread),
+          getCodexCatalogSource(thread),
         ),
       );
     }
@@ -138,7 +100,7 @@ export async function projectCodexCatalogPage(
       rows,
       ...(excludedThreadIds.length ? { excludedThreadIds } : {}),
       nextCursor: readControlCursor(response.nextCursor, "next response"),
-      backwardsCursor: readControlCursor(response.backwardsCursor, "backwards response"),
+      backwardsCursor,
     };
   } finally {
     if (diagnostics) {
@@ -156,15 +118,15 @@ export function canReuseCodexCatalogPreview(
   return Boolean(
     row &&
     !row.archived &&
-    row.updatedAt === (asFiniteNumber(thread.updatedAt) ?? null) &&
-    row.recencyAt === (asFiniteNumber(thread.recencyAt) ?? null) &&
+    row.updatedAt === (thread.updatedAt ?? null) &&
+    row.recencyAt === (thread.recencyAt ?? null) &&
     (row.rolloutPath ? codexCatalogRolloutLogicalPath(row.rolloutPath) : undefined) ===
       (thread.path ? codexCatalogRolloutLogicalPath(thread.path) : undefined),
   );
 }
 
 export async function projectCodexCatalogDeltaPage(
-  response: CodexThreadListResponse,
+  response: Omit<CodexThreadListResponse, "data"> & { data: CodexCatalogNativeThread[] },
   params: CodexCatalogProjectionParams & {
     getRow: (threadId: string) => CodexCatalogIndexRow | undefined;
   },
@@ -177,10 +139,10 @@ export async function projectCodexCatalogDeltaPage(
     if (row.page.sessions.length === 0) {
       return copyCodexCatalogSource(thread, { ...row, nativeMetadata: true });
     }
-    if (typeof thread.preview === "string" && Boolean(thread.preview) !== Boolean(row.preview)) {
+    if (thread.preview != null && Boolean(thread.preview) !== Boolean(row.preview)) {
       return undefined;
     }
-    const session = toCatalogSession(thread, false, params.sanitize, { value: row.preview });
+    const session = toCatalogSession(thread, row.preview);
     return copyCodexCatalogSource(thread, {
       ...row,
       nativeMetadata: true,

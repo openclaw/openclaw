@@ -1,23 +1,14 @@
-// Codex helper module supports helpers behavior.
-import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { readJsonFileWithFallback } from "openclaw/plugin-sdk/json-store";
-import { pathExists } from "openclaw/plugin-sdk/security-runtime";
-
-export async function exists(filePath: string): Promise<boolean> {
-  return await pathExists(filePath);
-}
+import { tryReadJson } from "@openclaw/fs-safe/json";
+import { safeStat } from "openclaw/plugin-sdk/path-existence-runtime";
+import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export async function isDirectory(filePath: string | undefined): Promise<boolean> {
   if (!filePath) {
     return false;
   }
-  try {
-    return (await fs.stat(filePath)).isDirectory();
-  } catch {
-    return false;
-  }
+  return (await safeStat(filePath))?.isDirectory() === true;
 }
 
 export function resolveUserHomeDir(): string {
@@ -46,11 +37,5 @@ export function sanitizeName(value: string): string {
 export async function readJsonObject(
   filePath: string | undefined,
 ): Promise<Record<string, unknown>> {
-  if (!filePath) {
-    return {};
-  }
-  const { value: parsed } = await readJsonFileWithFallback<unknown>(filePath, {});
-  return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-    ? (parsed as Record<string, unknown>)
-    : {};
+  return asNonArrayRecord(filePath ? await tryReadJson(filePath) : null);
 }

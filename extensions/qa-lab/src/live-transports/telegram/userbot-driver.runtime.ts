@@ -26,17 +26,10 @@ export type TelegramUserbotUpdate = {
   timestamp: number;
 };
 
-type PendingUserbotCommand =
-  | {
-      kind: "send";
-      reject(error: Error): void;
-      resolve(value: TelegramUserbotUpdate): void;
-    }
-  | {
-      kind: "cleanup-private-forum";
-      reject(error: Error): void;
-      resolve(): void;
-    };
+type PendingUserbotCommand = {
+  reject(error: Error): void;
+  resolve(value: TelegramUserbotUpdate): void;
+};
 
 function isUtf16Boundary(text: string, offset: number) {
   const before = text.charCodeAt(offset - 1);
@@ -146,7 +139,6 @@ function waitForChildExit(child: ChildProcessWithoutNullStreams, timeoutMs: numb
 }
 
 export class TelegramUserbotDriver {
-  private activeChatId: number | undefined;
   private activeUserId: number | undefined;
   private closing = false;
   private commandId = 0;
@@ -262,7 +254,6 @@ export class TelegramUserbotDriver {
         this.fail(new Error("Telegram userbot emitted an invalid ready chat id."));
         return;
       }
-      this.activeChatId = chatId;
       this.activeUserId =
         isRecord(message.user) && typeof message.user.id === "number" ? message.user.id : undefined;
       this.readyResolve();
@@ -297,17 +288,6 @@ export class TelegramUserbotDriver {
       pending.reject(new Error("Telegram userbot emitted an invalid command result."));
       return;
     }
-    if (pending.kind === "cleanup-private-forum") {
-      if (
-        message.result.ok !== true ||
-        (message.result.status !== "deleted" && message.result.status !== "not-created")
-      ) {
-        pending.reject(new Error("Telegram userbot did not confirm private forum cleanup."));
-        return;
-      }
-      pending.resolve();
-      return;
-    }
     try {
       pending.resolve(parseUserbotUpdate({ ...message.result, kind: "message" }));
     } catch (error) {
@@ -336,13 +316,6 @@ export class TelegramUserbotDriver {
     }
   }
 
-  get chatId(): number {
-    if (this.activeChatId === undefined) {
-      throw new Error("Telegram userbot chat id is unavailable before readiness.");
-    }
-    return this.activeChatId;
-  }
-
   async send(params: {
     chatId?: string;
     forumTopicId?: number;
@@ -354,22 +327,10 @@ export class TelegramUserbotDriver {
     this.commandId += 1;
     const id = String(this.commandId);
     const result = new Promise<TelegramUserbotUpdate>((resolve, reject) => {
-      this.pending.set(id, { kind: "send", resolve, reject });
+      this.pending.set(id, { resolve, reject });
     });
     this.child.stdin.write(`${JSON.stringify({ id, method: "send", ...params })}\n`);
     return await result;
-  }
-
-  async cleanupPrivateForum() {
-    this.leaseHealth.assertHealthy();
-    this.assertHealthy();
-    this.commandId += 1;
-    const id = String(this.commandId);
-    const result = new Promise<void>((resolve, reject) => {
-      this.pending.set(id, { kind: "cleanup-private-forum", resolve, reject });
-    });
-    this.child.stdin.write(`${JSON.stringify({ id, method: "cleanup-private-forum" })}\n`);
-    await result;
   }
 
   async close() {

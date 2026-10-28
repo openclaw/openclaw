@@ -24,7 +24,7 @@ scenario:
     - docs/concepts/qa-e2e-automation/whatsapp-and-credentials.md
   codeRefs:
     - extensions/qa-lab/src/live-transports/whatsapp/adapter.runtime.ts
-    - extensions/whatsapp/src/inbound/access-control.ts
+    - extensions/whatsapp/src/inbound/message-normalization.ts
   execution:
     kind: flow
     channel: whatsapp

@@ -4,6 +4,8 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import { loadOrCreateProcessDeviceIdentityAsync } from "../../infra/device-identity-async.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { handleDirectExternalChatSend } from "./chat-send-external-entry.js";
 import {
   mockDeletedAgentSession,
@@ -17,22 +19,25 @@ describe("chat.send deleted-agent guard", () => {
   });
 
   it("rejects keys belonging to a deleted agent", async () => {
-    const orphanKey = mockDeletedAgentSession();
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await loadOrCreateProcessDeviceIdentityAsync();
+      const orphanKey = mockDeletedAgentSession();
 
-    const respond = vi.fn() as unknown as RespondFn;
+      const respond = vi.fn() as unknown as RespondFn;
 
-    await handleDirectExternalChatSend({
-      req: { id: "req-1" } as never,
-      params: { sessionKey: orphanKey, message: "hi", idempotencyKey: "run-1" },
-      respond,
-      context: { getRuntimeConfig: () => ({}) } as never,
-      client: null,
-      isWebchatConnect: () => false,
-    });
+      await handleDirectExternalChatSend({
+        req: { id: "req-1" } as never,
+        params: { sessionKey: orphanKey, message: "hi", idempotencyKey: "run-1" },
+        respond,
+        context: { getRuntimeConfig: () => ({}) } as never,
+        client: null,
+        isWebchatConnect: () => false,
+      });
 
-    expect(respond).toHaveBeenCalledWith(false, undefined, {
-      code: ErrorCodes.INVALID_REQUEST,
-      message: 'Agent "deleted-agent" no longer exists in configuration',
+      expect(respond).toHaveBeenCalledWith(false, undefined, {
+        code: ErrorCodes.INVALID_REQUEST,
+        message: 'Agent "deleted-agent" no longer exists in configuration',
+      });
     });
   });
 });

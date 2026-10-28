@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -5,7 +6,6 @@ import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import type { WebSocket } from "ws";
 import { createDeferred } from "../../test/helpers/promise.js";
-import * as testPromises from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { listAgentIds } from "../agents/agent-scope.js";
 import { type AgentsConfig, getRuntimeConfig as getMockedRuntimeConfig } from "../config/config.js";
@@ -20,46 +20,40 @@ import {
   startSessionTranscriptIndexReconcile,
   waitForSessionTranscriptIndexReconcile,
 } from "../config/sessions/session-transcript-reconcile.js";
-import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
+import * as historyWorkers from "../config/sessions/session-transcript-worker-runtime.js";
+import { getGatewayContextResolver } from "../plugins/runtime/gateway-context-binding.js";
 import {
   getActiveGatewayRootWorkCount,
   retainGatewayRootWorkAdmissionContinuationScope,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
-import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
+import { beginSessionEffect } from "../sessions/session-controller.lifecycle.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
+import * as agentDatabaseLifecycle from "../state/openclaw-agent-db-lifecycle.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import {
-  closeOpenClawAgentDatabaseByPath,
+  closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { listOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.test-support.js";
-import {
-  runOpenClawAgentWriteAdmission,
-  SQLITE_SESSION_WRITER_QUEUES,
-} from "../state/openclaw-agent-write-admission.js";
-import {
-  captureOpenClawStateDatabaseReadAdmission,
-  registerOpenClawStateDatabaseAsyncResource,
-} from "../state/openclaw-state-db-cache.js";
-import {
-  closeOpenClawStateDatabaseByPathAsync,
-  isOpenClawStateDatabaseOpen,
-} from "../state/openclaw-state-db.js";
-import {
-  releaseSessionTestDirectories,
-  removeSessionTestDirectories,
-} from "./session-test-directories.test-support.js";
+import { SQLITE_SESSION_WRITER_QUEUES } from "../state/openclaw-agent-write-admission-state.js";
+import { runOpenClawAgentWriteAdmission } from "../state/openclaw-agent-write-admission.js";
+import { getGatewayRecoveryRuntime } from "./server-recovery-runtime-context.js";
+import { getSessionRowProjection } from "./session-row-projection-access.js";
+import { releaseSessionTestDirectories } from "./session-test-directories.test-support.js";
 import { createGatewayConfigOverrides } from "./test-helpers.config-runtime.js";
 import {
   installGatewayTestHooks,
-  onceMessage,
   prepareGatewayReplyRuntimeForTest,
   rpcReq,
   testState,
   writeSessionStore,
 } from "./test-helpers.js";
 import { installConnectedControlUiServerSuite } from "./test-with-server.js";
-import { releaseGatewaySessionStoreFixture } from "./test/server-sessions-resources.test-helpers.js";
+import {
+  releaseGatewaySessionStoreFixture,
+  settleGatewaySessionStoreFixture,
+} from "./test/server-sessions-resources.test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -67,19 +61,42 @@ let ws: WebSocket;
 installConnectedControlUiServerSuite((started) => {
   ws = started.ws;
 });
+const listAgents = () =>
+  rpcReq<{ agents: Array<{ id: string; name?: string }> }>(ws, "agents.list", {});
+
+function storeFixture(name: string, dir = tempDirs.make(`openclaw-gw-${name}-`)) {
+  const storePath = path.join(dir, "openclaw-agent.sqlite");
+  testState.sessionStorePath = storePath;
+  return {
+    dir,
+    storePath,
+    scope: { agentId: "main", sessionKey: "agent:main:main", storePath },
+    seed: (updatedAt = 1, label?: string) =>
+      writeSessionStore({ entries: { main: { sessionId: name, updatedAt, label } } }),
+  };
+}
+function expectStoreClosed(storePath: string) {
+  expect(listOpenClawAgentDatabasesForTest().some((db) => db.path === storePath)).toBe(false);
+}
+function expectSelectedStore(storePath: string) {
+  const selectedStorePath = getMockedRuntimeConfig().session?.store;
+  expect([testState.sessionStorePath, selectedStorePath]).toEqual([storePath, storePath]);
+  return selectedStorePath;
+}
+// These fixtures explicitly own directory disposal after their admitted writers settle.
+async function ownedDirectory(name: string) {
+  // openclaw-temp-dir: allow verifies explicit store teardown while a writer owns the directory
+  return fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), `openclaw-gw-${name}-`)));
+}
 
 async function retainGatewayEvent() {
   const root = tryBeginGatewayRootWorkAdmission("test:transcript-event");
-  if (!root) {
-    throw new Error("expected gateway root admission");
-  }
+  assert(root, "expected gateway root admission");
   try {
     const continuation = await root.run(async () =>
       retainGatewayRootWorkAdmissionContinuationScope(),
     );
-    if (!continuation) {
-      throw new Error("expected retained gateway event");
-    }
+    assert(continuation, "expected retained gateway event");
     return continuation;
   } finally {
     root.release();
@@ -87,101 +104,100 @@ async function retainGatewayEvent() {
 }
 
 describe("Gateway RPC fixture session writes", () => {
-  test.each(["complete", "timeout"] as const)(
-    "joins client identity database closure before removal (%s)",
-    async (outcome) => {
-      const dir = tempDirs.make("openclaw-gw-identity-close-");
-      const sibling = path.join(tempDirs.make("openclaw-gw-identity-sibling-"), "device.sqlite");
-      const identityPath = path.join(dir, "copilot-device.json");
-      const identities = [identityPath, path.join(dir, "unpaired-copilot-device.json")];
-      for (const pathname of [...identities, sibling]) {
-        loadOrCreateDeviceIdentity({ path: pathname });
-      }
-      const admission = captureOpenClawStateDatabaseReadAdmission(identityPath);
-      const closing = createDeferred();
-      const release = createDeferred();
-      const unregister = registerOpenClawStateDatabaseAsyncResource({
-        async close(identity) {
-          if (identity?.key === admission.identity.key) {
-            closing.resolve();
-            await release.promise;
-          }
-        },
+  test("joins the suite projection before revoking a released store's history reader", async () => {
+    const { dir, storePath, seed } = storeFixture("projection-release");
+    await seed();
+    expect((await rpcReq(ws, "chat.history", { sessionKey: "main" })).ok).toBe(true);
+    const runtime = getGatewayRecoveryRuntime();
+    const projection = getSessionRowProjection(runtime && getGatewayContextResolver(runtime)?.());
+    assert(projection, "Suite Gateway projection is missing");
+    await projection.ensureMaterialized();
+    const entered = createDeferred();
+    const release = createDeferred();
+    const boundary = createDeferred();
+    const runRead = historyWorkers.withSessionHistoryWorkerDatabases;
+    let held = false;
+    const reads = vi
+      .spyOn(historyWorkers, "withSessionHistoryWorkerDatabases")
+      .mockImplementation((targets, consume, lane) =>
+        runRead(
+          targets,
+          async (owners) => {
+            const result = await consume(owners);
+            if (!held && targets.some((target) => target.path === storePath)) {
+              held = true;
+              entered.resolve();
+              await release.promise;
+            }
+            return result;
+          },
+          lane,
+        ),
+      );
+    sessionChanges.emit({ all: true, scope: { storePath }, factsInvalidated: true });
+    const preparing = projection.ensureMaterialized();
+    void preparing.catch(() => {});
+    const ensure = projection.ensureMaterialized;
+    const join = vi.spyOn(projection, "ensureMaterialized").mockImplementation(() => {
+      boundary.resolve();
+      return ensure();
+    });
+    const close = agentDatabaseLifecycle.closeOpenClawAgentDatabasesAsync;
+    const closing = vi
+      .spyOn(agentDatabaseLifecycle, "closeOpenClawAgentDatabasesAsync")
+      .mockImplementation((root) => {
+        if (root === dir) {
+          boundary.resolve();
+        }
+        return close(root);
       });
-      const withTestTimeout = testPromises.withTestTimeout;
-      const deadline =
-        outcome === "timeout"
-          ? vi
-              .spyOn(testPromises, "withTestTimeout")
-              .mockImplementation((promise, _ms, message) => withTestTimeout(promise, 0, message))
-          : undefined;
-      const removing = removeSessionTestDirectories([dir]);
-      void removing.catch(() => {});
-      try {
-        expect(
-          await Promise.race([
-            closing.promise.then(() => "closing"),
-            removing.then(() => "removed"),
-          ]),
-        ).toBe("closing");
-        expect(isOpenClawStateDatabaseOpen(identityPath)).toBe(true);
-        await expect(fs.access(dir)).resolves.toBeUndefined();
-        if (outcome === "timeout") {
-          await expect(removing).rejects.toThrow(
-            `Timed out closing shared-state fixture database ${JSON.stringify(identityPath)}`,
-          );
-          await expect(fs.access(dir)).resolves.toBeUndefined();
-        } else {
-          release.resolve();
-          await removing;
-          expect(identities.map((pathname) => isOpenClawStateDatabaseOpen(pathname))).toEqual([
-            false,
-            false,
-          ]);
-          await expect(fs.access(dir)).rejects.toMatchObject({ code: "ENOENT" });
-        }
-        expect(isOpenClawStateDatabaseOpen(sibling)).toBe(true);
-      } finally {
-        deadline?.mockRestore();
-        release.resolve();
-        await removing.catch(() => {});
-        unregister();
-        for (const pathname of [...identities, sibling]) {
-          await closeOpenClawStateDatabaseByPathAsync(pathname);
-        }
-      }
-    },
-  );
+    let releasing: Promise<void> | undefined;
+    try {
+      await Promise.race([
+        entered.promise,
+        preparing.then(() => {
+          throw new Error("Projection completed without retaining the fixture history read");
+        }),
+      ]);
+      releasing = releaseGatewaySessionStoreFixture(dir);
+      void releasing.catch(() => {});
+      await boundary.promise;
+      release.resolve();
+      await expect(preparing).resolves.toBeUndefined();
+      await releasing;
+      expectStoreClosed(storePath);
+    } finally {
+      release.resolve();
+      await Promise.allSettled([preparing, releasing]);
+      reads.mockRestore();
+      join.mockRestore();
+      closing.mockRestore();
+    }
+  });
 
   test.each(["session", "gateway event"] as const)(
     "%s release joins admitted continuations before deselecting their store",
     async (owner) => {
-      // openclaw-temp-dir: allow verifies explicit store teardown while a writer owns the directory
-      const dir = await fs.realpath(
-        await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-admitted-writes-")),
+      const { dir, storePath, scope, seed } = storeFixture(
+        "admitted-write",
+        await ownedDirectory("admitted-writes"),
       );
-      const storePath = path.join(dir, "openclaw-agent.sqlite");
-      testState.sessionStorePath = storePath;
-      const scope = { agentId: "main", sessionKey: "agent:main:main", storePath };
-      await writeSessionStore({ entries: { main: { sessionId: "admitted-write", updatedAt: 1 } } });
+      await seed();
       const admission =
         owner === "session"
-          ? await beginSessionWorkAdmission({
+          ? await beginSessionEffect({
               scope: storePath,
               identities: [scope.sessionKey, "admitted-write"],
               assertAllowed: () => {},
             })
           : await retainGatewayEvent();
-      // Resolve this fixture's canonical path before the continuation runs, so the
-      // release must retain its selector across a real event-loop turn.
+      // Resolve the canonical path now to hold the selector across a real event-loop turn.
       const realpath = vi.spyOn(fs, "realpath").mockResolvedValueOnce(dir);
       const releasing = releaseSessionTestDirectories([dir]);
       realpath.mockRestore();
       try {
         await yieldToEventLoop();
-        expect(testState.sessionStorePath).toBe(storePath);
-        const selectedStorePath = getMockedRuntimeConfig().session?.store;
-        expect(selectedStorePath).toBe(storePath);
+        const selectedStorePath = expectSelectedStore(storePath);
         await admission.run(() =>
           updateSessionEntry({ ...scope, storePath: selectedStorePath }, () => ({
             label: "late continuation",
@@ -193,18 +209,13 @@ describe("Gateway RPC fixture session writes", () => {
         await releasing;
         await fs.rm(dir, { recursive: true, force: true });
       }
-      expect(
-        listOpenClawAgentDatabasesForTest().some((database) => database.path === storePath),
-      ).toBe(false);
+      expectStoreClosed(storePath);
     },
   );
 
   test("fixture release joins queued participant persistence before deselecting its store", async () => {
-    const dir = tempDirs.make("openclaw-gw-participant-join-");
-    const storePath = path.join(dir, "openclaw-agent.sqlite");
-    testState.sessionStorePath = storePath;
-    const scope = { agentId: "main", sessionKey: "agent:main:main", storePath };
-    await writeSessionStore({ entries: { main: { sessionId: "participant-join", updatedAt: 1 } } });
+    const { dir, storePath, scope, seed } = storeFixture("participant-join");
+    await seed();
     const release = createDeferred();
     const holding = runOpenClawAgentWriteAdmission(
       { agentId: "main", path: storePath },
@@ -221,36 +232,32 @@ describe("Gateway RPC fixture session writes", () => {
     try {
       await yieldToEventLoop();
       expect(getActiveGatewayRootWorkCount()).toBe(0);
-      expect(testState.sessionStorePath).toBe(storePath);
-      expect(getMockedRuntimeConfig().session?.store).toBe(storePath);
+      expectSelectedStore(storePath);
       release.resolve();
       await releasing;
       expect(await outcome).toEqual([{ status: "fulfilled", value: "inserted" }]);
       expect(testState.sessionStorePath).toBeUndefined();
-      expect(
-        listOpenClawAgentDatabasesForTest().some((database) => database.path === storePath),
-      ).toBe(false);
+      expectStoreClosed(storePath);
     } finally {
       release.resolve();
       await Promise.allSettled([holding, recorded, releasing]);
     }
   });
 
-  test.each(["raw WebSocket", "rpcReq", "fixture release"])(
+  test.each(["rpcReq", "fixture release", "fixture reseed"])(
     "%s preserves queued session writes",
     async (request) => {
-      const dir = await fs.realpath(
-        await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-rpc-writes-")),
+      const { dir, storePath, scope, seed } = storeFixture(
+        "rpc-writes",
+        await ownedDirectory("rpc-writes"),
       );
-      const storePath = path.join(dir, "openclaw-agent.sqlite");
-      testState.sessionStorePath = storePath;
-      const scope = { agentId: "main", sessionKey: "agent:main:main", storePath };
       const planning = createDeferred();
       const release = createDeferred();
       const writes: Promise<unknown>[] = [];
       let drains: Promise<void>[] = [];
+      let reseeding: Promise<void> | undefined;
       try {
-        await writeSessionStore({ entries: { main: { sessionId: "rpc-writes", updatedAt: 1 } } });
+        await seed();
         expect((await rpcReq(ws, "sessions.subscribe", {})).ok).toBe(true);
         const first = updateSessionEntry(scope, async () => {
           planning.resolve();
@@ -268,11 +275,9 @@ describe("Gateway RPC fixture session writes", () => {
         );
         if (request === "rpcReq") {
           expect((await rpcReq(ws, "sessions.subscribe", {})).ok).toBe(true);
-        } else if (request === "raw WebSocket") {
-          const id = "queued-writes-control";
-          const response = onceMessage(ws, (event) => event.type === "res" && event.id === id);
-          ws.send(JSON.stringify({ type: "req", id, method: "sessions.subscribe", params: {} }));
-          expect((await response).ok).toBe(true);
+        } else if (request === "fixture reseed") {
+          reseeding = seed(2, "reseeded");
+          void reseeding.catch(() => {});
         } else {
           const releasedDir = path.join(dir, "released");
           const options = {
@@ -294,9 +299,10 @@ describe("Gateway RPC fixture session writes", () => {
             },
           );
           await waitForSessionTranscriptIndexReconcile(options);
+          await settleGatewaySessionStoreFixture(releasedDir);
           const database = openOpenClawAgentDatabase(options);
           database.db.prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1").run();
-          expect(closeOpenClawAgentDatabaseByPath(database.path)).toBe(true);
+          expect(await closeOpenClawAgentDatabaseByPathAsync(database.path)).toBe(true);
 
           // Schedule after closing the handle: disposal must join work that has not reopened it yet.
           startSessionTranscriptIndexReconcile(options);
@@ -308,9 +314,7 @@ describe("Gateway RPC fixture session writes", () => {
                 options,
               ),
             ).toEqual({ found: true, value: [] });
-            expect(
-              listOpenClawAgentDatabasesForTest().some((entry) => entry.path === options.path),
-            ).toBe(false);
+            expectStoreClosed(options.path);
             expect(testState.sessionStorePath).toBe(storePath);
           } finally {
             // Keep a failed release assertion from racing the outer directory removal.
@@ -322,23 +326,24 @@ describe("Gateway RPC fixture session writes", () => {
           { status: "fulfilled", value: expect.objectContaining({ label: "first" }) },
           { status: "fulfilled", value: expect.objectContaining({ label: "second" }) },
         ]);
-        expect(loadSessionEntry(scope)?.label).toBe("second");
+        if (reseeding) {
+          await reseeding;
+        }
+        expect(loadSessionEntry(scope)?.label).toBe(reseeding ? "reseeded" : "second");
       } finally {
         release.resolve();
-        await Promise.allSettled([...writes, ...drains]);
+        await Promise.allSettled([...writes, ...drains, reseeding]);
         // This custom store lives outside the Gateway HOME and owns its own disposal.
         await releaseGatewaySessionStoreFixture(dir);
         await fs.rm(dir, { recursive: true, force: true });
       }
-      expect(
-        listOpenClawAgentDatabasesForTest().some((database) => database.path === storePath),
-      ).toBe(false);
+      expectStoreClosed(storePath);
     },
   );
 });
 
 describe("Gateway fixture config publication", () => {
-  test.each(["RPC admission", "reply preparation", "RPC session update"] as const)(
+  test.each(["reply preparation", "RPC session update"] as const)(
     "%s shares the current fixture with real IO across awaited work",
     async (boundary) => {
       const actual = await vi.importActual<typeof import("../config/io.js")>("../config/io.js");
@@ -352,7 +357,7 @@ describe("Gateway fixture config publication", () => {
         const admission =
           boundary === "reply preparation"
             ? prepareGatewayReplyRuntimeForTest({ force: true })
-            : rpcReq(ws, "agents.list", {});
+            : listAgents();
         // Real maintenance/finalizer callbacks can read config while admission
         // yields for imports or model preparation, before the RPC is sent.
         const duringAdmission = actual.getRuntimeConfig();
@@ -364,7 +369,7 @@ describe("Gateway fixture config publication", () => {
         }
         expect(listAgentIds(actual.getRuntimeConfig())).toEqual(expectedAgents);
         expect(getRuntimeConfig()).toEqual(actual.getRuntimeConfig());
-        const response = await rpcReq<{ agents: Array<{ id: string }> }>(ws, "agents.list", {});
+        const response = await listAgents();
         expect(response.ok, JSON.stringify(response)).toBe(true);
         expect(response.payload?.agents.map((agent) => agent.id)).toEqual(expectedAgents);
       }
@@ -396,11 +401,7 @@ describe("Gateway fixture config publication", () => {
       expectedEntries: NonNullable<AgentsConfig["entries"]>,
       timeoutSeconds: number,
     ) => {
-      const request = rpcReq<{ agents: Array<{ id: string; name?: string }> }>(
-        ws,
-        "agents.list",
-        {},
-      );
+      const request = listAgents();
       try {
         const realConfig = actual.getRuntimeConfig();
         expect(realConfig.agents?.entries).toEqual(expectedEntries);

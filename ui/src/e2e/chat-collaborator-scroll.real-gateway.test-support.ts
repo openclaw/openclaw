@@ -24,6 +24,7 @@ export async function startScrollInferenceFixture() {
     let response: ServerResponse | undefined;
     let text = "";
     const messageId = "scroll-message-" + index;
+    const message = { type: "message", id: messageId, role: "assistant" };
     const emit = (event: Record<string, unknown>) => {
       if (!response || response.destroyed || response.writableEnded) {
         throw new Error("Inference turn is not writable: " + index);
@@ -41,13 +42,7 @@ export async function startScrollInferenceFixture() {
         emit({
           type: "response.output_item.added",
           output_index: 0,
-          item: {
-            type: "message",
-            id: messageId,
-            role: "assistant",
-            status: "in_progress",
-            content: [],
-          },
+          item: { ...message, status: "in_progress", content: [] },
         });
         received.resolve(incoming);
       },
@@ -64,10 +59,8 @@ export async function startScrollInferenceFixture() {
       },
       async finish() {
         await received.promise;
-        const message = {
-          type: "message",
-          id: messageId,
-          role: "assistant",
+        const finalMessage = {
+          ...message,
           status: "completed",
           content: [{ type: "output_text", text, annotations: [] }],
         };
@@ -78,13 +71,13 @@ export async function startScrollInferenceFixture() {
           content_index: 0,
           text,
         });
-        emit({ type: "response.output_item.done", output_index: 0, item: message });
+        emit({ type: "response.output_item.done", output_index: 0, item: finalMessage });
         emit({
           type: "response.completed",
           response: {
             id: "scroll-response-" + index,
             status: "completed",
-            output: [message],
+            output: [finalMessage],
             usage: { input_tokens: 10, output_tokens: 100, total_tokens: 110 },
           },
         });
@@ -146,20 +139,16 @@ export async function startScrollInferenceFixture() {
   };
 }
 
-type AssistantVisibilityFailure = { at: number; text: string; opacity: string; transform: string };
 declare global {
   interface Window {
-    assistantVisibilityProof?: { failures: AssistantVisibilityFailure[]; stop: () => void };
-    replyPresenceProof?: {
-      missing: Array<{ at: number; runId: string | null; streamLength: number | null }>;
-      stop: () => void;
-    };
+    assistantVisibilityProof?: { failures: string[]; stop: () => void };
+    replyPresenceProof?: { missing: number[]; stop: () => void };
   }
 }
 
 export async function startAssistantVisibilityProbe(page: Page) {
   await page.evaluate(() => {
-    const failures: AssistantVisibilityFailure[] = [];
+    const failures: string[] = [];
     let frame = 0;
     const sample = () => {
       for (const bubble of document.querySelectorAll<HTMLElement>(
@@ -170,12 +159,7 @@ export async function startAssistantVisibilityProbe(page: Page) {
         }
         const style = getComputedStyle(bubble);
         if (style.opacity !== "1" || style.transform !== "none") {
-          failures.push({
-            at: performance.now(),
-            text: bubble.textContent.slice(0, 100),
-            opacity: style.opacity,
-            transform: style.transform,
-          });
+          failures.push(`${style.opacity}/${style.transform}: ${bubble.textContent.slice(0, 100)}`);
         }
       }
       frame = requestAnimationFrame(sample);
@@ -195,11 +179,7 @@ export async function startAssistantVisibilityProbe(page: Page) {
 }
 
 export async function watchExistingReply(page: Page, prefix: string) {
-  await page
-    .locator(".chat-text p")
-    .filter({ hasText: prefix })
-    .first()
-    .waitFor({ state: "attached" });
+  await page.locator(".chat-text p", { hasText: prefix }).first().waitFor({ state: "attached" });
   await page.evaluate((textPrefix) => {
     const thread = document.querySelector<HTMLElement>(
       ".chat-pane-cache__pane--active .chat-thread",
@@ -214,18 +194,11 @@ export async function watchExistingReply(page: Page, prefix: string) {
     if (!present()) {
       throw new Error("Expected reply was not present before submission");
     }
-    const missing: Array<{ at: number; runId: string | null; streamLength: number | null }> = [];
+    const missing: number[] = [];
     let frame = 0;
     const sample = () => {
       if (!present()) {
-        const state = thread.closest<HTMLElement & { state?: ChatPageHost }>(
-          "openclaw-chat-pane",
-        )?.state;
-        missing.push({
-          at: performance.now(),
-          runId: state?.chatRunId ?? null,
-          streamLength: state?.chatStream?.length ?? null,
-        });
+        missing.push(performance.now());
       }
       frame = requestAnimationFrame(sample);
     };
@@ -244,21 +217,18 @@ export async function watchExistingReply(page: Page, prefix: string) {
 }
 
 type ScrollSample = {
+  keys: string[];
+  anchorText: string;
   top: number;
   anchor: number | null;
   distance: number;
-  messageKey?: string;
-  rowKey?: string;
-  policy?: {
-    locked: boolean;
-    initialized: boolean;
-    runId: string | null;
-    streamLength: number | null;
-  };
-  rows: Array<{ key?: string; height: number }>;
+  policy?: { locked: boolean };
 };
 type ScrollProbeElement = HTMLElement & {
-  scrollProof: { samples: ScrollSample[]; stop: () => void };
+  scrollProof: {
+    samples: ScrollSample[];
+    stop: () => void;
+  };
 };
 export async function startScrollProbe(page: Page) {
   return page.locator(".chat-pane-cache__pane--active .chat-thread").evaluate((element) => {
@@ -284,20 +254,11 @@ export async function startScrollProbe(page: Page) {
       const pane = element.closest<HTMLElement & { state?: ChatPageHost }>("openclaw-chat-pane");
       const state = pane?.state;
       return {
-        messageKey: anchor?.closest<HTMLElement>(".chat-bubble")?.dataset.messageId,
-        rowKey: anchor?.closest<HTMLElement>(".chat-virtual-row")?.dataset.virtualRowKey,
-        policy: state
-          ? {
-              locked: state.chatFollowLocked,
-              initialized: state.chatHasAutoScrolled,
-              runId: state.chatRunId,
-              streamLength: state.chatStream?.length ?? null,
-            }
-          : undefined,
-        rows: [...element.querySelectorAll<HTMLElement>(".chat-virtual-row")].map((row) => ({
-          key: row.dataset.virtualRowKey,
-          height: row.offsetHeight,
-        })),
+        keys: [...element.querySelectorAll<HTMLElement>(".chat-virtual-row")].map(
+          (row) => row.dataset.virtualRowKey!,
+        ),
+        anchorText,
+        policy: state ? { locked: state.chatFollowLocked } : undefined,
         top: element.scrollTop,
         distance: element.scrollHeight - element.clientHeight - element.scrollTop,
         anchor: anchor
@@ -317,7 +278,7 @@ export async function startScrollProbe(page: Page) {
       stop: () => cancelAnimationFrame(frame),
     };
     frame = requestAnimationFrame(tick);
-    return { ...before, anchorText };
+    return before;
   });
 }
 export async function readScrollProbe(page: Page, stop = false) {

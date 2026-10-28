@@ -12,6 +12,11 @@ it.each([
     config: "test/vitest/vitest.agents-core.config.ts",
     build: "runtime",
   },
+  {
+    file: "src/agents/prepared-model-catalog-worker.oauth-peers.integration.test.ts",
+    config: "test/vitest/vitest.infra.config.ts",
+    build: "runtime",
+  },
   { file: unitFile, config: "test/vitest/vitest.unit-fast.config.ts", build: undefined },
 ])("prepares only the selected provider runtime consumer: $file", ({ file, config, build }) => {
   const plans = buildVitestRunPlans([file]);
@@ -21,6 +26,17 @@ it.each([
       plans.map((plan) => ({ configs: [plan.config], includePatterns: plan.includePatterns })),
     ),
   ).toBe(build);
+});
+
+it("prepares the cold ClawRouter catalog E2E worker runtime", () => {
+  expect(
+    resolveVitestPretestBuildMode([
+      {
+        configs: ["test/vitest/vitest.e2e.config.ts"],
+        includePatterns: ["src/agents/clawrouter-catalog-discovery.e2e.test.ts"],
+      },
+    ]),
+  ).toBe("runtime");
 });
 
 it.each(["test/vitest/vitest.agents-core.config.ts", "test/vitest/vitest.agents.config.ts"])(

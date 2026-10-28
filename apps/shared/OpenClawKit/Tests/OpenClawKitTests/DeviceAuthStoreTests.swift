@@ -107,8 +107,9 @@ struct DeviceAuthStoreTests {
                     gatewayID: gatewayID),
             ]))
 
+        _ = try DeviceIdentityStore.loadOrCreatePersistedOrThrow()
         #expect(DeviceAuthStore.loadToken(deviceId: deviceID, role: "node")?.token == "legacy-node")
-        #expect(try !FileManager.default.fileExists(atPath: Self.authURL().path))
+        #expect(try FileManager.default.fileExists(atPath: Self.authURL().path))
         let scoped = try #require(DeviceAuthStore.loadToken(
             deviceId: deviceID,
             role: "operator",
@@ -142,11 +143,11 @@ struct DeviceAuthStoreTests {
         let loaded = try #require(DeviceAuthStore.loadToken(deviceId: deviceID, role: "node"))
         #expect(loaded.token == "sqlite-token")
         #expect(loaded.scopes == ["sqlite-scope"])
-        #expect(try !FileManager.default.fileExists(atPath: Self.authURL().path))
+        #expect(try FileManager.default.fileExists(atPath: Self.authURL().path))
     }
 
     @Test(.stateDirectoryIsolated)
-    func `failed legacy removal cannot commit a clear`() throws {
+    func `read-only legacy input imports once and cannot resurrect a revoked token`() throws {
         let deviceID = "removal-failure-device"
         try Self.writeLegacy(DeviceAuthStoreFile(
             version: 1,
@@ -169,8 +170,11 @@ struct DeviceAuthStoreTests {
 
         #expect(FileManager.default.fileExists(atPath: authURL.path))
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: identityDirectory.path)
-        #expect(DeviceAuthStore.loadToken(deviceId: deviceID, role: "node")?.token == "legacy-token")
-        #expect(!FileManager.default.fileExists(atPath: authURL.path))
+        #expect(DeviceAuthStore.loadToken(deviceId: deviceID, role: "node") == nil)
+        #expect(FileManager.default.fileExists(atPath: authURL.path))
+        DeviceAuthStore.clearToken(deviceId: deviceID, role: "node")
+        #expect(DeviceAuthStore.loadToken(deviceId: deviceID, role: "node") == nil)
+        #expect(FileManager.default.fileExists(atPath: authURL.path))
     }
 
     @Test(.stateDirectoryIsolated)
@@ -200,12 +204,13 @@ struct DeviceAuthStoreTests {
 
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: identityDirectory.path)
         #expect(FileManager.default.fileExists(atPath: authURL.path))
+        _ = try DeviceIdentityStore.loadOrCreatePersistedOrThrow()
         #expect(DeviceAuthStore.loadToken(deviceId: deviceID, role: "node")?.token == "legacy-token")
-        #expect(!FileManager.default.fileExists(atPath: authURL.path))
+        #expect(FileManager.default.fileExists(atPath: authURL.path))
     }
 
     @Test(.stateDirectoryIsolated)
-    func `failed invalid-file quarantine aborts the requested write`() throws {
+    func `malformed read-only input remains a visible write failure`() throws {
         let authURL = try Self.authURL()
         let identityDirectory = authURL.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: identityDirectory, withIntermediateDirectories: true)
@@ -222,23 +227,27 @@ struct DeviceAuthStoreTests {
         #expect(FileManager.default.fileExists(atPath: authURL.path))
 
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: identityDirectory.path)
-        #expect(DeviceAuthStore.storeTokenPersisted(
+        #expect(!DeviceAuthStore.storeTokenPersisted(
             deviceId: "quarantine-device",
             role: "node",
             token: "sqlite-token"))
-        #expect(DeviceAuthStore.loadToken(
-            deviceId: "quarantine-device",
-            role: "node")?.token == "sqlite-token")
+        #expect(try Data(contentsOf: authURL) == Data([0xFF]))
     }
 
     @Test(.stateDirectoryIsolated)
-    func `corrupt legacy file is quarantined and SQLite remains writable`() throws {
+    func `correcting malformed legacy input permits the pending write`() throws {
         let authURL = try Self.authURL()
         try FileManager.default.createDirectory(
             at: authURL.deletingLastPathComponent(),
             withIntermediateDirectories: true)
         try Data([0xFF, 0x00, 0xAA]).write(to: authURL)
 
+        #expect(!DeviceAuthStore.storeTokenPersisted(
+            deviceId: "corrupt-device",
+            role: "node",
+            token: "sqlite-token"))
+        #expect(try Data(contentsOf: authURL) == Data([0xFF, 0x00, 0xAA]))
+        try Self.writeLegacy(DeviceAuthStoreFile(version: 1, deviceId: "corrupt-device", tokens: [:]))
         #expect(DeviceAuthStore.storeTokenPersisted(
             deviceId: "corrupt-device",
             role: "node",
@@ -246,11 +255,7 @@ struct DeviceAuthStoreTests {
         #expect(DeviceAuthStore.loadToken(
             deviceId: "corrupt-device",
             role: "node")?.token == "sqlite-token")
-        #expect(!FileManager.default.fileExists(atPath: authURL.path))
-        let quarantined = try FileManager.default.contentsOfDirectory(
-            atPath: authURL.deletingLastPathComponent().path)
-            .filter { $0.hasPrefix("device-auth.json.invalid-") }
-        #expect(quarantined.count == 1)
+        #expect(FileManager.default.fileExists(atPath: authURL.path))
     }
 
     @Test(.stateDirectoryIsolated)
@@ -371,14 +376,14 @@ struct DeviceAuthStoreTests {
     }
 
     @Test(.stateDirectoryIsolated)
-    func `version zero bootstrap creates the exact composite key table`() throws {
+    func `local schema preserves the exact composite key table`() throws {
         #expect(DeviceAuthStore.storeTokenPersisted(
             deviceId: "bootstrap-device",
             role: "node",
             token: "bootstrap-token"))
         let databaseURL = try Self.databaseURL()
 
-        #expect(try Self.scalarInt(databaseURL, "PRAGMA user_version") == 0)
+        #expect(try Self.scalarInt(databaseURL, "PRAGMA user_version") == 1)
         #expect(try Self.scalarText(
             databaseURL,
             """
@@ -429,8 +434,8 @@ extension DeviceAuthStoreTests {
 
     private static func databaseURL() throws -> URL {
         try self.stateDirectoryURL()
-            .appendingPathComponent("state", isDirectory: true)
-            .appendingPathComponent("openclaw.sqlite", isDirectory: false)
+            .appendingPathComponent("client", isDirectory: true)
+            .appendingPathComponent("credentials.sqlite", isDirectory: false)
     }
 
     private static func authURL(
@@ -449,7 +454,7 @@ extension DeviceAuthStoreTests {
         try FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(),
             withIntermediateDirectories: true)
-        try JSONEncoder().encode(store).write(to: url, options: [.atomic])
+        try JSONEncoder().encode(store).write(to: url)
     }
 
     private static func storageComponent(_ value: String) -> String {

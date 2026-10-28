@@ -1,3 +1,4 @@
+import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 describe("memory-lancedb startup imports", () => {

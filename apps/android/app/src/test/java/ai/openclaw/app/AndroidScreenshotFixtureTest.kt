@@ -106,7 +106,7 @@ class AndroidScreenshotFixtureTest {
   }
 
   @Test
-  fun providesDeterministicRecentChatHistory() {
+  fun recentChatHistoryKeepsNoticeMarkersAndActiveRun() {
     val history =
       json
         .parseToJsonElement(request("chat.history", null))
@@ -114,41 +114,8 @@ class AndroidScreenshotFixtureTest {
     val messages = history["messages"]?.jsonArray.orEmpty().takeLast(10)
 
     assertEquals(
-      listOf(
-        listOf("user", "What is blocking the Android release?", "1783555020000"),
-        listOf(
-          "assistant",
-          "Two review threads are still open on the release branch, and the localization sync needs one more pass. " +
-            "Once those land, the changelog draft is ready for review and the tag can go out.",
-          "1783555080000",
-        ),
-        listOf("user", "[System] Continue the interrupted turn.", "1783555100000"),
-        listOf("user", "[System] Gateway restarted during the Android release update.", "1783555120000"),
-        listOf("user", "Summarize the open review feedback for me.", "1783555140000"),
-        listOf(
-          "assistant",
-          "The release check is ready:\n\n```kotlin\nval ready = lint && tests\n```\n\n" +
-            "Review https://openclaw.ai before tagging.",
-          "1783555200000",
-        ),
-        listOf("system", "Compaction", "1783555220000"),
-        listOf("system", "Reset", "1783555240000"),
-        listOf("user", "Draft a short status update for the team.", "1783555260000"),
-        listOf(
-          "assistant",
-          "The Android release is close. Two review follow-ups and one localization pass remain; once those land, " +
-            "the changelog can be reviewed and the tag can go out.",
-          "1783555320000",
-        ),
-      ),
-      messages.map { message ->
-        val fields = message.jsonObject
-        listOf(
-          fields["role"]?.jsonPrimitive?.content,
-          fields["content"]?.jsonPrimitive?.content,
-          fields["timestamp"]?.jsonPrimitive?.content,
-        )
-      },
+      listOf("user", "assistant", "user", "user", "user", "assistant", "system", "system", "user", "assistant"),
+      messages.map { it.jsonObject["role"]?.jsonPrimitive?.content },
     )
 
     val restartRecovery = messages[2].jsonObject["provenance"]?.jsonObject

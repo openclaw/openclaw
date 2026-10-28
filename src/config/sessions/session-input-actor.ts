@@ -1,0 +1,246 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
+import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
+import { wrapSqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
+import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
+import type { AgentDatabaseRequestExecutionSource } from "../../state/openclaw-agent-execution-admission-contract.js";
+import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
+import { captureSessionPendingInputWorkerCustody } from "./session-accessor.sqlite-pending-inputs.js";
+import { prepareSessionEntryReplacementDatabase } from "./session-accessor.sqlite-replacement-worker.js";
+import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope-helpers.js";
+import type { SessionEntryTargetPatchScope } from "./session-accessor.types.js";
+import type {
+  SessionActor,
+  SessionActorAuthority,
+  SessionActorLifetime,
+} from "./session-actor-contract.js";
+import { acquireSessionActorStorage } from "./session-actor-storage-acquisition.js";
+import {
+  getSessionActorStorageBinding,
+  captureSessionActorStorageOwner,
+} from "./session-actor-storage-binding.js";
+import type { SessionActorStorageAuthority } from "./session-actor-storage-contract.js";
+import { SessionPendingInputCustodyError } from "./session-pending-input-custody-error.js";
+
+type SessionInputActorAcquisition = {
+  actor: SessionActor;
+  target: SessionEntryTargetPatchScope;
+  storageAuthority?: SessionActorStorageAuthority;
+};
+
+export type SessionInputActorBinding = {
+  phase: "acceptInput" | "adoptRun";
+  acquire(): Promise<SessionInputActorAcquisition | undefined>;
+};
+
+const recorderBindings = new WeakMap<
+  UserTurnTranscriptRecorder,
+  (binding: SessionInputActorBinding) => void
+>();
+
+export function registerUserTurnInputActor(
+  recorder: UserTurnTranscriptRecorder,
+  bind: (binding: SessionInputActorBinding) => void,
+): void {
+  recorderBindings.set(recorder, bind);
+}
+
+/** Internal handoff only: the released recorder shape does not grant actor authority. */
+export function bindUserTurnInputActor(
+  recorder: UserTurnTranscriptRecorder,
+  binding: SessionInputActorBinding,
+): void {
+  const bind = recorderBindings.get(recorder);
+  if (!bind) {
+    throw new Error("Input actor requires a factory-owned transcript recorder");
+  }
+  bind(binding);
+}
+
+/** Capture the selected owner; never redirect an incognito target to a file. */
+export async function acquireSessionInputActor(
+  requestedTarget: SessionEntryTargetPatchScope,
+  lifetime: SessionActorLifetime,
+  followRegistration?: AgentDatabaseRequestExecutionSource["onRegistryChange"],
+): Promise<SessionInputActorAcquisition | undefined> {
+  const agentId = requestedTarget.readSource?.agentId ?? requestedTarget.agentId;
+  if (!agentId) {
+    throw new Error("Input actor requires its captured agent owner");
+  }
+  // Sentinel aliases retain their selected physical key (global/unknown).
+  const sessionKey = resolveSqliteSessionKey(
+    requestedTarget.target.storeKeys[0] ?? requestedTarget.target.canonicalKey,
+    agentId,
+  );
+  const target = {
+    ...requestedTarget,
+    target: { ...requestedTarget.target, canonicalKey: sessionKey },
+  };
+  const database = {
+    agentId,
+    path: target.readSource?.path ?? target.storePath,
+    env: target.env,
+  };
+  lifetime.assertCurrent();
+  const input = { ...database, storePath: database.path, sessionKey };
+  const authority = {
+    assertCurrent: () => lifetime.assertCurrent(),
+    authorize: () => lifetime.assertCurrent(),
+  };
+  if (captureSessionActorStorageOwner(input, authority)) {
+    const memory = await acquireSessionActorStorage(input, { lifetime, authority });
+    if (!memory) {
+      return undefined;
+    }
+    return {
+      actor: memory.actor,
+      storageAuthority: memory.authority,
+      target: {
+        ...target,
+        readSource: {
+          agentId: memory.agentId,
+          path: memory.path,
+          databaseIdentity: memory.actor.target.database.incarnation,
+        },
+      },
+    };
+  }
+  const { createSessionActorFactory } = await import("./session-actor-durable.js");
+  lifetime.assertCurrent();
+  const execution = captureOpenClawAgentDatabaseExecution(database, {
+    expectedIdentity: target.readSource && {
+      kind: "file",
+      physicalIdentity: target.readSource.databaseIdentity,
+      birthtime: target.readSource.databaseBirthtime,
+      nativeLocation: database.path,
+    },
+  });
+  try {
+    // Native receipts already identify the file; only cold owners need writer preparation.
+    if (!execution.fileIdentity) {
+      await prepareSessionEntryReplacementDatabase(
+        database,
+        () => lifetime.assertCurrent(),
+        execution,
+        followRegistration,
+      );
+    }
+    const identity = execution.fileIdentity;
+    if (!identity) {
+      throw new Error("Input actor has no admitted physical database");
+    }
+    const actor = await createSessionActorFactory(database).acquire(
+      { database: identity, sessionKey },
+      lifetime,
+    );
+    return {
+      actor,
+      target: {
+        ...target,
+        readSource: target.readSource ?? {
+          agentId: database.agentId,
+          path: database.path,
+          databaseIdentity: identity.physicalIdentity,
+          databaseBirthtime: identity.birthtime,
+        },
+      },
+    };
+  } finally {
+    await execution.release();
+  }
+}
+
+const inputActor = new AsyncLocalStorage<SessionInputActorBinding | undefined>();
+
+/** Recorder calls capture their binding before yielding; handoff never redirects accepted work. */
+export function withSessionInputActor<T>(
+  binding: SessionInputActorBinding | undefined,
+  run: () => T,
+): T {
+  return inputActor.run(binding, run);
+}
+
+export async function getSessionInputActor(
+  scope: { agentId: string; sessionKey: string },
+  targetPending = false,
+) {
+  const binding = inputActor.getStore();
+  if (!binding) {
+    const memory = getSessionActorStorageBinding(scope);
+    if (memory) {
+      const identity = memory.actor.target.database;
+      if (identity.kind !== "memory") {
+        throw new Error("Memory input actor requires its selected memory owner");
+      }
+      return {
+        actor: memory.actor,
+        phase: "adoptRun" as const,
+        storageAuthority: memory.authority,
+        target: {
+          agentId: memory.agentId,
+          storePath: memory.path,
+          target: {
+            canonicalKey: memory.actor.target.sessionKey,
+            storeKeys: [memory.actor.target.sessionKey],
+          },
+          readSource: {
+            agentId: memory.agentId,
+            path: memory.path,
+            databaseIdentity: identity.incarnation,
+          },
+        } satisfies SessionEntryTargetPatchScope,
+        snapshot(authority: SessionActorAuthority) {
+          return memory.actor.snapshot(authority);
+        },
+      };
+    }
+    return undefined;
+  }
+  using acquisitionPhase = observeDiagnosticsTimelinePhases("session.inputActor.acquire");
+  const acquired = await binding.acquire();
+  acquisitionPhase[Symbol.dispose]();
+  if (!acquired) {
+    return undefined;
+  }
+  if (
+    !targetPending &&
+    acquired.target.target.canonicalKey !== resolveSqliteSessionKey(scope.sessionKey, scope.agentId)
+  ) {
+    throw new Error("Input actor differs from the recorder's admitted target");
+  }
+  const custody = captureSessionPendingInputWorkerCustody();
+  return {
+    ...acquired,
+    phase: binding.phase,
+    storageAuthority: acquired.storageAuthority ?? getSessionActorStorageBinding(scope)?.authority,
+    snapshot(authority: SessionActorAuthority) {
+      try {
+        return acquired.actor.snapshot(authority);
+      } catch (error) {
+        // A closed input actor must remain a custody refusal, not enable fallback.
+        if (custody) {
+          throw new SessionPendingInputCustodyError("Pending input actor is unavailable", {
+            cause: error,
+          });
+        }
+        throw error;
+      }
+    },
+  };
+}
+
+export function throwSessionInputActorFailure(
+  outcome: {
+    kind: "rolled-back" | "stale-version" | "unknown";
+    error: { name: string; message: string; cause?: unknown };
+  },
+  authorityFailure?: unknown,
+): never {
+  if (outcome.kind === "unknown") {
+    throw wrapSqliteWorkerError(outcome.error.message, "outcome-unknown", outcome.error);
+  }
+  if (authorityFailure !== undefined) {
+    throw toErrorObject(authorityFailure, "Input actor authority rejected the operation");
+  }
+  throw toErrorObject(outcome.error, outcome.error.message);
+}

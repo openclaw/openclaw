@@ -233,6 +233,16 @@ OPENCLAW_TRACE_SYNC_IO=1 pnpm openclaw gateway --force
 
 `pnpm gateway:watch` leaves this flag disabled by default for the watched Gateway child. Set `OPENCLAW_TRACE_SYNC_IO=1` when you want sync I/O trace output in watch mode too.
 
+For Gateway startup phase timings, set `OPENCLAW_GATEWAY_STARTUP_TRACE=1`.
+Per-plugin `plugins.gateway-load.plugin.<id>` details separate config validation
+(`configValidationMs`), artifact selection and entry-path checks
+(`artifactPreparationMs`), source capture and module evaluation (`loadMs`), and
+registration (`registerMs`). `loadAndRegisterMs` covers loading and registration;
+it excludes config validation and artifact preparation. These details are emitted
+for attempted module loads, including load or registration failures.
+`plugins.gateway-bootstrap-import` reports the lazy host-module import before
+individual plugin loading begins.
+
 ## Plugin lifecycle trace
 
 Set `OPENCLAW_PLUGIN_LIFECYCLE_TRACE=1` for a phase-by-phase breakdown of plugin metadata, discovery, registry, runtime mirror, config mutation, and refresh work. Writes to stderr, so JSON command output stays parseable.

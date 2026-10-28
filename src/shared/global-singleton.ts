@@ -4,7 +4,11 @@
  */
 const GLOBAL_SINGLETON_RESETS_KEY = Symbol.for("openclaw.globalSingletonLifecycleResets");
 
-type GlobalSingletonLifecycle = "close-and-restart" | "close-only" | "plugin-registry";
+type GlobalSingletonLifecycle =
+  | "close-and-restart"
+  | "close-only"
+  | "plugin-registry"
+  | "shared-state";
 type GlobalSingletonReset<T> = (value: T) => void | Promise<void>;
 type RegisteredGlobalSingletonReset = {
   lifecycle: GlobalSingletonLifecycle;
@@ -20,6 +24,13 @@ function resolveGlobalSingletonResetRegistry(): Map<symbol, RegisteredGlobalSing
   const created = new Map<symbol, RegisteredGlobalSingletonReset>();
   globalStore[GLOBAL_SINGLETON_RESETS_KEY] = created;
   return created;
+}
+
+/** Observe an existing owner's state without initializing it or registering cleanup. */
+export function readGlobalSingleton(key: symbol): unknown {
+  // SAFETY: Singleton slots are symbol-keyed properties owned by this registry.
+  const globalStore = globalThis as Record<PropertyKey, unknown>;
+  return Object.hasOwn(globalStore, key) ? globalStore[key] : undefined;
 }
 
 /** Resolves a process-local singleton for caches and registries that tolerate helper lookup. */
@@ -54,14 +65,12 @@ export function resolveGlobalMap<TKey, TValue>(
   reset?: GlobalSingletonLifecycle | GlobalSingletonReset<Map<TKey, TValue>>,
   lifecycle?: GlobalSingletonLifecycle,
 ): Map<TKey, TValue> {
-  return typeof reset === "string"
-    ? resolveGlobalSingleton(
-        key,
-        () => new Map<TKey, TValue>(),
-        (value) => value.clear(),
-        reset,
-      )
-    : resolveGlobalSingleton(key, () => new Map<TKey, TValue>(), reset, lifecycle);
+  return resolveGlobalSingleton(
+    key,
+    () => new Map<TKey, TValue>(),
+    typeof reset === "string" ? (value) => value.clear() : reset,
+    typeof reset === "string" ? reset : lifecycle,
+  );
 }
 
 /** Resolves a lifecycle-owned process-local Set singleton. */
@@ -76,10 +85,17 @@ export function resolveGlobalSet<T>(key: symbol, lifecycle: GlobalSingletonLifec
 
 /** Resets every opt-in singleton while preserving shared object identity for the next lifecycle. */
 export async function drainGlobalSingletonLifecycleState(
-  event: "close" | "plugin-registry" | "restart" = "close",
+  event: "close" | "plugin-registry" | "restart" | "shared-state" = "close",
+  options: { retainSharedState?: boolean } = {},
 ): Promise<void> {
   const resets = [...resolveGlobalSingletonResetRegistry().values()]
     .filter(({ lifecycle }) => {
+      if (event === "shared-state") {
+        return lifecycle === "shared-state";
+      }
+      if (lifecycle === "shared-state") {
+        return event !== "plugin-registry" && !options.retainSharedState;
+      }
       if (event === "plugin-registry") {
         return lifecycle === "plugin-registry";
       }

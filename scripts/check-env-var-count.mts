@@ -1,23 +1,34 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { runtimeProcessScriptEntrypoints } from "../src/infra/runtime-process-manifest.ts";
+import { reportLimitViolations } from "./lib/check-limits.mts";
 import {
-  enforceRatchetScalar,
   loadRatchetReference,
   loadRatchetSnapshot,
   loadRatchetSources,
+  parseRatchetArgs,
   parseRatchetScalar,
-  reportRatchetSuccess,
+  resolveRatchetBase,
 } from "./lib/shrink-ratchet.mts";
 
 const BUDGET_PATH = "config/env-var-count-budget.txt";
 const SOURCE_ROOTS = ["src", "packages", "extensions"];
 const SOURCE_EXTENSIONS = new Set([".cjs", ".cts", ".js", ".jsx", ".mjs", ".mts", ".ts", ".tsx"]);
 const ENV_VAR_PATTERN = /OPENCLAW_[A-Z0-9_]+/gu;
+// Compiled copies carry their source owner's names; only authored inputs define configuration.
+const generatedScriptArtifacts = new Set<string>(
+  Object.values(runtimeProcessScriptEntrypoints).flatMap((entry) =>
+    "buildSource" in entry ? [entry.sourceModule] : [],
+  ),
+);
 
 export function isCountedSourcePath(filePath: string) {
   const normalized = filePath.replaceAll("\\", "/");
+  if (generatedScriptArtifacts.has(normalized)) {
+    return false;
+  }
   if (!SOURCE_ROOTS.some((root) => normalized.startsWith(root + "/"))) {
     return false;
   }
@@ -85,61 +96,52 @@ function parseBudget(source: string) {
   return parseRatchetScalar(source, BUDGET_PATH);
 }
 
-function readBaseBudget(root: string, ref: string) {
-  const resolved = spawnSync("git", ["rev-parse", "--verify", `${ref}^{commit}`], {
-    cwd: root,
-    encoding: "utf8",
-  });
-  if (resolved.status !== 0) {
-    throw new Error(`Could not resolve env-var count base ref: ${ref}`);
-  }
-  const mergeBase = spawnSync("git", ["merge-base", "HEAD", ref], {
-    cwd: root,
-    encoding: "utf8",
-  });
-  const baselineRef = mergeBase.stdout.trim();
-  // Exit 1 with no output is git reporting no shared ancestor; a real failure exits 128.
-  // Shallow clones and grafted agent checkouts resolve the ref but truncate history, and
-  // only the growth comparison needs a baseline, so skip it rather than failing the gate.
-  if (mergeBase.status === 1 && !baselineRef) {
-    process.stderr.write(
-      `[env-var-count] ${ref} shares no reachable ancestor here; skipping the base-budget comparison\n`,
-    );
-    return null;
-  }
-  if (mergeBase.status !== 0 || !baselineRef) {
-    throw new Error(`Could not resolve env-var count merge base for: ${ref}`);
-  }
-  return loadRatchetReference(root, baselineRef, BUDGET_PATH, parseBudget);
-}
-
 export function main(
   argv: string[] = process.argv.slice(2),
   root = process.cwd(),
   preparedNames?: EnvVarNamesByPath,
 ) {
-  const baseIndex = argv.indexOf("--base");
-  const baseRef = baseIndex < 0 ? "origin/main" : argv[baseIndex + 1];
-  const staged = argv.includes("--staged");
-  const expectedLength = (baseIndex >= 0 ? 2 : 0) + (staged ? 1 : 0);
-  if (!baseRef || argv.length !== expectedLength) {
-    throw new Error(
-      "Usage: node --import tsx scripts/check-env-var-count.mts [--staged] [--base <git-ref>]",
-    );
+  const args = parseRatchetArgs(argv);
+  if (args.prune) {
+    throw new Error("The env-var budget must be updated explicitly; --prune is not supported.");
   }
+  const { staged } = args;
   const budget = loadRatchetSnapshot(root, BUDGET_PATH, staged, parseBudget);
-  const baseBudget = readBaseBudget(root, baseRef);
-  if (baseBudget !== null) {
-    enforceRatchetScalar(budget, baseBudget, {
-      increased: `OPENCLAW_* budget grew from ${baseBudget} to ${budget}`,
-    });
+  // Staging selects the source/budget snapshot, not the allowed budget: that
+  // still belongs to the origin/main fork unless the caller supplies a base.
+  const baseRef = resolveRatchetBase(root, {
+    ...args,
+    base: args.base ?? "origin/main",
+    staged: false,
+  });
+  if (!baseRef) {
+    throw new Error("Could not resolve env-var count budget base");
+  }
+  const baseBudget = loadRatchetReference(root, baseRef, BUDGET_PATH, parseBudget);
+  const growth =
+    baseBudget !== null && budget > baseBudget
+      ? [
+          {
+            file: BUDGET_PATH,
+            title: "Environment variable count budget",
+            message: `OPENCLAW_* budget grew from ${baseBudget} to ${budget}`,
+          },
+        ]
+      : [];
+  if (reportLimitViolations(growth)) {
+    throw new Error(growth[0]!.message);
   }
   const names = collectEnvVarNames(root, { staged, preparedNames });
-  enforceRatchetScalar(names.length, budget, {
-    decreased: `OPENCLAW_* count ${names.length} is below budget ${budget}; update ${BUDGET_PATH}`,
-    increased: `OPENCLAW_* count ${names.length} exceeds budget ${budget}; update ${BUDGET_PATH}`,
-  });
-  reportRatchetSuccess(`OPENCLAW_* count ${names.length}/${budget}`);
+  // The budget must describe the tree in CI too, so unrecorded names cannot reach main
+  // and fail every later local run. Recorded growth follows the limit severity policy.
+  if (names.length !== budget) {
+    throw new Error(
+      `OPENCLAW_* count ${names.length} ${names.length < budget ? "is below" : "exceeds"} budget ${budget}; update ${BUDGET_PATH}`,
+    );
+  }
+  if (growth.length === 0) {
+    console.log(`OPENCLAW_* count ${names.length}/${budget}`);
+  }
   return names.length;
 }
 

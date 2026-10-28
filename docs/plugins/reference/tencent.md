@@ -15,7 +15,7 @@ Adds Tencent TokenHub, Tencent Tokenplan model provider support to OpenClaw.
 ## Distribution
 
 - Package: `@openclaw/tencent-provider`
-- Install route: npm or ClawHub: `clawhub:@openclaw/tencent-provider`
+- Install route: npm or ClawHub: `@openclaw/tencent-provider`
 
 ## Surface
 

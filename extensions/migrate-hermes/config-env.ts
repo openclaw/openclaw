@@ -1,7 +1,9 @@
 // Hermes environment interpolation shared by provider and MCP config.
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-export const MCP_ENV_REFERENCE_RE = /\$\{([^}]+)\}/gu;
+const MCP_ENV_REFERENCE_RE = /\$\{([^}]+)\}/gu;
+
+type ResolvedEnvValue<T> = { unresolved: boolean; referenced: boolean; value: T };
 
 export function normalizeHermesEnvReferenceName(value: string): string | undefined {
   const trimmed = value.trim();
@@ -10,45 +12,42 @@ export function normalizeHermesEnvReferenceName(value: string): string | undefin
 }
 
 export function resolveMcpEnvReferences(
+  value: string,
+  env: Record<string, string>,
+): ResolvedEnvValue<string>;
+export function resolveMcpEnvReferences(
   value: unknown,
   env: Record<string, string>,
-): { unresolved: boolean; value: unknown } {
-  if (typeof value === "string") {
-    let unresolved = false;
-    const resolved = value.replace(MCP_ENV_REFERENCE_RE, (match, rawName: string) => {
-      const name = normalizeHermesEnvReferenceName(rawName);
-      if (!name) {
-        unresolved = true;
-        return match;
-      }
-      const replacement = env[name];
-      if (replacement === undefined) {
-        unresolved = true;
-        return match;
-      }
-      return replacement;
-    });
-    return { unresolved, value: resolved };
+): ResolvedEnvValue<unknown>;
+export function resolveMcpEnvReferences(
+  value: unknown,
+  env: Record<string, string>,
+): ResolvedEnvValue<unknown> {
+  let unresolved = false;
+  let referenced = false;
+  function resolve(entry: unknown): unknown {
+    if (typeof entry === "string") {
+      return entry.replace(MCP_ENV_REFERENCE_RE, (match, rawName: string) => {
+        referenced = true;
+        const name = normalizeHermesEnvReferenceName(rawName);
+        const replacement = name ? env[name] : undefined;
+        if (replacement === undefined) {
+          unresolved = true;
+          return match;
+        }
+        return replacement;
+      });
+    }
+    if (Array.isArray(entry)) {
+      return entry.map(resolve);
+    }
+    if (isRecord(entry)) {
+      return Object.fromEntries(
+        Object.entries(entry).map(([key, childValue]) => [key, resolve(childValue)]),
+      );
+    }
+    return entry;
   }
-  if (Array.isArray(value)) {
-    const entries = value.map((entry) => resolveMcpEnvReferences(entry, env));
-    return {
-      unresolved: entries.some((entry) => entry.unresolved),
-      value: entries.map((entry) => entry.value),
-    };
-  }
-  if (isRecord(value)) {
-    const entries = Object.entries(value).map(
-      ([key, entry]) => [key, resolveMcpEnvReferences(entry, env)] as const,
-    );
-    return {
-      unresolved: entries.some(([, entry]) => entry.unresolved),
-      value: Object.fromEntries(entries.map(([key, entry]) => [key, entry.value])),
-    };
-  }
-  return { unresolved: false, value };
-}
-
-export function mcpValueHasEnvReferences(value: unknown): boolean {
-  return value !== undefined && resolveMcpEnvReferences(value, {}).unresolved;
+  const resolved = resolve(value);
+  return { unresolved, referenced, value: resolved };
 }

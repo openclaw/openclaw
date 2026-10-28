@@ -1,6 +1,7 @@
 import path from "node:path";
 import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import { isPathInside } from "./path-guards.js";
+import { resolveSqliteDatabaseFilePaths } from "./sqlite-files.js";
 
 /** Declare the private filesystem namespace shared by every rehearsal child. */
 export function buildUpdateRehearsalPathEnv(root: string): NodeJS.ProcessEnv {
@@ -60,6 +61,19 @@ export function isUpdateRehearsalReadOnlyPath(filePath: string, env: NodeJS.Proc
     !isPathInside(
       resolveIdentityPathViaExistingAncestorSync(root),
       resolveIdentityPathViaExistingAncestorSync(resolved),
+    )
+  );
+}
+
+/** Reuse prepared images only when the entire SQLite family stays in the disposable namespace. */
+export function isUpdateRehearsalPrivateDatabase(
+  filePath: string,
+  env: NodeJS.ProcessEnv,
+): boolean {
+  return (
+    resolveUpdateRehearsalRoot(env) !== undefined &&
+    resolveSqliteDatabaseFilePaths(filePath).every(
+      (file) => !isUpdateRehearsalReadOnlyPath(file, env),
     )
   );
 }

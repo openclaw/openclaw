@@ -1,0 +1,333 @@
+import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
+import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
+import { personalSessionPinKeys } from "../app-navigation.ts";
+import { isSessionRouteId, type RouteId } from "../app-route-paths.ts";
+import type { ApplicationContext } from "../app/context.ts";
+import { i18n } from "../i18n/index.ts";
+import type { SidebarOutboxSummary } from "../lib/chat/outbox-store-projection.ts";
+import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
+import type { PersonalSessionGroup } from "../lib/sessions/personal-groups.ts";
+import {
+  projectSidebarHomeSession,
+  type SidebarHomeSession,
+} from "./app-sidebar-agent-session-rows.ts";
+import type { SidebarSessionCatalog } from "./app-sidebar-session-catalogs.ts";
+import { findActiveSidebarLineageRow } from "./app-sidebar-session-lookup.ts";
+import {
+  buildSidebarSessionNavigationState,
+  type SidebarSessionNavigationState,
+} from "./app-sidebar-session-navigation-logic.ts";
+import type {
+  SidebarSessionProjection,
+  SidebarVisibleSections,
+} from "./app-sidebar-session-projection.ts";
+import { projectSidebarSnoozeCatalogs } from "./app-sidebar-session-snooze-visibility.ts";
+import {
+  isListedInPinnedSection,
+  type SidebarEmptyGroupsMode,
+  type SidebarRecentSession,
+  type SidebarPinZone,
+  type SidebarSessionSortMode,
+  type SidebarSessionStatusFilter,
+} from "./app-sidebar-session-types.ts";
+import type { SessionDataOwner } from "./session-data.ts";
+import type {
+  SidebarProjectionMemo,
+  SidebarSessionRowProjection,
+} from "./sidebar-projection-cache.ts";
+
+export type SidebarProjectionHost = {
+  readonly sessionData: SessionDataOwner;
+  readonly sessionDataContext: ApplicationContext | undefined;
+  readonly sessionProjection: SidebarSessionProjection;
+  readonly sidebarAgentsMode: "chip" | "roster";
+  readonly rosterSessionSource: {
+    result: SessionsListResult | null;
+    agentIds: readonly string[];
+    collapsedAgentIds: ReadonlySet<string>;
+  } | null;
+  readonly activeRouteId?: RouteId;
+  readonly sessionSortMode: SidebarSessionSortMode;
+  readonly sessionsStatusFilter: SidebarSessionStatusFilter;
+  readonly sessionsEmptyGroupsMode: SidebarEmptyGroupsMode;
+  readonly sessionsShowCron: boolean;
+  readonly sessionsShowSystem: boolean;
+  readonly sessionsShowPreview: boolean;
+  readonly sidebarEntries: readonly string[];
+  readonly sidebarLiveActivity: boolean;
+  readonly sidebarNarrationLines: ReadonlyMap<string, string>;
+  readonly sidebarObserverDigests: ReadonlyMap<string, SessionObserverDigest>;
+  readonly collapsedSessionSections: ReadonlySet<string>;
+  readonly hiddenSessionCatalogIds: ReadonlySet<string>;
+  readonly sessionOwnerFilterId: string | null;
+  readonly sessionOwnerFilterActive: boolean;
+  readonly sessionInvolvingMeFilterActive: boolean;
+  readonly storedOutboxes: SidebarOutboxSummary | undefined;
+  resolveSessionAttention: Parameters<typeof projectSidebarHomeSession>[0]["resolveAttention"];
+  personalGroupSessionReferences(): readonly (GatewaySessionRow | undefined)[];
+  personalGroupSessionRows(
+    group: PersonalSessionGroup,
+    zone?: SidebarPinZone,
+  ): SidebarRecentSession[];
+  reconciledSidebarZone(rows?: SidebarRecentSession[]): SidebarPinZone;
+  getRouteSessionKey(): string;
+  getSessionNavigationState(): SidebarSessionNavigationState;
+  effectiveSessionSortMode(): SidebarSessionSortMode;
+  effectiveSessionsGrouping(): SidebarSessionsGrouping;
+  expandedAgentId(): string;
+  sessionNavigationAgentId(session: Pick<SidebarRecentSession, "key" | "agentId">): string;
+  selectedAgentMainSessionKey(agentId: string): string;
+  knownSessionGroups(): string[];
+  knownSectionOrder(): string[];
+  visibleSessionCatalogs(): SessionDataOwner["sessionCatalogs"];
+};
+
+export function sidebarNavigationInputs(
+  host: SidebarProjectionHost,
+  result: SessionsListResult | null,
+) {
+  const data = host.sessionData;
+  const context = host.sessionDataContext;
+  const pending = context?.chatSubmissions?.readCreate();
+  return [
+    context,
+    result,
+    Boolean(host.sidebarAgentsMode === "roster" && host.rosterSessionSource),
+    data.sessionsAgentId,
+    data.sessionResultsByAgent,
+    data.activeSessionLineageRoot,
+    data.activeSessionLineageSelectedRow,
+    data.childSessionRowsByParent,
+    data.loadingChildSessionKeys,
+    host.getRouteSessionKey(),
+    pending?.creation,
+    pending?.creation.admitted,
+    context?.gateway.snapshot.sessionKey,
+    isSessionRouteId(host.activeRouteId),
+    context?.agentSelection.state.selectedId,
+    context?.gateway.snapshot.assistantAgentId,
+    context?.agents.state.agentsList,
+    context?.gateway.snapshot.hello,
+    context?.gateway.snapshot.selfUser?.id,
+    context?.sessions,
+    context?.sessions.revision,
+    host.sessionSortMode,
+    host.sessionProjection.createdOrderRevision,
+    host.sessionsShowCron,
+    host.sessionsShowSystem,
+    host.sessionsStatusFilter,
+    host.resolveSessionAttention,
+    host.storedOutboxes,
+    i18n.getLocale(),
+  ];
+}
+
+export function memoizedSidebarSections(
+  memo: SidebarProjectionMemo<SidebarVisibleSections>,
+  host: SidebarProjectionHost,
+  rows: SidebarRecentSession[],
+  catalogs: SidebarSessionCatalog[],
+  rosterLimits: ReadonlyMap<string, number>,
+): SidebarVisibleSections {
+  const context = host.sessionDataContext;
+  const roster = host.sidebarAgentsMode === "roster" ? host.rosterSessionSource : null;
+  const groups = context?.navigation.snapshot.personalSessionGroups;
+  const references = groups?.length ? host.personalGroupSessionReferences() : [];
+  return memo.read(
+    () => [
+      rows,
+      groups?.length ? host.getSessionNavigationState() : undefined,
+      groups?.length ? groups : undefined,
+      ...references,
+      catalogs,
+      roster,
+      host.collapsedSessionSections,
+      host.effectiveSessionsGrouping(),
+      host.sessionsEmptyGroupsMode,
+      rosterLimits,
+      host.sessionData.visibleSessionLimits,
+      host.sidebarEntries,
+      context?.gateway.snapshot.phase,
+      context?.gateway.snapshot.client,
+      host.sidebarLiveActivity,
+      host.sessionsShowPreview,
+      host.sidebarNarrationLines,
+      host.sidebarObserverDigests,
+      host.sessionProjection.revision,
+    ],
+    () => {
+      const grouping = host.effectiveSessionsGrouping();
+      const pinnedKeys = personalSessionPinKeys(host.sidebarEntries);
+      const sections = roster?.agentIds.map((agentId) => ({
+        id: `agent:${agentId}:recent` as const,
+        rows: rows.filter(
+          (row) =>
+            !isListedInPinnedSection(row, pinnedKeys) &&
+            host.sessionNavigationAgentId(row) === agentId,
+        ),
+      }));
+      const collapsedSections = new Set(host.collapsedSessionSections);
+      for (const agentId of roster?.collapsedAgentIds ?? []) {
+        collapsedSections.add(`agent:${agentId}:recent`);
+      }
+      const zone = groups?.length ? host.reconciledSidebarZone(rows) : undefined;
+      return host.sessionProjection.project({
+        rows,
+        referencedRows: groups?.flatMap((group) => host.personalGroupSessionRows(group, zone)),
+        sections,
+        pinnedKeys,
+        grouping,
+        knownGroups: grouping === "category" ? host.knownSessionGroups() : [],
+        selfOwnerId: context?.gateway.snapshot.selfUser?.id ?? null,
+        // Normalize gateway order without dropping catalog-lagging categories.
+        sectionOrder: host.knownSectionOrder(),
+        catalogIds: catalogs.map((catalog) => catalog.id),
+        collapsedSections,
+        emptyGroupsMode: host.sessionsEmptyGroupsMode,
+        ownerFilter: host.sessionOwnerFilterActive
+          ? "owner"
+          : host.sessionInvolvingMeFilterActive
+            ? "involvingMe"
+            : null,
+        visibleSessionLimits: roster ? rosterLimits : host.sessionData.visibleSessionLimits,
+        sortMode: host.effectiveSessionSortMode(),
+        statusFilter: host.sessionsStatusFilter,
+        agentId: roster ? "*" : host.expandedAgentId(),
+        connectionIdentity:
+          context?.gateway.snapshot.phase === "connected"
+            ? (context.gateway.snapshot.client ?? null)
+            : null,
+        listSource: context?.sessions ?? null,
+        listLoaded: (roster ? roster.result : host.sessionData.sessionsResult) !== null,
+        subtitle: {
+          sidebarLiveActivity: host.sidebarLiveActivity,
+          showPreview: host.sessionsShowPreview,
+          narrationLines: host.sidebarNarrationLines,
+          observerDigests: host.sidebarObserverDigests,
+        },
+      });
+    },
+  );
+}
+
+export function projectSidebarNavigation(
+  host: SidebarProjectionHost,
+  compareSessions: (a: GatewaySessionRow, b: GatewaySessionRow) => number,
+  rowProjection: SidebarSessionRowProjection,
+  resolveAgentStatusNote: (row: GatewaySessionRow) => string | undefined,
+) {
+  const roster = host.sidebarAgentsMode === "roster" ? host.rosterSessionSource : null;
+  const routeSessionKey = host.getRouteSessionKey();
+  const context = host.sessionDataContext;
+  const pending = context?.chatSubmissions?.readCreate();
+  const creating =
+    pending?.creation.admitted === false && pending.creation.sessionKey === routeSessionKey;
+  // The provisional row is rendered separately, without synthesizing an actionable session.
+  const admittedKey = creating ? (context?.gateway.snapshot.sessionKey ?? "") : routeSessionKey;
+  const navigation = buildSidebarSessionNavigationState({
+    context: host.sessionDataContext,
+    routeSessionKey: admittedKey,
+    sessionsResult: roster?.result ?? host.sessionData.sessionsResult,
+    activeSession: findActiveSidebarLineageRow(host.sessionData, admittedKey),
+    sessionsAgentId: host.sessionData.sessionsAgentId,
+    showCron: host.sessionsShowCron,
+    showSystem: host.sessionsShowSystem,
+    statusFilter: host.sessionsStatusFilter,
+    compareSessions,
+    highlightCurrentSession: isSessionRouteId(host.activeRouteId) && !creating,
+    rowProjection,
+    loadingChildSessionKeys: host.sessionData.loadingChildSessionKeys,
+    outboxAttentionCountForSessionKey: (key) =>
+      host.storedOutboxes?.attentionCountForSession(key) ?? 0,
+    hasSessionDraft: (key) => host.storedOutboxes?.hasSessionDraft(key) ?? false,
+    resolveAttention: host.resolveSessionAttention,
+    resolveAgentStatusNote,
+  });
+  if (roster) {
+    const rows = roster.result?.sessions ?? [];
+    const current = navigation.visibleSessionRows.find(
+      (row) => row.key === navigation.activeRowKey,
+    );
+    navigation.visibleSessionRows =
+      current && !rows.some((row) => row.key === current.key) ? [...rows, current] : [...rows];
+  }
+  return navigation;
+}
+
+export function memoizedSidebarCatalogs(
+  memo: SidebarProjectionMemo<SidebarSessionCatalog[]>,
+  host: SidebarProjectionHost,
+  ownerId: string | null,
+) {
+  return memo.read(
+    () => [
+      host.sessionDataContext,
+      host.sessionDataContext?.sessions.revision,
+      host.expandedAgentId(),
+      host.resolveSessionAttention,
+      host.sessionData.sessionCatalogs,
+      host.sessionData.pendingCatalogArchives,
+      host.hiddenSessionCatalogIds,
+      host.sessionsStatusFilter,
+      ownerId,
+      host.sessionInvolvingMeFilterActive,
+      host.sessionData.sessionsResult,
+      host.sessionData.sessionResultsByAgent,
+    ],
+    () => projectSidebarSnoozeCatalogs(host, ownerId),
+  );
+}
+
+export function sidebarRowsInputs(
+  host: SidebarProjectionHost,
+  navigationState: SidebarSessionNavigationState,
+) {
+  const data = host.sessionData;
+  // List only inputs not already keyed by the upstream stage value.
+  return [
+    navigationState,
+    host.sidebarAgentsMode === "roster" ? host.rosterSessionSource : null,
+    host.expandedAgentId(),
+    data.sessionsResult,
+    data.loadedChildSessionKeys,
+    data.childSessionErrorsByParent,
+    data.sessionCatalogs,
+    data.pendingCatalogArchives,
+    host.hiddenSessionCatalogIds,
+    host.sessionOwnerFilterId,
+    host.sessionInvolvingMeFilterActive,
+    host.sessionDataContext?.gateway.snapshot.selfUser,
+  ];
+}
+
+export function memoizedSidebarHome(
+  memo: SidebarProjectionMemo<SidebarHomeSession>,
+  host: SidebarProjectionHost,
+  row: GatewaySessionRow,
+  agentId: string,
+) {
+  const result = host.sidebarAgentsMode === "roster" ? host.rosterSessionSource?.result : undefined;
+  const navigationState = host.getSessionNavigationState();
+  return memo.read(
+    () => [
+      row,
+      agentId,
+      result,
+      navigationState,
+      host.sessionOwnerFilterId,
+      host.sessionInvolvingMeFilterActive,
+      host.sessionDataContext?.gateway.snapshot.selfUser,
+      host.sessionData.loadedChildSessionKeys,
+      host.sessionData.childSessionErrorsByParent,
+    ],
+    () =>
+      projectSidebarHomeSession({
+        host,
+        row,
+        agentId,
+        result,
+        navigationState,
+        resolveAttention: host.resolveSessionAttention,
+      }),
+  );
+}

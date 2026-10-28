@@ -1,89 +1,90 @@
-// Tests prepared reply queue state resolution before get-reply starts a run.
-import { describe, expect, it, vi } from "vitest";
-import { resolvePreparedReplyQueueState } from "./get-reply-run-queue.js";
+import { expect, it, vi } from "vitest";
+import {
+  interruptReplyRunTarget,
+  createReplyOperation,
+} from "../../sessions/session-controller.js";
+import { isSessionRunActiveForKey } from "../../sessions/session-controller.queries.js";
+import { captureCurrentSessionRunInterruptTarget } from "../../sessions/session-controller.stop-runtime.js";
+import { createDeferredCore } from "../../shared/deferred.js";
+import { waitForPreparedReplyQueue } from "./get-reply-run-queue.js";
 
-describe("resolvePreparedReplyQueueState", () => {
-  it("continues immediately when queue policy does not require waiting", async () => {
-    const resolveBusyState = vi.fn(() => ({
-      activeSessionId: undefined,
-      isActive: false,
-      isStreaming: false,
-    }));
-
-    const result = await resolvePreparedReplyQueueState({
-      activeRunQueueAction: "enqueue-followup",
-      activeSessionId: undefined,
-      queueMode: "followup",
-      sessionKey: "session-key",
-      sessionId: "session-1",
-      interruptActiveRun: vi.fn(),
-      waitForActiveRunEnd: vi.fn(),
-      refreshPreparedState: vi.fn(),
-      resolveBusyState,
-    });
-
-    expect(result).toEqual({
-      kind: "continue",
-      busyState: { activeSessionId: undefined, isActive: false, isStreaming: false },
-    });
-    expect(resolveBusyState).toHaveBeenCalledOnce();
-  });
-
-  it("aborts and waits for interrupt mode before continuing", async () => {
-    const interruptActiveRun = vi.fn(async () => true);
-    const waitForActiveRunEnd = vi.fn(async () => {
-      throw new Error("interrupt mode must use session-work admission settling");
-    });
-    const refreshPreparedState = vi.fn(async () => undefined);
-    const resolveBusyState = vi.fn(() => ({
-      activeSessionId: undefined,
-      isActive: false,
-      isStreaming: false,
-    }));
-
-    const result = await resolvePreparedReplyQueueState({
-      activeRunQueueAction: "run-now",
+it.each([
+  ["followup", false, false, undefined],
+  ["interrupt", false, false, undefined],
+  [
+    "interrupt",
+    true,
+    false,
+    "⚠️ Previous run is still shutting down. Please try again in a moment.",
+  ],
+  ["followup", true, true, expect.stringMatching(/separate session or restart the Gateway/u)],
+] as const)(
+  "%s admission with active=%s, blocked=%s",
+  async (queueMode, isActive, terminalProducerBlocked, text) => {
+    const order: string[] = [];
+    const result = await waitForPreparedReplyQueue({
       activeSessionId: "session-active",
-      queueMode: "interrupt",
-      sessionKey: "session-key",
-      sessionId: "session-1",
-      interruptActiveRun,
-      waitForActiveRunEnd,
-      refreshPreparedState,
-      resolveBusyState,
-    });
-
-    expect(interruptActiveRun).toHaveBeenCalledOnce();
-    expect(waitForActiveRunEnd).not.toHaveBeenCalled();
-    expect(refreshPreparedState).toHaveBeenCalledOnce();
-    expect(result).toEqual({
-      kind: "continue",
-      busyState: { activeSessionId: undefined, isActive: false, isStreaming: false },
-    });
-  });
-
-  it("rechecks after wait and returns shutdown reply when still busy", async () => {
-    const result = await resolvePreparedReplyQueueState({
-      activeRunQueueAction: "run-now",
-      activeSessionId: "session-active",
-      queueMode: "interrupt",
-      sessionKey: "session-key",
-      sessionId: "session-1",
-      interruptActiveRun: vi.fn(async () => true),
-      waitForActiveRunEnd: vi.fn(async () => undefined),
-      refreshPreparedState: vi.fn(async () => undefined),
-      resolveBusyState: () => ({
-        activeSessionId: "session-after-wait",
-        isActive: true,
-        isStreaming: false,
-      }),
-    });
-
-    expect(result).toEqual({
-      kind: "reply",
-      reply: {
-        text: "⚠️ Previous run is still shutting down. Please try again in a moment.",
+      queueMode,
+      interruptActiveRun: async () => {
+        order.push("interrupt");
+        return true;
+      },
+      waitForActiveRunEnd: async (id) => {
+        order.push(`wait:${id}`);
+      },
+      refreshPreparedState: async () => {
+        order.push("refresh");
+      },
+      resolveBusyState: () => {
+        order.push("recheck");
+        return { isActive, terminalProducerBlocked };
       },
     });
+    expect(result).toEqual(text === undefined ? undefined : { text });
+    expect(order).toEqual([
+      queueMode === "interrupt" ? "interrupt" : "wait:session-active",
+      "refresh",
+      "recheck",
+    ]);
+  },
+);
+it("does not admit after interrupt timeout merely because the old slot cleared", async () => {
+  vi.useFakeTimers();
+  const operation = createReplyOperation({
+    sessionKey: "agent:main:interrupt-settlement",
+    sessionId: "old-writer",
+    resetTriggered: false,
   });
+  const delivery = createDeferredCore();
+  const refreshPreparedState = vi.fn(async () => {});
+  try {
+    operation.setPhase("running");
+    const target = captureCurrentSessionRunInterruptTarget(operation.key);
+    if (!target) {
+      throw new Error("Missing interrupt owner");
+    }
+    const waiting = waitForPreparedReplyQueue({
+      activeSessionId: operation.sessionId,
+      queueMode: "interrupt",
+      interruptActiveRun: async () => (await interruptReplyRunTarget(target, 100)).settled,
+      waitForActiveRunEnd: async () => {
+        throw new Error("wrong wait owner");
+      },
+      refreshPreparedState,
+      resolveBusyState: () => ({
+        isActive: isSessionRunActiveForKey(operation.key),
+      }),
+    });
+    expect(operation.abortSignal.aborted).toBe(true);
+    operation.completeWithAfterClearBarrier(delivery.promise);
+    expect(isSessionRunActiveForKey(operation.key)).toBe(false);
+    await vi.advanceTimersByTimeAsync(100);
+    expect((await waiting)?.text).toContain("shutting down");
+    expect(refreshPreparedState).not.toHaveBeenCalled();
+  } finally {
+    delivery.resolve();
+    operation.complete();
+    await operation.ownerSettlement;
+    vi.useRealTimers();
+  }
 });

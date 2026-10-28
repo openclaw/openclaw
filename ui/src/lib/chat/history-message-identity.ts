@@ -1,23 +1,19 @@
 import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import type { ChatInputReceipts } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 
-/** Exact custody is independent of display pagination, but stays physical-session scoped. */
-export function readChatInputReceipt(
-  history: {
-    inputReceipts?: ChatInputReceipts;
-    sessionInfo?: { sessionId?: string };
-    sessionId?: string;
-  },
-  item: { sendRunId?: string; sessionId?: string },
-) {
-  if (
-    !item.sendRunId ||
-    (item.sessionId && item.sessionId !== (history.sessionInfo?.sessionId ?? history.sessionId))
-  ) {
-    return undefined;
-  }
-  return history.inputReceipts?.find((input) => input.runId === item.sendRunId)?.state;
+export function readChatThreadMessageIdentity(message: unknown) {
+  const record = asNullableRecord(message);
+  const surfaceId =
+    typeof record?.messageId === "string" && record.messageId.trim()
+      ? record.messageId
+      : record?.id;
+  return readSessionMessageIdentity(message, { messageId: surfaceId });
+}
+
+/** Causal boundaries follow execution ownership, which can differ from the submit key. */
+export function userTurnRunId(message: unknown): string | null {
+  const identity = readChatThreadMessageIdentity(message);
+  return identity?.role === "user" ? identity.runId : null;
 }
 
 /** Submission proof uses the recorded key, never execution correlation. */
@@ -67,14 +63,14 @@ export function nativeHistoryMessageIdentity(message: unknown): string | null {
   const record = asNullableRecord(message);
   const metadata = asNullableRecord(record?.["__openclaw"]);
   const { recordTimestampMs: _recordTimestampMs, ...projectionMetadata } = metadata ?? {};
-  const projection = metadata ? { ...record, __openclaw: projectionMetadata } : record;
-  try {
-    // History alone adds recordTimestampMs; delivery metadata is not projection identity.
-    // Keep every other projection byte so siblings from one transcript row stay distinct.
-    return `${sourceIdentity}:${JSON.stringify(projection)}`;
-  } catch {
-    return sourceIdentity;
+  const projection = { ...record };
+  delete projection.openclawResponsesInputReplay;
+  if (metadata) {
+    projection["__openclaw"] = projectionMetadata;
   }
+  // History timestamps and provider replay data are not display identity.
+  // Keep every other projection byte so siblings from one transcript row stay distinct.
+  return `${sourceIdentity}:${JSON.stringify(projection)}`;
 }
 
 /** Preserve projected siblings while removing only overlapping page occurrences. */

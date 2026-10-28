@@ -1,28 +1,39 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
+import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
+import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { readSessionArchiveContentSync } from "./archive-compression.js";
 import { isRetainedSessionTranscriptArchiveName } from "./artifacts.js";
-import { runSessionsCleanup } from "./cleanup-service.js";
+import { setCleanupDeleteFault } from "./cleanup-service.delete-fault.test-support.js";
+import { runSessionsCleanup, type SessionsCleanupOptions } from "./cleanup-service.js";
 import {
-  appendTranscriptEventSync,
-  appendTranscriptMessageSync,
-  applySessionEntryLifecycleMutation,
+  afterCleanupRead,
+  appendUserMessage,
+  sessionScope,
+} from "./cleanup-service.test-support.js";
+import {
   inspectTranscriptEventsSync,
   loadSessionEntry,
   replaceSessionEntry,
 } from "./session-accessor.js";
 import { prunePublishedSessionArchivesByRetention } from "./session-accessor.sqlite-archive-store.js";
+import {
+  appendTranscriptEventSync,
+  replaceTranscriptEventsSync,
+} from "./session-accessor.sqlite-transcript-write.test-support.js";
+import * as entryReaders from "./session-entry-read-runtime.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+vi.mock("node:worker_threads", async (importOriginal) => {
+  const { cleanupFaultWorker } = await import("./cleanup-service.delete-fault.test-support.js");
+  return cleanupFaultWorker(await importOriginal<typeof import("node:worker_threads")>());
+});
+
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-cleanup-fix-missing-");
 
 function listDeletedArchives(directory: string): string[] {
   if (!fs.existsSync(directory)) {
@@ -34,359 +45,307 @@ function listDeletedArchives(directory: string): string[] {
     .map((entry) => path.join(directory, entry));
 }
 
-describe("sessions cleanup --fix-missing", () => {
-  let storePath: string;
+let storePath: string;
 
-  beforeEach(() => {
-    const tempDir = tempDirs.make("openclaw-cleanup-fix-missing-");
-    storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
+const cleanup = (opts: SessionsCleanupOptions = { enforce: true, fixMissing: true }) =>
+  runSessionsCleanup({ cfg: {}, opts, targets: [{ agentId: "main", storePath }] });
+const archives = () => listDeletedArchives(path.dirname(storePath));
+const databasePath = () =>
+  resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path;
+const sql = (query: string) =>
+  openOpenClawAgentDatabase({ agentId: "main", path: databasePath() }).db.prepare(query);
+const archiveRow = (sessionId: string) =>
+  sql("SELECT 1 FROM session_transcript_archives WHERE session_id = ?").get(sessionId);
+const pruneArchives = () =>
+  prunePublishedSessionArchivesByRetention({
+    scope: { agentId: "main", path: databasePath() },
+    rules: [{ reason: "deleted", olderThanMs: 10 }],
+    nowMs: 100,
   });
+const seed = async (sessionId: string) => {
+  const scope = sessionScope(storePath, sessionId);
+  await replaceSessionEntry(scope, { sessionId, updatedAt: Date.now() });
+  return scope;
+};
+const seedProof = async (sessionId: string, content: string) => {
+  const scope = await seed(sessionId);
+  appendTranscriptEventSync(scope, { type: "proof", content });
+  return scope;
+};
+function expectRetained(scope: ReturnType<typeof sessionScope>) {
+  expect(loadSessionEntry(scope)).toMatchObject({ sessionId: scope.sessionId });
+  expect(archives()).toEqual([]);
+}
 
-  afterEach(() => {
-    closeOpenClawAgentDatabasesForTest();
-  });
+beforeEach(() => {
+  const tempDir = sessionDirs.make();
+  storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
+});
 
-  it("inspects unscoped transcript keys in the selected agent's fixed-store partition", async () => {
-    await withOpenClawTestState({ layout: "state-only" }, async (state) => {
-      storePath = state.statePath("shared.json");
-      const cfg: OpenClawConfig = {
-        agents: { ownership: "explicit", entries: { main: {}, beta: {} } },
-        session: { store: storePath },
-      };
-      await state.writeConfig(cfg);
-      const main = { agentId: "main", sessionKey: "global", sessionId: "main-global", storePath };
-      const beta = { agentId: "beta", sessionKey: "global", sessionId: "beta-global", storePath };
-      for (const scope of [main, beta]) {
-        await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: Date.now() });
-      }
-      appendTranscriptMessageSync(beta, {
-        eventId: "beta-user-message",
-        message: { role: "user", content: [{ type: "text", text: "Keep this conversation." }] },
-      });
+afterEach(() => {
+  setCleanupDeleteFault(undefined);
+  vi.restoreAllMocks();
+});
 
-      const result = await runSessionsCleanup({
-        cfg,
-        opts: { agent: "beta", dryRun: true, fixMissing: true },
-      });
+it("inspects unscoped transcript keys in the selected agent's fixed-store partition", async () => {
+  await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+    storePath = state.statePath("shared.json");
+    const cfg: OpenClawConfig = {
+      agents: { ownership: "explicit", entries: { main: {}, beta: {} } },
+      session: { store: storePath },
+    };
+    await state.writeConfig(cfg);
+    const main = { agentId: "main", sessionKey: "global", sessionId: "main-global", storePath };
+    const beta = { agentId: "beta", sessionKey: "global", sessionId: "beta-global", storePath };
+    for (const scope of [main, beta]) {
+      await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: Date.now() });
+    }
+    appendUserMessage(beta, "beta-user-message", "Keep this conversation.");
 
-      expect(result.previewResults[0]?.summary).toMatchObject({ beforeCount: 1, missing: 0 });
-      expect(loadSessionEntry(beta)).toMatchObject({ sessionId: "beta-global" });
+    const result = await runSessionsCleanup({
+      cfg,
+      opts: { agent: "beta", dryRun: true, fixMissing: true },
     });
-  });
 
-  it("preserves readable session state when a later transcript row is malformed", async () => {
-    const sessionKey = "agent:main:malformed-after-message";
-    const sessionId = "malformed-after-message";
-    const scope = { sessionKey, sessionId, storePath };
-    await replaceSessionEntry(scope, { sessionId, updatedAt: Date.now() });
-    appendTranscriptMessageSync(scope, {
-      eventId: "readable-user-message",
-      message: { role: "user", content: [{ type: "text", text: "keep this conversation" }] },
-    });
+    expect(result.previewResults[0]?.summary).toMatchObject({ beforeCount: 1, missing: 0 });
+    expect(loadSessionEntry(beta)).toMatchObject({ sessionId: "beta-global" });
+  });
+});
+
+// A malformed row cannot prove the transcript has no message, with or without a readable one.
+it.each([true, false])(
+  "preserves session state when a transcript row is malformed (readable message: %s)",
+  async (readableMessage) => {
+    const scope = await seed(readableMessage ? "malformed-after-message" : "malformed-only");
+    const { sessionId } = scope;
+    if (readableMessage) {
+      appendUserMessage(scope, "readable-user-message", "keep this conversation");
+    }
     appendTranscriptEventSync(scope, { type: "proof", id: "row-to-corrupt" });
 
-    const sqlitePath = resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path;
-    if (!sqlitePath) {
-      throw new Error("expected SQLite session store");
-    }
-    const database = openOpenClawAgentDatabase({ agentId: "main", path: sqlitePath });
-    database.db
-      .prepare(
-        `UPDATE transcript_events
+    sql(
+      `UPDATE transcript_events
          SET event_json = '{malformed'
          WHERE session_id = ? AND seq = (
            SELECT MAX(seq) FROM transcript_events WHERE session_id = ?
          )`,
-      )
-      .run(sessionId, sessionId);
+    ).run(sessionId, sessionId);
 
-    const result = await runSessionsCleanup({
-      cfg: {},
-      opts: { enforce: true, fixMissing: true },
-      targets: [{ agentId: "main", storePath }],
-    });
+    const result = await cleanup();
 
     expect(result.appliedSummaries[0]?.missing).toBe(0);
-    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({ sessionId });
-    expect(listDeletedArchives(path.dirname(storePath))).toEqual([]);
-  });
+    expectRetained(scope);
+  },
+);
 
-  it("archives raw non-message rows before removing a confirmed missing session", async () => {
-    const sessionKey = "agent:main:message-free";
-    const sessionId = "message-free";
-    const scope = { sessionKey, sessionId, storePath };
-    await replaceSessionEntry(scope, { sessionId, updatedAt: Date.now() });
-    appendTranscriptEventSync(scope, {
-      type: "proof",
-      id: "raw-event",
-      content: "recoverable non-message state",
-    });
-    const rawEventJson =
-      '{  "content": "recoverable non-message state", "id": "raw-event", "type": "proof"  }';
-    const sqlitePath = resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path;
-    if (!sqlitePath) {
-      throw new Error("expected SQLite session store");
-    }
-    openOpenClawAgentDatabase({ agentId: "main", path: sqlitePath })
-      .db.prepare("UPDATE transcript_events SET event_json = ? WHERE session_id = ?")
-      .run(rawEventJson, sessionId);
+it("recreates every derived file from pending canonical archives after commit", async () => {
+  const sessionIds = Array.from({ length: 6 }, (_, index) => `pending-export-${index}`);
+  const rawEventJson = (sessionId: string) =>
+    `{  "content": "recover after commit ${sessionId}", "type": "proof"  }`;
+  for (const sessionId of sessionIds) {
+    await seedProof(sessionId, `recover after commit ${sessionId}`);
+    sql("UPDATE transcript_events SET event_json = ? WHERE session_id = ?").run(
+      rawEventJson(sessionId),
+      sessionId,
+    );
+  }
 
-    const result = await runSessionsCleanup({
-      cfg: {},
-      opts: { enforce: true, fixMissing: true },
-      targets: [{ agentId: "main", storePath }],
-    });
+  await cleanup();
 
-    expect(result.appliedSummaries[0]?.missing).toBe(1);
-    expect(loadSessionEntry({ sessionKey, storePath })).toBeUndefined();
-    const archives = listDeletedArchives(path.dirname(storePath));
-    expect(archives).toHaveLength(1);
-    expect(readSessionArchiveContentSync(archives[0] ?? "")).toBe(`${rawEventJson}\n`);
-    expect(
-      openOpenClawAgentDatabase({ agentId: "main", path: sqlitePath })
-        .db.prepare(
-          `SELECT session_key, reason, published_at
-           FROM session_transcript_archives WHERE session_id = ?`,
-        )
-        .get(sessionId),
-    ).toMatchObject({
-      published_at: expect.any(Number),
-      reason: "deleted",
-      session_key: sessionKey,
-    });
-  });
-
-  it("recreates every derived file from pending canonical archives after commit", async () => {
-    const sessionIds = Array.from({ length: 6 }, (_, index) => `pending-export-${index}`);
-    for (const sessionId of sessionIds) {
-      const scope = {
-        sessionId,
-        sessionKey: `agent:main:${sessionId}`,
-        storePath,
-      };
-      await replaceSessionEntry(scope, { sessionId, updatedAt: Date.now() });
-      appendTranscriptEventSync(scope, {
-        type: "proof",
-        content: `recover after commit ${sessionId}`,
-      });
-    }
-
-    await runSessionsCleanup({
-      cfg: {},
-      opts: { enforce: true, fixMissing: true },
-      targets: [{ agentId: "main", storePath }],
-    });
-
-    const archives = listDeletedArchives(path.dirname(storePath));
-    expect(archives).toHaveLength(sessionIds.length);
-    for (const archivePath of archives) {
-      fs.rmSync(archivePath);
-    }
-    const sqlitePath = resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path;
-    if (!sqlitePath) {
-      throw new Error("expected SQLite session store");
-    }
-    openOpenClawAgentDatabase({ agentId: "main", path: sqlitePath })
-      .db.prepare(
-        `UPDATE session_transcript_archives
+  const published = archives();
+  expect(published).toHaveLength(sessionIds.length);
+  for (const archivePath of published) {
+    fs.rmSync(archivePath);
+  }
+  sql(
+    `UPDATE session_transcript_archives
          SET published_at = NULL, last_publish_error = 'simulated crash'`,
-      )
-      .run();
+  ).run();
 
-    await runSessionsCleanup({
-      cfg: {},
-      opts: { enforce: true, fixMissing: true },
-      targets: [{ agentId: "main", storePath }],
-    });
+  await cleanup();
 
-    const recovered = listDeletedArchives(path.dirname(storePath));
-    expect(recovered).toHaveLength(sessionIds.length);
-    for (const sessionId of sessionIds) {
-      const archivePath = recovered.find((candidate) =>
-        path.basename(candidate).startsWith(`${sessionId}.jsonl.deleted.`),
-      );
-      expect(archivePath).toBeTruthy();
-      expect(readSessionArchiveContentSync(archivePath ?? "")).toContain(
-        `recover after commit ${sessionId}`,
-      );
-    }
-    const statuses = openOpenClawAgentDatabase({ agentId: "main", path: sqlitePath })
-      .db.prepare(
-        `SELECT session_id, published_at, publish_attempts, last_publish_error
+  const recovered = archives();
+  expect(recovered).toHaveLength(sessionIds.length);
+  for (const sessionId of sessionIds) {
+    const archivePath = recovered.find((candidate) =>
+      path.basename(candidate).startsWith(`${sessionId}.jsonl.deleted.`),
+    );
+    expect(archivePath).toBeTruthy();
+    expect(readSessionArchiveContentSync(archivePath ?? "")).toBe(`${rawEventJson(sessionId)}\n`);
+  }
+  const statuses = sql(
+    `SELECT session_id, published_at, publish_attempts, last_publish_error
          FROM session_transcript_archives ORDER BY session_id`,
-      )
-      .all();
-    expect(statuses).toHaveLength(sessionIds.length);
-    for (const status of statuses) {
-      expect(status).toMatchObject({
-        last_publish_error: null,
-        publish_attempts: 2,
-        published_at: expect.any(Number),
-      });
+  ).all();
+  expect(statuses).toHaveLength(sessionIds.length);
+  for (const status of statuses) {
+    expect(status).toMatchObject({
+      last_publish_error: null,
+      publish_attempts: 2,
+      published_at: expect.any(Number),
+    });
+  }
+});
+
+it("never overwrites a different derived-file collision", async () => {
+  const scope = await seedProof("collision", "canonical bytes");
+  const { sessionId } = scope;
+  await cleanup();
+  const archivePath = archives()[0];
+  expect(archivePath).toBeTruthy();
+  fs.writeFileSync(archivePath ?? "", "different bytes", "utf8");
+  sql("UPDATE session_transcript_archives SET published_at = NULL WHERE session_id = ?").run(
+    sessionId,
+  );
+
+  await expect(cleanup()).rejects.toThrow("remain pending in SQLite");
+
+  expect(fs.readFileSync(archivePath ?? "", "utf8")).toBe("different bytes");
+  expect(
+    sql(
+      "SELECT published_at, last_publish_error FROM session_transcript_archives WHERE session_id = ?",
+    ).get(sessionId),
+  ).toMatchObject({
+    last_publish_error: expect.stringContaining("collision"),
+    published_at: null,
+  });
+});
+
+it("rolls back the canonical archive when lifecycle deletion fails", async () => {
+  const sessionId = "rollback-delete";
+  setCleanupDeleteFault({
+    databasePath: databasePath(),
+    sessionId,
+    message: "injected lifecycle delete failure",
+  });
+  const scope = await seedProof(sessionId, "must remain live");
+
+  await expect(cleanup()).rejects.toThrow("injected lifecycle delete failure");
+
+  expectRetained(scope);
+  expect(sql("SELECT 1 FROM transcript_events WHERE session_id = ?").get(sessionId)).toEqual({
+    1: 1,
+  });
+  expect(archiveRow(sessionId)).toBeUndefined();
+});
+
+it("keeps a foreign append after worker classification through lifecycle commit", async () => {
+  const scope = await seed("worker-classification");
+  let classified = 0;
+  afterCleanupRead((_snapshot, fixMissing) => {
+    if (fixMissing && ++classified === 1) {
+      appendUserMessage(scope, "foreign-message-after-inspection", "Keep this new turn.");
     }
   });
 
-  it("never overwrites a different derived-file collision", async () => {
-    const sessionKey = "agent:main:collision";
-    const sessionId = "collision";
-    const scope = { sessionKey, sessionId, storePath };
-    await replaceSessionEntry(scope, { sessionId, updatedAt: Date.now() });
-    appendTranscriptEventSync(scope, { type: "proof", content: "canonical bytes" });
-    await runSessionsCleanup({
-      cfg: {},
-      opts: { enforce: true, fixMissing: true },
-      targets: [{ agentId: "main", storePath }],
-    });
-    const archivePath = listDeletedArchives(path.dirname(storePath))[0];
-    expect(archivePath).toBeTruthy();
-    fs.writeFileSync(archivePath ?? "", "different bytes", "utf8");
-    const sqlitePath = resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path;
-    if (!sqlitePath) {
-      throw new Error("expected SQLite session store");
+  const result = await cleanup();
+
+  expect(classified).toBe(1);
+  expect(result.appliedSummaries[0]).toMatchObject({
+    applied: true,
+    appliedCount: 1,
+    beforeCount: 1,
+    afterCount: 1,
+    missing: 0,
+    wouldMutate: false,
+  });
+  expect(inspectTranscriptEventsSync(scope).events).toEqual(
+    expect.arrayContaining([expect.objectContaining({ id: "foreign-message-after-inspection" })]),
+  );
+  expectRetained(scope);
+});
+
+it("reclassifies a rewritten generation after a warmed message-bearing inspection", async () => {
+  const scope = await seed("rewritten-inspection");
+  appendUserMessage(scope, "message-before-rewrite", "Previous generation.");
+  const preview = await cleanup({ dryRun: true, fixMissing: true });
+  expect(preview.previewResults[0]?.summary.missing).toBe(0);
+  expect(
+    replaceTranscriptEventsSync(scope, [{ type: "proof", id: "replacement-generation" }]),
+  ).toBe(true);
+
+  const result = await cleanup();
+
+  expect(result.appliedSummaries[0]?.missing).toBe(1);
+  expect(loadSessionEntry(scope)).toBeUndefined();
+  const published = archives();
+  expect(published).toHaveLength(1);
+  expect(readSessionArchiveContentSync(published[0]!)).toContain("replacement-generation");
+});
+
+it.each([false, true])(
+  "refuses physical replacement after cleanup classification (initially absent=%s)",
+  async (initiallyAbsent) => {
+    const scope = sessionScope(storePath, "replaced-cleanup");
+    const sqlitePath = resolveSqliteTargetFromSessionStorePath(storePath, {
+      agentId: "main",
+    }).path;
+    const seedPath = `${sqlitePath}.seed.sqlite`;
+    await replaceSessionEntry(
+      { ...scope, storePath: initiallyAbsent ? seedPath : storePath },
+      { sessionId: scope.sessionId, updatedAt: Date.now() },
+    );
+    let appeared = false;
+    if (initiallyAbsent) {
+      await closeOpenClawAgentDatabaseByPathAsync(seedPath);
+      expect(fs.existsSync(sqlitePath)).toBe(false);
+      const withReader = entryReaders.withSessionStoreReaderInWorker;
+      vi.spyOn(entryReaders, "withSessionStoreReaderInWorker").mockImplementation(
+        (input, read, options) =>
+          withReader(
+            input,
+            (owner) => {
+              if (input.storePath === storePath && !appeared) {
+                // The existing owner has already captured absence; the real worker will supply the receipt.
+                expect(owner.database.path).toBe(sqlitePath);
+                fs.copyFileSync(seedPath, sqlitePath);
+                appeared = true;
+              }
+              return read(owner);
+            },
+            options,
+          ),
+      );
     }
-    const database = openOpenClawAgentDatabase({ agentId: "main", path: sqlitePath });
-    database.db
-      .prepare("UPDATE session_transcript_archives SET published_at = NULL WHERE session_id = ?")
-      .run(sessionId);
-
-    await expect(
-      runSessionsCleanup({
-        cfg: {},
-        opts: { enforce: true, fixMissing: true },
-        targets: [{ agentId: "main", storePath }],
-      }),
-    ).rejects.toThrow("remain pending in SQLite");
-
-    expect(fs.readFileSync(archivePath ?? "", "utf8")).toBe("different bytes");
-    expect(
-      database.db
-        .prepare(
-          "SELECT published_at, last_publish_error FROM session_transcript_archives WHERE session_id = ?",
-        )
-        .get(sessionId),
-    ).toMatchObject({
-      last_publish_error: expect.stringContaining("collision"),
-      published_at: null,
+    const savedPath = `${sqlitePath}.saved`;
+    let replaced = false;
+    let replacementBytes: Buffer | undefined;
+    afterCleanupRead((snapshot) => {
+      if (!replaced) {
+        expect(snapshot.missing).toHaveLength(1);
+        fs.renameSync(sqlitePath, savedPath);
+        fs.copyFileSync(savedPath, sqlitePath);
+        replacementBytes = fs.readFileSync(sqlitePath);
+        replaced = true;
+      }
     });
-  });
-
-  it("rolls back the canonical archive when lifecycle deletion fails", async () => {
-    const sessionKey = "agent:main:rollback-delete";
-    const sessionId = "rollback-delete";
-    const scope = { sessionKey, sessionId, storePath };
-    await replaceSessionEntry(scope, { sessionId, updatedAt: Date.now() });
-    appendTranscriptEventSync(scope, { type: "proof", content: "must remain live" });
-    const sqlitePath = resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path;
-    if (!sqlitePath) {
-      throw new Error("expected SQLite session store");
+    try {
+      await expect(cleanup()).rejects.toThrow(/changed|physical|owner|identity/i);
+      expect(replaced).toBe(true);
+      expect(appeared).toBe(initiallyAbsent);
+      expect(fs.readFileSync(sqlitePath)).toEqual(replacementBytes);
+      expect(archives()).toEqual([]);
+    } finally {
+      if (replaced) {
+        fs.rmSync(sqlitePath);
+        fs.renameSync(savedPath, sqlitePath);
+      }
     }
-    const database = openOpenClawAgentDatabase({ agentId: "main", path: sqlitePath });
-    database.db.exec(`
-      CREATE TEMP TRIGGER fail_session_window_delete
-      BEFORE DELETE ON main.session_windows
-      WHEN OLD.session_id = '${sessionId}'
-      BEGIN
-        SELECT RAISE(ABORT, 'injected lifecycle delete failure');
-      END;
-    `);
+    expect(loadSessionEntry(scope)).toMatchObject({ sessionId: scope.sessionId });
+  },
+);
 
-    await expect(
-      runSessionsCleanup({
-        cfg: {},
-        opts: { enforce: true, fixMissing: true },
-        targets: [{ agentId: "main", storePath }],
-      }),
-    ).rejects.toThrow("injected lifecycle delete failure");
+it("expires a retained canonical row and its derived file in one retention pass", async () => {
+  const scope = await seedProof("retention", "expire together");
+  const { sessionId } = scope;
+  await cleanup();
+  const archivePath = archives()[0];
+  expect(archivePath).toBeTruthy();
+  sql("UPDATE session_transcript_archives SET created_at = 1 WHERE session_id = ?").run(sessionId);
 
-    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({ sessionId });
-    expect(
-      database.db.prepare("SELECT 1 FROM transcript_events WHERE session_id = ?").get(sessionId),
-    ).toEqual({ 1: 1 });
-    expect(
-      database.db
-        .prepare("SELECT 1 FROM session_transcript_archives WHERE session_id = ?")
-        .get(sessionId),
-    ).toBeUndefined();
-    expect(listDeletedArchives(path.dirname(storePath))).toEqual([]);
-  });
-
-  it("omits a cleanup removal whose transcript classification became stale", async () => {
-    const sessionKey = "agent:main:stale-classification";
-    const sessionId = "stale-classification";
-    const scope = { sessionKey, sessionId, storePath };
-    const entry = { sessionId, updatedAt: Date.now() };
-    await replaceSessionEntry(scope, entry);
-    const observation = inspectTranscriptEventsSync(scope).snapshot;
-    appendTranscriptMessageSync(scope, {
-      eventId: "message-after-classification",
-      message: { role: "user", content: [{ type: "text", text: "now live" }] },
-    });
-
-    const result = await applySessionEntryLifecycleMutation({
-      storePath,
-      removals: [
-        {
-          sessionKey,
-          expectedEntry: entry,
-          expectedTranscriptSnapshot: observation,
-          archiveRemovedTranscript: true,
-        },
-      ],
-      skipMaintenance: true,
-    });
-
-    expect(result.removedSessionKeys).toEqual([]);
-    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({ sessionId });
-    expect(listDeletedArchives(path.dirname(storePath))).toEqual([]);
-  });
-
-  it("drops a retained canonical row only after retention removes its derived file", async () => {
-    const sessionKey = "agent:main:retention";
-    const sessionId = "retention";
-    const scope = { sessionKey, sessionId, storePath };
-    await replaceSessionEntry(scope, { sessionId, updatedAt: Date.now() });
-    appendTranscriptEventSync(scope, { type: "proof", content: "expire together" });
-    await runSessionsCleanup({
-      cfg: {},
-      opts: { enforce: true, fixMissing: true },
-      targets: [{ agentId: "main", storePath }],
-    });
-    const archivePath = listDeletedArchives(path.dirname(storePath))[0];
-    expect(archivePath).toBeTruthy();
-    const sqlitePath = resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path;
-    if (!sqlitePath) {
-      throw new Error("expected SQLite session store");
-    }
-    const database = openOpenClawAgentDatabase({ agentId: "main", path: sqlitePath });
-    database.db
-      .prepare("UPDATE session_transcript_archives SET created_at = 1 WHERE session_id = ?")
-      .run(sessionId);
-
-    expect(
-      await prunePublishedSessionArchivesByRetention({
-        scope: { agentId: "main", path: sqlitePath },
-        rules: [{ reason: "deleted", olderThanMs: 10 }],
-        nowMs: 100,
-      }),
-    ).toBe(0);
-    expect(
-      database.db
-        .prepare("SELECT 1 FROM session_transcript_archives WHERE session_id = ?")
-        .get(sessionId),
-    ).toEqual({ 1: 1 });
-
-    fs.rmSync(archivePath ?? "");
-    expect(
-      await prunePublishedSessionArchivesByRetention({
-        scope: { agentId: "main", path: sqlitePath },
-        rules: [{ reason: "deleted", olderThanMs: 10 }],
-        nowMs: 100,
-      }),
-    ).toBe(1);
-    expect(
-      database.db
-        .prepare("SELECT 1 FROM session_transcript_archives WHERE session_id = ?")
-        .get(sessionId),
-    ).toBeUndefined();
-  });
+  expect(archiveRow(sessionId)).toEqual({ 1: 1 });
+  expect(await pruneArchives()).toBe(1);
+  expect(fs.existsSync(archivePath!)).toBe(false);
+  expect(archiveRow(sessionId)).toBeUndefined();
+  expect(await pruneArchives()).toBe(0);
 });

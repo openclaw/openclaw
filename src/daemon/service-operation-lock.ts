@@ -8,6 +8,7 @@ import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../utils/absolut
 import { resolveLaunchAgentLabel } from "./launchd-label.js";
 import { resolveLaunchAgentGuiDomain } from "./launchd-runtime.js";
 import { resolveTaskName } from "./schtasks-layout.js";
+import { getServiceInspectionClock } from "./service-inspection-budget.js";
 import type { GatewayServiceEnv, SystemdServiceReadBinding } from "./service-types.js";
 import { assertGatewayServiceUpdateCurrent } from "./service-update-authority.js";
 import { resolveSystemdServiceName } from "./systemd-service-files.js";
@@ -15,7 +16,7 @@ import { resolveSystemdServiceName } from "./systemd-service-files.js";
 type Scope = {
   active: boolean;
   pending: Set<Promise<unknown>>;
-  systemdRead?: { key: string; binding: Promise<SystemdServiceReadBinding | undefined> };
+  systemdRead?: Promise<SystemdServiceReadBinding | undefined>;
 };
 const scopes = new AsyncLocalStorage<Map<string, Scope>>();
 
@@ -26,37 +27,23 @@ export async function withSystemdServiceReadBinding<T>(
   read: (binding: SystemdServiceReadBinding | undefined) => Promise<T>,
   deadline?: number,
 ): Promise<T> {
+  const now = getServiceInspectionClock();
   const expired = () => new Error("Original systemd read admission deadline expired.");
-  if (deadline !== undefined && performance.now() >= deadline) {
+  if (deadline !== undefined && now() >= deadline) {
     throw expired();
   }
   const scope = scopes.getStore()?.get(resolveGatewayServiceOperationLockPath(env));
-  const key = JSON.stringify([
-    env.HOME,
-    env.OPENCLAW_PROFILE,
-    // Installed service metadata makes the shell's inferred unit explicit.
-    resolveSystemdServiceName(env),
-    env.OPENCLAW_STATE_DIR,
-    env.XDG_RUNTIME_DIR,
-    env.DBUS_SESSION_BUS_ADDRESS,
-  ]);
-  if (scope) {
-    if (!scope.active || (scope.systemdRead && scope.systemdRead.key !== key)) {
-      throw new Error("Original systemd read scope is closed or selects a different manager.");
-    }
-    scope.systemdRead ??= { key, binding: create() };
-    const retained = scope.systemdRead.binding;
+  if (scope?.active) {
+    scope.systemdRead ??= create();
+    const retained = scope.systemdRead;
     const work = Promise.resolve().then(async () => {
       const binding = await awaitWithinDeadline(
         () => retained,
         deadline,
-        () => performance.now(),
+        () => now(),
       );
       if (binding === ABSOLUTE_DEADLINE_EXPIRED) {
         throw expired();
-      }
-      if (!scope.active) {
-        throw new Error("Original systemd read scope has closed.");
       }
       binding?.verify();
       return await read(binding);
@@ -70,7 +57,7 @@ export async function withSystemdServiceReadBinding<T>(
   }
   const binding = await create();
   try {
-    if (deadline !== undefined && performance.now() >= deadline) {
+    if (deadline !== undefined && now() >= deadline) {
       throw expired();
     }
     return await read(binding);
@@ -159,7 +146,7 @@ export async function withGatewayServiceOperationLock<T>(
         // Close admission atomically with the final empty-pending observation.
         scope.active = false;
         try {
-          const binding = await scope.systemdRead?.binding;
+          const binding = await scope.systemdRead;
           await binding?.close();
         } catch (error) {
           failures.push(error);

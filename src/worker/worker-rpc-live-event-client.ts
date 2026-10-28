@@ -1,12 +1,12 @@
+import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import type { WorkerLiveEvent } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { type WorkerConnection, WorkerConnectionInterruptedError } from "./worker-connection.js";
-import { fenceForOwnershipError, isTerminalConnection } from "./worker-rpc-client-shared.js";
+import { fenceForOwnershipError } from "./worker-rpc-client-shared.js";
 
 type WorkerLiveEventClientOptions = {
   runEpoch: number;
   initialAckedSeq?: number;
-  maxBufferedEvents?: number;
 };
 
 type BufferedLiveEvent = {
@@ -53,23 +53,14 @@ export class WorkerLiveEventClient {
   }
 
   enqueuePreview(runId: string, event: WorkerLiveEvent): boolean {
-    if (this.disposed || this.previewDegraded || isTerminalConnection(this.connection)) {
+    if (this.disposed || this.previewDegraded || this.connection.isTerminal()) {
       return false;
     }
-    if (this.buffered.length >= (this.options.maxBufferedEvents ?? 1_024)) {
+    if (this.buffered.length >= 1_024) {
       this.degradePreviews();
       return false;
     }
-    try {
-      this.buffered.push({
-        seq: this.nextSeqValue,
-        runId,
-        event: structuredClone(event),
-      });
-    } catch {
-      this.degradePreviews();
-      return false;
-    }
+    this.buffered.push({ seq: this.nextSeqValue, runId, event });
     this.nextSeqValue += 1;
     this.pump();
     return true;
@@ -87,7 +78,7 @@ export class WorkerLiveEventClient {
     this.buffered.push({
       seq: this.nextSeqValue,
       runId,
-      event: structuredClone(event),
+      event,
       ...(terminalResyncFromSeq === undefined ? {} : { resyncFromSeq: terminalResyncFromSeq }),
       completion,
     });
@@ -142,7 +133,10 @@ export class WorkerLiveEventClient {
     this.maxSentSeqValue = Math.max(this.maxSentSeqValue, sentSeq);
     try {
       await this.connection.waitForReady();
-      const response = await this.connection.requestLiveEvent({
+      if (generation !== this.replayGeneration || !this.buffered.includes(entry)) {
+        return;
+      }
+      const response = await this.connection.rpc.request("live-event", {
         runEpoch: this.options.runEpoch,
         lastAckedSeq: entry.resyncFromSeq ?? this.ackedSeqValue,
         seq: sentSeq,
@@ -185,14 +179,10 @@ export class WorkerLiveEventClient {
       fenceForOwnershipError(this.connection, response.error);
       throw new Error(`${response.error.message}: ${response.error.details.reason}`);
     } catch (error) {
-      if (
-        error instanceof WorkerConnectionInterruptedError &&
-        !isTerminalConnection(this.connection)
-      ) {
+      if (error instanceof WorkerConnectionInterruptedError && !this.connection.isTerminal()) {
         return;
       }
-      const failure = error instanceof Error ? error : new Error(String(error));
-      this.handleFailure(entry, failure);
+      this.handleFailure(entry, toStringifiedError(error));
     } finally {
       this.inFlight.delete(entry);
       this.pump();
@@ -234,7 +224,7 @@ export class WorkerLiveEventClient {
   }
 
   private handleFailure(entry: BufferedLiveEvent, error: Error): void {
-    if (!entry.completion && !isTerminalConnection(this.connection)) {
+    if (!entry.completion && !this.connection.isTerminal()) {
       this.degradePreviews();
     } else {
       this.rejectAll(error);

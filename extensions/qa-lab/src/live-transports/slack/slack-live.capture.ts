@@ -1,6 +1,7 @@
 // QA Lab Slack capture preserves transient message writes from the shared debug capture store.
 import { setTimeout as sleep } from "node:timers/promises";
-import type { DebugProxyCaptureReader } from "openclaw/plugin-sdk/proxy-capture";
+import type { AsyncDebugProxyCaptureReader } from "openclaw/plugin-sdk/proxy-capture";
+import { safeParseQaJson } from "../../json.js";
 import type { SlackObservedMessage } from "./slack-live.contracts.js";
 import { collectSlackBlockText } from "./slack-live.observations.js";
 
@@ -34,13 +35,13 @@ export type SlackNativeWrite = {
   fileIds?: string[];
 };
 
-function readSlackQaCapturePayload(
-  store: DebugProxyCaptureReader,
+async function readSlackQaCapturePayload(
+  store: AsyncDebugProxyCaptureReader,
   event: Record<string, unknown>,
-): string | undefined {
+): Promise<string | undefined> {
   const blobId = typeof event.dataBlobId === "string" ? event.dataBlobId : undefined;
   if (blobId) {
-    const payload = store.readBlob(blobId);
+    const payload = await store.readBlob(blobId);
     if (payload !== null) {
       return payload;
     }
@@ -60,19 +61,45 @@ function parseSlackQaCaptureObject(payload: string): Record<string, unknown> | u
   return Object.fromEntries(new URLSearchParams(payload));
 }
 
-function parseSuccessfulSlackCaptureResponse(
-  store: DebugProxyCaptureReader,
-  event: Record<string, unknown>,
+async function indexSlackQaCaptureFlows(
+  events: Array<Record<string, unknown>>,
+  store: AsyncDebugProxyCaptureReader,
 ) {
-  if (event.kind !== "response" || event.status !== 200) {
-    return undefined;
+  const responses = new Map<string, Record<string, unknown>>();
+  const rejected = new Set<string>();
+  const uncertain = new Map<string, SlackNativeWrite["reason"]>();
+  for (const event of events) {
+    if (typeof event.flowId !== "string") {
+      continue;
+    }
+    if (event.kind === "error") {
+      uncertain.set(event.flowId, "transport-error");
+      continue;
+    }
+    if (event.kind !== "response") {
+      continue;
+    }
+    const payload = await readSlackQaCapturePayload(store, event);
+    const response = payload ? parseSlackQaCaptureObject(payload) : undefined;
+    if (event.status === 200 && response?.ok === true) {
+      responses.set(event.flowId, response);
+    } else if (
+      typeof event.status === "number" &&
+      event.status >= 200 &&
+      event.status < 500 &&
+      response?.ok === false &&
+      response.error !== "internal_error" &&
+      response.error !== "fatal_error"
+    ) {
+      rejected.add(event.flowId);
+    } else if (!uncertain.has(event.flowId)) {
+      uncertain.set(
+        event.flowId,
+        typeof response?.ok === "boolean" ? "response-indeterminate" : "response-undecodable",
+      );
+    }
   }
-  const payload = readSlackQaCapturePayload(store, event);
-  if (!payload) {
-    return undefined;
-  }
-  const parsed = parseSlackQaCaptureObject(payload);
-  return parsed?.ok === true ? parsed : undefined;
+  return { responses, rejected, uncertain };
 }
 
 function readSlackQaMethod(event: Record<string, unknown>) {
@@ -93,15 +120,18 @@ function isSlackQaMessageWriteRequest(event: Record<string, unknown>) {
   return method !== undefined && SLACK_QA_MESSAGE_WRITE_METHODS.has(method);
 }
 
-function readSlackQaCaptureEvents(params: { sessionId: string; store: DebugProxyCaptureReader }) {
+function readSlackQaCaptureEvents(params: {
+  sessionId: string;
+  store: AsyncDebugProxyCaptureReader;
+}) {
   return params.store.getSessionEvents(params.sessionId, SLACK_QA_CAPTURE_EVENT_LIMIT);
 }
 
-export function getSlackQaMessageWriteCursor(params: {
+export async function getSlackQaMessageWriteCursor(params: {
   sessionId: string;
-  store: DebugProxyCaptureReader;
-}): number {
-  return readSlackQaCaptureEvents(params).reduce(
+  store: AsyncDebugProxyCaptureReader;
+}): Promise<number> {
+  return (await readSlackQaCaptureEvents(params)).reduce(
     (cursor, event) =>
       isSlackQaMessageWriteRequest(event) && typeof event.id === "number"
         ? Math.max(cursor, event.id)
@@ -117,24 +147,20 @@ function parseSlackQaBlocks(value: unknown): unknown[] | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
-  try {
-    const parsed = JSON.parse(value) as unknown;
-    return Array.isArray(parsed) ? parsed : undefined;
-  } catch {
-    return undefined;
-  }
+  const parsed = safeParseQaJson(value);
+  return Array.isArray(parsed) ? parsed : undefined;
 }
 
 function truncateSlackQaText(value: unknown): string | undefined {
   return typeof value === "string" ? value.slice(0, SLACK_QA_MESSAGE_TEXT_MAX_CHARS) : undefined;
 }
 
-function parseSlackQaMessageWrite(params: {
+async function parseSlackQaMessageWrite(params: {
   request: Record<string, unknown>;
   response: Record<string, unknown>;
-  store: DebugProxyCaptureReader;
-}): SlackObservedMessage | undefined {
-  const payload = readSlackQaCapturePayload(params.store, params.request);
+  store: AsyncDebugProxyCaptureReader;
+}): Promise<SlackObservedMessage | undefined> {
+  const payload = await readSlackQaCapturePayload(params.store, params.request);
   const request = payload ? parseSlackQaCaptureObject(payload) : undefined;
   const channelId = truncateSlackQaText(params.response.channel ?? request?.channel);
   const ts = truncateSlackQaText(params.response.ts ?? request?.ts);
@@ -150,16 +176,13 @@ function parseSlackQaMessageWrite(params: {
     text: truncateSlackQaText(request.text) ?? "",
     ts,
     ...(blockText.length > 0 ? { blockText } : {}),
-    ...(typeof request.thread_ts === "string"
-      ? { threadTs: request.thread_ts.slice(0, SLACK_QA_MESSAGE_TEXT_MAX_CHARS) }
-      : {}),
   };
 }
 
-function collectSlackQaMessageWrites(params: {
+async function collectSlackQaMessageWrites(params: {
   afterRequestEventId: number;
   events: Array<Record<string, unknown>>;
-  store: DebugProxyCaptureReader;
+  store: AsyncDebugProxyCaptureReader;
 }) {
   const requests = params.events.filter(
     (event) =>
@@ -167,29 +190,26 @@ function collectSlackQaMessageWrites(params: {
       typeof event.id === "number" &&
       event.id > params.afterRequestEventId,
   );
-  const responsesByFlowId = new Map<string, Record<string, unknown>>();
-  const settledFlowIds = new Set<string>();
-  for (const event of params.events) {
-    if (event.kind !== "response" || typeof event.flowId !== "string") {
-      continue;
-    }
-    settledFlowIds.add(event.flowId);
-    const response = parseSuccessfulSlackCaptureResponse(params.store, event);
-    if (response) {
-      responsesByFlowId.set(event.flowId, response);
-    }
-  }
-  const messages = requests.toReversed().flatMap((request) => {
+  const responses = params.events.filter((event) => event.kind === "response");
+  const settledFlowIds = new Set(responses.map((event) => event.flowId));
+  const { responses: responsesByFlowId } = await indexSlackQaCaptureFlows(
+    responses.filter((event) => event.status === 200),
+    params.store,
+  );
+  const messages: SlackObservedMessage[] = [];
+  for (const request of requests.toReversed()) {
     if (typeof request.flowId !== "string") {
-      return [];
+      continue;
     }
     const response = responsesByFlowId.get(request.flowId);
     if (!response) {
-      return [];
+      continue;
     }
-    const message = parseSlackQaMessageWrite({ request, response, store: params.store });
-    return message ? [message] : [];
-  });
+    const message = await parseSlackQaMessageWrite({ request, response, store: params.store });
+    if (message) {
+      messages.push(message);
+    }
+  }
   return {
     settled: requests.every(
       (request) => typeof request.flowId === "string" && settledFlowIds.has(request.flowId),
@@ -201,15 +221,13 @@ function collectSlackQaMessageWrites(params: {
 export async function readSlackQaMessageWrites(params: {
   afterRequestEventId: number;
   sessionId: string;
-  settleTimeoutMs?: number;
-  store: DebugProxyCaptureReader;
+  store: AsyncDebugProxyCaptureReader;
 }): Promise<SlackObservedMessage[]> {
-  const timeoutMs = params.settleTimeoutMs ?? SLACK_QA_CAPTURE_SETTLE_TIMEOUT_MS;
-  const deadline = Date.now() + timeoutMs;
+  const deadline = Date.now() + SLACK_QA_CAPTURE_SETTLE_TIMEOUT_MS;
   while (true) {
-    const result = collectSlackQaMessageWrites({
+    const result = await collectSlackQaMessageWrites({
       afterRequestEventId: params.afterRequestEventId,
-      events: readSlackQaCaptureEvents(params),
+      events: await readSlackQaCaptureEvents(params),
       store: params.store,
     });
     if (result.settled || Date.now() >= deadline) {
@@ -219,55 +237,26 @@ export async function readSlackQaMessageWrites(params: {
   }
 }
 
-export function getSlackQaNativeWriteCursor(params: {
+export async function getSlackQaNativeWriteCursor(params: {
   sessionId: string;
-  store: DebugProxyCaptureReader;
-}): number {
-  return readSlackQaCaptureEvents(params).reduce(
+  store: AsyncDebugProxyCaptureReader;
+}): Promise<number> {
+  return (await readSlackQaCaptureEvents(params)).reduce(
     (cursor, event) => (typeof event.id === "number" ? Math.max(cursor, event.id) : cursor),
     0,
   );
 }
 
 /** Gateway Web API mutations, not Socket Mode delivery or visual evidence. */
-export function readSlackQaNativeWrites(params: {
+export async function readSlackQaNativeWrites(params: {
   afterRequestEventId: number;
   sessionId: string;
-  store: DebugProxyCaptureReader;
-}): SlackNativeWrite[] {
-  const events = readSlackQaCaptureEvents(params);
-  const responses = new Map<string, Record<string, unknown>>();
-  const rejected = new Set<string>();
-  const uncertain = new Map<string, SlackNativeWrite["reason"]>();
-  for (const event of events) {
-    if (typeof event.flowId !== "string") {
-      continue;
-    }
-    if (event.kind === "error") {
-      uncertain.set(event.flowId, "transport-error");
-    } else if (event.kind === "response") {
-      const payload = readSlackQaCapturePayload(params.store, event);
-      const response = payload ? parseSlackQaCaptureObject(payload) : undefined;
-      if (event.status === 200 && response?.ok === true) {
-        responses.set(event.flowId, response);
-      } else if (
-        typeof event.status === "number" &&
-        event.status >= 200 &&
-        event.status < 500 &&
-        response?.ok === false &&
-        response.error !== "internal_error" &&
-        response.error !== "fatal_error"
-      ) {
-        rejected.add(event.flowId);
-      } else if (!uncertain.has(event.flowId)) {
-        uncertain.set(
-          event.flowId,
-          typeof response?.ok === "boolean" ? "response-indeterminate" : "response-undecodable",
-        );
-      }
-    }
-  }
-  return events.toReversed().flatMap((event): SlackNativeWrite[] => {
+  store: AsyncDebugProxyCaptureReader;
+}): Promise<SlackNativeWrite[]> {
+  const events = await readSlackQaCaptureEvents(params);
+  const { responses, rejected, uncertain } = await indexSlackQaCaptureFlows(events, params.store);
+  const writes: SlackNativeWrite[] = [];
+  for (const event of events.toReversed()) {
     const method = readSlackQaMethod(event);
     if (
       !method ||
@@ -275,14 +264,14 @@ export function readSlackQaNativeWrites(params: {
       typeof event.id !== "number" ||
       event.id <= params.afterRequestEventId
     ) {
-      return [];
+      continue;
     }
     const flowId = typeof event.flowId === "string" ? event.flowId : "";
     const response = responses.get(flowId);
     if (!response && rejected.has(flowId)) {
-      return [];
+      continue;
     }
-    const payload = readSlackQaCapturePayload(params.store, event);
+    const payload = await readSlackQaCapturePayload(params.store, event);
     const request = payload ? parseSlackQaCaptureObject(payload) : undefined;
     const uploaded = Array.isArray(response?.files) ? response.files : [];
     const fileIds = uploaded.flatMap((file: unknown) =>
@@ -293,20 +282,17 @@ export function readSlackQaNativeWrites(params: {
     if (method === "files.delete" && typeof request?.file === "string") {
       fileIds.push(request.file);
     }
-    return [
-      {
-        evidence: response ? "api-accepted" : "uncertain",
-        ...(!response ? { reason: uncertain.get(flowId) ?? "response-not-captured" } : {}),
-        requestEventId: event.id,
-        method,
-        channelId: truncateSlackQaText(
-          response?.channel ?? request?.channel ?? request?.channel_id,
-        ),
-        messageId: truncateSlackQaText(response?.ts ?? request?.ts ?? request?.timestamp),
-        threadId: truncateSlackQaText(request?.thread_ts),
-        emoji: truncateSlackQaText(request?.name),
-        ...(fileIds.length ? { fileIds } : {}),
-      },
-    ];
-  });
+    writes.push({
+      evidence: response ? "api-accepted" : "uncertain",
+      ...(!response ? { reason: uncertain.get(flowId) ?? "response-not-captured" } : {}),
+      requestEventId: event.id,
+      method,
+      channelId: truncateSlackQaText(response?.channel ?? request?.channel ?? request?.channel_id),
+      messageId: truncateSlackQaText(response?.ts ?? request?.ts ?? request?.timestamp),
+      threadId: truncateSlackQaText(request?.thread_ts),
+      emoji: truncateSlackQaText(request?.name),
+      ...(fileIds.length ? { fileIds } : {}),
+    });
+  }
+  return writes;
 }

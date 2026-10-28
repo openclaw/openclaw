@@ -10,6 +10,8 @@ const DEDICATED_TOOL_INVOKE_COMMANDS = new Map([
   ["computer.act", "computer"],
   ["mobile.ui.observe", "mobile_ui"],
   ["mobile.ui.act", "mobile_ui"],
+  ["browser.proxy", "browser"],
+  ["browser.proxy.upload.v1", "browser"],
 ]);
 
 export function resolveNodesToolInvokeTimeouts(params: {

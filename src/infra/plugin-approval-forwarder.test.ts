@@ -4,14 +4,15 @@ import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
-import { createExecApprovalForwarder } from "./exec-approval-forwarder.js";
+import {
+  createForwarder,
+  flushPendingDelivery,
+  stopForwarderFixtures,
+} from "./exec-approval-forwarder.test-support.js";
 import type { PluginApprovalRequest, PluginApprovalResolved } from "./plugin-approvals.js";
 
-const forwarders: ReturnType<typeof createExecApprovalForwarder>[] = [];
-
 afterEach(async () => {
-  await Promise.all(forwarders.map((forwarder) => forwarder.stop()));
-  forwarders.length = 0;
+  await stopForwarderFixtures();
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
@@ -38,26 +39,6 @@ const PLUGIN_DISABLED_CFG = {
   },
 } as OpenClawConfig;
 
-function createForwarder(params: {
-  cfg: OpenClawConfig;
-  deliver?: ReturnType<typeof vi.fn>;
-  resolveSessionTarget?: NonNullable<
-    Parameters<typeof createExecApprovalForwarder>[0]
-  >["resolveSessionTarget"];
-}) {
-  const deliver = params.deliver ?? vi.fn().mockResolvedValue([]);
-  const forwarder = createExecApprovalForwarder({
-    getConfig: () => params.cfg,
-    deliver: deliver as unknown as NonNullable<
-      NonNullable<Parameters<typeof createExecApprovalForwarder>[0]>["deliver"]
-    >,
-    nowMs: () => 1000,
-    resolveSessionTarget: params.resolveSessionTarget,
-  });
-  forwarders.push(forwarder);
-  return { deliver, forwarder };
-}
-
 function makePluginRequest(overrides?: Partial<PluginApprovalRequest>): PluginApprovalRequest {
   return {
     id: "plugin-req-1",
@@ -74,11 +55,6 @@ function makePluginRequest(overrides?: Partial<PluginApprovalRequest>): PluginAp
     expiresAtMs: 6000,
     ...overrides,
   };
-}
-
-async function flushPendingDelivery(): Promise<void> {
-  await Promise.resolve();
-  await Promise.resolve();
 }
 
 type DeliveryArgs = {
@@ -134,6 +110,7 @@ describe("plugin approval forwarding", () => {
     it("returns false when forwarding is disabled", async () => {
       const { forwarder } = createForwarder({ cfg: PLUGIN_DISABLED_CFG });
       const result = await forwarder.handlePluginApprovalRequested!(makePluginRequest());
+      await flushPendingDelivery();
       expect(result).toBe(false);
     });
 
@@ -160,6 +137,7 @@ describe("plugin approval forwarding", () => {
             }),
           ),
         ).resolves.toBe(false);
+        await flushPendingDelivery();
         expect(resolveSessionTarget).toHaveBeenCalledWith(
           expect.objectContaining({
             request: expect.objectContaining({
@@ -192,6 +170,7 @@ describe("plugin approval forwarding", () => {
           }),
         ),
       ).resolves.toBe(true);
+      await flushPendingDelivery();
       expect(resolveSessionTarget).toHaveBeenCalledWith(
         expect.objectContaining({
           request: expect.objectContaining({
@@ -203,8 +182,7 @@ describe("plugin approval forwarding", () => {
     });
 
     it("forwards to configured targets", async () => {
-      const deliver = vi.fn().mockResolvedValue([]);
-      const { forwarder } = createForwarder({ cfg: PLUGIN_TARGETS_CFG, deliver });
+      const { deliver, forwarder } = createForwarder({ cfg: PLUGIN_TARGETS_CFG });
       const result = await forwarder.handlePluginApprovalRequested!(makePluginRequest());
       expect(result).toBe(true);
       await flushPendingDelivery();
@@ -257,9 +235,33 @@ describe("plugin approval forwarding", () => {
       expect(payload?.interactive).toBeUndefined();
     });
 
+    it("does not forward reviewer cards through an older channel capability", async () => {
+      registerSlackAdapterPlugin(
+        createSlackAdapterPlugin({
+          approvalCapability: { authorizeActorAction: () => ({ authorized: true }) },
+        }),
+      );
+      const cfg = {
+        approvals: {
+          plugin: {
+            enabled: true,
+            mode: "targets",
+            targets: [{ channel: "slack", to: "U123" }],
+            slack: { approvers: ["team:T11111111:user:U11111111"] },
+          },
+        },
+      } as OpenClawConfig;
+      const { deliver, forwarder } = createForwarder({ cfg });
+
+      await expect(forwarder.handlePluginApprovalRequested!(makePluginRequest())).resolves.toBe(
+        false,
+      );
+      await flushPendingDelivery();
+      expect(deliver).not.toHaveBeenCalled();
+    });
+
     it("renders only request-scoped plugin approval decisions", async () => {
-      const deliver = vi.fn().mockResolvedValue([]);
-      const { forwarder } = createForwarder({ cfg: PLUGIN_TARGETS_CFG, deliver });
+      const { deliver, forwarder } = createForwarder({ cfg: PLUGIN_TARGETS_CFG });
       const result = await forwarder.handlePluginApprovalRequested!(
         makePluginRequest({
           request: {
@@ -306,8 +308,7 @@ describe("plugin approval forwarding", () => {
     });
 
     it("includes severity icon for critical", async () => {
-      const deliver = vi.fn().mockResolvedValue([]);
-      const { forwarder } = createForwarder({ cfg: PLUGIN_TARGETS_CFG, deliver });
+      const { deliver, forwarder } = createForwarder({ cfg: PLUGIN_TARGETS_CFG });
       const request = makePluginRequest();
       request.request.severity = "critical";
       await forwarder.handlePluginApprovalRequested!(request);
@@ -326,6 +327,7 @@ describe("plugin approval forwarding", () => {
       } as OpenClawConfig;
       const { forwarder } = createForwarder({ cfg });
       const result = await forwarder.handlePluginApprovalRequested!(makePluginRequest());
+      await flushPendingDelivery();
       expect(result).toBe(false);
     });
 
@@ -352,6 +354,7 @@ describe("plugin approval forwarding", () => {
       const cfg = {} as OpenClawConfig;
       const { forwarder } = createForwarder({ cfg });
       const result = await forwarder.handlePluginApprovalRequested!(makePluginRequest());
+      await flushPendingDelivery();
       expect(result).toBe(false);
     });
   });
@@ -371,8 +374,7 @@ describe("plugin approval forwarding", () => {
         }),
       );
 
-      const deliver = vi.fn().mockResolvedValue([]);
-      const { forwarder } = createForwarder({ cfg: PLUGIN_TARGETS_CFG, deliver });
+      const { deliver, forwarder } = createForwarder({ cfg: PLUGIN_TARGETS_CFG });
       await forwarder.handlePluginApprovalRequested!(makePluginRequest());
       await flushPendingDelivery();
       expect(deliver).toHaveBeenCalled();
@@ -390,8 +392,7 @@ describe("plugin approval forwarding", () => {
         }),
       );
 
-      const deliver = vi.fn().mockResolvedValue([]);
-      const { forwarder } = createForwarder({ cfg: PLUGIN_TARGETS_CFG, deliver });
+      const { deliver, forwarder } = createForwarder({ cfg: PLUGIN_TARGETS_CFG });
       await forwarder.handlePluginApprovalRequested!(makePluginRequest());
       await flushPendingDelivery();
       expect(deliver).toHaveBeenCalled();
@@ -412,8 +413,7 @@ describe("plugin approval forwarding", () => {
         }),
       );
 
-      const deliver = vi.fn().mockResolvedValue([]);
-      const { forwarder } = createForwarder({ cfg: PLUGIN_TARGETS_CFG, deliver });
+      const { deliver, forwarder } = createForwarder({ cfg: PLUGIN_TARGETS_CFG });
 
       await registerPendingApproval(forwarder, deliver);
 
@@ -426,8 +426,7 @@ describe("plugin approval forwarding", () => {
 
   describe("handlePluginApprovalResolved", () => {
     it("delivers resolved message to targets", async () => {
-      const deliver = vi.fn().mockResolvedValue([]);
-      const { forwarder } = createForwarder({ cfg: PLUGIN_TARGETS_CFG, deliver });
+      const { deliver, forwarder } = createForwarder({ cfg: PLUGIN_TARGETS_CFG });
 
       await registerPendingApproval(forwarder, deliver);
 
@@ -440,23 +439,14 @@ describe("plugin approval forwarding", () => {
     });
 
     it("reconstructs targets from resolved request snapshot when pending cache is missing", async () => {
-      const deliver = vi.fn().mockResolvedValue([]);
-      const { forwarder } = createForwarder({ cfg: PLUGIN_TARGETS_CFG, deliver });
+      const { deliver, forwarder } = createForwarder({ cfg: PLUGIN_TARGETS_CFG });
 
       await forwarder.handlePluginApprovalResolved!({
         id: "plugin-req-late",
         decision: "deny",
         resolvedBy: "telegram:user123",
         ts: 2_000,
-        request: {
-          pluginId: "sage",
-          title: "Sensitive tool call",
-          description: "The agent wants to call a sensitive tool",
-          severity: "warning",
-          toolName: "bash",
-          agentId: "main",
-          sessionKey: "agent:main:main",
-        },
+        request: makePluginRequest().request,
       });
 
       expect(deliver).toHaveBeenCalled();
@@ -468,8 +458,7 @@ describe("plugin approval forwarding", () => {
 
   describe("stop", () => {
     it("clears pending plugin approvals", async () => {
-      const deliver = vi.fn().mockResolvedValue([]);
-      const { forwarder } = createForwarder({ cfg: PLUGIN_TARGETS_CFG, deliver });
+      const { deliver, forwarder } = createForwarder({ cfg: PLUGIN_TARGETS_CFG });
       await forwarder.handlePluginApprovalRequested!(makePluginRequest());
       await flushPendingDelivery();
       expect(deliver).toHaveBeenCalled();

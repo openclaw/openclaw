@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readCapabilityConsentErrorDetails } from "../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import {
   GATEWAY_CLIENT_MODES,
@@ -7,16 +8,19 @@ import type {
   PluginsInspectResult,
   PluginsReloadResult,
 } from "../../packages/gateway-protocol/src/schema/plugins.js";
+import { sleepWithAbort } from "../infra/backoff.js";
 import { readActiveGatewayLockIdentity } from "../infra/gateway-lock.js";
 import type { PluginCapabilityConsentHandler } from "../plugins/capability-consent.js";
 import type { PluginInstallBatchReload } from "../plugins/install-runtime-batch.js";
-import { sleep } from "../utils/sleep.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { monotonicNow } from "../shared/monotonic-time.js";
+import { registerSignalExitGate } from "./signal-exit-barrier.js";
 
 /** Capture the local client before a Claw batch takes any package or plugin lease. */
 export async function resolvePluginBatchReload(): Promise<PluginInstallBatchReload | undefined> {
   const gateway = await resolvePluginLifecycleGateway();
   return gateway
-    ? async (plugins) => {
+    ? async (plugins, options) => {
         const result = await gateway<PluginsReloadResult>("plugins.reload", {
           plugins,
         });
@@ -25,9 +29,12 @@ export async function resolvePluginBatchReload(): Promise<PluginInstallBatchRelo
             "Gateway did not confirm the plugin batch runtime generation. Inspect plugin status before retrying.",
           );
         }
-        return result.warnings?.length
-          ? { ...result.runtime, warnings: result.warnings }
-          : result.runtime;
+        options?.commitGuard?.();
+        return {
+          ...result.runtime,
+          ...(result.restartRequired ? { restartRequired: true } : {}),
+          ...(result.warnings?.length ? { warnings: result.warnings } : {}),
+        };
       }
     : undefined;
 }
@@ -44,39 +51,53 @@ export async function resolvePluginLifecycleGateway(): Promise<PluginLifecycleGa
   if (!owner) {
     return null;
   }
-  const { callGateway, isGatewayClientRequestError } = await import("../gateway/call.js");
+  const { callGateway } = await import("../gateway/call.js");
+  const { isGatewayProtocolResponseError } = await import("../gateway/client.js");
   const request = async <T>(method: string, params: Record<string, unknown>): Promise<T> => {
-    const deadline = Date.now() + 600_000;
-    for (;;) {
-      try {
-        return await callGateway<T>({
-          method,
-          params,
-          localPortOverride: owner.port,
-          ignoreEnvUrlOverride: true,
-          requiredMethods: [...new Set([method, "plugins.reload"])],
-          timeoutMs: Math.max(1, deadline - Date.now()),
-          scopes: ["operator.admin"],
-          clientName: GATEWAY_CLIENT_NAMES.CLI,
-          mode: GATEWAY_CLIENT_MODES.CLI,
-        });
-      } catch (error) {
-        // Lifecycle admission rejects before writes so a config reload can drain
-        // the request. Honor that response outside the Gateway's admission scope.
-        if (
-          !isGatewayClientRequestError(error) ||
-          error.gatewayCode !== "UNAVAILABLE" ||
-          !error.retryable ||
-          error.retryAfterMs === undefined ||
-          error.retryAfterMs >= deadline - Date.now()
-        ) {
-          throw error;
-        }
-        await sleep(error.retryAfterMs);
-        if (Date.now() >= deadline) {
-          throw error;
+    const deadline = monotonicNow() + 600_000;
+    const waitForDrain = method === "plugins.reload" && params.waitForDrain === true;
+    const controller = new AbortController();
+    const finished = createDeferredCore();
+    const releaseExitGate = registerSignalExitGate(finished.promise, () => controller.abort());
+    try {
+      for (;;) {
+        try {
+          controller.signal.throwIfAborted();
+          return await callGateway<T>({
+            method,
+            params,
+            localPortOverride: owner.port,
+            ignoreEnvUrlOverride: true,
+            requiredMethods: [...new Set([method, "plugins.reload"])],
+            timeoutMs: waitForDrain ? null : Math.max(1, deadline - monotonicNow()),
+            signal: controller.signal,
+            scopes: ["operator.admin"],
+            clientName: GATEWAY_CLIENT_NAMES.CLI,
+            mode: GATEWAY_CLIENT_MODES.CLI,
+          });
+        } catch (error) {
+          // Release the rejected RPC so reload can drain it; never replay an uncertain effect.
+          if (
+            !isGatewayProtocolResponseError(error) ||
+            error.gatewayCode !== "UNAVAILABLE" ||
+            !error.retryable ||
+            !isRecord(error.details) ||
+            error.details.mutationAccepted !== false ||
+            error.retryAfterMs === undefined ||
+            error.retryAfterMs <= 0 ||
+            error.retryAfterMs >= deadline - monotonicNow()
+          ) {
+            throw error;
+          }
+          await sleepWithAbort(error.retryAfterMs, controller.signal);
+          if (monotonicNow() >= deadline) {
+            throw error;
+          }
         }
       }
+    } finally {
+      finished.resolve();
+      releaseExitGate();
     }
   };
   return async <T>(
@@ -99,8 +120,14 @@ export async function resolvePluginLifecycleGateway(): Promise<PluginLifecycleGa
         const { plugin, ...inspection } = await request<PluginsInspectResult>("plugins.inspect", {
           pluginId: consent.pluginId,
         });
+        if (!inspection.reviewToken) {
+          throw new Error(`Gateway did not return a capability-consent token for "${plugin.id}".`, {
+            cause: error,
+          });
+        }
         const acknowledgeCapabilities = await onCapabilityConsent({
           ...inspection,
+          reviewToken: inspection.reviewToken,
           pluginId: plugin.id,
           name: plugin.name,
           ...(plugin.version ? { version: plugin.version } : {}),

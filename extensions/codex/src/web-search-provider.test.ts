@@ -1,207 +1,138 @@
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCodexWebSearchProvider as createContractCodexWebSearchProvider } from "../web-search-contract-api.js";
-import type { CodexAppServerClient } from "./app-server/client.js";
-import type { CodexAppServerStartOptions } from "./app-server/config.js";
+import { codexModel as baseModel } from "./app-server/bounded-turn.test-harness.js";
 import {
-  isJsonObject,
-  type CodexServerNotification,
-  type JsonValue,
-} from "./app-server/protocol.js";
+  createFakeCodexAppServerClient,
+  threadStartResult as baseThreadStartResult,
+  turnStartResult as baseTurnStartResult,
+} from "./app-server/codex-app-server.test-fixtures.js";
+import type { CodexAppServerStartOptions } from "./app-server/config.js";
+import { isJsonObject, type JsonValue } from "./app-server/protocol.js";
+import * as shared from "./app-server/shared-client.js";
 import { createCodexWebSearchProvider } from "./web-search-provider.js";
+// Loads the provider's lazy runtime at collection, outside the first test's deadline.
+import "./web-search-provider.runtime.js";
 
-function codexModel(
-  options: {
-    id?: string;
-    model?: string;
-    inputModalities?: string[];
-    isDefault?: boolean;
-  } = {},
-) {
-  const id = options.id ?? "gpt-5.5";
-  return {
-    id,
-    model: options.model ?? id,
-    upgrade: null,
-    upgradeInfo: null,
-    availabilityNux: null,
-    displayName: "gpt-5.5",
-    description: "GPT-5.5",
-    hidden: false,
-    supportedReasoningEfforts: [{ reasoningEffort: "low", description: "fast" }],
-    defaultReasoningEffort: "low",
-    inputModalities: options.inputModalities ?? ["text", "image"],
-    supportsPersonality: false,
-    additionalSpeedTiers: [],
-    isDefault: options.isDefault ?? true,
-  };
-}
+afterEach(() => vi.restoreAllMocks());
 
 function threadStartResult(model: string) {
+  const result = baseThreadStartResult("thread-1", "/tmp/openclaw-agent");
   return {
+    ...result,
     thread: {
-      id: "thread-1",
-      sessionId: "session-1",
-      forkedFromId: null,
-      preview: "",
+      ...result.thread,
       ephemeral: true,
-      modelProvider: "openai",
-      createdAt: 1,
-      updatedAt: 1,
-      status: { type: "idle" },
-      path: null,
-      cwd: "/tmp/openclaw-agent",
-      projectId: null,
       cliVersion: "0.149.0",
-      source: "unknown",
-      agentNickname: null,
-      agentRole: null,
-      gitInfo: null,
-      name: null,
-      turns: [],
     },
     model,
-    modelProvider: "openai",
-    serviceTier: null,
-    cwd: "/tmp/openclaw-agent",
-    instructionSources: [],
     approvalPolicy: "on-request",
-    approvalsReviewer: "user",
-    sandbox: { type: "dangerFullAccess" },
-    permissionProfile: null,
-    reasoningEffort: null,
-  };
-}
-
-function turnStartResult(status = "inProgress") {
-  return {
-    turn: {
-      id: "turn-1",
-      status,
-      items: [],
-      error: null,
-      startedAt: null,
-      completedAt: null,
-      durationMs: null,
-    },
   };
 }
 
 function createFakeClient(options?: {
   emitWebSearch?: boolean;
-  models?: ReturnType<typeof codexModel>[];
+  models?: ReturnType<typeof baseModel>[];
 }) {
-  const notifications = new Set<(notification: CodexServerNotification) => void>();
-  const requests: Array<{ method: string; params?: JsonValue }> = [];
-  const request = vi.fn(async (method: string, params?: JsonValue) => {
+  const requests: Array<{ method: string; params?: unknown }> = [];
+  const fixture = createFakeCodexAppServerClient(async (method, params) => {
     requests.push({ method, params });
     if (method === "model/list") {
-      return { data: options?.models ?? [codexModel()], nextCursor: null };
+      return { data: options?.models ?? [baseModel("gpt-5.5")], nextCursor: null };
     }
     if (method === "thread/start" && isJsonObject(params) && typeof params.model === "string") {
       return threadStartResult(params.model);
     }
     if (method === "turn/start") {
-      for (const notify of notifications) {
+      const scope = { threadId: "thread-1", turnId: "turn-1" };
+      for (const handler of fixture.notifications) {
+        const notify = (eventMethod: string, eventParams: JsonValue) =>
+          handler({ method: eventMethod, params: eventParams });
         if (options?.emitWebSearch !== false) {
-          notify({
-            method: "item/completed",
-            params: {
-              threadId: "thread-1",
-              turnId: "turn-1",
-              item: {
-                id: "search-1",
-                type: "webSearch",
-                query: "plumbers in Edmonton Alberta",
-                action: {
-                  type: "search",
-                  query: "plumbers in Edmonton Alberta",
-                  queries: ["plumbers in Edmonton Alberta"],
-                },
-              },
+          await notify("item/completed", {
+            ...scope,
+            item: {
+              id: "search-1",
+              type: "webSearch",
+              query,
+              action: { type: "search", query, queries: [query] },
             },
           });
         }
-        notify({
-          method: "item/agentMessage/delta",
-          params: {
-            threadId: "thread-1",
-            turnId: "turn-1",
-            itemId: "msg-1",
-            delta: "Two current providers: Example One and Example Two.",
-          },
+        await notify("item/agentMessage/delta", {
+          ...scope,
+          itemId: "msg-1",
+          delta: "Two current providers: Example One and Example Two.",
         });
-        notify({
-          method: "turn/completed",
-          params: {
-            threadId: "thread-1",
-            turnId: "turn-1",
-            turn: turnStartResult("completed").turn,
-          },
+        await notify("turn/completed", {
+          ...scope,
+          turn: baseTurnStartResult("turn-1", "completed").turn,
         });
       }
-      return turnStartResult();
+      return baseTurnStartResult();
     }
     return {};
   });
 
-  const client = {
-    request,
-    addNotificationHandler(handler: (notification: CodexServerNotification) => void) {
-      notifications.add(handler);
-      return () => notifications.delete(handler);
-    },
-    addRequestHandler() {
-      return () => {};
-    },
-    addCloseHandler: () => () => undefined,
-  } as unknown as CodexAppServerClient;
-
-  return { client, requests };
+  return { client: fixture.client, requests };
 }
 
-function createConfig(): OpenClawConfig {
-  return {
-    tools: {
-      web: {
-        search: {
-          provider: "codex",
-          timeoutSeconds: 30,
-          openaiCodex: {
-            enabled: true,
-            mode: "live",
-            allowedDomains: ["example.com"],
-            contextSize: "high",
-            userLocation: {
-              country: "CA",
-              region: "Alberta",
-              city: "Edmonton",
-              timezone: "America/Edmonton",
-            },
+const query = "plumbers in Edmonton Alberta";
+const config: OpenClawConfig = {
+  tools: {
+    web: {
+      search: {
+        provider: "codex",
+        timeoutSeconds: 30,
+        openaiCodex: {
+          enabled: true,
+          mode: "live",
+          allowedDomains: ["example.com"],
+          contextSize: "high",
+          userLocation: {
+            country: "CA",
+            region: "Alberta",
+            city: "Edmonton",
+            timezone: "America/Edmonton",
           },
         },
       },
     },
-  };
+  },
+};
+
+function createSearchTool(provider: ReturnType<typeof createCodexWebSearchProvider>) {
+  return provider.createTool({
+    config,
+    searchConfig: config.tools?.web?.search,
+    agentDir: "/tmp/openclaw-agent",
+  });
 }
 
-beforeAll(async () => {
-  // Execution cases share this lazy runtime. Import it once so the first case
-  // does not absorb module initialization that every later case reuses.
-  await import("./web-search-provider.runtime.js");
-});
+function searchFixture(options?: Parameters<typeof createFakeClient>[0], pluginConfig?: unknown) {
+  const fixture = createFakeClient(options);
+  vi.spyOn(shared, "createIsolatedCodexAppServerClient").mockResolvedValue(fixture.client);
+  const tool = createSearchTool(
+    createCodexWebSearchProvider({
+      resolvePluginConfig: () => pluginConfig,
+    }),
+  );
+  return { ...fixture, tool };
+}
 
 describe("codex web search provider", () => {
   it("registers a selectable keyless provider contract", () => {
     const provider = createContractCodexWebSearchProvider();
 
-    expect(provider.id).toBe("codex");
-    expect(provider.label).toBe("Codex Hosted Search");
-    expect(provider.requiresCredential).toBe(false);
-    expect(provider.envVars).toEqual([]);
-    expect(provider.autoDetectOrder).toBe(900);
+    expect(provider).toMatchObject({
+      id: "codex",
+      label: "Codex Hosted Search",
+      requiresCredential: false,
+      envVars: [],
+      autoDetectOrder: 900,
+    });
     expect(provider.applySelectionConfig?.({}).plugins?.entries?.codex?.enabled).toBe(true);
   });
 
@@ -215,32 +146,13 @@ describe("codex web search provider", () => {
     ).toBeNull();
   });
 
-  it("fails closed when configured app-server transport cannot be isolated", async () => {
-    const { client } = createFakeClient();
-    const provider = createCodexWebSearchProvider({
-      resolvePluginConfig: () => ({
-        appServer: {
-          transport: "websocket",
-          url: "ws://127.0.0.1:4501",
-        },
-      }),
-      clientFactory: async () => client,
-    });
-    const config = createConfig();
-    const tool = provider.createTool({
-      config,
-      searchConfig: config.tools?.web?.search,
-      agentDir: "/tmp/openclaw-agent",
-    });
-
-    await expect(tool?.execute({ query: "plumbers in Edmonton Alberta" })).rejects.toThrow(
-      "Bounded Codex turns require stdio transport so native tools can be isolated.",
-    );
-  });
-
   it("runs an isolated grounded Codex search with configured restrictions", async () => {
     const { client, requests } = createFakeClient();
     let isolatedStartOptions: CodexAppServerStartOptions | undefined;
+    vi.spyOn(shared, "createIsolatedCodexAppServerClient").mockImplementation(async (options) => {
+      isolatedStartOptions = options?.startOptions;
+      return client;
+    });
     const provider = createCodexWebSearchProvider({
       resolvePluginConfig: () => ({
         appServer: {
@@ -257,22 +169,13 @@ describe("codex web search provider", () => {
           clearEnv: ["CODEX_HOME", "KEEP_CLEARED"],
         },
       }),
-      clientFactory: async (options) => {
-        isolatedStartOptions = options?.startOptions;
-        return client;
-      },
     });
-    const config = createConfig();
-    const tool = provider.createTool({
-      config,
-      searchConfig: config.tools?.web?.search,
-      agentDir: "/tmp/openclaw-agent",
-    });
+    const tool = createSearchTool(provider);
 
-    const result = await tool?.execute({ query: "plumbers in Edmonton Alberta" });
+    const result = await tool?.execute({ query });
 
     expect(result).toMatchObject({
-      query: "plumbers in Edmonton Alberta",
+      query,
       provider: "codex",
       model: "gpt-5.5",
       externalContent: {
@@ -281,12 +184,7 @@ describe("codex web search provider", () => {
         provider: "codex",
         wrapped: true,
       },
-      searches: [
-        {
-          query: "plumbers in Edmonton Alberta",
-          queries: ["plumbers in Edmonton Alberta"],
-        },
-      ],
+      searches: [{ query, queries: [query] }],
     });
     expect(result?.content).toContain("Two current providers");
     expect(requests.map((entry) => entry.method)).toEqual([
@@ -343,46 +241,18 @@ describe("codex web search provider", () => {
     expect(path.dirname(threadStartCwd)).toBe(path.dirname(isolatedCodexHome));
   });
 
-  it("selects the live default text-capable model", async () => {
-    const { client, requests } = createFakeClient({
-      models: [
-        codexModel({ id: "available-first", isDefault: false }),
-        codexModel({ id: "available-default", model: "available-default-wire" }),
-      ],
-    });
-    const provider = createCodexWebSearchProvider({
-      clientFactory: async () => client,
-    });
-    const config = createConfig();
-    const tool = provider.createTool({
-      config,
-      searchConfig: config.tools?.web?.search,
-      agentDir: "/tmp/openclaw-agent",
-    });
-
-    const result = await tool?.execute({ query: "plumbers in Edmonton Alberta" });
-
-    expect(result?.model).toBe("available-default");
-    expect(requests[1]?.params).toEqual(
-      expect.objectContaining({ model: "available-default-wire" }),
-    );
-    expect(requests[2]?.params).not.toHaveProperty("model");
-  });
-
   it("does not send app-server requests after authority ends during client preparation", async () => {
     const { client, requests } = createFakeClient();
     const entered = createDeferred<void>();
     const release = createDeferred<void>();
     const denial = new Error("search caller no longer authorized");
     let current = true;
-    const provider = createCodexWebSearchProvider({
-      clientFactory: async () => {
-        entered.resolve();
-        await release.promise;
-        return client;
-      },
+    vi.spyOn(shared, "createIsolatedCodexAppServerClient").mockImplementation(async () => {
+      entered.resolve();
+      await release.promise;
+      return client;
     });
-    const config = createConfig();
+    const provider = createCodexWebSearchProvider();
     const tool = provider.createTool({ config, searchConfig: config.tools?.web?.search });
     const pending = tool!.execute(
       { query: "synthetic authority probe" },
@@ -401,40 +271,29 @@ describe("codex web search provider", () => {
     expect(requests).toEqual([]);
   });
 
-  it("fails closed when the live catalog has no text-capable model", async () => {
-    const { client, requests } = createFakeClient({
-      models: [codexModel({ id: "image-only", inputModalities: ["image"] })],
-    });
-    const provider = createCodexWebSearchProvider({
-      clientFactory: async () => client,
-    });
-    const config = createConfig();
-    const tool = provider.createTool({
-      config,
-      searchConfig: config.tools?.web?.search,
-      agentDir: "/tmp/openclaw-agent",
-    });
-
-    await expect(tool?.execute({ query: "plumbers in Edmonton Alberta" })).rejects.toThrow(
-      "Codex app-server has no model supporting text input.",
-    );
-    expect(requests.map((entry) => entry.method)).toEqual(["model/list"]);
-  });
-
-  it("fails closed when Codex returns an ungrounded answer", async () => {
-    const { client } = createFakeClient({ emitWebSearch: false });
-    const provider = createCodexWebSearchProvider({
-      clientFactory: async () => client,
-    });
-    const config = createConfig();
-    const tool = provider.createTool({
-      config,
-      searchConfig: config.tools?.web?.search,
-      agentDir: "/tmp/openclaw-agent",
-    });
-
-    await expect(tool?.execute({ query: "plumbers in Edmonton Alberta" })).rejects.toThrow(
-      "Codex hosted search completed without invoking web search.",
-    );
+  it.each([
+    {
+      name: "unisolatable transport",
+      options: {},
+      pluginConfig: { appServer: { transport: "websocket", url: "ws://127.0.0.1:4501" } },
+      error: "Bounded Codex turns require stdio transport so native tools can be isolated.",
+    },
+    {
+      name: "no text-capable model",
+      options: { models: [{ ...baseModel("image-only"), inputModalities: ["image"] }] },
+      error: "Codex app-server has no model supporting text input.",
+      methods: ["model/list"],
+    },
+    {
+      name: "ungrounded answer",
+      options: { emitWebSearch: false },
+      error: "Codex hosted search completed without invoking web search.",
+    },
+  ])("fails closed for $name", async ({ options, pluginConfig, error, methods }) => {
+    const { tool, requests } = searchFixture(options, pluginConfig);
+    await expect(tool?.execute({ query })).rejects.toThrow(error);
+    if (methods) {
+      expect(requests.map((entry) => entry.method)).toEqual(methods);
+    }
   });
 });

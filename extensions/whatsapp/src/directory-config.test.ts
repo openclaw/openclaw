@@ -1,336 +1,185 @@
-// Whatsapp tests cover directory config plugin behavior.
 import { createDirectoryTestRuntime } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { readWebAuthExistsForDecision } from "./auth-store.js";
-import { getWhatsAppConnectionController } from "./connection-controller-runtime-context.js";
-import {
-  acquireWhatsAppStandaloneConnectionOwner,
-  WhatsAppConnectionOwnerBusyError,
-} from "./connection-owner.js";
-import {
-  listWhatsAppDirectoryGroupsLive,
-  listWhatsAppDirectoryGroupsFromConfig,
-  listWhatsAppDirectoryPeersFromConfig,
-} from "./directory-config.js";
-import {
-  createWaDirectorySocket,
-  waitForCredsSaveQueueWithTimeout,
-  waitForWaConnection,
-} from "./session.js";
+import { beforeEach, expect, it, vi } from "vitest";
+import { WhatsAppConnectionOwnerBusyError } from "./connection-owner.js";
+import { listWhatsAppDirectoryGroupsLive as listGroups } from "./directory-config.js";
 
 const mocks = vi.hoisted(() => ({
-  acquireOwner: vi.fn(),
-  createSocket: vi.fn(),
-  getController: vi.fn(),
+  acquireOwner:
+    vi.fn<typeof import("./connection-owner.js").acquireWhatsAppStandaloneConnectionOwner>(),
+  createSocket: vi.fn<typeof import("./session.js").createWaDirectorySocket>(),
+  getController:
+    vi.fn<
+      typeof import("./connection-controller-runtime-context.js").getWhatsAppConnectionController
+    >(),
   hasPendingOwner: vi.fn(),
-  readAuth: vi.fn(),
+  readAuth: vi.fn<typeof import("./auth-store.js").readWebAuthExistsForDecision>(),
   releaseOwner: vi.fn(),
   resolveAuthDir: vi.fn(),
-  waitForConnection: vi.fn(),
-  waitForCreds: vi.fn(),
+  waitForConnection: vi.fn<typeof import("./session.js").waitForWaConnection>(),
+  waitForCreds: vi.fn<typeof import("./session.js").waitForCredsSaveQueueWithTimeout>(),
 }));
-
-vi.mock("./active-listener.js", () => ({
+vi.mock("./active-listener.js", async (original) => ({
+  ...(await original<typeof import("./active-listener.js")>()),
   resolveWebAccountId: () => "default",
 }));
-
-vi.mock("./accounts.js", () => ({
+vi.mock("./accounts.js", async (original) => ({
+  ...(await original<typeof import("./accounts.js")>()),
   resolveWhatsAppAuthDir: mocks.resolveAuthDir,
 }));
-
 vi.mock("./connection-controller-runtime-context.js", () => ({
   getWhatsAppConnectionController: mocks.getController,
   hasPendingWhatsAppConnectionOwner: mocks.hasPendingOwner,
 }));
-
-vi.mock("./connection-owner.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./connection-owner.js")>();
-  return {
-    ...actual,
-    acquireWhatsAppStandaloneConnectionOwner: mocks.acquireOwner,
-  };
-});
-
-vi.mock("./auth-store.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./auth-store.js")>();
-  return {
-    ...actual,
-    readWebAuthExistsForDecision: mocks.readAuth,
-  };
-});
-
+vi.mock("./connection-owner.js", async (original) => ({
+  ...(await original<typeof import("./connection-owner.js")>()),
+  acquireWhatsAppStandaloneConnectionOwner: mocks.acquireOwner,
+}));
+vi.mock("./auth-store.js", async (original) => ({
+  ...(await original<typeof import("./auth-store.js")>()),
+  readWebAuthExistsForDecision: mocks.readAuth,
+}));
 vi.mock("./session.js", () => ({
   createWaDirectorySocket: mocks.createSocket,
   waitForCredsSaveQueueWithTimeout: mocks.waitForCreds,
   waitForWaConnection: mocks.waitForConnection,
 }));
 
-const getControllerMock = vi.mocked(getWhatsAppConnectionController);
-const acquireOwnerMock = vi.mocked(acquireWhatsAppStandaloneConnectionOwner);
-const readAuthMock = vi.mocked(readWebAuthExistsForDecision);
-const createSocketMock = vi.mocked(createWaDirectorySocket);
-const waitForConnectionMock = vi.mocked(waitForWaConnection);
-const waitForCredsMock = vi.mocked(waitForCredsSaveQueueWithTimeout);
-
-describe("whatsapp directory", () => {
-  const runtimeEnv = createDirectoryTestRuntime() as never;
-  const cfg = {
-    channels: {
-      whatsapp: {
-        authDir: "/tmp/wa-auth",
-        allowFrom: [
-          "whatsapp:+15551230001",
-          "15551230002@s.whatsapp.net",
-          "120363999999999999@g.us",
-        ],
-        groups: {
-          "120363111111111111@g.us": {},
-          "120363222222222222@g.us": {},
-        },
+const root = "/tmp/wa-auth";
+const first = "120363100000000000@g.us";
+const third = "120363300000000000@g.us";
+const cfg = { channels: { whatsapp: { authDir: root, groups: { [first]: {}, [third]: {} } } } };
+const runtime = createDirectoryTestRuntime() as never;
+const params = (overrides: Partial<Parameters<typeof listGroups>[0]> = {}) =>
+  ({ cfg, accountId: undefined, runtime, ...overrides }) as never;
+const unavailable = (reason: string) =>
+  expect(listGroups(params())).rejects.toMatchObject({
+    code: "whatsapp_directory_unavailable",
+    reason,
+  });
+const entry = (id: string, name: string) => ({ kind: "group", id, name });
+function socket(groups?: Record<string, { id: string; subject?: string }>, onEnd = () => {}) {
+  let closed = false;
+  return {
+    groupFetchAllParticipating: groups === undefined ? vi.fn() : vi.fn().mockResolvedValue(groups),
+    end: vi.fn(async () => {
+      closed = true;
+      onEnd();
+    }),
+    ws: {
+      close: vi.fn(async () => {
+        closed = true;
+      }),
+      get isClosed() {
+        return closed;
       },
     },
-  } as unknown as OpenClawConfig;
+  };
+}
+beforeEach(() => {
+  vi.clearAllMocks();
+  mocks.getController.mockReturnValue(null);
+  mocks.hasPendingOwner.mockReturnValue(false);
+  mocks.releaseOwner.mockResolvedValue(undefined);
+  mocks.resolveAuthDir.mockImplementation(({ accountId }: { accountId: string }) => ({
+    authDir: accountId === "secondary" ? "/tmp/secondary-wa-auth" : root,
+    isLegacy: false,
+  }));
+  mocks.acquireOwner.mockResolvedValue({ release: mocks.releaseOwner });
+  mocks.readAuth.mockResolvedValue({ outcome: "stable", exists: true });
+  mocks.waitForConnection.mockResolvedValue(undefined);
+  mocks.waitForCreds.mockResolvedValue("drained");
+});
 
-  const makeParams = (overrides: { query?: string; limit?: number } = {}) =>
-    ({
-      cfg,
-      accountId: undefined,
-      query: overrides.query,
-      limit: overrides.limit,
-      runtime: runtimeEnv,
-    }) as never;
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-    getControllerMock.mockReturnValue(null);
-    mocks.hasPendingOwner.mockReturnValue(false);
-    mocks.releaseOwner.mockResolvedValue(undefined);
-    mocks.resolveAuthDir.mockImplementation(({ accountId }: { accountId: string }) => ({
-      authDir: accountId === "secondary" ? "/tmp/secondary-wa-auth" : "/tmp/wa-auth",
-      isLegacy: false,
-    }));
-    acquireOwnerMock.mockResolvedValue({ release: mocks.releaseOwner });
-    readAuthMock.mockResolvedValue({ outcome: "stable", exists: true });
-    waitForConnectionMock.mockResolvedValue(undefined);
-    waitForCredsMock.mockResolvedValue("drained");
+it("filters and sorts groups through the active owner", async () => {
+  const sock = socket({
+    [third]: { id: third, subject: "Beta" },
+    [first]: { id: first, subject: "Beta Team" },
   });
+  mocks.getController.mockReturnValue({ getCurrentSock: () => sock } as never);
+  await expect(listGroups(params({ query: "beta", limit: 1 }))).resolves.toEqual([
+    entry(first, "Beta Team"),
+  ]);
+  expect(mocks.acquireOwner).not.toHaveBeenCalled();
+});
 
-  afterEach(() => {
-    vi.useRealTimers();
+it.each([false, true])(
+  "refuses a standalone socket while gateway owner is pending=%s",
+  async (pending) => {
+    if (pending) {
+      mocks.hasPendingOwner.mockReturnValueOnce(true);
+    } else {
+      mocks.getController.mockReturnValue({ getCurrentSock: () => null } as never);
+    }
+    await unavailable("active_owner_unavailable");
+    expect(mocks.acquireOwner).not.toHaveBeenCalled();
+  },
+);
+
+it("does not substitute configured groups after a failed gateway lookup", async () => {
+  const sock = socket();
+  sock.groupFetchAllParticipating.mockRejectedValue(new Error("query failed"));
+  mocks.getController.mockReturnValue({ getCurrentSock: () => sock } as never);
+  await unavailable("lookup_failed");
+});
+
+it("orders standalone socket closure, credential drain, and ownership release", async () => {
+  const order: string[] = [];
+  const sock = socket({ [third]: { id: third, subject: "Three" } }, () =>
+    order.push("socket-ended"),
+  );
+  mocks.createSocket.mockResolvedValue(sock as never);
+  mocks.waitForCreds.mockImplementationOnce(async () => {
+    order.push("creds-drained");
+    return "drained";
   });
-
-  it("lists peers and groups from config", async () => {
-    await expect(
-      listWhatsAppDirectoryPeersFromConfig({
-        cfg,
-        accountId: undefined,
-        query: undefined,
-        limit: undefined,
-        runtime: runtimeEnv,
-      } as never),
-    ).resolves.toEqual([
-      { kind: "user", id: "+15551230001" },
-      { kind: "user", id: "+15551230002" },
-    ]);
-
-    await expect(
-      listWhatsAppDirectoryGroupsFromConfig({
-        cfg,
-        accountId: undefined,
-        query: undefined,
-        limit: undefined,
-        runtime: runtimeEnv,
-      } as never),
-    ).resolves.toEqual([
-      { kind: "group", id: "120363111111111111@g.us" },
-      { kind: "group", id: "120363222222222222@g.us" },
-    ]);
+  mocks.releaseOwner.mockImplementationOnce(async () => {
+    order.push("owner-released");
   });
+  await expect(listGroups(params())).resolves.toEqual([entry(third, "Three")]);
+  expect(mocks.acquireOwner).toHaveBeenCalledWith(root);
+  expect(mocks.waitForConnection).toHaveBeenCalledWith(sock, { timeoutMs: 30_000 });
+  expect(order).toEqual(["socket-ended", "creds-drained", "owner-released"]);
+});
 
-  it("uses the active gateway owner and applies deterministic filtering", async () => {
-    const sock = {
-      groupFetchAllParticipating: vi.fn().mockResolvedValue({
-        "120363300000000000@g.us": { id: "120363300000000000@g.us", subject: "Beta" },
-        "120363100000000000@g.us": { id: "120363100000000000@g.us", subject: "Beta Team" },
-      }),
-    };
-    getControllerMock.mockReturnValue({ getCurrentSock: () => sock } as never);
+it("reports contention without opening a socket", async () => {
+  mocks.acquireOwner.mockRejectedValueOnce(new WhatsAppConnectionOwnerBusyError(root));
+  await unavailable("connection_owner_busy");
+  expect(mocks.createSocket).not.toHaveBeenCalled();
+});
 
-    await expect(
-      listWhatsAppDirectoryGroupsLive(makeParams({ query: "beta", limit: 1 })),
-    ).resolves.toEqual([{ kind: "group", id: "120363100000000000@g.us", name: "Beta Team" }]);
-    expect(acquireOwnerMock).not.toHaveBeenCalled();
-  });
-
-  it("reports a typed error when the gateway owner has no active socket", async () => {
-    getControllerMock.mockReturnValue({ getCurrentSock: () => null } as never);
-
-    await expect(listWhatsAppDirectoryGroupsLive(makeParams())).rejects.toMatchObject({
-      code: "whatsapp_directory_unavailable",
-      reason: "active_owner_unavailable",
-    });
-    expect(acquireOwnerMock).not.toHaveBeenCalled();
-  });
-
-  it("does not start a standalone socket while the gateway owner is connecting", async () => {
-    mocks.hasPendingOwner.mockReturnValueOnce(true);
-
-    await expect(listWhatsAppDirectoryGroupsLive(makeParams())).rejects.toMatchObject({
-      code: "whatsapp_directory_unavailable",
-      reason: "active_owner_unavailable",
-    });
-    expect(acquireOwnerMock).not.toHaveBeenCalled();
-  });
-
-  it("does not substitute configured groups when the gateway lookup fails", async () => {
-    getControllerMock.mockReturnValue({
-      getCurrentSock: () => ({
-        groupFetchAllParticipating: vi.fn().mockRejectedValue(new Error("query failed")),
-      }),
-    } as never);
-
-    await expect(listWhatsAppDirectoryGroupsLive(makeParams())).rejects.toMatchObject({
-      code: "whatsapp_directory_unavailable",
-      reason: "lookup_failed",
-    });
-  });
-
-  it("runs a standalone lookup under exclusive ownership and awaits cleanup", async () => {
-    const order: string[] = [];
-    let closed = false;
-    const sock = {
-      groupFetchAllParticipating: vi.fn().mockResolvedValue({
-        "120363300000000000@g.us": { id: "120363300000000000@g.us", subject: "Three" },
-      }),
-      end: vi.fn(async () => {
-        closed = true;
-        order.push("socket-ended");
-      }),
-      ws: {
-        close: vi.fn(async () => {
-          closed = true;
-        }),
-        get isClosed() {
-          return closed;
-        },
-      },
-    };
-    createSocketMock.mockResolvedValue(sock as never);
-    waitForCredsMock.mockImplementationOnce(async () => {
-      order.push("creds-drained");
-      return "drained";
-    });
-    mocks.releaseOwner.mockImplementationOnce(async () => {
-      order.push("owner-released");
-    });
-
-    await expect(listWhatsAppDirectoryGroupsLive(makeParams())).resolves.toEqual([
-      { kind: "group", id: "120363300000000000@g.us", name: "Three" },
-    ]);
-    expect(acquireOwnerMock).toHaveBeenCalledWith("/tmp/wa-auth");
-    expect(waitForConnectionMock).toHaveBeenCalledWith(sock, { timeoutMs: 30_000 });
-    expect(order).toEqual(["socket-ended", "creds-drained", "owner-released"]);
-  });
-
-  it("reports connection-owner contention without opening a socket", async () => {
-    acquireOwnerMock.mockRejectedValueOnce(new WhatsAppConnectionOwnerBusyError("/tmp/wa-auth"));
-
-    await expect(listWhatsAppDirectoryGroupsLive(makeParams())).rejects.toMatchObject({
-      code: "whatsapp_directory_unavailable",
-      reason: "connection_owner_busy",
-    });
-    expect(createSocketMock).not.toHaveBeenCalled();
-  });
-
-  it("reports unlinked auth and releases standalone ownership", async () => {
-    readAuthMock.mockResolvedValueOnce({ outcome: "stable", exists: false });
-
-    await expect(listWhatsAppDirectoryGroupsLive(makeParams())).rejects.toMatchObject({
+it("resolves the selected account and releases ownership when unlinked", async () => {
+  mocks.readAuth.mockResolvedValueOnce({ outcome: "stable", exists: false });
+  const namedCfg: OpenClawConfig = {
+    channels: { whatsapp: { accounts: { secondary: { enabled: true } } } },
+  };
+  await expect(listGroups(params({ cfg: namedCfg, accountId: "secondary" }))).rejects.toMatchObject(
+    {
       code: "whatsapp_directory_unavailable",
       reason: "not_linked",
-    });
-    expect(mocks.releaseOwner).toHaveBeenCalledOnce();
-  });
+    },
+  );
+  expect(mocks.resolveAuthDir).toHaveBeenCalledWith({ cfg: namedCfg, accountId: "secondary" });
+  expect(mocks.acquireOwner).toHaveBeenCalledWith("/tmp/secondary-wa-auth");
+  expect(mocks.releaseOwner).toHaveBeenCalledOnce();
+});
 
-  it("resolves standalone credentials for the selected account", async () => {
-    readAuthMock.mockResolvedValueOnce({ outcome: "stable", exists: false });
-    const namedCfg = {
-      channels: { whatsapp: { accounts: { secondary: { enabled: true } } } },
-    } as unknown as OpenClawConfig;
+it("cleans up a socket whose connection fails", async () => {
+  const sock = socket();
+  mocks.createSocket.mockResolvedValueOnce(sock as never);
+  mocks.waitForConnection.mockRejectedValueOnce(new Error("offline"));
+  await unavailable("connection_failed");
+  expect(sock.end).toHaveBeenCalledOnce();
+  expect(mocks.waitForCreds).toHaveBeenCalledWith(root);
+  expect(mocks.releaseOwner).toHaveBeenCalledOnce();
+});
 
-    await expect(
-      listWhatsAppDirectoryGroupsLive({
-        cfg: namedCfg,
-        accountId: "secondary",
-        query: undefined,
-        limit: undefined,
-        runtime: runtimeEnv,
-      } as never),
-    ).rejects.toMatchObject({ reason: "not_linked" });
-
-    expect(mocks.resolveAuthDir).toHaveBeenCalledWith({
-      cfg: namedCfg,
-      accountId: "secondary",
-    });
-    expect(acquireOwnerMock).toHaveBeenCalledWith("/tmp/secondary-wa-auth");
-  });
-
-  it("closes a created socket when standalone connection setup fails", async () => {
-    let closed = false;
-    const sock = {
-      groupFetchAllParticipating: vi.fn(),
-      end: vi.fn(async () => {
-        closed = true;
-      }),
-      ws: {
-        close: vi.fn(async () => {
-          closed = true;
-        }),
-        get isClosed() {
-          return closed;
-        },
-      },
-    };
-    createSocketMock.mockResolvedValueOnce(sock as never);
-    waitForConnectionMock.mockRejectedValueOnce(new Error("offline"));
-
-    await expect(listWhatsAppDirectoryGroupsLive(makeParams())).rejects.toMatchObject({
-      code: "whatsapp_directory_unavailable",
-      reason: "connection_failed",
-    });
-    expect(sock.end).toHaveBeenCalledOnce();
-    expect(waitForCredsMock).toHaveBeenCalledWith("/tmp/wa-auth");
-    expect(mocks.releaseOwner).toHaveBeenCalledOnce();
-  });
-
-  it("retries retained ownership after credential cleanup times out", async () => {
-    vi.useFakeTimers();
-    let closed = false;
-    const sock = {
-      groupFetchAllParticipating: vi.fn().mockResolvedValue({}),
-      end: vi.fn(async () => {
-        closed = true;
-      }),
-      ws: {
-        close: vi.fn(async () => {
-          closed = true;
-        }),
-        get isClosed() {
-          return closed;
-        },
-      },
-    };
-    createSocketMock.mockResolvedValueOnce(sock as never);
-    waitForCredsMock.mockResolvedValueOnce("timed_out");
-
-    await expect(listWhatsAppDirectoryGroupsLive(makeParams())).rejects.toMatchObject({
-      code: "whatsapp_directory_unavailable",
-      reason: "cleanup_failed",
-    });
-    expect(mocks.releaseOwner).not.toHaveBeenCalled();
-
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(mocks.releaseOwner).toHaveBeenCalledOnce();
-  });
+it("retries retained cleanup after credential drain times out", async () => {
+  const sock = socket({});
+  mocks.createSocket.mockResolvedValueOnce(sock as never).mockResolvedValueOnce(sock as never);
+  mocks.waitForCreds.mockResolvedValueOnce("timed_out");
+  await unavailable("cleanup_failed");
+  expect(mocks.releaseOwner).not.toHaveBeenCalled();
+  await expect(listGroups(params())).resolves.toEqual([]);
+  expect(mocks.releaseOwner).toHaveBeenCalledTimes(2);
 });

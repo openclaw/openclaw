@@ -39,12 +39,7 @@ function resolveMatrixAccountAuthView(params: {
   cfg: CoreConfig;
   accountId: string;
   env: NodeJS.ProcessEnv;
-}): {
-  homeserver: string;
-  userId: string;
-  accessToken?: string;
-  password?: string;
-} {
+}) {
   const normalizedAccountId = normalizeAccountId(params.accountId);
   const matrix = resolveMatrixBaseConfig(params.cfg);
   const account = findMatrixAccountConfig(params.cfg, normalizedAccountId) ?? {};
@@ -102,8 +97,11 @@ export function listMatrixAccountIds(cfg: CoreConfig): string[] {
   return ids.length > 0 ? ids : [DEFAULT_ACCOUNT_ID];
 }
 
-export function resolveDefaultMatrixAccountId(cfg: CoreConfig): string {
-  return normalizeAccountId(resolveMatrixDefaultOrOnlyAccountId(cfg));
+export function resolveDefaultMatrixAccountId(
+  cfg: CoreConfig,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  return normalizeAccountId(resolveMatrixDefaultOrOnlyAccountId(cfg, env));
 }
 
 export async function resolveConfiguredMatrixBotUserIds(params: {
@@ -150,7 +148,7 @@ function prepareMatrixAccount(params: {
 }) {
   const env = params.env ?? process.env;
   const accountId = normalizeAccountId(
-    params.accountId ?? resolveDefaultMatrixAccountId(params.cfg),
+    params.accountId ?? resolveDefaultMatrixAccountId(params.cfg, env),
   );
   const matrixBase = resolveMatrixBaseConfig(params.cfg);
   const base = resolveMatrixAccountConfig({ cfg: params.cfg, accountId, env });
@@ -202,13 +200,33 @@ function isMatrixAccountConfigured(
   return prepared.hasHomeserver && (prepared.hasConfiguredAuth || hasStored);
 }
 
+/** @deprecated Use resolveMatrixAccountAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function resolveMatrixAccount(params: {
   cfg: CoreConfig;
   accountId?: string | null;
   env?: NodeJS.ProcessEnv;
 }): ResolvedMatrixAccount {
   const prepared = prepareMatrixAccount(params);
-  const stored = loadMatrixCredentials(params.env ?? process.env, prepared.account.accountId);
+  const stored =
+    prepared.hasHomeserver && !prepared.hasConfiguredAuth
+      ? loadMatrixCredentials(params.env ?? process.env, prepared.account.accountId)
+      : null;
+  return { ...prepared.account, configured: isMatrixAccountConfigured(prepared, stored) };
+}
+
+export async function resolveMatrixAccountAsync(params: {
+  cfg: CoreConfig;
+  accountId?: string | null;
+  env?: NodeJS.ProcessEnv;
+}): Promise<ResolvedMatrixAccount> {
+  const prepared = prepareMatrixAccount(params);
+  const stored =
+    prepared.hasHomeserver && !prepared.hasConfiguredAuth
+      ? await loadMatrixCredentialsAsync(
+          captureMatrixCredentialsEnv(params.env ?? process.env),
+          prepared.account.accountId,
+        )
+      : null;
   return { ...prepared.account, configured: isMatrixAccountConfigured(prepared, stored) };
 }
 

@@ -1,0 +1,82 @@
+import type { AgentWaitParams } from "../../../packages/gateway-protocol/src/index.js";
+import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { getAgentRunContext } from "../../infra/agent-run-registry.js";
+import {
+  getRpcSourceForGateway,
+  getRpcSourceIdentity,
+  isRpcSourceQueued,
+} from "../../sessions/session-controller.rpc-sources.js";
+import type { GatewayRequestContext } from "../server-methods/types.js";
+import { resolveAgentWaitSource } from "./agent-dedupe.js";
+import {
+  captureAgentJobSession,
+  getAgentJobSession,
+  projectAgentJobObservation,
+  waitForAgentJob,
+} from "./agent-job.js";
+
+/** Capture an agent wait's initial session and defer its terminal or queued result. */
+export function prepareAgentWaitForTurn(
+  context: Pick<GatewayRequestContext, "dedupe"> &
+    Partial<Pick<GatewayRequestContext, "resolveGatewayContext">>,
+  params: AgentWaitParams,
+  // Turn waits preserve byte-exact protocol run IDs.
+  options: { exactTurnSource?: boolean } = {},
+) {
+  const runId = options.exactTurnSource ? params.runId : params.runId.trim();
+  const timeoutMs = params.timeoutMs ?? 30_000;
+  const source = resolveAgentWaitSource(context, runId);
+  const lifecycleGeneration = getAgentEventLifecycleGeneration();
+  const queuedResult = () => {
+    const queued = getRpcSourceForGateway(runId, context.resolveGatewayContext);
+    return queued && queued.input.custody.enqueued === true && isRpcSourceQueued(queued)
+      ? {
+          session: captureAgentJobSession({
+            ...getRpcSourceIdentity(queued),
+            lifecycleGeneration,
+          }),
+          result: {
+            runId,
+            status: "pending" as const,
+            timeoutPhase: "queue" as const,
+            providerStarted: false,
+          },
+        }
+      : undefined;
+  };
+  const queuedBeforeWait = queuedResult();
+  // Compaction updates this registration; a reused run ID must not replace it.
+  const runContext = getAgentRunContext(runId);
+  const initialSession =
+    queuedBeforeWait?.session ??
+    getAgentJobSession(runId, source === "chat" ? "chat" : undefined) ??
+    captureAgentJobSession(runContext);
+  const wait = async () => {
+    if (queuedBeforeWait) {
+      return queuedBeforeWait;
+    }
+    let queuedDuringWait: ReturnType<typeof queuedResult>;
+    const snapshot = await waitForAgentJob({
+      runId,
+      timeoutMs,
+      source,
+      stopWaiting: () => {
+        queuedDuringWait = queuedResult();
+        return queuedDuringWait !== undefined;
+      },
+    });
+    const queuedAfterWait = queuedDuringWait ?? queuedResult();
+    if (queuedAfterWait) {
+      return queuedAfterWait;
+    }
+    if (!snapshot) {
+      return {
+        result: { runId, status: "timeout" as const },
+        session: captureAgentJobSession(runContext) ?? initialSession,
+      };
+    }
+    const { session, ...result } = projectAgentJobObservation(snapshot);
+    return { session, result: { runId, ...result } };
+  };
+  return { session: initialSession, wait };
+}

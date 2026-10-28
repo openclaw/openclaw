@@ -19,6 +19,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
@@ -114,9 +115,7 @@ internal class ProviderAuthController(
           publish { it.copy(signInActive = false) }
           throw err
         }
-      if (closed) {
-        closeWizard(id)
-      } else if (sessionId == id && cancelRequested) {
+      if (closed || (sessionId == id && cancelRequested)) {
         val result = closeWizard(id)
         if (result != null) finish(id, terminalResult(result))
       } else if (sessionId == id) {
@@ -189,9 +188,8 @@ internal class ProviderAuthController(
           sessionId = null
           publish { it.copy(signInActive = false, errorText = nativeText("This sign-in session has ended. Refresh and start again.")) }
         }
-      } catch (err: CancellationException) {
-        throw err
-      } catch (_: Exception) {
+      } catch (err: Exception) {
+        if (err is CancellationException) throw err
         publish { it.copy(errorText = nativeText("Could not cancel sign-in. Check the connection and try again.")) }
       } finally {
         publish { it.copy(cancelling = false) }
@@ -206,9 +204,8 @@ internal class ProviderAuthController(
     scope.launch {
       try {
         closeWizard(id)
-      } catch (err: CancellationException) {
-        throw err
-      } catch (_: Exception) {
+      } catch (err: Exception) {
+        if (err is CancellationException) throw err
         Log.w("ProviderAuth", "Could not close provider sign-in; connection teardown also closes the session.")
       }
     }
@@ -222,9 +219,8 @@ internal class ProviderAuthController(
     scope.launch {
       try {
         block()
-      } catch (err: CancellationException) {
-        throw err
       } catch (err: Exception) {
+        if (err is CancellationException) throw err
         if (err is GatewayRequestRejected && err.gatewayError.details?.code == "WIZARD_NOT_FOUND" && sessionId != id) return@launch
         if (sessionId == id || sessionId == null) {
           publish {
@@ -346,9 +342,5 @@ internal class ProviderAuthController(
 
   private fun resultError(result: JsonObject): NativeText? = if (result["error"] != null) nativeText("Sign-in could not finish. Review the sign-in step and try again.") else null
 
-  private fun terminalResult(result: JsonObject): JsonObject =
-    buildJsonObject {
-      put("done", true)
-      result.forEach { (key, value) -> put(key, value) }
-    }
+  private fun terminalResult(result: JsonObject): JsonObject = JsonObject(mapOf("done" to JsonPrimitive(true)) + result)
 }

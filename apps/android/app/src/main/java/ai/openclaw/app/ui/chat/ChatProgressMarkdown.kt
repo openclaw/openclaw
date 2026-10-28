@@ -47,12 +47,13 @@ internal data class ChatInlineProgress(
 
 private fun isProgressWhitespace(node: Node): Boolean = node is SoftLineBreak || node is HardLineBreak || (node is MarkdownText && node.literal.isBlank())
 
+private fun Node?.skipProgressWhitespace(): Node? = markdownSiblings(this).firstOrNull { !isProgressWhitespace(it) }
+
 internal fun findChatInlineProgress(start: Node?): ChatInlineProgress? {
   var node = start
   while (node != null) {
     if (node is HtmlInline) {
-      var close = node.next
-      while (close != null && isProgressWhitespace(close)) close = close.next
+      val close = node.next.skipProgressWhitespace()
       if (close is HtmlInline) {
         val element = parseProgressLiteral(node.literal + close.literal)
         if (element != null) return ChatInlineProgress(node, close.next, element)
@@ -66,13 +67,10 @@ internal fun findChatInlineProgress(start: Node?): ChatInlineProgress? {
 internal fun parseChatProgressElement(node: Node): ChatProgressElement? {
   if (node is HtmlBlock) return parseProgressLiteral(node.literal)
   if (node !is Paragraph) return null
-  var first = node.firstChild
-  while (first != null && isProgressWhitespace(first)) first = first.next
+  val first = node.firstChild.skipProgressWhitespace()
   val progress = findChatInlineProgress(first) ?: return null
   if (progress.start !== first) return null
-  var after = progress.after
-  while (after != null && isProgressWhitespace(after)) after = after.next
-  return progress.element.takeIf { after == null }
+  return progress.element.takeIf { progress.after.skipProgressWhitespace() == null }
 }
 
 private fun parseProgressLiteral(source: String): ChatProgressElement? {

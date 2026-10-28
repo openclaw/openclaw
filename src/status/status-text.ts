@@ -1,3 +1,4 @@
+import os from "node:os";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import {
   resolveAgentConfig,
@@ -6,20 +7,20 @@ import {
   resolveSessionAgentId,
   resolveAgentModelFallbacksOverride,
 } from "../agents/agent-scope.js";
-import { ensureAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
-import { waitForContextWindowCacheLoad } from "../agents/context.js";
+import { ensureAuthProfileStoreAsync } from "../agents/auth-profiles/store-runtime.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
 import { resolveAgentHarnessAutoSelectionHint } from "../agents/harness/auto-selection.js";
 import { resolveAgentHarnessPolicy } from "../agents/harness/policy.js";
 import { listRegisteredAgentHarnesses } from "../agents/harness/registry.js";
 import { findModelInCatalog } from "../agents/model-catalog-lookup.js";
+import { createModelCatalogView } from "../agents/model-catalog-view.js";
 import {
   areRuntimeModelRefsEquivalent,
   shouldPreferActiveRuntimeAliasAuthLabel,
 } from "../agents/model-runtime-aliases.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { resolveConfiguredThinkingDefault } from "../agents/model-thinking-default.js";
-import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../agents/openai-routing.js";
+import { resolveSandboxRuntimeStatusAsync } from "../agents/sandbox/runtime-status.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../agents/session-runtime-compat.js";
 import {
   resolveInternalSessionKey,
@@ -29,82 +30,56 @@ import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import { resolveSelectedAndActiveModel } from "../auto-reply/model-runtime.js";
 import { normalizeThinkLevel } from "../auto-reply/thinking.shared.js";
 import { toAgentModelListLike } from "../config/model-input.js";
-import type { SessionEntry } from "../config/sessions.js";
+import { resolveFreshSessionTotalTokens } from "../config/sessions.js";
+import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
+import { resolveSessionLifecycleTimestampsAsync } from "../config/sessions/lifecycle-read.js";
 import { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { preparePhysicalSessionStorePath } from "../config/sessions/session-store-path.js";
+import { resolveProjectedAgentRunProgressState } from "../infra/agent-run-registry.js";
+import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
+import { withTimeout } from "../infra/fs-safe.js";
 import {
   formatUsageWindowSummary,
   loadProviderUsageSummary,
   resolveUsageProviderId,
 } from "../infra/provider-usage.js";
+import { formatMissingCostEntries } from "../infra/session-cost-usage-totals.js";
+import { loadSessionCostSummariesFromCache } from "../infra/session-cost-usage.js";
 import { resolveActiveProviderThinkingProfile } from "../plugins/provider-thinking-active.js";
 import { normalizeAccountId } from "../routing/account-id.js";
 import { resolveNormalizedAccountEntry } from "../routing/account-lookup.js";
 import { createLazyPromise } from "../shared/lazy-runtime.js";
-import { readTaskStatusSnapshots } from "../tasks/task-status-access.js";
-import {
-  type buildTaskStatusSnapshot,
-  formatTaskStatus,
-  formatTaskStatusDetail,
-  formatTaskStatusTitle,
-} from "../tasks/task-status.js";
+import { prepareTtsPreferences } from "../tts/tts-preferences.js";
 import {
   deliveryContextFromSession,
   sessionDeliveryOrigin,
 } from "../utils/delivery-context.read.js";
-// Status text helpers render runtime status summaries for CLI output.
+import { formatTokenCount, formatUsd } from "../utils/usage-format.js";
 import {
   buildCodexSyntheticUsageAuth,
   resolveUsageCredentialType,
   shouldUseCodexSyntheticUsageForRuntime,
 } from "./codex-synthetic-usage.js";
 import { resolveActiveFallbackState } from "./fallback-notice-state.js";
-import { readSessionFallbackModel } from "./session-fallback-model.js";
+import { readSessionFallbackModelAsync } from "./session-fallback-model.js";
 import type { StatusMessageParts } from "./status-message.js";
-import { createStatusModelAuthResolver } from "./status-model-auth.js";
+import { createStatusModelResolver } from "./status-model-auth.js";
 import { formatCompactPluginHealthLine } from "./status-plugin-health.js";
-import { appendSessionCostLine, buildStatusUptimeValue } from "./status-runtime-lines.js";
 import type { BuildStatusTextParams } from "./status-text.types.js";
 
-// Status text assembly gathers runtime/model/session/task facts, then delegates
-// final formatting to status-message.runtime through lazy imports.
+function buildStatusUptimeValue(): string {
+  const format = (ms: number) => formatDurationCompact(ms, { spaced: true }) ?? "0s";
+  const gatewayMs = Math.max(0, Math.round(process.uptime() * 1000));
+  const systemMs = Math.max(0, Math.round(os.uptime() * 1000));
+  return `gateway ${format(gatewayMs)} · system ${format(systemMs)}`;
+}
+
 const USAGE_OAUTH_ONLY_PROVIDERS = new Set([
   "anthropic",
   "github-copilot",
   "google-gemini-cli",
   "openai",
 ]);
-
-function resolveStatusChannelFeatureLine(params: {
-  cfg: OpenClawConfig;
-  statusChannel: string;
-  statusAccountId?: string;
-  sessionEntry?: SessionEntry;
-}): string | undefined {
-  const channel = normalizeOptionalLowercaseString(params.statusChannel);
-  if (channel !== "telegram") {
-    return undefined;
-  }
-  const telegramConfig = params.cfg.channels?.telegram;
-  const accountId = normalizeAccountId(
-    params.statusAccountId ??
-      deliveryContextFromSession(params.sessionEntry)?.accountId ??
-      sessionDeliveryOrigin(params.sessionEntry)?.accountId ??
-      telegramConfig?.defaultAccount,
-  );
-  const accountConfig = resolveNormalizedAccountEntry(
-    telegramConfig?.accounts,
-    accountId,
-    normalizeAccountId,
-  );
-  const richMessagesSetting = accountConfig?.richMessages ?? telegramConfig?.richMessages;
-  if (richMessagesSetting === true) {
-    return "Telegram rich messages: on · Bot API 10.3 sendRichMessage enabled";
-  }
-  return accountConfig?.richMessages === false
-    ? "Telegram rich messages: off · enable richMessages for this Telegram account"
-    : "Telegram rich messages: off · set channels.telegram.richMessages=true for tables/details/rich media";
-}
 
 // Status loaders keep the lazy-promise eviction default: a transient module-load
 // failure on one /status request self-heals on the next instead of poisoning
@@ -123,163 +98,15 @@ const loadStatusPluginHealthRuntime = createLazyPromise(
   () => import("./status-plugin-health.runtime.js"),
 );
 
-function shouldLoadUsageSummary(params: {
-  provider?: string;
-  selectedModelAuth?: string;
-  credentialType?: string;
-}): boolean {
-  if (!params.provider) {
-    return false;
-  }
-  if (!USAGE_OAUTH_ONLY_PROVIDERS.has(params.provider)) {
-    return true;
-  }
-  // OAuth/token usage endpoints are meaningful only for providers authenticated
-  // through those modes; skip API-key sessions to avoid slow unavailable calls.
-  const auth = normalizeOptionalLowercaseString(params.selectedModelAuth);
-  return Boolean(
-    params.credentialType === "oauth" ||
-    params.credentialType === "token" ||
-    auth?.startsWith("oauth") ||
-    auth?.startsWith("token"),
-  );
-}
-
-function resolveCodexSyntheticUsageAuthProfileId(params: {
-  profileId: string | undefined;
-  cfg: OpenClawConfig;
-  agentDir?: string;
-}): string | undefined {
-  const normalizedProfileId = params.profileId?.trim();
-  if (!normalizedProfileId) {
-    return undefined;
-  }
-  try {
-    const store = ensureAuthProfileStore(params.agentDir, {
-      allowKeychainPrompt: false,
-      config: params.cfg,
-      readOnly: true,
-      syncExternalCli: false,
-    });
-    const credential = store.profiles[normalizedProfileId];
-    if (!credential) {
-      return undefined;
-    }
-    return normalizeOptionalLowercaseString(credential.provider) === "openai"
-      ? normalizedProfileId
-      : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function formatSessionTaskLine(
-  snapshot: ReturnType<typeof buildTaskStatusSnapshot>,
-): string | undefined {
-  const task = snapshot.focus;
-  if (!task) {
-    return undefined;
-  }
-  const headline =
-    snapshot.activeCount > 0
-      ? `${snapshot.activeCount} active · ${snapshot.totalCount} total`
-      : snapshot.recentFailureCount > 0
-        ? `${snapshot.recentFailureCount} recent failure${snapshot.recentFailureCount === 1 ? "" : "s"}`
-        : "recently finished";
-  const title = formatTaskStatusTitle(task);
-  const detail = formatTaskStatusDetail(task);
-  const blocked = formatTaskStatus(task) === "blocked" ? "blocked" : undefined;
-  const parts = [headline, blocked, task.runtime, title, detail].filter(Boolean);
-  return parts.length ? `📌 Tasks: ${parts.join(" · ")}` : undefined;
-}
-
-async function resolveStatusHarnessId(params: {
-  cfg: OpenClawConfig;
-  provider: string;
-  model: string;
-  agentId: string;
-  sessionKey: string;
-  sessionEntry?: SessionEntry;
-}): Promise<string | undefined> {
-  try {
-    const sessionRuntime = resolveSessionRuntimeOverrideForProvider({
-      provider: params.provider,
-      entry: params.sessionEntry,
-      cfg: params.cfg,
-    });
-    const configuredRuntime = resolveAgentHarnessPolicy({
-      provider: params.provider,
-      modelId: params.model,
-      config: params.cfg,
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-    }).runtime;
-    const runtime = sessionRuntime ?? configuredRuntime;
-    if (runtime !== "auto") {
-      return normalizeOptionalLowercaseString(runtime) || undefined;
-    }
-    const registeredHarnesses = listRegisteredAgentHarnesses();
-    if (
-      registeredHarnesses.every(
-        ({ harness }) =>
-          resolveAgentHarnessAutoSelectionHint({ harness, provider: params.provider }) !==
-          undefined,
-      )
-    ) {
-      return "openclaw";
-    }
-    const { resolveEffectiveAgentRuntime } = await loadAgentThinkingRuntime();
-    const id = resolveEffectiveAgentRuntime({
-      cfg: params.cfg,
-      provider: params.provider,
-      modelId: params.model,
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-      sessionEntry: params.sessionEntry,
-    });
-    return normalizeOptionalLowercaseString(id) || undefined;
-  } catch {
-    // Harness selection is nice-to-have for display. Status should still render
-    // if dynamic harness modules are unavailable.
-    return undefined;
-  }
-}
-
-function resolveStatusRuntimeProvider(params: {
-  provider: string;
-  effectiveHarness?: string;
-}): string {
-  const harness = normalizeOptionalLowercaseString(params.effectiveHarness);
-  const provider = normalizeOptionalLowercaseString(params.provider);
-  if (harness === "codex" && (provider === "openai" || provider === "codex")) {
-    return "openai";
-  }
-  if (harness === "claude-cli" && provider === "anthropic") {
-    return "claude-cli";
-  }
-  return params.provider;
-}
-
-function formatAgentTaskCountsLine(
-  snapshot: ReturnType<typeof buildTaskStatusSnapshot> | undefined,
-): string | undefined {
-  if (!snapshot || snapshot.totalCount === 0) {
-    return undefined;
-  }
-  return `📌 Tasks: ${snapshot.activeCount} active · ${snapshot.totalCount} total · agent-local`;
-}
-
 async function resolveRuntimePluginHealthLine(): Promise<string | undefined> {
   try {
     const { collectRuntimePluginHealthSnapshot } = await loadStatusPluginHealthRuntime();
-    return formatCompactPluginHealthLine(collectRuntimePluginHealthSnapshot());
+    return formatCompactPluginHealthLine(await collectRuntimePluginHealthSnapshot());
   } catch {
     return "⚠️ Plugins: health unavailable";
   }
 }
 
-// Public status text builder for CLI/chat status commands. It resolves dynamic
-// runtime details just-in-time and returns the formatted multiline status body.
 export async function buildStatusText(params: BuildStatusTextParams): Promise<string> {
   return (await buildStatusReplyParts(params)).text;
 }
@@ -299,7 +126,6 @@ export async function buildStatusReplyParts(
     statusChannel,
     provider,
     model,
-    contextTokens,
     thinkingCatalog,
     resolvedThinkLevel,
     resolvedFastMode,
@@ -322,27 +148,69 @@ export async function buildStatusReplyParts(
     sessionEntry?.modelOverride?.trim() && !sessionEntry?.providerOverride?.trim(),
   );
   const modelParams = { selectedProvider, selectedModel, sessionEntry, parseSelectedProvider };
-  const activeModel = readSessionFallbackModel({
-    ...modelParams,
-    config: cfg,
-    sessionScope: { agentId: statusAgentId, sessionKey, storePath },
-  });
+  const activeModel =
+    resolveProjectedAgentRunProgressState({
+      agentId: statusAgentId,
+      sessionId: sessionEntry?.sessionId,
+      sessionKeys: sessionKey ? [sessionKey] : [],
+    }) === undefined
+      ? await readSessionFallbackModelAsync({
+          ...modelParams,
+          config: cfg,
+          sessionScope: { agentId: statusAgentId, sessionKey, storePath },
+        })
+      : undefined;
   const modelRefs = resolveSelectedAndActiveModel({
     ...modelParams,
     sessionEntry: activeModel ?? sessionEntry,
   });
   const selectedLookupProvider = modelRefs.selected.provider || selectedProvider || provider;
   const selectedLookupModel = modelRefs.selected.model || selectedModel || model;
-  const effectiveHarness =
-    params.resolvedHarness ??
-    (await resolveStatusHarnessId({
-      cfg,
-      provider: selectedLookupProvider,
-      model: selectedLookupModel,
-      agentId: statusAgentId,
-      sessionKey,
-      sessionEntry,
-    }));
+  const resolveStatusHarnessId = async (): Promise<string | undefined> => {
+    try {
+      const sessionRuntime = resolveSessionRuntimeOverrideForProvider({
+        provider: selectedLookupProvider,
+        entry: sessionEntry,
+        cfg,
+      });
+      const configuredRuntime = resolveAgentHarnessPolicy({
+        provider: selectedLookupProvider,
+        modelId: selectedLookupModel,
+        config: cfg,
+        agentId: statusAgentId,
+        sessionKey,
+      }).runtime;
+      const runtime = sessionRuntime ?? configuredRuntime;
+      if (runtime !== "auto") {
+        return normalizeOptionalLowercaseString(runtime) || undefined;
+      }
+      const registeredHarnesses = listRegisteredAgentHarnesses();
+      if (
+        registeredHarnesses.every(
+          ({ harness }) =>
+            resolveAgentHarnessAutoSelectionHint({ harness, provider: selectedLookupProvider }) !==
+            undefined,
+        )
+      ) {
+        return "openclaw";
+      }
+      const { resolveEffectiveAgentRuntime } = await loadAgentThinkingRuntime();
+      const id = resolveEffectiveAgentRuntime({
+        cfg,
+        provider: selectedLookupProvider,
+        modelId: selectedLookupModel,
+        agentId: statusAgentId,
+        sessionKey,
+        sessionEntry,
+      });
+      return normalizeOptionalLowercaseString(id) || undefined;
+    } catch {
+      // Harness selection is nice-to-have for display. Status should still render
+      // if dynamic harness modules are unavailable.
+      return undefined;
+    }
+  };
+  const effectiveHarness = params.resolvedHarness ?? (await resolveStatusHarnessId());
   const { getPreparedModelCatalogOwnerSnapshot, materializePreparedModelCatalogOwner } =
     await import("../agents/prepared-model-catalog.js");
   const preparedOwner = getPreparedModelCatalogOwnerSnapshot({
@@ -352,51 +220,54 @@ export async function buildStatusReplyParts(
     workspaceDir: statusWorkspaceDir,
     readOnly: true,
   });
+  const owner = preparedOwner ? materializePreparedModelCatalogOwner(preparedOwner) : undefined;
   // This lookup borrows existing facts; status never starts inventory discovery.
-  const resolveAuth = createStatusModelAuthResolver({
+  const resolveModel = createStatusModelResolver({
     cfg,
     agentId: statusAgentId,
     agentDir: statusAgentDir,
     workspaceDir: statusWorkspaceDir,
     sessionEntry,
-    owner: preparedOwner ? materializePreparedModelCatalogOwner(preparedOwner) : undefined,
+    owner,
   });
-  const selectedStatusProvider = resolveStatusRuntimeProvider({
-    provider: selectedLookupProvider,
-    effectiveHarness,
-  });
-  const selectedAuthProviders = listOpenAIAuthProfileProvidersForAgentRuntime({
-    provider: selectedLookupProvider,
-    harnessRuntime: effectiveHarness,
-    config: cfg,
-  });
+  const resolveStatusRuntimeProvider = (inputProvider: string): string => {
+    const harness = normalizeOptionalLowercaseString(effectiveHarness);
+    const normalizedProvider = normalizeOptionalLowercaseString(inputProvider);
+    if (
+      harness === "codex" &&
+      (normalizedProvider === "openai" || normalizedProvider === "codex")
+    ) {
+      return "openai";
+    }
+    if (harness === "claude-cli" && normalizedProvider === "anthropic") {
+      return "claude-cli";
+    }
+    return inputProvider;
+  };
+  const selectedStatusProvider = resolveStatusRuntimeProvider(selectedLookupProvider);
   const activeProvider = modelRefs.active.provider || provider;
-  const activeStatusProvider = resolveStatusRuntimeProvider({
-    provider: activeProvider,
-    effectiveHarness,
+  const activeStatusProvider = resolveStatusRuntimeProvider(activeProvider);
+  const selectedResolution = await resolveModel({
+    provider: selectedStatusProvider,
+    model: selectedLookupModel,
+    runtimeId: effectiveHarness,
+    acceptedProviderIds: [selectedLookupProvider],
+    ...(Object.hasOwn(params, "modelAuthOverride")
+      ? { authLabelOverride: params.modelAuthOverride }
+      : {}),
   });
-  const activeAuthProviders = listOpenAIAuthProfileProvidersForAgentRuntime({
-    provider: activeProvider,
-    harnessRuntime: effectiveHarness,
-    config: cfg,
-  });
-  let selectedModelAuth = Object.hasOwn(params, "modelAuthOverride")
-    ? params.modelAuthOverride
-    : await resolveAuth({
-        provider: selectedStatusProvider,
-        model: selectedLookupModel,
-        runtimeId: effectiveHarness,
-        acceptedProviderIds: selectedAuthProviders,
-      });
+  let selectedModelAuth = selectedResolution.authLabel;
   const activeModelAuth = Object.hasOwn(params, "activeModelAuthOverride")
     ? params.activeModelAuthOverride
     : modelRefs.activeDiffers
-      ? await resolveAuth({
-          provider: activeStatusProvider,
-          model: modelRefs.active.model || model,
-          runtimeId: effectiveHarness,
-          acceptedProviderIds: activeAuthProviders,
-        })
+      ? (
+          await resolveModel({
+            provider: activeStatusProvider,
+            model: modelRefs.active.model || model,
+            runtimeId: effectiveHarness,
+            acceptedProviderIds: [activeProvider],
+          })
+        ).authLabel
       : selectedModelAuth;
   const runtimeAliasModelEquivalent = areRuntimeModelRefsEquivalent(
     modelRefs.selected.label,
@@ -439,52 +310,60 @@ export async function buildStatusReplyParts(
       // A runtime fallback does not erase the session's Codex binding or its rate limits.
       sessionHarnessId: sessionEntry?.agentHarnessId,
     });
+  const resolveCodexSyntheticUsageAuthProfileId = async (): Promise<string | undefined> => {
+    const normalizedProfileId = sessionEntry?.authProfileOverride?.trim();
+    if (!normalizedProfileId) {
+      return undefined;
+    }
+    try {
+      const store = await ensureAuthProfileStoreAsync(statusAgentDir, {
+        allowKeychainPrompt: false,
+        config: cfg,
+        readOnly: true,
+        syncExternalCli: false,
+      });
+      const credential = store.profiles[normalizedProfileId];
+      if (!credential) {
+        return undefined;
+      }
+      return normalizeOptionalLowercaseString(credential.provider) === "openai"
+        ? normalizedProfileId
+        : undefined;
+    } catch {
+      return undefined;
+    }
+  };
   const codexUsageAuthProfileId = useCodexSyntheticUsage
-    ? resolveCodexSyntheticUsageAuthProfileId({
-        profileId: sessionEntry?.authProfileOverride,
-        cfg,
-        agentDir: statusAgentDir,
-      })
+    ? await resolveCodexSyntheticUsageAuthProfileId()
     : undefined;
   const usageCredentialType = useCodexSyntheticUsage ? "token" : selectedUsageCredentialType;
   const currentUsageProvider =
     resolveUsageProviderId(usageStatusProvider, { credentialType: usageCredentialType }) ??
     resolveUsageProviderId(usageProvider, { credentialType: usageCredentialType });
   let usageLine: string | null = null;
+  const normalizedUsageAuth = normalizeOptionalLowercaseString(usageAuthLabel);
+  // OAuth-only endpoints cannot report usage for API-key sessions.
   if (
     currentUsageProvider &&
-    shouldLoadUsageSummary({
-      provider: currentUsageProvider,
-      selectedModelAuth: usageAuthLabel,
-      credentialType: usageCredentialType,
-    })
+    (!USAGE_OAUTH_ONLY_PROVIDERS.has(currentUsageProvider) ||
+      usageCredentialType === "oauth" ||
+      usageCredentialType === "token" ||
+      normalizedUsageAuth?.startsWith("oauth") ||
+      normalizedUsageAuth?.startsWith("token"))
   ) {
     try {
       // Usage summary is optional operator context. Bound it tightly so a slow
       // provider usage probe cannot delay the status command.
       const usageSummaryTimeoutMs = useCodexSyntheticUsage ? 8000 : 3500;
-      let usageTimeout: NodeJS.Timeout | undefined;
-      const usageSummary = await Promise.race([
-        loadProviderUsageSummary({
-          timeoutMs: usageSummaryTimeoutMs,
-          providers: [currentUsageProvider],
-          agentDir: statusAgentDir,
-          workspaceDir: statusWorkspaceDir,
-          config: cfg,
-          auth: useCodexSyntheticUsage
-            ? [buildCodexSyntheticUsageAuth({ authProfileId: codexUsageAuthProfileId })]
-            : undefined,
-        }),
-        new Promise<never>((_, reject) => {
-          usageTimeout = setTimeout(
-            () => reject(new Error("usage summary timeout")),
-            usageSummaryTimeoutMs,
-          );
-        }),
-      ]).finally(() => {
-        if (usageTimeout) {
-          clearTimeout(usageTimeout);
-        }
+      const usageSummary = await loadProviderUsageSummary({
+        timeoutMs: usageSummaryTimeoutMs,
+        providers: [currentUsageProvider],
+        agentDir: statusAgentDir,
+        workspaceDir: statusWorkspaceDir,
+        config: cfg,
+        auth: useCodexSyntheticUsage
+          ? [buildCodexSyntheticUsageAuth({ authProfileId: codexUsageAuthProfileId })]
+          : undefined,
       });
       const usageEntry = usageSummary.providers[0];
       if (
@@ -494,11 +373,7 @@ export async function buildStatusReplyParts(
           Boolean(usageEntry.billing?.length) ||
           Boolean(usageEntry.summary?.trim()))
       ) {
-        const summaryLine = formatUsageWindowSummary(usageEntry, {
-          now: Date.now(),
-          maxWindows: 2,
-          includeResets: true,
-        });
+        const summaryLine = formatUsageWindowSummary(usageEntry);
         if (summaryLine) {
           usageLine = `📊 Usage: ${summaryLine}`;
         }
@@ -507,7 +382,50 @@ export async function buildStatusReplyParts(
       usageLine = null;
     }
   }
-  usageLine = await appendSessionCostLine(usageLine, cfg, statusAgentId, sessionEntry, storePath);
+  const costSessionId = sessionEntry?.sessionId?.trim();
+  if (costSessionId) {
+    try {
+      const sessionFile = formatSqliteSessionFileMarker({
+        sessionId: costSessionId,
+        agentId: statusAgentId,
+        storePath: await preparePhysicalSessionStorePath(
+          { agentId: statusAgentId, ...(storePath ? { storePath } : {}) },
+          cfg,
+        ),
+      });
+      const now = Date.now();
+      const date = new Date(now);
+      const startMs = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+      const loaded = await withTimeout(
+        loadSessionCostSummariesFromCache({
+          sessions: [{ sessionId: costSessionId, sessionFile }],
+          config: cfg,
+          agentId: statusAgentId,
+          startMs,
+          endMs: now,
+          dayBucket: { mode: "utc-offset", utcOffsetMinutes: -date.getTimezoneOffset() },
+          requestRefresh: false,
+        }),
+        3_500,
+        { message: "session cost timeout" },
+      );
+      const summary = loaded.cacheStatus.status === "fresh" ? loaded.summaries[0] : null;
+      if (summary) {
+        const cost =
+          summary.missingCostEntries > 0
+            ? `missing cost: ${formatMissingCostEntries(summary)}`
+            : formatUsd(summary.totalCost);
+        const tokens =
+          summary.usageReport?.state === "unavailable"
+            ? `usage incomplete · ${formatTokenCount(summary.totalTokens)} known tokens`
+            : `${formatTokenCount(summary.totalTokens)} tok`;
+        const line = `💵 ${cost ? `${cost} · ` : ""}${tokens} (today)`;
+        usageLine = [usageLine, line].filter(Boolean).join("\n");
+      }
+    } catch {
+      // Optional session cost must not hide the provider usage already collected.
+    }
+  }
   const { getFollowupQueueDepth, resolveQueueSettings } = await loadStatusQueueRuntime();
   const queueSettings = resolveQueueSettings({
     cfg,
@@ -521,22 +439,9 @@ export async function buildStatusReplyParts(
   );
 
   let subagentsLine: string | undefined;
-  let taskLine: string | undefined;
   if (sessionKey) {
-    const { mainKey, alias } = resolveMainSessionAlias(cfg);
-    const requesterKey = resolveInternalSessionKey({ key: sessionKey, alias, mainKey });
-    // Task/subagent status should follow the internal session key alias used by
-    // runtime registries, not necessarily the external key passed to the command.
-    taskLine = params.taskLineOverride;
-    if (!params.skipDefaultTaskLookup && !taskLine) {
-      const snapshots = await readTaskStatusSnapshots({
-        sessionKey: taskLine === undefined ? requesterKey : undefined,
-        agentId: statusAgentId,
-      });
-      snapshots.assertCurrent();
-      taskLine ??= formatSessionTaskLine(snapshots.session);
-      taskLine ||= formatAgentTaskCountsLine(snapshots.agent);
-    }
+    const { alias } = resolveMainSessionAlias(cfg);
+    const requesterKey = resolveInternalSessionKey({ key: sessionKey, alias });
     const { buildControlledSubagentRunsReadContext, buildSubagentsStatusLine } =
       await loadStatusSubagentsRuntime();
     const subagentReadContext = await buildControlledSubagentRunsReadContext(
@@ -559,8 +464,8 @@ export async function buildStatusReplyParts(
     resolvedFastMode ??
     resolveFastModeState({
       cfg,
-      provider,
-      model,
+      provider: selectedLookupProvider,
+      model: selectedLookupModel,
       agentId: statusAgentId,
       sessionEntry,
     }).mode;
@@ -574,29 +479,67 @@ export async function buildStatusReplyParts(
   const pluginHealthLine = Object.hasOwn(params, "pluginHealthLineOverride")
     ? params.pluginHealthLineOverride
     : await resolveRuntimePluginHealthLine();
-  const channelFeatureLine = resolveStatusChannelFeatureLine({
-    cfg,
-    statusChannel,
-    statusAccountId: params.statusAccountId,
-    sessionEntry,
-  });
+  let channelFeatureLine: string | undefined;
+  if (normalizeOptionalLowercaseString(statusChannel) === "telegram") {
+    const telegramConfig = cfg.channels?.telegram;
+    const accountId = normalizeAccountId(
+      params.statusAccountId ??
+        deliveryContextFromSession(sessionEntry)?.accountId ??
+        sessionDeliveryOrigin(sessionEntry)?.accountId ??
+        telegramConfig?.defaultAccount,
+    );
+    const accountConfig = resolveNormalizedAccountEntry(
+      telegramConfig?.accounts,
+      accountId,
+      normalizeAccountId,
+    );
+    const richMessagesSetting = accountConfig?.richMessages ?? telegramConfig?.richMessages;
+    channelFeatureLine =
+      richMessagesSetting === true
+        ? "Telegram rich messages: on · Bot API 10.3 sendRichMessage enabled"
+        : accountConfig?.richMessages === false
+          ? "Telegram rich messages: off · enable richMessages for this Telegram account"
+          : "Telegram rich messages: off · set channels.telegram.richMessages=true for tables/details/rich media";
+  }
   const { buildStatusMessageParts } = await loadStatusMessageRuntime();
-  await waitForContextWindowCacheLoad();
   const configuredThinkingDefault = resolveConfiguredThinkingDefault({
     cfg,
     agentId: statusAgentId,
     provider: selectedLookupProvider,
     model: selectedLookupModel,
   });
-  const preparedContextTokens =
-    typeof contextTokens === "number" && contextTokens > 0 ? contextTokens : undefined;
+  const catalog = owner ? (owner.isCurrent() ? owner.modelCatalog : undefined) : undefined;
+  const catalogView =
+    catalog &&
+    createModelCatalogView({
+      cfg,
+      catalog: catalog.entries,
+      routeVariants: catalog.routeVariants,
+    });
+  const contextCatalog =
+    catalog && catalogView
+      ? catalog.entries.map(
+          (entry) =>
+            catalogView.selectRuntimeEntry({
+              entry,
+              runtimeId: effectiveHarness ?? "openclaw",
+              allowApiFallback: false,
+            }).entry,
+        )
+      : owner
+        ? []
+        : (thinkingCatalog ?? []).filter((entry) =>
+            entry.nativeRuntime
+              ? entry.nativeRuntime === effectiveHarness
+              : ["openclaw", "auto", entry.provider].includes(effectiveHarness ?? "openclaw"),
+          );
   const selectedCatalogEntry = findModelInCatalog(
-    thinkingCatalog ?? [],
+    contextCatalog,
     selectedLookupProvider,
     selectedLookupModel,
   );
   const initialActiveCatalogEntry = findModelInCatalog(
-    thinkingCatalog ?? [],
+    contextCatalog,
     activeProvider,
     modelRefs.active.model || model,
   );
@@ -645,8 +588,49 @@ export async function buildStatusReplyParts(
               ? "active-or-bundled"
               : "active",
         });
+  const hasCommittedUsage =
+    resolveFreshSessionTotalTokens(sessionEntry) !== undefined &&
+    [
+      sessionEntry?.inputTokens,
+      sessionEntry?.outputTokens,
+      sessionEntry?.cacheRead,
+      sessionEntry?.cacheWrite,
+    ].every((value) => value !== undefined) &&
+    Boolean(sessionEntry?.model || activeModel);
+  const [lifecycleTimestamps, transcriptUsage] = await Promise.all([
+    resolveSessionLifecycleTimestampsAsync({
+      entry: sessionEntry,
+      agentId: statusAgentId,
+      sessionKey,
+      storePath,
+    }),
+    params.includeTranscriptUsage !== false && !hasCommittedUsage && sessionEntry?.sessionId
+      ? import("../gateway/session-transcript-usage.js")
+          .then(({ readRecentSessionUsageFromTranscriptAsync }) =>
+            readRecentSessionUsageFromTranscriptAsync(
+              {
+                agentId: statusAgentId,
+                sessionEntry,
+                sessionId: sessionEntry.sessionId,
+                sessionKey,
+                storePath,
+              },
+              256 * 1024,
+            ),
+          )
+          .catch(() => null)
+      : undefined,
+  ]);
+  const preparedSandboxRuntime = await resolveSandboxRuntimeStatusAsync({
+    cfg,
+    sessionKey,
+    agentId: statusAgentId,
+    preparedSessionEntry: sessionEntry,
+  });
   return buildStatusMessageParts({
     config: cfg,
+    preparedSandboxRuntime,
+    preparedTtsPreferences: params.preparedTtsPreferences ?? (await prepareTtsPreferences()),
     agent: {
       ...agentDefaults,
       model: {
@@ -655,7 +639,7 @@ export async function buildStatusReplyParts(
         ...(agentFallbacksOverride === undefined ? {} : { fallbacks: agentFallbacksOverride }),
       },
       thinkingDefault: configuredThinkingDefault,
-      verboseDefault: agentDefaults.verboseDefault,
+      verboseDefault: agentConfig?.verboseDefault ?? agentDefaults.verboseDefault,
       reasoningDefault: agentConfig?.reasoningDefault ?? agentDefaults.reasoningDefault,
       elevatedDefault: agentDefaults.elevatedDefault,
     },
@@ -664,30 +648,25 @@ export async function buildStatusReplyParts(
     modelRefs,
     activeModel,
     selectedContextWindow: selectedCatalogEntry?.contextWindow,
-    selectedContextTokens:
-      selectedCatalogEntry?.contextTokens ??
-      (selectedCatalogEntry && !activeRuntimeIsAuthoritative ? preparedContextTokens : undefined),
-    thinkingCatalog,
+    selectedContextTokens: selectedCatalogEntry?.contextTokens,
+    thinkingCatalog: contextCatalog,
     runtimeContextProvider: activeRuntimeIsAuthoritative ? activeStatusProvider : undefined,
-    runtimeContextTokens:
-      activeRuntimeIsAuthoritative &&
-      (initialActiveCatalogEntry || fallbackState.active) &&
-      (!activeModel || (activeModel.modelProvider === provider && activeModel.model === model))
-        ? preparedContextTokens
-        : undefined,
+    runtimeContextTokens: initialActiveCatalogEntry?.contextTokens,
     sessionEntry,
     sessionKey,
     parentSessionKey,
     sessionScope,
-    sessionStorePath: storePath,
+    sessionStartedAt: lifecycleTimestamps.sessionStartedAt,
     groupActivation,
     resolvedThink: effectiveThinkLevel,
+    requestedThink: requestedThinkLevel,
     resolvedFast: effectiveFastMode,
     resolvedHarness: effectiveHarness,
     resolvedVerbose: resolvedVerboseLevel,
     resolvedReasoning: resolvedReasoningLevel,
     resolvedElevated: resolvedElevatedLevel,
     modelAuth: selectedModelAuth,
+    selectedEndpoint: selectedResolution.endpoint,
     activeModelAuth,
     uptimeValue: buildStatusUptimeValue(),
     usageLine: usageLine ?? undefined,
@@ -700,10 +679,9 @@ export async function buildStatusReplyParts(
       showDetails: queueOverrides,
     },
     subagentsLine,
-    taskLine,
     pluginHealthLine,
     channelFeatureLine,
     mediaDecisions: params.mediaDecisions,
-    includeTranscriptUsage: params.includeTranscriptUsage ?? true,
+    transcriptUsage,
   });
 }

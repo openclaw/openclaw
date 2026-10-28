@@ -3,7 +3,7 @@ package ai.openclaw.app.ui
 import ai.openclaw.app.GatewayModelProviderSummary
 import ai.openclaw.app.GatewayModelSummary
 import ai.openclaw.app.MainViewModel
-import ai.openclaw.app.currentAppLanguage
+import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.i18n.nativeText
@@ -12,14 +12,15 @@ import ai.openclaw.app.i18n.resolveNativeTextResource
 import ai.openclaw.app.i18n.verbatimText
 import ai.openclaw.app.ui.design.ClawAvatarMark
 import ai.openclaw.app.ui.design.ClawEmptyState
+import ai.openclaw.app.ui.design.ClawIconBadge
+import ai.openclaw.app.ui.design.ClawIcons
 import ai.openclaw.app.ui.design.ClawListItem
+import ai.openclaw.app.ui.design.ClawListPanel
 import ai.openclaw.app.ui.design.ClawPanel
 import ai.openclaw.app.ui.design.ClawPlainIconButton
 import ai.openclaw.app.ui.design.ClawScaffold
-import ai.openclaw.app.ui.design.ClawSeparatedColumn
 import ai.openclaw.app.ui.design.ClawTextField
 import ai.openclaw.app.ui.design.ClawTheme
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -32,14 +33,11 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.AccessTime
-import androidx.compose.material.icons.outlined.ChatBubbleOutline
-import androidx.compose.material.icons.outlined.MicNone
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -62,7 +60,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
-/** Full-screen command palette for navigation and recent-session search. */
+private val commandListPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+
 @Composable
 internal fun CommandPalette(
   viewModel: MainViewModel,
@@ -131,19 +130,19 @@ internal fun CommandPalette(
 
         if (actionRows.isNotEmpty() || sessionRows.isEmpty()) {
           item(key = "actions-heading") {
-            CommandSectionLabel(title = nativeString("Quick actions"))
+            UppercaseSectionLabel(title = nativeString("Quick actions"), verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.Start)
           }
           item(key = "actions") {
             if (actionRows.isEmpty()) {
               ClawEmptyState(title = nativeString("No actions found"), body = nativeString("Try Chat, Voice, Threads, Providers, or Settings."))
             } else {
-              CommandActionList(rows = actionRows, onOpen = onOpen)
+              ClawListPanel(items = actionRows, contentPadding = commandListPadding) { row -> CommandActionRow(row = row, onOpen = onOpen) }
             }
           }
         }
 
         item(key = "threads-heading") {
-          CommandSectionLabel(title = nativeString("Threads"))
+          UppercaseSectionLabel(title = nativeString("Threads"), verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.Start)
         }
 
         item(key = "threads") {
@@ -156,19 +155,9 @@ internal fun CommandPalette(
               )
             }
           } else {
-            CommandSessionList(
-              rows =
-                sessionRows.map { session ->
-                  CommandSessionRow(
-                    key = session.key,
-                    ownerAgentId = session.ownerAgentId,
-                    title = sessionPresentationTitle(session) { nativeString("Main thread") },
-                    subtitle = sessionListSubtitle(session, fallback = nativeString("OpenClaw thread"), activeRunLabel = nativeString("Assistant working")),
-                    metadata = session.updatedAtMs?.let(::relativeSessionTime) ?: nativeString("now"),
-                  )
-                },
-              onOpen = onOpenSession,
-            )
+            ClawListPanel(items = sessionRows, contentPadding = commandListPadding) { row ->
+              CommandSessionListRow(row = row, onClick = { onOpenSession(row.key, row.ownerAgentId) })
+            }
           }
         }
       }
@@ -205,11 +194,11 @@ internal fun commandItems(
     .map { action ->
       when (action) {
         CommandAction.Chat -> {
-          CommandItem(action, nativeText("Open Chat"), nativeText("Start or continue a conversation"), Icons.Outlined.ChatBubbleOutline)
+          CommandItem(action, nativeText("Open Chat"), nativeText("Start or continue a conversation"), ClawIcons.Chat)
         }
 
         CommandAction.Voice -> {
-          CommandItem(action, nativeText("Start Voice"), nativeText("Talk or dictate with OpenClaw"), Icons.Outlined.MicNone)
+          CommandItem(action, nativeText("Start Voice"), nativeText("Talk or dictate with OpenClaw"), ClawIcons.Mic)
         }
 
         CommandAction.Sessions -> {
@@ -222,6 +211,7 @@ internal fun commandItems(
             when (route) {
               SettingsRoute.Home -> nativeText("Gateway, voice, notifications, privacy")
               SettingsRoute.ProvidersModels -> verbatimText(providerSubtitle)
+              SettingsRoute.SystemAgent -> nativeText("Setup, status, and repair")
               else -> checkNotNull(route.category).title
             }
           CommandItem(action, route.title, subtitle, route.icon)
@@ -256,35 +246,7 @@ internal fun commandActionAccessibilityDescription(
   action: CommandAction,
   title: String,
   resolve: (String, String) -> String = { source, argument -> nativeString(source, argument) },
-): String =
-  when (action) {
-    CommandAction.Chat,
-    CommandAction.Voice,
-    CommandAction.Sessions,
-    -> title
-
-    is CommandAction.Settings -> resolve("Open \${row.title}", title)
-  }
-
-private data class CommandSessionRow(
-  val key: String,
-  val ownerAgentId: String?,
-  val title: String,
-  val subtitle: String,
-  val metadata: String,
-)
-
-@Composable
-private fun CommandActionList(
-  rows: List<CommandItem>,
-  onOpen: (CommandAction) -> Unit,
-) {
-  ClawPanel(contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) {
-    ClawSeparatedColumn(items = rows) { row ->
-      CommandActionRow(row = row, onOpen = onOpen)
-    }
-  }
-}
+): String = if (action is CommandAction.Settings) resolve("Open \${row.title}", title) else title
 
 @Composable
 private fun CommandActionRow(
@@ -308,20 +270,8 @@ private fun CommandActionRow(
 }
 
 @Composable
-private fun CommandSessionList(
-  rows: List<CommandSessionRow>,
-  onOpen: (String, String?) -> Unit,
-) {
-  ClawPanel(contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) {
-    ClawSeparatedColumn(items = rows) { row ->
-      CommandSessionListRow(row = row, onClick = { onOpen(row.key, row.ownerAgentId) })
-    }
-  }
-}
-
-@Composable
 private fun CommandSessionListRow(
-  row: CommandSessionRow,
+  row: ChatSessionEntry,
   onClick: () -> Unit,
 ) {
   Surface(color = ClawTheme.colors.canvas, contentColor = ClawTheme.colors.text) {
@@ -336,12 +286,12 @@ private fun CommandSessionListRow(
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-      CommandRowIcon(icon = Icons.Outlined.ChatBubbleOutline)
+      CommandRowIcon(icon = ClawIcons.Chat)
       Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
-        Text(text = row.title, style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        Text(text = row.subtitle, style = ClawTheme.type.caption, color = ClawTheme.colors.textSubtle, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(text = sessionPresentationTitle(row) { nativeString("Main thread") }, style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(text = sessionListSubtitle(row, fallback = nativeString("OpenClaw thread"), activeRunLabel = nativeString("Assistant working")), style = ClawTheme.type.caption, color = ClawTheme.colors.textSubtle, maxLines = 1, overflow = TextOverflow.Ellipsis)
       }
-      Text(text = row.metadata, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+      Text(text = row.updatedAtMs?.let(::relativeSessionTime) ?: nativeString("now"), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
       CommandRowChevron(contentDescription = nativeString("Open thread"))
     }
   }
@@ -349,16 +299,13 @@ private fun CommandSessionListRow(
 
 @Composable
 private fun CommandRowIcon(icon: ImageVector) {
-  Surface(
-    modifier = Modifier.size(30.dp),
-    shape = CircleShape,
+  ClawIconBadge(
+    icon = icon,
+    size = 30.dp,
+    iconSize = 15.dp,
     color = ClawTheme.colors.canvas,
-    border = BorderStroke(1.dp, ClawTheme.colors.borderStrong),
-  ) {
-    Box(contentAlignment = Alignment.Center) {
-      Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(15.dp), tint = ClawTheme.colors.text)
-    }
-  }
+    borderColor = ClawTheme.colors.borderStrong,
+  )
 }
 
 @Composable
@@ -370,13 +317,6 @@ private fun CommandRowChevron(contentDescription: String?) {
       modifier = Modifier.size(17.dp),
       tint = ClawTheme.colors.textMuted,
     )
-  }
-}
-
-@Composable
-private fun CommandSectionLabel(title: String) {
-  Row(modifier = Modifier.fillMaxWidth()) {
-    Text(text = localizedUppercase(title, currentAppLanguage().languageTag), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
   }
 }
 

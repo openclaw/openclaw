@@ -1,6 +1,7 @@
 import childProcess from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { syncFixtureBuiltinExports } from "../scripts/fixtures/ci-fixture-runtime.cjs";
 
 /** @param {{ root: string, preload: string }} options */
@@ -11,7 +12,10 @@ export function installVitestShutdownCancellation({ root, preload }) {
     fs.renameSync(file(`${name}.tmp`), file(name));
   };
 
-  if (process.argv[2] === root) {
+  if (
+    process.argv.includes(fileURLToPath(new URL("./vitest-fork-shutdown.mjs", import.meta.url)))
+  ) {
+    let workerReady = false;
     const spawn = childProcess.spawn;
     childProcess.spawn = (command, args, options) => {
       const child = spawn(command, args, {
@@ -22,6 +26,16 @@ export function installVitestShutdownCancellation({ root, preload }) {
         },
       });
       publish("shim.pid", child.pid);
+      let output = "";
+      const forwardReady = (chunk) => {
+        output += chunk.toString();
+        if (output.includes("shutdown-worker-ready\n")) {
+          workerReady = true;
+          child.stdout.off("data", forwardReady);
+          fs.writeSync(1, "shutdown-worker-ready\n");
+        }
+      };
+      child.stdout.on("data", forwardReady);
       return child;
     };
     // Release after every TERM listener and its microtasks run. An immediate KILL
@@ -29,6 +43,9 @@ export function installVitestShutdownCancellation({ root, preload }) {
     process.on("SIGTERM", () => {
       publish("term-received", process.pid);
       setImmediate(() => {
+        if (!workerReady) {
+          return;
+        }
         for (const name of ["shim.pid", "worker.pid"]) {
           try {
             process.kill(Number(fs.readFileSync(file(name), "utf8")), "SIGCONT");
@@ -47,6 +64,8 @@ export function installVitestShutdownCancellation({ root, preload }) {
       if (target === file("receipt.json")) {
         // Stop at the actual worker receipt, before any test result or teardown.
         publish("worker.pid", process.pid);
+        // Flush to the already-owned pipe before suspending this event loop.
+        fs.writeSync(1, "shutdown-worker-ready\n");
         process.kill(process.pid, "SIGSTOP");
       }
       return result;

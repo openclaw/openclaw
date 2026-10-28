@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { once } from "node:events";
 import { appendFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { createQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
@@ -29,36 +30,20 @@ function hasExited(child: ChildProcess): boolean {
   return child.exitCode !== null || child.signalCode !== null;
 }
 
-function waitForClose(child: ChildProcess, timeoutMs: number): Promise<void> {
-  if (hasExited(child)) {
-    return Promise.resolve();
+async function stopFollowChild(child: ChildProcess, closed: Promise<unknown>): Promise<void> {
+  if (!hasExited(child)) {
+    child.kill("SIGINT");
   }
-  return new Promise((resolve, reject) => {
-    const onClose = () => {
-      clearTimeout(timer);
-      resolve();
-    };
-    const timer = setTimeout(() => {
-      child.off("close", onClose);
-      reject(new Error("follow child did not close before timeout"));
-    }, timeoutMs);
-    child.once("close", onClose);
-  });
-}
-
-async function stopFollowChild(child: ChildProcess): Promise<void> {
-  if (hasExited(child)) {
-    return;
-  }
-  child.kill("SIGINT");
-  try {
-    await waitForClose(child, 5_000);
-  } catch {
-    if (hasExited(child)) {
-      return;
+  // The grace escalates shutdown; only the captured close event completes ownership.
+  const escalation = setTimeout(() => {
+    if (!hasExited(child)) {
+      child.kill("SIGKILL");
     }
-    child.kill("SIGKILL");
-    await waitForClose(child, 5_000);
+  }, 5_000);
+  try {
+    await closed;
+  } finally {
+    clearTimeout(escalation);
   }
 }
 
@@ -66,10 +51,12 @@ export async function withOwnedFollowChild<T>(
   child: ChildProcess,
   operation: () => Promise<T>,
 ): Promise<T> {
+  const closed = once(child, "close");
+  void closed.catch(() => {});
   try {
     return await operation();
   } finally {
-    await stopFollowChild(child);
+    await stopFollowChild(child, closed);
   }
 }
 
@@ -86,6 +73,7 @@ export async function runRemoteLogTailing(repoRoot: string, outputRoot: string) 
   try {
     const gateway = await gatewayOwner.start({
       repoRoot,
+      initializeCurrentRuntimeState: true,
       command: {
         executablePath: process.execPath,
         argsPrefix: [path.join(repoRoot, "dist", "index.js")],
@@ -167,7 +155,7 @@ export async function runRemoteLogTailing(repoRoot: string, outputRoot: string) 
         "--interval",
         "50",
         "--limit",
-        "1",
+        "200",
         "--max-bytes",
         "4096",
       ],
@@ -182,17 +170,31 @@ export async function runRemoteLogTailing(repoRoot: string, outputRoot: string) 
       stderr += String(chunk);
     });
     const followOutput = await withOwnedFollowChild(child, async () => {
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 250);
-      });
-      await appendFile(logPath, logLine("qa-follow-line"));
       const deadline = Date.now() + 10_000;
-      while (!stdout.includes("qa-follow-line") && Date.now() < deadline) {
+      const records = () =>
+        stdout
+          .split("\n")
+          .slice(0, -1)
+          .map((line) => JSON.parse(line) as { type?: string; message?: string });
+      while (!records().some((record) => record.type === "meta") && Date.now() < deadline) {
         await new Promise<void>((resolve) => {
           setTimeout(resolve, 50);
         });
       }
-      if (!stdout.includes("qa-follow-line")) {
+      if (!records().some((record) => record.type === "meta")) {
+        throw new Error(`follow did not receive initial snapshot: ${stderr}`);
+      }
+      // Each poll logs its admitted connection; the window must also retain the appended record.
+      await appendFile(logPath, logLine("qa-follow-line"));
+      while (
+        !records().some((record) => record.message === "qa-follow-line") &&
+        Date.now() < deadline
+      ) {
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 50);
+        });
+      }
+      if (!records().some((record) => record.message === "qa-follow-line")) {
         throw new Error(`follow did not receive appended record: ${stderr}`);
       }
       return stdout;

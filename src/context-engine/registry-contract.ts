@@ -2,7 +2,9 @@ import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coer
 import type { ContextEngine } from "./types.js";
 
 export const CONTEXT_ENGINE_HOST_PARAMS = new Set(
-  "sessionKey prompt runtimeSettings sessionTarget runtimeContext abortSignal".split(" "),
+  "sessionKey prompt runtimeSettings sessionTarget runtimeContext abortSignal onProgress".split(
+    " ",
+  ),
 );
 
 export function projectContextEngineHostParams(

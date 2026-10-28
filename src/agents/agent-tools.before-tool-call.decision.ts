@@ -1,6 +1,6 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import { recordExecutionDecisionWork } from "../audit/execution-decision-work.js";
+import { AsyncContext } from "../shared/async-context.js";
 import { getAgentToolActionDescriptor } from "./agent-tool-metadata.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
@@ -10,7 +10,7 @@ const genericDecisions = {
   denied: ["denied", "enforced", "generic_action_policy_denied"],
   suppressed: ["not-applicable", "attribution-only", "generic_action_suppressed"],
 } as const;
-const toolDecisionOwner = new AsyncLocalStorage<{ recorded: boolean }>();
+const toolDecisionOwner = new AsyncContext<{ recorded: boolean }>(Symbol("toolDecisionOwner"));
 
 /** Marks the current tool call after its owner-native decision record is registered. */
 export function markToolDecisionRecorded(): void {

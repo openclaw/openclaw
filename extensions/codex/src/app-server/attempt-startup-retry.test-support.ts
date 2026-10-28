@@ -1,22 +1,18 @@
 import path from "node:path";
-import type {
-  CodexBundleMcpThreadConfig,
-  EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { CodexBundleMcpThreadConfig } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { vi } from "vitest";
 import { startCodexAttemptThread } from "./attempt-startup.js";
+import { createAttemptParams } from "./attempt-startup.test-support.js";
 import {
   resolveCodexAppServerRuntimeOptions,
   resolveCodexComputerUseConfig,
   type CodexPluginConfig,
 } from "./config.js";
-import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
 import { testCodexAppServerBindingStore } from "./session-binding.test-helpers.js";
 import { getLeasedSharedCodexAppServerClient } from "./shared-client.js";
-import { createCodexTestModel } from "./test-support.js";
 
 export function startFixtureAttempt(
-  fixture: { root: string; pluginConfig: CodexPluginConfig },
+  fixture: { root: string; pluginConfig: CodexPluginConfig; disableTools?: boolean },
   attemptClientFactory = getLeasedSharedCodexAppServerClient,
   signal = new AbortController().signal,
 ) {
@@ -36,40 +32,30 @@ export function startFixtureAttempt(
     appServer: resolveCodexAppServerRuntimeOptions({ pluginConfig: fixture.pluginConfig }),
     pluginConfig: fixture.pluginConfig,
     computerUseConfig: resolveCodexComputerUseConfig({ pluginConfig: fixture.pluginConfig }),
-    startupAuthProfileId: undefined,
-    startupAuthBindingFingerprint: undefined,
+    clientOptions: {
+      authProfileId: undefined,
+      authBindingFingerprint: undefined,
+      authRequirement: undefined,
+    },
     startupAuthAccountCacheKey: undefined,
     startupEnvApiKeyCacheKey: undefined,
     agentDir,
     config: undefined,
-    buildAttemptParams: () =>
-      ({
-        hostCapabilities: createCodexTestHostCapabilities(),
-        prompt: "hello",
-        sessionId: "session-1",
-        sessionKey: "agent:agent-1:session-1",
+    buildAttemptParams: () => ({
+      ...createAttemptParams({
         agentDir,
+        cwd: workspaceDir,
         sessionFile: path.join(fixture.root, "session.jsonl"),
-        effectiveCwd: workspaceDir,
         workspaceDir,
-        runId: "run-1",
-        provider: "codex",
-        modelId: "gpt-5.4-codex",
-        model: createCodexTestModel("codex"),
-        thinkLevel: "medium",
-        disableTools: true,
-        timeoutMs: 5_000,
-        authStorage: {} as never,
-        authProfileStore: { version: 1, profiles: {} },
-        modelRegistry: {} as never,
-      }) as EmbeddedRunAttemptParams,
+      }),
+      disableTools: fixture.disableTools ?? true,
+    }),
     sessionAgentId: "agent-1",
     effectiveWorkspace: workspaceDir,
     effectiveCwd: workspaceDir,
     dynamicTools: [],
     webSearchAllowed: false,
     developerInstructions: undefined,
-    finalConfigPatch: undefined,
     bundleMcpThreadConfig,
     nativeToolSurfaceEnabled: true,
     nativeProviderWebSearchSupport: "supported",

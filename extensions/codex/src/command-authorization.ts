@@ -1,4 +1,10 @@
 import type { PluginCommandContext } from "openclaw/plugin-sdk/plugin-entry";
+import type { PreparedSessionSourceAssertion } from "openclaw/plugin-sdk/session-binding-runtime";
+
+export type CodexCommandContext = PluginCommandContext & {
+  assertNativePolicyCurrent?: () => Promise<void>;
+  nativePolicySource?: PreparedSessionSourceAssertion;
+};
 
 type CodexHostMutationAuthContext = Pick<
   PluginCommandContext,
@@ -20,7 +26,7 @@ export function canMutateCodexHost(ctx: CodexHostMutationAuthContext): boolean {
   return ctx.senderIsOwner === true || hasCodexAdminScope(ctx);
 }
 
-export function assertCodexHostOwnerCurrent(ctx: PluginCommandContext): void {
+export function assertCodexHostOwnerCurrent(ctx: CodexCommandContext): void {
   if (!hasCodexAdminScope(ctx)) {
     ctx.assertOwnerCurrent?.();
   }

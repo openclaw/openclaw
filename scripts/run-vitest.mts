@@ -26,12 +26,17 @@ import { createVitestCacheSlots, resolveVitestCacheRoot } from "./lib/vitest-cac
 import {
   hasNonRunVitestSubcommand,
   collectVitestFileFilters,
+  replaceVitestFileFilters,
   resolveBooleanModeFlag,
   resolveExplicitVitestMode,
   vitestOptionConsumesNextArg,
 } from "./lib/vitest-cli-mode.mts";
 import { parseVitestExecutionArgs } from "./lib/vitest-cli.mts";
 import { resolveVitestHomeSelection } from "./lib/vitest-home-selection.mts";
+import {
+  VITEST_INFRASTRUCTURE_EXIT_CODE,
+  vitestInfrastructureExitCode,
+} from "./lib/vitest-outcome.mts";
 import {
   resolveVitestProcessEnv,
   resolveVitestNodeArgs,
@@ -47,13 +52,21 @@ import {
   runVitestCli,
   type exitVitestBySignal,
 } from "./lib/vitest-process.mts";
-import { resolveVitestRuntimeCliSelections } from "./lib/vitest-runtime-selection.mts";
-import { resolveVitestTestCommand } from "./lib/vitest-test-runtime.mts";
+import {
+  resolveVitestRuntimeCliSelections,
+  shouldPrepareVitestCoreWorkers,
+  shouldUseRuntimeOnlyVitestWorkers,
+} from "./lib/vitest-runtime-selection.mts";
+import {
+  resolveNativeBunTestCommand,
+  resolveVitestTestCommand,
+} from "./lib/vitest-test-runtime.mts";
 import {
   createVitestUnhandledErrorDetector,
   stripVitestAnsi,
   writeVitestUnhandledErrorSummary,
 } from "./lib/vitest-unhandled-errors.mts";
+import { getVitestWorkerDescriptor } from "./lib/vitest-worker-descriptor.mts";
 import { createVitestWorkerRun, type VitestWorkerRun } from "./lib/vitest-worker-run.mts";
 import { createPnpmRunnerSpawnSpec, type PnpmRunnerParams } from "./pnpm-runner.mts";
 import {
@@ -86,7 +99,7 @@ const TOOLING_VITEST_CONFIG = "test/vitest/vitest.tooling.config.ts";
 const GATEWAY_SERVER_VITEST_CONFIG = "test/vitest/vitest.gateway-server.config.ts";
 const E2E_VITEST_CONFIG = "test/vitest/vitest.e2e.config.ts";
 const E2E_TEST_PROCESS_COUNT = 4;
-export const TOOLING_EXCLUDED_TESTS = new Set([
+const TOOLING_EXCLUDED_TESTS = new Set([
   ...boundaryTestFiles,
   "test/scripts/docker-build-helper.test.ts",
   ...toolingIsolatedTestFiles,
@@ -202,8 +215,11 @@ export function resolveBoundedVitestInvocations(
       `--shard=${index + 1}/${E2E_TEST_PROCESS_COUNT}`,
     ]);
   }
-  const chunks = options.gatewayServerTargetChunks ?? createGatewayServerTestTargetChunks(cwd);
-  return chunks.length > 1 ? chunks.map((targets) => insertVitestTargets(argv, targets)) : [argv];
+  const chunks =
+    options.gatewayServerTargetChunks ?? createGatewayServerTestTargetChunks(cwd, argv, env);
+  return chunks.length > 1
+    ? chunks.map((targets) => replaceVitestFileFilters(argv, targets))
+    : [argv];
 }
 
 /**
@@ -231,7 +247,7 @@ export function shouldSuppressVitestStderrLine(line: string): boolean {
 /**
  * Detects pnpm exec node invocations so the wrapper can spawn Node directly.
  */
-export function resolveDirectNodeVitestArgs(pnpmArgs: string[]): string[] | null {
+function resolveDirectNodeVitestArgs(pnpmArgs: string[]): string[] | null {
   return pnpmArgs[0] === "exec" && pnpmArgs[1] === "node" ? pnpmArgs.slice(2) : null;
 }
 
@@ -259,6 +275,28 @@ function isExplicitFileTargetArg(arg: string): boolean {
 
 function isExplicitTestFileArg(arg: string): boolean {
   return EXPLICIT_TEST_FILE_RE.test(arg) && isExplicitFileTargetArg(arg);
+}
+
+function validateNativeBunTestFiles(files: string[], cwd: string): string[] {
+  if (
+    files.length === 0 ||
+    files.some((file) => {
+      const relative = path.relative(cwd, path.resolve(cwd, file)).replaceAll(path.sep, "/");
+      return !isExplicitTestFileArg(file) || file !== `./${relative}` || relative.startsWith("../");
+    })
+  ) {
+    throw new Error("Native Bun tests require explicit ./relative.test.ts file operands");
+  }
+  const missing = resolveMissingExplicitTestFiles(files, cwd);
+  if (missing.length > 0) {
+    throw new Error(`Native Bun test files not found: ${missing.join(", ")}`);
+  }
+  for (const file of files) {
+    if (!fs.statSync(path.resolve(cwd, file)).isFile()) {
+      throw new Error(`Native Bun test operand is not a file: ${file}`);
+    }
+  }
+  return files;
 }
 
 function isDelegableBroadProjectRouterTarget(arg: string, cwd: string): boolean {
@@ -796,26 +834,47 @@ function forwardVitestOutput(
  * Joins watched Vitest processes and keeps expired deadlines failed after cooperative exits.
  */
 export function spawnWatchedVitestProcess({
-  pnpmArgs,
+  pnpmArgs = [],
+  nativeBunFiles,
   spawnParams,
   env,
   onNoOutputTimeout,
   workerRun,
-  homeMode = resolveVitestHomeSelection(pnpmArgs, { cwd: spawnParams.cwd, env }),
+  homeMode = nativeBunFiles
+    ? "hermetic"
+    : resolveVitestHomeSelection(pnpmArgs, { cwd: spawnParams.cwd, env }),
 }: {
-  pnpmArgs: string[];
   spawnParams: PnpmRunnerParams;
   env: NodeJS.ProcessEnv;
   onNoOutputTimeout?: () => void;
-  workerRun?: VitestWorkerRun;
-  homeMode?: Parameters<typeof spawnOwnedVitestProcess>[0]["homeMode"];
-}) {
+} & (
+  | {
+      pnpmArgs: string[];
+      nativeBunFiles?: never;
+      workerRun?: VitestWorkerRun;
+      homeMode?: Parameters<typeof spawnOwnedVitestProcess>[0]["homeMode"];
+    }
+  | {
+      nativeBunFiles: string[];
+      pnpmArgs?: never;
+      workerRun?: never;
+      homeMode?: "hermetic";
+    }
+)) {
   if (homeMode !== "tooling") {
     assertTestHomeSelection(env, homeMode);
   }
   let timeoutCompletion: Promise<boolean> | null = null;
   const directNodeArgs = resolveDirectNodeVitestArgs(pnpmArgs);
-  const testCommand = directNodeArgs ? resolveVitestTestCommand(directNodeArgs, env) : undefined;
+  const testCommand = nativeBunFiles
+    ? resolveNativeBunTestCommand(
+        validateNativeBunTestFiles(nativeBunFiles, spawnParams.cwd ?? process.cwd()),
+        undefined,
+        env,
+      )
+    : directNodeArgs
+      ? resolveVitestTestCommand(directNodeArgs, env)
+      : undefined;
   if (workerRun && testCommand) {
     // Give either runtime the same owned compiled-subprocess generation.
     const cliIndex = testCommand.args.findIndex((arg) => path.basename(arg) === "vitest.mjs");
@@ -827,6 +886,7 @@ export function spawnWatchedVitestProcess({
       0,
       path.join(resolveRepoRoot(import.meta.url), "scripts/lib/vitest-worker-bootstrap.mts"),
       workerRun.descriptor.directory,
+      ...(workerRun.descriptor.preset === "runtime" ? ["--worker-preset=runtime"] : []),
     );
   }
   const childSpawnParams: PnpmRunnerParams = workerRun
@@ -846,7 +906,18 @@ export function spawnWatchedVitestProcess({
     : spawnParams;
   const { child, completion: childCompletion } = spawnOwnedVitestProcess({
     ...(testCommand
-      ? { ...testCommand, options: childSpawnParams }
+      ? {
+          ...testCommand,
+          options: testCommand.envOverrides
+            ? {
+                ...childSpawnParams,
+                env: {
+                  ...(childSpawnParams.env ?? process.env),
+                  ...testCommand.envOverrides,
+                },
+              }
+            : childSpawnParams,
+        }
       : createPnpmRunnerSpawnSpec({ pnpmArgs, ...childSpawnParams })),
     homeMode,
   });
@@ -898,7 +969,8 @@ export function spawnWatchedVitestProcess({
   };
   const completion = Promise.all([childCompletion, forwardedOutput])
     .then(async ([{ code: childCode, signal, groupJoined }]) => {
-      const code = (await timeoutCompletion) && childCode === 0 ? 1 : childCode;
+      const code =
+        (await timeoutCompletion) && !signal ? vitestInfrastructureExitCode(childCode) : childCode;
       const result = unhandledErrors.finish();
       if (result) {
         writeVitestUnhandledErrorSummary(result, env);
@@ -922,6 +994,46 @@ export async function runVitest(
   argv: string[] = process.argv.slice(2),
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<void> {
+  if (argv[0] === "--native-bun") {
+    if (env.OPENCLAW_NATIVE_BUN_PARENT_IPC === "1" && !process.connected) {
+      throw new Error("Native Bun test parent IPC disconnected before admission");
+    }
+    const spawnEnv = resolveRunVitestSpawnEnv(env, ["run"]);
+    let watched: ReturnType<typeof spawnWatchedVitestProcess> | undefined;
+    let interrupted: NodeJS.Signals | undefined;
+    const onSignal = (signal: NodeJS.Signals) => {
+      interrupted ??= signal;
+    };
+    const onParentDisconnect = () => {
+      interrupted ??= "SIGTERM";
+      process.kill(process.pid, "SIGTERM");
+    };
+    process.on("SIGINT", onSignal);
+    process.on("SIGTERM", onSignal);
+    if (process.connected) {
+      process.once("disconnect", onParentDisconnect);
+      process.channel?.unref();
+    }
+    try {
+      watched = spawnWatchedVitestProcess({
+        nativeBunFiles: argv.slice(1),
+        spawnParams: resolveVitestSpawnParams(spawnEnv),
+        env: spawnEnv,
+      });
+      const result = await watched.completion;
+      interrupted ??= result.signal ?? undefined;
+      process.exitCode = result.code ?? VITEST_INFRASTRUCTURE_EXIT_CODE;
+    } finally {
+      const signal = interrupted ?? watched?.getForwardedSignal();
+      process.off("disconnect", onParentDisconnect);
+      process.off("SIGINT", onSignal);
+      process.off("SIGTERM", onSignal);
+      if (signal) {
+        await exitBySignal(signal);
+      }
+    }
+    return;
+  }
   if (argv.some((arg) => arg === "--isolated-image" || arg.startsWith("--isolated-image="))) {
     const { parseIsolatedVitestArgs, runIsolatedVitest } =
       await import("./lib/vitest-isolated.mts");
@@ -971,7 +1083,7 @@ export async function runVitest(
   } catch (error) {
     if (isErrorWithCode(error, "OPENCLAW_MISSING_VITEST")) {
       console.error(error.message);
-      process.exitCode = 1;
+      process.exitCode = VITEST_INFRASTRUCTURE_EXIT_CODE;
       return;
     }
     throw error;
@@ -981,22 +1093,29 @@ export async function runVitest(
   const invocations = execution
     ? resolveBoundedVitestInvocations(vitestArgs, { env })
     : [vitestArgs];
+  const sourceMode =
+    !execution || execution.options.watch || resolveExplicitVitestMode(vitestArgs) === "watch";
   const config = resolveVitestConfigArg(vitestArgs);
-  const relativeConfig = config ? toRepoRelativeArg(path.resolve(config), repoRoot) : "";
+  const relativeConfig = config
+    ? toRepoRelativeArg(path.resolve(config), repoRoot)
+    : config === null && !sourceMode && process.cwd() === repoRoot
+      ? "vitest.config.ts"
+      : "";
+  // Custom roots/projects keep their own runtime preparation. Prebuilt UI
+  // projects below only partition the known real-Gateway fixture scope.
+  const canonicalRootRun =
+    execution &&
+    !hasAlternateVitestRootArg(vitestArgs) &&
+    !hasNonRunVitestSubcommand(vitestArgs) &&
+    !hasExplicitDisabledRunFlag(vitestArgs);
+  const canonicalSelection = canonicalRootRun && !hasExplicitVitestProjectArg(vitestArgs);
+  // E2E global setup must precede shared asset preparation, including a single
+  // invocation; otherwise it can replace dist after UI readiness was checked.
   const invocationEnv =
-    invocations.length > 1 && relativeConfig === E2E_VITEST_CONFIG
+    canonicalSelection && relativeConfig === E2E_VITEST_CONFIG
       ? { ...env, ...(await prepareE2eVitestRuntime(env)) }
       : env;
-  // Canonical configs have known project scopes. Custom roots/projects keep
-  // their own setup; never infer their runtime selection from a config name.
-  if (
-    execution &&
-    config &&
-    !hasAlternateVitestRootArg(vitestArgs) &&
-    !hasExplicitVitestProjectArg(vitestArgs) &&
-    !hasNonRunVitestSubcommand(vitestArgs) &&
-    !hasExplicitDisabledRunFlag(vitestArgs)
-  ) {
+  if (canonicalSelection && relativeConfig) {
     const code = await prepareVitestRuntime(
       invocations.flatMap((cliArgs) =>
         resolveVitestRuntimeCliSelections(relativeConfig, cliArgs, invocationEnv),
@@ -1004,25 +1123,61 @@ export async function runVitest(
       invocationEnv,
     );
     if (code !== 0) {
-      process.exitCode = code;
+      process.exitCode = vitestInfrastructureExitCode(code);
       return;
     }
   }
-  const sourceMode =
-    !execution || execution.options.watch || resolveExplicitVitestMode(vitestArgs) === "watch";
   const workers = sourceMode
     ? undefined
-    : createVitestWorkerRun(resolveVitestProcessEnv(invocationEnv));
+    : createVitestWorkerRun(
+        resolveVitestProcessEnv(invocationEnv),
+        getVitestWorkerDescriptor(),
+        (canonicalSelection &&
+          (relativeConfig === "test/vitest/vitest.ui-e2e.config.ts" ||
+            relativeConfig === "test/vitest/vitest.extension-browser.config.ts" ||
+            shouldUseRuntimeOnlyVitestWorkers(
+              relativeConfig,
+              vitestArgs,
+              invocationEnv,
+              execution?.options.testNamePattern,
+            ))) ||
+          (canonicalRootRun && relativeConfig === "test/vitest/vitest.ui-e2e-prebuilt.config.ts")
+          ? "runtime"
+          : "full",
+      );
   const withCacheSlot = createVitestCacheSlots();
   let interrupted: NodeJS.Signals | undefined;
+  let preparingWorkers = false;
   const onSignal = (signal: NodeJS.Signals) => {
     interrupted ??= signal;
+    if (preparingWorkers) {
+      // No borrower can finish admission yet; cancel through the existing owner.
+      void workers?.dispose().catch(() => {});
+    }
   };
   // The invocation outlives child-scoped handlers when admission or final
   // verification is still reading. Retain signal ownership through disposal.
   process.on("SIGINT", onSignal);
   process.on("SIGTERM", onSignal);
   try {
+    if (
+      workers &&
+      canonicalSelection &&
+      config &&
+      invocations.some((args) =>
+        shouldPrepareVitestCoreWorkers(relativeConfig, args, invocationEnv),
+      )
+    ) {
+      preparingWorkers = true;
+      try {
+        await workers.prepare();
+      } finally {
+        preparingWorkers = false;
+      }
+    }
+    if (interrupted) {
+      return;
+    }
     let failedExitCode = 0;
     for (const [index, invocation] of invocations.entries()) {
       const guardedVitestArgs = await resolveExplicitTestFileNoPassArgs(invocation);
@@ -1065,7 +1220,7 @@ export async function runVitest(
         },
       );
       interrupted ??= signal ?? undefined;
-      const exitCode = code ?? 1;
+      const exitCode = code ?? VITEST_INFRASTRUCTURE_EXIT_CODE;
       // Ordinary test failures must not hide later files; interruptions stop
       // admission and are re-raised only after the invocation has been disposed.
       if (interrupted || (exitCode !== 0 && exitCode !== 1)) {
@@ -1077,8 +1232,8 @@ export async function runVitest(
     process.exitCode = failedExitCode;
   } finally {
     try {
-      await workers?.dispose().catch((error: unknown) => {
-        process.exitCode ||= 1;
+      await workers?.dispose({ interrupted: Boolean(interrupted) }).catch((error: unknown) => {
+        process.exitCode = vitestInfrastructureExitCode(Number(process.exitCode));
         console.error(error);
       });
     } finally {

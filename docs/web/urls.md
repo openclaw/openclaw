@@ -15,13 +15,14 @@ becomes `/openclaw/chat/main` when the base path is `/openclaw`.
 
 ## Session and dashboard URLs
 
-**Copy → Session link** uses the connected Gateway's public Control UI address
+**Copy link** in the session menu uses the connected Gateway's public Control UI address
 when `gateway.publicOrigin` is configured, including its
 `gateway.controlUi.basePath`. This keeps links shareable when the desktop app
 connects through a local SSH tunnel. Without a public origin, copied links use
 the connected Gateway's HTTP(S) address; a tunnel-only address remains local.
 Normal navigation and **Open in** continue using the current UI. Copied links
-contain no connection credentials, and recipients still need Gateway access.
+contain no connection credentials. Recipients need Gateway access unless the
+thread has [public access](/web/urls#public-session-transcripts) enabled.
 
 If the Gateway disconnects while a session link is loading, the Control UI retries
 the interrupted load after reconnecting. Navigating elsewhere cancels that recovery;
@@ -58,17 +59,17 @@ two ways.
 
 The short-id form applies to non-Incognito sessions when the key's rest, everything after
 `agent:<agentId>:`, ends in a UUID. `<sessionRef>` is an optional display-name
-slug plus a short id, such as `deploy-monitor-6db92d48`. The short id is the
-authoritative part: at least eight lowercase hexadecimal characters from the
-start of the key's trailing UUID, with UUID dashes omitted. Longer prefixes up
-to all 32 hexadecimal characters are accepted. The row's rotating `sessionId`
-is not part of the URL identity.
+slug plus a short id, such as `deploy-monitor-6db92d48`. Within the agent named
+in the path, the short id is authoritative: at least eight lowercase hexadecimal
+characters from the start of the key's trailing UUID, with UUID dashes omitted.
+Longer prefixes up to all 32 hexadecimal characters are accepted. The row's
+rotating `sessionId` is not part of the URL identity.
 
 The Control UI generates links with all 32 UUID characters by default, so a
 selected session keeps its identity even when another session shares its prefix
 and display name. Existing shorter links still resolve, and the disambiguation
 view can offer the shortest unique prefix. Resolving a literal or display-name
-link to a UUID session also keeps the full UUID in its canonical URL.
+link to a UUID session also keeps the full UUID in its standard URL.
 
 Every other key uses the literal-key form. Each colon-delimited segment after
 `agent:<agentId>:` becomes one URL-encoded path segment. For example,
@@ -80,8 +81,9 @@ Incognito sessions always use the literal-key form, even when their keys end
 in a UUID. For example, an Incognito link looks like
 `/chat/main/dashboard/incognito-12345678-90ab-cdef-1234-567890abcdef`.
 Incognito sessions are excluded from short-id and display-name discovery;
-their exact links still require administrator access and work only while the
-session exists. Reopen an existing session from the sidebar to replace an old
+their exact links still require administrator access and can be reloaded while the
+session exists in the running Gateway. Reloading the browser does not end the
+session; restarting the Gateway does. Reopen an existing session from the sidebar to replace an old
 short-id link that reports **Session not found**.
 
 Literal rest segments exactly equal to `.` or `..` use `~dot` and `~dotdot` so
@@ -102,7 +104,7 @@ and `sessions`. Exactly one segment after the agent id is literal when it is
 reserved or does not contain a valid short id; otherwise it is a short reference.
 Two or more segments after the agent id are always literal.
 
-The canonical main session `agent:research:main` uses the agent-only path
+The main session `agent:research:main` uses the agent-only path
 `/chat/research`. Custom `session.mainKey` values are ignored by config loading;
 setting it to `"workspace"` does not make `/chat/research/workspace` a main-session
 route. It follows ordinary session lookup; if no existing session matches, it shows
@@ -113,18 +115,26 @@ route. It follows ordinary session lookup; if no existing session matches, it sh
 The following parts are stable URL contracts:
 
 - The `/chat` and `/dashboard` namespace words.
-- The key UUID short id in short-id URLs.
+- The agent id and key UUID short id together in short-id URLs.
 - The arity and short-versus-literal parsing rules above.
 
-In short-id form, the agent segment is decorative and the slug is almost
-decorative. Neither identifies the session on its own, and both may change
-without notice. The one exception is a tie: if the short id matches more than
-one session and exactly one of them still carries the slug in the link, that
-session is used, so a generated link keeps working even when two ids happen to
-share a prefix. A slug that matches none or several of the tied sessions is
-ignored and the disambiguation view is shown. After resolution, the Control UI
-replaces the address bar with the current agent id and current display-name slug
-without adding a browser-history entry.
+In short-id form, the agent segment scopes session lookup; it is not decorative.
+Changing it can make the link stop resolving or select a different visible session
+with the same UUID prefix. This applies even when the link contains all 32 UUID
+characters. Changing an agent's display name does not change its id in the URL.
+
+The slug is an optional display-name hint. A stale slug does not invalidate a
+unique UUID-prefix match within the selected agent. If several visible sessions
+match the prefix, matching slugs narrow the candidates. Exactly one remaining
+candidate resolves; otherwise the disambiguation view is shown. A slug that
+matches none of the candidates is ignored. After resolution, the Control UI
+replaces the address bar with the standard session path and current display-name
+slug without adding a browser-history entry.
+
+Renaming a session or rotating its `sessionId` does not break an otherwise unique
+short-id link. Moving a session to a different agent id is not covered by this
+stability guarantee; use its current link. A URL does not bypass
+session authorization or enable public access.
 
 In literal-key form, the agent segment is authoritative because it is part of
 the reconstructed session key. The remaining literal segments are authoritative
@@ -153,10 +163,10 @@ missing sessions keep showing the "Session not found" recovery page.
 To continue one of these links in the terminal or attach a coding harness, see
 [Session synchronization and attachment](/concepts/session-attachment).
 
-Canonical links do not use `?session=` or `?face=`. Released links such as
+Standard links do not use `?session=` or `?face=`. Released links such as
 `/chat?session=<sessionKey>` are accepted only at the application boundary as a
 migration aid and immediately rewritten, without adding browser history, to the
-canonical path. The released `?face=dashboard` companion selects the
+standard path. The released `?face=dashboard` companion selects the
 `/dashboard` namespace during that rewrite. Loaders and page code never read the
 query-form identity, and new links must not emit it. The Sessions list keeps its
 own `?session=` parameter because that parameter expands a row; it is not a
@@ -180,21 +190,60 @@ also works under `/dashboard/<agentId>`.
 
 ## Social previews
 
-Use **Copy → Preview link** in a session's menu to share a link with an OpenClaw
+Use **Advanced → Copy details → Preview link** in a session's menu to share a link with an OpenClaw
 social card. It opens a small public landing page; **Open dashboard** or
 **Open session** then takes the recipient to the normal authenticated view.
-**Copy → Session link** still copies the direct link.
+**Copy link** in the root menu still copies the direct link.
 
 For example, `/share/dashboard/main/deploy-monitor-6db92d48` previews
 `/dashboard/main/deploy-monitor-6db92d48`. A configured Control UI base path
 prefixes both paths. The preview serves Open Graph metadata and a 1200 × 630 PNG
-at `/share/card.png`, without requiring JavaScript or a Gateway connection.
+at `/share/card.png`, plus a generic, silent five-second H.264 video at
+`/share/preview-v1.mp4`, without requiring JavaScript or a Gateway connection.
+The landing page starts with the still image. Expand **Play animation** for
+native video controls. It does not autoplay, including for people who request
+reduced motion. Playback is optional; the still image and destination link work
+without JavaScript or video support.
 
 The card shows generic OpenClaw branding, not the session's title, messages,
 dashboard widgets, or screenshots. Preview requests never look up session state,
 so the page does not reveal whether the target exists. The link itself still
 contains the session route and, for catalog sessions, the catalog routing fields.
 Treat those URLs as information you are choosing to share.
+
+### Animated cards and platform support
+
+The preview advertises the MP4 with [Open Graph video metadata](https://ogp.me/#structured)
+and retains the PNG as both `og:image` and `twitter:image`. X still receives a
+`summary_large_image` card. Some clients may use the video; others show only the
+still. Open Graph metadata does **not** guarantee inline playback, animation,
+looping, or autoplay on X. Client settings, data-saving behavior, and platform
+policy remain outside OpenClaw's control.
+
+X Player Cards are a separate integration, not a synonym for `og:video`. The
+[official Player Card sample](https://github.com/twitterdev/cards) uses HTTPS
+player/container and stream URLs plus `twitter:player` metadata. OpenClaw does
+not add an embeddable player or change its frame restrictions for a decorative
+brand animation. Test an actual posted preview on the intended X clients before
+claiming animated-card support; metadata validation alone is not playback proof.
+
+Chat platforms cache previews independently of the Gateway's HTTP cache headers.
+After deployment, use a fresh preview URL when testing, and allow for platform
+recrawling. Existing posts may continue showing old artwork. Published video
+artwork has a versioned path; replacing it requires a new asset name and matching
+Gateway route/metadata changes. The PNG remains a usable fallback.
+
+The artwork is fixed branding, not a recording of a conversation. Public
+transcripts retain their session-specific static cards; this animation applies
+to the generic `/share/chat/*` and `/share/dashboard/*` preview pages. The
+`openclaw.ai` marketing site is a separate deployment and is not changed by the
+Gateway's Control UI build.
+
+To revise the artwork, edit `ui/config/control-ui-social-preview.ts` and run
+`node scripts/generate-social-preview.mts` with system ffmpeg/libx264 available.
+The generator uses bundled fonts and the existing mascot to author the shipped
+MP4; ordinary UI builds do not need ffmpeg. `pnpm ui:build` creates the matching
+poster and copies the MP4 from `ui/public`.
 
 ### Behind a login proxy
 
@@ -210,77 +259,150 @@ host. See [Cloudflare's application path rules](https://developers.cloudflare.co
 This is an operator deployment step; OpenClaw does not change proxy policies.
 
 Set the existing `gateway.publicOrigin` to your external HTTP(S) origin when TLS
-terminates at the proxy, so the image and canonical URLs use the public HTTPS
+terminates at the proxy, so the image and standard URLs use the public HTTPS
 address. Without it, previews use the request's Host and direct connection
 protocol; forwarded headers are not trusted for public preview URLs.
 
-Verify both the preview URL and its `/share/card.png` return `200` without
-cookies, then check that opening the dashboard still requires login. If a chat
+Verify the preview URL, `/share/card.png`, and `/share/preview-v1.mp4` return
+`200` without cookies (the MP4 must use `Content-Type: video/mp4`), then check that opening the dashboard still requires login. If a chat
 app shows the login page or no image, check for proxy redirects on both preview
 requests. Ordinary dashboard URLs remain protected and do not gain crawler
 access from this feature.
 
 ## Public session transcripts
 
-Session creators and Gateway admins can open the session's sharing menu and select
-**Public access → Enable public access**. Confirming publishes the session's
-existing and future conversation text to anyone with its public URL. Recipients
-do not need an account or Gateway credentials. **Copy public link** copies that
-URL; **Disable public access** revokes it. The chat header shows **Public** while
-access is enabled.
+A thread has one normal `/chat/<agentId>/<sessionRef>` URL for signed-in people
+and anonymous readers. Session creators and Gateway admins can open **Session
+sharing → Public access → Enable public access** to publish its existing and
+future conversation, including images and tool-call summaries. **Copy public link** copies the normal thread URL,
+not a separate viewer address. The chat header shows **Public** while access is enabled.
 
-Assigning another owner does not transfer public-sharing authority. If the public
+A signed-out visitor sees the public conversation with a **Log in** button.
+Signing in returns to the same thread and applies the person's existing
+permissions; it does not grant editing or access to other sessions. A signed-in
+person without private access can still read the public version. Private,
+missing, and ambiguous anonymous targets show the same unavailable page without
+revealing names or candidate sessions. While the protected login handoff checks
+access, a private-thread page shows **Loading conversation**, not an unavailable
+error. A failed access check offers reload or login instead of claiming access
+was denied. Without JavaScript, the generic unavailable page remains readable.
+
+Token/password operators with a saved credential for this Gateway automatically
+continue into the Control UI when reopening, reloading, or following a chat link.
+The browser uses its session token or paired-device credential; passwords remain
+in memory only. This also works on loopback HTTP, which permits public readers. Chat links remain
+reloadable during Gateway updates; the temporary recovery marker is removed when
+the app starts.
+With Tailscale Serve identity authentication enabled, the same-origin handoff
+verifies the viewer through Tailscale and checks access to the requested conversation.
+No saved browser token or extra **Log in** click is needed.
+In trusted-proxy deployments, browsers controlled by the installed Control UI service worker request the
+protected session-entry app document directly when reopening a chat deep link,
+without first loading the public reader or probing access. Registration is only
+a navigation hint: the protected handoff still checks current permissions.
+Denied access or a login redirect falls back to the public reader. Browsers
+without the worker retain the public document and protected access probe.
+The handoff rechecks that conversation's current access after preparing the app
+document. Activity in other conversations does not restart navigation. If access
+changes during preparation, the handoff stops with a visible error and offers
+reload or login; it does not redirect back into another automatic probe.
+The anonymous private-thread document initially returns `404`, then an admitted
+browser opens the app through the session-entry handoff with a `200` response. No extra
+**Log in** click is needed. Without a saved credential, **Log in** opens the normal
+login gate. On non-secure ingress where public transcripts are unavailable,
+token/password deployments serve the app shell directly.
+
+Assigning another owner does not transfer public-sharing authority. If the
 controls are unavailable, confirm that the session is saved, is not incognito,
 and you are its creator or a Gateway admin. See
 [Multi-user mode](/concepts/multi-user#world-readable-session-links).
 
 Public access is separate from teammate visibility and editing permissions.
-Publishing does not let anonymous visitors send messages, invoke tools, open
-private dashboards, or connect to the Gateway. Incognito sessions cannot be
-published. Review the conversation before enabling public access: text can
-contain sensitive information, and disabling access cannot recall saved copies.
+The public reader does not open a Gateway WebSocket, subscribe to the session
+roster, send messages, invoke tools, or open private dashboards. It shows every user and assistant text message, including progress updates, with Markdown formatting and code-copy controls. Adjacent tool calls appear in collapsed steps with tool names and short command, path, or query summaries; tool result text stays private. User, assistant, and tool-result images open at full size through a public media route bound to the same publication and transcript entry. Only size-capped PNG, JPEG, GIF, and WebP images are served after checking their bytes. Other attachments appear as filename chips without download links. Saved inline widgets shown in the conversation render in sandboxed frames with scripts allowed, restricted network access, and no Gateway access. Each frame uses a link scoped to that widget document; the link cannot read the conversation. A widget is served only when its inline widget result is itself publicly visible in the shared conversation. Other `[embed ...]` content, including YouTube videos and external pages, appears as a plain link to its HTTPS or HTTP address; the reader does not load the page, player, or thumbnail. Embeds of other Gateway pages are omitted. Shortcodes inside code stay literal. Pinned dashboard widgets are not part of the public reader. Reasoning, internal metadata, and hidden messages stay omitted. Included text is not secret-masked. Review the conversation for credentials and other sensitive content before publishing; future messages become public too.
 
-The public page shows user messages and assistant final answers, with Markdown
-formatting. Tool output, reasoning, files, images, executable widgets, internal
-metadata, and hidden messages are omitted. Recognized credential patterns are
-redacted, but this is not a guarantee that all sensitive text is detected.
-The latest view refreshes every 15 seconds. **Older messages** opens earlier
-pages without automatic refresh; **Back to latest** returns to the live view.
-Each page is bounded, and oversized content is explicitly marked as omitted.
-The initial page and its social metadata work without JavaScript.
+The latest public view checks for updates approximately every 15 seconds while
+visible and catches up when the tab returns or the connection comes back online.
+Updates follow the conversation when you are at its latest message, but preserve
+your place and expanded tool steps when you scroll back. **Top** and **Latest**
+let you jump without reloading; **Refresh now** checks in place and shows retry
+status if the connection fails. **Older messages** opens earlier pages without
+automatic refresh; **Back to latest** returns to the live view. Pages contain approximately 50 visible messages and tool-step groups, newest pages first and chronological within each page. Read and message size limits still apply, with visible omission notices. The initial conversation and social metadata
+work without JavaScript.
 
-Public URLs have this form, prefixed by the configured Control UI base path:
+The reader uses the saved Control UI language preference on the same origin, or
+your browser language when no supported preference is saved. Navigation, status,
+copy controls, and reader notices are localized, with right-to-left layout for
+Arabic and Persian. Conversation titles, messages, code, tool names, and filenames
+are never translated. Missing translations fall back to English; without
+JavaScript the initial document remains in English. Reader translations are
+packaged at build time from the same generated catalog as the Control UI, without
+loading the operator app or fetching a translation service.
 
-```text
-/share/session?token=<opaque-publication-token>
-```
+Public session links include a 1200 × 630 preview card with the session title and
+opening public request. When recorded worktree changes are already available,
+the card shows a work receipt with change counts and recorded PR/check details.
+Cards preserve included text without secret masking and never fetch Git or GitHub
+data; missing facts are omitted. Unavailable sessions use the generic OpenClaw card.
+Preview images may remain cached by a recipient for five minutes after revocation.
 
-The token is an encrypted bearer capability. It does not expose the agent,
-session key, session ID, or internal publication ID in the URL. Anyone who has
-the complete URL can read the published text, so handle it like any other
-public link. Copying the link again can produce a different token for the same
-publication; every copy remains valid until public access is disabled.
+Public reads wait for current sharing facts when a session changes during the
+request. If the page changes while it is being prepared, the reader can return a
+temporary-unavailable response; retrying reads the current publication.
 
-The publication is bound to one exact session instance. Resetting, replacing,
-forking, or deleting the session does not transfer public access to another
-instance. Disabling and enabling again creates a new URL; the old link remains
-invalid. The publication record lives with existing session metadata and does
-not require a database schema migration. Normal session retention still applies.
+### Revocation and older links
 
-Tokens are bound to the Gateway installation identity, not its login token or
-password. Rotating Gateway authentication does not break public links. A full
-OpenClaw backup preserves both the installation identity and agent session
-databases, so links survive a full restore. Restoring only an agent database to
-another installation, or replacing the installation identity during repair,
-invalidates its existing links; disable and enable public access again to issue
-new links.
+**Disable public access** stops anonymous reads through the normal thread URL.
+Re-enabling publication makes that same URL readable again. Resetting, replacing,
+forking, or deleting a session does not transfer its publication to a new
+instance. Disabling access cannot recall copies already downloaded by readers.
 
-Behind a login proxy, apply the same narrow `/share/*` routing described in
-[Behind a login proxy](/web/urls#behind-a-login-proxy). Keep all other routes protected.
-The proxy must overwrite `X-Forwarded-Proto` with the external request scheme;
-public session reads require its exact value to be `https`. The viewer and social
-card must both be reachable without cookies. OpenClaw
-does not change the proxy's access policies automatically.
+Previously issued `/share/session` token links remain bound to their original
+publication and exact session instance. Disabling and re-enabling public access
+does not revive those older token links. Their encrypted tokens remain bound to
+the installation identity, independently of the Gateway login password or token.
+A full backup preserves that identity and the session databases; moving only an
+agent database to another installation invalidates its old token links. The
+normal thread URL is not a secret capability: current public-sharing state
+determines whether anonymous access is allowed.
+
+### Login-proxy deployment
+
+Deploy the public thread handler before changing the proxy. Permit anonymous
+thread-document requests under the Control UI's `/chat/*` namespace and the
+existing `/share/*` namespace, including the configured base path. The Gateway
+rejects mutation methods on public thread documents. Keep the root application,
+WebSocket, bootstrap, APIs, media, dashboards, settings, and the protected
+`/__openclaw__/session-entry` login handoff behind authentication. Do not bypass
+authentication for the whole host or for the `__openclaw__` namespace.
+
+The public thread route does not trust identity headers on the bypassed path.
+Its small browser helper checks the protected session-entry route and enters
+the authenticated app only through the existing authentication and session
+permission owners. The login return target must be a same-origin chat path;
+external URLs and arbitrary application/API paths are rejected.
+
+Set `gateway.publicOrigin` to the external HTTPS origin and make the trusted
+proxy overwrite `X-Forwarded-Proto` with the external scheme. Verify public
+threads and the share card without cookies, private-thread non-disclosure,
+login returning to the same thread, and authentication on all protected routes.
+OpenClaw does not change Cloudflare Access or other proxy policies automatically.
+
+### Reader capacity
+
+Public pages share bounded rendered representations and in-flight work.
+Committed session and transcript changes invalidate affected pages; every
+response, including `304 Not Modified`, still checks live publication authority.
+If a change overtakes an in-flight read, the public reader prepares the current
+representation before responding, without requiring a browser retry.
+Representations are retained only on the server, not in a shared browser/CDN
+cache. Eight distinct builds may run at once, two for one publication, with
+32 additional builds queued. Overload returns `503` and `Retry-After`.
+
+Request budgets are 120 per minute for one attributed client and 240 per minute
+for one publication, including cached responses. These accommodate 20 readers
+behind one IP at the default refresh interval without removing abuse limits.
+They are admission budgets, not a guarantee of throughput on every host.
 
 ## Person activity URLs
 
@@ -358,7 +480,7 @@ it returns the corresponding normal route when one exists:
 /openclaw/focus/dashboard/roboclaw/the-daily-claw-6d7c9ccb
 ```
 
-Dashboard focus routes use the complete canonical `/dashboard` grammar above:
+Dashboard focus routes use the complete standard `/dashboard` format above:
 
 ```text
 /focus/dashboard/<agentId>
@@ -366,10 +488,9 @@ Dashboard focus routes use the complete canonical `/dashboard` grammar above:
 ```
 
 The Control UI removes the focus modifier before passing the dashboard route to
-the canonical session resolver. Canonical address replacement and ambiguity
+the shared session resolver. Address-bar updates and ambiguity
 candidate links preserve `/focus`. Missing, ambiguous, and unavailable sessions
-remain visible, and the dashboard is not read until the session resolves to a
-canonical key.
+remain visible, and the dashboard is not read until the session key has been resolved.
 
 The other focus targets are:
 
@@ -444,7 +565,7 @@ With `gateway.controlUi.basePath: "/openclaw"`, use
 This table lists every Control UI application route. A dash means the route has
 no route-specific URL parameters.
 
-| Page                | Canonical path                                 | Aliases                   | Parameters or dynamic forms                                                       |
+| Page                | Primary path                                   | Aliases                   | Parameters or dynamic forms                                                       |
 | ------------------- | ---------------------------------------------- | ------------------------- | --------------------------------------------------------------------------------- |
 | Chat                | `/chat`                                        | -                         | Key-backed session forms above; `?draft=<text>`                                   |
 | Dashboard           | `/dashboard`                                   | -                         | Key-backed session forms above; `?draft=<text>`                                   |
@@ -456,7 +577,8 @@ no route-specific URL parameters.
 | Person activity     | `/activity/<name>-<profile-id>`                | -                         | Optional name slug and 8-32 lowercase hexadecimal id characters                   |
 | Apps                | `/apps`                                        | -                         | -                                                                                 |
 | Portals             | `/portals`                                     | -                         | -                                                                                 |
-| Agents              | `/settings/agents`                             | `/agents`                 | `/settings/agents/<agentId>[/<panel>]`                                            |
+| Agents              | `/settings/agents`                             | -                         | `/settings/agents/<agentId>[/<panel>]`                                            |
+| Claws               | `/claws`                                       | -                         | `/claws/<official-package-slug>`; requires the Claws Labs toggle                  |
 | Channels            | `/settings/channels`                           | `/channels`               | Shared settings parameters below                                                  |
 | Connection          | `/settings/connection`                         | -                         | Shared settings parameters below                                                  |
 | Legacy General      | `/settings/general`                            | `/config`                 | Redirects to Appearance → Language                                                |
@@ -489,7 +611,6 @@ no route-specific URL parameters.
 | Plugins             | `/plugins`                                     | -                         | -                                                                                 |
 | Plugin settings     | `/settings/plugins`                            | -                         | `?tab=advanced`, `/settings/plugins/<pluginId>`                                   |
 | Automations         | `/automations`                                 | `/cron`                   | `?job=<jobId>`, `?job=<jobId>&run=<runId>`                                        |
-| Tasks               | `/tasks`                                       | -                         | -                                                                                 |
 | Devices             | `/settings/devices`                            | `/nodes`                  | Shared settings parameters below                                                  |
 | Plugin tab host     | `/<slug>` when advertised; `/plugin` otherwise | -                         | Generic host: `?plugin=<pluginId>&id=<tabId>`; tab parameters: `?p.<key>=<value>` |
 
@@ -516,6 +637,10 @@ page before the link, and Forward returns to the current destination.
 
 Model setup links with `?firstRun=1` or `?firstRun=explicit` retain the first-run onboarding flow. Without either marker, `/settings/model-setup` and `/model-setup` redirect to `/settings/model-providers?connect=1`, which opens the connection dialog on Models. The Models page otherwise stays in place while connecting a provider or reviewing Gateway discovery.
 
+After provider sign-in, Models refreshes credentials and the shared model catalog
+without reloading its existing rows, usage, or cost requests. If credentials were
+saved but status could not refresh, the page keeps its rows and offers **Retry**.
+
 The retired General route and its `/config` alias are replaced once with
 `/settings/appearance?section=__appearance__#settings-language`. The historical
 `#settings-general-model` target instead lands on the Models behavior section.
@@ -523,7 +648,10 @@ The retired General route and its `/config` alias are replaced once with
 Memory tabs use the paths in the table instead of `?tab=`. Older Memory links
 with `?tab=memories|dreams|settings`, `?tab=dreaming`, `?tab=search`, or
 `?section=memory` are replaced once with the corresponding path while keeping
-any setting anchor.
+any setting anchor and other query parameters. Memory settings search adds
+`?advanced=1` when a matching field is advanced, opening the advanced group without changing
+the browser's saved advanced-settings preference. The same reveal survives a
+reload or an older Memory link that includes `advanced=1`.
 
 Plugin catalog tabs also use paths instead of `?tab=`. Older links with
 `?tab=discover|installed` are replaced once with the corresponding path while

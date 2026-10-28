@@ -155,10 +155,6 @@ function resolveTestProviderConfig(
       ? (rawConfig.providers as Record<string, unknown>)
       : {};
   for (const key of [providerId, ...aliases]) {
-    const direct = rawConfig[key];
-    if (typeof direct === "object" && direct !== null && !Array.isArray(direct)) {
-      return direct as Record<string, unknown>;
-    }
     const nested = providers[key];
     if (typeof nested === "object" && nested !== null && !Array.isArray(nested)) {
       return nested as Record<string, unknown>;
@@ -405,7 +401,9 @@ export function describeTtsConfigContract() {
           cfg: asLegacyTtsConfig({
             ...baseCfg,
             tts: {
-              edge: { outputFormat: "audio-24khz-96kbitrate-mono-mp3" },
+              providers: {
+                edge: { outputFormat: "audio-24khz-96kbitrate-mono-mp3" },
+              },
             },
           }),
           expected: "audio-24khz-96kbitrate-mono-mp3",

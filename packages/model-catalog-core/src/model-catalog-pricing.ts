@@ -11,13 +11,14 @@ import { normalizeModelCatalogProviderId } from "./model-catalog-refs.js";
 import type { ModelCatalogCost, ModelCatalogTieredCost } from "./model-catalog-types.js";
 
 export const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
+export const MODELS_DEV_CATALOG_URL = "https://models.opencode.ai/api.json";
 export const LITELLM_PRICING_URL =
   "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
 export const MODEL_PRICING_SOURCES = [
   {
     id: "openCode",
     label: "OpenCode",
-    url: "https://models.opencode.ai/api.json",
+    url: MODELS_DEV_CATALOG_URL,
     authoritative: true,
   },
   {
@@ -44,6 +45,14 @@ export const MODEL_PRICING_SOURCES = [
     url: "https://api.deepinfra.com/models/list",
     authoritative: true,
   },
+  // Non-authoritative order is price precedence. models.dev lists each provider's own
+  // billing; OpenRouter's feed describes OpenRouter's billing and prices only its own keys.
+  {
+    id: "modelsDev",
+    label: "models.dev",
+    url: MODELS_DEV_CATALOG_URL,
+    authoritative: false,
+  },
   { id: "openRouter", label: "OpenRouter", url: OPENROUTER_MODELS_URL, authoritative: false },
   { id: "liteLLM", label: "LiteLLM", url: LITELLM_PRICING_URL, authoritative: false },
 ] as const;
@@ -53,9 +62,14 @@ export type ModelPricingSource = {
   passthroughProviderModel?: boolean;
   modelIdTransforms?: "version-dots"[];
 };
-export type ModelPricingProvider = { external?: boolean } & Partial<
-  Record<ModelPricingSourceId, ModelPricingSource | false>
->;
+export type ModelPricingProvider = {
+  external?: boolean;
+  /**
+   * Provider whose catalog rows price this provider's models when it has no price of its own,
+   * for a runtime that sends the same models to that provider (a CLI backend over its vendor API).
+   */
+  priceAs?: string;
+} & Partial<Record<ModelPricingSourceId, ModelPricingSource | false>>;
 
 type CompleteModelCost = Omit<ModelCatalogTieredCost, "range"> &
   Pick<ModelCatalogCost, "tieredPricing">;
@@ -67,8 +81,11 @@ export function normalizeModelPricingProvider(value: unknown): ModelPricingProvi
   if (!record) {
     return undefined;
   }
-  const policy: ModelPricingProvider =
-    typeof record.external === "boolean" ? { external: record.external } : {};
+  const priceAs = normalizeModelCatalogProviderId(normalizeOptionalString(record.priceAs) ?? "");
+  const policy: ModelPricingProvider = {
+    ...(typeof record.external === "boolean" ? { external: record.external } : {}),
+    ...(priceAs ? { priceAs } : {}),
+  };
   for (const { id: sourceId } of MODEL_PRICING_SOURCES) {
     const raw = record[sourceId];
     if (raw === false) {

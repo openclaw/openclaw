@@ -7,6 +7,7 @@ import OpenClawProtocol
 @Observable
 final class IOSChatViewModelOwner {
     private(set) var viewModel: OpenClawChatViewModel?
+    private(set) var presentationID = UUID()
     private(set) var ownerID = ""
     private(set) var presentationAgentID = "main"
     private(set) var presentationAgentName = "Main"
@@ -15,7 +16,14 @@ final class IOSChatViewModelOwner {
     private var transportAgentID = ""
     private var routingContract = ""
     private var wasConnected = false
+    @ObservationIgnored private var hydratedComposerModel: (@MainActor () -> OpenClawChatViewModel?)?
     @ObservationIgnored private var controlUIInputs: GatewayConnectConfig.ControlUIInputs?
+    @ObservationIgnored private var isObservingPendingSend = false
+
+    private var hasPendingSend: Bool {
+        guard let viewModel else { return false }
+        return viewModel.isSubmittingDraft || viewModel.pendingRunCount > 0
+    }
 
     func sync(appModel: NodeAppModel) {
         self.viewModel?.attachmentOwnerActivityChanged()
@@ -29,11 +37,8 @@ final class IOSChatViewModelOwner {
         let reconnected = connected && !self.wasConnected
         self.wasConnected = connected
         if authorityChanged { self.viewModel?.retireQuestionAuthority() }
-        if let viewModel, !viewModel.isQuestionAuthorityRetired, !authorityChanged, !Self.requiresViewModelRebuild(
-            currentOwnerID: self.ownerID,
-            nextOwnerID: ownerID,
-            currentTransportAgentID: self.transportAgentID,
-            nextTransportAgentID: agentID)
+        if let viewModel, !viewModel.isQuestionAuthorityRetired, !authorityChanged,
+           self.ownerID == ownerID, self.transportAgentID == agentID
         {
             if self.routingContract != routingContract {
                 self.routingContract = routingContract
@@ -49,6 +54,22 @@ final class IOSChatViewModelOwner {
         }
         // Recording, staging, and delivery retain their captured route until the owner releases it.
         guard self.viewModel?.isAttachmentOwnerPinned != true else { return }
+        let isDefaultAgentHydration = self.viewModel?.isQuestionAuthorityRetired == false &&
+            self.ownerID == ownerID && self.controlUIInputs == controlUIInputs &&
+            self.transportAgentID.isEmpty && !agentID.isEmpty &&
+            self.viewModel?.sessionKey == appModel.chatSessionKey
+        // Preserve the accepted turn and optimistic row until its captured run settles.
+        if isDefaultAgentHydration, self.hasPendingSend,
+           Self.transportAgentID(appModel.selectedAgentId).isEmpty,
+           self.routingContract.isEmpty || self.routingContract == routingContract
+        {
+            self.observePendingSend(appModel: appModel)
+            return
+        }
+        // Resolving the default agent replaces its transport without changing the draft's owner.
+        let draft = isDefaultAgentHydration ? self.viewModel?.input : nil
+        // Initial route hydration changes transport, but the same draft keeps its native editor.
+        if draft == nil { self.presentationID = UUID() }
         self.viewModel?.detachTransport()
         self.ownerID = ownerID
         self.transportAgentID = agentID
@@ -86,7 +107,38 @@ final class IOSChatViewModelOwner {
             },
             diagnosticsLog: { message in GatewayDiagnostics.log(message) })
         self.viewModel = viewModel
+        if let draft { viewModel.input = draft }
+        self.hydratedComposerModel = draft != nil ? viewModel.composerModelResolver() : nil
         viewModel.load()
+    }
+
+    private func observePendingSend(appModel: NodeAppModel) {
+        guard !self.isObservingPendingSend else { return }
+        self.isObservingPendingSend = true
+        // A fast send can settle between SwiftUI updates, so the owner observes its release directly.
+        withObservationTracking {
+            _ = self.hasPendingSend
+        } onChange: { [weak self, weak appModel] in
+            Task { @MainActor in
+                guard let self else { return }
+                self.isObservingPendingSend = false
+                guard let appModel else { return }
+                self.sync(appModel: appModel)
+            }
+        }
+    }
+
+    func composerModelResolver() -> @MainActor () -> OpenClawChatViewModel? {
+        guard let viewModel else { return { nil } }
+        let presentationID = self.presentationID
+        let modelID = ObjectIdentifier(viewModel)
+        let capturedModel = viewModel.composerModelResolver()
+        return { [weak self] in
+            guard let self, self.presentationID == presentationID else { return nil }
+            if self.viewModel.map(ObjectIdentifier.init) == modelID { return capturedModel() }
+            // A keystroke can arrive after hydration replaces the model but before SwiftUI updates its binding.
+            return self.hydratedComposerModel?()
+        }
     }
 
     func isCurrent(appModel: NodeAppModel) -> Bool {
@@ -100,22 +152,13 @@ final class IOSChatViewModelOwner {
         let agent = appModel.gatewayAgents.first { $0.id == self.presentationAgentID }
         let name = agent?.name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         self.presentationAgentName = name.isEmpty ? appModel.chatAgentName : name
-        self.presentationAgentBadge = AgentIdentityPresentation.normalizedBadgeEmoji(
-            agent?.identity?["emoji"]?.value as? String) ??
-            AgentIdentityPresentation.initialsBadge(for: self.presentationAgentName)
+        self.presentationAgentBadge = AgentIdentityPresentation.badge(
+            avatarText: agent?.identity?["emoji"]?.value as? String,
+            displayName: self.presentationAgentName)
         self.hasVerifiedOfflineRoutingIdentity = appModel.hasVerifiedChatOfflineRoutingIdentity
     }
 
     nonisolated static func transportAgentID(_ value: String?) -> String {
         value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
-    }
-
-    nonisolated static func requiresViewModelRebuild(
-        currentOwnerID: String,
-        nextOwnerID: String,
-        currentTransportAgentID: String,
-        nextTransportAgentID: String) -> Bool
-    {
-        currentOwnerID != nextOwnerID || currentTransportAgentID != nextTransportAgentID
     }
 }

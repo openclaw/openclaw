@@ -1,6 +1,6 @@
 // Memory FTS reconciliation keeps derived schemas aligned with canonical data.
 import { DatabaseSync } from "node:sqlite";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ensureMemoryIndexSchema } from "./memory-schema.js";
 
 describe("memory FTS schema reconciliation", () => {
@@ -74,6 +74,60 @@ describe("memory FTS schema reconciliation", () => {
         { id: "kept" },
         { id: "missing" },
       ]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("counts derived rows from the FTS5 docsize table, not by scanning the FTS table", () => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      expect(
+        ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: true }).ftsAvailable,
+      ).toBe(true);
+      const insert = db.prepare(
+        `INSERT INTO memory_index_chunks
+           (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
+         VALUES (?, 'memory/seed.md', 'memory', 1, 1, ?, 'model', ?, X'', 1)`,
+      );
+      // Deletes, re-inserts and empty-text rows move %_docsize alongside the FTS content rows.
+      for (let i = 0; i < 40; i++) {
+        insert.run(`chunk-${i}`, `hash-${i}`, i % 10 === 0 ? "" : `seed body ${i}`);
+      }
+      db.exec("DELETE FROM memory_index_chunks WHERE CAST(substr(id, 7) AS INTEGER) % 3 = 0");
+      for (const i of [3, 6, 9]) {
+        insert.run(`chunk-${i}`, `rehash-${i}`, `reinserted body ${i}`);
+      }
+      db.exec("UPDATE memory_index_chunks SET text = 'edited body' WHERE id = 'chunk-1'");
+
+      const prepare = vi.spyOn(db, "prepare");
+      let preparedSql: string[] = [];
+      try {
+        expect(
+          ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: true }).ftsAvailable,
+        ).toBe(true);
+        preparedSql = prepare.mock.calls.map(([sql]) => sql);
+      } finally {
+        prepare.mockRestore();
+      }
+      const countSql = preparedSql.find((sql) => sql.includes("derived_count"));
+      expect(countSql).toBeDefined();
+      const plan = db
+        .prepare(`EXPLAIN QUERY PLAN ${countSql}`)
+        .all()
+        .map((row) => String(row.detail));
+      expect(plan.filter((detail) => detail.includes("VIRTUAL TABLE"))).toEqual([]);
+      expect(plan.join("\n")).toContain("memory_index_chunks_fts_docsize");
+
+      const counts = db.prepare(String(countSql)).get() as {
+        canonical_count: number;
+        derived_count: number;
+      };
+      const ftsCount = db.prepare("SELECT COUNT(*) AS n FROM memory_index_chunks_fts").get() as {
+        n: number;
+      };
+      expect(counts).toEqual({ canonical_count: 29, derived_count: ftsCount.n });
+      expect(ftsCount.n).toBe(29);
     } finally {
       db.close();
     }

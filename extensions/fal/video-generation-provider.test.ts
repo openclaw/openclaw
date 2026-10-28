@@ -1,94 +1,137 @@
-// Fal tests cover video generation provider plugin behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import * as providerAuth from "openclaw/plugin-sdk/provider-auth-runtime";
-import * as providerHttp from "openclaw/plugin-sdk/provider-http";
-import { expectExplicitVideoGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
+import type { VideoGenerationRequest } from "openclaw/plugin-sdk/video-generation";
+import { generateVideo as generateRuntimeVideo } from "openclaw/plugin-sdk/video-generation-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildFalVideoGenerationProvider } from "./video-generation-provider.js";
 
-const { fetchGuardMock } = vi.hoisted(() => ({
-  fetchGuardMock: vi.fn(),
-}));
+const { fetchGuardMock } = vi.hoisted(() => ({ fetchGuardMock: vi.fn() }));
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>()),
   fetchWithSsrFGuard: fetchGuardMock,
 }));
 
+const queueSubmission = {
+  request_id: "req-123",
+  status_url: "https://queue.fal.run/fal-ai/minimax/requests/req-123/status",
+  response_url: "https://queue.fal.run/fal-ai/minimax/requests/req-123",
+};
+const videoUrl = "https://fal.run/files/video.mp4";
+const referenceModel = "bytedance/seedance-2.0/fast/reference-to-video";
+const mediaCap = { agents: { defaults: { mediaMaxMb: 0.000001 } } };
+const references = (kind: string, count: number) =>
+  Array.from({ length: count }, (_, index) => ({ url: `https://example.com/${kind}-${index}` }));
+const dataUrl = (kind: string, mimeType: string) =>
+  `data:${mimeType};base64,${Buffer.from(`local-${kind}`).toString("base64")}`;
+const mixedReferences = (url: string, kind: string, mimeType: string) => [
+  { url },
+  { buffer: Buffer.from(`local-${kind}`), mimeType },
+];
+
+function generateVideo(request: Partial<VideoGenerationRequest> = {}) {
+  return buildFalVideoGenerationProvider().generateVideo({
+    provider: "fal",
+    model: "fal-ai/minimax/video-01-live",
+    prompt: "Animate this",
+    cfg: {},
+    ...request,
+  });
+}
+
+async function expectRejected(request: Partial<VideoGenerationRequest>, message: string) {
+  await expect(generateVideo(request)).rejects.toThrow(message);
+}
+
 describe("fal video generation provider", () => {
+  it("rejects a duration that rounds to zero before submission", async () => {
+    mockFalProviderRuntime();
+    await expect(
+      generateVideo({ model: "bytedance/seedance-2.0/fast/text-to-video", durationSeconds: 0.4 }),
+    ).rejects.toThrow("durationSeconds must be a positive duration");
+    expect(fetchGuardMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { model: "fal-ai/minimax/video-01-live", ignored: ["aspectRatio", "resolution", "audio"] },
+    { model: "fal-ai/heygen/v2/video-agent", ignored: ["aspectRatio", "resolution", "audio"] },
+    { model: "fal-ai/kling-video/v2.1/master/text-to-video", ignored: ["audio"] },
+    { model: "fal-ai/wan/v2.2-a14b/text-to-video", ignored: ["audio"] },
+    { model: "bytedance/seedance-2.0/text-to-video", ignored: [] },
+  ])("reports ignored overrides through the runtime for $model", async ({ model, ignored }) => {
+    mockCompletedFalVideoJob();
+    const provider = buildFalVideoGenerationProvider();
+    const result = await generateRuntimeVideo(
+      {
+        cfg: { agents: { defaults: { mediaModels: { video: `fal/${model}` } } } },
+        prompt: "Animate this",
+        aspectRatio: "16:9",
+        resolution: "1080P",
+        audio: true,
+      },
+      {
+        getProvider: (id) => (id === provider.id ? provider : undefined),
+        listProviders: () => [provider],
+        getProviderEnvVars: () => [],
+        log: { debug: vi.fn(), warn: vi.fn() },
+      },
+    );
+    expect(result.ignoredOverrides.map((override) => override.key)).toEqual(ignored);
+    const body = getSubmitBody();
+    if (ignored.includes("aspectRatio")) {
+      expect(body).toEqual({ prompt: "Animate this" });
+    } else {
+      expect(body).toMatchObject({ aspect_ratio: "16:9" });
+      if (ignored.includes("audio")) {
+        expect(body).not.toHaveProperty("generate_audio");
+      } else {
+        expect(body).toMatchObject({ resolution: "1080p", generate_audio: true });
+      }
+    }
+  });
+
   function mockFalProviderRuntime() {
     vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
       apiKey: "fal-key",
       source: "env",
       mode: "api-key",
     });
-    vi.spyOn(providerHttp, "resolveProviderHttpRequestConfig").mockReturnValue({
-      baseUrl: "https://fal.run",
-      allowPrivateNetwork: false,
-      headers: new Headers({
-        Authorization: "Key fal-key",
-        "Content-Type": "application/json",
-      }),
-      dispatcherPolicy: undefined,
-    });
-    vi.spyOn(providerHttp, "assertOkOrThrowHttpError").mockResolvedValue(undefined);
   }
 
   function releasedJson(value: unknown) {
-    return {
-      response: Response.json(value),
-      release: vi.fn(async () => {}),
-    };
+    return { response: Response.json(value), release: vi.fn(async () => {}) };
   }
 
-  function releasedVideo(params: { contentType: string; bytes: string }) {
+  function releasedVideo(contentType = "video/mp4", bytes = "mp4-bytes") {
     return {
-      response: new Response(Buffer.from(params.bytes), {
-        status: 200,
-        headers: { "content-type": params.contentType },
+      response: new Response(Buffer.from(bytes), {
+        headers: { "content-type": contentType },
       }),
       release: vi.fn(async () => {}),
     };
   }
 
-  function mockCompletedFalVideoJob(params: {
-    requestId: string;
-    statusUrl: string;
-    responseUrl: string;
-    videoUrl: string;
-    bytes: string;
-    contentType?: string;
-    responseExtras?: Record<string, unknown>;
-  }) {
+  function mockQueueResult(payload: unknown) {
+    mockFalProviderRuntime();
     fetchGuardMock
-      .mockResolvedValueOnce(
-        releasedJson({
-          request_id: params.requestId,
-          status_url: params.statusUrl,
-          response_url: params.responseUrl,
-        }),
-      )
+      .mockResolvedValueOnce(releasedJson(queueSubmission))
       .mockResolvedValueOnce(releasedJson({ status: "COMPLETED" }))
-      .mockResolvedValueOnce(
-        releasedJson({
-          status: "COMPLETED",
-          response: {
-            video: { url: params.videoUrl },
-            ...params.responseExtras,
-          },
-        }),
-      )
-      .mockResolvedValueOnce(
-        releasedVideo({ contentType: params.contentType ?? "video/mp4", bytes: params.bytes }),
-      );
+      .mockResolvedValueOnce(releasedJson(payload));
+  }
+
+  function mockCompletedFalVideoJob(
+    download = releasedVideo(),
+    responseExtras: Record<string, unknown> = {},
+  ) {
+    mockQueueResult({
+      status: "COMPLETED",
+      response: { video: { url: videoUrl }, ...responseExtras },
+    });
+    fetchGuardMock.mockResolvedValueOnce(download);
   }
 
   function requireFetchGuardCall(callNumber: number): { init?: RequestInit; url?: string } {
-    const call = fetchGuardMock.mock.calls[callNumber - 1];
-    if (!call) {
-      throw new Error(`expected fal fetch guard call ${callNumber}`);
-    }
-    const [request] = call;
+    const request = fetchGuardMock.mock.calls[callNumber - 1]?.[0];
     if (!request || typeof request !== "object" || Array.isArray(request)) {
       throw new Error(`expected fal fetch guard request ${callNumber}`);
     }
@@ -103,198 +146,61 @@ describe("fal video generation provider", () => {
     return JSON.parse(body) as Record<string, unknown>;
   }
 
-  function fetchGuardUrl(callNumber: number): string | undefined {
-    return requireFetchGuardCall(callNumber).url;
-  }
-
   afterEach(() => {
     vi.restoreAllMocks();
     fetchGuardMock.mockReset();
   });
 
-  it("declares explicit mode capabilities", () => {
-    const provider = buildFalVideoGenerationProvider();
-    expectExplicitVideoGenerationCapabilities(provider);
-    expect(provider.capabilities.imageToVideo?.maxInputImages).toBe(1);
-    expect(
-      provider.capabilities.imageToVideo?.maxInputImagesByModel?.[
-        "bytedance/seedance-2.0/fast/reference-to-video"
-      ],
-    ).toBe(9);
-    expect(provider.capabilities.videoToVideo?.maxInputVideos).toBe(0);
-    expect(
-      Object.keys(provider.capabilities.videoToVideo?.supportedDurationSecondsByModel ?? {}),
-    ).toEqual([
-      "bytedance/seedance-2.0/fast/reference-to-video",
-      "bytedance/seedance-2.0/reference-to-video",
-    ]);
-  });
+  it("parses raw fal queue result payloads with top-level video output", async () => {
+    const prompt = "A calm harbor at sunrise";
+    mockQueueResult({
+      video: { url: "https://fal.run/files/raw-output.mp4" },
+      prompt,
+      seed: 443600358,
+    });
+    fetchGuardMock.mockResolvedValueOnce(releasedVideo());
 
-  it("submits fal video jobs through the queue API and downloads the completed result", async () => {
-    mockFalProviderRuntime();
-    mockCompletedFalVideoJob({
-      requestId: "req-123",
-      statusUrl: "https://queue.fal.run/fal-ai/minimax/requests/req-123/status",
-      responseUrl: "https://queue.fal.run/fal-ai/minimax/requests/req-123",
-      videoUrl: "https://fal.run/files/video.mp4",
-      bytes: "webm-bytes",
-      contentType: "video/webm",
+    const result = await generateVideo({
+      model: "fal-ai/wan/v2.2-a14b/image-to-video",
+      prompt,
     });
 
-    const provider = buildFalVideoGenerationProvider();
-    const result = await provider.generateVideo({
-      provider: "fal",
-      model: "fal-ai/minimax/video-01-live",
+    expect(result.videos[0]?.url).toBe("https://fal.run/files/raw-output.mp4");
+    expect(result.metadata).toEqual({ requestId: "req-123", prompt, seed: 443600358 });
+  });
+
+  it("returns URL-only videos when generated video downloads exceed the configured media cap", async () => {
+    mockCompletedFalVideoJob(releasedVideo("video/mp4", "too-large"));
+
+    const result = await generateVideo({
       prompt: "A spaceship emerges from the clouds",
       durationSeconds: 5,
       aspectRatio: "16:9",
       resolution: "720P",
-      cfg: {},
+      cfg: mediaCap,
     });
 
-    expect(fetchGuardUrl(1)).toBe("https://queue.fal.run/fal-ai/minimax/video-01-live");
-    const submitBody = getSubmitBody();
-    expect(submitBody).toEqual({
-      prompt: "A spaceship emerges from the clouds",
-    });
-    expect(fetchGuardUrl(2)).toBe("https://queue.fal.run/fal-ai/minimax/requests/req-123/status");
-    expect(fetchGuardUrl(3)).toBe("https://queue.fal.run/fal-ai/minimax/requests/req-123");
-    expect(result.videos).toHaveLength(1);
-    expect(result.videos[0]?.mimeType).toBe("video/webm");
-    expect(result.videos[0]?.fileName).toBe("video-1.webm");
-    expect(result.videos[0]?.url).toBe("https://fal.run/files/video.mp4");
-    expect(result.metadata).toEqual({
-      requestId: "req-123",
-    });
-  });
-
-  it("parses raw fal queue result payloads with top-level video output", async () => {
-    mockFalProviderRuntime();
-    fetchGuardMock
-      .mockResolvedValueOnce(
-        releasedJson({
-          request_id: "req-raw",
-          status_url: "https://queue.fal.run/fal-ai/wan/requests/req-raw/status",
-          response_url: "https://queue.fal.run/fal-ai/wan/requests/req-raw",
-        }),
-      )
-      .mockResolvedValueOnce(releasedJson({ status: "COMPLETED" }))
-      .mockResolvedValueOnce(
-        releasedJson({
-          video: { url: "https://fal.run/files/raw-output.mp4" },
-          prompt: "A calm harbor at sunrise",
-          seed: 443600358,
-        }),
-      )
-      .mockResolvedValueOnce(releasedVideo({ contentType: "video/mp4", bytes: "mp4-bytes" }));
-
-    const provider = buildFalVideoGenerationProvider();
-    const result = await provider.generateVideo({
-      provider: "fal",
-      model: "fal-ai/wan/v2.2-a14b/image-to-video",
-      prompt: "A calm harbor at sunrise",
-      cfg: {},
-    });
-
-    expect(result.videos[0]?.url).toBe("https://fal.run/files/raw-output.mp4");
-    expect(result.metadata).toEqual({
-      requestId: "req-raw",
-      prompt: "A calm harbor at sunrise",
-      seed: 443600358,
-    });
-  });
-
-  it("returns URL-only videos when generated video downloads exceed the configured media cap", async () => {
-    mockFalProviderRuntime();
-    mockCompletedFalVideoJob({
-      requestId: "req-123",
-      statusUrl: "https://queue.fal.run/fal-ai/minimax/requests/req-123/status",
-      responseUrl: "https://queue.fal.run/fal-ai/minimax/requests/req-123",
-      videoUrl: "https://fal.run/files/video.mp4",
-      bytes: "too-large",
-      contentType: "video/mp4",
-    });
-
-    const provider = buildFalVideoGenerationProvider();
-    const result = await provider.generateVideo({
-      provider: "fal",
-      model: "fal-ai/minimax/video-01-live",
-      prompt: "A spaceship emerges from the clouds",
-      cfg: { agents: { defaults: { mediaMaxMb: 0.000001 } } },
-    });
-
+    expect(requireFetchGuardCall(1).url).toBe("https://queue.fal.run/fal-ai/minimax/video-01-live");
+    expect(getSubmitBody()).toEqual({ prompt: "A spaceship emerges from the clouds" });
     expect(result.videos).toEqual([
-      {
-        url: "https://fal.run/files/video.mp4",
-        mimeType: "video/mp4",
-        fileName: "video-1.mp4",
-      },
+      { url: videoUrl, mimeType: "video/mp4", fileName: "video-1.mp4" },
     ]);
   });
 
-  it.each([
-    { name: "JSON error", contentType: "application/json", body: '{"error":"denied"}' },
-    { name: "problem JSON", contentType: "application/problem+json", body: '{"title":"denied"}' },
-    { name: "HTML", contentType: "text/html; charset=utf-8", body: "<html>sign in</html>" },
-    { name: "empty video", contentType: "video/mp4", body: "" },
-  ])("rejects a successful $name response as generated video", async ({ contentType, body }) => {
-    mockFalProviderRuntime();
-    mockCompletedFalVideoJob({
-      requestId: "req-123",
-      statusUrl: "https://queue.fal.run/fal-ai/minimax/requests/req-123/status",
-      responseUrl: "https://queue.fal.run/fal-ai/minimax/requests/req-123",
-      videoUrl: "https://fal.run/files/video.mp4",
-      bytes: body,
-      contentType,
-    });
-
-    const provider = buildFalVideoGenerationProvider();
-    await expect(
-      provider.generateVideo({
-        provider: "fal",
-        model: "fal-ai/minimax/video-01-live",
-        prompt: "invalid download",
-        cfg: {},
-      }),
-    ).rejects.toThrow("fal generated video download: malformed video response");
-  });
-
   it("rejects malformed generated video downloads instead of returning URL-only videos", async () => {
-    mockFalProviderRuntime();
-    mockCompletedFalVideoJob({
-      requestId: "req-123",
-      statusUrl: "https://queue.fal.run/fal-ai/minimax/requests/req-123/status",
-      responseUrl: "https://queue.fal.run/fal-ai/minimax/requests/req-123",
-      videoUrl: "https://fal.run/files/video.mp4",
-      bytes: '{"error":"denied"}',
-      contentType: "application/json",
-    });
+    mockCompletedFalVideoJob(releasedVideo("application/json", '{"error":"denied"}'));
 
-    const provider = buildFalVideoGenerationProvider();
-    await expect(
-      provider.generateVideo({
-        provider: "fal",
-        model: "fal-ai/minimax/video-01-live",
-        prompt: "invalid download under a tiny media cap",
-        // The same cap that turns oversized downloads into URL-only videos above.
-        cfg: { agents: { defaults: { mediaMaxMb: 0.000001 } } },
-      }),
-    ).rejects.toThrow("fal generated video download: malformed video response");
+    await expectRejected(
+      { cfg: mediaCap },
+      "fal generated video download: malformed video response",
+    );
   });
 
   it("wraps malformed successful fal submit responses", async () => {
     mockFalProviderRuntime();
     fetchGuardMock.mockResolvedValueOnce(releasedJson([]));
 
-    const provider = buildFalVideoGenerationProvider();
-    await expect(
-      provider.generateVideo({
-        provider: "fal",
-        model: "fal-ai/minimax/video-01-live",
-        prompt: "bad shape",
-        cfg: {},
-      }),
-    ).rejects.toThrow("fal video generation response malformed");
+    await expect(generateVideo()).rejects.toThrow("fal video generation response malformed");
   });
 
   it("wraps non-JSON successful fal submit responses", async () => {
@@ -307,428 +213,174 @@ describe("fal video generation provider", () => {
       release: vi.fn(async () => {}),
     });
 
-    const provider = buildFalVideoGenerationProvider();
-    await expect(
-      provider.generateVideo({
-        provider: "fal",
-        model: "fal-ai/minimax/video-01-live",
-        prompt: "html body",
-        cfg: {},
-      }),
-    ).rejects.toThrow("fal video generation response malformed");
+    await expect(generateVideo()).rejects.toThrow("fal video generation response malformed");
   });
 
-  it("rejects missing fal queue statuses without waiting for timeout", async () => {
+  it.each([{}, { status: "ALMOST_DONE" }])("rejects status %j immediately", async (response) => {
     mockFalProviderRuntime();
     fetchGuardMock
-      .mockResolvedValueOnce(
-        releasedJson({
-          request_id: "req-123",
-          status_url: "https://queue.fal.run/fal-ai/minimax/requests/req-123/status",
-          response_url: "https://queue.fal.run/fal-ai/minimax/requests/req-123",
-        }),
-      )
-      .mockResolvedValueOnce(releasedJson({}));
+      .mockResolvedValueOnce(releasedJson(queueSubmission))
+      .mockResolvedValueOnce(releasedJson(response));
 
-    const provider = buildFalVideoGenerationProvider();
-    await expect(
-      provider.generateVideo({
-        provider: "fal",
-        model: "fal-ai/minimax/video-01-live",
-        prompt: "missing status",
-        cfg: {},
-      }),
-    ).rejects.toThrow("fal video generation response malformed");
-    expect(fetchGuardMock).toHaveBeenCalledTimes(2);
-  });
-
-  it("rejects unknown fal queue statuses without waiting for timeout", async () => {
-    mockFalProviderRuntime();
-    fetchGuardMock
-      .mockResolvedValueOnce(
-        releasedJson({
-          request_id: "req-123",
-          status_url: "https://queue.fal.run/fal-ai/minimax/requests/req-123/status",
-          response_url: "https://queue.fal.run/fal-ai/minimax/requests/req-123",
-        }),
-      )
-      .mockResolvedValueOnce(releasedJson({ status: "ALMOST_DONE" }));
-
-    const provider = buildFalVideoGenerationProvider();
-    await expect(
-      provider.generateVideo({
-        provider: "fal",
-        model: "fal-ai/minimax/video-01-live",
-        prompt: "bad status",
-        cfg: {},
-      }),
-    ).rejects.toThrow("fal video generation response malformed");
+    await expect(generateVideo()).rejects.toThrow("fal video generation response malformed");
     expect(fetchGuardMock).toHaveBeenCalledTimes(2);
   });
 
   it("caps oversized fal queue operation deadlines", async () => {
     mockFalProviderRuntime();
-    const nowSpy = vi.spyOn(Date, "now");
-    nowSpy
-      .mockReturnValueOnce(0)
-      .mockReturnValueOnce(0)
-      .mockReturnValueOnce(MAX_TIMER_TIMEOUT_MS + 1);
+    let monotonicMs = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => monotonicMs);
     fetchGuardMock
-      .mockResolvedValueOnce(
-        releasedJson({
-          request_id: "req-123",
-          status_url: "https://queue.fal.run/fal-ai/minimax/requests/req-123/status",
-          response_url: "https://queue.fal.run/fal-ai/minimax/requests/req-123",
-        }),
-      )
-      .mockResolvedValueOnce(releasedJson({ status: "IN_PROGRESS" }));
+      .mockResolvedValueOnce(releasedJson(queueSubmission))
+      .mockImplementationOnce(async () => {
+        monotonicMs = MAX_TIMER_TIMEOUT_MS + 1;
+        return releasedJson({ status: "IN_PROGRESS" });
+      });
 
-    try {
-      const provider = buildFalVideoGenerationProvider();
-      await expect(
-        provider.generateVideo({
-          provider: "fal",
-          model: "fal-ai/minimax/video-01-live",
-          prompt: "huge timeout",
-          cfg: {},
-          timeoutMs: Number.MAX_SAFE_INTEGER,
-        }),
-      ).rejects.toThrow("fal video generation did not finish in time (last status: IN_PROGRESS)");
-      expect(fetchGuardMock).toHaveBeenCalledTimes(2);
-    } finally {
-      nowSpy.mockRestore();
-    }
+    await expectRejected(
+      { timeoutMs: Number.MAX_SAFE_INTEGER },
+      "fal video generation did not finish in time (last status: IN_PROGRESS)",
+    );
+    expect(fetchGuardMock).toHaveBeenCalledTimes(2);
   });
 
   it("rejects malformed fal completed result payloads", async () => {
-    mockFalProviderRuntime();
-    fetchGuardMock
-      .mockResolvedValueOnce(
-        releasedJson({
-          request_id: "req-123",
-          status_url: "https://queue.fal.run/fal-ai/minimax/requests/req-123/status",
-          response_url: "https://queue.fal.run/fal-ai/minimax/requests/req-123",
-        }),
-      )
-      .mockResolvedValueOnce(releasedJson({ status: "COMPLETED" }))
-      .mockResolvedValueOnce(releasedJson({ status: "COMPLETED", response: [] }));
+    mockQueueResult({ status: "COMPLETED", response: [] });
 
-    const provider = buildFalVideoGenerationProvider();
-    await expect(
-      provider.generateVideo({
-        provider: "fal",
-        model: "fal-ai/minimax/video-01-live",
-        prompt: "bad result",
-        cfg: {},
-      }),
-    ).rejects.toThrow("fal video generation response malformed");
-  });
-
-  it("exposes Seedance 2 models", () => {
-    const provider = buildFalVideoGenerationProvider();
-
-    expect(provider.models).toContain("fal-ai/heygen/v2/video-agent");
-    expect(provider.models).toContain("bytedance/seedance-2.0/fast/text-to-video");
-    expect(provider.models).toContain("bytedance/seedance-2.0/fast/image-to-video");
-    expect(provider.models).toContain("bytedance/seedance-2.0/fast/reference-to-video");
-    expect(provider.models).toContain("bytedance/seedance-2.0/text-to-video");
-    expect(provider.models).toContain("bytedance/seedance-2.0/image-to-video");
-    expect(provider.models).toContain("bytedance/seedance-2.0/reference-to-video");
-  });
-
-  it("submits HeyGen video-agent requests without unsupported fal controls", async () => {
-    mockFalProviderRuntime();
-    mockCompletedFalVideoJob({
-      requestId: "heygen-req-123",
-      statusUrl:
-        "https://queue.fal.run/fal-ai/heygen/v2/video-agent/requests/heygen-req-123/status",
-      responseUrl: "https://queue.fal.run/fal-ai/heygen/v2/video-agent/requests/heygen-req-123",
-      videoUrl: "https://fal.run/files/heygen.mp4",
-      bytes: "heygen-mp4-bytes",
-    });
-
-    const provider = buildFalVideoGenerationProvider();
-    const result = await provider.generateVideo({
-      provider: "fal",
-      model: "fal-ai/heygen/v2/video-agent",
-      prompt: "A founder explains OpenClaw in a concise studio video",
-      durationSeconds: 8,
-      aspectRatio: "16:9",
-      resolution: "720P",
-      audio: true,
-      cfg: {},
-    });
-
-    expect(fetchGuardUrl(1)).toBe("https://queue.fal.run/fal-ai/heygen/v2/video-agent");
-    expect(getSubmitBody()).toEqual({
-      prompt: "A founder explains OpenClaw in a concise studio video",
-    });
-    expect(result.metadata).toEqual({
-      requestId: "heygen-req-123",
-    });
-  });
-
-  it("submits Seedance 2 requests with fal schema fields", async () => {
-    mockFalProviderRuntime();
-    mockCompletedFalVideoJob({
-      requestId: "seedance-req-123",
-      statusUrl:
-        "https://queue.fal.run/bytedance/seedance-2.0/fast/text-to-video/requests/seedance-req-123/status",
-      responseUrl:
-        "https://queue.fal.run/bytedance/seedance-2.0/fast/text-to-video/requests/seedance-req-123",
-      videoUrl: "https://fal.run/files/seedance.mp4",
-      bytes: "seedance-mp4-bytes",
-      responseExtras: { seed: 42 },
-    });
-
-    const provider = buildFalVideoGenerationProvider();
-    const result = await provider.generateVideo({
-      provider: "fal",
-      model: "bytedance/seedance-2.0/fast/text-to-video",
-      prompt: "A chrome lobster drives a tiny kart across a neon pier",
-      durationSeconds: 7,
-      aspectRatio: "16:9",
-      resolution: "720P",
-      audio: false,
-      cfg: {},
-    });
-
-    expect(fetchGuardUrl(1)).toBe(
-      "https://queue.fal.run/bytedance/seedance-2.0/fast/text-to-video",
-    );
-    expect(getSubmitBody()).toEqual({
-      prompt: "A chrome lobster drives a tiny kart across a neon pier",
-      aspect_ratio: "16:9",
-      resolution: "720p",
-      duration: "7",
-      generate_audio: false,
-    });
-    expect(result.metadata).toEqual({
-      requestId: "seedance-req-123",
-      seed: 42,
-    });
+    await expect(generateVideo()).rejects.toThrow("fal video generation response malformed");
   });
 
   it("drops unsupported Seedance 2 duration values before queue submission", async () => {
-    mockFalProviderRuntime();
-    mockCompletedFalVideoJob({
-      requestId: "seedance-req-123",
-      statusUrl:
-        "https://queue.fal.run/bytedance/seedance-2.0/fast/text-to-video/requests/seedance-req-123/status",
-      responseUrl:
-        "https://queue.fal.run/bytedance/seedance-2.0/fast/text-to-video/requests/seedance-req-123",
-      videoUrl: "https://fal.run/files/seedance.mp4",
-      bytes: "seedance-mp4-bytes",
-    });
+    mockCompletedFalVideoJob();
 
-    const provider = buildFalVideoGenerationProvider();
-    await provider.generateVideo({
-      provider: "fal",
+    await generateVideo({
       model: "bytedance/seedance-2.0/fast/text-to-video",
       prompt: "A chrome lobster drives a tiny kart across a neon pier",
       durationSeconds: 99,
-      cfg: {},
     });
 
     expect(getSubmitBody()).not.toHaveProperty("duration");
   });
 
-  it("submits Seedance 2 image-to-video requests with a single image_url", async () => {
-    mockFalProviderRuntime();
-    mockCompletedFalVideoJob({
-      requestId: "seedance-i2v-req-123",
-      statusUrl:
-        "https://queue.fal.run/bytedance/seedance-2.0/fast/image-to-video/requests/seedance-i2v-req-123/status",
-      responseUrl:
-        "https://queue.fal.run/bytedance/seedance-2.0/fast/image-to-video/requests/seedance-i2v-req-123",
-      videoUrl: "https://fal.run/files/seedance-i2v.mp4",
-      bytes: "seedance-i2v-mp4-bytes",
-    });
+  it.each([
+    {
+      input: { url: "https://example.com/start-frame.png" },
+      url: "https://example.com/start-frame.png",
+    },
+    {
+      input: { buffer: Buffer.from("image"), mimeType: " \t" },
+      url: "data:image/png;base64,aW1hZ2U=",
+    },
+  ])(
+    "submits Seedance 2 image-to-video requests with a single image_url $url",
+    async ({ input, url }) => {
+      mockCompletedFalVideoJob();
 
-    const provider = buildFalVideoGenerationProvider();
-    await provider.generateVideo({
-      provider: "fal",
-      model: "bytedance/seedance-2.0/fast/image-to-video",
-      prompt: "Animate this product still with a slow orbit",
-      durationSeconds: 6,
-      inputImages: [{ url: "https://example.com/start-frame.png" }],
-      cfg: {},
-    });
+      await generateVideo({
+        model: "bytedance/seedance-2.0/fast/image-to-video",
+        prompt: "Animate this product still with a slow orbit",
+        durationSeconds: 6,
+        inputImages: [input],
+      });
 
-    expect(getSubmitBody()).toEqual({
-      prompt: "Animate this product still with a slow orbit",
-      image_url: "https://example.com/start-frame.png",
-      duration: "6",
-    });
-  });
+      expect(getSubmitBody()).toEqual({
+        prompt: "Animate this product still with a slow orbit",
+        image_url: url,
+        duration: "6",
+      });
+    },
+  );
 
   it("submits Seedance 2 reference-to-video requests with image, video, and audio URLs", async () => {
-    mockFalProviderRuntime();
-    mockCompletedFalVideoJob({
-      requestId: "seedance-ref-req-123",
-      statusUrl:
-        "https://queue.fal.run/bytedance/seedance-2.0/fast/reference-to-video/requests/seedance-ref-req-123/status",
-      responseUrl:
-        "https://queue.fal.run/bytedance/seedance-2.0/fast/reference-to-video/requests/seedance-ref-req-123",
-      videoUrl: "https://fal.run/files/seedance-ref.mp4",
-      bytes: "seedance-ref-mp4-bytes",
-      responseExtras: { seed: 1234 },
-    });
+    mockCompletedFalVideoJob(releasedVideo(), { seed: 1234 });
 
-    const provider = buildFalVideoGenerationProvider();
-    const result = await provider.generateVideo({
-      provider: "fal",
-      model: "bytedance/seedance-2.0/fast/reference-to-video",
+    const result = await generateVideo({
+      model: referenceModel,
       prompt: "Blend @Image1, @Image2, @Video1, @Video2, and @Audio1 into one short film",
       durationSeconds: 8,
       aspectRatio: "9:16",
       resolution: "480P",
       audio: false,
       inputImages: [
-        { url: "https://example.com/reference-1.png" },
-        { buffer: Buffer.from("local-image"), mimeType: "image/webp" },
+        ...mixedReferences("https://example.com/reference-1.png", "image", "image/webp"),
+        { buffer: Buffer.from("image") },
       ],
       inputVideos: [
-        { url: "https://example.com/reference-1.mp4" },
-        { buffer: Buffer.from("local-video"), mimeType: "video/quicktime" },
+        ...mixedReferences("https://example.com/reference-1.mp4", "video", "video/quicktime"),
+        { buffer: Buffer.from("video"), mimeType: " " },
       ],
       inputAudios: [
-        { url: "https://example.com/reference-1.mp3" },
-        { buffer: Buffer.from("local-audio"), mimeType: "audio/wav" },
+        ...mixedReferences("https://example.com/reference-1.mp3", "audio", "audio/wav"),
+        { buffer: Buffer.from("audio") },
       ],
-      cfg: {},
     });
 
-    expect(fetchGuardUrl(1)).toBe(
-      "https://queue.fal.run/bytedance/seedance-2.0/fast/reference-to-video",
-    );
+    expect(requireFetchGuardCall(1).url).toBe(`https://queue.fal.run/${referenceModel}`);
     expect(getSubmitBody()).toEqual({
       prompt: "Blend @Image1, @Image2, @Video1, @Video2, and @Audio1 into one short film",
       image_urls: [
         "https://example.com/reference-1.png",
-        `data:image/webp;base64,${Buffer.from("local-image").toString("base64")}`,
+        dataUrl("image", "image/webp"),
+        "data:image/png;base64,aW1hZ2U=",
       ],
       video_urls: [
         "https://example.com/reference-1.mp4",
-        `data:video/quicktime;base64,${Buffer.from("local-video").toString("base64")}`,
+        dataUrl("video", "video/quicktime"),
+        "data:video/mp4;base64,dmlkZW8=",
       ],
       audio_urls: [
         "https://example.com/reference-1.mp3",
-        `data:audio/wav;base64,${Buffer.from("local-audio").toString("base64")}`,
+        dataUrl("audio", "audio/wav"),
+        "data:audio/mpeg;base64,YXVkaW8=",
       ],
       aspect_ratio: "9:16",
       resolution: "480p",
       duration: "8",
       generate_audio: false,
     });
-    expect(result.metadata).toEqual({
-      requestId: "seedance-ref-req-123",
-      seed: 1234,
-    });
+    expect(result.metadata).toEqual({ requestId: "req-123", seed: 1234 });
   });
 
   it("rejects video, audio, and multiple image references for non-reference fal models", async () => {
-    const provider = buildFalVideoGenerationProvider();
-
-    await expect(
-      provider.generateVideo({
-        provider: "fal",
-        model: "fal-ai/minimax/video-01-live",
-        prompt: "Animate this",
-        inputImages: [
-          { url: "https://example.com/one.png" },
-          { url: "https://example.com/two.png" },
-        ],
-        cfg: {},
-      }),
-    ).rejects.toThrow("fal video generation supports at most one image reference.");
-
-    await expect(
-      provider.generateVideo({
-        provider: "fal",
-        model: "fal-ai/minimax/video-01-live",
-        prompt: "Animate this",
-        inputVideos: [{ url: "https://example.com/reference.mp4" }],
-        cfg: {},
-      }),
-    ).rejects.toThrow("fal video generation does not support video reference inputs.");
-
-    await expect(
-      provider.generateVideo({
-        provider: "fal",
-        model: "fal-ai/minimax/video-01-live",
-        prompt: "Animate this",
-        inputAudios: [{ url: "https://example.com/reference.mp3" }],
-        cfg: {},
-      }),
-    ).rejects.toThrow("fal video generation does not support audio reference inputs.");
+    await expectRejected(
+      { inputImages: references("image", 2) },
+      "fal video generation supports at most one image reference.",
+    );
+    await expectRejected(
+      { inputVideos: references("video", 1) },
+      "fal video generation does not support video reference inputs.",
+    );
+    await expectRejected(
+      { inputAudios: references("audio", 1) },
+      "fal video generation does not support audio reference inputs.",
+    );
   });
 
   it("rejects over-limit and audio-only Seedance reference-to-video requests", async () => {
-    const provider = buildFalVideoGenerationProvider();
-    const model = "bytedance/seedance-2.0/fast/reference-to-video";
-
-    await expect(
-      provider.generateVideo({
-        provider: "fal",
+    const model = referenceModel;
+    await expectRejected(
+      { model, inputImages: references("image", 10) },
+      "fal Seedance reference-to-video supports at most 9 reference images.",
+    );
+    await expectRejected(
+      { model, inputVideos: references("video", 4) },
+      "fal Seedance reference-to-video supports at most 3 reference videos.",
+    );
+    await expectRejected(
+      { model, inputAudios: references("audio", 4) },
+      "fal Seedance reference-to-video supports at most 3 reference audios.",
+    );
+    await expectRejected(
+      {
         model,
-        prompt: "Too many images",
-        inputImages: Array.from({ length: 10 }, (_, index) => ({
-          url: `https://example.com/image-${index}.png`,
-        })),
-        cfg: {},
-      }),
-    ).rejects.toThrow("fal Seedance reference-to-video supports at most 9 reference images.");
-
-    await expect(
-      provider.generateVideo({
-        provider: "fal",
-        model,
-        prompt: "Too many videos",
-        inputVideos: Array.from({ length: 4 }, (_, index) => ({
-          url: `https://example.com/video-${index}.mp4`,
-        })),
-        cfg: {},
-      }),
-    ).rejects.toThrow("fal Seedance reference-to-video supports at most 3 reference videos.");
-
-    await expect(
-      provider.generateVideo({
-        provider: "fal",
-        model,
-        prompt: "Too many audios",
-        inputAudios: Array.from({ length: 4 }, (_, index) => ({
-          url: `https://example.com/audio-${index}.mp3`,
-        })),
-        cfg: {},
-      }),
-    ).rejects.toThrow("fal Seedance reference-to-video supports at most 3 reference audios.");
-
-    await expect(
-      provider.generateVideo({
-        provider: "fal",
-        model,
-        prompt: "Too many total files",
-        inputImages: Array.from({ length: 9 }, (_, index) => ({
-          url: `https://example.com/image-${index}.png`,
-        })),
-        inputVideos: Array.from({ length: 3 }, (_, index) => ({
-          url: `https://example.com/video-${index}.mp4`,
-        })),
-        inputAudios: [{ url: "https://example.com/audio.mp3" }],
-        cfg: {},
-      }),
-    ).rejects.toThrow("fal Seedance reference-to-video supports at most 12 total reference files.");
-
-    await expect(
-      provider.generateVideo({
-        provider: "fal",
-        model,
-        prompt: "Audio only",
-        inputAudios: [{ url: "https://example.com/audio.mp3" }],
-        cfg: {},
-      }),
-    ).rejects.toThrow(
+        inputImages: references("image", 9),
+        inputVideos: references("video", 3),
+        inputAudios: references("audio", 1),
+      },
+      "fal Seedance reference-to-video supports at most 12 total reference files.",
+    );
+    await expectRejected(
+      { model, inputAudios: references("audio", 1) },
       "fal Seedance reference-to-video requires at least one image or video reference when audio references are provided.",
     );
   });

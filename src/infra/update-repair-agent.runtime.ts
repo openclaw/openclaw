@@ -13,7 +13,15 @@ import { isToolAllowedByPolicies } from "../agents/tool-policy-match.js";
 import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "../agents/tool-policy.js";
 import { buildExecRunConfig } from "../commands/agent-exec-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  getBoundLegacyPluginSdkResourceHost,
+  LegacyPluginSdkResourceHost,
+} from "../plugins/legacy-sdk-resource-host.js";
+import { hasRetainedPluginRuntimeCloseError } from "../plugins/runtime-close-error.js";
+import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import type { SystemAgentConfiguredRoute } from "../system-agent/inference-route.js";
+import { settleWithCleanup } from "./error-graph-internal.js";
+import { GatewayScheduler } from "./gateway-scheduler.js";
 import { sanitizeHostExecEnv, withHostExecInheritedEnvOmitted } from "./host-env-security.js";
 import {
   installationTargetEnv,
@@ -105,14 +113,71 @@ export async function withUpdateRepairEnvironment<T>(
   }
 }
 
+async function withRepairResources<T>(run: () => Promise<T>): Promise<T> {
+  const existingHost = getBoundLegacyPluginSdkResourceHost();
+  const scheduler = existingHost ? existingHost.scheduler : new GatewayScheduler();
+  const host = existingHost ?? new LegacyPluginSdkResourceHost();
+  if (!existingHost) {
+    host.bindScheduler(scheduler);
+  }
+  const resources = createOpenClawDatabaseMaintenanceScope();
+  return settleWithCleanup(
+    Promise.resolve().then(() => {
+      host.assertOpen();
+      scheduler.signal.throwIfAborted();
+      return host.run(() =>
+        resources.run(async () => {
+          const { captureRuntimeConfigAsyncReader } = await import("../config/io.js");
+          await captureRuntimeConfigAsyncReader()();
+          return run();
+        }),
+      );
+    }),
+    async () => {
+      try {
+        const [sdkCleanup] = await Promise.allSettled([
+          existingHost ? Promise.resolve() : scheduler.stop().then(() => host.close()),
+        ]);
+        if (
+          sdkCleanup.status === "rejected" &&
+          hasRetainedPluginRuntimeCloseError(sdkCleanup.reason)
+        ) {
+          throw sdkCleanup.reason;
+        }
+        try {
+          await resources.close();
+        } catch (error) {
+          if (sdkCleanup.status === "rejected") {
+            throw new AggregateError(
+              [sdkCleanup.reason, error],
+              "Repair SDK and database resource cleanup failed.",
+              { cause: error },
+            );
+          }
+          throw error;
+        }
+        if (sdkCleanup.status === "rejected") {
+          throw sdkCleanup.reason;
+        }
+      } catch (error) {
+        recordAgentCleanupFailure();
+        throw error;
+      }
+    },
+    "Repair turn and database resource cleanup failed.",
+  );
+}
+
 export async function prepareUpdateRepairInference(signal: AbortSignal, timeoutMs: number) {
-  signal.throwIfAborted();
-  const { getRuntimeConfig } = await import("../config/io.js");
-  signal.throwIfAborted();
-  const config = getRuntimeConfig();
-  const { selectUpdateRepairInference } = await import("./update-repair-inference.js");
-  signal.throwIfAborted();
-  return await selectUpdateRepairInference({ config, runtime: repairRuntime, signal, timeoutMs });
+  return withRepairResources(async () => {
+    signal.throwIfAborted();
+    const { getRuntimeConfig } = await import("../config/io.js");
+    signal.throwIfAborted();
+    const config = getRuntimeConfig();
+    const { selectUpdateRepairInference } = await import("./update-repair-inference.js");
+    signal.throwIfAborted();
+    return await selectUpdateRepairInference({ config, runtime: repairRuntime, signal, timeoutMs });
+  });
 }
 
 // Operator-owned updates permit prompt-free exec, never past an explicit deny.
@@ -219,7 +284,7 @@ function repairRunConfig(
   });
 }
 
-export async function runUpdateRepairTurn(params: {
+type UpdateRepairTurnParams = {
   target: UpdateRepairTarget;
   route: Extract<SystemAgentConfiguredRoute, { runner: "embedded" }>;
   modelFallbacks: string[];
@@ -227,8 +292,17 @@ export async function runUpdateRepairTurn(params: {
   timeoutMs: number;
   maxToolCalls: number;
   signal: AbortSignal;
+  /** Full authority for model candidates, tool admission, and tool effect guards. */
   isCurrent?: () => boolean;
-}) {
+  /** Repeated run-preparation source checks; defaults to `isCurrent`. */
+  isLive?: () => boolean;
+};
+
+export async function runUpdateRepairTurn(params: UpdateRepairTurnParams) {
+  return withRepairResources(() => runScopedUpdateRepairTurn(params));
+}
+
+async function runScopedUpdateRepairTurn(params: UpdateRepairTurnParams) {
   params.signal.throwIfAborted();
   const { route, target } = params;
   const config = repairRunConfig(route, params.modelFallbacks);
@@ -239,12 +313,14 @@ export async function runUpdateRepairTurn(params: {
   const runConfig = buildExecRunConfig({ base: config.value.runConfig, cwd: target.installRoot });
   const controller = new AbortController();
   const signal = AbortSignal.any([params.signal, controller.signal]);
-  const assertCurrent = () => {
+  const isLive = params.isLive ?? params.isCurrent;
+  const assertAuthority = (isCurrent: (() => boolean) | undefined) => {
     signal.throwIfAborted();
-    if (params.isCurrent?.() === false) {
+    if (isCurrent?.() === false) {
       throw new Error("Repair no longer owns the failed update.");
     }
   };
+  const assertCurrent = () => assertAuthority(params.isCurrent);
   const runId = `update-repair-${randomUUID()}`;
   const sessionKey = `agent:${route.agentId}:update-repair:${runId}`;
   const preparedRunAdmission = prepareSystemAgentRunAdmission(
@@ -252,7 +328,7 @@ export async function runUpdateRepairTurn(params: {
     runId,
     route.agentId,
     "update.repair",
-    assertCurrent,
+    () => assertAuthority(isLive),
   );
   const toolBudget = createAgentToolExecutionBudget({
     maxToolCalls: params.maxToolCalls,
@@ -326,6 +402,7 @@ export async function runUpdateRepairTurn(params: {
                   assertCurrent();
                   return runEmbeddedAgent({
                     ...options,
+                    ...(options.authProfileId ? { authProfileIdSource: "user" as const } : {}),
                     preparedRunAdmission,
                     runId,
                     sessionId: runId,
@@ -348,6 +425,7 @@ export async function runUpdateRepairTurn(params: {
                       : {}),
                     modelFallbacksOverride: modelFallbacks,
                     codeModeOverride: false,
+                    cleanupBundleMcpOnRunEnd: true,
                     disableTrajectory: true,
                     trigger: "manual",
                     timeoutMs: Math.max(1, deadline - Date.now()),
@@ -386,5 +464,9 @@ export async function runUpdateRepairTurn(params: {
     recordAgentCleanupFailure();
     throw error;
   }
-  return { status: "completed" as const, toolCalls: toolBudget.toolCalls, envelope };
+  return {
+    status: "completed" as const,
+    toolCalls: toolBudget.toolCalls,
+    envelope,
+  };
 }

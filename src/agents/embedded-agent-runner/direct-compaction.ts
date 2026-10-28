@@ -1,4 +1,3 @@
-/** Coordinates one direct compaction attempt through explicit lifecycle phases. */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
@@ -34,6 +33,7 @@ export async function compactEmbeddedAgentSessionDirectOnce(
   const cleanupWork = new AsyncWorkScope();
   const cleanupContext = cleanupWork.run(() => AsyncLocalStorage.snapshot());
   let cleanup: PreparedCompactionCleanup | undefined;
+  let releaseSandbox = () => {};
   const runAttempt = async () => {
     const preparation = await prepareDirectCompactionAttempt({
       ...params,
@@ -42,6 +42,7 @@ export async function compactEmbeddedAgentSessionDirectOnce(
     if (!preparation.ok) {
       return preparation.result;
     }
+    releaseSandbox = preparation.value.releaseSandbox;
     try {
       const runtime = await buildPreparedCompactionRuntime(preparation.value, (preparedCleanup) => {
         cleanup = preparedCleanup;
@@ -92,6 +93,7 @@ export async function compactEmbeddedAgentSessionDirectOnce(
               Promise.all([context(() => work.drain()), cleanupContext(() => cleanupWork.drain())]),
           );
         } finally {
+          releaseSandbox();
           cancellationSignal?.removeEventListener("abort", closeWork);
         }
       }

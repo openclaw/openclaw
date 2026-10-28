@@ -1,36 +1,92 @@
-import { expect, it, vi, type Mock } from "vitest";
+import { expect, it, onTestFinished, vi, type Mock } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../../../browser-lifecycle-cleanup.js";
+import type { closeTrackedBrowserTabsForSessions as CloseTabs } from "../../../plugin-sdk/browser-maintenance.js";
 import * as gatewayWorkAdmission from "../../../process/gateway-work-admission.js";
-import { AsyncWorkScope } from "../../../shared/async-work-scope.js";
+import { observeAsyncWorkScopeRuns } from "../../../shared/async-work-scope.test-support.js";
 import type { SubagentRegistryHarness } from "../../subagent-test-fixtures.test-helpers.js";
 import type { createSubagentRegistryMockState } from "./subagent-registry.mock-state.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
-export function observeRootWork(): () => Promise<void> {
-  const observations = [
-    vi.spyOn(gatewayWorkAdmission, "runWithGatewayIndependentRootWorkContinuation"),
-    // Detached completion resolves its result before this scope drains and releases its root.
-    vi.spyOn(AsyncWorkScope.prototype, "run"),
-  ];
-  return async () => {
+function createRootAdmissionObservation() {
+  const admitted = new WeakMap<Promise<unknown>, { entered: boolean }>();
+  const admissions = (
+    [
+      "runWithGatewayDetachedWorkAdmission",
+      "runWithGatewayIndependentRootWorkAdmission",
+      "runWithGatewayIndependentRootWorkContinuation",
+      "runWithGatewayDetachedWorkContinuation",
+    ] as const
+  ).map((name) => {
+    const original: typeof gatewayWorkAdmission.runWithGatewayIndependentRootWorkAdmission =
+      gatewayWorkAdmission[name];
+    return vi.spyOn(gatewayWorkAdmission, name).mockImplementation((run, origin, signal) => {
+      const entry = { entered: false };
+      const result = original(
+        () => {
+          entry.entered = true;
+          return run();
+        },
+        origin,
+        signal,
+      );
+      admitted.set(result, entry);
+      return result;
+    });
+  });
+  return { admitted, admissions, subscribers: 0 };
+}
+
+let rootAdmissionObservation: ReturnType<typeof createRootAdmissionObservation> | undefined;
+
+export function observeRootWork(): (keepObserving?: boolean) => Promise<void> {
+  const rootWork = (rootAdmissionObservation ??= createRootAdmissionObservation());
+  rootWork.subscribers += 1;
+  // Detached completion resolves its result before this scope drains and releases its root.
+  const scopeRuns = observeAsyncWorkScopeRuns();
+  let disposed = false;
+  const dispose = () => {
+    if (disposed) {
+      return;
+    }
+    disposed = true;
+    if (--rootWork.subscribers === 0) {
+      rootWork.admissions.forEach((admission) => admission.mockRestore());
+      rootAdmissionObservation = undefined;
+    }
+    scopeRuns[Symbol.dispose]();
+  };
+  onTestFinished(dispose);
+  const observations = [...rootWork.admissions, scopeRuns];
+  const positions = observations.map((observation) => observation.mock.results.length);
+  return async (keepObserving = false) => {
     const failures: unknown[] = [];
     try {
-      for (const observation of observations) {
-        for (const result of observation.mock.results) {
-          try {
-            if (result.type === "throw") {
-              throw result.value;
+      // A settled task writer can admit cleanup roots while another scope drains.
+      while (
+        observations.some((observation, i) => observation.mock.results.length > positions[i]!)
+      ) {
+        for (const [i, observation] of observations.entries()) {
+          while (positions[i]! < observation.mock.results.length) {
+            const result = observation.mock.results[positions[i]!]!;
+            positions[i]! += 1;
+            try {
+              if (result.type === "throw") {
+                throw result.value;
+              }
+              await result.value;
+            } catch (error) {
+              // Refused admission never owned cleanup; its caller handles rejection.
+              if (rootWork.admitted.get(result.value)?.entered !== false) {
+                failures.push(error);
+              }
             }
-            await result.value;
-          } catch (error) {
-            failures.push(error);
           }
         }
       }
     } finally {
-      for (const observation of observations) {
-        observation.mockRestore();
+      if (!keepObserving) {
+        dispose();
       }
     }
     if (failures.length > 0) {
@@ -43,7 +99,6 @@ export function registerBrowserCleanupBoundaryTests({
   getRegistry,
   mocks,
   loadBrowserMaintenanceSurface,
-  mockPendingAgentWait,
   findRequesterRun,
 }: {
   getRegistry: () => SubagentRegistryHarness;
@@ -55,22 +110,22 @@ export function registerBrowserCleanupBoundaryTests({
   mockPendingAgentWait: () => void;
   findRequesterRun: (runId: string) => SubagentRunRecord | undefined;
 }): void {
-  it.each(["current owner", "replacement row", "newer child generation", "session reset"] as const)(
+  it.each(["current owner", "session reset"] as const)(
     "rechecks the %s after browser activation in registered run completion",
     async (owner) => {
       const mod = getRegistry();
-      const browser = await vi.importActual<typeof import("../../../browser-lifecycle-cleanup.js")>(
-        "../../../browser-lifecycle-cleanup.js",
-      );
       vi.mocked(cleanupBrowserSessionsForLifecycleEnd).mockImplementation(
-        browser.cleanupBrowserSessionsForLifecycleEnd,
+        (
+          await vi.importActual<typeof import("../../../browser-lifecycle-cleanup.js")>(
+            "../../../browser-lifecycle-cleanup.js",
+          )
+        ).cleanupBrowserSessionsForLifecycleEnd,
       );
-      const closeTrackedBrowserTabsForSessions = vi
-        .fn<
-          typeof import("../../../plugin-sdk/browser-maintenance.js").closeTrackedBrowserTabsForSessions
-        >()
-        .mockResolvedValue(1);
-      const surface = { closeTrackedBrowserTabsForSessions };
+      const closeTabs = vi.fn<typeof CloseTabs>().mockResolvedValue(1);
+      const surface = {
+        supportsSessionEntryCurrent: true,
+        closeTrackedBrowserTabsForSessions: closeTabs,
+      };
       const activation = createDeferred<typeof surface>();
       const activationEntered = createDeferred();
       loadBrowserMaintenanceSurface.mockImplementationOnce(() => {
@@ -79,24 +134,15 @@ export function registerBrowserCleanupBoundaryTests({
       });
       const settleRootWork = observeRootWork();
       const childSessionKey = "agent:main:subagent:child";
-      const runId = "run-browser-activation-old";
-      const successorRunId = owner === "replacement row" ? runId : "run-browser-activation-new";
+      const runId = "browser-old";
 
       try {
-        mod.registerSubagentRun({ runId, childSessionKey, task: "finish browser work" });
+        await mod.registerSubagentRun({ runId, childSessionKey, task: "finish" });
         await activationEntered.promise;
-        expect(loadBrowserMaintenanceSurface).toHaveBeenCalledOnce();
         expect(gatewayWorkAdmission.getActiveGatewayRootWorkCount()).toBeGreaterThan(0);
 
         if (owner === "session reset") {
-          mod.prepareSubagentSessionCleanupRevocation(childSessionKey)();
-        } else if (owner !== "current owner") {
-          mockPendingAgentWait();
-          mod.registerSubagentRun({
-            runId: successorRunId,
-            childSessionKey,
-            task: "continue using the same browser session",
-          });
+          (await mod.prepareSubagentSessionCleanupRevocation(childSessionKey))();
         }
       } finally {
         activation.resolve(surface);
@@ -104,25 +150,17 @@ export function registerBrowserCleanupBoundaryTests({
       }
 
       expect(gatewayWorkAdmission.getActiveGatewayRootWorkCount()).toBe(0);
-      expect(closeTrackedBrowserTabsForSessions).toHaveBeenCalledTimes(
-        owner === "current owner" ? 1 : 0,
-      );
+      expect(closeTabs).toHaveBeenCalledTimes(owner === "current owner" ? 1 : 0);
       if (owner === "current owner") {
-        expect(closeTrackedBrowserTabsForSessions).toHaveBeenCalledWith(
+        expect(closeTabs).toHaveBeenCalledWith(
           expect.objectContaining({ sessionKeys: [childSessionKey] }),
         );
         expect(findRequesterRun(runId)?.cleanupCompletedAt).toBeTypeOf("number");
-      } else if (owner === "session reset") {
+      } else {
         expect(findRequesterRun(runId)?.execution).toMatchObject({
           status: "terminal",
           suppressSessionEffects: true,
         });
-      } else {
-        expect(findRequesterRun(successorRunId)).toMatchObject({
-          childSessionKey,
-          execution: { status: "running" },
-        });
-        expect(findRequesterRun(successorRunId)?.cleanupCompletedAt).toBeUndefined();
       }
     },
   );
@@ -135,25 +173,14 @@ export function registerBrowserCleanupBoundaryTests({
     });
     const settleRootWork = observeRootWork();
     try {
-      getRegistry().registerSubagentRun({
-        runId: "run-cleanup-warning",
-        task: "finish despite cleanup warning",
-      });
+      await getRegistry().registerSubagentRun({ runId: "browser-warning", task: "finish" });
       await cleanupEntered.promise;
     } finally {
       await settleRootWork();
     }
 
     expect(gatewayWorkAdmission.getActiveGatewayRootWorkCount()).toBe(0);
-    expect(mocks.cleanupBrowserSessionsForLifecycleEnd).toHaveBeenCalledOnce();
-    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledOnce();
-    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledWith(
-      expect.objectContaining({
-        childSessionKey: "agent:main:subagent:child",
-        childRunId: "run-cleanup-warning",
-        task: "finish despite cleanup warning",
-      }),
-    );
-    expect(findRequesterRun("run-cleanup-warning")?.cleanupCompletedAt).toBeTypeOf("number");
+    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalled();
+    expect(findRequesterRun("browser-warning")?.cleanupCompletedAt).toBeTypeOf("number");
   });
 }

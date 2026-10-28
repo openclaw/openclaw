@@ -1,12 +1,19 @@
 import type { DatabaseSync } from "node:sqlite";
+import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
+import { extractSqliteTableSchema, normalizeSchemaSql } from "../infra/sqlite-schema-sql.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import {
   tableExists,
   tableHasColumn,
   tablePrimaryKeyColumns,
 } from "./openclaw-state-db-schema-helpers.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 const AUDIT_EVENT_STATE_SCHEMA_VERSION = 2;
+const CANONICAL_AUDIT_TABLES = ["audit_events", "audit_identity_keys"].map((name) => ({
+  name,
+  sql: normalizeSchemaSql(extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, name)),
+}));
 
 const AUDIT_EVENT_LEGACY_COLUMNS = [
   "sequence",
@@ -28,25 +35,12 @@ const AUDIT_EVENT_LEGACY_COLUMNS = [
   "tool_name",
 ] as const;
 
+const AUDIT_EVENT_MIGRATED_COLUMNS = AUDIT_EVENT_LEGACY_COLUMNS.flatMap((column) =>
+  column === "source_id" ? [column, "schema_version"] : [column],
+);
+
 const AUDIT_EVENT_V2_COLUMNS = [
-  "sequence",
-  "event_id",
-  "source_id",
-  "schema_version",
-  "source_sequence",
-  "occurred_at",
-  "kind",
-  "action",
-  "status",
-  "error_code",
-  "actor_type",
-  "actor_id",
-  "agent_id",
-  "session_key",
-  "session_id",
-  "run_id",
-  "tool_call_id",
-  "tool_name",
+  ...AUDIT_EVENT_MIGRATED_COLUMNS,
   "direction",
   "channel",
   "conversation_kind",
@@ -62,14 +56,8 @@ const AUDIT_EVENT_V2_COLUMNS = [
   "target_ref",
 ] as const;
 
-type TableColumnInfo = {
-  name?: unknown;
-  notnull?: unknown;
-  pk?: unknown;
-};
-
-function tableColumnInfo(db: DatabaseSync, tableName: string): TableColumnInfo[] {
-  return db.prepare(`PRAGMA table_info(${tableName})`).all() as TableColumnInfo[];
+function tableColumnInfo(db: DatabaseSync, tableName: string) {
+  return db.prepare(`PRAGMA table_info(${tableName})`).all();
 }
 
 function tableHasExactColumns(
@@ -93,23 +81,18 @@ function tableHasRequiredColumns(
 function tableSql(db: DatabaseSync, tableName: string): string | undefined {
   const row = db
     .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?")
-    .get(tableName) as { sql?: unknown } | undefined;
+    .get(tableName);
   return typeof row?.sql === "string" ? row.sql : undefined;
 }
 
 function tableHasUniqueColumn(db: DatabaseSync, tableName: string, columnName: string): boolean {
-  const indexes = db.prepare(`PRAGMA index_list(${tableName})`).all() as Array<{
-    name?: unknown;
-    unique?: unknown;
-  }>;
+  const indexes = db.prepare(`PRAGMA index_list(${tableName})`).all();
   return indexes.some((index) => {
     if (Number(index.unique ?? 0) !== 1 || typeof index.name !== "string") {
       return false;
     }
     const escaped = index.name.replaceAll("'", "''");
-    const columns = db.prepare(`PRAGMA index_info('${escaped}')`).all() as Array<{
-      name?: unknown;
-    }>;
+    const columns = db.prepare(`PRAGMA index_info('${escaped}')`).all();
     return columns.length === 1 && columns[0]?.name === columnName;
   });
 }
@@ -146,6 +129,16 @@ function hasCanonicalAuditIdentityKeyTable(db: DatabaseSync): boolean {
 }
 
 export function hasCanonicalAuditEventsSchema(db: DatabaseSync): boolean {
+  const schema = getAdmittedSqliteSchemaFacts(db);
+  // Exact CREATE definitions include the required primary keys and UNIQUE constraints.
+  if (
+    schema &&
+    CANONICAL_AUDIT_TABLES.every(
+      ({ name, sql }) => normalizeSchemaSql(schema.tableSql.get(name) ?? null) === sql,
+    )
+  ) {
+    return true;
+  }
   if (!tableExists(db, "audit_events")) {
     return (
       readSqliteUserVersion(db) < AUDIT_EVENT_STATE_SCHEMA_VERSION &&
@@ -205,7 +198,7 @@ function readAuditEventSequenceHighWater(db: DatabaseSync): number | undefined {
   }
   const row = db
     .prepare("SELECT CAST(seq AS TEXT) AS seq FROM sqlite_sequence WHERE name = 'audit_events'")
-    .get() as { seq?: unknown } | undefined;
+    .get();
   if (row === undefined) {
     return undefined;
   }
@@ -270,45 +263,8 @@ export function repairAuditEventsSchema(db: DatabaseSync): boolean {
       message_ref TEXT,
       target_ref TEXT
     );
-    INSERT INTO audit_events_migration_new (
-      sequence,
-      event_id,
-      source_id,
-      schema_version,
-      source_sequence,
-      occurred_at,
-      kind,
-      action,
-      status,
-      error_code,
-      actor_type,
-      actor_id,
-      agent_id,
-      session_key,
-      session_id,
-      run_id,
-      tool_call_id,
-      tool_name
-    )
-    SELECT
-      sequence,
-      event_id,
-      source_id,
-      1,
-      source_sequence,
-      occurred_at,
-      kind,
-      action,
-      status,
-      error_code,
-      actor_type,
-      actor_id,
-      agent_id,
-      session_key,
-      session_id,
-      run_id,
-      tool_call_id,
-      tool_name
+    INSERT INTO audit_events_migration_new (${AUDIT_EVENT_MIGRATED_COLUMNS.join(", ")})
+    SELECT ${AUDIT_EVENT_MIGRATED_COLUMNS.map((column) => (column === "schema_version" ? "1" : column)).join(", ")}
     FROM audit_events;
     DROP TABLE audit_events;
     ALTER TABLE audit_events_migration_new RENAME TO audit_events;

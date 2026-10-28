@@ -1,25 +1,16 @@
-import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 // Registers the terminal UI subcommand and normalizes its local-vs-gateway options.
 import type { Command } from "commander";
 import { CHAT_HISTORY_MAX_ENTRIES } from "../../packages/gateway-protocol/src/schema/chat-history-constants.js";
-import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
-import { theme } from "../../packages/terminal-core/src/theme.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { defaultRuntime } from "../runtime.js";
+import type { TuiOptions } from "../tui/tui-types.js";
+import { formatDocsHelp } from "./help-format.js";
+import { parseOptionalPositiveInteger } from "./parse-positive-integer.js";
 import { parseTimeoutMs } from "./parse-timeout.js";
 import { resolveSessionTarget } from "./session-target.js";
 import { addTuiOptions } from "./tui-cli-options.js";
 
-type TuiCliOptions = {
-  local?: boolean;
-  url?: string;
-  token?: string;
-  password?: string;
-  tlsFingerprint?: string;
-  session?: string;
-  deliver?: boolean;
-  thinking?: string;
-  message?: string;
+type TuiCliOptions = Omit<TuiOptions, "timeoutMs" | "historyLimit" | "initialMessageTimeoutMs"> & {
   timeoutMs?: string;
   historyLimit?: string;
 };
@@ -48,44 +39,30 @@ export async function runTuiCliAction(
   if (opts.timeoutMs !== undefined && timeoutMs === undefined) {
     defaultRuntime.error(`warning: invalid --timeout-ms "${opts.timeoutMs}"; ignoring`);
   }
-  const historyLimit = parseStrictPositiveInteger(opts.historyLimit ?? "200");
-  if (historyLimit === undefined) {
-    throw new Error("--history-limit must be a positive integer.");
-  }
+  const historyLimit =
+    parseOptionalPositiveInteger(opts.historyLimit ?? undefined, "--history-limit", ".") ?? 200;
   if (!isLocal && historyLimit > CHAT_HISTORY_MAX_ENTRIES) {
     throw new Error(`--history-limit must be at most ${CHAT_HISTORY_MAX_ENTRIES}.`);
   }
 
+  const gateway = {
+    url: opts.url,
+    token: opts.token,
+    password: opts.password,
+    tlsFingerprint: opts.tlsFingerprint,
+  };
   const resolved = target
     ? await resolveSessionTarget({
         raw: target,
         requiredScope: "operator.admin",
-        gateway: {
-          url: opts.url,
-          token: opts.token,
-          password: opts.password,
-          tlsFingerprint: opts.tlsFingerprint,
-        },
+        gateway,
       })
     : undefined;
   const { runTui } = await import("../tui/tui.js");
+  const { url, token, password, tlsFingerprint } = resolved?.gateway ?? {};
   await runTui({
     local: isLocal,
-    ...(resolved?.gateway.url
-      ? {
-          boundGateway: {
-            url: resolved.gateway.url,
-            token: resolved.gateway.token,
-            password: resolved.gateway.password,
-            tlsFingerprint: resolved.gateway.tlsFingerprint,
-          },
-        }
-      : {
-          url: opts.url,
-          token: opts.token,
-          password: opts.password,
-          tlsFingerprint: opts.tlsFingerprint,
-        }),
+    ...(url ? { boundGateway: { url, token, password, tlsFingerprint } } : gateway),
     session: resolved?.sessionKey ?? opts.session,
     ...(resolved ? { agentId: resolved.agentId } : {}),
     deliver: Boolean(opts.deliver),
@@ -93,7 +70,6 @@ export async function runTuiCliAction(
     message: opts.message,
     timeoutMs,
     historyLimit,
-    forceProcessExitOnReturn: true,
   });
 }
 
@@ -113,10 +89,7 @@ export function registerTuiCli(program: Command) {
     .option("--message <text>", "Send an initial message after connecting")
     .option("--timeout-ms <ms>", "Agent timeout in ms (defaults to agents.defaults.timeoutSeconds)")
     .option("--history-limit <n>", "History entries to load", "200")
-    .addHelpText(
-      "after",
-      () => `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/tui", "docs.openclaw.ai/cli/tui")}\n`,
-    )
+    .addHelpText("after", () => formatDocsHelp("/cli/tui"))
     .action(async (target: string | undefined, opts: TuiCliOptions, cmd: Command) => {
       try {
         // `cmd.name()` always returns the canonical subcommand name (`tui`).

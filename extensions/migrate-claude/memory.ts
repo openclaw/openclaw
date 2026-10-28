@@ -1,4 +1,3 @@
-// Migrate Claude plugin module implements memory behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -6,97 +5,17 @@ import {
   isPathInside,
 } from "openclaw/plugin-sdk/file-access-runtime";
 import { createMigrationItem, MIGRATION_REASON_TARGET_EXISTS } from "openclaw/plugin-sdk/migration";
+import type { PlannedMigrationTargets } from "openclaw/plugin-sdk/migration-runtime";
+import { lstatIfExists } from "openclaw/plugin-sdk/path-existence-runtime";
 import type { MigrationItem } from "openclaw/plugin-sdk/plugin-entry";
 import {
   CLAUDE_AUTO_MEMORY_MAX_FILES,
   CLAUDE_AUTO_MEMORY_MAX_SCAN_ENTRIES,
-  readMemoryDir,
+  listMarkdownFiles,
   type ClaudeSource,
 } from "./source.js";
-import type { PlannedTargets } from "./targets.js";
 
 const MIGRATION_REASON_TARGET_NOT_REGULAR = "target is not a regular file";
-
-async function lstatIfExists(filePath: string) {
-  try {
-    return await fs.lstat(filePath);
-  } catch (error) {
-    const code =
-      error && typeof error === "object" && "code" in error
-        ? String((error as { code?: unknown }).code)
-        : undefined;
-    if (code === "ENOENT" || code === "ENOTDIR") {
-      return undefined;
-    }
-    throw error;
-  }
-}
-
-async function addInstructionItem(params: {
-  items: MigrationItem[];
-  id: string;
-  source?: string;
-  target: string;
-  sourceLabel: string;
-}): Promise<void> {
-  if (!params.source) {
-    return;
-  }
-  const targetNotRegular = (await lstatIfExists(params.target))?.isFile() === false;
-  params.items.push(
-    createMigrationItem({
-      id: params.id,
-      kind: ["AGENTS.md", "USER.md"].includes(path.basename(params.target))
-        ? "workspace"
-        : "memory",
-      action: "append",
-      source: params.source,
-      target: params.target,
-      status: targetNotRegular ? "conflict" : "planned",
-      reason: targetNotRegular ? MIGRATION_REASON_TARGET_NOT_REGULAR : undefined,
-      details: { sourceLabel: params.sourceLabel },
-    }),
-  );
-}
-
-type MarkdownFileScan = {
-  files: string[];
-  truncatedBy?: "files" | "entries";
-};
-
-async function listMarkdownFiles(root: string, maxFiles: number): Promise<MarkdownFileScan> {
-  const files: string[] = [];
-  const pending = [""];
-  let visited = 0;
-  let truncatedBy: MarkdownFileScan["truncatedBy"];
-  scan: while (pending.length > 0) {
-    const relativeDir = pending.pop();
-    if (relativeDir === undefined) {
-      break;
-    }
-    for (const entry of await readMemoryDir(path.join(root, relativeDir))) {
-      visited += 1;
-      if (visited > CLAUDE_AUTO_MEMORY_MAX_SCAN_ENTRIES) {
-        truncatedBy = "entries";
-        break scan;
-      }
-      const relativePath = path.join(relativeDir, entry.name);
-      if (entry.isDirectory()) {
-        pending.push(relativePath);
-      } else if (entry.isFile() && entry.name.toLowerCase().endsWith(".md")) {
-        files.push(relativePath);
-        if (files.length > maxFiles) {
-          truncatedBy = "files";
-          break scan;
-        }
-      }
-    }
-  }
-  return {
-    files: files.toSorted((left, right) => left.localeCompare(right)),
-    ...(truncatedBy ? { truncatedBy } : {}),
-  };
-}
 
 function collectionSlug(label: string, id: string): string {
   const slug = label
@@ -140,12 +59,51 @@ async function assertSafeMemoryDestination(
   }
 }
 
-async function buildAutoMemoryItems(params: {
+export async function buildMemoryItems(params: {
   source: ClaudeSource;
-  targets: PlannedTargets;
+  targets: PlannedMigrationTargets;
   overwrite?: boolean;
+  includeInstructions?: boolean;
 }): Promise<MigrationItem[]> {
   const items: MigrationItem[] = [];
+  if (params.includeInstructions !== false) {
+    for (const [id, source, target, sourceLabel] of [
+      ["workspace:CLAUDE.md", params.source.projectMemoryPath, "AGENTS.md", "project CLAUDE.md"],
+      [
+        "workspace:.claude/CLAUDE.md",
+        params.source.projectDotClaudeMemoryPath,
+        "AGENTS.md",
+        "project .claude/CLAUDE.md",
+      ],
+      [
+        "memory:user-CLAUDE.md",
+        params.source.userMemoryPath,
+        "USER.md",
+        "user ~/.claude/CLAUDE.md",
+      ],
+    ] as const) {
+      const targetPath = path.join(params.targets.workspaceDir, target);
+      if (!source) {
+        continue;
+      }
+      const targetNotRegular = (await lstatIfExists(targetPath))?.isFile() === false;
+      items.push(
+        createMigrationItem({
+          id,
+          kind: ["AGENTS.md", "USER.md"].includes(path.basename(targetPath))
+            ? "workspace"
+            : "memory",
+          action: "append",
+          source,
+          target: targetPath,
+          status: targetNotRegular ? "conflict" : "planned",
+          reason: targetNotRegular ? MIGRATION_REASON_TARGET_NOT_REGULAR : undefined,
+          details: { sourceLabel },
+        }),
+      );
+    }
+  }
+  const autoMemoryItems: MigrationItem[] = [];
   for (const collection of params.source.autoMemorySources) {
     const destinationBoundary = await resolveMemoryDestinationBoundary(
       collection.path,
@@ -159,7 +117,7 @@ async function buildAutoMemoryItems(params: {
       collectionSlug(collection.label, collection.id),
     );
     await assertSafeMemoryDestination(destinationBoundary, targetRoot);
-    const remaining = CLAUDE_AUTO_MEMORY_MAX_FILES - items.length;
+    const remaining = CLAUDE_AUTO_MEMORY_MAX_FILES - autoMemoryItems.length;
     const scan = await listMarkdownFiles(collection.path, remaining);
     if (scan.truncatedBy) {
       const limit =
@@ -181,7 +139,7 @@ async function buildAutoMemoryItems(params: {
         await assertSafeMemoryDestination(destinationBoundary, target);
       }
       const targetConflict = targetNotRegular || (targetExists && !params.overwrite);
-      items.push(
+      autoMemoryItems.push(
         createMigrationItem({
           id: `memory:claude-auto:${collection.id}:${relativePath.replaceAll(path.sep, "/")}`,
           kind: "memory",
@@ -207,39 +165,6 @@ async function buildAutoMemoryItems(params: {
       );
     }
   }
-  return items;
-}
-
-export async function buildMemoryItems(params: {
-  source: ClaudeSource;
-  targets: PlannedTargets;
-  overwrite?: boolean;
-  includeInstructions?: boolean;
-}): Promise<MigrationItem[]> {
-  const items: MigrationItem[] = [];
-  if (params.includeInstructions !== false) {
-    await addInstructionItem({
-      items,
-      id: "workspace:CLAUDE.md",
-      source: params.source.projectMemoryPath,
-      target: path.join(params.targets.workspaceDir, "AGENTS.md"),
-      sourceLabel: "project CLAUDE.md",
-    });
-    await addInstructionItem({
-      items,
-      id: "workspace:.claude/CLAUDE.md",
-      source: params.source.projectDotClaudeMemoryPath,
-      target: path.join(params.targets.workspaceDir, "AGENTS.md"),
-      sourceLabel: "project .claude/CLAUDE.md",
-    });
-    await addInstructionItem({
-      items,
-      id: "memory:user-CLAUDE.md",
-      source: params.source.userMemoryPath,
-      target: path.join(params.targets.workspaceDir, "USER.md"),
-      sourceLabel: "user ~/.claude/CLAUDE.md",
-    });
-  }
-  items.push(...(await buildAutoMemoryItems(params)));
+  items.push(...autoMemoryItems);
   return items;
 }
