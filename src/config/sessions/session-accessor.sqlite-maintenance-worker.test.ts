@@ -1,10 +1,13 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { symlinkSync } from "node:fs";
+import path from "node:path";
 import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
+import * as workerCpu from "../../infra/worker-cpu.js";
 import {
   beginSessionEffect,
   runSessionMutation,
@@ -87,6 +90,7 @@ it.for(["cold", "warm-cap", "removal"] as const)(
     const remove = scenario === "removal" || scenario === "warm-cap";
     await withMaintenanceFixture(async ({ state, scope, seed }) => {
       const active = seed("agent:main:maintenance-worker-active", "active");
+      let databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
       const stale = scope("agent:main:subagent:maintenance-worker-stale");
       const locked = scope("agent:main:maintenance-worker-locked");
       const protectedEntry = scope("agent:main:maintenance-worker-protected");
@@ -97,6 +101,10 @@ it.for(["cold", "warm-cap", "removal"] as const)(
       };
       if (scenario === "removal") {
         seedStale(1);
+        const alias = path.join(state.root, "agent-alias");
+        symlinkSync(path.dirname(databasePath), alias, "junction");
+        databasePath = path.join(alias, path.basename(databasePath));
+        active.storePath = databasePath;
       }
       const policy = maintenancePolicy("1h", { maxEntries: scenario === "warm-cap" ? 3 : 100 });
       if (scenario === "warm-cap") {
@@ -135,7 +143,8 @@ it.for(["cold", "warm-cap", "removal"] as const)(
           writeOutcomes.push({ kind: result.kind, admitted: writeAdmitted });
         },
       });
-      const completed = observeMaintenance();
+      const spawned = vi.spyOn(workerCpu, "createCpuTrackedWorker");
+      const completed = observeSessionMaintenanceCompletion(databasePath);
       const observation = new AsyncLocalStorage<boolean>();
       const kick = maintenanceKick.kickSessionEntryMaintenanceAfterWrite;
       vi.spyOn(maintenanceKick, "kickSessionEntryMaintenanceAfterWrite").mockImplementation(
@@ -151,18 +160,17 @@ it.for(["cold", "warm-cap", "removal"] as const)(
         capture: () => (scenario === "warm-cap" ? [protectedEntry.sessionKey] : []),
         dispose() {},
       }));
-      const result = await (async () => {
-        try {
-          await patchSessionEntryCore(active, () => ({ label: "updated" }), {
-            maintenanceConfig: policy,
-            workerGuard: {},
-          });
-          return await racePromiseWithAbortSignal(completed, signal);
-        } finally {
-          unregister();
-          sql.restore();
-        }
-      })();
+      let result: Awaited<typeof completed>;
+      try {
+        await patchSessionEntryCore(active, () => ({ label: "updated" }), {
+          maintenanceConfig: policy,
+          workerGuard: {},
+        });
+        result = await racePromiseWithAbortSignal(completed, signal);
+      } finally {
+        unregister();
+        sql.restore();
+      }
       expect(
         parentSql.filter((query) =>
           /(?:from|update|into) "(?:session_nodes|session_transcript_archives)"/iu.test(query),
@@ -190,11 +198,13 @@ it.for(["cold", "warm-cap", "removal"] as const)(
         expect(scenario === "warm-cap" ? result.capped : result.pruned).toBe(1);
         expect(loadSessionEntry(stale)).toBeUndefined();
         expect(result.archivedTranscripts).toHaveLength(1);
-        expect(
-          readSessionArchiveContentSync(result.archivedTranscripts[0]!.archivedPath)
-            .trim()
-            .split("\n"),
-        ).toEqual([JSON.stringify(staleEvent)]);
+        const archived = readSessionArchiveContentSync(result.archivedTranscripts[0]!.archivedPath);
+        expect(archived.trim()).toBe(JSON.stringify(staleEvent));
+        const archiveStarts = spawned.mock.calls.filter(([, options]) => {
+          const data: unknown = options?.workerData;
+          return isRecord(data) && data.operation === "materialize";
+        });
+        expect(archiveStarts).toHaveLength(0);
       }
       const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
       await closeOpenClawAgentDatabaseByPathAsync(database.path);
@@ -521,18 +531,8 @@ it("publishes exact archived keys without worktrees after Worker planning", asyn
 
 it("publishes only committed removal keys after Worker finalization", async () => {
   await withMaintenanceFixture(async ({ seed, databaseOptions }) => {
-    const removedEntry = { sessionId: "removed", updatedAt: 1 };
-    const previousEntry = { sessionId: "changed", updatedAt: 1 };
-    const removed = seed(
-      "agent:main:keyed-removed",
-      removedEntry.sessionId,
-      removedEntry.updatedAt,
-    );
-    const changed = seed(
-      "agent:main:keyed-changed",
-      previousEntry.sessionId,
-      previousEntry.updatedAt,
-    );
+    const removed = seed("agent:main:keyed-removed", "removed", 1);
+    const changed = seed("agent:main:keyed-changed", "changed", 1);
     const database = openOpenClawAgentDatabase(databaseOptions);
     const entries = [
       { sessionKey: removed.sessionKey, expectedEntry: loadSessionEntry(removed) },
@@ -544,7 +544,11 @@ it("publishes only committed removal keys after Worker finalization", async () =
       entries,
       materializedPlans: [],
     });
-    replaceSessionEntrySync(changed, { ...previousEntry, label: "changed after planning" });
+    replaceSessionEntrySync(changed, {
+      sessionId: "changed",
+      updatedAt: 1,
+      label: "changed after planning",
+    });
     const published: SessionRowChange[] = [];
     const unsubscribe = sessionChanges.subscribe((change) => published.push(change));
     const identities: SessionIdentityMutation[] = [];
@@ -593,7 +597,7 @@ it("publishes only committed removal keys after Worker finalization", async () =
         expect.objectContaining({
           kind: "delete",
           agentId: "main",
-          previous: { sessionId: removedEntry.sessionId, sessionKeys: [removed.sessionKey] },
+          previous: { sessionId: "removed", sessionKeys: [removed.sessionKey] },
         }),
       ]);
       expect(loadSessionEntry(removed)).toBeUndefined();
