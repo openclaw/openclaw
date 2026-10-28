@@ -1,6 +1,10 @@
 import { isDeepStrictEqual } from "node:util";
-import type { SessionRowReadView } from "./session-row-prepared-read.js";
-import { identity, type MaterializedRow, type Row } from "./session-row-projection-record.js";
+import {
+  identity,
+  type MaterializedRow,
+  type Row,
+  type EntryRow,
+} from "./session-row-projection-record.js";
 import type { SessionSharingTarget } from "./session-sharing-target.types.js";
 
 type ChildLinks = MaterializedRow["materialized"]["source"]["childLinks"];
@@ -183,7 +187,7 @@ export function createSessionRowChildVisibility() {
         agentId?: string,
         storePath?: string,
       ) => boolean,
-      selectEntries: SessionRowReadView["selectEntries"],
+      selectEntries: (query: { key: string }) => EntryRow[],
       includeSwarm = true,
     ): Visibility {
       const id = identity(record);

@@ -11,9 +11,9 @@ import {
   type Query,
   type SnapshotOptions,
 } from "./session-row-projection-record.js";
-import type { SessionListRowContext } from "./session-utils-contracts.js";
+import type { SessionChildActivity, SessionListRowContext } from "./session-utils-contracts.js";
 import { sessionChildLinkExpiresAt } from "./session-utils-core.js";
-import { projectPreparedSessionChild } from "./session-utils-projection.js";
+import { projectPreparedSessionChild } from "./session-utils-display.js";
 
 type Link = NonNullable<MaterializedRow["materialized"]["source"]["childLinks"]>[number];
 type Contribution = {
@@ -22,11 +22,6 @@ type Contribution = {
   active: boolean | undefined;
   expires: number;
   volatile: boolean;
-};
-export type SessionChildActivity = {
-  revision?: object;
-  childSessions: string[] | undefined;
-  hasActiveSubagentRun: boolean;
 };
 type View = {
   excluded?: ReadonlySet<string>;
