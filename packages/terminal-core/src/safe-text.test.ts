@@ -1,19 +1,15 @@
 import { Chalk } from "chalk";
-// Terminal Core tests cover safe text behavior.
 import { describe, expect, it } from "vitest";
 import { hasTerminalControl, sanitizeTerminalText, terminalText } from "./safe-text.js";
 
 describe("hasTerminalControl", () => {
   it.each([
-    ["C0", "safe\u0000text"],
-    ["DEL", "safe\u007ftext"],
-    ["C1", "safe\u0085text"],
-  ])("detects %s controls", (_name, input) => {
-    expect(hasTerminalControl(input)).toBe(true);
-  });
-
-  it("allows printable shell metacharacters and Unicode", () => {
-    expect(hasTerminalControl(`'"$&;|<>^()%![]{}\\\`-%PATH%-��`)).toBe(false);
+    ["C0", "safe\u0000text", true],
+    ["DEL", "safe\u007ftext", true],
+    ["C1", "safe\u0085text", true],
+    ["printable", `'"$&;|<>^()%![]{}\\\`-%PATH%-\u{1f980}`, false],
+  ])("classifies %s text", (_name, input, expected) => {
+    expect(hasTerminalControl(input)).toBe(expected);
   });
 });
 
