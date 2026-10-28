@@ -655,58 +655,53 @@ describe("capability cli", () => {
     expect(mocks.runtime.log).toHaveBeenCalledWith("No results found.");
   });
 
-  it.each(["inspect", "missing", "run"] as const)(
-    "uses the requested agent's catalog for model %s",
-    async (scenario) => {
-      mocks.loadConfig.mockReturnValue({
-        agents: {
-          ownership: "explicit",
-          defaults: { systemAgent: { agentId: "main" } },
-          entries: { main: {}, work: {} },
-        },
-      });
-      const workModel = { provider: "catalog-fixture", id: "Work-Model", name: "Work model" };
-      mocks.loadModelCatalog.mockImplementation(async (params) =>
-        params?.agentId === "work" && scenario !== "missing" ? [workModel] : [],
-      );
-      const model =
-        scenario === "run"
-          ? "catalog-fixture/WORK-MODEL@work"
-          : scenario === "missing"
-            ? "cerebras/gpt-oss-120b"
-            : "catalog-fixture/Work-Model";
-      const run = runCap(
-        "infer",
-        "model",
-        "--agent",
-        "work",
-        scenario === "run" ? "run" : "inspect",
-        ...cliOptions({ model, prompt: scenario === "run" ? "hello" : undefined, json: true }),
-      );
-      if (scenario === "missing") {
-        await expect(run).rejects.toThrow("exit 1");
-        expectRuntimeErrorContains("Model not found: cerebras/gpt-oss-120b");
-        expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
+  it.each([
+    ["inspect", "catalog-fixture/Work-Model"],
+    ["missing", "cerebras/gpt-oss-120b"],
+    ["run", "catalog-fixture/WORK-MODEL@work"],
+  ] as const)("uses the requested agent's catalog for model %s", async (scenario, model) => {
+    mocks.loadConfig.mockReturnValue({
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "main" } },
+        entries: { main: {}, work: {} },
+      },
+    });
+    const workModel = { provider: "catalog-fixture", id: "Work-Model", name: "Work model" };
+    mocks.loadModelCatalog.mockImplementation(async (params) =>
+      params?.agentId === "work" && scenario !== "missing" ? [workModel] : [],
+    );
+    const run = runCap(
+      "infer",
+      "model",
+      "--agent",
+      "work",
+      scenario === "run" ? "run" : "inspect",
+      ...cliOptions({ model, prompt: scenario === "run" ? "hello" : undefined, json: true }),
+    );
+    if (scenario === "missing") {
+      await expect(run).rejects.toThrow("exit 1");
+      expectRuntimeErrorContains("Model not found: cerebras/gpt-oss-120b");
+      expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
+    } else {
+      await run;
+      if (scenario === "inspect") {
+        expect(mocks.runtime.writeJson).toHaveBeenCalledWith(workModel);
       } else {
-        await run;
-        if (scenario === "inspect") {
-          expect(mocks.runtime.writeJson).toHaveBeenCalledWith(workModel);
-        } else {
-          expect(firstPreparedModelParams()).toMatchObject({
-            agentId: "work",
-            modelRef: "catalog-fixture/Work-Model@work",
-            allowBundledStaticCatalogFallback: true,
-            skipAgentDiscovery: true,
-          });
-        }
+        expect(firstPreparedModelParams()).toMatchObject({
+          agentId: "work",
+          modelRef: "catalog-fixture/Work-Model@work",
+          allowBundledStaticCatalogFallback: true,
+          skipAgentDiscovery: true,
+        });
       }
-      expect(mocks.loadModelCatalog).toHaveBeenCalledWith({
-        config: mocks.loadConfig(),
-        agentId: "work",
-        readOnly: true,
-      });
-    },
-  );
+    }
+    expect(mocks.loadModelCatalog).toHaveBeenCalledWith({
+      config: mocks.loadConfig(),
+      agentId: "work",
+      readOnly: true,
+    });
+  });
 
   it("scopes provider state and model selection to an explicit agent", async () => {
     const cfg = {
@@ -918,23 +913,22 @@ describe("capability cli", () => {
   );
 
   it("runs gateway model probes in fresh raw sessions without chat-agent prompt policy or tools", async () => {
+    const agentMeta = {
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      fallbackAttempts: [
+        {
+          provider: "openrouter",
+          model: "openrouter/auto",
+          error: "model unavailable",
+          reason: "model_not_found",
+        },
+      ],
+    };
     mocks.callGateway.mockResolvedValueOnce({
       result: {
         payloads: [{ text: "gateway fallback reply" }],
-        meta: {
-          agentMeta: {
-            provider: "openai",
-            model: "gpt-4.1-mini",
-            fallbackAttempts: [
-              {
-                provider: "openrouter",
-                model: "openrouter/auto",
-                error: "model unavailable",
-                reason: "model_not_found",
-              },
-            ],
-          },
-        },
+        meta: { agentMeta },
       },
     } as never);
     await runModelProbe("--gateway");
@@ -944,8 +938,7 @@ describe("capability cli", () => {
       attempts: [{ provider: "openrouter", model: "openrouter/auto", reason: "model_not_found" }],
     });
     await runCapability("model", "run", "--prompt", "again", "--gateway", "--json");
-    const gatewayCalls = mocks.callGateway.mock.calls as unknown as Array<[GatewayCall]>;
-    const sessionIds = gatewayCalls.map(([call]) => {
+    const sessionIds = mocks.callGateway.mock.calls.map(([call]: [GatewayCall]) => {
       const sessionId = call.params?.sessionId;
       expect(sessionId).toEqual(expect.stringMatching(/^model-run-[0-9a-f-]{36}$/));
       expect(call).toMatchObject({

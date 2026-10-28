@@ -430,7 +430,10 @@ export function registerModelCapabilityCommands(capability: Command): void {
           transport: "gateway" as const,
           provider: agentMeta?.provider,
           model: agentMeta?.model,
-          usage: hasObservedModelUsage(agentMeta?.usage) ? agentMeta.usage : undefined,
+          usage:
+            agentMeta?.usage?.costStatus !== undefined || hasObservedModelUsage(agentMeta?.usage)
+              ? agentMeta?.usage
+              : undefined,
           lastCallUsage: hasObservedModelUsage(agentMeta?.lastCallUsage)
             ? agentMeta.lastCallUsage
             : undefined,

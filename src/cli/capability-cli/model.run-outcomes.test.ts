@@ -142,12 +142,7 @@ for (const transport of ["local", "gateway"] as const) {
     ],
   ])(`preserves ${transport} usage observations: %s`, async (_name, usage, expected) => {
     const gatewayUsage = expected ?? usage;
-    const agentMeta = {
-      provider: "openai",
-      model: "gpt-5.4",
-      usage: gatewayUsage,
-      lastCallUsage: gatewayUsage,
-    };
+    const agentMeta = { usage: gatewayUsage, lastCallUsage: gatewayUsage };
     mocks.complete.mockResolvedValueOnce({ content: [{ type: "text", text: "OK" }], usage });
     mocks.callGateway.mockResolvedValueOnce({
       result: { payloads: [{ text: "OK", mediaUrl: null }], meta: { agentMeta } },
@@ -159,18 +154,30 @@ for (const transport of ["local", "gateway"] as const) {
   });
 }
 
-it("preserves distinct Gateway billing totals, provenance, and last-call usage", async () => {
-  const usage = { input: 40, output: 8, total: 48, costStatus: "unavailable" };
-  const lastCallUsage = { input: 7, output: 2, total: 9 };
-  mocks.callGateway.mockResolvedValueOnce({
-    result: { meta: { agentMeta: { usage, lastCallUsage } } },
-  });
-  await runModel("--gateway");
-  expect(mocks.runtime.writeJson.mock.calls[0]?.[0]).toMatchObject({
-    usage: { total: 48, costStatus: "unavailable" },
-    lastCallUsage: { total: 9 },
-  });
-});
+it.each([
+  ["unavailable", 48],
+  ["complete", 0],
+  ["unavailable", 0],
+] as const)(
+  "preserves %s Gateway billing totals of %s separately from last-call usage",
+  async (costStatus, total) => {
+    const usage = {
+      total,
+      costStatus,
+      ...(total ? { input: 40, output: 8 } : {}),
+      ...(costStatus === "complete" ? { cost: { total: 0 } } : {}),
+    };
+    const lastCallUsage = total ? { input: 7, output: 2, total: 9 } : undefined;
+    mocks.callGateway.mockResolvedValueOnce({
+      result: { meta: { agentMeta: { usage, lastCallUsage } } },
+    });
+    await runModel("--gateway");
+    expect(mocks.runtime.writeJson.mock.calls[0]?.[0]).toMatchObject({
+      usage: { total, costStatus, ...(costStatus === "complete" ? { cost: { total: 0 } } : {}) },
+      lastCallUsage: total ? { total: 9 } : undefined,
+    });
+  },
+);
 
 it("rejects --file before sending it to a text-only local model", async () =>
   withOpenClawTestState({}, async (state) => {
