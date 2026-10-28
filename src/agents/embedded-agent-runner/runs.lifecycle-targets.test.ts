@@ -173,6 +173,42 @@ describe("native lifecycle admission and cancellation", () => {
     detachActiveEmbeddedRun(sessionId, handle, sessionKey);
   });
 
+  it("preserves the previous detached run when replacement registration is rejected", async () => {
+    const first = createEmbeddedRunHandle({ runId: "previous-detached-run" });
+    const replacement = createEmbeddedRunHandle({ runId: "rejected-replacement" });
+    const assertRegistrationActive = vi.fn(() => {
+      throw new Error("registration authority was revoked");
+    });
+
+    attachActiveEmbeddedRun(sessionId, first);
+    try {
+      await expect(
+        withGatewayToolCallerIdentity(
+          {
+            agentId: "main",
+            sessionKey,
+            embeddedRunToolAuthorityBinding: () => ({
+              source: "attempt",
+              acceptsRequesterOrigin: () => false,
+              detached: true,
+              project: () => undefined,
+              projectAsync: async () => undefined,
+              assertRegistrationActive,
+              assertActive: vi.fn(),
+            }),
+          },
+          () => attachActiveEmbeddedRun(sessionId, replacement, sessionKey),
+        ),
+      ).rejects.toThrow("registration authority was revoked");
+
+      expect(getEmbeddedRunAttachment(first)).toBeDefined();
+      expect(getEmbeddedRunAttachment(replacement)).toBeUndefined();
+    } finally {
+      detachActiveEmbeddedRun(sessionId, first);
+      detachActiveEmbeddedRun(sessionId, replacement);
+    }
+  });
+
   it.each(["owned", "preparing", "detached"] as const)(
     "preserves typed single-session restart cancellation for %s work",
     (kind) => {

@@ -846,9 +846,8 @@ export function attachActiveEmbeddedRun(
     throw error;
   }
   const operation = toolAuthority?.operation ?? admittedOperation;
-  completionTarget = operation
-    ? getSessionControllerEntryForOperation(operation).target
-    : undefined;
+  const controllerEntry = operation ? getSessionControllerEntryForOperation(operation) : undefined;
+  completionTarget = controllerEntry?.target;
   if (
     admittedOperation &&
     toolAuthority?.operation &&
@@ -871,6 +870,12 @@ export function attachActiveEmbeddedRun(
   } else if (sessionKey) {
     throw new SessionControllerAdmissionRequiredError();
   }
+  try {
+    toolAuthority?.assertRegistrationActive();
+  } catch (error) {
+    revokeCompletionClaim(sessionId, handle.runId, completionTarget);
+    throw error;
+  }
   const previousAttachment = operation
     ? getControllerEmbeddedAttachment(operation)
     : getDetachedNativeAttachment(sessionId);
@@ -886,16 +891,7 @@ export function attachActiveEmbeddedRun(
     ACTIVE_EMBEDDED_RUN_SNAPSHOTS.delete(previousAttachment);
     EMBEDDED_RUN_FORCED_TERMINAL_SETTLEMENTS.delete(previousHandle);
   }
-  try {
-    toolAuthority?.assertRegistrationActive();
-  } catch (error) {
-    revokeCompletionClaim(sessionId, handle.runId, completionTarget);
-    throw error;
-  }
-  clearEmbeddedRunAbandonment(
-    operation ? getSessionControllerEntryForOperation(operation) : sessionId,
-    { sessionId, sessionKey, sessionFile },
-  );
+  clearEmbeddedRunAbandonment(controllerEntry ?? sessionId, { sessionId, sessionKey, sessionFile });
   if (operation && getAttachedBackend(operation) !== handle) {
     if (hasNativeBackendControl(handle)) {
       operation.attachBackend(handle);
@@ -953,11 +949,10 @@ export function attachActiveEmbeddedRun(
   };
   let attachment: ActiveEmbeddedRunAttachment = registration;
   if (operation) {
-    const controllerAttachment = getSessionControllerEntryForOperation(operation).attachment;
-    if (!controllerAttachment || controllerAttachment.operation !== operation) {
-      throw new Error("Native registration requires its controller backend attachment");
-    }
-    attachment = Object.assign(controllerAttachment, registration, { operation });
+    // Admission and controller ownership were validated before retiring the predecessor.
+    attachment = Object.assign(controllerEntry!.attachment!, registration, {
+      operation,
+    });
   }
   attachNativeAttempt(attachment);
   handle[embeddedRunCleanupAttachment] = attachment;

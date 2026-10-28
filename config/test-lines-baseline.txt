@@ -1,9 +1,7 @@
-# PR #186457: retain distinct upgrade, lease-revocation, rollback and cold-closure regressions.
-# CI 40663216626 used 6,301,549 lines: 10 over the old 6,301,539 ceiling; PR net stays +1,114.
-# CI base eba63b90 used 6,300,435 against 6,299,646: 789 existing base-debt lines.
-# Round measured use to the next 1,000: fixed ceiling 6,302,000, with 451 bounded reserve lines.
-# Reserve covers ordinary main advancement during exact-head CI and required regression maintenance.
-# Increase over the CI-base ceiling: 789 existing debt + 1,114 PR lines + 451 reserve = 2,354.
-# Reserve is below 0.01% of measured use; this is test-resource capacity, not a security waiver.
-# All cases, assertions and counting/gating rules remain unchanged; no automatic budget growth.
-6302000
+# PR #186457 previously set the fixed ceiling to 6,302,000; the ratchet remains manual.
+# Current base b0966db12046 has 6,301,952 test lines; PR #185265 adds 201 net test lines.
+# Exact merge tree 72880cd6b6 measured 6,302,153, 153 over the previous ceiling.
+# Round measured use to the next 1,000: fixed ceiling 6,303,000, with 847 bounded reserve lines.
+# Reserve is below 0.02% of measured use; no automatic growth or test-counting changes.
+# All regression cases and assertions remain unchanged.
+6303000
