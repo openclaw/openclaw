@@ -111,7 +111,7 @@ import {
   isPersistentOpenClawAgentDatabasePath,
   resolveOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.paths.js";
-import { migrateAgentJsonPredicatesInTransaction } from "./openclaw-agent-json-predicate-schema.js";
+import * as jsonPredicates from "./openclaw-agent-json-predicate-schema.js";
 import { migrateOutboxEnqueueSequenceInTransaction } from "./openclaw-agent-outbox-sequence-migration.js";
 import { migrateSessionParticipantsSchema } from "./openclaw-agent-participants-migration.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
@@ -431,7 +431,7 @@ function ensureAgentSchema(
           previousVersion < AGENT_JSON_PREDICATE_SCHEMA_VERSION &&
           targetVersion >= AGENT_JSON_PREDICATE_SCHEMA_VERSION
         ) {
-          migrateAgentJsonPredicatesInTransaction(db);
+          jsonPredicates.migrateAgentJsonPredicatesInTransaction(db);
         }
         if (
           previousVersion < AGENT_OUTBOX_SEQUENCE_SCHEMA_VERSION &&
@@ -533,6 +533,7 @@ function ensureAgentSchema(
       }
       migrateRetiredAgentStateLeaseSchema(db, pathname, targetVersion);
       if (previousVersion === targetVersion) {
+        jsonPredicates.repairDeepTranscriptPredicatesInTransaction(db);
         ensureSessionAdditiveColumns(db);
         ensureSessionEntryValidityProjection(db);
         ensureSessionKeyContractSchemaInTransaction(db);

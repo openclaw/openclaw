@@ -1,5 +1,5 @@
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
-import { sql } from "kysely";
+import { jsonNativeFieldsValid } from "../../infra/database-engine/json-values.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -17,6 +17,10 @@ import type {
   SessionTranscriptReadScope,
   TranscriptEvent,
 } from "./session-accessor.sqlite-contract.js";
+import {
+  inputMessageJson,
+  readInputMessage,
+} from "./session-accessor.sqlite-history-input-visibility.js";
 import {
   getActiveTranscriptKysely,
   getMessageRangeReaders,
@@ -46,7 +50,7 @@ import {
   resolveSqliteSessionTranscriptReadFence,
   SessionTranscriptReadFenceError,
 } from "./session-transcript-read-fence.js";
-import { transcriptEventNavigationSql, transcriptEventRunIdSql } from "./transcript-payload.js";
+import { transcriptEventNavigationSql } from "./transcript-payload.js";
 import { assertTranscriptNavigationValid } from "./transcript-predicate-fields.js";
 export { waitForSessionTranscriptProjection } from "./session-transcript-reconcile.js";
 export {
@@ -132,15 +136,13 @@ export function everySessionTranscriptUserInputFrom(
       start: anchor.message_position,
       endExclusive: end,
     })
-      .select(
-        /* kysely-allow-raw: Stream only admission control facts, never message bodies, across the exact active input range. */
-        sql<string>`json_object('role', json_extract(${transcriptEventNavigationSql(projection.database.db, "event")}, '$.message.role'),
-          'idempotencyKey', json_extract(${transcriptEventNavigationSql(projection.database.db, "event")}, '$.message.idempotencyKey'),
-          '__openclaw', json_object('runId', ${transcriptEventRunIdSql(projection.database.db, "event")}),
-          'provenance', json_extract(${transcriptEventNavigationSql(projection.database.db, "event")}, '$.message.provenance'))`.as(
-          "message_json",
-        ),
-      )
+      .select([
+        inputMessageJson(projection.database.db, false).as("message_json"),
+        jsonNativeFieldsValid(
+          projection.database.db,
+          transcriptEventNavigationSql(projection.database.db, "event"),
+        ).as("native"),
+      ])
       .select("event.navigation_valid")
       .where((eb) =>
         eb.or([eb("event.message_role", "=", "user"), eb("event.navigation_valid", "=", 0)]),
@@ -149,7 +151,7 @@ export function everySessionTranscriptUserInputFrom(
     for (const row of iterateSqliteQuerySync(projection.database.db, query)) {
       assertTranscriptNavigationValid(row.navigation_valid);
       seen = true;
-      if (!accept(JSON.parse(row.message_json))) {
+      if (!accept(readInputMessage(row, false))) {
         return false;
       }
     }

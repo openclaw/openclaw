@@ -1,15 +1,17 @@
 import type { AgentMessage, SessionTreeEntry } from "@openclaw/agent-core";
-import { sql, type AliasableExpression } from "kysely";
+import { sql, type AliasableExpression, type RawBuilder, type SqlBool } from "kysely";
 import { iterateSessionContextMessages } from "../../../packages/agent-core/src/harness/session/session.js";
 import {
   isSyntheticMissingToolResult,
   SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY,
 } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
+import { jsonNativeFieldsValid } from "../../infra/database-engine/json-values.js";
 import {
   executeSqliteQueryTakeFirstSync,
   iterateSqliteQuerySync,
   prepareSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
@@ -35,6 +37,8 @@ import type {
   SessionModelContextLimits,
   SessionTranscriptModelContext,
 } from "./session-history-read.types.js";
+import { projectSessionModelContextEntry } from "./session-model-context-entry.js";
+import { projectSessionModelContextNavigation } from "./session-model-context-navigation.js";
 import { projectModelContextEventSql } from "./session-model-context-projection.js";
 import { projectSessionModelContext } from "./session-model-context-read.js";
 import type { ContextEntry, ModelContextRequest } from "./session-model-context-window.js";
@@ -109,12 +113,16 @@ function validateContextVersion(
       database.db,
       getSessionKysely(database.db)
         .selectFrom("transcript_events")
-        .select(["seq", transcriptEventModelNavigationSql(database.db).as("navigation_json")])
+        .select([
+          "seq",
+          transcriptEventModelNavigationSql(database.db).as("navigation_json"),
+          modelNavigationNativeSql(database.db).as("native"),
+        ])
         .where("session_id", "=", sessionId)
         .orderBy("seq", "asc"),
     ),
     // SAFETY: The codec's navigation projection preserves entry discriminants and tree links.
-    (row) => ({ ...(JSON.parse(row.navigation_json) as SessionTreeEntry), seq: row.seq }),
+    (row) => ({ ...readModelNavigation(row), seq: row.seq }),
   );
   const headSeq = version.rawSeq;
   const prefix = scanSessionTranscriptTree(entries.filter((entry) => entry.seq <= headSeq));
@@ -288,6 +296,15 @@ function withTranscriptContextSnapshot<T>(
         database.db,
         () => {
           const db = getSessionKysely(database.db);
+          const native = modelNavigationNativeSql(database.db);
+          const projectionValid = jsonNativeFieldsValid(
+            database.db,
+            sql`coalesce(event_json, '{}')`,
+          );
+          const exceptional = /* kysely-allow-raw: only PostgreSQL-undecodable rows cross into the JS model projector. */ sql<
+            string | null
+          >`CASE WHEN NOT ${native} THEN event_json END`;
+
           const fence = resolveSqliteSessionTranscriptReadFence({ database, ...resolved });
           const version = readTranscriptContextVersionInTransaction(database, resolved.sessionId);
           if (through) {
@@ -317,13 +334,14 @@ function withTranscriptContextSnapshot<T>(
                 base
                   .select([
                     "seq",
+                    modelNavigationNativeSql(database.db).as("native"),
                     transcriptEventModelNavigationSql(database.db).as("navigation_json"),
                   ])
                   .orderBy("seq", "asc"),
               )) {
                 // Only navigation crosses into JavaScript before the canonical context is selected.
                 // SAFETY: SQL preserves entry discriminants and replaces payloads with readable empty bodies.
-                yield { ...(JSON.parse(row.navigation_json) as SessionTreeEntry), seq: row.seq };
+                yield { ...readModelNavigation(row), seq: row.seq };
               }
             })(),
           );
@@ -379,17 +397,32 @@ function withTranscriptContextSnapshot<T>(
                                 omitCheckpoint,
                                 omission,
                                 eb.ref("message_role"),
+                                projectionValid,
                               ),
                             ]),
                           )
                           .else(storedBytes)
                           .end()
                       : storedBytes;
-                    return ["seq", bytes.as("bytes")];
+                    return ["seq", bytes.as("bytes"), exceptional.as("exceptional_json")];
                   })
                   .where("seq", "in", [...bySeq.keys()]);
                 for (const row of iterateSqliteQuerySync(database.db, query)) {
-                  sizes.set(bySeq.get(row.seq)!, row.bytes);
+                  const entry = bySeq.get(row.seq)!;
+                  const request = batch.find((item) => item.entry === entry)!;
+                  sizes.set(
+                    entry,
+                    row.exceptional_json === null
+                      ? row.bytes
+                      : Buffer.byteLength(
+                          JSON.stringify(
+                            projectSessionModelContextEntry(
+                              JSON.parse(row.exceptional_json) as SessionTreeEntry,
+                              request,
+                            ),
+                          ),
+                        ),
+                  );
                 }
               }
               return sizes;
@@ -403,18 +436,25 @@ function withTranscriptContextSnapshot<T>(
                 const query = base
                   .select((eb) => [
                     "seq",
+                    native.as("native"),
                     projectModelContextEventSql(
                       database.db,
                       transcriptEventJsonSql(database.db),
                       omitCheckpoint,
                       omission,
                       eb.ref("message_role"),
+                      projectionValid,
                     ).as("event_json"),
                   ])
                   .where("seq", "in", [...bySeq.keys()]);
                 for (const row of iterateSqliteQuerySync(database.db, query)) {
                   const entry = bySeq.get(row.seq)!;
-                  const hydrated = hydrateContextEntry(row.event_json, entry);
+                  const hydrated = row.native
+                    ? hydrateContextEntry(row.event_json, entry)
+                    : projectSessionModelContextEntry(
+                        JSON.parse(row.event_json) as SessionTreeEntry,
+                        batch.find((item) => item.entry === entry)!,
+                      );
                   if (
                     entry.type === "message" &&
                     entry.message.role === "toolResult" &&
@@ -448,4 +488,18 @@ function hydrateContextEntry(eventJson: string, entry: ContextEntry): SessionTre
       ? { firstKeptEntryId: entry.firstKeptEntryId }
       : {}),
   };
+}
+
+function modelNavigationNativeSql(
+  database: Parameters<typeof isPostgresSqlConnection>[0],
+): RawBuilder<SqlBool> {
+  // SQLite projects deep rows inside its reader; PostgreSQL has no JS SQL callback.
+  return isPostgresSqlConnection(database)
+    ? jsonNativeFieldsValid(database, sql`event_json`)
+    : sql<SqlBool>`1`;
+}
+
+function readModelNavigation(row: { navigation_json: string; native: unknown }): SessionTreeEntry {
+  const entry = JSON.parse(row.navigation_json) as SessionTreeEntry;
+  return row.native ? entry : projectSessionModelContextNavigation(entry);
 }

@@ -40,8 +40,16 @@ describe("JSON predicate field scanning", () => {
     expect(fields.first.size).toBe(0);
   });
 
+  it("retains exact root member offsets across opaque deep values", () => {
+    const raw = '{"data":' + "[".repeat(5000) + "0" + "]".repeat(5000) + ', "parentId" : "old"}';
+    const result = scanJsonObjectFields(raw, ["parentId"]);
+    expect(result.valid).toBe(true);
+    const span = result.firstOffsets.get("parentId")!;
+    expect(raw.slice(span.start, span.end)).toBe('"old"');
+  });
+
   it("records SQLite's container-depth boundary for empty and scalar leaves", () => {
-    for (const count of [999, 1000, 1001]) {
+    for (const count of [999, 1000, 1001, 5000]) {
       expect(
         scanJsonObjectFields("[".repeat(count) + "0" + "]".repeat(count), []).maximumDepth,
       ).toBe(count);

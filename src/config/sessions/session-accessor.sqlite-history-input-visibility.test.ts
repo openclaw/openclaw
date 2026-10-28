@@ -1,5 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createReadonlySessionHistoryReader } from "../../gateway/session-history-readonly-reader.js";
 import {
@@ -10,6 +10,7 @@ import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import { replaceSessionEntry, waitForSessionTranscriptProjection } from "./session-accessor.js";
+import { everySessionTranscriptUserInputFrom } from "./session-accessor.sqlite-active-events.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 
 it.each([false, true])(
@@ -161,3 +162,40 @@ it.each([false, true])(
     });
   },
 );
+
+it("reads exceptional completion-source input through the ordinary active reader", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    setRuntimeConfigSnapshot({});
+    const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+    const scope = {
+      agentId: "main",
+      sessionId: "deep-input",
+      sessionKey: "agent:main:dashboard:deep-input",
+      storePath: database.path,
+    };
+    await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    await replaceTranscriptEvents(scope, [
+      { type: "session", version: 3, id: scope.sessionId },
+      {
+        type: "message",
+        id: "deep",
+        parentId: null,
+        message: {
+          role: "user",
+          content: "complete",
+          idempotencyKey: "deep:user",
+          details: JSON.parse("[".repeat(1100) + "1" + "]".repeat(1100)),
+        },
+      },
+    ]);
+    await waitForSessionTranscriptProjection(scope);
+    const accept = vi.fn(() => true);
+    expect(everySessionTranscriptUserInputFrom(scope, "deep:user", accept)).toBe(true);
+    expect(accept).toHaveBeenCalledWith({
+      role: "user",
+      idempotencyKey: "deep:user",
+      provenance: null,
+      __openclaw: { runId: null },
+    });
+  });
+});

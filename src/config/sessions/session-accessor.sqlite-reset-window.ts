@@ -2,6 +2,7 @@
 import type { SessionTreeEntry } from "@openclaw/agent-core";
 import { sql } from "kysely";
 import { selectResetKeptEntries } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
+import { jsonNativeFieldsValid } from "../../infra/database-engine/json-values.js";
 import { registerNodeSqliteDisposeCallback } from "../../infra/kysely-sync-cache-state.js";
 import {
   executeSqliteQuerySync,
@@ -350,7 +351,7 @@ function findLatestResetMessageWindow(
           .select([
             "active.message_position",
             /* kysely-allow-raw: preserve JS-readable overdepth rows for existing tool-pairing validation. */
-            sql<string>`CASE WHEN json_valid(${transcriptEventNavigationSql(projection.database.db, "event")})
+            sql<string>`CASE WHEN ${jsonNativeFieldsValid(projection.database.db, transcriptEventNavigationSql(projection.database.db, "event"))}
               THEN ${transcriptEventModelNavigationSql(projection.database.db, "event")}
               ELSE ${transcriptEventNavigationSql(projection.database.db, "event")} END`.as(
               "event_json",

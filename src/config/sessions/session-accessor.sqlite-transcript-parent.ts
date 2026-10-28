@@ -1,10 +1,15 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sql } from "kysely";
+import { jsonNativeFieldsValid, jsonPathValue } from "../../infra/database-engine/json-values.js";
 import {
   executeSqliteQueryTakeFirstSync,
   iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
+import {
+  scanJsonObjectFields,
+  readJsonPredicateScalar,
+} from "../../state/json-predicate-fields.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type {
   TranscriptEvent,
@@ -118,6 +123,12 @@ export function canRebasePreparedAssistantInTransaction(
   if (newerMessageMetadata.length === 0) {
     return !admittedIsNewer;
   }
+  const navigation = transcriptEventNavigationSql(database.db, "event");
+  const native = jsonNativeFieldsValid(database.db, navigation);
+  const field = (path: string) =>
+    /* kysely-allow-raw: decode only native-readable metadata. */ sql<
+      string | null
+    >`CASE WHEN ${native} THEN ${jsonPathValue(database.db, navigation, sql.val(path))} END`;
   const newerRoles = Array.from(
     iterateSqliteQuerySync(
       database.db,
@@ -142,29 +153,15 @@ export function canRebasePreparedAssistantInTransaction(
           "identity.parent_id",
           "active.message_position",
           "rewrite.generation",
-          /* kysely-allow-raw: validate the canonical message role without hydrating content. */
-          sql<string>`json_extract(${transcriptEventNavigationSql(database.db, "event")}, '$.message.role')`.as(
-            "message_role",
-          ),
-          /* kysely-allow-raw: only exact canonical booleans exempt a command from model context. */
-          sql<
-            number | null
-          >`json_type(${transcriptEventNavigationSql(database.db, "event")}, '$.message.excludeFromContext') = 'true'
-            AND json_type(${transcriptEventNavigationSql(database.db, "event")}, '$.message.__openclaw.contextFreeCommand') = 'true'`.as(
+          field("$.message.role").as("message_role"),
+          field("$.message.provenance.kind").as("provenance_kind"),
+          field("$.message.provenance.sourceChannel").as("provenance_source_channel"),
+          /* kysely-allow-raw: native booleans alone classify context-free commands. */
+          sql<number>`CASE WHEN ${native} THEN json_type(${navigation}, '$.message.excludeFromContext') = 'true' AND json_type(${navigation}, '$.message.__openclaw.contextFreeCommand') = 'true' ELSE 0 END`.as(
             "context_free_command",
           ),
-          /* kysely-allow-raw: classify realtime voice records without hydrating content. */
-          sql<
-            string | null
-          >`json_extract(${transcriptEventNavigationSql(database.db, "event")}, '$.message.provenance.kind')`.as(
-            "provenance_kind",
-          ),
-          /* kysely-allow-raw: pair the kind with its channel so a partial marker cannot match. */
-          sql<
-            string | null
-          >`json_extract(${transcriptEventNavigationSql(database.db, "event")}, '$.message.provenance.sourceChannel')`.as(
-            "provenance_source_channel",
-          ),
+          /* kysely-allow-raw: exceptional rows are scanned once with first-member semantics. */
+          sql<string | null>`CASE WHEN NOT ${native} THEN ${navigation} END`.as("exceptional_json"),
         ])
         .where("identity.session_id", "=", sessionId)
         .where("identity.seq", ">=", newerMessageMetadata[0]!.seq)
@@ -174,7 +171,44 @@ export function canRebasePreparedAssistantInTransaction(
         .limit(PREPARED_ASSISTANT_MAX_NEWER_MESSAGES),
     ),
   );
-  return preparedAssistantMessagesPreserveTurn(newerRoles, admittedUserId, (row) => {
+  const facts = newerRoles.map((row) => {
+    if (row.exceptional_json === null) {
+      return row;
+    }
+    const root = scanJsonObjectFields(row.exceptional_json, ["message"]);
+    if (!root.valid) {
+      throw new Error("malformed JSON in transcript navigation");
+    }
+    const messageToken = root.first.get("message");
+    const message = scanJsonObjectFields(
+      messageToken?.kind === "object" ? messageToken.text : "{}",
+      ["role", "excludeFromContext", "__openclaw", "provenance"],
+    );
+    const internal = message.first.get("__openclaw");
+    const flags = scanJsonObjectFields(internal?.kind === "object" ? internal.text : "{}", [
+      "contextFreeCommand",
+    ]);
+    const provenance = message.first.get("provenance");
+    const source = scanJsonObjectFields(provenance?.kind === "object" ? provenance.text : "{}", [
+      "kind",
+      "sourceChannel",
+    ]);
+    const text = (token: Parameters<typeof readJsonPredicateScalar>[0]) => {
+      const value = readJsonPredicateScalar(token);
+      return typeof value === "string" ? value : null;
+    };
+    return Object.assign(row, {
+      message_role: text(message.first.get("role")),
+      context_free_command:
+        readJsonPredicateScalar(message.first.get("excludeFromContext")) === true &&
+        readJsonPredicateScalar(flags.first.get("contextFreeCommand")) === true
+          ? 1
+          : 0,
+      provenance_kind: text(source.first.get("kind")),
+      provenance_source_channel: text(source.first.get("sourceChannel")),
+    });
+  });
+  return preparedAssistantMessagesPreserveTurn(facts, admittedUserId, (row) => {
     const answer = questionAnswers.find((input) => input.entryId === row.event_id);
     return (
       answer !== undefined &&

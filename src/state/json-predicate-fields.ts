@@ -7,6 +7,7 @@ export type JsonPredicateToken = {
 export function scanJsonObjectFields(json: string, fields: readonly string[]) {
   const first = new Map<string, JsonPredicateToken>();
   const last = new Map<string, JsonPredicateToken>();
+  const firstOffsets = new Map<string, { start: number; end: number }>();
   const wanted = new Set(fields);
   let offset = 0;
   let maximumDepth = 0;
@@ -62,6 +63,62 @@ export function scanJsonObjectFields(json: string, fields: readonly string[]) {
     if (start === "{" || start === "[") {
       const object = start === "{";
       const close = object ? "}" : "]";
+      // Root fields need tokens, but opaque children do not need recursive call frames.
+      if (depth > 0) {
+        const containers: boolean[] = [];
+        let needValue = true;
+        for (;;) {
+          skipWhitespace();
+          if (needValue) {
+            const next = json[offset];
+            if (next === "{" || next === "[") {
+              const nestedObject = next === "{";
+              containers.push(nestedObject);
+              maximumDepth = Math.max(maximumDepth, depth + containers.length);
+              offset++;
+              skipWhitespace();
+              if (json[offset] === (nestedObject ? "}" : "]")) {
+                offset++;
+                containers.pop();
+                needValue = false;
+              } else {
+                if (nestedObject) {
+                  string();
+                  skipWhitespace();
+                  if (json[offset++] !== ":") {
+                    fail();
+                  }
+                }
+                continue;
+              }
+            } else {
+              value(depth + containers.length);
+              needValue = false;
+            }
+          }
+          if (containers.length === 0) {
+            return object ? "object" : "array";
+          }
+          skipWhitespace();
+          const nestedObject = containers[containers.length - 1];
+          const separator = json[offset++];
+          if (separator === (nestedObject ? "}" : "]")) {
+            containers.pop();
+          } else if (separator === ",") {
+            skipWhitespace();
+            if (nestedObject) {
+              string();
+              skipWhitespace();
+              if (json[offset++] !== ":") {
+                fail();
+              }
+            }
+            needValue = true;
+          } else {
+            fail();
+          }
+        }
+      }
       offset++;
       skipWhitespace();
       if (json[offset] === close) {
@@ -95,6 +152,7 @@ export function scanJsonObjectFields(json: string, fields: readonly string[]) {
             const token = { kind, text: json.slice(tokenStart, offset) };
             if (keepFirst) {
               first.set(firstKey, token);
+              firstOffsets.set(firstKey, { start: tokenStart, end: offset });
             }
             if (keepLast) {
               last.set(key, token);
@@ -133,9 +191,10 @@ export function scanJsonObjectFields(json: string, fields: readonly string[]) {
     if (offset !== json.length && json[offset] !== "\0") {
       fail();
     }
-    return { valid: true, maximumDepth, first, last };
+    return { valid: true, maximumDepth, first, last, firstOffsets };
   } catch {
     return {
+      firstOffsets: new Map<string, { start: number; end: number }>(),
       valid: false,
       maximumDepth,
       first: new Map<string, JsonPredicateToken>(),

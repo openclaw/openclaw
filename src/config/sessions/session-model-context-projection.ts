@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import type { SessionTreeEntry } from "@openclaw/agent-core";
 import { sql, type Expression, type RawBuilder } from "kysely";
 import {
   LEGACY_MISSING_TOOL_RESULT_TEXT,
@@ -14,16 +15,68 @@ import {
   jsonRemovePaths,
   jsonSetPath,
   jsonType,
-  jsonValid,
+  jsonNativeFieldsValid,
 } from "../../infra/database-engine/json-values.js";
+import { getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { supportsNodeSqliteJsonb } from "../../infra/node-sqlite.js";
 import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { MODEL_CONTEXT_PRIVATE_METADATA_KEYS } from "../../shared/model-context-message.js";
+import { projectSessionModelContextEntry } from "./session-model-context-entry.js";
 import {
+  projectSessionModelContextNavigation,
   MODEL_CONTEXT_NAVIGATION_KEYS,
   MODEL_MESSAGE_NAVIGATION_KEYS,
   TRANSCRIPT_NAVIGATION_KEYS,
 } from "./session-model-context-navigation.js";
+
+const registeredDeepProjectors = new WeakSet<DatabaseSync>();
+
+/** JavaScript owner for rows native JSON cannot project: SQLite deep JSON, PostgreSQL JSONB-invalid escapes. */
+export function projectModelContextJson(
+  raw: string,
+  navigation: boolean,
+  omitCheckpoint = false,
+  toolResultOmission?: string,
+): string {
+  // SAFETY: This is the same canonical entry decoded by the native context reader.
+  const entry = JSON.parse(raw) as SessionTreeEntry;
+  return JSON.stringify(
+    navigation
+      ? projectSessionModelContextNavigation(entry)
+      : projectSessionModelContextEntry(entry, { entry, omitCheckpoint, toolResultOmission }),
+  );
+}
+
+/** SQLite rejects valid deep JSON; project those exceptional rows inside the reader worker. */
+function projectDeepModelContextSql(
+  db: DatabaseSync,
+  event: Expression<string | Uint8Array>,
+  navigation: boolean,
+  omitCheckpoint: Expression<number> = sql.lit(0),
+  toolResultOmission: Expression<string | null> = sql.lit(null),
+) {
+  const name = "openclaw_deep_model_context";
+  if (!registeredDeepProjectors.has(db)) {
+    db.function(name, { deterministic: true, directOnly: true }, (raw, nav, omit, omission) => {
+      if (typeof raw !== "string") {
+        throw new TypeError("Deep transcript projection requires canonical JSON text");
+      }
+      return projectModelContextJson(
+        raw,
+        nav === 1,
+        omit === 1,
+        typeof omission === "string" ? omission : undefined,
+      );
+    });
+    registeredDeepProjectors.add(db);
+  }
+  return getNodeSqliteKysely<Record<string, never>>(db).fn<string>(name, [
+    event,
+    sql.lit(navigation ? 1 : 0),
+    omitCheckpoint,
+    toolResultOmission,
+  ]);
+}
 
 /** Exclude storage-only fields in SQLite, before a row's JSON crosses into JavaScript. */
 export function projectModelContextEventSql(
@@ -32,6 +85,7 @@ export function projectModelContextEventSql(
   omitCheckpoint: Expression<number>,
   toolResultOmission?: Expression<string | null>,
   role: Expression<unknown> = jsonPathValue(db, event, sql.lit("$.message.role")),
+  nativeJsonValid: Expression<unknown> = jsonNativeFieldsValid(db, event),
 ): RawBuilder<string> {
   const paths = MODEL_CONTEXT_PRIVATE_METADATA_KEYS.map((key) => `$.message.__openclaw.${key}`);
   const projected = jsonRemovePaths(
@@ -55,7 +109,8 @@ export function projectModelContextEventSql(
     : modelEvent;
   // The context owner classifies invalidated prefix checkpoints using the transport
   // contract. Other replay state must survive, including checkpoints after the cut.
-  return /* kysely-allow-raw: exclude invalidated replay before hydrating a retained prefix. */ sql<string>`CASE WHEN ${omitCheckpoint} = 1
+  return /* kysely-allow-raw: exclude invalidated replay before hydrating a retained prefix. */ sql<string>`CASE WHEN NOT ${nativeJsonValid} THEN ${isPostgresSqlConnection(db) ? event : projectDeepModelContextSql(db, event, false, omitCheckpoint, toolResultOmission)}
+    WHEN ${omitCheckpoint} = 1
     THEN ${jsonRemovePaths(db, boundedEvent, [sql.lit("$.message.providerReplay")])} ELSE ${boundedEvent} END`;
 }
 
@@ -119,7 +174,7 @@ export function projectTranscriptNavigationSql(
   db: DatabaseSync,
   event: Expression<string>,
 ): RawBuilder<string> {
-  return jsonPickObject(db, event, TRANSCRIPT_NAVIGATION_KEYS);
+  return /* kysely-allow-raw: exceptional canonical rows are decoded by the tree reader. */ sql<string>`CASE WHEN ${jsonNativeFieldsValid(db, event)} THEN ${jsonPickObject(db, event, TRANSCRIPT_NAVIGATION_KEYS)} ELSE ${event} END`;
 }
 
 /** Reset boundaries select ancestry and replay roles without loading message bodies. */
@@ -135,7 +190,7 @@ export function projectResetBoundaryNavigationSql(
     "display",
   ]);
   // Malformed rows must reach JSON.parse unchanged; CASE guards the native projection.
-  return /* kysely-allow-raw: reset planning uses navigation metadata, never durable transcript payloads. */ sql<string>`CASE WHEN ${jsonValid(db, event)} THEN
+  return /* kysely-allow-raw: reset planning uses navigation metadata, never durable transcript payloads. */ sql<string>`CASE WHEN ${jsonNativeFieldsValid(db, event)} THEN
     CASE WHEN ${jsonType(db, event)} = 'object' THEN
       ${jsonSetPath(
         db,
@@ -167,9 +222,10 @@ export function projectModelContextNavigationSql(
   db: DatabaseSync,
   event: Expression<string | Uint8Array>,
   entryType: Expression<unknown> = jsonPathValue(db, event, sql.lit("$.type")),
+  nativeJsonValid: Expression<unknown> = jsonNativeFieldsValid(db, event),
 ): RawBuilder<string> {
   if (isPostgresSqlConnection(db)) {
-    return postgresModelNavigationSql(db, event, entryType);
+    return /* kysely-allow-raw: canonical exceptional text reaches the JavaScript navigation reader. */ sql<string>`CASE WHEN ${jsonNativeFieldsValid(db, event)} THEN ${postgresModelNavigationSql(db, event, entryType)} ELSE ${event} END`;
   }
   const entry = jsonPickObject(db, event, MODEL_CONTEXT_NAVIGATION_KEYS);
   // Binary intermediates avoid serializing and reparsing the entire message.
@@ -188,7 +244,7 @@ export function projectModelContextNavigationSql(
   const synthetic = /* kysely-allow-raw: pairing prefers real results over synthetic missing-result placeholders. */ sql<number>`COALESCE(json_extract(${event}, ${`$.message.details.${SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY}`}), 0) = 1 OR EXISTS (
     SELECT 1 FROM json_each(${event}, '$.message.content') WHERE type = 'object'
     AND ${contentPropertySql(event, "type")} = 'text' AND ${contentPropertySql(event, "text")} = ${LEGACY_MISSING_TOOL_RESULT_TEXT})`;
-  return /* kysely-allow-raw: retain readable empty bodies only for navigation outside the model window. */ sql<string>`CASE ${entryType}
+  const navigation = /* kysely-allow-raw: retain readable empty bodies only for navigation outside the model window. */ sql<string>`CASE ${entryType}
     WHEN 'message' THEN json_set(${entry}, '$.message', json_set(${messageFacts},
       '$.content', json(${calls}), '$.command', '', '$.output', '',
       '$.providerReplay', json_object('type', json_extract(${event}, '$.message.providerReplay.type')),
@@ -203,6 +259,7 @@ export function projectModelContextNavigationSql(
     WHEN 'compaction' THEN json_set(${entry}, '$.summary', '')
     WHEN 'branch_summary' THEN json_set(${entry}, '$.summary', '')
     ELSE ${entry} END`;
+  return /* kysely-allow-raw: native JSON retains its fast path; deep rows use the same model owner as memory. */ sql<string>`CASE WHEN ${nativeJsonValid} THEN ${navigation} ELSE ${projectDeepModelContextSql(db, event, true)} END`;
 }
 
 function postgresModelNavigationSql(

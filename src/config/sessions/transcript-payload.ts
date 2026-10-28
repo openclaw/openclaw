@@ -1,6 +1,10 @@
 import type { DatabaseSync } from "node:sqlite";
 import { sql, type Expression, type RawBuilder } from "kysely";
-import { jsonPathValue, jsonRemovePaths } from "../../infra/database-engine/json-values.js";
+import {
+  jsonNativeFieldsValid,
+  jsonPathValue,
+  jsonRemovePaths,
+} from "../../infra/database-engine/json-values.js";
 import {
   createSqliteQueryCache,
   getNodeSqliteKysely,
@@ -161,9 +165,9 @@ function navigationProjection(
       'report', json(${report}),
       'navigation', json(${projectTranscriptPayloadNavigationSql(database, event)}),
       'reset', json(${projectResetBoundaryNavigationSql(database, originalEvent)}),
-      'model', json(${projectModelContextNavigationSql(database, event)}),
-      'modelBytes', octet_length(${projectModelContextEventSql(database, event, sql.lit(0))}),
-      'modelWithoutCheckpointBytes', octet_length(${projectModelContextEventSql(database, event, sql.lit(1))}),
+      'model', json(${projectModelContextNavigationSql(database, event, undefined, sql.lit(1))}),
+      'modelBytes', octet_length(${projectModelContextEventSql(database, event, sql.lit(0), undefined, undefined, sql.lit(1))}),
+      'modelWithoutCheckpointBytes', octet_length(${projectModelContextEventSql(database, event, sql.lit(1), undefined, undefined, sql.lit(1))}),
       'withoutCustomDataBytes', octet_length(json_remove(${event}, '$.data')))
     END ELSE NULL END`;
 }
@@ -389,11 +393,10 @@ export function transcriptEventRunIdSql(
   database: DatabaseSync,
   alias: TranscriptPayloadAlias = "transcript_events",
 ): RawBuilder<string | null> {
-  return jsonPathValue(
-    database,
-    transcriptEventNavigationSql(database, alias),
-    sql.lit("$.message.__openclaw.runId"),
-  );
+  const navigation = transcriptEventNavigationSql(database, alias);
+  return /* kysely-allow-raw: callers classify exceptional rows from canonical text. */ sql<
+    string | null
+  >`CASE WHEN ${jsonNativeFieldsValid(database, navigation)} THEN ${jsonPathValue(database, navigation, sql.lit("$.message.__openclaw.runId"))} END`;
 }
 
 function storedProjectionSql(

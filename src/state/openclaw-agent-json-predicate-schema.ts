@@ -1,4 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
+import { deriveTranscriptPredicateFields } from "../config/sessions/transcript-predicate-fields.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { DB } from "./openclaw-agent-db.generated.js";
 import { ensureColumn, tableExists } from "./openclaw-state-db-schema-helpers.js";
 
 /** Derived fields introduced together by agent schema 26. JSON remains canonical. */
@@ -97,4 +100,60 @@ export function migrateAgentJsonPredicatesInTransaction(database: DatabaseSync):
       navigation_valid = fields.valid
     FROM fields WHERE transcript_events.session_id = fields.session_id AND transcript_events.seq = fields.seq;
   `);
+  repairDeepTranscriptPredicatesInTransaction(database);
+}
+
+/** Repair only false-invalid identity rows during admitted schema upkeep; canonical bytes never change. */
+export function repairDeepTranscriptPredicatesInTransaction(database: DatabaseSync): void {
+  const db = getNodeSqliteKysely<DB>(database);
+  let after: { session_id: string; seq: number } | undefined;
+  for (;;) {
+    const rows = executeSqliteQuerySync(
+      database,
+      db
+        .selectFrom("transcript_events")
+        .select(["session_id", "seq", "event_json", "navigation_json"])
+        .where("navigation_valid", "=", 0)
+        .$if(after !== undefined, (query) =>
+          query.where((eb) =>
+            eb.or([
+              eb("session_id", ">", after!.session_id),
+              eb.and([eb("session_id", "=", after!.session_id), eb("seq", ">", after!.seq)]),
+            ]),
+          ),
+        )
+        .orderBy("session_id")
+        .orderBy("seq")
+        .limit(256),
+    ).rows;
+    if (rows.length === 0) {
+      return;
+    }
+    for (const row of rows) {
+      let canonical = row.event_json;
+      if (canonical === null && row.navigation_json !== null) {
+        try {
+          const metadata = JSON.parse(row.navigation_json) as { navigation?: unknown };
+          canonical = JSON.stringify(metadata.navigation) ?? null;
+        } catch {
+          // Corrupt projections remain invalid and retain the ordinary repair diagnostic.
+        }
+      }
+      if (canonical === null || canonical === undefined) {
+        continue;
+      }
+      const fields = deriveTranscriptPredicateFields(canonical);
+      if (fields.navigation_valid === 1) {
+        executeSqliteQuerySync(
+          database,
+          db
+            .updateTable("transcript_events")
+            .set(fields)
+            .where("session_id", "=", row.session_id)
+            .where("seq", "=", row.seq),
+        );
+      }
+    }
+    after = rows.at(-1)!;
+  }
 }

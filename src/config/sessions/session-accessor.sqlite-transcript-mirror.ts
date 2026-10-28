@@ -1,3 +1,5 @@
+import { sql } from "kysely";
+import { jsonNativeFieldsValid } from "../../infra/database-engine/json-values.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -17,7 +19,11 @@ import { createTranscriptEntryAnchor } from "./session-accessor.sqlite-transcrip
 import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
-import { transcriptEventJsonSql, transcriptEventRunIdSql } from "./transcript-payload.js";
+import {
+  transcriptEventJsonSql,
+  transcriptEventRunIdSql,
+  transcriptEventNavigationSql,
+} from "./transcript-payload.js";
 import { selectVisibleTranscriptEvents } from "./transcript-visible-events.js";
 
 // Keep supplied-key probes below SQLite's conservative variable ceiling.
@@ -142,10 +148,16 @@ export function readTranscriptMirrorFacts(
       for (const batch of batches) {
         let query = events
           .where("identity.session_id", "=", resolved.sessionId)
-          .where("identity.message_idempotency_key", "in", batch)
+          .where((eb) =>
+            batch.length ? eb("identity.message_idempotency_key", "in", batch) : sql.lit(false),
+          )
           .select((eb) => eb.val(0).as("is_source"));
         const sourceRunId = batch === batches[0] ? params.sourceRunId : undefined;
         if (sourceRunId) {
+          const native = jsonNativeFieldsValid(
+            database.db,
+            transcriptEventNavigationSql(database.db, "event"),
+          );
           // UNION keeps each branch independently indexable; an OR here scans
           // the session. The input bounds long runs without truncating them.
           query = query.unionAll(
@@ -170,8 +182,17 @@ export function readTranscriptMirrorFacts(
                   ),
                 ),
               )
-              .where(transcriptEventRunIdSql(database.db, "event"), "=", sourceRunId)
-              .select((eb) => eb.val(1).as("is_source")),
+              .where((eb) =>
+                eb.or([
+                  eb(transcriptEventRunIdSql(database.db, "event"), "=", sourceRunId),
+                  eb.not(native),
+                ]),
+              )
+              .select(
+                /* kysely-allow-raw: exceptional source candidates are rechecked in JavaScript. */ sql<number>`CASE WHEN ${native} THEN 1 ELSE 2 END`.as(
+                  "is_source",
+                ),
+              ),
           );
         }
         const rows = executeSqliteQuerySync(
@@ -182,6 +203,12 @@ export function readTranscriptMirrorFacts(
           // SAFETY: event_json reconstructs the stored TranscriptEvent via transcriptEventJsonSql.
           const event = JSON.parse(row.event_json) as TranscriptEvent;
           if (row.is_source) {
+            if (
+              row.is_source === 2 &&
+              readSessionTranscriptRunId(readTranscriptEventMessage(event)) !== sourceRunId
+            ) {
+              continue;
+            }
             facts.sourceEvents?.push(event);
             continue;
           }

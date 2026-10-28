@@ -4,6 +4,7 @@ import { sql } from "kysely";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { jsonNativeFieldsValid } from "../../infra/database-engine/json-values.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import * as nodeSqlite from "../../infra/node-sqlite.js";
@@ -237,7 +238,7 @@ describe("transcript payload storage boundary", () => {
         ["", null, null, 0],
         ['{"type":"custom", invalid', null, null, 0],
         [`{"type":"custom","data":"${"x".repeat(2048)}`, null, null, 0],
-        [`{"type":"custom","data":${"[".repeat(1001)}0${"]".repeat(1001)}}`, null, null, 0],
+        [`{"type":"custom","data":${"[".repeat(1001)}0${"]".repeat(1001)}}`, "custom", null, 1],
         [
           `{"type":"message","id":"nested","parentId":null,"appendMode":${"[".repeat(998)}0${"]".repeat(998)},"message":{"role":"user","content":"${"x".repeat(12 * 1024)}"}}`,
           "message",
@@ -455,6 +456,7 @@ describe("transcript payload storage boundary", () => {
                         transcriptEventNavigationSql(database),
                         eb.val("$.message.role"),
                       ]),
+                      jsonNativeFieldsValid(database, transcriptEventNavigationSql(database)),
                     ).as("event"),
                   )
                   .where("seq", "=", seq),

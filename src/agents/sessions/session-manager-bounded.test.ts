@@ -1009,3 +1009,46 @@ it("preserves explicit reset retention of excluded user input in a bounded reope
     },
   );
 });
+
+it("preserves exceptional values across awaited appends, concurrent rebase, and reopen", async () => {
+  const { dir, scope } = await createSessionScope("exceptional-values");
+  const manager = await SessionManager.openAsync(scope, dir);
+  await manager.appendMessageAsync(makeUserMessage("start", 1));
+  const details: unknown = JSON.parse("[".repeat(1100) + "1" + "]".repeat(1100));
+  const text = "complete" + String.fromCharCode(0, 0xd800);
+  const toolId = await manager.appendMessageAsync({
+    role: "toolResult",
+    toolCallId: "probe",
+    toolName: "probe",
+    content: [{ type: "text", text }],
+    details,
+    isError: false,
+    timestamp: 2,
+  });
+  const nextId = await manager.appendMessageAsync(makeUserMessage(text, 3));
+  if (!toolId || !nextId) {
+    throw new Error("awaited exceptional appends did not return entry IDs");
+  }
+  expect(manager.getEntry(nextId)?.parentId).toBe(toolId);
+  const context = await SessionManager.openModelContextAsync(scope, {
+    limits: { maxBytes: 4096, maxEvents: 10 },
+  });
+  expect(context.buildSessionContext().messages.at(-1)).toMatchObject({ content: text });
+  const concurrent = SessionManager.open(scope, dir);
+  const otherId = await manager.appendMessageAsync(makeUserMessage("concurrent", 4));
+  const rebasedId = await concurrent.appendMessageAsync(makeUserMessage("rebased", 5));
+  if (!rebasedId) {
+    throw new Error("rebased append did not return an entry ID");
+  }
+  expect(concurrent.getEntry(rebasedId)?.parentId).toBe(otherId);
+  await closeOpenClawAgentDatabasesAsync(dir);
+  closeOpenClawAgentDatabasesForTest(dir);
+  const reopened = await SessionManager.openAsync(scope, dir);
+  const stored = reopened.getEntry(toolId);
+  expect(
+    stored?.type === "message" &&
+      stored.message.role === "toolResult" &&
+      JSON.stringify(stored.message.details),
+  ).toBe(JSON.stringify(details));
+  expect(reopened.getEntry(nextId)).toMatchObject({ message: { content: text } });
+});

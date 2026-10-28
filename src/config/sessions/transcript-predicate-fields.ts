@@ -33,7 +33,7 @@ function discriminator(token: JsonPredicateToken | undefined, values: ReadonlySe
 /** Query-only discriminators preserve SQLite's first member and legacy JS's last member. */
 export function deriveTranscriptPredicateFields(eventJson: string): TranscriptPredicateFields {
   const fields = scanJsonObjectFields(eventJson, ["type", "customType", "display", "message"]);
-  if (!fields.valid || fields.maximumDepth > 1000) {
+  if (!fields.valid) {
     return {
       navigation_type: null,
       navigation_custom_type: null,

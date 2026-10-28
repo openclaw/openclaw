@@ -170,6 +170,62 @@ describe("agent JSON predicate migration", () => {
     }
   });
 
+  it("repairs previously stored deep predicate fields without changing canonical bytes or schema", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const pathname = state.path("deep-predicates.sqlite");
+      using database = new DatabaseSync(pathname);
+      seedSchema(database);
+      await withAgentDatabaseMaintenanceLease({ env: state.env }, async () => {
+        const admit = () =>
+          ensureOpenClawAgentDatabaseSchema(database, {
+            agentId: "main",
+            env: state.env,
+            path: pathname,
+          });
+        admit();
+        const canonical = JSON.stringify({
+          type: "message",
+          id: "deep",
+          parentId: null,
+          message: {
+            role: "user",
+            content: "complete",
+            details: JSON.parse("[".repeat(1100) + "1" + "]".repeat(1100)),
+          },
+        });
+        database
+          .prepare(
+            "INSERT INTO transcript_events (session_id, seq, event_json, navigation_valid, created_at) VALUES ('history', ?, ?, 0, 1)",
+          )
+          .run(1, canonical);
+        database
+          .prepare(
+            "INSERT INTO transcript_events (session_id, seq, event_json, navigation_valid, created_at) VALUES ('history', ?, ?, 0, 1)",
+          )
+          .run(2, "{malformed");
+        admit();
+        expect(
+          database
+            .prepare(
+              "SELECT event_json, navigation_valid, navigation_type, message_role FROM transcript_events WHERE seq = 1",
+            )
+            .get(),
+        ).toEqual({
+          event_json: canonical,
+          navigation_valid: 1,
+          navigation_type: "message",
+          message_role: "user",
+        });
+        expect(
+          database.prepare("SELECT navigation_valid FROM transcript_events WHERE seq = 2").get(),
+        ).toEqual({ navigation_valid: 0 });
+        expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(
+          OPENCLAW_AGENT_SCHEMA_VERSION,
+        );
+      });
+    });
+  });
+
   it.each(["commit", "rollback", "without-outbox", "missing-additive-indexes"] as const)(
     "publishes both version markers only with the complete migration (%s)",
     async (outcome) => {

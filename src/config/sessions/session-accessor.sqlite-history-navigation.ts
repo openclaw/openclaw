@@ -1,6 +1,8 @@
+import type { DatabaseSync } from "node:sqlite";
 import { toUSVString } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sql, type Expression, type RawBuilder, type SqlBool } from "kysely";
+import { jsonNativeFieldsValid } from "../../infra/database-engine/json-values.js";
 import { iterateSqliteQuerySync } from "../../infra/kysely-sync.js";
 import type {
   UnindexedActiveTranscriptNavigation,
@@ -47,6 +49,7 @@ function parseNavigation(eventJson: string): Record<string, unknown> | undefined
 }
 
 function navigationCandidatesSql(
+  database: DatabaseSync,
   identitySeq: Expression<number | null>,
   event: Expression<string>,
   candidate: { key: "id"; eventIds: readonly string[] },
@@ -62,7 +65,7 @@ function navigationCandidatesSql(
   // Invalid and SQLite-overdepth rows still reach the existing JSON.parse fallback.
   // Fence JSON behind the anti-join so indexed payloads are never parsed just to reject them.
   return /* kysely-allow-raw: decoded members only narrow unindexed candidates; JavaScript owns exact matching. */ sql<SqlBool>`CASE WHEN ${identitySeq} IS NOT NULL THEN 0
-    WHEN json_valid(${event}) THEN EXISTS (
+    WHEN ${jsonNativeFieldsValid(database, event)} THEN EXISTS (
       SELECT 1 FROM json_each(${event}) AS member
       WHERE member.key = ${candidate.key} AND member.type = 'text' AND ${match}
     ) ELSE 1 END`;
@@ -96,6 +99,7 @@ function unindexedNavigationQuery(
     .$if(canFilterEventIds(eventIds), (filtered) =>
       filtered.where((eb) =>
         navigationCandidatesSql(
+          projection.database.db,
           eb.ref("identity.seq"),
           transcriptEventNavigationSql(projection.database.db, "event"),
           {

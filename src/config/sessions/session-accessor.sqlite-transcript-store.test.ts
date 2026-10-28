@@ -684,76 +684,83 @@ describe("SQLite exact transcript suffix replacement", () => {
     }, events);
   });
 
-  it("reparents a retained compressed opaque suffix while preserving payload and rollback", async () => {
-    const plannedTail = {
-      type: "custom",
-      id: "opaque",
-      parentId: "user",
-      customType: "openclaw.cache-ttl",
-      display: true,
-      message: { role: "toolResult" },
-    };
-    const tail = {
-      ...plannedTail,
-      data: { payload: "opaque retained 🦞 ".repeat(4096) },
-    };
-    const events = [rewriteEvents[0], rewriteEvents[1], tail];
-    const expected = [rewriteEvents[0], rewriteEvents[1], plannedTail];
-    const next = [rewriteEvents[0], { ...plannedTail, parentId: "root" }];
-    const retainedIds = [tail.id];
-    await withRewriteFixture(({ db, snapshot, scope }) => {
-      const before = snapshot();
-      const beforeStats = readTranscriptStatsSync(scope);
-      expect(before.storage[2]?.event_json).toBeNull();
-      expect(before.storage[2]?.event_zstd).toBeInstanceOf(Uint8Array);
-      expect(() =>
-        runOpenClawAgentWriteTransaction((database) => {
-          replaceSqliteTranscriptSuffixInTransaction(database, scope, {
-            expectedEvents: expected,
-            nextEvents: next,
-            persistedPrefixLength: 1,
-            retainedCustomDataIds: retainedIds,
-          });
-          throw new Error("rollback retained suffix");
-        }, scope),
-      ).toThrow("rollback retained suffix");
-      expect(snapshot()).toEqual(before);
-      expect(readTranscriptStatsSync(scope)).toEqual(beforeStats);
-      replaceTranscriptSuffixForTest(scope, expected, next, 1, retainedIds);
-      const result = snapshot();
-      const retainedJson = JSON.stringify({ ...tail, parentId: "root" });
-      expect(result.raw).toEqual([
-        before.raw[0],
-        { ...before.raw[2], seq: 1, event_json: retainedJson },
-      ]);
-      expect(result.storage[1]).toMatchObject({
-        navigation_type: "custom",
-        navigation_custom_type: "openclaw.cache-ttl",
-        navigation_display: 1,
-        message_role: "toolResult",
-        navigation_last_type: "custom",
-        navigation_last_custom_type: "openclaw.cache-ttl",
-        navigation_valid: 1,
-      });
-      expect(result).toMatchObject({
-        identities: [
-          expect.objectContaining({ seq: 0 }),
-          expect.objectContaining({ seq: 1, event_id: tail.id, parent_id: "root" }),
-        ],
-        active: [
-          expect.objectContaining({ event_seq: 0 }),
-          expect.objectContaining({ event_seq: 1 }),
-        ],
-        search: [],
-      });
-      expect(result.generation).not.toBe(before.generation);
-      expect(readTranscriptStatsSync(scope)).toMatchObject({
-        eventCount: 2,
-        sizeBytes: Buffer.byteLength(`${JSON.stringify(rewriteEvents[0])}\n${retainedJson}`),
-      });
-      expect(sessionTranscriptIndexNeedsReconcile(db, scope.sessionId)).toBe(false);
-    }, events);
-  });
+  it.each([false, true])(
+    "reparents retained opaque data, exceptional=%s, preserving payload and rollback",
+    async (exceptional) => {
+      const plannedTail = {
+        type: "custom",
+        id: "opaque",
+        parentId: "user",
+        customType: "openclaw.cache-ttl",
+        display: true,
+        message: { role: "toolResult" },
+      };
+      const tail = {
+        ...plannedTail,
+        data: exceptional
+          ? JSON.parse("[".repeat(1100) + '"\\u0000\\ud800"' + "]".repeat(1100))
+          : { payload: "opaque retained 🦞 ".repeat(4096) },
+      };
+      const events = [rewriteEvents[0], rewriteEvents[1], tail];
+      const expected = [rewriteEvents[0], rewriteEvents[1], exceptional ? tail : plannedTail];
+      const next = [rewriteEvents[0], { ...(exceptional ? tail : plannedTail), parentId: "root" }];
+      const retainedIds = [tail.id];
+      await withRewriteFixture(({ db, snapshot, scope }) => {
+        const before = snapshot();
+        const beforeStats = readTranscriptStatsSync(scope);
+        if (!exceptional) {
+          expect(before.storage[2]?.event_json).toBeNull();
+          expect(before.storage[2]?.event_zstd).toBeInstanceOf(Uint8Array);
+        }
+        expect(() =>
+          runOpenClawAgentWriteTransaction((database) => {
+            replaceSqliteTranscriptSuffixInTransaction(database, scope, {
+              expectedEvents: expected,
+              nextEvents: next,
+              persistedPrefixLength: 1,
+              retainedCustomDataIds: retainedIds,
+            });
+            throw new Error("rollback retained suffix");
+          }, scope),
+        ).toThrow("rollback retained suffix");
+        expect(snapshot()).toEqual(before);
+        expect(readTranscriptStatsSync(scope)).toEqual(beforeStats);
+        replaceTranscriptSuffixForTest(scope, expected, next, 1, retainedIds);
+        const result = snapshot();
+        const retainedJson = JSON.stringify({ ...tail, parentId: "root" });
+        expect(result.raw).toEqual([
+          before.raw[0],
+          { ...before.raw[2], seq: 1, event_json: retainedJson },
+        ]);
+        expect(result.storage[1]).toMatchObject({
+          navigation_type: "custom",
+          navigation_custom_type: "openclaw.cache-ttl",
+          navigation_display: 1,
+          message_role: "toolResult",
+          navigation_last_type: "custom",
+          navigation_last_custom_type: "openclaw.cache-ttl",
+          navigation_valid: 1,
+        });
+        expect(result).toMatchObject({
+          identities: [
+            expect.objectContaining({ seq: 0 }),
+            expect.objectContaining({ seq: 1, event_id: tail.id, parent_id: "root" }),
+          ],
+          active: [
+            expect.objectContaining({ event_seq: 0 }),
+            expect.objectContaining({ event_seq: 1 }),
+          ],
+          search: [],
+        });
+        expect(result.generation).not.toBe(before.generation);
+        expect(readTranscriptStatsSync(scope)).toMatchObject({
+          eventCount: 2,
+          sizeBytes: Buffer.byteLength(`${JSON.stringify(rewriteEvents[0])}\n${retainedJson}`),
+        });
+        expect(sessionTranscriptIndexNeedsReconcile(db, scope.sessionId)).toBe(false);
+      }, events);
+    },
+  );
 
   it.each([
     {

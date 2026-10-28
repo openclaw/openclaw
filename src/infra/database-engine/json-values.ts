@@ -7,6 +7,7 @@ import {
   type RawBuilder,
   type ShallowDehydrateObject,
   type Simplify,
+  type SqlBool,
 } from "kysely";
 import {
   jsonArrayFrom as sqliteJsonArrayFrom,
@@ -170,6 +171,16 @@ export function jsonValid(db: DatabaseSync | PostgresSqlConnection, value: Expre
   return isPostgresSqlConnection(db)
     ? /* kysely-allow-raw: PostgreSQL 16+ validates JSON without raising a parse error. */ sql`pg_input_is_valid(${value}, 'json')`
     : /* kysely-allow-raw: Keep SQLite validation unchanged. */ sql`json_valid(${value})`;
+}
+
+/** Native field decoding is stricter than JSON syntax on PostgreSQL. */
+export function jsonNativeFieldsValid(
+  db: DatabaseSync | PostgresSqlConnection,
+  value: Expression<unknown>,
+): RawBuilder<SqlBool> {
+  return isPostgresSqlConnection(db)
+    ? /* kysely-allow-raw: fence JSONB-invalid escaped NUL and unmatched surrogates. */ sql<SqlBool>`coalesce(pg_input_is_valid(${value}, 'jsonb'), false)`
+    : /* kysely-allow-raw: SQLite JSON functions share this syntax/depth boundary. */ sql<SqlBool>`coalesce(json_valid(${value}), 0)`;
 }
 
 export function jsonType(db: DatabaseSync | PostgresSqlConnection, value: Expression<unknown>) {
