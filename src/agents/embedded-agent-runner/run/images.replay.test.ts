@@ -105,6 +105,43 @@ describe("structured prompt media replay", () => {
     ]);
   });
 
+  it("keeps a resized inline image on later requests in the same turn", async () => {
+    const oversized = createSolidPngBuffer(40, 100, { r: 200, g: 10, b: 10 });
+    const imagePath = await writeImage(workspaceDir, "shot.png", oversized);
+    // Chat ingress keeps a resized inline copy that still exceeds the model limit.
+    const message = {
+      role: "user",
+      content: [{ type: "text", text: "inspect" }, image(oversized.toString("base64"))],
+      idempotencyKey: "resized-inline:user",
+      __openclaw: {
+        media: mediaAt(imagePath),
+        mediaImageLayout: layout([{ kind: "inline", factIndex: 0 }]),
+      },
+    } as unknown as AgentMessage;
+    const failures: number[] = [];
+    const sessionOptions = {
+      ...options(),
+      maxDimensionPx: 50,
+      imageSessionKey: promptImageSessionKey({ sessionId: "resized", workspaceDir }),
+      onCurrentTurnImageFailure: (count: number) => failures.push(count),
+    };
+    const request = async () => {
+      // Each model request hydrates the unmodified session message again.
+      const hydrated = await hydratePromptMediaMessages([structuredClone(message)], sessionOptions);
+      return await materializeProviderContext({
+        ...sessionOptions,
+        context: { messages: convertToLlm(hydrated) },
+      });
+    };
+
+    const first = await request();
+    const second = await request();
+
+    expect(first.messages[0]?.content).toContainEqual(expect.objectContaining({ type: "image" }));
+    expect(second.messages[0]).toEqual(first.messages[0]);
+    expect(failures).toEqual([]);
+  });
+
   it.each`
     name                                                                               | params                                                                                                                                                                                                                                                                               | expected
     ${"attributes a suppressed-plus-inline sanitization failure to the inline fact"}   | ${{ media: suppressedInlineImageFacts(), existingImages: [image("%%%")], imageOrder: ["inline"] }}                                                                                                                                                                                   | ${{ loadedCount: 0, failedMediaCount: 1, images: [], imageFactIndexes: [] }}
