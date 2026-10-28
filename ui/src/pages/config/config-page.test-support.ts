@@ -132,10 +132,12 @@ export function completeConfigContext(context: ApplicationContext): ApplicationC
     context.theme,
     context.overlays,
     context.webPush,
+    context.nativeNotifications,
+    context.nativeDeviceSettings,
     context.runtimeConfig,
     context.router,
   ]) {
-    observeFixture(source);
+    if (source) observeFixture(source);
   }
   Object.assign(context.router, {
     getState:
