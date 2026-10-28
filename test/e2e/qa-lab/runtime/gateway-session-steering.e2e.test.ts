@@ -159,9 +159,14 @@ describe("session input lifecycle", () => {
         expect(session.chatStates(runId).at(-1)).toBe("aborted");
       }
       expect(session.requests()).toHaveLength(1);
+      expect(session.executedRuns()).toEqual([original.runId]);
       const history = await session.history();
       expect(roleTexts(history, "assistant")).toEqual([]);
-      expect(history.pendingInputs).toMatchObject({ total: 0 });
+      expect(history.pendingInputs).toMatchObject({
+        total: 1,
+        queuedCount: 0,
+        items: [{ runId: queued.runId, state: "cancelled" }],
+      });
     },
   );
 
