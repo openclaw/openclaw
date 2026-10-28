@@ -93,6 +93,12 @@ export type ScribeSnapshot = {
  */
 export type PluginReadiness = "missing" | "disabled" | "needs-sign-in" | "ready";
 
+/** Readiness of the plugin `scribe` needs; undefined when it needs none or it was not read. */
+export const neededPluginState = (
+  scribe: ScribeDefinition,
+  detection: ScribeDetection,
+): PluginReadiness | undefined => scribe.plugin && detection.plugins?.[scribe.plugin.id];
+
 /** Cheap facts for the Available rows. Absent fields could not be read. */
 export type ScribeDetection = {
   activeConversations?: number;

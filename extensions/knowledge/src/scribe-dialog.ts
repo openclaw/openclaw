@@ -19,8 +19,9 @@ import {
   type ScribeId,
   type ScribeMode,
   type ScribeOptions,
+  type ScribePlugin,
 } from "./scribes-catalog.js";
-import type { PluginReadiness, ScribeDetection } from "./scribes-state.js";
+import { neededPluginState, type PluginReadiness, type ScribeDetection } from "./scribes-state.js";
 import { icon } from "./ui-icons.js";
 
 /** What the start dialog needs from the page. */
@@ -30,10 +31,8 @@ export type StartDialogInput = {
   storeName: string;
   detection: ScribeDetection;
   canWrite: boolean;
-  /** Control that opens the Plugins page to fix a needed plugin that is not ready. */
-  pluginButton?: (readiness: Exclude<PluginReadiness, "ready">) => HTMLElement;
-  /** One line describing a needed plugin's readiness. */
-  pluginText?: (readiness: PluginReadiness) => string;
+  /** The Control UI's base path, for links to the Plugins page. */
+  basePath: string;
   /** Starts the scribe with the prompt shown; a rejection keeps the dialog open with the error. */
   start: (prompt: string) => Promise<void>;
 };
@@ -44,6 +43,42 @@ export function scribeTile(scribe: ScribeDefinition, size = 36) {
   tile.style.setProperty("--tile-size", `${size}px`);
   tile.append(icon(scribe.icon, size >= 36 ? 18 : 15));
   return tile;
+}
+
+// What a needed plugin's readiness means, in the page's words.
+const PLUGIN_STATE: Record<PluginReadiness, (name: string) => string> = {
+  missing: (name) => `Needs the ${name} plugin, which is not installed`,
+  disabled: (name) => `Needs the ${name} plugin, which is turned off`,
+  "needs-sign-in": (name) => `${name} plugin installed, not connected to your ${name} account`,
+  ready: (name) => `${name} connected`,
+};
+/** One line for a needed plugin's readiness. */
+export const pluginStateText = (plugin: ScribePlugin, readiness: PluginReadiness) =>
+  PLUGIN_STATE[readiness](plugin.name);
+
+// The control that fixes a needed plugin, by readiness; a ready plugin needs none.
+const PLUGIN_ACTION: Record<Exclude<PluginReadiness, "ready">, (name: string) => string> = {
+  missing: (name) => `Install ${name}…`,
+  disabled: (name) => `Turn on ${name}…`,
+  "needs-sign-in": (name) => `Connect ${name}…`,
+};
+
+/**
+ * Button that opens the plugin's page under Plugins, where it is installed, turned on and signed
+ * in to. It leaves the Knowledge page; the Scribes tab reads the new state when it loads again.
+ */
+export function pluginButton(
+  basePath: string,
+  plugin: ScribePlugin,
+  readiness: Exclude<PluginReadiness, "ready">,
+  className = "knowledge-button knowledge-primary knowledge-small",
+) {
+  const href = `${basePath}/plugins/${plugin.catalogPath}`;
+  return button(
+    PLUGIN_ACTION[readiness](plugin.name),
+    () => window.location.assign(href),
+    className,
+  );
 }
 
 const count = (n: number, one: string, many = `${one}s`) =>
@@ -287,22 +322,23 @@ function granolaFields(changed: () => void) {
  * the scribe needs no plugin or its state could not be read.
  */
 function pluginNotice(input: StartDialogInput) {
-  const { scribe, detection } = input;
-  const readiness = scribe.plugin && detection.plugins?.[scribe.plugin.id];
-  if (!scribe.plugin || !readiness || !input.pluginText) {
+  const { scribe } = input;
+  const readiness = neededPluginState(scribe, input.detection);
+  if (!scribe.plugin || !readiness) {
     return undefined;
   }
-  const notice = el("div", undefined, "knowledge-effect scribe-plugin-notice");
+  const state = pluginStateText(scribe.plugin, readiness);
+  const notice = el("div", undefined, "knowledge-effect");
   notice.append(
     el(
       "p",
       readiness === "ready"
-        ? `${input.pluginText(readiness)}. The scribe reads your meetings through the ${scribe.plugin.name} plugin.`
-        : `${input.pluginText(readiness)}. The scribe reads your meetings through it, so connect it first.`,
+        ? `${state}. This scribe reads through the ${scribe.plugin.name} plugin.`
+        : `${state}. Connect it before starting this scribe.`,
     ),
   );
-  if (readiness !== "ready" && input.pluginButton) {
-    notice.append(input.pluginButton(readiness));
+  if (readiness !== "ready") {
+    notice.append(pluginButton(input.basePath, scribe.plugin, readiness));
   }
   return { node: notice, ready: readiness === "ready" };
 }

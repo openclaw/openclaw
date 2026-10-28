@@ -1,7 +1,13 @@
 /** The Scribes tab: the list of scribes grouped by state, and one scribe's detail and controls. */
 import type { Page } from "./page-context.js";
 import { button, chip, clock, el } from "./page-dom.js";
-import { openConfirmDialog, openStartDialog, scribeTile } from "./scribe-dialog.js";
+import {
+  openConfirmDialog,
+  openStartDialog,
+  pluginButton,
+  pluginStateText,
+  scribeTile,
+} from "./scribe-dialog.js";
 import {
   repairScribe,
   runScribeNow,
@@ -9,14 +15,14 @@ import {
   startScribe,
   turnOffScribe,
 } from "./scribes-actions.js";
-import { scribeById, scribeLabel, type ScribeDefinition } from "./scribes-catalog.js";
+import { scribeById, scribeLabel } from "./scribes-catalog.js";
 import {
   detectSources,
   loadRuns,
   loadScribes,
+  neededPluginState,
   statusFromText,
   type ScribeDetection,
-  type PluginReadiness,
   type ScribeJob,
   type ScribeRun,
   type ScribeSnapshot,
@@ -156,11 +162,11 @@ function detectionMeta(snapshot: ScribeSnapshot, detection: ScribeDetection, age
   const { scribe } = snapshot;
   const meta = el("span", undefined, "scribe-meta");
   const { activeConversations: active, archivedConversations: archived, memoryFile } = detection;
-  const readiness = scribe.plugin && detection.plugins?.[scribe.plugin.id];
+  const readiness = neededPluginState(scribe, detection);
   if (snapshot.status === "done" && snapshot.result) {
     meta.append(el("span", `Done · ${snapshot.result.summary}`));
   } else if (scribe.plugin && readiness) {
-    meta.append(el("span", pluginStateText(scribe.plugin.name, readiness)));
+    meta.append(el("span", pluginStateText(scribe.plugin, readiness)));
   } else if (scribe.id === "conversations" && (active !== undefined || archived !== undefined)) {
     const counts = [
       active === undefined ? "" : `${active.toLocaleString()} active`,
@@ -179,42 +185,6 @@ function detectionMeta(snapshot: ScribeSnapshot, detection: ScribeDetection, age
   }
   meta.append(chip(scribe.cadence));
   return meta;
-}
-
-// What a needed plugin's readiness means, in the page's words.
-const PLUGIN_STATE: Record<PluginReadiness, (name: string) => string> = {
-  missing: (name) => `Needs the ${name} plugin, which is not installed`,
-  disabled: (name) => `Needs the ${name} plugin, which is turned off`,
-  "needs-sign-in": (name) => `${name} plugin installed, not connected to your ${name} account`,
-  ready: (name) => `${name} connected`,
-};
-/** One line for a needed plugin's readiness. */
-export const pluginStateText = (name: string, readiness: PluginReadiness) =>
-  PLUGIN_STATE[readiness](name);
-
-// The control that fixes a needed plugin, by readiness; a ready plugin needs none.
-const PLUGIN_ACTION: Record<Exclude<PluginReadiness, "ready">, (name: string) => string> = {
-  missing: (name) => `Install ${name}…`,
-  disabled: (name) => `Turn on ${name}…`,
-  "needs-sign-in": (name) => `Connect ${name}…`,
-};
-
-/**
- * Button that opens the plugin's page on the Plugins page, where it is installed, turned on and
- * signed in to. It leaves the Knowledge page; the Scribes tab reads the new state when it loads.
- */
-export function pluginButton(
-  ui: Page,
-  plugin: NonNullable<ScribeDefinition["plugin"]>,
-  readiness: Exclude<PluginReadiness, "ready">,
-  className = "knowledge-button knowledge-primary knowledge-small",
-) {
-  const href = `${ui.s.context.host.basePath}/plugins/${plugin.catalogPath}`;
-  return button(
-    PLUGIN_ACTION[readiness](plugin.name),
-    () => window.location.assign(href),
-    className,
-  );
 }
 
 /** Load the Scribes tab for the viewed agent: the list, or one scribe's detail. */
@@ -310,12 +280,7 @@ function start(ui: Page, snapshot: ScribeSnapshot, detection: ScribeDetection) {
     storeName,
     detection,
     canWrite: host.connection.canWrite,
-    ...(snapshot.scribe.plugin && {
-      pluginButton: (readiness: Exclude<PluginReadiness, "ready">) =>
-        pluginButton(ui, snapshot.scribe.plugin!, readiness),
-      pluginText: (readiness: PluginReadiness) =>
-        pluginStateText(snapshot.scribe.plugin!.name, readiness),
-    }),
+    basePath: host.basePath,
     start: async (prompt) => {
       await startScribe(host, snapshot, agentId, prompt, attempt);
       ui.announce(`Started ${scribeLabel(snapshot.scribe)}.`);
@@ -413,10 +378,10 @@ function availableRow(
     );
   }
   // A needed plugin that is not ready comes first: the scribe can't start until it is.
-  const readiness = scribe.plugin && detection.plugins?.[scribe.plugin.id];
-  const blocked = scribe.plugin && readiness && readiness !== "ready" ? readiness : undefined;
+  const readiness = neededPluginState(scribe, detection);
+  const blocked = readiness && readiness !== "ready" ? readiness : undefined;
   if (scribe.plugin && blocked) {
-    actions.append(pluginButton(ui, scribe.plugin, blocked));
+    actions.append(pluginButton(ui.s.context.host.basePath, scribe.plugin, blocked));
   }
   const startButton = button(
     scribe.startLabel,
@@ -633,12 +598,14 @@ function detail(ui: Page, snapshot: ScribeSnapshot, runs: ScribeRun[], detection
     ["Store", storeName],
   );
   facts.push(["Follows", `${scribe.skill} skill · ships with Knowledge`]);
-  const readiness = scribe.plugin && detection.plugins?.[scribe.plugin.id];
+  const readiness = neededPluginState(scribe, detection);
   if (scribe.plugin && readiness) {
     const value = el("span", undefined, "scribe-status");
-    value.append(el("span", pluginStateText(scribe.plugin.name, readiness)));
+    value.append(el("span", pluginStateText(scribe.plugin, readiness)));
     if (readiness !== "ready") {
-      value.append(pluginButton(ui, scribe.plugin, readiness, "knowledge-quiet knowledge-small"));
+      value.append(
+        pluginButton(host.basePath, scribe.plugin, readiness, "knowledge-quiet knowledge-small"),
+      );
     }
     facts.push(["Source", value]);
   }

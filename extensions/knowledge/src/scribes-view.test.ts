@@ -189,7 +189,9 @@ it("starts the Granola scribe once the plugin is connected", async () => {
   expect(setUp.disabled).toBe(false);
   setUp.click();
   const dialog = page.querySelector("dialog")!;
-  expect(dialog.textContent).toContain("Granola connected. The scribe reads your meetings");
+  expect(dialog.textContent).toContain(
+    "Granola connected. This scribe reads through the Granola plugin.",
+  );
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   expect(dialog.querySelector("textarea")!.value).toBe(
     setupPrompt(scribeSetup("granola", "ongoing", defaultOptions("granola"), timezone)),
