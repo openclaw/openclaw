@@ -32,7 +32,15 @@ openclaw-assistant-panel {
 }
 
 .assistant-panel--right {
-  top: var(--shell-topbar-height, 0);
+  /* Keep narrow headers intact below right-hand caption controls. A zero caption
+     width preserves the original position on the web, macOS, and in fullscreen. */
+  top: max(
+    var(--shell-topbar-height, 0px),
+    min(
+      var(--openclaw-native-window-controls-width, 0px),
+      var(--openclaw-native-titlebar-height, 0px)
+    )
+  );
 }
 
 .assistant-panel-resizer {

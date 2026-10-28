@@ -1,7 +1,9 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
+import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   dockChatSidePanel,
   focusChatSidePanel,
@@ -423,6 +425,117 @@ async function alignsNativeHeaders(
 }
 
 suite.define(() => {
+  it("keeps the Home / Ask OpenClaw assistant actions clear of Linux window controls", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const actions = await installWindowChrome(page, "linux");
+      const workKey = "agent:main:assistant-titlebar";
+      await installMockGateway(page, {
+        sessionKey: workKey,
+        sessions: [workKey, "agent:main:main"].map((key) => ({
+          key,
+          kind: "direct",
+          label: key === workKey ? "Workspace" : "Home",
+          updatedAt: 1,
+        })),
+        featureMethods: [
+          "chat.metadata",
+          "chat.startup",
+          "chat.history",
+          "chat.send",
+          "openclaw.chat",
+          "openclaw.chat.history",
+        ],
+        methodResponses: { "openclaw.chat.history": { turns: [] } },
+      });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, workKey));
+      const home = page.locator(".sidebar-footer-bar__home");
+      const panel = page.locator(".assistant-panel");
+      const header = panel.locator(".assistant-panel-header");
+      const close = namedButton(panel, "Close assistant sidebar");
+      const caption = page.locator(".openclaw-window-controls");
+      const maximize = caption.locator('[data-action="toggle-maximize"]');
+      await home.click();
+      await namedButton(panel, "Home").waitFor();
+      await namedButton(page.locator(".shell-chrome-controls"), "Expand sidebar").click();
+      await attribute(page.locator(".shell"), "class").not.toContain("shell--nav-collapsed");
+      await attribute(page.locator(".shell"), "class").not.toContain("shell--mobile-nav");
+      await attribute(panel, "class").toContain("assistant-panel--right");
+      await maximize.click();
+      await attribute(maximize, "aria-label").toBe("Restore window");
+      const frame = await takeControlUiScreenshotFrame(page, panel, [header, close, caption], {
+        animations: "disabled",
+        elements: [header],
+      });
+      writeFileSync(path.join(suite.artifactDir, "linux-assistant-right.png"), frame.png);
+
+      const assertClear = async () => {
+        const captionBounds = (await caption.boundingBox())!;
+        for (const button of await header.locator("button").all()) {
+          const bounds = (await button.boundingBox())!;
+          expect(
+            bounds.y >= captionBounds.y + captionBounds.height ||
+              bounds.x + bounds.width <= captionBounds.x,
+            "assistant-panel-caption-clearance",
+          ).toBe(true);
+          await button.click({ trial: true });
+        }
+      };
+      await assertClear();
+      for (const restored of [true, false]) {
+        await maximize.click();
+        await attribute(maximize, "aria-label").toBe(
+          restored ? "Maximize window" : "Restore window",
+        );
+        await assertClear();
+        await namedButton(panel, "Ask OpenClaw").click();
+        await close.click();
+        await panel.waitFor({ state: "hidden" });
+        expect(await actions()).not.toContain("close");
+        await home.click();
+        await namedButton(panel, "Home").waitFor();
+        await namedButton(page.locator(".shell-chrome-controls"), "Expand sidebar").click();
+        await assertClear();
+      }
+      const divider = page.getByRole("separator", {
+        name: "Resize assistant sidebar",
+        exact: true,
+      });
+      const resizeBounds = (await divider.boundingBox())!;
+      const centerX = resizeBounds.x + resizeBounds.width / 2;
+      const centerY = resizeBounds.y + resizeBounds.height / 2;
+      await page.mouse.move(centerX, centerY);
+      await page.mouse.down();
+      await page.mouse.move(centerX + 200, centerY, { steps: 4 });
+      await page.mouse.up();
+      await expect.poll(async () => (await panel.boundingBox())!.width).toBe(320);
+      const firstAction = (await header.locator(".assistant-panel-actions").boundingBox())!;
+      for (const tab of await header.locator(".assistant-panel-tab").all()) {
+        const bounds = (await tab.boundingBox())!;
+        expect(bounds.x + bounds.width).toBeLessThanOrEqual(firstAction.x);
+      }
+      await assertClear();
+      await namedButton(panel, "Dock assistant sidebar at bottom").click();
+      await attribute(panel, "class").toContain("assistant-panel--bottom");
+      expect(await header.evaluate((element) => getComputedStyle(element).paddingRight)).toBe(
+        "8px",
+      );
+      await assertClear();
+      await namedButton(panel, "Dock assistant sidebar at right").click();
+      await page.setViewportSize({ width: 560, height: 900 });
+      await attribute(page.locator(".shell"), "class").toContain("shell--mobile-nav");
+      expect(await header.evaluate((element) => getComputedStyle(element).paddingRight)).toBe(
+        "8px",
+      );
+      await assertClear();
+      await close.click();
+      await panel.waitFor({ state: "hidden" });
+      expect(await actions()).not.toContain("close");
+      await namedButton(caption, "Minimize window").click();
+      await namedButton(caption, "Close window").click();
+      expect((await actions()).slice(-2)).toEqual(["minimize", "close"]);
+    });
+  });
+
   it.each(["linux", "windows", "macos"] as const)(
     "keeps the native %s frame when a dashboard does not advertise shared chrome",
     (platform) =>
