@@ -2,6 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { createCronTool } from "../../agents/tools/cron-tool.js";
+import { withCronManagementCaller } from "../../agents/tools/cron-tool.management.test-support.js";
+import { getGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
+import * as gatewayModule from "../../agents/tools/gateway.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
@@ -29,6 +33,7 @@ import {
 import {
   expectCronReply as expectReply,
   expectCronFailure as expectError,
+  requireRecord,
 } from "./cron.validation.test-support.js";
 import {
   disposeSessionReadContexts,
@@ -194,6 +199,62 @@ async function withCronHistory(
 }
 
 describe("cron.runs session visibility", () => {
+  it("lets an admitted manager inspect a foreign automation and its stored run history", () =>
+    withCronHistory(async ({ foreignJobId, query, owner }) => {
+      await withCronManagementCaller(
+        "history-management-run",
+        async (identity) => {
+          using _ = vi
+            .spyOn(gatewayModule, "callGatewayTool")
+            .mockImplementation(async <T>(method: string, _options: unknown, params: unknown) => {
+              if (method !== "cron.get" && method !== "cron.runs") {
+                throw new Error(`Unexpected history inspection method: ${method}`);
+              }
+              const respond = await query(
+                requireRecord(params, "automation history request"),
+                {
+                  ...owner,
+                  internal: {
+                    agentRuntimeIdentity: { ...identity, ...getGatewayToolCallerIdentity() },
+                  },
+                },
+                method,
+              );
+              const [ok, result, error] = expectDefined(respond.mock.calls[0], "history response");
+              if (!ok) {
+                throw new Error(error?.message);
+              }
+              return result as T;
+            });
+          const tool = createCronTool({
+            runId: identity.operationalRunInstance.runId,
+            agentSessionKey: identity.sessionKey,
+          });
+          expect(
+            (await tool.execute("inspect-job", { action: "get", jobId: foreignJobId })).details,
+          ).toMatchObject({ id: foreignJobId });
+          expect(
+            (await tool.execute("inspect-runs", { action: "runs", jobId: foreignJobId })).details,
+          ).toMatchObject({
+            total: 1,
+            entries: [
+              {
+                jobId: foreignJobId,
+                runId: "history-run-5",
+                status: "error",
+                summary: "needle foreign job",
+              },
+            ],
+          });
+          const scopedTool = createCronTool({ agentSessionKey: identity.sessionKey });
+          await expect(
+            scopedTool.execute("scoped-history", { action: "runs", jobId: foreignJobId }),
+          ).rejects.toThrow("Automation not found");
+        },
+        "channel-owner",
+      );
+    }));
+
   it.each([true, false])(
     "keeps retained deleted-main visibility ahead of replacement-agent aliases (visible: %s)",
     (visible) =>

@@ -209,7 +209,7 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
         !CRON_MANAGEMENT_METHODS.some((method) => method === `cron.${action}`)
       ) {
         throw new Error(
-          "This turn can only list, get, update, run, remove, or bind automations. Use the Automations page for other actions.",
+          "This turn can only list, inspect, update, run, remove, or bind existing automations. Use the Automations page for other actions.",
         );
       }
       assertCronSelfRemoveScope(opts, action, params);
