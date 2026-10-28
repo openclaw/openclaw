@@ -106,6 +106,11 @@ Outbound `initiate_call`, `voicecall.initiate`, and the CLI accept an optional
 `brief`. It applies only to that call and reaches both the voice model and its
 agent consult. The opening `message` stays the first verbatim spoken line.
 
+For task-oriented conversations, supply `brief.task` with the ongoing goal; the
+opening `message` alone is not a substitute for the brief. For example, use
+`message: "Hello, I'd like to ask about a reservation."` with
+`brief: { task: "Ask whether a table for two is available Friday at 7 PM." }`.
+
 Every brief field is optional:
 
 | Field                | Meaning                                                                            |

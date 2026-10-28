@@ -2,7 +2,13 @@ import { Type } from "typebox";
 
 const VoiceCallBriefToolSchema = Type.Object(
   {
-    task: Type.Optional(Type.String({ maxLength: 2000 })),
+    task: Type.Optional(
+      Type.String({
+        maxLength: 2000,
+        description:
+          "Ongoing goal for the conversation, such as requesting a reservation. Supply this for task-oriented calls; the opening message is not a substitute.",
+      }),
+    ),
     context: Type.Optional(Type.String({ maxLength: 4000 })),
     language: Type.Optional(Type.String({ maxLength: 100 })),
     identity: Type.Optional(
@@ -25,7 +31,11 @@ const VoiceCallBriefToolSchema = Type.Object(
     successCriteria: Type.Optional(Type.String({ maxLength: 1000 })),
     maxDurationSeconds: Type.Optional(Type.Integer({ minimum: 1 })),
   },
-  { additionalProperties: false },
+  {
+    additionalProperties: false,
+    description:
+      "Per-call task, facts, and owner permissions retained throughout the conversation and supplied to both the realtime voice model and its agent consult.",
+  },
 );
 
 export const VoiceCallToolSchema = Type.Union([
@@ -33,7 +43,10 @@ export const VoiceCallToolSchema = Type.Union([
     action: Type.Literal("initiate_call"),
     brief: Type.Optional(VoiceCallBriefToolSchema),
     to: Type.Optional(Type.String({ description: "Call target" })),
-    message: Type.String({ description: "Intro message" }),
+    message: Type.String({
+      description:
+        "First verbatim spoken line when the call connects. Put the ongoing conversation goal in brief.task, not only in this opening message.",
+    }),
     mode: Type.Optional(Type.Union([Type.Literal("notify"), Type.Literal("conversation")])),
     sessionKey: Type.Optional(Type.String({ description: "OpenClaw session key for the call" })),
     dtmfSequence: Type.Optional(Type.String({ description: "DTMF digits to play before connect" })),
