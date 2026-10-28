@@ -1,3 +1,5 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { findTranscriptEvent } from "../../config/sessions/session-accessor.js";
 import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { sessionMatchesExpectedTranscriptTurn } from "../../config/sessions/session-transcript-turn-state.js";
 import {
@@ -6,8 +8,14 @@ import {
   type SessionTranscriptTargetBinding,
 } from "../../config/sessions/transcript-target-binding.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions/transcript.js";
+import {
+  attachManagedOutgoingMediaToMessage,
+  createManagedOutgoingMediaBlocks,
+  removeManagedOutgoingMediaBlocks,
+} from "../../gateway/managed-image-attachments.js";
 import type { SessionDeliveryRequesterBinding } from "../../infra/session-delivery-queue.records.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { readAssistantDisplayContent } from "../../shared/assistant-display-content.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { RequiredCompletionTerminalResult } from "../completion-result.js";
 import {
@@ -89,24 +97,118 @@ export async function retainBlockedMediaCompletion(params: {
     }
   };
   assertCurrent();
-  const result = await appendAssistantMessageToSessionTranscript({
-    agentId: target.agentId,
-    sessionKey: target.sessionKey,
-    storePath: target.storePath,
-    expectedSessionId: target.sessionId,
-    expectedLifecycleRevision: target.lifecycleRevision,
-    idempotencyKey: `media-completion-retained:${handle.runId}`,
-    assertCurrent,
-    text: "Generated media is ready, but completion delivery was not confirmed. The saved media is retained here.",
-    mediaUrls: Array.from(
-      new Set([
-        ...(params.mediaUrls ?? []),
-        ...mediaUrlsFromGeneratedAttachments(params.attachments),
-      ]),
-    ),
+  const fallbackText =
+    "Generated media is ready, but completion delivery was not confirmed. The saved media is retained here.";
+  const idempotencyKey = `media-completion-retained:${handle.runId}`;
+  const existing = await findTranscriptEvent(target, {
+    kind: "idempotency",
+    key: idempotencyKey,
+    assistant: true,
   });
-  if (!result.ok) {
-    throw new Error(`Could not retain generated media in the original session: ${result.reason}`);
+  if (existing) {
+    assertCurrent();
+    const event = existing.event;
+    const message = isRecord(event) && isRecord(event.message) ? event.message : undefined;
+    const displayContent = readAssistantDisplayContent(message);
+    const hasImage = displayContent.some((block) => block.type === "image");
+    if (hasImage) {
+      const messageId = isRecord(event) && typeof event.id === "string" ? event.id.trim() : "";
+      if (
+        !messageId ||
+        !(await attachManagedOutgoingMediaToMessage({ messageId, blocks: displayContent }))
+      ) {
+        throw new Error("Could not reconcile retained generated image ownership");
+      }
+      assertCurrent();
+    }
+    return;
+  }
+  assertCurrent();
+  const mediaUrls = Array.from(
+    new Set([
+      ...(params.mediaUrls ?? []),
+      ...mediaUrlsFromGeneratedAttachments(params.attachments),
+    ]),
+  );
+  const imageItems = (params.attachments ?? []).flatMap((attachment) => {
+    const isImage =
+      attachment.type === "image" ||
+      (attachment.type === undefined && attachment.mimeType?.toLowerCase().startsWith("image/"));
+    if (!isImage) {
+      return [];
+    }
+    const url = attachment.path ?? attachment.url ?? attachment.mediaUrl ?? attachment.filePath;
+    return url
+      ? [
+          {
+            url,
+            trustedLocal: false,
+            ...(attachment.name ? { filename: attachment.name } : {}),
+            ...(attachment.mimeType ? { mimeType: attachment.mimeType } : {}),
+          },
+        ]
+      : [];
+  });
+  let displayMedia: Record<string, unknown>[] = [];
+  if (imageItems.length > 0) {
+    try {
+      displayMedia = await createManagedOutgoingMediaBlocks({
+        sessionKey: target.sessionKey,
+        agentId: target.agentId,
+        items: imageItems,
+        continueOnPrepareError: true,
+        onPrepareError: (error) => {
+          log.warn("A generated image could not be prepared for retained completion", {
+            runId: handle.runId,
+            error,
+          });
+        },
+        assertCurrent,
+      });
+    } catch (error) {
+      assertCurrent();
+      log.warn("Blocked media completion could not prepare retained images", {
+        runId: handle.runId,
+        error,
+      });
+    }
+  }
+
+  let transcriptCommitted = false;
+  try {
+    assertCurrent();
+    const result = await appendAssistantMessageToSessionTranscript({
+      agentId: target.agentId,
+      sessionKey: target.sessionKey,
+      storePath: target.storePath,
+      expectedSessionId: target.sessionId,
+      expectedLifecycleRevision: target.lifecycleRevision,
+      idempotencyKey,
+      assertCurrent,
+      text: fallbackText,
+      ...(displayMedia.length > 0
+        ? { displayContent: [{ type: "text", text: fallbackText }, ...displayMedia] }
+        : {}),
+      mediaUrls,
+    });
+    if (!result.ok) {
+      throw new Error(`Could not retain generated media in the original session: ${result.reason}`);
+    }
+    transcriptCommitted = true;
+    if (
+      displayMedia.some((block) => block.type === "image") &&
+      !(await attachManagedOutgoingMediaToMessage({
+        messageId: result.messageId,
+        blocks: displayMedia,
+      }))
+    ) {
+      throw new Error("Could not persist retained generated image ownership");
+    }
+    assertCurrent();
+  } finally {
+    if (!transcriptCommitted && displayMedia.length > 0) {
+      await removeManagedOutgoingMediaBlocks({ blocks: displayMedia, messageId: null });
+    }
   }
 }
 
