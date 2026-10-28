@@ -12,8 +12,9 @@ export type ChatHistoryBoundaryProps = {
   onShowEarlier: () => void;
 };
 
-// Keep every outcome the same height: the virtualizer uses this as scrollMargin.
-export const CHAT_HISTORY_BOUNDARY_HEIGHT_PX = 80;
+// Keep the original scroll margin: a taller retiring header can require a
+// negative scroll offset when a short final page arrives at the top edge.
+export const CHAT_HISTORY_BOUNDARY_HEIGHT_PX = 44;
 
 export function ChatHistoryBoundary(props: ChatHistoryBoundaryProps) {
   const unavailable = () => props.connected === false;
@@ -51,20 +52,20 @@ export function ChatHistoryBoundary(props: ChatHistoryBoundaryProps) {
         }}
       >
         <span role="status">{label()}</span>
+        <span
+          class="chat-history-boundary__status"
+          role={props.error && !blocked() ? "alert" : undefined}
+          title={props.error ?? undefined}
+        >
+          {props.error && !blocked()
+            ? t("chat.thread.earlierUnavailable")
+            : t("chat.thread.earlierHint")}
+        </span>
       </button>
       <span
         class="chat-history-boundary__line chat-history-boundary__line--trailing"
         aria-hidden="true"
       />
-      <span
-        class="chat-history-boundary__status"
-        role={props.error && !blocked() ? "alert" : undefined}
-        title={props.error ?? undefined}
-      >
-        {props.error && !blocked()
-          ? t("chat.thread.earlierUnavailable")
-          : t("chat.thread.earlierHint")}
-      </span>
     </div>
   );
 }

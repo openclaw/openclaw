@@ -749,12 +749,12 @@ openclaw-pending-session-create {
 .chat-history-boundary {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
-  grid-template-rows: 44px 16px;
+  grid-template-rows: 44px;
   overflow: hidden;
-  height: 80px;
+  height: 44px;
   align-items: center;
-  gap: 4px 10px;
-  padding: 8px;
+  gap: 10px;
+  padding: 0 8px;
   color: var(--muted);
   font-size: 12px;
   user-select: none;
@@ -791,6 +791,8 @@ openclaw-pending-session-create {
   display: inline-flex;
   min-width: 160px;
   height: 44px;
+  flex-direction: column;
+  gap: 2px;
   align-items: center;
   justify-content: center;
   padding: 0 16px;
@@ -803,8 +805,12 @@ openclaw-pending-session-create {
 }
 
 .chat-history-boundary__status {
-  grid-column: 1 / -1;
+  max-width: 100%;
   overflow: hidden;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 400;
+  line-height: 12px;
   text-align: center;
   text-overflow: ellipsis;
   white-space: nowrap;
