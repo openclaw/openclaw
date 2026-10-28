@@ -209,6 +209,7 @@ export type ExecToolDetails = {
       exitCode: number | null;
       exitSignal?: NodeJS.Signals | number | null;
       failureKind?: string;
+      message?: string;
       reason?: "not-dispatched" | "outcome-unknown" | "policy-denied" | "permission-missing";
       nodeInvokeFailure?: {
         failureCode?: string;

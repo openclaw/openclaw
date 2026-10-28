@@ -10,7 +10,7 @@ import {
   isRetryableUnadoptedChatClaim,
 } from "../../config/sessions/restart-recovery-state.js";
 import { isSessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
+import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { claimAgentRunContext, clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import {
@@ -171,8 +171,8 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
   let gatewayWorkAdmission: Awaited<ReturnType<typeof beginSessionEffect>> | undefined;
   let restartSafeAdmission: ReturnType<typeof resolveRestartSafeChatAdmission>;
   let workerGoalAdmission = false;
-  let initialSessionEntry: SessionEntry | undefined;
-  let admittedSessionEntry: SessionEntry | undefined;
+  let initialSessionEntry: InternalSessionEntry | undefined;
+  let admittedSessionEntry: InternalSessionEntry | undefined;
   let admittedSessionSettings: ReturnType<typeof captureAdmittedChatSendSessionSettings>;
   let assertInitialSkillSelection: (() => void) | undefined;
   let messageInjectionTarget: ReplyMessageInjectionTarget | undefined;

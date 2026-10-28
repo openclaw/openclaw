@@ -1,12 +1,10 @@
 import { once } from "node:events";
 import { createServer } from "node:http";
-import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel-contract";
 import { afterEach, expect, it, vi } from "vitest";
 import { type WebSocket, WebSocketServer } from "ws";
 import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
-import type { ClickClackEvent, ResolvedClickClackAccount } from "./types.js";
-
-type GatewayContext = ChannelGatewayContext<ResolvedClickClackAccount>;
+import { createGatewayContext } from "./gateway.test-support.js";
+import type { ClickClackEvent } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   handleClickClackInbound: vi.fn(),
@@ -96,27 +94,11 @@ it.each([true, false])(
       commandAuthorized: true,
     });
     const abort = new AbortController();
-    const ctx: GatewayContext = {
-      cfg: {
-        channels: {
-          clickclack: {
-            baseUrl: "https://clickclack.example",
-            apiBaseUrl: `http://127.0.0.1:${port}`,
-            token: "test-token",
-            workspace: "main",
-            reconnectMs: 5,
-            commandMenu: false,
-          },
-        },
-      } as GatewayContext["cfg"],
-      accountId: "default",
-      account: {} as ResolvedClickClackAccount,
-      runtime: {} as GatewayContext["runtime"],
-      abortSignal: abort.signal,
-      log: { warn: vi.fn(), info: vi.fn(), error: vi.fn(), debug: vi.fn() },
-      getStatus: () => ({ accountId: "default" }) as ReturnType<GatewayContext["getStatus"]>,
-      setStatus: vi.fn(),
-    };
+    const ctx = createGatewayContext(abort.signal, {
+      apiBaseUrl: `http://127.0.0.1:${port}`,
+      reconnectMs: 5,
+      commandMenu: false,
+    });
     const run = startClickClackGatewayAccount(ctx);
     try {
       // One keepalive interval passes while the first handshake is still pending.

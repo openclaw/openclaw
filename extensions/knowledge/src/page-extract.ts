@@ -1,57 +1,118 @@
 import path from "node:path";
 import { parseDocument } from "yaml";
-import { resolveLinks } from "./markdown-links.js";
+import { linkSpans, resolveLinkHref, type LinkSpan } from "./markdown-links.js";
 import type { linkTargets } from "./merge.js";
 import type { Evidence, LoadedRecord } from "./model.js";
-import { pageMentions } from "./page-budget.js";
 import { digest } from "./vault.js";
 
 type Targets = ReturnType<typeof linkTargets>;
-const resolvedIds = (body: string, at: string, targets: Targets) =>
-  new Map(
-    resolveLinks(
-      { id: "extract", title: "", path: at, body, metadata: {} },
-      targets.candidates,
-      targets.canonical,
-    ).flatMap((link) => (link.id ? [[link.href, link.id] as const] : [])),
-  );
+export type DocumentLink = LinkSpan & { id?: string; key: string };
 
-/** Distinct records the body's links resolve to when authored at `at`. */
-export const linkedIds = (body: string, at: string, targets: Targets) =>
-  new Set(resolvedIds(body, at, targets).values());
+/** Every link of one complete body, in document order, and where it leads from path `at`. */
+const documentLinks = (body: string, at: string, targets: Targets): DocumentLink[] =>
+  linkSpans(body).map((link) => {
+    const to = resolveLinkHref(link.href, at, targets.candidates, targets.canonical);
+    return Object.assign(link, {
+      id: to?.id,
+      key: to?.id ? `id:${to.id}` : `${to?.status ?? "external"}:${link.href}`,
+    });
+  });
+
+/** Where each link starting in [start, end) leads, in order. */
+const linkKeys = (links: DocumentLink[], start: number, end = Infinity) =>
+  links.filter((l) => l.start >= start && l.start < end).map((l) => l.key);
 
 /**
- * Move section text from one record path to another without changing where its
- * links lead. Relative Markdown links are rewritten for the new directory; any
- * other link that would resolve differently rejects the extraction.
+ * Section text for another record path, with the section's links as the complete source
+ * reads them. Inline relative links are rewritten for the new directory inside their parsed
+ * spans only, so code, escapes and every other byte stay as written. The caller verifies the
+ * links in the complete destination; anything else that would lead elsewhere rejects there.
  */
-export function carryLinks(text: string, from: string, to: string, targets: Targets) {
-  const original = resolvedIds(text, from, targets);
-  let carried = text;
-  const moved = resolvedIds(text, to, targets);
-  for (const [href, id] of original) {
-    const target = targets.candidates.find((r) => r.id === id);
-    if (moved.get(href) === id || href.startsWith("#wiki=") || !target) {
+export function carryLinks(
+  body: string,
+  section: { start: number; end: number },
+  from: string,
+  to: string,
+  targets: Targets,
+) {
+  const links = documentLinks(body, from, targets).filter(
+    (l) => l.start >= section.start && l.start < section.end,
+  );
+  let text = body.slice(section.start, section.end);
+  // Last link first, so earlier offsets stay valid.
+  for (const link of links.toReversed()) {
+    const target = link.id ? targets.candidates.find((r) => r.id === link.id) : undefined;
+    const destination =
+      target && link.inline && link.verbatim
+        ? /^(\s*)(<[^<>\n]*>|\S+)([\s\S]*)$/.exec(link.raw.slice(link.label.length + 3, -1))
+        : undefined;
+    if (
+      !target ||
+      !destination ||
+      resolveLinkHref(link.href, to, targets.candidates, targets.canonical)?.id === link.id
+    ) {
       continue;
     }
-    const hash = href.indexOf("#"),
-      fragment = hash === -1 ? "" : href.slice(hash);
-    const relative = path.posix.relative(path.posix.dirname(to), target.path) + fragment;
-    for (const end of [")", " "]) {
-      carried = carried.split(`](${href}${end}`).join(`](${relative}${end}`);
+    const authored = destination[2]!,
+      hash = authored.indexOf("#");
+    let href =
+      path.posix.relative(path.posix.dirname(to), target.path) +
+      (hash === -1 ? "" : authored.slice(hash).replace(/>$/, ""));
+    if (authored.startsWith("<") || /[\s()<>]/.test(href)) {
+      href = `<${href}>`;
     }
+    const at = link.start - section.start;
+    text =
+      text.slice(0, at) +
+      `[${link.label}](${destination[1]}${href}${destination[3]})` +
+      text.slice(at + link.raw.length);
   }
-  const before = new Set(original.values()),
-    after = resolvedIds(carried, to, targets);
-  const changed = [...original].filter(([, id]) => ![...after.values()].includes(id));
-  if (changed.length || [...after.values()].some((id) => !before.has(id))) {
+  return { text, links, linked: new Set(links.flatMap((l) => (l.id ? [l.id] : []))) };
+}
+
+type Page = { title: string; body: string; path: string };
+/**
+ * Check an extraction in the complete pages, against the vault as it will be read: the
+ * appended section's links lead where they did on the source, and no other link on either
+ * page changes. A reference definition left behind, or a destination that ends inside an open
+ * code block, changes the section's links even though its text arrives intact.
+ */
+export function verifyMovedLinks(
+  moved: ReturnType<typeof carryLinks>,
+  pages: { source: Page; shrunk: Page; target?: Page; landed: Page },
+  targets: Targets,
+  at: {
+    section: { start: number; end: number };
+    stubEnd: number;
+    appended: number;
+    destinationId: string;
+  },
+) {
+  const links = (page: Page) => documentLinks(page.body, page.path, targets);
+  const same = (a: string[], b: string[]) => a.join("\n") === b.join("\n");
+  const { start, end } = at.section,
+    source = links(pages.source),
+    shrunk = links(pages.shrunk),
+    landed = links(pages.landed);
+  if (
+    (pages.target && !same(linkKeys(links(pages.target), 0), linkKeys(landed, 0, at.appended))) ||
+    !same(
+      [...linkKeys(source, 0, start), ...linkKeys(source, end)],
+      [...linkKeys(shrunk, 0, start), ...linkKeys(shrunk, at.stubEnd)],
+    ) ||
+    !linkKeys(shrunk, start, at.stubEnd).includes(`id:${at.destinationId}`)
+  ) {
     throw new Error(
-      `Section links would point elsewhere on the destination: ${changed
-        .map(([href]) => (href.startsWith("#wiki=") ? decodeURIComponent(href.slice(6)) : href))
-        .join(", ")}. Link those records by ID ([[id|label]]) first. No publication accepted.`,
+      "Extraction verification failed: the move would change other links on either page. Link records by ID ([[id|label]]) and retry. No publication accepted.",
     );
   }
-  return { text: carried, linked: before };
+  const keys = linkKeys(landed, at.appended),
+    lost = moved.links.filter((l, n) => l.key !== keys[n]);
+  if (lost.length || keys.length !== moved.links.length) {
+    throw new Error(
+      `Section links would not lead to the same records on ${pages.landed.title}: ${(lost.length ? lost : moved.links).map((l) => l.raw).join(", ")}. Write them as inline links or [[id|label]] links (a reference definition elsewhere on ${pages.source.title} does not move), and make sure ${pages.landed.title} does not end inside an open code block. No publication accepted.`,
+    );
+  }
 }
 
 /** Source-page citations the section itself names by quote, retained path or filename. */
@@ -71,18 +132,19 @@ export const sameCitation = (a: Evidence, b: Evidence) =>
   a.end_line === b.end_line &&
   a.quote === b.quote;
 
-/** A claim revision whose entities move from the source page to the destination. */
+/**
+ * A claim revision with the destination page as its first entity. Its established
+ * subjects stay: whether the source page is still relevant is the agent's call, made
+ * explicitly with knowledge_annotate, not inferred from the claim's wording.
+ */
 export function relinkClaim(
   claim: LoadedRecord,
-  source: LoadedRecord,
   destinationId: string,
   change: { reason: string; actor: string; requestId: string; at: string },
 ): LoadedRecord {
   const entities = [
     destinationId,
-    ...(claim.metadata.entities ?? []).filter((e) => e !== source.id && e !== destinationId),
-    // The source stays a secondary subject only when the claim itself names it.
-    ...(pageMentions(`${claim.title}\n${claim.body}`, source) ? [source.id] : []),
+    ...(claim.metadata.entities ?? []).filter((e) => e !== destinationId),
   ];
   const revision = claim.revision + 1;
   const match = /^(?:\uFEFF)?---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(claim.raw)!;

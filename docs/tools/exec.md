@@ -12,6 +12,8 @@ Gateway, sandbox, and worker-local execution support foreground and background e
 
 Completed calls return command output directly. Use `process` only when `exec` reports that a command is still running and provides a `sessionId`; an identifier printed by the command is ordinary output, not a process handle.
 
+Workdir errors and failed foreground process results on the Gateway or in its sandbox include a concise diagnostic in `message`, separate from command output in `aggregated`. Code Mode receives both fields, so it can inspect failures and recovery guidance without duplicating the command output. Ordinary completed commands keep their existing output and exit-code behavior.
+
 Headless node-host commands terminated by an operating-system signal include the signal name in the result, even when no numeric exit code is available. Output printed before termination does not mean the command succeeded.
 
 ## Host memory protection

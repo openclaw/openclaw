@@ -75,6 +75,12 @@ export function AppearancePicker(props: AppearancePickerProps) {
       }),
     );
   });
+  const noShortcutHint = () =>
+    t(
+      props.allowSvg
+        ? "sessionsView.customIconHintNoShortcut"
+        : "sessionsView.customEmojiHintNoShortcut",
+    );
   const accepted = () => {
     const normalized = normalizeSessionIconValue(props.customIconValue);
     return (
@@ -291,6 +297,7 @@ export function AppearancePicker(props: AppearancePickerProps) {
           <div class="session-menu__icon-custom-hint">
             {sessionEmojiPickerShortcut() ? (
               <ShortcutText
+                fallback={noShortcutHint()}
                 text={t(
                   props.allowSvg ? "sessionsView.customIconHint" : "sessionsView.customEmojiHint",
                   { shortcut: "{shortcut}" },
@@ -298,11 +305,7 @@ export function AppearancePicker(props: AppearancePickerProps) {
                 shortcut={() => <Kbd keys={sessionEmojiPickerShortcut()!} inline />}
               />
             ) : (
-              t(
-                props.allowSvg
-                  ? "sessionsView.customIconHintNoShortcut"
-                  : "sessionsView.customEmojiHintNoShortcut",
-              )
+              noShortcutHint()
             )}
           </div>
         </div>

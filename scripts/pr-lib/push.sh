@@ -247,24 +247,15 @@ setup_prhead_remote() {
 
 resolve_prhead_remote_sha() {
   local pr_head="$1"
-  local remote_refs remote_sha remote_status=0
+  local remote_status=0
   PRHEAD_REMOTE_SHA=""
 
-  # A transport can fail after advertising refs. Partial output must never
-  # become publication authority, and its diagnostic must stay visible.
-  remote_refs=$(pr_git ls-remote --exit-code --heads "$PRHEAD_REMOTE_URL" "refs/heads/$pr_head") || remote_status=$?
-  if [ "$remote_status" -eq 0 ]; then
-    remote_sha=$(printf '%s\n' "$remote_refs" | awk -v ref="refs/heads/$pr_head" '$2 == ref {print $1}')
-    if [ -n "$remote_sha" ]; then
-      PRHEAD_REMOTE_SHA="$remote_sha"
-      return 0
-    fi
-    remote_status=2
-  fi
+  PRHEAD_REMOTE_SHA=$(pr_remote_branch_sha "$PRHEAD_REMOTE_URL" "$pr_head") || remote_status=$?
+  [ "$remote_status" -ne 0 ] || return 0
   if [ "$remote_status" -eq 2 ]; then
     echo "Remote branch refs/heads/$pr_head not found on prhead" >&2
   else
-    echo "Unable to inspect remote branch refs/heads/$pr_head (git ls-remote exited $remote_status)" >&2
+    echo "Unable to inspect remote branch refs/heads/$pr_head (remote branch probe exited $remote_status)" >&2
   fi
   return "$remote_status"
 }

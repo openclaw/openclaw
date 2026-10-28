@@ -312,6 +312,10 @@ it("observes the exact PR branch without changing shared remotes and reports pro
       "test ! -e .local/git-calls",
       "resolve_prhead_remote_sha topic",
       `test "$PRHEAD_REMOTE_SHA" = '${f.source}'`,
+      "command git push -q origin :refs/heads/topic",
+      "if resolve_prhead_remote_sha topic; then exit 96; else status=$?; fi",
+      'test "$status" -eq 2',
+      'test -z "$PRHEAD_REMOTE_SHA"',
       "if resolve_prhead_remote_sha missing; then exit 97; else status=$?; fi",
       'test "$status" -eq 2',
       'test -z "$PRHEAD_REMOTE_SHA"',
@@ -324,13 +328,14 @@ it("observes the exact PR branch without changing shared remotes and reports pro
   expect(result.stderr).toContain("Remote branch refs/heads/missing not found on prhead");
   expect(f.read("git-calls").trim().split("\n")).toEqual([
     `ls-remote --exit-code --heads ${f.remote} refs/heads/topic`,
+    `ls-remote --exit-code --heads ${f.remote} refs/heads/topic`,
     `ls-remote --exit-code --heads ${f.remote} refs/heads/missing`,
   ]);
 });
 
-it.each([false, true])(
-  "stops conditional publication after failed advertisement (partial=%s)",
-  (partial) => {
+it.each(["empty", "partial", "parse"])(
+  "stops conditional publication after a failed %s observation",
+  (fault) => {
     const f = createPublisher();
     const prep = f.read("prep.md");
     const gates = f.read("gates.env");
@@ -345,21 +350,26 @@ it.each([false, true])(
       [
         "pr_git() {",
         '  if [ "$1" = ls-remote ]; then',
-        ...(partial ? [`    printf '%s\\t%s\\n' '${f.candidate}' refs/heads/topic`] : []),
-        "    echo fixture-transport-diagnostic >&2",
-        "    return 99",
+        ...(fault !== "empty" ? [`    printf '%s\\t%s\\n' '${f.candidate}' refs/heads/topic`] : []),
+        ...(fault === "parse"
+          ? ["    return 0"]
+          : ["    echo fixture-transport-diagnostic >&2", "    return 99"]),
         "  fi",
         '  command git "$@"',
         "}",
+        ...(fault === "parse" ? ["awk() { echo fixture-parse-diagnostic >&2; return 2; }"] : []),
         "revalidate_pr_publication() { touch .local/continued-publication; return 98; }",
         "push_prep_head_once() { touch .local/continued-publication; return 98; }",
       ],
     );
 
-    expect(result.status, result.stdout + result.stderr).toBe(99);
-    expect(result.stderr).toContain("fixture-transport-diagnostic");
+    const status = fault === "parse" ? 1 : 99;
+    expect(result.status, result.stdout + result.stderr).toBe(status);
     expect(result.stderr).toContain(
-      "Unable to inspect remote branch refs/heads/topic (git ls-remote exited 99)",
+      fault === "parse" ? "fixture-parse-diagnostic" : "fixture-transport-diagnostic",
+    );
+    expect(result.stderr).toContain(
+      `Unable to inspect remote branch refs/heads/topic (remote branch probe exited ${status})`,
     );
     expect(result.stderr).not.toContain("not found");
     expect(f.exists("continued-publication")).toBe(false);

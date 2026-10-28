@@ -5,29 +5,8 @@ import {
 } from "@aws-sdk/client-bedrock-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BedrockOptions } from "./bedrock-options.js";
+import { bedrockModel, streamEvents } from "./bedrock.test-support.js";
 import { streamSimpleBedrock } from "./stream.runtime.js";
-
-function bedrockModel(overrides: Record<string, unknown>) {
-  return {
-    api: "bedrock-converse-stream",
-    provider: "amazon-bedrock",
-    id: "amazon.nova-micro-v1:0",
-    name: "Nova Micro",
-    baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
-    reasoning: true,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 128000,
-    maxTokens: 4096,
-    ...overrides,
-  } as never;
-}
-
-async function* streamEvents(events: unknown[]) {
-  for (const event of events) {
-    yield event;
-  }
-}
 
 async function captureCommandInput(
   model: Parameters<typeof streamSimpleBedrock>[0],

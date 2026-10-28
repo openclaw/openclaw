@@ -1,3 +1,4 @@
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
@@ -13,7 +14,12 @@ import {
   bindGatewayContextResolver,
   getGatewayContextResolver,
 } from "../../../plugins/runtime/gateway-request-scope.js";
-import { beginSessionEffect } from "../../../sessions/session-controller.lifecycle.js";
+import { controllerSource } from "../../../sessions/controller-core.test-support.js";
+import {
+  beginSessionEffect,
+  captureSessionTarget,
+} from "../../../sessions/session-controller.lifecycle.js";
+import { retireSessionControllerInput } from "../../../sessions/session-controller.mailbox.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { restartRecoveryTestHarness } from "./subagent-registry-restart-recovery.test-support.js";
 import { createSubagentSweeperHarness } from "./subagent-registry-sweeper.test-support.js";
@@ -222,6 +228,53 @@ describe("subagent registry restart recovery", () => {
       expect(preparations()).toBe(retired ? 8 : 9);
     },
   );
+
+  it("retries recovery after retained source settlement rejects without an unhandled rejection", async () => {
+    vi.useFakeTimers();
+    const stale = new Error("Session reader validation is no longer current");
+    const unhandled: unknown[] = [];
+    const listener = (reason: unknown) => unhandled.push(reason);
+    const entry = run();
+    entry.execution.status = "interrupted";
+    const { sweeper, finalizeInterruptedSubagentRun } = sweeperFor(entry);
+    const lease = await beginSessionEffect({
+      scope: mocks.storePath,
+      identities: [childSessionKey, "session-id"],
+      assertAllowed() {},
+    });
+    const source = controllerSource(
+      captureSessionTarget({
+        storeScope: mocks.storePath,
+        sessionKey: childSessionKey,
+        incarnation: "session-id",
+      }),
+      {
+        adapter: {
+          onSettled() {
+            throw stale;
+          },
+        },
+      },
+    );
+    process.on("unhandledRejection", listener);
+    try {
+      await sweeper.sweepOnce();
+      expect(finalizeInterruptedSubagentRun).not.toHaveBeenCalled();
+      lease.release();
+      retireSessionControllerInput(source);
+      await expect(source.settlement.promise).rejects.toBe(stale);
+      await nextTurn();
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect.soft(unhandled).toEqual([]);
+      expect(finalizeInterruptedSubagentRun).toHaveBeenCalledOnce();
+    } finally {
+      process.off("unhandledRejection", listener);
+      await sweeper.reset();
+      lease.release();
+      retireSessionControllerInput(source);
+      vi.useRealTimers();
+    }
+  });
 
   it.each(["run", "admission", "run after admission"] as const)(
     "recovers as soon as a retained %s releases ownership",

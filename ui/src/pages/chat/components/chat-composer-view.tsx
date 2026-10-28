@@ -12,6 +12,7 @@ import { McpAppContextStrip } from "../../../components/solid/mcp-app-context-st
 import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { keyboardHintsVisible } from "../../../lib/reactive/keyboard-hints.ts";
 import { PaneSubagentStop } from "../chat-pane-header-view.tsx";
 import type { ChatComposerPlusMenuView } from "../composer-capability-types.ts";
 import "../../../styles/chat/composer-context-strip.css";
@@ -603,7 +604,9 @@ export function renderChatComposerView(
                       aria-keyshortcuts="Tab"
                       onClick={() => context().acceptPrediction()}
                     >
-                      <kbd>{t("chat.composer.predictionShortcut")}</kbd>{" "}
+                      <Show when={keyboardHintsVisible()}>
+                        <kbd>{t("chat.composer.predictionShortcut")}</kbd>{" "}
+                      </Show>
                       {t("chat.composer.usePrediction")}
                     </button>
                     <button
