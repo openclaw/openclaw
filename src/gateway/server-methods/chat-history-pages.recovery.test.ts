@@ -217,7 +217,9 @@ describe("historical page recovery context", () => {
             ok: true,
             message: expect.objectContaining({
               role: "assistant",
-              content: `${"q".repeat(500)}\n...(truncated)...`,
+              // The quoted original shares its 500-char preview budget with a tail
+              // slice so its terminal facts stay visible (Precedent: #186382).
+              content: `${"q".repeat(286)}\n...(truncated)...\n${"q".repeat(150)}`,
               __openclaw: expect.objectContaining({ id: "original", truncated: true }),
             }),
           });

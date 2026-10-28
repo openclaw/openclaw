@@ -10,6 +10,7 @@ import { getMediaDir } from "../media/store.js";
 import * as assistantDisplay from "../shared/assistant-display-content.js";
 import { readRunFailureNotice } from "../shared/run-failure-notice.js";
 import { augmentChatHistoryWithCanvasBlocks } from "./chat-display-projection.canvas.js";
+import { truncateChatHistoryText } from "./chat-display-projection.helpers.js";
 import {
   projectChatDisplayMessage,
   projectChatDisplayMessages,
@@ -275,6 +276,40 @@ describe("transcript display metadata", () => {
       expect(JSON.stringify(projected)).toContain("...(truncated)...");
       expect(projected).toHaveProperty("__openclaw", { truncated: true, reason: "display-cap" });
     }
+  });
+
+  it("shares one budget between head and tail so long messages keep terminal facts", () => {
+    const head = "HEAD_FACT_9C41 run starts here";
+    const tail = "RESULT_CODE=E_OK";
+    const long = `${head}\n${"tool observation line\n".repeat(600)}${tail}`;
+    const projected = truncateChatHistoryText(long);
+
+    expect(long.length).toBeGreaterThan(8_000);
+    expect(projected.truncated).toBe(true);
+    expect(projected.text.startsWith(head)).toBe(true);
+    expect(projected.text.endsWith(tail)).toBe(true);
+    expect(projected.text.length).toBeLessThanOrEqual(8_000);
+    const [markerHead, markerTail] = projected.text.split("\n...(truncated)...\n");
+    expect(markerHead).toContain(head);
+    expect(markerTail).toContain(tail);
+  });
+
+  it("serves reloaded assistant history with the tail's terminal facts intact", () => {
+    const head = "HEAD_FACT_9C41 run starts here";
+    const tail = "RESULT_CODE=E_OK";
+    const long = `${head}\n${"tool observation line\n".repeat(600)}${tail}`;
+    const [projected] = sanitizeChatHistoryMessages([
+      assistant(long, { __openclaw: { id: "long-tail" } }),
+    ]);
+
+    expect(projected).toHaveProperty("__openclaw.truncated", true);
+    expect(projected).toHaveProperty("content", expect.stringContaining(head));
+    expect(projected).toHaveProperty("content", expect.stringContaining(tail));
+  });
+
+  it("leaves short text unchanged under the shared display budget", () => {
+    const short = "RESULT_CODE=E_OK after a quick check";
+    expect(truncateChatHistoryText(short)).toEqual({ text: short, truncated: false });
   });
 });
 

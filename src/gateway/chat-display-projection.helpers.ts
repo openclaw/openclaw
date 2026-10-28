@@ -3,7 +3,7 @@ import {
   asOptionalObjectRecord as readObjectRecord,
   asOptionalRecord as readRecord,
 } from "@openclaw/normalization-core/record-coerce";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { isToolCallContentType, isToolResultContentType } from "../chat/tool-content.js";
 import { isMeaningfulMediaFact, readPersistedMediaFacts } from "../media/media-facts.js";
 import { isRelativeAssistantMediaReference, splitMediaOutput } from "../media/parse-output.js";
@@ -18,6 +18,17 @@ export type RoleContentMessage = {
 };
 
 export const DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS = 8_000;
+
+/** In-band display-cap sentinel shared with native and UI clients. */
+const CHAT_HISTORY_TRUNCATION_MARKER = "\n...(truncated)...";
+// Mirrors the #186382 summarizer projection: head and tail share one budget, with
+// the marker reserved inside it, so terminal facts at the end of a long message
+// survive the display cap. Budgets that cannot fund a head at least as large as the
+// retained tail keep the legacy head-only marker; splitting those would leave no
+// usable head.
+const CHAT_HISTORY_TAIL_SHARE = 0.3;
+const CHAT_HISTORY_TAIL_MAX_CHARS = 600;
+const CHAT_HISTORY_MARKER_RESERVE_CHARS = 64;
 
 /** Removes private yield inputs from a display copy without changing the source argument objects. */
 export function stripPrivateToolCallContextForDisplay(entry: Record<string, unknown>): boolean {
@@ -112,9 +123,25 @@ export function truncateChatHistoryText(
   if (text.length <= limit) {
     return { text, truncated: false };
   }
-  const prefix = truncateUtf16Safe(text, limit);
+  if (preserveExactPrefix) {
+    // Structured payload consumers parse this preview, so its prefix stays byte-exact.
+    return { text: truncateUtf16Safe(text, limit), truncated: true };
+  }
+  const tailChars = Math.min(
+    Math.floor(limit * CHAT_HISTORY_TAIL_SHARE),
+    CHAT_HISTORY_TAIL_MAX_CHARS,
+  );
+  const headBudget = limit - tailChars - CHAT_HISTORY_MARKER_RESERVE_CHARS;
+  if (headBudget < tailChars) {
+    return {
+      text: `${truncateUtf16Safe(text, limit)}${CHAT_HISTORY_TRUNCATION_MARKER}`,
+      truncated: true,
+    };
+  }
+  const head = truncateUtf16Safe(text, headBudget);
+  const tail = sliceUtf16Safe(text, -tailChars);
   return {
-    text: preserveExactPrefix ? prefix : `${prefix}\n...(truncated)...`,
+    text: `${head}${CHAT_HISTORY_TRUNCATION_MARKER}\n${tail}`,
     truncated: true,
   };
 }

@@ -538,7 +538,9 @@ it("enriches reply previews on refresh, then resumes the cursor", async () => {
     expect(message).toHaveProperty("__openclaw.replyToMessage", {
       ok: true,
       message: expect.objectContaining({
-        content: `${originalText.slice(0, 500)}\n...(truncated)...`,
+        // The quoted original shares its 500-char preview budget with a tail slice
+        // so the original's terminal facts stay visible (Precedent: #186382).
+        content: `${originalText.slice(0, 286)}\n...(truncated)...\n${originalText.slice(-150)}`,
         __openclaw: expect.objectContaining({ id: "original", truncated: true }),
       }),
     });
