@@ -56,6 +56,11 @@ export function hasHandoffToolCall(message: unknown): boolean {
   );
 }
 
+/** Handoff boundaries shape grouping but never occupy a transcript row. */
+export function isHandoffBoundaryItem(item: { kind: string; handoffBoundary?: boolean }): boolean {
+  return item.kind === "notice" && item.handoffBoundary === true;
+}
+
 /**
  * A sessions_yield acknowledgment is the agent speaking, so the projection adds
  * it as assistant text where the run handed off. These display-only facts let

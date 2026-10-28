@@ -431,6 +431,46 @@ it("keeps a failed older load blocked across a layout-induced scroll", async () 
   expect(request).toHaveBeenCalledOnce();
 });
 
+it.each(["empty", "overlapping"])(
+  "continues past an %s older page within one reader action",
+  async (kind) => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({
+        messages: kind === "empty" ? [] : [nativeHistoryMessage(3)],
+        hasMore: true,
+        nextOffset: 4,
+        totalMessages: 6,
+      })
+      .mockResolvedValueOnce({
+        messages: [nativeHistoryMessage(1), nativeHistoryMessage(2)],
+        hasMore: false,
+        totalMessages: 6,
+      });
+    const { pane, state } = createNativeShowEarlierPane(request);
+    await pane.loadOlderMessages();
+    expect(state.chatMessages.map(nativeHistorySeq)).toEqual([1, 2, 3, 4]);
+    expect(state.chatHistoryPagination.hasMore).toBe(false);
+  },
+);
+
+it("keeps a retry outcome when a tail refresh retires an earlier-history action", async () => {
+  const held = createDeferred<ChatHistoryResult>();
+  const request = vi
+    .fn()
+    .mockImplementationOnce(() => held.promise)
+    .mockResolvedValue({ ...historyPage([3, 4], { sessionId: "current" }), ...pagination(4, 2) });
+  const { pane, state } = createNativeShowEarlierPane(request);
+  const older = pane.loadOlderMessages();
+  const tail = loadChatHistory(state);
+  pane.syncHistoryObserver();
+  await tail;
+  held.resolve({ messages: historyPage().messages, hasMore: false, totalMessages: 4 });
+  await older;
+  expect(pane.history.olderError).toContain("refreshed");
+  expect(state.chatMessages.map(nativeHistorySeq)).toEqual([3, 4]);
+});
+
 it("joins an in-flight canonical load without commanding a viewport jump", async () => {
   const deferred = createDeferred<ReturnType<typeof historyPage>>();
   const request = vi.fn(() => deferred.promise);
@@ -445,17 +485,25 @@ it("joins an in-flight canonical load without commanding a viewport jump", async
   expect(scrollToOffset).not.toHaveBeenCalled();
 });
 
-it("does not apply older history to a replacement session", async () => {
-  const older = createDeferred<ChatHistoryResult>();
-  const { pane, state, scrollToOffset } = createNativeShowEarlierPane(vi.fn(() => older.promise));
-  const loading = pane.loadOlderMessages();
-  state.sessionKey = "agent:main:replacement";
-  state.chatMessages = [];
-  older.resolve({ messages: [nativeHistoryMessage(1)], hasMore: false, totalMessages: 1 });
-  await loading;
-  expect(state.chatMessages).toEqual([]);
-  expect(scrollToOffset).not.toHaveBeenCalled();
-});
+it.each(["resolved", "rejected"])(
+  "does not apply a %s older read to a replacement session",
+  async (outcome) => {
+    const older = createDeferred<ChatHistoryResult>();
+    const { pane, state, scrollToOffset } = createNativeShowEarlierPane(vi.fn(() => older.promise));
+    const loading = pane.loadOlderMessages();
+    state.sessionKey = "agent:main:replacement";
+    state.chatMessages = [];
+    if (outcome === "resolved") {
+      older.resolve({ messages: [nativeHistoryMessage(1)], hasMore: false, totalMessages: 1 });
+    } else {
+      older.reject(new Error("Obsolete history read failed"));
+    }
+    await loading;
+    expect(state.chatMessages).toEqual([]);
+    expect(pane.history.olderError).toBeNull();
+    expect(scrollToOffset).not.toHaveBeenCalled();
+  },
+);
 
 it("fills a visible history tail once the viewport can fit it", async () => {
   const { pane, state, request } = historyPane();
@@ -530,6 +578,34 @@ it("joins an in-flight prefetch instead of duplicating the request", async () =>
 
   expect(request.mock.calls.filter(([, params]) => params.offset === 4)).toHaveLength(1);
   expect(state.chatMessages.map(nativeHistorySeq)).toEqual([3, 4, 5, 6, 7, 8]);
+});
+
+it("uses the refreshed continuation when a joined prefetch becomes stale", async () => {
+  const held = createDeferred<unknown>();
+  const pages = stagedPagesRequest({
+    4: () => held.promise,
+    5: () => ({ ...historyPage([1, 2], { totalMessages: 9, sessionId: "current" }) }),
+  });
+  const request = vi.fn((method, params: { offset?: number }) =>
+    params.offset === undefined
+      ? Promise.resolve({
+          ...historyPage([7, 8, 9], { totalMessages: 9, sessionId: "current" }),
+          ...pagination(9, 5),
+        })
+      : pages(method, params),
+  );
+  const { pane, state } = createStagedPrefetchPane(request);
+  await pane.loadOlderMessages();
+  const joined = pane.loadOlderMessages();
+  await loadChatHistory(state);
+  held.resolve(historyPage([3, 4], { totalMessages: 8 }));
+  await expect(joined).resolves.toBe(true);
+  expect(state.chatMessages.map(nativeHistorySeq)).toEqual([1, 2, 7, 8, 9]);
+  expect(request).toHaveBeenLastCalledWith(
+    "chat.history",
+    olderRequest(state.sessionKey, 5),
+    expect.anything(),
+  );
 });
 
 it.each([

@@ -8,7 +8,7 @@ import {
 } from "../../api/gateway-socket.test-support.ts";
 import { GatewayBrowserClient, GatewayRequestError } from "../../api/gateway.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
-import { requestSharedHistory } from "./chat-history-request.ts";
+import { loadOlderChatHistoryPage, requestSharedHistory } from "./chat-history-request.ts";
 import { getChatHistoryLoadState, isChatHistoryRetrying } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
@@ -88,6 +88,40 @@ const requestError = (code: string, message: string, retryable: boolean, retryAf
   new GatewayRequestError({ code, message, retryable, retryAfterMs });
 
 describe("shared chat history transient recovery", () => {
+  it.each(["recover", "retire", "denied"])(
+    "settles an older read after %s without replaying stale or denied work",
+    async (outcome) => {
+      const error = requestError(
+        outcome === "denied" ? "PERMISSION_DENIED" : "UNAVAILABLE",
+        "Earlier history unavailable",
+        outcome !== "denied",
+        250,
+      );
+      const request = vi
+        .fn()
+        .mockRejectedValueOnce(error)
+        .mockResolvedValue({
+          messages: [{ role: "user", content: "Earlier prompt" }],
+          hasMore: false,
+        });
+      const state = makeChatHost({ requestHandlers: { "chat.history": request } });
+      const result = loadOlderChatHistoryPage(state, 80).catch((failure: unknown) => failure);
+      await vi.advanceTimersByTimeAsync(0);
+      if (outcome === "retire") {
+        state.sessionKey = "agent:main:replacement";
+      }
+      await vi.advanceTimersByTimeAsync(500);
+      if (outcome === "recover") {
+        expect(await result).toMatchObject({
+          messages: [{ role: "user", content: "Earlier prompt" }],
+        });
+        expect(request).toHaveBeenCalledTimes(2);
+      } else {
+        expect(await result).toBe(error);
+        expect(request).toHaveBeenCalledOnce();
+      }
+    },
+  );
   it.each([false, true])(
     "keeps manual Retry after the recovery deadline (startup=%s)",
     async (startup) => {

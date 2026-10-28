@@ -1,4 +1,7 @@
+import { writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { expect, it } from "vitest";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { newChatPage } from "./chat-flow.test-support.ts";
 import { expectHistoryBoundaryState } from "./chat-history-boundary.test-support.ts";
@@ -24,6 +27,70 @@ function historyPage(messages: unknown[], hasMore: boolean, nextOffset?: number)
 }
 
 suite.define(() => {
+  it("shows an inline retry after earlier history fails on mobile and recovers in place", async () => {
+    await suite.withPage(
+      { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true },
+      async ({ page }) => {
+        const recent = {
+          role: "assistant",
+          content:
+            "I found a better option for the report. I’m checking the details before sharing the final recommendation.",
+          __openclaw: { id: "recent", seq: 22 },
+        };
+        const gateway = await installMockGateway(page, {
+          deferredRequests: [{ method: "chat.history", match: { offset: 1 } }],
+          methodResponses: {
+            "chat.startup": historyPage([recent], true, 1),
+            "chat.history": {
+              cases: [
+                {
+                  match: { offset: 1 },
+                  response: historyPage(
+                    [
+                      {
+                        role: "user",
+                        content: "Please check the report and compare the available options.",
+                        __openclaw: { id: "earlier", seq: 1 },
+                      },
+                    ],
+                    false,
+                  ),
+                },
+              ],
+            },
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}chat`);
+        const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
+        await gateway.waitForRequest("chat.history");
+        await gateway.rejectDeferred(
+          "chat.history",
+          { code: "UNAVAILABLE", message: "The connection was interrupted. Try again." },
+          { match: { offset: 1 } },
+        );
+        await expect
+          .poll(() => pane.locator('.chat-history-boundary__action[aria-busy="true"]').count())
+          .toBe(0);
+        const frame = await takeControlUiScreenshotFrame(
+          page,
+          pane,
+          [pane.getByText(recent.content, { exact: true })],
+          { animations: "disabled" },
+        );
+        await writeFile(join(suite.artifactDir, "history-retry-mobile.png"), frame.png);
+        const retry = pane.getByRole("button", { name: "Retry earlier messages", exact: true });
+        await expect.poll(() => retry.count()).toBe(1);
+        await retry.click();
+        await pane
+          .getByText("Please check the report and compare the available options.", { exact: true })
+          .waitFor();
+        expect(await pane.locator(".chat-history-boundary").count()).toBe(0);
+        expect(await pane.getByText(recent.content, { exact: true }).count()).toBe(1);
+        expect(await gateway.getRequests("chat.history")).toHaveLength(2);
+      },
+    );
+  });
+
   it("keeps keyboard focus on the earlier-history action while older history loads", async () => {
     const page = await newChatPage(suite);
     const message = (seq: number) => ({
@@ -124,7 +191,19 @@ suite.define(() => {
             "chat.history": {
               cases: [
                 { match: { offset: 80 }, response: emptyTailPage([], 160) },
-                { match: { offset: 160 }, response: emptyTailPage(olderMessages) },
+                {
+                  match: { offset: 160 },
+                  response: emptyTailPage(
+                    [
+                      {
+                        ...hiddenActivity[0],
+                        __openclaw: { id: "older-hidden-activity", seq: 100 },
+                      },
+                    ],
+                    180,
+                  ),
+                },
+                { match: { offset: 180 }, response: emptyTailPage(olderMessages) },
               ],
             },
           },
@@ -148,6 +227,7 @@ suite.define(() => {
         expect(await gateway.getRequests("chat.history")).toMatchObject([
           { params: { offset: 80 } },
           { params: { offset: 160 } },
+          { params: { offset: 180 } },
         ]);
       });
     });
