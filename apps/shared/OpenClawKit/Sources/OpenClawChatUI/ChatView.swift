@@ -904,6 +904,13 @@ extension OpenClawChatView {
         self.messageSessionActions(for: message)
         self.listenMessageButton(for: message)
         if let outboxState = self.viewModel.outboxState(for: message.id) {
+            if self.viewModel.canSteerOutboxMessage(message.id) {
+                Button {
+                    self.viewModel.steerOutboxMessage(message.id)
+                } label: {
+                    Label("Steer", systemImage: "arrow.turn.up.right")
+                }
+            }
             if outboxState.isFailed {
                 Button {
                     self.viewModel.retryOutboxMessage(message.id)

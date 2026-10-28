@@ -3727,6 +3727,7 @@
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatView.swift","kind":"ui-call","surface":"apple","id":"native.apple.89ec22b6b9eccbb8","source":"Retry Send"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatView.swift","kind":"ui-call","surface":"apple","id":"native.apple.523c7af21d1f5343","source":"Rewind to Here"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatView.swift","kind":"ui-call","surface":"apple","id":"native.apple.f4483cba92be9484","source":"Select Text"},
+    {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatView.swift","kind":"ui-call","surface":"apple","id":"native.apple.2c9cfb27b8d652f0","source":"Steer"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatView.swift","kind":"ui-call","surface":"apple","id":"native.apple.39643c00a32a1c8e","source":"Waiting on subagents"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatView.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.1bc1c50e6c31b571","source":"Assistant"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatView.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.3aed5e06894db75b","source":"Reply"},

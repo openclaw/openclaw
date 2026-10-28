@@ -15,6 +15,7 @@ struct ChatComposerTextViewIOS: UIViewRepresentable {
     var onFocusChange: (Bool) -> Void
     var onHistoryUp: (Bool) -> Bool
     var onHistoryDown: () -> Bool
+    var onCommandReturn: () -> Bool
     /// Nil leaves paste entirely to UIKit.
     var onPasteImageAttachment: ((_ data: Data, _ fileName: String, _ mimeType: String) -> Void)?
 
@@ -61,6 +62,7 @@ struct ChatComposerTextViewIOS: UIViewRepresentable {
     private func configureInputHandlers(_ textView: ChatComposerUITextView) {
         textView.onHistoryUp = self.onHistoryUp
         textView.onHistoryDown = self.onHistoryDown
+        textView.onCommandReturn = self.onCommandReturn
         textView.onPasteImageAttachment = self.onPasteImageAttachment
     }
 
@@ -149,6 +151,7 @@ struct ChatComposerTextViewIOS: UIViewRepresentable {
 final class ChatComposerUITextView: UITextView {
     var onHistoryUp: ((Bool) -> Bool)?
     var onHistoryDown: (() -> Bool)?
+    var onCommandReturn: (() -> Bool)?
     var onPasteImageAttachment: ((_ data: Data, _ fileName: String, _ mimeType: String) -> Void)?
 
     override var accessibilityTraits: UIAccessibilityTraits {
@@ -203,8 +206,13 @@ final class ChatComposerUITextView: UITextView {
     {
         let commandModifiers: UIKeyModifierFlags = [.shift, .control, .alternate, .command]
         // UIKit owns composition and selection even while history recall is active.
+        guard self.markedTextRange == nil else { return false }
+        if modifierFlags.intersection(commandModifiers) == .command,
+           keyCode == .keyboardReturnOrEnter || keyCode == .keypadEnter
+        {
+            return self.onCommandReturn?() == true
+        }
         guard modifierFlags.isDisjoint(with: commandModifiers),
-              self.markedTextRange == nil,
               self.selectedRange.length == 0
         else { return false }
         switch keyCode {

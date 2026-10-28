@@ -794,8 +794,10 @@ actor ScriptedOutbox: OpenClawChatCommandOutbox {
         return await self.base.recoverInterruptedSends()
     }
 
-    func claimNextCommand() async -> OpenClawChatOutboxCommand? {
-        await self.base.claimNextCommand()
+    func claimNextCommand(holdingFollowupsIn heldScope: OpenClawChatOutboxScope?) async
+        -> OpenClawChatOutboxCommand?
+    {
+        await self.base.claimNextCommand(holdingFollowupsIn: heldScope)
     }
 
     func markCommandQueued(
@@ -1193,7 +1195,7 @@ struct ChatViewModelBusySendTests {
     }
 
     @Test @MainActor
-    func `busy followups retain FIFO while the first delivery is suspended`() async throws {
+    func `queue next waits for the visible reply then keeps FIFO`() async throws {
         let (store, _, databaseDirectory) = try makeOutboxStore()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }
         let transport = OutboxTestTransport(healthy: true)
@@ -1216,10 +1218,56 @@ struct ChatViewModelBusySendTests {
         #expect(await userTexts(vm) == ["first followup", "second followup"])
         await sendGate.release()
         await flush.value
+        await vm.outboxFlushTask?.value
+        // Queue next stays on the device, and steerable, until the reply settles.
+        #expect(await transport.state.sentMessages == ["first followup"])
+        let held = try #require(vm.messages.last { $0.role == "user" })
+        #expect(vm.outboxState(for: held.id) == .queued)
+        #expect(vm.canSteerOutboxMessage(held.id))
+
+        vm.hasActiveSessionRunWithoutChatSnapshot = false
+        await transport.state.waitForState { $0.sentMessages.count == 2 }
+        #expect(!vm.canSteerOutboxMessage(held.id))
         #expect(await transport.state.sentMessages == ["first followup", "second followup"])
         #expect(await transport.state.sentQueueModes == [nil, .followup])
         #expect(await Set(transport.state.sentIdempotencyKeys).count == 2)
+        await vm.outboxFlushTask?.value
         #expect(await store.loadCommands().isEmpty)
+    }
+
+    @Test @MainActor
+    func `steering a queued message sends it into the running reply ahead of older queued messages`() async throws {
+        let (store, _, databaseDirectory) = try makeOutboxStore()
+        defer { try? FileManager.default.removeItem(at: databaseDirectory) }
+        let transport = OutboxTestTransport(healthy: true)
+        let vm = await makeOutboxViewModel(transport: transport, outbox: store)
+        vm.load()
+        await vm.bootstrapTask?.value
+        await waitForObservedState { vm.hasRestoredOutboxMessages }
+        vm.hasActiveSessionRunWithoutChatSnapshot = true
+        for text in ["older queued", "newer queued"] {
+            vm.input = text
+            let send = try #require(vm.send(queueMode: .followup))
+            await send.value
+            await vm.outboxFlushTask?.value
+        }
+        #expect(await transport.state.sentMessages.isEmpty)
+        let queued = vm.messages.filter { $0.role == "user" }
+        #expect(queued.map { vm.canSteerOutboxMessage($0.id) } == [true, true])
+
+        vm.steerOutboxMessage(queued[1].id)
+        await transport.state.waitForState { $0.sentMessages.count == 1 }
+        #expect(await transport.state.sentMessages == ["newer queued"])
+        #expect(await transport.state.sentQueueModes == [.steer])
+        #expect(vm.outboxState(for: queued[0].id) == .queued)
+
+        // Cmd-Return on an empty composer steers the oldest held message.
+        #expect(vm.steerOldestQueuedOutboxMessage())
+        await transport.state.waitForState { $0.sentMessages.count == 2 }
+        #expect(await transport.state.sentMessages == ["newer queued", "older queued"])
+        #expect(await transport.state.sentQueueModes == [.steer, .steer])
+        await vm.outboxFlushTask?.value
+        #expect(!vm.steerOldestQueuedOutboxMessage())
     }
 }
 

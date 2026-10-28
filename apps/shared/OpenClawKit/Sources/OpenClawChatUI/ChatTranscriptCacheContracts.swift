@@ -253,8 +253,14 @@ public protocol OpenClawChatCommandOutbox: Sendable {
     @discardableResult
     func recoverInterruptedSends() async -> Bool
     /// Atomically claims the oldest queued row when no other row is sending.
+    /// Queue-next rows in `heldScope` stay queued while that session's reply
+    /// runs, so later rows may pass them.
     /// Nil means another flusher owns the queue or no deliverable row remains.
-    func claimNextCommand() async -> OpenClawChatOutboxCommand?
+    func claimNextCommand(holdingFollowupsIn heldScope: OpenClawChatOutboxScope?) async
+        -> OpenClawChatOutboxCommand?
+    /// Turns a queue-next row into a steer only while it is still queued, so a
+    /// row already claimed for delivery keeps the mode it was sent with.
+    func steerQueuedCommand(id: String) async -> OpenClawChatOutboxUpdateResult
     /// Safe automatic retry: only the completing attempt may requeue the row,
     /// and a successful requeue mints the next attempt version atomically.
     func markCommandQueued(
@@ -328,6 +334,14 @@ public protocol OpenClawChatCommandOutbox: Sendable {
 }
 
 extension OpenClawChatCommandOutbox {
+    public func claimNextCommand() async -> OpenClawChatOutboxCommand? {
+        await self.claimNextCommand(holdingFollowupsIn: nil)
+    }
+
+    public func steerQueuedCommand(id _: String) async -> OpenClawChatOutboxUpdateResult {
+        .unavailable
+    }
+
     public func parkQueuedCommands(
         in _: OpenClawChatOutboxScope,
         lastError _: String) async -> Bool

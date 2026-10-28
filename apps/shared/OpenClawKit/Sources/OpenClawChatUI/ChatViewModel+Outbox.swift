@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 import OpenClawKit
 import OSLog
 
@@ -773,6 +774,71 @@ extension OpenClawChatViewModel {
         }
     }
 
+    /// Queue-next rows wait on this device while the visible reply runs, as
+    /// Control UI queued messages do, so they stay steerable. Another visible
+    /// session, or a run this view cannot see, lets the Gateway queue them.
+    private var heldFollowupScope: OpenClawChatOutboxScope? {
+        guard self.hasBlockingRunActivity else { return nil }
+        return self.outboxBranchScope(for: self.currentSessionSnapshot())
+    }
+
+    private func isHeldFollowup(_ messageID: UUID) -> Bool {
+        self.outboxStatesByMessageID[messageID] == .queued && self.outboxQueueModesByMessageID[messageID] == .followup
+    }
+
+    /// Run activity has several owners; observing the derived flag releases
+    /// held rows whichever one settles. Each flush that still holds re-arms,
+    /// and a flush already running coalesces the trigger into another pass.
+    private func observeHeldFollowupRelease() {
+        guard !self.isObservingHeldFollowupRelease else { return }
+        self.isObservingHeldFollowupRelease = true
+        withObservationTracking {
+            _ = self.hasBlockingRunActivity
+        } onChange: { [weak self] in
+            Task { @MainActor in
+                guard let self else { return }
+                self.isObservingHeldFollowupRelease = false
+                self.flushOutboxIfNeeded()
+            }
+        }
+    }
+
+    public func canSteerOutboxMessage(_ messageID: UUID) -> Bool {
+        self.healthOK && self.heldFollowupScope != nil && self.isHeldFollowup(messageID)
+    }
+
+    /// Sends a held queue-next message into the running reply with the same
+    /// chat.send queue mode the composer's Steer now choice uses.
+    public func steerOutboxMessage(_ messageID: UUID) {
+        guard self.canSteerOutboxMessage(messageID),
+              let outbox,
+              let commandID = self.outboxCommandIDsByMessageID[messageID]
+        else { return }
+        Task { [weak self] in
+            let result = await outbox.steerQueuedCommand(id: commandID)
+            guard let self else { return }
+            switch result {
+            case .updated:
+                if let messageID = self.outboxMessageIDsByCommandID[commandID] {
+                    self.outboxQueueModesByMessageID[messageID] = .steer
+                }
+                self.flushOutboxIfNeeded()
+            case .unavailable:
+                self.errorText = "Could not steer the queued message. Try again."
+            case .missing, .confirmed, .superseded:
+                // Delivery or deletion claimed the row first; its own state wins.
+                break
+            }
+        }
+    }
+
+    /// Hardware-keyboard steer: the oldest held message, matching Control UI.
+    public func steerOldestQueuedOutboxMessage() -> Bool {
+        guard let message = self.messages.first(where: { self.canSteerOutboxMessage($0.id) }) else { return false }
+        self.steerOutboxMessage(message.id)
+        return true
+    }
+
     private func performOutboxFlush() async {
         guard let outbox else { return }
         let presentationGeneration = self.outboxPresentationGeneration
@@ -829,7 +895,12 @@ extension OpenClawChatViewModel {
                     .map(Self.deliveryTarget))
             let visibleSession = self.currentSessionSnapshot()
             self.presentOutboxCommands(commands.filter { self.commandMatchesTarget($0, session: visibleSession) })
-            guard let next = await outbox.claimNextCommand() else { break }
+            let heldScope = self.heldFollowupScope
+            // Arm before the claim suspends so a reply that settles meanwhile still releases held rows.
+            if heldScope != nil, self.outboxStatesByMessageID.keys.contains(where: { self.isHeldFollowup($0) }) {
+                self.observeHeldFollowupRelease()
+            }
+            guard let next = await outbox.claimNextCommand(holdingFollowupsIn: heldScope) else { break }
             let scope = Self.outboxBranchScope(for: next)
             guard self.reconciledOutboxBranchScopes.contains(scope) else {
                 _ = await outbox.markCommandQueued(

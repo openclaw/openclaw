@@ -587,7 +587,9 @@ extension OpenClawChatSQLiteTranscriptCache {
         }
     }
 
-    public func claimNextCommand() async -> OpenClawChatOutboxCommand? {
+    public func claimNextCommand(holdingFollowupsIn heldScope: OpenClawChatOutboxScope?) async
+        -> OpenClawChatOutboxCommand?
+    {
         guard !self.isRetired else { return nil }
         let gatewayID = self.gatewayID
         do {
@@ -615,9 +617,11 @@ extension OpenClawChatSQLiteTranscriptCache {
                           WHERE c.gateway_id = ? AND c.status = 'queued'
                             AND s.switch_pending_since IS NULL
                             AND COALESCE(s.needs_reconciliation, 1) = 0
+                            AND NOT (c.queue_mode IS 'followup' AND c.session_key IS ? AND c.agent_id IS ?)
                           ORDER BY created_at, enqueue_sequence LIMIT 1
                           """,
-                          arguments: [gatewayID])
+                          // A nil scope binds NULL, which matches no row.
+                          arguments: [gatewayID, heldScope?.sessionKey, heldScope.map { $0.agentID ?? "" }])
                 else { return (nil, expiredScopes) }
                 let id: String = row["client_uuid"]
                 try db.execute(
@@ -641,6 +645,25 @@ extension OpenClawChatSQLiteTranscriptCache {
         } catch {
             cacheLogger.error("outbox claim failed: \(error.localizedDescription, privacy: .public)")
             return nil
+        }
+    }
+
+    public func steerQueuedCommand(id: String) async -> OpenClawChatOutboxUpdateResult {
+        guard !self.isRetired else { return .unavailable }
+        let gatewayID = self.gatewayID
+        do {
+            return try await self.databases.stateQueue.write { db in
+                try db.execute(
+                    sql: """
+                    UPDATE outbox_commands SET queue_mode = 'steer'
+                    WHERE gateway_id = ? AND client_uuid = ? AND status = 'queued' AND queue_mode = 'followup'
+                    """,
+                    arguments: [gatewayID, id])
+                return db.changesCount > 0 ? .updated : .superseded
+            }
+        } catch {
+            cacheLogger.error("outbox steer failed: \(error.localizedDescription, privacy: .public)")
+            return .unavailable
         }
     }
 

@@ -902,6 +902,7 @@ struct OpenClawChatComposer: View {
                     !self.isSlashPopoverPresented && self.inputModel?.recallPreviousInput(caretOnFirstLine: $0) == true
                 },
                 onHistoryDown: { !self.isSlashPopoverPresented && self.inputModel?.recallNextInput() == true },
+                onCommandReturn: { self.handleCommandReturn() },
                 onPasteImageAttachment: self.isAttachmentInputEnabled
                     ? { self.viewModel.addImageAttachment(data: $0, fileName: $1, mimeType: $2) }
                     : nil)
@@ -1644,4 +1645,17 @@ extension OpenClawChatComposer {
         guard self.canSendMessage else { return }
         self.inputModel?.send(queueMode: queueMode)
     }
+
+    #if os(iOS)
+    /// Hardware Cmd-Return sends a draft; with an empty draft it steers the
+    /// oldest queued message, as Control UI's send shortcut does.
+    private func handleCommandReturn() -> Bool {
+        guard let inputModel else { return false }
+        if inputModel.hasDraftToSend {
+            self.sendDraftIfEnabled()
+            return true
+        }
+        return inputModel.steerOldestQueuedOutboxMessage()
+    }
+    #endif
 }

@@ -1330,6 +1330,32 @@ final class ChatCommandOutboxStoreTests: ClientDatabaseTestSuite, @unchecked Sen
         #expect(command.lastError == OpenClawChatSQLiteTranscriptCache.outboxQueueModeUpgradeRequiredError)
     }
 
+    @Test func `held queue next rows let later rows pass and steer only while queued`() async throws {
+        let createdAt = Date().timeIntervalSince1970
+        let rows: [(id: String, sessionKey: String, mode: OpenClawChatQueueMode?)] = [
+            ("held", "main", .followup), ("other-session", "side", .followup), ("default", "main", nil),
+        ]
+        for (index, row) in rows.enumerated() {
+            #expect(await store.enqueueCommand(OpenClawChatOutboxCommand(
+                id: row.id, sessionKey: row.sessionKey, text: row.id, thinking: "off", queueMode: row.mode,
+                createdAt: createdAt + Double(index), status: .queued, retryCount: 0, lastError: nil)))
+        }
+        let running = OpenClawChatOutboxScope(sessionKey: "main", agentID: nil)
+        for expected in ["other-session", "default"] {
+            let claimed = try #require(await store.claimNextCommand(holdingFollowupsIn: running))
+            #expect(claimed.id == expected)
+            #expect(await store.markCommandAwaitingConfirmation(
+                id: claimed.id, attemptVersion: claimed.attemptVersion) == .updated)
+        }
+        #expect(await store.claimNextCommand(holdingFollowupsIn: running) == nil)
+
+        #expect(await store.steerQueuedCommand(id: "held") == .updated)
+        #expect(await store.steerQueuedCommand(id: "held") == .superseded)
+        let steered = try #require(await store.claimNextCommand(holdingFollowupsIn: running))
+        #expect(steered.id == "held" && steered.queueMode == .steer)
+        #expect(await store.steerQueuedCommand(id: "other-session") == .superseded)
+    }
+
     @Test func `session settings expectation survives a cold outbox reopen`() async throws {
         let expectation = OpenClawChatSessionSettingsExpectation(
             permissionMode: .guarded,

@@ -263,6 +263,8 @@ public final class OpenClawChatViewModel {
     @ObservationIgnored
     var isOutboxFlushRequestedWhileActive = false
     @ObservationIgnored
+    var isObservingHeldFollowupRelease = false
+    @ObservationIgnored
     var reconciledOutboxBranchScopes: Set<OpenClawChatOutboxScope> = []
     @ObservationIgnored
     var outboxBranchConnectionGeneration: UInt64 = 0

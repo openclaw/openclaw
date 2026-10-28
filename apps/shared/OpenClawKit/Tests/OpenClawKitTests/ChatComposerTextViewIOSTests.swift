@@ -73,6 +73,38 @@ struct ChatComposerTextViewIOSTests {
         #expect(!textView.handleHardwareKey(.keyboardDownArrow, modifierFlags: []))
     }
 
+    @Test func `command return routes to send or steer outside text composition`() throws {
+        let textView = ChatComposerTextViewIOSFactory.makeConfiguredTextView()
+        var handled = true
+        var calls = 0
+        textView.onCommandReturn = {
+            calls += 1
+            return handled
+        }
+        textView.text = "draft"
+        textView.selectedRange = NSRange(location: 0, length: 5)
+        #expect(textView.handleHardwareKey(.keyboardReturnOrEnter, modifierFlags: .command))
+        #expect(textView.handleHardwareKey(.keypadEnter, modifierFlags: [.command, .alphaShift]))
+        #expect(calls == 2)
+        let otherModifiers: [UIKeyModifierFlags] = [[], .shift, [.command, .shift], [.command, .alternate]]
+        for modifiers in otherModifiers {
+            #expect(!textView.handleHardwareKey(.keyboardReturnOrEnter, modifierFlags: modifiers))
+        }
+        #expect(calls == 2)
+        // With nothing to send or steer, UIKit keeps the key.
+        handled = false
+        #expect(!textView.handleHardwareKey(.keyboardReturnOrEnter, modifierFlags: .command))
+        #expect(calls == 3)
+
+        textView.selectedRange = NSRange(location: 5, length: 0)
+        textView.setMarkedText("ka", selectedRange: NSRange(location: 2, length: 0))
+        try #require(textView.markedTextRange != nil)
+        handled = true
+        #expect(!textView.handleHardwareKey(.keyboardReturnOrEnter, modifierFlags: .command))
+        #expect(calls == 3)
+        textView.unmarkText()
+    }
+
     @Test(arguments: [UIKeyboardHIDUsage.keyboardUpArrow, .keyboardDownArrow], [false, true])
     func `arrow keys preserve editor state and active recall`(
         keyCode: UIKeyboardHIDUsage,
