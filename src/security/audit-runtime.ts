@@ -3,7 +3,7 @@ import { formatNodeSecurityWarning } from "../../node-version.mjs";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SecurityAuditFinding } from "./audit.types.js";
 
-export function collectNodeRuntimeFindings(): SecurityAuditFinding[] {
+export function collectNodeRuntimeSecurityFindings(): SecurityAuditFinding[] {
   const nodeSecurityWarning = process.versions.bun
     ? null
     : formatNodeSecurityWarning(process.versions.node);

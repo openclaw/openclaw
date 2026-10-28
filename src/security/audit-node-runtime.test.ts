@@ -1,31 +1,29 @@
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runSecurityAuditCore } from "./audit.js";
 
-describe("security audit process Node security patches", () => {
-  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-  const nodeVersionDescriptor = Object.getOwnPropertyDescriptor(process.versions, "node");
-  const bunVersionDescriptor = Object.getOwnPropertyDescriptor(process.versions, "bun");
-
-  afterEach(() => {
-    if (nodeVersionDescriptor) {
-      Object.defineProperty(process.versions, "node", nodeVersionDescriptor);
-    }
-    if (bunVersionDescriptor) {
-      Object.defineProperty(process.versions, "bun", bunVersionDescriptor);
-    } else {
-      Reflect.deleteProperty(process.versions, "bun");
-    }
-  });
-
-  async function audit(version: string, bun?: string) {
-    Object.defineProperty(process.versions, "node", { value: version, configurable: true });
-    if (bun) {
-      Object.defineProperty(process.versions, "bun", { value: bun, configurable: true });
-    } else {
-      Reflect.deleteProperty(process.versions, "bun");
-    }
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => vi.unstubAllGlobals());
+it.each([
+  ["24.16.0", true],
+  ["24.22.0", true],
+  ["24.22.1", false],
+  ["26.1.0", true],
+  ["26.12.0", true],
+  ["26.12.1", false],
+  ["27.0.0-nightly20261018", false],
+  ["not-a-version", false],
+  ["24.16.0", false, "1.4.4"],
+] as const)(
+  "audits Node %s security warning=%s (Bun=%s) without deep checks",
+  async (version, warning, bun?: string) => {
+    vi.stubGlobal(
+      "process",
+      Object.create(process, {
+        versions: { value: { ...process.versions, node: version, bun } },
+      }),
+    );
     const rootDir = tempDirs.make("openclaw-audit-node-runtime-");
     const probeGatewayFn = vi.fn();
     const report = await runSecurityAuditCore({
@@ -48,43 +46,20 @@ describe("security audit process Node security patches", () => {
     });
     expect(probeGatewayFn).not.toHaveBeenCalled();
     expect(report.deep).toBeUndefined();
-    return report;
-  }
-
-  it.each([
-    { version: "24.16.0", warning: true },
-    { version: "24.22.0", warning: true },
-    { version: "24.22.1", warning: false },
-    { version: "26.1.0", warning: true },
-    { version: "26.12.0", warning: true },
-    { version: "26.12.1", warning: false },
-  ])(
-    "reports warning=$warning for Node $version without deep checks",
-    async ({ version, warning }) => {
-      const report = await audit(version);
-      const findings = report.findings.filter(
-        (finding) => finding.checkId === "runtime.node_security_patch",
-      );
-      expect(report.summary.warn).toBe(warning ? 1 : 0);
-      if (warning) {
-        expect(findings).toHaveLength(1);
-        expect(findings[0]).toMatchObject({
-          severity: "warn",
-          detail: expect.stringContaining("Audit process runtime:"),
-          remediation: expect.stringContaining("The Gateway may use a different runtime"),
-        });
-        expect(findings[0]?.detail).toContain(version);
-      } else {
-        expect(findings).toEqual([]);
-      }
-    },
-  );
-
-  it("does not warn for Bun based on its Node compatibility version", async () => {
-    const report = await audit("24.16.0", "1.4.4");
-    expect(report.findings).not.toContainEqual(
-      expect.objectContaining({ checkId: "runtime.node_security_patch" }),
+    const findings = report.findings.filter(
+      (finding) => finding.checkId === "runtime.node_security_patch",
     );
-    expect(report.summary.warn).toBe(0);
-  });
-});
+    expect(report.summary.warn).toBe(warning ? 1 : 0);
+    expect(findings).toHaveLength(warning ? 1 : 0);
+    if (warning) {
+      expect(findings[0]).toMatchObject({
+        severity: "warn",
+        detail: expect.stringContaining("Audit process runtime:"),
+        remediation: expect.stringContaining("The Gateway may use a different runtime"),
+      });
+      for (const text of [version, "compromised", "24.22.1", "26.12.1"]) {
+        expect(findings[0]?.detail).toContain(text);
+      }
+    }
+  },
+);

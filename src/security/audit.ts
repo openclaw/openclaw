@@ -44,7 +44,7 @@ import {
   type McporterRegistryRejectReason,
 } from "./audit-mcporter-registry.js";
 import { listConfiguredOpenInboundPolicyPaths } from "./audit-open-inbound.js";
-import { collectElevatedFindings, collectNodeRuntimeFindings } from "./audit-runtime.js";
+import { collectElevatedFindings, collectNodeRuntimeSecurityFindings } from "./audit-runtime.js";
 import type {
   SecurityAuditFinding,
   SecurityAuditReport,
@@ -988,7 +988,7 @@ export async function runSecurityAuditCore(
     : [];
   const openInboundPolicies = listConfiguredOpenInboundPolicyPaths(cfg, channelMetadata);
 
-  findings.push(...collectNodeRuntimeFindings());
+  findings.push(...collectNodeRuntimeSecurityFindings());
 
   findings.push(
     ...(await auditNonDeep.collectAttackSurfaceSummaryFindings(cfg, openInboundPolicies)),

@@ -1,6 +1,6 @@
 import { runInNewContext } from "node:vm";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
-import { formatNodeSecurityWarning, PROCESS_NODE_VERSION_CHECK } from "../../node-version.mjs";
+import { PROCESS_NODE_VERSION_CHECK } from "../../node-version.mjs";
 import {
   assertSupportedRuntime,
   isSupportedBunVersion,
@@ -88,44 +88,6 @@ function createRuntime() {
 }
 
 describe("runtime-guard", () => {
-  it.each(["24.16.0", "24.22.0", "26.1.0", "26.12.0"])(
-    "admits compatible Node %s below the recommended security patch level",
-    async (version) => {
-      state.version = version;
-      state.lossless = true;
-      const runtime = createExitingRuntime();
-      await expect(assertSupportedRuntime(runtime)).resolves.toBeUndefined();
-      expect(runtime.exit).not.toHaveBeenCalled();
-    },
-  );
-  it.each([
-    ["24.16.0", true],
-    ["24.22.0", true],
-    ["24.22.1", false],
-    ["26.1.0", true],
-    ["26.12.0", true],
-    ["26.12.1", false],
-    ["27.0.0-nightly20261018", false],
-    ["not-a-version", false],
-  ] as const)("reports the independent Node %s security recommendation", (version, warned) => {
-    const warning = formatNodeSecurityWarning(version);
-    if (warned) {
-      expect(warning).toContain(`Node.js ${version}`);
-      expect(warning).toContain("compromised");
-      expect(warning).toContain("24.22.1");
-      expect(warning).toContain("26.12.1");
-    } else {
-      expect(warning).toBeNull();
-    }
-  });
-
-  it("validates ordinary CLI runtimes without initializing SQLite worker policy", async () => {
-    state.initializeSqlite.mockClear();
-    state.version = "24.22.1";
-    state.lossless = true;
-    await assertSupportedRuntime(createExitingRuntime());
-    expect(state.initializeSqlite).not.toHaveBeenCalled();
-  });
   it("warns once while admitting capable Node 22 diagnostics", async () => {
     const runtime = createRuntime();
     const details = runtimeDetails("node", { version: "22.23.2", sqliteVersion: null });
@@ -354,14 +316,21 @@ describe("runtime-guard", () => {
   });
 
   it.each([
-    runtimeDetails("node", {
-      sqliteVersion: "3.53.3",
-      sqliteProbe: { available: true, version: "3.53.3", text: true, blob: true, json: true },
-    }),
+    ...["24.16.0", "24.22.0", "24.22.1", "26.1.0", "26.12.0"].map((version) =>
+      runtimeDetails("node", {
+        version,
+        sqliteVersion: "3.53.3",
+        sqliteProbe: { available: true, version: "3.53.3", text: true, blob: true, json: true },
+      }),
+    ),
     runtimeDetails("bun"),
   ])("returns silently when $kind runtime meets requirements", async (details) => {
+    state.initializeSqlite.mockClear();
     const runtime = createRuntime();
     await expect(assertSupportedRuntime(runtime, details)).resolves.toBeUndefined();
+    if (details.kind === "node") {
+      expect(state.initializeSqlite).not.toHaveBeenCalled();
+    }
     expect(runtime.exit).not.toHaveBeenCalled();
     expect(runtime.error).not.toHaveBeenCalled();
   });

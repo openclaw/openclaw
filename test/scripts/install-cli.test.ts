@@ -14,10 +14,8 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { isSupportedOpenClawNodeVersion } from "../../node-version.mjs";
 import { readStandaloneInstaller } from "../../scripts/lib/standalone-installers.mjs";
 import { requireNodeTool } from "../helpers/node-toolchain.js";
-import { NODE_RELEASE_VERSION_CASES } from "../helpers/node-version-cases.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { writeNpmLifecycleFixture } from "./install-npm-fixtures.js";
 import { findDarwinReexecBash } from "./install-reexec-fixtures.js";
@@ -526,26 +524,6 @@ fi
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("--timeout=300");
     expect(result.stdout).toContain("wget-status=4");
-  });
-
-  it("matches the canonical release-label contract for installed Node runtimes", () => {
-    const result = runShell(
-      [
-        "set -euo pipefail",
-        `source ${JSON.stringify(SCRIPT_PATH)}`,
-        "set +e",
-        ...NODE_RELEASE_VERSION_CASES.flatMap((version, index) => [
-          `node_release_version_is_supported ${JSON.stringify(version)}`,
-          `printf '${index}=%s\\n' "$?"`,
-        ]),
-      ].join("\n"),
-    );
-
-    expect(result.status).toBe(0);
-    for (const [index, version] of NODE_RELEASE_VERSION_CASES.entries()) {
-      const expectedStatus = isSupportedOpenClawNodeVersion(version) ? 0 : 1;
-      expect(result.stdout, version).toContain(`${index}=${expectedStatus}`);
-    }
   });
 
   it.each(["npm", "git"])("rejects incompatible %s before replacing the managed CLI", (method) => {

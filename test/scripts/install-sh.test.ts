@@ -2146,53 +2146,37 @@ EOF
     );
   });
 
-  it("mirrors the canonical support policy for Node release labels", () => {
-    const pkg = JSON.parse(readFileSync("package.json", "utf8")) as {
-      engines?: { node?: string };
-    };
-    expect(pkg.engines?.node).toBe(">=24.16.0 <25 || >=26.1.0");
-
-    const tmp = tempDirs.make("openclaw-install-node-floor-");
-    const bin = join(tmp, "bin");
-    mkdirSync(bin, { recursive: true });
-
-    const nodePath = join(bin, "node");
-    writeFileSync(
-      nodePath,
-      ["#!/bin/sh", 'printf "%s\\n" "${FAKE_NODE_VERSION:-v0.0.0}"', ""].join("\n"),
-    );
-    chmodSync(nodePath, 0o755);
-
-    const result = runInstallShell(
-      [
-        `cd ${JSON.stringify(process.cwd())}`,
-        `source ${JSON.stringify(SCRIPT_PATH)}`,
-        "set +e",
-        `PATH=${JSON.stringify(`${bin}:/usr/bin:/bin`)}`,
-        "export PATH",
-        "unset -f node 2>/dev/null || true",
-        "unalias node 2>/dev/null || true",
-        'node() { printf "%s\\n" "${FAKE_NODE_VERSION:-v0.0.0}"; }',
-        ...NODE_RELEASE_VERSION_CASES.flatMap((version, index) => [
-          `FAKE_NODE_VERSION=${JSON.stringify(version)}`,
-          "export FAKE_NODE_VERSION",
-          "node_version_is_supported",
-          `printf '${index}=%s\\n' "$?"`,
-        ]),
-        "exit 0",
-      ].join("\n"),
-      {
-        PATH: `${bin}:/usr/bin:/bin`,
-        TERM: "dumb",
-      },
-    );
-
-    expect(result.status).toBe(0);
-    for (const [index, version] of NODE_RELEASE_VERSION_CASES.entries()) {
-      const expectedStatus = isSupportedOpenClawNodeVersion(version) ? 0 : 1;
-      expect(result.stdout, version).toContain(`${index}=${expectedStatus}`);
-    }
-  });
+  it.each(["install.sh", "install-cli.sh"])(
+    "checks canonical Node release labels in %s",
+    (installer) => {
+      const pkg = JSON.parse(readFileSync("package.json", "utf8")) as {
+        engines?: { node?: string };
+      };
+      expect(pkg.engines?.node).toBe(">=24.16.0 <25 || >=26.1.0");
+      const result = runInstallShell(
+        [
+          `source "scripts/${installer}"`,
+          "set +e",
+          'node() { printf "%s\\n" "$FAKE_NODE_VERSION"; }',
+          ...NODE_RELEASE_VERSION_CASES.flatMap((version, index) => [
+            `FAKE_NODE_VERSION=${JSON.stringify(version)}`,
+            installer === "install.sh"
+              ? "node_version_is_supported"
+              : 'node_release_version_is_supported "$FAKE_NODE_VERSION"',
+            `printf '${index}=%s\\n' "$?"`,
+          ]),
+          "exit 0",
+        ].join("\n"),
+        { TERM: "dumb", OPENCLAW_INSTALL_CLI_SH_NO_RUN: "1" },
+      );
+      expect(result.status).toBe(0);
+      for (const [index, version] of NODE_RELEASE_VERSION_CASES.entries()) {
+        expect(result.stdout, version).toContain(
+          `${index}=${isSupportedOpenClawNodeVersion(version) ? 0 : 1}`,
+        );
+      }
+    },
+  );
 
   it.each(
     [
