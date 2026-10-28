@@ -13,6 +13,7 @@ import {
   installMockGateway,
   requireRecord,
   requireString,
+  scrollChatThreadToTop,
   waitForRequests,
 } from "./chat-flow.test-support.ts";
 import { outboxButton as button, readOutboxQueue } from "./chat-outbox-payloads.test-support.ts";
@@ -81,7 +82,6 @@ suite.define(() => {
           });
           await page.goto(suite.server.baseUrl + "chat");
           await page.locator('.chat-send-status[data-send-state="held"]').waitFor();
-          const statuses = page.locator(".chat-send-status");
           const held = page.locator('.chat-send-status[data-send-state="held"]');
           await expectBrowser(held).toContainText("Needs review");
           await expectBrowser(button(held, "Discard")).toBeVisible();
@@ -89,11 +89,14 @@ suite.define(() => {
           await page.addStyleTag({ content: ".chat-send-status { font-size: 24px; }" });
           for (const theme of ["light", "dark"]) {
             await gateway.setOnline(false);
-            await expectBrowser(statuses).toHaveCount(3, { timeout: 30_000 });
             await page.evaluate((mode) => {
               document.documentElement.dataset.themeMode = mode;
             }, theme);
-            for (const status of await statuses.all()) {
+            // Recovery rows can unmount outside the virtualized transcript window.
+            await scrollChatThreadToTop(page);
+            for (const state of ["failed", "waiting-reconnect", "held"]) {
+              const status = page.locator(`.chat-send-status[data-send-state="${state}"]`);
+              await expectBrowser(status).toBeVisible({ timeout: 30_000 });
               await status.scrollIntoViewIfNeeded();
               await page.mouse.move(0, 0);
               const footer = status.locator(
@@ -113,6 +116,7 @@ suite.define(() => {
             }
             // Retry requires a live connection; reconnect after measuring offline recovery.
             await gateway.setOnline(true);
+            await scrollChatThreadToTop(page);
             const failed = page.locator('.chat-send-status[data-send-state="failed"]');
             const retry = failed.getByRole("button", { name: "Retry queued message" });
             await retry.focus();
