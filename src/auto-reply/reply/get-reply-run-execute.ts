@@ -15,6 +15,10 @@ import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
 import { resolveOwnerPromptNumbers } from "../../agents/owner-display.js";
 import { captureRequesterOrigin } from "../../agents/requester-origin.js";
+import {
+  bindSubagentTaskHandoff,
+  readSubagentTaskHandoff,
+} from "../../agents/subagents/registry/subagent-task-handoff.js";
 import { revokeRequesterCronAuthority } from "../../agents/subagents/requester-cron-authority.js";
 import {
   attachToolAllowlistIntersection,
@@ -658,6 +662,7 @@ export async function executePreparedReplyRun(
   };
   const sourceReplyDeliveryRuntimeOptions = opts as SourceReplyDeliveryRuntimeOptions | undefined;
   copyChildSessionPublication(sessionCtx, followupRun.run);
+  bindSubagentTaskHandoff(followupRun.run, readSubagentTaskHandoff(sessionCtx));
   if (command.senderIsOwner && channelOwnerAuthority) {
     bindCommandOwnerAuthority(followupRun.run, channelOwnerAuthority);
   }

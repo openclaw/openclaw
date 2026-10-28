@@ -6,6 +6,7 @@ import {
 } from "../../agents/admitted-run-context.js";
 import { prepareAgentDeletionBlocked } from "../../agents/agent-lifecycle-registry.js";
 import { resolveConfiguredAgentId } from "../../agents/agent-scope-config.js";
+import type { SubagentTaskHandoff } from "../../agents/subagents/registry/subagent-task-handoff.js";
 import { createRuntimeToolMatcher } from "../../agents/tool-policy-match.js";
 import {
   attachToolAllowlistIntersection,
@@ -43,6 +44,7 @@ const targetScopes = resolveGlobalSingleton(
         env?: NodeJS.ProcessEnv;
         operatorAuthority?: AdmittedRunOperatorAuthority;
         ownerContinuation?: true;
+        subagentTask?: SubagentTaskHandoff;
         deletion?: { agentId: string; isBlocked: () => boolean };
       }
     >(),
@@ -90,6 +92,8 @@ export async function captureSessionEventTargetForHost(
     operatorAuthority?: AdmittedRunOperatorAuthority;
     /** The producing turn held command-owner authority under `operatorAuthority`. */
     ownerContinuation?: true;
+    /** The producing turn was this yielded native task's execution. */
+    subagentTask?: SubagentTaskHandoff;
   } = {},
 ): Promise<SessionEventTarget> {
   const operatorAuthority = options.operatorAuthority;
@@ -199,6 +203,7 @@ export async function captureSessionEventTargetForHost(
       env,
       operatorAuthority,
       ...(operatorAuthority && options.ownerContinuation ? { ownerContinuation: true } : {}),
+      ...(options.subagentTask ? { subagentTask: options.subagentTask } : {}),
       deletion,
     });
     return target;
@@ -343,6 +348,13 @@ export function readSessionEventTargetOwnerContinuation(target: SessionEventTarg
   return targetScopes.get(target)?.ownerContinuation === true;
 }
 
+/** The yielded native task this event continues, captured by the producing turn. */
+export function readSessionEventTargetSubagentTask(
+  target: SessionEventTarget,
+): SubagentTaskHandoff | undefined {
+  return targetScopes.get(target)?.subagentTask;
+}
+
 /** Coalesced work retains every producer's original destination and permission bound. */
 export function combineSessionEventTargetsForHost(
   targets: readonly SessionEventTarget[],
@@ -365,6 +377,7 @@ export function combineSessionEventTargetsForHost(
         readSessionEventTargetOperatorAuthority(first) ||
       readSessionEventTargetOwnerContinuation(target) !==
         readSessionEventTargetOwnerContinuation(first) ||
+      readSessionEventTargetSubagentTask(target) !== readSessionEventTargetSubagentTask(first) ||
       channelRouteDedupeKey(target.deliveryContext) !== route
     ) {
       throw new Error(
