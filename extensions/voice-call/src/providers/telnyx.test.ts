@@ -403,6 +403,28 @@ describe("TelnyxProvider noise suppression", () => {
     expect(warn.mock.calls[0]?.[0]).toContain("socket hang up");
   });
 
+  it.each([
+    {
+      name: "hangs up when the stream-less answer fails",
+      noiseSuppression: { direction: "outbound" },
+      hangup: true,
+    },
+    {
+      name: "leaves a failed inline-stream answer to the caller",
+      noiseSuppression: undefined,
+      hangup: false,
+    },
+  ] as const)("$name", async ({ noiseSuppression, hangup }) => {
+    mockTelnyxApi((url) => (url.endsWith("/answer") ? new Error("socket hang up") : undefined));
+
+    await expect(withSuppression(noiseSuppression).answerCall(STREAMING_ANSWER)).rejects.toThrow(
+      "socket hang up",
+    );
+    expect(readRequests().map(({ url }) => url)).toEqual(
+      hangup ? [ANSWER.url, `${ACTIONS}/hangup`] : [ANSWER.url],
+    );
+  });
+
   it("hangs up when streaming cannot start after the answer, even if that hangup fails", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     mockTelnyxApi((url) =>
