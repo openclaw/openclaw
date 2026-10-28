@@ -27,6 +27,54 @@ type StoppedGatewayInspection =
   | { kind: "not-ours"; reason: string }
   | { kind: "inconclusive"; reason: string };
 
+/** Decides whether Doctor may start a managed Gateway that it did not stop itself. */
+export async function resolveUnstoppedGatewayRestoration(params: {
+  before: PreManagedServiceStop;
+  serviceEnv: NodeJS.ProcessEnv;
+  root: string;
+  leaveStopped: boolean;
+  reportStopped: boolean;
+}): Promise<{ restore: boolean; warning?: string }> {
+  const { before, serviceEnv } = params;
+  const verdict = before.serviceUpdateVerdict;
+  if (verdict?.kind === "owned" && verdict.requiresInstallRootRefresh) {
+    const { inspectGatewayServiceInstallationDrift } = await import("../daemon/service-layout.js");
+    const drift = await inspectGatewayServiceInstallationDrift(
+      { packageRootReal: verdict.root },
+      params.root,
+    );
+    if (drift) {
+      const { formatGatewayServiceInstallationDrift } = await import("../cli/daemon-cli/shared.js");
+      const warning = formatGatewayServiceInstallationDrift(drift, serviceEnv, {
+        stopped: true,
+        port: before.servicePort,
+      });
+      return { restore: false, warning };
+    }
+  }
+  if (
+    !params.leaveStopped &&
+    before.offline === true &&
+    verdict?.kind === "owned" &&
+    !verdict.requiresInstallRootRefresh
+  ) {
+    return { restore: true };
+  }
+  // Public update repair would otherwise report success over a Gateway that stays down.
+  if (
+    params.reportStopped &&
+    verdict?.kind === "owned" &&
+    before.runtimeInspected &&
+    !before.running
+  ) {
+    return {
+      restore: false,
+      warning: `Gateway service is stopped and remains stopped; update repair does not start a Gateway that a failed update or the operator stopped. Start it with \`${formatCliCommand("openclaw gateway start", serviceEnv)}\`, then check \`${formatCliCommand("openclaw gateway status --deep", serviceEnv)}\`.`,
+    };
+  }
+  return { restore: false };
+}
+
 export async function restoreDoctorGatewayService(params: {
   before: PreManagedServiceStop;
   serviceEnv: NodeJS.ProcessEnv;
@@ -74,7 +122,26 @@ export async function restoreDoctorGatewayService(params: {
       assertInspectionCurrent();
       assertRestoreAdmission?.();
     };
-    assertMaintenanceCurrent();
+    const assertAutoStartCurrent = async () => {
+      assertMaintenanceCurrent();
+      if (before.serviceAutoStartEnabled === undefined) {
+        return;
+      }
+      const readEnabled = service.isEnabled;
+      if (!readEnabled) {
+        throw new Error(
+          "Gateway native autostart policy could not be verified after Doctor repair.",
+        );
+      }
+      const enabled = await settle(() => readEnabled({ env: serviceEnv }));
+      assertMaintenanceCurrent();
+      if (enabled !== before.serviceAutoStartEnabled) {
+        throw new Error(
+          "Gateway native autostart policy changed during Doctor repair; automatic restoration was refused. Inspect gateway status --deep before starting it.",
+        );
+      }
+    };
+    await assertAutoStartCurrent();
     const readCurrent = () =>
       settle(() =>
         readGatewayServiceState(service, {
@@ -216,6 +283,7 @@ export async function restoreDoctorGatewayService(params: {
           params.assertInstallationAdmission?.();
         };
         assertInstallationCurrent();
+        await assertAutoStartCurrent();
         const [{ maybeRepairGatewayServiceConfig }, { createDoctorPrompter }] = await Promise.all([
           import("./doctor-gateway-services.js"),
           import("./doctor-prompter.js"),
@@ -256,6 +324,7 @@ export async function restoreDoctorGatewayService(params: {
                       managerUid: before.serviceManagerUid,
                       assertCurrent: assertInstallationCurrent,
                       assertReadCurrent: assertInspectionCurrent,
+                      beforeMutation: assertAutoStartCurrent,
                     },
                   },
                 ),
@@ -330,6 +399,8 @@ export async function restoreDoctorGatewayService(params: {
         env: current?.env ?? serviceEnv,
         stdout: params.options.json ? process.stderr : process.stdout,
         preserveDefinition: true,
+        preserveAutoStart: true,
+        beforeMutation: assertAutoStartCurrent,
         assertCurrent: assertMaintenanceCurrent,
         ...(before.serviceSystemdIdentity
           ? { systemdIdentity: before.serviceSystemdIdentity }

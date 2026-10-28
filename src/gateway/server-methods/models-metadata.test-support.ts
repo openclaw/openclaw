@@ -5,7 +5,7 @@ export async function createModelPluginMetadataSnapshot() {
   const { buildPluginMetadataProviderFacts } =
     await import("../../plugins/plugin-metadata-provider-facts.js");
   const { makeEmptyPluginMetadataOwners } =
-    await import("../../plugins/current-plugin-metadata.test-support.js");
+    await import("../../plugins/plugin-metadata-empty.test-support.js");
   const { buildDeclaredProviderOwnerIndex } = await import("../../plugins/provider-owner-index.js");
   const { createPluginManifestRecordFixture, createPluginMetadataSnapshotFixture } =
     await import("../../plugins/plugin-metadata.test-support.js");

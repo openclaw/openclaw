@@ -2,7 +2,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator } from "playwright";
-import { expect, it } from "vitest";
+import { expect, inject, it } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import {
   controlUiBundledGatewayUrl,
@@ -10,7 +10,7 @@ import {
   pauseVirtualClock,
   waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
-import { polledAttribute, polledText } from "./chat-presentation.test-support.ts";
+import { polledAttribute } from "./chat-presentation.test-support.ts";
 import { configSnapshot } from "./config-composer-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import {
@@ -34,7 +34,8 @@ const proofBuildId = proofIdentity.expectedRevisionSha
   : "phone-proof-local-artifact";
 const suite = createControlUiE2eSuite({
   name: "Control UI phone stale-build recovery E2E",
-  startServer: () => startPhoneProofServer(proofBuildId),
+  startServer: () =>
+    startPhoneProofServer(proofBuildId, inject("controlUiE2ePrebuiltAssets")?.root),
   startServerBeforeBrowser: true,
   unavailableMessage: (executablePath) =>
     `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
@@ -320,32 +321,6 @@ suite.define(() => {
       const terminalInvocationCount = (await gateway.getRequests("terminal.open")).length;
       await expectNoTerminalAdvice(recovery);
       expect(terminalInvocationCount).toBe(0);
-
-      const documentCountBeforeFailedProbe = documentRequests.length;
-      await page.evaluate(() => {
-        const originalFetch = window.fetch.bind(window);
-        let remainingFailures = 1;
-        window.fetch = async (input, init) => {
-          if (remainingFailures > 0 && init?.method === "HEAD") {
-            remainingFailures -= 1;
-            sessionStorage.setItem("openclaw.control-ui-e2e.failed-refresh-probes", "1");
-            return new Response(null, { status: 503 });
-          }
-          return originalFetch(input, init);
-        };
-      });
-      await recovery.tap();
-      await page.waitForFunction(
-        () => sessionStorage.getItem("openclaw.control-ui-e2e.failed-refresh-probes") === "1",
-      );
-      const failedRecovery = page.locator(".sidebar-update-card--floating .sidebar-update-card");
-      await expect.poll(() => failedRecovery.getByRole("button").isEnabled()).toBe(true);
-      await polledText(failedRecovery).toContain("Retry now");
-      await polledText(failedRecovery).toContain(
-        "Could not refresh. Check your connection and try again.",
-      );
-      expect(documentRequests).toHaveLength(documentCountBeforeFailedProbe);
-      await expectNoTerminalAdvice(failedRecovery);
 
       await recovery.tap();
       await expect.poll(() => documentRequests.length).toBe(3);

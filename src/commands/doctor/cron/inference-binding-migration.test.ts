@@ -308,6 +308,26 @@ const provider = (apiKey: string, baseUrl: string): ModelProviderConfig => ({
   models: [configuredModel("model")],
 });
 
+it("warns that an unbound job whose default moved to a stored account is refused until it records one", async () => {
+  await withAccounts(async (state) => {
+    // The job last ran on a configured key; the default now resolves to a stored account.
+    const cfg = await configure(state);
+    await saveProfiles(apiProfile("openai:manual", "synthetic-manual"));
+    const storePath = state.statePath("cron", "jobs.json");
+    await saveJobs(storePath, legacyJob("hourly"));
+    await doctor.withDoctorConfigMaintenance(async () => {
+      const preview = await migrate(cfg, false);
+      expect(preview.changes).toEqual([]);
+      contains(
+        preview.warnings.join("\n"),
+        "Automation hourly (hourly): retain openai:manual for openai/gpt-5.5",
+        "Its runs are refused until it records this account",
+        "openclaw doctor --fix",
+      );
+    });
+  });
+});
+
 it("records the planner's first account for ambiguous jobs, keeps direct keys unbound and refuses missing accounts instead of pinning a previous fallback", async () => {
   await withAccounts(async (state) => {
     const cfg = config(state, {

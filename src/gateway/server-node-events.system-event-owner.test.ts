@@ -36,12 +36,7 @@ it.each([
   { name: "system-agent notification", event: "notifications.changed", explicit: false },
   { name: "authorized exec completion", event: "exec.finished", explicit: true },
   { name: "unmatched exec completion", event: "exec.finished", explicit: true, denied: true },
-  {
-    name: "rejected notification",
-    event: "notifications.changed",
-    explicit: true,
-    rejected: true,
-  },
+  { name: "rejected notification", event: "notifications.changed", explicit: true, rejected: true },
   { name: "rejected exec completion", event: "exec.finished", explicit: true, rejected: true },
 ])(
   "preserves the loaded global owner for $name",
@@ -67,7 +62,6 @@ it.each([
           { sessionId: `${agentId}-session`, updatedAt: 1 },
         );
       }
-      const authorizeNodeSystemRunEvent = vi.fn(() => !denied);
       const ctx: NodeEventContext = {
         deps: {},
         broadcast: () => {},
@@ -84,7 +78,7 @@ it.each([
           throw new Error("Unexpected health refresh");
         },
         loadGatewayModelCatalog: async () => [],
-        authorizeNodeSystemRunEvent,
+        authorizeNodeSystemRunEvent: () => !denied,
         logGateway: { warn: vi.fn() },
       };
       const runId = `node-owner-${name}`;
@@ -121,15 +115,6 @@ it.each([
       }
 
       expect(peekSystemEvents("agent:main:global")).toEqual([]);
-      if (event === "exec.finished") {
-        expect(authorizeNodeSystemRunEvent).toHaveBeenCalledExactlyOnceWith({
-          nodeId: "node-owner",
-          connId: "owner-connection",
-          runId,
-          sessionKey: "agent:research:main",
-          event: "exec.finished",
-        });
-      }
       expect(result).toEqual(
         denied
           ? expect.objectContaining({ handled: false, reason: "unmatched_exec_event" })

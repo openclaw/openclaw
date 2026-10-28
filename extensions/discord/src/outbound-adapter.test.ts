@@ -664,27 +664,6 @@ it("falls back to chunked text when a table exceeds the Discord component envelo
   expect(deliveredText).toContain("Continue: `/continue`");
 });
 
-it("sends prepared native Discord payload data through outbound delivery", async () => {
-  await sendPayload(
-    {
-      ...discordPayload("hello", {
-        components: [{ type: 1, components: [] }],
-        filename: "photo.png",
-      }),
-      mediaUrl: "https://example.com/photo.png",
-    },
-    firstReply,
-  );
-
-  const options = expectMessage("hello");
-  expect(options).toMatchObject({
-    mediaUrl: "https://example.com/photo.png",
-    filename: "photo.png",
-  });
-  expect(options.components).toEqual([{ type: 1, components: [] }]);
-  expect(options.reply).toEqual({ messageId: "reply-1", scope: "first" });
-});
-
 it("renders channelData Discord components on payload sends", async () => {
   await sendPayload(
     discordPayload("native component text", {

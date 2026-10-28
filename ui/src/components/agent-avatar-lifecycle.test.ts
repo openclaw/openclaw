@@ -72,7 +72,7 @@ it.each(fixtures)(
           new Response(new Uint8Array([1, 2, 3]), { headers: { "content-type": "image/png" } }),
       );
     vi.stubGlobal("fetch", fetchAvatar);
-    setAvatarGatewayOrigin(globalThis.location.origin);
+    setAvatarGatewayOrigin(globalThis.location.origin, ["avatar-test-token"]);
 
     const { element, setIdentity } = create();
     setIdentity({ agentId: "alpha", name: "Alpha", avatar: "/avatar/alpha?rev=first" });

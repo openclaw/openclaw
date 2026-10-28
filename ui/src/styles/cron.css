@@ -81,6 +81,8 @@
 }
 
 .cron-search-box {
+  /* Text edits should repaint the search field without repainting every row. */
+  will-change: transform;
   position: relative;
   flex: 1 1 auto;
   min-width: 0;
@@ -221,6 +223,8 @@
 }
 
 .cron-table__row {
+  /* Keep row paint local; action menus live in the top layer. */
+  contain: layout paint;
   cursor: var(--cursor-action);
   transition: background var(--duration-fast) var(--ease-out);
 }
@@ -231,7 +235,7 @@
 
 .cron-table__row:hover,
 .cron-table__row:focus-within {
-  background: var(--bg-hover);
+  background: var(--surface-hover);
 }
 
 .cron-table__row--paused .cron-table__name-text,

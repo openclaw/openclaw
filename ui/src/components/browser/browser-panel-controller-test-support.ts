@@ -1,6 +1,7 @@
 import type { GatewayClientRequestOptions } from "@openclaw/gateway-client";
 import { afterEach, vi } from "vitest";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { BrowserDashboardTarget, BrowserInspectedNode } from "./browser-client.ts";
 import {
   createBrowserPanel,

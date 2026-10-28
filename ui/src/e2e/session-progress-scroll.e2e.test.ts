@@ -1,28 +1,17 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e.ts";
 import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
-import { openProgressHomeDock } from "./session-progress-home.test-support.ts";
+import {
+  openProgressHomeDock,
+  waitForProgressScrollIdle as waitForHomeScrollIdle,
+} from "./session-progress-home.test-support.ts";
+
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
 const suite = createChatFlowE2eSuite();
-
-async function waitForHomeScrollIdle(thread: Locator) {
-  await expect
-    .poll(() =>
-      thread.evaluate(async (element) => {
-        const before = [element.scrollTop, element.scrollHeight, element.clientHeight];
-        await new Promise<void>((resolve) => {
-          requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-        });
-        const after = [element.scrollTop, element.scrollHeight, element.clientHeight];
-        return before.every((value, index) => value === after[index]);
-      }),
-    )
-    .toBe(true);
-}
 
 const sessionKey = "agent:main:main";
 const progress = {
@@ -152,7 +141,9 @@ suite.define(() => {
           thread: await thread.evaluate((element) => element.scrollTop),
           output: await outputScroller.evaluate((element) => element.scrollTop),
         };
-        await page.screenshot({ path: path.join(artifactDir, "before-wheel.png") });
+        if (captureUiProof) {
+          await page.screenshot({ path: path.join(artifactDir, "before-wheel.png") });
+        }
         for (let index = 0; index < 3; index++) {
           await page.mouse.wheel(0, -240);
           // These are three separate gestures under the disclosure's 200 ms boundary.
@@ -164,7 +155,9 @@ suite.define(() => {
           thread: await thread.evaluate((element) => element.scrollTop),
           output: await outputScroller.evaluate((element) => element.scrollTop),
         };
-        await page.screenshot({ path: path.join(artifactDir, "after-wheel.png") });
+        if (captureUiProof) {
+          await page.screenshot({ path: path.join(artifactDir, "after-wheel.png") });
+        }
         await writeFile(
           path.join(artifactDir, "offsets.json"),
           JSON.stringify({ target, before, after, cardOpen: await isOpen() }, null, 2),
@@ -249,7 +242,9 @@ suite.define(() => {
         );
       });
       const offsets: Array<{ before: number; released: number; settled: number }> = [];
-      await page.screenshot({ path: path.join(artifactDir, "before-touch.png") });
+      if (captureUiProof) {
+        await page.screenshot({ path: path.join(artifactDir, "before-touch.png") });
+      }
       for (let index = 0; index < 3; index++) {
         const before = await thread.evaluate((element) => element.scrollTop);
         const timestamp = Date.now() / 1000;
@@ -283,7 +278,9 @@ suite.define(() => {
           ),
         );
       }
-      await page.screenshot({ path: path.join(artifactDir, "after-touch.png") });
+      if (captureUiProof) {
+        await page.screenshot({ path: path.join(artifactDir, "after-touch.png") });
+      }
       await writeFile(
         path.join(artifactDir, "touch-offsets.json"),
         JSON.stringify(offsets, null, 2),

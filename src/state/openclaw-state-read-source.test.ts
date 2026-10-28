@@ -3,6 +3,7 @@
 import { emptyReply, mock, queueTask, source } from "./openclaw-state-read-worker.test-harness.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { expect, it, vi } from "vitest";
+import * as processRole from "../infra/database-engine/admission-scope.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { withRuntimeWorkerGeneration } from "../infra/runtime-worker-generation.js";
 import { captureRetainedNativeWorkerSource } from "../infra/worker-native-lifecycle.js";
@@ -51,6 +52,35 @@ function readFixture() {
     authority: { signal: new AbortController().signal, assertCurrent: () => {} },
   };
 }
+
+it.each(["gateway", "cli-oneshot", undefined] as const)(
+  "uses the %s process lifetime for early awaited reads",
+  async (role) => {
+    const roleSpy = vi.spyOn(processRole, "getDatabaseProcessRole").mockReturnValue(role);
+    const { location, authority } = readFixture();
+    try {
+      for (const awaitedOnly of [true, true, true, false]) {
+        const transport = captureOpenClawStateReadSource().createTransport(
+          backupRead,
+          undefined,
+          undefined,
+          awaitedOnly,
+        );
+        const task = readyTask();
+        await expect(transport.startRead(location, authority)).resolves.toEqual({
+          value: emptyReply,
+        });
+        await transport.startClose();
+        expect(task.close).toHaveBeenCalledExactlyOnceWith(
+          awaitedOnly && role !== "gateway" ? { retire: true } : undefined,
+        );
+      }
+      expect(mock.create).toHaveBeenCalledTimes(role === "gateway" ? 1 : 2);
+    } finally {
+      roleSpy.mockRestore();
+    }
+  },
+);
 
 it("shares read setup methods while each read retains independent task custody", async () => {
   const { location, authority } = readFixture();

@@ -30,6 +30,8 @@ export type TeamShapeSessionsOptions = {
   longTranscriptEntries?: number;
   longTranscriptSessions?: number;
   chatStartupSessions?: number;
+  /** Exact route targets for the first fixture sessions, before related state is generated. */
+  sessionKeys?: readonly string[];
   /** Stable category mix for the reusable dev-Gateway load harness. */
   teamStress?: boolean;
 };
@@ -173,7 +175,8 @@ export async function seedTeamShapeSessions(options: TeamShapeSessionsOptions) {
                       ? "cron"
                       : "other";
         const sessionKey =
-          stressCategory === "dashboard" || stressCategory === "archivedDashboard"
+          options.sessionKeys?.[index] ??
+          (stressCategory === "dashboard" || stressCategory === "archivedDashboard"
             ? `agent:main:dashboard:${startupUuid}`
             : stressCategory === "subagent"
               ? `agent:main:subagent:${startupUuid}`
@@ -183,7 +186,7 @@ export async function seedTeamShapeSessions(options: TeamShapeSessionsOptions) {
                   ? `agent:main:cron:synthetic-${index}`
                   : startupTarget
                     ? `agent:main:dashboard:${startupUuid}`
-                    : `agent:main:${sessionId}`;
+                    : `agent:main:${sessionId}`);
         // Keep the live stress cohort inside normal maintenance age limits for the campaign.
         const ageDays = stressCategory === "dashboard" ? 6 : stressCategory ? 29 : 30;
         const updatedAt = options.now - Math.floor(random() ** 2 * ageDays * DAY_MS);

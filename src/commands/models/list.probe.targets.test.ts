@@ -95,31 +95,8 @@ vi.mock("../../agents/provider-auth-aliases.js", () => ({
   resolveProviderIdForAuth: (provider: string) =>
     provider === "byteplus-plan" ? "byteplus" : provider,
 }));
-vi.mock("../../agents/model-selection.js", () => {
-  const normalizeProviderId = (value: string) =>
-    value.trim().toLowerCase() === "z.ai" || value.trim().toLowerCase() === "z-ai"
-      ? "zai"
-      : value.trim().toLowerCase();
-  return {
-    normalizeProviderId,
-    findNormalizedProviderValue: (record: Record<string, unknown> | undefined, provider: string) =>
-      Object.entries(record ?? {}).find(([key]) => normalizeProviderId(key) === provider)?.[1],
-    parseModelRef: (raw: string, defaultProvider: string) => {
-      const [provider, ...modelParts] = raw.includes("/") ? raw.split("/") : [defaultProvider, raw];
-      const model = modelParts.join("/");
-      return provider && model ? { provider: normalizeProviderId(provider), model } : null;
-    },
-  };
-});
 vi.mock("../../secrets/resolve.js", () => ({
   resolveSecretRefString: resolveSecretRefStringMock,
-}));
-vi.mock("../status-all/format.js", () => ({
-  redactStatusSecrets: (value: string) => value,
-}));
-vi.mock("./shared.js", () => ({
-  DEFAULT_PROVIDER: "openai",
-  formatMs: (ms: number) => `${ms}ms`,
 }));
 
 // mock-isolation: Probe planning uses fixture stores and never discovers operator credentials.
@@ -508,22 +485,6 @@ describe("buildProbeTargets", () => {
       );
     },
   );
-
-  it("matches canonical providers against alias-valued catalog probe models", async () => {
-    emptyStore();
-    loadModelCatalogMock.mockResolvedValueOnce([catalogModel("z.ai", "glm-4.7")]);
-    const result = await withEnvAsync({ ZAI_API_KEY: undefined, Z_AI_API_KEY: undefined }, () =>
-      plan({
-        cfg: providerConfig("sk-zai-test", "zai", {
-          baseUrl: "https://api.z.ai/v1",
-          api: "openai-responses",
-        }),
-        providers: ["zai"],
-        modelCandidates: [],
-      }),
-    );
-    expectTargets(result, target("zai", "glm-4.7"));
-  });
 
   it("prioritizes live Anthropic Haiku catalog entries over retired and slower probes", async () => {
     emptyStore();

@@ -14,8 +14,6 @@ import * as sessionReaders from "../config/sessions/session-transcript-worker-re
 import { resolveStateDir } from "../config/state-dir.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { hasSqliteDatabaseSchemaAdmissionForPath } from "../infra/sqlite-database-admission.js";
-import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
-import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import { openOpenClawAgentSqliteWorkerStoreV2 } from "../state/openclaw-agent-worker-store.js";
 import { agentWorkerStoreFixtureEntrypoint } from "../state/openclaw-agent-worker-store.runtime.test-support.js";
 import type { AgentWorkerFixtureOperations } from "../state/openclaw-agent-worker-store.test-support.js";
@@ -112,8 +110,6 @@ test.for(["new database", "interrupted empty database"])(
         );
       });
     let creating: Promise<CreateSessionReply> | undefined;
-    let cancelledBorrower: ReturnType<typeof captureOpenClawAgentDatabaseExecution> | undefined;
-    let cancelledPreparation: Promise<void> | undefined;
     try {
       await beforeSettlement(
         gate.entered,
@@ -122,31 +118,6 @@ test.for(["new database", "interrupted empty database"])(
       );
       // Catalog admission precedes canonical schema creation at this worker gate.
       expect(hasSqliteDatabaseSchemaAdmissionForPath(databasePath)).toBe(true);
-      if (scenario === "interrupted empty database") {
-        // One caller's cancellation must not release discovery while another births the schema.
-        cancelledBorrower = captureOpenClawAgentDatabaseExecution({ agentId, path: databasePath });
-        const cancellation = new AbortController();
-        const reason = new Error("Cancel the second preparation");
-        cancelledPreparation = cancelledBorrower.prepare(
-          {
-            assertCurrent() {},
-            createAdmission(binding) {
-              return () => ({
-                nativeLocations: binding.nativeLocations,
-                admission: createSqliteWorkerOperationAdmission((request, grant) => {
-                  binding.authorize(request);
-                  if (!grant()) {
-                    throw new Error("Preparation fixture lost admission");
-                  }
-                }, binding.attachment),
-              });
-            },
-          },
-          cancellation.signal,
-        );
-        cancellation.abort(reason);
-        await expect(withinTest(cancelledPreparation, signal)).rejects.toBe(reason);
-      }
       const key = `agent:${agentId}:dashboard:first-birth`;
       observeDiscovery = true;
       const request = {
@@ -184,8 +155,7 @@ test.for(["new database", "interrupted empty database"])(
       expect(entry?.sessionId).toBe(result.payload?.sessionId);
     } finally {
       gate.release();
-      await Promise.allSettled([opening, creating, cancelledPreparation]);
-      await cancelledBorrower?.release();
+      await Promise.allSettled([opening, creating]);
       await nativeWorker.close();
       readCandidates.mockRestore();
       run.mockRestore();

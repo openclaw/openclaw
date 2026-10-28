@@ -373,7 +373,7 @@ describe("createCliJsonlStreamingParser events", () => {
   });
 
   it("lets plugin parsers own their frames before lazily parsing fallback JSON", () => {
-    const parseSpy = vi.spyOn(JSON, "parse");
+    using parseSpy = vi.spyOn(JSON, "parse");
     const parseCountsAtPluginEntry: number[] = [];
     const parser = createPluginParser({
       parseJsonlEvent: (line) => {
@@ -389,24 +389,20 @@ describe("createCliJsonlStreamingParser events", () => {
       },
     });
 
-    try {
-      parser.push("plain provider frame\n");
-      expect(parseSpy).not.toHaveBeenCalled();
+    parser.push("plain provider frame\n");
+    expect(parseSpy).not.toHaveBeenCalled();
 
-      parser.push(`${JSON.stringify({ text: " provider JSON" })}\n`);
-      expect(parseSpy).toHaveBeenCalledTimes(1);
+    parser.push(`${JSON.stringify({ text: " provider JSON" })}\n`);
+    expect(parseSpy).toHaveBeenCalledTimes(1);
 
-      parser.push(
-        `${JSON.stringify({
-          type: "item.completed",
-          item: { type: "agent_message", text: "fallback" },
-        })}\n`,
-      );
-      expect(parseCountsAtPluginEntry).toEqual([0, 0, 1]);
-      expect(parseSpy).toHaveBeenCalledTimes(2);
-    } finally {
-      parseSpy.mockRestore();
-    }
+    parser.push(
+      `${JSON.stringify({
+        type: "item.completed",
+        item: { type: "agent_message", text: "fallback" },
+      })}\n`,
+    );
+    expect(parseCountsAtPluginEntry).toEqual([0, 0, 1]);
+    expect(parseSpy).toHaveBeenCalledTimes(2);
   });
 
   it("projects lifecycle events without dropping fork-successor session metadata", () => {

@@ -6,6 +6,7 @@ import type { PresenceEntry } from "../../../packages/gateway-protocol/src/index
 import type { DevicePairingList } from "../../../src/gateway/device-pairing-list.types.js";
 import type { CronJob } from "../api/types.ts";
 import { pathForRoute, type RouteId } from "../app-route-paths.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
@@ -356,6 +357,8 @@ suite.define(() => {
     await installMockGateway(page, { methodResponses: emptyDeviceResponses });
 
     try {
+      const navigate = (route: RouteId) =>
+        evaluateControlUiContext(page, (app, routeId) => app.navigate(routeId), route);
       const readShellInsets = (route: RouteId) =>
         page.evaluate((activeRoute) => {
           const content = document.querySelector<HTMLElement>("main.content");
@@ -373,9 +376,14 @@ suite.define(() => {
           };
         }, route);
 
-      for (const route of mobileSettingsRoutes) {
+      // The desktop audit below owns cold CSS coverage; these rows check shell insets.
+      for (const [index, route] of mobileSettingsRoutes.entries()) {
         const pathname = pathForRoute(route);
-        await page.goto(new URL(pathname, suite.server.baseUrl).toString());
+        if (index === 0) {
+          await page.goto(new URL(pathname, suite.server.baseUrl).toString());
+        } else {
+          await navigate(route);
+        }
         await waitForControlUiRoute(page, { pathname, routeId: route });
         await expect
           .poll(() => readShellInsets(route), { message: `${route} settings shell alignment` })
@@ -384,7 +392,7 @@ suite.define(() => {
 
       for (const route of mobileStandaloneSettingsPageRoutes) {
         const pathname = pathForRoute(route);
-        await page.goto(new URL(pathname, suite.server.baseUrl).toString());
+        await navigate(route);
         await waitForControlUiRoute(page, { pathname, routeId: route });
         const settingsPage = page.locator(".settings-page").last();
         await settingsPage.waitFor({ state: "attached" });
@@ -397,11 +405,16 @@ suite.define(() => {
       }
 
       for (const { route, contentSelector } of mobileGeometryCases) {
-        await page.close();
-        page = await context.newPage();
-        await installMockGateway(page);
         const pathname = pathForRoute(route);
-        await page.goto(new URL(pathname, suite.server.baseUrl).toString());
+        // The desktop audit cold-loads these routes; keep fresh mobile loads for the rest.
+        if (settingsRowRoutes.some((settingsRoute) => settingsRoute === route)) {
+          await navigate(route);
+        } else {
+          await page.close();
+          page = await context.newPage();
+          await installMockGateway(page);
+          await page.goto(new URL(pathname, suite.server.baseUrl).toString());
+        }
         await waitForControlUiRoute(page, { pathname, routeId: route });
         const header = page.locator(".content-header").last();
         const title = header.locator(".page-title");
@@ -461,7 +474,7 @@ suite.define(() => {
           });
       }
 
-      await page.goto(`${suite.server.baseUrl}settings/appearance`);
+      await navigate("appearance");
       await waitForControlUiRoute(page, {
         pathname: "/settings/appearance",
         routeId: "appearance",
@@ -498,7 +511,7 @@ suite.define(() => {
       });
 
       await page.setViewportSize({ height: 900, width: 1440 });
-      await page.goto(`${suite.server.baseUrl}settings/appearance`);
+      await navigate("appearance");
       await waitForControlUiRoute(page, {
         pathname: "/settings/appearance",
         routeId: "appearance",

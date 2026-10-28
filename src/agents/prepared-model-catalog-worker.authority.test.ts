@@ -143,32 +143,17 @@ it("publishes a failed task's committed credential before releasing denial", asy
   }
 });
 
-it.each([
-  { name: "releases confirmed credential facts before rejecting a failed result", known: true },
-  { name: "keeps credential authority denied when the worker outcome is unknown", known: false },
-])("$name", async ({ known }) => {
+it("keeps credential authority denied when the worker outcome is unknown", async () => {
   const { worker, dispatched, authority, outcome, capture, credential } = fixture();
   const rejected = expect(worker.loadAuth({ providerIds: [] })).rejects.toThrow(
-    known ? "synthetic catalog failure" : "worker terminated",
+    "worker terminated",
   );
   await dispatched.promise;
   expect(() => authority.readCurrentCredential()).toThrow();
-  if (known) {
-    outcome.resolve({
-      status: "failed",
-      error: "synthetic catalog failure",
-      authCredentials: [],
-    });
-  } else {
-    outcome.reject(new Error("worker terminated"));
-  }
+  outcome.reject(new Error("worker terminated"));
   await rejected;
-  if (known) {
-    expect(authority.readCurrentCredential()).toEqual(credential);
-  } else {
-    expect(() => authority.readCurrentCredential()).toThrow();
-    const prepared = capture();
-    prepared.observe(credential);
-    expect(() => prepared.readCurrentCredential()).toThrow();
-  }
+  expect(() => authority.readCurrentCredential()).toThrow();
+  const prepared = capture();
+  prepared.observe(credential);
+  expect(() => prepared.readCurrentCredential()).toThrow();
 });

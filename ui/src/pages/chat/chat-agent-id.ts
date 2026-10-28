@@ -2,7 +2,7 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { normalizeAgentLabel, resolveAgentTextAvatar } from "../../lib/agents/display.ts";
 import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
 import type { AgentIdentity } from "../../lib/identity-avatar-view.ts";
-import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
+import { scopedAgentParamsForSession } from "../../lib/sessions/navigation.ts";
 import {
   normalizeAgentId,
   parseAgentSessionKey,

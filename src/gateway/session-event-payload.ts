@@ -1,10 +1,8 @@
 import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-lineage.js";
+import { isStaleLifecycleEventForSession } from "../config/sessions/session-run-lifecycle-projection.js";
 import type { AgentEventRuntimePayload } from "../infra/agent-events.js";
 import { deriveSessionUnread } from "../shared/session-unread.js";
-import {
-  deriveGatewaySessionLifecycleProjectionPatch,
-  isStaleLifecycleEventForSession,
-} from "./session-lifecycle-state.js";
+import { deriveGatewaySessionLifecycleProjectionPatch } from "./session-lifecycle-projection.js";
 import type { GatewaySessionRow } from "./session-utils.js";
 
 export function buildGatewaySessionSnapshot(params: {
@@ -64,6 +62,8 @@ export function buildGatewaySessionSnapshot(params: {
   const omitUnscopedSwarm =
     (sessionRow.key === "global" || sessionRow.key === "unknown") && !params.agentId;
   const eventFields: Record<string, unknown> = {
+    // Reserve wire order; attach the row after copying defined event fields into it.
+    session: undefined,
     updatedAt: sessionRow.updatedAt ?? undefined,
     sessionId: sessionRow.sessionId,
     createdActor: sessionRow.createdActor ?? null,
@@ -223,10 +223,8 @@ export function buildGatewaySessionSnapshot(params: {
   if ((sessionRow.key === "global" || sessionRow.key === "unknown") && !params.agentId) {
     delete session.swarm;
   }
-  return {
-    session,
-    ...eventFields,
-    subagentRunState: sessionRow.subagentRunState,
-    hasActiveSubagentRun: sessionRow.hasActiveSubagentRun,
-  };
+  eventFields.session = session;
+  eventFields.subagentRunState = sessionRow.subagentRunState;
+  eventFields.hasActiveSubagentRun = sessionRow.hasActiveSubagentRun;
+  return eventFields;
 }

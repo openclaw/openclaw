@@ -21,6 +21,10 @@ import type {
 import { requestCloudWorkerStop } from "./cloud-worker-stop.runtime.ts";
 import { showConfirmDialog, type ConfirmDialogSkipPreference } from "./confirm-dialog.ts";
 import { showInputDialog } from "./input-dialog.tsx";
+import {
+  confirmWithBoundAutomations,
+  withBoundAutomationNotice,
+} from "./session-automation-confirm.ts";
 import type { SessionMenuAction } from "./session-menu-solid.tsx";
 import { archiveSessionsWithUndo } from "./session-organizer-archive.runtime.ts";
 import {
@@ -81,6 +85,31 @@ function sessionDeleteSkipPreference(
   };
 }
 
+// Delete always confirms; bound automations add an unskippable pause warning.
+function confirmSessionDelete(
+  sessions: readonly SessionActionRow[],
+  options: { message: string; skipPreference?: ConfirmDialogSkipPreference },
+  scope: SidebarSessionMutationScope,
+): Promise<boolean> {
+  const dialog = {
+    ...options,
+    confirmLabel: t("common.delete"),
+    danger: true,
+    signal: scope.signal,
+  };
+  return confirmWithBoundAutomations(
+    {
+      action: "delete",
+      sessions,
+      gateway: scope.gateway,
+      selectedAgentId: scope.selectedAgentId,
+      signal: scope.signal,
+    },
+    (notice) => showConfirmDialog(notice ? withBoundAutomationNotice(dialog, notice) : dialog),
+    Boolean,
+  );
+}
+
 /** One confirm and one preserved-worktrees alert for the whole selection. */
 export async function deleteSessionsBatch(
   deps: SessionOrganizerDependencies,
@@ -90,13 +119,14 @@ export async function deleteSessionsBatch(
   if (rows.length === 0) {
     return;
   }
-  const confirmed = await showConfirmDialog({
-    message: t("sessionsView.deleteSessionsConfirm", { count: String(rows.length) }),
-    confirmLabel: t("common.delete"),
-    danger: true,
-    skipPreference: sessionDeleteSkipPreference(scope),
-    signal: scope.signal,
-  });
+  const confirmed = await confirmSessionDelete(
+    rows,
+    {
+      message: t("sessionsView.deleteSessionsConfirm", { count: String(rows.length) }),
+      skipPreference: sessionDeleteSkipPreference(scope),
+    },
+    scope,
+  );
   // A reconnect or a replaced sessions capability can land while the modal is
   // open, so the captured scope is revalidated before any delete leaves here.
   // Checked ahead of `confirmed`: a retired scope aborts the dialog to `false`
@@ -178,33 +208,13 @@ async function acknowledgeUnreadHiddenRuns(
       runs.set(run.key, run);
     }
   }
-  await Promise.all(
-    [...runs.values()].map(async (run) => {
-      if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
-        return;
-      }
-      const agentId = resolveUiSessionRowAgentId(run, scope.selectedAgentId);
-      const expectedSessionId = run.sessionId ? { expectedSessionId: run.sessionId } : {};
-      const access = readSessionMethodAccess(scope.gateway.snapshot, {
-        method: "sessions.patch",
-        params: { key: run.key, unread: false, agentId, ...expectedSessionId },
-        sessionScope: true,
-        session: run,
-      });
-      // Runs the caller cannot patch keep their state without a second error.
-      if (!access.allowed) {
-        return;
-      }
-      // The capability publishes request failures once.
-      await scope.sessions
-        .patch(
-          run.key,
-          { unread: false },
-          { agentId, expectedMarkedUnreadAt: null, ...expectedSessionId },
-        )
-        .catch(() => undefined);
-    }),
-  );
+  if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
+    return;
+  }
+  await scope.sessions.acknowledgeHiddenRuns([...runs.values()], {
+    agentId: scope.selectedAgentId ?? undefined,
+    publishErrors: true,
+  });
 }
 
 // A child may temporarily render as a root while its parent is archived.
@@ -547,13 +557,14 @@ export async function deleteSession(
   // only the sidebar the setting names may offer it, and the default keeps asking.
   options: { offerSkip?: boolean } = {},
 ) {
-  const confirmed = await showConfirmDialog({
-    message: t("sessionsView.deleteSessionConfirm", { session: session.label }),
-    confirmLabel: t("common.delete"),
-    danger: true,
-    ...(options.offerSkip ? { skipPreference: sessionDeleteSkipPreference(scope) } : {}),
-    signal: scope.signal,
-  });
+  const confirmed = await confirmSessionDelete(
+    [session],
+    {
+      message: t("sessionsView.deleteSessionConfirm", { session: session.label }),
+      ...(options.offerSkip ? { skipPreference: sessionDeleteSkipPreference(scope) } : {}),
+    },
+    scope,
+  );
   // Checked ahead of `confirmed`: a retired scope aborts the dialog to `false`
   // too, so without this order the operator's lost intent would look like an
   // ordinary cancel instead of the reconnect that actually dropped it.

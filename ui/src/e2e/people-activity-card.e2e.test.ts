@@ -316,7 +316,7 @@ suite.define(() => {
         await person.waitFor({ state: "visible" });
         await expectCount(card, 0);
         await expectCount(row.locator("a, button"), 2);
-        await expectCount(row.getByRole("button", { name: "Pin", exact: true }), 1);
+        await expectCount(row.getByRole("button", { name: "Actions for Alice", exact: true }), 1);
         await person.hover();
         await card.waitFor({ state: "visible" });
         await expectText(card, "Reported time zone: Europe/Paris");

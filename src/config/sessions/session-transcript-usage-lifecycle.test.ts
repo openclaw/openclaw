@@ -40,6 +40,8 @@ it.each(["read", "refresh"] as const)(
     );
     const taskFinished = createDeferredCore();
     const finishScope = createDeferredCore();
+    const value =
+      kind === "read" ? { kind: "inventory", files: [] } : { kind: "refresh", changed: false };
     nativePosts.observe = (worker, message) => {
       if (!message.input) {
         return;
@@ -48,14 +50,7 @@ it.each(["read", "refresh"] as const)(
         worker.emit("message", {
           status: "ok",
           taskId: message.taskId,
-          value: {
-            ok: true,
-            value:
-              kind === "read"
-                ? { kind: "inventory", files: [] }
-                : { kind: "refresh", changed: false },
-            closedDatabases: [database],
-          },
+          value: { ok: true, value, closedDatabases: [database] },
         });
       });
     };
@@ -66,10 +61,10 @@ it.each(["read", "refresh"] as const)(
     });
     try {
       await awaitGateBeforeSettlement(taskFinished.promise, scope, "Usage task did not finish");
-      await vi.advanceTimersByTimeAsync(4 * 60_000);
+      await vi.advanceTimersByTimeAsync(20_000);
       finishScope.resolve();
       await scope;
-      await vi.advanceTimersByTimeAsync(60_000 - 1);
+      await vi.advanceTimersByTimeAsync(70_000 - 1);
       expect(lane.pool.getSnapshot().workers).toBe(1);
       await vi.advanceTimersByTimeAsync(1);
       expect(lane.pool.getSnapshot().workers).toBe(0);
@@ -136,7 +131,6 @@ it.each([false, true])(
       expect(observed.unregister).not.toHaveBeenCalled();
       allowExit.resolve();
       const failure = await outcome;
-      expect(failure).toBeInstanceOf(AggregateError);
       if (!(failure instanceof AggregateError)) {
         throw new Error("Expected original usage failure and its native cleanup error");
       }

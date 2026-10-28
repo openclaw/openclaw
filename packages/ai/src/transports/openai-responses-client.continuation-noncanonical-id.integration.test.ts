@@ -1,7 +1,7 @@
-import { createServer } from "node:http";
-import type { AddressInfo, Server } from "node:net";
+import { createServer, type Server } from "node:http";
 import type { AssistantMessage, Context, Model } from "@openclaw/llm-core";
 import { afterEach, assert, describe, expect, it } from "vitest";
+import { listenLoopback } from "../../../../test/helpers/gateway-integration-fixtures.js";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { cleanupSessionResources } from "../session-resources.js";
 import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
@@ -42,11 +42,7 @@ class ScriptedResponsesServer {
         res.end();
       });
     });
-    await new Promise<void>((resolve) => {
-      this.server?.listen(0, "127.0.0.1", resolve);
-    });
-    const address = this.server?.address() as AddressInfo;
-    return `http://127.0.0.1:${address.port}/v1`;
+    return `${await listenLoopback(this.server)}/v1`;
   }
 
   async close(): Promise<void> {

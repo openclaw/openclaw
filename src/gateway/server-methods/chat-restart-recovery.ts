@@ -52,7 +52,7 @@ import { parseInlineDirectives } from "../../utils/directive-tags.js";
 import { resolveAgentSessionWorkStartError } from "../agent-turn/agent-handler-helpers.js";
 import { resolveChatRunOwnerAgentId } from "../chat-run-owner.js";
 import type { GatewayRecoveryRuntime } from "../server-instance-runtime.types.js";
-import { deriveGatewaySessionLifecycleSnapshot } from "../session-lifecycle-state.js";
+import { deriveGatewaySessionLifecycleSnapshot } from "../session-lifecycle-projection.js";
 import {
   captureGatewayScopeMatcher,
   captureRpcSourceScopeMatcher,

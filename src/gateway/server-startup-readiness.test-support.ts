@@ -1,4 +1,9 @@
 import { expect, it, vi } from "vitest";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import {
@@ -6,9 +11,11 @@ import {
   recordAgentDatabaseAdmissions,
 } from "../state/agent-database-admission.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { GatewayInputRecovery } from "./agent-input-recovery.js";
 import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./methods/core-method-policy.js";
 import type { GatewayStartupModuleMocks } from "./server-startup-module-mocks.test-support.js";
 import type { startGatewayPostAttachRuntime } from "./server-startup-post-attach.js";
+import type { postAttachMocks } from "./server-startup-post-attach.mocks.test-support.js";
 import { logGatewayReady } from "./server-startup-readiness.js";
 import type { GatewayStartupTrace } from "./server-startup-trace.js";
 import type { ReadinessChecker } from "./server/readiness.js";
@@ -26,6 +33,10 @@ export function createStartupMethodUnlocker(unavailableGatewayMethods: Set<strin
 }
 
 export function registerGatewayStartupReadinessTests(params: {
+  recoveryMocks: Pick<
+    typeof postAttachMocks,
+    "activateSubagentRegistry" | "scheduleRestartAbortedMainSessionRecovery"
+  >;
   start: (
     params: PostAttachParams,
     runtimeDeps?: GatewayStartupModuleMocks,
@@ -38,20 +49,22 @@ export function registerGatewayStartupReadinessTests(params: {
   it.each([true, false])(
     "admits update canary readiness only for attributed plugin failures (attributed=%s)",
     async (attributed) => {
+      const error = "synthetic registration failure";
+      const diagnostic = {
+        level: "error" as const,
+        message: error,
+        ...(attributed ? { pluginId: "startup-fixture" } : {}),
+      };
       const pluginRegistry = createEmptyPluginRegistry();
       pluginRegistry.plugins.push(
         createPluginRecord({
           id: "startup-fixture",
           source: params.path("startup-fixture", "index.js"),
           status: "error",
-          error: "synthetic registration failure",
+          error,
         }),
       );
-      pluginRegistry.diagnostics.push({
-        level: "error",
-        message: "synthetic registration failure",
-        ...(attributed ? { pluginId: "startup-fixture" } : {}),
-      });
+      pluginRegistry.diagnostics.push({ ...diagnostic });
       const onStartupPluginsLoaded =
         vi.fn<NonNullable<PostAttachParams["onStartupPluginsLoaded"]>>();
       const onSidecarsReady = vi.fn();
@@ -64,34 +77,25 @@ export function registerGatewayStartupReadinessTests(params: {
       });
       const runtimeDeps = params.createRuntimeDeps();
       const startup = params.start(startupParams, runtimeDeps);
-
       if (attributed) {
         await startup;
-        expect(onSidecarsReady).toHaveBeenCalledOnce();
-        expect(startupParams.unlockStartupMethods).toHaveBeenCalledOnce();
       } else {
         await expect(startup).rejects.toThrow(
           "Candidate plugin registry reported an unattributed error",
         );
-        expect(onSidecarsReady).not.toHaveBeenCalled();
-        expect(startupParams.unlockStartupMethods).not.toHaveBeenCalled();
       }
+      expect(onSidecarsReady).toHaveBeenCalledTimes(Number(attributed));
+      expect(startupParams.unlockStartupMethods).toHaveBeenCalledTimes(Number(attributed));
       const published = onStartupPluginsLoaded.mock.lastCall?.[0].pluginRegistry;
-      expect(published?.plugins).toEqual([
-        expect.objectContaining({
+      expect(published?.plugins).toMatchObject([
+        {
           id: "startup-fixture",
           status: "error",
           activated: true,
-          error: "synthetic registration failure",
-        }),
-      ]);
-      expect(published?.diagnostics).toEqual([
-        {
-          level: "error",
-          message: "synthetic registration failure",
-          ...(attributed ? { pluginId: "startup-fixture" } : {}),
+          error,
         },
       ]);
+      expect(published?.diagnostics).toEqual([diagnostic]);
       expect(startupParams.startChannels).not.toHaveBeenCalled();
       params.expectAutonomousSidecarsNotStarted();
       expect(runtimeDeps.createGatewayUpdateCheck).not.toHaveBeenCalled();
@@ -134,6 +138,87 @@ export function registerGatewayStartupReadinessTests(params: {
       ["postReadySidecarCount", 3],
     ]);
   });
+  it.for([false, true])(
+    "releases healthy main-session recovery after initial restoration (deferred failure: %s)",
+    async (failRestoration, { signal }) => {
+      const { promise: postReadyWork, resolve: releasePostReadyWork } = createDeferred();
+      const restorationStarted = createDeferred();
+      const initialRestorationReady = createDeferred();
+      const restorationReady = createDeferred();
+      const inputRecovery = new GatewayInputRecovery();
+      params.recoveryMocks.activateSubagentRegistry.mockImplementationOnce(() => {
+        restorationStarted.resolve();
+        const settled = restorationReady.promise.then(() => {
+          if (failRestoration) {
+            throw new Error("restoration failed");
+          }
+        });
+        return {
+          initial: initialRestorationReady.promise,
+          pending: new Map([["slow", settled]]),
+          settled,
+        };
+      });
+      let waitForStart: (() => Promise<void>) | undefined;
+      params.recoveryMocks.scheduleRestartAbortedMainSessionRecovery.mockImplementationOnce(
+        (recovery: { waitForStart?: () => Promise<void>; inputRecovery?: unknown }) => {
+          waitForStart = recovery.waitForStart;
+          expect(recovery.inputRecovery).toBe(inputRecovery);
+          return { stop: vi.fn(async () => {}) };
+        },
+      );
+
+      const base = params.createParams();
+      const context = { ...base.resolveGatewayContext()!, inputRecovery };
+      const runtime = await params.start({
+        ...base,
+        resolveGatewayContext: () => context,
+        trackInputRecovery: (progress) => inputRecovery.track(progress),
+        unlockStartupMethods: (options) => {
+          if (!options?.keepChatSendUnavailable) {
+            inputRecovery.releaseInitial();
+          }
+        },
+        waitForPostReadyWork: () => postReadyWork,
+      });
+
+      await vi.waitFor(
+        () => {
+          expect(waitForStart).toEqual(expect.any(Function));
+        },
+        { interval: 1 },
+      );
+      let released = false;
+      const waiting = waitForStart?.().then(() => {
+        released = true;
+      });
+      await Promise.resolve();
+      expect(released).toBe(false);
+
+      try {
+        releasePostReadyWork();
+        await withinTest(
+          awaitGateBeforeSettlement(
+            restorationStarted.promise,
+            runtime.subagentRecoverySettled,
+            "startup recovery settled before source restoration",
+          ),
+          signal,
+        );
+        expect(released).toBe(false);
+        initialRestorationReady.resolve();
+        await waiting;
+        expect(released).toBe(true);
+        expect(inputRecovery.isPending("healthy")).toBe(false);
+        expect(inputRecovery.isPending("slow")).toBe(true);
+      } finally {
+        initialRestorationReady.resolve();
+        restorationReady.resolve();
+      }
+      await runtime.subagentRecoverySettled;
+      expect(inputRecovery.isPending("slow")).toBe(failRestoration);
+    },
+  );
 }
 
 export function expectCoreAgentDatabaseReadiness(

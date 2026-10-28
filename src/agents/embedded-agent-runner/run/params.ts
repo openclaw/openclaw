@@ -1,10 +1,10 @@
 import type { ReasoningStreamPayload } from "../../../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../../../auto-reply/reply-payload.js";
+import type { SessionDeliveryState } from "../../../config/sessions/types.js";
 import type { CronRuntimeAuthority } from "../../../cron/runtime-authority.js";
 import type { CronScheduledToolCallerOrigin } from "../../../cron/scheduled-tool-policy.js";
 import type { CommandQueueEnqueueFn } from "../../../process/command-queue.types.js";
 import type { ExplicitSkillSelection } from "../../../skills/types.js";
-import type { ModelFallbackAvailability } from "../../agent-scope.js";
 import type { MemoryFlushToolRunContext } from "../../agent-tools.memory-flush.types.js";
 import type { AssistantErrorTranscript } from "../../assistant-error-transcript.js";
 import type { ExecApprovalContinuationPromptRange } from "../../bash-tools.exec-approval-output.js";
@@ -30,6 +30,7 @@ import type { ExpectedAgentHarnessRuntimeArtifact } from "../../harness/runtime-
 import type { AgentInternalEvent } from "../../internal-events.js";
 import type { CurrentInboundPromptContext } from "../../internal-runtime-context.js";
 import type { PreparedModelThinkingCapability } from "../../model-catalog-lookup.js";
+import type { ModelFallbackAvailability } from "../../model-fallback.types.js";
 import type { ReplyDeliveryObserver } from "../../reply-completion.js";
 import type { ResolvedToolPromptFinalizer } from "../../resolved-tool-prompt.types.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.types.js";
@@ -180,6 +181,8 @@ export type RunEmbeddedAgentParams = Pick<
   cronCreatorAuthorityUnavailableReason?: "queued-local-operator";
   /** Canonical persisted exec policy for this session. */
   execSession?: ExecSessionDefaults;
+  /** Session-owned presentation facts; never current-turn delivery or tool authority. */
+  sessionPromptDelivery?: SessionDeliveryState;
   execOverrides?: Pick<
     ExecToolDefaults,
     | "host"
@@ -295,6 +298,7 @@ export type EmbeddedForegroundPromptContext = Pick<
   | "allowGatewaySubagentBinding"
   | "extraSystemPrompt"
   | "extraSystemPromptTurnContext"
+  | "sessionPromptDelivery"
   | "gitCoauthorPrompt"
   | "silentReplyPromptMode"
   | "ownerNumbers"

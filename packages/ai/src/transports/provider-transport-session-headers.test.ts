@@ -1,14 +1,10 @@
-import type {
-  AssistantMessageEventStreamContract,
-  AssistantMessageEventStreamLike,
-  StreamFn,
-} from "@openclaw/llm-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { jsonResponse } from "../../../../src/test-helpers/http.js";
 import { createApiRegistry } from "../api-registry.js";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import { streamSimpleGoogle } from "../providers/google.js";
 import { makeProviderModel } from "../providers/provider-model.test-support.js";
+import { registerSynchronousTestApi } from "../providers/provider-stream.test-support.js";
 import { registerBuiltInApiProviders } from "../providers/register-builtins.js";
 import type { Model } from "../types.js";
 import { createAnthropicMessagesTransportStreamFn } from "./anthropic-transport-stream.js";
@@ -38,26 +34,6 @@ function makeModel<T extends Model["api"]>(
     maxTokens: 128,
     ...overrides,
   });
-}
-
-function isSynchronousStream(
-  stream: AssistantMessageEventStreamLike,
-): stream is AssistantMessageEventStreamContract {
-  return (
-    "push" in stream &&
-    typeof stream.push === "function" &&
-    "end" in stream &&
-    typeof stream.end === "function"
-  );
-}
-
-function requireSynchronousStream(
-  stream: ReturnType<StreamFn>,
-): AssistantMessageEventStreamContract {
-  if (stream instanceof Promise || !isSynchronousStream(stream)) {
-    throw new Error("Expected synchronous assistant event stream");
-  }
-  return stream;
 }
 
 afterEach(() => {
@@ -261,22 +237,7 @@ describe("managed OpenAI Responses session headers at fetch egress", () => {
       buildModelFetch: () => captureFetch,
       requiresManagedTransport: () => testCase.managed,
       plugin: { ...initialHost.plugin, resolveProviderStream: () => undefined },
-      registerCustomApi: (registry, api, streamFn) => {
-        if (registry.getApiProvider(api)) {
-          return false;
-        }
-        const registeredStream = (
-          model: Model,
-          context: Parameters<StreamFn>[1],
-          options?: Parameters<StreamFn>[2],
-        ) => requireSynchronousStream(streamFn(model, context, options));
-        registry.registerApiProvider({
-          api,
-          stream: registeredStream,
-          streamSimple: registeredStream,
-        });
-        return true;
-      },
+      registerCustomApi: registerSynchronousTestApi,
     });
 
     const apiRegistry = createApiRegistry();

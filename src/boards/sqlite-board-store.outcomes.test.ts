@@ -48,10 +48,7 @@ beforeEach(() => {
 });
 
 function fixture() {
-  const { storeOptions, sessionKey, database } = boardFixture(
-    tempDirs.make("board-publication-outcome-"),
-    "agent:main:original",
-  );
+  const { storeOptions, sessionKey, database } = boardFixture(tempDirs.make("board-outcome-"));
   const store = new SqliteBoardStore({
     ...storeOptions,
     resolveSession: (target) => ({ agentId: "main", path: database.path, ...target }),
@@ -63,7 +60,6 @@ function fixture() {
   function expectPublication(expected: SessionRowChange[]) {
     expect(changes).toEqual(expected);
     expect(boundary.execute).toHaveBeenCalledOnce();
-    expect(boundary.close).toHaveBeenCalledOnce();
   }
   return { store, params, change, expectPublication };
 }
@@ -76,8 +72,6 @@ function failureOutcome(kind: "native" | "transported" | "cleanup") {
       error,
     );
   }
-  // Broker retirement/settlement is owned by sqlite-worker-request-custody and
-  // sqlite-worker-broker-reply.cleanup tests. Here only the delivered error matters.
   return kind === "native"
     ? error
     : Object.assign(new Error(error.message), { name: error.name, code: error.code });

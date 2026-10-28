@@ -6,6 +6,7 @@ import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { i18n } from "../../i18n/index.ts";
 import { prepareCatalogTerminal } from "../../lib/sessions/catalog-terminal-start.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { preserveDocumentStyle } from "../../test-helpers/preserve-document-style.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
@@ -67,6 +68,7 @@ describe("OpenClawTerminalPanel", () => {
   });
 
   beforeEach(async () => {
+    preserveDocumentStyle();
     vi.stubGlobal("localStorage", createStorageMock());
     vi.stubGlobal("sessionStorage", createStorageMock());
     await i18n.setLocale("en");

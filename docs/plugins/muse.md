@@ -135,9 +135,10 @@ guessed relationships or inherited recommendations.
 
 Use **Model Setup → Meta → Muse Code** in either **Provider Access** or **AI Setup**
 in the Control UI for browser sign-in.
-The credential stays in Muse Code's own credential store; OpenClaw does not
-copy it into an auth profile. This sign-in authorizes the Muse runtime, not
-the direct Meta API route.
+The credential is saved in a Muse credential file under the OpenClaw state
+directory, separate from the default sign-in that the `muse` CLI uses on the
+same host; OpenClaw does not copy it into an auth profile. This sign-in
+authorizes the Muse runtime, not the direct Meta API route.
 
 Keep the sign-in dialog open while it shows **Waiting for approval in your
 browser…**. The device code and **Open sign-in** link remain available during
@@ -163,7 +164,8 @@ credential directory when its credential file exists.
 
 Before the first sign-in for an agent, OpenClaw asks you to accept Muse Code's
 native permissions. Continuing remembers this choice for that agent, so future
-Muse chats do not ask again. Muse runs on the Gateway host with its own tools;
+Muse chats do not ask again, including your own channel chats. Other senders
+still need a chat set to Full access. Muse runs on the Gateway host with its own tools;
 OpenClaw's optional native tool and sandbox restrictions do not apply to it.
 OpenClaw-hosted tools retain their policy checks. Revoke consent by removing
 `muse` from the agent's **Remembered native runtime permissions** setting.

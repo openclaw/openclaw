@@ -47,6 +47,23 @@ it("admits display content once before sanitizing a history page", () => {
   }
 });
 
+it("preserves model-change labels without exposing other custom-message details", () => {
+  const message = {
+    role: "custom",
+    customType: "session-model-change",
+    display: true,
+    content: "Model changed from Demo model A to Demo model B.",
+    details: { from: "Demo model A", to: "Demo model B", diagnostic: "PRIVATE_DETAIL" },
+  };
+  expect(projectStable([message])).toEqual([
+    { ...message, details: { from: "Demo model A", to: "Demo model B" } },
+  ]);
+  for (const details of [{ from: "Demo model A" }, { from: 1, to: "Demo model B" }]) {
+    const projected = projectStable([{ ...message, details }]);
+    expect(projected[0]).not.toHaveProperty("details");
+  }
+});
+
 it("preserves catalog text that resembles an OpenClaw reply-control token", () => {
   expect(
     projectChatDisplayMessages([
@@ -508,19 +525,18 @@ it.each([{ maxChars: 32 }, { maxChars: 8_000, toolResultMaxChars: 32 }])(
 );
 
 it("retains complete structured tool previews and tool arguments under a smaller text cap", () => {
-  const payload = JSON.stringify({
-    kind: "canvas",
-    view: { id: "preview", title: "x".repeat(3_000) },
-  });
+  const payload = JSON.stringify({ view: { title: "x".repeat(3_000) } });
   const call = { type: "toolCall", id: "structured", name: "exec", arguments: { input: payload } };
-  const result = { type: "toolResult", toolCallId: "structured", content: [text(payload)] };
+  const readText = vi.fn(() => payload);
+  const output = Object.defineProperty(text(payload), "text", { get: readText });
+  const result = { type: "toolResult", toolCallId: "structured", content: [output] };
   const messages = [
     { role: "toolResult", content: result.content },
     { role: "assistant", content: [call, result] },
   ];
-  expect(sanitizeChatHistoryMessages(messages, 8_000, { toolResultMaxChars: 2_000 })).toEqual(
-    messages,
-  );
+  const projected = sanitizeChatHistoryMessages(messages, 8_000, { toolResultMaxChars: 2_000 });
+  expect(readText).toHaveBeenCalledTimes(2);
+  expect(projected).toEqual(messages);
 });
 
 const user = userRow("hello", { seq: 1 });

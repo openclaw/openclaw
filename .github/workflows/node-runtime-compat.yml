@@ -104,7 +104,6 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=8192
         run: |
           pnpm build
-          pnpm ui:build
           node openclaw.mjs --help
           node openclaw.mjs status --json --timeout 1
           pnpm test:build:singleton

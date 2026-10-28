@@ -24,7 +24,6 @@ import {
   buildLmstudioReasoningEffortMap,
   LMSTUDIO_OPENAI_COMPAT_ENABLED_REASONING_EFFORTS,
   LMSTUDIO_OPENAI_COMPAT_REASONING_EFFORTS,
-  normalizeLmstudioTransportReasoningCompat,
 } from "./model-reasoning.js";
 
 export type LmstudioModelWire = {
@@ -170,14 +169,6 @@ function normalizeUrlPath(pathname: string): string {
     .replace(/\/v1$/i, "");
 }
 
-function isLikelyHostBaseUrl(value: string): boolean {
-  return (
-    /^(?:localhost|(?:\d{1,3}\.){3}\d{1,3}|[a-z0-9.-]+\.[a-z]{2,}|[^/\s?#]+:\d+)(?:[/?#].*)?$/i.test(
-      value,
-    ) && !value.startsWith("/")
-  );
-}
-
 function normalizeConfiguredReasoningEffortMap(
   value: Record<string, string> | undefined,
 ): Record<string, string> | undefined {
@@ -203,15 +194,22 @@ function normalizeLmstudioConfiguredCompat(
   const { supportedReasoningEfforts, reasoningEffortMap, ...compat } = value;
   const normalizedEfforts = normalizeReasoningOptions(supportedReasoningEfforts);
   const normalizedMap = normalizeConfiguredReasoningEffortMap(reasoningEffortMap);
-  return normalizeLmstudioTransportReasoningCompat({
+  return {
     ...compat,
     ...(normalizedEfforts.length > 0 ? { supportedReasoningEfforts: normalizedEfforts } : {}),
     ...(normalizedMap ? { reasoningEffortMap: normalizedMap } : {}),
-  });
+  };
 }
 
 export function toFetchableLmstudioBaseUrl(value: string): string {
-  if (/^https?:\/\//i.test(value) || !isLikelyHostBaseUrl(value)) {
+  if (
+    /^https?:\/\//i.test(value) ||
+    !(
+      /^(?:localhost|(?:\d{1,3}\.){3}\d{1,3}|[a-z0-9.-]+\.[a-z]{2,}|[^/\s?#]+:\d+)(?:[/?#].*)?$/i.test(
+        value,
+      ) && !value.startsWith("/")
+    )
+  ) {
     return value;
   }
   return `http://${value}`;

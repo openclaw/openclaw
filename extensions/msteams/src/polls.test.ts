@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import path from "node:path";
 import { DatabaseSync, StatementSync } from "node:sqlite";
+import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
@@ -239,6 +240,29 @@ describe("msteams polls", () => {
     async (failure) => {
       const metadata = pluginStore<unknown>("polls", 2000);
       const buckets = pluginStore<unknown>("poll-vote-buckets", 32_032);
+      setMSTeamsRuntime({
+        ...msteamsRuntimeStub,
+        state: {
+          ...msteamsRuntimeStub.state,
+          openKeyedStore: <T>(options: OpenAsyncKeyedStoreOptions) => {
+            const backing = msteamsRuntimeStub.state.openKeyedStore<T>(options);
+            if (options.namespace !== "polls") {
+              return backing;
+            }
+            return {
+              ...backing,
+              async delete(...args: Parameters<typeof backing.delete>) {
+                const deleted = await backing.delete(...args);
+                if (args[0] === "expired-a" && failure !== "delete") {
+                  // The trigger injects an offline fault outside committed writer facts.
+                  await closeOpenClawStateDatabaseAsync();
+                }
+                return deleted;
+              },
+            };
+          },
+        },
+      });
       const store = createMSTeamsPollStoreState();
       await store.createPoll(poll({ id: "new", question: "Pick" }));
       const expiredAt = new Date(Date.now() - 31 * 24 * 60 * 60 * 1000).toISOString();
@@ -275,6 +299,8 @@ describe("msteams polls", () => {
               AND entry_key = 'failing'; END;
         `,
         );
+        // Reload the deliberately rewritten timestamps before the real mutation.
+        await closeOpenClawStateDatabaseAsync();
         await expect(
           store.recordVote({ pollId: "new", voterId: "voter", selections: ["1"] }),
         ).rejects.toThrow(

@@ -90,6 +90,10 @@ Initial thread history uses its existing rendering path once. With
 `thread.historyScope: "channel"`, the recent window uses the channel timeline
 while initial thread seeding remains separate.
 
+When the bounded session transcript confirms a completed answer, unchanged
+requests with matching message IDs are not quoted again. Edits, unseen discussion,
+unfinished requests, and attachments remain eligible; reply targets stay separate.
+
 Thread-scoped history reads only that thread. Slack returns thread replies oldest
 first, so automatic thread recovery stops after three pages. If that cannot reach
 the recent end, OpenClaw logs an omission rather than presenting an old prefix as

@@ -12,14 +12,12 @@ import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.
 import {
   cleanupStore,
   makeRuntime,
-  mockSessionsConfig,
   resetMockSessionsConfig,
   runSessionsJson,
   setMockSessionsConfig,
   writeStore as seedStore,
 } from "./sessions.test-helpers.js";
 
-mockSessionsConfig();
 const gatewayOwner = { pid: 123, port: 19461, createdAt: "fixture" };
 
 const catalogState = vi.hoisted(() => ({
@@ -120,8 +118,14 @@ describe("sessionsCommand", () => {
     const entries = [
       ["agent:main:main", "gpt-5.6-luna"],
       ["agent:main:東京", "gemini-3-flash-preview"],
-      ["agent:main:e\u0301", "gpt-5.6-luna"],
-      ["agent:main:👩‍💻", "claude-sonnet-4-6"],
+      ...["😀", "👩‍💻", "e\u0301"].map(
+        (cluster) =>
+          [
+            `agent:main:aaaa${cluster}middle${cluster}zzzzz`,
+            "claude-sonnet-4-6",
+            `agent:main:aaaa${cluster}...${cluster}zzzzz`,
+          ] as const,
+      ),
     ] as const;
     const store = await writeStore(
       Object.fromEntries(
@@ -145,10 +149,11 @@ describe("sessionsCommand", () => {
     const lines = stripAnsi(logs.join("\n")).split("\n");
     const header = lines.find((line) => line.includes("Key") && line.includes("Model")) ?? "";
     expect(header).toContain("Flags");
-    for (const [key, model] of entries) {
-      const row = lines.find((line) => line.includes(key)) ?? "";
+    for (const [key, model, displayKey = key] of entries) {
+      const row = lines.find((line) => line.includes(displayKey)) ?? "";
+      expect(singleSessionTableCells([header, row])[1]).toBe(displayKey);
       for (const [title, value] of [
-        ["Key", key],
+        ["Key", displayKey],
         ["Model", model],
         ["Flags", "system"],
       ] as const) {
@@ -349,6 +354,23 @@ describe("sessionsCommand", () => {
     expect(row).toContain("think:high");
   });
 
+  it.skipIf(process.platform === "win32")(
+    "escapes terminal controls in store headers without changing JSON paths",
+    async () => {
+      const store = await writeStore(
+        {},
+        "sessions-café\u001b[31m\noperator-forged\tend\rrow\u0007",
+      );
+
+      const logs = await readSessionsText(store);
+      const header = logs.find((line) => line.includes("Session store:"));
+      expect(header).not.toMatch(/\p{Cc}/u);
+      expect(header).toContain("sessions-café\\noperator-forged\\tend\\rrow");
+      expect(logs).toContain("No sessions found.");
+      expect(await readSessionsJson(store)).toMatchObject({ path: store, count: 0 });
+    },
+  );
+
   it("sanitizes persisted identifiers only for terminal output", async () => {
     const key = "agent:main:\u001B[31mpeer\nrow";
     const sessionId = "session-\u001B[31mid\r\nforged-id";
@@ -368,7 +390,7 @@ describe("sessionsCommand", () => {
     expect(payload.sessions?.[0]).toMatchObject({ key, sessionId, model });
   });
 
-  it("preserves collaboration metadata in JSON and human output", async () => {
+  it.each([false, true])("preserves collaboration metadata (delegated=%s)", async (delegated) => {
     const sessionKey = "agent:main:shared";
     const ids = ["profile-ada", "profile-ben", "profile-cam", "profile-dee", "profile-eli"];
     const store = await writeSession(
@@ -379,8 +401,11 @@ describe("sessionsCommand", () => {
         createdActor: {
           type: "human",
           source: "profile",
-          id: "profile-creator",
+          id: delegated ? "isolation-owner" : "profile-creator",
           label: "Creator",
+          ...(delegated
+            ? { delegatedBy: { type: "human", source: "profile", id: "profile-creator" } as const }
+            : {}),
         },
       },
       sessionKey,
@@ -405,7 +430,6 @@ describe("sessionsCommand", () => {
     const shared = payload.sessions?.find((entry) => entry.key === sessionKey);
     expect(shared).toMatchObject({
       visibility: "suggest",
-      createdActor: { type: "human", id: "profile-creator" },
       owner: {
         actor: { type: "human", id: "profile-owner" },
         assignedBy: { type: "human", id: "profile-admin" },
@@ -413,6 +437,12 @@ describe("sessionsCommand", () => {
       },
       participantCount: 5,
       participants: ids.map((id) => ({ identity: { type: "profile", id } })),
+    });
+    expect(shared?.createdActor).toEqual({
+      type: "human",
+      source: "profile",
+      id: "profile-creator",
+      ...(delegated ? {} : { label: "Creator" }),
     });
     expect(shared).not.toHaveProperty("sharingRole");
   });

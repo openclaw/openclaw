@@ -470,7 +470,14 @@ describe("recoverSessionEntryFromRestartTombstone", () => {
       }
       await closing;
       if (retireOwner) {
-        captures.forEach((capture) => expect(capture).not.toHaveBeenCalled());
+        // Other fixtures can still reconcile until the file's afterAll cleanup.
+        captures.forEach((capture) => {
+          expect(
+            capture.mock.calls.filter(
+              ([options]) => resolvePath(options) === resolvePath(databaseOptions),
+            ),
+          ).toEqual([]);
+        });
       }
       restoreCaptures();
       expect(readEntry(fixture.scope(fixture.successorKey))).toMatchObject(params.successorEntry);

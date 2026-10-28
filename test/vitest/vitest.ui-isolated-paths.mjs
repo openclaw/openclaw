@@ -57,8 +57,6 @@ export const uiIsolatedTestFiles = [
   "ui/src/pages/chat/chat-pane-pull-requests.test.ts",
   "ui/src/pages/chat/chat-pane-retained-presentation.test.ts",
   "ui/src/pages/chat/chat-pane-retention.test.ts",
-  // Request-level speed proof replaces the provider SDK transport and SQL asset loaders.
-  "ui/src/pages/chat/chat-pane-session-controls.permissions.node.test.ts",
   "ui/src/pages/chat/chat-pane-swarm-startup.test.ts",
   "ui/src/pages/chat/chat-pane.read-marker.test.ts",
   "ui/src/pages/chat/chat-pane.session-discussion.test.ts",

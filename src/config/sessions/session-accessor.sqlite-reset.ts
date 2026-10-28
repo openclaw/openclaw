@@ -19,6 +19,7 @@ import {
   deleteAllSessionTranscriptArchivesInTransaction,
   readSessionTranscriptArchiveResetInventory,
 } from "./session-accessor.sqlite-archive-store-kernel.js";
+import type { SessionColdArchive } from "./session-accessor.sqlite-archive-types.js";
 import { runExclusiveSqliteTranscriptArchiveWorker } from "./session-accessor.sqlite-archive.js";
 import { readSessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.js";
 import {
@@ -37,10 +38,7 @@ import {
 import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
 import { readSessionColdChunks } from "./session-cold-storage-chunks.js";
 import { resolveSessionColdArchivePath } from "./session-cold-storage-codec.js";
-import {
-  sessionColdArchiveMetadataColumns,
-  type SessionColdArchive,
-} from "./session-cold-storage-state.js";
+import { sessionColdArchiveMetadataColumns } from "./session-cold-storage-state.js";
 import { collectAdmissionProtectedSessionIds } from "./session-history-eviction.js";
 import { deleteSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
 import type { SessionStoreTarget as SessionStoreResetScope } from "./targets-collision.js";

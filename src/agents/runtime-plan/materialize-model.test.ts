@@ -84,17 +84,14 @@ describe("materializePreparedRuntimeModel", () => {
   it.each(["matching", "resolved"] as const)(
     "compares the final %s route only once",
     async (mode) => {
-      const compare = vi.spyOn(modelRoutes, "modelMatchesProviderModelRoute");
-      try {
-        await expectModel({
-          ...(mode === "matching" ? { model: subscriptionModel } : {}),
-          metadataSnapshot,
-          resolveModel: async () => ({ model: subscriptionModel }),
-        }).resolves.toBe(subscriptionModel);
-        expect(compare).toHaveBeenCalledTimes(1);
-      } finally {
-        compare.mockRestore();
-      }
+      using compare = vi.spyOn(modelRoutes, "modelMatchesProviderModelRoute");
+
+      await expectModel({
+        ...(mode === "matching" ? { model: subscriptionModel } : {}),
+        metadataSnapshot,
+        resolveModel: async () => ({ model: subscriptionModel }),
+      }).resolves.toBe(subscriptionModel);
+      expect(compare).toHaveBeenCalledTimes(1);
     },
   );
 

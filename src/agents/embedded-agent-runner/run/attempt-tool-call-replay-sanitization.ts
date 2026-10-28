@@ -2,6 +2,7 @@ import { replaceCompactionReplayOwnerContent } from "@openclaw/ai/transports";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import { classifyToolUseResultPairing } from "../../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import { normalizeOpenAIResponsesToolCallIds } from "../../embedded-agent-helpers/openai.js";
 import {
   mergeConsecutiveUserMessages,
@@ -86,7 +87,8 @@ function sanitizeReplayToolCallInputs(
   const out: AgentMessage[] = [];
   const preservedThinkingToolCallIds = new Set<string>();
   const priorToolCallIds = new Set<string>();
-  const isCompleted = createCompletedToolCallPredicate(messages);
+  const pairing = classifyToolUseResultPairing(messages);
+  const isCompleted = createCompletedToolCallPredicate(messages, pairing);
 
   for (const [index, message] of messages.entries()) {
     if (!message) {
@@ -171,6 +173,7 @@ function sanitizeReplayToolCallInputs(
   return {
     messages: changed ? out : messages,
     droppedAssistantMessages,
+    pairing: changed ? undefined : pairing,
   };
 }
 
@@ -301,11 +304,6 @@ export function sanitizeReplayToolCallIdsForStream(params: {
   });
 }
 
-export function sanitizeOpenAIResponsesReplayForStream(messages: AgentMessage[]): AgentMessage[] {
-  const repaired = sanitizeToolUseResultPairingForModel(messages, true);
-  return normalizeOpenAIResponsesToolCallIds(repaired);
-}
-
 export function wrapStreamFnSanitizeMalformedToolCalls(
   baseFn: StreamFn,
   allowedToolNames?: Set<string>,
@@ -342,7 +340,7 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
       modelApi === "azure-openai-responses";
     const replayInputsChanged = sanitized.messages !== messages;
     let nextMessages = isOpenAIResponsesApi
-      ? sanitizeToolUseResultPairingForModel(sanitized.messages, true)
+      ? sanitizeToolUseResultPairingForModel(sanitized.messages, true, sanitized.pairing)
       : replayInputsChanged
         ? sanitizeToolUseResultPairing(sanitized.messages)
         : sanitized.messages;
@@ -360,10 +358,9 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
     }
     // Appended Bedrock users need merging without revalidating unchanged signed tools.
     if (nextMessages === messages) {
-      if (modelApi !== "bedrock-converse-stream") {
-        return baseFn(model, context, options);
+      if (modelApi === "bedrock-converse-stream") {
+        nextMessages = mergeConsecutiveUserMessages(nextMessages);
       }
-      nextMessages = mergeConsecutiveUserMessages(nextMessages);
     } else if (
       sanitized.droppedAssistantMessages > 0 ||
       transcriptPolicy?.validateAnthropicTurns ||
@@ -377,6 +374,9 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
           mergeConsecutiveTurns: shouldMergeConsecutiveTurns(transcriptPolicy, modelApi),
         });
       }
+    }
+    if (isOpenAIResponsesApi) {
+      nextMessages = normalizeOpenAIResponsesToolCallIds(nextMessages);
     }
     if (nextMessages === messages) {
       return baseFn(model, context, options);

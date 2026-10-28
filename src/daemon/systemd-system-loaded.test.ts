@@ -93,6 +93,13 @@ it("proves absence using the existing manager and load paths without activation"
   expect(fs.lstat).toHaveBeenCalledWith(`/etc/systemd/system/${unit}`);
   expect(fs.lstat).toHaveBeenCalledWith(`/run/systemd/system/${unit}`);
 });
+it("proves absence when systemd 245 busctl colors the missing-unit line", async () => {
+  const colored = `\u001b[0;1;31mCall failed: Unit ${unit} not loaded.\u001b[0m\n`;
+  exec.mockImplementation(async (_command, args) =>
+    args.includes("GetUnit") ? commandResult("", colored, 1) : reply(args),
+  );
+  await expect(absent()).resolves.toBeUndefined();
+});
 it("refuses filesystem uncertainty", async () => {
   vi.spyOn(fs, "lstat").mockRejectedValue(Object.assign(new Error("denied"), { code: "EACCES" }));
   await expect(absent()).rejects.toMatchObject({

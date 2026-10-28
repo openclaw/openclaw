@@ -233,28 +233,23 @@ describe("applyResetModelOverride", () => {
       await writeCredential("minimax");
       const agentDir = state.agentDir();
       clearRuntimeAuthProfileStoreSnapshotCore(agentDir);
-      const synchronousRead = vi
-        .spyOn(authStore, "findPersistedAuthProfileCredential")
-        .mockImplementation(() => {
-          throw new Error("synchronous credential read during model selection");
-        });
-      try {
-        const fixture = createResetFixture({
-          authProfileOverride: profileId,
-          authProfileOverrideSource: "user",
-        });
-        const reset = () => apply(fixture, { agentDir, bodyStripped: "minimax/m2.7 summarize" });
+      using _ = vi.spyOn(authStore, "findPersistedAuthProfileCredential").mockImplementation(() => {
+        throw new Error("synchronous credential read during model selection");
+      });
 
-        await reset();
-        expect(fixture.sessionEntry.authProfileOverride).toBe(profileId);
+      const fixture = createResetFixture({
+        authProfileOverride: profileId,
+        authProfileOverrideSource: "user",
+      });
+      const reset = () => apply(fixture, { agentDir, bodyStripped: "minimax/m2.7 summarize" });
 
-        await writeCredential("openai");
-        await reset();
-        expect(fixture.sessionEntry.authProfileOverride).toBeUndefined();
-        expect(fixture.sessionEntry.authProfileOverrideSource).toBeUndefined();
-      } finally {
-        synchronousRead.mockRestore();
-      }
+      await reset();
+      expect(fixture.sessionEntry.authProfileOverride).toBe(profileId);
+
+      await writeCredential("openai");
+      await reset();
+      expect(fixture.sessionEntry.authProfileOverride).toBeUndefined();
+      expect(fixture.sessionEntry.authProfileOverrideSource).toBeUndefined();
     });
   });
 

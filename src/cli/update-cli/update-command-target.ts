@@ -1,4 +1,5 @@
 import path from "node:path";
+import { withNodeRuntimePath } from "../../../node-runtime-env.mjs";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { isBunRuntime } from "../../daemon/runtime-binary.js";
@@ -237,7 +238,7 @@ export async function resolveUpdateCommandTarget(
         !legacyConfigPlan &&
         !usesCandidateUpdateAdmission(opts, installKind)
       ) {
-        const failure = createUpdateConfigFailure(configSnapshot);
+        const failure = createUpdateConfigFailure(configSnapshot, configReadFailure);
         await refuseUpdate(failure.reason, failure.message, failure.failureFacts);
         return undefined;
       }
@@ -280,7 +281,7 @@ export async function resolveUpdateCommandTarget(
         updateInstallKind !== "package" &&
         usesCandidateUpdateAdmission(opts, installKind)
       ) {
-        const failure = createUpdateConfigFailure(configSnapshot);
+        const failure = createUpdateConfigFailure(configSnapshot, configReadFailure);
         await refuseUpdate(failure.reason, failure.message, failure.failureFacts);
         return undefined;
       }
@@ -446,6 +447,10 @@ export async function resolveUpdateCommandTarget(
           pkgOwnership,
         });
         packageInstallEnv = await createGlobalInstallEnv(undefined, packageInstallTarget);
+        if (packageUpdateNodeRunner) {
+          // Candidate staging runs npm lifecycle scripts before the runtime preflight rebinds PATH.
+          packageInstallEnv = withNodeRuntimePath(packageInstallEnv, packageUpdateNodeRunner);
+        }
         if (packageInstallTarget.manager === "npm") {
           const destination = await inspectNpmGlobalDestination(root, packageInstallTarget);
           if (destination.kind !== "owned" && destination.kind !== "empty") {

@@ -9,6 +9,7 @@ import { createContextEngineLogicalTurnLease } from "../agents/harness/context-e
 import type { AgentMessage } from "../agents/runtime/index.js";
 import { ensureCliPluginRegistryLoaded } from "../cli/plugin-registry-loader.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { settleWithCleanup, throwCollectedErrors } from "../infra/error-graph-internal.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import {
   createCorePluginStateSyncKeyedStore,
@@ -24,6 +25,7 @@ import {
   useNoBundledPlugins,
   writePlugin,
 } from "../plugins/loader.test-fixtures.js";
+import { waitForPluginCacheRetirement } from "../plugins/plugin-cache.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import * as pluginRuntime from "../plugins/runtime.js";
 import {
@@ -35,7 +37,6 @@ import {
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { setPluginEnabledInConfig } from "../plugins/toggle-config.js";
 import { AsyncWorkScope, getAsyncWorkSignal, trackAsyncWork } from "../shared/async-work-scope.js";
-import { createDeferredCore } from "../shared/deferred.js";
 import { getProcessStartTime } from "../shared/pid-alive.js";
 import { seedNativeVersionZeroState } from "../state/native-version-zero.test-support.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -73,6 +74,7 @@ import {
   resetContextEngineRuntimeQuarantineForTests,
   resetContextEngineRuntimeQuarantineForTests as resetQuarantine,
   captureContextEngineRegistryStateForTests,
+  gateContextEngineHealthCleanupForTest,
 } from "./registry.test-support.js";
 import type { ContextEngine, ContextEngineRuntimeSettings } from "./types.js";
 
@@ -760,20 +762,6 @@ describe("quarantine health", () => {
     };
   }
 
-  function gateHealthCleanup() {
-    const reached = createDeferredCore();
-    const release = createDeferredCore();
-    const clear = pluginStateWorker.clearRuntimeHealthInWorker;
-    const observer = vi
-      .spyOn(pluginStateWorker, "clearRuntimeHealthInWorker")
-      .mockImplementation(async (params) => {
-        reached.resolve();
-        await release.promise;
-        await clear(params);
-      });
-    return { reached, release, observer };
-  }
-
   afterEach(() => resetPluginStateStoreForTests());
   afterAll(cleanupPluginLoaderFixturesForTest);
 
@@ -846,7 +834,7 @@ describe("quarantine health", () => {
         const engineId = `health-registration-${superseded}`;
         const record = makeQuarantine({ engineId });
         await recordPersisted(record);
-        const { reached, release, observer } = gateHealthCleanup();
+        const { reached, release, observer } = gateContextEngineHealthCleanupForTest();
         const registration = registerContextEngineForOwner(
           engineId,
           () => new MockContextEngine(),
@@ -977,7 +965,7 @@ describe("quarantine health", () => {
       };
       await recordContextEngineQuarantine(quarantine);
       const original = getContextEngineQuarantine(engineId);
-      const { reached, release, observer } = gateHealthCleanup();
+      const { reached, release, observer } = gateContextEngineHealthCleanupForTest();
       const failure = new Error("publication rejected");
       const commit = vi.spyOn(pluginRuntime, "commitStagedPluginRegistry");
       if (publicationThrows) {
@@ -1003,44 +991,62 @@ describe("quarantine health", () => {
           settled = true;
         });
       let retirement: Promise<unknown> | undefined;
-      try {
-        expect(
-          await Promise.race([reached.promise.then(() => "worker"), loading.then(() => "settled")]),
-        ).toBe("worker");
-        expect(settled).toBe(false);
-        expect(getContextEngineQuarantine(engineId)).toBeUndefined();
-        if (mode === "superseded" || mode === "sync superseded") {
-          const supersededRegistry = pluginRuntime.getActivePluginRegistry();
-          pluginRuntime.setActivePluginRegistry(createEmptyPluginRegistry());
-          if (supersededRegistry) {
-            retirement = pluginRuntime.waitForPluginRegistryRetirement(supersededRegistry);
+      await settleWithCleanup(
+        (async () => {
+          expect(
+            await Promise.race([
+              reached.promise.then(() => "worker"),
+              loading.then(() => "settled"),
+            ]),
+          ).toBe("worker");
+          expect(settled).toBe(false);
+          expect(getContextEngineQuarantine(engineId)).toBeUndefined();
+          if (mode === "superseded" || mode === "sync superseded") {
+            const supersededRegistry = pluginRuntime.getActivePluginRegistry();
+            pluginRuntime.setActivePluginRegistry(createEmptyPluginRegistry());
+            if (supersededRegistry) {
+              retirement = pluginRuntime.waitForPluginRegistryRetirement(supersededRegistry);
+            }
+          } else if (mode === "new failure") {
+            await recordContextEngineQuarantine({
+              ...quarantine,
+              error: new Error("new failure"),
+            });
           }
-        } else if (mode === "new failure") {
-          await recordContextEngineQuarantine({
-            ...quarantine,
-            error: new Error("new failure"),
-          });
-        }
-        release.resolve();
-        expect(await loading).toBe(publicationThrows ? failure : undefined);
-        await retirement;
-        expect(await listPersisted()).toEqual(
-          mode === "new failure"
-            ? [getContextEngineQuarantine(engineId)]
-            : mode === "superseded" || mode === "sync superseded" || publicationThrows
-              ? [original]
-              : [],
-        );
-      } finally {
-        release.resolve();
-        await loading;
-        await retirement;
-        observer.mockRestore();
-        commit.mockRestore();
-        await resetQuarantine();
-        resetPluginLoaderTestStateForTest();
-        restoreGlobalRegistry(previous);
-      }
+          release.resolve();
+          expect(await loading).toBe(publicationThrows ? failure : undefined);
+          await retirement;
+          expect(await listPersisted()).toEqual(
+            mode === "new failure"
+              ? [getContextEngineQuarantine(engineId)]
+              : mode === "superseded" || mode === "sync superseded" || publicationThrows
+                ? [original]
+                : [],
+          );
+        })(),
+        async () => {
+          release.resolve();
+          await [
+            () => loading.then(() => retirement),
+            () => commit.mockRestore(),
+            () => resetQuarantine(),
+            () => resetPluginLoaderTestStateForTest(),
+            async () => {
+              const { failures } = await waitForPluginCacheRetirement(true);
+              const errors = failures.map(({ error }) => error);
+              throwCollectedErrors(errors, "Plugin cleanup failed");
+            },
+            () => observer.mockRestore(),
+            () => restoreGlobalRegistry(previous),
+          ].reduceRight<() => Promise<void>>(
+            (next, run) => async () => {
+              await settleWithCleanup(Promise.resolve().then(run), next, "Cleanup failed");
+            },
+            async () => {},
+          )();
+        },
+        "Activation health proof and cleanup failed",
+      );
     });
   });
 });

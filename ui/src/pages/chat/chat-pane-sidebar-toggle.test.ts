@@ -3,15 +3,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { sidebarPanelFixtureParams } from "../../test-helpers/chat-pane-embedded-panels.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import { createGatewayBrowserClientFixture } from "./chat-application-context.test-support.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import { createChatPaneRails } from "./chat-pane-rails.ts";
 import {
-  createGatewayBrowserClientFixture,
   createPaneHeaderWorkspaceFixture,
-  createSessionCapabilityFixture,
   createTestChatPane,
   getPaneTestRuntime,
 } from "./chat-pane.test-support.ts";
+import { createSessionCapabilityFixture } from "./chat-session-capability.test-support.ts";
 import { isSidebarSlotVisible, openSlot } from "./sidebar-layout.ts";
 
 const panelCases = [

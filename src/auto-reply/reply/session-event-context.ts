@@ -1,4 +1,3 @@
-import { GATEWAY_OWNER_PROFILE_ID } from "../../../packages/gateway-protocol/src/schema/users.js";
 import { resolveConfiguredAgentId } from "../../agents/agent-scope-config.js";
 import { getRuntimeConfigSnapshotMetadata } from "../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
@@ -18,6 +17,7 @@ import {
   getSessionEventRuntimeConfig,
   readSessionEventTargetEnvironment,
   readSessionEventTargetOperatorAuthority,
+  readSessionEventTargetOwnerContinuation,
   resolveSessionEventKey,
 } from "./session-event-target.js";
 import { setChannelSourceTurnId } from "./source-turn-id.js";
@@ -128,15 +128,16 @@ export function buildSessionEventContext(params: {
   }
   const operatorAuthority = automation?.controlUiAdmin
     ? automation.operatorAuthority
-    : options.source === "plugin"
+    : options.source === "plugin" || options.source === "tool_handoff"
       ? readSessionEventTargetOperatorAuthority(target)
       : undefined;
   if (
     operatorAuthority &&
-    (automation?.controlUiAdmin || operatorAuthority.profileId === GATEWAY_OWNER_PROFILE_ID)
+    (automation?.controlUiAdmin || readSessionEventTargetOwnerContinuation(target))
   ) {
-    // Plugin handoffs continue their captured owner capability while retaining
-    // internal provenance and the event text's existing command authorization.
+    // A tool handoff resumes the yielded turn: it continues that turn's own owner decision
+    // under the same live operator source, retaining internal provenance and the event
+    // text's existing command authorization. Non-owner and system turns never gain it.
     bindCommandOwnerAuthority(ctx, {
       operatorAuthority,
       isCurrent: () => {

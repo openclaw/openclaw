@@ -84,6 +84,7 @@ export type AdmittedFollowupTurn = {
   sessionStore?: Record<string, SessionEntry>;
   sendPolicy: "allow" | "deny";
   preflightCompactionApplied: boolean;
+  memoryFlushAttempted?: boolean;
   preflightFailurePayload?: ReplyPayload;
   preflightError?: Error;
   restartRecovery?: ReplyRestartRecoveryClaimController;
@@ -270,6 +271,10 @@ export async function prepareReplyAgentTurn<TConfigured>(
     }
     const selectionEntry = admission.sessionEntry ?? initialEntry;
     const admittedSelectionEntry = selectionEntry ? { ...selectionEntry } : undefined;
+    // An edit before enqueue can miss the queue refresh; admission owns the saved preference.
+    if (kind === "queued_followup" && admission.sessionEntry) {
+      run.cyberAccessProgram = admittedSelectionEntry?.cyberAccessProgram;
+    }
     let queuedFollowupAdmitted = false;
     let admissionFailed = false;
     let callerOwnsOperation = false;
@@ -546,6 +551,7 @@ export async function prepareReplyAgentTurn<TConfigured>(
                     sessionEntry: entry,
                   }),
                 );
+                turn.memoryFlushAttempted ||= flushed.outcome !== "skipped";
                 session.publish(flushed.sessionEntry);
                 operation.abortSignal.throwIfAborted();
                 if (flushed.outcome === "exhausted") {

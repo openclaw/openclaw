@@ -63,10 +63,10 @@ async function* readEvents(body: ReadableStream<Uint8Array>, signal?: AbortSigna
         signal?.throwIfAborted();
         return chunk;
       },
-      (pending) => {
-        if (Buffer.byteLength(pending, "utf8") > MAX_SSE_EVENT_BYTES) {
-          throw new Error("Radius SSE event exceeds 16 MiB");
-        }
+      {
+        max: MAX_SSE_EVENT_BYTES,
+        unit: "bytes",
+        message: "Radius SSE event exceeds 16 MiB",
       },
     )) {
       const data = frame

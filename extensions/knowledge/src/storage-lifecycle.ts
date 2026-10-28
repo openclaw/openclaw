@@ -13,14 +13,16 @@ import {
   type Receipt,
   MergeInput,
   UnmergeInput,
+  SupersedeInput,
 } from "./mutation-contract.js";
 import { PublicationFiles } from "./publication-files.js";
 import { withdrawnIds, eligible } from "./retrieval.js";
 import { encodeRecordEvidence, readSourceDescriptor } from "./source-records.js";
 import { StorageEdits } from "./storage-edits.js";
 import { canonical, scopeKey, type Prepared } from "./storage-types.js";
+import { planSupersede } from "./supersede.js";
 import { digest } from "./vault.js";
-/** Record lifecycle changes: correction, withdrawal, merge and unmerge. */
+/** Record lifecycle changes: correction, withdrawal, supersession, merge and unmerge. */
 export class StorageLifecycle extends StorageEdits {
   async correct(input: CorrectInput, access: VaultAccess, actor: string): Promise<Receipt> {
     if (!Check(CorrectInput, input) || !input.reason.trim()) {
@@ -69,6 +71,56 @@ export class StorageLifecycle extends StorageEdits {
         throw new Error("Edit conflict: vault changed during validation.");
       }
       return { record, previous, artifacts: {}, data, snapshot, lifecycle: input };
+    });
+    return this.accept(input.requestId, intent, prepared, access, actor);
+  }
+  /** Supersede earlier claims by one existing claim (or undo that) in a single publication. */
+  async supersede(input: SupersedeInput, access: VaultAccess, actor: string): Promise<Receipt> {
+    if (!Check(SupersedeInput, input) || !input.reason.trim()) {
+      throw new Error("Invalid supersede input.");
+    }
+    access.assertCurrent();
+    if (!this.config.writesEnabled) {
+      throw new Error("Knowledge writes are disabled.");
+    }
+    if (input.expectedVaultId && input.expectedVaultId !== this.config.vaultId) {
+      throw new Error("Connected vault changed; no publication accepted.");
+    }
+    await this.initialize(access);
+    const scope = scopeKey(access.scope),
+      intent = digest(canonical({ operation: "supersede", input }));
+    const prior = this.store.withDatabase((db) => this.row(db, scope, input.requestId));
+    if (prior) {
+      this.checkReplay(prior, intent);
+      return this.resume(access, input.requestId);
+    }
+    this.assertReadable();
+    const prepared = await this.real.run(access, async (vault) => {
+      const snapshot = new PublicationFiles(this.config.root).snapshot(scope),
+        data = await vault.scan();
+      const current = this.store.withDatabase((db) =>
+        eligible(data, withdrawnIds(db, this.retrievalBinding(access)), false),
+      );
+      const plan = planSupersede(data, current, input, actor);
+      if (new PublicationFiles(this.config.root).snapshot(scope) !== snapshot) {
+        throw new Error("Edit conflict: vault changed during validation.");
+      }
+      const [first, ...rest] = plan.changes;
+      return {
+        previous: first!.before,
+        record: first!.after,
+        additional: rest,
+        data,
+        snapshot,
+        artifacts: {},
+        metadataOnly: true,
+        supersede: {
+          operation: input.undo ? "unsupersede" : "supersede",
+          by: plan.by.id,
+          reason: input.reason,
+          impact: plan.impact,
+        },
+      } satisfies Prepared;
     });
     return this.accept(input.requestId, intent, prepared, access, actor);
   }

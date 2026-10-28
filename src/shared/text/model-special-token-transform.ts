@@ -11,16 +11,14 @@ function findLastBlankLine(text: string): number {
   return lastBlank;
 }
 
-type ProjectedTokenText = {
-  text: string;
-  codeOwnershipPending: boolean;
-  hasRetainedInlineCode: boolean;
-};
-
 export function projectModelSpecialTokens(
   text: string,
   resolveOwnership?: (text: string) => ReturnType<typeof findCodeOwnership>,
-): ProjectedTokenText {
+): {
+  text: string;
+  codeOwnershipPending: boolean;
+  hasRetainedInlineCode: boolean;
+} {
   if (!text) {
     return { text, codeOwnershipPending: false, hasRetainedInlineCode: false };
   }

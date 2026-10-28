@@ -4,6 +4,7 @@ import { stripAnsi, visibleWidth } from "../../packages/terminal-core/src/ansi.j
 import { GatewayCredentialsRequiredError } from "../gateway/call.js";
 import { GatewayTransportError } from "../gateway/transport-error.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { gatewayTransportError } from "./agents.delete.test-helpers.js";
 import { sessionsCleanupLargeLabelsEntrypoint } from "./sessions-cleanup-runtime.test-support.js";
 import { cleanupSummary } from "./sessions-cleanup-summary.test-support.js";
 import { createCapturingTestRuntime as makeRuntime } from "./test-runtime-config-helpers.js";
@@ -44,15 +45,6 @@ import { sessionsCleanupCommand } from "./sessions-cleanup.js";
 
 function expectLogsToInclude(logs: readonly string[], text: string): void {
   expect(logs.some((line) => line.includes(text))).toBe(true);
-}
-
-function gatewayTransportError(kind: "closed" | "timeout", code?: number): GatewayTransportError {
-  return new GatewayTransportError({
-    kind,
-    code,
-    message: `gateway ${kind}`,
-    connectionDetails: { url: "ws://127.0.0.1:1", urlSource: "test", message: "test gateway" },
-  });
 }
 
 function gatewayCleanupResult(

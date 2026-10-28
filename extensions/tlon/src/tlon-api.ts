@@ -149,7 +149,7 @@ function sanitizeFileName(fileName: string): string {
 }
 
 /** Join a storage object key onto publicUrlBase without treating #/? as URL delimiters. */
-export function buildCustomS3PublicUrl(publicUrlBase: string, fileKey: string): string {
+function buildCustomS3PublicUrl(publicUrlBase: string, fileKey: string): string {
   const base = publicUrlBase.endsWith("/") ? publicUrlBase : `${publicUrlBase}/`;
   const encodedKey = fileKey
     .split("/")

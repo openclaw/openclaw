@@ -77,11 +77,7 @@ describe("GatewayBrowserClient shared-auth handshake", () => {
     ws.emitOpen();
     await vi.advanceTimersByTimeAsync(0);
     expect(dispatch).not.toHaveBeenCalled();
-    ws.emitMessage({
-      type: "event",
-      event: "connect.challenge",
-      payload: { nonce: "handshake-challenge", ts: 1_800_000_000_000 },
-    });
+    ws.emitConnectChallenge({ nonce: "handshake-challenge", ts: 1_800_000_000_000 });
     await dispatched;
     expect(dispatch).toHaveBeenCalledOnce();
   });
@@ -165,6 +161,7 @@ describe("GatewayBrowserClient shared-auth handshake", () => {
       await vi.advanceTimersByTimeAsync(60_000);
       expect(wsInstances).toHaveLength(1);
       expect(client.needsWakeReconnect).toBe(false);
+      expect(client.needsReachabilityReconnect).toBe(false);
       expect(onClose).toHaveBeenLastCalledWith(
         expect.objectContaining({
           willRetry: false,
@@ -280,6 +277,8 @@ describe("GatewayBrowserClient shared-auth handshake", () => {
     });
     expect(onReconnectScheduled).toHaveBeenCalledExactlyOnceWith(delayMs);
     expect(wsInstances).toHaveLength(1);
+    expect(client.needsWakeReconnect).toBe(false);
+    expect(client.needsReachabilityReconnect).toBe(false);
     await vi.advanceTimersByTimeAsync(delayMs - 1);
     expect(wsInstances).toHaveLength(1);
     await vi.advanceTimersByTimeAsync(1);

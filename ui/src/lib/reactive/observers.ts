@@ -1,3 +1,5 @@
+/// <reference lib="es2024.collection" />
+
 import { createEffect, createMemo, createSignal, onSettled } from "solid-js";
 
 type ObserverTargets = readonly Element[];

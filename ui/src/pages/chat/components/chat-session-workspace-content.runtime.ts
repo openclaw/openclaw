@@ -1,7 +1,7 @@
 import { BROWSER_IMAGE_MIME_TYPES } from "../../../../../src/shared/browser-image-mime-types.js";
 import { formatInlineCodeSpan } from "../../../../../src/shared/markdown-code.js";
 import { downloadArtifact, isHttpArtifactDownloadUrl } from "../../../api/artifact-download.ts";
-import { GatewayRequestError } from "../../../api/gateway.ts";
+import { GatewayRequestError } from "../../../api/gateway-connect-errors.ts";
 import {
   downloadSessionFile,
   type SessionFileDownload,
@@ -128,15 +128,34 @@ function createSessionWorkspaceFileContent(
     };
   }
   if (file.previewKind === "unsupported") {
+    const source: FilePreviewSource = {
+      path: filePath,
+      absolutePath: workspaceBrowserFilePath(result.root, filePath),
+      root: result.root,
+      download,
+    };
+    if (file.mimeType === "application/pdf") {
+      return {
+        kind: "attachment",
+        attachmentKind: "document",
+        title: name,
+        mimeType: file.mimeType,
+        sizeBytes: file.size,
+        sourceIdentity: JSON.stringify([
+          gatewayUrl,
+          result.sessionKey,
+          messageFile,
+          actionPath,
+          result.root,
+          result.source,
+        ]),
+        file: source,
+      };
+    }
     return {
       ...unsupportedFileSidebarContent(file, actionPath, download),
       fileLinkSessionKey: result.sessionKey,
-      file: {
-        path: filePath,
-        absolutePath: workspaceBrowserFilePath(result.root, filePath),
-        root: result.root,
-        download,
-      },
+      file: source,
     };
   }
   const text = readWorkspaceFileText(file);

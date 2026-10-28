@@ -15,7 +15,6 @@ import type {
   WebPushDevicePreferences,
   WebPushNotificationPreferences,
 } from "../../../../packages/gateway-protocol/src/schema/push.js";
-import type { NativeNotificationsPermission } from "../../app/native-notifications.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import {
   SettingsPage,
@@ -49,22 +48,6 @@ export type NotificationsSectionProps = Pick<
   | "onWebPushSetUserPreferences"
   | "onWebPushSetDevicePreferences"
 >;
-
-function nativeNotificationsStatus(permission: NativeNotificationsPermission | "unknown"): {
-  kind: "ok" | "danger" | "accent" | "muted";
-  label: string;
-} {
-  switch (permission) {
-    case "granted":
-      return { kind: "ok", label: t("configView.notifications.granted") };
-    case "denied":
-      return { kind: "danger", label: t("configView.notifications.denied") };
-    case "notDetermined":
-      return { kind: "accent", label: t("configView.notifications.notRequested") };
-    default:
-      return { kind: "muted", label: t("configView.notifications.checking") };
-  }
-}
 
 function NotificationActions(props: { children: JSX.Element }) {
   return (
@@ -124,7 +107,22 @@ function NativeNotificationSection(props: {
   native: NonNullable<NotificationsSectionProps["nativeNotifications"]>;
   actions: NotificationsSectionProps;
 }) {
-  const status = () => nativeNotificationsStatus(props.native.permission);
+  const status = (): {
+    kind: "ok" | "danger" | "accent" | "muted";
+    label: string;
+  } => {
+    const permission = props.native.permission;
+    switch (permission) {
+      case "granted":
+        return { kind: "ok", label: t("configView.notifications.granted") };
+      case "denied":
+        return { kind: "danger", label: t("configView.notifications.denied") };
+      case "notDetermined":
+        return { kind: "accent", label: t("configView.notifications.notRequested") };
+      default:
+        return { kind: "muted", label: t("configView.notifications.checking") };
+    }
+  };
   const testAnnouncement = () =>
     props.native.test?.state === "sent" ? t("configView.notifications.testQueued") : "";
   const [sending, setSending] = createOptimistic(false);
@@ -220,7 +218,9 @@ function NativeNotificationSection(props: {
 const renderWebPushError = (error: () => unknown) => (
   <div class="settings-row">
     <div class="settings-row__text">
-      <span class="cfg-field__error">{formatUiError(error())}</span>
+      <span class="cfg-field__error" role="alert">
+        {formatUiError(error())}
+      </span>
     </div>
   </div>
 );
@@ -414,7 +414,9 @@ function WebPushSection(props: {
         <Show when={props.push.error}>
           <div class="settings-row">
             <div class="settings-row__text">
-              <span class="cfg-field__error">{formatUiExternalText(props.push.error)}</span>
+              <span class="cfg-field__error" role="alert">
+                {formatUiExternalText(props.push.error)}
+              </span>
             </div>
           </div>
         </Show>

@@ -206,6 +206,16 @@ function isGatewayAuthRejection(reason: string): boolean {
   );
 }
 
+function isVerifiedUserRequiredResponse(error: unknown): boolean {
+  // The exact close-reason allowlist does not include this sentence. The
+  // structured code is the Gateway's correlated refusal, so the probe can stop.
+  return (
+    isGatewayProtocolResponseError(error) &&
+    readConnectErrorDetailCode(error.details) ===
+      ConnectErrorDetailCodes.AUTH_VERIFIED_USER_REQUIRED
+  );
+}
+
 function readActivatedPluginErrors(health: unknown): PluginHealthErrorSummary[] {
   const errors = asOptionalRecord(asOptionalRecord(health)?.plugins)?.errors;
   if (!Array.isArray(errors)) {
@@ -233,41 +243,6 @@ function readActivatedPluginErrors(health: unknown): PluginHealthErrorSummary[] 
     }
     return [error];
   });
-}
-
-function readChannelProbeFailures(health: unknown) {
-  const errors: GatewayReachability["channelProbeErrors"] = [];
-  const timeouts: GatewayReachability["channelProbeErrors"] = [];
-  const warnings: GatewayReachability["channelProbeErrors"] = [];
-  const channels = asOptionalRecord(asOptionalRecord(health)?.channels);
-  for (const [id, summary] of Object.entries(channels ?? {})) {
-    const accounts = Object.entries(asOptionalRecord(asOptionalRecord(summary)?.accounts) ?? {});
-    for (const [accountId, value] of accounts.length ? accounts : Object.entries({ "": summary })) {
-      const account = asOptionalRecord(value);
-      if (account?.enabled === false || account?.configured === false) {
-        continue;
-      }
-      if (account?.running === false || account?.healthState === "not-running") {
-        warnings.push({
-          id: accountId ? `${id}/${accountId}` : id,
-          error:
-            typeof account.lastError === "string" && account.lastError.trim()
-              ? account.lastError
-              : "not running",
-        });
-      }
-    }
-    const probe = asOptionalRecord(asOptionalRecord(summary)?.probe);
-    if (!probe || (probe.timedOut !== true && probe.ok !== false)) {
-      continue;
-    }
-    // Retain the explicit timeout marker from older Gateways that also sent ok:false.
-    (probe.timedOut === true ? timeouts : errors).push({
-      id,
-      error: typeof probe.error === "string" && probe.error.trim() ? probe.error : "check failed",
-    });
-  }
-  return { errors, timeouts, warnings };
 }
 
 function readUnavailablePlugins(health: unknown): UnavailablePluginHealthSummary[] {
@@ -352,7 +327,39 @@ export async function confirmGatewayReachable(params: {
     result.reachable = true;
     result.activatedPluginErrors = readActivatedPluginErrors(health);
     result.unavailablePlugins = readUnavailablePlugins(health);
-    const { errors, timeouts, warnings } = readChannelProbeFailures(health);
+    const errors: GatewayReachability["channelProbeErrors"] = [];
+    const timeouts: GatewayReachability["channelProbeErrors"] = [];
+    const warnings: GatewayReachability["channelProbeErrors"] = [];
+    const channels = asOptionalRecord(asOptionalRecord(health)?.channels);
+    for (const [id, summary] of Object.entries(channels ?? {})) {
+      const accounts = Object.entries(asOptionalRecord(asOptionalRecord(summary)?.accounts) ?? {});
+      for (const [accountId, value] of accounts.length
+        ? accounts
+        : Object.entries({ "": summary })) {
+        const account = asOptionalRecord(value);
+        if (account?.enabled === false || account?.configured === false) {
+          continue;
+        }
+        if (account?.running === false || account?.healthState === "not-running") {
+          warnings.push({
+            id: accountId ? `${id}/${accountId}` : id,
+            error:
+              typeof account.lastError === "string" && account.lastError.trim()
+                ? account.lastError
+                : "not running",
+          });
+        }
+      }
+      const probe = asOptionalRecord(asOptionalRecord(summary)?.probe);
+      if (!probe || (probe.timedOut !== true && probe.ok !== false)) {
+        continue;
+      }
+      // Retain the explicit timeout marker from older Gateways that also sent ok:false.
+      (probe.timedOut === true ? timeouts : errors).push({
+        id,
+        error: typeof probe.error === "string" && probe.error.trim() ? probe.error : "check failed",
+      });
+    }
     result.channelProbeErrors = errors;
     result.channelRuntimeWarnings = warnings.length ? warnings : undefined;
     if (timeouts.length) {
@@ -366,7 +373,11 @@ export async function confirmGatewayReachable(params: {
       : isGatewayTransportError(error) && error.code === 1008
         ? error.reason
         : undefined;
-    if ((reason && isGatewayAuthRejection(reason)) || isGatewayCredentialsRequiredError(error)) {
+    if (
+      (reason && isGatewayAuthRejection(reason)) ||
+      isGatewayCredentialsRequiredError(error) ||
+      isVerifiedUserRequiredResponse(error)
+    ) {
       result.authenticationError = formatGatewayRestartProbeError(reason ?? error);
     }
     // Updates verify with the previous package, so any protocol change between it and the

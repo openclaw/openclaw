@@ -88,11 +88,7 @@ test("serves queued work during an accepted commit while retaining writer admiss
   });
   const writes: number[] = [];
   await fixture.accepted;
-  const queued = [1, 2].map((value) =>
-    fixture.nextWrite(() => {
-      writes.push(value);
-    }),
-  );
+  const queued = [1, 2].map((value) => fixture.nextWrite(() => writes.push(value)));
   await setImmediate();
   expect.soft({ settled, value: fixture.value(), writes }).toEqual({
     settled: false,

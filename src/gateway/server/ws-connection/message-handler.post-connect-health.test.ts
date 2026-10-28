@@ -281,7 +281,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       await Promise.all([prewarmStarted.promise, helloSent.promise]);
       expect(prewarmGatewaySessionHistoryMock).toHaveBeenCalledWith(
         loadConfigMock(),
-        expect.objectContaining({ onlyIfCold: true }),
+        expect.objectContaining({ isCancelled: expect.any(Function) }),
       );
       expect(JSON.parse(harness.socketSend.mock.calls[0]![0])).toMatchObject({
         ok: true,

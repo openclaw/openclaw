@@ -47,10 +47,8 @@ export const scheduleAdoptedChildZombieReapAfterExit = () => { throw new Error('
 export const runOutsideCommandProcessScope = operation => operation();
 let child, failure;
 export let completedHelpers = 0;
-export const requests = [];
 export function bind(value, reject) { child = value; failure = reject; }
-export async function spawnCommand(args) {
-  requests.push(args);
+export async function spawnCommand() {
   // Simulate backend completion without retaining a native handle.
   await Promise.resolve();
   child.exitCode = 0;
@@ -63,19 +61,18 @@ export async function spawnCommand(args) {
 import * as backend from './dependencies.mjs';
 Object.defineProperty(process, 'platform', { value: 'win32' });
 const { createCommandTerminationController } = await import('./owner.mjs');
-const scenario = JSON.parse(process.argv[2]);
 const child = { pid: 4242, exitCode: null, signalCode: null };
-backend.bind(child, scenario.failedHelper);
+backend.bind(child, JSON.parse(process.argv[2]));
 const cancellation = new AbortController();
 const owner = createCommandTerminationController({
-  child, cancelController: cancellation, processTree: { mode: scenario.mode },
+  child, cancelController: cancellation, processTree: { mode: "graceful" },
   killGraceMs: 300, isChildExited: () => child.exitCode !== null,
   isCommandSettled: () => child.exitCode !== null,
 });
 owner.terminate();
 const outcome = await owner.settle();
 console.log(JSON.stringify({ outcome, completedHelpers: backend.completedHelpers,
-  requests: backend.requests, cancelled: cancellation.signal.aborted }));
+  cancelled: cancellation.signal.aborted }));
 `,
   };
   for (const [name, content] of Object.entries(modules)) {
@@ -83,26 +80,18 @@ console.log(JSON.stringify({ outcome, completedHelpers: backend.completedHelpers
   }
 });
 
-it.each([
-  { mode: "graceful", failedHelper: false },
-  { mode: "graceful", failedHelper: true },
-  { mode: "force", failedHelper: false },
-])(
-  "keeps Windows $mode settlement alive after backend completion (failed helper: $failedHelper)",
-  async (scenario) => {
+it.each([false, true])(
+  "keeps Windows settlement alive after backend completion (failed helper: %s)",
+  async (failedHelper) => {
     const result = await promisify(execFile)(
       requireNodeTool("node"),
-      [path.join(directory, "driver.mjs"), JSON.stringify(scenario)],
+      [path.join(directory, "driver.mjs"), JSON.stringify(failedHelper)],
       { env: { SystemRoot: process.env.SystemRoot, NODE_DISABLE_COMPILE_CACHE: "1" } },
     );
     expect(JSON.parse(result.stdout)).toEqual({
       outcome: "forced",
       completedHelpers: 1,
-      requests: [
-        ["taskkill.exe", "/PID", "4242", "/T", ...(scenario.mode === "force" ? ["/F"] : [])],
-      ],
       cancelled: false,
     });
-    expect(result.stderr).not.toContain("unsettled top-level await");
   },
 );

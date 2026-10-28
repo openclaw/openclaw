@@ -307,7 +307,7 @@ async function updateCommandInternal(
       !legacyConfigPlan &&
       !run.candidateAdmissionChecks?.includes("config")
     ) {
-      const failure = createUpdateConfigFailure(configSnapshot);
+      const failure = createUpdateConfigFailure(configSnapshot, target.configReadFailure);
       return await refuseUpdate(failure.reason, failure.message, failure.failureFacts);
     }
     const schemaPreflight = await preflightUpdateCommandSchemas({

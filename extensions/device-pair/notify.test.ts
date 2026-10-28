@@ -220,18 +220,25 @@ describe("device-pair notify persistence", () => {
   }
 
   it("reports live subscriber counts", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(1_000);
     const subscriber: NotifySubscription = {
       to: "chat-123",
       mode: "persistent",
       addedAtMs: 1,
     };
-    const subscriberStore = openSubscriberStore();
-    await subscriberStore.register(notifySubscriberStoreKey(subscriber), subscriber);
-    await subscriberStore.register("expired", subscriber, { ttlMs: 1 });
-    await openStore({ namespace: "other", maxEntries: 10 }).register("sibling", subscriber);
-    vi.setSystemTime(1_001);
+    const { db } = openOpenClawStateDatabase({ env });
+    // Seed cold rows with absolute expiry; fake host time does not control the writer worker.
+    const insert = db.prepare(
+      "INSERT INTO plugin_state_entries (plugin_id, namespace, entry_key, value_json, created_at, expires_at) VALUES ('device-pair', ?, ?, ?, 1, ?)",
+    );
+    const value = JSON.stringify(subscriber);
+    insert.run(
+      DEVICE_PAIR_NOTIFY_SUBSCRIBER_NAMESPACE,
+      notifySubscriberStoreKey(subscriber),
+      value,
+      null,
+    );
+    insert.run(DEVICE_PAIR_NOTIFY_SUBSCRIBER_NAMESPACE, "expired", value, 1);
+    insert.run("other", "sibling", value, null);
     const api = createApi();
     for (const [senderId, mode] of [
       ["chat-123", "persistent"],

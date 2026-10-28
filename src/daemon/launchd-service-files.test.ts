@@ -2,7 +2,9 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { PassThrough } from "node:stream";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as exec from "../process/exec.js";
 import { installLaunchAgent, stageLaunchAgent } from "./launchd-install.js";
@@ -94,6 +96,34 @@ function mockPlutil() {
 
 describe("LaunchAgent plist", () => {
   beforeEach(mockPlutil);
+  it("resolves service paths without loading the XML policy editor", async () => {
+    const result = await runNodeScript(
+      [
+        "--import",
+        fileURLToPath(new URL("../../scripts/tsx.mjs", import.meta.url)),
+        "--input-type=module",
+        "--eval",
+        `import assert from "node:assert/strict";
+import { registerHooks } from "node:module";
+registerHooks({ resolve(specifier, context, nextResolve) {
+  if (specifier === "linkedom") throw new Error("Service path lookup loaded the XML policy editor");
+  return nextResolve(specifier, context);
+} });
+const { resolveLaunchAgentPlistPathForLabel } = await import(${JSON.stringify(new URL("./launchd-service-files.ts", import.meta.url).href)});
+assert.equal(resolveLaunchAgentPlistPathForLabel({ HOME: "/synthetic" }, "test.service"), "/synthetic/Library/LaunchAgents/test.service.plist");
+console.log("service-path-import-ok");`,
+      ],
+      {
+        PATH: process.env.PATH,
+        SystemRoot: process.env.SystemRoot,
+        HOME: dirs.make("launchd-import-"),
+      },
+      30_000,
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("service-path-import-ok");
+  });
+
   it("gives the installed Gateway 330 seconds to drain and exit", () => {
     expect(buildPlist()).toMatch(/<key>ExitTimeOut<\/key>\s*<integer>330<\/integer>/u);
   });

@@ -52,6 +52,8 @@ export type ReplyToolAuthorityInput = {
       | "gatewayUiCommandTarget"
       | "toolBindings"
     >
-  > &
-    Pick<FollowupRun["run"], "sessionId" | "sessionFile" | "workspaceDir" | "provider" | "model">;
+  > & { operatorProfileId?: string } & Pick<
+      FollowupRun["run"],
+      "sessionId" | "sessionFile" | "workspaceDir" | "provider" | "model"
+    >;
 };

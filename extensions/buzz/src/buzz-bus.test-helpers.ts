@@ -9,14 +9,8 @@ type Handlers = {
   oneose?: () => void;
   onclose: (reason: string) => void;
 };
-type PrepareSubscription = (
-  filters: Filter[],
-  handlers: Handlers,
-) => {
-  id: string;
-  close: ReturnType<typeof vi.fn>;
-  closed: boolean;
-};
+const subscription = (id: string, close = vi.fn()) => ({ id, close, closed: false });
+type Prepare = (filters: Filter[], handlers: Handlers) => ReturnType<typeof subscription>;
 
 export const relayMocks = {
   connect: vi.fn<() => Promise<void>>(),
@@ -42,7 +36,7 @@ export const relayMocks = {
   }>,
 };
 
-export const mockBuzzRelay = (prepare?: PrepareSubscription) => ({
+export const mockBuzzRelay = (prepare?: Prepare) => ({
   Relay: class {
     onauth?: (template: unknown) => Promise<unknown>;
     idleSince: number | undefined;
@@ -55,7 +49,6 @@ export const mockBuzzRelay = (prepare?: PrepareSubscription) => ({
     publish = relayMocks.publish;
     send = relayMocks.send;
     close = relayMocks.close;
-    scheduleIdleClose = vi.fn();
 
     prepareSubscription(filters: Filter[], handlers: Handlers) {
       if (prepare) {
@@ -103,8 +96,7 @@ export const mockBuzzRelay = (prepare?: PrepareSubscription) => ({
       if (events && canEnd()) {
         queueMicrotask(() => handlers.oneose?.());
       }
-      const id = `sub:${state.subscriptions.length}`;
-      return { id, close, closed: false };
+      return subscription(`sub:${state.subscriptions.length}`, close);
     }
   },
 });

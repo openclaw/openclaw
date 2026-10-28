@@ -6,11 +6,6 @@ import {
   type LinkReaderMetadataUpdate,
 } from "./link-reader-response.ts";
 
-type MetadataScope = {
-  client: GatewayBrowserClient | null;
-  agentId: string | undefined;
-  sessionKey: string | undefined;
-};
 type MetadataListener = (update: LinkReaderMetadataUpdate) => void;
 type MetadataSessions = Map<string, Set<MetadataListener>>;
 type MetadataAgents = Map<string | undefined, MetadataSessions>;
@@ -24,7 +19,11 @@ const owners = new WeakMap<Window, MetadataOwner>();
 /** Routes committed metadata; providers still validate reader membership and live context. */
 export function subscribeLinkReaderMetadata(
   window: Window,
-  scope: MetadataScope,
+  scope: {
+    client: GatewayBrowserClient | null;
+    agentId: string | undefined;
+    sessionKey: string | undefined;
+  },
   listener: MetadataListener,
 ): () => void {
   let owner = owners.get(window);

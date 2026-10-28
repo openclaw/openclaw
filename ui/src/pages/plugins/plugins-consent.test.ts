@@ -3,7 +3,8 @@
 import { createRoot, onCleanup } from "solid-js";
 import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError, type GatewayEventListener } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
+import type { GatewayEventListener } from "../../api/gateway.ts";
 import { i18n } from "../../i18n/index.ts";
 import { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
 import type {

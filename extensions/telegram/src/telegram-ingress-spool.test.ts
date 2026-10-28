@@ -21,17 +21,16 @@ import { openTelegramIngressQueue, resolveTelegramUpdateId } from "./telegram-in
 
 async function withTempState<T>(fn: (stateDir: string) => Promise<T>): Promise<T> {
   const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-tg-spool-"));
-  const openKeyedStoreV2 = <StoreValue>(
-    options: Parameters<typeof createPluginStateKeyedStoreForTests<StoreValue>>[1],
-  ) =>
-    createPluginStateKeyedStoreForTests<StoreValue>("telegram", options).withCurrent({
-      assertCurrent: () => {},
-    });
   setTelegramRuntime({
     channel: { inbound: { ingress: createPluginRuntimeMock().channel.inbound.ingress } },
     state: {
       resolveStateDir: () => stateDir,
-      openKeyedStoreV2,
+      openKeyedStoreV2: <StoreValue>(
+        options: Parameters<typeof createPluginStateKeyedStoreForTests<StoreValue>>[1],
+      ) =>
+        createPluginStateKeyedStoreForTests<StoreValue>("telegram", options).withCurrent({
+          assertCurrent: () => {},
+        }),
       openSyncKeyedStore: <StoreValue>(
         options: Parameters<typeof createPluginStateSyncKeyedStoreForTests<StoreValue>>[1],
       ) => createPluginStateSyncKeyedStoreForTests<StoreValue>("telegram", options),
@@ -70,7 +69,7 @@ function pollEntry(pollId: string) {
 function vote(pollId: string) {
   return { update_id: 9, poll_answer: { poll_id: pollId, option_ids: [0], user: sender } };
 }
-function message(updateId: number, topic: number, text: string) {
+function message(updateId: number, topic: number) {
   return {
     update_id: updateId,
     message: {
@@ -79,7 +78,7 @@ function message(updateId: number, topic: number, text: string) {
       is_topic_message: true,
       message_id: updateId + 31,
       message_thread_id: topic,
-      text,
+      text: "after vote",
     },
   };
 }
@@ -114,7 +113,6 @@ describe("telegram ingress spool ordering", () => {
         accountId: "acct",
         ...pollEntry("poll-topic-order"),
       });
-      const messageUpdate = message(10, 99, "after vote");
       const { promise: voteReleased, resolve: releaseVote } = createDeferred<void>();
       const { dispatchOrder, onError, queue, monitor } = createMonitor(stateDir, voteReleased);
 
@@ -123,20 +121,21 @@ describe("telegram ingress spool ordering", () => {
         await monitor.waitForIdle();
         const admissions = await Promise.all([
           monitor.admit(vote("poll-topic-order")),
-          monitor.admit(messageUpdate),
+          monitor.admit(message(10, 99)),
         ]);
         expect(admissions.map((result) => result.kind)).toEqual(["durable", "durable"]);
         await monitor.waitForPumpIdle();
         await vi.waitFor(() => expect(dispatchOrder).toEqual([9]));
         expect(onError).not.toHaveBeenCalled();
-        const preparedPollAnswer = {
-          entry: expect.objectContaining({ threadSpec: { scope: "forum", id: 99 } }),
-        };
         expect(await queue.listClaims()).toEqual([
           expect.objectContaining({
             id: "0000000000000009",
             laneKey: "telegram:-100123:topic:99",
-            payload: expect.objectContaining({ preparedPollAnswer }),
+            payload: expect.objectContaining({
+              preparedPollAnswer: {
+                entry: expect.objectContaining({ threadSpec: { scope: "forum", id: 99 } }),
+              },
+            }),
           }),
         ]);
         expect(await queue.listPending({ limit: "all" })).toMatchObject([
@@ -156,22 +155,17 @@ describe("telegram ingress spool ordering", () => {
     await withTempState(async (stateDir) => {
       const entry = pollEntry("poll-pending-topic");
       const registration = beginTelegramPollRegistration({ accountId: "acct", entry });
-      const unrelatedUpdate = message(10, 100, "unrelated topic");
-      const sameTopicUpdate = message(11, 99, "after vote");
       const { dispatchOrder, queue, monitor } = createMonitor(stateDir);
 
       monitor.start();
       await monitor.waitForIdle();
-      await expect(
-        Promise.all([
-          monitor.admit(vote(entry.pollId)),
-          monitor.admit(unrelatedUpdate),
-          monitor.admit(sameTopicUpdate),
-        ]),
-      ).resolves.toMatchObject([{ kind: "durable" }, { kind: "durable" }, { kind: "durable" }]);
-      await vi.waitFor(() => expect(dispatchOrder).toContain(10));
-      expect(dispatchOrder).not.toContain(9);
-      expect(dispatchOrder).not.toContain(11);
+      const admissions = await Promise.all([
+        monitor.admit(vote(entry.pollId)),
+        monitor.admit(message(10, 100)),
+        monitor.admit(message(11, 99)),
+      ]);
+      expect(admissions.map(({ kind }) => kind)).toEqual(["durable", "durable", "durable"]);
+      await vi.waitFor(() => expect(dispatchOrder).toEqual([10]));
       expect(await queue.listClaims()).toMatchObject([{ laneKey: "telegram:-100123:topic:99" }]);
 
       registration.complete(entry);

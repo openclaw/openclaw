@@ -164,7 +164,8 @@ function appendCustomBinds(args: string[], binds: readonly string[] | undefined)
   }
 }
 
-export type SandboxContainerAllocationParams = {
+/** Allocate inertly; the caller records custody before starting any container process. */
+export async function allocateSandboxContainer(params: {
   engine: SandboxContainerEngine;
   name: string;
   cfg: SandboxDockerConfig;
@@ -180,12 +181,7 @@ export type SandboxContainerAllocationParams = {
   assertCurrent?: () => void;
   labels?: Record<string, string>;
   command?: SandboxPersistentExecCommand;
-};
-
-/** Allocate inertly; the caller records custody before starting any container process. */
-export async function allocateSandboxContainer(
-  params: SandboxContainerAllocationParams,
-): Promise<string> {
+}): Promise<string> {
   const { engine, name, workspaceDir, scopeKey } = params;
   const cfg = params.command?.env
     ? { ...params.cfg, env: { ...params.cfg.env, ...params.command.env } }
@@ -203,7 +199,9 @@ export async function allocateSandboxContainer(
         })
       : undefined;
   const createCfg = podmanPolicy?.cfg ?? cfg;
-  await ensureContainerImage(engine, cfg.image);
+  if (engine.id === "podman") {
+    await ensureContainerImage(engine, cfg.image);
+  }
 
   const { argv: args, env } = buildSandboxCreateArgs({
     name,
@@ -215,6 +213,10 @@ export async function allocateSandboxContainer(
   });
   if (podmanPolicy) {
     args.push(...podmanPolicy.extraCreateArgs);
+  }
+  if (engine.id === "docker") {
+    // Creation already resolves the local image; do not inspect it a second time.
+    args.push("--pull=never");
   }
   args.push("--workdir", cfg.workdir);
   for (const bind of params.mountPlan.skippedBinds) {
@@ -246,7 +248,15 @@ export async function allocateSandboxContainer(
   const created = await withContainerEnvFile(env, async (envFile) => {
     args.push("--env-file", envFile, cfg.image, ...command);
     params.assertCurrent?.();
-    return await execContainer(engine, args);
+    try {
+      return await execContainer(engine, args, { assertCurrent: params.assertCurrent });
+    } catch (error) {
+      if (engine.id === "docker") {
+        // Retain image/daemon guidance while preserving unrelated creation failures.
+        await ensureContainerImage(engine, cfg.image);
+      }
+      throw error;
+    }
   });
   const containerId = created.stdout.trim();
   if (!/^[a-f0-9]{64}$/u.test(containerId)) {

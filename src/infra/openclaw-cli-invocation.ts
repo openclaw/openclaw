@@ -23,13 +23,6 @@ const OPENCLAW_PACKAGE_ENTRY_PATHS = new Set([
   path.join("src", "entry.ts"),
 ]);
 
-export type OpenClawCliInvocation = Readonly<{
-  command: string;
-  args: string[];
-  cwd: string;
-  env?: Record<string, string>;
-}>;
-
 /** Keep parent runtime flags, pin its known TSX preload, and leave debugger ownership behind. */
 export function filterOpenClawChildExecArgv(
   execArgv: readonly string[],
@@ -95,7 +88,12 @@ export function resolveCurrentOpenClawCliInvocation(
   options: {
     moduleUrl?: string;
   } = {},
-): OpenClawCliInvocation {
+): Readonly<{
+  command: string;
+  args: string[];
+  cwd: string;
+  env?: Record<string, string>;
+}> {
   const execPath = process.execPath;
   const embeddedRoot = getEmbeddedStandaloneRuntimeRoot();
   const manifest = embeddedRoot ? undefined : readStandaloneRuntimeManifest(execPath);

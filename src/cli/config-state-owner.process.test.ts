@@ -8,6 +8,7 @@ import { hashConfigRaw } from "../config/io.read-helpers.js";
 import { acquireGatewayLock, type GatewayLockHandle } from "../infra/gateway-lock.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
+import { writeFixtureJson } from "./cli-fixtures.test-support.js";
 import { runStateOwnerCli as run, stateOwnerEnv } from "./cli-process-fixture.test-support.js";
 
 const roots = useAutoCleanupTempDirTracker(afterAll);
@@ -32,10 +33,7 @@ describe("config CLI database effects", () => {
     const stateDir = path.join(home, "state");
     const configPath = path.join(home, "openclaw.json");
     await fs.mkdir(stateDir, { recursive: true });
-    await fs.writeFile(
-      configPath,
-      JSON.stringify({ gateway: { mode: "local" }, logging: { level: "debug" } }),
-    );
+    await writeFixtureJson(configPath, { gateway: { mode: "local" }, logging: { level: "debug" } });
     return stateOwnerEnv(home);
   }
 

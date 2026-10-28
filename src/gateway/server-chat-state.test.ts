@@ -5,6 +5,7 @@ import {
 } from "../agents/internal-runtime-context.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { AgentAssistantSourceReceipt } from "../infra/agent-events.js";
+import * as jsonUtf8 from "../infra/json-utf8-bytes.js";
 import * as codeRegions from "../shared/text/code-regions.js";
 import { projectInFlightRunSnapshot } from "./chat-inflight-snapshot.js";
 import {
@@ -398,6 +399,7 @@ describe("createChatRunState", () => {
           },
           omitted: undefined,
           values: [undefined, Number.NaN],
+          literals: [true, false, null],
         };
       },
     };
@@ -419,10 +421,16 @@ describe("createChatRunState", () => {
       },
     });
     using inspection = vi.spyOn(Object, "getPrototypeOf");
+    using traversal = vi.spyOn(jsonUtf8, "boundedJsonUtf8Bytes");
+    using literalEncoding = vi.spyOn(JSON, "stringify");
     tool(1, "result", "done", {
       result: { details, first: shared, again: shared, last: revocable.proxy },
     });
     const firstSnapshot = getSnapshot();
+    expect(traversal).not.toHaveBeenCalled();
+    expect(
+      literalEncoding.mock.calls.filter(([value]) => value === null || typeof value === "boolean"),
+    ).toHaveLength(0);
     const capturedResult = firstSnapshot!.events[0]!.data.result;
     const capturedInspections = inspection.mock.calls.filter(
       ([value]) => value === capturedResult,
@@ -434,7 +442,7 @@ describe("createChatRunState", () => {
     expect([serializations, reads, numberHints]).toEqual([1, 1, ["number", "number"]]);
     const snapshot = getSnapshot();
     expect(snapshot?.events[0]?.data.result).toEqual({
-      details: { text: "é", values: [null, null] },
+      details: { text: "é", values: [null, null], literals: [true, false, null] },
       first: { value: -3.25, text: "é", enabled: false },
       again: { value: -3.25, text: "é", enabled: false },
       last: ["last"],

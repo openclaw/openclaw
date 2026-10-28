@@ -14,7 +14,7 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
-import { acquireSessionActorStorage } from "../../config/sessions/session-actor-storage-binding.js";
+import { acquireSessionActorStorage } from "../../config/sessions/session-actor-storage-acquisition.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { makeCronJob } from "../../cron/delivery.test-helpers.js";
 import {

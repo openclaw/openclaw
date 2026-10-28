@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { materializeErrorStack } from "../infra/error-graph-internal.js";
 import "./detached-async-context.js";
 import { runWithAsyncStore } from "./async-store.js";
 import { createDeferredCore } from "./deferred.js";
@@ -67,6 +68,10 @@ export class AsyncWorkScope {
     if (this.phase === "closed") {
       throw new AsyncWorkScopeClosedError();
     }
+    // Existing work already makes reentrant drain yield until this synchronous call returns.
+    if (this.pending.size > 0) {
+      return this.enter(run);
+    }
     // Synchronous work is removed in finally and needs no promise cleanup reactions.
     const operation = createDeferredCore();
     this.pending.add(operation.promise);
@@ -90,7 +95,10 @@ export class AsyncWorkScope {
       () => this.pending.delete(operation.promise),
       (error: unknown) => {
         this.pending.delete(operation.promise);
-        this.failures?.add(error);
+        if (this.failures) {
+          materializeErrorStack(error);
+          this.failures.add(error);
+        }
       },
     );
     try {
@@ -107,6 +115,7 @@ export class AsyncWorkScope {
     }
     this.phase = "closing";
     this.controller.abort(reason);
+    materializeErrorStack(this.controller.signal.reason);
   }
 
   /** Starts the next phase in the same continuation that observes settled pending work. */

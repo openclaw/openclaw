@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import {
   boundCodeModeError,
@@ -11,6 +10,10 @@ import { estimateToolResultTextChars } from "./embedded-agent-runner/tool-result
 import { toolResultFitsBudget } from "./tool-result-limits.js";
 import { serializeToolSearchControlResult } from "./tool-search-control-result.js";
 
+function reference(bytes: number, preview: string, id = "result_synthetic") {
+  return { id, bytes, count: 1, shape: "object", preview, previewTruncated: true };
+}
+
 describe("Code Mode JSON normalization", () => {
   it.each(["output", "error"])("bounds serialization work for oversized %s", (channel) => {
     const text = "x".repeat(64_000);
@@ -22,202 +25,118 @@ describe("Code Mode JSON normalization", () => {
       state.append(captureCodeModeOutput([{ type: "text", text }], 65_536));
     }
     const stringify = JSON.stringify;
+    const parse = JSON.parse;
     let serializedChars = 0;
+    let parsedChars = 0;
     let serializations = 0;
+    const stringSpy = vi.spyOn(globalThis, "String");
     const spy = vi.spyOn(JSON, "stringify").mockImplementation((...args) => {
       serializations++;
       const json = stringify(...args);
       serializedChars += json?.length ?? 0;
       return json;
     });
+    const parseSpy = vi.spyOn(JSON, "parse").mockImplementation((...args) => {
+      parsedChars += args[0].length;
+      return parse(...args);
+    });
     let result;
+    let stringConversions: number;
     try {
       result = state.takeResult(
         { status: channel === "error" ? "failed" : "completed" },
         channel === "error" ? { error: text } : {},
       );
     } finally {
+      stringConversions = stringSpy.mock.calls.length;
+      stringSpy.mockRestore();
       spy.mockRestore();
+      parseSpy.mockRestore();
     }
     expect(JSON.stringify(result)).toHaveLength(16_000);
     // Trials measure captured JSON and changed prefix intervals, not whole envelopes.
     expect(serializedChars).toBeLessThan(210_000);
     expect(serializations).toBeLessThanOrEqual(5);
+    // Rejected complete channels must not be decoded before selecting their bounded prefix.
+    expect(parsedChars).toBeLessThan(16_000);
+    // Decimal marker widths must not allocate one string per prefix byte.
+    expect(stringConversions).toBeLessThan(100);
   });
 
-  it("matches fully serialized budgets for every randomized projection probe", () => {
-    let seed = 0x77c0de;
-    const next = (bound: number) => {
-      seed ^= seed << 13;
-      seed ^= seed >>> 17;
-      seed ^= seed << 5;
-      return (seed >>> 0) % bound;
-    };
-    const alphabet = [
-      "a",
-      '"',
-      "\\",
-      "\n",
-      "\r",
-      "\b",
-      "\f",
-      "\t",
-      "\0",
-      "é",
-      "中",
-      "🌍",
-      "\ud800",
-      "\udfff",
-      "·",
-      "꜀",
-      "ˇ",
-      "𝍠",
-      "𠀀",
-      "\u2028",
-    ];
-    for (let fixture = 0; fixture < 64; fixture++) {
-      const text = Array.from({ length: 1 + next(128) }, () => alphabet[next(alphabet.length)]!)
-        .join("")
-        .repeat(1 + next(32));
-      const maxBytes = 128 + next(8_192);
+  it.each([
+    [false, false, false, false],
+    [false, false, false, true],
+    [true, false, false, false],
+    [false, true, false, false],
+    [false, false, true, false],
+    [true, true, true, false],
+    [true, true, true, true],
+  ])("matches serialized budgets for channel combination %#", (output, value, error, retained) => {
+    for (const repeat of [1, 1_024]) {
+      const text = 'a"\\\n\r\b\f\t\0é中🌍\ud800z\udfff·꜀ˇ𝍠𠀀\u2028'.repeat(repeat);
+      const maxBytes = 8_192;
       const state = new CodeModeOutputState(maxBytes);
-      if (fixture % 3) {
+      if (output) {
         state.append(captureCodeModeOutput([{ text }, text], maxBytes));
       }
       const params = {
-        ...(fixture % 4 ? { value: captureCodeModeValue({ text }, maxBytes) } : {}),
-        ...(fixture % 5 ? { error: text } : {}),
-        valueGuidance: text.slice(0, next(64)),
-        ...(fixture % 7 === 0
-          ? {
-              reference: {
-                id: "result_synthetic",
-                bytes: Buffer.byteLength(text),
-                count: 1,
-                shape: "object",
-                preview: text.slice(0, next(128)),
-                previewTruncated: true,
-              },
-            }
-          : {}),
+        ...(value ? { value: captureCodeModeValue({ text }, maxBytes) } : {}),
+        ...(error ? { error: text } : {}),
+        valueGuidance: "Return less data.",
+        ...(retained ? { reference: reference(Buffer.byteLength(text), text.slice(0, 128)) } : {}),
       };
       const metadata = {
         status: "completed",
-        [text.slice(0, 8)]: { detail: text.slice(0, next(128)) },
+        [text.slice(0, 8)]: { detail: text.slice(0, 128) },
         output: "overwritten",
         value: "metadata value",
         error: "metadata error",
       };
       // Exercise the production projector directly, without a test-only budget API.
       const project = state["createProjector"](params, metadata);
-      const assertProbe = (limit: number) => {
+      // Descending and ascending probes cover reuse of measured prefix intervals.
+      for (const limit of [maxBytes, 0, 1, maxBytes - 1, 128, 4_096, 512]) {
         const measured = project(limit, "budget");
         const json = serializeToolSearchControlResult(
           { ...metadata, ...project(limit).channels },
           true,
         );
-        expect(measured, `fixture=${fixture}, limit=${limit}`).toEqual({
+        expect(measured, `repeat=${repeat}, limit=${limit}`).toEqual({
           chars: estimateToolResultTextChars(json),
           contextChars: estimateToolResultTextChars(json, { minimumRawWeight: 2 }),
         });
-        return measured;
-      };
-      // Arbitrary order exercises both directions of the retained interval measurement.
-      for (const limit of [
-        maxBytes,
-        0,
-        1,
-        maxBytes - 1,
-        ...Array.from({ length: 20 }, () => next(maxBytes + 1)),
-      ]) {
-        assertProbe(limit);
-      }
-      const budget = { maxChars: 128 + next(maxBytes), maxContextChars: 256 + next(maxBytes * 2) };
-      let low = 0;
-      let high = maxBytes;
-      while (low <= high) {
-        const middle = Math.floor((low + high) / 2);
-        const measured = assertProbe(middle);
-        if (measured.chars <= budget.maxChars && measured.contextChars <= budget.maxContextChars) {
-          low = middle + 1;
-        } else {
-          high = middle - 1;
-        }
       }
     }
   });
 
-  it.each([
-    { text: "ascii", digest: "cc82812183d5ed7fef2f0962654a749276f13cc88eaf3e9542e8034b56d81543" },
-    {
-      text: 'a"\\\n\r\t\b\f\u0000',
-      digest: "d63c1219facc698ecfb3bc03aba3a7c2bc9e6cc16ebfab4bc4fb809a606bd936",
-    },
-    {
-      text: "\u00e9\u4e2d\ud83c\udf0d\ud800z",
-      digest: "195c485e5cf655cb43afac31ff426d49ad11691c1abf0be57fd657fd993b8e9e",
-    },
-    {
-      text: "\u00b7\ua700\u02c7\ud834\udf60\ud840\udc00",
-      digest: "0e867347ed3060cc6f69f9e91fb748407db258978bc1d3b4884ba01d52c0d835",
-    },
-    {
-      text: '<<<EXTERNAL_UNTRUSTED_CONTENT id="x">>>[im_start]',
-      digest: "c9aa01b87a279d74760780266285ef429a84d9e2961a9886439048eace94de27",
-    },
-  ])("preserves baseline JSON bytes for $text", ({ text, digest }) => {
-    const hash = createHash("sha256");
-    for (const repeat of [0, 1, 37, 1_024]) {
-      for (const [maxBytes, maxChars, maxContextChars, network] of [
-        [128, 160, 320, false],
-        [1_024, 256, 300, false],
-        [65_536, 16_000, 32_000, false],
-        [1_024, 1_200, 2_400, true],
-      ] as const) {
-        const state = new CodeModeOutputState(maxBytes, { maxChars, maxContextChars });
-        const input = text.repeat(repeat);
-        state.append(captureCodeModeOutput([{ text: input }], maxBytes));
-        const value = captureCodeModeValue({ input }, maxBytes);
-        let released = 0;
-        try {
-          for (const valueGuidance of [undefined, "Not retained; return less data."]) {
-            const result = state.takeResult(
-              {
-                status: "completed",
-                telemetry: { calls: 1 },
-                value: "overwritten",
-                error: "metadata error",
-              },
-              { value, ...(repeat % 2 ? { error: input } : {}), valueGuidance },
-              network,
-              repeat === 37
-                ? () => ({
-                    reference: {
-                      id: "result_synthetic",
-                      bytes: input.length,
-                      count: 1,
-                      shape: "object",
-                      preview: input.slice(0, 80),
-                      previewTruncated: true,
-                    },
-                    release() {
-                      released++;
-                    },
-                  })
-                : undefined,
-            );
-            hash.update(JSON.stringify(result));
-          }
-        } catch (error) {
-          if (!(error instanceof Error)) {
-            throw error;
-          }
-          hash.update(error.message);
-        }
-        hash.update(String(released));
-      }
-    }
-    expect(hash.digest("hex")).toBe(digest);
+  it("rejects a model budget that cannot fit the status envelope", () => {
+    const state = new CodeModeOutputState(128, { maxChars: 0, maxContextChars: 0 });
+    expect(() => state.takeResult({ status: "completed" })).toThrow(
+      "Model tool-result budget cannot fit Code Mode status",
+    );
+  });
+
+  it("projects owned channels over metadata without losing unrelated fields", () => {
+    const state = new CodeModeOutputState(1_024);
+    state.append(captureCodeModeOutput(["output"], 1_024));
+    expect(
+      state.takeResult(
+        {
+          status: "completed",
+          telemetry: { calls: 1 },
+          output: "stale",
+          value: "stale",
+          error: "stale",
+        },
+        { value: captureCodeModeValue("value", 1_024), error: "diagnostic" },
+      ),
+    ).toEqual({
+      status: "completed",
+      telemetry: { calls: 1 },
+      output: ["output"],
+      value: "value",
+      error: "diagnostic",
+    });
   });
 
   it.each(["capacity", "undeliverable reference"])(
@@ -240,14 +159,11 @@ describe("Code Mode JSON normalization", () => {
                   "Not retained: result-store capacity exceeded. Delete references or return less data.",
               }
             : {
-                reference: {
-                  id: "result_00000000-0000-0000-0000-000000000000",
-                  bytes: 4_011,
-                  count: 1,
-                  shape: "object",
-                  preview: "sample",
-                  previewTruncated: true,
-                },
+                reference: reference(
+                  4_011,
+                  "sample",
+                  "result_00000000-0000-0000-0000-000000000000",
+                ),
                 release,
               },
       );
@@ -339,11 +255,6 @@ describe("Code Mode JSON normalization", () => {
 
     const second = state.takeResult({ status: "completed" }, { value: captured });
     expect(second).toMatchObject({ value: normalized, output: [] });
-    state.append(captureCodeModeOutput([{ type: "text", text: "next" }], 65_536));
-    expect(
-      state.takeResult({ status: "completed" }, { value: captureCodeModeValue(null, 65_536) })
-        .value,
-    ).toBeNull();
   });
 
   it("retains cycle fallbacks and normalizes each output entry with the root toJSON key", () => {

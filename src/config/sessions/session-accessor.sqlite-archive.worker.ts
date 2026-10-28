@@ -27,10 +27,12 @@ import {
 } from "../../infra/sqlite-worker-database-admission-relay.js";
 import { assertDatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
 import { cancelWorkerIdleGc, scheduleWorkerIdleGc } from "../../infra/worker-idle-gc.js";
+import { serveWorkerMemorySamples } from "../../infra/worker-memory.js";
 import { encodeNativeWorkerFailure } from "../../infra/worker-native-error.js";
 import { routeLogsToStderr } from "../../logging/console.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { withFreshOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly-open.js";
+import { OpenClawAgentDatabaseReadOnlyScope } from "../../state/openclaw-agent-db-readonly-scope.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
   hashSessionArchiveBytes,
@@ -65,10 +67,7 @@ import {
 } from "./session-accessor.sqlite-delete-snapshot.js";
 import { isRecentHistoricalSessionId } from "./session-accessor.sqlite-history-recency.js";
 import type { SqliteSessionReclamationPlan } from "./session-accessor.sqlite-lifecycle-types.js";
-import type {
-  SessionColdPreparationWorkerData,
-  SqliteArchiveMutationRequest,
-} from "./session-cold-storage-worker.js";
+import type { SqliteArchiveMutationRequest } from "./session-cold-storage-worker.js";
 import { transcriptEventJsonSql } from "./transcript-payload-read.js";
 
 type TranscriptArchiveDatabase = Pick<
@@ -122,7 +121,6 @@ function stageTranscriptArchiveContent(
       rowCount += 1;
     }
     flush();
-    fs.fsyncSync(fd);
   } finally {
     fs.closeSync(fd);
   }
@@ -381,7 +379,23 @@ async function runArchiveSessionRequest(
     return true;
   }
   let response: SqliteArchiveSessionResponse;
-  if (request.operation === "materialize") {
+  if (request.operation === "cold-prepare") {
+    const { prepareSessionColdBatchInWorker } = await import("./session-cold-storage-prepare.js");
+    const scope = new OpenClawAgentDatabaseReadOnlyScope();
+    try {
+      response = {
+        type: "cold-prepared",
+        results: [
+          await scope.run(request.input.databaseOptions, () =>
+            prepareSessionColdBatchInWorker(request.input),
+          ),
+        ],
+      };
+    } finally {
+      // The reusable carrier must not retain the preparation's database lease.
+      scope.close();
+    }
+  } else if (request.operation === "materialize") {
     const results: TranscriptArchiveWorkerResult[] = [];
     for await (const result of materializeTranscriptArchiveBatch(request.plans, env)) {
       results.push(result);
@@ -530,13 +544,6 @@ if (isRecord(workerData) && workerData.type === "sqlite-transcript-archive-v2") 
       }
       port.postMessage({ type: "done", results: [] }, []);
       port.close();
-    } else if (operation === "cold-prepare") {
-      const { prepareSessionColdBatchInWorker } = await import("./session-cold-storage-worker.js");
-      // SAFETY: the paired parent constructs this internal payload with SessionColdPreparationWorkerData.
-      const data = workerData as SessionColdPreparationWorkerData;
-      const result = await prepareSessionColdBatchInWorker(data.input);
-      port.postMessage({ type: "done", results: [result] }, []);
-      port.close();
     } else if (operation === "maintenance-size") {
       const { readSessionTranscriptJsonlBytesInDatabase } =
         await import("./session-accessor.sqlite-maintenance-store.js");
@@ -567,19 +574,28 @@ if (isRecord(workerData) && workerData.type === "sqlite-transcript-archive-v2") 
     }
   };
   const admissionPort = workerData.databaseAdmissionPort;
-  if (admissionPort instanceof MessagePort) {
-    bindSqliteDatabaseAdmissionUpstream(admissionPort);
-    try {
-      await withSqliteDatabaseAdmissionExchange(
-        (admissions, location, create) =>
-          exchangeSqliteDatabaseAdmissions(admissionPort, admissions, location, create),
-        () => run(workerPort),
-      );
-    } finally {
-      admissionPort.close();
+  // Pooled validation serves its own diagnostics; dedicated carriers own them until exit.
+  const memorySamples =
+    workerData.operation === "canonical-validation-pool"
+      ? undefined
+      : serveWorkerMemorySamples(workerPort);
+  try {
+    if (admissionPort instanceof MessagePort) {
+      bindSqliteDatabaseAdmissionUpstream(admissionPort);
+      try {
+        await withSqliteDatabaseAdmissionExchange(
+          (admissions, location, create) =>
+            exchangeSqliteDatabaseAdmissions(admissionPort, admissions, location, create),
+          () => run(workerPort),
+        );
+      } finally {
+        admissionPort.close();
+      }
+    } else {
+      // Task-pool dispatch installs its own existing admission exchange per task.
+      await run(workerPort);
     }
-  } else {
-    // Task-pool dispatch installs its own existing admission exchange per task.
-    await run(workerPort);
+  } finally {
+    memorySamples?.close();
   }
 }

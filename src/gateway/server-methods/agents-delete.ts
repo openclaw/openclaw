@@ -10,7 +10,6 @@ import {
   readAgentDeleteDatabaseRegistry,
   resolveSurvivingDatabaseFilePaths,
   retireAgentDeleteRuntime,
-  type AgentDeleteDatabasePlan,
 } from "../../agents/agent-delete-databases.js";
 import {
   formatSharedAuthStoreOwnerDeleteError,
@@ -185,7 +184,7 @@ export async function deleteGatewayAgent(
         const deleteFiles = journal.deleteFiles;
         let rosterCommitted = !configured;
         let committed: Awaited<ReturnType<typeof deleteAgentConfigEntry>> | undefined;
-        let databasePlan: AgentDeleteDatabasePlan | undefined;
+        let databasePlan: Awaited<ReturnType<typeof prepareAgentDeleteDatabases>> | undefined;
         try {
           await deletion.assertCurrentAsync();
           await assertAgentSessionStoreDeletionSafe(lockedConfig, agentId);

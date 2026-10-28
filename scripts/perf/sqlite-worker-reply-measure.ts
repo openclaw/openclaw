@@ -4,21 +4,38 @@
  * Run unchanged on base and candidate; compare the JSON CPU/op and sampled bytes/op.
  * Synthetic replies and jobs are prepared outside every measured loop. Five untraced
  * timing passes are separate from allocation sampling, which includes collected objects.
+ * Enable the Gateway task monitor so synchronous decode attribution is included.
+ * Pass --reply-file <synthetic-reply.bin> to replay a V8-serialized reply captured
+ * by sqlite-reply-census-preload.mjs instead of the default synthetic shapes.
+ * Add --acknowledgement-only to replay that sample as an undefined command reply
+ * when the domain already delivers its result through native commit settlement.
+ * This measures receiver cost only; domain tests must prove receipt equivalence.
  */
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
-import { serialize } from "node:v8";
+import { parseArgs } from "node:util";
+import { deserialize, serialize } from "node:v8";
+import { createMainThreadStallMonitor } from "../../src/infra/main-thread-stall.js";
 import { receiveSqliteWorkerReply } from "../../src/infra/sqlite-worker-broker-reply.js";
 import type { Job } from "../../src/infra/sqlite-worker-broker.types.js";
 import type { SqliteWorkerReply } from "../../src/infra/sqlite-worker-contract.js";
 import { SqliteWorkerSlotCustody } from "../../src/infra/sqlite-worker-request-custody.js";
 
-const iterations = 5_000;
+const iterations = 10_000;
+const { values } = parseArgs({
+  options: {
+    "reply-file": { type: "string" },
+    "acknowledgement-only": { type: "boolean", default: false },
+  },
+});
+assert(!values["acknowledgement-only"] || values["reply-file"], "Provide --reply-file");
 const samplingInterval = 512;
 const gc = global.gc;
 assert(gc, "Run with --expose-gc");
 const initialLoad = loadavg();
+const monitor = createMainThreadStallMonitor();
 const result = Promise.resolve(undefined);
 const observation = { started() {}, completed() {} };
 const custody = new SqliteWorkerSlotCustody();
@@ -79,17 +96,25 @@ function entry(index: number) {
     deliveryContext: { channel: "webchat", accountId: "synthetic" },
   };
 }
-const fixtures = [
-  { name: "scalar", value: true },
-  { name: "session-entry", value: entry(1) },
-  { name: "session-page-64", value: Array.from({ length: 64 }, (_, index) => entry(index)) },
-];
+const sampledReply = values["reply-file"] ? readFileSync(values["reply-file"]) : undefined;
+const capturedReply = values["acknowledgement-only"] ? serialize(undefined) : sampledReply;
+const fixtures: { name: string; value: unknown }[] = capturedReply
+  ? [{ name: "captured-synthetic-reply", value: deserialize(capturedReply) }]
+  : [
+      { name: "scalar", value: true },
+      { name: "session-entry", value: entry(1) },
+      { name: "session-page-64", value: Array.from({ length: 64 }, (_, index) => entry(index)) },
+    ];
 const inspector = new Session();
 inspector.connect();
 const reports = [];
 try {
   for (const fixture of fixtures) {
-    const reply: SqliteWorkerReply = { id: 1, ok: true, value: serialize(fixture.value) };
+    const reply: SqliteWorkerReply = {
+      id: 1,
+      ok: true,
+      value: capturedReply ?? serialize(fixture.value),
+    };
     run(prepare(500), reply);
     const timing = [];
     const loadBefore = loadavg();
@@ -120,6 +145,8 @@ try {
     assert.deepEqual(lastValue, fixture.value);
     reports.push({
       name: fixture.name,
+      sampledReplyBytes: sampledReply?.byteLength,
+      serializedBytes: reply.value.byteLength,
       iterationsPerPass: iterations,
       timing,
       sampledBytesPerReply:
@@ -133,6 +160,7 @@ try {
   }
 } finally {
   inspector.disconnect();
+  monitor.stop();
 }
 assert.equal(completed, fixtures.length * (500 + iterations * 6));
 console.log(

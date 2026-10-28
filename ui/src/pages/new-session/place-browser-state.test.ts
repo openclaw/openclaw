@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FsListDirResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import { PlaceBrowserState, PICKER_INPUT_DEBOUNCE_MS } from "./place-browser-state.ts";
 
 function directory(path: string, names: string[], parent = "/workspace"): FsListDirResult {

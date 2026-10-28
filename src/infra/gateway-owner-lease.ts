@@ -25,6 +25,7 @@ import {
 import { captureOpenClawStateReadSource } from "../state/openclaw-state-read-worker.js";
 import type { OpenClawStateReadOutcome } from "../state/openclaw-state-read.types.js";
 import { captureOpenClawStateReadWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { readProcessMachineIdentity } from "./current-machine-identity.js";
 import {
   classifyGatewayOwnerProcessNamespace,
   describeGatewayLockHolder,
@@ -70,6 +71,7 @@ function resolveStoppedGatewayOwnerLease(previous: GatewayOwnerLeaseIdentity | u
   }
   const namespace = classifyGatewayOwnerProcessNamespace(previous.processNamespace, {
     ownerHost: previous.host,
+    machineIdentity: previous.machineIdentity,
   });
   if (namespace === "dead") {
     return previous;
@@ -229,6 +231,7 @@ export function acquireGatewayOwnerLease(params: {
     pid: process.pid,
     host: hostname(),
     processNamespace: readGatewayLockProcessNamespace(),
+    machineIdentity: process.platform === "darwin" ? readProcessMachineIdentity() : undefined,
     // Retry the native self lookup with its full Windows budget before publication.
     startedAt:
       getFileLockProcessStartTime(process.pid, env) ??

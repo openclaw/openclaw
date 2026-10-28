@@ -10,6 +10,9 @@ export { OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER } from "../../packages/agent-core
 export const OPENCLAW_TRANSCRIPT_ARTIFACT_API = "openclaw-transcript" as const;
 export const OPENCLAW_DELIVERY_MIRROR_MODEL = "delivery-mirror" as const;
 export const SUBAGENT_COMPLETION_DIRECT_DELIVERY_KIND = "subagent-completion-direct" as const;
+/** Model-visible background result rows written by the destination history owner. */
+export const AUTOMATION_RESULT_MODEL = "automation-result" as const;
+export const SUBAGENT_COMPLETION_RESULT_KIND = "subagent-completion" as const;
 export const CRON_DIRECT_DELIVERY_CONTEXT_KIND = "cron-direct-delivery-context" as const;
 /** Marker kind of a skill review notice; `skill-workshop-change-notice.ts` owns its shape. */
 export const SKILL_WORKSHOP_CHANGE_NOTICE_KIND = "skill-workshop-change" as const;
@@ -75,8 +78,17 @@ export function isOpenClawDeliveryMirrorAssistantMessage(message: unknown): bool
   );
 }
 
+/** Matches a delivered subagent completion row: a canonical result or a retained mirror. */
 export function isOpenClawSubagentCompletionMirrorAssistantMessage(message: unknown): boolean {
   const entry = asOptionalRecord(message);
+  if (
+    entry?.role === "assistant" &&
+    entry.provider === OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER &&
+    entry.model === AUTOMATION_RESULT_MODEL &&
+    asOptionalRecord(entry.openclawAutomation)?.kind === SUBAGENT_COMPLETION_RESULT_KIND
+  ) {
+    return true;
+  }
   return (
     isOpenClawDeliveryMirrorAssistantMessage(entry) &&
     asOptionalRecord(entry?.openclawDeliveryMirror)?.kind ===

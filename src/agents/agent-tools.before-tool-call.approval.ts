@@ -82,11 +82,21 @@ export function mergeParamsWithApprovalOverrides(
   originalParams: unknown,
   approvalParams?: unknown,
 ): unknown {
-  return isPlainObject(approvalParams)
-    ? isPlainObject(originalParams)
-      ? { ...originalParams, ...approvalParams }
-      : approvalParams
-    : originalParams;
+  if (!isPlainObject(approvalParams)) {
+    return originalParams;
+  }
+  if (!isPlainObject(originalParams)) {
+    return approvalParams;
+  }
+  // Hook snapshots omit private properties such as Code Mode launch identity.
+  // Apply overrides before defining originals so even non-configurable keys can be rewritten.
+  return Object.defineProperties(
+    {},
+    {
+      ...Object.getOwnPropertyDescriptors(originalParams),
+      ...Object.getOwnPropertyDescriptors(approvalParams),
+    },
+  );
 }
 
 function notifyPluginApprovalResolution(
@@ -208,8 +218,11 @@ type PluginToolApprovalParams = {
  * can still answer. The approval's own timeout plus the gateway grace bounds it.
  */
 async function requestPluginToolApproval(params: PluginToolApprovalParams): Promise<HookOutcome> {
-  const deadlineAtMs =
-    Date.now() +
+  // Use the monotonic clock for the local human-input-wait deadline so an
+  // NTP step or wall-clock adjustment cannot prematurely end the wait or
+  // hold the lane indefinitely while the approval is still genuinely pending.
+  const deadlineMonotonicMs =
+    performance.now() +
     (addTimerTimeoutGraceMs(resolvePluginToolApprovalTimeoutMs(params.approval), 10_000) ??
       DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS + 10_000);
   let pending = true;
@@ -217,7 +230,7 @@ async function requestPluginToolApproval(params: PluginToolApprovalParams): Prom
   const release = params.ctx?.runId
     ? registerActiveEmbeddedRunHumanInputWaitForRun(
         params.ctx.runId,
-        () => pending && params.signal?.aborted !== true && Date.now() < deadlineAtMs,
+        () => pending && params.signal?.aborted !== true && performance.now() < deadlineMonotonicMs,
       )
     : undefined;
   try {

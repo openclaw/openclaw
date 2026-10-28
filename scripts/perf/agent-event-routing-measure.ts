@@ -91,11 +91,11 @@ await withAgentRunLifecycleGeneration(getAgentEventLifecycleGeneration(), async 
       includeObjectsCollectedByMinorGC: true,
     });
   }
-  const cpuStart = process.cpuUsage();
+  const cpuStart = process.threadCpuUsage();
   const started = performance.now();
   batch(events);
   const elapsedMs = performance.now() - started;
-  const cpu = process.cpuUsage(cpuStart);
+  const cpu = process.threadCpuUsage(cpuStart);
   let allocatedBytes: number | undefined;
   if (values.allocation) {
     const { profile } = await inspector.post("HeapProfiler.stopSampling");

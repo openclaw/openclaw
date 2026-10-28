@@ -2,24 +2,17 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { applyUpdateHunk } from "./apply-patch-update.js";
-import { applyPatch } from "./apply-patch.test-support.js";
+import { applyPatch, createMemoryPatchSandbox } from "./apply-patch.test-support.js";
 
-type Chunk = Parameters<typeof applyUpdateHunk>[1][number];
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function chunk(overrides: Partial<Chunk>): Chunk {
-  return {
-    oldLines: [],
-    newLines: [],
-    contextOldIndexes: [],
-    isEndOfFile: false,
-    ...overrides,
-  };
-}
-
-async function applyTo(source: string, chunks: Chunk[]): Promise<string> {
-  return applyUpdateHunk("source.txt", chunks, { readFile: async () => source });
+async function applyTo(source: string, hunk: string) {
+  const memory = createMemoryPatchSandbox({ "source.txt": source });
+  await applyPatch(
+    `*** Begin Patch\n*** Update File: source.txt\n${hunk}\n*** End Patch`,
+    memory.options,
+  );
+  return memory.files.get("/sandbox/source.txt");
 }
 
 describe("apply_patch ambiguous hunk matching", () => {
@@ -30,7 +23,7 @@ describe("apply_patch ambiguous hunk matching", () => {
     ["punctuation", "It\u2019s done\nIt\u2018s done", "It's done"],
   ])("refuses duplicate matches at the %s tier", async (_tier, lines, pattern) => {
     const source = `before\n${lines}\nafter\n`;
-    await expect(applyTo(source, [chunk({ oldLines: [pattern] })])).rejects.toThrow(
+    await expect(applyTo(source, `@@\n-${pattern}`)).rejects.toThrow(
       /Found 2 occurrences.*include more surrounding lines/s,
     );
   });
@@ -38,14 +31,7 @@ describe("apply_patch ambiguous hunk matching", () => {
     const source = "function target() {\n  return 1;\n}\nfunction target() {\n  return 2;\n}\n";
 
     await expect(
-      applyTo(source, [
-        chunk({
-          changeContext: "function target() {",
-          oldLines: ["  return 2;"],
-          newLines: ["  return 3;"],
-          contextOldIndexes: [undefined],
-        }),
-      ]),
+      applyTo(source, "@@ function target() {\n-  return 2;\n+  return 3;"),
     ).rejects.toThrow(/Found 2 occurrences of context.*more specific @@ context line/s);
   });
 
@@ -55,31 +41,22 @@ describe("apply_patch ambiguous hunk matching", () => {
     ["trim", "  target", "target"],
     ["punctuation", "It\u2019s done", "It's done"],
   ])("applies a unique match at the %s tier", async (_tier, line, pattern) => {
-    await expect(
-      applyTo(`before\n${line}\nafter\n`, [chunk({ oldLines: [pattern] })]),
-    ).resolves.toBe("before\nafter\n");
+    await expect(applyTo(`before\n${line}\nafter\n`, `@@\n-${pattern}`)).resolves.toBe(
+      "before\nafter\n",
+    );
   });
 
   it("prefers a unique exact match over broader tolerant lookalikes", async () => {
     const source = " target\ntarget\n\ttarget\n";
 
-    await expect(applyTo(source, [chunk({ oldLines: ["target"] })])).resolves.toBe(
-      " target\n\ttarget\n",
-    );
+    await expect(applyTo(source, "@@\n-target")).resolves.toBe(" target\n\ttarget\n");
   });
 
   it("uses a unique @@ context to disambiguate repeated exact hunk text", async () => {
     const source = "function first() {\n  return 1;\n}\nfunction second() {\n  return 1;\n}\n";
 
     await expect(
-      applyTo(source, [
-        chunk({
-          changeContext: "function second() {",
-          oldLines: ["  return 1;"],
-          newLines: ["  return 2;"],
-          contextOldIndexes: [undefined],
-        }),
-      ]),
+      applyTo(source, "@@ function second() {\n-  return 1;\n+  return 2;"),
     ).resolves.toBe("function first() {\n  return 1;\n}\nfunction second() {\n  return 2;\n}\n");
   });
 
@@ -87,34 +64,16 @@ describe("apply_patch ambiguous hunk matching", () => {
     const source = "marker\ntarget\nmiddle\ntarget\n";
 
     await expect(
-      applyTo(source, [
-        chunk({
-          oldLines: ["marker", "target"],
-          newLines: ["marker", "first"],
-          contextOldIndexes: [undefined, undefined],
-        }),
-        chunk({
-          oldLines: ["target"],
-          newLines: ["second"],
-          contextOldIndexes: [undefined],
-        }),
-      ]),
+      applyTo(source, "@@\n marker\n-target\n+first\n@@\n-target\n+second"),
     ).resolves.toBe("marker\nfirst\nmiddle\nsecond\n");
   });
 
   it("keeps end-of-file matching anchored to the final candidate", async () => {
     const source = "\ttarget\nmiddle\n\ttarget\n";
 
-    await expect(
-      applyTo(source, [
-        chunk({
-          oldLines: ["  target"],
-          newLines: ["done"],
-          contextOldIndexes: [undefined],
-          isEndOfFile: true,
-        }),
-      ]),
-    ).resolves.toBe("\ttarget\nmiddle\ndone\n");
+    await expect(applyTo(source, "@@\n-  target\n+done\n*** End of File")).resolves.toBe(
+      "\ttarget\nmiddle\ndone\n",
+    );
   });
 
   it("leaves the file byte-identical when an ambiguous patch is refused", async () => {

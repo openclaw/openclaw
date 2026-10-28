@@ -9,7 +9,7 @@ import { showInputDialog } from "../../components/input-dialog.tsx";
 import * as sessionMenuWork from "../../components/session-menu-work.ts";
 import { agentRoster } from "../../e2e/agent-roster.test-support.ts";
 import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
-import type { SessionCapability } from "../../lib/sessions/index.ts";
+import type { SessionCapability, SessionListOptions } from "../../lib/sessions/index.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import type {
   SessionDeleteOutcome,
@@ -123,6 +123,59 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 describe("sessions page lifecycle", () => {
+  it.each(["pending", "completed"] as const)(
+    "adopts the entering route's %s list without another request",
+    async (completion) => {
+      const response = createDeferred<SessionsListResult>();
+      const linked = completion === "completed";
+      const key = linked ? "agent:research:linked" : "agent:main:current";
+      const row = sessionRow("current", { key });
+      const result = sessionsResult([{ ...row, rowMode: "compact" }], 1);
+      const { request, sessions, context } = liveSessions<SessionListOptions>({
+        "sessions.subscribe": () => ({ subscribed: true }),
+        "sessions.list": (params) =>
+          params?.source === "sessions-page" ? response.promise : sessionsResult([], 1),
+        "sessions.describe": () => ({ session: row }),
+      });
+      const refresh = vi.spyOn(sessions, "refreshList");
+      const pageRequests = () =>
+        request.mock.calls.filter(
+          ([method, params]) => method === "sessions.list" && params?.source === "sessions-page",
+        );
+      let mountedPage: Awaited<ReturnType<typeof createPage>> | undefined;
+      try {
+        // SAFETY: The Sessions route loader returns these options, without a redirect or not-found.
+        const routeData = (await sessionsRoute.loader!(
+          context,
+          createRouteLoaderOptions({
+            pathname: "/sessions",
+            search: linked ? `?session=${encodeURIComponent(key)}` : "",
+            hash: "",
+          }),
+        )) as SessionsRouteData;
+        expect(pageRequests()).toHaveLength(1);
+        expect(pageRequests()[0]?.[1]).toMatchObject({
+          agentId: linked ? "research" : "main",
+          includeUnknown: linked,
+          ...(linked ? { search: key } : {}),
+        });
+        if (completion === "completed") {
+          response.resolve(result);
+          await refresh.mock.results[0]!.value;
+        }
+        mountedPage = await createPage(context, routeData);
+        expect(pageRequests()).toHaveLength(1);
+        response.resolve(result);
+        await waitForFast(() => expect(mountedPage?.result?.sessions[0]?.key).toBe(key));
+        expect(pageRequests()).toHaveLength(1);
+      } finally {
+        response.resolve(result);
+        mountedPage?.remove();
+        sessions.dispose();
+      }
+    },
+  );
+
   it("retries a retained agent identity on roster publication after reconnect backoff", async () => {
     let now = 1_000;
     vi.spyOn(Date, "now").mockImplementation(() => now);
@@ -360,9 +413,8 @@ describe("sessions page lifecycle", () => {
   );
 
   it.each(["startup", "same-client reconnect"])(
-    "loads the current query before config settles on %s",
+    "loads the current query and routes the configured main session without config on %s",
     async (ordering) => {
-      const config = createDeferred();
       const sidebar = createDeferred<SessionsListResult>();
       const result = (key: string) => sessionsResult([{ key, kind: "direct", updatedAt: 1 }], 1);
       let pageRequests = 0;
@@ -377,23 +429,18 @@ describe("sessions page lifecycle", () => {
         undefined,
         ordering === "startup" ? "connecting" : undefined,
       );
-      context.runtimeConfig.ensureLoaded = () => config.promise;
-      let routeData: SessionsRouteData | undefined;
-      const pendingRoute = Promise.resolve(
-        sessionsRoute.loader!(
-          context,
-          createRouteLoaderOptions({ pathname: "/sessions", search: "", hash: "" }),
-        ),
-      ).then((data) => {
-        routeData = data as SessionsRouteData;
-        return routeData;
-      });
+      context.agents.state.agentsList = {
+        ...agentRoster({ main: "Main" }, "main", "per-sender"),
+        mainKey: "workspace",
+      };
+      const routeData = (await sessionsRoute.loader!(
+        context,
+        createRouteLoaderOptions({ pathname: "/sessions", search: "", hash: "" }),
+      )) as SessionsRouteData;
       connection.emit({ phase: "connected" });
       let mountedPage: Awaited<ReturnType<typeof createPage>> | undefined;
       try {
-        await waitForFast(() =>
-          expect(routeData).toEqual({ expandedSessionKey: null, statusFilter: "active" }),
-        );
+        expect(routeData).toEqual({ expandedSessionKey: null, statusFilter: "active" });
         const page = await createPage(context, routeData);
         mountedPage = page;
         await waitForFast(() => expect(page.result?.sessions[0]?.key).toBe("agent:main:current-1"));
@@ -408,11 +455,6 @@ describe("sessions page lifecycle", () => {
         const expectedRequests = ordering === "startup" ? 1 : 2;
         expect(pageRequests).toBe(expectedRequests);
 
-        config.resolve();
-        page.routeData = (await pendingRoute) as SessionsRouteData;
-        await page.updateComplete;
-        expect(pageRequests).toBe(expectedRequests);
-
         sidebar.resolve(result("agent:main:sidebar"));
         await waitForFast(() =>
           expect(sessions.state.result?.sessions[0]?.key).toBe("agent:main:sidebar"),
@@ -421,8 +463,13 @@ describe("sessions page lifecycle", () => {
         await page.updateComplete;
         expect(pageRequests).toBe(expectedRequests);
         expect(page.result?.sessions[0]?.key).toBe(`agent:main:current-${expectedRequests}`);
+        expect(page.mainKey).toBe("workspace");
+        page.onNavigateToChat("agent:main:workspace");
+        expect(context.navigate).toHaveBeenCalledWith(
+          "chat",
+          expect.objectContaining({ pathname: "/chat/main" }),
+        );
       } finally {
-        config.resolve();
         sidebar.resolve(result("agent:main:sidebar"));
         mountedPage?.remove();
         sessions.dispose();
@@ -522,6 +569,23 @@ describe("sessions page lifecycle", () => {
     confirmation.resolve(true);
     await deleting;
     expect(sessions.deleteMany).toHaveBeenCalledWith([capturedTarget(target)]);
+  });
+
+  it("warns about automations added to a selected conversation after selection", async () => {
+    vi.mocked(showConfirmDialog).mockResolvedValue(false);
+    const target = sessionRow("gained-automation");
+    const { page, sessions } = await mountMutation();
+    page.result = sessionsResult([target], 1);
+    // Selecting captures a row copy through the page's real selection owner.
+    selectRows(page, target);
+    // A refreshed row for the same incarnation keeps the captured selection copy.
+    page.result = sessionsResult([{ ...target, hasAutomation: true }], 2);
+    await page.deleteSelected();
+    expect(showConfirmDialog).toHaveBeenCalledOnce();
+    expect(showConfirmDialog).toHaveBeenCalledWith(
+      expect.objectContaining({ confirmLabel: "Delete anyway" }),
+    );
+    expect(sessions.deleteMany).not.toHaveBeenCalled();
   });
 
   it("publishes unrelated roster updates while an optimistic deletion is pending", async () => {

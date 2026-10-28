@@ -194,7 +194,7 @@ describe("Control UI mount fallback", () => {
       [win.document.documentElement, win.document.body].map(
         (element) => win.getComputedStyle(element).backgroundColor,
       ),
-    ).toEqual(["rgb(247, 242, 236)", "rgb(247, 242, 236)"]);
+    ).toEqual(["rgb(232, 226, 220)", "rgb(232, 226, 220)"]);
   });
 
   it("keeps the fallback visible until the app completes its first render", async () => {

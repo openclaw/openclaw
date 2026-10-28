@@ -27,40 +27,25 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-it.each([false, true])("logs once at the profiling=%s threshold", async (enabled) => {
+it.each([
+  [false, 5_000],
+  [true, 500],
+] as const)("logs once at the profiling=%s threshold", (enabled, duration) => {
   vi.stubEnv("OPENCLAW_DIAGNOSTICS", enabled ? "reply.profiler" : "");
-  const tracker = createReplyTimingTracker({
-    log: { warn },
-    enabled: isReplyProfilerEnabled(),
-  });
-  expect(
-    tracker.measureSync("sync", () => {
-      advance(enabled ? 500 : 0);
-      return enabled ? 7 : 42;
-    }),
-  ).toBe(enabled ? 7 : 42);
-  if (!enabled) {
-    await expect(tracker.measure("async", async () => "ok")).resolves.toBe("ok");
-  }
+  const tracker = createReplyTimingTracker({ log: { warn }, enabled: isReplyProfilerEnabled() });
   const log = () =>
-    tracker.logIfSlow({
-      message: "reply timings",
-      ...(enabled ? { outcome: "completed" } : { details: { runId: "run-1" } }),
-    });
+    tracker.logIfSlow({ message: "reply timings", outcome: "completed", details: identity });
   log();
-  expect(warn).toHaveBeenCalledTimes(Number(enabled));
-  if (!enabled) {
-    await tracker.measure("prepare", () => advance(5_000));
-  }
+  expect(warn).not.toHaveBeenCalled();
+  tracker.measureSync("prepare", () => advance(duration));
   log();
   log();
   expect(warn).toHaveBeenCalledExactlyOnceWith(
-    enabled ? expect.stringContaining("stages=sync:") : expect.any(String),
+    expect.stringContaining("stages=prepare:"),
     expect.objectContaining({
-      ...(enabled ? { outcome: "completed" } : { runId: "run-1" }),
-      spans: enabled
-        ? [expect.objectContaining({ name: "sync" })]
-        : expect.arrayContaining([span("prepare", 5_000)]),
+      ...identity,
+      outcome: "completed",
+      spans: [span("prepare", duration)],
     }),
   );
 });
@@ -71,31 +56,17 @@ it("keeps agent milestones repeatable without reopening the terminal log", () =>
 
   tracker.logMilestoneIfSlow({ ...identity, milestone: "model_started" });
   tracker.logMilestoneIfSlow({ ...identity, milestone: "" });
-  const terminal = {
-    runId: "run-1",
-    outcome: "error" as const,
-    error: "failed",
-    milestone: "unexpected",
-    token: "secret",
-  };
-  tracker.logIfSlow(terminal);
+  const terminal = { ...identity, outcome: "error" as const, error: "failed" };
+  const privateFields = { milestone: "unexpected", token: "secret" };
+  tracker.logIfSlow({ ...terminal, ...privateFields });
   tracker.logIfSlow({ ...identity, outcome: "completed" });
 
-  expect(subsystemWarn).toHaveBeenCalledTimes(3);
-  expect(subsystemWarn.mock.calls[0]?.[0]).toBe(
-    "agent turn milestone runId=run-1 sessionId=session-1 sessionKey=agent:main milestone=model_started totalMs=1500 stages=none",
-  );
-  expect(subsystemWarn.mock.calls[1]?.[0]).toContain(" milestone= totalMs=1500 ");
-  expect(subsystemWarn.mock.calls[2]?.[0]).toContain("agent turn timings runId=run-1");
-  expect(subsystemWarn.mock.calls[2]?.[1]).toEqual(
-    summary({
-      runId: "run-1",
-      sessionId: undefined,
-      sessionKey: undefined,
-      outcome: "error",
-      error: "failed",
-    }),
-  );
+  expect(subsystemWarn.mock.calls.map(([, details]) => details)).toEqual([
+    summary({ ...identity, milestone: "model_started" }),
+    summary({ ...identity, milestone: "" }),
+    summary({ ...identity, outcome: "error", error: "failed" }),
+  ]);
+  expect(JSON.stringify(subsystemWarn.mock.calls)).not.toMatch(/secret|unexpected/);
 });
 
 it("preserves dispatch timing messages and structured details", () => {
@@ -109,10 +80,10 @@ it("preserves dispatch timing messages and structured details", () => {
   };
   const details = { ...context, token: "secret" };
   tracker.logIfSlow(details);
-  tracker.logIfSlow(details);
+  tracker.logIfSlow(context);
 
   expect(subsystemWarn).toHaveBeenCalledExactlyOnceWith(
-    "reply hot path timings channel=telegram messageId=unknown runId=run-1 sessionId=session-1 sessionKey=unknown outcome=skipped totalMs=1500 stages=none",
+    expect.any(String),
     summary({
       ...context,
       messageId: undefined,
@@ -120,28 +91,41 @@ it("preserves dispatch timing messages and structured details", () => {
       reason: undefined,
     }),
   );
+  expect(JSON.stringify(subsystemWarn.mock.calls)).not.toContain("secret");
 });
 
-it("keeps ordinary model and tool execution out of default terminal warnings", async () => {
-  const agentTiming = createAgentTurnTimingTracker();
-  const dispatchTiming = createReplyHotPathTimingTracker();
-
-  agentTiming.logMilestoneIfSlow({ ...identity, milestone: "before_embedded_run" });
-  agentTiming.logExecutionPhaseIfSlow({ ...identity, phase: "turn_accepted" });
-  agentTiming.logExecutionPhaseIfSlow({ ...identity, phase: "model_call_started" });
-  await dispatchTiming.measure("reply.run_reply_resolver", () =>
-    agentTiming.measure("embedded_run", async () => {
-      nowMs += 20_000;
-      agentTiming.logExecutionPhaseIfSlow({ ...identity, phase: "assistant_output_started" });
-      agentTiming.logExecutionPhaseIfSlow({ ...identity, phase: "tool_execution_started" });
-    }),
-  );
-  agentTiming.logIfSlow({ ...identity, outcome: "completed" });
-  dispatchTiming.logIfSlow({ channel: "webchat", outcome: "completed" });
-
-  expect(subsystemWarn).not.toHaveBeenCalled();
-  expect(subsystemInfo).toHaveBeenCalledTimes(2);
-});
+it.each([false, true])(
+  "logs first execution observations only (slow admission=%s)",
+  (slowAdmission) => {
+    const agent = createAgentTurnTimingTracker();
+    const dispatch = createReplyHotPathTimingTracker();
+    const phase = (value: Parameters<typeof agent.logExecutionPhaseIfSlow>[0]["phase"]) =>
+      agent.logExecutionPhaseIfSlow({ ...identity, phase: value });
+    agent.logMilestoneIfSlow({ ...identity, milestone: "before_embedded_run" });
+    phase(slowAdmission ? "runner_entered" : "turn_accepted");
+    phase("model_call_started");
+    expect(subsystemWarn).not.toHaveBeenCalled();
+    nowMs = slowAdmission ? 21_000 : 20_000;
+    if (slowAdmission) {
+      phase("turn_accepted");
+      nowMs = 24_000;
+    }
+    phase("assistant_output_started");
+    phase("tool_execution_started");
+    const outputMs = nowMs;
+    nowMs = 30_000;
+    phase("tool_execution_started");
+    agent.logIfSlow({ ...identity, outcome: "completed" });
+    dispatch.logIfSlow({ channel: "webchat", outcome: "completed" });
+    expect(subsystemWarn.mock.calls.map(([, details]) => details)).toEqual(
+      slowAdmission ? [summary({ ...identity, milestone: "turn_accepted" }, 21_000)] : [],
+    );
+    expect(subsystemInfo.mock.calls.map(([, details]) => details)).toEqual([
+      summary({ ...identity, milestone: "assistant_output_started" }, outputMs),
+      summary({ ...identity, milestone: "tool_execution_started" }, outputMs),
+    ]);
+  },
+);
 
 it("reports slow dispatch preparation and early cancellation without profiling", async () => {
   const tracker = createReplyHotPathTimingTracker();
@@ -162,27 +146,5 @@ it("reports slow dispatch preparation and early cancellation without profiling",
       spans: [span("reply.load_reply_resolver", 5_000)],
     },
     { outcome: "skipped", reason: "reply_operation_aborted", totalMs: 5_000 },
-  ]);
-});
-
-it("records the first slow execution phases without profiling or repeated tool logs", () => {
-  const tracker = createAgentTurnTimingTracker();
-
-  tracker.logExecutionPhaseIfSlow({ ...identity, phase: "runner_entered" });
-  expect(subsystemWarn).not.toHaveBeenCalled();
-  nowMs = 21_000;
-  tracker.logExecutionPhaseIfSlow({ ...identity, phase: "turn_accepted" });
-  nowMs = 24_000;
-  tracker.logExecutionPhaseIfSlow({ ...identity, phase: "assistant_output_started" });
-  tracker.logExecutionPhaseIfSlow({ ...identity, phase: "tool_execution_started" });
-  nowMs = 30_000;
-  tracker.logExecutionPhaseIfSlow({ ...identity, phase: "tool_execution_started" });
-
-  expect(subsystemWarn.mock.calls.map((call) => call[1])).toEqual([
-    summary({ ...identity, milestone: "turn_accepted" }, 21_000),
-  ]);
-  expect(subsystemInfo.mock.calls.map((call) => call[1])).toEqual([
-    summary({ ...identity, milestone: "assistant_output_started" }, 24_000),
-    summary({ ...identity, milestone: "tool_execution_started" }, 24_000),
   ]);
 });

@@ -1,17 +1,22 @@
-import { createMemo, createSignal, For, lazy, onSettled, Show } from "solid-js";
+import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
 import { PersonName } from "../../../components/person-activity-link-solid.tsx";
 import { personActivityLink } from "../../../components/person-activity-link.ts";
 import type { MessageGroup as MessageGroupData } from "../../../lib/chat/chat-types.ts";
 import { messageClientSourcesLabel } from "../../../lib/chat/message-client-source.ts";
 import { normalizeRoleForGrouping } from "../../../lib/chat/message-normalizer.ts";
+import { participantPalette } from "../../../lib/reactive/participant-palette.ts";
 import { createMediaQuerySource } from "../../../lib/reactive/platform.ts";
 import { ChatAvatar, ForwardedAvatar } from "../chat-avatar.ts";
+import { readHandoffDisplay } from "../chat-sessions-yield.ts";
+import { listResumedHandoffSessions } from "../chat-subagent-wait.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
 import { hasForwardedSource, isSessionActivityGroup } from "../chat-turn-boundary.ts";
 import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
 import { BrowserTabPreviews } from "./chat-browser-tab-previews.tsx";
 import { ForwardedAttribution } from "./chat-forwarded-attribution.tsx";
+import { ChatHandoffResume } from "./chat-handoff-sessions.tsx";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
+import { ActivityGroupContent } from "./chat-message-activity-view.tsx";
 import type { GroupedMessageOptions } from "./chat-message-bubble-options.ts";
 import { GroupedMessage } from "./chat-message-bubble-view.tsx";
 import { RewindButton } from "./chat-message-confirmation-view.tsx";
@@ -47,10 +52,6 @@ import type { ReplyConnectorElements } from "./chat-reply-connector.tsx";
 import { ChatSessionActivity } from "./chat-session-activity.solid.tsx";
 import { selectBrowserTabPreviews } from "./chat-tool-cards.ts";
 import { TurnRecapRow } from "./chat-turn-recap-view.tsx";
-
-const ActivityGroupContent = lazy(() => import("./chat-message-activity-view.tsx"), {
-  export: "ActivityGroupContent",
-});
 
 export type { NativeMessageGroupOptions } from "./chat-message-group-frame.ts";
 
@@ -136,6 +137,7 @@ function PreparedMessage(props: {
           ? props.options.firstBubbleKey
           : (props.group.messages.find((message) => message.hasVisibleContent)?.key ?? null),
       isStreaming: isStreaming(),
+      ownsTerminalStatus: props.item.presentationOwnsTerminalStatus,
       entryId,
       // Tool-row file links carry their message like rendered markdown links, so earlier
       // messages keep reading their original source; sender-owned links stay session-scoped.
@@ -147,11 +149,16 @@ function PreparedMessage(props: {
             },
           }
         : {}),
-      duplicateCount: props.item.duplicateCount ?? 1,
       showToolCalls: props.options.showToolCalls ?? true,
       assistantMessageDisclosure,
       messageActions: actionDetails,
     };
+  });
+  // A spoken handoff acknowledgment marks where its run resumed.
+  const resumed = createMemo(() => {
+    const handoff = readHandoffDisplay(props.item.message);
+    const resumedAt = handoff?.resumedAt;
+    return handoff && resumedAt !== undefined ? { ...handoff, resumedAt } : undefined;
   });
   return (
     <>
@@ -161,6 +168,23 @@ function PreparedMessage(props: {
         options={options()}
         onOpenSidebar={props.options.onOpenSidebar}
       />
+      <Show when={resumed()}>
+        {(handoff) => (
+          <ChatHandoffResume
+            handoff={handoff()}
+            links={props.options.handoffSessionLinks}
+            sessions={
+              props.options.sessionKey && props.options.subagents
+                ? listResumedHandoffSessions(
+                    props.options.sessionKey,
+                    props.options.subagents,
+                    handoff(),
+                  )
+                : []
+            }
+          />
+        )}
+      </Show>
       <Show when={props.showReactions !== false}>
         <GroupMessageReactions
           group={props.group}
@@ -465,7 +489,11 @@ function FramedMessageGroup(props: {
     <div
       ref={(element) => (replyElements.group = element)}
       class={frame().className}
-      style={frame().style}
+      style={
+        frame().normalizedRole === "user" || frame().isForwarded
+          ? participantPalette.read()?.style(frame().senderHue)
+          : undefined
+      }
       data-chat-row-key={props.group.key}
       data-chat-streaming={props.group.isStreaming ? "true" : undefined}
       data-file-session-key={frame().sessionKey}
@@ -500,11 +528,7 @@ function FramedMessageGroup(props: {
           when={Boolean(options().activeContinuation)}
           fallback={
             options().turnRecap ? (
-              <TurnRecapRow
-                recap={options().turnRecap!}
-                presentation="continuation"
-                hideDuration={options().hideTurnRecapDuration}
-              />
+              <TurnRecapRow recap={options().turnRecap!} presentation="continuation" />
             ) : undefined
           }
         >

@@ -29,6 +29,7 @@ import {
 import { withManagedImageSessionRead } from "./managed-image-session-read.js";
 import { createPresenceRecipientProjection } from "./presence-projection.js";
 import type { GatewayClient } from "./server-methods/types.js";
+import type { SessionRowProjection } from "./session-row-projection.js";
 import { readSessionMessagesMatchingIdAsync } from "./session-transcript-readers.js";
 import {
   retainGatewaySessionEntryReadOnly,
@@ -247,9 +248,24 @@ it("projects unbound memory watches from current facts with the existing recipie
   await fixture(siblingKey);
   await fixture(otherKey);
   const person = { text: "watcher", ts: 1 };
+  // A durable revision cannot certify memory-session lifetime across recipients.
+  const projection = {
+    getPolicyConfig: () => cfg,
+    sharingRevision: {},
+    sharingTargetState: () => {
+      throw new Error("Memory watch used a durable target");
+    },
+    hasMembership: () => {
+      throw new Error("Memory watch used durable membership");
+    },
+  } satisfies Pick<
+    SessionRowProjection,
+    "getPolicyConfig" | "sharingRevision" | "sharingTargetState" | "hasMembership"
+  >;
   const project = createPresenceRecipientProjection({
     cfg,
     presence: [{ ...person, watchedSessions: [sessionKey, siblingKey, otherKey] }],
+    projection,
   });
   const client: GatewayClient = {
     connect: {

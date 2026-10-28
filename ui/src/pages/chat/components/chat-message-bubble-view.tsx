@@ -74,15 +74,13 @@ const PluginInlineView = lazy(() => import("../../../plugins/control-ui-inline-v
   export: "PluginInlineView",
 });
 
-export type GroupedMessageProps = {
+/** Message identity owns text/media DOM; option refreshes only publish new facts. */
+export function GroupedMessage(props: {
   preparation: ChatMessageRenderPreparation;
   messageKey: string;
   options: GroupedMessageOptions;
   onOpenSidebar?: (content: SidebarContent) => void;
-};
-
-/** Message identity owns text/media DOM; option refreshes only publish new facts. */
-export function GroupedMessage(props: GroupedMessageProps) {
+}) {
   const refreshMedia = () => void refresh(state);
   const state = createMemo(() =>
     prepareGroupedMessage(props.preparation, props.messageKey, props.options, props.onOpenSidebar),
@@ -106,7 +104,13 @@ export function GroupedMessage(props: GroupedMessageProps) {
     <Show
       when={state().workspaceConflict}
       fallback={
-        <Show when={!state().empty}>
+        <Show
+          when={
+            !state().empty ||
+            (props.options.ownsTerminalStatus === true &&
+              assistantMessageIsInterrupted(state().message))
+          }
+        >
           {(_visible) => {
             const entryRef = messageElements?.forKey(initialMessageKey);
             const bindEntry = elementRef((element) => {
@@ -166,6 +170,7 @@ export function GroupedMessage(props: GroupedMessageProps) {
                   </Switch>
                   <Show
                     when={
+                      props.options.ownsTerminalStatus !== false &&
                       state().sourceRole === "assistant" &&
                       assistantMessageIsInterrupted(state().message)
                     }
@@ -175,18 +180,6 @@ export function GroupedMessage(props: GroupedMessageProps) {
                       role="status"
                     >
                       {t("chat.composer.runInterrupted")}
-                    </div>
-                  </Show>
-                  <Show
-                    when={state().duplicateCount > 1 && (!state().markdown || state().jsonResult)}
-                  >
-                    <div
-                      class="chat-duplicate-count"
-                      aria-label={t("chat.messages.duplicatesCollapsed", {
-                        count: String(state().duplicateCount),
-                      })}
-                    >
-                      ×{state().duplicateCount}
                     </div>
                   </Show>
                 </div>
@@ -277,7 +270,6 @@ function MessageText(props: ContentProps) {
           messageKey={props.messageKey}
           options={prepared().options}
           markdownOptions={props.state().markdownRenderOptions}
-          duplicateSuffix={props.state().duplicateSuffix}
           media={prepared().media}
         />
       </Match>

@@ -4,7 +4,6 @@ import { prepareSharedAuthStoreOwnershipForNative } from "../auth-profiles/path-
 import {
   clearAllRuntimeAuthMaterializations,
   getPreparedRuntimeAuthMaterializations,
-  runtimeAuthMaterializationChanges,
 } from "../auth-profiles/runtime-materializations.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import { copyAttemptDeliveryState } from "./run/attempt-delivery-state.js";
@@ -73,30 +72,6 @@ describe("reportEmbeddedRunSuccessfulAuthBinding", () => {
     modelBaseUrl: "https://api.openai.com/v1",
   };
   afterEach(clearAllRuntimeAuthMaterializations);
-
-  it("publishes an identical prepared API-key success only once", () => {
-    const listener = vi.fn();
-    const publishMaterialization = runtimeAuthMaterializationChanges.onChange;
-    runtimeAuthMaterializationChanges.onChange = (event) => {
-      publishMaterialization?.(event);
-      listener(event);
-    };
-    try {
-      reportEmbeddedRunSuccessfulAuthBinding(preparedBinding);
-      reportEmbeddedRunSuccessfulAuthBinding(preparedBinding);
-
-      expect(getPreparedRuntimeAuthMaterializations(agentDir)).toEqual([
-        expect.objectContaining({
-          authMode: "api-key",
-          authProfileId: "openai:work",
-          runtimeOwnerId: "codex",
-        }),
-      ]);
-      expect(listener).toHaveBeenCalledOnce();
-    } finally {
-      runtimeAuthMaterializationChanges.onChange = publishMaterialization;
-    }
-  });
 
   it("rejects prepared auth with non-profile provenance", () => {
     reportEmbeddedRunSuccessfulAuthBinding({

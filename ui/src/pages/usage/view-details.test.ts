@@ -515,17 +515,28 @@ it("keeps loaded details visible and marks them stale after refresh failures", a
   const restoreI18n = captureI18nStateForTesting();
   const timestamp = Date.UTC(2026, 0, 2, 15, 4, 55);
   try {
+    await i18n.setLocale("en");
+    const container = mount([point({ timestamp: 1000 }), point({ timestamp: 2000 })], {
+      timeSeries: "timeline unavailable",
+      sessionLogs: "logs unavailable",
+      sessionLogsData: [
+        log(timestamp, "user", "retained message"),
+        log(Number.NaN, "assistant", "undated message"),
+      ],
+      stale: true,
+    });
     for (const locale of ["en", "fr", "en"] as const) {
       await i18n.setLocale(locale);
-      const container = mount([point({ timestamp: 1000 }), point({ timestamp: 2000 })], {
-        timeSeries: "timeline unavailable",
-        sessionLogs: "logs unavailable",
-        sessionLogsData: [
-          log(timestamp, "user", "retained message"),
-          log(Number.NaN, "assistant", "undated message"),
-        ],
-        stale: true,
+      flush();
+      const chartTimestamp = new Date(1000).toLocaleString(locale, {
+        month: "short",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
       });
+      expect(container.querySelector(".ts-bar")?.getAttribute("aria-label")).toBe(
+        `${chartTimestamp} · 100 ${t("usage.metrics.tokens").toLowerCase()}`,
+      );
 
       expect(container.querySelectorAll(".usage-detail-error--timeline strong")).toHaveLength(1);
       expect(container.querySelectorAll(".usage-detail-error--conversation strong")).toHaveLength(

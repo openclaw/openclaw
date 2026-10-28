@@ -88,3 +88,13 @@ export async function createConversationDeliveryTestStore(agentId = "main") {
     markSuppressed: vi.fn(delivery.markConversationDeliverySuppressed),
   };
 }
+
+export const createClickClackConversationConfig = () => ({
+  channels: {
+    clickclack: {
+      baseUrl: "https://clickclack.example",
+      workspace: "wsp_synthetic",
+      token: "synthetic-token",
+    },
+  },
+});

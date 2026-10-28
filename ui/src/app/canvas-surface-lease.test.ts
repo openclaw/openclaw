@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../api/gateway.ts";
+import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
 import { createCanvasSurfaceLease } from "./canvas-surface-lease.runtime.ts";
 
 const url = (name: string) => `https://canvas.test/__openclaw__/cap/${name}`;

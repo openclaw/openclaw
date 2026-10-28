@@ -55,28 +55,18 @@ it.each([0, 37])("handles launchctl bootstrap status %s", (bootstrapStatus) => {
     () => {
       const failure = { status: 1, stdout: "" };
       spawnSyncMock.mockImplementation((command: string, args: string[]) => {
-        if (command !== "launchctl") {
-          return failure;
+        if (command === "launchctl") {
+          if (args[0] === "bootstrap") {
+            return { status: bootstrapStatus };
+          }
+          if (args[0] === "kickstart" && args[1] !== "-k" && bootstrapStatus === 37) {
+            return { status: 0, stdout: "" };
+          }
         }
-        if (args[0] === "bootstrap") {
-          return {
-            status: bootstrapStatus,
-            stderr: bootstrapStatus === 0 ? "" : "Operation already in progress",
-          };
-        }
-        if (args[0] !== "kickstart") {
-          return failure;
-        }
-        if (args[1] === "-k") {
-          return { status: 113, stderr: "service not loaded" };
-        }
-        return bootstrapStatus === 0 ? failure : { status: 0, stdout: "" };
+        return failure;
       });
       const uid = typeof process.getuid === "function" ? process.getuid() : 501;
-      expect(triggerOpenClawRestart()).toEqual({
-        ok: true,
-        method: "launchctl",
-      });
+      expect(triggerOpenClawRestart()).toEqual({ ok: true, method: "launchctl" });
       expect(
         spawnSyncMock.mock.calls
           .filter(([command]) => command === "launchctl")

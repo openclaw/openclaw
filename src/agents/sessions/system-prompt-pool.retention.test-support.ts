@@ -19,19 +19,24 @@ const checkpoint = {
   historyId: null,
   restart: true,
 };
+const custom = <T>(id: string, customType: string, data: T) => ({
+  type: "custom" as const,
+  customType,
+  id,
+  parentId: null,
+  timestamp: "2026-10-01T00:00:00Z",
+  data,
+});
+const collect = () => {
+  global.gc!();
+  global.gc!();
+};
 
 function createSession(index: number, restored: boolean) {
   if (restored) {
     return SessionManager.fromEntries([
       { type: "session", version: 4, id: `prefix-${index}`, cwd: "/synthetic" },
-      {
-        type: "custom",
-        customType: "openclaw.system-prompt",
-        id: "checkpoint",
-        parentId: null,
-        timestamp: "2026-10-01T00:00:00Z",
-        data: checkpoint,
-      },
+      custom("checkpoint", "openclaw.system-prompt", checkpoint),
     ]);
   }
   const manager = SessionManager.inMemory("/synthetic");
@@ -42,12 +47,10 @@ function createSession(index: number, restored: boolean) {
 assert.equal(typeof global.gc, "function");
 for (const restored of [false, true]) {
   createSession(-1, restored);
-  global.gc!();
-  global.gc!();
+  collect();
   const before = process.memoryUsage().heapUsed;
   const sessions = Array.from({ length: 50 }, (_, index) => createSession(index, restored));
-  global.gc!();
-  global.gc!();
+  collect();
   const retainedBytes = process.memoryUsage().heapUsed - before;
   console.log(JSON.stringify({ restored, sessions: sessions.length, retainedBytes }));
   assert.ok(retainedBytes < 2 * MIB, `prompt checkpoints retained ${retainedBytes} bytes`);
@@ -69,22 +72,19 @@ async function assertInterleavedCheckpointRetention() {
   function checkpointFor(index: number) {
     const text = `Synthetic checkpoint ${index}: `.padEnd(128 * 1024, "x");
     return shareSessionSystemPrompt(
-      structuredClone({
-        type: "custom" as const,
-        customType: "openclaw.system-prompt",
-        id: `checkpoint-${index}`,
-        parentId: null,
-        timestamp: "2026-10-01T00:00:00Z",
-        data: { prefix: text, renderedPrefix: text },
-      }),
+      structuredClone(
+        custom(`checkpoint-${index}`, "openclaw.system-prompt", {
+          prefix: text,
+          renderedPrefix: text,
+        }),
+      ),
     );
   }
   const checkpoints = Array.from({ length: 3 }, () =>
     Array.from({ length: 80 }, (_, index) => checkpointFor(index)),
   );
   await setImmediate();
-  global.gc!();
-  global.gc!();
+  collect();
   const retainedBytes = process.memoryUsage().heapUsed - before;
   console.log(JSON.stringify({ workingSet: 80, cohorts: checkpoints.length, retainedBytes }));
   assert.ok(retainedBytes < 14 * MIB, `interleaved checkpoints retained ${retainedBytes} bytes`);
@@ -103,14 +103,7 @@ await drainGlobalSingletonLifecycleState();
 function prepareRetainedAdmission() {
   const lease = retainEmbeddedSessionPromptState("retained-admission");
   const entries: SessionEntry[] = [
-    {
-      type: "custom",
-      customType: "synthetic-history",
-      id: "history",
-      parentId: null,
-      timestamp: "2026-10-01T00:00:00Z",
-      data: { text: "Historical payload" },
-    },
+    custom("history", "synthetic-history", { text: "Historical payload" }),
   ];
   return {
     lease,

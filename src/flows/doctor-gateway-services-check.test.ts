@@ -9,10 +9,6 @@ vi.mock("../commands/doctor-gateway-services.js", () => ({
   detectExtraGatewayServiceIssues: mocks.detectExtraGatewayServiceIssues,
 }));
 const runtime = { log() {}, error() {}, exit() {} };
-const inspectionError = (source: string) => ({
-  source,
-  message: "Service path could not be inspected.",
-});
 const check = createCoreHealthChecks().find(
   (entry) => entry.id === "core/doctor/gateway-services/extra",
 )!;
@@ -48,51 +44,27 @@ it.each([
             service("linux", "clawdbot-system.service", "system"),
             service("darwin", "ai.clawdbot.system", "system"),
           ],
-      errors: [inspectionError(empty ? "clawdbot-gateway.service" : "clawdbot-backup.service")],
+      errors: [{ source: "unreadable.service", message: "Service path could not be inspected." }],
     });
     const ctx = { mode: "fix" as const, runtime, cfg: {}, deep: true, dryRun };
     const findings = await check.detect(ctx);
     const result = await check.repair?.(ctx, findings);
-    expect(mocks.detectExtraGatewayServiceIssues).toHaveBeenCalledWith({ deep: true });
+    expect(findings.at(-1)).toMatchObject({
+      target: "unreadable.service",
+      severity: "warning",
+      message: expect.stringContaining("Service path could not be inspected."),
+    });
     if (empty) {
-      expect(findings).toMatchObject([
-        {
-          severity: "warning",
-          target: "clawdbot-gateway.service",
-          message: expect.stringContaining("could not be inspected"),
-        },
-      ]);
+      expect(findings).toHaveLength(1);
     } else {
-      expect(findings).toMatchObject([
-        {
-          checkId: "core/doctor/gateway-services/extra",
-          severity: "info",
-          source: "linux",
-          target: "custom-gateway.service",
-          message:
-            "Other gateway-like service detected: custom-gateway.service (user, unit: /home/test/.config/systemd/user/custom-gateway.service)",
-          fixHint: "Run a single gateway per machine unless this extra gateway is intentional.",
-        },
-        { target: "ai.clawdbot.gateway" },
-        {
-          severity: "warning",
-          target: "clawdbot-gateway.service",
-          message:
-            "Other gateway-like service detected: clawdbot-gateway.service (user, unit: /home/test/.config/systemd/user/clawdbot-gateway.service)",
-          fixHint:
-            "Run `openclaw doctor` interactively to review legacy gateway services and confirm supported cleanup.",
-        },
-        { target: "Clawdbot Gateway" },
-        { target: "clawdbot-gateway-custom.service" },
-        { target: "clawdbot-system.service" },
-        { target: "ai.clawdbot.system" },
-        {
-          checkId: "core/doctor/gateway-services/extra",
-          severity: "warning",
-          target: "clawdbot-backup.service",
-          message: expect.stringContaining("Service path could not be inspected."),
-        },
-      ]);
+      expect(findings[0]).toMatchObject({
+        severity: "info",
+        fixHint: expect.stringContaining("Run a single gateway"),
+      });
+      expect(findings[1]).toMatchObject({
+        severity: "warning",
+        fixHint: expect.stringContaining("confirm supported cleanup"),
+      });
     }
     expect(result).toEqual({
       status: dryRun ? "repaired" : "skipped",

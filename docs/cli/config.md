@@ -9,20 +9,35 @@ sidebarTitle: "Config"
 
 Non-interactive helpers for `openclaw.json`: get/set/patch/unset a value by path, print the schema, validate, or print the active file path. Run `openclaw config` with no subcommand to open the same guided wizard as `openclaw configure`.
 
+Validation, dry-run, and config-update reports escape terminal control characters
+in config file paths. JSON path fields and the raw path from `openclaw config file`
+retain their original values.
+
 When a local Gateway owns the state directory, `config set`, `config patch`, and
 `config unset` route the write through that Gateway instead of writing the file
 themselves. The CLI prepares the same change and validation as an offline write,
 then sends it as one `config.patch` guarded by the `hash` from `config.get`, so the
 Gateway stays the only writer and applies the change under its reload policy.
-Output and exit codes match the offline command. If the config changed in between,
+Output and exit codes match the offline command. With `gateway.reload.mode: "off"`,
+a routed write is saved without a Gateway restart and prints
+`Restart the gateway to apply.`, as an offline write does. Older Gateways, such as
+2026.10.7, still restart to apply such a write. If the config changed in between,
 the Gateway rejects the write; rerun the command. A failure after the request was
 sent is reported as an uncertain outcome and is never retried locally; check the
 path with `openclaw config get` before retrying.
 
-Two kinds of change still need the Gateway stopped: `database.*` settings, which
-select the state database the Gateway holds open, and changes a merge patch
-cannot express (for example an authored `null`). Stop the Gateway through its
-service owner, wait for it to exit, then rerun the command. `--dry-run` never
+Some changes still need the Gateway stopped: `database.*` settings, which
+select the state database the Gateway holds open, changes a merge patch
+cannot express (for example an authored `null`), and changes the Gateway would
+save differently because it cannot see which paths the command set. The last
+group includes activating an escaped `$${VAR}` literal as a `${VAR}` reference,
+and setting `agents.defaults.authInheritance` or
+`agents.defaults.sessionStore.agentId` in the same command that changes the
+agent roster or `session.store`. Run the owner change as a separate command
+after the roster or store change. Otherwise, stop the Gateway through its
+service owner, wait for it to exit, then rerun the command. When a routed
+`session.store` change clears a copied session-store owner, the CLI reports it
+as the offline command does. `--dry-run` never
 contacts the Gateway. See [Config RPC](/gateway/configuration/config-rpc) for the
 underlying methods.
 
@@ -628,7 +643,7 @@ After every successful `config set` / `config patch` / `config unset`, the CLI p
 | `Restart the gateway to apply.`                     | The changed path needs a full restart, or passive reload is disabled. |
 | `Change will apply without restarting the gateway.` | Hot reload picks it up automatically.                                 |
 | `No gateway restart needed.`                        | Nothing runtime-relevant changed.                                     |
-| `The Gateway is restarting to apply it.`            | A running Gateway accepted the write and scheduled its own restart.   |
+| `The Gateway is restarting to apply it.`            | An older running Gateway accepted the write and scheduled a restart.  |
 
 Plugin entry changes use the same reload planner as other settings. In the default
 `hybrid` mode, ordinary `plugins.entries.<id>` edits replace the affected plugin

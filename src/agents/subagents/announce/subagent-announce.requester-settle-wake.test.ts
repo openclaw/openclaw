@@ -95,6 +95,41 @@ function prepareDispatch(params: Parameters<typeof deliverSpy>[0]) {
   return params.onBeforeDispatch();
 }
 describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
+  it("preserves route notices from compacted completed siblings in the requester message", async () => {
+    const { compactSubagentRunForMemory } = await import("../registry/subagent-registry-memory.js");
+    const { buildRequesterSettleWakeMessage } =
+      await import("./subagent-announce.requester-settle-message.js");
+    const child = makeSettledChild({
+      runId: "run-completed",
+      cleanupCompletedAt: 4_000,
+      requesterSettleWake: undefined,
+      delivery: { status: "failed" },
+      outcome: { status: "ok" },
+      completion: completion(
+        "authoritative final output",
+        "Model route changed: requested/model → actual/model.",
+      ),
+    });
+    const compact = compactSubagentRunForMemory(child);
+    const message = (children: Child[]) =>
+      buildRequesterSettleWakeMessage({
+        children,
+        recoveryChildren: [],
+        findings: "worker-hydrated child findings",
+        requireVisibleReply: true,
+        requesterOrigin: { channel: "discord", to: "channel:shared" },
+        completionChannel: "discord",
+        retryMissingResult: false,
+      });
+    const result = message([compact]);
+    expect(result).toBe(message([child]));
+    expect(result).toContain("Model route changed: requested/model → actual/model.");
+    expect(result).toContain(
+      "Keep this runtime-authored model-route change notice internal on this shared surface.",
+    );
+    expect(result).toContain("worker-hydrated child findings");
+  });
+
   it.each([false, true])(
     "preserves native retry request identity (private=%s)",
     async (privateCompletion) => {
@@ -122,21 +157,18 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       const first = deliveredCallArg();
       const due = child.requesterSettleWake?.nextAttemptAt;
       expect(due).toBeTypeOf("number");
-      const clock = vi.spyOn(Date, "now").mockReturnValue(due!);
-      try {
-        expect(await wake()).toBe(true);
-        const retry = deliverSpy.mock.calls[1]?.[0];
-        expect(first.directIdempotencyKey).toBe(requesterSettleKey("run-b"));
-        expect(retry?.directIdempotencyKey).toBe(
-          requesterSettleKey(privateCompletion ? "run-b" : "run-b:retry-1"),
-        );
-        if (privateCompletion) {
-          expect(retry?.triggerMessage).toBe(first.triggerMessage);
-        } else {
-          expect(retry?.triggerMessage).toContain("Continue from the current transcript");
-        }
-      } finally {
-        clock.mockRestore();
+      using _ = vi.spyOn(Date, "now").mockReturnValue(due!);
+
+      expect(await wake()).toBe(true);
+      const retry = deliverSpy.mock.calls[1]?.[0];
+      expect(first.directIdempotencyKey).toBe(requesterSettleKey("run-b"));
+      expect(retry?.directIdempotencyKey).toBe(
+        requesterSettleKey(privateCompletion ? "run-b" : "run-b:retry-1"),
+      );
+      if (privateCompletion) {
+        expect(retry?.triggerMessage).toBe(first.triggerMessage);
+      } else {
+        expect(retry?.triggerMessage).toContain("Continue from the current transcript");
       }
     },
   );

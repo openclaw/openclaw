@@ -32,7 +32,7 @@ const validatedBunPath = "/opt/Validated Bun/bin/bun";
 const missingSelectedNodeError =
   "No supported Node runtime was selected for the daemon. Install Node >=24.22.1 <25, or >=26.12.1 (Node 26 recommended), then retry.";
 const missingSelectedBunError =
-  "No supported Bun runtime was selected for the daemon. Install Bun 1.4.3 or newer with WAL-reset-safe node:sqlite, then retry.";
+  "No supported Bun runtime was selected for the daemon. Install Bun 1.4.4 or newer with WAL-reset-safe node:sqlite, then retry.";
 
 beforeEach(() => {
   vi.spyOn(os, "totalmem").mockReturnValue(64 * 1024 ** 3);

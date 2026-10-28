@@ -58,23 +58,17 @@ vi.mock("openai/resources/responses/ws.js", () => ({
 }));
 
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
+import { makeProviderModel } from "../providers/provider-model.test-support.js";
 import { cleanupSessionResources } from "../session-resources.js";
 import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
 
 const initialHost = getAiTransportHost();
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-responses-transcript-");
-const model = {
-  id: "gpt-5.6-luna",
+const model = makeProviderModel("openai-responses", "openai", "gpt-5.6-luna", {
   name: "GPT-5.6 Luna",
-  api: "openai-responses",
-  provider: "openai",
   baseUrl: "https://api.openai.com/v1",
-  reasoning: true,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   contextWindow: 200_000,
-  maxTokens: 8192,
-} satisfies Model<"openai-responses">;
+}) satisfies Model<"openai-responses">;
 const astra = { ...model, id: "gpt-6-astra", name: "GPT-6 Astra" };
 
 function functionTool(name: string) {

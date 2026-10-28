@@ -41,7 +41,7 @@ const config: OpenClawConfig = {
 };
 const answer = (): Extract<DecisionOutcomeV2, { status: "ok" }> => ({
   status: "ok",
-  provenance: { providerId: "fixture", rubricVersion: "9", runtimeGeneration: "test" },
+  provenance: { providerId: "fixture", rubricVersion: "10", runtimeGeneration: "test" },
   result: {
     model: "model",
     answers: {

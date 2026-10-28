@@ -15,18 +15,13 @@ import { SessionHovercard, type SessionHovercardInput } from "./session-hovercar
 function row(overrides: Partial<SidebarRecentSession> = {}): SidebarRecentSession {
   return {
     key: "agent:main:work",
-    label: "Ship the release",
     hasActiveRun: true,
-    createdAt: Date.now() - 2 * 60 * 60_000,
-    startedAt: Date.now() - 2 * 60 * 60_000,
-    updatedAt: Date.now() - 5 * 60_000,
     createdActor: {
       type: "human",
       id: "alice",
       identity: { type: "profile", id: "alice" },
       label: "Alice Baker",
     },
-    subtitle: "openclaw ⎇ feature/session-hovercard",
     workContext: {
       kind: "project",
       name: "openclaw",

@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, onTestFinished, test, vi } fro
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { prepareLocalAgentAvatar } from "../agents/identity-avatar-file-runtime.js";
-import { getTrackedWorkerLifecycleSnapshot } from "../infra/worker-cpu.js";
+import * as workerCpu from "../infra/worker-cpu.js";
 import { getWorkerComputeCapacity } from "../infra/worker-task-capacity.js";
 import { WorkerTaskPool } from "../infra/worker-task-pool.js";
 import {
@@ -176,6 +176,8 @@ describe("createGatewayControlUiRootLifecycle", () => {
   });
 
   test("reads a cold asset while the shared compute budget is occupied", async () => {
+    await drainGlobalSingletonLifecycleState();
+    const created = vi.spyOn(workerCpu, "createCpuTrackedWorker");
     const root = tempDirs.make("control-ui-compute-contention-");
     fs.writeFileSync(path.join(root, "index.html"), "synthetic asset");
     const capacity = getWorkerComputeCapacity();
@@ -192,6 +194,14 @@ describe("createGatewayControlUiRootLifecycle", () => {
     const read = readControlUiRootAsset({ kind: "resolved", path: root }, "index.html", true);
     try {
       await expectBody(read, "synthetic asset");
+      const index = created.mock.calls.findIndex(([url]) =>
+        /control-ui-file\.worker\.[cm]?[jt]s$/.test(String(url)),
+      );
+      expect(index).toBeGreaterThanOrEqual(0);
+      expect(created.mock.calls[index]?.[1]?.resourceLimits).toMatchObject({
+        maxOldGenerationSizeMb: 512,
+        maxYoungGenerationSizeMb: 16,
+      });
     } finally {
       for (const permit of permits) {
         capacity.release(permit);
@@ -208,9 +218,9 @@ describe("createGatewayControlUiRootLifecycle", () => {
       const files = ["first.png", "second.png"];
       const source = { kind: "resolved" as const, path: root };
       const starts = () =>
-        getTrackedWorkerLifecycleSnapshot().workerLifecycle.find((entry) =>
-          entry.script.includes(`${script}.worker`),
-        )?.started ?? 0;
+        workerCpu
+          .getTrackedWorkerLifecycleSnapshot()
+          .workerLifecycle.find((entry) => entry.script.includes(`${script}.worker`))?.started ?? 0;
       const read = async (file: string) => {
         if (script === "control-ui-file") {
           return (await readControlUiRootAsset(source, file, true))?.file.body;
@@ -244,6 +254,9 @@ describe("createGatewayControlUiRootLifecycle", () => {
         expect(starts() - before).toBe(2);
         await vi.advanceTimersByTimeAsync(10 * 60_000);
         expect(await readPair()).toEqual(changed);
+        expect(starts() - before).toBe(script === "identity-avatar-file" ? 2 : 4);
+        const afterIdle = writePair("third image");
+        expect(await readPair()).toEqual(afterIdle);
         expect(starts() - before).toBe(4);
       } finally {
         await drainGlobalSingletonLifecycleState();

@@ -48,6 +48,7 @@ import {
   expectCachePartitionByPluginSource,
   globalAfterEach0,
   globalAfterAll1,
+  writeFixtureJson,
 } from "./loader.test-harness.js";
 import {
   buildMemoryPromptSection,
@@ -193,18 +194,10 @@ describe("loadOpenClawPlugins", () => {
       );`,
     });
     for (const plugin of [first, second]) {
-      fs.writeFileSync(
-        path.join(plugin.dir, "openclaw.plugin.json"),
-        JSON.stringify(
-          {
-            id: plugin.id,
-            configSchema: { type: "object" },
-          },
-          null,
-          2,
-        ),
-        "utf-8",
-      );
+      writeFixtureJson(plugin.dir, "openclaw.plugin.json", {
+        id: plugin.id,
+        configSchema: { type: "object" },
+      });
     }
 
     clearInternalHooks();

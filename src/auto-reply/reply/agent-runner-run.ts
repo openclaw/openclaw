@@ -251,7 +251,11 @@ export async function runReplyAgent(
     const activeReplyOperation = controllerInput.mailbox.owner.active;
     const steeringRequesterMismatch =
       isActiveSteer && hasReplySteeringRequesterMismatch(followupRun, activeReplyOperation);
-    if (messageInjectionDisposition === "collaborative-steering-disabled") {
+    const collaborationBlocked = messageInjectionDisposition === "collaborative-steering-disabled";
+    if (
+      collaborationBlocked &&
+      followupRun.run.config.messages?.queue?.collaborativeSteeringFallback === "reject"
+    ) {
       try {
         await refuseCollaborativeSteering(followupRun, replyOperationRunState);
       } finally {
@@ -263,7 +267,8 @@ export async function runReplyAgent(
     // independently of whether the incoming requester could collaborate.
     const shouldQueueUnavailableSteer =
       isActiveSteer &&
-      (messageInjectionDisposition === "rejected" ||
+      (collaborationBlocked ||
+        messageInjectionDisposition === "rejected" ||
         (messageInjectionDisposition === "none" && !activeReplyOperation));
     const typingSignals = createTypingSignaler({
       typing,
@@ -415,6 +420,7 @@ export async function runReplyAgent(
       replyRunState.recordReplyFollowupAdmission(replyOperationRunState, {
         explicitFollowup,
         requesterMismatch: questionRequesterMismatch,
+        collaborationBlocked,
         unavailableSteer:
           effectiveShouldSteer && (isActive || messageInjectionDisposition === "rejected"),
         followupRun,
@@ -651,6 +657,7 @@ export async function runReplyAgent(
           returnWithQueuedFollowupDrain,
           runFollowupTurn,
           preflightCompactionApplied: turn.preflightCompactionApplied,
+          recoveryMemoryFlushAttempted: turn.memoryFlushAttempted,
           setRunFollowupTurn: (runner) => {
             runFollowupTurn = runner;
           },

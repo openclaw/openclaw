@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { jsonResult } from "../agents/tools/common.js";
 import { ensureGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { addTestHook } from "../plugins/hooks.test-helpers.js";
@@ -36,93 +36,85 @@ function preparePluginRuntime(generation: number, execute = () => jsonResult({ g
     pluginRegistry: registry,
     context: { config: {}, agentId: "main", sessionKey: "agent:main:cron:reload:trigger" },
     createTools,
+    scheduledToolPolicy: undefined,
   };
   return { prepared, instance, registry };
 }
 
 const request = { jobId: "reload", script: "return { state: await probe({}) };", state: null };
 
-describe("automation plugin reload recovery", () => {
-  it("refreshes a retired cached runtime on the next invocation", async () => {
+async function expectGeneration(
+  runtime: ReturnType<typeof createCronScriptRuntime>,
+  generation: number,
+) {
+  await expect(runtime.executePayload(request)).resolves.toMatchObject({
+    kind: "completed",
+    state: { generation },
+  });
+}
+
+it.each(["registry", "hook plugin"] as const)(
+  "refreshes a cached runtime after retiring its %s",
+  async (retired) => {
+    if (retired === "hook plugin") {
+      ensureGlobalHookRunner();
+    }
     let generation = 0;
     const disposed: number[] = [];
-    const prepareRuntime = vi.fn(async () => {
-      const current = ++generation;
-      return {
-        ...preparePluginRuntime(current).prepared,
-        [Symbol.dispose]: () => disposed.push(current),
-      };
-    });
-    const runtime = createCronScriptRuntime({ config: {}, prepareRuntime });
-    await expect(runtime.executePayload(request)).resolves.toMatchObject({
-      kind: "completed",
-      state: { generation: 1 },
-    });
-    markPluginRegistryRetired(registries[0]);
-    await expect(runtime.executePayload(request)).resolves.toMatchObject({
-      kind: "completed",
-      state: { generation: 2 },
-    });
-    expect(prepareRuntime).toHaveBeenCalledTimes(2);
-    expect(disposed).toEqual([1]);
-  });
-
-  it("refreshes a cached runtime whose hook plugin was replaced without retiring the registry", async () => {
-    // Per-plugin replacement disposes the replaced instance while the cached
-    // registry is still retained, so it is never marked retired.
-    ensureGlobalHookRunner();
-    let generation = 0;
     const guarded: number[] = [];
     const guards: PluginInstance[] = [];
-    const prepareRuntime = vi.fn(async () => {
+    const prepareRuntime = async () => {
       const current = ++generation;
       const { prepared, registry } = preparePluginRuntime(current);
-      const record = createPluginRecord({ id: "guard" });
-      registry.plugins.push(record);
-      const guard = new PluginInstance("guard", { record, registry });
-      guards.push(guard);
-      addTestHook({
-        registry,
-        pluginId: "guard",
-        hookName: "before_tool_call",
-        handler: guard.wrap(async () => {
-          guarded.push(current);
-          return undefined;
-        }),
-      });
-      return prepared;
-    });
+      if (retired === "hook plugin") {
+        const record = createPluginRecord({ id: "guard" });
+        registry.plugins.push(record);
+        const guard = new PluginInstance("guard", { record, registry });
+        guards.push(guard);
+        addTestHook({
+          registry,
+          pluginId: "guard",
+          hookName: "before_tool_call",
+          handler: guard.wrap(async () => {
+            guarded.push(current);
+            return undefined;
+          }),
+        });
+      }
+      return {
+        ...prepared,
+        [Symbol.dispose]: () => disposed.push(current),
+      };
+    };
     const runtime = createCronScriptRuntime({ config: {}, prepareRuntime });
-    await expect(runtime.executePayload(request)).resolves.toMatchObject({
-      kind: "completed",
-      state: { generation: 1 },
-    });
-    await guards[0]?.dispose();
-    expect(guards).toHaveLength(1);
-    await expect(runtime.executePayload(request)).resolves.toMatchObject({
-      kind: "completed",
-      state: { generation: 2 },
-    });
-    expect(prepareRuntime).toHaveBeenCalledTimes(2);
-    expect(guarded).toEqual([1, 2]);
-  });
+    await expectGeneration(runtime, 1);
+    if (retired === "registry") {
+      markPluginRegistryRetired(registries[0]);
+    } else {
+      // Replacing one plugin leaves its registry retained and unretired.
+      await guards[0]?.dispose();
+      expect(guards).toHaveLength(1);
+    }
+    await expectGeneration(runtime, 2);
+    expect(disposed).toEqual([1]);
+    expect(guarded).toEqual(retired === "hook plugin" ? [1, 2] : []);
+  },
+);
 
-  it("never replays a script that fails after a tool effect and plugin retirement", async () => {
-    let effects = 0;
-    const current = preparePluginRuntime(1, () => {
-      effects += 1;
-      current.instance.quiesce();
-      return current.instance.wrap(() => jsonResult({ generation: 1 }))();
-    });
-    const prepareRuntime = vi.fn(async () => current.prepared);
-    const runtime = createCronScriptRuntime({ config: {}, prepareRuntime });
-    await expect(
-      runtime.executePayload({
-        ...request,
-        script: "await probe({}); throw new Error('stopped after effect');",
-      }),
-    ).resolves.toMatchObject({ kind: "error" });
-    expect(effects).toBe(1);
-    expect(prepareRuntime).toHaveBeenCalledOnce();
+it("never replays a script that fails after a tool effect and plugin retirement", async () => {
+  let effects = 0;
+  const current = preparePluginRuntime(1, () => {
+    effects += 1;
+    current.instance.quiesce();
+    return current.instance.wrap(() => jsonResult({ generation: 1 }))();
   });
+  const prepareRuntime = async () => current.prepared;
+  const runtime = createCronScriptRuntime({ config: {}, prepareRuntime });
+  await expect(
+    runtime.executePayload({
+      ...request,
+      script: "await probe({}); throw new Error('stopped after effect');",
+    }),
+  ).resolves.toMatchObject({ kind: "error" });
+  expect(effects).toBe(1);
 });

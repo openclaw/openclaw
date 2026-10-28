@@ -8,26 +8,17 @@ const tempDirs: string[] = [];
 
 const mocks = vi.hoisted(() => ({
   metadata: vi.fn(),
-  artifact: vi.fn(() => null),
   rejectHardlinks: vi.fn(() => true),
-}));
-
-// mock-isolation: Supply only synthetic plugin records from each temporary fixture.
-vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
-  loadPluginMetadataSnapshot: mocks.metadata,
 }));
 
 // mock-isolation: Keep config discovery scoped to the synthetic plugin registry.
 vi.mock("../config/io.plugin-metadata.js", () => ({
-  resolveConfigWidePluginManifestRegistry: (...args: unknown[]) => {
-    const snapshot = mocks.metadata(...args);
-    return snapshot.manifestRegistry ?? snapshot;
-  },
+  resolveConfigWidePluginManifestRegistry: mocks.metadata,
 }));
 
 // mock-isolation: Control bundled fallback without loading installed plugin code.
 vi.mock("../plugins/public-surface-loader.js", () => ({
-  loadBundledPluginPublicArtifactModuleFromCandidatesSync: mocks.artifact,
+  loadBundledPluginPublicArtifactModuleFromCandidatesSync: () => null,
 }));
 
 // mock-isolation: Select each filesystem policy branch independently of the host.
@@ -52,20 +43,7 @@ const contractIds = (api: ReturnType<typeof loadChannelSecretContractApi>) =>
 const usePlugins = (...plugins: ReturnType<typeof writePlugin>[]) =>
   mocks.metadata.mockReturnValue({ plugins });
 
-function expectOfficialFallback() {
-  const api = loadContract({
-    channelId: "qqbot",
-    config: { channels: { qqbot: { appId: "app" } } },
-    loadablePluginOrigins: undefined,
-  });
-  expect(contractIds(api)).toEqual([
-    "channels.qqbot.accounts.*.clientSecret",
-    "channels.qqbot.clientSecret",
-  ]);
-  return api;
-}
-
-function writePlugin(params: { pluginId?: string; channelId?: string; directory?: string }) {
+function writePlugin(params: { pluginId?: string; channelId?: string; directory?: string } = {}) {
   const rootDir = makeTrackedTempDir("openclaw-channel-secret-contract", tempDirs);
   const contractDir = path.join(rootDir, params.directory ?? "");
   fs.mkdirSync(contractDir, { recursive: true });
@@ -81,7 +59,6 @@ function writePlugin(params: { pluginId?: string; channelId?: string; directory?
     id: params.pluginId ?? "discord",
     origin: "global",
     channels: [params.channelId ?? "discord"],
-    channelConfigs: {},
     rootDir,
   };
 }
@@ -89,15 +66,14 @@ function writePlugin(params: { pluginId?: string; channelId?: string; directory?
 describe("external channel secret contract api", () => {
   beforeEach(() => {
     mocks.metadata.mockReset();
-    mocks.artifact.mockClear();
     mocks.rejectHardlinks.mockReset().mockReturnValue(true);
   });
 
   afterEach(() => cleanupTrackedTempDirs(tempDirs));
 
-  it("keeps a healthy external contract available when another artifact fails to load", () => {
+  it("loads a healthy dist contract after another external artifact fails", () => {
     const broken = writePlugin({ pluginId: "custom", channelId: "custom" });
-    const healthy = writePlugin({ pluginId: "custom-alt", channelId: "custom" });
+    const healthy = writePlugin({ pluginId: "custom-alt", channelId: "custom", directory: "dist" });
     fs.writeFileSync(
       path.join(broken.rootDir, "secret-contract-api.cjs"),
       'throw new Error("contract dependency unavailable");\n',
@@ -109,22 +85,11 @@ describe("external channel secret contract api", () => {
     expect(contractIds(api)).toEqual(["channels.custom.token"]);
   });
 
-  it("loads dist/ secret-contract-api sidecars for compiled npm-published external channel plugins", () => {
-    const record = writePlugin({ directory: "dist" });
-    usePlugins(record);
-    const contractApi = loadContract();
-    expect(contractIds(contractApi)).toContain("channels.discord.token");
-    expect(contractApi?.collectRuntimeConfigAssignments).toBeTypeOf("function");
-  });
-
   it.runIf(process.platform !== "win32")(
     "loads hardlinked external channel contracts when the plugin hardlink policy allows them",
     () => {
-      const record = writePlugin({});
-      const outsideDir = makeTrackedTempDir(
-        "openclaw-channel-secret-contract-hardlink-outside",
-        tempDirs,
-      );
+      const record = writePlugin();
+      const outsideDir = makeTrackedTempDir("openclaw-hardlink-outside", tempDirs);
       fs.linkSync(
         path.join(record.rootDir, "secret-contract-api.cjs"),
         path.join(outsideDir, "secret-contract-api.cjs"),
@@ -134,35 +99,34 @@ describe("external channel secret contract api", () => {
       usePlugins(record);
       const api = loadContract({ env });
 
-      expect(mocks.rejectHardlinks).toHaveBeenCalledWith({
-        origin: "global",
-        rootDir: record.rootDir,
-        env,
-      });
       expect(contractIds(api)).toContain("channels.discord.token");
     },
   );
 
   it("skips external channel records outside the loadable plugin origin set", () => {
-    const record = writePlugin({});
+    const record = writePlugin();
     usePlugins(record);
     const api = loadContract({ loadablePluginOrigins: new Map([["other", "global"]]) });
 
     expect(api).toBeUndefined();
   });
 
-  it("falls back to official host secret metadata when an external plugin has no artifact", () => {
-    usePlugins();
-
-    const api = expectOfficialFallback();
-    expect(api?.collectRuntimeConfigAssignments).toBeTypeOf("function");
-  });
-
-  it("falls back to official host secret metadata when plugin metadata is unavailable", () => {
-    mocks.metadata.mockImplementation(() => {
-      throw new Error("metadata unavailable");
-    });
-
-    expectOfficialFallback();
-  });
+  it.each(["missing artifact", "unavailable metadata"])(
+    "uses official metadata with %s",
+    (failure) => {
+      if (failure === "missing artifact") {
+        usePlugins();
+      } else {
+        mocks.metadata.mockImplementation(() => {
+          throw new Error("metadata unavailable");
+        });
+      }
+      const api = loadContract({
+        channelId: "qqbot",
+        config: { channels: { qqbot: { appId: "app" } } },
+        loadablePluginOrigins: undefined,
+      });
+      expect(api?.collectRuntimeConfigAssignments).toBeTypeOf("function");
+    },
+  );
 });

@@ -17,10 +17,11 @@ import {
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
 import { pairControlUiPage } from "../test-helpers/control-ui-browser-pairing.ts";
+import { readControlUiE2eDownload } from "../test-helpers/control-ui-e2e-download.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { clickBoardWidgetControl } from "../test-helpers/control-ui-e2e-widget.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
-import { callGateway, runGatewayCli } from "./chat-real-gateway.test-support.ts";
+import { connectChatGateway, runGatewayCli } from "./chat-real-gateway.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const sessionKey = "agent:main:html-publication-proof";
@@ -31,6 +32,7 @@ const finalHtml = `<!doctype html><html><head><meta charset="utf-8"><title>Imple
 <body><h1>Parent revision</h1><p>Final bytes: café 雪 🦀</p><button id="count">Count</button>
 <output id="value">0</output><script>let count=0;document.querySelector('#count').onclick=()=>document.querySelector('#value').textContent=String(++count);</script></body></html>\r\n`;
 let instance: OpenClawTestInstance;
+let client: Awaited<ReturnType<typeof connectChatGateway>>;
 let sourcePath: string;
 
 async function startProvider() {
@@ -101,6 +103,14 @@ let provider: Awaited<ReturnType<typeof startProvider>>;
 const suite = createControlUiE2eSuite({
   name: "Explicit HTML publication through real Webchat",
   startServerBeforeBrowser: true,
+  resources: {
+    async run(signal) {
+      client = await connectChatGateway(instance, signal);
+    },
+    async close() {
+      await client?.stopAndWait();
+    },
+  },
   async startServer() {
     provider = await startProvider();
     const close = () =>
@@ -177,12 +187,10 @@ const suite = createControlUiE2eSuite({
 });
 
 const cli = (args: string[]) => runGatewayCli(instance, args);
-const rpc = async (method: string, params: Record<string, unknown>): Promise<unknown> =>
-  JSON.parse(await callGateway(instance, method, params));
 
 suite.define(() => {
   it("retains final parent-edited HTML after source deletion, reload, sandbox preview and exact download", async () => {
-    await rpc("sessions.create", {
+    await client.request("sessions.create", {
       key: sessionKey,
       agentId: "main",
       label: "HTML publication",
@@ -255,9 +263,7 @@ suite.define(() => {
         expect(await panel.locator("pre:visible").textContent()).toBe(finalHtml);
         const downloadLink = panel.getByRole("link", { name: `Download ${filename}`, exact: true });
         const [download] = await Promise.all([page.waitForEvent("download"), downloadLink.click()]);
-        const saved = await download.path();
-        expect(saved).not.toBeNull();
-        expect(await readFile(saved!)).toEqual(Buffer.from(finalHtml));
+        expect(await readControlUiE2eDownload(download)).toEqual(Buffer.from(finalHtml));
         expect(download.suggestedFilename()).toBe(filename);
         expect(provider.failures).toEqual([]);
       },

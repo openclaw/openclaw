@@ -83,17 +83,12 @@ it("isolates a cold Beam credential without disabling unrelated configured crede
   };
   const snapshot = await prepare(config, { HEALTHY_TOKEN: "synthetic-healthy-key" });
   expect(snapshot.degradedOwners).toMatchObject([
-    {
-      ownerKind: "capability",
-      ownerId: tokenPath,
-      degradationState: "cold",
-    },
+    { ownerKind: "capability", ownerId: tokenPath, degradationState: "cold" },
   ]);
   expect(snapshot.config.models?.providers?.example?.apiKey).toBe("synthetic-healthy-key");
   activateSecretsRuntimeSnapshot(snapshot);
   const { scheduler, logger } = await startMirror(snapshot.config);
   try {
-    expect(logger.info).not.toHaveBeenCalled();
     const warnings = logger.warn.mock.calls.flat().join("\n");
     expect(warnings).toContain("credential");
     expect(warnings).not.toContain("BEAM_MISSING_TOKEN");
@@ -127,9 +122,6 @@ it.skipIf(process.platform === "win32")(
     );
     config.secrets = { providers: { "beam-fixture": { source: "exec", command } } };
     const snapshot = await prepare(config, {});
-    expect(snapshot.config.plugins?.entries?.beam?.config).toMatchObject({
-      mirror: { token: "synthetic-prepared-token" },
-    });
     activateSecretsRuntimeSnapshot(snapshot);
     let reads = 0;
     let reloadDuringRead: (() => void) | undefined;

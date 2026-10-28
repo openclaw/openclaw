@@ -173,7 +173,11 @@ Ordinary temporary GitHub failures retain the same association's last verified
 status with a warning; a failed own-PR authorization clears it.
 
 Repeating a completed preparation of the same head preserves later edits without
-resetting or synchronizing source files. If the remote PR head has advanced,
+resetting or synchronizing source files. If the PR's original base branch changes,
+preparation refuses and preserves the original association and saved work. The
+refusal names the original base branch. Have the PR author restore that base on
+GitHub, then retry `prepare_pr` to continue in the same workspace.
+If the remote PR head has advanced,
 an explicit refresh with `prepare_pr` integrates that head and preserves subsequent
 guest work. Resolve returned `conflictPaths`, then repeat with
 `conflictsResolved: true` and `expectedHeadCommit` set to the returned `headCommit`.
@@ -290,7 +294,7 @@ Squash landing uses the current PR title read by the merge action as the commit 
 
 For delegated work, the agent must explicitly select the child's `publishingSessionKey`. An authorized person's managed parent conversation receives these PR actions even when its own workspace is ineligible for publication; publishing from that parent remains unavailable. The Gateway verifies that the publishing session belongs to this conversation and binds the operation to its recorded PR. A changed publication or GitHub head requires another inspection and review. If an action's response is interrupted, inspect the same publication before retrying; already-ready, already-merged, or already-closed requests return their observed state without another write. Closing preserves the branch, workspace, and conversation history; it does not reopen a closed PR. Failed checks or unavailable credentials leave the saved work intact.
 
-Only a current full-write person's tool schema and instructions expose privileged inspection, merging, closing and child selection. Guest turns retain their own publication, current-PR metadata editing and readiness, including after admin participation in the conversation. Each action also rechecks the initiating person's current authority at the Gateway. Admin participation does not elevate the session or later guest requests, and publication never grants merge authority. The Gateway keeps the publisher credentials and executes only the requested operation; the agent remains responsible for review, testing, and sequencing the landing request.
+The tool schema and instructions stay stable across turns, including privileged inspection, merging, closing and child selection. For agent tool calls, those actions require the initiating person's current full operator write authority at execution; internal System scopes alone do not grant it. Guest turns retain their own publication, current-PR metadata editing and readiness, including after admin participation in the conversation. Each action rechecks the initiating person's current authority at the Gateway. Admin participation does not elevate the session or later guest requests, and publication never grants merge authority. The Gateway keeps the publisher credentials and executes only the requested operation; the agent remains responsible for review, testing, and sequencing the landing request.
 
 The Gateway prepares the shared identity for worker launch in the background when a session requests it, and refreshes observed sessions after GitHub configuration, credential, or workspace changes. Idle session rows do not trigger credential discovery. Worker turns consume the last prepared result without waiting; removing a workspace binding retires its old fact. Worker launch still validates current identity authority before attaching any credential.
 

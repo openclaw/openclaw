@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   mergeRestartRecoveryTerminalRunIds,
   sameRestartRecoveryTerminalRunIds,
@@ -113,12 +114,37 @@ export function sessionMatchesExpectedTranscriptTurn<T extends { entry: SessionE
 }
 
 export function buildExpectedTranscriptTurnSessionPatch(params: {
-  appendedMessages: readonly { appended: boolean }[];
+  appendedMessages: readonly { appended: boolean; message?: unknown }[];
   currentEntry: SessionEntry;
   expectedSessionState?: SessionTranscriptTurnExpectedState;
   sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
   touchSessionEntry?: boolean;
 }): Partial<SessionEntry> {
+  let lastSubmittedModel: SessionEntry["lastSubmittedModel"];
+  for (const append of params.appendedMessages) {
+    const message = append.appended ? asOptionalRecord(append.message) : undefined;
+    if (
+      message?.role !== "user" ||
+      message.display === false ||
+      message.excludeFromContext === true ||
+      (message.provenance && asOptionalRecord(message.provenance)?.kind !== "external_user")
+    ) {
+      continue;
+    }
+    const metadata = asOptionalRecord(message["__openclaw"]);
+    if (metadata?.lateMedia === true || metadata?.beforeAgentRunBlocked !== undefined) {
+      continue;
+    }
+    const selection = asOptionalRecord(metadata?.modelSelection);
+    if (
+      typeof selection?.provider === "string" &&
+      selection.provider &&
+      typeof selection.model === "string" &&
+      selection.model
+    ) {
+      lastSubmittedModel = { provider: selection.provider, model: selection.model };
+    }
+  }
   const hasAppendedMessage = params.appendedMessages.some((message) => message.appended);
   const acceptedMessage =
     hasAppendedMessage ||
@@ -133,6 +159,11 @@ export function buildExpectedTranscriptTurnSessionPatch(params: {
     : undefined;
   return {
     ...(acceptedMessage ? params.sessionLifecyclePatch : undefined),
+    ...(lastSubmittedModel &&
+    (lastSubmittedModel.provider !== params.currentEntry.lastSubmittedModel?.provider ||
+      lastSubmittedModel.model !== params.currentEntry.lastSubmittedModel?.model)
+      ? { lastSubmittedModel }
+      : {}),
     ...(acceptedMessage && restartRecoveryTerminalRunIds ? { restartRecoveryTerminalRunIds } : {}),
     ...(touchUpdatedAt > 0
       ? {

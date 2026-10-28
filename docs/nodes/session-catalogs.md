@@ -36,8 +36,9 @@ covers provider discovery and queueing, not session-projection preparation or
 time spent waiting for the Gateway event loop.
 
 Paired-node discovery reuses the current committed node inventory while pairing
-writes are queued. A committed pairing change invalidates that inventory before
-the next read, including when a node's access is revoked.
+writes are queued. Committed pairing receipts refresh that inventory from the
+owner's prepared rows without another database read, including when a node's
+access is revoked. Missing or incomplete publications still reload from storage.
 
 With diagnostics enabled, slow-provider warnings report elapsed time, including
 queueing and asynchronous I/O. `isMainThread` identifies the calling thread; it
@@ -272,6 +273,14 @@ turn them off in the Web UI under **Config > Plugins**.
 Terminal resume uses the stored session working directory and the same
 allowlisted duplex PTY relay as Codex and Claude. It does not expose arbitrary
 node command execution.
+
+## Activity probe failures
+
+For adopted Claude or Pi sessions on the Gateway, an unreadable transcript produces
+a `plugins/session-catalog` warning with the path and recovery guidance. Check that
+the Gateway can read the file. Probing retries automatically while preserving the
+session link and activity marker; an access failure does not mean the transcript
+was deleted.
 
 ## OpenClaw sessions and transcripts
 

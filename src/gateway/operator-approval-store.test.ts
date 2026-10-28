@@ -3,6 +3,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { buildApprovalResolutionRef } from "../infra/approval-resolution-ref.js";
+import * as approvalResolutionRef from "../infra/approval-resolution-ref.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -10,6 +11,7 @@ import {
 } from "../infra/kysely-sync.js";
 import { withSqliteWriteAdmissionService } from "../infra/sqlite-transaction.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
+import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -32,6 +34,7 @@ import {
   recoverOperatorApprovalsOnStartup,
   resolveOperatorApproval,
 } from "./operator-approval-store.js";
+import { decodeOperatorApprovalRow } from "./operator-approval-store.rows.js";
 import { createOperatorApproval as approval } from "./operator-approval-store.test-support.js";
 import { operatorApprovalOperations } from "./operator-approval-store.worker.js";
 
@@ -72,11 +75,28 @@ function rawApprovalRow(options: OpenClawStateDatabaseOptions, id: string) {
 }
 
 describe("operator approval store", () => {
-  beforeEach(() => {
+  it("validates decoded resolution references by exact identity without a second shape check", async () => {
+    const databaseOptions = getSuiteDatabaseOptions();
+    await insertOperatorApproval({ approval: approval("exact-reference"), databaseOptions });
+    const row = rawApprovalRow(databaseOptions, "exact-reference")!;
+    const shapeChecks = vi.spyOn(approvalResolutionRef, "isApprovalResolutionRef");
+    try {
+      expect(decodeOperatorApprovalRow(row)?.id).toBe("exact-reference");
+      for (const resolutionRef of ["", "!".repeat(43), "a".repeat(43), row.resolution_ref + "a"]) {
+        expect(decodeOperatorApprovalRow({ ...row, resolution_ref: resolutionRef })).toBeNull();
+      }
+      expect(shapeChecks).not.toHaveBeenCalled();
+    } finally {
+      shapeChecks.mockRestore();
+    }
+  });
+
+  beforeEach(async () => {
     if (!suiteDatabaseOptions) {
       return;
     }
-    // Completed cases leave workers reusable; only their approval rows are isolated.
+    // Offline fixture writes must retire the prior owner's receipt-maintained view.
+    await closeOpenClawStateDatabaseAsync();
     runOpenClawStateWriteTransaction((database) => {
       const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(database.db);
       executeSqliteQuerySync(database.db, stateDb.deleteFrom("operator_approvals"));
@@ -233,6 +253,40 @@ describe("operator approval store", () => {
         databaseOptions,
       }),
     ).toMatchObject([{ id: "authorized-after-first-page" }]);
+  });
+
+  it("maintains ordered session pages from committed receipts until the database closes", async () => {
+    const databaseOptions = getSuiteDatabaseOptions();
+    const selection = { audienceSessionKey: "agent:main:target", nowMs: 2_000, databaseOptions };
+    await listPendingOperatorApprovals(selection);
+    using reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+    // Equal timestamps retain SQLite's UTF-8 binary ID order, including non-BMP IDs.
+    for (const id of ["😀", "\uE000", "a"]) {
+      await insertOperatorApproval({
+        approval: approval(id, { audienceSessionKeys: [selection.audienceSessionKey] }),
+        databaseOptions,
+      });
+    }
+    await insertOperatorApproval({
+      approval: approval("unrelated", { audienceSessionKeys: ["agent:main:other"] }),
+      databaseOptions,
+    });
+    expect(
+      (await listPendingOperatorApprovals({ ...selection, limit: 2 })).map((row) => row.id),
+    ).toEqual(["a", "\uE000"]);
+    await forceDenyOperatorApproval({
+      id: "a",
+      reason: "no-route",
+      resolver: { kind: "system", id: null },
+      nowMs: 2_000,
+      databaseOptions,
+    });
+    const expected = ["\uE000", "😀"];
+    expect((await listPendingOperatorApprovals(selection)).map((row) => row.id)).toEqual(expected);
+    expect(reads).not.toHaveBeenCalled();
+    await closeOpenClawStateDatabaseAsync();
+    expect((await listPendingOperatorApprovals(selection)).map((row) => row.id)).toEqual(expected);
+    expect(reads).toHaveBeenCalled();
   });
 
   it.each([

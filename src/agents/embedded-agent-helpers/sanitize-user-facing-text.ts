@@ -5,7 +5,7 @@ import {
   RECENT_HISTORY_CONTEXT_MARKER,
 } from "../../auto-reply/reply/history.js";
 import {
-  INBOUND_METADATA_MARKERS,
+  createInboundMetadataProbe,
   stripInboundMetadata,
 } from "../../auto-reply/reply/strip-inbound-meta.js";
 import { RUNTIME_CONTEXT_HEADER } from "../../llm/types.js";
@@ -21,11 +21,13 @@ import {
 import {
   findCodeRegions,
   isInsideCode,
+  projectLinesOutsideCode,
   stripLinesOutsideCode,
 } from "../../shared/text/code-regions.js";
 import { finalTagTextFilter } from "../../shared/text/final-tags.js";
 import {
   applyTextFilters,
+  createConditionalTextProjector,
   duplicateParagraphTextFilter,
   leadingEmptyLinesTextFilter,
   type TextFilter,
@@ -39,20 +41,91 @@ import {
   stripInternalRuntimeContext,
 } from "../internal-runtime-context.js";
 
+const TOOL_CALLS_OMITTED_TOKEN = "[tool calls omitted]";
 const TOOL_CALLS_OMITTED_PLACEHOLDER_LINE_RE = /^[ \t]*\[tool calls omitted\][ \t]*$/i;
+
+function isInternalPlaceholderLine(line: string): boolean {
+  return (
+    TOOL_CALLS_OMITTED_PLACEHOLDER_LINE_RE.test(line) || line.trim() === EXEC_NO_OUTPUT_PLACEHOLDER
+  );
+}
 
 function stripInternalPlaceholderLines(text: string): string {
   if (
-    !text.toLowerCase().includes("[tool calls omitted]") &&
+    !text.toLowerCase().includes(TOOL_CALLS_OMITTED_TOKEN) &&
     !text.includes(EXEC_NO_OUTPUT_PLACEHOLDER)
   ) {
     return text;
   }
-  return stripLinesOutsideCode(
-    text,
-    (line) =>
-      TOOL_CALLS_OMITTED_PLACEHOLDER_LINE_RE.test(line) ||
-      line.trim() === EXEC_NO_OUTPUT_PLACEHOLDER,
+  return stripLinesOutsideCode(text, isInternalPlaceholderLine);
+}
+
+// Quotes of an empty command transcript latch this stage for the rest of the reply. The canonical
+// scan (and the Markdown code scan it needs) used to run on the whole reply for every delta: 17.9 s
+// for a 16 KB reply that opens with a fenced transcript, 1.4 s for the same reply as a blockquote.
+// Two cheap probes keep ordinary replies away from it: only a completed (or currently unfinished)
+// line that the strip predicate accepts can change the output, and completed lines never change.
+const internalPlaceholderLinesTextFilter: TextFilter = {
+  transform: stripInternalPlaceholderLines,
+  create: createInternalPlaceholderLinesProjector,
+};
+
+function createInternalPlaceholderLinesProjector(): TextProjector {
+  let matched = false;
+  let lineTail: string | null = "";
+  let allowToolCallsOmitted = true;
+  // Reject a nonmatching line until its newline; retain only a possible literal token prefix.
+  const scanAppendedLines = (appended: string): boolean => {
+    let start = 0;
+    while (true) {
+      const newline = appended.indexOf("\n", start);
+      if (lineTail !== null) {
+        const line = lineTail + appended.slice(start, newline === -1 ? undefined : newline);
+        const candidate = line.trimStart();
+        // Only the exec placeholder accepts Unicode padding; the bracket token accepts ASCII.
+        allowToolCallsOmitted &&= /^[ \t]*$/u.test(line.slice(0, line.length - candidate.length));
+        const normalized = candidate.replace(/\r$/u, "");
+        if (
+          isInternalPlaceholderLine(normalized) &&
+          (allowToolCallsOmitted || normalized.trim() === EXEC_NO_OUTPUT_PLACEHOLDER)
+        ) {
+          return true;
+        }
+        lineTail =
+          EXEC_NO_OUTPUT_PLACEHOLDER.startsWith(normalized) ||
+          (allowToolCallsOmitted && TOOL_CALLS_OMITTED_TOKEN.startsWith(normalized.toLowerCase()))
+            ? candidate
+            : null;
+      }
+      if (newline === -1) {
+        return false;
+      }
+      start = newline + 1;
+      lineTail = "";
+      allowToolCallsOmitted = true;
+    }
+  };
+  return createConditionalTextProjector(
+    stripInternalPlaceholderLines,
+    (input) => {
+      if (matched) {
+        return true;
+      }
+      if (input.delta === null) {
+        // A replacement can end mid-placeholder. Re-scan it through the append scanner so the
+        // unfinished tail is carried into the next delta instead of being dropped.
+        matched = false;
+        lineTail = "";
+        allowToolCallsOmitted = true;
+        matched = scanAppendedLines(input.text);
+        return matched;
+      }
+      matched = scanAppendedLines(input.delta);
+      return matched;
+    },
+    // Completed lines never change again, so only the unfinished tail needs the canonical scan.
+    (text, settledBoundary) =>
+      projectLinesOutsideCode(text, isInternalPlaceholderLine, settledBoundary),
   );
 }
 
@@ -415,13 +488,14 @@ export function userFacingTextFilters(
             RUNTIME_CONTEXT_HEADER,
           ],
         },
-    { transform: stripInboundMetadata, activationTokens: INBOUND_METADATA_MARKERS },
+    {
+      transform: stripInboundMetadata,
+      create: () =>
+        createConditionalTextProjector(stripInboundMetadata, createInboundMetadataProbe()),
+    },
     minimaxToolCallTextFilter(streaming),
     toolCallXmlTextFilter({ stripFunctionCallsXmlPayloads: true }),
-    {
-      transform: stripInternalPlaceholderLines,
-      activationTokens: [EXEC_NO_OUTPUT_PLACEHOLDER, "[tool calls omitted]"],
-    },
+    internalPlaceholderLinesTextFilter,
     ...(errorContext ? [assistantTraceTextFilter] : []),
     legacyBracketToolCallTextFilter,
     plainToolCallTextFilter,

@@ -24,31 +24,6 @@ type ChatPaneMobileHeaderNotice =
       onOpenMachine: (source: HTMLElement) => void;
     };
 
-export type ChatPaneMobileHeaderProps = {
-  active: boolean;
-  onHeaderRef?: (element: HTMLElement) => void | (() => void);
-  title: string;
-  titlePending: boolean;
-  /** Mobile ProjectCrumb: menu, full accessible name and overflow fade. */
-  project?: Element;
-  publicAccess?: Pick<ChatSessionSharingProps, "state">;
-  incognito: boolean;
-  navDrawerOpen: boolean;
-  onToggleNavigation: (source: HTMLElement) => void;
-  onOpenDetails: (source: HTMLElement) => void;
-  onOpenPanels: (source: HTMLElement) => void;
-  panelsOpen: boolean;
-  compactActions?: boolean;
-  /** The People control owns its trigger, presence facts and expanded action. */
-  people?: Element;
-  /** Native menu trigger; the owner omits it while disconnected/reconnecting. */
-  actions?: Element;
-  /** Supply only for an available session Dashboard; opens/reuses its destination. */
-  onOpenDashboard?: (source: HTMLElement) => void;
-  /** One owner-selected notice: Gateway status takes priority over device offline. */
-  notice?: ChatPaneMobileHeaderNotice;
-};
-
 function MobileHeaderNotice(props: { notice: ChatPaneMobileHeaderNotice }) {
   return (
     <div
@@ -106,7 +81,30 @@ function MobileHeaderNotice(props: { notice: ChatPaneMobileHeaderNotice }) {
   );
 }
 
-export function ChatPaneMobileHeader(props: ChatPaneMobileHeaderProps) {
+export function ChatPaneMobileHeader(props: {
+  active: boolean;
+  onHeaderRef?: (element: HTMLElement) => void | (() => void);
+  title: string;
+  titlePending: boolean;
+  /** Mobile ProjectCrumb: menu, full accessible name and overflow fade. */
+  project?: Element;
+  publicAccess?: Pick<ChatSessionSharingProps, "state">;
+  incognito: boolean;
+  navDrawerOpen: boolean;
+  onToggleNavigation: (source: HTMLElement) => void;
+  onOpenDetails: (source: HTMLElement) => void;
+  onOpenPanels: (source: HTMLElement) => void;
+  panelsOpen: boolean;
+  compactActions?: boolean;
+  /** The People control owns its trigger, presence facts and expanded action. */
+  people?: Element;
+  /** Native menu trigger; the owner omits it while disconnected/reconnecting. */
+  actions?: Element;
+  /** Supply only for an available session Dashboard; opens/reuses its destination. */
+  onOpenDashboard?: (source: HTMLElement) => void;
+  /** One owner-selected notice: Gateway status takes priority over device offline. */
+  notice?: ChatPaneMobileHeaderNotice;
+}) {
   let header!: HTMLDivElement;
   const drawerRef = createRouteElementRef(NAV_DRAWER_TOGGLE_REGISTRATION);
   const project = children(() => props.project);

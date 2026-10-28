@@ -8,6 +8,7 @@ import {
   pluginCacheStatSync,
   readPluginCacheDirectory,
 } from "./plugin-cache-files.js";
+import type { PluginDirectoryEntry } from "./plugin-cache-files.types.js";
 import { getPluginCache } from "./plugin-cache.js";
 
 /** Parses Linux mountinfo content into absolute mount points. */
@@ -77,7 +78,7 @@ export function listBundledSourceOverlayDirs(params: {
     return [];
   }
 
-  let entries: fs.Dirent[];
+  let entries: PluginDirectoryEntry[];
   try {
     entries = readPluginCacheDirectory(legacyRoot);
   } catch {

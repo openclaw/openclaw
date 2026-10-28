@@ -79,14 +79,10 @@ export function createViewRuntime(
   const invalidate = () => listeners.forEach((listener) => listener());
   // SAFETY: these fixtures exercise only view mounting and scoped host requests.
   const host = {
-    signal: abort.signal,
+    ...createInertViewHost(abort.signal),
     request,
-    sessions: {},
-    agents: {},
-    navigation: {},
     ui: options.hostInvalidation === false ? {} : { invalidate },
-    components: {},
-  } as unknown as ControlUiHost;
+  };
   const reportError = vi.fn();
   // SAFETY: the views read only this plugin capability, not other app owners.
   const context = {

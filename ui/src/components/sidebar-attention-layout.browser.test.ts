@@ -268,11 +268,13 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
         background: style(inbox).backgroundColor,
       });
       expect(Number.parseFloat(paint().border)).toBeGreaterThan(0);
+      const { page } = await import("vitest/browser");
+      // The shared browser may leave its pointer over this fixture's position.
+      await page.elementLocator(query(chrome, "button")).hover();
       const resting = paint();
       expect(resting.background).not.toBe("rgba(0, 0, 0, 0)");
       expect(style(inbox).boxShadow).not.toBe("none");
       expect(style(inbox).backdropFilter).toBe("blur(10px)");
-      const { page } = await import("vitest/browser");
       await page.elementLocator(inbox).hover();
       const hovered = paint();
       expect(hovered.border).toBe(resting.border);

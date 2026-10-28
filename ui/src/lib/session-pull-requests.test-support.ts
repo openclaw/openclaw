@@ -1,8 +1,8 @@
 import { vi } from "vitest";
+import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient, GatewayEventListener, GatewayHelloOk } from "../api/gateway.ts";
 import type { ApplicationGateway, ApplicationGatewaySnapshot } from "../app/gateway.ts";
 import { createApplicationGatewaySnapshot } from "../test-helpers/application-context-fixtures.ts";
-import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "./session-pull-requests.ts";
 
 export function createHello(scopes: string[] = ["operator.read"]): GatewayHelloOk {
   return {

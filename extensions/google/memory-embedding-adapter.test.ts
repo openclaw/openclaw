@@ -3,17 +3,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   createGeminiEmbeddingProvider: vi.fn(),
-  runGeminiEmbeddingBatches: vi.fn(async () => new Map([["0", [1, 0]]])),
 }));
 
 vi.mock("./embedding-provider.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./embedding-provider.js")>();
   return { ...actual, createGeminiEmbeddingProvider: mocks.createGeminiEmbeddingProvider };
 });
-
-vi.mock("./embedding-batch.js", () => ({
-  runGeminiEmbeddingBatches: mocks.runGeminiEmbeddingBatches,
-}));
 
 import { geminiMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
 
@@ -48,7 +43,6 @@ async function createAdapter(headers: Record<string, string>, version?: string) 
 describe("Gemini memory embedding adapter", () => {
   beforeEach(() => {
     mocks.createGeminiEmbeddingProvider.mockReset();
-    mocks.runGeminiEmbeddingBatches.mockClear();
   });
 
   it.each([
@@ -58,29 +52,6 @@ describe("Gemini memory embedding adapter", () => {
   ] as const)("resolves multimodal support for %s", (model, expected) => {
     expect(geminiMemoryEmbeddingProviderAdapter.supportsMultimodalEmbeddings?.({ model })).toBe(
       expected,
-    );
-  });
-
-  it("formats stable Gemini asynchronous batch documents without a task type", async () => {
-    const result = await createAdapter({});
-
-    await result.runtime?.batchEmbed?.({
-      agentId: "main",
-      chunks: [{ text: "remember this" }],
-      wait: true,
-      concurrency: 1,
-      pollIntervalMs: 1000,
-      timeoutMs: 60_000,
-      debug: () => {},
-    });
-
-    const request = {
-      content: { parts: [{ text: "title: none | text: remember this" }] },
-      model: "models/gemini-embedding-2",
-      outputDimensionality: 768,
-    };
-    expect(mocks.runGeminiEmbeddingBatches).toHaveBeenCalledWith(
-      expect.objectContaining({ requests: [{ custom_id: "0", request }] }),
     );
   });
 

@@ -8,13 +8,17 @@ import { expandHomePrefix } from "./home-dir.js";
 const GLOB_REGEX_CACHE_LIMIT = 512;
 const globRegexCache = new Map<string, RegExp>();
 const DOT_PATH_SEGMENT = /(?:^|[\\/])\.{1,2}(?![^\\/])/;
+const WILDCARD = /[*?]/;
+const WINDOWS_PREFIX = /^\\\\[?.]\\/;
+const WINDOWS_SEPARATOR = /\\/g;
+const ESCAPED_SEPARATOR = /\\\\/g;
 
 function normalizeMatchTarget(value: string): string {
   if (process.platform === "win32") {
-    const stripped = value.replace(/^\\\\[?.]\\/, "");
-    return normalizeLowercaseStringOrEmpty(stripped.replace(/\\/g, "/"));
+    const stripped = value.replace(WINDOWS_PREFIX, "");
+    return normalizeLowercaseStringOrEmpty(stripped.replace(WINDOWS_SEPARATOR, "/"));
   }
-  const normalized = value.replace(/\\\\/g, "/");
+  const normalized = value.includes("\\\\") ? value.replace(ESCAPED_SEPARATOR, "/") : value;
   if (process.platform === "darwin") {
     if (normalized === "/private/var") {
       return "/var";
@@ -60,26 +64,33 @@ function compileGlobRegex(pattern: string): RegExp {
   return compiled;
 }
 
-export function matchesExecAllowlistPattern(pattern: string, target: string): boolean {
+export function compileExecAllowlistPattern(pattern: string): (target: string) => boolean {
   const trimmed = pattern.trim();
   if (!trimmed) {
-    return false;
+    return () => false;
   }
-
-  const expanded = trimmed.startsWith("~") ? expandHomePrefix(trimmed) : trimmed;
-  const hasWildcard = /[*?]/.test(expanded);
-  let normalizedPattern = expanded;
-  let normalizedTarget = target;
-  if (process.platform === "win32" && !hasWildcard) {
-    normalizedPattern = safeRealpathSync(expanded) ?? expanded;
-    normalizedTarget = safeRealpathSync(target) ?? target;
-  }
-  normalizedPattern = normalizeMatchTarget(normalizedPattern);
-  normalizedTarget = normalizeMatchTarget(normalizedTarget);
-  // Normalize only the target. Glob patterns are operator-authored strings, and
-  // normalizing them can change wildcard structure such as `*/..`.
-  if (hasWildcard && DOT_PATH_SEGMENT.test(normalizedTarget)) {
-    normalizedTarget = normalizeDotPathSegments(normalizedTarget);
-  }
-  return compileGlobRegex(normalizedPattern).test(normalizedTarget);
+  let hasWildcard = WILDCARD.test(trimmed);
+  // Home selection and literal Windows realpaths can change without a policy write.
+  const dynamic = trimmed.startsWith("~") || (process.platform === "win32" && !hasWildcard);
+  const resolvePattern = () => {
+    const expanded = trimmed.startsWith("~") ? expandHomePrefix(trimmed) : trimmed;
+    hasWildcard = WILDCARD.test(expanded);
+    const resolved =
+      process.platform === "win32" && !hasWildcard
+        ? (safeRealpathSync(expanded) ?? expanded)
+        : expanded;
+    return compileGlobRegex(normalizeMatchTarget(resolved));
+  };
+  const compiled = dynamic ? undefined : resolvePattern();
+  return (target) => {
+    const regex = compiled ?? resolvePattern();
+    let normalizedTarget =
+      process.platform === "win32" && !hasWildcard ? (safeRealpathSync(target) ?? target) : target;
+    normalizedTarget = normalizeMatchTarget(normalizedTarget);
+    // Only targets normalize dot segments; doing so to a glob changes `*/..`.
+    if (hasWildcard && DOT_PATH_SEGMENT.test(normalizedTarget)) {
+      normalizedTarget = normalizeDotPathSegments(normalizedTarget);
+    }
+    return regex.test(normalizedTarget);
+  };
 }

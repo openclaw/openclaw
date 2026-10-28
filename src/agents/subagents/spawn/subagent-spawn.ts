@@ -1,9 +1,11 @@
+import { isAcpRuntimeSpawnAvailable } from "../../../acp/runtime/availability.js";
 import { isExecutionIdentityCollectionEnabled } from "../../../audit/audit-config.js";
 import { composeSessionSourceAssertion } from "../../../config/sessions/session-source-authority.js";
 import {
   readExecRequestOwners,
   withExecRequestOwners,
 } from "../../../infra/exec-request-context.js";
+import { listRegisteredPluginAgentPromptGuidance } from "../../../plugins/command-registry-state.js";
 import { getCanonicalGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { hasDeliveryTargetFields } from "../../../utils/delivery-context.shared.js";
 import { runWithAgentToolSourceExecutionScope } from "../../agent-tool-source-execution-guard.js";
@@ -19,9 +21,9 @@ import { activateSwarmRun } from "../swarm/swarm-scheduler.js";
 import { readParentExecutionIdentity } from "./execution-identity-spawn-context.js";
 import { materializeSubagentAttachments } from "./subagent-attachments.js";
 import { resolveSubagentChildPlan } from "./subagent-spawn-child-plan.js";
-import { buildSubagentChildPrompt } from "./subagent-spawn-child-prompt.js";
 import {
   bindSubagentSpawnCleanup,
+  captureSubagentSessionCleanupIdentity,
   cleanupFailedSpawnBeforeAgentStart,
   cleanupProvisionalSession,
   terminateFailedRegistrationRun,
@@ -61,8 +63,12 @@ import { resolveSubagentSpawnRequest } from "./subagent-spawn-request.js";
 import { createInitialSubagentSession } from "./subagent-spawn-session-patch.js";
 import { bindThreadForSubagentSpawn } from "./subagent-spawn-thread-binding.js";
 import { emitSessionLifecycleEvent, mergeDeliveryContext } from "./subagent-spawn.runtime.js";
+import { buildSubagentSpawnEnvelope } from "./subagent-system-prompt.js";
 
 export { SUBAGENT_SPAWN_CONTEXT_MODES, SUBAGENT_SPAWN_MODES } from "./subagent-spawn.types.js";
+
+const STRUCTURED_OUTPUT_INSTRUCTION =
+  'Call structured_output with {"result": <your final result>} until one payload is accepted, with at most one retry after a rejected attempt. The result value must match the requested JSON Schema. Do not call structured_output again after acceptance.';
 
 export async function spawnSubagentDirect(
   input: SpawnSubagentParams,
@@ -125,6 +131,7 @@ export async function spawnSubagentDirect(
   let canAbortRegisteredRun: (() => boolean) | undefined;
   let canRetireReservation: (() => boolean) | undefined;
   let provisionalCleanupOpen = true;
+  let cleanupUnlaunchedSession: (() => Promise<boolean>) | undefined;
   let contextEnginePreparation: PreparedContextEngineSubagentSpawn | undefined;
   try {
     const delegation = prepareNativeDelegatedToolPolicy({
@@ -175,6 +182,7 @@ export async function spawnSubagentDirect(
       modelPlan: plan,
       launchAuthorization,
       resolvedModelMetadata,
+      acceptedModelFields,
     } = childPlan.resolved;
     let { childSessionOrigin } = childPlan.resolved;
     const sessionError = (error: string): SpawnSubagentResult => ({
@@ -182,9 +190,42 @@ export async function spawnSubagentDirect(
       error,
       childSessionKey,
     });
+    let provisionalSessionIdentity = captureSubagentSessionCleanupIdentity();
+    let cleanupOwner: ReturnType<typeof bindSubagentSpawnCleanup> | undefined;
+    const ownsCleanup = () => canCleanupCreatedSession?.() ?? provisionalCleanupOpen;
+    const ownsAcceptedRun = () =>
+      ownsCleanup() || (!params.collect && canAbortRegisteredRun?.() === true);
+    const isCleanupCurrent = () => cleanupOwner?.isCurrent() ?? ownsCleanup();
+    const isAbortCurrent = () => cleanupOwner?.isCurrent("chat.abort") ?? ownsAcceptedRun();
+    const cleanupCreatedSession = (emitLifecycleHooks = false) =>
+      cleanupProvisionalSession(childSessionKey, {
+        emitLifecycleHooks,
+        ...provisionalSessionIdentity,
+        isCurrent: isCleanupCurrent,
+        ...(cleanupOwner ? { callGateway: cleanupOwner.callGateway } : {}),
+      });
     const initialSession = await runWithAgentToolSourceExecutionScope(assertActive, () =>
       createInitialSubagentSession({
         assertActive,
+        signal: ctx.signal,
+        onCreated: (session) => {
+          provisionalSessionIdentity = captureSubagentSessionCleanupIdentity(session.entry);
+          const cleanupContext = gatewayContextResolver?.();
+          cleanupOwner =
+            gatewayContextResolver &&
+            (operatorAuthority ||
+              (!params.collect && cleanupContext && cleanupContext.localEmbedded !== true))
+              ? bindSubagentSpawnCleanup({
+                  childSessionKey,
+                  target: session.controllerTarget,
+                  resolveGatewayContext: gatewayContextResolver,
+                  isCurrent: ownsCleanup,
+                  canAbortAcceptedRun: ownsAcceptedRun,
+                  getSessionIdentity: () => provisionalSessionIdentity,
+                })
+              : undefined;
+          cleanupUnlaunchedSession = () => cleanupCreatedSession(threadBindingReady);
+        },
         cfg,
         requesterAgentId,
         targetAgentId,
@@ -218,36 +259,6 @@ export async function spawnSubagentDirect(
     if (initialSession.status === "error") {
       return sessionError(initialSession.error);
     }
-    let provisionalSessionIdentity = {
-      expectedSessionId: initialSession.entry?.sessionId,
-      expectedLifecycleRevision: initialSession.entry?.lifecycleRevision,
-    };
-    const ownsCleanup = () => canCleanupCreatedSession?.() ?? provisionalCleanupOpen;
-    const ownsAcceptedRun = () =>
-      ownsCleanup() || (!params.collect && canAbortRegisteredRun?.() === true);
-    const cleanupContext = gatewayContextResolver?.();
-    const cleanupOwner =
-      gatewayContextResolver &&
-      (operatorAuthority ||
-        (!params.collect && cleanupContext && cleanupContext.localEmbedded !== true))
-        ? bindSubagentSpawnCleanup({
-            childSessionKey,
-            target: initialSession.controllerTarget,
-            resolveGatewayContext: gatewayContextResolver,
-            isCurrent: ownsCleanup,
-            canAbortAcceptedRun: ownsAcceptedRun,
-            getSessionIdentity: () => provisionalSessionIdentity,
-          })
-        : undefined;
-    const isCleanupCurrent = cleanupOwner?.isCurrent ?? ownsCleanup;
-    const isAbortCurrent = () => cleanupOwner?.isCurrent("chat.abort") ?? ownsAcceptedRun();
-    const cleanupCreatedSession = (emitLifecycleHooks = false) =>
-      cleanupProvisionalSession(childSessionKey, {
-        emitLifecycleHooks,
-        ...provisionalSessionIdentity,
-        isCurrent: isCleanupCurrent,
-        ...(cleanupOwner ? { callGateway: cleanupOwner.callGateway } : {}),
-      });
     const preparedSpawnContext = await runWithAgentToolSourceExecutionScope(assertActive, () =>
       prepareSubagentSessionContext({
         assertActive,
@@ -260,17 +271,13 @@ export async function spawnSubagentDirect(
       }),
     );
     if (preparedSpawnContext.status === "error") {
-      await cleanupCreatedSession();
       return sessionError(preparedSpawnContext.error);
     }
     const childEntry = preparedSpawnContext.childEntry ?? initialSession.entry;
     if (childEntry) {
       // Only preparation's committed entry can advance cleanup ownership. A reread
       // of the key could capture a reset/rebound successor that this spawn does not own.
-      provisionalSessionIdentity = {
-        expectedSessionId: childEntry.sessionId,
-        expectedLifecycleRevision: childEntry.lifecycleRevision,
-      };
+      provisionalSessionIdentity = captureSubagentSessionCleanupIdentity(childEntry);
     }
     if (requestThreadBinding) {
       const bindResult = await runWithAgentToolSourceExecutionScope(assertActive, () =>
@@ -291,7 +298,6 @@ export async function spawnSubagentDirect(
         }),
       );
       if (bindResult.status === "error") {
-        await cleanupCreatedSession();
         return sessionError(bindResult.error);
       }
       threadBindingReady = true;
@@ -308,28 +314,26 @@ export async function spawnSubagentDirect(
         : expectsCompletionMessage
           ? "announce"
           : "quiet";
-    const childPrompt = buildSubagentChildPrompt({
-      config: cfg,
-      sandboxed: childRuntimeSandboxed,
-      structuredOutput: Boolean(params.outputSchema),
-      applyProfile: systemPrompt,
-      envelope: {
-        completionMode,
-        completionTarget: params.completionTarget,
-        soleCollectorChild: soleImplicitMember,
-        spawnMode,
-        task: params.task,
-        requesterSessionKey: ctx.agentSessionKey,
-        requesterOrigin: childSessionOrigin,
-        childSessionKey,
-        label: label || undefined,
-        childDepth,
-        maxSpawnDepth,
-        blind,
-      },
+    const envelope = buildSubagentSpawnEnvelope({
+      completionMode,
+      completionTarget: params.completionTarget,
+      soleCollectorChild: soleImplicitMember,
+      spawnMode,
+      task: params.task,
+      requesterSessionKey: ctx.agentSessionKey,
+      requesterOrigin: childSessionOrigin,
+      childSessionKey,
+      label: label || undefined,
+      childDepth,
+      maxSpawnDepth,
+      blind,
+      acpEnabled: isAcpRuntimeSpawnAvailable({ config: cfg, sandboxed: childRuntimeSandboxed }),
+      nativeCommandGuidanceLines: listRegisteredPluginAgentPromptGuidance({ surface: "subagent" }),
     });
-    const { envelope } = childPrompt;
-    let childSystemPrompt = childPrompt.systemPrompt;
+    const profiledSystemPrompt = systemPrompt(envelope.systemPrompt);
+    let childSystemPrompt = params.outputSchema
+      ? `${profiledSystemPrompt}\n\n${STRUCTURED_OUTPUT_INSTRUCTION}`
+      : profiledSystemPrompt;
 
     const materializedAttachments = await runWithAgentToolSourceExecutionScope(assertActive, () =>
       materializeSubagentAttachments({
@@ -343,7 +347,6 @@ export async function spawnSubagentDirect(
       }),
     );
     if (materializedAttachments && materializedAttachments.status !== "ok") {
-      await cleanupCreatedSession(threadBindingReady);
       return materializedAttachments;
     }
     const attachmentId = materializedAttachments?.attachmentId;
@@ -527,6 +530,8 @@ export async function spawnSubagentDirect(
         await cleanupCreatedSession(emitLifecycleHooks);
       },
     };
+    // The pipeline now owns initialization, dispatch and registration failures.
+    cleanupUnlaunchedSession = undefined;
     const pipelineResult = await runSpawnPipeline({
       ...withExecRequestOwners({}, readExecRequestOwners(ctx)),
       adapter,
@@ -686,11 +691,11 @@ export async function spawnSubagentDirect(
       note:
         [envelope.acceptedNote, preparedSpawnContext.forkFallbackNote].filter(Boolean).join(" ") ||
         undefined,
-      ...resolvedModelMetadata,
-      modelApplied: plan.modelApplied || undefined,
+      ...acceptedModelFields,
       attachments: materializedAttachments?.receipt,
     };
   } finally {
+    await cleanupUnlaunchedSession?.();
     provisionalCleanupOpen = false;
     preparationHold.finish();
     admissionReservation?.release();

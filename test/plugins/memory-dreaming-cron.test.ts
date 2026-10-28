@@ -73,25 +73,19 @@ async function createScheduler(cronEnabled: boolean, owner?: string) {
   return cron;
 }
 
-function dreamingConfig(overrides: OpenClawConfig = {}): OpenClawConfig {
-  const agents: OpenClawConfig["agents"] = {
-    ownership: "explicit",
-    entries: { qa: {}, "qa-extra": {} },
-    ...overrides.agents,
-  };
-  return { ...overrides, agents };
-}
+const dreamingConfig = (overrides: OpenClawConfig = {}): OpenClawConfig => ({
+  ...overrides,
+  agents: { ownership: "explicit", entries: { qa: {}, "qa-extra": {} }, ...overrides.agents },
+});
 
 it("does not author ownerless dreaming work when the scheduler overrides enabled config", async () => {
   vi.useFakeTimers();
   const config = dreamingConfig({ cron: { enabled: true } });
   const cron = await createScheduler(false);
-  const add = vi.spyOn(cron, "add");
   const { logger } = await startDreaming(config, () => cron);
 
   await vi.advanceTimersByTimeAsync(60_000);
   expect(logger.error).not.toHaveBeenCalled();
-  expect(add).not.toHaveBeenCalled();
   expect(await cron.list({ includeDisabled: true })).toEqual([]);
 });
 

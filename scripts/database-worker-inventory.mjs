@@ -6,7 +6,10 @@ import { format } from "oxfmt";
 import * as ts from "typescript/ast";
 import { inspectDatabaseWorkerBoundaries } from "./lib/database-worker-compat.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
-import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
+import {
+  createNativeTypeScriptParser,
+  reportNativeTypeScriptPhase,
+} from "./lib/native-typescript.mts";
 import { loadRatchetSources } from "./lib/shrink-ratchet.mts";
 
 const defaultRoot = path.resolve(import.meta.dirname, "..");
@@ -39,14 +42,6 @@ const reviewed = new Map([
       tier: "T3",
       evidence:
         "Only state-migrations.device-identity.ts and state-migrations.device-auth.ts call the consumed-claim importer under Doctor migration custody.",
-    },
-  ],
-  [
-    "src/infra/client-credential-native-tokens.ts",
-    {
-      tier: "T3",
-      evidence:
-        "Only client-credential-operations.ts calls scoped-token claim/clear. Runtime operations enter client-credential.worker.ts; synchronous consumers are offline Doctor/CLI migration and verified restore.",
     },
   ],
   [
@@ -804,7 +799,7 @@ const reviewedOperations = new Map([
     ],
   ],
   [
-    "src/config/sessions/session-accessor.sqlite-entry.ts",
+    "src/config/sessions/session-accessor.sqlite-entry-replace.ts",
     [
       {
         tier: "W",
@@ -3504,7 +3499,8 @@ const workerModules = new Set([
   "src/gateway/worker-environments/placement-move-intent.ts", // Move reads and mutations run only in placement lifecycle, turn-claim, and projection workers.
   "src/state/user-background.store.ts", // Background read/write workers; preference validation and profile merge/link/GitHub-sync also run in shared-state workers.
   "src/gateway/worker-environments/local-workspace-store.kernel.ts", // Projection read/write workers and worktree retirement worker only.
-  "src/gateway/worker-environments/local-workspace-manifest-scan.ts", // Only openclaw-state-read.worker.ts executes its row snapshot and filesystem scan; host imports are types.
+  "src/gateway/worker-environments/local-workspace-manifest-scan.ts", // State-read workers capture rows; Git workspace workers compute manifests from detached snapshots. Host imports are types.
+  "src/gateway/worker-environments/local-workspace-cas.kernel.ts", // Shared-state read/manifest workers traverse immutable content; local-workspace-store.worker.ts alone prepares, prunes, and sweeps it.
   "src/skills/library/import.kernel.ts", // Upload commands execute only in the shared-state writer.
   "src/skills/library/read.kernel.ts", // Only openclaw-state-read-operation-registry.ts imports this worker operation table.
   "src/skills/library/service.kernel.ts", // Library catalog and revision reads use the shared-state read registry.
@@ -3561,12 +3557,15 @@ const workerModules = new Set([
   "src/channels/message/ingress-queue-health.kernel.ts",
   "src/channels/message/ingress-queue.kernel.ts",
 
+  "src/config/sessions/session-accessor.sqlite-archive.worker.ts", // The archive owner starts this native worker; cold-prepare callbacks stay inside its read-only scope and private-port dispatcher.
   "src/config/sessions/session-accessor.sqlite-archive-selection.ts", // Archive worker read-page selection only.
   "src/config/sessions/session-accessor.sqlite-mutation-worker.runtime.ts",
   "src/config/sessions/session-accessor.sqlite-summary.ts", // Only session-transcript.worker.ts dispatches the summary kernel at runtime.
   "src/config/sessions/session-accessor.sqlite-transcript-binding.ts", // History worker transcript-binding reader only.
-  "src/config/sessions/session-cold-storage-selection.ts", // Cold preparation and mutation kernels in session-cold-storage-worker.ts only.
-  "src/config/sessions/session-cold-storage-worker.ts", // Archive worker cold-prepare and cold-mutate dispatchers only.
+  "src/config/sessions/session-cold-storage-selection.ts", // Archive-worker preparation and cold-mutation kernels only.
+  "src/config/sessions/session-cold-storage-worker.ts", // Archive-worker cold-mutate dispatcher only.
+  "src/config/sessions/session-cold-storage-read.worker.ts", // Transcript/history workers dispatch cold probes; verified-chunk reads stay in their read snapshots.
+  "src/config/sessions/session-transcript-hydration.worker.ts", // Only session-transcript-hydration-read.worker.ts dispatches hydration; cold records stream inside that worker.
   "src/config/sessions/session-membership-facts.ts", // Transcript worker session-membership-facts dispatcher only.
 
   "src/cron/store/run-history.kernel.ts", // Cron read worker and shared-state Cron dispatch own history SQL.
@@ -3645,6 +3644,10 @@ const exceptionModules = new Set([
   "src/infra/sqlite-staging-token.ts", // acquireSqliteStagingToken holds the private snapshot admission/retirement lock through native transactions.
 ]);
 const cliModules = new Map([
+  [
+    "scripts/perf/session-cold-selection.ts",
+    "Explicit developer-only benchmark of cold preparation and mutation on synthetic state; no runtime imports or Gateway callers",
+  ],
   [
     "src/claws/provenance-adopted.ts",
     "Only claws migrate/remove CLI one-shots call these writers via migrate.ts and lifecycle-adopted-removal.ts; no Gateway caller",
@@ -3921,13 +3924,19 @@ export function loadInventorySources(root = defaultRoot, ref = "", staged = fals
     : new Map(sourceFiles.map((file) => [file, fs.readFileSync(path.join(root, file), "utf8")]));
 }
 
+/** @param {{ observer?: import("./lib/native-typescript.mts").NativeTypeScriptObserver }} [options] */
 export function inventory(
   root = defaultRoot,
   ref = "",
   staged = false,
   texts = loadInventorySources(root, ref, staged),
+  options = {},
 ) {
-  using parser = createNativeTypeScriptParser({ cwd: root });
+  const { observer } = options;
+  using parser = createNativeTypeScriptParser({
+    cwd: root,
+    observer: observer && ((phase, facts) => observer(`syntax.${phase}`, facts)),
+  });
   const pattern = new RegExp([...primitives.keys()].join("|"));
   const compatibility = inspectDatabaseWorkerBoundaries(
     root,
@@ -3936,6 +3945,7 @@ export function inventory(
     classifyKnownEntry,
     // Historical snapshots supply counts; only current-source diagnostics are consumed below.
     !ref,
+    observer && ((phase, facts) => observer(`semantic.${phase}`, facts)),
   );
   if (!ref && compatibility.violations.length > 0) {
     throw new Error(
@@ -3944,16 +3954,18 @@ export function inventory(
     );
   }
   const files = [...texts.keys()].filter((file) => pattern.test(texts.get(file)));
+  reportNativeTypeScriptPhase(observer, "syntax.inputs", { files: files.length });
   const sources = parser.parseSourceFiles(
     files.map((fileName) => ({ fileName, text: texts.get(fileName) })),
   );
   const invalidSource = parser.getSyntacticDiagnostics()[0];
+  parser.checkpoint?.("diagnostics");
   if (invalidSource) {
     throw new Error(
       `Cannot inventory invalid syntax in ${path.relative(root, invalidSource.fileName ?? root)}`,
     );
   }
-  return files
+  const rows = files
     .flatMap((file, index) => {
       const calls = findCalls(sources[index]);
       /** @type {Map<string, {
@@ -4013,6 +4025,8 @@ export function inventory(
         a.owner.localeCompare(b.owner, "en") ||
         a.file.localeCompare(b.file, "en"),
     );
+  parser.checkpoint?.("walk-classify");
+  return rows;
 }
 
 function totals(rows) {

@@ -32,6 +32,7 @@ import {
 import { runRegisteredCli } from "../../test-utils/command-runner.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
+import { writeFixtureJsonSync } from "../cli-fixtures.test-support.js";
 import { registerUpdateCli } from "../update-cli.js";
 import { updateCleanupCommand } from "./cleanup.js";
 
@@ -81,34 +82,31 @@ function orphan(f: Fixture) {
     UPDATE_CAPTURE_PRIVACY_MARKER_CONTENT,
   );
   fs.writeFileSync(path.join(directory, "payload", "original"), "capture payload");
-  fs.writeFileSync(
-    path.join(directory, "manifest.json"),
-    JSON.stringify({
-      schemaVersion: 2,
-      kind: "update-recovery",
-      generation: { kind: "baseline" },
-      databases: [],
-      runId,
-      installRoot: f.home,
-      stateDir: f.stateDir,
-      configPath: f.env.OPENCLAW_CONFIG_PATH,
-      configPaths: [f.env.OPENCLAW_CONFIG_PATH],
-      creator: { host: "fixture", pid: 1, startIdentity: "1" },
-      drivers: [],
-      createdAt: "2026-01-01T00:00:00.000Z",
-      roots: [f.env.OPENCLAW_CONFIG_PATH],
-      excludedRoots: [],
-      protectedPaths: [f.env.OPENCLAW_CONFIG_PATH],
-      entries: [
-        {
-          kind: "missing",
-          sourcePath: f.env.OPENCLAW_CONFIG_PATH,
-          sqlite: false,
-          directory: false,
-        },
-      ],
-    }),
-  );
+  writeFixtureJsonSync(path.join(directory, "manifest.json"), {
+    schemaVersion: 2,
+    kind: "update-recovery",
+    generation: { kind: "baseline" },
+    databases: [],
+    runId,
+    installRoot: f.home,
+    stateDir: f.stateDir,
+    configPath: f.env.OPENCLAW_CONFIG_PATH,
+    configPaths: [f.env.OPENCLAW_CONFIG_PATH],
+    creator: { host: "fixture", pid: 1, startIdentity: "1" },
+    drivers: [],
+    createdAt: "2026-01-01T00:00:00.000Z",
+    roots: [f.env.OPENCLAW_CONFIG_PATH],
+    excludedRoots: [],
+    protectedPaths: [f.env.OPENCLAW_CONFIG_PATH],
+    entries: [
+      {
+        kind: "missing",
+        sourcePath: f.env.OPENCLAW_CONFIG_PATH,
+        sqlite: false,
+        directory: false,
+      },
+    ],
+  });
   return directory;
 }
 
@@ -414,11 +412,8 @@ it.each(["selection", "removal"] as const)(
   async (phase) => {
     const f = fixture();
     const include = path.join(f.stateDir, "selection.json");
-    fs.writeFileSync(f.env.OPENCLAW_CONFIG_PATH, JSON.stringify({ $include: "selection.json" }));
-    fs.writeFileSync(
-      include,
-      JSON.stringify(phase === "selection" ? { session: { store: f.original } } : {}),
-    );
+    writeFixtureJsonSync(f.env.OPENCLAW_CONFIG_PATH, { $include: "selection.json" });
+    writeFixtureJsonSync(include, phase === "selection" ? { session: { store: f.original } } : {});
     const hideInclude = () => fs.renameSync(include, `${include}.saved`);
     if (phase === "selection") {
       hideInclude();

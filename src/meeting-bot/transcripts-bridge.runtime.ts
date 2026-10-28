@@ -2,6 +2,7 @@ import path from "node:path";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { resolveStateDir } from "../config/paths.js";
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
+import { pluginInstanceInvocation } from "../plugins/plugin-instance-invocation.js";
 import {
   createTranscriptSummaryUpdates,
   persistTranscriptSummary,
@@ -89,6 +90,9 @@ export function createMeetingDurableTranscriptBridge<
       return isEnabled();
     },
     async start(session, capture) {
+      const runInBackground =
+        pluginInstanceInvocation.getStore()?.instance.lifecycle.runInBackgroundContext ??
+        (<T>(run: () => T) => run());
       await lifecycleTasks.enqueue(session.id, async () => {
         if (!isEnabled() || captures.has(session.id)) {
           return;
@@ -157,26 +161,34 @@ export function createMeetingDurableTranscriptBridge<
             }
           }
         };
-        const timer = setInterval(() => {
-          // polling covers both initialize() and capture, so session writes are
-          // single-flight too. A skipped tick is followed within CAPTURE_INTERVAL_MS.
-          if (!isEnabled() || active.polling || active.closing) {
-            return;
-          }
-          active.polling = true;
-          void lifecycleTasks
-            .enqueue(session.id, async () => {
-              if (captures.get(session.id) !== active || active.closing || !isEnabled()) {
-                return;
-              }
-              await initialize();
-              await capture();
-            })
-            .catch((error: unknown) => reportCaptureError(session.id, error))
-            .finally(() => {
-              active.polling = false;
-            });
-        }, CAPTURE_INTERVAL_MS);
+        // Capture belongs to this plugin instance, not the request that joined.
+        // Enter again per tick so retirement rejects new work before dispatch.
+        const timer = runInBackground(() =>
+          setInterval(() => {
+            // polling covers both initialize() and capture, so session writes are
+            // single-flight too. A skipped tick is followed within CAPTURE_INTERVAL_MS.
+            if (!isEnabled() || active.polling || active.closing) {
+              return;
+            }
+            active.polling = true;
+            void Promise.resolve()
+              .then(() =>
+                runInBackground(() =>
+                  lifecycleTasks.enqueue(session.id, async () => {
+                    if (captures.get(session.id) !== active || active.closing || !isEnabled()) {
+                      return;
+                    }
+                    await initialize();
+                    await capture();
+                  }),
+                ),
+              )
+              .catch((error: unknown) => reportCaptureError(session.id, error))
+              .finally(() => {
+                active.polling = false;
+              });
+          }, CAPTURE_INTERVAL_MS),
+        );
         timer.unref?.();
         active.timer = timer;
         active.polling = true;

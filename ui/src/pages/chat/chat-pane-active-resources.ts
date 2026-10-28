@@ -8,7 +8,7 @@ import {
   resolveChatPaneDesktopTarget,
 } from "../../components/desktop/desktop-source.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
-import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
+import { scopedAgentParamsForSession } from "../../lib/sessions/navigation.ts";
 import type {
   SessionCapability,
   SessionRowObservation,

@@ -203,23 +203,20 @@ it("keeps bounded diagnostics when the complete inventory locator cannot fit", a
 it("keeps the original bounded failure when the complete inventory cannot be written", async () => {
   const rename = fs.rename;
   let rejectedInventory = 0;
-  const writeInventory = vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+  using _ = vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
     if (path.basename(String(to)).startsWith("openclaw-update-lint-")) {
       rejectedInventory += 1;
       throw Object.assign(new Error("ENOSPC: no space left on device"), { code: "ENOSPC" });
     }
     return rename(from, to);
   });
-  try {
-    const outputPath = await writeTriageUpdateFailure(lintFailure(), { env });
-    const failure = await readTriageUpdateFailure(outputPath, { env, stateDir });
-    expect(failure.error).toContain("Original Doctor failure");
-    expect(failure.error).toContain("Complete Doctor lint inventory unavailable: ENOSPC");
-    expect(failure.error).not.toContain("Complete Doctor lint inventory:");
-    expect(Buffer.byteLength(await fs.readFile(outputPath))).toBeLessThanOrEqual(8 * 1024);
-    expect(rejectedInventory).toBe(1);
-    expect(await fs.readdir(path.dirname(outputPath))).toEqual([path.basename(outputPath)]);
-  } finally {
-    writeInventory.mockRestore();
-  }
+
+  const outputPath = await writeTriageUpdateFailure(lintFailure(), { env });
+  const failure = await readTriageUpdateFailure(outputPath, { env, stateDir });
+  expect(failure.error).toContain("Original Doctor failure");
+  expect(failure.error).toContain("Complete Doctor lint inventory unavailable: ENOSPC");
+  expect(failure.error).not.toContain("Complete Doctor lint inventory:");
+  expect(Buffer.byteLength(await fs.readFile(outputPath))).toBeLessThanOrEqual(8 * 1024);
+  expect(rejectedInventory).toBe(1);
+  expect(await fs.readdir(path.dirname(outputPath))).toEqual([path.basename(outputPath)]);
 });

@@ -17,60 +17,42 @@ const context = {
 };
 const jsonResult = (value: unknown, code = 0, stderr = "") =>
   commandResult({ code, stderr, stdout: JSON.stringify(value) });
+const LEASE = {
+  id: ID,
+  state: "active",
+  provider: "aws",
+  createdAt: new Date(NOW).toISOString(),
+  ttlSeconds: 1800,
+  idleTimeout: "45m",
+  expiresAt: new Date(NOW + 2700_000).toISOString(),
+  leasePolicy: { maxTTLSeconds: 14400, runtimeExtension: true, extension: "allow" },
+};
 
-function fixture(
-  options: {
-    ttl?: number;
-    extension?: string;
-    runtime?: boolean;
-    expiry?: number;
-    createdAgo?: number;
-    maximum?: number;
-    source?: "inspect" | "list";
-  } = {},
-) {
-  const state = {
-    ttl: options.ttl ?? 1800,
-    extend: async () => jsonResult({ id: ID }),
-  };
+function fixture(patch: Partial<typeof LEASE> = {}, source?: "inspect" | "list") {
+  const state = { ...LEASE, ...patch };
+  const extend = vi.fn(async () => jsonResult({ id: ID }));
   const calls: string[][] = [];
-  const observation = vi.fn();
-  const facts = () => ({
-    id: ID,
-    state: "active",
-    provider: "aws",
-    createdAt: new Date(NOW - (options.createdAgo ?? 0)).toISOString(),
-    ttlSeconds: state.ttl,
-    idleTimeout: "45m",
-    expiresAt: new Date(NOW + (options.expiry ?? 2700) * 1000).toISOString(),
-    leasePolicy: {
-      maxTTLSeconds: options.maximum ?? 14400,
-      runtimeExtension: options.runtime ?? true,
-      extension: options.extension ?? "allow",
-    },
-  });
   vi.spyOn(processRunner, "runCrabboxProcess").mockImplementation(async (argv) => {
     calls.push(argv);
     if (argv[1] === "extend") {
-      return state.extend();
+      return extend();
     }
+    const { createdAt, ttlSeconds, leasePolicy, ...common } = state;
     if (argv[1] === "inspect") {
       // Coordinator inspect omits the creation anchor and total TTL.
-      const { createdAt: _created, ttlSeconds: _ttl, ...inspect } = facts();
-      return jsonResult(options.source === "inspect" ? facts() : inspect);
+      return jsonResult(source === "inspect" ? state : { ...common, leasePolicy });
     }
     if (argv[1] === "list") {
-      const { leasePolicy, ...listed } = facts();
-      return jsonResult([options.source ? listed : { ...listed, leasePolicy }]);
+      return jsonResult([source ? { ...common, createdAt, ttlSeconds } : state]);
     }
-    return jsonResult(facts());
+    return jsonResult(state);
   });
   return {
     state,
+    extend,
     calls,
-    observation,
     prepare: (overrides: Partial<typeof context> = {}) =>
-      prepareCrabboxCaptureLifetime({ ...context, ...overrides }, { observe: observation }),
+      prepareCrabboxCaptureLifetime({ ...context, ...overrides }, { observe() {} }),
     actions: () => calls.map((call) => call[1]),
     writes: () => calls.filter((call) => call[1] === "extend"),
   };
@@ -98,23 +80,20 @@ it("never echoes connection JSON from a failed inspection", async () => {
 });
 
 it("distinguishes idle expiry from total TTL without extending an adequate lease", async () => {
-  const f = fixture({ ttl: 14400 });
+  const f = fixture({ ttlSeconds: 14400 });
   await f.prepare();
-  expect(f.actions()).toEqual(["inspect", "heartbeat", "inspect", "list"]);
-  expect(f.observation.mock.lastCall?.[0].lifetime).toMatchObject({
-    ttlMs: 14400000,
-    createdAtMs: NOW,
-  });
+  expect(f.writes()).toEqual([]);
 });
 
 it.each(["inspect", "list"] as const)("honors the tightened maximum from %s", async (source) => {
-  const f = fixture({
+  const f = fixture(
+    {
+      ttlSeconds: 14400,
+      createdAt: new Date(NOW - 3600_000).toISOString(),
+      leasePolicy: { ...LEASE.leasePolicy, maxTTLSeconds: 5400 },
+    },
     source,
-    ttl: 14400,
-    createdAgo: 60 * 60_000,
-    expiry: 1800,
-    maximum: 5400,
-  });
+  );
   await expect(f.prepare()).rejects.toThrow(
     "required source window exceeds the configured TTL or effective maximum",
   );
@@ -128,32 +107,31 @@ it.each([
   "admits a $budget minute budget with one bounded, verified extension",
   async ({ budget, target, elapsed }) => {
     const f = fixture();
-    f.state.extend = async () => {
+    f.extend.mockImplementation(async () => {
       vi.advanceTimersByTime(elapsed);
-      f.state.ttl = target;
+      f.state.ttlSeconds = target;
       return jsonResult({ id: ID });
-    };
+    });
     await f.prepare({ sourcePreparationTimeoutMs: budget * 60_000 });
     expect(f.writes()).toEqual([
       ["/fixture/crabbox", "extend", ID, "--provider", "aws", "--ttl", `${target}s`, "--json"],
     ]);
-    expect(f.actions().slice(-2)).toEqual(["inspect", "list"]);
   },
 );
 
 it("surfaces coordinator refusal without a retry or replacement", async () => {
   const code = "lease_extension_budget_exceeded";
   const f = fixture();
-  f.state.extend = async () => commandResult({ code: 1, stderr: `coordinator: ${code}` });
+  f.extend.mockResolvedValue(commandResult({ code: 1, stderr: `coordinator: ${code}` }));
   await expect(f.prepare()).rejects.toThrow(code);
   expect(f.writes()).toHaveLength(1);
   expect(f.actions()).not.toContain("warmup");
 });
 
-it.each([{ runtime: false }, { extension: "deny" }])(
+it.each([{ runtimeExtension: false }, { extension: "deny" }])(
   "rejects policy before extending",
   async (policy) => {
-    const f = fixture(policy);
+    const f = fixture({ leasePolicy: { ...LEASE.leasePolicy, ...policy } });
     await expect(f.prepare()).rejects.toThrow(/lease_extension_(unsupported_provider|denied)/u);
     expect(f.writes()).toEqual([]);
   },
@@ -163,16 +141,16 @@ it.each([true, false])("settles guest-refresh once (recovered=%s)", async (recov
   const f = fixture();
   const pending = { id: ID, guestExpiryRefreshPending: true };
   let attempts = 0;
-  f.state.extend = async () => {
+  f.extend.mockImplementation(async () => {
     if (recovered && attempts++ > 0) {
-      f.state.ttl = 4440;
+      f.state.ttlSeconds = 4440;
       return jsonResult({ id: ID });
     }
     if (!recovered) {
-      f.state.ttl = 14400;
+      f.state.ttlSeconds = 14400;
     }
     return jsonResult(recovered ? { ...pending, error: "guest refresh failed" } : pending, 1);
-  };
+  });
   if (recovered) {
     await f.prepare();
   } else {

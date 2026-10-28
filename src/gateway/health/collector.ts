@@ -21,6 +21,7 @@ import { isDiagnosticFlagEnabled } from "../../infra/diagnostic-flags.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   projectHeartbeatSummary,
+  readHeartbeatSummaryForStatus,
   readHeartbeatSummarySnapshot,
 } from "../../infra/heartbeat-summary-snapshot.js";
 import { redactToolPayloadTextWithConfig } from "../../logging/redact.js";
@@ -145,14 +146,12 @@ async function prepareHealthAgentSummaries(
   const { prepareStatusSessionStores } = await import("../../status/session-stores.js");
   const { isTransientSqliteError } = await import("../../infra/unhandled-rejections.js");
   // Receipts list the primary job first; retain it when converted siblings share an agent.
-  const heartbeatJobs = new Map(
-    (
-      await (cronState?.readHeartbeatSummary?.(cfg) ??
-        readHeartbeatSummarySnapshot(cfg, cronState?.storePath))
-    )
-      .toReversed()
-      .map((job) => [job.agentId, job]),
+  const heartbeat = await readHeartbeatSummaryForStatus(
+    () =>
+      cronState?.readHeartbeatSummary?.(cfg) ??
+      readHeartbeatSummarySnapshot(cfg, cronState?.storePath),
   );
+  const heartbeatJobs = new Map(heartbeat.jobs.toReversed().map((job) => [job.agentId, job]));
   const sessionStores = await prepareStatusSessionStores(
     cfg,
     ordered,
@@ -180,7 +179,7 @@ async function prepareHealthAgentSummaries(
         agentId: agent.id,
         name: agent.name,
         isDefault: agent.id === displayDefaultId,
-        heartbeat: projectHeartbeatSummary(heartbeatJobs.get(agent.id)),
+        heartbeat: projectHeartbeatSummary(heartbeatJobs.get(agent.id), heartbeat.selectionWarning),
         sessions: projectHealthSessions(store.path, store),
       }));
       return {

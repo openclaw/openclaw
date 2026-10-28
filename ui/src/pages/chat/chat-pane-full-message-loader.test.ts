@@ -3,9 +3,9 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { sessionListResult } from "../../test-helpers/chat-model.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import { createGatewayBrowserClientFixture } from "./chat-application-context.test-support.ts";
 import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
 import { createSidebarFullMessageLoader } from "./chat-pane-sidebar-layout.ts";
-import { createGatewayBrowserClientFixture } from "./chat-pane.test-support.ts";
 
 const messageRequest = { sessionKey: "agent:main:example", messageId: "answer" };
 const result = { ok: true, message: { role: "assistant", content: "The full answer" } };

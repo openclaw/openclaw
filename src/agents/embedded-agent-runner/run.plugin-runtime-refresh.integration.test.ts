@@ -168,7 +168,8 @@ it.each([false, true])(
   },
 );
 
-it("retains settled work from an overloaded attempt through a later plugin refresh", async () => {
+it("retains settled native work from an overloaded attempt through a later plugin refresh", async () => {
+  useOpenAIPlatformAuthFixture();
   const originalPrompt = "write the receipt, reload the plugin, then report the receipt ID";
   const originalMessage = userMessage(originalPrompt);
   const settledMessages = settledWrite();
@@ -205,7 +206,12 @@ it("retains settled work from an overloaded attempt through a later plugin refre
     expect(params.continuation).toBeUndefined();
     return makeAttemptResult({ assistantTexts: ["Receipt AMBER-731 verified."] });
   });
-  const result = await run({ prompt: originalPrompt });
+  const result = await run({
+    prompt: originalPrompt,
+    agentHarnessId: "codex",
+    provider: "openai",
+    model: "gpt-5.6-luna",
+  });
   expect(result.meta.error).toBeUndefined();
   expect(attempt).toHaveBeenCalledTimes(3);
 });
@@ -213,7 +219,7 @@ it("retains settled work from an overloaded attempt through a later plugin refre
 it.each([true, false])("preserves refresh usage totals (CLI priced: %s)", async (priced) => {
   const cliDispatch = await import("./cli-backend-dispatch.js");
   const terminalUsage = tokenUsage(30, 3, priced ? 0.2 : undefined);
-  const dispatch = vi
+  using dispatch = vi
     .spyOn(cliDispatch, "runEmbeddedAgentViaCliBackendIfEligible")
     .mockResolvedValueOnce(undefined)
     .mockResolvedValueOnce({
@@ -238,38 +244,34 @@ it.each([true, false])("preserves refresh usage totals (CLI priced: %s)", async 
     attemptUsage: tokenUsage(100, 10, 0.1),
   });
 
-  try {
-    const result = await run();
+  const result = await run();
 
-    expect(result.payloads).toEqual([{ text: "Receipt verified." }]);
-    expect(result.meta.agentMeta).toMatchObject({
-      provider: "cli-provider",
-      model: "cli-model",
-      contextTokens: 64_000,
-      promptTokens: 30,
-      usage: { input: 130, output: 13, total: 143 },
-      diagnosticUsage: { input: 400, output: 40, total: 440 },
-      lastCallUsage: terminalUsage,
+  expect(result.payloads).toEqual([{ text: "Receipt verified." }]);
+  expect(result.meta.agentMeta).toMatchObject({
+    provider: "cli-provider",
+    model: "cli-model",
+    contextTokens: 64_000,
+    promptTokens: 30,
+    usage: { input: 130, output: 13, total: 143 },
+    diagnosticUsage: { input: 400, output: 40, total: 440 },
+    lastCallUsage: terminalUsage,
+  });
+  for (const [usage, expected] of [
+    [result.meta.agentMeta?.usage, 0.3],
+    [result.meta.agentMeta?.diagnosticUsage, 0.5],
+  ] as const) {
+    const cost = estimateAggregateUsageCost({
+      usage,
+      cost: { input: 10, output: 20, cacheRead: 0, cacheWrite: 0 },
     });
-    for (const [usage, expected] of [
-      [result.meta.agentMeta?.usage, 0.3],
-      [result.meta.agentMeta?.diagnosticUsage, 0.5],
-    ] as const) {
-      const cost = estimateAggregateUsageCost({
-        usage,
-        cost: { input: 10, output: 20, cacheRead: 0, cacheWrite: 0 },
-      });
-      if (priced) {
-        expect(cost).toBeCloseTo(expected, 9);
-      } else {
-        expect(cost).toBeUndefined();
-      }
+    if (priced) {
+      expect(cost).toBeCloseTo(expected, 9);
+    } else {
+      expect(cost).toBeUndefined();
     }
-    expect(attempt).toHaveBeenCalledOnce();
-    expect(dispatch).toHaveBeenCalledTimes(2);
-  } finally {
-    dispatch.mockRestore();
   }
+  expect(attempt).toHaveBeenCalledOnce();
+  expect(dispatch).toHaveBeenCalledTimes(2);
 });
 
 it("preserves same-route text delivery dedupe across refresh", async () => {

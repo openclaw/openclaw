@@ -456,6 +456,22 @@ describe("sessions lifecycle commands", () => {
       },
     );
 
+    it("emits the shared JSON failure envelope for a rejected RPC", async () => {
+      const key = "agent:main:missing";
+      mocks.callGateway.mockRejectedValueOnce(
+        new GatewayClientRequestError({ code: "INVALID_REQUEST", message: "Session not found." }),
+      );
+
+      await compact({ key, json: true });
+
+      expect(runtime.writeJson).toHaveBeenCalledExactlyOnceWith(
+        { ok: false, key, error: { type: "cli_error", message: "Session not found." } },
+        2,
+      );
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+      expect(runtime.error).not.toHaveBeenCalled();
+    });
+
     it("preserves raw result values in JSON output", async () => {
       const payload = {
         ok: false,

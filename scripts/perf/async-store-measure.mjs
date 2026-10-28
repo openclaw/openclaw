@@ -1,4 +1,4 @@
-// Run on the approved benchmark host with Node 26 and --import ./scripts/tsx.mjs.
+// Run on the approved benchmark host with Node 26; consolidated variants need --import ./scripts/tsx.mjs.
 // Compare revisions with: scripts/perf/async-store-measure.mjs <variant> 26 20000
 // consolidated uses enterWith; consolidated-run uses run; consolidated-restore
 // also changes a sibling field, exercising restoration into a replacement frame.
@@ -7,13 +7,15 @@ import { writeFileSync } from "node:fs";
 import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import { performance } from "node:perf_hooks";
-import { AsyncContext } from "../../src/shared/async-context.ts";
 import { runWithAsyncStore } from "../../src/shared/async-store.ts";
 
 const [variant = "single", countText = "26", iterationsText = "200000", profilePath] =
   process.argv.slice(2);
 const count = Number(countText);
 const iterations = Number(iterationsText);
+const AsyncContext = variant.startsWith("consolidated")
+  ? (await import("../../src/shared/async-context.ts")).AsyncContext
+  : undefined;
 if (
   ![
     "stock",

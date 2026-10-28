@@ -7,6 +7,7 @@ import {
   resolveUiConversationIdentity,
   type UiSessionDefaultsHost,
 } from "../lib/sessions/session-key.ts";
+import { waitForControlUiProofSurface } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionUrl,
   defaultControlUiFeatureMethods,
@@ -26,6 +27,23 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
+
+const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+
+async function captureProof(
+  page: Page,
+  filePath: string,
+  options: { fullPage?: boolean; pane?: Locator } = {},
+): Promise<void> {
+  await waitForControlUiProofSurface(options.pane ?? page.locator("body"), []);
+  if (captureUiProofEnabled) {
+    if (options.pane) {
+      await options.pane.screenshot({ path: filePath });
+    } else {
+      await page.screenshot({ path: filePath, fullPage: options.fullPage });
+    }
+  }
+}
 
 const ONE_PIXEL_PNG_B64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
@@ -139,7 +157,7 @@ suite.define(() => {
           .getByRole("button", { name: "Send message", exact: true })
           .isDisabled(),
       };
-      await page.screenshot({ path: path.join(proofDir, "dock-pending.png"), fullPage: true });
+      await captureProof(page, path.join(proofDir, "dock-pending.png"), { fullPage: true });
       await page.evaluate(async () => {
         const proof = (globalThis as unknown as { attachmentReadProof: DeferredAttachmentProof })
           .attachmentReadProof;
@@ -162,7 +180,7 @@ suite.define(() => {
         requests: await gateway.getRequests("chat.send"),
       };
       await writeFile(path.join(proofDir, "handoff.json"), JSON.stringify(receipt, null, 2));
-      await page.screenshot({ path: path.join(proofDir, "returned-home.png"), fullPage: true });
+      await captureProof(page, path.join(proofDir, "returned-home.png"), { fullPage: true });
       console.log(JSON.stringify({ artifactDir: proofDir, ...receipt }));
       expect(receipt.pending).toEqual({ files: 1, sendDisabled: true });
       expect(receipt.returnedDraft).toBe(draft);
@@ -280,7 +298,7 @@ suite.define(() => {
         if (scenario !== "rewind-newer-file") {
           await expect.poll(() => composer.inputValue()).toBe(expectedText);
         }
-        await page.screenshot({ path: path.join(proofDir, "restored-before-release.png") });
+        await captureProof(page, path.join(proofDir, "restored-before-release.png"));
       }
       if (scenario !== "same-draft" && scenario !== "rewind-completed") {
         await finishRead();
@@ -299,7 +317,7 @@ suite.define(() => {
         ),
         pageErrors,
       };
-      await page.screenshot({ path: path.join(proofDir, "settled-before-send.png") });
+      await captureProof(page, path.join(proofDir, "settled-before-send.png"));
       await send.click();
       const request = await gateway.waitForRequest("chat.send");
       const sent = request.params as {
@@ -447,7 +465,7 @@ suite.define(() => {
           })),
         ).toEqual({ focused: true, visibility: "visible" });
         if (capture) {
-          await pane.screenshot({ path: path.join(proofDir, "held-enter-before.png") });
+          await captureProof(page, path.join(proofDir, "held-enter-before.png"), { pane });
         }
 
         const keyProof = await composer.evaluateHandle((element) => {
@@ -604,7 +622,7 @@ suite.define(() => {
           });
           expect(pageErrors).toEqual([]);
           if (capture) {
-            await pane.screenshot({ path: path.join(proofDir, "held-enter-after.png") });
+            await captureProof(page, path.join(proofDir, "held-enter-after.png"), { pane });
           }
           expect(observed.bubbles.map((row) => row.id)).toEqual([`msg:send:${followUpRunId}:0`]);
           for (const rows of [observed.bubbles, observed.queued]) {
@@ -655,7 +673,7 @@ suite.define(() => {
       const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
       if (artifactDir) {
         await mkdir(artifactDir, { recursive: true });
-        await page.screenshot({ path: path.join(artifactDir, "offline-draft-restored.png") });
+        await captureProof(page, path.join(artifactDir, "offline-draft-restored.png"));
       }
       await composer.press("Enter");
 
@@ -747,9 +765,10 @@ suite.define(() => {
       await activeAttachments(restoredPage).first().waitFor();
       expect(await activeAttachments(restoredPage).count()).toBe(1);
       if (artifactDir) {
-        await restoredPage.screenshot({
-          path: path.join(artifactDir, "existing-session-restart-draft-restored.png"),
-        });
+        await captureProof(
+          restoredPage,
+          path.join(artifactDir, "existing-session-restart-draft-restored.png"),
+        );
       }
 
       await navigateToControlUiSession(restoredPage, secondSession);
@@ -796,9 +815,10 @@ suite.define(() => {
         .toBe("restart draft B with removable file");
       await expect.poll(() => activeAttachments(clearedPage).count()).toBe(0);
       if (artifactDir) {
-        await clearedPage.screenshot({
-          path: path.join(artifactDir, "existing-session-restart-drafts-cleaned.png"),
-        });
+        await captureProof(
+          clearedPage,
+          path.join(artifactDir, "existing-session-restart-drafts-cleaned.png"),
+        );
       }
     } finally {
       await context.close();
@@ -837,7 +857,7 @@ suite.define(() => {
       const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
       if (artifactDir) {
         await mkdir(artifactDir, { recursive: true });
-        await page.screenshot({ path: path.join(artifactDir, "attachment-frame-rejected.png") });
+        await captureProof(page, path.join(artifactDir, "attachment-frame-rejected.png"));
       }
 
       await composer.press("Enter");
@@ -985,12 +1005,13 @@ suite.define(() => {
       // 1. Stalled preparing state
       await expect.poll(() => send.isDisabled()).toBe(true);
       await page.locator(".chat-attachment-loading").waitFor();
-      await page.screenshot({
-        path: path.join(proofDir, "screenshot-1-attachment-stalled-preparing.png"),
-      });
+      await captureProof(
+        page,
+        path.join(proofDir, "screenshot-1-attachment-stalled-preparing.png"),
+      );
 
-      // Advance virtual clock past the 15-second read timeout
-      await page.clock.runFor(15_001);
+      // Expire the idle watchdog without replaying unrelated frame callbacks.
+      await page.clock.fastForward(15_001);
 
       // Failed reads leave the composer and report through the shared toast.
       await page
@@ -998,9 +1019,10 @@ suite.define(() => {
         .getByText("Could not attach file. Try again.", { exact: true })
         .waitFor();
       await expect.poll(() => send.isEnabled()).toBe(true);
-      await page.screenshot({
-        path: path.join(proofDir, "screenshot-2-attachment-stalled-settled-error.png"),
-      });
+      await captureProof(
+        page,
+        path.join(proofDir, "screenshot-2-attachment-stalled-settled-error.png"),
+      );
 
       await expect.poll(() => page.locator(".chat-attachment-thumb").count()).toBe(0);
       expect(await composer.inputValue()).toBe(draftText);
@@ -1014,9 +1036,7 @@ suite.define(() => {
       });
       expect((request.params as { attachments?: unknown }).attachments).toBeUndefined();
       await expect.poll(() => composer.inputValue()).toBe("");
-      await page.screenshot({
-        path: path.join(proofDir, "screenshot-4-attachment-draft-sent.png"),
-      });
+      await captureProof(page, path.join(proofDir, "screenshot-4-attachment-draft-sent.png"));
 
       const aborts = await page.evaluate(
         () =>

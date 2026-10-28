@@ -1,5 +1,4 @@
 import { resolvePhysicalSessionStorePath } from "../../../config/sessions/session-store-path.js";
-import { decodeGatewayOperatorRecoverySource } from "../../../gateway/operator-run-recovery-source.codec.js";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import { captureOperatorToolGatewayContinuationContext } from "../../../gateway/server-plugin-in-process-dispatch.js";
 import {
@@ -14,9 +13,9 @@ import {
 } from "../../../plugins/runtime/gateway-request-scope.js";
 import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
 import { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
-import { intersectOperatorScopes } from "../../../shared/operator-scope-compat.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
+import { createOperatorInputRecoverySource } from "../../operator-run-recovery-source.js";
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
 import {
   prepareTerminatedCollectorLaunch,
@@ -221,30 +220,32 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
             }),
       );
       authority = await captureOperatorToolGatewayContinuationContext();
-      const operator = authority?.operatorAuthority;
-      let operatorRecoverySource: SubagentRunRecord["operatorRecoverySource"];
-      if (
-        operator?.recoverySnapshot &&
+      // Direct child turns have no spawning requester turn. Save their own admitted
+      // source before launch so a restart never depends on an absent parent claim.
+      const recoveryTarget =
+        requesterAgentId &&
         registerParams.completionRequesterSessionId &&
         registerParams.requesterTurnRunId
-      ) {
-        try {
-          operatorRecoverySource = decodeGatewayOperatorRecoverySource({
-            version: 1,
-            agentId: requesterAgentId,
-            sessionKey: requesterSessionKey,
-            sessionId: registerParams.completionRequesterSessionId,
-            lifecycleRevision: registerParams.completionRequesterLifecycleRevision,
-            sourceRunId: registerParams.requesterTurnRunId,
-            snapshot: {
-              ...operator.recoverySnapshot,
-              scopes: intersectOperatorScopes(operator.recoverySnapshot.scopes, operator.scopes),
-            },
-          });
-        } catch {
-          // Oversized evidence must not block admission or become executable recovery authority.
-        }
-      }
+          ? {
+              agentId: requesterAgentId,
+              sessionKey: requesterSessionKey,
+              entry: {
+                sessionId: registerParams.completionRequesterSessionId,
+                lifecycleRevision: registerParams.completionRequesterLifecycleRevision,
+                updatedAt: Date.now(),
+              },
+              sourceRunId: registerParams.requesterTurnRunId,
+            }
+          : {
+              agentId: childAgentId,
+              sessionKey: childSessionKey,
+              entry: { ...registerParams.sessionEntry, updatedAt: Date.now() },
+              sourceRunId: runId,
+            };
+      const operatorRecoverySource = createOperatorInputRecoverySource({
+        ...recoveryTarget,
+        authority: authority?.operatorAuthority,
+      });
       const assertCurrent = () => {
         options.assertCurrent?.();
         authority?.assertCurrent();

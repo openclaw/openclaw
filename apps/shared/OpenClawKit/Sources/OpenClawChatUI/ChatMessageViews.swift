@@ -596,28 +596,7 @@ extension ChatMessageBubble {
 
     private var toolActivityItems: [ChatToolActivityItem] {
         guard self.displayOptions.contains(.toolActivity) else { return [] }
-        // Results normally reach us merged into the calling assistant message
-        // (ChatTranscriptRow.mergeToolResults); this branch is the orphan
-        // fallback for results whose call is not in the preceding message.
-        if self.message.isToolResult {
-            return [ChatToolActivityItem(
-                id: self.message.content.first?.id ?? "result-0",
-                name: self.message.toolName,
-                arguments: nil,
-                details: self.message.details,
-                resultText: self.primaryText,
-                state: ChatToolActivity
-                    .resultIsError(self.message.isError, text: self.primaryText) ? .failed : .finished,
-                liveDiffStat: nil,
-                activity: self.message.activity?.first,
-                activityPrepared: self.message.activity != nil)]
-        }
-        guard self.message.role.lowercased() == "assistant" else { return [] }
-        return ChatToolActivity.items(
-            calls: self.message.content.filter(\.isToolCall),
-            results: self.message.content.filter(\.isToolResult),
-            activity: self.message.activity,
-            liveTools: self.liveToolCalls)
+        return ChatToolActivity.items(message: self.message, liveTools: self.liveToolCalls)
     }
 
     private var linkPreviewURL: URL? {

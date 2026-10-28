@@ -4,11 +4,8 @@ import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
-import {
-  scopedAgentIdForSession,
-  visibleSessionMatches,
-  type SessionCapability,
-} from "../../lib/sessions/index.ts";
+import type { SessionCapability } from "../../lib/sessions/index.ts";
+import { scopedAgentIdForSession, visibleSessionMatches } from "../../lib/sessions/navigation.ts";
 import {
   areUiSessionKeysEquivalent,
   resolveUiConversationIdentity,

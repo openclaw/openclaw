@@ -15,6 +15,9 @@ import {
   restoreNpmPackageRoot,
 } from "./package-update-filesystem.js";
 import { interceptStagedFileSync } from "./package-update-sync.test-support.js";
+import * as retry from "./retry.js";
+
+const runRetry = retry.retryAsync;
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
@@ -514,6 +517,103 @@ it("does not compensate a root rename after its original owner refused once", as
   await expectMissing(liveRoot);
   await expectFile(path.join(displacedRoot, "marker.txt"), "candidate");
   await expectFile(path.join(backupRoot, "marker.txt"), "original");
+});
+
+function restoreRenameRetryHarness() {
+  const wait = vi.fn(async () => {});
+  vi.spyOn(retry, "retryAsync").mockImplementation((fn, options) =>
+    runRetry(fn, { ...(typeof options === "object" ? options : {}), sleep: wait }),
+  );
+  return wait;
+}
+
+it("names the retained backup when publication fails without a candidate", async () => {
+  const liveRoot = path.join(root, "live");
+  const backupRoot = path.join(root, "backup");
+  const displacedRoot = path.join(root, "displaced");
+  await writeFiles({ "backup/marker.txt": "original" });
+  vi.spyOn(fs, "rename").mockRejectedValue(errno("EXDEV: cross-device link", "EXDEV"));
+
+  const failure = restoreNpmPackageRoot({
+    liveRoot,
+    backupRoot,
+    displacedRoot,
+    candidatePresent: false,
+  });
+  await expect(failure).rejects.toThrow(/is missing/u);
+  const message = await failure.then(
+    () => "",
+    (error: unknown) => (error instanceof Error ? error.message : String(error)),
+  );
+  expect(message).toContain("EXDEV: cross-device link");
+  expect(message).toContain(`moving ${backupRoot} to ${liveRoot}`);
+  await expectMissing(liveRoot);
+  await expectFile(path.join(backupRoot, "marker.txt"), "original");
+});
+
+it.each([
+  ["owner", "update owner revoked"],
+  ["retained backup", "package path changed"],
+  ["live parent", "package path changed"],
+] as const)("stops Windows package rename retries when the %s changes", async (change, refusal) => {
+  const liveRoot = path.join(root, "live", "openclaw");
+  const backupRoot = path.join(root, "backup");
+  const stage = path.join(root, "stage", "openclaw");
+  const activation = change === "live parent";
+  await writeFiles({
+    "live/openclaw/marker.txt": "candidate",
+    "backup/marker.txt": "original",
+    "stage/openclaw/marker.txt": "staged",
+  });
+  const wait = restoreRenameRetryHarness();
+  const rename = fs.rename.bind(fs);
+  const denied = activation ? stage : backupRoot;
+  let attempts = 0;
+  vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+    if (String(from) === denied && ++attempts === 1) {
+      throw errno("EPERM: package is in use", "EPERM");
+    }
+    return rename(from, to);
+  });
+  wait.mockImplementationOnce(async () => {
+    const replaced = activation ? path.dirname(liveRoot) : backupRoot;
+    if (change !== "owner") {
+      await rename(replaced, `${replaced}.retained`);
+      await fs.mkdir(replaced);
+    }
+  });
+  const revoked = () => change === "owner" && wait.mock.calls.length > 0;
+  const assertCurrent = assertOwner(revoked, errno("update owner revoked", "EPERM"));
+
+  await expect(
+    activation
+      ? activateStagedNpmPackageRoot(stage, path.join(root, "live", "next"), undefined, {
+          assertCaller: assertCurrent,
+          warnings: [],
+          platform: "win32",
+        })
+      : restoreNpmPackageRoot({
+          liveRoot,
+          backupRoot,
+          displacedRoot: path.join(root, "displaced"),
+          candidatePresent: true,
+          platform: "win32",
+          assertCurrent,
+        }),
+  ).rejects.toThrow(refusal);
+
+  expect(attempts).toBe(1);
+  // Nothing moves after the refusal; a changed backup still gets its candidate back.
+  const retained = change === "retained backup" ? `${backupRoot}.retained` : denied;
+  await expectFile(path.join(retained, "marker.txt"), activation ? "staged" : "original");
+  if (activation) {
+    await expectMissing(path.join(root, "live", "next"));
+  } else if (change === "owner") {
+    await expectMissing(liveRoot);
+  } else {
+    await expectFile(path.join(liveRoot, "marker.txt"), "candidate");
+    await expectMissing(path.join(root, "displaced"));
+  }
 });
 
 it.each(["copy", "cleanup"] as const)(

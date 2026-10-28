@@ -350,6 +350,45 @@ maintenance host. URL-encode special characters in credentials and paths.
 `sslmode=disable` disables TLS; reserve it for a deliberately local connection.
 Keep DSNs out of shell history, diagnostic captures, and logs.
 
+When PostgreSQL runs on the Gateway host, the server can accept connections only
+on its Unix socket (`listen_addresses = ''`). Put the socket directory in the
+DSN's `host` query parameter and disable TLS for it:
+
+```text
+postgresql://openclaw_runtime:<URL_ENCODED_PASSWORD>@localhost/openclaw?host=/path/to/socket-dir&sslmode=disable
+```
+
+PostgreSQL does not accept TLS on a Unix socket: keeping `sslmode=verify-full`
+or another TLS mode from a network DSN, or a `PGSSLMODE` environment variable,
+fails with "The server does not support SSL connections". Drop the certificate
+options and keep `sslmode=disable` in the DSN, which takes precedence over
+`PGSSLMODE`.
+
+The socket file belongs to the OS account that runs PostgreSQL, and
+`unix_socket_permissions` applies to that file, not to its directory. When
+PostgreSQL and the Gateway run as the same account, `unix_socket_permissions =
+0700` limits the socket to that account. When they run as different accounts,
+put both in a shared group, set `unix_socket_group` to it with
+`unix_socket_permissions = 0770`, and make the socket directory traversable by
+that group. Either way, authenticate the runtime role with a
+`local ... scram-sha-256` line in `pg_hba.conf`. A file SecretRef can read the
+DSN from a private file:
+
+```json5
+{
+  secrets: {
+    providers: {
+      pgdsn: { source: "file", path: "~/.openclaw/secrets/postgres-dsn", mode: "singleValue" },
+    },
+  },
+  database: {
+    postgres: {
+      connection: { source: "file", provider: "pgdsn", id: "value" },
+    },
+  },
+}
+```
+
 ### TLS and exec connection qualification
 
 For a private CA, install its certificate on every host that runs the Gateway or
@@ -569,8 +608,12 @@ Cold transcript references and file-artifact paths remain in place. Rebuildable
 memory indexes are omitted from the agent port; canonical memory origins,
 tombstones, and the embedding cache are retained. After publication releases
 port ownership, the command acquires fresh offline ownership and rebuilds each
-ported agent through the selected memory plugin. Unchanged cached chunks reuse
-their embeddings. Per-agent results appear in the command output and `--json`.
+ported agent through the selected memory plugin. Agents rebuild concurrently, up
+to four at a time, bounded by the host's CPU count and free memory; hosts with
+two or fewer CPUs or under 2 GiB of free memory rebuild one agent at a time.
+Unchanged cached chunks reuse their embeddings. Per-agent results appear in the
+command output and `--json`. The rebuild stays offline, so start the Gateway
+after the command finishes.
 
 A rebuild failure warns without failing the completed port and includes
 `openclaw memory index --agent <id>` to retry while the Gateway remains stopped.
@@ -855,8 +898,9 @@ backfills the generated sketches without building an HNSW index; ordinary writes
 maintain them automatically. Canonical embeddings, zero-vector eligibility and
 the result shape are unchanged, and backup/port operations rebuild the sketches.
 
-Scores and tokenization are engine-local. Expect different ordering from SQLite
-BM25, particularly for punctuation, compound words, and Unicode. Hybrid retrieval
+Scores are engine-local. Expect different ordering from SQLite BM25 and different
+Unicode normalization; punctuation runs are replaced by spaces before indexing and
+querying, so words inside dates, paths, and file names match as on SQLite. Hybrid retrieval
 keeps the existing text/vector weighting, not cross-engine score equivalence.
 Memory full-text rank uses unnormalized frequency ranking (`ts_rank`) and maps
 its rank `r` to `r / (r + 0.0027)` before the shared hybrid merge. This calibration

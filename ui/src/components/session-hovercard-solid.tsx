@@ -191,30 +191,6 @@ type SessionDisplayPullRequest = Omit<ControlUiSessionPullRequest, "state"> & {
   sourceAgentId?: string;
 };
 
-/** Presentation only: task results never become evidence that the current branch was published. */
-function displaySessionPullRequests(
-  snapshot: ControlUiSessionPullRequestSnapshot | undefined,
-): SessionDisplayPullRequest[] {
-  const requests = new Map<string, SessionDisplayPullRequest>();
-  for (const task of snapshot?.taskPullRequests ?? []) {
-    requests.set(task.url, {
-      owner: task.owner,
-      repo: task.repo,
-      number: task.number,
-      branch: task.branch,
-      url: task.url,
-      title: task.title ?? `${task.owner}/${task.repo}#${task.number}`,
-      ...task.pullRequest,
-      sourceSessionKey: task.sourceSessionKey,
-      sourceAgentId: task.sourceAgentId,
-    });
-  }
-  for (const request of snapshot?.pullRequests ?? []) {
-    requests.set(request.url, { ...requests.get(request.url), ...request });
-  }
-  return orderSessionPullRequests([...requests.values()]);
-}
-
 const MAX_VISIBLE_ATTRIBUTION_PARTICIPANTS = 4;
 type SessionHovercardAvatarAuth = { authTokens: readonly string[]; authReady: boolean };
 export type SessionHovercardInput = SessionHovercardContextInput & {
@@ -545,7 +521,28 @@ function PullRequestRow(props: { request: SessionDisplayPullRequest }) {
 
 function PullRequestDetails(props: { snapshot?: ControlUiSessionPullRequestSnapshot }) {
   const branch = () => props.snapshot?.branch;
-  const requests = createMemo(() => displaySessionPullRequests(props.snapshot));
+  const requests = createMemo((): SessionDisplayPullRequest[] => {
+    /** Presentation only: task results never become evidence that the current branch was published. */
+    const snapshot = props.snapshot;
+    const byUrl = new Map<string, SessionDisplayPullRequest>();
+    for (const task of snapshot?.taskPullRequests ?? []) {
+      byUrl.set(task.url, {
+        owner: task.owner,
+        repo: task.repo,
+        number: task.number,
+        branch: task.branch,
+        url: task.url,
+        title: task.title ?? `${task.owner}/${task.repo}#${task.number}`,
+        ...task.pullRequest,
+        sourceSessionKey: task.sourceSessionKey,
+        sourceAgentId: task.sourceAgentId,
+      });
+    }
+    for (const request of snapshot?.pullRequests ?? []) {
+      byUrl.set(request.url, { ...byUrl.get(request.url), ...request });
+    }
+    return orderSessionPullRequests([...byUrl.values()]);
+  });
   const count = createMemo(
     () =>
       props.snapshot?.pullRequestCount ??

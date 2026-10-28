@@ -39,11 +39,6 @@ import "../styles/sidebar-agent-roster.css";
 
 registerEnglishCatalog(registerAgentsHomeEnglish);
 type RosterHost = AppSidebarRenderHost & SessionListHost;
-type RosterProps = {
-  host: RosterHost;
-  active: boolean;
-  sections: SidebarVisibleSections["sections"];
-};
 type AgentMenuCard = { id: string; name: string };
 type AgentContextMenu = { id: string; x: number; y: number; anchor: HTMLElement | null };
 
@@ -65,7 +60,11 @@ function cachedRosterCards(host: RosterHost) {
   }));
 }
 
-export function SidebarAgentRoster(props: RosterProps) {
+export function SidebarAgentRoster(props: {
+  host: RosterHost;
+  active: boolean;
+  sections: SidebarVisibleSections["sections"];
+}) {
   const context = useApplication();
   const hostProjection = createMemo(() => projectOwner(props.host, (host) => host));
   const presented = () => props.active;

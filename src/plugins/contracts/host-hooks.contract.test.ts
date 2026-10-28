@@ -1,4 +1,5 @@
 import path from "node:path";
+import { setImmediate as waitForPluginEventHandlers } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import {
   createPluginRegistryFixture,
@@ -74,12 +75,6 @@ import {
 import type { OpenClawPluginApi } from "../types.js";
 import { registerHostHookFixture } from "./host-hook-fixture.js";
 import { hostHookUiProjection } from "./test-helpers/host-hook-ui-projection.js";
-
-async function waitForPluginEventHandlers(): Promise<void> {
-  await new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
-}
 
 function createHostHookFixtureRegistry() {
   return createPluginRegistryFixture({
@@ -169,6 +164,19 @@ function makePolicy(
   return { id, description: "Fixture policy", evaluate };
 }
 
+function sessionExtension(
+  overrides: Partial<Parameters<OpenClawPluginApi["registerSessionExtension"]>[0]> = {},
+) {
+  return { namespace: "workflow", description: "Fixture workflow state", ...overrides };
+}
+
+function runPolicy(
+  event: Parameters<typeof runTrustedToolPolicies>[0] = { toolName: "exec", params: {} },
+  options?: Parameters<typeof runTrustedToolPolicies>[2],
+) {
+  return runTrustedToolPolicies(event, { toolName: event.toolName }, options);
+}
+
 function requireFirstCommandRegistration(
   registry: ReturnType<typeof createPluginRegistryFixture>["registry"]["registry"],
 ) {
@@ -195,17 +203,6 @@ async function seedSession(storePath: string, fields: Partial<SessionEntry> = {}
       ...fields,
     },
   );
-}
-
-function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
-  if (!record || typeof record !== "object") {
-    throw new Error("Expected record");
-  }
-  const actual = record as Record<string, unknown>;
-  for (const [key, value] of Object.entries(expected)) {
-    expect(actual[key]).toEqual(value);
-  }
-  return actual;
 }
 
 type HostHookStateFixture = {
@@ -464,12 +461,7 @@ describe("host-hook fixture plugin contract", () => {
     ]);
     expect(diagnosticSummaries(registry.registry.diagnostics)).toEqual([]);
 
-    const result = await runTrustedToolPolicies(
-      { toolName: "exec", params: {} },
-      { toolName: "exec" },
-    );
-
-    expect(result?.blockReason).toBe("bundled policy");
+    expect((await runPolicy())?.blockReason).toBe("bundled policy");
   });
 
   it.each([
@@ -544,15 +536,12 @@ describe("host-hook fixture plugin contract", () => {
 
     using matcherCopies = vi.spyOn(Array, "from");
     await expect(
-      runTrustedToolPolicies(
-        { toolName: "web_search", params: {} },
-        { toolName: "web_search" },
-        { registry },
-      ),
+      runPolicy({ toolName: "web_search", params: {} }, { registry }),
     ).resolves.toBeUndefined();
-    await expect(
-      runTrustedToolPolicies({ toolName: "exec", params: {} }, { toolName: "exec" }, { registry }),
-    ).resolves.toMatchObject({ block: true, blockReason: "covered" });
+    await expect(runPolicy(undefined, { registry })).resolves.toMatchObject({
+      block: true,
+      blockReason: "covered",
+    });
     expect(evaluate).toHaveBeenCalledOnce();
     expect(
       matcherCopies.mock.calls.filter(([value]) => value instanceof Set && value.has("exec")),
@@ -608,7 +597,7 @@ describe("host-hook fixture plugin contract", () => {
     }
 
     const toolName = failure === "matcher" ? "web_search" : "exec";
-    await expect(runTrustedToolPolicies({ toolName, params: {} }, { toolName })).resolves.toEqual({
+    await expect(runPolicy({ toolName, params: {} })).resolves.toEqual({
       block: true,
       blockReason: `blocked by ${failure === "policy" ? "fuzzplugin" : "fuzzpolicy"}: ${reason}`,
     });
@@ -650,9 +639,7 @@ describe("host-hook fixture plugin contract", () => {
     );
     setActivePluginRegistry(registry);
 
-    await expect(
-      runTrustedToolPolicies({ toolName: "exec", params: {} }, { toolName: "exec" }),
-    ).resolves.toEqual({
+    await expect(runPolicy()).resolves.toEqual({
       block: true,
       blockReason: "blocked by later policy",
     });
@@ -678,14 +665,11 @@ describe("host-hook fixture plugin contract", () => {
     setActivePluginRegistry(registry);
 
     await expect(
-      runTrustedToolPolicies(
-        {
-          toolName: "apply_patch",
-          params: { input: "*** Update File: old.ts" },
-          derivedPaths: ["old.ts"],
-        },
-        { toolName: "apply_patch" },
-      ),
+      runPolicy({
+        toolName: "apply_patch",
+        params: { input: "*** Update File: old.ts" },
+        derivedPaths: ["old.ts"],
+      }),
     ).resolves.toBeUndefined();
     expect(mutationRejected).toBe(true);
     expect(seenDerivedPaths).toEqual([["old.ts"]]);
@@ -721,16 +705,13 @@ describe("host-hook fixture plugin contract", () => {
       setActivePluginRegistry(registry);
 
       await expect(
-        runTrustedToolPolicies(
+        runPolicy(
           {
             toolName: "apply_patch",
             params: originalParams,
             derivedPaths: ["old.ts"],
           },
-          { toolName: "apply_patch" },
-          {
-            deriveEvent,
-          },
+          { deriveEvent },
         ),
       ).resolves.toEqual({ params: { input } });
       expect(seenEvents).toEqual([
@@ -743,18 +724,23 @@ describe("host-hook fixture plugin contract", () => {
   );
 
   it("validates plugin-owned JSON values as plain JSON-compatible data", () => {
-    expect(
-      isPluginJsonValue({
-        state: "waiting",
-        attempts: 1,
-        nested: [{ ok: true }, null],
-      }),
-    ).toBe(true);
+    const valid = { state: "waiting", attempts: 1, nested: [{ ok: true }, null] };
+    expect(isPluginJsonValue(valid)).toBe(true);
     expect(isPluginJsonValue({ value: Number.NaN })).toBe(false);
     expect(isPluginJsonValue({ value: undefined })).toBe(false);
     expect(isPluginJsonValue(new Date(0))).toBe(false);
     expect(isPluginJsonValue(new Map([["state", "waiting"]]))).toBe(false);
     expect(isPluginJsonValue({ value: "x".repeat(70 * 1024) })).toBe(false);
+    let reads = 0;
+    const value = Object.create(null);
+    for (let index = 0; index < 513; index++) {
+      Object.defineProperty(value, `field${index}`, {
+        enumerable: true,
+        get: () => ++reads,
+      });
+    }
+    expect(isPluginJsonValue(value)).toBe(false);
+    expect(reads).toBe(0);
   });
 
   it("rejects non-JSON descriptor schemas before projecting Control UI descriptors", () => {
@@ -787,25 +773,13 @@ describe("host-hook fixture plugin contract", () => {
       ["promise", () => Promise.reject(new Error("projectors must be synchronous"))],
     ] as const) {
       registerInto({ registry, config }, { id }, (api) => {
-        Reflect.apply(api.registerSessionExtension, api, [
-          { namespace: "workflow", description: "Invalid projection", project },
-        ]);
+        Reflect.apply(api.registerSessionExtension, api, [{ ...sessionExtension(), project }]);
       });
     }
-    registerInto(
-      { registry, config },
-      {
-        id: "projector-fixture",
-        name: "Projector Fixture",
-      },
-      (api) => {
-        api.registerSessionExtension({
-          namespace: "raw",
-          description: "State without a custom projector",
-        });
-        api.registerSessionExtension({
-          namespace: "workflow",
-          description: "Projected workflow state",
+    registerInto({ registry, config }, { id: "projector-fixture" }, (api) => {
+      api.registerSessionExtension(sessionExtension({ namespace: "raw" }));
+      api.registerSessionExtension(
+        sessionExtension({
           project: ({ state }) => {
             if (!state || typeof state !== "object" || Array.isArray(state)) {
               return undefined;
@@ -813,9 +787,9 @@ describe("host-hook fixture plugin contract", () => {
             const workflowState = (state as { state?: unknown }).state;
             return typeof workflowState === "string" ? { state: workflowState } : undefined;
           },
-        });
-      },
-    );
+        }),
+      );
+    });
     setActivePluginRegistry(registry.registry);
 
     const entry: SessionEntry = {
@@ -867,13 +841,13 @@ describe("host-hook fixture plugin contract", () => {
           ...fixture,
           record,
           register(api) {
-            api.registerSessionExtension({
-              namespace: "workflow",
-              description: "Scoped workflow state",
-              sessionEntrySlotKey: `${label}Projection`,
-              sessionEntrySlotSchema: { type: "object" },
-              project: ({ state }) => ({ registry: label, state: state ?? null }),
-            });
+            api.registerSessionExtension(
+              sessionExtension({
+                sessionEntrySlotKey: `${label}Projection`,
+                sessionEntrySlotSchema: { type: "object" },
+                project: ({ state }) => ({ registry: label, state: state ?? null }),
+              }),
+            );
           },
         });
         return { ...fixture, instance: expectDefined(getPluginInstance(record), "plugin owner") };
@@ -993,11 +967,7 @@ describe("host-hook fixture plugin contract", () => {
     },
   ])("rejects invalid session callbacks: $message", ({ callbacks, message }) => {
     const { registry } = registerFixture("bad-session-extension-fixture", (api) => {
-      api.registerSessionExtension({
-        namespace: "workflow",
-        description: "Invalid workflow callbacks",
-        ...callbacks,
-      });
+      api.registerSessionExtension(sessionExtension(callbacks));
     });
 
     expect(registry.registry.sessionExtensions).toHaveLength(0);
@@ -1012,26 +982,14 @@ describe("host-hook fixture plugin contract", () => {
         id: "bad-cleanup",
         cleanup: "not-a-function" as never,
       });
-      api.registerAgentEventSubscription({
-        id: "events",
-        streams: ["tool"],
-        handle: () => undefined,
-      });
-      api.registerAgentEventSubscription({
-        id: "events",
-        streams: ["error"],
-        handle: () => undefined,
-      });
-      api.registerAgentEventSubscription({
-        id: "missing-handler",
-        streams: ["tool"],
-        handle: "not-a-function" as never,
-      });
-      api.registerAgentEventSubscription({
-        id: "bad-streams",
-        streams: { length: 1, 0: "tool" } as never,
-        handle: () => undefined,
-      });
+      for (const subscription of [
+        { id: "events", streams: ["tool"] },
+        { id: "events", streams: ["error"] },
+        { id: "missing-handler", streams: ["tool"], handle: "not-a-function" as never },
+        { id: "bad-streams", streams: { length: 1, 0: "tool" } as never },
+      ]) {
+        api.registerAgentEventSubscription({ handle: () => undefined, ...subscription });
+      }
       api.registerSessionSchedulerJob({
         id: "bad-scheduler-cleanup",
         sessionKey: "agent:main:main",
@@ -1085,10 +1043,7 @@ describe("host-hook fixture plugin contract", () => {
 
   it("requires explicit unset to remove plugin session extension state", async () => {
     const { registry } = registerFixture("patch-fixture", (api) => {
-      api.registerSessionExtension({
-        namespace: "workflow",
-        description: "Patch workflow state",
-      });
+      api.registerSessionExtension(sessionExtension());
     });
     setActivePluginRegistry(registry.registry);
 
@@ -1117,12 +1072,7 @@ describe("host-hook fixture plugin contract", () => {
       });
       expect(readWorkflow()).toEqual({ state: "waiting" });
 
-      await expect(
-        patch({
-          value: { state: "ambiguous" },
-          unset: true,
-        }),
-      ).resolves.toEqual({
+      await expect(patch({ value: { state: "ambiguous" }, unset: true })).resolves.toEqual({
         ok: false,
         error: "plugin session extension cannot specify both unset and value",
       });
@@ -1218,19 +1168,10 @@ describe("host-hook fixture plugin contract", () => {
   it("skips malformed persisted next-turn injection records during prompt assembly", () => {
     const queuedContext = buildPluginAgentTurnPrepareContext({
       queuedInjections: [
+        { ...injection("approval-plugin", "bad-text", "", "prepend_context"), text: 123 } as never,
         {
-          id: "bad-text",
-          pluginId: "approval-plugin",
-          text: 123,
-          placement: "prepend_context",
-          createdAt: 1,
-        } as never,
-        {
-          id: "bad-placement",
-          pluginId: "approval-plugin",
-          text: "wrong placement",
+          ...injection("approval-plugin", "bad-placement", "wrong placement"),
           placement: "middle_context",
-          createdAt: 1,
         } as never,
         injection("approval-plugin", "valid", "  approval workflow resumed  "),
       ],
@@ -1301,20 +1242,10 @@ describe("host-hook fixture plugin contract", () => {
               injection("active-injector", "active", "active prompt contribution"),
             ],
             "disabled-injector": [
-              injection(
-                "disabled-injector",
-                "stale",
-                "stale prompt contribution",
-                "prepend_context",
-              ),
+              injection("disabled-injector", "stale", "stale", "prepend_context"),
             ],
             "policy-blocked-injector": [
-              injection(
-                "policy-blocked-injector",
-                "policy-blocked",
-                "policy blocked prompt contribution",
-                "prepend_context",
-              ),
+              injection("policy-blocked-injector", "blocked", "blocked", "prepend_context"),
             ],
           },
         });
@@ -1324,7 +1255,7 @@ describe("host-hook fixture plugin contract", () => {
           sessionKey: "agent:main:main",
         });
         expect(drained).toHaveLength(1);
-        expectRecordFields(drained[0], {
+        expect(drained[0]).toMatchObject({
           id: "active",
           pluginId: "active-injector",
           text: "active prompt contribution",
@@ -1334,11 +1265,7 @@ describe("host-hook fixture plugin contract", () => {
       (storePath) => ({
         session: { store: storePath },
         plugins: {
-          entries: {
-            "policy-blocked-injector": {
-              hooks: { allowPromptInjection: false },
-            },
-          },
+          entries: { "policy-blocked-injector": { hooks: { allowPromptInjection: false } } },
         },
       }),
     );
@@ -1361,10 +1288,11 @@ describe("host-hook fixture plugin contract", () => {
         cfg: tempConfig,
         sessionKey: "agent:main:main",
       });
-      expect(drained).toHaveLength(3);
-      expectRecordFields(drained[0], { id: "a1", text: "first" });
-      expectRecordFields(drained[1], { id: "b1", text: "second" });
-      expectRecordFields(drained[2], { id: "a2", text: "third" });
+      expect(drained.map(({ id, text }) => ({ id, text }))).toEqual([
+        { id: "a1", text: "first" },
+        { id: "b1", text: "second" },
+        { id: "a2", text: "third" },
+      ]);
     });
   });
 
@@ -1659,7 +1587,7 @@ describe("host-hook fixture plugin contract", () => {
       });
     const cleanupResult = await runCleanup();
     expect(cleanupResult.failures).toHaveLength(1);
-    expectRecordFields(cleanupResult.failures[0], {
+    expect(cleanupResult.failures[0]).toMatchObject({
       pluginId: "cleanup-failure-fixture",
       hookId: "scheduler:retryable-job",
     });
@@ -1851,7 +1779,7 @@ describe("host-hook fixture plugin contract", () => {
     expect(schedulerJobs).toHaveLength(1);
     const schedulerJob = schedulerJobs[0];
     expect(schedulerJob?.pluginId).toBe("snapshot-fixture");
-    expectRecordFields(schedulerJob?.job, job);
+    expect(schedulerJob?.job).toMatchObject(job);
     expect(listPluginSessionSchedulerJobs("snapshot-fixture")).toStrictEqual([]);
   });
 });

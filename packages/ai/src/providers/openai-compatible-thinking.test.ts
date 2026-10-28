@@ -111,6 +111,23 @@ const mappingCases: ReasoningCase[] = [
 ];
 
 const adapterCases: ReasoningCase[] = [
+  mapped("compat off mapping without an effort list", "off", "none", {
+    compat: { reasoningEffortMap: { off: "none" } },
+  }),
+  mapped("model off mapping without an effort list", "off", "none", {
+    thinkingLevelMap: { off: "none" },
+  }),
+  mapped("advertised ladder rejects a mapped disable", "off", undefined, {
+    compat: efforts(["low", "high"], { off: "none" }),
+  }),
+  mapped("proxy model name cannot declare a disable control", "off", undefined, {
+    modelId: "gpt-5.4",
+  }),
+  mapped("unknown off contract omits scalar effort", "off", undefined),
+  mapped("unknown native none omits scalar effort", "none", undefined),
+  mapped("off without disable support", "off", undefined, {
+    compat: efforts(["low", "medium", "high"]),
+  }),
   mapped("known model API max default", "max", "xhigh", {
     modelId: "gpt-5.6-sol",
     expectedResponses: "max",

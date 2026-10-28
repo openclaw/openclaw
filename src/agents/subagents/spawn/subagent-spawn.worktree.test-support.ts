@@ -165,6 +165,7 @@ export function registerManagedWorktreeSpawnCases(
           expect(subagentRuns.size).toBe(0);
           expect(runEmbeddedAgent).not.toHaveBeenCalled();
         }
+        const invocation = new AbortController();
         spawn = createBoundSpawnInvocation(bound, {
           visible: false,
           context: "isolated",
@@ -176,12 +177,14 @@ export function registerManagedWorktreeSpawnCases(
           ...(cleanup === "keep"
             ? { completionTarget: "parent" }
             : { expectsCompletionMessage: false }),
-        })();
+        })("spawn-managed-worktree", invocation.signal);
         const spawned = await withinTest(spawn, signal);
         expect(spawned.details, JSON.stringify(spawned)).toMatchObject({
           status: "accepted",
           context: "isolated",
         });
+        // Accepted workspace preparation belongs to the child, even after the invocation ends.
+        invocation.abort(new Error("Spawn invocation ended"));
         const details = expectDefined(
           normalizeAcceptedSessionSpawnResult(spawned),
           "accepted spawn",

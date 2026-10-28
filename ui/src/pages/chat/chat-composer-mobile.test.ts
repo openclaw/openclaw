@@ -24,19 +24,33 @@ beforeEach(() => {
 });
 afterEach(() => resetComposerFixture());
 
-it("keeps the draft and caret through mobile editing, own controls and outside focus", async () => {
+function mount(overrides: Parameters<typeof renderComposerFixture>[0] = {}) {
+  const fixture = renderComposerFixture({ mobileComposer: true, ...overrides });
+  document.body.append(fixture.container);
+  const textarea = fixture.container.querySelector<HTMLTextAreaElement>("textarea")!;
+  const focus = (target: HTMLElement = textarea) => {
+    target.focus();
+    flush();
+  };
+  const expectDraft = (value: string) => {
+    expect(fixture.container.querySelector("textarea")).toBe(textarea);
+    expect(textarea.value).toBe(value);
+    expect(document.activeElement).toBe(textarea);
+    expect([textarea.selectionStart, textarea.selectionEnd]).toEqual([2, 7]);
+  };
+  return { ...fixture, textarea, focus, expectDraft };
+}
+
+it("keeps the draft and caret through controls, outside focus, and keyboard recovery", async () => {
   const onComposerEditingChange = vi.fn();
-  const { container, props } = renderComposerFixture({
-    mobileComposer: true,
+  const { container, props, textarea, focus, expectDraft } = mount({
+    mobileKeyboardVisible: true,
     draft: "A draft kept across focus changes",
     queue: [{ id: "queued", text: "Next message", createdAt: 1, sendState: "waiting-idle" }],
     composerControls: createComposerControlsFixture(),
     onComposerEditingChange,
   });
-  document.body.append(container);
   await waitForSolid(() => expect(container.querySelector(".chat-queue__remove")).not.toBeNull());
-  const textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
-  const queueControl = container.querySelector<HTMLButtonElement>(".chat-queue__remove")!;
   const outside = document.createElement("button");
   outside.textContent = "Outside composer";
   document.body.append(outside);
@@ -48,54 +62,20 @@ it("keeps the draft and caret through mobile editing, own controls and outside f
   textarea.setSelectionRange(2, 7);
   flush();
   expect(onComposerEditingChange).toHaveBeenLastCalledWith(true);
-  container.querySelector<HTMLButtonElement>(".chat-composer-model-control")!.focus();
-  flush();
-  expect(onComposerEditingChange).toHaveBeenLastCalledWith(true);
-  queueControl.focus();
-  flush();
-  expect(onComposerEditingChange).toHaveBeenLastCalledWith(true);
-  outside.focus();
-  flush();
+  for (const selector of [".chat-composer-model-control", ".chat-queue__remove"]) {
+    focus(container.querySelector<HTMLButtonElement>(selector)!);
+    expect(onComposerEditingChange).toHaveBeenLastCalledWith(true);
+  }
+  focus(outside);
   expect(onComposerEditingChange).toHaveBeenLastCalledWith(false);
   expect(textarea.value).toBe(props.draft);
   expect([textarea.selectionStart, textarea.selectionEnd]).toEqual([2, 7]);
   expect(container.querySelector("textarea")).toBe(textarea);
   expect(props.onSend).not.toHaveBeenCalled();
-});
-
-it("does not send when expansion moves an action beneath the first editor tap", () => {
-  const { container, props } = renderComposerFixture({ mobileComposer: true, draft: "Keep this" });
-  document.body.append(container);
-  const textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
-  textarea.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
-  textarea.focus();
-  flush();
-  container
-    .querySelector<HTMLButtonElement>(".chat-send-btn--send")!
-    .dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, detail: 1 }));
-  expect(props.onSend).not.toHaveBeenCalled();
-  expect(textarea.value).toBe("Keep this");
-});
-
-it("accepts observed keyboard recovery even when the editor retains focus", () => {
-  const onComposerEditingChange = vi.fn();
-  const { container, props } = renderComposerFixture({
-    mobileComposer: true,
-    mobileKeyboardVisible: true,
-    draft: "Retained draft",
-    onComposerEditingChange,
-  });
-  document.body.append(container);
-  const textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
-  textarea.focus();
-  flush();
-  expect(onComposerEditingChange).toHaveBeenLastCalledWith(true);
-  textarea.setSelectionRange(2, 7);
+  focus();
   renderComposerInto(container, { ...props, mobileKeyboardVisible: false });
   expect(onComposerEditingChange).toHaveBeenLastCalledWith(false);
-  expect(document.activeElement).toBe(textarea);
-  expect(textarea.value).toBe("Retained draft");
-
+  expectDraft(props.draft);
   onComposerEditingChange.mockClear();
   textarea.dispatchEvent(
     new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerType: "touch" }),
@@ -115,18 +95,25 @@ it("accepts observed keyboard recovery even when the editor retains focus", () =
     expect(event.defaultPrevented).toBe(prevented);
   }
   expect(onComposerEditingChange.mock.calls.some(([editing]) => !editing)).toBe(false);
-  expect(document.activeElement).toBe(textarea);
-  expect([textarea.selectionStart, textarea.selectionEnd]).toEqual([2, 7]);
-  expect(textarea.value).toBe("Retained draft");
+  expectDraft(props.draft);
   expect(props.onSend).not.toHaveBeenCalled();
+});
+
+it("does not send when expansion moves an action beneath the first editor tap", () => {
+  const { container, props, textarea, focus } = mount({ draft: "Keep this" });
+  textarea.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+  focus();
+  container
+    .querySelector<HTMLButtonElement>(".chat-send-btn--send")!
+    .dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, detail: 1 }));
+  expect(props.onSend).not.toHaveBeenCalled();
+  expect(textarea.value).toBe("Keep this");
 });
 
 it("does not activate mobile editing in a desktop composer", () => {
   const onComposerEditingChange = vi.fn();
-  const { container } = renderComposerFixture({ onComposerEditingChange });
-  document.body.append(container);
-  container.querySelector<HTMLTextAreaElement>("textarea")!.focus();
-  flush();
+  const { container, focus } = mount({ mobileComposer: false, onComposerEditingChange });
+  focus();
   expect(onComposerEditingChange).not.toHaveBeenCalledWith(true);
   expect(container.querySelector('[data-mobile-composer="true"]')).toBeNull();
 });
@@ -134,28 +121,19 @@ it("does not activate mobile editing in a desktop composer", () => {
 it("mounts only visible activity pills without disturbing the mobile draft or focus", async () => {
   const empty: ChatActivityPillsProps = { presented: true, approvalPending: true };
   const onActivityPillsLayout = vi.fn();
-  const { container, props } = renderComposerFixture({
-    mobileComposer: true,
+  const { container, props, textarea, expectDraft } = mount({
     mobileActivityPills: empty,
     onActivityPillsLayout,
   });
-  document.body.append(container);
-  const textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
   textarea.focus();
   textarea.value = "Unsaved mobile draft";
   textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
   textarea.setSelectionRange(2, 7);
-  const expectDraft = () => {
-    expect(container.querySelector("textarea")).toBe(textarea);
-    expect(textarea.value).toBe("Unsaved mobile draft");
-    expect(document.activeElement).toBe(textarea);
-    expect([textarea.selectionStart, textarea.selectionEnd]).toEqual([2, 7]);
-  };
   await vi.dynamicImportSettled();
   flush();
   expect(container.querySelector(".chat-activity-pills")).toBeNull();
   expect(onActivityPillsLayout).not.toHaveBeenCalled();
-  expectDraft();
+  expectDraft("Unsaved mobile draft");
 
   const goal: NonNullable<ChatActivityPillsProps["goal"]> = {
     value: createSessionGoalFixture("mobile-goal", "Verify the release", { updatedAt: 2 }),
@@ -169,13 +147,10 @@ it("mounts only visible activity pills without disturbing the mobile draft or fo
   );
   const strip = container.querySelector<HTMLElement>(".chat-activity-pills")!;
   expect(strip.hidden).toBe(false);
-  expectDraft();
+  expectDraft("Unsaved mobile draft");
 
-  renderComposerInto(container, {
-    ...props,
-    mobileActivityPills: empty,
-  });
+  renderComposerInto(container, { ...props, mobileActivityPills: empty });
   expect(container.querySelector(".chat-activity-pills")).toBeNull();
   expect(onActivityPillsLayout).toHaveBeenLastCalledWith(expect.objectContaining({ strip }), true);
-  expectDraft();
+  expectDraft("Unsaved mobile draft");
 });

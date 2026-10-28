@@ -138,3 +138,58 @@ globalThis.openclawStandaloneLoadJitiFactory = () => loadStandalonePluginRuntime
 }`,
   };
 }
+
+/** Transfer compiled exports to interpreted plugins without reading virtual source files. */
+export function createStandaloneExternalModuleBootstrap({ source = false } = {}) {
+  return `const imageNamespace = ${source ? JSON.stringify("openclaw-image") : "undefined"};
+globalThis.__openclawStandaloneExternalModulePath = (filename) => {
+  // The compiled require adapter already passes image paths to the native loader.
+  if (filename.startsWith("/$bunfs/")) return undefined;
+  const entry = embedded(filename);
+  return entry ? (imageNamespace && !commonJsEntries.has(entry) ? imageNamespace + ":" + entry : entry) : undefined;
+};
+globalThis.__openclawStandaloneExternalModuleResolution = (filename) => {
+  const entry = embedded(filename);
+  return { path: entry ?? filename, namespace: imageNamespace && entry && !commonJsEntries.has(entry) ? imageNamespace : "file" };
+};
+${
+  source
+    ? `let requireImageModule;
+Bun.plugin({ name: "openclaw-image-exports", setup(build) {
+  build.onLoad({ filter: /.*/, namespace: imageNamespace }, ({ path: filename }) => {
+    requireImageModule ??= globalThis.__openclawStandaloneCreateRequire(createRequire, path.join(root, "package.json"));
+    // Passing require's interop marker back to the loader unwraps only the default.
+    const { __esModule: _interop, ...exports } = requireImageModule(filename);
+    return { exports, loader: "object" };
+  });
+}});`
+    : ""
+}`;
+}
+
+/** Route disk imports to their embedded module without changing the compiled loader. */
+export function createStandaloneModuleResolverBootstrap() {
+  return `let resolving = false;
+if (isMainThread) Bun.plugin({ name: "openclaw-embedded-modules", setup(build) {
+  // Bun checks the filter against the compiled entry before invoking callbacks.
+  const filter = new RegExp("^(?!" + RegExp.escape(Bun.main) + "(?![\\\\s\\\\S]))");
+  build.onResolve({ filter }, ({path: specifier, importer, kind}) => {
+    // Re-entering the disk bridge while requiring an image exposes partial exports.
+    if (specifier.startsWith("/$bunfs/")) return;
+    if (kind === "require-resolve" || resolving || specifier.startsWith("node:") || specifier.startsWith("bun:")) return;
+    let target;
+    try {
+      resolving = true;
+      target = globalThis.__openclawStandaloneNativeResolve(importer || path.join(root, "openclaw.mjs"), specifier)
+        ?? (specifier.startsWith("file:") ? fileURLToPath(specifier)
+        : path.isAbsolute(specifier) ? specifier
+        : (() => {
+          try { return Bun.resolveSync(specifier, importer ? path.dirname(importer) : root); }
+          catch { return Bun.resolveSync(specifier, root); }
+        })());
+    } catch { return; } finally { resolving = false; }
+    const entry = embedded(target);
+    if (entry) return globalThis.__openclawStandaloneExternalModuleResolution(entry);
+  });
+}});`;
+}

@@ -18,6 +18,12 @@ const row = (key: string, fields: Partial<GatewaySessionRow> = {}): GatewaySessi
   ...fields,
 });
 const reply = (text: string, timestamp: number) => ({ text, timestamp });
+const previewRow = (
+  key: string,
+  updatedAt: number,
+  lastMessagePreview: string,
+  fields: Partial<GatewaySessionRow> = {},
+) => row(key, { updatedAt, lastMessagePreview, ...fields });
 
 describe("agent roster activity", () => {
   it.each([
@@ -29,13 +35,12 @@ describe("agent roster activity", () => {
     "keeps internal assistant output out of the preview: $key",
     (internal) => {
       const agents = roster(["main"]);
-      const internalRow: GatewaySessionRow = {
-        kind: "direct",
+      const internalRow = row(internal.key, {
         updatedAt: 40,
         hasActiveRun: true,
         lastAssistantMessage: { text: '{"title":"Internal recap"}', timestamp: 30 },
         ...internal,
-      };
+      });
       const cards = agentRosterCards(agents, [
         row("agent:main:main", { lastAssistantMessage: reply("Earlier reply", 10) }),
         row("agent:main:dashboard:delegated-work", {
@@ -44,7 +49,6 @@ describe("agent roster activity", () => {
         }),
         internalRow,
       ]);
-
       expect(cards[0]).toMatchObject({
         assistantPreview: "The validation is running.",
         activeNow: true,
@@ -56,24 +60,17 @@ describe("agent roster activity", () => {
 
   it("selects the latest assistant reply across sessions without using user activity", () => {
     const cards = agentRosterCards(roster(["main", "unanswered"]), [
-      row("agent:main:main", {
-        updatedAt: 100,
-        lastMessagePreview: "New user question",
+      previewRow("agent:main:main", 100, "New user question", {
         lastAssistantMessage: reply("Earlier main reply", 10),
       }),
-      row("agent:main:work", {
-        updatedAt: 30,
-        lastMessagePreview: "Another user question",
+      previewRow("agent:main:work", 30, "Another user question", {
         lastAssistantMessage: reply("I have set up the template.", 20),
       }),
       row("agent:main:tied", {
         updatedAt: 50,
         lastAssistantMessage: reply("Tied reply", 20),
       }),
-      row("agent:unanswered:main", {
-        updatedAt: 200,
-        lastMessagePreview: "Only a user message",
-      }),
+      previewRow("agent:unanswered:main", 200, "Only a user message"),
     ]);
     expect(cards.map((card) => card.assistantPreview)).toEqual([
       "I have set up the template.",
@@ -83,85 +80,51 @@ describe("agent roster activity", () => {
   });
 
   it("preserves row ownership, recency ties, and canonical main precedence", () => {
-    const identities: string[] = [];
     const rows: GatewaySessionRow[] = [
       row("agent:alpha:alias", { isMain: true, lastMessagePreview: "Alias" }),
       row("agent::ALPHA:task", { agentId: "beta", updatedAt: 9, unread: true }),
-      row("foreign-key", { agentId: "beta", updatedAt: 7, lastMessagePreview: "First beta" }),
-      row("agent:beta:second", { updatedAt: 7, lastMessagePreview: "Tied beta" }),
-      row("agent:alpha:main", { updatedAt: 1, lastMessagePreview: "Canonical" }),
+      previewRow("foreign-key", 7, "First beta", { agentId: "beta" }),
+      previewRow("agent:beta:second", 7, "Tied beta"),
+      previewRow("agent:alpha:team", 1, "Canonical"),
       row("unscoped", { updatedAt: 10, hasActiveRun: true }),
       row("agent:system:main", { updatedAt: 99, hasActiveRun: true }),
     ];
     const before = structuredClone(rows);
     const cards = agentRosterCards(
-      roster(["beta", "system", "alpha", "empty"], { defaultId: "alpha" }),
+      roster(["beta", "system", "alpha", "empty"], { defaultId: "alpha", mainKey: "team" }),
       rows,
-      (id) => {
-        identities.push(id);
-        return null;
-      },
+      (id) => (id === "alpha" ? { agentId: id, name: "Alpha", emoji: "🔥", avatar: "" } : null),
     );
 
     expect(cards).toMatchObject([
       { id: "beta", lastActiveAt: 7, preview: "First beta", activeNow: false },
-      { id: "alpha", lastActiveAt: 10, preview: "Canonical", activeNow: true },
+      {
+        id: "alpha",
+        name: "Alpha",
+        textAvatar: "🔥",
+        mainKey: "agent:alpha:team",
+        lastActiveAt: 10,
+        preview: "Canonical",
+        activeNow: true,
+      },
       { id: "empty", lastActiveAt: 0, preview: undefined, activeNow: false },
     ]);
-    expect(identities).toEqual(["beta", "alpha", "empty"]);
     expect(rows).toEqual(before);
   });
 
   it("uses the canonical global main stream rather than a synthesized agent key", () => {
     const cards = agentRosterCards(roster(["main"], { scope: "global" }), [
-      { key: "global", kind: "global", updatedAt: 1, lastMessagePreview: "Main stream" },
-      row("agent:main:other", {
-        updatedAt: 2,
-        lastMessagePreview: "Other conversation",
-      }),
+      previewRow("global", 1, "Main stream", { kind: "global" }),
+      previewRow("agent:main:other", 2, "Other conversation"),
     ]);
     expect(cards[0]).toMatchObject({ mainKey: "global", preview: "Main stream" });
-  });
-
-  it("aggregates work across sessions while keeping the main preview and identity", () => {
-    const rows: GatewaySessionRow[] = [
-      row("agent:harbor:other", { updatedAt: 9, lastMessagePreview: "Recent fallback" }),
-      row("agent:ember:team", { updatedAt: 1, lastMessagePreview: "Main summary" }),
-      row("agent:ember:work", {
-        updatedAt: 4,
-        hasActiveRun: true,
-        lastMessagePreview: "Side task",
-      }),
-      row("foreign-key", { agentId: "ember", updatedAt: 6 }),
-    ];
-    const cards = agentRosterCards(
-      roster(["harbor", "ember", "empty", "system"], { mainKey: "team" }),
-      rows,
-      (id) => (id === "ember" ? { agentId: id, name: "Ember", emoji: "🔥", avatar: "" } : null),
-    );
-    expect(cards).toMatchObject([
-      { id: "harbor", activeNow: false, lastActiveAt: 9, preview: "Recent fallback" },
-      {
-        id: "ember",
-        name: "Ember",
-        textAvatar: "🔥",
-        activeNow: true,
-        lastActiveAt: 6,
-        preview: "Main summary",
-        mainKey: "agent:ember:team",
-      },
-      { id: "empty", activeNow: false, lastActiveAt: 0 },
-    ]);
   });
 
   it("honors terminal run state and uses the main flag when its canonical key is absent", () => {
     const cards = agentRosterCards(roster(["alpha", "beta"], { defaultId: "beta" }), [
       row("agent:alpha:old", { updatedAt: 2, hasActiveRun: true, status: "done" }),
-      row("agent:beta:main-alias", {
-        isMain: true,
-        lastMessagePreview: "Flagged main",
-      }),
-      row("agent:beta:recent", { updatedAt: 2, lastMessagePreview: "Other" }),
+      row("agent:beta:main-alias", { isMain: true, lastMessagePreview: "Flagged main" }),
+      previewRow("agent:beta:recent", 2, "Other"),
     ]);
     expect(cards.map((card) => card.id)).toEqual(["alpha", "beta"]);
     expect(cards.every((card) => !card.activeNow)).toBe(true);

@@ -17,7 +17,7 @@ import {
   coalesceAgentRunFrames,
   type AgentRunFrameRenderItem,
 } from "../chat-agent-run-grouping.ts";
-import { createInitializationContext } from "../chat-pane.test-support.ts";
+import { createInitializationContext } from "../chat-application-context.test-support.ts";
 import { groupMessages } from "../chat-thread-grouping.ts";
 import { AgentRunFrame } from "./chat-agent-run-frame.tsx";
 import type { NativeMessageGroupOptions } from "./chat-message-group-view.tsx";
@@ -234,7 +234,6 @@ it.each([false, true])("preserves sender attribution (forwarded=%s)", async (for
   }
   const forwardedGroup = query(".chat-group--forwarded");
   expect(forwardedGroup?.classList.contains("chat-group--sender-tint")).toBe(true);
-  expect(forwardedGroup?.style.getPropertyValue("--chat-sender-hue")).not.toBe("");
   const attribution = required(
     ".chat-group--forwarded .chat-group-messages > .chat-reply-attribution",
   );

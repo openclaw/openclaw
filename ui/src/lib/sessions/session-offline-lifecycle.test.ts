@@ -3,7 +3,7 @@ import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { roleScopesAllow } from "../../../../src/shared/operator-scope-compat.js";
 import { resolveBaseSessionMutationRequiredScope } from "../../../../src/shared/session-method-scopes-base.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import {
   createGatewayStoreTestStore,

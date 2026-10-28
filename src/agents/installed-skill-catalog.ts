@@ -1,9 +1,10 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { openLocalFileSafely, readLocalFileSafely } from "../infra/fs-safe.js";
+import { LruCache } from "../infra/lru-cache.js";
 import { readCodeModeSkill, type CodeModeSkill } from "./code-mode-skills.js";
 import type { SkillInstructionResult } from "./skill-instruction-result.js";
-import { getTextLexicalIndex } from "./tool-search-index.js";
+import { getTextLexicalIndex, prepareTextLexicalDocument } from "./tool-search-index.js";
 import { scoreLexical, tokenizeDocument } from "./tool-search-ranking.js";
 import { ToolInputError } from "./tools/common.js";
 
@@ -24,6 +25,16 @@ const MAX_BODY_SKILLS = 1_024;
 const MAX_BODY_BYTES = 16 * 1024;
 const MAX_INDEX_BODY_BYTES = 4 * 1024 * 1024;
 const READ_CONCURRENCY = 4;
+
+type SearchBody = {
+  document: ReturnType<typeof prepareTextLexicalDocument>;
+  truncated: boolean;
+};
+// Completed file revisions only; live path admission still happens on every read.
+const localBodies = new LruCache<{ body: SearchBody; bytes: number }>(MAX_BODY_SKILLS, {
+  maxBytes: MAX_INDEX_BODY_BYTES,
+  sizeOf: (entry) => entry.bytes,
+});
 
 function assertCatalogCurrent(skills: readonly InstalledSkill[], signal?: AbortSignal) {
   signal?.throwIfAborted();
@@ -50,7 +61,7 @@ async function prepareBodyView(
     MAX_BODY_BYTES,
     Math.floor(MAX_INDEX_BODY_BYTES / Math.max(1, selected.length)),
   );
-  const documents: Array<{ value: InstalledSkill; content: string }> = [];
+  const documents: Array<{ value: InstalledSkill; document: SearchBody["document"] }> = [];
   let truncatedBodies = 0;
   for (let offset = 0; offset < selected.length; offset += READ_CONCURRENCY) {
     const batch = await Promise.allSettled(
@@ -61,7 +72,7 @@ async function prepareBodyView(
         try {
           const body = await readSearchBody(skill, bodyBytes, signal);
           truncatedBodies += body?.truncated ? 1 : 0;
-          return body && { value: skill, content: body.content };
+          return body && { value: skill, document: body.document };
         } catch {
           // Unreadable bodies retain metadata.
           return undefined;
@@ -86,7 +97,7 @@ async function prepareBodyView(
   assertCatalogCurrent(skills, signal);
   assertBodyReadable(canReadInstructions);
   return {
-    bodies: getTextLexicalIndex(documents.map(({ content }) => content)),
+    bodies: getTextLexicalIndex(documents.map(({ document }) => document)),
     skills: documents.map(({ value }) => value),
     coverage: {
       bodyIndexed: documents.length,
@@ -96,17 +107,24 @@ async function prepareBodyView(
   };
 }
 
-async function readSearchBody(skill: InstalledSkill, maxBytes: number, signal?: AbortSignal) {
+async function readSearchBody(
+  skill: InstalledSkill,
+  maxBytes: number,
+  signal?: AbortSignal,
+): Promise<SearchBody | undefined> {
   const inline = skill.source.readContent;
   if (typeof inline === "string") {
     const prefix = inline.slice(0, maxBytes);
     // Keep UTF-8 replacement semantics for malformed or byte-truncated text.
     if (prefix.isWellFormed() && Buffer.byteLength(prefix) <= maxBytes) {
-      return { content: prefix, truncated: prefix.length < inline.length };
+      return {
+        document: prepareTextLexicalDocument(prefix),
+        truncated: prefix.length < inline.length,
+      };
     }
     const bytes = Buffer.from(prefix);
     return {
-      content: bytes.subarray(0, maxBytes).toString("utf8"),
+      document: prepareTextLexicalDocument(bytes.subarray(0, maxBytes).toString("utf8")),
       truncated: prefix.length < inline.length || bytes.length > maxBytes,
     };
   }
@@ -115,7 +133,7 @@ async function readSearchBody(skill: InstalledSkill, maxBytes: number, signal?: 
     if (Buffer.byteLength(content) > maxBytes) {
       throw new Error("Skill search reader exceeded its byte budget.");
     }
-    return { content, truncated: false };
+    return { document: prepareTextLexicalDocument(content), truncated: false };
   }
   // An opaque reader is not permission to read an ambient host path, nor a
   // guarantee that a whole-resource read is bounded enough for catalog search.
@@ -124,6 +142,20 @@ async function readSearchBody(skill: InstalledSkill, maxBytes: number, signal?: 
   }
   const opened = await openLocalFileSafely({ filePath: skill.source.filePath });
   try {
+    const { stat, exactIdentity } = opened;
+    const revision = JSON.stringify([
+      opened.realPath,
+      String(exactIdentity.dev),
+      String(exactIdentity.ino),
+      stat.size,
+      stat.mtimeMs,
+      stat.ctimeMs,
+      maxBytes,
+    ]);
+    const cached = localBodies.get(revision);
+    if (cached) {
+      return cached.body;
+    }
     // One extra byte detects truncation without reading the rest of the file.
     const buffer = Buffer.alloc(maxBytes + 1);
     let total = 0;
@@ -135,10 +167,17 @@ async function readSearchBody(skill: InstalledSkill, maxBytes: number, signal?: 
       }
       total += bytesRead;
     }
-    return {
-      content: buffer.subarray(0, Math.min(total, maxBytes)).toString("utf8"),
+    const body = {
+      document: prepareTextLexicalDocument(
+        buffer.subarray(0, Math.min(total, maxBytes)).toString("utf8"),
+      ),
       truncated: total > maxBytes,
     };
+    localBodies.set(revision, {
+      body,
+      bytes: body.document.text.length * 2 + revision.length * 2 + 256,
+    });
+    return body;
   } finally {
     await opened.handle.close();
   }

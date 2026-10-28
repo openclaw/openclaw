@@ -5,7 +5,7 @@ import path from "node:path";
 import zlib from "node:zlib";
 import { z } from "zod";
 import { resolveSessionArtifactDirectory } from "./paths.js";
-import type { SessionColdArchive } from "./session-cold-storage-state.js";
+import type { SessionColdArchive } from "./session-accessor.sqlite-archive-types.js";
 
 export const MAX_COLD_ARCHIVE_BYTES = 64 * 1024 * 1024;
 
@@ -143,36 +143,62 @@ export function verifyPublishedSessionColdArchive(
   }
 }
 
-export function decodeSessionColdRecords(
+/** Exhaust before publication, or consume inside a transaction that rolls back on failure. */
+export function* decodeSessionColdRecords(
   bytes: Uint8Array,
   archive: Pick<
     SessionColdArchive,
     "session_id" | "generation" | "event_count" | "raw_bytes" | "last_seq"
   > & { first_seq?: number },
-): SessionColdRecord[] {
-  const records = zlib
-    .zstdDecompressSync(bytes, { maxOutputLength: MAX_COLD_ARCHIVE_BYTES })
-    .toString("utf8")
-    .trimEnd()
-    .split("\n")
-    .map((line) => sessionColdRecordSchema.parse(JSON.parse(line)));
-  const header = records[0];
-  const events = records.filter((record) => record.kind === "event");
+): Generator<SessionColdRecord> {
+  const decoded = zlib.zstdDecompressSync(bytes, { maxOutputLength: MAX_COLD_ARCHIVE_BYTES });
+  let headerSeen = false;
+  let eventCount = 0;
+  let rawBytes = -1;
+  let lastSeq: number | undefined;
+  for (let offset = 0; offset < decoded.length;) {
+    const newline = decoded.indexOf(10, offset);
+    const end = newline < 0 ? decoded.length : newline;
+    const line = decoded.toString("utf8", offset, end);
+    // Preserve the envelope's trailing-whitespace allowance without copying all its text.
+    if (!line.trim() && !decoded.toString("utf8", offset).trimEnd()) {
+      break;
+    }
+    const record = sessionColdRecordSchema.parse(JSON.parse(line));
+    if (!headerSeen) {
+      if (
+        record.kind !== "header" ||
+        record.sessionId !== archive.session_id ||
+        record.generation !== archive.generation
+      ) {
+        throw new Error("Cold transcript archive metadata does not match its contents");
+      }
+      headerSeen = true;
+    } else if (record.kind === "header") {
+      throw new Error("Cold transcript archive metadata does not match its contents");
+    }
+    if (record.kind === "event") {
+      if (
+        (eventCount === 0 &&
+          archive.first_seq !== undefined &&
+          record.row.seq !== archive.first_seq) ||
+        (lastSeq !== undefined && record.row.seq <= lastSeq)
+      ) {
+        throw new Error("Cold transcript archive metadata does not match its contents");
+      }
+      eventCount++;
+      rawBytes += Buffer.byteLength(record.row.event_json) + 1;
+      lastSeq = record.row.seq;
+    }
+    yield record;
+    offset = end + 1;
+  }
   if (
-    header?.kind !== "header" ||
-    header.sessionId !== archive.session_id ||
-    header.generation !== archive.generation ||
-    records.slice(1).some((record) => record.kind === "header") ||
-    events.length !== archive.event_count ||
-    (archive.first_seq !== undefined && events[0]?.row.seq !== archive.first_seq) ||
-    events.some((event, index) => index > 0 && event.row.seq <= events[index - 1]!.row.seq) ||
-    events.at(-1)?.row.seq !== archive.last_seq ||
-    events.reduce((sum, event) => sum + Buffer.byteLength(event.row.event_json), 0) +
-      events.length -
-      1 !==
-      archive.raw_bytes
+    !headerSeen ||
+    eventCount !== archive.event_count ||
+    lastSeq !== archive.last_seq ||
+    rawBytes !== archive.raw_bytes
   ) {
     throw new Error("Cold transcript archive metadata does not match its contents");
   }
-  return records;
 }

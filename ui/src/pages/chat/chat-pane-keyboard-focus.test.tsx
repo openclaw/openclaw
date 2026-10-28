@@ -4,7 +4,8 @@ import { expect, it, onTestFinished, vi } from "vitest";
 import { registerModalSurface } from "../../components/overlay-registry.ts";
 import { getRenderedModalDialog, installDialogPolyfill } from "../../test-helpers/modal-dialog.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { createGatewayBrowserClientFixture, createTestChatPane } from "./chat-pane.test-support.ts";
+import { createGatewayBrowserClientFixture } from "./chat-application-context.test-support.ts";
+import { createTestChatPane } from "./chat-pane.test-support.ts";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
 import {
   configureNativeKeyTarget,
@@ -121,6 +122,7 @@ it("distinguishes an open disclosure from an open overlay", () => {
 });
 
 it("does not steal typing focus from a shadow-root confirmation", async () => {
+  await import("../../components/modal-dialog.tsx");
   onTestFinished(installDialogPolyfill());
   const { press, focus } = createFocusedPane();
   const container = bodyElement("div");

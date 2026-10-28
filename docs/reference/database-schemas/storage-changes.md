@@ -145,6 +145,96 @@ fragment activation/dependencies and the expected catalog for the state owner;
 it does not maintain a separate schema definition. They omit transaction wrappers and fixed schema qualification;
 the owning connection supplies the namespace and transaction. The `agent.postgres.sql` artifact follows the same runtime-only convention.
 
+### Local workspace manifest storage
+
+Shared-state schema 35 stores each directory's sibling treap as one immutable
+pack in `local_workspace_tree_packs`. An ordinary rowid table keeps the large
+JSON TEXT payloads outside its unique 32-byte digest index. The BLOB primary key
+also gives database ports their existing keyset pagination.
+Each pack contains its records' existing entry facts, content and tree digests,
+and links, plus a small child-pack digest array and sweep epoch. It contains no
+filesystem stat identities. The treap shape and digest definitions remain
+unchanged: a pack uses its sibling root's existing tree digest.
+`local_workspace_projections.tree_root_digest`
+selects the accepted tree, and `baseline_ref` retains its existing meaning.
+`local_workspace_source_path_sets` shares digest-keyed, zstd-compressed source
+path arrays through `source_paths_digest` on each projection. Both tables remain
+in the existing shared-state database.
+
+Tree reads fetch packs level by level with batched digest lookups inside the
+existing read snapshot. Both engines return the stored record text and small
+child-pack arrays; loading never recomputes digests. Missing roots or child packs
+retain the reconstruction handoff. Reads reconstruct their own Maps without a
+root cache.
+
+`canonical_fingerprints` and `projection_fingerprints` are nullable BLOB columns
+on the projection row. Each zstd format-v1 blob holds the target filesystem's
+device, aligned tree digest, and file count, followed by fixed-width inode and
+nanosecond ctime records in deterministic path order. Directories have no record.
+A scan reuses a baseline file hash only when the entire blob validates against
+the current tree, the device and path's inode/ctime match, and the size matches
+the shared entry. A missing, malformed, stale, or misaligned blob supplies no
+reuse. Inode comparison is necessary because renaming an ancestor directory can
+leave its files' ctimes unchanged. The fingerprint and in-process hash memo share
+a two-second racy-clean margin: ctime must predate scan or hash start by more than
+two seconds. Recent fingerprint entries carry an unusable ctime sentinel, and
+recent hashes do not enter the memo. A later scan hashes those files again before
+recording reusable timestamps; a backwards clock step only increases hashing.
+A scan shares its sorted path order between reuse and encoding. When the root
+and every exact reusable fingerprint remain unchanged, it retains the stored
+blob without encoding or compressing it again.
+
+The read worker prepares the immutable tree before acceptance. The writer
+inserts new packs and stamps reused packs in bounded short transactions.
+Incremental edits prepare the edited directory pack and each ancestor pack;
+replacing a tree already present inserts no packs. A large flat directory
+rewrites its complete pack on an edit. Acceptance retains the
+existing revision, baseline, lease, and registry checks, then publishes the root,
+changed target fingerprint, and receipt together. Checkpoints retain the previous
+and resulting roots needed by the existing reconciliation owner. No filesystem
+work or full-tree replacement runs inside that acceptance transaction.
+
+The schema migration performs DDL only. The reconciliation owner converts v31
+rows and legacy full-document baselines online, one projection at a time, and
+keeps the old inputs until root publication succeeds. Pending legacy receipts
+retain their original identities through settlement. The v31 table stays until a
+later schema bump can drop it after it is empty. The PostgreSQL generator derives
+the same tables, columns, and first-use fragments from the canonical SQLite
+schema; its state port descriptor retains the legacy conversion inputs.
+
+Stored baseline decoding and materialization preserve the accepted inventory,
+including directories now excluded from new workspace captures. Conversion
+rebuilds and compares the saved reference before preparing immutable content.
+A mismatch preserves the original rows and JSON, warns, and requests the existing
+full-scan baseline repair. Recovery first rolls back any interrupted filesystem
+apply. The repair replaces storage only when a workspace reproduces the exact
+saved baseline reference; otherwise both workspaces and conversion inputs remain
+intact for recovery.
+
+DDL-only does not mean constant-time admission: SQLite validates existing rows
+after adding a column to a STRICT table. The four nullable additions therefore
+each scan the projection table. Migration keeps that validation and the declared
+backup of changed schema and retained conversion inputs; older binaries refusing
+schema 35 does not remove the rollback requirement.
+
+Workspace maintenance advances `workspace.manifest.sweepEpoch` in the existing
+`config_machine_state` owner, marks every accepted and pending checkpoint root
+in one read snapshot, and deletes unreachable packs and path sets older than the
+preceding epoch in bounded batches. Writers stamp the current epoch when
+preparing or reusing content. A writer stalled for more than an epoch can lose
+unaccepted packs. Preparation returns its sweep epoch; acceptance checks the
+oldest preparation epoch inside the writer transaction and refuses an expired
+preparation before publishing any root or checkpoint. Retry the session to
+prepare the preserved live files again. This uses the existing retention window,
+without reference counts or a new durable reservation.
+
+A missing-pack load reconstructs the saved root from the projection or canonical
+copy. An intact pending-checkpoint result can also reconstruct the saved baseline
+by reversing its authenticated delta in memory and verifying the saved tree digest.
+Neither filesystem is changed by reconstruction. If no candidate reproduces the
+saved digest, reconciliation reports both preserved paths and an inspection
+command. It cannot safely invent a merge base or choose between divergent edits.
+
 ### PostgreSQL index ordering migrations
 
 Explicit PostgreSQL index keys use native ordering for canonical NOT NULL and
@@ -166,6 +256,29 @@ existing migration progress and recovery handling.
 The worker-only `openclaw/plugin-sdk/database-engine-worker-runtime` helpers
 `postgresIndexOrderingMigration` and `withLegacyPostgresIndexOrdering` let store
 owners share that cutover and exact predecessor reconstruction for generated DDL.
+
+State schema 34 records the default cron partition's existing opaque key in
+`config_machine_state`. SQLite and PostgreSQL publish the binding in the existing
+schema migration transaction without rewriting jobs, scratch, receipts, or history.
+Partition discovery includes retained legacy run logs before their history import.
+The binding survives state-directory moves and restored backups. If an older store
+has already moved and its original default cannot be established, the Gateway
+starts with cron paused and reports the available partitions. Run
+`openclaw doctor --fix` interactively to select the default partition. Until that
+selection, noninteractive Doctor preserves retired heartbeat settings and reports
+the combined selection and migration step. Rollback restores the verified
+pre-migration backup with its matching binary.
+
+Agent schema 38 makes PostgreSQL full-text search tokenize like SQLite FTS5:
+punctuation runs are replaced by spaces before `to_tsvector` and before the query
+parser, so words inside dates, paths, and file names match. The stored `tsvector`
+is maintained by a `<table>_search_sync` trigger instead of a generated column,
+because PostgreSQL 16 cannot replace a generated expression in place and dropping
+the column would move it out of the sealed catalog position. The migration drops
+the generated expression in place, installs the trigger, and reparses existing
+rows once for the transcript index and every persisted search extension. SQLite
+advances version metadata only. Historical admission and backup descriptors keep
+the generated column; rollback restores the verified pre-upgrade backup.
 
 The transcript navigation CHECK keeps its JSON validation for present metadata.
 Its PostgreSQL helper is strict, so absent metadata passes the CHECK without
@@ -407,8 +520,10 @@ and current-authority checks inside the worker admission boundary. The existing
 terminal replay keys, JSON payloads, retention limits, schema, and restart
 recovery policy remain unchanged.
 
-Ordinary operator approval lookups, pending replay, verdicts, expiry, and allow-once
-consumption execute in the shared-state worker. Replay expires and publishes due
+Ordinary operator approval lookups, verdicts, expiry, and allow-once
+consumption execute in the shared-state worker. Pending replay uses a per-session
+view seeded in bounded read-worker pages and maintained by committed approval
+receipts. Closing or replacing the database retires the view. Replay expires and publishes due
 approvals before listing the pending set; the pending query excludes expired rows
 without repeating that sweep. Lookups retain expiry, and both reads retain
 corrupt-row repair transactions; history pages use the read-only worker. The
@@ -2947,6 +3062,51 @@ Cross-agent reports fold worker summaries in global session order on the Gateway
 to preserve floating-point addition. Reports reuse completed results only while
 their transcript, usage, session metadata,
 visibility, profile, and configuration revisions remain current.
+
+The `session-cost-usage-quarters-v1` scope stores a report-only numeric
+companion of every month partition: per quarter-hour totals with cost parts,
+message counts, latency count/sum/min/max/p95 and first/last offsets, plus
+per-quarter model and tool tables, in two typed sections (unsigned 32-bit and
+float64) with a small JSON header. It uses the partition's key and is written in
+the same writer transaction with the same `updated_at`; every partition deletion,
+replacement, month removal and prune deletes it too. Readers count a quarter row
+only while a partition with the same key and `updated_at` exists, so a partition
+rewritten by an older build never pairs with a stale summary. No table, index or
+schema version changes; older builds ignore the scope, so rollback needs no
+migration.
+
+The Usage overview (`sessions.usage` with `projection: "overview"`) and the
+`usage.cost` summary read rollup envelopes and quarter rows only. One worker pass
+per agent folds them column by column per family and report day in the requested
+time zone and returns packed rows in a shared, immutable buffer; no bucket JSON is
+parsed and no hashes are checked on this path, and the former cumulative report
+byte allowance no longer applies to it. The Gateway keeps the packed rows in its
+report snapshot, selects and re-checks visible sessions, and a compute worker
+expands those rows and runs the shared overview aggregation, returning only the
+page, selected rows and aggregates.
+Quarter grain is exact for zones whose offsets and transitions fall on quarter
+hours (including +05:30, +05:45 and DST changes). A per-day p95 is the largest
+quarter p95. Ranges or zones that split a quarter with activity report
+`aggregate-boundary` for the overview; `usage.cost` replays those transcripts
+within its bounded allowance. Overview freshness compares the checkpoint with the
+session window's last mutation time and rewrite generation instead of transcript
+statistics. Session detail reads keep using the month partitions.
+
+Upgraded installs have partitions without quarter rows. The usage refresh owner
+finds partitions without a paired quarter row with one anti-join, derives the
+rows from the stored partitions (no transcript scan) in its bounded batches, and
+inserts each row only while the partition header it decoded is still current.
+The work is idempotent and resumes after a restart.
+
+Both reports first let pending transcript publications land. When a pass finds
+instances without quarter rows, with invalid rows or older than their
+transcript, it asks the refresh owner for exactly those sessions (which also
+runs the upgrade backfill for them), waits up to 10 seconds inside the
+15-second usage request budget, and runs once more, so the answer includes
+them. Only a refresh that outlasts that wait leaves the second answer `partial`
+with reason `summarizing` and the summarized/total counts. Archived JSONL
+transcripts resolve through the same read cache as session detail reads and
+count in both reports.
 
 Transcripts remain authoritative; the projection changes neither retention nor
 billing data. Exact partial-quarter ranges and arithmetic that cannot be

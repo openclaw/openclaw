@@ -17,16 +17,17 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
 import { resolveChatAgentId } from "./chat-agent-id.ts";
-import type { ChatPageHost } from "./chat-state-host.ts";
-import type { HeaderMenuAction } from "./components/chat-header-session-menu.ts";
-
-type HeaderMetadataAction = Extract<
+import type {
   HeaderMenuAction,
-  { kind: "toggle-unread" | "set-icon" | "set-color" | "set-communication" | "reset-appearance" }
->;
+  HeaderSessionOperation,
+} from "./chat-pane-session-menu-contract.ts";
+import type { ChatPageHost } from "./chat-state-host.ts";
 
 function headerSessionMetadataPatch(
-  action: HeaderMetadataAction,
+  action: Extract<
+    HeaderMenuAction,
+    { kind: "toggle-unread" | "set-icon" | "set-color" | "set-communication" | "reset-appearance" }
+  >,
   session: Pick<GatewaySessionRow, "unread">,
 ) {
   switch (action.kind) {
@@ -49,28 +50,6 @@ type HeaderSessionRenameAttempt = {
   isCurrent(): boolean;
   publishError(error: unknown): void;
 };
-
-type HeaderSessionOperation = Exclude<
-  HeaderMenuAction,
-  {
-    kind:
-      | "move-session"
-      | "stop-cloud-worker"
-      | "open-in"
-      | "copy-session-id"
-      | "copy-session-link"
-      | "copy-session-preview-link"
-      | "copy-markdown"
-      | "open-new-tab"
-      | "open-new-window"
-      | "split-right"
-      | "split-below"
-      | "continue-in-terminal"
-      | "toggle-pin"
-      | "new-group"
-      | "plugin";
-  }
->;
 
 export async function runHeaderSessionOperation(
   action: HeaderSessionOperation,
@@ -115,6 +94,7 @@ export async function runHeaderSessionOperation(
       gatewayHasActiveRun: actionRow.hasActiveRun,
       hasActiveSubagentRun: actionRow.hasActiveSubagentRun,
       hasArchiveDescendants: hasSessionArchiveDescendants(actionRow, rows),
+      hasAutomation: actionRow.hasAutomation === true,
     };
   };
   const session = toActionSession(row);

@@ -335,6 +335,17 @@ function getCachedOpenClawStateDatabase(
   options?: { readOnly: true },
 ): OpenClawStateDatabase | undefined {
   const resolvedPath = resolveDatabasePath({ path: pathname });
+  const runtimeFailure = terminalOpenLatch.get(resolvedPath);
+  if (runtimeFailure) {
+    throw runtimeFailure;
+  }
+  return readCachedOpenClawStateDatabase(resolvedPath, options);
+}
+
+function readCachedOpenClawStateDatabase(
+  resolvedPath: string,
+  options?: { readOnly: true },
+): OpenClawStateDatabase | undefined {
   const maintenance = getOpenClawDatabaseMaintenanceScope();
   if (options?.readOnly) {
     maintenance?.assertReadAdmission();
@@ -342,18 +353,29 @@ function getCachedOpenClawStateDatabase(
     maintenance?.assertAdmission();
   }
   assertExistingOpenClawStateSchemaCacheAdmission(resolvedPath, stateDatabaseLifecycle);
-  const runtimeFailure = terminalOpenLatch.get(resolvedPath);
-  if (runtimeFailure) {
-    throw runtimeFailure;
-  }
   const database = cachedDatabases.get(resolvedPath);
   if (database) {
     if (borrowers.get(database.db)?.retiring) {
-      throw new Error(`OpenClaw state database native borrower cleanup is pending: ${pathname}`);
+      throw new Error(
+        `OpenClaw state database native borrower cleanup is pending: ${resolvedPath}`,
+      );
     }
     touchStateDatabase(database);
   }
   return database;
+}
+
+/** Prepared host facts retain admission; native transactions still expose their staged facts. */
+export function prepareOpenClawStateCachedRead(pathname: string) {
+  const resolvedPath = resolveDatabasePath({ path: pathname });
+  const options = { readOnly: true } as const;
+  getCachedOpenClawStateDatabase(resolvedPath, options);
+  // Terminal failures invalidate this admission before closing the native owner.
+  const admission = asyncResources.capture(resolvedPath);
+  return () => {
+    admission.assertCurrent();
+    return readCachedOpenClawStateDatabase(resolvedPath, options);
+  };
 }
 
 /** Keep the admitted revision live while a synchronous reader consumes its row facts. */
@@ -581,8 +603,12 @@ export const captureOpenClawStateIntegrityAdmission = asyncResources.integrity;
 /** Bind worker-created storage to its captured admission without publishing a native handle. */
 export function publishOpenClawStateDatabaseWorkerAdmission(
   admission: OpenClawStateDatabaseReadAdmission,
+  preparedIdentity?: DatabasePathIdentity,
 ): void {
-  asyncResources.publish(admission.databasePath);
+  if (preparedIdentity) {
+    admission.assertCurrent();
+  }
+  asyncResources.publish(admission.databasePath, preparedIdentity);
   admission.assertCurrent();
 }
 

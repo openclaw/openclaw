@@ -229,12 +229,15 @@ it("retains cumulative worker work, messages, selections and GC across retiremen
           direction: "from_worker" as const,
           messages: 4,
           payloadBytes: 1234,
+          payloadBytesByRequestClass: { "audit.writer.process": 1000, other: 234 },
           unmeasuredMessages: 2,
         },
       ],
       sessionRowSelections: {
         selections: [{ kind: "parent" as const, task: "control-ui-pr", calls: 4, rows: 12 }],
         resets: 2,
+        partitions: [{ task: "sessions.list", hits: 63, misses: 1 }],
+        partitionRevisions: [{ reason: "metadata", changes: 3 }],
         materialization: {
           created: 0,
           reused: 0,
@@ -270,11 +273,15 @@ openclaw_worker_gc_duration_seconds_total{kind="scavenge",${labels}} ${current.g
   }
   expectMetrics(metrics.render())(`openclaw_worker_count 0
 openclaw_worker_messages_total{direction="from_worker",kind="sqlite_reply"} 4
-openclaw_worker_message_payload_bytes_total{direction="from_worker",kind="sqlite_reply"} 1234
+openclaw_worker_message_payload_bytes_total{direction="from_worker",kind="sqlite_reply",request_class="audit.writer.process"} 1000
+openclaw_worker_message_payload_bytes_total{direction="from_worker",kind="sqlite_reply",request_class="other"} 234
 openclaw_worker_message_unmeasured_total{direction="from_worker",kind="sqlite_reply"} 2
 openclaw_session_row_selections_total{kind="parent",task="control-ui-pr"} 4
 openclaw_session_row_selection_rows_total{kind="parent",task="control-ui-pr"} 12
-openclaw_session_row_selection_resets_total 2`);
+openclaw_session_row_selection_resets_total 2
+openclaw_session_row_partition_cache_total{outcome="hit",task="sessions.list"} 63
+openclaw_session_row_partition_cache_total{outcome="miss",task="sessions.list"} 1
+openclaw_session_row_partition_revisions_total{reason="metadata"} 3`);
 });
 
 it("exports native memory, missing workers, lifecycle totals and attributed spawns", () => {

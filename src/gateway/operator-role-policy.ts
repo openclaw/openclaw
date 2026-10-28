@@ -1,5 +1,5 @@
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/schema/error-codes.js";
-import type { ErrorShape } from "../../packages/gateway-protocol/src/schema/frames.js";
+import type { ErrorShape, HelloOk } from "../../packages/gateway-protocol/src/schema/frames.js";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import { assertAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import type { SessionCreatedActor } from "../config/sessions/session-entry-provenance.js";
@@ -18,6 +18,7 @@ type OperatorRolePolicyChange =
   | { kind: "assignment"; profileId: string }
   | { kind: "config"; context: object };
 const policyListeners = new Set<(change: OperatorRolePolicyChange) => void>();
+const configRevisions = new WeakMap<object, object>();
 let assignmentRevision = 0;
 const deniedOperatorRole: GatewayOperatorRoleDefinition = {
   sessions: { others: "none" },
@@ -55,8 +56,14 @@ export function onOperatorRolePolicyChanged(
 /** Called after this Gateway's committed runtime reader advances, never at tentative activation. */
 export function publishOperatorRoleConfigChange(context: object | undefined): void {
   if (context) {
+    configRevisions.set(context, {});
     notifyListeners([...policyListeners], { kind: "config", context });
   }
+}
+
+/** Committed publications invalidate prepared policy even when config identity is retained. */
+export function readOperatorRoleConfigRevision(context: object): object | undefined {
+  return configRevisions.get(context);
 }
 
 export function readOperatorRolePolicyRevision(): number {
@@ -241,7 +248,10 @@ export function authorizeCurrentOperatorRoleScopes(
   return undefined;
 }
 
-export function operatorSessionCap(client: GatewayClient | null, cfg: OpenClawConfig) {
+export function operatorSessionCap(
+  client: GatewayClient | null,
+  cfg: OpenClawConfig,
+): HelloOk["auth"]["sessionCap"] {
   return resolveOperatorRolePolicy(client, cfg)?.sessions.others;
 }
 

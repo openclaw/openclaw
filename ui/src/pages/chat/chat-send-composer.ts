@@ -6,7 +6,7 @@ import type {
   HumanMention,
 } from "../../lib/chat/chat-types.ts";
 import type { StoredChatOutboxScope } from "../../lib/chat/outbox-store-scope.ts";
-import { visibleSessionMatches } from "../../lib/sessions/index.ts";
+import { visibleSessionMatches } from "../../lib/sessions/navigation.ts";
 import {
   getChatAttachmentDataUrl,
   releaseChatAttachmentPayloads,

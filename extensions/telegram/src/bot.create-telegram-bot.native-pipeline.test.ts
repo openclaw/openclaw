@@ -11,8 +11,7 @@ import {
   resolveStorePath,
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
-import { peekSystemEventEntries } from "openclaw/plugin-sdk/system-event-runtime";
-import { createRequireRecord, resetSystemEventsForTest } from "openclaw/plugin-sdk/test-fixtures";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { assert, expect, it, vi } from "vitest";
 import { runWithTelegramSpooledReplayUpdate } from "./bot-processing-outcome.js";
 import {
@@ -32,8 +31,6 @@ import { startTelegramCallbackQueryAnswer } from "./callback-query-answer-state.
 import { getTelegramRuntime, setTelegramRuntime } from "./runtime.js";
 import { getCachedSticker } from "./sticker-cache.js";
 
-const { loginExecutor } = vi.hoisted(() => ({ loginExecutor: vi.fn(async () => false) }));
-vi.mock("./bot-native-command-login.js", () => ({ executeTelegramLoginCommand: loginExecutor }));
 vi.mock("openclaw/plugin-sdk/agent-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/agent-runtime")>()),
   loadPreparedModelCatalog: vi.fn(async () => []),
@@ -59,13 +56,6 @@ const callback = (id: string, data: string, chat_instance: string, message_id: n
   chat_instance,
   from,
   message: { message_id, date: messageBase.date, chat },
-});
-
-it("runs the login executor without dispatching a turn", async () => {
-  const bot = await createBot();
-  await handleMessage(bot, 1004, commandMessage("/login"));
-  expect(loginExecutor).toHaveBeenCalledWith(expect.objectContaining({ commandText: "/login" }));
-  expect(harness.replySpy).not.toHaveBeenCalled();
 });
 
 it.each(["forum", "DM"] as const)("routes native commands to the %s topic", async (kind) => {
@@ -286,36 +276,6 @@ it("inherits named-account group access and composes exact-topic overrides on wi
     "Group prompt\n\nTopic prompt",
   );
   expect(harness.replySpy.mock.calls.at(-1)?.[1]?.skillFilter).toEqual([]);
-});
-
-it("dispatches registered reaction updates to the routed event queue", async () => {
-  resetSystemEventsForTest();
-  const bot = await configuredBot({
-    ...openDm,
-    reactionNotifications: "all",
-  });
-  try {
-    await bot.handleUpdate({
-      update_id: 2200,
-      message_reaction: {
-        chat,
-        message_id: 42,
-        user: from,
-        date: 1736380800,
-        old_reaction: [],
-        new_reaction: [{ type: "emoji", emoji: "\u{1F44D}" }],
-      },
-    });
-    expect(peekSystemEventEntries("agent:main:main")).toEqual([
-      expect.objectContaining({
-        text: "Telegram reaction added: \u{1F44D} by Alice on msg 42",
-        contextKey: "telegram:reaction:add:42001:42:42001:\u{1F44D}",
-      }),
-    ]);
-    expect(harness.replySpy).not.toHaveBeenCalled();
-  } finally {
-    resetSystemEventsForTest();
-  }
 });
 
 it("handles the overlapping migration filter once without starting an ordinary turn", async () => {

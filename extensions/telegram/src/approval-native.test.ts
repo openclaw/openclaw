@@ -8,16 +8,12 @@ import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-test
 import { afterAll, describe, expect, it } from "vitest";
 import { telegramApprovalCapability } from "./approval-native.js";
 
-const cfg: OpenClawConfig = {
-  channels: {
-    telegram: {
-      botToken: "tok",
-      execApprovals: { enabled: true, approvers: ["8460800771"], target: "dm" },
-    },
-  },
-};
+const execApprovals = { enabled: true, approvers: ["8460800771"], target: "dm" as const };
+const cfg: OpenClawConfig = { channels: { telegram: { botToken: "tok", execApprovals } } };
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-telegram-approval-native-");
 const requestTimes = { createdAtMs: 0, expiresAtMs: 1000 };
+const chatId = "-1003841603622";
+const directTopic = `${chatId}:direct-topic:77`;
 
 describe("telegram native approval adapter", () => {
   it.each([undefined, "work"])(
@@ -39,14 +35,8 @@ describe("telegram native approval adapter", () => {
 
   it.each([
     ["direct:8460800771", "8460800771", "8460800771", undefined, "exec"],
-    ["group:-1003841603622:topic:928", "-1003841603622:topic:928", "-1003841603622", 928, "exec"],
-    [
-      "group:-1003841603622:direct-topic:77",
-      "-1003841603622:direct-topic:77",
-      "-1003841603622:direct-topic:77",
-      undefined,
-      "system-agent",
-    ],
+    [`group:${chatId}:topic:928`, `${chatId}:topic:928`, chatId, 928, "exec"],
+    [`group:${directTopic}`, directTopic, directTopic, undefined, "system-agent"],
   ] as const)(
     "resolves the turn-source target for %s",
     async (session, source, to, threadId, approvalKind) => {
@@ -72,7 +62,7 @@ describe("telegram native approval adapter", () => {
 
   it("parses numeric string thread ids from the session store for plugin approvals", async () => {
     const storePath = path.join(sessionDirs.make(), "sessions.json");
-    const sessionKey = "agent:main:telegram:group:-1003841603622:topic:928";
+    const sessionKey = `agent:main:telegram:group:${chatId}:topic:928`;
     await upsertSessionEntry({
       storePath,
       sessionKey,
@@ -82,7 +72,7 @@ describe("telegram native approval adapter", () => {
         delivery: normalizeSessionDeliveryState({
           context: {
             channel: "telegram",
-            to: "-1003841603622",
+            to: chatId,
             accountId: "default",
             threadId: "928",
           },
@@ -101,6 +91,6 @@ describe("telegram native approval adapter", () => {
       },
     });
 
-    expect(target).toEqual({ to: "-1003841603622", threadId: 928 });
+    expect(target).toEqual({ to: chatId, threadId: 928 });
   });
 });

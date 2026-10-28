@@ -2,7 +2,8 @@
 import { createMemo } from "solid-js";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
@@ -102,7 +103,6 @@ it.each([
     ...baseContext,
     basePath: "",
     settingsAgentSelection: selection,
-    channels: { state: {}, subscribe: () => () => undefined },
     runtimeConfig: {
       state: { configForm: {}, configSnapshot: {} },
       subscribe: () => () => undefined,

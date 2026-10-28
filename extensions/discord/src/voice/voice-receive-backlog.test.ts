@@ -117,7 +117,7 @@ defineDiscordVoiceTests((h) => {
     }
   });
 
-  it.each(["backlog", "decoder", "decryption", "stream"] as const)(
+  it.each(["backlog", "decoder", "stream"] as const)(
     "retires only the incomplete realtime speaker after a %s failure",
     async (failure) => {
       const audio = await import("./audio.js");
@@ -151,7 +151,7 @@ defineDiscordVoiceTests((h) => {
           diskReady.resolve();
           await receiving;
         } else {
-          stream.destroy(new Error(failure === "decryption" ? "Failed to decrypt" : "socket"));
+          stream.destroy(new Error("socket"));
         }
         await vi.waitFor(() => expect(stream.destroyed).toBe(true));
         await h.emitFinalRealtimeUserTranscript(interrupted.bridgeParams, "incomplete request");

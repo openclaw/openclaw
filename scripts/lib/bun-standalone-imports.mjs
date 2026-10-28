@@ -173,8 +173,8 @@ export function rewriteStandaloneImports({
       // CJS aliases bypass Bun's public hook. Map the loader handoff while
       // admission and SDK discovery continue to use physical filenames.
       const wrapper = preserveTypes
-        ? `((resolve: NonNullable<(${resolverOwnerType(node.left.object)})["_resolveFilename"]>) => function (this: ThisParameterType<typeof resolve>, ...args: Parameters<typeof resolve>): ReturnType<typeof resolve> { const target = resolve.apply(this, args); return globalThis.__openclawStandaloneEmbeddedPath(target) ?? target; })(`
-        : "((resolve) => function (...args) { const target = resolve.apply(this, args); return globalThis.__openclawStandaloneEmbeddedPath(target) ?? target; })(";
+        ? `((resolve: NonNullable<(${resolverOwnerType(node.left.object)})["_resolveFilename"]>) => function (this: ThisParameterType<typeof resolve>, ...args: Parameters<typeof resolve>): ReturnType<typeof resolve> { const target = resolve.apply(this, args); return globalThis.__openclawStandaloneExternalModulePath(target) ?? target; })(`
+        : "((resolve) => function (...args) { const target = resolve.apply(this, args); return globalThis.__openclawStandaloneExternalModulePath(target) ?? target; })(";
       edits.push([node.right.start, node.right.start, wrapper]);
       edits.push([node.right.end, node.right.end, ")"]);
     }
@@ -192,9 +192,9 @@ export function rewriteStandaloneImports({
       if (target?.value?.type === "Identifier" && staticString(namespace?.value) === "file") {
         // Bun does not resolve a hook's returned filename through subsequent hooks.
         edits.push([
-          target.value.start,
-          target.value.end,
-          `(globalThis.__openclawStandaloneEmbeddedPath(${contents.slice(target.value.start, target.value.end)}) ?? ${contents.slice(target.value.start, target.value.end)})`,
+          node.start,
+          node.end,
+          `globalThis.__openclawStandaloneExternalModuleResolution(${contents.slice(target.value.start, target.value.end)})`,
         ]);
         pluginResolvers.delete(owner);
       }

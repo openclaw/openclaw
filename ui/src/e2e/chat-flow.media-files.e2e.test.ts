@@ -118,7 +118,7 @@ suite.define(() => {
     expect(await link.getAttribute("href")).toBe(mediaUrl);
     await card.hover();
     const [download] = await Promise.all([page.waitForEvent("download"), link.click()]);
-    await download.path();
+    expect(await download.failure()).toBeNull();
 
     expect(download.suggestedFilename()).toBe("测试 report.pdf");
   });

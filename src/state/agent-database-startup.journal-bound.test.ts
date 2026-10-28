@@ -6,8 +6,8 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { WorkerTaskError } from "../infra/worker-task-pool.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
-  AgentDatabaseSchemaAdmissionChangedError,
-  AgentDatabaseSchemaAdmissionInvalidError,
+  AgentDatabaseSchemaAdmissionChangedError as ChangedAdmission,
+  AgentDatabaseSchemaAdmissionInvalidError as InvalidAdmission,
 } from "./agent-database-admission-error.js";
 import { withAgentDatabaseStartupAdmission } from "./agent-database-startup.js";
 import { readAgentDeletionJournalStatusInWorker } from "./agent-deletion-journal.read.js";
@@ -33,7 +33,7 @@ vi.mock("./agent-database-admission.js", async (importOriginal) => {
     failPendingAgentDatabase: vi.fn<typeof actual.failPendingAgentDatabase>((refusal) => {
       admissionState.failed.push(refusal.agentId);
     }),
-    readAgentDatabaseAdmissionRefusal: vi.fn(() => undefined),
+    readAgentDatabaseAdmissionRefusal: () => undefined,
   };
 });
 
@@ -41,12 +41,13 @@ vi.mock("../infra/sqlite-readonly-worker.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../infra/sqlite-readonly-worker.js")>();
   return {
     ...actual,
-    withSqliteReadOnlyWorkerScope: vi.fn(async (operation: () => Promise<unknown>) => operation()),
+    withSqliteReadOnlyWorkerScope: async (operation: () => Promise<unknown>) => operation(),
   };
 });
 
 const readJournal = vi.mocked(readAgentDeletionJournalStatusInWorker);
 const overload = () => new WorkerTaskError("worker task capacity reached", "overloaded");
+const locked = () => Object.assign(new Error("locked"), { errcode: 5 });
 function expectAdmission(prepared: string[], failed: string[], reads: number) {
   expect(admissionState).toEqual({ prepared, failed });
   expect(readJournal).toHaveBeenCalledTimes(reads);
@@ -159,6 +160,18 @@ it("prepares more than 128 agents without overflowing state-read admission", asy
   expect(maxActive).toBeLessThanOrEqual(8);
 });
 
+it.each([
+  ["migrateAgent", Object.assign(new Error("locked"), { code: "SQLITE_LOCKED" }), 4, 4],
+  ["migrateAgent", new AggregateError([locked(), new Error("cleanup failed")]), 1, 1],
+  ["publishAgent", new ChangedAdmission(), 4, 4],
+  ["publishAgent", new InvalidAdmission(), 1, 1],
+] as const)("refuses %s for %s after %i attempts", async (operation, error, attempts, reads) => {
+  const run = vi.fn().mockRejectedValue(error);
+  await prepareAgents(1, { [operation]: run });
+  expectAdmission([], ["agent-0"], reads);
+  expect(run).toHaveBeenCalledTimes(attempts);
+});
+
 it("retries shared-pool capacity rejections and prepares the agent", async () => {
   readJournal.mockRejectedValueOnce(overload()).mockRejectedValueOnce(overload());
   await prepareAgents(1);
@@ -166,10 +179,9 @@ it("retries shared-pool capacity rejections and prepares the agent", async () =>
 });
 
 it.each(["openAgent", "migrateAgent"] as const)(
-  "recovers a transient SQLite lock in %s without restarting",
+  "recovers a transient lock in %s",
   async (operation) => {
-    const busy = Object.assign(new Error("database is locked"), { errcode: 5 });
-    const run = vi.fn().mockRejectedValueOnce(busy).mockResolvedValue(undefined);
+    const run = vi.fn().mockRejectedValueOnce(locked()).mockResolvedValue(undefined);
     const opened = vi.fn().mockResolvedValue(undefined);
     await prepareAgents(1, { openAgent: opened, [operation]: run });
     expectAdmission(["agent-0"], [], 3);
@@ -180,19 +192,10 @@ it.each(["openAgent", "migrateAgent"] as const)(
   },
 );
 
-it("bounds startup lock retries and leaves the agent refused", async () => {
-  const run = vi
-    .fn()
-    .mockRejectedValue(Object.assign(new Error("locked"), { code: "SQLITE_LOCKED" }));
-  await prepareAgents(1, { migrateAgent: run });
-  expectAdmission([], ["agent-0"], 4);
-  expect(run).toHaveBeenCalledTimes(4);
-});
-
 it.each(["deletion", "replacement"] as const)(
   "refuses %s before retrying a locked migration",
   async (change) => {
-    const run = vi.fn().mockRejectedValue(Object.assign(new Error("locked"), { errcode: 5 }));
+    const run = vi.fn().mockRejectedValue(locked());
     readJournal.mockImplementation(async (_agentId, options) => {
       const env = options?.env;
       if (readJournal.mock.calls.length === 2) {
@@ -211,49 +214,21 @@ it.each(["deletion", "replacement"] as const)(
   },
 );
 
-it("does not retry a lock combined with a cleanup failure", async () => {
-  const run = vi
-    .fn()
-    .mockRejectedValue(
-      new AggregateError([
-        Object.assign(new Error("locked"), { errcode: 5 }),
-        new Error("cleanup failed"),
-      ]),
-    );
-  await prepareAgents(1, { migrateAgent: run });
-  expectAdmission([], ["agent-0"], 1);
-  expect(run).toHaveBeenCalledOnce();
-});
-
 it("keeps real database corruption terminal during migration", async () => {
   const pathname = path.join(tempDirTracker.make("corrupt-startup-"), "corrupt.sqlite");
   fs.writeFileSync(pathname, "This is not a SQLite database".repeat(100));
   const migrateAgent = vi.fn(async () => {
-    const database = new DatabaseSync(pathname);
-    try {
-      database.prepare("PRAGMA schema_version").get();
-    } finally {
-      database.close();
-    }
+    using database = new DatabaseSync(pathname);
+    database.prepare("PRAGMA schema_version").get();
   });
   await prepareAgents(1, { migrateAgent });
   expect(migrateAgent).toHaveBeenCalledOnce();
   expectAdmission([], ["agent-0"], 1);
 });
 
-it.each([
-  [new AgentDatabaseSchemaAdmissionChangedError(), 4],
-  [new AgentDatabaseSchemaAdmissionInvalidError(), 1],
-] as const)("fails publication for %s after %i attempts", async (error, attempts) => {
-  const publish = vi.fn().mockRejectedValue(error);
-  await prepareAgents(1, { publishAgent: publish });
-  expect(publish).toHaveBeenCalledTimes(attempts);
-  expect(admissionState).toEqual({ prepared: [], failed: ["agent-0"] });
-});
-
 it("does not republish after the agent is deleted during an admission retry", async () => {
   readJournal.mockResolvedValueOnce("absent").mockResolvedValue("pending");
-  const publish = vi.fn().mockRejectedValue(new AgentDatabaseSchemaAdmissionChangedError());
+  const publish = vi.fn().mockRejectedValue(new ChangedAdmission());
   await prepareAgents(1, { publishAgent: publish });
   expect(publish).toHaveBeenCalledOnce();
   expect(admissionState).toEqual({ prepared: [], failed: ["agent-0"] });

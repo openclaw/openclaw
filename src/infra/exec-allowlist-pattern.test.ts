@@ -2,7 +2,11 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withEnv } from "../test-utils/env.js";
-import { matchesExecAllowlistPattern } from "./exec-allowlist-pattern.js";
+import { compileExecAllowlistPattern } from "./exec-allowlist-pattern.js";
+
+function matchesExecAllowlistPattern(pattern: string, target: string) {
+  return compileExecAllowlistPattern(pattern)(target);
+}
 
 describe("matchesExecAllowlistPattern", () => {
   it.each([{ pattern: "   ", target: "/tmp/tool", expected: false }])(
@@ -32,11 +36,17 @@ describe("matchesExecAllowlistPattern", () => {
   });
 
   it("expands home-prefix patterns", () => {
+    const matches = compileExecAllowlistPattern("~/bin/tool");
     const openClawHome = path.join(path.resolve("/srv/openclaw-home"), "bin", "tool");
     const fallbackHome = path.join(path.resolve("/home/other"), "bin", "tool");
     withEnv({ OPENCLAW_HOME: "/srv/openclaw-home", HOME: "/home/other" }, () => {
       expect(matchesExecAllowlistPattern("~/bin/tool", openClawHome)).toBe(true);
       expect(matchesExecAllowlistPattern("~/bin/tool", fallbackHome)).toBe(false);
+      expect(matches(openClawHome)).toBe(true);
+    });
+    withEnv({ OPENCLAW_HOME: "/home/other", HOME: "/home/other" }, () => {
+      expect(matches(openClawHome)).toBe(false);
+      expect(matches(fallbackHome)).toBe(true);
     });
   });
 

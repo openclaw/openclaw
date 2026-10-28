@@ -81,7 +81,7 @@ describe("browser bridge facade", () => {
   });
 
   for (const operation of ["startBrowserBridgeServer", "stopBrowserBridgeServer"] as const) {
-    it(`awaits activation of the bridge-only artifact before ${operation} and preserves identity`, async () => {
+    it(`awaits and rechecks activation for ${operation}, preserving results and errors`, async () => {
       const surface = createSurface();
       const activation = createDeferred<typeof surface>();
       loaders.async.mockReturnValue(activation.promise);
@@ -103,24 +103,13 @@ describe("browser bridge facade", () => {
         dirName: "browser",
         artifactBasename: "bridge-api.js",
       });
-    });
-
-    it(`rechecks activation before every ${operation}, including after a successful load`, async () => {
-      const surface = createSurface();
       const blocked = new Error("activation blocked");
-      loaders.async.mockResolvedValueOnce(surface).mockRejectedValueOnce(blocked);
-      const invoke = await invocation(operation, surface);
-      await invoke();
+      loaders.async.mockRejectedValueOnce(blocked);
       await expect(invoke()).rejects.toBe(blocked);
       expect(surface[operation]).toHaveBeenCalledOnce();
-    });
-
-    it(`propagates the original delegated ${operation} error`, async () => {
-      const surface = createSurface();
       const failure = new Error("bridge lifecycle failed");
       surface[operation].mockRejectedValue(failure);
       loaders.async.mockResolvedValue(surface);
-      const invoke = await invocation(operation, surface);
       await expect(invoke()).rejects.toBe(failure);
     });
   }

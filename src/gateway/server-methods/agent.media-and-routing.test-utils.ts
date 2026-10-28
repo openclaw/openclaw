@@ -37,6 +37,7 @@ import {
   cronContinuationGatewayClient,
   cronMediaCompletionEvent,
   setupCronContinuationReleaseFixture,
+  readyCronContinuationEntry,
   operatorWriteGatewayClient,
   REAL_PNG,
   waitForAgentCommandCall,
@@ -47,21 +48,6 @@ import {
 import { getAgentTestStorePath } from "./agent.user-turn-recorder.test-support.js";
 
 const mocks = getAgentTestMocks();
-
-function readyCronContinuationEntry(): SessionEntry {
-  return {
-    sessionId: "run-1",
-    updatedAt: Date.now(),
-    lifecycleRevision: "revision-1",
-    modelProvider: "openai",
-    model: "gpt-5.4",
-    cronRunContinuation: {
-      lifecycleRevision: "revision-1",
-      phase: "ready",
-      basePersisted: true,
-    },
-  };
-}
 
 function mockCronContinuationStore(
   sessionKey: string,

@@ -349,7 +349,7 @@ export const QA_REASONING_ONLY_RETRY_NEEDLE =
   "recorded reasoning but did not produce a user-visible answer";
 export const QA_EMPTY_RESPONSE_RETRY_NEEDLE = "Continue from the current state";
 export const QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE =
-  "Do not repeat completed tool calls or restart from scratch. Tools are unavailable in this step:";
+  "Do not repeat completed tool calls or restart from scratch. Do not call tools in this step.";
 export const QA_SKILL_WORKSHOP_GIF_PROMPT_RE =
   /externally sourced animated GIF asset|animated GIF asset in a product UI/i;
 export const QA_SKILL_WORKSHOP_REVIEW_PROMPT_RE = /Review transcript for durable skill updates/i;

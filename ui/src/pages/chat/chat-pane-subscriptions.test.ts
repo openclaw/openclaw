@@ -12,12 +12,15 @@ import type {
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
+import {
+  createGatewayBrowserClientFixture,
+  createInitializationContext,
+} from "./chat-application-context.test-support.ts";
+import { ChatComposerCapabilityHost } from "./chat-composer-capability-host.tsx";
 import { syncSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
 import { createMountedPanes } from "./chat-pane-mounted.test-support.ts";
 import {
   connectPaneTestView,
-  createGatewayBrowserClientFixture,
-  createInitializationContext,
   createRenderTestChatPane,
   createTestChatPane,
   getPaneTestRuntime,
@@ -180,11 +183,21 @@ function observeRender<T>(pane: TestChatPane, read: () => T) {
 it("projects composer capability changes and catches up a parked pane on reveal", async () => {
   const fixture = createMountedPanes([{ key: "main", kind: "direct", updatedAt: 1 }]);
   const { pane } = fixture;
-  const capabilities = getPaneTestRuntime(pane).composerCapabilities;
-  const view = () => capabilities.dialogView(pane.context, pane.state, undefined);
-  const { render, expectUpdate } = observeRender(pane, () => view().open);
+  const runtime = getPaneTestRuntime(pane);
+  expect(runtime.composerCapabilities).toBeUndefined();
+  const { render, expectUpdate } = observeRender(
+    pane,
+    () =>
+      runtime.composerCapabilities?.dialogView(pane.context, pane.state, undefined).open ?? false,
+  );
   fixture.mount("main");
   await pane.updateComplete;
+  const create = vi.fn(() => new ChatComposerCapabilityHost());
+  const capabilities = runtime.ensureComposerCapabilities(create);
+  await pane.updateComplete;
+  expect(runtime.ensureComposerCapabilities(create)).toBe(capabilities);
+  expect(create).toHaveBeenCalledOnce();
+  const view = () => capabilities.dialogView(pane.context, pane.state, undefined);
 
   await expectUpdate(
     () => capabilities.props(pane.context, pane.state, undefined, "main").onAddServer?.(),

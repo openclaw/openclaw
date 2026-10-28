@@ -1,16 +1,14 @@
 import { throwIfSettledRejected } from "../infra/error-graph-internal.js";
 
-type MeetingSessionCleanupProgress = {
-  browserLeft?: boolean;
-  browserSettled: boolean;
-  stopSettled: boolean;
-};
-
 type MeetingSessionCleanupState = {
   stops: Set<() => Promise<void>>;
   setup?: Promise<void>;
   stopping?: Promise<void>;
-  cleanup?: MeetingSessionCleanupProgress;
+  cleanup?: {
+    browserLeft?: boolean;
+    browserSettled: boolean;
+    stopSettled: boolean;
+  };
   unpublished?: boolean;
 };
 

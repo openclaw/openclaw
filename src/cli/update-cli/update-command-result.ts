@@ -60,6 +60,7 @@ import {
 import { exitCliAfterOutput } from "../one-shot-exit.js";
 import { printResult } from "./progress.js";
 import { UpdatePreMutationError, type UpdateCommandOptions } from "./shared.js";
+import { resolveUpdateOwnershipFailure } from "./update-command-config-failure.js";
 import type { UpdateConfigSnapshot } from "./update-command-config-snapshot.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import type { OwnedManagedUpdateContext } from "./update-command-managed-context.js";
@@ -273,27 +274,37 @@ export function createUpdateCommandFailureResult(
 ): UpdateRunResult & { failedStep: UpdateStepResult } {
   const { failure, admission, phase, ...result } = params;
   const cause = primaryUpdateFailure(failure.cause);
+  const ownershipFailure = resolveUpdateOwnershipFailure(failure.cause);
   const refusal = classifyDoctorMaintenanceRefusal(failure.cause);
   const preMutationFailure = cause instanceof UpdatePreMutationError;
   const pkgOwnershipFailure = cause instanceof SystemPackageOwnershipError;
   const admissionFailure =
     admission === true && cause instanceof GatewayServiceUpdateOwnershipError;
-  const detail = admissionFailure
-    ? `The installation and Gateway were left unchanged. ${failure.detail ?? cause.message}`
-    : failure.detail;
+  const detail =
+    ownershipFailure?.message ??
+    (admissionFailure
+      ? `The installation and Gateway were left unchanged. ${failure.detail ?? cause.message}`
+      : failure.detail);
   const reason =
     cause instanceof UpdateRequesterRevokedError
       ? cause.code
-      : preMutationFailure || pkgOwnershipFailure
-        ? cause.reason
-        : admissionFailure
-          ? "managed-service-preflight"
-          : "update-failed";
+      : ownershipFailure && admission
+        ? "config-read-failed"
+        : preMutationFailure || pkgOwnershipFailure
+          ? cause.reason
+          : admissionFailure
+            ? "managed-service-preflight"
+            : "update-failed";
   const stepResult = preMutationFailure ? cause.stepResult : undefined;
   const doctorFailureFacts = collectUpdateDoctorFailureFacts(failure.cause);
   const failedStep: UpdateStepResult = stepResult?.failedStep ?? {
     name:
-      preMutationFailure || pkgOwnershipFailure || admissionFailure ? reason : (phase ?? "update"),
+      (ownershipFailure && admission) ||
+      preMutationFailure ||
+      pkgOwnershipFailure ||
+      admissionFailure
+        ? reason
+        : (phase ?? "update"),
     command: "openclaw update",
     cwd: result.root ?? process.cwd(),
     durationMs: result.durationMs,
@@ -303,11 +314,12 @@ export function createUpdateCommandFailureResult(
     ...(preMutationFailure && cause.recoverySteps ? { recoverySteps: cause.recoverySteps } : {}),
     // Recorded diagnostics do not change post-mutation recovery eligibility.
     failureFacts:
-      preMutationFailure || cause instanceof GatewayServiceUpdateOwnershipError
+      ownershipFailure?.failureFacts ??
+      (preMutationFailure || cause instanceof GatewayServiceUpdateOwnershipError
         ? cause.failureFacts
         : doctorFailureFacts.length
           ? doctorFailureFacts
-          : [createUpdateErrorFact(phase ?? "update", failure.cause)],
+          : [createUpdateErrorFact(phase ?? "update", failure.cause)]),
   };
   if (refusal.kind === "data-at-risk") {
     result.recovery = {
@@ -360,7 +372,11 @@ export async function resolveMutableUpdateFailure(params: {
           cause: params.cause,
         });
   }
-  const failure = { cause: params.cause, detail: formatErrorMessage(params.cause) };
+  const failure = {
+    cause: params.cause,
+    detail:
+      resolveUpdateOwnershipFailure(params.cause)?.message ?? formatErrorMessage(params.cause),
+  };
   defaultRuntime.error(failure.detail);
   let phase: string | undefined;
   if (params.run) {
@@ -424,20 +440,27 @@ export async function withUpdateAdmissionReporting<T>(
     if (error instanceof UpdateCommandPendingRecoveryFailure) {
       return reportUpdateCommandPendingRecovery(error, opts);
     }
+    const ownershipFailure = !hasCommandProcessCleanupError(error)
+      ? resolveUpdateOwnershipFailure(error)
+      : undefined;
     if (
       !(error instanceof GatewayServiceUpdateOwnershipError) &&
       !(error instanceof SystemPackageOwnershipError) &&
       !(
         error instanceof UpdatePreMutationError &&
         (error.reason === "config-read-failed" || error.reason === "invalid-config")
-      )
+      ) &&
+      !ownershipFailure
     ) {
       throw error;
     }
     const message =
-      error instanceof SystemPackageOwnershipError || error instanceof UpdatePreMutationError
+      ownershipFailure?.message ??
+      (error instanceof SystemPackageOwnershipError || error instanceof UpdatePreMutationError
         ? error.message
-        : `${error.message} Run \`openclaw gateway status --deep\` from the service's owning account before retrying.`;
+        : error instanceof GatewayServiceUpdateOwnershipError
+          ? `${error.message} Run \`openclaw gateway status --deep\` from the service's owning account before retrying.`
+          : undefined);
     if (opts.json) {
       defaultRuntime.error(message);
     }
@@ -452,7 +475,8 @@ export async function withUpdateAdmissionReporting<T>(
       {
         readHistory: false,
         nextAction:
-          error instanceof UpdatePreMutationError ? (error.nextAction ?? message) : message,
+          ownershipFailure?.nextAction ??
+          (error instanceof UpdatePreMutationError ? (error.nextAction ?? message) : message),
       },
     );
     return exitCliAfterOutput(defaultRuntime, 1);

@@ -157,28 +157,17 @@
   color: var(--text);
 }
 
-/* The preview owner retains pointer hover over the card; keyboard-only marks stay uniform. Items carry the
-   width so :has() stays in the subject compound: a tick selector after it joins Chromium's
-   shared :has() invalidation set and restyles every tick on each transcript row insertion. */
-.chat-position-rail__item:has(
-  + .chat-position-rail__item + .chat-position-rail__item + .chat-position-rail__item[data-hovered]
-),
-.chat-position-rail__item[data-hovered]
-  + .chat-position-rail__item
-  + .chat-position-rail__item
-  + .chat-position-rail__item {
+/* The owner supplies contiguous hover neighbors. Sibling :has() selectors
+   make WebKit revisit the marker list on every virtual-window DOM mutation. */
+.chat-position-rail__item[data-hover-distance="3"] {
   --chat-position-tick-width: 12px;
 }
 
-.chat-position-rail__item:has(
-  + .chat-position-rail__item + .chat-position-rail__item[data-hovered]
-),
-.chat-position-rail__item[data-hovered] + .chat-position-rail__item + .chat-position-rail__item {
+.chat-position-rail__item[data-hover-distance="2"] {
   --chat-position-tick-width: 16px;
 }
 
-.chat-position-rail__item:has(+ .chat-position-rail__item[data-hovered]),
-.chat-position-rail__item[data-hovered] + .chat-position-rail__item {
+.chat-position-rail__item[data-hover-distance="1"] {
   --chat-position-tick-width: 24px;
 }
 
@@ -321,10 +310,6 @@
   corner-shape: inherit;
 }
 
-.chat-image-frame--managed > .chat-image-surface {
-  min-height: 32px;
-}
-
 .chat-image-frame--image {
   display: block;
   flex: none;
@@ -377,6 +362,17 @@
   right: 0;
   width: 44px;
   height: 44px;
+}
+
+/* Reserve the menu outside the ratio-preserving surface so it cannot cover the next image. */
+.chat-image-frame--small-actions {
+  min-height: 44px;
+}
+
+/* Narrow previews keep their ratio; the full-size menu target may extend beside them. */
+.chat-image-frame--small > .chat-image-actions {
+  right: auto;
+  inset-inline-start: 0;
 }
 
 .chat-image-actions .oc-menu {

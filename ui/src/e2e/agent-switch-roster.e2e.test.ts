@@ -10,7 +10,7 @@ import {
   installMockGateway,
 } from "./session-management.test-support.ts";
 
-const suite = createSessionManagementE2eSuite(true);
+const suite = createSessionManagementE2eSuite();
 const rows = ["main", "writer"].flatMap((agentId) =>
   Array.from({ length: 200 }, (_, index) =>
     createControlUiSessionRow(

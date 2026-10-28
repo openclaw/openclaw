@@ -1,6 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { createInitializationContext } from "../../pages/chat/chat-pane.test-support.ts";
+import { createInitializationContext } from "../../pages/chat/chat-application-context.test-support.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";

@@ -15,6 +15,7 @@ import {
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { deleteSessionEntryLifecycle } from "../../config/sessions/session-accessor.sqlite-lifecycle.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import * as gitBudget from "../../infra/git-content-budget.js";
 import * as gitExec from "../../infra/git-exec.js";
 import {
   isSessionMutationActive,
@@ -202,6 +203,191 @@ it("refuses unarchive after an interrupted removal releases its process claim", 
   expect(entry.archivedAt).toBe(1);
   expect(getRegistryWorktree(env, record.id)?.removedAt).toBeUndefined();
 });
+
+it("records failed deleted-session cleanup and replaces it only after preserving the snapshot", async () => {
+  const { repoRoot, env, sessionKey, storePath, cfg, record } =
+    await archivedSession("deleted-cleanup");
+  await fs.writeFile(path.join(record.path, "draft.txt"), "recoverable deleted-session work\n");
+  await deleteSessionEntryLifecycle({
+    agentId: "main",
+    storePath,
+    env,
+    archiveTranscript: false,
+    target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+  });
+  const service = new ManagedWorktreeService({ env });
+  const capture = vi
+    .spyOn(snapshots, "captureManagedWorktreeSnapshot")
+    .mockRejectedValueOnce(new Error("snapshot storage unavailable"));
+  const failed = await service.gc(createManagedWorktreeOwnerPolicy(cfg));
+  expect(failed.removed).not.toContain(record.id);
+  expect(await fs.readFile(path.join(record.path, "draft.txt"), "utf8")).toBe(
+    "recoverable deleted-session work\n",
+  );
+  await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
+  const retained = (await service.listRegistryRecords()).find((entry) => entry.id === record.id);
+  expect(retained).toMatchObject({
+    runEndCleanup: {
+      outcome: "failed",
+      reason: expect.stringContaining("snapshot storage unavailable"),
+    },
+  });
+  expect(retained?.removedAt).toBeUndefined();
+  capture.mockRestore();
+
+  expect((await service.gc(createManagedWorktreeOwnerPolicy(cfg))).removed).toContain(record.id);
+  const removed = (await service.listRegistryRecords()).find((entry) => entry.id === record.id)!;
+  expect(removed).toMatchObject({
+    removedAt: expect.any(Number),
+    runEndCleanup: { outcome: "removed-lossless" },
+  });
+  expect(removed.runEndCleanup?.reason).toBeUndefined();
+  await expect(fs.access(record.path)).rejects.toMatchObject({ code: "ENOENT" });
+  expect(await requireGit(repoRoot, ["show", `${removed.snapshotRef}:draft.txt`])).toBe(
+    "recoverable deleted-session work",
+  );
+});
+
+it("continues cleanup when a failed snapshot's session was deleted before outcome recording", async () => {
+  const { repoRoot, env, sessionKey, storePath, cfg, record } =
+    await archivedSession("changed-cleanup-owner");
+  const nextKey = `${sessionKey}-next`;
+  const next = await materializeManagedWorktreeFixture({
+    env,
+    stateDir: env.OPENCLAW_STATE_DIR,
+    repoRoot,
+    name: "next-cleanup-owner",
+    now: 0,
+    ownerKind: "session",
+    ownerId: nextKey,
+  });
+  await replaceSessionEntry(
+    { agentId: "main", sessionKey: nextKey, storePath, env },
+    {
+      sessionId: "next-cleanup-session",
+      updatedAt: 1,
+      archivedAt: 1,
+      worktree: { id: next.id, branch: next.branch, repoRoot },
+    },
+  );
+  await fs.writeFile(path.join(record.path, "draft.txt"), "preserve the failed checkout\n");
+  await fs.writeFile(path.join(next.path, "draft.txt"), "snapshot the next checkout\n");
+  const capture = snapshots.captureManagedWorktreeSnapshot;
+  const captured: string[] = [];
+  vi.spyOn(snapshots, "captureManagedWorktreeSnapshot").mockImplementation(async (params) => {
+    captured.push(params.record.id);
+    if (params.record.id === record.id) {
+      await deleteSessionEntryLifecycle({
+        agentId: "main",
+        storePath,
+        env,
+        archiveTranscript: false,
+        target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+      });
+      throw new Error("snapshot failed after owner deletion");
+    }
+    return capture(params);
+  });
+  const service = new ManagedWorktreeService({ env });
+  const result = await service.gc(createManagedWorktreeOwnerPolicy(cfg));
+  expect(captured).toEqual([record.id, next.id]);
+  expect(result.removed).toEqual([next.id]);
+  expect(result.issues).toContainEqual(
+    expect.objectContaining({ id: record.id, reason: expect.stringContaining("snapshot failed") }),
+  );
+  expect(await fs.readFile(path.join(record.path, "draft.txt"), "utf8")).toBe(
+    "preserve the failed checkout\n",
+  );
+  const records = await service.listRegistryRecords();
+  expect(records.find((entry) => entry.id === record.id)?.runEndCleanup).toBeUndefined();
+  const removed = records.find((entry) => entry.id === next.id)!;
+  expect(await requireGit(repoRoot, ["show", `${removed.snapshotRef}:draft.txt`])).toBe(
+    "snapshot the next checkout",
+  );
+});
+
+it(
+  "lets admitted content writers publish refs while pack maintenance waits for a slot",
+  { timeout: 5_000 },
+  async ({ signal }) => {
+    const root = tempDirs.make("worktree-maintenance-content-admission-");
+    const repoRoot = await initializeRepository(root);
+    const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
+    setRuntimeConfigSnapshot({});
+    await materializeManagedWorktreeFixture({
+      env,
+      stateDir: root,
+      repoRoot,
+      name: "publication",
+      now: 1,
+    });
+    await requireGit(repoRoot, ["repack", "-d"]);
+    const head = await requireGit(repoRoot, ["rev-parse", "HEAD"]);
+    const refs = ["refs/openclaw/test-publication/one", "refs/openclaw/test-publication/two"];
+    const abort = new AbortController();
+    const occupied = createDeferred();
+    const publish = createDeferred();
+    const maintenanceWaiting = createDeferred();
+    const withSlot = gitBudget.withContentGitSlot;
+    let observeWait = false;
+    vi.spyOn(gitBudget, "withContentGitSlot").mockImplementation(
+      (run, queueSignal, interactive) => {
+        const pending = withSlot(run, queueSignal, interactive);
+        if (observeWait) {
+          maintenanceWaiting.resolve();
+        }
+        return pending;
+      },
+    );
+    let writers: Promise<string>[] = [];
+    const execute = gitExec.executeGitCommand;
+    vi.spyOn(gitExec, "executeGitCommand").mockImplementation(async (cwd, args, options) => {
+      const result = await execute(cwd, args, options);
+      if (options?.operation === "worktree.maintenance" && args[1] === "--git-common-dir") {
+        let active = 0;
+        // Fill the budget after maintenance's metadata read. Snapshot workers also
+        // hold a content slot while publishing through the real shared ref queue.
+        writers = refs.map((ref) =>
+          withSlot(async () => {
+            if (++active === refs.length) {
+              occupied.resolve();
+            }
+            await publish.promise;
+            return requireGit(repoRoot, ["update-ref", ref, head], { signal: abort.signal });
+          }, abort.signal),
+        );
+        for (const writer of writers) {
+          void writer.catch(() => {});
+        }
+        await occupied.promise;
+        observeWait = true;
+      }
+      return result;
+    });
+    const maintenance = createWorktreeGitMaintenance(env)({ signal: abort.signal });
+    void maintenance.catch(() => {});
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(
+          maintenanceWaiting.promise,
+          maintenance,
+          "Maintenance settled before waiting for content admission",
+        ),
+        signal,
+      );
+      publish.resolve();
+      await withinTest(Promise.all([...writers, maintenance]), signal);
+      for (const ref of refs) {
+        expect(await requireGit(repoRoot, ["rev-parse", ref])).toBe(head);
+      }
+    } finally {
+      abort.abort(new Error("content admission test finished"));
+      publish.resolve();
+      await Promise.allSettled([...writers, maintenance]);
+    }
+  },
+);
 
 it("bounds Git housekeeping without delaying orphan cleanup or newly registered repositories", async () => {
   const root = tempDirs.make("worktree-gc-cadence-state-");

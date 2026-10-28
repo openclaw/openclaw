@@ -1,26 +1,10 @@
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../../infra/kysely-sync.js";
 import { SqliteWorkerError } from "../../../infra/sqlite-worker-contract.js";
-import type { DB } from "../../../state/openclaw-state-db.generated.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  openOpenClawStateDatabase,
-} from "../../../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import * as persistence from "./subagent-registry-persistence.js";
 import { withQueuedRegistrationFixture } from "./subagent-registry-queued-registration.test-support.js";
-
-function storedPayload(runId: string): string | undefined {
-  const { db } = openOpenClawStateDatabase();
-  return executeSqliteQuerySync(
-    db,
-    getNodeSqliteKysely<Pick<DB, "subagent_runs">>(db)
-      .selectFrom("subagent_runs")
-      .select("payload_json")
-      .where("run_id", "=", runId),
-  ).rows[0]?.payload_json;
-}
 
 it.each(["live", "closing"] as const)(
   "settles failed completion recovery with a %s state database",
@@ -33,8 +17,8 @@ it.each(["live", "closing"] as const)(
       });
       const original = f.current();
       const before = structuredClone(original);
-      const persisted = storedPayload(original.runId);
-      expect(persisted).toBeTypeOf("string");
+      const persisted = f.stored();
+      expect(persisted).toBeDefined();
       const write = f.holdNextWrite("before");
       const writesBefore = f.writes;
       const recoveryQueued = createDeferred();
@@ -84,7 +68,7 @@ it.each(["live", "closing"] as const)(
           expect(f.stored()?.cleanupHandled).toBe(false);
           expect(f.options.resumeSubagentRun).toHaveBeenCalledExactlyOnceWith(original.runId);
         } else {
-          expect(storedPayload(original.runId)).toBe(persisted);
+          expect(f.stored()).toEqual(persisted);
           expect(f.current()).toEqual(before);
           expect(f.options.resumeSubagentRun).not.toHaveBeenCalled();
           expect(f.options.scheduleSweep).not.toHaveBeenCalled();

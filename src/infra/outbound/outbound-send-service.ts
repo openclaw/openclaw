@@ -1,4 +1,8 @@
-import { projectPluginMessageDeliveryFact } from "../../agents/embedded-agent-message-delivery.js";
+import { randomUUID } from "node:crypto";
+import {
+  projectPluginMessageDeliveryFact,
+  type EmbeddedMessageDeliveryFact,
+} from "../../agents/embedded-agent-message-delivery.js";
 import type { AgentToolResult } from "../../agents/runtime/index.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ChatType } from "../../channels/chat-type.js";
@@ -11,11 +15,13 @@ import {
   normalizeMessagePresentation,
   renderMessagePresentationFallbackText,
 } from "../../interactive/payload.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import { extractToolPayload } from "../../plugin-sdk/tool-payload.js";
+import { commitConfirmedVisibleMessage } from "../../sessions/confirmed-visible-message.js";
+import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
-import { mirrorDeliveredPayloads } from "./deliver-transcript.js";
 import type { NormalizedOutboundPayload } from "./deliver.js";
 import {
   createChannelActionContext,
@@ -24,16 +30,19 @@ import {
 import { collectActionMediaSourceHints } from "./message-action-params.js";
 import type { MessagePollResult, MessageSendResult } from "./message.js";
 import { sendMessage, sendPoll } from "./message.js";
-import type { OutboundMirror } from "./mirror.js";
+import type { OutboundSessionRoute } from "./outbound-session.js";
+import { buildOutboundSessionContext } from "./session-context.js";
+
+const log = createSubsystemLogger("outbound/send-service");
 
 type OutboundSendContext = Omit<ResolvedActionContext, "mediaAccess"> & {
   mediaAccess?: OutboundMediaAccess;
   conversationType?: ChatType;
-  mirror?: OutboundMirror;
+  transcriptRoute?: OutboundSessionRoute;
   silent?: boolean;
   /** The caller resends proven-not-sent payloads itself, so recovery must not. */
   deliveryRetryOwner?: "caller";
-  /** Commits the route after platform evidence, before either delivery mirror. */
+  /** Commits first-contact routing after platform evidence. */
   onSendAccepted?: () => Promise<void>;
 };
 
@@ -81,7 +90,7 @@ async function tryHandleWithPluginAction(params: {
   ctx: OutboundSendContext;
   action: "send" | "poll";
   reply?: OutboundReplyFacts;
-  onHandled?: (outcome: { partialDelivery: boolean }) => Promise<void> | void;
+  onHandled?: (deliveryFact: EmbeddedMessageDeliveryFact | undefined) => Promise<void> | void;
 }): Promise<PluginHandledResult | null> {
   if (params.ctx.dryRun) {
     return null;
@@ -90,7 +99,7 @@ async function tryHandleWithPluginAction(params: {
   // policy as core delivery so custom handlers cannot widen file reads.
   const mediaAccess = resolveAgentScopedOutboundMediaAccess({
     cfg: params.ctx.cfg,
-    agentId: params.ctx.agentId ?? params.ctx.mirror?.agentId,
+    agentId: params.ctx.agentId,
     mediaSources: collectActionMediaSourceHints(params.ctx.params, undefined, {
       structuredAttachments: params.action === "send" ? "all" : undefined,
     }),
@@ -119,7 +128,7 @@ async function tryHandleWithPluginAction(params: {
   }
   const deliveryFact = projectPluginMessageDeliveryFact(handled);
   if (!deliveryFact || deliveryFact.status === "settled") {
-    await params.onHandled?.({ partialDelivery: deliveryFact?.partialDelivery === true });
+    await params.onHandled?.(deliveryFact);
   }
   return {
     handledBy: "plugin",
@@ -192,30 +201,52 @@ export async function executeSendAction(params: SendActionParams): Promise<{
         ctx: pluginCtx,
         action: "send",
         reply: params.reply,
-        onHandled: async ({ partialDelivery }) => {
-          // The accepted-send commit must precede the transcript mirror below:
-          // first-contact outbound routes create their session row in it.
-          await params.ctx.onSendAccepted?.();
-          if (partialDelivery || !params.ctx.mirror) {
-            return;
-          }
-          const mirrorText =
-            pluginMessage !== params.message
-              ? pluginMessage
-              : params.ctx.mirror.text?.trim() || pluginMessage;
-          const mirrorMediaUrls =
-            params.ctx.mirror.mediaUrls ??
-            params.mediaUrls ??
-            (params.mediaUrl ? [params.mediaUrl] : undefined);
-          await mirrorDeliveredPayloads({
-            delivery: {
-              cfg: params.ctx.cfg,
+        onHandled: async (deliveryFact) => {
+          try {
+            await params.ctx.onSendAccepted?.();
+            if (
+              !deliveryFact ||
+              deliveryFact.partialDelivery ||
+              params.ctx.input.callerRecordsDestinationHistory
+            ) {
+              return;
+            }
+            if (deliveryFact.createdThreadIds.length > 1) {
+              log.warn("Confirmed plugin outbound transcript skipped: multiple delivery threads");
+              return;
+            }
+            const threadId = deliveryFact.createdThreadIds[0] ?? params.threadId;
+            const threadChanged =
+              threadId != null &&
+              String(threadId) !== String(params.ctx.transcriptRoute?.threadId ?? params.threadId);
+            const result = await commitConfirmedVisibleMessage({
+              config: params.ctx.cfg,
               channel: params.ctx.channel,
               to: params.to,
-              mirror: params.ctx.mirror,
-            },
-            payloads: [{ text: mirrorText, mediaUrls: mirrorMediaUrls ?? [] }],
-          });
+              accountId: params.ctx.accountId ?? undefined,
+              threadId,
+              route: threadChanged ? undefined : params.ctx.transcriptRoute,
+              producer: buildOutboundSessionContext({
+                cfg: params.ctx.cfg,
+                sessionKey: params.ctx.input.sessionKey,
+                agentId: params.ctx.agentId,
+              }),
+              payload: { ...defaultPayload, text: pluginMessage },
+              deliveryId:
+                params.ctx.input.deliveryIntentId ?? params.ctx.idempotencyKey ?? randomUUID(),
+              payloadIndex: 0,
+              signal: params.ctx.abortSignal,
+              assertDirectAdapterHandoff: params.ctx.input.assertDirectAdapterHandoff,
+            });
+            const diagnostic = result.ok ? result.diagnostics : result.reason;
+            if (diagnostic) {
+              log.warn(`Confirmed plugin outbound transcript: ${diagnostic}`);
+            }
+          } catch (error) {
+            log.warn(
+              `Confirmed plugin outbound transcript commit failed: ${formatErrorMessage(error)}`,
+            );
+          }
         },
       });
     } catch (error) {
@@ -232,7 +263,7 @@ export async function executeSendAction(params: SendActionParams): Promise<{
   }
 
   throwIfAborted(params.ctx.abortSignal);
-  // Prepared payloads and presentations share core queueing, hooks, and mirrors.
+  // Prepared payloads and presentations share core queueing, hooks, and transcript ownership.
   // The legacy gateway send RPC accepts text/media, so materialize its fallback.
   const message =
     corePayload &&
@@ -277,7 +308,6 @@ export async function executeSendAction(params: SendActionParams): Promise<{
     idempotencyKey: params.ctx.idempotencyKey,
     runId: params.ctx.input.runId,
     executionIdentityToken: params.ctx.input.executionIdentityToken,
-    mirror: params.ctx.mirror,
     abortSignal: params.ctx.abortSignal,
     silent: params.ctx.silent,
     mediaAccess: params.ctx.mediaAccess,
@@ -286,6 +316,8 @@ export async function executeSendAction(params: SendActionParams): Promise<{
     gatewayOwnedDelivery: params.ctx.input.gatewayOwnedDelivery,
     deliveryIntentId: params.ctx.input.deliveryIntentId,
     deliveryCompletion: params.ctx.input.deliveryCompletion,
+    transcriptRoute: params.ctx.transcriptRoute,
+    skipDestinationHistory: params.ctx.input.callerRecordsDestinationHistory,
     conversationDeliveryTarget: params.ctx.input.conversationDeliveryTarget,
     deliveryRetryOwner: params.ctx.deliveryRetryOwner,
     requireUnknownSendReconciliation: params.ctx.input.requireQueuePersistence ? false : undefined,

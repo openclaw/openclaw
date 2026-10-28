@@ -7,11 +7,13 @@ import type {
 } from "./plugin-state-operation-contract.js";
 import { isMissingPluginStateTableError } from "./plugin-state-store.database.js";
 import {
+  assertPluginStateKey,
   deletePluginStateEntry,
   isRetainedPluginStateNamespace,
   rowToEntry,
   selectPluginStateEntry,
   type PluginStateDatabase,
+  type PluginStateReadRow,
 } from "./plugin-state-store.kernel.js";
 import { listPluginStateEntries, selectPluginStateBatchRows } from "./plugin-state-store.reads.js";
 import {
@@ -24,6 +26,7 @@ import type {
   PluginStateOperationDefinitions,
   PluginStateOperationHandler,
   PluginStateOperationTransaction,
+  PluginStateStoreOperation,
 } from "./plugin-state-store.types.js";
 import {
   invalidInput,
@@ -36,6 +39,8 @@ export function executePluginStateOperation(
   initialStore: PluginStateDatabase | undefined,
   input: PluginStateOperationInput,
   handler: PluginStateOperationHandler<PluginStateOperationDefinitions>,
+  databasePath = initialStore?.path ?? "",
+  postgres = false,
 ): PluginStateOperationResult {
   let store = initialStore;
   let active = true;
@@ -63,6 +68,7 @@ export function executePluginStateOperation(
     string,
     {
       entries: Map<string, PluginStateEntry<unknown> | undefined>;
+      rows?: Map<string, PluginStateReadRow>;
       scanned: boolean;
       retention?: ReturnType<typeof readPluginStateRetention>;
     }
@@ -79,7 +85,12 @@ export function executePluginStateOperation(
     const identity = JSON.stringify([options.pluginId, options.namespace]);
     let view = views.get(identity);
     if (!view) {
-      view = { entries: new Map(), scanned: !store };
+      const snapshot = writable.size === 0 ? input.namespaceSnapshots?.[identity] : undefined;
+      view = {
+        entries: new Map(),
+        rows: snapshot && new Map(snapshot.map((row) => [row.entry_key, row])),
+        scanned: !store || snapshot !== undefined,
+      };
       views.set(identity, view);
     }
     return { options, view };
@@ -92,9 +103,24 @@ export function executePluginStateOperation(
   };
   const live = (entry: PluginStateEntry<unknown> | undefined) =>
     entry?.expiresAt !== undefined && entry.expiresAt <= Date.now() ? undefined : entry;
+  const readView = (
+    view: ReturnType<typeof requireScope>["view"],
+    key: string,
+    operation: PluginStateStoreOperation,
+  ) => {
+    if (view.rows && !view.entries.has(key)) {
+      const row = view.rows.get(key);
+      // Decode only requested live values; expired malformed JSON remains unread.
+      if (row && (row.expires_at === null || row.expires_at > Date.now())) {
+        view.entries.set(key, rowToEntry(row, operation, databasePath));
+      }
+    }
+    return observe(live(view.entries.get(key)));
+  };
   const read = (index: number, rawKey: string) => {
     const { options, view } = requireScope(index);
     const key = toUSVString(validateKey(rawKey, "lookup"));
+    assertPluginStateKey(postgres, key, "lookup");
     if (!view.entries.has(key) && !view.scanned && store) {
       const row = readNative(
         (database) => selectPluginStateEntry(database.db, { ...options, key, now: Date.now() }),
@@ -102,7 +128,7 @@ export function executePluginStateOperation(
       );
       view.entries.set(key, row ? rowToEntry(row, "lookup", store.path) : undefined);
     }
-    return observe(live(view.entries.get(key)));
+    return readView(view, key, "lookup");
   };
   const transaction: PluginStateOperationTransaction = {
     lookup(index: number, key: string) {
@@ -120,6 +146,7 @@ export function executePluginStateOperation(
         const scope = requireScope(index);
         const { options, view } = scope;
         const key = toUSVString(validateKey(rawKey, "lookup"));
+        assertPluginStateKey(postgres, key, "lookup");
         if (!view.scanned && !view.entries.has(key)) {
           missing.set(JSON.stringify([options.namespace, key]), { ...scope, key });
         }
@@ -153,8 +180,9 @@ export function executePluginStateOperation(
         view.entries = new Map(entries.map((entry) => [entry.key, entry]));
         view.scanned = true;
       }
-      const entries = [...view.entries.values()].flatMap((entry) => {
-        const current = observe(live(entry));
+      const keys = view.rows?.keys() ?? view.entries.keys();
+      const entries = [...keys].flatMap((key) => {
+        const current = readView(view, key, "entries");
         return current ? [current] : [];
       });
       entries.sort(

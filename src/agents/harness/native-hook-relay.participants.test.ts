@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { withPersonalToolTurn } from "../../auto-reply/reply/personal-tool-turn.test-support.js";
 import * as relayRuntime from "../../plugin-sdk/native-hook-relay-runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -129,12 +130,7 @@ it("keeps collaborative native spawn under the incumbent and refuses an ended pa
             }
             expect(admittedCalls).toEqual(names.map((name) => `single-${name}`));
             const pending = invoke("Agent", "pending-spawn");
-            await Promise.race([
-              entered.promise,
-              pending.then(() => {
-                throw new Error("Native spawn bypassed execution admission");
-              }),
-            ]);
+            await awaitGateBeforeSettlement(entered.promise, pending, "Spawn bypassed admission");
             await turn.complete();
             resume.resolve();
             const expectDenied = (response: Awaited<ReturnType<typeof invoke>>) => {

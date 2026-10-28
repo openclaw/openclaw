@@ -90,6 +90,7 @@ function createSessionPatchHandler(
         request = { many: false, params };
       }
       const inputPatch = request.many ? request.params.patch : request.params;
+      diagnostics.describeRequest(request.many ? request.params.targets.length : 1, inputPatch);
       const scopes = client?.connect.scopes ?? [];
       if (
         (inputPatch.permissionMode === "full" ||
@@ -125,7 +126,11 @@ function createSessionPatchHandler(
           sessionMutationAuthorization?.assertCurrent();
         }
       };
-      if (patch.model !== undefined) {
+      if (
+        patch.model !== undefined ||
+        patch.agentRuntime !== undefined ||
+        patch.cyberAccessProgram !== undefined
+      ) {
         preparingOperator = captureGatewayOperatorRunAuthority({
           client,
           context,
@@ -579,7 +584,15 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       });
     },
   ),
-  "sessions.reset": async ({ params, respond, context, client, sessionMutationAuthorization }) => {
+  "sessions.reset": async ({
+    params,
+    respond,
+    context,
+    client,
+    sessionMutationAuthorization,
+    hasCurrentClientAuthority,
+    signal,
+  }) => {
     if (!assertValidParams(params, validateSessionsResetParams, "sessions.reset", respond)) {
       return;
     }
@@ -591,54 +604,70 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
 
     const reason = p.reason === "new" ? "new" : "reset";
     const { performGatewaySessionReset } = await loadSessionLifecycleRuntime();
-    const result = await performGatewaySessionReset({
-      key,
-      ...(p.agentId ? { agentId: p.agentId } : {}),
-      reason,
-      commandSource: "gateway:sessions.reset",
-      creation: resolveOperatorSessionCreation(client),
-      ...(client?.authenticatedUserProfile
-        ? { requestingOperatorProfileId: client.authenticatedUserProfile.profileId }
-        : {}),
-      ...(client?.internal?.operatorRoleActor
-        ? { operatorRoleActor: client.internal.operatorRoleActor }
-        : {}),
-      authorizedPluginId: normalizeOptionalString(client?.internal?.pluginRuntimeOwnerId),
-      armSessionDiffBaselineCapture: true,
-      workerPlacementContext: context,
-      assertAuthorizedInstance: sessionMutationAuthorization?.assertCurrent,
-      expectedSessionId: p.expectedSessionId,
-    });
-    if (!result.ok) {
-      respond(false, undefined, result.error);
-      return;
-    }
-    const deleted = "incognitoDeleted" in result;
-    respond(
-      true,
-      {
-        ok: true,
-        key: result.key,
-        ...(deleted
-          ? {
-              deleted: true,
-              ...(result.worktreePreserved ? { worktreePreserved: result.worktreePreserved } : {}),
-            }
-          : {
-              entry: {
-                ...result.entry,
-                fastMode: prepareSessionFastModePresentation(client)(result.entry.fastMode),
-              },
-              resolved: result.resolved,
-            }),
+    const captured = await captureGatewayOperatorRunAuthority({
+      client,
+      context,
+      hasCurrentClientAuthority,
+      invocationAuthority: {
+        assertCurrent: () => sessionMutationAuthorization?.assertCurrent(),
+        signal,
       },
-      undefined,
-    );
-    emitSessionsChanged(context, {
-      sessionKey: result.key,
-      agentId: result.agentId,
-      ...(deleted ? { sessionId: result.deletedSessionId } : {}),
-      reason: deleted ? "delete" : reason,
     });
+    try {
+      const result = await performGatewaySessionReset({
+        operatorAuthority: captured?.authority,
+        key,
+        ...(p.agentId ? { agentId: p.agentId } : {}),
+        reason,
+        commandSource: "gateway:sessions.reset",
+        creation: resolveOperatorSessionCreation(client),
+        ...(client?.authenticatedUserProfile
+          ? { requestingOperatorProfileId: client.authenticatedUserProfile.profileId }
+          : {}),
+        ...(client?.internal?.operatorRoleActor
+          ? { operatorRoleActor: client.internal.operatorRoleActor }
+          : {}),
+        authorizedPluginId: normalizeOptionalString(client?.internal?.pluginRuntimeOwnerId),
+        armSessionDiffBaselineCapture: true,
+        workerPlacementContext: context,
+        assertAuthorizedInstance: sessionMutationAuthorization?.assertCurrent,
+        expectedSessionId: p.expectedSessionId,
+      });
+      if (!result.ok) {
+        respond(false, undefined, result.error);
+        return;
+      }
+      const deleted = "incognitoDeleted" in result;
+      respond(
+        true,
+        {
+          ok: true,
+          key: result.key,
+          ...(deleted
+            ? {
+                deleted: true,
+                ...(result.worktreePreserved
+                  ? { worktreePreserved: result.worktreePreserved }
+                  : {}),
+              }
+            : {
+                entry: {
+                  ...result.entry,
+                  fastMode: prepareSessionFastModePresentation(client)(result.entry.fastMode),
+                },
+                resolved: result.resolved,
+              }),
+        },
+        undefined,
+      );
+      emitSessionsChanged(context, {
+        sessionKey: result.key,
+        agentId: result.agentId,
+        ...(deleted ? { sessionId: result.deletedSessionId } : {}),
+        reason: deleted ? "delete" : reason,
+      });
+    } finally {
+      captured?.release();
+    }
   },
 };

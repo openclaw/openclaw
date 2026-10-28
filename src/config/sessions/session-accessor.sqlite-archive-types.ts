@@ -1,9 +1,54 @@
+import type { Selectable } from "kysely";
 import type { PreparedSessionHistoryReadTarget } from "../../gateway/session-history-read.types.js";
 import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
+import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
+import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import type { SessionLifecycleArchivedTranscript } from "./session-accessor.lifecycle-types.js";
 import type { SessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.types.js";
 import type { TranscriptEvent } from "./session-accessor.types.js";
 import type { SessionArchivePruningRead } from "./session-history-archive-pruning.types.js";
+
+export type SessionColdArchive = Selectable<DB["session_transcript_cold_archives"]>;
+type SessionColdChunk = Selectable<DB["session_transcript_cold_archive_chunks"]>;
+export type SessionColdChunkMetadata = Omit<SessionColdChunk, "archive_blob">;
+
+export type SessionColdPlan = {
+  databaseOptions: OpenClawAgentDatabaseOptions & { path: string };
+  sessionId: string;
+  snapshot: SessionStateDeleteSnapshot;
+};
+export type SessionColdPrepared = {
+  plan: SessionColdPlan;
+  archive: SessionColdArchive;
+  chunks: SessionColdChunkMetadata[];
+  envelopeBytes: number;
+};
+export type SessionColdExternalization = {
+  chunks: SessionColdChunkMetadata[];
+  archive: Omit<SessionColdArchive, "archive_blob">;
+  envelopeBytes: number;
+};
+type SessionColdOversized = {
+  sessionId: string;
+  lowerBoundBytes: number;
+};
+export type SessionColdBatchInput = {
+  databaseOptions: OpenClawAgentDatabaseOptions & { path: string };
+  admissionIdentities: string[];
+  liveSessionKeys: string[];
+  cooledSessionIds: string[];
+  beforeMs: number;
+  maxTranscripts: number;
+  maxBytes: number;
+};
+export type SessionColdBatchPrepared = {
+  freePages: number;
+  protectionKeys: string[];
+  prepared: SessionColdPrepared[];
+  externalizations: SessionColdExternalization[];
+  oversizedTranscripts: SessionColdOversized[];
+  envelopeBytes: number;
+};
 
 export type SessionStateDeletePlan = {
   agentId: string;
@@ -127,6 +172,7 @@ export type TranscriptArchivePageResult = {
 };
 
 export type SqliteArchiveOperation =
+  | { operation: "cold-prepare"; input: SessionColdBatchInput }
   | { operation: "materialize"; plans: readonly TranscriptArchiveWorkerPlan[] }
   | { operation: "publish"; plans: readonly TranscriptArchivePublishPlan[] }
   | { operation: "read-page"; plans: readonly TranscriptArchivePagePlan[] }
@@ -142,6 +188,7 @@ export type SqliteArchiveSessionRequest = SqliteArchiveOperation & {
 };
 
 export type SqliteArchiveSessionResponse =
+  | { type: "cold-prepared"; results: SessionColdBatchPrepared[] }
   | TranscriptArchiveWorkerMessage
   | TranscriptArchivePublishWorkerMessage
   | { type: "page-read"; results: Array<TranscriptArchivePageResult | undefined> }

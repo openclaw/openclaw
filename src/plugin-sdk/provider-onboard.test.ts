@@ -7,7 +7,6 @@ import {
   applyProviderConfigWithDefaultModels,
   createAliasOnlyPresetAppliers,
   OPENCODE_ZEN_DEFAULT_MODEL,
-  resolveAgentModelPrimaryValue,
   type OpenClawConfig,
 } from "./provider-onboard.js";
 
@@ -29,43 +28,38 @@ const modelRef = "example/default";
 const appliers = createAliasOnlyPresetAppliers({ modelRef, alias: "Example" });
 
 it("adds only the alias entry in provider-only mode", () => {
-  const cfg: OpenClawConfig = {
-    models: { mode: "merge", providers: {} },
-    agents: { defaults: { models: { "other/model": { alias: "Other" } } } },
+  const other = { "other/model": { alias: "Other" } };
+  const cfg = {
+    ...withDefaults({ models: structuredClone(other) }),
+    models: { mode: "merge" as const, providers: {} },
   };
-
   const result = appliers.applyProviderConfig(cfg);
-
   expect(result.models).toBe(cfg.models);
   expect(result.agents?.defaults?.model).toBeUndefined();
   expect(result.agents?.defaults?.models).toEqual({
-    "other/model": { alias: "Other" },
+    ...other,
     [modelRef]: { alias: "Example" },
   });
 });
 
 it("preserves entry fields and alias while replacing the primary", () => {
+  const entry = { alias: "Custom", params: { temperature: 0.2 } };
   const cfg = withDefaults({
     model: { primary: "old/model", fallbacks: ["fallback/model"] },
-    models: { [modelRef]: { alias: "Custom", params: { temperature: 0.2 } } },
+    models: { [modelRef]: structuredClone(entry) },
   });
 
   const result = appliers.applyConfig(cfg);
 
-  expect(resolveAgentModelPrimaryValue(result.agents?.defaults?.model)).toBe(modelRef);
   expect(result.agents?.defaults?.model).toEqual({
     primary: modelRef,
     fallbacks: ["fallback/model"],
   });
-  expect(result.agents?.defaults?.models?.[modelRef]).toEqual({
-    alias: "Custom",
-    params: { temperature: 0.2 },
-  });
+  expect(result.agents?.defaults?.models?.[modelRef]).toEqual(entry);
 });
 it("applyOpencodeZenModelDefault no-ops when already the legacy default", () => {
   const cfg = withDefaults({ model: "opencode-zen/claude-opus-4-5" });
-  const applied = applyOpencodeZenModelDefault(cfg);
-  expect(applied).toEqual({ changed: false, next: cfg });
+  expect(applyOpencodeZenModelDefault(cfg)).toEqual({ changed: false, next: cfg });
 });
 
 it("preserves fallbacks when setting primary", () => {

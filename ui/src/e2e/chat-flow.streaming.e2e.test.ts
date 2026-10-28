@@ -225,7 +225,9 @@ suite.define(() => {
   );
 
   it("keeps the pending telemetry row stable through acknowledgement and streaming", async () => {
-    const { page, gateway } = await chatFixture(suite);
+    const { page, gateway } = await chatFixture(suite, {
+      sessionInfo: { key: "agent:main:main", kind: "group" },
+    });
 
     await page.goto(`${suite.server.baseUrl}chat`);
     await gateway.deferNext("chat.send");
@@ -311,6 +313,7 @@ suite.define(() => {
     await gateway.emitGatewayEvent("chat", chatDelta(runId, response, "main"));
 
     await chatTranscript(page).getByText(response).waitFor({ timeout: 10_000 });
+    expect(await pendingRow.$(".chat-avatar.assistant")).not.toBeNull();
     await indicator.waitFor({ state: "detached", timeout: 10_000 });
     const streamingLayout = await pendingRow.evaluate(
       (row, visibleResponse) => ({

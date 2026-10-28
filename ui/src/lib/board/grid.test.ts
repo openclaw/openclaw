@@ -47,23 +47,17 @@ it("breaks duplicate order ties by name", () => {
   expectNames(layout([item("z", 2, 1, 0), item("a", 2, 1, 0)]), ["a", "z"]);
 });
 it("backfills earlier partial rows after packing a full-width prefix and later full rows", () => {
-  expect(
-    layout([
-      item("prefix", 12, 3, 0),
-      item("left", 5, 3, 1),
-      item("top-right", 7, 1, 2),
-      item("lower-full", 12, 2, 3),
-      item("gap", 7, 2, 4),
-      item("tail", 1, 1, 5),
-    ]),
-  ).toEqual([
+  const expected = [
     { name: "prefix", x: 0, y: 0, w: 12, h: 3 },
     { name: "left", x: 0, y: 3, w: 5, h: 3 },
     { name: "top-right", x: 5, y: 3, w: 7, h: 1 },
     { name: "lower-full", x: 0, y: 6, w: 12, h: 2 },
     { name: "gap", x: 5, y: 4, w: 7, h: 2 },
     { name: "tail", x: 0, y: 8, w: 1, h: 1 },
-  ]);
+  ];
+  expect(layout(expected.map(({ name, w, h }, order) => item(name, w, h, order)))).toEqual(
+    expected,
+  );
 });
 it("chooses the next empty-cell target by rendered row-major geometry", () => {
   const heterogeneous = [1, 3, 5, 7, 1, 3, 9, 11].map((w, order) =>
@@ -87,24 +81,17 @@ it("preserves compaction invariants across generated drag targets", () => {
     );
   }
 });
-it("returns a compact canonical board for an unknown item", () => {
-  const preview = previewDrag([item("b", 3, 1, 5), item("a", 3, 1, 2)], "missing", {
-    name: "a",
-    x: 0,
-    y: 0,
-  });
-  expect(preview.map((entry) => [entry.name, entry.order])).toEqual([
-    ["a", 0],
-    ["b", 1],
-  ]);
+const emptyNameItems = [item("", 6, 1, 0), item("b", 6, 1, 1)];
+it.each([
+  ["missing", "a", [item("b", 3, 1, 5), item("a", 3, 1, 2)], ["a", "b"]],
+  ["b", "", emptyNameItems, ["b", ""]],
+  ["", undefined, emptyNameItems, ["b", ""]],
+] as const)("canonicalizes a drag from %s to %s", (moving, target, items, names) => {
+  const preview = previewDrag(items, moving, { name: target, x: 100, y: 100 });
+  expect(preview.map(({ name, order }) => [name, order])).toEqual(
+    names.map((name, order) => [name, order]),
+  );
   expectValid(layout(preview));
-});
-it("preserves empty widget names in moving and target positions", () => {
-  const emptyNameItems = [item("", 6, 1, 0), item("b", 6, 1, 1)];
-  const preview = previewDrag(emptyNameItems, "b", { name: "", x: 100, y: 100 });
-  expectNames(preview, ["b", ""]);
-  expectValid(layout(preview));
-  expectNames(previewDrag(emptyNameItems, "", { name: undefined, x: 100, y: 100 }), ["b", ""]);
 });
 it("resolves successive named targets from the latest preview through pointerup", () => {
   const items = [item("a", 4, 2, 0), item("b", 4, 2, 1), item("c", 4, 2, 2)];
@@ -116,7 +103,6 @@ it("resolves successive named targets from the latest preview through pointerup"
   expectNames(second, ["a", "c", "b"]);
   expect(first).toEqual(firstSnapshot);
   expect(previewDrag(second, "c", { name: "b", x: 100, y: 100 })).toEqual(second);
-  expectValid(layout(second), true);
   expect(items).toEqual(before);
 });
 it("resizes immutably and clamps both axes", () => {

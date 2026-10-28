@@ -724,8 +724,11 @@ ownership or head timing preserves the item. PR exact-head executed CI protectio
 remains: a successful named CI gate, or a product check with a successful aggregate.
 
 Security/P0/P1, current maintainer authors/assignees, `no-stale`, `bad-barnacle`,
-pinned/hold/in-progress labels and active ClawSweeper work are protected. Issues
-with `enhancement` retain their existing exemption.
+pinned/hold/in-progress labels and `clawsweeper:queueable-fix` are protected.
+Issues with `enhancement` retain their existing exemption.
+`clawsweeper:source-repro` and `clawsweeper:fix-shape-clear` describe review evidence,
+not ownership holds. Alone, they do not block the inactivity lifecycle or existing
+reason-driven responses, and do not establish that a repair worker is active.
 Maintainers use `no-stale` for a durable hold, then explicitly remove it when work
 can resume. Known freeform maintainer holds must be normalized or adjudicated
 before migration can close their items; silence is not release of a hold.

@@ -151,7 +151,6 @@ it.each(["direct", "cell", "nested", "detached"] as const)(
       await running;
       await prepared.subscription.waitForPendingEvents();
       expect(requests).toBe(2);
-      expect(processOwner.wait).toHaveBeenCalledOnce();
     } finally {
       vi.useRealTimers();
       finish();

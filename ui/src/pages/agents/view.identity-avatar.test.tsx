@@ -118,7 +118,7 @@ it("shares one authenticated avatar between editor and picker", async () => {
     image?.dispatchEvent(new Event("load"));
     flush();
     expect(preview?.classList).not.toContain("is-pending");
-    expect(classes).toContain("is-pending");
+    expect(classes).not.toContain("is-pending");
     view.image()?.dispatchEvent(new Event("load"));
     flush();
     expect(classes).not.toContain("is-pending");

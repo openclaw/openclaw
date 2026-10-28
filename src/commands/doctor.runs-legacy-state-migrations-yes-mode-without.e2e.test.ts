@@ -16,6 +16,15 @@ const providerRuntimeMocks = vi.hoisted(() => ({
   resolvePluginProvidersCore: vi.fn((_params?: unknown): ProviderPlugin[] => []),
 }));
 
+// Physical-store inspection has its own suites; this fixture exercises migration/config routing.
+vi.mock("./doctor-database-engine.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./doctor-database-engine.js")>();
+  return {
+    ...actual,
+    noteDatabaseEngines: vi.fn<typeof actual.noteDatabaseEngines>().mockResolvedValue([]),
+  };
+});
+
 vi.mock("../plugins/providers.runtime.js", async () => {
   const actual = await vi.importActual<typeof import("../plugins/providers.runtime.js")>(
     "../plugins/providers.runtime.js",

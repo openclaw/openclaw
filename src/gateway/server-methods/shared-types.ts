@@ -622,6 +622,8 @@ export type SessionEventProjection = {
   serializeSession?: () => string;
   /** Publication-owned UTF-8 message field, including its trailing comma. */
   serializeMessage?: () => Buffer;
+  /** Producer-owned payload fragment; three segments preserve the shared message compression boundary. */
+  serializePayload?: () => readonly [Buffer] | readonly [Buffer, Buffer, Buffer];
   delivered?: (client: GatewayClient) => void;
 };
 

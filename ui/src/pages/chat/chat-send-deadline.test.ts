@@ -122,9 +122,9 @@ async function startPreparingSend(
 
 describe.each(["send", "steer", "redirect"] as const)("%s startup", (command) => {
   const message = (text: string) => (command === "send" ? text : `/${command} ${text}`);
-  it.each([45_000, 240_000])("delivers once after %i ms", async (delay) => {
+  it("delivers once after four minutes of startup", async () => {
     const fixture = await startPreparingSend(message("Wait for this agent"));
-    await vi.advanceTimersByTimeAsync(delay);
+    await vi.advanceTimersByTimeAsync(240_000);
     expect(fixture.pending.hasPending).toBe(true);
     expect(fixture.writes).toHaveLength(0);
     fixture.ready();

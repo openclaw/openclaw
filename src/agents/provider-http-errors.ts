@@ -4,6 +4,7 @@ import {
   asOptionalRecord,
 } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { readTransportDiagnosticLabel } from "../../packages/ai/src/utils/provider-error.js";
 import { normalizeOptionalString as trimToUndefined } from "../../packages/normalization-core/src/string-coerce.js";
 import {
   readResponseTextPrefix,
@@ -160,14 +161,14 @@ export function summarizeProviderTransportError(error: unknown): string {
     return `type=${typeof error}`;
   }
   const cause = asOptionalObjectRecord(record.cause);
-  const read = (value: unknown) => (typeof value === "string" ? value : typeof value);
-  return [
-    `name=${read(record.name)}`,
-    `code=${read(record.code)}`,
-    `causeName=${read(cause?.name)}`,
-    `causeCode=${read(cause?.code)}`,
-    `message=${error instanceof Error ? error.message : read(record.message)}`,
-  ].join(" ");
+  return Object.entries({
+    name: readTransportDiagnosticLabel(record.name),
+    code: readTransportDiagnosticLabel(record.code),
+    causeName: readTransportDiagnosticLabel(cause?.name),
+    causeCode: readTransportDiagnosticLabel(cause?.code),
+  })
+    .flatMap(([key, value]) => (value === undefined ? [] : [`${key}=${value}`]))
+    .join(" ");
 }
 
 /** Trims provider error details to a log- and prompt-safe preview length. */

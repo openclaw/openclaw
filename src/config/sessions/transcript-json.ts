@@ -40,6 +40,10 @@ function requiresNativeJson(value: unknown, ancestors: Set<object>): boolean {
   if (value === null || typeof value !== "object") {
     return typeof value === "bigint" || typeof value === "function";
   }
+  // Admission already checked and sealed the entire payload, including its descendants.
+  if (ownedTranscriptRoots.has(value)) {
+    return false;
+  }
   if (isProxy(value)) {
     return true;
   }

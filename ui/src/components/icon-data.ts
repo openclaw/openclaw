@@ -3,6 +3,10 @@ import { statusIconPaths } from "./icon-data-status.ts";
 import { keyboardIconData, toolIconData } from "./icon-data-tools.ts";
 import { strokeIconData, strokePathData, type IconData } from "./icon-data-types.ts";
 
+const ZAP_POINTS = "13 2 3 14 12 14 11 22 21 10 12 10 13 2";
+const SOFT_ZAP_PATH =
+  "M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z";
+
 export const iconData = {
   share: strokeIconData([
     ["circle", { cx: "18", cy: "5", r: "3" }],
@@ -188,7 +192,34 @@ export const iconData = {
     "M22 12h-6",
     "m19.07 10.93-4.24 4.24",
   ),
-  zap: strokeIconData([["polygon", { points: "13 2 3 14 12 14 11 22 21 10 12 10 13 2" }]]),
+  zap: strokeIconData([["polygon", { points: ZAP_POINTS }]]),
+  zapDouble: {
+    ...strokeIconData([
+      [
+        "path",
+        {
+          d: SOFT_ZAP_PATH,
+          transform: "translate(0 6.55)",
+          fill: "var(--icon-secondary, currentColor)",
+          stroke: "var(--icon-secondary, currentColor)",
+        },
+      ],
+      [
+        "path",
+        {
+          d: SOFT_ZAP_PATH,
+          transform: "translate(4.36 0)",
+          fill: "var(--icon-primary, currentColor)",
+          stroke: "var(--icon-primary, currentColor)",
+        },
+      ],
+    ]),
+    attributes: {
+      ...strokeIconData([]).attributes,
+      viewBox: "0 0 28.36 30.55",
+      "stroke-width": "1.4",
+    },
+  },
   monitor: strokeIconData([
     ["rect", { width: "20", height: "14", x: "2", y: "3", rx: "2" }],
     ["line", { x1: "8", x2: "16", y1: "21", y2: "21" }],

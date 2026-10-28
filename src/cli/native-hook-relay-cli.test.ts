@@ -321,7 +321,7 @@ describe("native hook relay CLI", () => {
 
   it("handles bridge rejection when the deadline expires during bridge startup", async () => {
     let now = 0;
-    const nowSpy = vi.spyOn(performance, "now").mockImplementation(() => now);
+    using _ = vi.spyOn(performance, "now").mockImplementation(() => now);
     const invokeBridge = vi.fn(() => {
       now = 26;
       return Promise.reject(new Error("native hook relay bridge not found"));
@@ -329,26 +329,22 @@ describe("native hook relay CLI", () => {
     const callGateway = vi.fn();
     const { stdout, stderr, run } = relayFixture();
 
-    try {
-      const exitCode = await run(
-        { event: "pre_tool_use", timeout: "25" },
-        { invokeBridge, callGateway },
-      );
+    const exitCode = await run(
+      { event: "pre_tool_use", timeout: "25" },
+      { invokeBridge, callGateway },
+    );
 
-      expect(exitCode).toBe(0);
-      expect(JSON.parse(stdout.text())).toMatchObject({
-        hookSpecificOutput: {
-          hookEventName: "PreToolUse",
-          permissionDecision: "deny",
-          permissionDecisionReason: "Native hook relay timed out",
-        },
-      });
-      expect(stderr.text()).toContain("native hook relay timed out");
-      expect(invokeBridge).toHaveBeenCalledOnce();
-      expect(callGateway).not.toHaveBeenCalled();
-    } finally {
-      nowSpy.mockRestore();
-    }
+    expect(exitCode).toBe(0);
+    expect(JSON.parse(stdout.text())).toMatchObject({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: "Native hook relay timed out",
+      },
+    });
+    expect(stderr.text()).toContain("native hook relay timed out");
+    expect(invokeBridge).toHaveBeenCalledOnce();
+    expect(callGateway).not.toHaveBeenCalled();
   });
 
   it("rejects oversized hook input without touching the gateway", async () => {

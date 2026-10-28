@@ -21,6 +21,7 @@ import {
 } from "../../infra/update-doctor-result.js";
 import type { ManagedHandoffRepair } from "../../infra/update-managed-service-handoff-lease-types.js";
 import { POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV } from "../../infra/update-post-core-context.js";
+import { readUpdateResultPolicy } from "../../infra/update-result-telemetry.js";
 import { formatUpdateRunOwnership } from "../../infra/update-run-activity.js";
 import {
   acknowledgeAbandonedUpdateRun,
@@ -131,9 +132,13 @@ export async function updateFinalizeCommand(
                   recoverOrphanedSidecars: false,
                 });
                 await retainCliProcessJobUntilExit();
+                const reportResult = await readUpdateResultPolicy(process.env);
                 phase.assertCurrent();
                 // Public repair supplies a recovery selection, even when it is empty.
-                const admittedRunId = lifecycle.attachLedger(recoveryRunIds !== undefined);
+                const admittedRunId = lifecycle.attachLedger(
+                  recoveryRunIds !== undefined,
+                  reportResult,
+                );
                 const resolvedRoot = await resolveUpdateRoot();
                 const resolvedInstallKind = await resolveUpdateInstallKind(resolvedRoot, {
                   timeoutMs: lifecycle.budget("preflight"),
@@ -373,6 +378,23 @@ async function updateFinalizeCommandInternal(
   let maintenance: Awaited<
     ReturnType<typeof import("../../commands/doctor-maintenance.js").beginDoctorMaintenance>
   >;
+  const enterMaintenance = async (serviceInspectionDeadlineAtMs: number | undefined) => {
+    if (!ownsMaintenance || maintenance) {
+      return;
+    }
+    const { beginDoctorMaintenance } = await import("../../commands/doctor-maintenance.js");
+    maintenance = await beginDoctorMaintenance({
+      root,
+      runId: invokingRunId,
+      options: { repair: true, nonInteractive: true, json: opts.json },
+      runtime: { ...defaultRuntime, log: defaultRuntime.error },
+      serviceInspectionDeadlineAtMs,
+      reportStoppedService: lifecycle.ownsUpdateRepairRun,
+    });
+    lifecycle.serviceUpdateVerdict = maintenance?.serviceUpdateVerdict;
+    // Fresh Doctor owns database fences; the parent retains service custody.
+    await maintenance?.releaseState();
+  };
   const restoreMaintenance = async (cfg: OpenClawConfig) => {
     const owned = maintenance;
     maintenance = undefined;
@@ -384,7 +406,14 @@ async function updateFinalizeCommandInternal(
   let outcome: { complete: () => Promise<void> } | { error: unknown };
   try {
     if (prepared.installKind === "git") {
-      await completeSourceUpdateRuntime({ root, timeoutMs: lifecycle.budget("plugins") });
+      const runtimeTimeoutMs = lifecycle.budget("plugins");
+      const runtimeDeadline = performance.now() + runtimeTimeoutMs;
+      await completeSourceUpdateRuntime({
+        root,
+        timeoutMs: runtimeTimeoutMs,
+        beforePublication: () =>
+          enterMaintenance(Date.now() + Math.max(0, runtimeDeadline - performance.now())),
+      });
     }
     const initialPluginUpdate = await withPrePluginUpdateDoctorEnv(async () => {
       await lifecycle.run("configSnapshot", () => createUpdateConfigSnapshot());
@@ -400,22 +429,7 @@ async function updateFinalizeCommandInternal(
           }),
         undefined,
         {
-          enter: async (serviceInspectionDeadlineAtMs) => {
-            if (!ownsMaintenance) {
-              return;
-            }
-            const { beginDoctorMaintenance } = await import("../../commands/doctor-maintenance.js");
-            maintenance = await beginDoctorMaintenance({
-              root,
-              runId: invokingRunId,
-              options: { repair: true, nonInteractive: true, json: opts.json },
-              runtime: { ...defaultRuntime, log: defaultRuntime.error },
-              serviceInspectionDeadlineAtMs,
-            });
-            lifecycle.serviceUpdateVerdict = maintenance?.serviceUpdateVerdict;
-            // Fresh Doctor owns database fences; the parent retains service custody.
-            await maintenance?.releaseState();
-          },
+          enter: enterMaintenance,
         },
       );
       return await lifecycle.run(

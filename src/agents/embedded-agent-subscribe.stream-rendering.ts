@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { readAssistantThinkingAppend } from "@openclaw/ai/internal/shared";
 import type { InlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import {
   buildCodeSpanIndex,
@@ -19,11 +18,7 @@ import {
 } from "../infra/agent-events.js";
 import { findFinalTagMatches } from "../shared/text/final-tags.js";
 import { hasOrphanReasoningCloseBoundary } from "../shared/text/reasoning-tags.js";
-import {
-  createTextProjection,
-  trimTextFilter,
-  trimTextPreservingCode,
-} from "../shared/text/text-projection.js";
+import { trimTextPreservingCode } from "../shared/text/text-projection.js";
 import type { BlockChunkMetadata } from "./embedded-agent-block-chunker.js";
 import {
   isMessagingToolDuplicateNormalized,
@@ -40,6 +35,7 @@ import type {
 } from "./embedded-agent-subscribe.handlers.types.js";
 import type { SubscribeEmbeddedAgentSessionParams } from "./embedded-agent-subscribe.types.js";
 import {
+  createAssistantThinkingStream,
   createAssistantStreamBlockState,
   createThinkingTagStreamState,
 } from "./embedded-agent-utils.js";
@@ -134,14 +130,11 @@ export function createStreamRendering({
 }: StreamRenderingParams) {
   const messagingToolSentTextsNormalized = state.messagingToolSentTextsNormalized;
   const partialReplyDirectiveAccumulator = createStreamingDirectiveAccumulator();
-  let reasoningProjection = createTextProjection([trimTextFilter("both")]);
+  let reasoningProjection = createAssistantThinkingStream();
   const coveredBlockSources = new Map<
     number,
     Array<{ range: readonly [number, number]; text: string }>
   >();
-  // Retain the producer snapshot for eligibility; the projection builds its own
-  // source, and comparing a reconstructed growing prefix can restore prefix work.
-  let reasoningRaw: string | undefined;
 
   const stripBlockTags = (
     text: string,
@@ -628,21 +621,8 @@ export function createStreamRendering({
     if (params.silentExpected) {
       return;
     }
-    const text = typeof input === "string" ? input : input.thinking;
-    const append =
-      typeof input !== "string" && reasoningRaw !== undefined
-        ? readAssistantThinkingAppend(input, reasoningRaw)
-        : undefined;
     const previousProjectedText = reasoningProjection.text;
-    let projected =
-      append !== undefined ? reasoningProjection.append(append) : reasoningProjection.replace(text);
-    reasoningRaw = text;
-    if (!projected.text && fallback?.trim()) {
-      // Empty native summaries have always fallen back to event payloads. That
-      // replacement must not seed a later append against a different raw prefix.
-      projected = reasoningProjection.replace(fallback);
-      reasoningRaw = undefined;
-    }
+    const projected = reasoningProjection.update(input, fallback);
     const trimmed = projected.text;
     if (!trimmed || trimmed === state.lastStreamedReasoning) {
       return;
@@ -696,6 +676,7 @@ export function createStreamRendering({
     state.streamBlockText = "";
     state.streamBlockFinal = false;
     state.blockReplyScopeStart = undefined;
+    state.blockReplyTextUnsettled = false;
     state.thinkingTagStream = createThinkingTagStreamState();
     state.deltaBufferIsCommentary = false;
     state.hasFlushedPartialText = false;
@@ -707,8 +688,7 @@ export function createStreamRendering({
     state.currentSourceMessagingToolHeldPartial = undefined;
     state.lastBlockReplyText = undefined;
     state.lastStreamedReasoning = undefined;
-    reasoningProjection = createTextProjection([trimTextFilter("both")]);
-    reasoningRaw = undefined;
+    reasoningProjection = createAssistantThinkingStream();
     state.reasoningStreamOpen = false;
     state.suppressBlockChunks = false;
     state.assistantMessageIndex += 1;

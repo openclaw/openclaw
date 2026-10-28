@@ -7,21 +7,16 @@ import {
   withWorktreePreparationTiming as withTiming,
 } from "./preparation-timing.js";
 
-const observations = vi.hoisted(() => ({ log: vi.fn(), event: vi.fn() }));
+const { log, event } = vi.hoisted(() => ({ log: vi.fn(), event: vi.fn() }));
 // mock-isolation: Observe the preparation receipt without a process-wide diagnostic queue.
 vi.mock("../../infra/diagnostic-events.js", () => ({
-  createQueuedDiagnosticPhaseEmitter: () => observations.event,
+  createQueuedDiagnosticPhaseEmitter: () => event,
 }));
 // mock-isolation: Keep the logging sink outside this timing-contract fixture.
-vi.mock("../../logging/subsystem.js", () => ({
-  createSubsystemLogger: () => ({ info: observations.log }),
-}));
+vi.mock("../../logging/subsystem.js", () => ({ createSubsystemLogger: () => ({ info: log }) }));
 
-afterEach(() => {
-  vi.restoreAllMocks();
-  observations.log.mockReset();
-  observations.event.mockReset();
-});
+afterEach(vi.restoreAllMocks);
+afterEach(vi.resetAllMocks);
 
 it("attributes nested preparation once per owner and retains failed phase time", async () => {
   let clock = 0;
@@ -35,11 +30,9 @@ it("attributes nested preparation once per owner and retains failed phase time",
       setWorktreePreparationTemplate("warm", warm);
       await timeWorktreePreparationPhase("templateApply", async () => {
         clock += 12;
-        await withTiming("managed", async () => {
-          await timeWorktreePreparationPhase("checkout", async () => {
-            clock += 40;
-          });
-        });
+        await withTiming("managed", () =>
+          timeWorktreePreparationPhase("checkout", async () => (clock += 40)),
+        );
       });
       await timeWorktreePreparationPhase("containerStart", async () => {
         clock += 8;
@@ -47,47 +40,30 @@ it("attributes nested preparation once per owner and retains failed phase time",
       });
     }),
   ).rejects.toBe(failure);
-  const receipts = [
-    ["managed", "unavailable", { reason: "not-requested" }, "returned", 40, { checkout: 40 }],
-    ["sandbox", "warm", warm, "threw", 60, phases],
-  ] as const;
-  expect(observations.log.mock.calls).toEqual(
-    receipts.map(([kind, template, templateDetails, outcome, durationMs, phaseDurationsMs]) => [
-      "managed worktree preparation",
-      {
-        kind,
-        template,
-        templateDetails,
-        outcome,
-        durationMs,
-        phaseDurationsMs,
-        unattributedMs: 0,
-        consoleMessage: expect.stringContaining(
-          `phaseDurationsMs=${JSON.stringify(phaseDurationsMs)}`,
-        ),
-      },
-    ]),
-  );
-  expect(observations.event).toHaveBeenCalledTimes(2);
-  expect(observations.event.mock.calls[1]?.[0]).toMatchObject({
+  expect(event.mock.calls[0]?.[0]).toMatchObject({
+    durationMs: 40,
+    details: { kind: "managed", template: "unavailable", outcome: "returned", checkout: 40 },
+  });
+  expect(event).toHaveBeenCalledTimes(2);
+  expect(event.mock.calls[1]?.[0]).toMatchObject({
     name: "worktree.preparation",
     durationMs: 60,
     details: {
       kind: "sandbox",
       template: "warm",
       outcome: "threw",
+      unattributedMs: 0,
       ...phases,
       ...Object.fromEntries(Object.entries(warm).map(([key, value]) => [`template.${key}`, value])),
     },
   });
-  expect(JSON.stringify(observations.log.mock.calls)).not.toContain(failure.message);
+  expect(JSON.stringify(log.mock.calls)).not.toContain(failure.message);
 });
 
 it("omits unmanaged sandboxes and preserves results if a diagnostics sink fails", async () => {
   await withTiming("sandbox", async () => "unmanaged");
-  expect(observations.log).not.toHaveBeenCalled();
-  expect(observations.event).not.toHaveBeenCalled();
-  observations.log.mockImplementation(() => {
+  expect([log.mock.calls, event.mock.calls]).toEqual([[], []]);
+  log.mockImplementation(() => {
     throw new Error("log sink unavailable");
   });
   await expect(withTiming("managed", async () => "ready")).resolves.toBe("ready");
@@ -108,7 +84,7 @@ it("reports uncovered time without double-counting overlapping phases", async ()
     finishWait();
     clock = 60;
   });
-  expect(observations.log.mock.calls[0]?.[1]).toMatchObject({
+  expect(log.mock.calls[0]?.[1]).toMatchObject({
     durationMs: 60,
     unattributedMs: 20,
     phaseDurationsMs: { base: 30, baseWait: 30 },
