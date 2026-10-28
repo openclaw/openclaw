@@ -494,6 +494,7 @@ src/channels/plugins/doctor-contract-api.ts
 src/channels/plugins/exposure.ts
 src/channels/plugins/legacy-config.ts
 src/channels/plugins/legacy-state-migration-preview.ts
+src/channels/plugins/message-action-names.ts
 src/channels/plugins/merge-plugin-section.ts
 src/channels/plugins/meta-normalization.ts
 src/channels/plugins/module-loader.ts

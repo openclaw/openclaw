@@ -464,11 +464,10 @@ export function resolveGatewayDelegatedChannelPlugin(params: {
     ) {
       continue;
     }
-    const channelConfig = asOptionalRecord(
-      record.channelConfigs
-        ? readOwnRecordValue(record.channelConfigs as Record<string, unknown>, params.channelId)
-        : undefined,
-    ) as ManifestChannelConfigRecord | undefined;
+    const channelConfig =
+      record.channelConfigs && Object.hasOwn(record.channelConfigs, params.channelId)
+        ? record.channelConfigs[params.channelId]
+        : undefined;
     const gatewayActions = new Set(channelConfig?.gatewayMessageActions);
     const plugin = gatewayActions.has(params.action)
       ? buildManifestChannelPlugin({ record, channelId: params.channelId })

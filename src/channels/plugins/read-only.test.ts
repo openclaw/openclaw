@@ -757,7 +757,9 @@ describe("resolveGatewayDelegatedChannelPlugin", () => {
     }
     const registry = createEmptyPluginRegistry();
     registry.channels.push({ pluginId: plugin.id, source: "manifest", plugin });
-    const request = vi.fn(async () => ({ ok: true, messages: [] }));
+    // Vitest mocks erase the generic request signature, so leave this one untyped.
+    const request = vi.fn();
+    request.mockResolvedValue({ ok: true, messages: [] });
     const { runMessageAction } = await import("../../infra/outbound/message-action-runner.js");
 
     const result = await withPluginRuntimeRegistryScope(registry, () =>
