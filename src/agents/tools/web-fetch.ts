@@ -487,7 +487,6 @@ async function buildWebFetchPayload(params: {
   };
 }
 
-
 export function createWebFetchTool(options?: {
   config?: OpenClawConfig;
   sandboxed?: boolean;

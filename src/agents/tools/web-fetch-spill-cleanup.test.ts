@@ -92,5 +92,4 @@ describe("web_fetch unpublished spill cleanup", () => {
     expect(created).toBeDefined();
     await expect(readFile(created!)).rejects.toMatchObject({ code: "ENOENT" });
   });
-
 });
