@@ -437,7 +437,22 @@ export function compareStoreTimestampDesc(
   return rightMs > leftMs ? 1 : -1;
 }
 
+// Retention must keep the entries the promotion ranker can still act on. Only
+// an interactive recall writes recallCount and userQueryHashes, and the
+// ranker requires uniqueQueries (userQueryHashes) to clear minUniqueQueries,
+// so an entry without recall evidence can never be promoted no matter how
+// often the nightly session ingestion re-stages it. Under store overflow those
+// staged entries were stamped with the sweep time and evicted every entry
+// that had collected real recalls (openclaw/openclaw#150635).
+function hasRecallEvidence(entry: ShortTermRecallEntry): boolean {
+  return entry.recallCount > 0 || (entry.userQueryHashes?.length ?? 0) > 0;
+}
+
 function compareShortTermRecallRetention(a: ShortTermRecallEntry, b: ShortTermRecallEntry): number {
+  const evidenceDiff = Number(hasRecallEvidence(b)) - Number(hasRecallEvidence(a));
+  if (evidenceDiff !== 0) {
+    return evidenceDiff;
+  }
   const lastDiff = compareStoreTimestampDesc(a.lastRecalledAt, b.lastRecalledAt);
   if (lastDiff !== 0) {
     return lastDiff;
