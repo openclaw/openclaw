@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { addAbortListener } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { setImmediate } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -219,7 +220,6 @@ const metadataFailures = [
 it.each(metadataFailures)("settles metadata after %s", async (failure) => {
   const walk = failure.startsWith("walk ");
   const metadataError = failure === "metadata error" || failure === "walk metadata error";
-  const admitted = 4;
   const { root, files, capture } = await inventoryFixture(9);
   const lstat = fs.lstat.bind(fs);
   const gates: Array<ReturnType<typeof createDeferred<void>>> = [];
@@ -253,19 +253,17 @@ it.each(metadataFailures)("settles metadata after %s", async (failure) => {
   });
   const settled = observeSettlement(scan);
   try {
-    await vi.waitFor(() => expect(gates).toHaveLength(admitted));
+    await vi.waitFor(() => expect(gates).toHaveLength(4));
     if (!metadataError) {
       controller.abort(abortError);
     }
     gates[0]!.resolve();
     await failed.promise;
     expect(settled()).toBe(false);
-    expect(started).toBe(admitted);
+    expect(started).toBe(4);
     if (metadataError) {
       // Let the rejected operation reach the scan owner before the later cancellation.
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await setImmediate();
       controller.abort(abortError);
     }
   } finally {
@@ -276,7 +274,7 @@ it.each(metadataFailures)("settles metadata after %s", async (failure) => {
     await Promise.allSettled([scan]);
   }
   await expect(scan).rejects.toBe(metadataError ? error : abortError);
-  expect(started).toBe(admitted);
+  expect(started).toBe(4);
   expect(opened).not.toHaveBeenCalled();
 });
 
