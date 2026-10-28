@@ -274,17 +274,22 @@ single revision-fenced publication:
   `{id, expectedRevision, expectedHash}` of an existing page connected to the
   source by a body link (either way) or a typed relationship. The section is
   appended to an existing page's body.
-- The section moves verbatim. Relative Markdown links are rewritten for the
-  destination's directory; any other link that would resolve differently rejects
-  the request. Source-page evidence whose quote, retained path or filename
+- The section moves verbatim. Links are read in the complete source and
+  destination pages. Relative inline Markdown links are rewritten for the
+  destination's directory, and only inside the parsed link: code, escaped text
+  and every other byte stay as written. Any link that would lead elsewhere in the
+  complete destination rejects the request: for example a reference-style link
+  whose definition stays on the source, or a destination that ends inside an open
+  code block. Write such links as inline or `[[id|label]]` links first. Source-page evidence whose quote, retained path or filename
   appears in the section is copied to the destination; add more with
   `evidence`. The source keeps all of its evidence.
 - The source keeps the heading line, followed by `summary` and a link to the
   destination (`[[<id>|<title>]]`).
 - Claims the section links to that name the source page as an entity get the
-  destination as their first entity. The source stays a secondary entity only
-  when the claim's title or text names it. Claim text, evidence and lifecycle are
-  unchanged.
+  destination as their first entity and keep all their existing entities,
+  including the source. Whether the source is still a subject is your call:
+  remove it explicitly with `knowledge_annotate` `entities` when it is not.
+  Claim text, evidence and lifecycle are unchanged.
 - Every changed record is validated together, and the destination is checked to
   contain the section with the same link targets, before the publication is
   accepted. Any failure leaves every file unchanged. The destination's own budget
