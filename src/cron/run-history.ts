@@ -99,12 +99,9 @@ export function cronRunHistoryMatchesQuery(
   query: string,
   jobNameById?: Record<string, string>,
 ): boolean {
-  return (
-    normalizeLowercaseStringOrEmpty(queryText(entry, jobNameById))
-      // Lowercasing alone leaves canonically equivalent NFC/NFD text unequal.
-      .normalize("NFC")
-      .includes(normalizeLowercaseStringOrEmpty(query).normalize("NFC"))
-  );
+  return normalizeLowercaseStringOrEmpty(queryText(entry, jobNameById))
+    .normalize("NFC")
+    .includes(normalizeLowercaseStringOrEmpty(query).normalize("NFC"));
 }
 
 function attachJobNames(entries: CronRunLogEntry[], jobNameById?: Record<string, string>): void {

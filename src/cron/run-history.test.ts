@@ -9,7 +9,6 @@ import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { cronQuietTriggerDetail, cronRunLogEntryToDetail } from "./run-history-detail.js";
 import {
-  cronRunHistoryMatchesQuery,
   projectCronRunHistoryPage,
   selectCronRunHistoryPage,
   type ReadCronRunHistoryPageOptions,
@@ -91,26 +90,6 @@ function expectTimestamps(records: CronRunRecord[], id: string, expected: (numbe
     row && [row.createdAt, row.startedAt, row.endedAt, row.lastEventAt, row.cleanupAfter],
   ).toEqual(expected);
 }
-
-it("matches canonically equivalent Unicode text in run search", () => {
-  const composed = "München report";
-  const decomposed = "Mu\u0308nchen report";
-  const entry = (fields: Partial<CronRunLogEntry> = {}): CronRunLogEntry => ({
-    action: "finished",
-    jobId: "job",
-    ts: 20,
-    status: "ok",
-    ...fields,
-  });
-  expect(cronRunHistoryMatchesQuery(entry({ summary: decomposed }), composed)).toBe(true);
-  expect(cronRunHistoryMatchesQuery(entry({ summary: composed }), decomposed)).toBe(true);
-  expect(cronRunHistoryMatchesQuery(entry({ summary: "run" }), composed, { job: decomposed })).toBe(
-    true,
-  );
-  // ASCII, case and absent-text behavior stay as they were.
-  expect(cronRunHistoryMatchesQuery(entry({ summary: "Daily REPORT" }), "report")).toBe(true);
-  expect(cronRunHistoryMatchesQuery(entry({ summary: "Daily REPORT" }), "nightly")).toBe(false);
-});
 
 function pruneHistory(
   db: EngineConnection,
@@ -321,7 +300,7 @@ it("pages large history without reading off-page payloads or changing completion
             runDetail(storeKey, {
               runId: `public-${id}`,
               diagnostics: {
-                summary: index === 7 ? "diagnostic-only-needle" : "Run diagnostics",
+                summary: index === 7 ? "Mu\u0308nchen diagnostic-only-needle" : "Run diagnostics",
                 entries: [{ ts: 1, source: "tool", severity: "error", message: payload }],
               },
               delivery: { intended: { channel: "test-channel" } },
@@ -396,18 +375,14 @@ it("pages large history without reading off-page payloads or changing completion
           }
         }
         const beforeSearchReads = reads.counts.history;
-        const search = readCronRunHistoryCandidatesInDatabase(
-          db,
-          storeKey,
-          "job",
-          "diagnostic-only-needle",
-        );
+        const query = "MÜNCHEN diagnostic-only-needle";
+        const search = readCronRunHistoryCandidatesInDatabase(db, storeKey, "job", query);
         expect(reads.counts.history - beforeSearchReads).toBe(1);
         expect(JSON.stringify(search.records)).not.toContain("diagnostic-payload:");
         const matching = selectCronRunHistoryPage(search.records, {
           storeKey,
           jobId: "job",
-          query: "diagnostic-only-needle",
+          query,
           view: "summary",
           queryMatchedTaskIds: new Set(search.queryMatches),
         });
