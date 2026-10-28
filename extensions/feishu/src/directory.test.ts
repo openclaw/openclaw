@@ -244,6 +244,16 @@ describe("feishu directory (config-backed)", () => {
     });
   });
 
+  it("matches canonically equivalent live peer names", async () => {
+    mockPeerList(
+      vi.fn().mockResolvedValueOnce(page([{ open_id: "ou_mueller", name: "Mu\u0308ller" }])),
+    );
+
+    await expect(livePeers({ query: "Müller", fallbackToStatic: false })).resolves.toEqual([
+      { kind: "user", id: "ou_mueller", name: "Mu\u0308ller" },
+    ]);
+  });
+
   it.each([50, 51])("returns up to %i live peers across full provider pages", async (limit) => {
     let pageIndex = 0;
     const list = vi.fn(async () => {
