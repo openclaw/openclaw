@@ -132,13 +132,15 @@ function parseGitHubPublicationPullRequests(raw: string) {
 
 export function requestHeadFields(
   headCommit: string,
-  requestHeadCommit: string | null | undefined,
+  requestHeadCommit: string | null | undefined | false,
   sourceHeadCommit: string,
 ): { headCommit: string; acceptedRequestHeadCommit: string | undefined } {
   return {
     headCommit,
     acceptedRequestHeadCommit:
-      requestHeadCommit && requestHeadCommit !== sourceHeadCommit ? requestHeadCommit : undefined,
+      typeof requestHeadCommit === "string" && requestHeadCommit !== sourceHeadCommit
+        ? requestHeadCommit
+        : undefined,
   };
 }
 

@@ -325,8 +325,8 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
     );
     const [initialHead, currentTree, parents, ...message] = head.split("\n");
     let headCommit = initialHead!;
-    const markerPresent = message.join("\n").trim().split(/\r?\n/u).includes(marker);
-    const requestHeadCommit = markerPresent ? row.head_commit : undefined;
+    const currentMessage = message.join("\n").trim();
+    const markerPresent = currentMessage.split(/\r?\n/u).includes(marker);
     const findPullRequest = () =>
       findGitHubPublicationPullRequest({
         repository,
@@ -335,7 +335,7 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
         branch,
         baseBranch,
         host: githubHost,
-        ...requestHeadFields(headCommit, requestHeadCommit, sourceHeadCommit),
+        ...requestHeadFields(headCommit, markerPresent && row.head_commit, sourceHeadCommit),
         marker: pullRequestMarker,
         refreshIdentity,
         recordObserved: async (url) => {
