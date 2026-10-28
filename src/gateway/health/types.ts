@@ -32,6 +32,7 @@ export type PluginHealthSummary = Omit<ProtocolPlugin, "unavailable"> & {
 export type HealthSummary = ProtocolHealth & {
   modelRuntime?: import("../../agents/prepared-model-runtime.startup-status.js").PreparedModelRuntimeStartupStatus;
   ok: true;
+  /** Collection completion time, not the time a cached RPC response was composed. */
   ts: number;
   durationMs: number;
   plugins?: PluginHealthSummary;

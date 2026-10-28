@@ -15,6 +15,7 @@ import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
 import { beginAgentDeletionJournal } from "../../test-utils/agent-deletion-journal.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { HealthSummary } from "../health/types.js";
+import { HEALTH_REFRESH_INTERVAL_MS } from "../server-constants.js";
 import type { GatewayHostLifecycle } from "../server-public.js";
 import * as processVitals from "../server/process-vitals.js";
 import { healthHandlers } from "./health.js";
@@ -76,10 +77,11 @@ function createHealthReader(
   snapshot: HealthSummary,
   getEventLoopHealth?: () => HealthSummary["eventLoop"],
   getReadiness?: import("../server/readiness.js").ReadinessChecker,
+  refreshHealthSnapshot = vi.fn(async () => snapshot),
 ) {
   const context = {
     getHealthCache: () => snapshot,
-    refreshHealthSnapshot: vi.fn(async () => snapshot),
+    refreshHealthSnapshot,
     getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
     getEventLoopHealth,
     getReadiness,
@@ -100,24 +102,49 @@ function createHealthReader(
 }
 
 describe("Gateway status owner routing", () => {
-  it.each([false, true])("publishes live core readiness with probe=%s", async (probe) => {
-    await withStateDirEnv("health-core-readiness-", async ({ stateDir }) => {
-      let coreReady = false;
-      const readHealth = createHealthReader(
-        healthSnapshot(stateDir, { coreReady: true }),
-        undefined,
-        () => ({
-          ready: coreReady,
-          coreReady,
-          failing: coreReady ? [] : ["chat-recovery"],
-          uptimeMs: 1,
-        }),
-      );
-      expect((await readHealth(probe)).mock.calls[0]?.[1]).toMatchObject({ coreReady: false });
-      coreReady = true;
-      expect((await readHealth(probe)).mock.calls[0]?.[1]).toMatchObject({ coreReady: true });
-    });
-  });
+  it.each(["cached", "probe", "expired"] as const)(
+    "distinguishes collection from live observation for %s health",
+    async (mode) => {
+      await withStateDirEnv("health-observation-time-", async ({ stateDir }) => {
+        let now = 100_000;
+        vi.spyOn(Date, "now").mockImplementation(() => now);
+        const collectedAt = now - 100;
+        const cached = healthSnapshot(stateDir, { ts: collectedAt, coreReady: true });
+        const refresh = vi.fn(async () => ({ ...cached, ts: now - 10 }));
+        let coreReady = false;
+        const readHealth = createHealthReader(
+          cached,
+          undefined,
+          () => ({
+            ready: coreReady,
+            coreReady,
+            failing: coreReady ? [] : ["chat-recovery"],
+            uptimeMs: 1,
+          }),
+          refresh,
+        );
+        if (mode === "expired") {
+          now = collectedAt + HEALTH_REFRESH_INTERVAL_MS;
+        }
+        for (const offset of [0, 100]) {
+          now += offset;
+          const respond = await readHealth(mode === "probe");
+          expect(respond.mock.calls[0]?.[1]).toMatchObject({
+            ts: mode === "cached" ? collectedAt : now - 10,
+            observedAt: now,
+            coreReady,
+          });
+          expect(respond.mock.calls[0]?.[3]).toEqual(
+            mode === "cached" ? { cached: true } : undefined,
+          );
+          coreReady = true;
+        }
+        expect(cached.ts).toBe(collectedAt);
+        expect(cached).not.toHaveProperty("observedAt");
+        expect(refresh).toHaveBeenCalledTimes(mode === "cached" ? 1 : 2);
+      });
+    },
+  );
 
   it("omits an agent deleted while the final worker-pool read is pending", async () => {
     await withOpenClawTestState({ label: "status-worker-pool-publication" }, async (state) => {
@@ -249,6 +276,8 @@ describe("Gateway status owner routing", () => {
           utilization: 0.2,
           cpuCoreRatio: 0.1,
         } satisfies NonNullable<HealthSummary["eventLoop"]>;
+        let now = 100_000;
+        vi.spyOn(Date, "now").mockImplementation(() => now);
         const cached = healthSnapshot(stateDir, { eventLoop: initial });
         const removed = {
           execPath: "/opt/homebrew/Cellar/node@24/24.20.0/bin/node",
@@ -259,7 +288,9 @@ describe("Gateway status owner routing", () => {
         const next = reset ? undefined : { ...initial, cpuCoreRatio: 1.2 };
         const request = createHealthReader(cached, () => current)();
         current = next;
+        now += 100;
         const respond = await request;
+        expect(respond.mock.calls[0]?.[1]).toMatchObject({ ts: 100_000, observedAt: 100_100 });
         expect(respond).toHaveBeenCalledOnce();
         expect(respond.mock.calls[0]?.[1].eventLoop).toBe(next);
         expect(respond.mock.calls[0]?.[3]).toEqual({ cached: true });

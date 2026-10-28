@@ -363,6 +363,16 @@ gateway refreshes that cache in the background; `--verbose` forces a live check 
 Connections and cached health reads share a one-minute background refresh cadence, so
 repeated diagnostic connections do not each rebuild the health snapshot. Explicit live
 checks and refreshes for missing or stale health still run immediately.
+
+Health RPC responses distinguish two timestamps (Unix milliseconds): `ts` is the
+collection completion time of the underlying snapshot; `observedAt` is when the
+RPC response was composed after reading current diagnostics. Cached reads preserve
+`ts` even when live readiness, model/child-runtime status, event-loop samples, or
+queue facts change. `observedAt` is a read timestamp, not a new measurement time:
+the sampler and queue owners can reuse their existing observations. Older
+Gateways omit `observedAt`; hello snapshots and passive health events retain
+collection timestamps without an RPC read timestamp.
+
 The passive WebSocket `health` event sends a snapshot only when health changes.
 Clients advertising `health-summary` receive it without agent heartbeat configuration
 and session activity summaries; request the `health` RPC for those details. Other
