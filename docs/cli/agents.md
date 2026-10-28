@@ -29,6 +29,7 @@ openclaw agents bind --agent work --bind telegram:ops
 openclaw agents unbind --agent work --bind telegram:ops
 openclaw agents set-identity --workspace ~/.openclaw/workspace --from-identity
 openclaw agents set-identity --agent main --avatar avatars/openclaw.png
+openclaw agents detach work --force --json
 openclaw agents delete work
 ```
 
@@ -170,6 +171,35 @@ Options: `--agent <id>` (defaults to the current default agent), `--bind <channe
 ### `agents set-identity`
 
 Options: `--agent <id>`, `--workspace <dir>`, `--identity-file <path>`, `--from-identity`, `--name <name>`, `--theme <theme>`, `--emoji <emoji>`, `--avatar <value>`, `--json`. See [Set identity](#set-identity) below.
+
+### `agents detach <id>`
+
+Options: `--force`, `--json`.
+
+Stop the local Gateway through its service owner and wait for it to exit before
+running this offline command. Detach holds exclusive Native state ownership until
+its database work settles; a running Gateway or another state owner causes a
+refusal, with no RPC fallback.
+
+Detach uses the same journaled lifecycle as Gateway `agents.detach`. It removes
+the agent from the configured roster, including routing and agent references and
+exec approvals. It retains the agent's databases, PostgreSQL namespaces, session
+identity and history, workspace, and scheduler jobs. Retained jobs cannot run for
+the detached agent; existing scheduler migration holds remain in effect.
+Detaching is not a whole-installation backup or migration: capture the source
+roster and other installation state through their owners before removing agents.
+
+Without `--force`, confirmation requires an interactive terminal. Automation uses
+`openclaw agents detach <id> --force --json`. Success includes `agentId`,
+`detached: true`, and `storePreserved: true`. Failures exit nonzero with the normal
+JSON `error` envelope when `--json` is selected.
+
+The only configured agent, shared store owners, and inherited credential owners
+retain the existing deletion safety checks. An interrupted preserve-store detach
+can resume through the same command. A pending destructive deletion cannot be
+converted into detach. Missing deletion history is not reconstructed by detach;
+follow the reported Doctor recovery guidance. No journal or recovery protection
+is cleared to force the operation through.
 
 ### `agents delete <id>`
 

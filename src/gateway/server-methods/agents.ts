@@ -9,6 +9,7 @@ import {
   errorShape,
   validateAgentsCreateParams,
   validateAgentsDeleteParams,
+  validateAgentsDetachParams,
   validateAgentsListParams,
   validateAgentsUpdateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
@@ -83,7 +84,7 @@ import {
   readPreparedServerMethodModelCatalog,
   readPreparedServerMethodModelCatalogs,
 } from "./optional-model-catalog.js";
-import type { GatewayRequestHandlers, RespondFn } from "./types.js";
+import type { GatewayRequestHandler, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams, defineValidatedGatewayHandler } from "./validation.js";
 
 function respondAgentNotFound(respond: RespondFn, agentId: string): void {
@@ -110,6 +111,67 @@ function createAgentConfigApplication(respond: RespondFn) {
       }
       return false;
     },
+  };
+}
+
+function createAgentRemovalHandler(detach: boolean): GatewayRequestHandler {
+  return async ({ params, respond, context }) => {
+    const method = detach ? "agents.detach" : "agents.delete";
+    const validateParams: typeof validateAgentsDeleteParams = detach
+      ? validateAgentsDetachParams
+      : validateAgentsDeleteParams;
+    if (!assertValidParams(params, validateParams, method, respond)) {
+      return;
+    }
+
+    const normalized = normalizeAgentIdStrict(params.agentId);
+    if (!normalized.ok) {
+      respondAgentNotFound(respond, params.agentId);
+      return;
+    }
+    const agentId = normalized.value;
+
+    const requestedDeleteFiles = detach ? false : (params.deleteFiles ?? true);
+    const application = createAgentConfigApplication(respond);
+    try {
+      const result = await deleteGatewayAgent(agentId, requestedDeleteFiles, context, {
+        writeOptions: application.attach({}),
+        detach,
+      });
+      // Reload may need the mutation/deletion leases; wait only after they settle.
+      if (!(await application.confirm())) {
+        return;
+      }
+      if (result.purgeFailed || result.failed?.length) {
+        const failures = result.failed?.map(({ path, reason }) => `${path}: ${reason}`) ?? [];
+        if (result.purgeFailed) {
+          failures.unshift("session-store cleanup failed");
+        }
+        respond(
+          false,
+          result,
+          errorShape(
+            ErrorCodes.UNAVAILABLE,
+            `Agent "${agentId}" was removed from configuration, but ${detach ? "detach" : "deletion"} cleanup is still pending: ${failures.join("; ")}. Resolve the cleanup failure, then retry ${method}.`,
+          ),
+        );
+        return;
+      }
+      respond(true, result, undefined);
+    } catch (error) {
+      if (
+        error instanceof AgentSharedAuthStoreOwnerError ||
+        error instanceof AgentSharedStoreOwnerError
+      ) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, error.message));
+        return;
+      }
+      if (error instanceof AgentConfigPreconditionError) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, error.message));
+        return;
+      }
+      throw error;
+    }
   };
 }
 
@@ -552,58 +614,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
       respond(true, { ok: true, agentId }, undefined);
     }
   },
-  "agents.delete": async ({ params, respond, context }) => {
-    if (!assertValidParams(params, validateAgentsDeleteParams, "agents.delete", respond)) {
-      return;
-    }
-
-    const normalized = normalizeAgentIdStrict(params.agentId);
-    if (!normalized.ok) {
-      respondAgentNotFound(respond, params.agentId);
-      return;
-    }
-    const agentId = normalized.value;
-
-    const requestedDeleteFiles = params.deleteFiles ?? true;
-    const application = createAgentConfigApplication(respond);
-    try {
-      const result = await deleteGatewayAgent(agentId, requestedDeleteFiles, context, {
-        writeOptions: application.attach({}),
-      });
-      // Reload may need the mutation/deletion leases; wait only after they settle.
-      if (!(await application.confirm())) {
-        return;
-      }
-      if (result.purgeFailed || result.failed?.length) {
-        const failures = result.failed?.map(({ path, reason }) => `${path}: ${reason}`) ?? [];
-        if (result.purgeFailed) {
-          failures.unshift("session-store cleanup failed");
-        }
-        respond(
-          false,
-          result,
-          errorShape(
-            ErrorCodes.UNAVAILABLE,
-            `Agent "${agentId}" was removed from configuration, but deletion cleanup is still pending: ${failures.join("; ")}. Resolve the cleanup failure, then retry agents.delete.`,
-          ),
-        );
-        return;
-      }
-      respond(true, result, undefined);
-    } catch (error) {
-      if (
-        error instanceof AgentSharedAuthStoreOwnerError ||
-        error instanceof AgentSharedStoreOwnerError
-      ) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, error.message));
-        return;
-      }
-      if (error instanceof AgentConfigPreconditionError) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, error.message));
-        return;
-      }
-      throw error;
-    }
-  },
+  "agents.delete": createAgentRemovalHandler(false),
+  "agents.detach": createAgentRemovalHandler(true),
   ...agentFileHandlers,
 };

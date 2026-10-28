@@ -505,6 +505,47 @@ unverifiable previous owner prevents takeover; lease expiry alone is insufficien
 Advisory writer locks protect transactions; they do not provide multi-Gateway
 ownership, routing, or failover.
 
+### Move an agent between Gateways
+
+For a controlled move, `agents.detach` removes an agent from its source Gateway
+without purging sessions, credentials, memory, its workspace, or its database
+anchor. It requires `operator.admin` and accepts only `{ "agentId": "traveler" }`.
+`agents.delete`, including `deleteFiles: false`, still deletes session data and
+must not be used for this handoff.
+
+1. Stop routing new work to the source agent. Call `agents.detach` on that
+   Gateway and wait for a successful response. Detach drains accepted work,
+   closes its database owners, and removes Gateway-local bindings and execution
+   approvals. Cron jobs and any scheduler migration hold remain intact; the
+   detached source cannot run them. Use `cron.migration` to export and stage
+   jobs, retire source jobs after cutover, or resume them after source adoption
+   during rollback. It refuses the sole configured agent and agents
+   that own shared or inherited credentials.
+2. Preserve the agent's closed anchor and workspace files. Place the anchor at
+   the destination's corresponding agent database path before creating the
+   agent. Keep the same agent ID and connect to the same PostgreSQL database
+   with access to its recorded namespace. Do not create a replacement anchor:
+   a new anchor identifies a new store. Server-side agent rows stay in place.
+3. Call `agents.create` on the destination with a name that resolves to the
+   original agent ID and its workspace path. The existing anchor is admitted
+   through normal agent creation. Verify history and required files, restore
+   destination bindings and jobs explicitly, then route work to the destination.
+
+An interrupted detach keeps its non-destructive intent in the source Gateway's
+local journal. Restart that Gateway or retry `agents.detach` to finish it;
+retry after an earlier ownership lease expires if recovery reports it still held.
+A pending detach cannot be converted into a destructive deletion by retrying
+`agents.delete`.
+Older binaries refuse these journal phases; use a compatible binary while the
+source retains its detach journal. If a response is lost, reconcile the source
+roster and retained state before retrying or adopting.
+
+The completed source tombstone prevents ordinary writes after restart. It does
+not coordinate ownership across Gateways: your controller must prevent a second
+adoption or explicitly recreating the old source agent. Keep independent local
+state directories and scoped database roles. SQLite shared state and local
+anchors can remain SQLite throughout this move.
+
 <a id="mixed-engines-experimental" />
 
 ## Mixed engines

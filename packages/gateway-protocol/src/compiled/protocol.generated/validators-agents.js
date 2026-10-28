@@ -9,6 +9,7 @@ export {
   isAgentsAvatarGenerateParams,
   isAgentsAvatarGenerateResult,
   isAgentsDeleteParams,
+  isAgentsDetachParams,
   isAgentsFilesListParams,
   isAgentsFilesGetParams,
   isAgentsFilesSetParams,

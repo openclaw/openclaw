@@ -212,7 +212,7 @@ export function assertAgentDeletionPathFence(
     }
     // Ingress is closed by run admission; its existing owners still need writable settlement.
     if (
-      row.phase === "draining" &&
+      (row.phase === "draining" || row.phase === "detach-draining") &&
       row.cleanup_completed !== 1 &&
       row.agent_id === snapshot.claimAgentId &&
       !snapshot.fenceAgentId
@@ -256,13 +256,19 @@ function fromRow(
     cleanupPaths?: AgentDeletionJournalCleanupPath[];
   },
 ): AgentDeletionJournalEntry {
-  if (row.phase != null && row.phase !== "draining" && row.phase !== "retiring") {
+  if (
+    row.phase != null &&
+    row.phase !== "draining" &&
+    row.phase !== "retiring" &&
+    row.phase !== "detach-draining" &&
+    row.phase !== "detach-retiring"
+  ) {
     throw new Error("Invalid agent deletion journal phase.");
   }
   return {
     agentId: row.agent_id,
     operationId: row.operation_id,
-    phase: row.phase === "draining" ? "draining" : "retiring",
+    phase: row.phase ?? "retiring",
     agentDir: row.agent_dir,
     workspaceDir: row.workspace_dir,
     sessionsDir: row.sessions_dir,
@@ -376,6 +382,12 @@ export function beginAgentDeletionJournalInDatabase(
   const previous = existing && fromRow(existing);
   if (preserveDeleteFiles && previous) {
     normalized.deleteFiles = previous.deleteFiles;
+  }
+  // Durable detach intent wins over a later delete/recovery request. The phase
+  // also makes older binaries refuse this journal instead of purging its store.
+  const phase = previous?.phase ?? normalized.phase;
+  if (phase === "detach-draining" || phase === "detach-retiring") {
+    normalized.deleteFiles = false;
   }
   const databasePaths = [
     ...new Set(
@@ -530,7 +542,9 @@ export function completeAgentDeletionJournalInDatabase(
       .set({ cleanup_completed: 1 })
       .where("agent_id", "=", id)
       .where("operation_id", "=", operationId)
-      .where((eb) => eb.or([eb("phase", "is", null), eb("phase", "=", "retiring")]))
+      .where((eb) =>
+        eb.or([eb("phase", "is", null), eb("phase", "in", ["retiring", "detach-retiring"])]),
+      )
       .returning(["database_paths_json", "delete_files"]),
   );
   // The journal already fences authority. Keep creation history through refusals and

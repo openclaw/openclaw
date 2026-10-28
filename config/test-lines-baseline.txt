@@ -1,4 +1,4 @@
-# Preserve 133 lines of real SQLite admission/capture regression coverage.
-# Current main contributes 6,310,650 lines; this candidate adds exactly 133.
-# Admit the measured 6,310,783 total without extra future allowance.
-6310783
+# Preserve 621 lines of agents.detach Gateway handoff and recovery regression coverage.
+# Current main contributes 6,310,907 lines; this candidate adds exactly 621.
+# Admit the measured 6,311,528 total without extra future allowance.
+6311528

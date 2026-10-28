@@ -2,11 +2,20 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import { acquireGatewayLock, type GatewayLockHandle } from "../infra/gateway-lock.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  runOpenClawAgentWriteTransaction,
+} from "../state/openclaw-agent-db.js";
 import {
   openOpenClawStateDatabase,
   closeOpenClawStateDatabaseAsync,
 } from "../state/openclaw-state-db.js";
+import {
+  beginAgentDeletionJournal,
+  readAgentDeletionJournal,
+} from "../test-utils/agent-deletion-journal.js";
 import { acquireTestPortBlock, type TestPortClaim } from "../test-utils/port-claims.js";
 import { localStateOwnerFixtureEntrypoint } from "./cli-entrypoint.test-support.js";
 import { stateOwnerEnv } from "./cli-process-fixture.test-support.js";
@@ -46,6 +55,7 @@ afterAll(async () => {
 it.each([
   ["advanced creation", "agents add advanced --role researcher --workspace WORKSPACE --json"],
   ["team creation", "agents team create --workspace-root WORKSPACE --non-interactive --json"],
+  ["detach", "agents detach traveler --force --json"],
 ])("refuses live %s before creating state", async (name, args) => {
   const workspace = path.join(root, `uncreated-${name.replaceAll(" ", "-")}`);
   const result = await fixture.run(
@@ -97,3 +107,99 @@ it("completes offline onboarding and releases ownership for Gateway startup", as
   expect(successor).not.toBeNull();
   await successor?.release();
 });
+
+it.each(["fresh", "persisted-session", "detach-retiring", "retiring", "missing-journal"] as const)(
+  "recovers only an existing preserve-store detach (%s)",
+  async (phase) => {
+    const root = roots.make("openclaw-offline-detach-");
+    const offline = createCliProcessFixture(root, stateOwnerEnv(root));
+    const agentDir = path.join(offline.env.OPENCLAW_STATE_DIR, "agents/traveler/agent");
+    const workspace = path.join(offline.env.HOME, "traveler-workspace");
+    const before = {
+      agents: {
+        ownership: "explicit",
+        defaults: { skipBootstrap: true },
+        entries: { keeper: {}, traveler: { workspace } },
+      },
+    };
+    await offline.writeConfig(before);
+    const database = openOpenClawStateDatabase({ env: offline.env });
+    await fs.mkdir(agentDir, { recursive: true });
+    await fs.mkdir(workspace, { recursive: true });
+    const marker = path.join(workspace, "IDENTITY.md");
+    await fs.writeFile(marker, "Retained traveler identity.\n");
+    if (phase === "persisted-session") {
+      runOpenClawAgentWriteTransaction(
+        (agent) =>
+          writeSessionEntry(agent, "agent:traveler:handoff", {
+            sessionId: "synthetic-retained-session",
+            updatedAt: 1,
+          }),
+        { agentId: "traveler", env: offline.env },
+      );
+      await closeOpenClawAgentDatabasesAsync();
+    } else if (phase === "missing-journal") {
+      database.db.exec("DROP TABLE agent_deletion_journal");
+    } else if (phase !== "fresh") {
+      beginAgentDeletionJournal(
+        {
+          agentId: "traveler",
+          operationId: "synthetic-interrupted-detach",
+          agentDir,
+          workspaceDir: workspace,
+          sessionsDir: path.join(offline.env.OPENCLAW_STATE_DIR, "agents/traveler/sessions"),
+          phase,
+          deleteFiles: false,
+        },
+        { env: offline.env },
+      );
+    }
+    await closeOpenClawStateDatabaseAsync();
+    const result = await offline.run(["agents", "detach", "traveler", "--force", "--json"]);
+    const saved = JSON.parse(await fs.readFile(offline.configPath, "utf8"));
+    expect(await fs.readFile(marker, "utf8")).toBe("Retained traveler identity.\n");
+    if (phase === "fresh" || phase === "persisted-session" || phase === "detach-retiring") {
+      const diagnostic = JSON.stringify({
+        ...result,
+        journal: readAgentDeletionJournal("traveler", { env: offline.env }),
+        config: saved,
+      });
+      expect(result.code, diagnostic).toBe(0);
+      expect(result.stdout.trim(), diagnostic).not.toBe("");
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        agentId: "traveler",
+        detached: true,
+        storePreserved: true,
+      });
+      expect(saved.agents.entries.traveler).toBeUndefined();
+      expect(readAgentDeletionJournal("traveler", { env: offline.env })).toMatchObject({
+        phase: "detach-retiring",
+        cleanupCompleted: true,
+        deleteFiles: false,
+      });
+    } else {
+      expect(result.code, result.stderr).toBe(1);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        ok: false,
+        error: {
+          message: expect.stringContaining(
+            phase === "retiring" ? "finish agents.delete" : "Agent deletion journal missing",
+          ),
+        },
+      });
+      expect(saved).toEqual(before);
+      if (phase === "missing-journal") {
+        expect(() => readAgentDeletionJournal("traveler", { env: offline.env })).toThrow(
+          "Agent deletion journal missing",
+        );
+      } else {
+        expect(readAgentDeletionJournal("traveler", { env: offline.env })).toMatchObject({
+          operationId: "synthetic-interrupted-detach",
+          phase: "retiring",
+          cleanupCompleted: false,
+        });
+      }
+    }
+    await closeOpenClawStateDatabaseAsync();
+  },
+);

@@ -87,19 +87,22 @@ it.each([
   );
 });
 
-it("admits settlement leases while draining and fences them once retirement begins", () => {
-  const { env, claim, begin } = fixture("deleted");
-  const { agentId, operationId } = begin({ databasePaths: [claim.path], phase: "draining" });
-  const lease = claimLease(claim);
-  try {
-    expect(() => claimLease({ ...claim, agentId: "survivor" })).toThrow("deletion owns");
-    expect(writeState((db) => complete(db, agentId, operationId), { env })).toBe(false);
-    expect(writeState((db) => retireJournal(db, agentId, operationId), { env })).toBe(true);
-    expect(() => claimLease(claim)).toThrow("while agent deleted is deleted");
-  } finally {
-    releaseLease(lease, { env });
-  }
-});
+it.each(["draining", "detach-draining"] as const)(
+  "admits settlement leases while %s and fences them once retirement begins",
+  (phase) => {
+    const { env, claim, begin } = fixture("deleted");
+    const { agentId, operationId } = begin({ databasePaths: [claim.path], phase });
+    const lease = claimLease(claim);
+    try {
+      expect(() => claimLease({ ...claim, agentId: "survivor" })).toThrow("deletion owns");
+      expect(writeState((db) => complete(db, agentId, operationId), { env })).toBe(false);
+      expect(writeState((db) => retireJournal(db, agentId, operationId), { env })).toBe(true);
+      expect(() => claimLease(claim)).toThrow("while agent deleted is deleted");
+    } finally {
+      releaseLease(lease, { env });
+    }
+  },
+);
 
 it.each([
   ["registration", "database_paths_json", false],
@@ -180,10 +183,12 @@ function phaseFixture(input: Partial<Parameters<typeof beginInDatabase>[1]>) {
   return result;
 }
 
-it.each(["draining", "legacy-null"] as const)(
+it.each(["draining", "legacy-null", "detach-draining", "detach-retiring"] as const)(
   "recovers %s without reopening retired drains",
   async (format) => {
-    const { input, open, write, restart } = phaseFixture({ phase: "draining" });
+    const { input, open, write, restart } = phaseFixture({
+      phase: format === "legacy-null" ? "draining" : format,
+    });
     const original = open();
     const version = original.db.prepare("PRAGMA user_version").get();
     if (format === "legacy-null") {
@@ -191,7 +196,8 @@ it.each(["draining", "legacy-null"] as const)(
     }
     await closeStateDatabaseForTest();
     const recovered = open();
-    const phase = format === "draining" ? "draining" : "retiring";
+    const phase = format === "legacy-null" ? "retiring" : format;
+    const detaching = format === "detach-draining" || format === "detach-retiring";
     expect(read(recovered, input.agentId)?.phase).toBe(phase);
     expect(pending(recovered).entries).toEqual([
       expect.objectContaining({ agentId: input.agentId, phase }),
@@ -201,9 +207,12 @@ it.each(["draining", "legacy-null"] as const)(
       const retry = beginInDatabase(database, {
         ...input,
         operationId: "recovery-attempt",
+        phase: "draining",
+        deleteFiles: true,
       });
       expect(retry.entry.phase).toBe(phase);
-      if (format === "draining") {
+      expect(retry.entry.deleteFiles).toBe(!detaching);
+      if (phase === "draining" || phase === "detach-draining") {
         expect(complete(database, input.agentId, "recovery-attempt")).toBe(false);
       }
       expect(retireJournal(database, input.agentId, input.operationId)).toBe(false);
@@ -211,7 +220,16 @@ it.each(["draining", "legacy-null"] as const)(
     });
     await closeStateDatabaseForTest();
 
-    expect(restart().entry.phase).toBe("retiring");
+    const final = restart();
+    expect(final.entry.phase).toBe(detaching ? "detach-retiring" : "retiring");
+    expect(final.entry.deleteFiles).toBe(!detaching);
+    expect(write((database) => complete(database, input.agentId, input.operationId))).toBe(true);
+    await closeStateDatabaseForTest();
+    expect(read(open(), input.agentId)).toMatchObject({
+      phase: detaching ? "detach-retiring" : "retiring",
+      deleteFiles: !detaching,
+      cleanupCompleted: true,
+    });
     expect(open().db.prepare("PRAGMA user_version").get()).toEqual(version);
   },
 );
