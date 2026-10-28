@@ -77,6 +77,7 @@ export function describeSessionsListTool(options?: SessionLinkDescriptionOptions
     "List visible session metadata and groups; filter ownerId/creatorId, projectId/workspaceDir, group/pinned, kind/agent/activity/archive. relationship=owned|created|involving selects the authenticated requesting user's sessions, not the agent's owner.",
     "Metadata-only by default. limit defaults to 100; larger requests stay valid but limitApplied never exceeds 200. count is this page, not an inventory total. Continue with nextOffset and identical filters while hasMore; truncationReason names a scan/byte budget. Pages are live: deduplicate by agentId/key/sessionId or restart for a fresh inventory. archived=all includes active and archived rows.",
     "Preview recent messages inline via includeLastMessage/messageLimit; includeDerivedTitles adds derived titles. enrichmentOmitted means previews exceeded the byte budget; read history separately.",
+    "Run outcomes: `done` means success, `failed` error, `timeout` time limit, and `killed` cancellation. These describe the last run, not task completion or whether the session can continue. Before spawning replacement work, consider a same-session follow-up; it still requires current access and lifecycle checks to admit new work.",
     "Use before history/send target selection.",
     ...(options?.sessionLinkBase ? [describeSessionLinkRule(options.sessionLinkBase)] : []),
   ].join(" ");
