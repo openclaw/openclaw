@@ -102,7 +102,7 @@ describe("collectArchivedSources scan reuse", () => {
     const target = { agentId: "main", sqlitePath, storePath };
 
     const first = collectArchivedSources(target, env);
-    expect([...first.keys()].sort()).toEqual([
+    expect([...first.keys()].toSorted()).toEqual([
       path.join(sessionsDir, "alpha.jsonl"),
       path.join(sessionsDir, "beta.jsonl"),
     ]);
