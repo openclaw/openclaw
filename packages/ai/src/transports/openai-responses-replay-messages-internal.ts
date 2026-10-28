@@ -288,6 +288,7 @@ function cloneResponsesInputForPayloadHook<T>(value: T): T {
     return value;
   }
   if (Array.isArray(value)) {
+    // SAFETY: Copying converter-owned JSON preserves the array shape and every member's type.
     return value.map(cloneResponsesInputForPayloadHook) as T;
   }
   // Non-wire source/provenance symbols retain identity through payload spreads.
