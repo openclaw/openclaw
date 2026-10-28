@@ -707,7 +707,10 @@ describe("runtime recovery discovery", () => {
     );
     expect(mocks.spawn.mock.calls[0]?.[0]).toBe(candidates[index]);
     expect(stderrSpy).toHaveBeenCalledExactlyOnceWith(
-      expect.stringContaining(`(${source}; current Node failed runtime admission)`),
+      expect.stringContaining(`(${source}; current Node failed runtime admission:`),
+    );
+    expect(stderrSpy).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining("node:sqlite truncates TEXT at embedded NUL"),
     );
   });
 
