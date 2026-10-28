@@ -422,6 +422,7 @@ it.for(["before-promotion", "revoked", "aborted"] as const)(
 
 it.for(["warm", "cold", "peer"] as const)(
   "serves shared ingress and prepares peers while agent integrity is held (%s)",
+  { timeout: 30_000 },
   async (workload, { signal }) => {
     const env = makeEnv("agent-preparation-isolation-");
     const databases = ["slow", "ready", "next"].map((agentId) => openAgent({ agentId, env }));
@@ -471,7 +472,6 @@ it.for(["warm", "cold", "peer"] as const)(
     }
     expect(slowPrepared).toBe(true);
   },
-  30_000,
 );
 
 it.each(["confirmed close", "native exit"] as const)(
