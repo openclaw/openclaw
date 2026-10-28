@@ -112,6 +112,8 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   /** Recomputed by the host for this attempt; never inherited from the requesting turn. */
   githubPublicationAvailable?: boolean;
   disableToolSearch?: true;
+  /** Recovery checkpoints preserve their input until memory extraction finishes. */
+  compactionForbidden?: boolean;
   sessionReadScopeKey?: string;
   admittedRunContext: NonNullable<RunEmbeddedAgentParams["admittedRunContext"]>;
   /**
