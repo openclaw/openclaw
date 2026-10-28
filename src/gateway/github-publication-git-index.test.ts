@@ -2,7 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import * as exec from "../process/exec.js";
 import { runCommandBuffered } from "../process/exec.js";
 import {
   createOpenClawTestState,
@@ -25,6 +26,7 @@ import {
 let testState: OpenClawTestState;
 let f: Awaited<ReturnType<typeof createFixture>>;
 let directoryIndex = 0;
+const commitId = expect.stringMatching(/^[a-f0-9]{40}$/u);
 const REQUEST_ID = "11111111-1111-4111-8111-111111111111";
 const rejectRefUpdate = async () => {
   throw new Error("update-ref must not run");
@@ -42,6 +44,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.unstubAllEnvs();
   await testState.cleanup();
 });
 
@@ -75,7 +78,8 @@ async function createFixture() {
   const commit = (tree: string, parent: string, message: string) =>
     git(cwd, ["commit-tree", tree, "-p", parent], message);
   const run = (...args: string[]) => git(cwd, args);
-  const write = (name: string, value: string) => fs.writeFile(path.join(cwd, name), value);
+  const write = (name: string, value: string, mode?: number) =>
+    fs.writeFile(path.join(cwd, name), value, { mode });
   await git(cwd, ["init", "--initial-branch=main"]);
   await git(cwd, ["config", "user.name", "OpenClaw Test"]);
   await git(cwd, ["config", "user.email", "openclaw@example.test"]);
@@ -111,6 +115,7 @@ async function createFixture() {
     ...params,
     commit,
     git: run,
+    snapshot: () => captureGitHubPublicationWorkspaceSnapshot({ cwd }),
     write,
     file: (...parts: string[]) => path.join(cwd, ...parts),
     update: (
@@ -341,10 +346,10 @@ describe("GitHub publication index update", () => {
   it("rejects a filter from Git's default global attributes file", async () => {
     const globalAttributes = path.join(testState.home, ".config", "git", "attributes");
     await fs.mkdir(path.dirname(globalAttributes), { recursive: true });
-    await captureGitHubPublicationWorkspaceSnapshot(f);
+    await f.snapshot();
     await fs.writeFile(globalAttributes, "*.secret filter=redact\n");
 
-    await rejects(captureGitHubPublicationWorkspaceSnapshot(f), "unsupported Git clean filter");
+    await rejects(f.snapshot(), "unsupported Git clean filter");
   });
 
   it("settles the accepted branch and index after publication authority ends", async () => {
@@ -487,5 +492,85 @@ describe("GitHub publication index update", () => {
       expect(recoveries).toHaveLength(revoked ? 1 : 0);
       expect(await f.git("rev-parse", "HEAD")).toBe(f.previousHead);
     },
+  );
+});
+
+it("accepts checkout-configured hooks while snapshot commands keep every hook disabled", async () => {
+  const hooks = f.file("git-hooks");
+  const sentinel = f.file(".hook-ran");
+  await fs.mkdir(hooks);
+  for (const hook of ["reference-transaction", "pre-push", "post-index-change"]) {
+    await f.write(path.join("git-hooks", hook), `#!/bin/sh\nprintf hook > '${sentinel}'\n`, 0o755);
+  }
+  await f.git("config", "core.hooksPath", "git-hooks");
+  await f.write("global-config", '[core]\nfsmonitor = "./monitor"\n');
+  await f.write("monitor", `#!/bin/sh\nprintf monitor > '${sentinel}'\n`, 0o755);
+  vi.stubEnv("GIT_CONFIG_GLOBAL", f.file("global-config"));
+  await f.write("artifact.txt", "snapshot\n");
+
+  await expect(f.snapshot()).resolves.toMatchObject({
+    sourceHeadCommit: commitId,
+    sourceIndexTree: commitId,
+    workspaceTree: commitId,
+  });
+  await expect(fs.access(sentinel)).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+it("captures a large tree without buffering unrelated paths for its attribute check", async () => {
+  // 600 ~540-byte entries exceed the default 256KB `ls-tree -r` output cap.
+  const directory = "a".repeat(240);
+  const filename = "b".repeat(240);
+  await fs.mkdir(f.file(directory));
+  for (let batch = 0; batch < 12; batch += 1) {
+    await Promise.all(
+      Array.from({ length: 50 }, (_, file) =>
+        f.write(`${directory}/${filename}-${batch}-${file}`, "x\n"),
+      ),
+    );
+  }
+  await f.git("add", "-A");
+  await f.git("commit", "-q", "-m", "large tree");
+
+  await f.write(".gitattributes", "*.txt text\n");
+  await f.write(`${directory}/.GITATTRIBUTES`, "*.txt -text\n");
+  const transport = vi.spyOn(exec, "runCommandBuffered");
+  onTestFinished(() => transport.mockRestore());
+  await expect(f.snapshot()).resolves.toMatchObject({
+    workspaceTree: commitId,
+  });
+  let inventoryBytes = 0;
+  for (let index = 0; index < transport.mock.calls.length; index++) {
+    if (transport.mock.calls[index]![0].some((arg) => arg === "ls-tree" || arg === "ls-files")) {
+      inventoryBytes += (await transport.mock.results[index]!.value).stdout.length;
+    }
+  }
+  expect(inventoryBytes).toBeGreaterThan(0);
+  expect(inventoryBytes).toBeLessThan(1024);
+});
+
+it.each([".gitattributes", "nested/.GITATTRIBUTES"])(
+  "checks newly staged attributes from the private snapshot index: %s",
+  async (file) => {
+    vi.stubEnv("GIT_LITERAL_PATHSPECS", "1");
+    await fs.mkdir(path.dirname(f.file(file)), { recursive: true });
+    await f.write(file, "*.txt text\n");
+    await f.git("add", file);
+    await f.snapshot();
+    await f.write(file, "*.txt filter=blocked\n");
+    await expect(f.snapshot()).rejects.toThrow("unsupported Git clean filter");
+    expect(await f.git("show", `:${file}`)).toBe("*.txt text");
+  },
+);
+
+it.each(["replace refs", "grafts"])("rejects Git replacement metadata from %s", async (kind) => {
+  const head = await f.git("rev-parse", "HEAD");
+  if (kind === "replace refs") {
+    await f.git("update-ref", `refs/replace/${head}`, head);
+  } else {
+    await f.write(".git/info/grafts", `${head}\n`);
+  }
+
+  await expect(assertSafeGitPublicationWorkspace(f.cwd, runPublicationCommand)).rejects.toThrow(
+    "replacement metadata",
   );
 });
