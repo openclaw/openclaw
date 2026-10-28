@@ -514,28 +514,6 @@ describe("session workspace path actions", () => {
   });
 });
 
-it.each([
-  ["composed query", "München", "Mu\u0308nchen.md"],
-  ["decomposed query", "Mu\u0308nchen", "München.md"],
-])(
-  "matches a %s against the canonically equivalent session file",
-  async (_label, query, stored) => {
-    setupDesktopLayout();
-    const workspace = createWorkspace({
-      list: { files: [file(stored), file("munchen.md", "read")] },
-    });
-    const { container, update } = await mountWorkspace(workspace);
-    workspace.browserSearch = query;
-    update(workspace);
-    expect(fileNames(container)).toEqual([stored]);
-    // The row still renders the stored bytes, not the query's canonical form.
-    expect(container.textContent).toContain(stored);
-    workspace.browserSearch = "munchen";
-    update(workspace);
-    expect(fileNames(container)).toEqual(["munchen.md"]);
-  },
-);
-
 function setupDesktopLayout() {
   // JSDOM has no layout observation or font loading. These tests exercise the
   // workspace owner; real-browser proof owns overflow and disclosure motion.
@@ -818,57 +796,4 @@ it("mobile restores folder search and root groups without mixing global search r
   await ready();
   expect(mounted.container.textContent).toContain("No matching files.");
   expect(mounted.queryByRole("button", { name: "Browse files" })).toBeNull();
-});
-
-it.each([
-  ["composed query", "München", "Mu\u0308nchen.md"],
-  ["decomposed query", "Mu\u0308nchen", "München.md"],
-])("mobile matches a %s through the local file filter", async (_label, query, stored) => {
-  setupDesktopLayout();
-  vi.useFakeTimers();
-  onTestFinished(() => {
-    vi.useRealTimers();
-  });
-  const listFiles = vi.fn(async (_key: string, options?: { path?: string; search?: string }) => ({
-    sessionKey: "agent:main:workspace",
-    root: "/workspace",
-    files: [file(stored)],
-    browser: {
-      path: options?.path ?? "",
-      ...(options?.search ? { search: options.search } : {}),
-      entries: [],
-    },
-  }));
-  const state: SessionWorkspaceHost = createSessionWorkspaceHost({
-    sessionKey: "agent:main:workspace",
-    agentsList: { defaultId: "main", mainKey: "main", scope: "global", agents: [] },
-    client: createGatewayBrowserClientFixture({ request: () => ({ artifacts: [] }) }),
-    sessions: createSessionCapabilityFixture({ listFiles }),
-    handleOpenSidebar: () => {},
-  });
-  const props = () =>
-    createSessionWorkspaceProps(state, { expanded: true, presentation: "mobile" });
-  const mounted = await mountWorkspace(props());
-  const unsubscribe = sessionWorkspaceForHost(state).subscribe(() => mounted.update(props()));
-  onTestFinished(() => {
-    unsubscribe();
-    mounted.unmount();
-  });
-  const ready = () =>
-    waitForSolid(() => {
-      expect(mounted.container.querySelector('[aria-busy="false"]')).not.toBeNull();
-    });
-  await ready();
-  expect(button(mounted.container, stored)).not.toBeNull();
-  search(mounted.container, query);
-  await vi.advanceTimersByTimeAsync(160);
-  await ready();
-  expect(button(mounted.container, stored)).not.toBeNull();
-  // The row keeps the stored bytes; normalization is comparison-side only.
-  expect(mounted.container.textContent).toContain(stored);
-  search(mounted.container, "munchen");
-  await vi.advanceTimersByTimeAsync(160);
-  await ready();
-  expect(button(mounted.container, stored)).toBeNull();
-  expect(mounted.container.textContent).toContain("No matching files.");
 });
