@@ -68,24 +68,26 @@ try {
     });
     assert.equal(written.approvals.length, 1);
     assert.equal(methods("approval/decide").at(-1).params.choiceId, "server-allow-id");
-    // Ending the run while it waits must keep a later allowance from reaching Muse.
+    // Ending the run while it waits must keep the later allowance from reaching Muse.
     const decided = methods("approval/decide").length;
-    const revoked = await harness
-      .turn("fixture:approval", {
-        via: writer,
-        key: "agent:main:writer-approval",
-        decision: "allow-once",
-        expectError: true,
-        beforeApproval: async (runId) => {
-          await writer.request("chat.abort", { sessionKey: "agent:main:writer-approval", runId });
-          await delay(500);
-        },
-      })
-      .catch((/** @type {unknown} */ error) => ({ error }));
+    const revoked = await harness.turn("fixture:approval", {
+      via: writer,
+      key: "agent:main:writer-approval",
+      decision: "allow-once",
+      expectError: true,
+      allowApprovalFailure: true,
+      beforeApproval: async (runId) => {
+        await writer.request("chat.abort", { sessionKey: "agent:main:writer-approval", runId });
+        await harness.client.request("agent.wait", { runId, timeoutMs: 30000 });
+      },
+    });
+    // The verdict was submitted after the run settled; give delivery time to reach Muse.
+    await delay(1000);
     console.log(
-      `revoked wait outcome: ${revoked.error ? String(revoked.error.cause ?? revoked.error) : JSON.stringify(revoked.wait)}`,
+      `revoked wait: run=${JSON.stringify(revoked.wait)} resolve=${revoked.approvalFailure ? String(revoked.approvalFailure) : "accepted"}`,
     );
-    assert.equal(revoked.wait?.status === "ok", false);
+    assert.equal(revoked.approvals.length, 1);
+    assert.notEqual(revoked.wait.status, "ok");
     assert.equal(
       methods("approval/decide")
         .slice(decided)
