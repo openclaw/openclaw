@@ -31,6 +31,21 @@ function bundledPluginFile(pluginId: string, relativePath: string, suffix = ""):
 // Package scripts, workflows, Docker scenarios, and documented maintainer commands invoke these
 // files by path. They are executable roots rather than importable library modules.
 const repositoryScriptEntries = [
+  // Their source headers document standalone benchmark and measurement commands.
+  "scripts/bench-duplicate-paragraphs.mts!",
+  "scripts/perf/auth-file-watch-events-measure.ts!",
+  "scripts/perf/completion-payload-bytes-measure.ts!",
+  "scripts/perf/connect-profile-binding-measure.ts!",
+  "scripts/perf/cron-reader-reuse-measure.ts!",
+  "scripts/perf/cron-registry-read-measure.ts!",
+  "scripts/perf/local-workspace-refresh-measure.ts!",
+  "scripts/perf/plugin-state-claims-measure.ts!",
+  "scripts/perf/session-append-reload-measure.ts!",
+  "scripts/perf/session-membership-retention-measure.ts!",
+  "scripts/perf/session-message-custody-payload-measure.mjs!",
+  "scripts/perf/session-patch-response-measure.ts!",
+  "scripts/perf/transcript-pool-idle-measure.ts!",
+  "scripts/perf/worktree-creation-measure.ts!",
   // The prepublish registry executes this shared build-and-pack lifetime by path.
   "scripts/lib/plugin-npm-build-and-pack.mts!",
   // Package scripts execute the PostgreSQL schema generator, which consumes state declarations.

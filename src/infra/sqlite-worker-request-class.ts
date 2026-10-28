@@ -142,12 +142,9 @@ const families = [
   "worktrees",
 ] as const;
 
-export const sqliteWorkerRequestClasses: ReadonlySet<string> = new Set([
-  ...operations,
-  ...families,
-]);
+const sqliteWorkerRequestClasses: ReadonlySet<string> = new Set([...operations, ...families]);
 
-export function classifySqliteWorkerExecute(commandType: string): string {
+function classifySqliteWorkerExecute(commandType: string): string {
   if (sqliteWorkerRequestClasses.has(commandType)) {
     return commandType;
   }
