@@ -34,6 +34,17 @@ visibility, or remote session-link titles. Side Chat is hidden, and session link
 keep their locally available labels. MCP Apps discovery requires general write
 access. The Gateway continues to authorize every request.
 
+When the Gateway starts with `OPENCLAW_CONFIG_READONLY=1` or `OPENCLAW_NIX_MODE=1`,
+its Control UI shows **Gateway configuration is read-only.** You can inspect the
+configuration there. OpenClaw refuses changes to `openclaw.json` through the Gateway.
+
+By default, the banner tells operators to update the configuration file or
+deployment settings for this Gateway. To direct them to your own workflow, set
+`OPENCLAW_CONFIG_READONLY_NOTICE` in the Gateway's startup environment. Its plain
+text replaces the instructions after the read-only heading. End the notice with
+a space and an absolute HTTP or HTTPS URL to add a **Learn more** link. For
+example, `Edit the deployment manifest and redeploy. https://example.org/gateway`.
+
 ## Command palette file attachments
 
 Open the command palette with **Cmd+K** on macOS or **Ctrl+K** elsewhere. Drop
@@ -359,16 +370,28 @@ Open group rename and **New session defaults** dialogs close when the Gateway
 reconnects or you switch connections. Reopen the group’s menu to make changes
 using the current connection.
 
-**Personal groups** organize only your sidebar, including when you are a guest.
-Use **New personal group** to name a group and select available sessions, or drag
-an existing session into a personal group. **Edit group** renames it and changes
-its members. Drag group headers to reorder them, or use **Move up** and **Move down**
-in the group menu. **Remove personal group** removes only that personal collection;
-it never deletes sessions. Pins and shared groups are independent.
+**Sections** organize only your sidebar, for solo users, members, and guests.
+They appear below **Pinned**, among the sidebar groups, marked with a stacked-layers
+icon; deliberately empty sections remain visible. Choose **New section** in
+**Filter & sort** even without selecting a session, or use a session's
+**Add to section** menu to add it to an existing section or create one with that
+session selected. Only your sidebar changes. Sessions stay in their groups.
 
-Personal groups do not grant access. Unavailable saved sessions remain hidden,
-and members outside the loaded session list resolve through the normal access-checked
-session lookup. Groups are scoped to your profile and Gateway. Connections with
+Creating a section takes two steps. First name it and choose where its sessions
+come from: **My sessions**, **Involving me**, **All sessions** (including
+teammates'), or one project. Then pick sessions from that list; the search button
+searches every session you can access, not only those loaded in the sidebar, and
+teammates' sessions show their owner. **Edit section** opens on the session list;
+**Back** returns to the name and source. Sessions inside a section follow the
+sidebar's **Sort by** selection. Drag an existing session into a section to add it. Drag section headers
+to reorder them, or use **Move up** and **Move down** in the section menu.
+**Remove section** removes only that personal section; it never deletes sessions.
+Pins and shared groups are independent, and **Move to group** still changes shared
+group membership.
+
+Sections do not grant access. Unavailable saved sessions remain hidden,
+and sessions outside the loaded session list resolve through the normal access-checked
+session lookup. Sections are scoped to your profile and Gateway. Connections with
 general Gateway write access sync them through personal preferences. Session-only,
 read-only, and profileless connections keep their edits in that browser, like personal pins.
 

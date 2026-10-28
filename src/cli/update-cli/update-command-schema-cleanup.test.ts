@@ -15,10 +15,12 @@ import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.pa
 import { inspectUpdateDatabaseContexts } from "./update-command-database-context.js";
 import { preflightUpdateCommandSchemas } from "./update-command-schema.js";
 
-vi.mock("./update-command-database-context.js", () => ({
+vi.mock("./update-command-database-context.js", async (original) => ({
+  ...(await original<typeof import("./update-command-database-context.js")>()),
   inspectUpdateDatabaseContexts: vi.fn(),
 }));
-vi.mock("./update-command-git.js", () => ({
+vi.mock("./update-command-git.js", async (original) => ({
+  ...(await original<typeof import("./update-command-git.js")>()),
   inspectGitDryRunTargetSchemaVersions: vi.fn(),
 }));
 
@@ -73,7 +75,7 @@ function makeSnapshot(name: string, onFailure?: Parameters<typeof adoptPreparedL
   return adoptPreparedLocation(location, directory, false, onFailure);
 }
 
-function runUpdate() {
+function runUpdate(packageAlreadyCurrent = false) {
   return preflightUpdateCommandSchemas({
     root,
     updateInstallKind: "package",
@@ -82,19 +84,23 @@ function runUpdate() {
     updateStepTimeoutMs: 1_000,
     managedServiceRootRedirect: null,
     channel: "stable",
-    packageTargetSchemaVersions: versions,
-    packageAlreadyCurrent: false,
+    packageTargetSchemaVersions: packageAlreadyCurrent ? { state: 0, agent: 0 } : versions,
+    packageAlreadyCurrent,
     opts: {},
     refuseUpdate: vi.fn(),
   });
 }
 
-it.each(["DELETE", "WAL"])(
-  "admits online update without acquiring an unrelated snapshot (%s)",
-  async (journalMode) => {
+it.each([
+  ["DELETE", false],
+  ["WAL", false],
+  ["WAL", true],
+] as const)(
+  "admits online update without acquiring an unrelated snapshot (%s, already-current=%s)",
+  async (journalMode, alreadyCurrent) => {
     using database = new (requireNodeSqlite().DatabaseSync)(source);
     database.exec(`PRAGMA journal_mode = ${journalMode}; CREATE TABLE online_probe(value);`);
-    await expect(runUpdate()).resolves.toMatchObject(admittedSchemas);
+    await expect(runUpdate(alreadyCurrent)).resolves.toMatchObject(admittedSchemas);
     expect(snapshots.prepareSqliteReadOnlyLocation).not.toHaveBeenCalled();
     expect(fs.existsSync(prepared.location)).toBe(true);
   },

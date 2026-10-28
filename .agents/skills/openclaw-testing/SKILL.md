@@ -91,7 +91,9 @@ decisions only when each entry is verified against source and the PR records its
 reason (for example, tool-owned metadata in an upgrade snapshot while user data
 stays exact). Never mask a real regression or user-data change. Blanket or
 unverified exceptions need approval. Exact shrink-only ratchet updates are
-maintenance.
+maintenance. A fix PR may raise the test-lines ceiling by exactly its own
+justified regression-test lines when the squash body states the reason; any
+other raise needs approval.
 
 ### Test failure policy
 

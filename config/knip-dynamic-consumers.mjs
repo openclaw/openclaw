@@ -266,6 +266,39 @@ function emittedSelfNamedImportNames(source) {
   );
 }
 
+function prToolingNamedImportEdges(source) {
+  // The wrapper supplies quoted argv to this specific stdin module. Keep the
+  // import and its path argument attached to the same live heredoc launch.
+  const tooling = source.match(
+    /^[ \t]*node[ \t]+--input-type=module[ \t]+-[ \t]+((?:"[^"\r\n]*"[ \t]+)+)<<'EOF_TOOLING'\r?\n([\s\S]*?)^EOF_TOOLING$/mu,
+  );
+  const edges = new Map();
+  if (!tooling) {
+    return edges;
+  }
+  const args = [...tooling[1].matchAll(/"([^"\r\n]*)"/gu)].map((match) => match[1]);
+  for (const match of tooling[2].matchAll(
+    /^[ \t]*const\s*\{([^{}]+)\}\s*=\s*await\s+import\(\s*\(\s*await\s+import\(["']node:url["']\)\s*\)\.pathToFileURL\(\s*process\.argv\[(\d+)\]\s*\)\s*\)\s*;/gmu,
+  )) {
+    const modulePath = args[Number(match[2]) - 2]?.match(
+      /^\$pr_bootstrap_root\/(scripts\/pr-lib\/[^"\r\n]+\.mjs)$/u,
+    )?.[1];
+    if (!modulePath) {
+      continue;
+    }
+    const target = path.resolve(modulePath);
+    const names = edges.get(target) ?? new Set();
+    for (const binding of match[1].split(",")) {
+      const name = binding.trim().split(/\s*:\s*/u)[0];
+      if (/^[A-Za-z_$][\w$]*$/u.test(name)) {
+        names.add(name);
+      }
+    }
+    edges.set(target, names);
+  }
+  return edges;
+}
+
 function namedImport(names, targetFile, consumerFile, index) {
   const bindings = names.map(
     (name, bindingIndex) => `${name} as __dynamic${index}_${bindingIndex}`,
@@ -498,6 +531,12 @@ export function compileDynamicConsumerEdges(source, filePath, scriptEntrypoints 
   }
   for (const [targetFile, names] of codexLazyEdges) {
     imports.push(namedImport([...names], targetFile, filePath, imports.length));
+  }
+
+  for (const [targetFile, names] of prToolingNamedImportEdges(
+    fs.readFileSync("scripts/pr", "utf8"),
+  )) {
+    addNamedImport([...names], targetFile);
   }
 
   return `${source}\n${imports.join("\n")}`;

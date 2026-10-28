@@ -152,11 +152,11 @@ async function ensureDashboardTargetReady(params: {
   const prompt = shouldInstall
     ? "No background Gateway service was detected for this profile. Install and start one to open the dashboard?"
     : "The background Gateway service is not running. Start it to open the dashboard?";
-  const approved =
-    yes || (allowRecovery !== false && process.stdin.isTTY && (await promptYesNo(prompt, true)));
+  const interactive = allowRecovery !== false && process.stdin.isTTY;
+  const approved = yes || (interactive && (await promptYesNo(prompt, true)));
   if (!approved) {
     printGatewayNotReadyHints(runtime, reason);
-    return { ready: false as const, reason };
+    return { ready: false as const, reason, declined: interactive };
   }
 
   if (shouldInstall) {
@@ -276,6 +276,9 @@ export async function dashboardCommand(
     yes: options.yes,
   });
   if (!readiness.ready) {
+    if (!readiness.declined) {
+      runtime.exit(1);
+    }
     return;
   }
 
@@ -290,6 +293,7 @@ export async function dashboardCommand(
       allowRecovery: false,
     });
     if (!finalReadiness.ready) {
+      runtime.exit(1);
       return;
     }
   }
@@ -298,6 +302,7 @@ export async function dashboardCommand(
       "Dashboard loopback listener could not be verified as the configured Gateway; refusing to copy or open an authenticated URL.",
     );
     runtime.log("Restart the Gateway, then run `openclaw gateway status --deep` for details.");
+    runtime.exit(1);
     return;
   }
   const document = await waitForControlUiDocument({
@@ -319,6 +324,7 @@ export async function dashboardCommand(
       `Could not create a one-time browser pairing link: ${error instanceof Error ? error.message : String(error)}`,
     );
     runtime.log("Run `openclaw doctor`, then retry `openclaw dashboard`.");
+    runtime.exit(1);
     return;
   }
   const { port, basePath, links, includeTokenInUrl, tlsConfig } = target;

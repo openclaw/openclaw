@@ -3,7 +3,6 @@ import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_pro
 import { createHash } from "node:crypto";
 import { createWriteStream } from "node:fs";
 import { access, cp, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -18,7 +17,7 @@ import {
 import { createControlUiE2eArtifactDir } from "../../ui/src/test-helpers/control-ui-e2e-artifacts.ts";
 import { waitForControlUiGatewayReady } from "../../ui/src/test-helpers/control-ui-e2e-readiness.ts";
 import { stopChild } from "../lib/gateway-bench-child.ts";
-import { startWarmReloadAdmission } from "./warm-reload-admission.ts";
+import { freeProofPort, startWarmReloadAdmission } from "./warm-reload-admission.ts";
 import { installWarmReloadBrowserProbe, proofRegions } from "./warm-reload-browser-probe.ts";
 import { launchWarmReloadBrowser, calibrateWarmReloadPaintHolding } from "./warm-reload-browser.ts";
 import { prepareWarmReloadBuild, createWarmReloadComparison } from "./warm-reload-compare.ts";
@@ -103,41 +102,6 @@ const directory = createControlUiE2eArtifactDir("warm-reload", values.output);
 const stateDir = path.join(directory, "state");
 const viewport = { width: 1720, height: 1180 };
 const revision = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
-
-async function freePort(excluded: number[] = [], gateway = false) {
-  for (let port = 19600; port <= 19699; port++) {
-    const ports = gateway ? [port, resolveSandboxHostPort(port)] : [port];
-    if (ports.some((candidate) => candidate > 19699 || excluded.includes(candidate))) {
-      continue;
-    }
-    const servers = ports.map(() => createServer());
-    try {
-      for (const [index, server] of servers.entries()) {
-        await new Promise<void>((resolve, reject) => {
-          server.once("error", reject);
-          server.listen(ports[index], "127.0.0.1", resolve);
-        });
-      }
-      return port;
-    } catch (error) {
-      if (!(error instanceof Error) || !("code" in error) || error.code !== "EADDRINUSE") {
-        throw error;
-      }
-    } finally {
-      await Promise.all(
-        servers
-          .filter((server) => server.listening)
-          .map(
-            (server) =>
-              new Promise<void>((resolve) => {
-                server.close(() => resolve());
-              }),
-          ),
-      );
-    }
-  }
-  throw new Error("No free loopback port in 19600–19699");
-}
 
 async function waitForGateway(url: string, child: ChildProcess) {
   const deadline = Date.now() + 180000;
@@ -610,7 +574,7 @@ const interrupt = () => {
 };
 process.once("SIGINT", interrupt);
 process.once("SIGTERM", interrupt);
-const port = await freePort([], true);
+const port = await freeProofPort([], true);
 // HTML boards bind this second native listener lazily after the Gateway starts.
 const gatewayPorts = [port, resolveSandboxHostPort(port)];
 let baseUrl = `http://127.0.0.1:${port}`;
@@ -647,7 +611,7 @@ try {
   if (values.admission === "signed-in") {
     admission = await startWarmReloadAdmission({
       gatewayPort: port,
-      port: await freePort(gatewayPorts),
+      port: await freeProofPort(gatewayPorts),
     });
     baseUrl = admission.origin;
   }
@@ -757,7 +721,7 @@ try {
     }
   }
   paintHoldingCalibration = await calibrateWarmReloadPaintHolding(browser, {
-    port: await freePort(gatewayPorts),
+    port: await freeProofPort(gatewayPorts),
     directory: path.join(directory, "paint-holding-calibration"),
   });
   const cpuBefore = os.cpus().map((cpu) => cpu.times);

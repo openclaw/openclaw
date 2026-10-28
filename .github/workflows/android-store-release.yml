@@ -77,8 +77,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # Fetch ancestry now; release-note reads hydrate historical file contents on demand.
           # Retain this main commit as a negotiation tip for the release owner's later main fetch.
-          git fetch --no-tags --unshallow origin "+$GITHUB_SHA:refs/remotes/origin/main"
+          git fetch --no-tags --filter=blob:none --unshallow origin "+$GITHUB_SHA:refs/remotes/origin/main"
 
       - name: Prepare trusted Linux Android tooling
         if: >-

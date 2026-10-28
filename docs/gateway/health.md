@@ -105,6 +105,7 @@ successful-health-response compatibility behavior for those versions.
 - `channels.<provider>.accounts.<accountId>.healthMonitor.enabled`: multi-account override that wins over the channel-level setting.
 - These per-channel overrides apply to the channels that expose them today: Discord, Google Chat, iMessage, IRC, Microsoft Teams, Signal, Slack, Telegram, and WhatsApp.
 - A crashing channel is recovered by its own auto-restart backoff first (`auto-restart attempt N/10` in the logs). The health monitor stays out of the way until that ladder ends with `giving up after 10 restart attempts`, then takes over as the last restart owner.
+- During slow startup, health-monitor recovery waits for the same channel-startup barrier as initial startup; expiry of the 60-second monitor grace does not launch providers early. Stopping a waiting account cancels that start.
 
 ## Inbound ingress health
 

@@ -819,6 +819,11 @@ selection; global PostgreSQL support alone is insufficient. A target without
 that proof is refused. A raw package-manager downgrade does not provide this
 guard.
 
+Agent schema admission recognizes the local PostgreSQL anchor and reads the
+matching server store's version without migrating it. An older server schema can
+therefore reach the stopped-writer migration phase; a newer schema or mismatched
+anchor identity still refuses the update.
+
 Before mutation, the updater captures exact PostgreSQL rows, sequence allocation
 state, schema facts, and matching anchors alongside local SQLite state and config.
 Recovery restores into fresh namespaces and publishes matching anchors. It
