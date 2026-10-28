@@ -750,14 +750,18 @@ it("mobile restores folder search and root groups without mixing global search r
     browser: {
       path: options?.path ?? "",
       ...(options?.search ? { search: options.search } : {}),
-      entries: options?.search
-        ? [
-            { path: "docs/report.txt", name: "report.txt", kind: "file" as const, size: 1536 },
-            { path: "outside/report.txt", name: "report.txt", kind: "file" as const },
-          ]
-        : options?.path === "docs"
-          ? [{ path: "docs/report.txt", name: "report.txt", kind: "file" as const, size: 1536 }]
-          : [{ path: "docs", name: "docs", kind: "directory" as const }],
+      truncated: Boolean(options?.search) && options?.search !== "absent",
+      entries:
+        options?.search === "docs/report.txt" || options?.search === "absent"
+          ? []
+          : options?.search
+            ? [
+                { path: "docs/report.txt", name: "report.txt", kind: "file" as const, size: 1536 },
+                { path: "outside/report.txt", name: "report.txt", kind: "file" as const },
+              ]
+            : options?.path === "docs"
+              ? [{ path: "docs/report.txt", name: "report.txt", kind: "file" as const, size: 1536 }]
+              : [{ path: "docs", name: "docs", kind: "directory" as const }],
     },
   }));
   const state: SessionWorkspaceHost = createSessionWorkspaceHost({
@@ -813,4 +817,28 @@ it("mobile restores folder search and root groups without mixing global search r
   expect(searchInput(mounted.container).value).toBe("report");
   expect(button(mounted.container, "docs/report.txt")).not.toBeNull();
   expect(button(mounted.container, "outside/report.txt")).toBeNull();
+  for (const query of ["report", "docs/report.txt"]) {
+    search(mounted.container, query);
+    await vi.advanceTimersByTimeAsync(160);
+    await ready();
+    expect(mounted.container.textContent).toContain(
+      "Search is incomplete. Some files may not appear in these results.",
+    );
+    expect(mounted.container.textContent).not.toContain("No matching files.");
+    expect(Boolean(button(mounted.container, "docs/report.txt"))).toBe(query === "report");
+    mounted.getByRole("button", { name: "Browse files" }).click();
+    await ready();
+    expect(searchInput(mounted.container).value).toBe("");
+    expect(document.activeElement).toBe(searchInput(mounted.container));
+    expect(getSessionWorkspace(state).browserPath).toBe("docs");
+    expect(getSessionWorkspace(state).tree?.searchOpen).toBe(false);
+    expect(button(mounted.container, "docs/report.txt")).not.toBeNull();
+    expect(button(mounted.container, "outside/report.txt")).toBeNull();
+    expect(mounted.queryByRole("button", { name: "Browse files" })).toBeNull();
+  }
+  search(mounted.container, "absent");
+  await vi.advanceTimersByTimeAsync(160);
+  await ready();
+  expect(mounted.container.textContent).toContain("No matching files.");
+  expect(mounted.queryByRole("button", { name: "Browse files" })).toBeNull();
 });
