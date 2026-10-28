@@ -1,13 +1,11 @@
 /* @vitest-environment jsdom */
 import { Blob as NodeBlob } from "node:buffer";
-import { Show, createSignal } from "solid-js";
+import { createSignal } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ChatRowDisplayFacts } from "../../../lib/chat/row-display-facts.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import { GroupedMessage } from "./chat-message-bubble-view.tsx";
-import { MessageImageAction } from "./chat-message-images-solid.tsx";
-import { prepareChatMessageRender } from "./chat-message-markdown-view.tsx";
+import { MessageImageAction, MessageImages } from "./chat-message-images-solid.tsx";
 import {
   imageResponse,
   managedSource,
@@ -23,7 +21,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it("paints saved thumbnail bytes and final geometry before live admission, without authorizing an action", () => {
+it("retains scoped display-only thumbnail bytes without authorizing a read or action", () => {
   const source = managedSource("cached-image");
   const artifactId = "artifact_managed_image_cached-image";
   const key = JSON.stringify([artifactId, source, 480]);
@@ -41,22 +39,14 @@ it("paints saved thumbnail bytes and final geometry before live admission, witho
   const [live, setLive] = createSignal(false);
   const view = mountSolid(() => (
     <ChatRowDisplayContext value={() => row}>
-      <GroupedMessage
-        preparation={prepareChatMessageRender({
-          role: "assistant",
-          __openclaw: { id: "cached-image" },
-          content: [{ type: "image", url: source, artifactId }],
-        })}
-        messageKey="cached-image"
+      <MessageImages
+        images={[{ url: source, artifactId }]}
         options={{
-          isStreaming: false,
-          showReasoning: false,
           mediaReadAllowed: live(),
           connectionEpoch: live() ? 2 : 1,
-          mediaPolicyKey: live() ? "live-policy" : "cached-policy",
-          assistantAttachmentAuthToken: live() ? "synthetic-live-token" : null,
+          policyKey: live() ? "live-policy" : "cached-policy",
+          authToken: live() ? "synthetic-live-token" : undefined,
           onOpenImage,
-          displayFacts: { forRow: () => row },
         }}
       />
       <MessageImageAction
@@ -69,12 +59,6 @@ it("paints saved thumbnail bytes and final geometry before live admission, witho
   try {
     let image = view.container.querySelector("img");
     expect(image?.getAttribute("src")).toBe("blob:cached-thumbnail");
-    expect(view.container.querySelector(".chat-image-skeleton")).toBeNull();
-    expect(
-      view.container
-        .querySelector<HTMLElement>(".chat-image-frame")
-        ?.style.getPropertyValue("--chat-image-ratio"),
-    ).toBe("400 / 200");
     const button = view.container.querySelector<HTMLButtonElement>(".chat-message-image-button")!;
     button.click();
     view.container.querySelector<HTMLButtonElement>(".catalog-image")!.click();
@@ -104,7 +88,7 @@ it("paints saved thumbnail bytes and final geometry before live admission, witho
   expect(revoke).toHaveBeenCalledWith("blob:cached-thumbnail");
 });
 
-it("records displayed bytes without replacing the live image, then restores them on the next mount", async () => {
+it("records displayed bytes only from HTTP cache without replacing the live image", async () => {
   vi.stubGlobal("IntersectionObserver", undefined);
   const source = `media://inbound/${crypto.randomUUID()}.png`;
   const key = JSON.stringify([null, source, 480]);
@@ -120,30 +104,14 @@ it("records displayed bytes without replacing the live image, then restores them
     init?.cache === "only-if-cached" ? imageResponse() : ticketResponse("synthetic-live-ticket"),
   );
   vi.stubGlobal("fetch", fetch);
-  const [visible, setVisible] = createSignal(true);
   const [live, setLive] = createSignal(true);
   const mediaOwner = vi.fn();
-  const preparation = prepareChatMessageRender({
-    role: "assistant",
-    __openclaw: { id: "live-image" },
-    content: [{ type: "image", url: source }],
-  });
   const view = mountSolid(() => (
     <ChatRowDisplayContext value={() => row}>
-      <Show when={visible()}>
-        <GroupedMessage
-          preparation={preparation}
-          messageKey="live-image"
-          options={{
-            isStreaming: false,
-            showReasoning: false,
-            mediaReadAllowed: live(),
-            mediaOwner,
-            assistantAttachmentAuthToken: "synthetic-live-token",
-            displayFacts: { forRow: () => row },
-          }}
-        />
-      </Show>
+      <MessageImages
+        images={[{ url: source }]}
+        options={{ mediaReadAllowed: live(), mediaOwner, authToken: "synthetic-live-token" }}
+      />
     </ChatRowDisplayContext>
   ));
   try {
@@ -170,13 +138,6 @@ it("records displayed bytes without replacing the live image, then restores them
     expect(view.container.querySelector(".chat-image-skeleton")).toBeNull();
     expect(view.container.querySelector("img")).toBe(image);
     expect(image.getAttribute("src")).toBe("blob:recorded-thumbnail");
-    setVisible(false);
-    flush();
-    setVisible(true);
-    flush();
-    expect(view.container.querySelector("img")?.getAttribute("src")).toBe(
-      "blob:recorded-thumbnail",
-    );
     expect(fetch).toHaveBeenCalledTimes(2);
   } finally {
     view.unmount();

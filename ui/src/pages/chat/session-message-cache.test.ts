@@ -126,6 +126,9 @@ describe("session message cache", () => {
   it.each([
     { messageReactions: { reply: [{ emoji: "👍", count: 1, identities: [{ id: "peer" }] }] } },
     { composer: { id: "saved", provider: "example", name: "Saved", permissionMode: "full" } },
+    { rowDisplay: { reply: { links: { source: { title: "Saved title" } } } } },
+    { rowDisplay: { reply: { images: { source: { width: 480, height: 240, rendition: 480 } } } } },
+    { avatarSources: { ops: "/avatar/ops?v=1", cleared: null } },
     {
       headerViewers: { users: [{ id: "peer", name: "Peer" }], totalCount: 5, ownerViewing: false },
       headerSharing: "public",
@@ -141,13 +144,17 @@ describe("session message cache", () => {
     },
   ] satisfies Partial<ChatSessionSnapshot>[])("retains %j across the same incarnation", (facts) => {
     const { read, write } = createCacheContext();
-    write(widgetSnapshot(["cached"], "session-1", facts));
-    write(widgetSnapshot(["live"], "session-1"));
+    const messages = [{ role: "assistant", content: "Cached", __openclaw: { id: "reply" } }];
+    write(widgetSnapshot(messages, "session-1", facts));
+    write(widgetSnapshot(messages.slice(), "session-1"));
     expect(read()).toMatchObject(facts);
     write(widgetSnapshot(["reset"], "session-2"));
-    for (const field of Object.keys(facts)) {
-      expect(read()).not.toHaveProperty(field);
-    }
+    expect(read()).toMatchObject({ messages: ["reset"], sessionId: "session-2" });
+    expect(
+      Object.entries(read() ?? {}).filter(
+        ([field, value]) => field in facts && value !== undefined,
+      ),
+    ).toEqual([]);
   });
 
   it("merges current-locale Details receipts without overwriting row footprints", () => {
@@ -213,32 +220,30 @@ describe("session message cache", () => {
   });
 
   it("publishes a footprint batch once and rejects a retired session's deferred batch", () => {
-    const cache: ChatMessageCache = new Map();
-    const host = { assistantAgentId: "main" };
-    const target = { sessionKey: "agent:main:batch" };
-    cacheChatSessionSnapshot(cache, host, target, widgetSnapshot([], "one"));
-    const layout = createChatWidgetLayout()(cache, host, target);
+    const { cache, read, write, layout: createLayout } = createCacheContext();
+    write(widgetSnapshot([], "one"));
+    const layout = createLayout();
     expect(layout.readRows()).toBeUndefined();
-    const write = vi.fn();
-    observeChatCache(cache, { write, delete: vi.fn() });
+    const publish = vi.fn();
+    observeChatCache(cache, { write: publish, delete: vi.fn() });
     const heights = {
       'row:v1:768:appearance:first:"one"': 100,
       'row:v1:768:appearance:second:"two"': 200,
     };
     layout.writeRows(heights);
-    expect(write).toHaveBeenCalledTimes(1);
-    expect(readChatSessionSnapshot(cache, host, target)?.widgetHeights).toEqual(heights);
+    expect(publish).toHaveBeenCalledTimes(1);
+    expect(read()?.widgetHeights).toEqual(heights);
     // Newly measured rows belong to the next reload, not this admission.
     expect(layout.readRows()).toBeUndefined();
-    const reloaded = createChatWidgetLayout()(cache, host, target);
+    const reloaded = createLayout();
     expect(reloaded.readRows()).toEqual(heights);
     layout.writeRows(heights);
-    expect(write).toHaveBeenCalledTimes(1);
-    cacheChatSessionSnapshot(cache, host, target, widgetSnapshot([], "two"));
-    write.mockClear();
+    expect(publish).toHaveBeenCalledTimes(1);
+    write(widgetSnapshot([], "two"));
+    publish.mockClear();
     layout.writeRows(heights);
-    expect(write).not.toHaveBeenCalled();
-    expect(readChatSessionSnapshot(cache, host, target)?.widgetHeights).toBeUndefined();
+    expect(publish).not.toHaveBeenCalled();
+    expect(read()?.widgetHeights).toBeUndefined();
     expect(reloaded.readRows()).toBeUndefined();
   });
   it("retires admitted row heights when the same session key moves to another account", () => {

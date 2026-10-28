@@ -10,7 +10,7 @@ import {
   readStoredChatSnapshotRecord,
 } from "./session-snapshot-database.ts";
 import * as snapshotDatabase from "./session-snapshot-database.ts";
-import { CHAT_SNAPSHOT_PROJECTION_VERSION } from "./session-snapshot-projection.ts";
+import { CHAT_SNAPSHOT_PROJECTION_VERSION } from "./session-snapshot-record.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
 /* @vitest-environment jsdom */
 import { writeSnapshotFixture } from "./session-snapshot.test-support.ts";
@@ -81,7 +81,20 @@ describe("snapshot write serialization and scheduling", () => {
       usage: { input: 1_200, output: 400 },
       openclawResponsesInputReplay: { text: "Server replay only" },
     }));
-    const value = { ...snapshot(), messages, pagination, deltaCursor: "latest-cursor" };
+    const reactions = [{ emoji: "👍", count: 1, identities: [{ id: "peer", label: "Peer" }] }];
+    const row = {
+      links: { source: { title: "Linked task" } },
+      images: { source: { width: 480, height: 240, rendition: 480 as const } },
+    };
+    const value: ChatSessionSnapshot = {
+      ...snapshot(),
+      messages,
+      pagination,
+      deltaCursor: "latest-cursor",
+      transcriptMetadata: { key: "agent:main:saved", kind: "direct", contextTokens: 200_000 },
+      messageReactions: { "message-0": reactions, "message-1099": reactions, missing: reactions },
+      rowDisplay: { "message-0": row, "message-1099": row, missing: row },
+    };
     writeSnapshotFixture(store, sessionKey, value);
     await store.flush();
     const restored = await store.read(sessionKey);
@@ -94,6 +107,9 @@ describe("snapshot write serialization and scheduling", () => {
       totalMessages: pagination.totalMessages,
     });
     expect(restored?.deltaCursor).toBe("latest-cursor");
+    expect(restored?.messageReactions).toEqual({ "message-1099": reactions });
+    expect(restored?.rowDisplay).toEqual({ "message-1099": row });
+    expect(restored?.transcriptMetadata?.contextTokens).toBe(200_000);
     expect(value.messages).toHaveLength(1_100);
     expect(JSON.stringify(restored).length).toBeLessThan(220_000);
   });
@@ -113,27 +129,6 @@ describe("snapshot write serialization and scheduling", () => {
     const restored = await store.read(sessionKey);
     expect(restored?.messages).toEqual(messages.slice(18));
     expect(restored?.pagination).toEqual({ hasMore: true, nextOffset: 0, totalMessages: 34 });
-  });
-
-  it("bounds saved reaction facts to the retained rows and restores their context window", async () => {
-    const messages = Array.from({ length: 100 }, (_, index) => ({
-      role: "assistant",
-      content: `Saved reply ${index}`,
-      __openclaw: { id: `reply-${index}`, seq: index + 1 },
-    }));
-    const summaries = [{ emoji: "👍", count: 1, identities: [{ id: "peer", label: "Peer" }] }];
-    writeSnapshotFixture(store, sessionKey, {
-      ...snapshot(),
-      messages,
-      pagination: { hasMore: false, totalMessages: 100 },
-      transcriptMetadata: { key: "agent:main:saved", kind: "direct", contextTokens: 200_000 },
-      messageReactions: { "reply-0": summaries, "reply-99": summaries, missing: summaries },
-    });
-    await store.flush();
-    const restored = await store.read(sessionKey);
-    expect(restored?.messageReactions).toEqual({ "reply-99": summaries });
-    expect(restored?.transcriptMetadata?.contextTokens).toBe(200_000);
-    expect(restored?.messages).toEqual(messages.slice(-80));
   });
 
   it.each([false, true])(

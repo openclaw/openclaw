@@ -35,7 +35,7 @@ import {
 } from "./session-snapshot-invalidation.ts";
 import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
 import { prewarmChatSnapshot } from "./session-snapshot-prewarm.ts";
-import { CHAT_SNAPSHOT_PROJECTION_VERSION } from "./session-snapshot-projection.ts";
+import { CHAT_SNAPSHOT_PROJECTION_VERSION } from "./session-snapshot-record.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
 import { writeSnapshotFixture } from "./session-snapshot.test-support.ts";
 
@@ -185,9 +185,6 @@ describe("persistent chat session snapshots", () => {
           links: { "session:agent:main:linked": { title: "Synthetic linked task" } },
           images: { source: { width: 480, height: 240, rendition: 480 as const, thumbnail } },
         },
-        evicted: {
-          images: { gone: { width: 480, height: 240, rendition: 480 as const, thumbnail } },
-        },
       },
     };
     await seed(saved);
@@ -197,7 +194,6 @@ describe("persistent chat session snapshots", () => {
     const image = restored?.rowDisplay?.reply?.images?.source;
     expect(image).toMatchObject({ width: 480, height: 240, rendition: 480 });
     expect(await image?.thumbnail?.arrayBuffer()).toEqual(await thumbnail.arrayBuffer());
-    expect(restored?.rowDisplay?.evicted).toBeUndefined();
     const otherAccountKey = resolveChatSnapshotKey(
       { ...snapshotHost, client: { recoveryScope: "account-b", recoveryScopeReady: true } },
       { sessionKey: rawKey(sessionKey) },
@@ -539,7 +535,7 @@ describe("persistent chat session snapshots", () => {
 
   it.each(["direct", "prewarmed"])("discards the previous projection (%s)", async (mode) => {
     await persist(writer, sessionKey, snapshot("current"));
-    await putRawRecord(envelope(sessionKey, snapshot("old"), 6));
+    await putRawRecord(envelope(sessionKey, snapshot("old"), 8));
     if (mode === "prewarmed") {
       void prewarmChatSnapshot(sessionKey);
     }

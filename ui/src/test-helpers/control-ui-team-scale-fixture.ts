@@ -16,19 +16,19 @@ import {
 } from "./control-ui-sidebar-list-fixture.ts";
 import { createTeamScaleSidebarPresentation } from "./control-ui-sidebar-presentation.test-support.ts";
 import { withTeamScaleConfig } from "./control-ui-team-scale-config.ts";
-import { createTeamScaleHistoryFixture } from "./control-ui-team-scale-history-fixture.ts";
+import {
+  createTeamScaleHistoryFixture,
+  type TeamScaleFixtureAsset,
+} from "./control-ui-team-scale-history-fixture.ts";
 import {
   createTeamScaleCronInventory,
   createTeamScaleCounts,
   createTeamScaleSessionInventory,
 } from "./control-ui-team-scale-inventory.ts";
 import {
-  createTeamScaleRowDisplayFixture,
-  type TeamScaleFixtureAsset,
-} from "./control-ui-team-scale-late-row-fixture.ts";
-import {
   createTeamScalePeople,
   teamScalePersonAvatar,
+  TEAM_SCALE_AVATAR_ASSET,
   TEAM_SCALE_SELF_INSTANCE_ID,
 } from "./control-ui-team-scale-people.ts";
 import {
@@ -37,6 +37,7 @@ import {
   dashboardWidgetHtml,
   widgetHtml,
 } from "./control-ui-team-scale-widget-html.ts";
+import { TEST_LINK_READER } from "./link-reader.ts";
 
 export { TEAM_SCALE_SELF_INSTANCE_ID };
 
@@ -114,17 +115,21 @@ export function createControlUiTeamScaleFixture(input: FixtureOptions = {}) {
   const duplicateReads = options.duplicateBootReads
     ? createTeamScaleDuplicateReadFixture(selectedSessionKey, now)
     : undefined;
-  const { assets: rowAssets, lateRows } = createTeamScaleRowDisplayFixture({
-    options,
-    now,
-    agents,
-    session: pinnedRows[0]!,
-    transcriptSender,
-    transcriptProfile: profiles[4]!,
-    liveRunId: TEAM_SCALE_LIVE_RUN_ID,
-  });
-  for (const [path, asset] of rowAssets) {
-    assets.set(path, asset);
+  const avatarAsset = {
+    ...TEAM_SCALE_AVATAR_ASSET,
+    headers: { "Cache-Control": "private, max-age=31536000, immutable" },
+  };
+  if (options.transcriptAvatars) {
+    transcriptSender.avatarUrl = `/api/users/${transcriptSender.id}/avatar?v=${now}`;
+    Object.assign(profiles[4]!, { hasAvatar: true, avatarMime: "image/png" });
+    assets.set(`/api/users/${transcriptSender.id}/avatar`, avatarAsset);
+  }
+  if (options.lateRowFacts) {
+    for (const agent of agents.agents) {
+      const path = `/avatar/${agent.id}`;
+      agent.identity = { ...agent.identity, avatarUrl: `${path}?v=${now}` };
+      assets.set(path, avatarAsset);
+    }
   }
   const sidebarPresentation = options.sidebarPresentation
     ? createTeamScaleSidebarPresentation({ agents, pinnedRows, assets, now })
@@ -176,20 +181,22 @@ export function createControlUiTeamScaleFixture(input: FixtureOptions = {}) {
     startedAt: now,
     events: [],
   });
-  const { messageIds, historyMessages, selectedHistory } = createTeamScaleHistoryFixture({
-    messageCount: counts.transcriptMessages,
-    inlineWidgets: counts.inlineWidgets,
-    now,
-    largeSnapshot: options.largeSnapshot,
-    rowFacts: options.rowFacts,
-    lateRowFacts: lateRows?.history,
-    duplicateBootReads: options.duplicateBootReads,
-    sessionInfo: pinnedRows[0]!,
-    models,
-    inFlightRun: options.liveRun ? inFlightRun() : undefined,
-    attachments: duplicateReads?.attachments,
-    sender: options.transcriptAvatars ? transcriptSender : undefined,
-  });
+  const { messageIds, historyMessages, lateRowFacts, methodResponses } =
+    createTeamScaleHistoryFixture({
+      messageCount: counts.transcriptMessages,
+      inlineWidgets: counts.inlineWidgets,
+      now,
+      largeSnapshot: options.largeSnapshot,
+      rowFacts: options.rowFacts,
+      lateRowFacts: options.lateRowFacts,
+      assets,
+      duplicateBootReads: options.duplicateBootReads,
+      sessionInfo: pinnedRows[0]!,
+      models,
+      inFlightRun: options.liveRun ? inFlightRun() : undefined,
+      attachments: duplicateReads?.attachments,
+      sender: options.transcriptAvatars ? transcriptSender : undefined,
+    });
   const catalogs: SessionCatalog[] = ["codex", "claude"].map((id, catalogIndex) => ({
     id,
     label: id === "codex" ? "Codex" : "Claude Code",
@@ -350,7 +357,7 @@ export function createControlUiTeamScaleFixture(input: FixtureOptions = {}) {
     assistantAgentId: "main",
     assistantName: "Harbor",
     agentModel: "gpt-5-mini",
-    ...(lateRows ? { controlUiLinkReaders: lateRows.linkReaders } : {}),
+    ...(lateRowFacts ? { controlUiLinkReaders: [TEST_LINK_READER] } : {}),
     sessionKey: selectedSessionKey,
     ...(options.rowFacts ? { sessionInfo: pinnedRows[0]! } : {}),
     sessions,
@@ -388,7 +395,9 @@ export function createControlUiTeamScaleFixture(input: FixtureOptions = {}) {
       ...(options.dashboardMcpApp ? ["board.widget.appView", "mcp.app.view"] : []),
       ...(options.dashboardWidgetFontUrl ? ["mcp.app.discover"] : []),
       ...(duplicateReads?.featureMethods ?? []),
-      ...(lateRows?.featureMethods ?? []),
+      ...(lateRowFacts
+        ? ["artifacts.download", "controlUi.sessionPreview", "forge.preview", "forge.detail"]
+        : []),
     ],
     methodResponses: {
       ...(sharingMembers
@@ -396,10 +405,8 @@ export function createControlUiTeamScaleFixture(input: FixtureOptions = {}) {
         : {}),
       "question.list": { questions: [] },
       ...(options.dashboardWidgetFontUrl ? { "mcp.app.discover": { servers: [] } } : {}),
-      "chat.startup": selectedHistory,
-      "chat.history": selectedHistory,
       ...duplicateReads?.methodResponses,
-      ...lateRows?.methodResponses,
+      ...methodResponses,
       "agents.list": agents,
       "agent.identity.get": {
         cases: agents.agents.map((agent) => ({
@@ -690,6 +697,6 @@ export function createControlUiTeamScaleFixture(input: FixtureOptions = {}) {
       : undefined,
     counts: { ...counts, sessions: sessions.length, pinned: pinnedKeys.length },
     assets,
-    lateRowFacts: lateRows?.facts,
+    lateRowFacts,
   };
 }

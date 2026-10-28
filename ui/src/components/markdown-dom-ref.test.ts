@@ -8,13 +8,11 @@ import { updateLinkReaderDisplay } from "./markdown-link-display.ts";
 import { toStreamingMarkdownDomParts } from "./markdown-live.ts";
 import { partitionMarkdownHtml, toSanitizedMarkdownHtml } from "./markdown.ts";
 
-it("commits cached session titles and PR state with Markdown, then changes only differing facts", () => {
-  const sessionKey = "agent:main:cached-research";
+it("publishes only differing PR facts and excludes query-bearing URLs from the cache", () => {
   const pr = "https://github.com/example/project/pull/42";
   const queryPr = `${pr}?access_token=synthetic-fixture`;
   let facts: ChatRowDisplayFacts = {
     links: {
-      [`session:${sessionKey}`]: { title: "Synthetic research" },
       [`pr:${pr}`]: { title: "Synthetic change", badge: { label: "Open", tone: "positive" } },
     },
   };
@@ -22,9 +20,7 @@ it("commits cached session titles and PR state with Markdown, then changes only 
     facts = { ...facts, ...update };
   });
   const display = { read: () => ({ scope: "cached-markdown", facts }), write };
-  const html = toSanitizedMarkdownHtml(`${sessionKey}\n\n${pr}\n\n${queryPr}`, {
-    sessionLinks: true,
-  });
+  const html = toSanitizedMarkdownHtml(`${pr}\n\n${queryPr}`);
   const view = renderSolidRef(
     () =>
       createMarkdownRef(
@@ -36,9 +32,6 @@ it("commits cached session titles and PR state with Markdown, then changes only 
     },
   );
   onTestFinished(() => view.unmount());
-  const session = view.container.querySelector(".markdown-session-link--titled")!;
-  expect(session?.textContent).toBe("Synthetic research");
-  expect(session.querySelector(":scope > .session-label")?.textContent).toBe("Synthetic research");
   const link = view.container.querySelector<HTMLAnchorElement>("a.markdown-github-item")!;
   expect(link.getAttribute("aria-description")).toBe("Open");
   expect(link.dataset.linkReaderTone).toBe("positive");
@@ -69,7 +62,7 @@ it("commits cached session titles and PR state with Markdown, then changes only 
       badge: { label: "Closed", tone: "neutral" },
     });
     expect(write).toHaveBeenCalledOnce();
-    expect(Object.keys(facts.links ?? {})).toHaveLength(2);
+    expect(Object.keys(facts.links ?? {})).toEqual([`pr:${pr}`]);
   } finally {
     observer.disconnect();
   }

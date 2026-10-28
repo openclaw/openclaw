@@ -525,7 +525,7 @@ describe("chat transcript rendering", () => {
     );
   });
 
-  it("renders canonical archive attribution as a timestamped notice without a speech bubble", async () => {
+  it("renders cached archive attribution in place and replaces it with differing live facts", async () => {
     const sessionKey = "agent:work:main";
     const archivedSession: GatewaySessionRow = {
       key: "global",
@@ -545,7 +545,8 @@ describe("chat transcript rendering", () => {
       sessionKey,
       [message("user", "Before archive", 1_000), message("assistant", "After archive", 3_000)],
       {
-        selectedSession: archivedSession,
+        transcriptMetadata: projectChatTranscriptMetadata(archivedSession),
+        mediaReadAllowed: false,
         sessions,
       },
     );
@@ -563,6 +564,7 @@ describe("chat transcript rendering", () => {
     ).toEqual(["message", "notice", "message"]);
 
     const variants: [Partial<GatewaySessionRow>, string | null][] = [
+      [{ archivedBy: { type: "human", id: "profile-bob", label: "Bob" } }, "Archived by Bob"],
       [{ archivedBy: { type: "human", id: "profile-bob" } }, "Archived by profile-bob"],
       [
         { archivedBy: undefined, archiveReason: "active-session-cap" },
@@ -571,6 +573,7 @@ describe("chat transcript rendering", () => {
       [{ archivedBy: undefined }, null],
       [{ archived: false, archivedAt: undefined, archivedBy: undefined }, null],
     ];
+    props.transcriptMetadata = undefined;
     for (const [changes, text] of variants) {
       sessions.sessions[0] = { ...archivedSession, ...changes };
       props.selectedSession = sessions.sessions[0];
@@ -580,40 +583,8 @@ describe("chat transcript rendering", () => {
       } else {
         expect(requireElement(container, ".chat-notice").textContent).toContain(text);
       }
+      expect(container.querySelectorAll(".chat-bubble")).toHaveLength(2);
     }
-  });
-
-  it("commits a cached archive notice with its rows and replaces only differing live facts", () => {
-    const sessionKey = "agent:main:cached-archive";
-    const archived: GatewaySessionRow = {
-      key: sessionKey,
-      sessionId: "cached-archive-session",
-      kind: "direct",
-      archived: true,
-      archivedAt: 2_000,
-      archivedBy: { type: "human", id: "profile-ada", label: "Ada" },
-    };
-    const props = threadProps(
-      "cached-archive",
-      sessionKey,
-      [message("assistant", "Before archive", 1_000)],
-      { transcriptMetadata: projectChatTranscriptMetadata(archived), mediaReadAllowed: false },
-    );
-    const { container, rerender } = threadFixture(props);
-    rerender(true);
-    expect(requireElement(container, ".chat-notice").textContent).toContain("Archived by Ada");
-
-    props.transcriptMetadata = undefined;
-    props.selectedSession = {
-      ...archived,
-      archivedBy: { type: "human", id: "profile-bob", label: "Bob" },
-    };
-    rerender();
-    expect(requireElement(container, ".chat-notice").textContent).toContain("Archived by Bob");
-    props.selectedSession = { ...archived, archived: false };
-    rerender();
-    expect(container.querySelector(".chat-notice")).toBeNull();
-    expect(container.querySelectorAll(".chat-bubble")).toHaveLength(1);
   });
 
   it.each([
