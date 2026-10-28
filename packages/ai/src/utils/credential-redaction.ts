@@ -321,7 +321,7 @@ function projectValue(
           : undefined;
     state.changed ||= keys.length > maxKeys;
     seen.add(value);
-    const out = (array ? (trusted && !policy.omitField ? value : []) : {}) as Record<
+    const out = (Array.isArray(value) ? (trusted && !policy.omitField ? value : []) : {}) as Record<
       string,
       unknown
     >;
