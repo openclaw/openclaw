@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  migrateElevenLabsModelConfig,
   migrateElevenLabsLegacyTalkConfig,
   resolveElevenLabsApiKeyWithProfileFallback,
 } from "./config-compat.js";
@@ -13,6 +14,65 @@ afterEach(() => {
 });
 
 describe("elevenlabs config compat", () => {
+  it("moves legacy ElevenLabs model keys to modelId across TTS and Talk", () => {
+    const result = migrateElevenLabsModelConfig({
+      tts: {
+        providers: { elevenlabs: { model: "eleven_v3" } },
+        personas: {
+          narrator: { providers: { elevenlabs: { model: "eleven_flash_v2" } } },
+        },
+      },
+      agents: {
+        entries: {
+          reader: { tts: { providers: { elevenlabs: { model: "eleven_turbo_v2" } } } },
+        },
+      },
+      talk: { providers: { elevenlabs: { model: "eleven_multilingual_v2" } } },
+    });
+
+    expect(result.config).toEqual({
+      tts: {
+        providers: { elevenlabs: { modelId: "eleven_v3" } },
+        personas: {
+          narrator: { providers: { elevenlabs: { modelId: "eleven_flash_v2" } } },
+        },
+      },
+      agents: {
+        entries: {
+          reader: { tts: { providers: { elevenlabs: { modelId: "eleven_turbo_v2" } } } },
+        },
+      },
+      talk: { providers: { elevenlabs: { modelId: "eleven_multilingual_v2" } } },
+    });
+    expect(result.changes).toEqual([
+      "Moved tts.providers.elevenlabs.model → tts.providers.elevenlabs.modelId.",
+      "Moved tts.personas.narrator.providers.elevenlabs.model → tts.personas.narrator.providers.elevenlabs.modelId.",
+      "Moved agents.entries.reader.tts.providers.elevenlabs.model → agents.entries.reader.tts.providers.elevenlabs.modelId.",
+      "Moved talk.providers.elevenlabs.model → talk.providers.elevenlabs.modelId.",
+    ]);
+    expect(migrateElevenLabsModelConfig(result.config)).toEqual({
+      config: result.config,
+      changes: [],
+    });
+  });
+
+  it("preserves explicit ElevenLabs modelId while removing the legacy model key", () => {
+    const result = migrateElevenLabsModelConfig({
+      tts: {
+        providers: {
+          elevenlabs: { model: "eleven_v3", modelId: "eleven_flash_v2" },
+        },
+      },
+    });
+
+    expect(result.config).toEqual({
+      tts: { providers: { elevenlabs: { modelId: "eleven_flash_v2" } } },
+    });
+    expect(result.changes).toEqual([
+      "Removed tts.providers.elevenlabs.model because tts.providers.elevenlabs.modelId is already set.",
+    ]);
+  });
+
   it("moves legacy talk fields into talk.providers.elevenlabs", () => {
     const result = migrateElevenLabsLegacyTalkConfig({
       talk: {

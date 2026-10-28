@@ -3,6 +3,7 @@
 
 export {
   ELEVENLABS_TALK_PROVIDER_ID,
+  migrateElevenLabsModelConfig,
   migrateElevenLabsLegacyTalkConfig,
   resolveElevenLabsApiKeyWithProfileFallback,
 } from "./config-compat.js";

@@ -92,6 +92,13 @@ Doctor does not expand the removed preset. Explicit execution, sandbox, file,
 steering, and messaging settings are preserved; configure those controls directly
 if you relied on preset-derived restrictions.
 
+## ElevenLabs speech model key
+
+Older TTS examples used `model` under an ElevenLabs provider block. Doctor moves
+that value to the canonical `modelId` key for root, per-agent, persona, channel,
+account, and Talk configuration. An existing `modelId` wins and the obsolete
+`model` key is removed. Runtime synthesis reads only `modelId`.
+
 ## Cloud setup secret migration
 
 The Crabbox plugin retires `cloudWorkers.profiles.<id>.settings.setupEnv`.
