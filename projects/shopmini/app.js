@@ -33,7 +33,7 @@ $("#stock-form").addEventListener("submit",e=>{e.preventDefault();const p=produc
 $("#export-orders").addEventListener("click",()=>csv("shopmini-don-hang.csv",[["Mã đơn","Ngày","Khách hàng","Sản phẩm","Số lượng","Đơn giá","Tổng tiền","Trạng thái"],...state.orders.map(o=>[o.id,o.date,o.customer,o.productName,o.quantity,o.unitPrice,o.unitPrice*o.quantity,o.status])]));
 $("#export-customers").addEventListener("click",()=>{const c={};state.orders.forEach(o=>{c[o.customer] ||= {n:0,t:0};c[o.customer].n++;if(o.status==="Đã giao")c[o.customer].t+=o.unitPrice*o.quantity;});csv("shopmini-khach-hang.csv",[["Khách hàng","Số đơn","Tổng chi tiêu"],...Object.entries(c).map(([n,v])=>[n,v.n,v.t])]);});
 $$(".nav-link").forEach(a=>a.addEventListener("click",()=>{$$(".nav-link").forEach(x=>x.classList.remove("active"));a.classList.add("active");}));
-$("#global-search").addEventListener("keydown",e=>{if(e.key==="Enter"){ $("#order-search").value=e.currentTarget.value;renderOrders();location.hash="#orders";$("#orders").scrollIntoView({behavior:"smooth"});}});
+const globalSearch=$("#global-search");if(globalSearch){globalSearch.addEventListener("keydown",e=>{if(e.key==="Enter"){ $("#order-search").value=e.currentTarget.value;renderOrders();location.hash="#orders";$("#orders").scrollIntoView({behavior:"smooth"});}});}
 function $$(s){return [...document.querySelectorAll(s)];}
 window.ShopMini={resetDemo:()=>{if(confirm("Khôi phục dữ liệu demo?")){state=JSON.parse(JSON.stringify(starter));save();render();toast("Đã khôi phục demo.");}}};
 render();
