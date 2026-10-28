@@ -231,7 +231,9 @@ it("retains rejected Git canary findings in the terminal result", async () => {
   });
   const executable = "/opt/service-runtime/bun";
   mocks.maybeStopService.mockImplementation(async ({ phase, onOwnedStartupRuntime }) => {
-    if (phase === "inspect") onOwnedStartupRuntime?.(executable);
+    if (phase === "inspect") {
+      onOwnedStartupRuntime?.(executable);
+    }
     return inspectOrStopService(phase);
   });
   gitCandidate(undefined, true);
@@ -254,7 +256,6 @@ it.each(["git", "package"] as const)(
   async (kind) => {
     const executable = "/opt/service-runtime/bun";
     mocks.maybeStopService.mockImplementation(async ({ phase, onOwnedStartupRuntime }) => {
-      expect(typeof onOwnedStartupRuntime).toBe(kind === "git" ? "function" : "undefined");
       if (phase === "inspect") {
         onOwnedStartupRuntime?.(executable);
       }
@@ -266,8 +267,14 @@ it.each(["git", "package"] as const)(
       mocks.runPackageUpdate.mockImplementation(packageCandidate("/candidate"));
     }
 
-    await execute({ ...executionParams(kind), shouldRestart: false });
+    const execution = await execute({ ...executionParams(kind), shouldRestart: false });
 
+    expect(execution?.result.status, execution?.failure?.detail).toBe("ok");
+    expect(
+      mocks.maybeStopService.mock.calls.some(
+        ([params]) => params.onOwnedStartupRuntime !== undefined,
+      ),
+    ).toBe(kind === "git");
     expect(mocks.validateCanary).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ gatewayStartupRuntime: kind === "git" ? executable : undefined }),
     );
@@ -295,7 +302,9 @@ if (args.includes("plugins")) console.log(JSON.stringify({plugins: [], diagnosti
       );
       mocks.validateCanary.mockImplementation(actual.validateUpdateCandidateCanary);
       mocks.maybeStopService.mockImplementation(async ({ phase, onOwnedStartupRuntime }) => {
-        if (phase === "inspect") onOwnedStartupRuntime?.(runner);
+        if (phase === "inspect") {
+          onOwnedStartupRuntime?.(runner);
+        }
         return inspectOrStopService(phase);
       });
       const publish = vi.fn();
