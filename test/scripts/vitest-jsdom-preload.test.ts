@@ -1,9 +1,8 @@
 import { pathToFileURL } from "node:url";
 import { afterEach, expect, it } from "vitest";
-import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
 import { resolveTsxImport } from "../../scripts/lib/tsx-cli-shim.mjs";
-import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
+import { runNodeScript } from "../helpers/run-node-script.js";
 import { fixtureFiles } from "./script-fixture-files.test-support.js";
 
 const lifetime = createFixtureLifetime();
@@ -11,34 +10,24 @@ afterEach(() => lifetime.cleanup());
 const preload = new URL("../vitest/vitest.jsdom-preload.mts", import.meta.url).href;
 
 async function run(root: string, args: string[], signal: AbortSignal) {
-  let stdout = "";
-  let stderr = "";
-  const code = await lifetime.track(
-    runManagedCommand({
-      bin: resolveTestNodeExecPath(),
-      args: [
+  const result = await lifetime.track(
+    runNodeScript(
+      [
         "--no-warnings",
         "--import",
         resolveTsxImport(process.cwd()),
         `--import=${preload}`,
         ...args,
       ],
-      cwd: root,
-      signal,
-      timeoutMs: 10_000,
-      requireProcessTreeExit: true,
-      stdio: ["ignore", "pipe", "pipe"],
-      onReady(child) {
-        child.stdout!.on("data", (chunk) => {
-          stdout += String(chunk);
-        });
-        child.stderr!.on("data", (chunk) => {
-          stderr += String(chunk);
-        });
-      },
-    }),
+      process.env,
+      10_000,
+      { cwd: root, signal, maxBuffer: 128 * 1024, requireProcessTreeExit: true },
+    ),
   );
-  return { code, stdout, stderr };
+  if (result.error) {
+    throw result.error;
+  }
+  return { code: result.status, stdout: result.stdout, stderr: result.stderr };
 }
 
 it("leaves inherited fork and thread preloads inert outside Vitest workers", ({ signal }) =>
