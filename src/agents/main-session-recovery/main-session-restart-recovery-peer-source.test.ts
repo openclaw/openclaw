@@ -9,6 +9,7 @@ import * as sessions from "../../config/sessions/session-accessor.js";
 import * as transcript from "../../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
+import { createSessionGoalFixture } from "../../gateway/session-goal.test-support.js";
 import { prepareConsumedSessionSendSource } from "../../gateway/session-send-recovery-source.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { resetGatewayWorkAdmission } from "../../process/gateway-work-admission.js";
@@ -171,6 +172,11 @@ it.each(["reset", "archive", "deny"] as const)(
   (change) =>
     withPeerState(async ({ seed, restart, recover }) => {
       const { source, target, originalTranscript } = await seed("revoked-peer-input");
+      const goal = createSessionGoalFixture("peer-goal", "Finish the work", {
+        tokensUsed: 42,
+        continuationTurns: 3,
+      });
+      await sessions.updateSessionEntry(target, () => ({ goal }));
       await restart();
       await sessions.updateSessionEntry(source, () =>
         change === "reset"
@@ -188,11 +194,44 @@ it.each(["reset", "archive", "deny"] as const)(
         "This interrupted turn could not resume after the Gateway restarted",
       );
       expect(sessions.loadSessionEntry(target)).toMatchObject({ status: "interrupted" });
+      const pausedGoal = sessions.loadSessionEntry(target)?.goal;
+      expect(pausedGoal).toMatchObject({
+        ...goal,
+        status: "paused",
+        updatedAt: expect.any(Number),
+        pausedAt: expect.any(Number),
+        lastStatusNote: expect.stringContaining("Resume to continue."),
+      });
       expect(sessions.loadSessionEntry(target)?.mainRestartRecovery?.tombstone).toBeUndefined();
       expect(await recover(runtime)).toEqual({ started: 0, settled: 0, failed: 0, skipped: 0 });
       expect(await sessions.loadTranscriptEvents(target)).toEqual(settledTranscript);
+      expect(sessions.loadSessionEntry(target)?.goal).toEqual(pausedGoal);
     }),
 );
+
+it("preserves a goal completed while its restart failure notice is being prepared", () =>
+  withPeerState(async ({ seed, restart, recover }) => {
+    const { source, target, originalTranscript } = await seed("completed-peer-goal");
+    const goal = createSessionGoalFixture("concurrent-goal", "Finish the work");
+    await sessions.updateSessionEntry(target, () => ({ goal }));
+    await restart();
+    await sessions.updateSessionEntry(source, () => ({ communication: { send: "never" } }));
+    const completed = { ...goal, status: "complete" as const, updatedAt: Date.now() };
+    const append = transcript.appendAssistantMessageToSessionTranscript;
+    vi.spyOn(transcript, "appendAssistantMessageToSessionTranscript").mockImplementationOnce(
+      async (params) => {
+        await sessions.updateSessionEntry(target, () => ({ goal: completed }));
+        return await append(params);
+      },
+    );
+    const runtime = idleRuntime();
+    expect(await recover(runtime)).toEqual({ started: 0, settled: 0, failed: 0, skipped: 1 });
+    expect(sessions.loadSessionEntry(target)?.goal).toEqual(completed);
+    expect(await sessions.loadTranscriptEvents(target)).toEqual(originalTranscript);
+    expect(await recover(runtime)).toEqual({ started: 0, settled: 1, failed: 0, skipped: 0 });
+    expect(sessions.loadSessionEntry(target)?.goal).toEqual(completed);
+    expect(runtime.dispatchAgent).not.toHaveBeenCalled();
+  }));
 
 it("leaves authenticated consumed inputs to their private requester recovery owner", () =>
   withPeerState(async ({ endpoint, seed, prepare }) => {

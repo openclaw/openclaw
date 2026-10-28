@@ -8,6 +8,7 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
+import { createSessionGoalFixture } from "../../gateway/session-goal.test-support.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { finishAgentCommandCleanup } from "../command/cleanup.js";
@@ -101,6 +102,7 @@ it.each(["none", "local", "channel"] as const)(
         status: savedFinal !== "none" ? "failed" : "interrupted",
         abortedLastRun: true,
         mainRestartRecovery: { cycleId: "failed-placement-cycle", revision: 1, chargedAttempts: 0 },
+        goal: createSessionGoalFixture("placement-goal", "Finish the worker task"),
         ...(savedFinal !== "none"
           ? {
               pendingFinalDelivery: {
@@ -146,6 +148,11 @@ it.each(["none", "local", "channel"] as const)(
           status: "failed",
           abortedLastRun: false,
           mainRestartRecovery: { tombstone: { reason } },
+          goal: {
+            id: "placement-goal",
+            status: "paused",
+            lastStatusNote: expect.stringContaining(reason),
+          },
         });
       }
       expect(release).toHaveBeenCalledOnce();
