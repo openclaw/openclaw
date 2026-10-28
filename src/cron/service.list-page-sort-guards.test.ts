@@ -212,53 +212,16 @@ it("applies schedule, status, trigger, and cross-field phrase filters before pag
   });
   expect(page).toMatchObject({ jobs: [{ id: "job-3" }], total: 1, hasMore: false });
 });
-
-it.each([
-  ["München", "Mu\u0308nchen report"],
-  ["Mu\u0308nchen", "München report"],
-])(
-  "finds a canonically equivalent search text without rewriting stored names (%s)",
-  async (query, storedName) => {
-    const state = listState(
-      { id: "muenchen", name: storedName },
-      { id: "other", name: "Daily report" },
-    );
-
-    const page = await listPage(state, { query });
-
-    expect(page.jobs.map((job) => job.id)).toEqual(["muenchen"]);
-    expect(page.jobs[0]?.name).toBe(storedName);
-    expect(state.store!.jobs.find((job) => job.id === "muenchen")?.name).toBe(storedName);
-
-    const ascii = await listPage(state, { query: "daily report" });
-    expect(ascii.jobs.map((job) => job.id)).toEqual(["other"]);
-
-    const absent = await listPage(state, { query: "absent phrase" });
-    expect(absent.jobs).toEqual([]);
-  },
-);
-
-it("finds a canonical query inside a decomposed description field", async () => {
+it("caches canonical search per row generation and rechecks visibility", async () => {
   const state = listState(
-    { id: "desc", name: "Weekly summary", description: "Mu\u0308nchen office report" },
-    { id: "other", name: "Daily report" },
-  );
-
-  const page = await listPage(state, { query: "München" });
-
-  expect(page.jobs.map((job) => job.id)).toEqual(["desc"]);
-});
-
-it("prepares search text once per row generation while rechecking visibility", async () => {
-  const state = listState(
-    { id: "one", name: "Alpha", description: "Report", displayName: "日本語 🦞" },
+    { id: "one", name: "A\u0308 Alpha", description: "é Report", displayName: "日本語 🦞" },
     { id: "two", name: "Beta", agentId: "ops" },
   );
   state.schedulerStarted = true;
   const normalize = vi.spyOn(stringCoerce, "normalizeLowercaseStringOrEmpty");
   let visible = true;
   const matchesJob = vi.fn(() => visible);
-  const first = await listPage(state, { query: " ALPHA " }, matchesJob);
+  const first = await listPage(state, { query: " Ä ALPHA E\u0301 " }, matchesJob);
   expect(first.jobs.map((job) => job.id)).toEqual(["one"]);
   expect((await listPage(state, { query: "日本語 🦞" }, matchesJob)).jobs[0]).toBe(first.jobs[0]);
   expect((await listPage(state, { query: "ops" })).jobs.map((job) => job.id)).toEqual(["two"]);
@@ -266,22 +229,22 @@ it("prepares search text once per row generation while rechecking visibility", a
   expect(await listPage(state, { query: "report" }, matchesJob)).toMatchObject({ total: 0 });
   expect(matchesJob).toHaveBeenCalledTimes(3);
   expect(
-    normalize.mock.calls.filter(([value]) => value === "one Alpha Report  日本語 🦞"),
+    normalize.mock.calls.filter(([value]) => value === "one A\u0308 Alpha é Report  日本語 🦞"),
   ).toHaveLength(1);
   expect(normalize.mock.calls.filter(([value]) => value === "two Beta  ops")).toHaveLength(1);
 
   await locked(state, async () => {
     const job = state.store!.jobs[0]!;
     applyCronRuntimeRowsToState(state, [
-      { ...job, name: "Renamed", description: "Changed", displayName: undefined },
+      { ...job, name: "Ä Renamed", description: "Changed", displayName: undefined },
     ]);
   });
   expect(await listPage(state, { query: "alpha" })).toMatchObject({ total: 0 });
   expect(await listPage(state, { query: "日本語" })).toMatchObject({ total: 0 });
-  const changed = await listPage(state, { query: "changed" });
+  const changed = await listPage(state, { query: "A\u0308 Renamed Changed" });
   expect(changed.jobs.map((job) => job.id)).toEqual(["one"]);
   expect(changed.snapshotRevision).not.toBe(first.snapshotRevision);
-  expect(first.jobs[0]?.name).toBe("Alpha");
+  expect(first.jobs[0]?.name).toBe("A\u0308 Alpha");
 });
 
 it("preserves callback failure and subsequent reads when the logger throws", async () => {
