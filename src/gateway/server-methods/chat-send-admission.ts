@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
+import {
+  createAgentRunRestartAbortError,
+  isAgentRunDirectAbortReason,
+} from "../../agents/run-termination.js";
+import { resolveQueueSettings } from "../../auto-reply/reply/queue/settings-runtime.js";
 import { resolveSessionWorkStartError } from "../../config/sessions.js";
 import { SESSION_ROUTING_CHANGED_ERROR_REASON } from "../../config/sessions/main-session.js";
 import { isSessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
@@ -151,7 +155,13 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
       agentId,
     });
     if (admissionError) {
-      respondChatSendAdmissionError(admissionError, respond);
+      if (isAgentRunDirectAbortReason(admissionError)) {
+        reservation.abort("rpc");
+        const aborted = readChatSendDedupeResponse(context.dedupe, clientRunId)!;
+        respond(aborted.ok, aborted.payload, aborted.error, cachedMeta);
+      } else {
+        respondChatSendAdmissionError(admissionError, respond);
+      }
       return undefined;
     }
     const uploadAdmission = admitChatSendUploads({ params: p, client, context, respond });
