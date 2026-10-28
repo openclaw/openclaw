@@ -4,7 +4,7 @@
 
 ### Hệ thống quản lý bán hàng dành cho cửa hàng nhỏ
 
-**Quản lý sản phẩm · Theo dõi đơn hàng · Kiểm soát kho · Phân tích kinh doanh**
+**Quản lý sản phẩm · Theo dõi đơn hàng · Kiểm soát kho · Báo cáo · Trợ lý OpenClaw AI**
 
 <p>
   <img src="https://img.shields.io/badge/Project-Frontend%20Demo-2563eb?style=for-the-badge" alt="Frontend Demo">
@@ -72,6 +72,12 @@
 - Xem doanh thu, giá vốn hàng đã giao và lợi nhuận gộp ước tính.
 - Xem giá trị hàng tồn theo giá vốn.
 - Xuất danh sách đơn hàng và dữ liệu khách hàng thành tệp CSV để mở bằng Excel hoặc phần mềm bảng tính tương thích.
+
+### 🤖 Trợ lý AI tích hợp OpenClaw
+- Chế độ quản lý: ghi nhận bán hàng từ tin nhắn và cập nhật đơn hàng/tồn kho; thêm sản phẩm mới khi có đủ tên, giá bán và số lượng.
+- Chế độ tư vấn khách hàng: trả lời câu hỏi dựa trên danh mục sản phẩm công khai, không cung cấp dữ liệu khách hàng hay giá vốn.
+- Backend Node.js giữ Gateway token ở máy chủ, không gửi token xuống trình duyệt.
+- AI cần được cấu hình và chạy OpenClaw Gateway; không hoạt động chỉ bằng cách mở `index.html`.
 
 ### 💾 Lưu trữ trên trình duyệt
 - Lưu dữ liệu bằng \`localStorage\`.
@@ -175,7 +181,8 @@ ShopMini chưa phải hệ thống quản lý bán hàng hoàn chỉnh để tri
 - [ ] Xây dựng backend và cơ sở dữ liệu dùng chung.
 - [ ] Thêm đăng nhập và phân quyền theo vai trò.
 - [ ] Hoàn thiện kiểm thử, xác thực dữ liệu và sao lưu.
-- [ ] Nghiên cứu chatbot hỗ trợ khách hàng và báo cáo nâng cao.
+- [x] Bổ sung giao diện trợ lý OpenClaw AI cho quản lý bán hàng và tư vấn khách hàng (cần cấu hình Gateway để chạy).
+- [ ] Chuyển dữ liệu từ localStorage sang backend/database dùng chung để đồng bộ an toàn.
 - [ ] Triển khai bản thử nghiệm lên hosting sau khi hoàn thiện các yêu cầu bảo mật.
 
 ## 🤝 Đóng góp
