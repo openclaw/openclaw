@@ -2,12 +2,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { cacheChatBoardSnapshotAfterHydration } from "./chat-board-snapshot.ts";
-import { projectDetailsSubagents } from "./chat-details-snapshot.ts";
+import { captureChatDetailsSnapshot, projectDetailsSubagents } from "./chat-details-snapshot.ts";
 import {
   appendChatMessageToCache,
   cacheChatSessionSnapshot,
   clearChatMessagesFromCache,
-  captureChatDetailsSnapshot,
   createChatWidgetLayout,
   observeChatCache,
   readChatMessagesFromCache,

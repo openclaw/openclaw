@@ -6,10 +6,8 @@ import {
 import type { MessageReactionSummary, ProgressCard } from "@openclaw/gateway-protocol";
 import { createSignal } from "solid-js";
 import type { GatewaySessionRow, ModelCatalogEntry } from "../../api/types.ts";
-import { i18n } from "../../i18n/index.ts";
 import type { ChatFastModePresentation } from "../../lib/chat/model-select-state.ts";
 import { readPairingQrContent } from "../../lib/chat/pairing-qr.ts";
-import type { ChatDetailsSnapshot, DetailsSnapshotPatch } from "./chat-details-snapshot.ts";
 import {
   chatDisplaySourceKey,
   chatRowDisplaySchema,
@@ -31,6 +29,7 @@ import type { ChatHistoryState, ChatTranscriptMetadata } from "./chat-transcript
 import { createTranscriptMemo } from "./components/chat-transcript-memo.ts";
 import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./history-merge.ts";
 import { getSessionCacheValue, setSessionCacheValue } from "./session-cache.ts";
+import type { ChatDetailsSnapshot } from "./session-details-snapshot-schema.ts";
 import type { SessionSnapshotInvalidationReason } from "./session-snapshot-invalidation-events.ts";
 import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
 
@@ -331,59 +330,11 @@ const chatCacheObservers = new WeakMap<ChatMessageCache, ChatCacheObserver>();
 type ChatMessageCacheHost = Parameters<typeof resolveChatSnapshotKey>[0];
 type ChatMessageCacheTarget = Parameters<typeof resolveChatSnapshotKey>[1];
 
-type ChatHistoryCursorHost = ChatMessageCacheHost & {
+export type ChatHistoryCursorHost = ChatMessageCacheHost & {
   sessionKey: string;
   currentSessionId?: string | null;
   chatHistoryCursor?: ChatHistoryCursor;
 };
-
-/** Display receipts share the transcript's scope and incarnation, never live read authority. */
-export function captureChatDetailsSnapshot(
-  host: ChatHistoryCursorHost & {
-    chatMessagesBySession: ChatMessageCache;
-    connectionEpoch: number;
-  },
-) {
-  const target = { sessionKey: host.sessionKey };
-  const key = resolveChatSnapshotKey(host, target);
-  const snapshot = readChatSessionSnapshot(host.chatMessagesBySession, host, target);
-  if (!snapshot?.sessionId || snapshot.sessionId !== host.currentSessionId) {
-    return undefined;
-  }
-  const client = host.client;
-  const epoch = host.connectionEpoch;
-  const locale = i18n.getLocale();
-  return {
-    snapshot,
-    details: snapshot.details?.locale === locale ? snapshot.details : undefined,
-    write: (patch: DetailsSnapshotPatch) => {
-      if (
-        !host.connected ||
-        host.client !== client ||
-        host.connectionEpoch !== epoch ||
-        host.currentSessionId !== snapshot.sessionId ||
-        resolveChatSnapshotKey(host, target) !== key ||
-        host.sessionKey !== target.sessionKey ||
-        i18n.getLocale() !== locale
-      ) {
-        return;
-      }
-      const current = readChatSessionSnapshot(host.chatMessagesBySession, host, target);
-      if (!current || current.sessionId !== snapshot.sessionId) {
-        return;
-      }
-      const details = {
-        ...(current.details?.locale === locale ? current.details : {}),
-        ...patch,
-        locale,
-      };
-      if (JSON.stringify(details) === JSON.stringify(current.details)) {
-        return;
-      }
-      cacheChatSessionSnapshot(host.chatMessagesBySession, host, target, { ...current, details });
-    },
-  };
-}
 
 export function readChatHistoryCursor(state: ChatHistoryCursorHost): string | undefined {
   const receipt = state.chatHistoryCursor;
