@@ -363,44 +363,33 @@ describe("submitSessionControllerSteer", () => {
     }
   });
 
-  it("keeps custody of an indeterminate steer and never returns it to the queue", async () => {
-    const receipt = createDeferredCore();
-    const { input } = startTurn({ queueMessage: () => receipt.promise });
-
-    const result = steer(input);
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(input.phase).toBe("injecting");
-    expect(tryClaimSessionControllerTask(input)).toBeUndefined();
-    receipt.reject(new QuestionAnswerUnconfirmedError("unknown acceptance"));
-
-    await expect(result).resolves.toMatchObject({ status: "indeterminate" });
-    await input.settlement.promise;
-    expect(input.phase).toBe("consumed");
-  });
-
-  it.each(["failed", "withdrawn"] as const)(
-    "after an early ACK, a %s injection settles custody",
-    async (outcome) => {
+  it.each([
+    ["unconfirmed", new QuestionAnswerUnconfirmedError("unknown acceptance")],
+    ["failed", new Error("backend failed after acceptance")],
+    ["withdrawn", new MessageInjectionWithdrawnError("active session ended before commit")],
+  ] as const)(
+    "keeps custody of a %s steer until a withdrawal returns it to the queue",
+    async (outcome, error) => {
+      const receipt = createDeferredCore();
       const { input } = startTurn({
-        queueMessage: async ({ onQueueAccepted }) => {
-          onQueueAccepted?.(true);
-          throw outcome === "withdrawn"
-            ? new MessageInjectionWithdrawnError("active session ended before commit")
-            : new Error("backend failed after acceptance");
+        queueMessage: ({ onQueueAccepted }) => {
+          onQueueAccepted?.(outcome !== "unconfirmed");
+          return receipt.promise;
         },
       });
-
       const result = steer(input);
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(input.phase).toBe("injecting");
+      expect(tryClaimSessionControllerTask(input)).toBeUndefined();
+      receipt.reject(error);
       if (outcome === "withdrawn") {
-        // Removal before delivery voids the ACK: the input runs as its own turn.
         await expectRejected(result, "injection_unavailable");
-        expectQueued(input);
-      } else {
-        await expect(result).resolves.toMatchObject({ status: "indeterminate" });
-        await input.settlement.promise;
-        expect(input.phase).toBe("consumed");
+        return expectQueued(input);
       }
+      await expect(result).resolves.toMatchObject({ status: "indeterminate" });
+      await input.settlement.promise;
+      expect(input.phase).toBe("consumed");
     },
   );
 
