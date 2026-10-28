@@ -300,7 +300,7 @@ it("pages large history without reading off-page payloads or changing completion
             runDetail(storeKey, {
               runId: `public-${id}`,
               diagnostics: {
-                summary: index === 7 ? "diagnostic-only-needle" : "Run diagnostics",
+                summary: index === 7 ? "Mu\u0308nchen diagnostic-only-needle" : "Run diagnostics",
                 entries: [{ ts: 1, source: "tool", severity: "error", message: payload }],
               },
               delivery: { intended: { channel: "test-channel" } },
@@ -375,18 +375,14 @@ it("pages large history without reading off-page payloads or changing completion
           }
         }
         const beforeSearchReads = reads.counts.history;
-        const search = readCronRunHistoryCandidatesInDatabase(
-          db,
-          storeKey,
-          "job",
-          "diagnostic-only-needle",
-        );
+        const query = "MÜNCHEN diagnostic-only-needle";
+        const search = readCronRunHistoryCandidatesInDatabase(db, storeKey, "job", query);
         expect(reads.counts.history - beforeSearchReads).toBe(1);
         expect(JSON.stringify(search.records)).not.toContain("diagnostic-payload:");
         const matching = selectCronRunHistoryPage(search.records, {
           storeKey,
           jobId: "job",
-          query: "diagnostic-only-needle",
+          query,
           view: "summary",
           queryMatchedTaskIds: new Set(search.queryMatches),
         });

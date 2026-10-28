@@ -920,6 +920,9 @@ const startupEnglish = {
       sectionLabel: "Gateway",
       menuLabel: "Gateway: {gateway}",
       primaryTag: "primary",
+      configReadOnly: "Gateway configuration is read-only.",
+      configReadOnlyHint:
+        "To make changes, update the configuration file or deployment settings for this Gateway.",
       setPrimary: "Set as primary…",
       openSettings: "Gateway settings",
       connected: "Connected",

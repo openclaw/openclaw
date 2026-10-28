@@ -38,16 +38,24 @@ const repositoryScriptEntries = [
   "scripts/bench-duplicate-paragraphs.mts!",
   "scripts/perf/anthropic-request-construction.ts!",
   "scripts/perf/auth-file-watch-events-measure.ts!",
+  "scripts/perf/catalog-worker-churn-measure.mjs!",
   "scripts/perf/completion-payload-bytes-measure.ts!",
   "scripts/perf/connect-profile-binding-measure.ts!",
   "scripts/perf/cron-reader-reuse-measure.ts!",
   "scripts/perf/cron-registry-read-measure.ts!",
+  "scripts/perf/doctor-session-manifests.ts!",
+  "scripts/perf/inspection-read-admission.ts!",
   "scripts/perf/local-workspace-refresh-measure.ts!",
+  "scripts/perf/node-worker-churn-measure.mjs!",
   "scripts/perf/plugin-state-claims-measure.ts!",
+  "scripts/perf/schema-crossing-measure.ts!",
   "scripts/perf/session-append-reload-measure.ts!",
   "scripts/perf/session-membership-retention-measure.ts!",
   "scripts/perf/session-message-custody-payload-measure.mjs!",
   "scripts/perf/session-patch-response-measure.ts!",
+  "scripts/perf/tool-loop-outcome-measure.ts!",
+  "scripts/perf/tool-search-snapshot-measure.ts!",
+  "scripts/perf/trajectory-record-event-measure.ts!",
   "scripts/perf/transcript-json-array-measure.mjs!",
   "scripts/perf/transcript-pool-idle-measure.ts!",
   "scripts/perf/worktree-creation-measure.ts!",
@@ -146,6 +154,8 @@ const repositoryScriptEntries = [
   "scripts/bench-control-ui-cold-load.ts!",
   // scripts/perf/warm-reload-proof.md invokes this real-Gateway visual proof loop.
   "scripts/perf/warm-reload-proof.ts!",
+  // scripts/perf/flaky-network-proof.md invokes this real-Gateway network-fault proof.
+  "scripts/perf/flaky-network-proof.ts!",
   // scripts/control-ui-retention/README.md invokes this opt-in production census.
   "scripts/control-ui-retention/retention-suite.ts!",
   // #179175 invokes this development-loop benchmark CLI by path.
