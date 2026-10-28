@@ -75,6 +75,34 @@ extension ChatToolActivityItem {
 }
 
 enum ChatToolActivity {
+    static func items(
+        message: OpenClawChatMessage,
+        liveTools: [OpenClawChatPendingToolCall] = []) -> [ChatToolActivityItem]
+    {
+        // Results normally merge into their calling assistant message. Keep
+        // orphan results visible when the calling message is outside history.
+        if message.isToolResult {
+            let text = ChatMessageVisibleText.displayText(in: message, includeThinking: false)
+            return [ChatToolActivityItem(
+                id: message.toolCallId ?? message.content.first?.id ?? message.id.uuidString,
+                name: message.toolName,
+                arguments: nil,
+                details: message.details,
+                resultText: text,
+                state: self.resultIsError(message.isError, text: text) ? .failed : .finished,
+                liveDiffStat: nil,
+                activity: message.activity?.first,
+                activityPrepared: message.activity != nil)]
+        }
+        guard message.role.lowercased() == "assistant" else { return [] }
+        return self.items(
+            calls: message.content.filter(\.isToolCall),
+            results: message.content.filter(\.isToolResult),
+            recordedResults: message.presentationRecordedToolResults,
+            activity: message.activity,
+            liveTools: liveTools)
+    }
+
     static func resultIsError(_ flag: Bool?, text: String?) -> Bool {
         if let flag { return flag }
         guard let text = text?.trimmingCharacters(in: .whitespacesAndNewlines) else { return false }

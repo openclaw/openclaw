@@ -89,7 +89,9 @@ SQLite admission delivery follows each worker's ordered cursor. The first snapsh
 includes its shared revision cells; later publications send only new or replaced
 facts, session scopes, and reference cells. Existing cells carry invalidation
 directly, so changing one fact does not resend every session's shared buffer.
-A new worker or database generation receives a complete snapshot.
+A new worker or database generation receives a complete snapshot of immutable
+scope buckets. Cloning does not flatten those buckets into another Map; receivers
+install their cells directly, preserving shared retirement and revision checks.
 Worker exit republishes only databases that held that worker's reference; an
 unrelated exit does not rescan retained session scopes. Interrupted-write
 settlement and shared reference revocation still precede publication.

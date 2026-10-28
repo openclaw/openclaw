@@ -7,6 +7,7 @@ import {
   restoreColdLoadWarmState,
 } from "../../../scripts/lib/control-ui-bench-warm-state.ts";
 import { buildSandboxHostPath } from "../../../src/agents/sandbox-host.js";
+import { CHAT_SNAPSHOT_PROJECTION_VERSION } from "../pages/chat/session-snapshot-projection.ts";
 import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
@@ -266,7 +267,7 @@ suite.define(() => {
       const warm = await page.evaluate(persistColdLoadWarmState, warmInput);
       expect(warm).toMatchObject({
         databaseVersion: 8,
-        projectionVersion: 6,
+        projectionVersion: CHAT_SNAPSHOT_PROJECTION_VERSION,
         sidebarView: "online",
         sidebarPeople: 120,
       });

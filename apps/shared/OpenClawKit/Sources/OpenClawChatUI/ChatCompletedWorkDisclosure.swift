@@ -17,6 +17,7 @@ struct ChatCompletedWorkDisclosure<Content: View>: View {
         } label: {
             Text(self.label)
                 .font(OpenClawChatTypography.caption)
+                .fixedSize(horizontal: false, vertical: true)
                 #if os(iOS)
                 .foregroundStyle(Color.secondary)
                 .frame(minHeight: 44)
@@ -29,8 +30,6 @@ struct ChatCompletedWorkDisclosure<Content: View>: View {
     }
 
     private var label: String {
-        guard let milliseconds = self.work.durationMilliseconds else { return String(localized: "Worked") }
-        let duration = ChatWorkingDurationFormatter.compact(milliseconds: milliseconds)
-        return String(format: String(localized: "Worked for %@"), duration)
+        ChatCompletedWorkSummary.label(work: self.work, expanded: self.isExpanded)
     }
 }

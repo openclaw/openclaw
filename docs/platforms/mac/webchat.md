@@ -151,7 +151,9 @@ while responses are streaming.
 In the full macOS chat window, all assistant text, images, and other attachments
 stay visible after a turn completes. Contiguous reasoning and tool work fold into
 separate **Worked** disclosures in place. Expand one to inspect that stretch of work;
-loading older history keeps expanded sections open. Active turns,
+loading older history keeps expanded sections open. Collapsed headings list operation
+kinds and failed, blocked, skipped, or unknown outcomes; expanding a section also
+shows its total tool-call count. Active turns,
 work without a final answer, and unresolved or failed work after the answer remain
 expanded. Work stays on its own side of forwarded messages, new inputs, and
 history dividers. Find in Conversation expands the transcript while searching.
