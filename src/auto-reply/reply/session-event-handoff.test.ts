@@ -537,7 +537,7 @@ describe("session event target custody", () => {
     setRuntimeConfigSnapshot({
       agents: { entries: { main: {} } },
       channels: { telegram: {} },
-      commands: { ownerAllowFrom: ["456"] },
+      commands: { ownerAllowFrom: ["456", "457"] },
     });
     const capture = (senderId: string) =>
       withGatewayToolCallerIdentity(
@@ -550,6 +550,11 @@ describe("session event target custody", () => {
     const owner = await capture("456");
     const guest = await capture("789");
     expect(() => combineSessionEventTargetsForHost([owner, guest])).toThrow(
+      "different captured destinations or requester authority",
+    );
+    // Owners share a source label, but each authority rechecks only its own requester.
+    const otherOwner = await capture("457");
+    expect(() => combineSessionEventTargetsForHost([owner, otherOwner])).toThrow(
       "different captured destinations or requester authority",
     );
     expect(combineSessionEventTargetsForHost([owner, await capture("456")])).toBeDefined();

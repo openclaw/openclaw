@@ -44,7 +44,8 @@ const targetScopes = resolveGlobalSingleton(
         env?: NodeJS.ProcessEnv;
         operatorAuthority?: AdmittedRunOperatorAuthority;
         ownerContinuation?: true;
-        commandOwner?: PreparedCommandOwnerAuthority;
+        /** The captured requester keys the authority, whose source label is shared by owners. */
+        commandOwner?: { authority: PreparedCommandOwnerAuthority; requester: string };
         deletion?: { agentId: string; isBlocked: () => boolean };
       }
     >(),
@@ -224,7 +225,19 @@ export async function captureSessionEventTargetForHost(
       env,
       operatorAuthority,
       ...(operatorAuthority && options.ownerContinuation ? { ownerContinuation: true } : {}),
-      ...(commandOwner?.source && commandOwner.isCurrent(cfg) ? { commandOwner } : {}),
+      ...(requester && commandOwner?.source && commandOwner.isCurrent(cfg)
+        ? {
+            commandOwner: {
+              authority: commandOwner,
+              requester: JSON.stringify([
+                requester.messageProvider,
+                requester.accountId ?? null,
+                requester.senderId,
+                requester.senderE164 ?? null,
+              ]),
+            },
+          }
+        : {}),
       deletion,
     });
     return target;
@@ -372,7 +385,7 @@ export function readSessionEventTargetOwnerContinuation(target: SessionEventTarg
 export function readSessionEventTargetCommandOwner(
   target: SessionEventTarget,
 ): PreparedCommandOwnerAuthority | undefined {
-  return targetScopes.get(target)?.commandOwner;
+  return targetScopes.get(target)?.commandOwner?.authority;
 }
 
 /** Coalesced work retains every producer's original destination and permission bound. */
@@ -397,8 +410,8 @@ export function combineSessionEventTargetsForHost(
         readSessionEventTargetOperatorAuthority(first) ||
       readSessionEventTargetOwnerContinuation(target) !==
         readSessionEventTargetOwnerContinuation(first) ||
-      readSessionEventTargetCommandOwner(target)?.source !==
-        readSessionEventTargetCommandOwner(first)?.source ||
+      targetScopes.get(target)?.commandOwner?.requester !==
+        targetScopes.get(first)?.commandOwner?.requester ||
       channelRouteDedupeKey(target.deliveryContext) !== route
     ) {
       throw new Error(
