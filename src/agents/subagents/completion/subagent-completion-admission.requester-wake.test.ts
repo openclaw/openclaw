@@ -621,6 +621,10 @@ describe("persisted subagent requester wakes", () => {
         );
         return true;
       });
+      await updateCompletionOwner(first.subagent.runId, (current) => ({
+        ...current,
+        execution: { ...current.execution, lifecycleGeneration: "cleaned-lifecycle" },
+      }));
       if (cut === "rejected") {
         db.value.db.exec(
           "CREATE TRIGGER reject_outcome AFTER UPDATE ON subagent_runs BEGIN SELECT RAISE(ABORT, 'cut:outcome'); END",

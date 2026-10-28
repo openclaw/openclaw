@@ -494,10 +494,11 @@ function currentRequesterEntries(
     }
     // Terminal bookkeeping settles the owed wake, not the child's old execution custody.
     // Cleanup and recovery can change that custody while this exact wave remains owed.
+    // Committed receipts validate their own postimages in the transaction owner.
     const current =
-      operation !== "transition" && !committed
-        ? rows.get(expected.runId)
-        : currentCompletionOwner(rows, expected);
+      operation === "transition" && !committed
+        ? currentCompletionOwner(rows, expected)
+        : rows.get(expected.runId);
     if (
       !current ||
       !isSameSubagentRunOwner(current, expected) ||
