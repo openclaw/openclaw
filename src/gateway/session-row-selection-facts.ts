@@ -1,5 +1,19 @@
 import { isDeepStrictEqual } from "node:util";
-import type { SelectionRow } from "./session-row-projection-record.js";
+import type { SessionStoreTarget } from "../config/sessions/targets.js";
+import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
+import type { readSessionListSelectionFacts } from "./session-list-target.js";
+
+/** Accepted selection facts exclude replaceable display graphs. */
+export type SelectionRow = {
+  key: string;
+  agentId: string;
+  storeTarget: SessionStoreTarget;
+  entry: SessionEntry;
+  selection: ReturnType<typeof readSessionListSelectionFacts>;
+  hasBoard?: boolean;
+  generation: string | symbol;
+  selectionFactsRevision?: object;
+};
 
 // Search and live-run queries bypass retained partitions; display facts publish separately.
 const presentationFields = new Set<string>([
@@ -39,11 +53,28 @@ export function sameSelectionFacts(previous: SelectionRow, next: SelectionRow) {
   if (previous.entry === next.entry) {
     return true;
   }
-  const before = new Map<string, unknown>(
-    Object.entries(previous.entry).filter(([field]) => !presentationFields.has(field)),
-  );
-  const after = new Map<string, unknown>(
-    Object.entries(next.entry).filter(([field]) => !presentationFields.has(field)),
-  );
-  return isDeepStrictEqual(before, after);
+  return sameSelectionEntry(previous.entry, next.entry);
+}
+
+function sameSelectionEntry<T extends object>(before: T, after: T) {
+  for (const field in before) {
+    if (Object.hasOwn(before, field) && !presentationFields.has(field)) {
+      if (
+        !Object.prototype.propertyIsEnumerable.call(after, field) ||
+        !isDeepStrictEqual(before[field], after[field])
+      ) {
+        return false;
+      }
+    }
+  }
+  for (const field in after) {
+    if (
+      Object.hasOwn(after, field) &&
+      !presentationFields.has(field) &&
+      !Object.prototype.propertyIsEnumerable.call(before, field)
+    ) {
+      return false;
+    }
+  }
+  return true;
 }

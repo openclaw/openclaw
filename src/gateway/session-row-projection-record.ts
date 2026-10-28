@@ -22,13 +22,15 @@ import type { SessionRepositoryWorkspaceRecord } from "../state/session-reposito
 import type { readSessionRowFacts } from "./server-methods/session-placement-read-projection.js";
 import { compareSessionEntryPairs } from "./session-list-order.js";
 import { readSessionListSelectionFacts } from "./session-list-target.js";
-import { sameSelectionFacts } from "./session-row-selection-facts.js";
+import { sameSelectionFacts, type SelectionRow } from "./session-row-selection-facts.js";
 import { selectStoredSessionLineage } from "./session-store-key.js";
 import { sessionTitleRequests } from "./session-title-state.js";
 import type { SessionChildActivity, SessionListRowContext } from "./session-utils-contracts.js";
 import * as rowProjection from "./session-utils-row.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
+
+export type { SelectionRow } from "./session-row-selection-facts.js";
 
 export type ProjectionOptions = {
   cfg: OpenClawConfig;
@@ -136,11 +138,6 @@ export type Row = {
   };
 };
 
-/** Accepted selection facts exclude replaceable display graphs. */
-export type SelectionRow = Pick<
-  EntryRow,
-  "key" | "agentId" | "storeTarget" | "entry" | "selection" | "hasBoard" | "generation"
-> & { selectionFactsRevision?: object };
 export type SelectionChange =
   | { kind: "reset" }
   | {
