@@ -1243,6 +1243,66 @@ describe("runGatewayLoop", () => {
     });
   });
 
+  it("keeps a state-owner failure outside shutdown at error level", async () => {
+    mocks.consumeGatewayRestartIntentPayload.mockRejectedValueOnce(
+      new Error("OpenClaw state process owner is no longer current"),
+    );
+
+    await mocks.withRunningGateway(async ({ captureSignal, exited }) => {
+      captureSignal("SIGTERM")();
+
+      await expect(exited).resolves.toBe(0);
+      expect(mocks.gatewayLog.error).toHaveBeenCalledWith(
+        "failed to handle SIGTERM: Error: OpenClaw state process owner is no longer current",
+      );
+    });
+  });
+
+  it("stops quietly when SIGTERM finds state released by an in-place restart", async () => {
+    const closing = createDeferred();
+    const close = vi.fn<GatewayCloseFn>(() => closing.promise);
+    // The restart reads its intent; the later SIGTERM finds the closing owner retired.
+    mocks.consumeGatewayRestartIntentPayload
+      .mockResolvedValueOnce(null)
+      .mockRejectedValueOnce(new Error("OpenClaw state process owner is no longer current"));
+
+    await testLoop.withIsolatedSignals(async ({ captureSignal }) => {
+      const completeBoot = vi.fn();
+      const { start, runtime, exited } = await mocks.createSignaledLoopHarness(undefined, false, {
+        close,
+        completeBoot,
+      });
+      try {
+        captureSignal("SIGUSR2")();
+        await waitForCalls(close, 1);
+        captureSignal("SIGTERM")();
+        closing.resolve();
+        await testLoop.waitForLoopCondition(
+          () => runtime.exit.mock.calls.length > 0 || start.mock.calls.length > 1,
+          "restart drain did not settle",
+        );
+        expect(start).toHaveBeenCalledOnce();
+        await expect(exited).resolves.toBe(0);
+        expect(mocks.gatewayLog.error).not.toHaveBeenCalledWith(
+          expect.stringContaining("failed to handle SIGTERM"),
+        );
+        expect(mocks.gatewayLog.info).toHaveBeenCalledWith(
+          "received SIGTERM after shutdown released Gateway state; stopping without a restart intent",
+        );
+        expect(completeBoot).toHaveBeenLastCalledWith({
+          outcome: "clean_stop",
+          reason: "stop (SIGTERM)",
+        });
+      } finally {
+        closing.resolve();
+        if (start.mock.calls.length > 1) {
+          captureSignal("SIGINT")();
+          await exited;
+        }
+      }
+    });
+  });
+
   it("recloses restart admission after a failed SIGUSR2 handler rolls it back", async () => {
     mocks.markGatewayRestartHandled.mockImplementationOnce(() => {
       throw new Error("restart token cleanup failed");

@@ -200,6 +200,35 @@ describe("channel-health-monitor", () => {
     monitor.stop();
   });
 
+  it("leaves a recent transport retry to its owner and takes over after reconnect grace", async () => {
+    const account = runningConnectedSlackAccount({ lastStartAt: Date.now() - 300_000 });
+    const manager = createSlackSnapshotManager(account);
+    const monitor = startDefaultMonitor(manager);
+    try {
+      await clock.advanceBy(33_000);
+      Object.assign(account, {
+        connected: false,
+        lifecycle: "recovering",
+        lastDisconnect: { at: Date.now(), error: "transport stopped" },
+      });
+      await clock.advanceBy(27_000);
+      expect(manager.getRuntimeSnapshot).toHaveBeenCalledOnce();
+      expect(manager.stopChannel).not.toHaveBeenCalled();
+      expect(manager.startChannel).not.toHaveBeenCalled();
+      expect(manager.resetRestartAttempts).not.toHaveBeenCalled();
+
+      await advanceHealthCheck();
+      expect(manager.stopChannel).toHaveBeenCalledExactlyOnceWith("slack", "default", {
+        manual: false,
+      });
+      expect(manager.startChannel).toHaveBeenCalledExactlyOnceWith("slack", "default", {
+        reason: "health-monitor",
+      });
+    } finally {
+      monitor.stop();
+    }
+  });
+
   it("treats crash-loop suppressed accounts as expected stopped", async () => {
     let suppressed = true;
     let allowRecovery = false;
