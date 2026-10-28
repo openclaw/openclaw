@@ -332,10 +332,11 @@ describe("stateless Claw Add", () => {
         introducedPackage,
         reusedPackage,
       ]);
-      vi.spyOn(mcpInstall, "installClawMcpServersStateless").mockResolvedValueOnce([
-        introducedMcp,
-        reusedMcp,
-      ]);
+      vi.spyOn(mcpInstall, "installClawMcpServersStateless").mockImplementationOnce(
+        async (_plan, { refs }) => {
+          refs.push(introducedMcp, reusedMcp);
+        },
+      );
 
       const result = await apply(plan, {
         commitConfig: async () => {

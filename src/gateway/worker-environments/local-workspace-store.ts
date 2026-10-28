@@ -173,10 +173,12 @@ export function withLocalWorkspaceStore<T>(
                   } while (more);
                 };
                 await pruneLegacy();
+                // Observations may commit while a scan still owns unaccepted packs.
+                let preparationEpoch: number | undefined;
                 const prepare = async (preparations: readonly Uint8Array[]) => {
                   for (const preparation of preparations) {
                     assertCurrent();
-                    await runOpenClawStateWorkerOperation(
+                    const epoch = await runOpenClawStateWorkerOperation(
                       context,
                       (scope) =>
                         scope.execute({
@@ -185,6 +187,7 @@ export function withLocalWorkspaceStore<T>(
                         }),
                       { assertCurrent },
                     );
+                    preparationEpoch = Math.min(preparationEpoch ?? epoch, epoch);
                   }
                   assertCurrent();
                 };
@@ -245,6 +248,7 @@ export function withLocalWorkspaceStore<T>(
                               input: {
                                 id: params.worktreeId,
                                 mutation: wireMutation!,
+                                preparationEpoch,
                                 predicates,
                                 leases: write.identities,
                               },
