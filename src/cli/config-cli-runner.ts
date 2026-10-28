@@ -7,7 +7,10 @@ import { replaceConfigFile } from "../config/config.js";
 import { getDeferredPluginMigrationConfigFacts } from "../config/deferred-plugin-migration-config.js";
 import { AUTO_MANAGED_CONFIG_META_PATHS } from "../config/io.meta.js";
 import { coerceConfig } from "../config/io.read-helpers.js";
-import { isConfigValidationFailedError } from "../config/io.write-errors.js";
+import {
+  ConfigWritePostCommitError,
+  isConfigValidationFailedError,
+} from "../config/io.write-errors.js";
 import { prepareConfigWriteValues } from "../config/io.write-prepare.js";
 import { prepareConfigWriteTopology } from "../config/io.write-topology.js";
 import { ConfigMutationConflictError } from "../config/mutation-conflict.js";
@@ -645,7 +648,8 @@ export function handleConfigMutationError(params: {
   } else {
     params.runtime.error(
       danger(
-        params.err instanceof ConfigSetDryRunValidationError
+        params.err instanceof ConfigSetDryRunValidationError ||
+          params.err instanceof ConfigWritePostCommitError
           ? params.err.humanOutput
           : terminalText`${message}`,
       ),
