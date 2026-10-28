@@ -172,9 +172,20 @@ it.each([
 });
 
 it("waits for the provider floor before exhausting recovery and rotating credentials", async () => {
-  const advance = vi.fn(async () => true);
+  let activeProfileId = "openai:p1";
+  const advance = vi.fn(async () => {
+    activeProfileId = "openai:p2";
+    return true;
+  });
   controller = createRetryController({
-    runtime: { advanceAttemptAuthProfile: advance },
+    runtime: {
+      advanceAttemptAuthProfile: advance,
+      snapshot: () => ({
+        lastProfileId: activeProfileId,
+        pluginHarnessOwnsTransport: false,
+        agentHarness: { id: "embedded" },
+      }),
+    },
     fallbackConfigured: true,
   });
   controller.observeAttempt({ providerRetryMaxRetries: 1 });
@@ -193,6 +204,47 @@ it("waits for the provider floor before exhausting recovery and rotating credent
     reason: "rate_limit",
     status: 429,
   });
+  expect(advance).toHaveBeenCalledTimes(1);
+});
+
+it("prefers the model chain over a rotation that re-selects the failed profile", async () => {
+  const advance = vi.fn(async () => true);
+  controller = createRetryController({
+    runtime: { advanceAttemptAuthProfile: advance },
+    fallbackConfigured: true,
+  });
+  await expect(rotate()).resolves.toBe(false);
+  expect(advance).toHaveBeenCalledTimes(1);
+});
+
+it("rotates to a different profile after a quota-class failure", async () => {
+  let activeProfileId = "openai:p1";
+  const advance = vi.fn(async () => {
+    activeProfileId = "openai:p2";
+    return true;
+  });
+  controller = createRetryController({
+    runtime: {
+      advanceAttemptAuthProfile: advance,
+      snapshot: () => ({
+        lastProfileId: activeProfileId,
+        pluginHarnessOwnsTransport: false,
+        agentHarness: { id: "embedded" },
+      }),
+    },
+    fallbackConfigured: true,
+  });
+  await expect(rotate()).resolves.toBe(true);
+  expect(advance).toHaveBeenCalledTimes(1);
+});
+
+it("keeps the same-profile retry when no model chain is configured", async () => {
+  const advance = vi.fn(async () => true);
+  controller = createRetryController({
+    runtime: { advanceAttemptAuthProfile: advance },
+    fallbackConfigured: false,
+  });
+  await expect(rotate()).resolves.toBe(true);
   expect(advance).toHaveBeenCalledTimes(1);
 });
 
