@@ -377,6 +377,68 @@ describe("handleModelsCommand", () => {
     });
   });
 
+  it.each([
+    { option: "limit=5", total: 25, pageSize: 5 },
+    { option: "size=5", total: 25, pageSize: 5 },
+    { option: "limit=50", total: 55, pageSize: 50 },
+    { option: "", total: 25, pageSize: 20 },
+  ])("follows More without skipping models ($option)", async ({ option, total, pageSize }) => {
+    catalog = Array.from({ length: total }, (_, index) => ({
+      ...openAIPlatformRoute,
+      provider: "openai",
+      id: `model-${String(index + 1).padStart(3, "0")}`,
+      name: `Model ${index + 1}`,
+    }));
+    const first = await runModels(`/models openai ${option}`);
+    const firstText = first?.reply?.text ?? "";
+    const more = /^More: (.+)$/m.exec(firstText)?.[1] ?? "";
+    expect(more).not.toBe("");
+    const second = await runModels(more);
+    const secondText = second?.reply?.text ?? "";
+    const rows = [firstText, secondText].flatMap((text) =>
+      [...text.matchAll(/^- openai\/(model-\d+)/gm)].map((match) => match[1]),
+    );
+    expect(rows).toEqual(
+      Array.from(
+        { length: Math.min(total, pageSize * 2) },
+        (_, index) => `model-${String(index + 1).padStart(3, "0")}`,
+      ),
+    );
+    expect(secondText).toContain(
+      `showing ${pageSize + 1}-${Math.min(total, pageSize * 2)} of ${total}`,
+    );
+    if (!option) {
+      expect(more).toBe("/models list openai 2");
+    }
+  });
+
+  it.each([
+    { pageSize: 5, total: 25, lastPage: 5 },
+    { pageSize: 50, total: 55, lastPage: 2 },
+  ])("follows Try with custom size ($pageSize)", async ({ pageSize, total, lastPage }) => {
+    catalog = Array.from({ length: total }, (_, index) => ({
+      ...openAIPlatformRoute,
+      provider: "openai",
+      id: `model-${String(index + 1).padStart(3, "0")}`,
+      name: `Model ${index + 1}`,
+    }));
+    const invalid = await runModels(`/models openai 99 limit=${pageSize}`);
+    const retry = /^Try: (.+)$/m.exec(invalid?.reply?.text ?? "")?.[1] ?? "";
+    expect(retry).not.toBe("");
+    const recovered = await runModels(retry);
+    expect(recovered?.reply?.text).toContain(
+      `showing ${(lastPage - 1) * pageSize + 1}-${total} of ${total} (page ${lastPage}/${lastPage})`,
+    );
+    expect(recovered?.reply?.text).not.toContain("Page out of range");
+  });
+
+  it("keeps all independent of the requested page size", async () => {
+    const result = await runModels("/models openai 99 limit=1 all");
+    expectOpenAIList(result?.reply?.text);
+    expect(result?.reply?.text).not.toContain("More:");
+    expect(result?.reply?.text).not.toContain("All:");
+  });
+
   it("lists models without coercing malformed tokens", async () => {
     const result = await runModels("/models openai page=2next limit=1x");
     expectOpenAIList(result?.reply?.text);
