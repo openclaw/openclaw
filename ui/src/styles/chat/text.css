@@ -35,6 +35,11 @@
     black calc(100% - var(--chat-disclosure-fade-size, var(--chat-text-size) * 1.5 * 0.5)),
     rgb(0 0 0 / 35%)
   );
+
+  /* Expand a human message before scrolling code outside its readable preview. */
+  .chat-group.user & :where(pre) {
+    overflow: clip;
+  }
 }
 
 .chat-message-disclosure__toggle {
@@ -1279,8 +1284,7 @@
   --code-block-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 6h18M3 12h15a3 3 0 1 1 0 6h-4m2-2-2 2 2 2M3 18h7'/%3E%3C/svg%3E");
 }
 
-.code-block-wrapper.is-wrapped .code-block-viewport :where(pre code),
-.chat-group.user .chat-text :where(pre code, pre code *) {
+.code-block-wrapper.is-wrapped .code-block-viewport :where(pre code) {
   width: auto;
   min-width: 0;
   overflow-wrap: anywhere;
@@ -1309,27 +1313,8 @@
   outline-offset: -2px;
 }
 
-.chat-group.user .chat-text :where(pre) {
-  padding: 0;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  overflow: visible;
-  white-space: pre-wrap;
-}
-
 .chat-group.user .chat-text :where(:not(.chat-text) > pre) {
-  margin-block: 1em;
-}
-
-/* A user fence carries no code chrome, so it reads as the message it was typed
-   into rather than as a rendered code surface. */
-.chat-group.user .chat-text :where(pre code, pre code *) {
-  color: inherit;
-  font: inherit;
-  word-break: break-word;
+  margin-block: var(--chat-block-gap);
 }
 
 .chat-text :where(pre code) {
@@ -1340,7 +1325,6 @@
 }
 
 .chat-text :where(pre code.markdown-block-art),
-.chat-group.user .chat-text :where(pre code.markdown-block-art),
 .chat-tool-card__block-content code.markdown-block-art {
   display: block;
   min-width: 100%;
