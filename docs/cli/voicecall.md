@@ -140,6 +140,10 @@ Alias for `call` with a different default flag shape.
 
 Speak a message and wait for a response.
 
+When waiting for a Gateway response, Ctrl-C or SIGTERM stops local polling and
+exits with status 130 or 143. It does not end the call or cancel the Gateway's
+speech operation. A request already starting that operation settles before exit.
+
 | Flag               | Required | Description       |
 | ------------------ | -------- | ----------------- |
 | `--call-id <id>`   | yes      | Call ID.          |

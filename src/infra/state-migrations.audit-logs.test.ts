@@ -307,24 +307,38 @@ it("imports and redacts audits only during Doctor repair", async ({ audit }) => 
   expect(audit.detect().hasLegacy).toBe(false);
 });
 
-it("rehashes a checkpointed raw archive before treating it as clean", async ({ audit }) => {
-  const { raw: rawPath, source: sourcePath } = audit.system;
-  const original = event("original");
-  const modified = { ...original, summary: "modified" };
-  await audit.writeJsonLines(sourcePath, [original]);
-  await audit.migrate();
-  const checkpointedStat = await fs.stat(rawPath);
-  const modifiedRaw = jsonLine(modified);
-  expect(Buffer.byteLength(modifiedRaw)).toBe(checkpointedStat.size);
-  await fs.writeFile(rawPath, modifiedRaw);
-  // Keep the original hash despite matching the rewritten file's cheap identity.
-  await refreshCheckpoint(audit);
-  const detected = audit.detect();
-  expect(detected.sources).toMatchObject([{ sourcePath: rawPath, storage: "raw-archive" }]);
-  const result = await audit.migrate(detected);
-  expectIncludes(result.warnings, "changed other than by append");
-  expect(audit.systemSummaries()).toEqual(["original"]);
-});
+it.for([false, true])(
+  "rehashes raw archives and upgrades verified legacy checkpoints (%s)",
+  async (legacy, { audit }) => {
+    const { raw } = audit.system;
+    await seedArchive(audit, [event("original")]);
+    const modifiedRaw = jsonLine(event(legacy ? "é" : "modified"));
+    if (!legacy) {
+      expect(Buffer.byteLength(modifiedRaw)).toBe((await fs.stat(raw)).size);
+    }
+    await fs.writeFile(raw, modifiedRaw);
+    // The rewrite keeps its old hash despite matching cheap metadata; legacy rows have a verified hash.
+    await refreshCheckpoint(
+      audit,
+      legacy
+        ? {
+            contentHash: createHash("sha256").update(modifiedRaw).digest("hex"),
+            recordCount: 1,
+          }
+        : {},
+    );
+    const detected = audit.detect();
+    expect(detected.sources).toMatchObject([{ sourcePath: raw, storage: "raw-archive" }]);
+    const result = await audit.migrate(detected);
+    if (legacy) {
+      expect(result.warnings).toEqual([]);
+      expect(openCheckpoints(audit.stateDir).entries()[0]?.value.recordCount).toBe(0);
+    } else {
+      expectIncludes(result.warnings, "changed other than by append");
+    }
+    expect(audit.systemSummaries()).toEqual(["original"]);
+  },
+);
 
 it("restores the archive prefix after a failed scrub", async ({ audit }) => {
   const { raw: rawPath, source: sourcePath } = audit.config;
@@ -570,21 +584,6 @@ it("retains malformed UTF-8 without importing replacement characters", async ({ 
   await expectMissing(claim, raw, sanitized);
   expect(audit.systemSummaries()).toEqual([]);
   expect(audit.configRecords()).toHaveLength(1);
-});
-
-it("upgrades a legacy nonzero raw checkpoint to the blank append pad", async ({ audit }) => {
-  const { raw: rawPath } = audit.system;
-  await seedArchive(audit, [event("original")]);
-  const legacyRaw = Buffer.from(jsonLine(event("é")));
-  await fs.writeFile(rawPath, legacyRaw);
-  await refreshCheckpoint(audit, {
-    contentHash: createHash("sha256").update(legacyRaw.toString("utf8")).digest("hex"),
-    recordCount: 1,
-  });
-  const detected = audit.detect();
-  expect(detected.hasLegacy).toBe(true);
-  await migrateClean(audit, detected);
-  expect(openCheckpoints(audit.stateDir).entries()[0]?.value.recordCount).toBe(0);
 });
 
 it.for(["stale", "later", "redacted", "scrubbing", "restoring"] as const)(

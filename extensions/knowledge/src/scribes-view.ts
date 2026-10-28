@@ -31,7 +31,7 @@ const STATUS: Record<ScribeStatus, [string, string]> = {
   paused: ["Paused", ""],
   failing: ["Failing", "scribe-chip-warn"],
   done: ["Done", "scribe-chip-on"],
-  reauth: ["Needs reauthorization", "scribe-chip-warn"],
+  missing: ["Conversation not found", "scribe-chip-warn"],
 };
 /**
  * Jobs whose first run this page already forced. A job reads as never run until its forced run
@@ -96,7 +96,7 @@ function activeMeta(snapshot: ScribeSnapshot) {
   const { status, job, result } = snapshot;
   const meta = el("span", undefined, "scribe-meta");
   const dot = el("span", undefined, "scribe-dot");
-  if (status === "failing" || status === "reauth") {
+  if (status === "failing" || status === "missing") {
     dot.classList.add("scribe-dot-warn");
   } else if (status !== "on") {
     dot.classList.add("scribe-dot-idle");
@@ -105,14 +105,18 @@ function activeMeta(snapshot: ScribeSnapshot) {
   const parts: string[] = [];
   if (status === "starting") {
     parts.push("Setting up in its conversation");
-  } else if (status === "reauth") {
-    parts.push("Its conversation is archived or gone. Repair reconnects it.");
+  } else if (status === "missing") {
+    parts.push(
+      snapshot.session?.archived
+        ? "Its conversation is archived. Repair restores it."
+        : "Its conversation was deleted. Repair starts a new one.",
+    );
   } else if (status === "paused") {
     parts.push("Paused");
   } else if (firstRunPending(snapshot)) {
     parts.push("First run in progress");
   }
-  if (job && status !== "reauth") {
+  if (job && status !== "missing") {
     parts.push(scheduleText(job));
     if (job.state.lastRunAtMs) {
       parts.push(`Last run ${when(job.state.lastRunAtMs)}`);
@@ -430,7 +434,7 @@ function detail(ui: Page, snapshot: ScribeSnapshot, runs: ScribeRun[]) {
     controls.push(node);
     return node;
   };
-  if (job && status !== "reauth") {
+  if (job && status !== "missing") {
     actions.append(
       control("Run now", () => runScribeNow(host, job), `${scribe.title} is running.`),
     );
@@ -445,16 +449,18 @@ function detail(ui: Page, snapshot: ScribeSnapshot, runs: ScribeRun[]) {
     );
   }
   // A scribe with an automation repairs it; one without starts over from the start dialog.
-  if (job && (status === "reauth" || status === "failing")) {
+  if (job && (status === "missing" || status === "failing")) {
     actions.append(
       control(
         "Repair",
         () => repairScribe(host, snapshot, job, agentId),
-        `Asked ${scribeLabel(scribe)} to repair its setup.`,
+        status === "missing" && session?.archived
+          ? `Restored ${scribeLabel(scribe)} and turned it back on.`
+          : `Asked ${scribeLabel(scribe)} to repair its setup.`,
       ),
     );
   }
-  if (job && status !== "reauth") {
+  if (job && status !== "missing") {
     const paused = !job.enabled;
     actions.append(
       control(
@@ -540,7 +546,7 @@ function detail(ui: Page, snapshot: ScribeSnapshot, runs: ScribeRun[]) {
       "Conversation",
       session
         ? `${scribeLabel(scribe)}${session.createdAt ? ` · started ${when(session.createdAt)}` : ""}${session.archived ? " · archived" : ""}`
-        : "Gone",
+        : "Not found",
     ],
     ["Model", lastRun?.model ?? `${agentName}’s default`],
     ["Store", storeName],
