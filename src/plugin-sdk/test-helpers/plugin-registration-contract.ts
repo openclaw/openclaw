@@ -47,102 +47,26 @@ export function installPluginRegistrationContract(
   };
 
   describe(`${params.pluginId} plugin registration contract`, () => {
-    if (params.cliBackendIds) {
-      it("keeps bundled cli-backend ownership explicit", () => {
-        expect(findRegistration(params.pluginId).cliBackendIds).toEqual(params.cliBackendIds);
-      });
-    }
-
-    if (params.providerIds) {
-      it("keeps bundled provider ownership explicit", () => {
-        expect(findRegistration(params.pluginId).providerIds).toEqual(params.providerIds);
-      });
-    }
-
-    if (params.webSearchProviderIds) {
-      it("keeps bundled web search ownership explicit", () => {
-        expect(findRegistration(params.pluginId).webSearchProviderIds).toEqual(
-          params.webSearchProviderIds,
-        );
-      });
-    }
-
-    if (params.webFetchProviderIds) {
-      it("keeps bundled web fetch ownership explicit", () => {
-        expect(findRegistration(params.pluginId).webFetchProviderIds).toEqual(
-          params.webFetchProviderIds,
-        );
-      });
-    }
-
-    if (params.speechProviderIds) {
-      it("keeps bundled speech ownership explicit", () => {
-        expect(findRegistration(params.pluginId).speechProviderIds).toEqual(
-          params.speechProviderIds,
-        );
-      });
-    }
-
-    if (params.realtimeTranscriptionProviderIds) {
-      it("keeps bundled realtime-transcription ownership explicit", () => {
-        expect(findRegistration(params.pluginId).realtimeTranscriptionProviderIds).toEqual(
-          params.realtimeTranscriptionProviderIds,
-        );
-      });
-    }
-
-    if (params.realtimeVoiceProviderIds) {
-      it("keeps bundled realtime-voice ownership explicit", () => {
-        expect(findRegistration(params.pluginId).realtimeVoiceProviderIds).toEqual(
-          params.realtimeVoiceProviderIds,
-        );
-      });
-    }
-
-    if (params.mediaUnderstandingProviderIds) {
-      it("keeps bundled media-understanding ownership explicit", () => {
-        expect(findRegistration(params.pluginId).mediaUnderstandingProviderIds).toEqual(
-          params.mediaUnderstandingProviderIds,
-        );
-      });
-    }
-
-    if (params.transcriptSourceProviderIds) {
-      it("keeps bundled transcripts source ownership explicit", () => {
-        expect(findRegistration(params.pluginId).transcriptSourceProviderIds).toEqual(
-          params.transcriptSourceProviderIds,
-        );
-      });
-    }
-
-    if (params.imageGenerationProviderIds) {
-      it("keeps bundled image-generation ownership explicit", () => {
-        expect(findRegistration(params.pluginId).imageGenerationProviderIds).toEqual(
-          params.imageGenerationProviderIds,
-        );
-      });
-    }
-
-    if (params.videoGenerationProviderIds) {
-      it("keeps bundled video-generation ownership explicit", () => {
-        expect(findRegistration(params.pluginId).videoGenerationProviderIds).toEqual(
-          params.videoGenerationProviderIds,
-        );
-      });
-    }
-
-    if (params.musicGenerationProviderIds) {
-      it("keeps bundled music-generation ownership explicit", () => {
-        expect(findRegistration(params.pluginId).musicGenerationProviderIds).toEqual(
-          params.musicGenerationProviderIds,
-        );
-      });
-    }
-
-    if (params.toolNames) {
-      it("keeps bundled tool ownership explicit", () => {
-        expect(findRegistration(params.pluginId).toolNames).toEqual(params.toolNames);
-      });
+    for (const [key, label] of [
+      ["cliBackendIds", "cli-backend"],
+      ["providerIds", "provider"],
+      ["webSearchProviderIds", "web search"],
+      ["webFetchProviderIds", "web fetch"],
+      ["speechProviderIds", "speech"],
+      ["realtimeTranscriptionProviderIds", "realtime-transcription"],
+      ["realtimeVoiceProviderIds", "realtime-voice"],
+      ["mediaUnderstandingProviderIds", "media-understanding"],
+      ["transcriptSourceProviderIds", "transcripts source"],
+      ["imageGenerationProviderIds", "image-generation"],
+      ["videoGenerationProviderIds", "video-generation"],
+      ["musicGenerationProviderIds", "music-generation"],
+      ["toolNames", "tool"],
+    ] as const) {
+      if (params[key]) {
+        it(`keeps bundled ${label} ownership explicit`, () => {
+          expect(findRegistration(params.pluginId)[key]).toEqual(params[key]);
+        });
+      }
     }
 
     const manifestAuthChoice = params.manifestAuthChoice;

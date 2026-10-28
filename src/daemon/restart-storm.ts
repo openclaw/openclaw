@@ -81,17 +81,12 @@ export async function warnAboutGatewayRestartStorm(
   env: GatewayServiceEnv,
   warn: (message: string) => void,
 ): Promise<void> {
-  let summary = readGatewayForcedRestartSummary(env);
+  const summary = readGatewayForcedRestartSummary(env);
   if (summary.count < RESTART_THRESHOLD || summary.lastWarningAt) {
     return;
   }
   const { findForeignLaunchdJobs } = await import("./launchd-foreign-jobs.js");
   const jobs = await findForeignLaunchdJobs(env).catch(() => []);
-  // Inspection yields; a concurrent startup may already have reported this storm.
-  summary = readGatewayForcedRestartSummary(env);
-  if (summary.count < RESTART_THRESHOLD || summary.lastWarningAt) {
-    return;
-  }
   const likelyJobs = jobs
     .filter((job) => job.keepAlive && job.safeToRemove && job.gatewayActions.includes("restart"))
     .map((job) => job.label)

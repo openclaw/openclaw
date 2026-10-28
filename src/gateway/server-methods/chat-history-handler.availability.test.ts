@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { chatHistoryHandlers } from "./chat-history-handler.js";
@@ -16,6 +17,7 @@ describe("chat history worker availability", () => {
     "returns retryable history errors when a worker is $code",
     async ({ code, message }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        setRuntimeConfigSnapshot({});
         const context = await createHistoryReadContext();
         const readSpy = vi
           .spyOn(chatHistoryPages, "readChatHistoryPage")
@@ -55,6 +57,7 @@ describe("chat history worker availability", () => {
 
   it("preserves unexpected history worker failures for the request error owner", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const context = await createHistoryReadContext();
       const failure = new WorkerTaskError("unexpected worker task failure", "failed");
       const readSpy = vi

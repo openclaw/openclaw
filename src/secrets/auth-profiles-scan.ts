@@ -1,42 +1,19 @@
 /** Scans auth-profile stores for plaintext credentials, SecretRefs, and OAuth tokens. */
 import { isNonEmptyString, isRecord } from "./shared.js";
-import { listAuthProfileSecretTargetEntries } from "./target-registry.js";
+import { AUTH_PROFILE_SECRET_FIELDS } from "./target-registry-data.js";
 
-/** Auth-profile credential kinds that can carry SecretRef-backed values. */
-type AuthProfileCredentialType = "api_key" | "token";
-
-type AuthProfileFieldSpec = {
-  valueField: string;
-  refField: string;
-};
-
-type ApiKeyCredentialVisit = {
-  kind: "api_key";
+type StaticCredentialVisit = {
   profileId: string;
   provider: string;
   /** Original mutable profile record from auth-profiles.json. */
   profile: Record<string, unknown>;
-  /** Plaintext value field name derived from the secret target registry. */
+  /** Canonical plaintext credential field name. */
   valueField: string;
-  /** SecretRef sibling field name derived from the secret target registry. */
+  /** Canonical SecretRef sibling field name. */
   refField: string;
   value: unknown;
   refValue: unknown;
-};
-
-type TokenCredentialVisit = {
-  kind: "token";
-  profileId: string;
-  provider: string;
-  /** Original mutable profile record from auth-profiles.json. */
-  profile: Record<string, unknown>;
-  /** Plaintext value field name derived from the secret target registry. */
-  valueField: string;
-  /** SecretRef sibling field name derived from the secret target registry. */
-  refField: string;
-  value: unknown;
-  refValue: unknown;
-};
+} & ({ kind: "api_key" } | { kind: "token" });
 
 type OauthCredentialVisit = {
   kind: "oauth";
@@ -49,61 +26,7 @@ type OauthCredentialVisit = {
   hasRefresh: boolean;
 };
 
-type AuthProfileCredentialVisit =
-  | ApiKeyCredentialVisit
-  | TokenCredentialVisit
-  | OauthCredentialVisit;
-
-function getAuthProfileFieldName(pathPattern: string): string {
-  const segments = pathPattern.split(".").filter(Boolean);
-  return segments[segments.length - 1] ?? "";
-}
-
-const AUTH_PROFILE_FIELD_SPEC_BY_TYPE = (() => {
-  const defaults: Record<AuthProfileCredentialType, AuthProfileFieldSpec> = {
-    api_key: { valueField: "key", refField: "keyRef" },
-    token: { valueField: "token", refField: "tokenRef" },
-  };
-  for (const target of listAuthProfileSecretTargetEntries()) {
-    if (!target.authProfileType) {
-      continue;
-    }
-    // Target registry owns shipped auth-profile field names; derive scan fields from it so
-    // policy checks and runtime collection cannot drift when a ref path changes.
-    defaults[target.authProfileType] = {
-      valueField: getAuthProfileFieldName(target.pathPattern),
-      refField:
-        target.refPathPattern !== undefined
-          ? getAuthProfileFieldName(target.refPathPattern)
-          : defaults[target.authProfileType].refField,
-    };
-  }
-  return defaults;
-})();
-
-/** Returns the value/ref field names for one auth-profile credential type. */
-function getAuthProfileFieldSpec(type: AuthProfileCredentialType): AuthProfileFieldSpec {
-  return AUTH_PROFILE_FIELD_SPEC_BY_TYPE[type];
-}
-
-function toSecretCredentialVisit(params: {
-  kind: AuthProfileCredentialType;
-  profileId: string;
-  provider: string;
-  profile: Record<string, unknown>;
-}): ApiKeyCredentialVisit | TokenCredentialVisit {
-  const spec = getAuthProfileFieldSpec(params.kind);
-  return {
-    kind: params.kind,
-    profileId: params.profileId,
-    provider: params.provider,
-    profile: params.profile,
-    valueField: spec.valueField,
-    refField: spec.refField,
-    value: params.profile[spec.valueField],
-    refValue: params.profile[spec.refField],
-  };
-}
+type AuthProfileCredentialVisit = StaticCredentialVisit | OauthCredentialVisit;
 
 /** Iterates credential-bearing auth profiles with normalized field metadata for audit/apply. */
 export function* iterateAuthProfileCredentials(
@@ -115,12 +38,17 @@ export function* iterateAuthProfileCredentials(
     }
     const provider = value.provider;
     if (value.type === "api_key" || value.type === "token") {
-      yield toSecretCredentialVisit({
+      const spec = AUTH_PROFILE_SECRET_FIELDS[value.type];
+      yield {
         kind: value.type,
         profileId,
         provider,
         profile: value,
-      });
+        valueField: spec.valueField,
+        refField: spec.refField,
+        value: value[spec.valueField],
+        refValue: value[spec.refField],
+      };
       continue;
     }
     if (value.type === "oauth") {

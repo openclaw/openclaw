@@ -1,0 +1,158 @@
+import fs from "node:fs";
+import net, { type Socket } from "node:net";
+import path from "node:path";
+import { afterEach, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
+import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
+import * as runtimeBackends from "../plugins/cli-backends.runtime.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { reserveTestPortListener } from "../test-utils/port-claims.js";
+import { wrapRunWithTestPreparedAdmission } from "./admitted-run-context.test-support.js";
+import { runCliAgent } from "./cli-runner.js";
+import * as cliPreparation from "./cli-runner/prepare.runtime.js";
+
+afterEach(() => vi.restoreAllMocks());
+
+it.for(["allowed root", "reassigned root", "ordinary session"] as const)(
+  "CLI cron-root authority after process start: %s controls the real child's next external effect",
+  (scenario, { signal }) =>
+    withOpenClawTestState({ label: "cli-cron-root-abort" }, async (state) => {
+      const ready = createDeferred<Socket>();
+      const childClosed = createDeferred();
+      const sockets = new Set<Socket>();
+      const listener = await reserveTestPortListener({
+        offsets: [0],
+        signal,
+        createListener: () =>
+          net.createServer((socket) => {
+            sockets.add(socket);
+            socket.setEncoding("utf8");
+            let received = "";
+            socket.on("data", (chunk) => {
+              received += chunk.toString();
+              if (received === "ready\n") {
+                ready.resolve(socket);
+              }
+            });
+            socket.on("error", (error) => ready.reject(error));
+            socket.once("close", () => {
+              sockets.delete(socket);
+              childClosed.resolve();
+            });
+          }),
+      });
+      const cleanupAbort = new AbortController();
+      const callerSignal = AbortSignal.any([signal, cleanupAbort.signal]);
+      let settled: Promise<unknown> | undefined;
+      try {
+        const preparation = vi.spyOn(cliPreparation, "prepareCliRunContext");
+        const effectFile = state.path("external-effect.txt");
+        const script = await state.writeText(
+          "fixture-cli.mjs",
+          `import { writeFileSync } from "node:fs";
+import net from "node:net";
+const socket = net.createConnection({ host: "127.0.0.1", port: Number(process.argv[2]) });
+socket.on("error", (error) => { console.error(error); process.exitCode = 1; });
+socket.once("connect", () => socket.write("ready\\n"));
+let received = "";
+socket.on("data", (chunk) => {
+  received += chunk;
+  if (received !== "go\\n") return;
+  writeFileSync(process.argv[3], "CLI_EFFECT_DONE");
+  process.stdout.write("CLI_EFFECT_DONE\\n");
+  socket.end();
+});
+`,
+        );
+        vi.spyOn(runtimeBackends, "resolveRuntimeCliBackends").mockReturnValue([
+          {
+            id: "fixture-cli",
+            pluginId: "fixture",
+            config: {
+              command: process.execPath,
+              args: [script, String(listener.claim.port), effectFile],
+              output: "text",
+              input: "arg",
+              sessionMode: "none",
+              systemPromptWhen: "never",
+            },
+          },
+        ]);
+        const root = {
+          agentId: "main",
+          sessionKey: "agent:main:cron:cli-abort",
+          storePath: path.join(state.agentDir(), "openclaw-agent.sqlite"),
+        };
+        const rootEntry = {
+          sessionId: "cron-run-1",
+          lifecycleRevision: "generation-1",
+          updatedAt: 1,
+        };
+        replaceSessionEntrySync(root, rootEntry);
+        const ordinary = scenario === "ordinary session";
+        const target = ordinary ? { ...root, sessionKey: "agent:main:ordinary-cli" } : root;
+        const entry = ordinary ? { ...rootEntry, sessionId: "ordinary-run-1" } : rootEntry;
+        if (ordinary) {
+          replaceSessionEntrySync(target, entry);
+        }
+        const operation = wrapRunWithTestPreparedAdmission(runCliAgent)({
+          ...target,
+          sessionId: entry.sessionId,
+          sessionTarget: { ...target, sessionId: entry.sessionId },
+          sessionEntry: entry,
+          sessionFile: path.join(state.sessionsDir(), `${entry.sessionId}.jsonl`),
+          workspaceDir: state.workspaceDir,
+          prompt: "Perform the fixture effect.",
+          provider: "fixture-cli",
+          model: "fixture-model",
+          timeoutMs: 5_000,
+          runId: `cli-authority-${scenario.replaceAll(" ", "-")}`,
+          abortSignal: callerSignal,
+          config: { agents: { defaults: { workspace: state.workspaceDir } } },
+        });
+        settled = operation.catch(() => undefined);
+        const child = await Promise.race([
+          ready.promise,
+          operation.then(() => {
+            throw new Error("CLI exited before reaching the external-effect barrier");
+          }),
+        ]);
+        const runSignal = preparation.mock.calls.at(-1)?.[0].abortSignal;
+        expect(runSignal?.aborted).toBe(false);
+        if (scenario !== "allowed root") {
+          replaceSessionEntrySync(root, {
+            ...rootEntry,
+            sessionId: "cron-run-2",
+            lifecycleRevision: "generation-2",
+          });
+        }
+
+        if (scenario === "reassigned root") {
+          // Check publication-driven cancellation before awaiting native exit;
+          // a missing callback must fail before the process timeout.
+          expect([runSignal?.aborted, callerSignal.aborted]).toEqual([true, false]);
+          await childClosed.promise;
+          await expect(operation).rejects.toThrow("original session generation no longer accepts");
+          expect(fs.existsSync(effectFile)).toBe(false);
+        } else {
+          expect(runSignal?.aborted).toBe(false);
+          child.write("go\n");
+          const result = await operation;
+          await childClosed.promise;
+          expect(result.payloads).toEqual([{ text: "CLI_EFFECT_DONE" }]);
+          expect(fs.readFileSync(effectFile, "utf8")).toBe("CLI_EFFECT_DONE");
+        }
+      } finally {
+        cleanupAbort.abort();
+        await settled;
+        for (const socket of sockets) {
+          socket.destroy();
+        }
+        try {
+          await listener.releaseListener();
+        } finally {
+          await listener.claim.release();
+        }
+      }
+    }),
+);

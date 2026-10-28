@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import {
   ensureMeetingAudioBackend,
   resolveMeetingAudioRuntimeForFormat,
@@ -10,19 +11,16 @@ import {
   type MeetingNodeHostOptions,
 } from "./node-host.js";
 
-type MeetingConfiguredNodeHostOptions = Omit<
-  MeetingNodeHostOptions,
-  "assertAudioAvailable" | "prepareAudio"
-> & {
-  meetingLabel: string;
-  sharePrerequisiteDeadline: boolean;
-};
-
 function isSpawnSyncTimeout(error: unknown): boolean {
   return error instanceof Error && "code" in error && error.code === "ETIMEDOUT";
 }
 
-export function createMeetingConfiguredNodeHost(options: MeetingConfiguredNodeHostOptions) {
+export function createMeetingConfiguredNodeHost(
+  options: Omit<MeetingNodeHostOptions, "assertAudioAvailable" | "prepareAudio"> & {
+    meetingLabel: string;
+    sharePrerequisiteDeadline: boolean;
+  },
+) {
   const runCommand = (argv: string[], timeoutMs: number): MeetingAudioCommandResult => {
     const [command, ...args] = argv;
     if (!command) {
@@ -32,11 +30,7 @@ export function createMeetingConfiguredNodeHost(options: MeetingConfiguredNodeHo
     if (isSpawnSyncTimeout(result.error)) {
       throw new Error(`${options.meetingLabel} audio prerequisite check timed out on the node.`);
     }
-    const error = result.error
-      ? result.error instanceof Error
-        ? result.error.message
-        : String(result.error)
-      : "";
+    const error = result.error ? coerceErrorMessage(result.error) : "";
     const stderr = [error, result.stderr, result.signal ? `terminated by ${result.signal}` : ""]
       .filter(Boolean)
       .join(": ");

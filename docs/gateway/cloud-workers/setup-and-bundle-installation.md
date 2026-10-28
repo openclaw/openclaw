@@ -1,22 +1,35 @@
 ---
-summary: "The idempotent setup command, Gateway-prepared runtime archives, and building a custom node package"
+summary: "The setup command (safe to repeat), Gateway-prepared runtime archives, and building a custom node package"
 title: "Worker setup and bundle installation"
+doc-schema-version: 1
 read_when: "You are writing a profile setup command, or you need a custom node distribution."
 ---
 
-What runs on the leased box before enrollment, how the Gateway prepares and verifies the runtime archive it installs there, and how to build a complete custom node package.
+OpenClaw installs its runtime automatically from the running Gateway. Profiles need only optional machine prerequisites; repository dependencies and startup commands belong in the [cloud environment file](/gateway/cloud-workers/environment-file).
+
+## Automatic Linux Node toolchains
+
+Linux x64 and arm64 workers need no Node installation in `settings.setup`. OpenClaw preserves a supported Node on `PATH` when npm, npx, and Corepack are available; otherwise it installs its pinned official release after SHA-256 verification. The image needs compatible glibc, `curl`, `tar`, and `sha256sum`, plus HTTPS access to nodejs.org.
+
+Prepared repositories select their Node requirement from `.nvmrc`, `.node-version`, `.tool-versions` (`nodejs` or `node`), `mise.toml` (`[tools] node`), then `package.json` `engines.node`. Versions, majors, SemVer ranges, `node`/`latest`, and LTS aliases resolve to a matching official Linux release; `system` retains the bootstrap Node. Invalid declarations or missing releases fail with a repair hint.
+
+Verified toolchains survive snapshot forks. Repository commands use the prepared HOME's `.local/bin` shims first. A declared `packageManager` gets user-writable Corepack shims without sudo. The OpenClaw runtime uses its own supported Node, independently of the repository's version. Custom profile Node installs remain supported. macOS and Windows need image- or setup-provided Node and npm; OpenClaw does not install them there.
 
 ## The setup command
 
-`settings.setup` runs on the leased box after Crabbox reports it ready and before ephemeral node enrollment. It runs on **every** provision attempt, including replay after an interrupted dispatch, so it must be idempotent. Check Node's version, not just executable presence, and preserve supported installations as in the example. Recheck the installed version and npm after any repair. If the final check still fails, fix the image's PATH or package selection before dispatching again. Automatic bootstrap installs the Gateway-matched OpenClaw runtime, not Node.js; keep the image or setup prerequisites aligned with the serving Gateway's `package.json` `engines.node` requirement when upgrading. If setup or enrollment fails, the provider stops the lease and the dispatch fails closed; no half-configured paid box is hidden behind terminal state.
+`settings.setup` runs on a cold machine after readiness and before repository preparation and enrollment. Provision replay can repeat it, so make it idempotent. Snapshot forks skip it because their compatible image already contains its filesystem results. Use repository `postStartCommand` for processes that must start on each new worker.
 
-The example profile supports both OpenClaw and Codex. Keep setup focused on machine prerequisites and project tools. You do not need to install OpenClaw globally, append a versioned Codex plugin install, or maintain a package URL in the profile. Remove those old runtime-install steps when updating an existing profile; bootstrap supplies the running Gateway's runtime automatically.
+Do not install OpenClaw globally or maintain a versioned runtime/plugin URL in setup. Bootstrap supplies the Gateway's runtime and required plugins. For additional packages, account for image initialization: wait for cloud-init and use your package manager's lock-wait option to avoid failing the first dispatch on a held lock. Setup or enrollment failures report an error and stop the incomplete lease.
 
-When an agent tool waits for a bounded in-process Gateway request, stalled-run recovery honors the active response deadline, including nested Crabbox creation calls. Completing, failing, canceling, or timing out the wait removes its allowance; a prior run's pending request cannot extend the current run's budget. A response timeout does not by itself cancel provisioning. Inspect the environment's state before retrying an uncertain creation request.
+### Protected setup secrets
+
+Private package access uses [setup secrets](/gateway/config-cloud-workers#setup-secrets) through protected egress, including when snapshots are disabled. Keep raw credentials out of setup commands and files.
 
 ### Native Windows prerequisites
 
-For `windows/normal`, Crabbox executes `settings.setup` with Windows PowerShell. Write setup commands for PowerShell; Linux, macOS, and Windows (WSL2) continue to use POSIX scripts. For example, this prerequisite check uses the machine's existing Node and npm installation:
+For `windows/normal`, Crabbox executes `settings.setup` with Windows PowerShell. Write setup commands for PowerShell; Linux, macOS, and Windows (WSL2) continue to use POSIX scripts. A profile with setup cannot override its OS across that interpreter boundary: OpenClaw rejects the request before allocation and omits incompatible OS and machine choices. Use a separate profile with `settings.target: "windows/normal"` and PowerShell setup for native Windows. Profiles without setup retain all backend-supported OS choices. OpenClaw does not inspect or translate scripts; you remain responsible for compatibility between POSIX targets.
+
+For example, this prerequisite check uses the machine's existing Node and npm installation:
 
 ```powershell
 $ErrorActionPreference = 'Stop'
@@ -30,31 +43,29 @@ Use a Crabbox bootstrap or image that supplies a supported Node.js release and n
 
 Headless Windows guests must include Crabbox's managed launcher at `C:\Program Files\Crabbox\bin\Start-CrabboxDetachedProcess.ps1`. It keeps the node alive after Crabbox closes its SSH command. Enrollment fails with guidance if the launcher is absent. A hidden PowerShell parent redirects node output to `node.log` under its isolated state directory because the launcher does not inherit SSH output handles.
 
-Restart replay verifies the actual `node.exe` child's PID, creation time, executable, and command line. Windows does not expose a cheap working-directory probe, so the launch record binds the runtime and state directories to that verified creation time. Missing or mismatched identity rejects replay and requires reprovisioning. Desktop-enabled Windows workers instead use Crabbox's interactive desktop service and also bind the account SID and interactive session; see [native desktop prerequisites](/gateway/cloud-workers/desktop#native-windows-prerequisites).
+New native Windows workers use a short, account- and lease-specific state directory on the profile's drive, leaving more path-length headroom for tools launched from their workspaces. Existing workers keep their original state directory across enrollment retries and recovery; reprovision a worker to use the shorter layout. Linux and macOS paths are unchanged.
+
+Each worker turn's GitHub profile lives in temporary runtime state. OpenClaw creates that profile with a protected Windows ACL for the worker account, SYSTEM, and Administrators before writing credentials, independently of the temporary directory's inherited permissions. Shell launches still reject profiles whose ownership or privacy cannot be verified.
+
+Desktop-enabled Windows workers use Crabbox's interactive desktop service; see [native desktop prerequisites](/gateway/cloud-workers/desktop#native-windows-prerequisites).
 
 ## Bundle installation
 
-Before enrolling a cloud node, the Gateway prepares a reusable runtime archive from its current built installation in a temporary staging directory. This works for published packages and source checkouts. It includes the complete node host and the trusted plugins that own the registered remote-execution commands required by the selected execution mode. Codex's plugin and its native dependency pin therefore travel with the node distribution without a separate profile recipe.
+Before enrollment, the Gateway prepares a reusable archive from its current built installation, including the node host and trusted plugins required by the selected execution mode. Codex's plugin and managed binary pin travel with it. The archive contains runtime code and package metadata, not Gateway config, authentication profiles, sessions, or process environment.
 
-The archive is selected and verified by SHA-256 content digest, not by the OpenClaw version string or Git commit alone. Two source builds with the same version can produce different archives, including a build containing uncommitted changes. Build source changes with `pnpm build` and restart the Gateway before dispatching. Bootstrap does not compile an unbuilt checkout, copy raw edits over a running build, or rewrite the running Gateway's installation. Missing or mismatched build metadata produces an actionable rebuild-and-restart error.
+The worker bundle and its standalone GitHub launcher include the pinned Windows permission-inspection helper and the package metadata needed for fallback inspection. These assets are covered by the same archive manifest and content verification.
 
-Source builds may also contain private QA tooling. Bootstrap omits complete chunks only when their bytes match build-generated ownership metadata and all owners are private QA plugins. Chunks shared with public plugins or referenced by the retained runtime stay in the archive. Missing ownership metadata cannot authorize omission, and stale ownership or an incomplete import closure fails preparation without changing the running Gateway.
+Archives and successful installs are verified by content digest, rather than version alone, and reused when they match. A snapshot fork tops up an older runtime before enrollment. Native dependencies install for the destination OS and CPU, so registry access is still required; this is not an offline dependency bundle. Enrollment and archive-download credentials are not passed to npm or the node process.
 
-Each enrollment receives short-lived download authority scoped to that live provisioning operation. Project image preparation first receives a runtime-only artifact grant: it installs the verified runtime without minting a node identity or enrollment credential. That grant closes before enrollment starts, and closing the provisioning operation revokes it. The node verifies the archive's declared size and digest, installs it as the node user, and enables its required plugins in isolated per-lease state only during enrollment. The archive contains runtime code and package metadata, not the Gateway's config, auth profiles, session state, or process environment. Download and enrollment credentials are not passed to npm or the launched node process.
+Each prepared runtime archive also gets a best-effort npm project lock, generated once by the Gateway and transferred separately from the lockless runtime tarball. Fresh workers use `npm ci --omit=dev` with that lock, while npm still selects and installs native optional packages for the worker's OS and CPU. A missing lock, failed download, or rejected locked install falls back to the ordinary unlocked install with a warning. Lock-generation failures are cached with the prepared archive, so each worker does not retry generation.
 
-Native dependencies are installed by npm for the cloud machine's operating system and CPU; the archive does not copy the build host's native `node_modules`. Registry access is still required, and this is not an offline dependency bundle. Bootstrap does not select a global OpenClaw installation merely because its version matches.
+Successful worker starts log the `openclaw-bootstrap-*` phase durations at info level in the Gateway log, including download, installation, and verification. The installation phase can overlap the independent worker-bundle download. Unlocked-install fallback warnings also appear in the Gateway log.
 
-Bootstrap emits `CRABBOX_PHASE:openclaw-bootstrap-*` markers into the Crabbox command stream for download, installation, verification, plugin activation, and node launch. Crabbox records these as command phase timings; cached runs emit only the work they perform.
+Concurrent workspace installs on the same node share an in-progress integrity scan of the same already prewarmed bundle. Later requests scan the installed files again, so edits or damage still trigger repair. Retention and replacement separate scans; each request keeps its own cancellation and download credentials.
 
-Enrollment enables its required plugins in one CLI invocation, in order, before publishing the runtime pointer or launching the node. Each plugin retains its normal policy and capability-consent checks; a failed enable stops enrollment. This avoids repeated CLI startup when a cloud desktop needs both an execution plugin and the computer-use plugin.
+For source builds, run `pnpm build` and restart the Gateway before dispatching. Bootstrap does not compile an unbuilt checkout or copy arbitrary source files. Missing or mismatched build metadata gives a rebuild-and-restart error. Runtime modules and installation scripts come from the package's published file list; custom distributions must declare their launcher helpers there. Private QA-only build chunks are excluded only when build metadata verifies their ownership; incomplete metadata or imports fail preparation.
 
-If enrollment was interrupted after publishing its runtime pointer but before recording the node PID, replay requires releasing and reprovisioning that worker. A detached process may still be running, so a missing PID does not authorize another launch. A retained launch receipt without a PID has the same recovery requirement.
-
-During project image preparation, npm installation and the optional worker archive download overlap after the runtime archive has passed size and digest verification. Both operations must finish before the runtime is published or temporary files are removed, including on failure. The combined `installation-and-worker-download` phase measures that shared interval; its duration is not an exclusive npm or download time. Download failures still identify the failed transport stage.
-
-The Gateway reuses its prepared archive for subsequent enrollments with the same execution mode. Nodes keep successful installs under `~/.openclaw-worker/node-runtimes/<sha256>`, so a warm image can reuse the exact artifact. A different digest selects a different installation even when the version is unchanged. The runtime archive omits worker deploy artifacts and the Gateway's Control UI assets, reducing transfer and installation work. The Gateway continues to serve the dashboard. A missing worker bundle is prepared during remote node installation, so that packaging can finish before the node is ready. After enrollment, OpenClaw `worker-turn` installs the content-addressed worker bundle from a matching archive retained in a prepared project image, or downloads it through the authenticated node channel when that archive is absent. Prepared archives still undergo validation; see [Warm images](/gateway/cloud-workers/warm-images). Codex `remote-exec` starts the managed exec-server directly. Existing placement checks, node-command allowlists, and invocation approval still govern execution.
-
-While a prepared worker is provisioning, cache cleanup retains the exact worker bundle recorded at admission, including before readiness produces a bootstrap receipt. After the environment reaches a terminal state, normal bundle cleanup can reclaim those bytes when no other environment or placement needs them.
+OpenClaw worker turns install the matching worker bundle, reusing a verified archive retained in a prepared image when available. Codex remote execution starts its managed exec-server directly. Node-command allowlists and invocation approval still apply. See [runtime support](/gateway/cloud-workers/dispatching-a-session#runtime-support) and [the security model](/gateway/cloud-workers/security-model).
 
 ### Reuse a node runtime archive after Gateway restart
 
@@ -64,15 +75,13 @@ Linux and macOS deployment images can retain an already prepared node runtime ar
 cp /path/to/prepared/node-runtime.tgz /path/to/openclaw/node-runtime.tgz
 ```
 
-The first cloud-node preparation in a new Gateway process copies that optional input into private temporary storage and verifies its actual files, contents, sizes, and permissions against the running distribution and selected plugins. It still checks build identity, exact dependency pins, and the built import closure. A version string or neighboring checksum manifest does not authorize reuse. Matching archives skip compression; missing, corrupt, unsafe, or mismatched inputs use the existing builder. Different execution modes can select different plugins and therefore rebuild from the same image input.
+On Linux and macOS Gateways, the first preparation after restart verifies the retained archive against the running distribution, selected plugins, dependency pins, and imports. A match skips compression; a missing, unsafe, corrupt, or mismatched archive uses the normal builder. Different execution modes can require different archives. Windows Gateways use the normal builder.
 
-The deployment image owns the retained file. Gateway shutdown removes only its temporary copy, after active consumers finish. Replace the image archive when the distribution or plugins change; removing it restores ordinary preparation. Windows Gateways continue to build their archive because the shared Windows archive reader normalizes permissions rather than preserving the tar modes needed for this comparison.
-
-This avoids repeated archive construction after restart. It does not reuse enrollment credentials, skip worker authorization, or eliminate worker installation and startup. Measure archive validation separately from end-to-end worker readiness when evaluating cold-start savings.
+Replace the retained file when the distribution or plugins change, or remove it to restore ordinary preparation. This saves archive construction, not enrollment or worker installation. Gateway shutdown removes its temporary copy after active consumers settle.
 
 ## Build a complete custom node package
 
-Automatic cloud bootstrap does not require a manually published package. For a separate deployment or package-validation workflow, the canonical package builder can still produce a complete custom distribution and explicitly include source-owned plugins that the ordinary core package excludes:
+Automatic cloud bootstrap does not require a manually published package. For a separate deployment or package-validation workflow, the standard package builder can still produce a complete custom distribution and explicitly include source-owned plugins that the ordinary core package excludes:
 
 ```bash
 source_sha="$(git rev-parse HEAD)"
@@ -85,7 +94,9 @@ node scripts/package-openclaw-for-docker.mjs \
 shasum -a 256 ".artifacts/cloud-node/openclaw-cloud-${source_sha}.tgz"
 ```
 
-Run this in a clean, trusted checkout with dependencies installed. The builder compiles the runtime, includes the selected plugin's built entrypoints and import closure, and regenerates the installation inventory. It temporarily adds the plugin's exact runtime dependency pins to the distribution manifest, rejecting conflicting or unpinned dependencies, then restores the source manifest and inventory. Repeat `--bundle-plugin <id>` for additional source plugins. Without that option, the ordinary core package and external plugin publication contracts are unchanged.
+Run this in a clean, trusted checkout with dependencies installed. The builder compiles the runtime, includes the selected plugin's built entrypoints and import closure, and regenerates the installation inventory. It temporarily adds the plugin's exact runtime dependency pins to the distribution manifest, rejecting conflicting or unpinned dependencies, and marks the selected plugin as distribution-owned. Source manifests and inventory are restored after packaging. Repeat `--bundle-plugin <id>` for additional source plugins. Without that option, the ordinary core package and external plugin publication contracts are unchanged.
+
+During an update, Doctor removes eligible managed npm copies that shadow the plugin included in this distribution, even when their version strings match. Copies retained by another operation keep their existing protection. Plugin settings and data remain in the state directory. Include runtime plugins that must match an unreleased host SDK in the same custom package; a core-only archive cannot update their separately published code.
 
 Deliver the resulting archive through your existing immutable artifact path and verify its SHA-256 before installing it with normal npm lifecycle scripts enabled. Record both source SHA and archive digest: different unreleased builds can share a version. Do not copy a plugin into an installed release or substitute a standalone `npm-pack:` plugin archive for this distribution. Cloud profiles do not consume this URL; their enrollment artifact comes from the running Gateway.
 

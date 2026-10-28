@@ -6,10 +6,7 @@ import {
   getProcessBundledPluginSources,
   type BundledPluginSource,
 } from "./bundled-sources.js";
-import {
-  resolveCatalogOfficialExternalInstallPlan,
-  resolveCatalogOfficialExternalNpmPackageTrust,
-} from "./official-external-install-trust.js";
+import { resolveCatalogOfficialExternalNpmPackageTrust } from "./official-external-install-trust.js";
 
 export const NON_CLAWHUB_INSTALL_FORCE_FLAG = "--force";
 
@@ -40,42 +37,6 @@ export function resolveOpenClawTrustedNpmPackageInstall(
     return { pluginId: bundled.pluginId };
   }
   return resolveCatalogOfficialExternalNpmPackageTrust(npmSpec);
-}
-
-export function isOpenClawTrustedPluginInstallSpec(
-  spec: string,
-  bundledSources: ReadonlyMap<string, BundledPluginSource> = getProcessBundledPluginSources(),
-): boolean {
-  const trimmed = spec.trim();
-  if (trimmed.toLowerCase().startsWith("clawhub:")) {
-    return true;
-  }
-  const explicitNpm = trimmed.toLowerCase().startsWith("npm:");
-  const npmSpec = explicitNpm ? trimmed.slice("npm:".length) : trimmed;
-  if (explicitNpm) {
-    return resolveOpenClawTrustedNpmPackageInstall(npmSpec, bundledSources) !== null;
-  }
-  const parsedPackageName = parseRegistryNpmSpec(npmSpec)?.name;
-  const bundled =
-    findBundledPluginSourceInMap({
-      bundled: bundledSources,
-      lookup: { kind: "pluginId", value: npmSpec },
-    }) ??
-    (parsedPackageName
-      ? findBundledPluginSourceInMap({
-          bundled: bundledSources,
-          lookup: { kind: "npmSpec", value: parsedPackageName },
-        })
-      : undefined) ??
-    findBundledPluginSourceInMap({
-      bundled: bundledSources,
-      lookup: { kind: "localPath", value: npmSpec },
-    });
-  return Boolean(
-    bundled ??
-    resolveOpenClawTrustedNpmPackageInstall(npmSpec, bundledSources) ??
-    resolveCatalogOfficialExternalInstallPlan(npmSpec),
-  );
 }
 
 const sourceClassLabels: Record<NonClawHubInstallSourceClass, string> = {

@@ -1,21 +1,66 @@
 import { execFile } from "node:child_process";
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
+import { hostname } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterAll, beforeAll } from "vitest";
+import { afterAll, assert, beforeAll } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
+import { withWorktreeMutationLease } from "./allocation.js";
+import { git } from "./git-fixture.test-support.js";
 import { insertRegistryWorktree } from "./registry.js";
-import type { ManagedWorktreeOwnerKind, ManagedWorktreeRecord } from "./types.js";
+import {
+  admitWorktreeRunLeaseInDatabase,
+  type WorktreeRunLeaseRowInput,
+} from "./run-lease-store.kernel.js";
+import {
+  listTemplatesAsync,
+  markTemplateReadyAsync,
+  releaseTemplateReaderAsync,
+  retainTemplateReaderAsync,
+} from "./template-registry-async.js";
+import type { ManagedWorktreeRecord } from "./types.js";
 
 const execFileAsync = promisify(execFile);
 
-async function git(cwd: string, ...args: string[]): Promise<void> {
-  await execFileAsync("git", ["-C", cwd, ...args]);
+export { git } from "./git-fixture.test-support.js";
+
+export function makeWorktreeRecord(
+  repoRoot: string,
+  id: string,
+  overrides: Partial<ManagedWorktreeRecord> = {},
+): ManagedWorktreeRecord {
+  return {
+    id,
+    name: id,
+    repoRoot,
+    repoFingerprint: "0123456789abcdef",
+    path: repoRoot,
+    branch: id,
+    baseRef: "HEAD",
+    ownerKind: "session",
+    createdAt: 1,
+    lastActiveAt: 1,
+    ...overrides,
+  };
 }
 
-async function initializeRepository(repo: string): Promise<void> {
+export async function seedWorktreeRunLease(
+  env: NodeJS.ProcessEnv,
+  record: ManagedWorktreeRecord,
+  owner: Pick<WorktreeRunLeaseRowInput, "pid" | "startTime"> = {
+    pid: process.pid,
+    startTime: null,
+  },
+): Promise<void> {
+  await insertRegistryWorktree(env, record);
+  const input = { worktreeId: record.id, token: record.id, now: 1, ...owner };
+  runOpenClawStateWriteTransaction(({ db }) => admitWorktreeRunLeaseInDatabase(db, input), { env });
+}
+
+export async function initializeManagedWorktreeTestRepository(root: string): Promise<string> {
+  const repo = path.join(root, "repo");
   await fs.mkdir(repo, { recursive: true });
   await git(repo, "init", "-b", "main");
   await git(repo, "config", "user.name", "OpenClaw Test");
@@ -23,97 +68,70 @@ async function initializeRepository(repo: string): Promise<void> {
   await fs.writeFile(path.join(repo, "README.md"), "base\n");
   await git(repo, "add", "README.md");
   await git(repo, "commit", "-m", "initial");
-}
-
-async function addRemote(root: string, repo: string): Promise<string> {
   const remote = path.join(root, "remote.git");
-  await git(root, "init", "--bare", remote);
+  await git(root, "init", "--bare", "-b", "main", remote);
   await git(repo, "remote", "add", "origin", remote);
   await git(repo, "push", "-u", "origin", "main");
   return await fs.realpath(repo);
 }
 
-export async function initializeManagedWorktreeTestRepository(root: string): Promise<string> {
-  const repo = path.join(root, "repo");
-  await initializeRepository(repo);
-  return await addRemote(root, repo);
-}
-
-export function useManagedWorktreeTestRepository(): (root: string) => Promise<string> {
+export function useManagedWorktreeTestRepository(
+  prepare?: (repo: string) => Promise<void>,
+): (root: string) => Promise<string> {
   const templateDirs = useAutoCleanupTempDirTracker(afterAll);
-  let templateRepo: string;
+  let templateRoot: string;
   beforeAll(async () => {
-    const templateRoot = templateDirs.make("openclaw-worktree-template-");
-    const repo = path.join(templateRoot, "repo");
-    await initializeRepository(repo);
-    templateRepo = repo;
+    templateRoot = templateDirs.make("openclaw-worktree-template-");
+    const repo = await initializeManagedWorktreeTestRepository(templateRoot);
+    await prepare?.(repo);
   });
 
-  // Only initial history is shared, within this suite. Each case still owns its
-  // Git metadata and real remote; no fetched refs, locks, or state DB are copied.
+  // Copy the initial push too. Each case owns independent Git metadata and a
+  // real remote; later fetches, pushes, locks, and state cannot reach the template.
   return async (root) => {
     const repo = path.join(root, "repo");
-    await fs.cp(templateRepo, repo, { recursive: true, mode: fsConstants.COPYFILE_FICLONE });
-    return await addRemote(root, repo);
+    await fs.cp(templateRoot, root, { recursive: true, mode: fsConstants.COPYFILE_FICLONE });
+    await git(repo, "remote", "set-url", "origin", path.join(root, "remote.git"));
+    return await fs.realpath(repo);
   };
 }
 
-async function copyProvisionedFiles(params: {
-  repoRoot: string;
-  worktreePath: string;
-  provisionedPaths: readonly string[];
-}): Promise<void> {
-  for (const provisionedPath of params.provisionedPaths) {
-    const source = path.join(params.repoRoot, provisionedPath);
-    const target = path.join(params.worktreePath, provisionedPath);
-    const sourceStat = await fs.lstat(source);
-    await fs.mkdir(path.dirname(target), { recursive: true });
-    await fs.copyFile(source, target, fsConstants.COPYFILE_FICLONE);
-    if (process.platform !== "win32") {
-      await fs.chmod(target, sourceStat.mode & 0o7777);
-    }
-  }
-}
-
-type ManagedWorktreeFixtureParams = {
-  env: NodeJS.ProcessEnv;
-  name: string;
-  now: number;
-  ownerKind?: ManagedWorktreeOwnerKind;
-  ownerId?: string;
-  provisionedPaths?: readonly string[];
-  repoRoot: string;
-  stateDir: string;
-};
+type ManagedWorktreeFixtureParams = Pick<ManagedWorktreeRecord, "name" | "repoRoot"> &
+  Partial<Pick<ManagedWorktreeRecord, "ownerKind" | "ownerId" | "repoFingerprint">> & {
+    env: NodeJS.ProcessEnv;
+    now: number;
+    provisionedPaths?: readonly string[];
+    stateDir: string;
+  };
 
 export async function materializeManagedWorktreeFixtures(
   params: Omit<ManagedWorktreeFixtureParams, "name"> & { names: string[] },
 ): Promise<ManagedWorktreeRecord[]> {
-  const records = params.names.map((name): ManagedWorktreeRecord => ({
-    id: `fixture-${name}`,
-    name,
-    repoFingerprint: "downstream-fixture",
-    repoRoot: params.repoRoot,
-    path: path.join(params.stateDir, "worktrees", "downstream-fixture", name),
-    branch: `openclaw/${name}`,
-    baseRef: "HEAD",
-    ownerKind: params.ownerKind ?? "manual",
-    ...(params.ownerId ? { ownerId: params.ownerId } : {}),
-    createdAt: params.now,
-    lastActiveAt: params.now,
-  }));
+  const repoFingerprint = params.repoFingerprint ?? "downstream-fixture";
+  const records = params.names.map((name) =>
+    makeWorktreeRecord(params.repoRoot, `fixture-${name}`, {
+      name,
+      repoFingerprint,
+      path: path.join(params.stateDir, "worktrees", repoFingerprint, name),
+      branch: `openclaw/${name}`,
+      ownerKind: params.ownerKind ?? "manual",
+      ...(params.ownerId ? { ownerId: params.ownerId } : {}),
+      createdAt: params.now,
+      lastActiveAt: params.now,
+    }),
+  );
   for (const record of records) {
     await fs.mkdir(path.dirname(record.path), { recursive: true });
   }
-  const commands = records.map((record) => [
+  const commands = records.map(({ repoRoot, branch, path: target }) => [
     "-C",
-    record.repoRoot,
+    repoRoot,
     "worktree",
     "add",
     "-b",
-    record.branch,
+    branch,
     "--",
-    record.path,
+    target,
     "HEAD",
   ]);
   if (records.length > 1) {
@@ -136,24 +154,44 @@ export async function materializeManagedWorktreeFixtures(
   }
   const provisionedPaths = params.provisionedPaths ?? [];
   for (const record of records) {
-    await copyProvisionedFiles({
-      repoRoot: record.repoRoot,
-      worktreePath: record.path,
-      provisionedPaths,
-    });
-  }
-  const register = () => {
-    for (const record of records) {
-      insertRegistryWorktree(params.env, record, { provisionedPaths });
+    for (const provisionedPath of provisionedPaths) {
+      const source = path.join(record.repoRoot, provisionedPath);
+      const target = path.join(record.path, provisionedPath);
+      const sourceStat = await fs.lstat(source);
+      await fs.mkdir(path.dirname(target), { recursive: true });
+      await fs.copyFile(source, target, fsConstants.COPYFILE_FICLONE);
+      if (process.platform !== "win32") {
+        await fs.chmod(target, sourceStat.mode & 0o7777);
+      }
     }
-  };
-  if (records.length > 1) {
-    // All asynchronous setup is complete before committing the fixture rows together.
-    runOpenClawStateWriteTransaction(register, { env: params.env });
-  } else {
-    register();
+  }
+  for (const record of records) {
+    await insertRegistryWorktree(params.env, record, { provisionedPaths });
   }
   return records;
+}
+
+export async function ageManagedWorktreeTemplates(
+  env: NodeJS.ProcessEnv,
+  lastUsedAt: number,
+): Promise<void> {
+  for (const template of await listTemplatesAsync(env)) {
+    await withWorktreeMutationLease({ env, id: `template:${template.cacheKey}` }, async (guard) => {
+      const key = `age-template:${template.id}`;
+      const reader = {
+        id: template.id,
+        key,
+        owner: { pid: process.pid, host: hostname(), startedAt: null },
+        unpublish: true,
+      } satisfies Parameters<typeof retainTemplateReaderAsync>[1];
+      assert(await retainTemplateReaderAsync(env, reader, guard.commitGuard));
+      try {
+        assert(await markTemplateReadyAsync(env, template.id, lastUsedAt, guard.commitGuard));
+      } finally {
+        await releaseTemplateReaderAsync(env, key, guard.commitGuard);
+      }
+    });
+  }
 }
 
 export async function materializeManagedWorktreeFixture(

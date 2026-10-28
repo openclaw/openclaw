@@ -1,4 +1,3 @@
-// Xai provider module implements model/runtime integration.
 import type {
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
@@ -53,8 +52,4 @@ export function resolveXaiForwardCompatModel(params: {
       maxTokens: definition.maxTokens,
     } as ProviderRuntimeModel),
   );
-}
-
-export function normalizeXaiResolvedModel(model: ProviderRuntimeModel): ProviderRuntimeModel {
-  return applyXaiRuntimeModelCompat(model);
 }

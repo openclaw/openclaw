@@ -1,5 +1,4 @@
-// Reports script supports OpenClaw repository automation.
-import type { ReportModule, TopologyEnvelope, TopologyRecord } from "./types.js";
+import type { TopologyEnvelope, TopologyRecord, TopologyReportName } from "./types.js";
 
 function canonicalExportName(record: TopologyRecord): string {
   const finalColon = record.canonicalKey.lastIndexOf(":");
@@ -20,100 +19,70 @@ function formatRecordLine(record: TopologyRecord): string {
   );
 }
 
-const reportModules: Record<ReportModule["name"], ReportModule> = {
-  "public-surface-usage": {
-    name: "public-surface-usage",
-    describe(envelope, limit) {
-      const candidates = envelope.rankedCandidates?.candidateToMove ?? [];
-      const duplicateExports = envelope.rankedCandidates?.duplicatedPublicExports ?? [];
-      return [
-        `Scope: ${envelope.scope.id}`,
-        `Public exports analyzed: ${envelope.totals.exports}`,
-        `Production-used exports: ${envelope.totals.usedByProduction}`,
-        `Single-owner shared exports: ${envelope.totals.singleOwnerShared}`,
-        `Unused public exports: ${envelope.totals.unused}`,
-        "",
-        `Top ${Math.min(limit, candidates.length)} candidate-to-move exports:`,
-        ...candidates.slice(0, limit).map(formatRecordLine),
-        "",
-        `Top ${Math.min(limit, duplicateExports.length)} duplicated public exports:`,
-        ...duplicateExports
-          .slice(0, limit)
-          .map(
-            (record) =>
-              `- ${primarySymbol(record)} via ${record.publicSpecifiers.join(", ")} ` +
-              `(${record.declarationPath}:${record.declarationLine})`,
-          ),
-      ].join("\n");
-    },
-  },
+const recordReports: Record<
+  Exclude<TopologyReportName, "public-surface-usage">,
+  { summary: string; heading: string; format: (record: TopologyRecord) => string }
+> = {
   "owner-map": {
-    name: "owner-map",
-    describe(envelope, limit) {
-      return [
-        `Scope: ${envelope.scope.id}`,
-        `Production-owned records: ${envelope.records.length}`,
-        "",
-        `Top ${Math.min(limit, envelope.records.length)} owner-map records:`,
-        ...envelope.records
-          .slice(0, limit)
-          .map(
-            (record) =>
-              `- ${primarySymbol(record)} owners=${record.productionOwners.join(",")} ` +
-              `extensions=${record.productionExtensions.join(",") || "-"} ` +
-              `packages=${record.productionPackages.join(",") || "-"}`,
-          ),
-      ].join("\n");
-    },
+    summary: "Production-owned records",
+    heading: "owner-map records",
+    format: (record) =>
+      `- ${primarySymbol(record)} owners=${record.productionOwners.join(",")} ` +
+      `extensions=${record.productionExtensions.join(",") || "-"} ` +
+      `packages=${record.productionPackages.join(",") || "-"}`,
   },
   "single-owner-shared": {
-    name: "single-owner-shared",
-    describe(envelope, limit) {
-      return [
-        `Scope: ${envelope.scope.id}`,
-        `Single-owner shared exports: ${envelope.records.length}`,
-        "",
-        `Top ${Math.min(limit, envelope.records.length)} single-owner shared exports:`,
-        ...envelope.records.slice(0, limit).map(formatRecordLine),
-      ].join("\n");
-    },
+    summary: "Single-owner shared exports",
+    heading: "single-owner shared exports",
+    format: formatRecordLine,
   },
   "unused-public-surface": {
-    name: "unused-public-surface",
-    describe(envelope, limit) {
-      return [
-        `Scope: ${envelope.scope.id}`,
-        `Unused public exports: ${envelope.records.length}`,
-        "",
-        `Top ${Math.min(limit, envelope.records.length)} unused exports:`,
-        ...envelope.records.slice(0, limit).map(formatRecordLine),
-      ].join("\n");
-    },
+    summary: "Unused public exports",
+    heading: "unused exports",
+    format: formatRecordLine,
   },
   "consumer-topology": {
-    name: "consumer-topology",
-    describe(envelope, limit) {
-      return [
-        `Scope: ${envelope.scope.id}`,
-        `Records with consumers: ${envelope.records.length}`,
-        "",
-        `Top ${Math.min(limit, envelope.records.length)} consumer-topology records:`,
-        ...envelope.records
-          .slice(0, limit)
-          .map(
-            (record) =>
-              `- ${primarySymbol(record)} prod=${record.productionConsumers.length} ` +
-              `test=${record.testConsumers.length} internal=${record.internalConsumers.length}`,
-          ),
-      ].join("\n");
-    },
+    summary: "Records with consumers",
+    heading: "consumer-topology records",
+    format: (record) =>
+      `- ${primarySymbol(record)} prod=${record.productionConsumers.length} ` +
+      `test=${record.testConsumers.length} internal=${record.internalConsumers.length}`,
   },
 };
 
 export function renderTextReport(envelope: TopologyEnvelope, limit: number): string {
-  const reportModule = reportModules[envelope.report];
-  if (!reportModule) {
+  if (envelope.report === "public-surface-usage") {
+    const candidates = envelope.rankedCandidates?.candidateToMove ?? [];
+    const duplicateExports = envelope.rankedCandidates?.duplicatedPublicExports ?? [];
+    return [
+      `Scope: ${envelope.scope.id}`,
+      `Public exports analyzed: ${envelope.totals.exports}`,
+      `Production-used exports: ${envelope.totals.usedByProduction}`,
+      `Single-owner shared exports: ${envelope.totals.singleOwnerShared}`,
+      `Unused public exports: ${envelope.totals.unused}`,
+      "",
+      `Top ${Math.min(limit, candidates.length)} candidate-to-move exports:`,
+      ...candidates.slice(0, limit).map(formatRecordLine),
+      "",
+      `Top ${Math.min(limit, duplicateExports.length)} duplicated public exports:`,
+      ...duplicateExports
+        .slice(0, limit)
+        .map(
+          (record) =>
+            `- ${primarySymbol(record)} via ${record.publicSpecifiers.join(", ")} ` +
+            `(${record.declarationPath}:${record.declarationLine})`,
+        ),
+    ].join("\n");
+  }
+  const report = recordReports[envelope.report];
+  if (!report) {
     throw new Error(`Unsupported topology report: ${envelope.report}`);
   }
-  return reportModule.describe(envelope, limit);
+  return [
+    `Scope: ${envelope.scope.id}`,
+    `${report.summary}: ${envelope.records.length}`,
+    "",
+    `Top ${Math.min(limit, envelope.records.length)} ${report.heading}:`,
+    ...envelope.records.slice(0, limit).map(report.format),
+  ].join("\n");
 }

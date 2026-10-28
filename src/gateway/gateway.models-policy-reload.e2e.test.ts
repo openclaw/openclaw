@@ -1,0 +1,178 @@
+import { X509Certificate } from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { afterEach, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
+import { getRuntimeConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { buildCatalogModel } from "../plugin-sdk/provider-catalog.test-support.js";
+import * as policy from "../plugins/provider-policy-surface.js";
+import * as artifacts from "../plugins/public-surface-loader.js";
+import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import { connectUserModelAccountAsync } from "../state/user-model-account-operations.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+it("reuses provider policy artifacts after a model config hot reload", async () => {
+  const home = tempDirs.make("openclaw-models-policy-reload-");
+  const workspace = path.join(home, "workspace");
+  await fs.mkdir(workspace);
+  const certPath = path.join(home, "cert.pem");
+  const keyPath = path.join(home, "key.pem");
+  await fs.writeFile(certPath, TEST_TLS_CERT_PEM);
+  await fs.writeFile(keyPath, TEST_TLS_KEY_PEM);
+  vi.stubEnv("HOME", home);
+  vi.stubEnv("OPENCLAW_STATE_DIR", path.join(home, "state"));
+  vi.stubEnv("OPENCLAW_TEST_MINIMAL_GATEWAY", undefined);
+  vi.stubEnv("OPENCLAW_TEST_GATEWAY_OVERRIDE_TOKEN", undefined);
+  vi.stubEnv("OPENCLAW_TEST_RUNTIME_OVERRIDE_TOKEN", undefined);
+  for (const name of [
+    "CHANNELS",
+    "CRON",
+    "GMAIL_WATCHER",
+    "CANVAS_HOST",
+    "BROWSER_CONTROL_SERVER",
+    "PROVIDERS",
+  ]) {
+    vi.stubEnv(`OPENCLAW_SKIP_${name}`, "1");
+  }
+  const modelIds = Array.from({ length: 100 }, (_, index) => `model-${index}`);
+  const config: OpenClawConfig = {
+    agents: {
+      ownership: "explicit",
+      defaults: {
+        workspace,
+        skipBootstrap: true,
+        model: { primary: "openai/model-0" },
+        models: Object.fromEntries(modelIds.map((id) => [`openai/${id}`, {}])),
+      },
+      entries: { main: {} },
+    },
+    gateway: {
+      trustedProxies: ["127.0.0.1"],
+      auth: {
+        mode: "trusted-proxy",
+        trustedProxy: {
+          userHeader: "x-forwarded-user",
+          requiredHeaders: ["x-forwarded-proto"],
+          allowLoopback: true,
+          deviceAutoApprove: { enabled: true, scopes: ["operator.read", "operator.write"] },
+        },
+        identityScopes: { "policy@example.test": ["operator.admin"] },
+      },
+      controlUi: { allowedOrigins: ["https://control.example.test"] },
+      tls: { enabled: true, autoGenerate: false, certPath, keyPath },
+    },
+    models: {
+      mode: "replace",
+      providers: {
+        openai: {
+          baseUrl: "https://provider.invalid/v1",
+          api: "openai-completions",
+          apiKey: "fixture-key",
+          models: modelIds.map((id) =>
+            buildCatalogModel(id, { contextWindow: 32000, maxTokens: 1024 }),
+          ),
+        },
+      },
+    },
+    plugins: { allow: ["openai"], slots: { memory: "none" } },
+  };
+  const gateway = await startGatewayWithClient({
+    cfg: config,
+    configPath: path.join(home, "openclaw.json"),
+    auth: config.gateway!.auth,
+    clientName: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+    mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+    secure: true,
+    tlsFingerprint: new X509Certificate(TEST_TLS_CERT_PEM).fingerprint256,
+    edgeAuthHeaders: {
+      "x-forwarded-for": "203.0.113.50",
+      "x-forwarded-proto": "https",
+      "x-forwarded-user": "policy@example.test",
+    },
+    origin: "https://control.example.test",
+    scopes: ["operator.admin", "operator.read", "operator.write"],
+  });
+  const candidateLoads = vi.spyOn(
+    artifacts,
+    "loadBundledPluginPublicArtifactModuleFromCandidatesSync",
+  );
+  let requesterProfileId: string | undefined;
+  let measuredLoads = 0;
+  let measuredLookups = 0;
+  const original = policy.resolveDirectBundledProviderPolicySurface;
+  const resolvePolicy = vi
+    .spyOn(policy, "resolveDirectBundledProviderPolicySurface")
+    .mockImplementation((id) => {
+      const client = getPluginRuntimeGatewayRequestScope()?.client;
+      // Watcher validation owns fresh caches; measure only this authenticated requester.
+      const measured =
+        requesterProfileId !== undefined &&
+        client?.authenticatedUserProfile?.profileId === requesterProfileId;
+      const beforeLoads = candidateLoads.mock.calls.length;
+      const surface = original(id);
+      if (measured) {
+        measuredLoads += candidateLoads.mock.calls.length - beforeLoads;
+        measuredLookups += 1;
+      }
+      return surface;
+    });
+  let authProfileId: string;
+  let requestIndex = 0;
+  // Equivalent spellings exercise each RPC instead of its one-second response cache.
+  const nextRequest = () => {
+    const mask = requestIndex++;
+    const provider = "openai"
+      .split("")
+      .map((letter, index) => (mask & (1 << index) ? letter.toUpperCase() : letter))
+      .join("");
+    return { agentId: "main", authProfileId, provider };
+  };
+  const measure = async () => {
+    await gateway.client.request("models.list", nextRequest());
+    candidateLoads.mockClear();
+    resolvePolicy.mockClear();
+    measuredLoads = 0;
+    measuredLookups = 0;
+    for (let i = 0; i < 12; i++) {
+      const beforeLookups = measuredLookups;
+      const result = await gateway.client.request<{
+        models: { id: string }[];
+        accountSelection?: { kind: string };
+      }>("models.list", nextRequest());
+      expect(result.models.some((model) => model.id === "model-0")).toBe(true);
+      expect(result.accountSelection?.kind).toBe("personal");
+      expect(measuredLookups).toBeGreaterThan(beforeLookups);
+    }
+    return measuredLoads;
+  };
+  try {
+    await gateway.server.startupSettled;
+    const self = await gateway.client.request<{ profile: { id: string } }>("users.self", {});
+    requesterProfileId = self.profile.id;
+    ({ authProfileId } = await connectUserModelAccountAsync({
+      ownerProfileId: self.profile.id,
+      credential: { type: "api_key", provider: "openai", key: "fixture-personal-key" },
+      assertCurrent() {},
+    }));
+    await measure();
+    const before = await gateway.client.request<{ hash: string }>("config.get", {});
+    await gateway.client.request("config.patch", {
+      baseHash: before.hash,
+      raw: JSON.stringify({ agents: { defaults: { model: { primary: "openai/model-1" } } } }),
+    });
+    expect(getRuntimeConfig().agents?.defaults?.model).toEqual({ primary: "openai/model-1" });
+    const afterLoads = await measure();
+    expect(afterLoads).toBe(0);
+  } finally {
+    resolvePolicy.mockRestore();
+    candidateLoads.mockRestore();
+    await disconnectGatewayClient(gateway.client);
+    await gateway.server.close({ reason: "policy reload proof complete" });
+    vi.unstubAllEnvs();
+  }
+}, 120_000);

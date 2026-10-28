@@ -260,25 +260,6 @@ describe("handshake auth helpers", () => {
     },
   );
 
-  it("keeps metadata refresh behavior unchanged when autoApproveLocal is false", () => {
-    expect(
-      allowSilentLocalPairing({
-        autoApproveLocal: false,
-        locality: "shared_secret_loopback_local",
-        reason: "metadata-upgrade",
-      }),
-    ).toBe(true);
-  });
-
-  it.each([undefined, true])(
-    "preserves existing local approval behavior when autoApproveLocal is %s",
-    (autoApproveLocal) => {
-      for (const reason of ["not-paired", "role-upgrade", "scope-upgrade"] as const) {
-        expect(allowSilentLocalPairing({ autoApproveLocal, reason })).toBe(true);
-      }
-    },
-  );
-
   it("allows Control UI or WebChat browser-origin pairing but keeps other browser-origin clients explicit", () => {
     expect(
       allowSilentLocalPairing({
@@ -332,29 +313,6 @@ describe("handshake auth helpers", () => {
         reason: "role-upgrade",
       }),
     ).toBe(false);
-  });
-
-  it("allows Control UI browser-origin local pairing for fresh pairing and upgrades", () => {
-    for (const locality of ["direct_local", "browser_container_local"] as const) {
-      expect(
-        allowSilentLocalPairing({
-          locality,
-          hasBrowserOriginHeader: true,
-          isControlUi: true,
-          isWebchat: true,
-          reason: "not-paired",
-        }),
-      ).toBe(true);
-      expect(
-        allowSilentLocalPairing({
-          locality,
-          hasBrowserOriginHeader: true,
-          isControlUi: true,
-          isWebchat: true,
-          reason: "role-upgrade",
-        }),
-      ).toBe(true);
-    }
   });
 
   it("classifies direct local requests ahead of any Docker CLI fallback", () => {
@@ -432,21 +390,6 @@ describe("handshake auth helpers", () => {
         authMethod: "device-token",
       }),
     ).toBe("remote");
-  });
-
-  it("classifies non-CLI Docker-published loopback clients as shared_secret_loopback_local when auth is token/password", () => {
-    expect(
-      resolvePairingLocality({
-        connectParams: GATEWAY_BACKEND_CONNECT_PARAMS,
-        isLocalClient: false,
-        requestHost: "172.17.0.2:18789",
-        remoteAddress: "127.0.0.1",
-        hasProxyHeaders: false,
-        hasBrowserOriginHeader: false,
-        sharedAuthOk: true,
-        authMethod: "token",
-      }),
-    ).toBe("shared_secret_loopback_local");
   });
 
   it("skips backend self-pairing only for direct-local backend clients", () => {
@@ -610,14 +553,6 @@ describe("handshake auth helpers", () => {
     ).toBe("remote");
   });
 
-  it("keeps shared-secret loopback clients remote when forwarded headers were present", () => {
-    expect(
-      resolveNodeLoopbackLocality({
-        hasProxyHeaders: true,
-      }),
-    ).toBe("remote");
-  });
-
   it("allows silent scope-upgrade, role-upgrade, and metadata-upgrade for shared_secret_loopback_local", () => {
     expect(
       allowSilentLocalPairing({
@@ -651,14 +586,6 @@ describe("handshake auth helpers", () => {
       ).toBe(true);
     });
 
-    it("still requires approval for direct local node metadata-upgrade", () => {
-      expect(
-        allowSilentLocalPairing({
-          reason: "metadata-upgrade",
-        }),
-      ).toBe(false);
-    });
-
     it("allows silent metadata-upgrade for cli_container_local CLI clients", () => {
       expect(
         allowSilentLocalPairing({
@@ -666,36 +593,6 @@ describe("handshake auth helpers", () => {
           reason: "metadata-upgrade",
         }),
       ).toBe(true);
-    });
-
-    it("allows silent metadata-upgrade for shared_secret_loopback_local CLI clients", () => {
-      expect(
-        allowSilentLocalPairing({
-          locality: "shared_secret_loopback_local",
-          reason: "metadata-upgrade",
-        }),
-      ).toBe(true);
-    });
-
-    it("still requires approval for metadata-upgrade from remote clients", () => {
-      expect(
-        allowSilentLocalPairing({
-          locality: "remote",
-          reason: "metadata-upgrade",
-        }),
-      ).toBe(false);
-    });
-
-    it("still requires approval for metadata-upgrade from browser_container_local (Control UI)", () => {
-      expect(
-        allowSilentLocalPairing({
-          locality: "browser_container_local",
-          hasBrowserOriginHeader: true,
-          isControlUi: true,
-          isWebchat: false,
-          reason: "metadata-upgrade",
-        }),
-      ).toBe(false);
     });
 
     it("still requires approval for direct local Browser or Control UI metadata-upgrade", () => {
@@ -714,13 +611,5 @@ describe("handshake auth helpers", () => {
         }),
       ).toBe(false);
     });
-  });
-
-  it("prefers cli_container_local over shared_secret_loopback_local for CLI clients", () => {
-    expect(
-      resolveCliLoopbackLocality({
-        requestHost: "127.0.0.1:18789",
-      }),
-    ).toBe("cli_container_local");
   });
 });

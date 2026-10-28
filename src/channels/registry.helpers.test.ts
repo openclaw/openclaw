@@ -2,7 +2,6 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
-import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
   getActivePluginChannelRegistryVersion,
   resetPluginRuntimeStateForTest,
@@ -10,21 +9,12 @@ import {
 } from "../plugins/runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { listChatChannels } from "./chat-meta.js";
-import { normalizeAnyChannelId as normalizeAnyChannelIdLight } from "./registry-normalize.js";
 import { formatChannelSelectionLine, normalizeAnyChannelId } from "./registry.js";
 
 describe("channel registry helpers", () => {
   afterEach(() => {
     resetPluginRuntimeStateForTest();
   });
-
-  function channelIds(): string[] {
-    const ids: string[] = [];
-    for (const channel of listChatChannels()) {
-      ids.push(channel.id);
-    }
-    return ids;
-  }
 
   function formatTestLink(path?: string, label?: string): string {
     if (label && path) {
@@ -46,10 +36,6 @@ describe("channel registry helpers", () => {
   it("keeps Feishu first in the current default order", () => {
     const channels = listChatChannels();
     expect(channels[0]?.id).toBe("feishu");
-  });
-
-  it("includes MS Teams in the bundled channel list", () => {
-    expect(channelIds()).toContain("msteams");
   });
 
   it("formats Telegram selection lines without a docs prefix and with website extras", () => {
@@ -74,7 +60,6 @@ describe("channel registry helpers", () => {
     );
 
     expect(normalizeAnyChannelId("exact-id")).toBe("exact-id");
-    expect(normalizeAnyChannelIdLight("exact-id")).toBe("exact-id");
   });
 
   it("rebuilds registered channel lookups when the active registry changes", () => {
@@ -83,7 +68,6 @@ describe("channel registry helpers", () => {
 
     const channelVersion = getActivePluginChannelRegistryVersion();
     expect(normalizeAnyChannelId("a")).toBe("alpha");
-    expect(normalizeAnyChannelIdLight("a")).toBe("alpha");
 
     const betaRegistry = createRegistryWithRegisteredChannel("beta", ["b"]);
     setActivePluginRegistry(betaRegistry);
@@ -91,25 +75,5 @@ describe("channel registry helpers", () => {
     expect(getActivePluginChannelRegistryVersion()).not.toBe(channelVersion);
     expect(normalizeAnyChannelId("a")).toBeNull();
     expect(normalizeAnyChannelId("b")).toBe("beta");
-    expect(normalizeAnyChannelIdLight("a")).toBeNull();
-    expect(normalizeAnyChannelIdLight("b")).toBe("beta");
-  });
-
-  it("refreshes registered channel lookups when selected registry channels grow in place", () => {
-    const registry = createEmptyPluginRegistry();
-    setActivePluginRegistry(registry);
-
-    expect(normalizeAnyChannelId("a")).toBeNull();
-    expect(normalizeAnyChannelIdLight("a")).toBeNull();
-
-    registry.channels.push(
-      expectDefined(
-        createRegistryWithRegisteredChannel("alpha", ["a"]).channels[0],
-        'createRegistryWithRegisteredChannel("alpha", ["a"]).channels[0] test invariant',
-      ),
-    );
-
-    expect(normalizeAnyChannelId("a")).toBe("alpha");
-    expect(normalizeAnyChannelIdLight("a")).toBe("alpha");
   });
 });

@@ -1,9 +1,11 @@
 import { LanguageDescription } from "@codemirror/language";
 import { languages } from "@codemirror/language-data";
 
-export async function loadCodeLanguage(path: string) {
+export async function loadCodeLanguage(path: string, language?: string) {
   const name = path.replaceAll("\\", "/").split("/").at(-1) ?? path;
-  const description = LanguageDescription.matchFilename(languages, name);
+  const description =
+    (language ? LanguageDescription.matchLanguageName(languages, language, false) : null) ??
+    LanguageDescription.matchFilename(languages, name);
   if (!description) {
     return null;
   }

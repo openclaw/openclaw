@@ -15,7 +15,7 @@ OpenClaw Zalo channel plugin for bot and webhook chats.
 ## Distribution
 
 - Package: `@openclaw/zalo`
-- Install route: npm or ClawHub: `clawhub:@openclaw/zalo`
+- Install route: npm or ClawHub: `@openclaw/zalo`
 
 ## Surface
 

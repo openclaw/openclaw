@@ -1,9 +1,11 @@
-import { expect, it, vi } from "vitest";
+import { afterAll, expect, it, vi } from "vitest";
 import {
   GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_IDS,
 } from "../../../packages/gateway-protocol/src/client-info.js";
+import { validateUiCommandParams } from "../../../packages/gateway-protocol/src/index.js";
 import { createGatewayToolCallerWrapper } from "../../../src/agents/tools/gateway-caller-context.js";
+import * as gatewayTransport from "../../../src/agents/tools/in-process-gateway.js";
 import { createScreenTool } from "../../../src/agents/tools/screen-tool.js";
 import type {
   GatewayClient,
@@ -20,9 +22,14 @@ import {
   expectDefined,
   installMockGateway,
 } from "./chat-flow.test-support.ts";
+import { observe } from "./desktop-panel.test-support.ts";
 import { createRfbRawFrame, installScriptedRfbServer } from "./desktop-rfb-test-support.ts";
 
 const suite = createChatFlowE2eSuite();
+const callGateway = vi.spyOn(gatewayTransport, "callInProcessGatewayTool");
+
+// The nested suite owns browser teardown before this transport is restored.
+afterAll(() => callGateway.mockRestore());
 
 suite.define(() => {
   it("opens the selected session and its app views only in the browser that asked the agent", async () => {
@@ -39,6 +46,7 @@ suite.define(() => {
             "desktop.observe",
             "environments.status",
             "portal.list",
+            "ui.command.result",
           ],
           methodResponses: {
             "sessions.list": chatSessionListResponse(),
@@ -48,12 +56,7 @@ suite.define(() => {
               status: "starting",
               desktop: false,
             },
-            "desktop.observe": {
-              transport: "rfb",
-              wsPath: "/desktop/observe?token=synthetic",
-              expiresAtMs: 60_000,
-              control: false,
-            },
+            "desktop.observe": observe("synthetic"),
             "portal.list": {
               portals: [
                 {
@@ -80,7 +83,7 @@ suite.define(() => {
           }),
         );
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, source));
-        await gateway.waitForRequest("chat.startup");
+        await gateway.waitForRequest("sessions.messages.subscribe");
         await page.getByText("Synthetic navigation proof.").first().waitFor();
         const client = {
           connId,
@@ -107,26 +110,66 @@ suite.define(() => {
       broadcastToConnIds: (event, payload, connIds) => {
         for (const browser of browsers) {
           if (connIds.has(browser.connId)) {
-            deliveries.push(browser.gateway.emitGatewayEvent(event, payload));
+            deliveries.push(
+              (async () => {
+                await browser.gateway.emitGatewayEvent(event, payload);
+                if (
+                  event === "ui.command" &&
+                  validateUiCommandParams(payload) &&
+                  payload.requestId
+                ) {
+                  const report = await browser.gateway.waitForRequest("ui.command.result", {
+                    match: { requestId: payload.requestId },
+                  });
+                  const respond = vi.fn();
+                  await expectDefined(
+                    uiCommandHandlers["ui.command.result"],
+                    "ui.command.result",
+                  )({ params: report.params, client: browser.client, respond, context } as never);
+                  expect(respond).toHaveBeenCalledWith(true, { ok: true });
+                }
+              })(),
+            );
           }
         }
       },
     } satisfies Partial<GatewayRequestContext>;
+    callGateway.mockImplementation(
+      async <T>(_method: string, params: Record<string, unknown>): Promise<T> => {
+        const respond = vi.fn();
+        await expectDefined(
+          uiCommandHandlers["ui.command"],
+          "ui.command",
+        )({ params, respond, context } as never);
+        if (!validateUiCommandParams(params)) {
+          throw new Error("Screen tool emitted an invalid UI command");
+        }
+        const command = params.command;
+        if (command.kind === "panel" && command.panel === "portal" && command.open) {
+          expect(respond).toHaveBeenCalledWith(true, {
+            ok: true,
+            delivery: "dispatched",
+            presentation:
+              "portalId" in command && command.portalId
+                ? {
+                    portalId: command.portalId,
+                    status: "unverified",
+                    reason: "network-reachable",
+                  }
+                : { status: "unverified", reason: "waiting-for-app" },
+          });
+        } else {
+          expect(respond).toHaveBeenCalledWith(true, { ok: true });
+        }
+        return expectDefined(respond.mock.calls[0], "Gateway response")[1] as T;
+      },
+    );
     const screen = createGatewayToolCallerWrapper("main", {
       agentSessionKey: source,
       gatewayUiCommandTarget: { connId: "requester" },
     })(
       createScreenTool({
         agentSessionKey: source,
-        callGateway: async <T>(_method: string, params: Record<string, unknown>): Promise<T> => {
-          const respond = vi.fn();
-          await expectDefined(
-            uiCommandHandlers["ui.command"],
-            "ui.command",
-          )({ params, respond, context } as never);
-          expect(respond).toHaveBeenCalledWith(true, { ok: true });
-          return { ok: true } as T;
-        },
       }),
     );
 
@@ -156,7 +199,7 @@ suite.define(() => {
     await Promise.all(deliveries);
     const desktop = requester.page.locator("openclaw-desktop-panel[embedded]");
     await requester.gateway.waitForRequest("environments.status");
-    await desktop.locator("openclaw-panel-loading-skeleton").waitFor();
+    await desktop.locator(".desktop-status-surface[role='status']").waitFor();
     await desktop.getByText("Starting your machine…", { exact: true }).waitFor();
     expect(await requester.gateway.getRequests("desktop.observe")).toHaveLength(0);
     await captureUiProof(suite, requester.page, "screen-requester-routing", "pending-desktop.png");
@@ -174,19 +217,15 @@ suite.define(() => {
     await rfb.send([createRfbRawFrame()]);
     expect(await other.gateway.getRequests("desktop.observe")).toHaveLength(0);
 
-    await requester.gateway.setMethodResponse("desktop.observe", {
-      transport: "rfb",
-      wsPath: "/desktop/observe?token=synthetic-control",
-      expiresAtMs: 60_000,
-      control: true,
-    });
-    await desktop.getByRole("button", { name: "Take control", exact: true }).click();
+    await requester.gateway.setMethodResponse(
+      "desktop.observe",
+      observe("synthetic-control", true),
+    );
+    const desktopControls = desktop.locator(".desktop-connection-rail");
+    await desktopControls.getByRole("button", { name: "Take control", exact: true }).click();
     await expect.poll(rfb.events).toContain("authenticated:2");
-    await desktop
-      .getByText("You control this desktop. Agent input is paused until you switch to view only.", {
-        exact: true,
-      })
-      .waitFor();
+    await desktopControls.getByRole("button", { name: "Back to viewing", exact: true }).waitFor();
+    expect(await desktop.locator(".desktop-note").count()).toBe(0);
     const controlledCanvas = await desktop.locator("canvas").elementHandle();
     const requestsBeforeShow = await Promise.all(
       ["environments.status", "desktop.observe", "desktop.release"].map((method) =>
@@ -222,12 +261,8 @@ suite.define(() => {
       ).toEqual(requestsBeforeShow);
       expect(await controlledCanvas?.evaluate((element) => element.isConnected)).toBe(true);
       expect(await rfb.connectionCount()).toBe(2);
-      await desktop
-        .getByText(
-          "You control this desktop. Agent input is paused until you switch to view only.",
-          { exact: true },
-        )
-        .waitFor();
+      await desktopControls.getByRole("button", { name: "Back to viewing", exact: true }).waitFor();
+      expect(await desktop.locator(".desktop-note").count()).toBe(0);
     }
     await captureUiProof(
       suite,
@@ -235,13 +270,10 @@ suite.define(() => {
       "screen-requester-routing",
       "human-control-preserved.png",
     );
-    await requester.gateway.setMethodResponse("desktop.observe", {
-      transport: "rfb",
-      wsPath: "/desktop/observe?token=synthetic",
-      expiresAtMs: 60_000,
-      control: false,
-    });
-    await desktop.getByRole("button", { name: "Switch to view only", exact: true }).click();
+    await requester.gateway.setMethodResponse("desktop.observe", observe("synthetic"));
+    // The Gateway revokes the human controller when the agent explicitly takes over.
+    await rfb.disconnect("control-taken:Agent", 4000);
+    await desktop.getByText("Agent took control", { exact: true }).waitFor();
     await expect.poll(rfb.events).toContain("authenticated:3");
     expect((await requester.gateway.getRequests("desktop.observe")).at(-1)).toMatchObject({
       params: { control: false },

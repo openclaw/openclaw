@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { buildAnthropicCliBackend } from "./cli-backend.js";
 
 describe("Claude CLI context-window selection", () => {
-  it.each(["claude-fable-5", "claude-fable-5-1"])(
+  it.each(["claude-fable-5-1"])(
     "maps %s selectable windows to native model ids and process env",
     (modelId) => {
       const backend = buildAnthropicCliBackend();

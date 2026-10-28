@@ -1,3 +1,4 @@
+import { SqliteReadOnlyInspectionContentionError } from "../infra/sqlite-readonly-worker-protocol.js";
 import {
   describeRunningOpenClawBuild,
   SqliteSchemaVersionError,
@@ -50,20 +51,26 @@ function formatIncompatibleDatabaseSchemas(
 export function formatIndeterminateDatabaseReadiness(
   indeterminate: readonly IndeterminateOpenClawDatabase[],
   operation: OpenClawDatabaseSchemaPreflightOperation,
+  causes: WeakMap<IndeterminateOpenClawDatabase, unknown>,
 ): string {
   const shown = indeterminate
     .toSorted((left, right) => left.path.localeCompare(right.path))
-    .map(
-      (database) =>
-        `${database.kind}${database.agentId ? ` ${database.agentId}` : ""} ${database.path}: ${database.reason}`,
-    );
+    .map((database) => {
+      const guidance =
+        operation !== "doctor"
+          ? ""
+          : causes.get(database) instanceof SqliteReadOnlyInspectionContentionError
+            ? " Wait a moment for write activity to settle, then retry the inspection."
+            : " Stop OpenClaw processes, then restore the affected database from a verified backup.";
+      return `${database.kind}${database.agentId ? ` ${database.agentId}` : ""} ${database.path}: ${database.reason}${guidance}`;
+    });
   const action =
     operation === "doctor"
       ? "Doctor could not complete repair"
       : operation === "gateway-startup"
         ? "Gateway refused startup"
         : "Gateway refused restart";
-  return `${action} because persisted database readiness could not be verified:\n${shown.join("\n")}\n${operation === "doctor" ? "Stop OpenClaw processes, then restore the affected database from a verified backup." : "Stop the Gateway and other OpenClaw processes, run openclaw doctor --fix, then retry."}`;
+  return `${action} because persisted database readiness could not be verified:\n${shown.join("\n")}${operation === "doctor" ? "" : "\nStop the Gateway and other OpenClaw processes, run openclaw doctor --fix, then retry."}`;
 }
 
 export function describeDeferredStateSchemaPublication(

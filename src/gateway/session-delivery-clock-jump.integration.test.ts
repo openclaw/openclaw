@@ -1,8 +1,7 @@
 import http from "node:http";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { onAgentEventForRun } from "../infra/agent-events.js";
-import { getDeliveryQueueEntryStatus } from "../infra/delivery-queue-sqlite.js";
+import { getDeliveryQueueEntryStatus } from "../infra/delivery-queue-sqlite.test-support.js";
 import { scheduleSessionDelivery } from "../infra/session-delivery-queue-runtime.js";
 import {
   enqueueClaimedSessionDelivery,
@@ -28,23 +27,8 @@ vi.mock("./server-idle-task.js", () => ({
   scheduleGatewayIdleTask: () => ({ stop: vi.fn() }),
 }));
 
-type DeliveryProofStage =
-  | "rescheduled"
-  | "provider-request"
-  | "provider-response"
-  | "agent-start"
-  | "agent-finishing"
-  | "agent-end"
-  | "agent-error"
-  | "client-marker";
-
-async function startProofProvider(
-  requests: string[],
-  observe: (stage: DeliveryProofStage) => void,
-): Promise<http.Server> {
+async function startProofProvider(requests: string[]): Promise<http.Server> {
   const server = http.createServer((request, response) => {
-    observe("provider-request");
-    response.once("finish", () => observe("provider-response"));
     let body = "";
     request.setEncoding("utf8");
     request.on("data", (chunk: string) => {
@@ -55,33 +39,23 @@ async function startProofProvider(
       const outputText = body.includes("clock-jump readiness marker")
         ? "CLOCK_JUMP READY"
         : "CLOCK_JUMP DELIVERED";
+      const message = { type: "message", id: "clock-jump-message", role: "assistant" };
       const events = [
         {
           type: "response.output_item.added",
-          item: {
-            type: "message",
-            id: "clock-jump-message",
-            role: "assistant",
-            content: [],
-            status: "in_progress",
-          },
+          item: { ...message, content: [], status: "in_progress" },
         },
         {
           type: "response.output_item.done",
           item: {
-            type: "message",
-            id: "clock-jump-message",
-            role: "assistant",
+            ...message,
             status: "completed",
             content: [{ type: "output_text", text: outputText, annotations: [] }],
           },
         },
         {
           type: "response.completed",
-          response: {
-            status: "completed",
-            usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
-          },
+          response: { status: "completed" },
         },
       ];
       response.writeHead(200, { "content-type": "text/event-stream" });
@@ -97,51 +71,40 @@ async function startProofProvider(
   return server;
 }
 
-async function closeProofProvider(server: http.Server): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    server.close((error) => (error ? reject(error) : resolve()));
-  });
-}
-
 afterEach(() => {
   resetGatewayTestState();
   vi.restoreAllMocks();
 });
 
-describe("session delivery clock-jump integration", () => {
-  it(
-    "delivers and settles a released claim through a real Gateway client",
-    { timeout: 90_000 },
-    async ({ signal }) => {
-      const startedAt = performance.now();
-      const stages: Partial<
-        Record<DeliveryProofStage, { count: number; firstAtMs: number; lastAtMs: number }>
-      > = {};
-      const observe = (stage: DeliveryProofStage) => {
-        const elapsedMs = Math.round(performance.now() - startedAt);
-        const previous = stages[stage];
-        if (previous) {
-          previous.count += 1;
-          previous.lastAtMs = elapsedMs;
-        } else {
-          stages[stage] = { count: 1, firstAtMs: elapsedMs, lastAtMs: elapsedMs };
-        }
-      };
-      let stopObserving: (() => void) | undefined;
+it(
+  "settles a released claim after a clock jump through a real Gateway client",
+  { timeout: 90_000 },
+  async ({ signal }) => {
+    {
       const initialTime = Date.now();
       const wallClock = vi.spyOn(Date, "now").mockReturnValue(initialTime);
       const { envSnapshot, tempHome, workspaceDir } = await setupGatewayTempHome({
         prefix: "openclaw-session-delivery-gateway-",
       });
+      await using cleanup = new AsyncDisposableStack();
+      cleanup.defer(() => envSnapshot.restore());
       const queueContext = captureOpenClawStateWorkerContext();
-      let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
-      let providerServer: http.Server | undefined;
+      cleanup.defer(async () => {
+        await closeOpenClawStateDatabaseByPathAsync(queueContext.admission.databasePath);
+        await removeGatewayTempHome(tempHome);
+      });
       let deliveryId = "";
       const providerRequests: string[] = [];
       const chatEvents: string[] = [];
 
       try {
-        providerServer = await startProofProvider(providerRequests, observe);
+        const providerServer = await startProofProvider(providerRequests);
+        cleanup.defer(
+          () =>
+            new Promise<void>((resolve, reject) => {
+              providerServer.close((error) => (error ? reject(error) : resolve()));
+            }),
+        );
         const providerAddress = providerServer.address();
         if (!providerAddress || typeof providerAddress === "string") {
           throw new Error("proof provider did not bind a loopback port");
@@ -164,7 +127,7 @@ describe("session delivery clock-jump integration", () => {
                 },
               },
             },
-            entries: { main: { default: true } },
+            entries: { main: {} },
           },
           models: {
             mode: "replace",
@@ -179,32 +142,26 @@ describe("session delivery clock-jump integration", () => {
           plugins: { slots: { memory: "none" } },
           tools: { profile: "minimal" },
         } satisfies OpenClawConfig;
-        gateway = await startGatewayWithClient({
+        const gateway = await startGatewayWithClient({
           cfg,
           configPath,
           token,
           scopes: ["operator.admin", "operator.read", "operator.write"],
           onEvent: (event) => {
-            if (event.event !== "chat") {
-              return;
-            }
-            const payload = JSON.stringify(event.payload ?? {});
-            chatEvents.push(payload);
-            if (payload.includes("CLOCK_JUMP DELIVERED")) {
-              observe("client-marker");
+            if (event.event === "chat") {
+              chatEvents.push(JSON.stringify(event.payload ?? {}));
             }
           },
         });
-        await gateway.server.startupSettled;
-        stopObserving = onAgentEventForRun("image:clock-jump:agent-loop", (event) => {
-          const phase = event.data.phase;
-          if (
-            event.stream === "lifecycle" &&
-            (phase === "start" || phase === "finishing" || phase === "end" || phase === "error")
-          ) {
-            observe(`agent-${phase}`);
+        cleanup.defer(async () => {
+          try {
+            await disconnectGatewayClient(gateway.client);
+          } finally {
+            await gateway.server.close({ reason: "session delivery clock-jump proof complete" });
+            await expect(scheduleSessionDelivery(deliveryId, queueContext)).resolves.toBe(false);
           }
         });
+        await gateway.server.startupSettled;
         // Gateway startup leaves first-turn preparation cold. Finish it before timing claim release.
         await expect(
           gateway.client.request(
@@ -217,8 +174,7 @@ describe("session delivery clock-jump integration", () => {
             { expectFinal: true, signal },
           ),
         ).resolves.toMatchObject({ status: "ok" });
-        expect(providerRequests).toHaveLength(1);
-        expect(providerRequests[0]).toContain("clock-jump readiness marker");
+        expect(providerRequests).toEqual([expect.stringContaining("clock-jump readiness marker")]);
         await gateway.client.request("sessions.messages.subscribe", { key: sessionKey });
         // Readiness must not consume the held claim timer that release needs to preempt.
         const { id } = await enqueueClaimedSessionDelivery(
@@ -248,7 +204,6 @@ describe("session delivery clock-jump integration", () => {
         wallClock.mockReturnValue(initialTime + 24 * 60 * 60 * 1_000);
         await releaseSessionDeliveryClaim(id, queueContext);
         await scheduleSessionDelivery(id, queueContext);
-        observe("rescheduled");
 
         await vi.waitFor(
           async () => {
@@ -258,50 +213,15 @@ describe("session delivery clock-jump integration", () => {
           },
           { timeout: 15_000, interval: 50 },
         );
-        expect(providerRequests).toHaveLength(2);
-        expect(providerRequests[1]).toContain("clock-jump proof marker");
-        expect(await loadPendingSessionDeliveries(queueContext)).toStrictEqual([]);
+        expect(providerRequests).toEqual([
+          expect.stringContaining("clock-jump readiness marker"),
+          expect.stringContaining("clock-jump proof marker"),
+        ]);
         expect(getDeliveryQueueEntryStatus(SESSION_DELIVERY_QUEUE_NAME, id)).toBe("completed");
-      } catch (error) {
-        console.error(
-          "session-delivery-clock-jump-diagnostics",
-          JSON.stringify({
-            elapsedMs: Math.round(performance.now() - startedAt),
-            stages,
-            providerRequests: providerRequests.length,
-            chatEvents: chatEvents.length,
-            activeRootWork: getActiveGatewayRootWorkCount(),
-          }),
-        );
-        throw error;
       } finally {
-        stopObserving?.();
         wallClock.mockRestore();
-        try {
-          if (gateway) {
-            try {
-              await disconnectGatewayClient(gateway.client);
-            } finally {
-              await gateway.server.close({ reason: "session delivery clock-jump proof complete" });
-              await expect(scheduleSessionDelivery(deliveryId, queueContext)).resolves.toBe(false);
-            }
-          }
-        } finally {
-          try {
-            if (providerServer) {
-              await closeProofProvider(providerServer);
-            }
-          } finally {
-            try {
-              await closeOpenClawStateDatabaseByPathAsync(queueContext.admission.databasePath);
-              await removeGatewayTempHome(tempHome);
-            } finally {
-              envSnapshot.restore();
-            }
-          }
-        }
       }
-      expect(getActiveGatewayRootWorkCount()).toBe(0);
-    },
-  );
-});
+    }
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+  },
+);

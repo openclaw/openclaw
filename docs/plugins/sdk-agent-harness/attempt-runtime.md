@@ -33,6 +33,12 @@ backends retain and revalidate each item's assertion, including before retries;
 omit revoked items without cancelling independently accepted work or poisoning
 later authorized controls.
 
+When supplied, call `options.onQueueSettled()` once after that input commits,
+is canceled, or is terminally rejected. `onQueueAccepted(true)` only reports
+admission. A backend that returns early for `waitForTranscriptCommit: false`
+retains the settlement callback until its exact input finishes; core uses it
+to release the selected sender's retained source authority.
+
 Optional V2 `claimPendingUserInputAnswer(text, options, assertCurrent, authorityKind)`
 and `cancelPendingUserInput(resolvedBy, assertCurrent, authorityKind)` methods
 require the same assertion and authority kind. Carry it through question registration and persistence to the final
@@ -40,17 +46,47 @@ claim or cancellation boundary. Do not implement V2 by checking only before
 calling an SDK method that itself awaits before dispatch. If the sink cannot
 enforce the assertion, leave V2 unsupported.
 
-The V1 `messageInjection`, queue options, `queueAgentHarnessMessage`, and
-`setActiveEmbeddedRun` signatures shipped in v2026.8.1 remain source-compatible.
+Register a session-keyed native run from the host-provided `runAttempt` callback.
+The host admits that attempt through the session controller and binds its
+authority before invoking the harness. `setActiveEmbeddedRun` inherits that
+binding; plugins must not manufacture a controller operation or substitute a
+session key for admission. A standalone session-keyed call now throws
+`AgentHarnessPreflightError`, exported from
+`openclaw/plugin-sdk/agent-harness-runtime`, with code
+`SESSION_CONTROLLER_ADMISSION_REQUIRED`. Move such calls into the host-admitted
+attempt. This runtime requirement applies immediately, including to V1 harnesses.
+
+A retained `replyOperation` keeps its published observations: a native yield
+remains `phase: "running"` with `result: null` until settlement, then reports
+`completed`. Direct attempts report `turnKind: "visible"`. Failure and Stop
+retain their existing result codes.
+
 Pass the resolved agent ID as the fifth `setActiveEmbeddedRun` argument so raw
-`global` and `unknown` keys retain their owner. Legacy calls inside a matching
-live host binding inherit its validated agent; an ambient caller alone does not
-supply ownership. Outside that binding, omitted ownership uses the qualified
-session key or the configured default agent for session activity.
-Unscoped V1 injection retains its existing behavior. Source-bound controls
+`global` and `unknown` keys retain their owner. Calls inside a matching live host
+binding inherit its validated agent. The returned cleanup function retains this
+exact registration; call it with an optional reason or pass it as the sixth
+`clearActiveEmbeddedRun` argument so an old callback cannot detach a successor
+run. A stale registration returns `undefined`.
+
+Sessionless detached native work does not own a session turn. A host-admitted
+detached attempt may retain a session key for policy context, but it cannot
+schedule or Stop that session; the host's detached authority must remain current.
+Do not mark ordinary session work detached to bypass admission.
+
+The V1 `messageInjection` and queue options remain supported within an admitted
+attempt.
+`queueAgentHarnessMessage` steers session-keyed turns through the session
+controller. Sessionless native work accepts input through its exact native
+registration instead. The helper returns `true` only when that active turn or
+native sink can take the input now (for example, it refuses images for a
+text-only model), and it never retries a later refusal. Once controller injection
+is attempted, `onQueueAccepted` reports the outcome, including `false` for a
+refusal. Backends that accept `waitForTranscriptCommit: true` must set
+`supportsTranscriptCommitWait`; otherwise core refuses that wait.
+Ordinary V1 injection retains its existing behavior within that admitted turn. Source-bound controls
 require V2 and reject visibly before queue or I/O when only V1 is available;
 they never fall back to an unchecked V1 callback. Existing deprecation windows
-are unchanged.
+for injection capabilities are unchanged.
 
 Copilot remains V1-only: `@github/copilot-sdk` 1.0.11 awaits trace-context and
 JSON-RPC writer preparation after `send` entry without a final-dispatch guard.
@@ -67,24 +103,36 @@ Bundled plugins and explicitly enabled installed plugins with matching
 manifest contracts can attach runtime-neutral tool-result middleware through
 `api.registerAgentToolResultMiddleware(...)` when their manifest declares the
 targeted runtime ids in `contracts.agentToolResultMiddleware`. This trusted
-seam is for async tool-result transforms that must run before OpenClaw or
-Codex feeds tool output back into the model.
+interface is for async tool-result transforms that must run before the selected
+harness feeds tool output back into the model. Supported runtime ids are
+`agentsapi`, `codex`, and `openclaw`.
 
 Middleware options may combine `runtimes` with a `matcher` tool-name list.
 Each registration keeps that pair intact, so registering the same handler for
 different runtimes does not broaden either matcher. Matchers use non-empty
-canonical OpenClaw tool ids; omit `matcher` to match all tools.
+standard OpenClaw tool ids; omit `matcher` to match all tools.
 
-Legacy bundled plugins can still use
-`api.registerCodexAppServerExtensionFactory(...)` for Codex app-server-only
-middleware, but new result transforms should use the runtime-neutral API. The
-embedded-runner-only `api.registerEmbeddedExtensionFactory(...)` hook has been
-removed; embedded tool-result transforms must use runtime-neutral middleware.
+Omitting `runtimes` uses every supported runtime declared in the plugin's
+`contracts.agentToolResultMiddleware`, including `agentsapi` when declared.
+Supply `runtimes` only to select a subset of that declaration. Registration
+rejects an empty runtime list or any targeted runtime missing from the manifest.
+
+The legacy `api.registerCodexAppServerExtensionFactory(...)` and
+`api.registerEmbeddedExtensionFactory(...)` hooks have been removed. Use
+`api.registerAgentToolResultMiddleware(...)` for tool-result transforms, with
+`contracts.agentToolResultMiddleware: ["codex"]` for Codex-only middleware. See
+the [removed factory registration and replacement](/plugins/sdk-migration/removed-surfaces#codex-app-server-extension-factories).
 
 Retain `details.messageDelivery.sourceReplyDelivered` from the host message tool
 before middleware transforms its result, and carry it into the attempt result.
 This confirms a final external source reply and does not depend on destination
 arguments or transcript mirrors.
+
+Use `extractMessagingToolSourceReplyPayload(result)` from the same runtime
+subpath to retain internal source-reply payloads through presentation changes.
+For a confirmed messaging delivery, `collectMessagingMediaUrlsFromRecord(args)`
+collects its attachment references for delivery deduplication. Neither helper
+establishes delivery or grants local-file trust.
 
 ## Reply attachments from a remote workspace
 
@@ -103,7 +151,22 @@ The reader must enforce the byte limit and workspace boundary and honor
 cancellation. It receives only paths authorized under the host's captured
 policy. Supply `workspaceRoot` when the remote workspace has a different
 absolute path; the host maps that alias to the logical workspace before checking
-policy. Keep the reader alive until preparation finishes.
+policy. Supply `assertCurrent` when native session or transport ownership can be
+revoked independently of the host attempt. The host retains this additional check
+through the final media write and publication. Keep the reader alive until preparation finishes.
+
+Raw file paths in these replies belong to the remote workspace. Paths outside
+that workspace fail with a labeled remote-file notice, even if a Gateway-local
+file exists at the same path. HTTP references and securely validated Gateway
+managed media, including `media://` attachments, remain available.
+
+For artifacts whose bytes the provider has already admitted, use `kind: "artifact"`
+with `buffer`, `fileName`, `assertCurrent`, and an optional `signal`. The host
+stages those exact bytes under the captured channel/account byte limit and returns
+a prepared `payload`. This request grants no filesystem reads and applies no
+image transformation or host-file MIME allowlist. The harness owns validation of
+the provider artifact's session, turn, environment, and path before downloading it;
+the host owns the outbound destination and retains live authority through publication.
 
 Missing, denied, and oversized attachments produce the usual delivery failure
 notice; preparation does not fall back to a stale Gateway workspace file.
@@ -121,9 +184,43 @@ receives its own `options.currentInboundContext`; do not reuse the initial
 turn's context. Keep context out of the original user transcript and pending
 question answer text. Conversation fields are model context, not tool authority.
 
+`resolveAgentHarnessBeforePromptBuildResult` from
+`openclaw/plugin-sdk/agent-harness-runtime` runs prompt hooks with prepared history
+and tool authority. Pass the admitted message as `currentUserMessage`; the helper
+extracts its text parts and `idempotencyKey` for ordinary and authorized hooks.
+String input and a separate `currentUserMessageId` remain supported. The harness
+owns the fallback when no admitted message exists.
+
+Supply `messages` as an array or an async loader, which runs only when a `before_prompt_build`
+hook needs history. Heartbeat-only contributions do not read conversation history.
+The production-private `resolveAgentHarnessHistoryLimits` helper applies the shared
+Codex and Agents API transcript read budget.
+
+Agents API retains the first successfully prepared, bounded hook history for
+retries of the same logical run and native session. Prompt hooks still run on
+each attempt with the current input and live host authority; their history stays
+at the original before-turn snapshot. Accepted steering therefore does not force
+a new transcript read through the original message's now-stale admission.
+This snapshot is data, not renewed transcript-read permission: later transcript
+changes are observed by the next logical run, and a changed recorder, session,
+run identity, or history budget requires a fresh read. Session reset and run
+cancellation retain their existing authority checks.
+
+The `developerInstructions.build` callback receives `toolsAllow` and
+`hasToolRestrictions`. Omitted policy or a trimmed `*` entry is unrestricted;
+an empty list or a list without `*` is restrictive. Backends enforcing per-turn
+restrictions apply or reject them inside that callback, before authorized recall
+runs. Agents API continues with hook context but does not enforce hook tool lists.
+
 Official harnesses use the JavaScript-only private
 `openclaw/plugin-sdk/agent-harness-attempt-runtime` for deadlines, cancellation,
 and lifecycle/event publication; it is not a third-party Plugin SDK contract.
+Codex and AgentsAPI also use `shouldIncludeAgentHarnessRuntimeContext` to exclude
+runtime prompt additions from lightweight cron inputs, and
+`resolveAgentWorkspaceMemoryRouting` to select admitted memory tools and check
+that they reach the prompt workspace. Backends retain workspace selection, tool
+name normalization, and native prompt rendering.
+
 `createAgentHarnessAttemptDeadlineController` takes the original `startedAtMs`,
 execution `timeoutMs`, backend `settlementTimeoutMs`, abort `signal`, and timeout
 callback. The first `beginSettlement(receivedAtMs)` starts an absolute settlement
@@ -133,6 +230,18 @@ and freezes admission at the terminal boundary. `emitAgentHarnessAttemptEvent`
 isolates observer failures, and `createAgentHarnessAttemptLifecycle` gates
 lifecycle events and deduplicates execution phases. Native interruption,
 completion decisions, output flushing, and cleanup remain backend-owned.
+
+Assistant event `data.itemId` identifies the native text item for cumulative
+snapshots and delta merging. A harness that persists part of an item while it
+continues streaming also supplies `data.occurrenceId`, an opaque string identifying
+the exact live interval. Freeze that occurrence when capturing the transcript
+candidate, before awaiting persistence, and allocate a new occurrence for later
+bytes without changing the native item ID or delta text. Successful transcript
+publication supplies the captured IDs in `assistantItemIds`; failed writes do not
+retire them. Retries retain every occurrence actually included in the candidate.
+Without `occurrenceId`, retirement uses `itemId` or the host's source receipt.
+Text without either identity stays live until terminal settlement; matching
+durable text alone never proves ownership.
 
 The private `openclaw/plugin-sdk/agent-harness-tool-runtime` provides correlated
 execution promises and argument/start snapshots through
@@ -149,8 +258,12 @@ Official harnesses use the private JavaScript-only
 existing execution boundary, monotonic execution snapshots, middleware, and
 cleanup. Its result and failure callbacks carry those facts to native adapters
 without taking over their receipt or timeout owner.
+Execution argument snapshots are readonly and shared by progress and terminal
+observers. Tool execution and result middleware receive separate mutable inputs;
+terminal formatters retain their own post-execution capture so they can observe
+changes made by the tool without aliasing later middleware.
 `recordAgentHarnessToolResultTelemetry` collects host-tool delivery, media, TTS,
-cron, and heartbeat facts using the caller's prepared source-reply projection.
+and cron facts using the caller's prepared source-reply projection.
 The invocation preserves execution failures when presentation middleware
 rewrites a result. `recordAgentHarnessMessagingDelivery`
 records an already-confirmed messaging delivery, and
@@ -158,16 +271,36 @@ records an already-confirmed messaging delivery, and
 Callers retain their native receipt, routing, cancellation, and result-encoding
 contracts; these helpers do not establish delivery or grant execution authority.
 
-For final argument validation, wrap the host-bound tool's execution in
-`runWithToolExecutionValidation(callId, validate, execute)` from the same private
-subpath. The validator runs at the existing execution boundary after policy and
-before-call hooks adjust the arguments. It uses one per-invocation context across
-host and SDK chunks and does not dispatch a second before-call hook.
+## Workspace-staged attachments
 
-Accepted background task metadata is available through `isAsyncStartedToolResult`
-and `readAsyncStartedTaskIds` from `openclaw/plugin-sdk/agent-harness-tool-runtime`.
-Retain accepted work independently of result presentation so recovery cannot
-replay it.
+Admitted attachment facts can refer to files staged under the prepared workspace
+instead of the managed media store. Use `root(workspaceDir)` and
+`createStagedInputPathMatcher(root)` from `openclaw/plugin-sdk/file-access-runtime`
+to verify staging ownership before a bounded `root.read(relativePath, { maxBytes })`.
+Match the fact's workspace to the attempt's prepared workspace, retain the host's
+current-run assertion through awaited reads, and use admitted media facts rather
+than paths extracted from user or model text. The matcher shares the staging
+owner's exact marker contract and caches results only for that capture.
+
+## Final tool-argument validation
+
+Official native harness adapters can call
+`runWithToolExecutionValidation(callId, validate, execute)` from
+the private `openclaw/plugin-sdk/agent-harness-tool-runtime` around the host-bound tool's
+`execute` call. The validator receives the final arguments after policy and
+before-call hooks have adjusted them, at the existing tool execution boundary.
+Use the shared schema validation helpers for the declared tool schema. Do not
+copy private validation markers or run a second before-call hook. Validation is
+scoped to the tool call and remains isolated from concurrent calls. Once `execute`
+settles, its validator is released. A later callback inheriting that completed
+call's validation scope is rejected rather than skipping validation.
+
+Retain accepted background work before middleware: `isAsyncStartedToolResult`
+and `readAsyncStartedTaskIds` from `openclaw/plugin-sdk/agent-harness-tool-runtime`
+expose its task metadata. `normalizeAcceptedSessionSpawnResult` from
+`openclaw/plugin-sdk/agent-harness-tool-runtime` preserves a child session's
+completion ownership. Carry their recorded facts into the attempt result so
+recovery cannot replay accepted work.
 
 ## Terminal outcome classification
 
@@ -200,12 +333,15 @@ snapshots and persisted billing usage separate from this live counter.
 
 ## Agent-end side effects
 
-Native harnesses must call `runAgentEndSideEffects(...)` from
+Native harnesses must await `runAgentEndSideEffectsAsync(...)` from
 `openclaw/plugin-sdk/agent-harness-runtime` after they finalize an attempt. It
-dispatches the portable `agent_end` hook and OpenClaw's research capture
-without delaying interactive replies. Use `awaitAgentEndSideEffects(...)` for
-local, non-interactive runs where the attempt must not resolve until those
-side effects finish. Both helpers accept the same `{ event, ctx }` payload as
+prepares transcript anchors through the history reader before releasing the
+turn lease, then starts the portable `agent_end` hook without waiting for it.
+Use `awaitAgentEndSideEffects(...)` for local, non-interactive runs that must
+also wait for plugin hooks. The synchronous `runAgentEndSideEffects(...)`
+remains deprecated through 2026-12-31, with removal in the first January 2027
+stable release. These helpers accept the
+same `{ event, ctx }` payload as
 `runAgentHarnessAgentEndHook(...)`; their failures do not alter the completed
 attempt result.
 

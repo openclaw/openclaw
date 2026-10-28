@@ -28,18 +28,52 @@ for process lifetime and capacity details.
 
 An agent can also use a temporary Crabbox attached to its existing conversation
 without moving the session's primary workspace. It passes the attachment's
-`environmentId` to the `portal` tool and uses `screen` with `portal_show` and the
-returned `portalId` to open that exact preview in the chat side panel. Commands
-for the app run through the Crabbox tool on that environment. Its managed
-background processes survive completed turns; stopping the attachment closes
-its apps and portals. The portal retains the same separate-origin network and
+`environmentId` to the `portal` tool. When `screen` is exposed for the current
+turn, it uses `portal_show` with the returned `portalId` to request that exact
+preview in the chat side panel; `browser_show` opens the agent Browser panel,
+not the app preview. Without `screen`, use **Control UI → Portals** instead of
+claiming a side panel was opened. Commands for the app run through the Crabbox
+tool on that environment. Its managed background processes survive completed
+turns; stopping the attachment closes its apps and portals. The portal retains the same separate-origin network and
 access contract described below.
 
 Opening a route does not prove that the application is running or that a remote
-browser can reach it. Open the returned URL in **Control UI → Portals** and verify
-that the page, assets, and live reload work. Use the returned URLs unchanged;
-replacing their scheme, hostname, or port with the Gateway's address does not
-create an ingress route.
+browser can reach it. The service includes machine-readable `exposure` facts in
+open and list results:
+
+- `kind: "loopback-only"`: the published URL or direct listener is restricted to
+  the Gateway host. This remains valid for local use, including apps running on a
+  worker, but an unrelated remote browser needs private portal ingress or a
+  reachable direct listener.
+- `kind: "non-loopback"`: the route is not known to be loopback-only. This does
+  **not** establish DNS, TLS, firewall, authentication, or browser access.
+- `browserReachability: "unverified"`: allocating or listing a route never proves
+  access from the requesting viewer. Omission is not proof of reachability either.
+
+Verify transport and app rendering from the **requesting viewer** in
+**Control UI → Portals**, including the page, assets, and live reload. A worker/Gateway fetch
+or browser test is useful app diagnostics, not viewer delivery proof. A panel
+request, transport response, authentication page, or waiting page does not by
+itself prove that the application rendered. Report blocked or unverified states
+with the concrete limitation rather than claiming delivery.
+
+`screen(action="portal_show", portalId="<returned id>")` returns
+`delivery: "dispatched"` plus a presentation diagnosis from the requesting Control UI:
+
+- `blocked`: a concrete limitation such as `remote-ingress-required` or
+  `network-unreachable`.
+- `new-tab-required`: this HTTP preview needs a top-level launch for its cookies.
+- `unverified`: transport alone does not establish application rendering. A
+  `network-reachable` response may be a login, waiting, or error page;
+  `probe-blocked` means browser policy prevented the network probe. Missing client
+  feedback or a disconnected viewer also stays unverified.
+
+The observation is scoped to the requesting connection and selected portal, not
+other tabs or users. An eight-second observation timeout does not close the app
+or portal. Inspect the application separately before claiming a working preview.
+
+Use the returned URLs unchanged; replacing their scheme, hostname, or port with
+the Gateway's address does not create an ingress route.
 
 ## Remote access
 
@@ -199,8 +233,9 @@ Out of the box:
 
 - `portal` belongs to `group:ui` and the `coding` profile, so coding agents have it while `messaging` and `minimal` agents do not.
 - Sandboxed sessions never receive it, because opening a portal starts a listener on the Gateway host.
-- It is blocked for HTTP `POST /tools/invoke` and restricted to the session owner, the same treatment `terminal` gets.
-- Cloud-worker sessions receive it only when their enrolled node advertises portal-stream support. Older node bundles without that capability do not receive the tool.
+- It is blocked for HTTP `POST /tools/invoke`. The global tool, including Gateway-host ports and primary worker placements, remains restricted to the session owner.
+- Non-owners can receive a restricted tool for a dedicated secondary worker attached to their conversation. The provider must explicitly attest that the current lease is not a shared host. Unknown classification, a shared machine, or a missing attachment hides this mode. After a Gateway restart, fresh provider inspection must qualify the lease again.
+- Primary cloud-worker placements receive it only when their enrolled node advertises portal-stream support. Older node bundles without that capability do not receive the tool in that placement mode.
 
 To turn portals off everywhere, deny the tool in the global policy:
 
@@ -220,6 +255,35 @@ To turn them off for a single agent, leaving the others unchanged:
 
 `tools.profile`, `tools.allow`, `byProvider`, and `toolsBySender` apply to `portal` as they do to any other tool, so portals can also be limited to specific providers, models, or senders without a portal-specific setting.
 
+The restricted tool selects the conversation's attachment automatically. It has
+no `environmentId` override and cannot expose Gateway-host ports. Its
+`portal.session.open`, `portal.session.list`, and `portal.session.close` RPCs
+require current write access to the named conversation and its effective `portal`
+tool policy. An own-session write grant applies only to its own conversation;
+broader collaborators retain the existing session-sharing rules. Required sandbox
+isolation and all sessions with `modelSelectionLocked: true` exclude this mode.
+Support for locked sessions requires a prepared session-ownership contract,
+including native and imported session ownership;
+the existing owner tool remains available under its ordinary policy. This does not change primary worker-turn
+placement permissions or grant access to other attached environments.
+
+Scoped previews have their own resource identity. Opening the same application
+port through the global tool and the restricted tool produces separate links;
+closing or retiring the scoped preview does not close the global one. Repeated
+opens within the same session incarnation and attachment reuse that scoped link.
+The restricted listing and close action cover only those scoped previews.
+
+For secondary attachments, tool availability checks conversation policy and the
+dedicated-machine qualification. Each open and connection separately verifies
+the current node's portal-stream support. An eligible attachment can therefore
+show the tool while its node is offline or needs an update; reconnect or update
+that worker node, then retry.
+
+A temporary provider inspection error preserves the last explicit qualification
+for the same lease, node, and owner. A successful inspection that omits the host
+classification, reports a shared host, or no longer recognizes the active lease
+withdraws the restricted capability and its previews.
+
 In direct mode, portal listeners bind the same interfaces as the Gateway. A Gateway bound to a LAN or tailnet address publishes its direct portal listener ports on that network too. Managed Serve uses a private loopback backend; configured wildcard ingress uses the dedicated loopback listener. Reaching one still requires the portal token, but deny the tool when the Gateway host must not offer operator-reachable application ports at all.
 
 ## Security model
@@ -236,6 +300,14 @@ not a browser URL template. Read-only listings and change events omit `url` and
 `tokenQuery`; authorized clients refetch them with write access. Do not put the
 bearer credential in `PUBLIC_URL` or share it in logs or screenshots.
 
+Authenticated portal URLs are shareable bearer links, including conversation-scoped
+previews. Completing a turn or revoking its initiating actor does not invalidate
+an already copied URL. Revocation prevents that actor from starting or managing
+previews. The conversation-scoped resource ends when its session is reset or
+deleted, its attachment is retired, its environment stops, or the Gateway
+restarts. Losing the provider's explicit dedicated-machine qualification also
+withdraws a scoped preview. Close the portal to withdraw a shared link immediately.
+
 Portals proxy only the selected development server on the Gateway host or a node-backed cloud worker. Worker connections use single-use tickets and the enrolled node's TLS-pinned Gateway connection; they never expose a public worker port or require SSH forwarding. Portals never serve Gateway data, and every portal ends when the Gateway restarts.
 
 ## Limitations
@@ -243,7 +315,7 @@ Portals proxy only the selected development server on the Gateway host or a node
 - Older node bundles without portal-stream support cannot open worker portals. Update the node bundle, or move the session back to the Gateway with `sessions.move`.
 - SSH-backed `remote-exec` placements, including Codex sessions, do not run the OpenClaw worker tool loop, so the `portal` tool does not apply there. Move the session back to the Gateway with `sessions.move` when a Gateway-hosted portal is needed.
 - A Gateway-only proxy, SSH tunnel, or externally managed Serve route does not automatically create portal ingress. Configure private wildcard ingress or OpenClaw-managed Serve. The UI reports a remote loopback URL as requiring ingress; it does not invent a reachable URL.
-- Browser reachability probes check transport only. A response can be an authentication page or a waiting page, not a rendered application. A Content Security Policy-blocked probe says nothing about iframe reachability.
+- Browser reachability checks verify transport only. A response can be an authentication page or a waiting page, not a rendered application. A Content Security Policy-blocked check says nothing about iframe reachability.
 - Portal ingress does not inherit Gateway trusted-proxy identities, Cloudflare Access policies, or tailnet ACL grants. Configure and verify those boundaries separately.
 - The prefix isolates cookies forwarded to each target; it does not create separate browser cookie jars. In direct/Serve mode, browser-side code can see non-`HttpOnly` cookies for sibling portals on the same hostname through `document.cookie`. Wildcard ingress separates hostnames, but portals under a common DNS suffix are not necessarily separate sites, and the cookie-name prefix still applies. Use `HttpOnly` for sensitive application cookies. Applications that manage cookies in browser code must account for the prefix; unprefixed cookies written directly by browser code are not forwarded to the target.
 
@@ -252,6 +324,8 @@ Portals proxy only the selected development server on the Gateway host or a node
 ### The portal shows a 502 waiting page
 
 The proxy is ready, but the application is not listening on the selected port or its worker node is temporarily disconnected. The page retries automatically. Check the background process, confirm that the server honors `PORT`, and verify that the worker node is connected.
+
+WebSocket upgrades to an unavailable worker return the same 502 waiting response and close the connection. Reconnect after the application or worker is available again.
 
 ### The portal is not reachable from this browser
 
@@ -270,7 +344,7 @@ Check the exact returned portal URL rather than substituting the Gateway host:
 - **Page loads but streaming or live reload fails:** preserve WebSocket upgrades
   and request paths, disable buffering, and check the app's `PUBLIC_URL`.
 - **New tab works but the preview does not:** inspect edge authentication,
-  frame policies, and browser cookie restrictions. A blocked reachability probe
+  frame policies, and browser cookie restrictions. A blocked reachability check
   alone does not prove the iframe is unreachable.
 
 After correcting ingress, select **Retry**. Reopen a portal if its route was

@@ -1,22 +1,28 @@
-// Trajectory metadata helpers capture environment metadata for trajectory files.
 import { resolveStateDir } from "../config/paths.js";
 import { redactConfigObject } from "../config/redact-snapshot.js";
 import type { SessionSystemPromptReport } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveCommitHash } from "../infra/git-commit.js";
 import { resolveOsSummary } from "../infra/os-summary.js";
+import { tryProcessCwd } from "../infra/safe-cwd.js";
 import {
   redactPathForSupport,
   sanitizeSupportSnapshotValue,
   type SupportRedactionContext,
 } from "../logging/diagnostic-support-redaction.js";
+import { getSecretRedactionRegistryRevision } from "../logging/secret-redaction-registry.js";
 import {
   loadPluginMetadataSnapshot,
   type PluginMetadataSnapshot,
 } from "../plugins/plugin-metadata-snapshot.js";
 import { getActivePluginRegistry, listImportedRuntimePluginIds } from "../plugins/runtime.js";
+import { memoizeFrozenPlainDataProjection } from "../shared/immutable-data.js";
 import type { SkillSnapshot } from "../skills/types.js";
 import { VERSION } from "../version.js";
+
+const redactTrajectoryConfig = memoizeFrozenPlainDataProjection((config: OpenClawConfig) =>
+  redactConfigObject(config),
+);
 
 // Runtime metadata capture for trajectory events. This records enough config,
 // plugin, skill, and prompt context to explain a run after logs are exported.
@@ -82,10 +88,10 @@ function toSortedUniqueStrings(values: readonly string[] | undefined): string[] 
   if (!values || values.length === 0) {
     return undefined;
   }
-  return [
-    ...new Set(values.filter((value) => typeof value === "string" && value.trim().length > 0)),
-  ]
+  return [...new Set(values)]
+    .filter((value) => typeof value === "string")
     .map((value) => value.trim())
+    .filter(Boolean)
     .toSorted((left, right) => left.localeCompare(right));
 }
 
@@ -183,6 +189,35 @@ function buildPluginsFromManifest(params: {
   };
 }
 
+type ResolvedSkill = NonNullable<SkillSnapshot["resolvedSkills"]>[number];
+const skillCaptures = new Map<
+  string,
+  WeakMap<ResolvedSkill, ReturnType<typeof captureResolvedSkill>>
+>();
+
+function captureResolvedSkill(skill: ResolvedSkill, redaction: SupportRedactionContext) {
+  return {
+    id: skill.name,
+    name: skill.name,
+    description: skill.description,
+    filePath: redactPathForSupport(skill.filePath, redaction),
+    baseDir: redactPathForSupport(skill.baseDir, redaction),
+    source: skill.source,
+    sourceInfo: sanitizeSupportSnapshotValue(skill.sourceInfo, redaction),
+    disableModelInvocation: skill.disableModelInvocation,
+    available: true,
+  };
+}
+
+function isFrozenDataRecord(value: object): boolean {
+  const prototype = Object.getPrototypeOf(value);
+  return (
+    Object.isFrozen(value) &&
+    (prototype === Object.prototype || prototype === null) &&
+    Object.values(Object.getOwnPropertyDescriptors(value)).every((entry) => "value" in entry)
+  );
+}
+
 function buildSkillsCapture(
   skillsSnapshot: SkillSnapshot | undefined,
   redaction: SupportRedactionContext,
@@ -194,21 +229,55 @@ function buildSkillsCapture(
     skillsSnapshot.resolvedSkills?.filter(
       (skill) => typeof skill.name === "string" && skill.name.length > 0,
     ) ?? [];
+  // Support redaction uses built-in rules plus live exact secrets. Relative paths
+  // also depend on cwd; retain separate bounded scopes for interleaved callers.
+  const revision = getSecretRedactionRegistryRevision();
+  const home = redaction.env.HOME;
+  const userProfile = redaction.env.USERPROFILE;
+  const cwd = tryProcessCwd();
+  const scope = JSON.stringify([revision, redaction.stateDir, home, userProfile, cwd]);
+  // An uncached accessor can change the scope while earlier entries are captured.
+  const isCurrentScope = () =>
+    getSecretRedactionRegistryRevision() === revision &&
+    redaction.env.HOME === home &&
+    redaction.env.USERPROFILE === userProfile &&
+    tryProcessCwd() === cwd;
+  let cache = skillCaptures.get(scope);
+  if (!cache) {
+    cache = new WeakMap();
+    skillCaptures.set(scope, cache);
+    if (skillCaptures.size > 8) {
+      skillCaptures.delete(skillCaptures.keys().next().value!);
+    }
+  }
   const entries =
     // Prefer resolved skill files when available; older call sites may only
     // have the summarized skill catalog, which is still useful for support.
     filteredResolvedSkills.length > 0
-      ? filteredResolvedSkills.map((skill) => ({
-          id: skill.name,
-          name: skill.name,
-          description: skill.description,
-          filePath: redactPathForSupport(skill.filePath, redaction),
-          baseDir: redactPathForSupport(skill.baseDir, redaction),
-          source: skill.source,
-          sourceInfo: sanitizeSupportSnapshotValue(skill.sourceInfo, redaction),
-          disableModelInvocation: skill.disableModelInvocation,
-          available: true,
-        }))
+      ? filteredResolvedSkills.map((skill) => {
+          const previous = cache.get(skill);
+          if (previous && isCurrentScope()) {
+            return previous;
+          }
+          const capture = captureResolvedSkill(skill, redaction);
+          // Discovery shares frozen catalog facts; mutable/custom nested inputs
+          // and capture-local identifier numbering still need fresh redaction.
+          if (
+            isCurrentScope() &&
+            isFrozenDataRecord(skill) &&
+            skill.sourceInfo &&
+            isFrozenDataRecord(skill.sourceInfo) &&
+            !redaction.identifierKeys &&
+            Object.values(skill.sourceInfo).every(
+              (value) =>
+                value === null || (typeof value !== "object" && typeof value !== "function"),
+            )
+          ) {
+            Object.freeze(capture.sourceInfo);
+            cache.set(skill, Object.freeze(capture));
+          }
+          return capture;
+        })
       : skillsSnapshot.skills
           .filter((skill) => typeof skill.name === "string" && skill.name.length > 0)
           .map((skill) => ({
@@ -225,26 +294,17 @@ function buildSkillsCapture(
   };
 }
 
-function buildTrajectorySupportRedaction(env: NodeJS.ProcessEnv): SupportRedactionContext {
-  return {
-    env,
-    stateDir: resolveStateDir(env),
-  };
-}
-
 export function buildTrajectoryRunMetadata(
   params: BuildTrajectoryRunMetadataParams,
 ): Record<string, unknown> {
   const env = params.env ?? process.env;
-  const redaction = buildTrajectorySupportRedaction(env);
+  const redaction: SupportRedactionContext = { env, stateDir: resolveStateDir(env) };
   const os = resolveOsSummary();
   const plugins =
     buildPluginsFromActiveRegistry() ??
     buildPluginsFromManifest({
       config: params.config,
-      ...(params.pluginMetadataSnapshot
-        ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }
-        : {}),
+      pluginMetadataSnapshot: params.pluginMetadataSnapshot,
       workspaceDir: params.workspaceDir,
       env,
     });
@@ -277,7 +337,7 @@ export function buildTrajectoryRunMetadata(
       reasoningLevel: params.reasoningLevel ?? "off",
     },
     config: {
-      redacted: params.config ? redactConfigObject(params.config) : undefined,
+      redacted: params.config ? redactTrajectoryConfig(params.config) : undefined,
       runtime: {
         timeoutMs: params.timeoutMs,
         trigger: params.trigger,
@@ -323,32 +383,10 @@ export function buildTrajectoryRunMetadata(
 export function buildTrajectoryArtifacts(
   params: BuildTrajectoryArtifactsParams,
 ): Record<string, unknown> {
+  const { status, ...artifacts } = params;
   return {
     capturedAt: new Date().toISOString(),
-    finalStatus: params.status,
-    aborted: params.aborted,
-    externalAbort: params.externalAbort,
-    timedOut: params.timedOut,
-    idleTimedOut: params.idleTimedOut,
-    timedOutDuringCompaction: params.timedOutDuringCompaction,
-    timedOutDuringToolExecution: params.timedOutDuringToolExecution,
-    timedOutByRunBudget: params.timedOutByRunBudget,
-    promptError: params.promptError,
-    promptErrorSource: params.promptErrorSource,
-    terminalError: params.terminalError,
-    usage: params.usage,
-    promptCache: params.promptCache,
-    compactionCount: params.compactionCount,
-    assistantTexts: params.assistantTexts,
-    stopReason: params.stopReason,
-    finalPromptText: params.finalPromptText,
-    itemLifecycle: params.itemLifecycle,
-    toolMetas: params.toolMetas,
-    didSendViaMessagingTool: params.didSendViaMessagingTool,
-    successfulCronAdds: params.successfulCronAdds,
-    messagingToolSentTexts: params.messagingToolSentTexts,
-    messagingToolSentMediaUrls: params.messagingToolSentMediaUrls,
-    messagingToolSentTargets: params.messagingToolSentTargets,
-    lastToolError: params.lastToolError,
+    finalStatus: status,
+    ...artifacts,
   };
 }

@@ -6,11 +6,7 @@ public enum OpenClawChatEventText {
     }
 
     public static func assistantText(fromMessage message: AnyCodable?) -> String? {
-        guard let message else { return nil }
-        return self.assistantText(fromValue: message.value)
-    }
-
-    private static func assistantText(fromValue value: Any) -> String? {
+        guard let value = message?.value else { return nil }
         if let text = value as? String {
             return ChatPayloadDecoding.trimmedNonEmptyString(text)
         }

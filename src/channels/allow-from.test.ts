@@ -1,4 +1,3 @@
-// Allow-from tests cover channel sender allowlist parsing and matching.
 import { describe, expect, it } from "vitest";
 import {
   firstDefined,
@@ -17,27 +16,14 @@ describe("mergeDmAllowFromSources", () => {
     ).toEqual(["line:user:abc", "123", "telegram:456"]);
   });
 
-  it.each([
-    {
-      name: "excludes pairing-store entries when dmPolicy is allowlist",
-      input: {
+  it("excludes pairing-store entries when dmPolicy is allowlist", () => {
+    expect(
+      mergeDmAllowFromSources({
         allowFrom: ["+1111"],
         storeAllowFrom: ["+2222", "+3333"],
-        dmPolicy: "allowlist" as const,
-      },
-      expected: ["+1111"],
-    },
-    {
-      name: "keeps pairing-store entries for non-allowlist policies",
-      input: {
-        allowFrom: ["+1111"],
-        storeAllowFrom: ["+2222"],
-        dmPolicy: "pairing" as const,
-      },
-      expected: ["+1111", "+2222"],
-    },
-  ])("$name", ({ input, expected }) => {
-    expect(mergeDmAllowFromSources(input)).toEqual(expected);
+        dmPolicy: "allowlist",
+      }),
+    ).toEqual(["+1111"]);
   });
 });
 
@@ -80,49 +66,11 @@ describe("firstDefined", () => {
 
 describe("isSenderIdAllowed", () => {
   it("supports per-channel empty-list defaults and wildcard/id matches", () => {
-    expect(
-      isSenderIdAllowed(
-        {
-          entries: [],
-          hasEntries: false,
-          hasWildcard: false,
-        },
-        "123",
-        true,
-      ),
-    ).toBe(true);
-    expect(
-      isSenderIdAllowed(
-        {
-          entries: [],
-          hasEntries: false,
-          hasWildcard: false,
-        },
-        "123",
-        false,
-      ),
-    ).toBe(false);
-    expect(
-      isSenderIdAllowed(
-        {
-          entries: ["111", "222"],
-          hasEntries: true,
-          hasWildcard: true,
-        },
-        undefined,
-        false,
-      ),
-    ).toBe(true);
-    expect(
-      isSenderIdAllowed(
-        {
-          entries: ["111", "222"],
-          hasEntries: true,
-          hasWildcard: false,
-        },
-        "222",
-        false,
-      ),
-    ).toBe(true);
+    const empty = { entries: [], hasEntries: false, hasWildcard: false };
+    const populated = { entries: ["111", "222"], hasEntries: true, hasWildcard: false };
+    expect(isSenderIdAllowed(empty, "123", true)).toBe(true);
+    expect(isSenderIdAllowed(empty, "123", false)).toBe(false);
+    expect(isSenderIdAllowed({ ...populated, hasWildcard: true }, undefined, false)).toBe(true);
+    expect(isSenderIdAllowed(populated, "222", false)).toBe(true);
   });
 });

@@ -1,12 +1,15 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, test, vi } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   appendTranscriptMessageSync,
   loadSessionEntryReadOnly,
   readSessionTranscriptWatermark,
+  replaceSessionEntry,
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
+import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   disposeSessionReadContexts,
@@ -15,15 +18,13 @@ import {
   requestContext,
 } from "../../gateway/server-methods/sessions-read-cache.test-support.js";
 import { withOperatorToolGatewayAuthority } from "../../gateway/server-plugin-in-process-dispatch.js";
+import { getSessionRowProjection } from "../../gateway/session-row-projection-access.js";
 import * as transcriptTitles from "../../gateway/session-transcript-title-reader.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import {
-  callAgentToolGatewayRequest,
-  type AgentToolGatewayRequestCaller,
-} from "./in-process-gateway.js";
+import { callAgentToolGatewayRequest } from "./in-process-gateway.js";
 import type { GatewaySessionListRow, SessionListRow } from "./sessions-helpers.js";
 import { createSessionsListTool } from "./sessions-list-tool.js";
 import { VALID_CONFIG } from "./sessions-list.test-support.js";
@@ -32,6 +33,8 @@ type FixtureRow = {
   row: Partial<GatewaySessionListRow> & { subject?: string };
   transcript?: boolean;
 };
+
+afterEach(() => memorySessionActorOwners.reset());
 
 async function withInventory(
   definitions: FixtureRow[],
@@ -45,7 +48,7 @@ async function withInventory(
     const viewer = ensureProfileForEmail("inventory-title-reader@example.test");
     const cfg: OpenClawConfig = {
       ...VALID_CONFIG,
-      agents: { entries: { main: { default: true }, other: {} } },
+      agents: { entries: { main: {}, other: {} } },
       gateway: {
         roles: {
           default: "reader",
@@ -60,38 +63,33 @@ async function withInventory(
       },
     };
     setRuntimeConfigSnapshot(cfg);
-    const rows = definitions.map(({ row }, index) => ({
-      key: `agent:main:dashboard:inventory-${index}`,
-      sessionId: `inventory-${index}`,
-      agentId: "main",
-      kind: "direct" as const,
-      classification: "dashboard" as const,
-      updatedAt: 1_000 - index,
-      ...row,
-    }));
-    const scopes = rows.map((row, index) => ({
-      agentId: row.agentId,
-      sessionKey: row.key,
+    const scopes = definitions.map(({ row }, index) => ({
+      agentId: row.agentId ?? "main",
+      sessionKey: row.key ?? `agent:main:dashboard:inventory-${index}`,
       sessionId: row.sessionId ?? `inventory-${index}`,
     }));
-    for (const [index, definition] of definitions.entries()) {
-      const row = rows[index]!;
+    for (const [index, { row, transcript }] of definitions.entries()) {
       const scope = scopes[index]!;
-      replaceSessionEntrySync(scope, {
+      const entry: SessionEntry = {
         sessionId: scope.sessionId,
-        updatedAt: row.updatedAt ?? 0,
+        updatedAt: row.updatedAt ?? 1_000 - index,
         label: row.label,
         displayName: row.displayName,
         subject: row.subject,
         visibility: "shared",
         createdActor: { type: "human", source: "profile", id: owner.id },
         ...(isIncognitoSessionKey(scope.sessionKey) ? { incognito: true } : {}),
-      });
-      if (!definition.transcript) {
+      };
+      if (isIncognitoSessionKey(scope.sessionKey)) {
+        await replaceSessionEntry(scope, entry);
+      } else {
+        replaceSessionEntrySync(scope, entry);
+      }
+      if (!transcript) {
         continue;
       }
       for (const message of [
-        { role: "user", content: `Find inventory topic ${index}.` },
+        { role: "user", content: `Topic ${index}.` },
         { role: "assistant", content: `Preview ${index}.` },
       ]) {
         expect(appendTranscriptMessageSync(scope, { message }).ok).toBe(true);
@@ -109,44 +107,27 @@ async function withInventory(
     context.trackExecution = async (operation) => await operation();
     await initializeSessionReadContext(context);
     const client = identifiedClient(viewer.id);
-    const asReader = <T>(operation: () => Promise<T>) =>
-      withPluginRuntimeGatewayRequestScope({ context, isWebchatConnect: () => false }, () =>
-        withOperatorToolGatewayAuthority(
-          {
-            authenticatedUserProfile: expectDefined(client.authenticatedUserProfile, "reader"),
-            scopes: ["operator.read"],
-          },
-          operation,
-        ),
-      );
-    const overrides = new Map(rows.map((row, index) => [row.key, definitions[index]!.row]));
-    const callGateway: AgentToolGatewayRequestCaller = async <T>(
-      request: Parameters<AgentToolGatewayRequestCaller>[0],
-    ): Promise<T> => {
-      if (request.method !== "sessions.list") {
-        return await callAgentToolGatewayRequest<T>(request);
-      }
-      expect(request.params).toMatchObject({
-        includeDerivedTitles: false,
-        includeLastMessage: false,
-      });
-      const response = await callAgentToolGatewayRequest<{ sessions: GatewaySessionListRow[] }>(
-        request,
-      );
-      for (const row of response.sessions) {
-        // Preserve the producer's row binding while exercising optional wire-field edge cases.
-        Object.assign(row, overrides.get(row.key));
-        // Keep the title-admission fixture below the separately tested byte budget.
-        delete row.createdActor;
-        delete row.owner;
-      }
-      // SAFETY: the registered method produced this response; only its row metadata was overlaid.
-      return response as T;
+    const authority = {
+      authenticatedUserProfile: expectDefined(client.authenticatedUserProfile, "reader"),
+      scopes: ["operator.read"],
     };
+    const overrides = new Map(
+      scopes.map((scope, index) => [scope.sessionKey, definitions[index]!.row]),
+    );
+    const projection = expectDefined(getSessionRowProjection(context), "inventory projection");
+    const presentRow = projection.present.bind(projection);
+    const presentation = vi.spyOn(projection, "present").mockImplementation((...args) => {
+      const row = presentRow(...args);
+      // Inject wire edges before publication; keep actor metadata below the byte budget.
+      Object.assign(row, overrides.get(row.key));
+      delete row.createdActor;
+      delete row.owner;
+      return row;
+    });
     const tool = createSessionsListTool({
       config: cfg,
       agentSessionKey: "agent:main:main",
-      callGateway,
+      callGateway: callAgentToolGatewayRequest,
     });
     const reads = vi.spyOn(transcriptTitles, "readSessionTitleFieldsFromTranscriptAsync");
     try {
@@ -154,21 +135,27 @@ async function withInventory(
         readSessionIds: () => reads.mock.calls.map(([scope]) => scope.sessionId),
         render: async (includeLastMessage = false) => {
           reads.mockClear();
-          return await asReader(
-            async () =>
-              (
-                await tool.execute("inventory-titles", {
-                  includeDerivedTitles: true,
-                  includeLastMessage,
-                  limit: definitions.length,
-                })
-              ).details as { sessions: SessionListRow[] },
+          return await withPluginRuntimeGatewayRequestScope(
+            { context, isWebchatConnect: () => false },
+            () =>
+              withOperatorToolGatewayAuthority(
+                authority,
+                async () =>
+                  (
+                    await tool.execute("inventory-titles", {
+                      includeDerivedTitles: true,
+                      includeLastMessage,
+                      limit: definitions.length,
+                    })
+                  ).details as { sessions: SessionListRow[] },
+              ),
           );
         },
       });
       expect(persisted()).toEqual(before);
     } finally {
       reads.mockRestore();
+      presentation.mockRestore();
       await disposeSessionReadContexts();
     }
   });
@@ -177,12 +164,14 @@ async function withInventory(
 test("does not hydrate named tool rows while preserving projected titles and visibility", async () => {
   await withInventory(
     [
-      { row: { label: " Explicit ", displayName: "Stored" }, transcript: true },
-      { row: { displayName: " Projected display ", subject: "Subject" }, transcript: true },
-      { row: { derivedTitle: "Gateway title", label: "Ignored" }, transcript: true },
-      { row: { derivedTitle: " \t ", label: "Ignored" }, transcript: true },
-      { row: { label: " ", displayName: " ", subject: " Subject title " }, transcript: true },
-      { row: { label: " ", displayName: " ", subject: " " }, transcript: true },
+      ...[
+        { label: " Explicit ", displayName: "Stored" },
+        { displayName: " Display ", subject: "Subject" },
+        { derivedTitle: "Gateway", label: "Ignored" },
+        { derivedTitle: " \t ", label: "Ignored" },
+        { label: " ", displayName: " ", subject: " Subject " },
+        { label: " ", displayName: " ", subject: " " },
+      ].map((row) => ({ row, transcript: true })),
       { row: { sessionId: undefined, label: "No identity" } },
       { row: { key: "agent:other:main", agentId: "other", derivedTitle: "Hidden agent" } },
       { row: { key: "agent:main:dashboard:incognito-hidden", derivedTitle: "Hidden incognito" } },
@@ -191,11 +180,11 @@ test("does not hydrate named tool rows while preserving projected titles and vis
       const titles = await render();
       expect(titles.sessions.map((row) => row.derivedTitle)).toEqual([
         "Explicit",
-        "Projected display",
-        "Gateway title",
+        "Display",
+        "Gateway",
         " \t ",
-        "Subject title",
-        "Find inventory topic 5.",
+        "Subject",
+        "Topic 5.",
         undefined,
       ]);
       expect(readSessionIds()).toEqual(["inventory-5"]);
@@ -225,10 +214,12 @@ test("keeps the first 100 tool session identities when named titles skip hydrati
     async ({ render, readSessionIds }) => {
       const result = await render();
       expect(result.sessions).toHaveLength(102);
-      expect(result.sessions[0]?.derivedTitle).toBeUndefined();
-      expect(result.sessions[99]?.derivedTitle).toBe("Named 98");
-      expect(result.sessions[100]?.derivedTitle).toBe("Find inventory topic 100.");
-      expect(result.sessions[101]?.derivedTitle).toBeUndefined();
+      expect([0, 99, 100, 101].map((index) => result.sessions[index]?.derivedTitle)).toEqual([
+        undefined,
+        "Named 98",
+        "Topic 100.",
+        undefined,
+      ]);
       expect(readSessionIds()).toEqual(["inventory-100"]);
     },
   );

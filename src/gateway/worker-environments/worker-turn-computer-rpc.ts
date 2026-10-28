@@ -1,3 +1,4 @@
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Value } from "typebox/value";
 import type { WorkerProtocolCloseReason } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
@@ -10,8 +11,7 @@ import {
   WORKER_PROTOCOL_MAX_FRAME_ID_LENGTH,
   WORKER_PROTOCOL_MAX_MEDIA_PAYLOAD_BYTES,
 } from "../../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
-import { formatErrorMessage } from "../../infra/errors.js";
-import { redactSensitiveText } from "../../logging/redact.js";
+import { ComputerTakeControlParamsSchema } from "../../agents/tools/computer-tool-control.js";
 import {
   ComputerActParamsSchema,
   ScreenSnapshotParamsSchema,
@@ -69,7 +69,10 @@ export function createWorkerComputerRpc(params: {
       const closing =
         request.command === "computer.act" &&
         Value.Check(NodeWorkerComputerCloseParamsSchema, commandParams);
-      if (!closing && !Value.Check(schema, commandParams)) {
+      const takingControl =
+        request.command === "computer.act" &&
+        Value.Check(ComputerTakeControlParamsSchema, commandParams);
+      if (!closing && !takingControl && !Value.Check(schema, commandParams)) {
         return { ok: false, closeReason: "invalid-frame" };
       }
       assertCurrent();
@@ -103,7 +106,7 @@ export function createWorkerComputerRpc(params: {
       return {
         ok: false,
         reason: "gateway-unavailable",
-        message: truncateUtf16Safe(redactSensitiveText(message, { mode: "tools" }), 256),
+        message: truncateUtf16Safe(message, 256),
       };
     }
   };

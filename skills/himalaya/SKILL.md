@@ -66,15 +66,14 @@ Use MML for attachments and rich messages; read `references/message-composition.
 ## Organize
 
 ```bash
-himalaya message copy <id> <folder>
-himalaya message move <id> <folder>
+himalaya message copy <id> --to <folder>
+himalaya message move <id> --to <folder>
 himalaya message delete <id>
 himalaya flag add <id> --flag seen
 himalaya flag remove <id> --flag seen
 ```
 
-## Safety
+## Notes
 
-- Confirm before sending, deleting, or moving many messages.
 - Use `--account` when multiple accounts exist.
 - Quote exact message IDs in summaries.

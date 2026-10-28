@@ -103,7 +103,7 @@ function* vitestPositionals(argv: string[]) {
     if (vitestOptionConsumesNextArg(arg, argv[index + 1])) {
       index++;
     } else if (!arg.startsWith("-")) {
-      yield arg;
+      yield index;
     }
   }
 }
@@ -113,12 +113,25 @@ export function hasNonRunVitestSubcommand(
   commands = NON_RUN_VITEST_SUBCOMMANDS,
 ): boolean {
   const first = vitestPositionals(argv).next();
-  return !first.done && commands.has(first.value);
+  return !first.done && commands.has(argv[first.value]!);
 }
 
 export function collectVitestFileFilters(argv: string[]): string[] {
-  const values = [...vitestPositionals(argv)];
+  const values = [...vitestPositionals(argv)].map((index) => argv[index]!);
   return values[0] && VITEST_SUBCOMMANDS.has(values[0]) ? values.slice(1) : values;
+}
+
+/** Replace native OR/substring filters without dropping option values or the separator tail. */
+export function replaceVitestFileFilters(argv: string[], files: string[]): string[] {
+  const indices = [...vitestPositionals(argv)];
+  if (indices[0] !== undefined && VITEST_SUBCOMMANDS.has(argv[indices[0]]!)) {
+    indices.shift();
+  }
+  const filters = new Set(indices);
+  const result = argv.filter((_, index) => !filters.has(index));
+  const separator = result.indexOf("--");
+  result.splice(separator < 0 ? result.length : separator, 0, ...files);
+  return result;
 }
 
 export function resolveBooleanModeFlag(

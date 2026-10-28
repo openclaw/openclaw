@@ -1,37 +1,23 @@
 // systemd.time(7) durations from unit files and systemctl show (USec properties
 // are printed as human-readable spans, not bare microseconds).
 export const SYSTEMD_DEFAULT_STOP_TIMEOUT_MS = 90_000;
-const UNITS: Record<string, number> = {
-  us: 0.001,
-  usec: 0.001,
-  μs: 0.001,
-  ms: 1,
-  msec: 1,
-  s: 1_000,
-  sec: 1_000,
-  second: 1_000,
-  seconds: 1_000,
-  m: 60_000,
-  min: 60_000,
-  minute: 60_000,
-  minutes: 60_000,
-  h: 3_600_000,
-  hr: 3_600_000,
-  hour: 3_600_000,
-  hours: 3_600_000,
-  d: 86_400_000,
-  day: 86_400_000,
-  days: 86_400_000,
-  w: 604_800_000,
-  week: 604_800_000,
-  weeks: 604_800_000,
-  M: 2_629_800_000,
-  month: 2_629_800_000,
-  months: 2_629_800_000,
-  y: 31_557_600_000,
-  year: 31_557_600_000,
-  years: 31_557_600_000,
-};
+const UNITS: Record<string, number> = Object.fromEntries(
+  (
+    [
+      ["us usec μs", 0.001],
+      ["ms msec", 1],
+      ["s sec second seconds", 1_000],
+      ["m min minute minutes", 60_000],
+      ["h hr hour hours", 3_600_000],
+      ["d day days", 86_400_000],
+      ["w week weeks", 604_800_000],
+      ["M month months", 2_629_800_000],
+      ["y year years", 31_557_600_000],
+    ] as const
+  ).flatMap(([aliases, multiplier]) =>
+    aliases.split(" ").map((alias) => [alias, multiplier] as const),
+  ),
+);
 
 export function parseSystemdTimeSpanMs(value: string): number | undefined {
   const text = value.trim();

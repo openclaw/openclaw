@@ -1,14 +1,10 @@
-import {
-  defineLegacyConfigMigration,
-  getRecord,
-  type LegacyConfigMigrationSpec,
-} from "../../../config/legacy.shared.js";
+import { getRecord, type LegacyConfigMigrationSpec } from "../../../config/legacy.shared.js";
 import { deleteRetiredPath } from "./legacy-config-record-shared.js";
 
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_SKILLS: LegacyConfigMigrationSpec[] = [
-  defineLegacyConfigMigration({
+  {
     id: "skills.workshop.autonomous.enabled->mode",
-    describe: "Migrate Skill Workshop autonomy to its three-position mode.",
+
     legacyRules: [
       {
         path: ["skills", "workshop", "autonomous", "enabled"],
@@ -22,6 +18,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_SKILLS: LegacyConfigMigrationSpec[
         return;
       }
       if (autonomous.mode === undefined) {
+        // enabled: true meant background reviews that propose changes for review.
         const mode = autonomous.enabled === false ? "off" : "propose";
         autonomous.mode = mode;
         changes.push(`Mapped skills.workshop.autonomous.enabled to mode: "${mode}".`);
@@ -32,10 +29,23 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_SKILLS: LegacyConfigMigrationSpec[
       }
       delete autonomous.enabled;
     },
-  }),
-  defineLegacyConfigMigration({
+  },
+  {
+    id: "skills.workshop.proposal-settings-retired",
+    legacyRules: ["approvalPolicy", "maxPending"].map((key) => ({
+      path: ["skills", "workshop", key],
+      message: `skills.workshop.${key} was removed with Skill Workshop proposals. Run "openclaw doctor --fix".`,
+    })),
+    apply: (raw, changes) => {
+      for (const key of ["approvalPolicy", "maxPending"]) {
+        if (deleteRetiredPath(raw, ["skills", "workshop", key])) {
+          changes.push(`Removed skills.workshop.${key}; Skill Workshop proposals were removed.`);
+        }
+      }
+    },
+  },
+  {
     id: "skills.workshop.allowSymlinkTargetWrites-retired",
-    describe: "Remove the retired Skill Workshop symlink write option.",
     legacyRules: [
       {
         path: ["skills", "workshop", "allowSymlinkTargetWrites"],
@@ -50,5 +60,5 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_SKILLS: LegacyConfigMigrationSpec[
         );
       }
     },
-  }),
+  },
 ];

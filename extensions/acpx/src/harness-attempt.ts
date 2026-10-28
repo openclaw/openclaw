@@ -14,6 +14,7 @@ import {
   type EmbeddedRunAttemptResult,
   type AgentMessage,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createNativeSessionBindingScope } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import { buildSessionContext, SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS } from "openclaw/plugin-sdk/approval-runtime";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
@@ -91,12 +92,18 @@ export async function runAcpHarnessAttempt(params: {
     sourceReplyDeliveryMode: input.sourceReplyDeliveryMode,
   };
   let activeRegistered = false;
+  let activeAttachment: ReturnType<typeof setActiveEmbeddedRun> | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   assertActive();
   try {
-    setActiveEmbeddedRun(input.sessionId, activeRun, sessionKey, input.sessionFile, agentId);
+    activeAttachment = setActiveEmbeddedRun(
+      input.sessionId,
+      activeRun,
+      sessionKey,
+      input.sessionFile,
+      agentId,
+    );
     activeRegistered = true;
-    input.replyOperation?.attachBackend(activeRun);
     signal.addEventListener("abort", stopDelivery, { once: true });
     timer = setTimeout(() => {
       timedOut = true;
@@ -196,6 +203,7 @@ export async function runAcpHarnessAttempt(params: {
         trigger: input.trigger,
         modelProviderId: input.provider,
         modelId: input.modelId,
+        contextTokenBudget: input.contextTokenBudget ?? input.model.contextWindow,
       },
       bootstrapContextRunKind: input.bootstrapContextRunKind,
     });
@@ -245,6 +253,7 @@ export async function runAcpHarnessAttempt(params: {
       }
     };
     const requestId = `${admission.entryId}:acp:${randomUUID()}`;
+    const assistantItemId = `${requestId}:acp:assistant`;
     // Prose labels keep file paths and literal user text out of native slash-command dispatch.
     const turn: AcpRuntimeTurnInput &
       Pick<AcpxRuntimeTurnInput, "onPermissionRequest" | "assertActive"> = {
@@ -296,7 +305,10 @@ export async function runAcpHarnessAttempt(params: {
               assertActive();
             }
             text += event.text;
-            const update = { stream: "assistant", data: { text, delta: event.text } };
+            const update = {
+              stream: "assistant",
+              data: { text, delta: event.text, itemId: assistantItemId },
+            };
             emitAgentEvent({
               runId: input.runId,
               sessionKey,
@@ -356,23 +368,22 @@ export async function runAcpHarnessAttempt(params: {
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
       },
     };
-    const key = `${requestId}:acp:assistant`;
     const written = await appendSessionTranscriptMessageByIdentityStrict({
       ...transcript,
       config: input.config,
       runId: input.runId,
       updateMode: "inline",
-      message: { ...assistant, idempotencyKey: key },
-      prepareMessageAfterIdempotencyCheck: (message) => {
-        input.hostCapabilities.assertActive();
-        return message;
+      message: { ...assistant, idempotencyKey: assistantItemId },
+      preparation: {
+        source: createNativeSessionBindingScope(input.hostCapabilities.assertActive)
+          .assertLegacyCurrent,
       },
     });
     if (written.kind !== "result") {
       throw new Error("ACP assistant transcript was not committed");
     }
     assistant = written.result.message;
-    assistantIdempotencyKey = key;
+    assistantIdempotencyKey = assistantItemId;
     terminalAnchor = written.result.anchor;
     messages = (
       await SessionManager.openModelContextAsync(transcript, {
@@ -387,7 +398,14 @@ export async function runAcpHarnessAttempt(params: {
     clearTimeout(timer);
     signal.removeEventListener("abort", stopDelivery);
     if (activeRegistered) {
-      clearActiveEmbeddedRun(input.sessionId, activeRun, sessionKey, input.sessionFile);
+      clearActiveEmbeddedRun(
+        input.sessionId,
+        activeRun,
+        sessionKey,
+        input.sessionFile,
+        undefined,
+        activeAttachment,
+      );
     }
   }
   return {

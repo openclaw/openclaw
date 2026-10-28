@@ -107,9 +107,7 @@ struct ChatInputHistory: Equatable, Sendable {
     mutating func next() -> String? {
         guard let cursor else { return nil }
         if cursor == 0 {
-            let draft = self.stashedDraft ?? ""
-            self.resetNavigation()
-            return draft
+            return self.cancel()
         }
         self.cursor = cursor - 1
         return self.entries[cursor - 1]
@@ -166,7 +164,10 @@ struct ChatInputHistory: Equatable, Sendable {
     }
 
     private mutating func restoreRecall(_ marker: RecallMarker) {
-        self.cursor = Self.index(ofOccurrence: marker.occurrence, value: marker.value, in: self.entries)
+        let entries = self.entries
+        self.cursor = entries.indices.reversed().lazy
+            .filter { entries[$0] == marker.value }
+            .dropFirst(marker.occurrence - 1).first
         if self.cursor == nil {
             self.resetNavigation()
         }
@@ -219,21 +220,30 @@ struct ChatInputHistory: Equatable, Sendable {
         return nil
     }
 
-    private static func index(ofOccurrence occurrence: Int, value: String, in entries: [String]) -> Int? {
-        var seen = 0
-        for (index, entry) in entries.enumerated().reversed() where entry == value {
-            seen += 1
-            if seen == occurrence { return index }
-        }
-        return nil
-    }
-
     private static func normalized(_ input: String) -> String {
         input.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 
 extension OpenClawChatViewModel {
+    /// Captures the admitted route for synchronous editor callbacks without invalidating them on refresh.
+    public func composerModelResolver() -> @MainActor () -> OpenClawChatViewModel? {
+        let session = self.currentSessionSnapshot()
+        return { [weak self] in
+            guard let self, !self.isTransportDetached,
+                  self.sessionKey == session.key,
+                  self.currentSessionSnapshot().deliveryAgentID == session.deliveryAgentID
+            else { return nil }
+            let contractSensitive = self.usesMutableContractRouting(
+                sessionKey: self.sessionKey,
+                contract: session.sessionRoutingContract) ||
+                self.usesMutableContractRouting(sessionKey: self.sessionKey, contract: self.sessionRoutingContract)
+            guard !contractSensitive || self.sessionRoutingContract == session.sessionRoutingContract
+            else { return nil }
+            return self
+        }
+    }
+
     func composerSessionKey(for sessionKey: String, agentID: String? = nil) -> String {
         let qualifiedOwner = OpenClawChatSessionKey.agentID(from: sessionKey)
         guard let agentID = qualifiedOwner ?? agentID ??
@@ -257,28 +267,24 @@ extension OpenClawChatViewModel {
     }
 
     func recallPreviousInput(caretOnFirstLine: Bool) -> Bool {
-        let key = self.composerSessionKey(for: self.sessionKey)
-        var history = self.inputHistoriesBySession[key] ?? ChatInputHistory()
-        guard history.isRecalling || caretOnFirstLine || self.input.isEmpty else { return false }
-        guard let recalled = history.previous(draft: self.input) else { return false }
-        self.inputHistoriesBySession[key] = history
-        self.applyRecalledInput(recalled, advancesRevision: true)
-        return true
+        self.recallInput { history in
+            guard history.isRecalling || caretOnFirstLine || self.input.isEmpty else { return nil }
+            return history.previous(draft: self.input)
+        }
     }
 
     func recallNextInput() -> Bool {
-        let key = self.composerSessionKey(for: self.sessionKey)
-        var history = self.inputHistoriesBySession[key] ?? ChatInputHistory()
-        guard let recalled = history.next() else { return false }
-        self.inputHistoriesBySession[key] = history
-        self.applyRecalledInput(recalled, advancesRevision: true)
-        return true
+        self.recallInput { $0.next() }
     }
 
     func cancelInputRecall() -> Bool {
+        self.recallInput { $0.cancel() }
+    }
+
+    private func recallInput(_ navigate: (inout ChatInputHistory) -> String?) -> Bool {
         let key = self.composerSessionKey(for: self.sessionKey)
         var history = self.inputHistoriesBySession[key] ?? ChatInputHistory()
-        guard let draft = history.cancel() else { return false }
+        guard let draft = navigate(&history) else { return false }
         self.inputHistoriesBySession[key] = history
         self.applyRecalledInput(draft, advancesRevision: true)
         return true
@@ -290,9 +296,9 @@ extension OpenClawChatViewModel {
         submittedRevision: UInt64? = nil,
         sessionKey: String)
     {
-        var history = self.inputHistoriesBySession[sessionKey] ?? ChatInputHistory()
-        history.record(input, transcriptEcho: transcriptEcho)
-        self.inputHistoriesBySession[sessionKey] = history
+        self.inputHistoriesBySession[sessionKey, default: ChatInputHistory()].record(
+            input,
+            transcriptEcho: transcriptEcho)
         if let submittedRevision, self.savedDraftRevisionsBySession[sessionKey] == submittedRevision {
             self.draftsBySession.removeValue(forKey: sessionKey)
             self.savedDraftRevisionsBySession.removeValue(forKey: sessionKey)
@@ -308,24 +314,20 @@ extension OpenClawChatViewModel {
             return text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : text
         }
         let key = self.composerSessionKey(for: self.sessionKey)
-        var history = self.inputHistoriesBySession[key] ?? ChatInputHistory()
-        history.seed(transcriptInputs: transcriptInputs)
-        self.inputHistoriesBySession[key] = history
+        self.inputHistoriesBySession[key, default: ChatInputHistory()].seed(transcriptInputs: transcriptInputs)
     }
 
     func noteComposerInputChanged() {
         guard !self.isApplyingRecalledInput else { return }
         let key = self.composerSessionKey(for: self.sessionKey)
         self.composerRevisionsBySession[key, default: 0] &+= 1
-        var history = self.inputHistoriesBySession[key] ?? ChatInputHistory()
-        history.draftChanged(to: self.input)
-        self.inputHistoriesBySession[key] = history
+        self.inputHistoriesBySession[key, default: ChatInputHistory()].draftChanged(to: self.input)
     }
 
     func prepareComposerForSessionSwitch(to nextSessionKey: String, agentID: String? = nil) {
         let currentKey = self.composerSessionKey(for: self.sessionKey)
         let nextKey = self.composerSessionKey(for: nextSessionKey, agentID: agentID)
-        var currentHistory = self.inputHistoriesBySession[currentKey] ?? ChatInputHistory()
+        let currentHistory = self.inputHistoriesBySession[currentKey] ?? ChatInputHistory()
         let draft = currentHistory.draftForSessionSwitch(currentDraft: self.input)
         if draft.isEmpty {
             self.draftsBySession.removeValue(forKey: currentKey)
@@ -337,12 +339,8 @@ extension OpenClawChatViewModel {
                 default: 0,
             ]
         }
-        currentHistory.resetNavigation()
-        self.inputHistoriesBySession[currentKey] = currentHistory
-
-        var nextHistory = self.inputHistoriesBySession[nextKey] ?? ChatInputHistory()
-        nextHistory.resetNavigation()
-        self.inputHistoriesBySession[nextKey] = nextHistory
+        self.inputHistoriesBySession[currentKey, default: ChatInputHistory()].resetNavigation()
+        self.inputHistoriesBySession[nextKey, default: ChatInputHistory()].resetNavigation()
         self.replyTarget = nil
     }
 

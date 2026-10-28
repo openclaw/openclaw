@@ -30,7 +30,6 @@ export class AcpxRuntimeProbe {
       const runtime = this.params.createRuntime(agent);
       try {
         const report = await this.params.runWithLease(agent, () => runtime.doctor());
-        this.params.assertRunning();
         this.health = { agent, ok: report.ok };
         return report;
       } finally {

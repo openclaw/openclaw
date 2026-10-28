@@ -98,7 +98,7 @@ enum MacChatTranscriptCache {
         }
         return self.gatewayID(
             mode: mode,
-            localStateDir: OpenClawConfigFile.stateDirURL(),
+            localStateDir: OpenClawPaths.stateDirURL,
             remoteTransport: resolution.transport,
             directURL: resolution.directURL,
             sshTarget: sshTarget,

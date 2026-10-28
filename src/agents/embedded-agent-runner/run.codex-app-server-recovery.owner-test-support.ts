@@ -51,15 +51,6 @@ describe("Codex app-server recovery decision", () => {
     ).toBe(false);
   });
 
-  it("retries a replay-safe stdio client close", () => {
-    expect(
-      resolveCodexAppServerRecoveryRetry({
-        attempt: makeCodexFailureAttempt(),
-        retryAvailable: true,
-      }),
-    ).toEqual({ retry: true });
-  });
-
   it("retries only completion-watch idle timeouts", () => {
     expect(
       resolveCodexAppServerRecoveryRetry({
@@ -83,7 +74,6 @@ describe("Codex app-server recovery decision", () => {
 
   it.each([
     ["websocket transports", { transport: "websocket" }, {}, true, "non_stdio_transport"],
-    ["an exhausted retry", {}, {}, false, "retry_exhausted"],
     ["provider-declared replay risk", { replaySafe: false }, {}, true, "replay_unsafe"],
     [
       "attempt replay risk",

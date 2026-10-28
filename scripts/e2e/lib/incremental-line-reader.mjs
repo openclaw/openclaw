@@ -1,19 +1,7 @@
-// Incremental line reader for streaming E2E logs.
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 
 function readSlice(filePath, start, length) {
-  if (length <= 0) {
-    return "";
-  }
-  const fd = fs.openSync(filePath, "r");
-  try {
-    const buffer = Buffer.alloc(length);
-    const bytesRead = fs.readSync(fd, buffer, 0, length, start);
-    return buffer.subarray(0, bytesRead).toString("utf8");
-  } finally {
-    fs.closeSync(fd);
-  }
+  return readBufferSlice(filePath, start, length).toString("utf8");
 }
 
 function readBufferSlice(filePath, start, length) {
@@ -30,29 +18,12 @@ function readBufferSlice(filePath, start, length) {
   }
 }
 
-function resolveFileIdentity(stats) {
-  if (Number.isSafeInteger(stats.dev) && Number.isSafeInteger(stats.ino) && stats.ino !== 0) {
-    return `${stats.dev}:${stats.ino}`;
-  }
-  return Number.isFinite(stats.birthtimeMs) ? `birth:${stats.birthtimeMs}` : undefined;
-}
-
-function readTailFingerprint(filePath, stats, maxReadBytes) {
-  const length = Math.min(stats.size, maxReadBytes);
-  const start = Math.max(0, stats.size - length);
-  const buffer = readBufferSlice(filePath, start, length);
-  const hash = createHash("sha256").update(buffer).digest("base64url");
-  return `${start}:${buffer.byteLength}:${hash}`;
-}
-
 export function resolvePositiveInteger(value, fallback) {
   return Number.isSafeInteger(value) && value > 0 ? value : fallback;
 }
 
 export function createIncrementalLineReader(filePath, options = {}) {
   const maxReadBytes = resolvePositiveInteger(options.maxReadBytes, 256 * 1024);
-  let fileIdentity;
-  let contentFingerprint;
   let offset = 0;
   let pending = "";
 
@@ -68,30 +39,7 @@ export function createIncrementalLineReader(filePath, options = {}) {
       }
 
       let reset = false;
-      const nextFileIdentity = resolveFileIdentity(stats);
-      if (
-        fileIdentity !== undefined &&
-        nextFileIdentity !== undefined &&
-        fileIdentity !== nextFileIdentity
-      ) {
-        offset = 0;
-        pending = "";
-        reset = true;
-      }
-      fileIdentity = nextFileIdentity;
-
-      if (!reset && stats.size === offset && contentFingerprint !== undefined) {
-        const nextContentFingerprint = readTailFingerprint(filePath, stats, maxReadBytes);
-        if (contentFingerprint !== nextContentFingerprint) {
-          offset = 0;
-          pending = "";
-          reset = true;
-        } else {
-          contentFingerprint = nextContentFingerprint;
-          return { lines: [], reset: false };
-        }
-      }
-
+      // Fixture logs append or truncate; same-size external replacement is best-effort.
       if (stats.size < offset) {
         offset = 0;
         pending = "";
@@ -103,23 +51,16 @@ export function createIncrementalLineReader(filePath, options = {}) {
 
       let start = offset;
       let discardFirstLine = false;
-      let clamped = false;
-      if (start === 0 && stats.size > maxReadBytes) {
+      if (stats.size - start > maxReadBytes) {
         start = stats.size - maxReadBytes;
         pending = "";
-        clamped = true;
-      } else if (stats.size - start > maxReadBytes) {
-        start = stats.size - maxReadBytes;
-        pending = "";
-        clamped = true;
-      }
-      if (clamped && start > 0) {
-        discardFirstLine = readSlice(filePath, start - 1, 1) !== "\n";
+        if (start > 0) {
+          discardFirstLine = readSlice(filePath, start - 1, 1) !== "\n";
+        }
       }
 
       const text = readSlice(filePath, start, stats.size - start);
       offset = stats.size;
-      contentFingerprint = readTailFingerprint(filePath, stats, maxReadBytes);
       if (!text) {
         return { lines: [], reset };
       }

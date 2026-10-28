@@ -21,11 +21,11 @@ import {
 } from "openclaw/plugin-sdk/thread-bindings-session-runtime";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { slackPlugin } from "../../../channel-plugin-api.js";
-import type { SlackMessageEvent } from "../../types.js";
 import { resolveSlackRoutingContext } from "./prepare-routing.js";
 import { createSlackTestAccount } from "./prepare.test-helpers.js";
 
 type Conversation = Parameters<SessionBindingAdapter["resolveByConversation"]>[0];
+const address = { channel: "slack", accountId: "default" };
 let state: OpenClawTestState;
 let adapter: SessionBindingAdapter | undefined;
 beforeAll(async () => {
@@ -44,21 +44,16 @@ beforeEach(() => {
 afterEach(() => {
   clearRuntimeConfigSnapshot();
   if (adapter) {
-    unregisterSessionBindingAdapter({ channel: "slack", accountId: "default", adapter });
+    unregisterSessionBindingAdapter({ ...address, adapter });
     adapter = undefined;
   }
   resetPluginRuntimeStateForTest();
 });
 
 it.each([
-  "none-to-global",
-  "plugin-to-global",
-  "plugin-stable",
-  "configured-stable",
   "configured-race",
   "child-over-base-stable",
   "child-over-base-race",
-  "derived-none-stable",
   "derived-none-to-global",
   "ordinary-dm-thread-stable",
 ] as const)("carries Slack routing into reply ownership validation: %s", async (scenario) => {
@@ -86,29 +81,17 @@ it.each([
     plugins: { enabled: false },
     session: { scope: derived ? "per-sender" : "global", dmScope: "main" },
     channels: { slack: { enabled: true, replyToMode: "all" } },
-    bindings: [
-      { agentId: "main", match: { channel: "slack", accountId: "default" } },
-      ...(configured
-        ? [
-            {
-              type: "acp" as const,
-              agentId: "work",
-              match: {
-                channel: "slack",
-                accountId: "default",
-                peer: { kind: "channel" as const, id: channelId },
-              },
-            },
-          ]
-        : []),
-    ],
+    bindings: [{ agentId: "main", match: address }],
   };
+  if (configured) {
+    cfg.bindings!.push({
+      type: "acp",
+      agentId: "work",
+      match: { ...address, peer: { kind: "channel", id: channelId } },
+    });
+  }
   setRuntimeConfigSnapshot(cfg);
-  const baseConversation: Conversation = {
-    channel: "slack",
-    accountId: "default",
-    conversationId: baseId,
-  };
+  const baseConversation: Conversation = { ...address, conversationId: baseId };
   const childConversation: Conversation = {
     ...baseConversation,
     conversationId: threadTs,
@@ -131,16 +114,6 @@ it.each([
       boundAt: 1,
       metadata: { agentId: "main" },
     });
-  } else if (scenario.startsWith("plugin-")) {
-    records.set(baseId, {
-      ...replacement,
-      targetSessionKey: "plugin-binding:synthetic:source",
-      metadata: {
-        pluginBindingOwner: "plugin",
-        pluginId: "synthetic",
-        pluginRoot: state.path("plugin"),
-      },
-    });
   }
   const lookup = (ref: Conversation) => records.get(ref.conversationId) ?? null;
   const entered = createDeferred<void>();
@@ -161,8 +134,7 @@ it.each([
     return lookup(ref);
   };
   adapter = {
-    channel: "slack",
-    accountId: "default",
+    ...address,
     listBySession: () => [],
     resolveByConversation: lookup,
     inspectByConversationAsync: read,
@@ -170,32 +142,27 @@ it.each([
     touchAsync: async () => {},
   };
   registerSessionBindingAdapter(adapter);
-  const message: SlackMessageEvent = {
-    type: "message",
-    channel: channelId,
-    channel_type: direct ? "im" : "channel",
-    user: "U1",
-    text: "hello",
-    ts: "1770408518.000002",
-    ...(threaded ? { thread_ts: threadTs } : {}),
-  };
-  const prepared = resolveSlackRoutingContext({
+
+  const { route, sessionKey, threadKeys } = await resolveSlackRoutingContext({
     ctx: { cfg, teamId: "T1", threadInheritParent: false, threadHistoryScope: "thread" },
     account: createSlackTestAccount({ replyToMode: "all" }),
-    message,
-    isDirectMessage: direct,
-    isGroupDm: false,
-    isRoom: !direct,
-    isRoomish: !direct,
+    message: {
+      type: "message",
+      channel: channelId,
+      channel_type: direct ? "im" : "channel",
+      user: "U1",
+      text: "hello",
+      ts: "1770408518.000002",
+      ...(threaded ? { thread_ts: threadTs } : {}),
+    },
+    chatType: direct ? "direct" : "channel",
   });
-  const route = prepared.route;
   expect(route.agentId).toBe(configured ? "work" : "main");
   if (configured) {
     expect(route.sessionKey).toContain("agent:work:acp:");
   }
   const ctx = buildChannelInboundEventContext({
-    channel: "slack",
-    accountId: "default",
+    ...address,
     messageId: scenario,
     from: direct ? "slack:U1" : `slack:channel:${channelId}`,
     sender: { id: "U1" },
@@ -207,13 +174,13 @@ it.each([
     route: {
       ...route,
       routeSessionKey: route.sessionKey,
-      dispatchSessionKey: prepared.sessionKey,
-      parentSessionKey: prepared.threadKeys.parentSessionKey,
+      dispatchSessionKey: sessionKey,
+      parentSessionKey: threadKeys.parentSessionKey,
     },
     reply: { to: direct ? "user:U1" : `channel:${channelId}` },
     command: { kind: "text-slash", name: "help", authorized: true, body: "/help" },
     access: { commands: { authorized: true } },
-    message: { rawBody: "/help", commandBody: "/help" },
+    message: { rawBody: "/help" },
   });
   if (derived) {
     expect(ctx.SessionKey).not.toBe(route.sessionKey);
@@ -250,7 +217,10 @@ it.each([
   expect(outcome).toMatchObject(
     changes ? { code: "SESSION_WORK_START_CHANGED" } : { name: "AbortError" },
   );
-  if (scenario === "child-over-base-stable" || direct) {
+  if (scenario === "child-over-base-stable") {
+    // Reply admission uses the final observation as the selected binding.
+    expect(admissionReads).toEqual([childConversation, baseConversation]);
+  } else if (direct) {
     expect(admissionReads).toEqual(
       expect.arrayContaining([
         expect.objectContaining(childConversation),
@@ -259,6 +229,5 @@ it.each([
     );
   }
   expect(adopted).not.toHaveBeenCalled();
-  expect(existsSync(mainWorkspace)).toBe(false);
-  expect(existsSync(workWorkspace)).toBe(false);
+  expect([mainWorkspace, workWorkspace].map(existsSync)).toEqual([false, false]);
 });

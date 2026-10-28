@@ -1,17 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { normalizeCompatibilityConfig } from "./doctor-contract.js";
 
+function slackConfig(slack: Record<string, unknown>) {
+  return { channels: { slack } };
+}
+
 describe("slack doctor contract", () => {
   it("removes the retired Enterprise Grid setting from root and account config", () => {
     const result = normalizeCompatibilityConfig({
-      cfg: {
-        channels: {
-          slack: {
-            enterpriseOrgInstall: true,
-            accounts: { work: { enterpriseOrgInstall: false } },
-          },
-        },
-      } as never,
+      cfg: slackConfig({
+        enterpriseOrgInstall: true,
+        accounts: { work: { enterpriseOrgInstall: false } },
+      }) as never,
     });
 
     expect(result.config.channels?.slack).toEqual({ accounts: { work: {} } });
@@ -23,16 +23,12 @@ describe("slack doctor contract", () => {
 
   it("removes retired interactive reply capabilities from root and account config", () => {
     const result = normalizeCompatibilityConfig({
-      cfg: {
-        channels: {
-          slack: {
-            capabilities: { interactiveReplies: true },
-            accounts: {
-              work: { capabilities: ["threads", " interactiveReplies "] },
-            },
-          },
+      cfg: slackConfig({
+        capabilities: { interactiveReplies: true },
+        accounts: {
+          work: { capabilities: ["threads", " interactiveReplies "] },
         },
-      } as never,
+      }) as never,
     });
 
     expect(result.config.channels?.slack).toEqual({
@@ -46,14 +42,10 @@ describe("slack doctor contract", () => {
 
   it("removes empty object-form capabilities accepted by the retired schema", () => {
     const result = normalizeCompatibilityConfig({
-      cfg: {
-        channels: {
-          slack: {
-            capabilities: {},
-            accounts: { work: { capabilities: {} } },
-          },
-        },
-      } as never,
+      cfg: slackConfig({
+        capabilities: {},
+        accounts: { work: { capabilities: {} } },
+      }) as never,
     });
 
     expect(result.config.channels?.slack).toEqual({ accounts: { work: {} } });
@@ -65,14 +57,10 @@ describe("slack doctor contract", () => {
 
   it("moves direct DM reply mode to the chat-type map", () => {
     const result = normalizeCompatibilityConfig({
-      cfg: {
-        channels: {
-          slack: {
-            dm: { replyToMode: "all" },
-            accounts: { work: { dm: { replyToMode: "first" } } },
-          },
-        },
-      } as never,
+      cfg: slackConfig({
+        dm: { replyToMode: "all" },
+        accounts: { work: { dm: { replyToMode: "first" } } },
+      }) as never,
     });
     expect(result.config.channels?.slack).toEqual({
       dm: {},

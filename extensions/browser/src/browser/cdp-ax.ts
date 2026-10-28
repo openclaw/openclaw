@@ -36,3 +36,13 @@ export type CdpProtocolSend = <Method extends CdpMethod>(
   params?: Parameters<typeof playwrightCdpSend<Method>>[1],
   sessionId?: string,
 ) => Promise<unknown>;
+/** Normalized accessibility tree node returned by ARIA snapshots. */
+export type AriaSnapshotNode = {
+  ref: string;
+  role: string;
+  name: string;
+  value?: string;
+  description?: string;
+  backendDOMNodeId?: number;
+  depth: number;
+};

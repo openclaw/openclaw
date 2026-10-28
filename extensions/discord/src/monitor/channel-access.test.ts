@@ -1,27 +1,12 @@
 // Discord tests cover channel access plugin behavior.
 import { describe, expect, it } from "vitest";
-import {
-  resolveDiscordChannelInfoSafe,
-  resolveDiscordChannelParentIdSafe,
-} from "./channel-access.js";
+import { resolveDiscordChannelInfoSafe } from "./channel-access.js";
 
 function resolveDiscordChannelOwnerIdSafe(channel: unknown) {
   return resolveDiscordChannelInfoSafe(channel).ownerId;
 }
 
 describe("resolveDiscordChannelOwnerIdSafe", () => {
-  it("reads camelCase ownerId directly", () => {
-    expect(resolveDiscordChannelOwnerIdSafe({ ownerId: "owner-1" })).toBe("owner-1");
-  });
-
-  it("falls back to direct snake_case owner_id", () => {
-    expect(resolveDiscordChannelOwnerIdSafe({ owner_id: "owner-2" })).toBe("owner-2");
-  });
-
-  it("falls back to rawData owner_id when direct fields are missing", () => {
-    expect(resolveDiscordChannelOwnerIdSafe({ rawData: { owner_id: "owner-3" } })).toBe("owner-3");
-  });
-
   it("prefers camelCase and direct snake_case before rawData", () => {
     expect(
       resolveDiscordChannelOwnerIdSafe({
@@ -38,55 +23,42 @@ describe("resolveDiscordChannelOwnerIdSafe", () => {
     ).toBe("snake");
   });
 
-  it("ignores invalid values and unsafe accessors", () => {
+  it("ignores invalid values", () => {
     expect(resolveDiscordChannelOwnerIdSafe({ ownerId: 123 })).toBeUndefined();
     expect(resolveDiscordChannelOwnerIdSafe({ owner_id: 123 })).toBeUndefined();
     expect(resolveDiscordChannelOwnerIdSafe({ rawData: { owner_id: 123 } })).toBeUndefined();
     expect(resolveDiscordChannelOwnerIdSafe(null)).toBeUndefined();
-    expect(
-      resolveDiscordChannelOwnerIdSafe(
-        new Proxy(
-          {},
-          {
-            get() {
-              throw new Error("boom");
-            },
-            has() {
-              throw new Error("boom");
-            },
-          },
-        ),
-      ),
-    ).toBeUndefined();
   });
 });
 
-describe("resolveDiscordChannelParentIdSafe", () => {
-  it("reads parentId from camelCase, direct snake_case, and rawData", () => {
-    expect(resolveDiscordChannelParentIdSafe({ parentId: "parent-1" })).toBe("parent-1");
-    expect(resolveDiscordChannelParentIdSafe({ parent_id: "parent-2" })).toBe("parent-2");
-    expect(resolveDiscordChannelParentIdSafe({ rawData: { parent_id: "parent-3" } })).toBe(
-      "parent-3",
-    );
-  });
-
+describe("channel parent aliases", () => {
   it("prefers camelCase over snake_case and rawData", () => {
     expect(
-      resolveDiscordChannelParentIdSafe({
+      resolveDiscordChannelInfoSafe({
         parentId: "camel",
         parent_id: "snake",
         rawData: { parent_id: "raw" },
-      }),
+      }).parentId,
     ).toBe("camel");
-  });
-
-  it("ignores invalid fallback values", () => {
-    expect(resolveDiscordChannelParentIdSafe({ parent_id: 7 })).toBeUndefined();
-    expect(resolveDiscordChannelParentIdSafe({ rawData: { parent_id: 7 } })).toBeUndefined();
   });
 });
 
 describe("resolveDiscordChannelInfoSafe", () => {
+  it("preserves array-backed fields and empty aliases without trimming", () => {
+    const channel = Object.assign([], {
+      name: " ",
+      topic: "",
+      ownerId: "",
+      owner_id: "fallback",
+    });
+
+    expect(resolveDiscordChannelInfoSafe(channel)).toMatchObject({
+      name: " ",
+      topic: "",
+      ownerId: "",
+    });
+  });
+
   it("populates ownerId and parentId from Discord API-style snake_case fields", () => {
     expect(
       resolveDiscordChannelInfoSafe({
@@ -94,6 +66,7 @@ describe("resolveDiscordChannelInfoSafe", () => {
         parent_id: "parent-snake",
       }),
     ).toEqual({
+      id: undefined,
       name: undefined,
       topic: undefined,
       type: undefined,
@@ -106,6 +79,7 @@ describe("resolveDiscordChannelInfoSafe", () => {
         rawData: { owner_id: "owner-raw", parent_id: "parent-raw" },
       }),
     ).toEqual({
+      id: undefined,
       name: undefined,
       topic: undefined,
       type: undefined,

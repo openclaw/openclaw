@@ -63,7 +63,6 @@ export function stateFingerprint(state: UiState): string {
     ccds: state.captureDetailSplitPct,
     ccdsd: state.captureDetailSplitDragging,
     ccdv: state.captureDetailView,
-    ccpdv: state.capturePreferredDetailView,
     ccdfl: state.captureFlowDetailLayout,
     ccdpl: state.capturePayloadDetailLayout,
     ccdpe: state.capturePayloadExtent,

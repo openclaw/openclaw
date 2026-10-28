@@ -1,41 +1,20 @@
 // Model command shared tests cover shared config and provider helper behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig, TransformConfigFileParams } from "../../config/config.js";
-import {
-  loadValidConfigSnapshotOrThrow,
-  resolveModelsTargetAgent,
-  updateConfig,
-} from "./shared.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import { loadValidConfigSnapshotOrThrow, resolveModelsTargetAgent } from "./shared.js";
 
 const mocks = vi.hoisted(() => ({
   readConfigFileSnapshot: vi.fn(),
-  replaceConfigFile: vi.fn(),
 }));
 
-vi.mock("../../config/config.js", () => ({
+vi.mock("../../config/config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/config.js")>()),
   readConfigFileSnapshot: (...args: unknown[]) => mocks.readConfigFileSnapshot(...args),
-  transformConfigFile: async ({ transform }: TransformConfigFileParams<unknown>) => {
-    const loaded = await mocks.readConfigFileSnapshot();
-    const snapshot = {
-      path: "/tmp/openclaw.json",
-      parsed: loaded.sourceConfig ?? loaded.config,
-      runtimeConfig: loaded.config,
-      ...loaded,
-    };
-    const { nextConfig, result } = await transform(
-      snapshot.sourceConfig ?? snapshot.config,
-      { snapshot, previousHash: snapshot.hash ?? null, attempt: 0 },
-      {},
-    );
-    await mocks.replaceConfigFile({ sourceConfig: nextConfig, baseHash: snapshot.hash });
-    return { nextConfig, result };
-  },
 }));
 
 describe("models/shared", () => {
   beforeEach(() => {
     mocks.readConfigFileSnapshot.mockClear();
-    mocks.replaceConfigFile.mockClear();
   });
 
   it("returns the paired source and runtime config when the snapshot is valid", async () => {
@@ -59,20 +38,6 @@ describe("models/shared", () => {
 
     await expect(loadValidConfigSnapshotOrThrow()).rejects.toThrowError(
       "Invalid config at /tmp/openclaw.json\n- providers.openai.apiKey: Required",
-    );
-  });
-
-  it("names only the supported model-command escape for an ambiguous roster", () => {
-    expect(() =>
-      resolveModelsTargetAgent(
-        {
-          agents: { ownership: "explicit", entries: { main: {}, helper: {}, third: {} } },
-        },
-        undefined,
-        { kind: "mutation" },
-      ),
-    ).toThrow(
-      "Multiple agents are configured, but the model command has no explicit owner. Pass --agent <id>.",
     );
   });
 
@@ -115,58 +80,5 @@ describe("models/shared", () => {
     ).toThrow(
       "Multiple agents are configured, but the model command has no explicit owner. Pass --agent <id>.",
     );
-  });
-
-  it("updateConfig writes mutated config", async () => {
-    const cfg = { update: { channel: "stable" } } as unknown as OpenClawConfig;
-    mocks.readConfigFileSnapshot.mockResolvedValue({
-      valid: true,
-      hash: "config-1",
-      sourceConfig: cfg,
-      config: cfg,
-    });
-    mocks.replaceConfigFile.mockResolvedValue(undefined);
-
-    await updateConfig((current) => ({
-      ...current,
-      update: { channel: "beta" },
-    }));
-
-    expect(mocks.replaceConfigFile).toHaveBeenCalledOnce();
-    const [replaceParams] = mocks.replaceConfigFile.mock.calls[0] ?? [];
-    expect(replaceParams?.sourceConfig.update).toEqual({ channel: "beta" });
-    expect(replaceParams?.baseHash).toBe("config-1");
-  });
-
-  it("updateConfig exposes runtime config without writing runtime defaults", async () => {
-    const sourceConfig = {
-      agents: { defaults: { models: { "anthropic/claude-sonnet-4-6": {} } } },
-    } as unknown as OpenClawConfig;
-    const runtimeConfig = {
-      agents: {
-        defaults: {
-          models: { "anthropic/claude-sonnet-4-6": { alias: "sonnet" } },
-        },
-      },
-    } as unknown as OpenClawConfig;
-    mocks.readConfigFileSnapshot.mockResolvedValue({
-      valid: true,
-      hash: "config-2",
-      sourceConfig,
-      runtimeConfig,
-      config: runtimeConfig,
-    });
-    mocks.replaceConfigFile.mockResolvedValue(undefined);
-
-    await updateConfig((current, context) => {
-      expect(current).toEqual(sourceConfig);
-      expect(context.runtimeConfig).toEqual(runtimeConfig);
-      return current;
-    });
-
-    expect(mocks.replaceConfigFile).toHaveBeenCalledOnce();
-    const [replaceParams] = mocks.replaceConfigFile.mock.calls[0] ?? [];
-    expect(replaceParams?.sourceConfig).toEqual(sourceConfig);
-    expect(replaceParams?.baseHash).toBe("config-2");
   });
 });

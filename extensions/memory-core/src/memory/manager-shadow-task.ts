@@ -1,15 +1,12 @@
 import fs from "node:fs";
+import type { DatabaseSync } from "node:sqlite";
 
 export type MemoryShadowConnection = {
   fileIdentity: { device: string; inode: string };
   extensionPath?: string;
+  // Schema admission temporarily disables foreign keys and restores the opener's policy.
   pragmas: {
-    busy_timeout: number;
-    synchronous: number;
     foreign_keys: number;
-    wal_autocheckpoint: number;
-    journal_size_limit: number;
-    checkpoint_fullfsync: number;
   };
 };
 
@@ -36,4 +33,12 @@ export function assertMemoryShadowIdentity(
   if (actual.device !== expected.device || actual.inode !== expected.inode) {
     throw new Error("Memory reindex shadow file changed during its owned lifetime");
   }
+}
+
+export function readMemoryConnectionPragmas(db: DatabaseSync, errorMessage: string) {
+  const value = db.prepare("PRAGMA foreign_keys").get()?.foreign_keys;
+  if (typeof value !== "number" || !Number.isSafeInteger(value)) {
+    throw new Error(errorMessage);
+  }
+  return { foreign_keys: value };
 }

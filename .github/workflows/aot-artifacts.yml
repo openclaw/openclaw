@@ -1,0 +1,179 @@
+name: Experimental macOS 27 AOT artifact
+
+on:
+  workflow_dispatch:
+    inputs:
+      enable_aot:
+        description: Build an unsigned macOS 27-only artifact; ordinary releases are unaffected
+        type: boolean
+        default: false
+      toolchain_run_id:
+        description: Successful main Actions run in this repository containing the compiler bundle
+        type: string
+        required: true
+      toolchain_artifact_id:
+        description: Actions artifact ID from that run containing toolchain.tar.gz
+        type: string
+        required: true
+      toolchain_bundle_sha256:
+        description: SHA256 of toolchain.tar.gz (not the Actions ZIP)
+        type: string
+        required: true
+      min_memory_gib:
+        description: Required physical GiB, chosen from measured JS build peak plus headroom
+        type: string
+        required: true
+
+permissions: {}
+
+concurrency:
+  group: experimental-aot-darwin-arm64
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  build:
+    if: ${{ inputs.enable_aot && github.ref == 'refs/heads/main' }}
+    runs-on: xcode-27-xlarge
+    timeout-minutes: 240
+    permissions:
+      contents: read
+      actions: read
+    env:
+      SOURCE_SHA: ${{ github.sha }}
+      GIT_COMMIT: ${{ github.sha }}
+      MACOSX_DEPLOYMENT_TARGET: "27.0"
+      OPENCLAW_MACOS_DEPLOYMENT_TARGET: "27.0"
+      TOOLCHAIN_RUN_ID: ${{ inputs.toolchain_run_id }}
+      TOOLCHAIN_ARTIFACT_ID: ${{ inputs.toolchain_artifact_id }}
+      TOOLCHAIN_BUNDLE_SHA256: ${{ inputs.toolchain_bundle_sha256 }}
+      MIN_MEMORY_GIB: ${{ inputs.min_memory_gib }}
+    steps:
+      - name: Check dispatch inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          [[ "$TOOLCHAIN_RUN_ID" =~ ^[1-9][0-9]*$ ]] || exit 1
+          [[ "$TOOLCHAIN_ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]] || exit 1
+          [[ "$TOOLCHAIN_BUNDLE_SHA256" =~ ^[0-9a-f]{64}$ ]] || exit 1
+          [[ "$MIN_MEMORY_GIB" =~ ^[1-9][0-9]{0,3}$ ]] || exit 1
+          AOT_ROOT="$RUNNER_TEMP/openclaw-aot-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          {
+            echo "AOT_ROOT=$AOT_ROOT"
+            echo "OPENCLAW_STATE_DIR=$AOT_ROOT/state"
+            echo "OPENCLAW_CONFIG_PATH=$AOT_ROOT/config.json"
+            echo "OPENCLAW_NO_RESPAWN=1"
+          } >> "$GITHUB_ENV"
+          mkdir -p "$AOT_ROOT/evidence" "$AOT_ROOT/tmp"
+
+      - name: Checkout dispatched main source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Verify dispatched source identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          git status --porcelain > "$AOT_ROOT/evidence/source-status.txt"
+          test ! -s "$AOT_ROOT/evidence/source-status.txt"
+          build_timestamp="$(date -u -r "$(git show -s --format=%ct "$SOURCE_SHA")" '+%Y-%m-%dT%H:%M:%S.000Z')"
+          echo "OPENCLAW_BUILD_TIMESTAMP=$build_timestamp" >> "$GITHUB_ENV"
+          printf '%s\n' "$build_timestamp" > "$AOT_ROOT/evidence/build-timestamp.txt"
+
+      - name: Check artifact helper boundaries
+        env:
+          TMPDIR: ${{ runner.temp }}/openclaw-aot-${{ github.run_id }}-${{ github.run_attempt }}/tmp
+        run: python3 test/scripts/test_aot_artifact.py
+
+      - name: Admit native host and storage
+        run: |
+          cp scripts/aot-artifact.py "$AOT_ROOT/helper.py"
+          python3 "$AOT_ROOT/helper.py" admit
+
+      - name: Verify toolchain artifact provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$TOOLCHAIN_ARTIFACT_ID" > "$AOT_ROOT/evidence/toolchain-artifact.json"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$TOOLCHAIN_RUN_ID" > "$AOT_ROOT/evidence/toolchain-run.json"
+          python3 "$AOT_ROOT/helper.py" provenance
+
+      - name: Download selected same-repository toolchain artifact
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          artifact-ids: ${{ inputs.toolchain_artifact_id }}
+          run-id: ${{ inputs.toolchain_run_id }}
+          repository: ${{ github.repository }}
+          github-token: ${{ github.token }}
+          merge-multiple: true
+          path: ${{ runner.temp }}/openclaw-aot-${{ github.run_id }}-${{ github.run_attempt }}/download
+
+      - name: Verify and extract pinned standard compiler
+        run: python3 "$AOT_ROOT/helper.py" extract
+
+      - name: Setup pinned Node and repository package manager
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          cache-mode: off
+
+      - name: Build canonical runtime and UI
+        env:
+          TMPDIR: ${{ runner.temp }}/openclaw-aot-${{ github.run_id }}-${{ github.run_attempt }}/tmp
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 "$AOT_ROOT/helper.py" measure runtime -- pnpm build
+          OPENCLAW_CONTROL_UI_RELEASE_BUILD=1 python3 "$AOT_ROOT/helper.py" measure ui -- pnpm ui:build
+
+      - name: Compile emitted-JS AOT
+        env:
+          TMPDIR: ${{ runner.temp }}/openclaw-aot-${{ github.run_id }}-${{ github.run_attempt }}/tmp
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 "$AOT_ROOT/helper.py" admit
+          python3 "$AOT_ROOT/helper.py" measure aot -- \
+            "$AOT_ROOT/toolchain/bin/bun" scripts/build-bun-standalone.mjs "$AOT_ROOT/output" --compile-aot
+
+      - name: Validate manifest and isolated smoke
+        run: python3 "$AOT_ROOT/helper.py" verify-output
+
+      - name: Upload unsigned experimental artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: openclaw-aot-js-darwin-arm64-macos27-only-unsigned-${{ github.sha }}
+          path: ${{ runner.temp }}/openclaw-aot-${{ github.run_id }}-${{ github.run_attempt }}/openclaw-aot-js-darwin-arm64-macos27-only.tar.gz
+          retention-days: 7
+          if-no-files-found: error
+          compression-level: 0
+
+      - name: Retain experiment evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: openclaw-aot-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/openclaw-aot-${{ github.run_id }}-${{ github.run_attempt }}/evidence
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - name: Summarize experimental result
+        if: ${{ always() }}
+        env:
+          BUILD_RESULT: ${{ job.status }}
+        run: |
+          {
+            echo "Unsigned macOS 27-only JS AOT experiment: $BUILD_RESULT"
+            echo "Source: $SOURCE_SHA; compiler: fd40ba44 / aaa690bf, standard darwin-arm64."
+            echo "No release assets, signing, notarization, appcasts, or ordinary JIT release jobs were changed."
+            echo "Compiler/output minimum macOS versions are inspected with vtool; this does not support the app’s macOS 15 floor."
+            echo "Version/help smoke is not full runtime or distribution qualification."
+          } >> "$GITHUB_STEP_SUMMARY"

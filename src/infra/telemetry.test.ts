@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createConfigIO } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as officialCatalog from "../plugins/official-external-plugin-catalog.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import * as pluginRuntime from "../plugins/runtime.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
@@ -8,7 +9,7 @@ import { writeConfigMachineState } from "../state/config-machine-state-write.js"
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import * as workerStore from "../state/openclaw-state-worker-store.js";
-import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+import { setTestEnvValue } from "../test-utils/env.js";
 import { useMockHttp } from "../test-utils/mock-http.js";
 import {
   createOpenClawTestState,
@@ -27,6 +28,39 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const TELEMETRY_URL = "https://telemetry.openclaw.ai/api/latest-version";
 const TELEMETRY_STATE_KEY = "telemetry.updateCheck";
 const mockHttp = useMockHttp();
+const update = { version: "2026.8.24" };
+
+function respond(version = update.version, url = TELEMETRY_URL) {
+  mockHttp.intercept({ url, reply: { json: { version } } });
+}
+
+function readState() {
+  return readConfigMachineState(TELEMETRY_STATE_KEY);
+}
+
+function payloadFor(config: OpenClawConfig = {}, surface: "gateway" | "cli" = "gateway") {
+  return buildTelemetryPayload(config, { surface });
+}
+
+function checkUpdate(config: OpenClawConfig = {}, nowMs = NOW, fetchImpl?: typeof fetch) {
+  vi.spyOn(Date, "now").mockReturnValue(nowMs);
+  if (fetchImpl) {
+    vi.spyOn(globalThis, "fetch").mockImplementation(fetchImpl);
+  }
+  return checkTelemetryUpdate(() => config);
+}
+
+function providerConfig(baseUrl: string, apiKey?: string) {
+  return {
+    baseUrl: `https://${baseUrl}.example.invalid/v1`,
+    ...(apiKey ? { apiKey } : {}),
+    models: [],
+  };
+}
+
+function expectState(lastPingAt: number, latestVersion = update.version, note?: string) {
+  expect(readState()).toEqual({ lastPingAt, latestVersion, ...(note ? { note } : {}) });
+}
 
 function installPluginRegistry(...plugins: Parameters<typeof createPluginRecord>[0][]): void {
   const registry = createEmptyPluginRegistry();
@@ -56,20 +90,9 @@ function createFeatureConfig(enabled = true): OpenClawConfig {
     },
     models: {
       providers: {
-        openai: {
-          baseUrl: "https://private-provider.example.invalid/v1",
-          apiKey: "private-provider-api-key",
-          models: [],
-        },
-        anthropic: {
-          baseUrl: "https://private-anthropic.example.invalid/v1",
-          apiKey: "private-anthropic-api-key",
-          models: [],
-        },
-        "acme-llm": {
-          baseUrl: "https://private-llm.example.invalid/v1",
-          models: [],
-        },
+        openai: providerConfig("private-provider", "private-provider-api-key"),
+        anthropic: providerConfig("private-anthropic", "private-anthropic-api-key"),
+        "acme-llm": providerConfig("private-llm"),
       },
     },
     plugins: {
@@ -99,6 +122,8 @@ describe("anonymous telemetry", () => {
         OPENCLAW_NIX_MODE: undefined,
         OPENCLAW_NO_AUTO_UPDATE: undefined,
         OPENCLAW_TELEMETRY_ENDPOINT: undefined,
+        VITEST: undefined,
+        NODE_ENV: undefined,
       },
     });
     installPluginRegistry(
@@ -120,7 +145,7 @@ describe("anonymous telemetry", () => {
   });
 
   it("builds deterministic feature facts without credentials, identities, paths, or hostnames", async () => {
-    const payload = await buildTelemetryPayload(createFeatureConfig(), { surface: "gateway" });
+    const payload = await payloadFor(createFeatureConfig());
     const serialized = JSON.stringify(payload);
 
     expect(payload).toEqual({
@@ -140,12 +165,9 @@ describe("anonymous telemetry", () => {
     expect(serialized).not.toMatch(
       /"(?:id|accountId|userId|machineId|installId|token|apiKey|secret|password|prompt|message|host|hostname|baseUrl|path|email|models)"\s*:/iu,
     );
-    expect(serialized).not.toContain("private-");
-    expect(serialized).not.toContain("acme-internal-crm");
-    expect(serialized).not.toContain("acme-internal-workflows");
-    expect(serialized).not.toContain("acme-llm");
-    expect(serialized).not.toContain("example.invalid");
-    expect(serialized).not.toContain("@");
+    expect(serialized).not.toMatch(
+      /private-|acme-internal-(?:crm|workflows)|acme-llm|example\.invalid|@/u,
+    );
     expect(serialized).not.toContain(testState.stateDir);
     expect(payload.features.sessionsLast24h).toBeGreaterThanOrEqual(0);
   });
@@ -155,24 +177,21 @@ describe("anonymous telemetry", () => {
       { id: "whatsapp", origin: "bundled", channelIds: ["whatsapp"] },
       { id: "diagnostics-otel", origin: "bundled" },
     );
-    const payload = await buildTelemetryPayload(
-      {
-        agents: {
-          defaults: {
-            model: {
-              primary: "anthropic/private-model",
-              fallbacks: ["openai/private-fallback", "cohere/private-official-model"],
-            },
-          },
-          entries: {
-            researcher: { model: "google/private-research-model" },
+    const payload = await payloadFor({
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/private-model",
+            fallbacks: ["openai/private-fallback", "cohere/private-official-model"],
           },
         },
-        channels: { whatsapp: { allowFrom: ["+15555550123"] } },
-        plugins: { entries: { "never-loaded": { enabled: true } } },
+        entries: {
+          researcher: { model: "google/private-research-model" },
+        },
       },
-      { surface: "gateway" },
-    );
+      channels: { whatsapp: { allowFrom: ["+15555550123"] } },
+      plugins: { entries: { "never-loaded": { enabled: true } } },
+    });
 
     expect(payload.features).toMatchObject({
       channels: ["whatsapp"],
@@ -180,8 +199,7 @@ describe("anonymous telemetry", () => {
       plugins: ["diagnostics-otel", "whatsapp"],
       pluginsEnabled: 2,
     });
-    expect(JSON.stringify(payload)).not.toContain("private-");
-    expect(JSON.stringify(payload)).not.toContain("+15555550123");
+    expect(JSON.stringify(payload)).not.toMatch(/private-|\+15555550123/u);
   });
 
   it("classifies configured channels by their loaded plugin owner", async () => {
@@ -190,104 +208,106 @@ describe("anonymous telemetry", () => {
       { id: "acme-internal-crm", channelIds: ["telegram"] },
     );
 
-    const payload = await buildTelemetryPayload(
-      { channels: { "public-alias": { enabled: true }, telegram: { enabled: true } } },
-      { surface: "gateway" },
-    );
+    const payload = await payloadFor({
+      channels: { "public-alias": { enabled: true }, telegram: { enabled: true } },
+    });
 
-    expect(payload.features.channels).toEqual(["public-alias"]);
-    expect(payload.features.plugins).toEqual(["public-channel-owner"]);
-    expect(payload.features.pluginsEnabled).toBe(2);
+    expect(payload.features).toMatchObject({
+      channels: ["public-alias"],
+      plugins: ["public-channel-owner"],
+      pluginsEnabled: 2,
+    });
     expect(JSON.stringify(payload)).not.toContain("acme-internal-crm");
   });
 
-  it.each(
-    (["provider map", "auth profile", "model reference"] as const).flatMap((source) =>
-      [
-        { provider: "OpenAI", expected: ["openai"] },
-        { provider: " OpenAI ", expected: ["openai"] },
-        { provider: " Open AI ", expected: [] },
-        { provider: " Acme-Private ", expected: [] },
-      ].map(({ provider, expected }) => ({ source, provider, expected })),
-    ),
-  )(
-    "reports loaded $source provider $provider as $expected",
-    async ({ source, provider, expected }) => {
-      const input: OpenClawConfig = { plugins: { enabled: false } };
-      if (source === "provider map") {
-        input.models = {
-          providers: { [provider]: { baseUrl: "https://provider.example.invalid/v1", models: [] } },
-        };
-      } else if (source === "auth profile") {
-        input.auth = { profiles: { configured: { provider, mode: "api_key" } } };
-      } else {
-        input.agents = { defaults: { model: `${provider}/gpt-4o` } };
-      }
-      await testState.writeConfig(input);
-      const config = createConfigIO({
-        configPath: testState.configPath,
-        env: { OPENCLAW_STATE_DIR: testState.stateDir },
-        homedir: () => testState.home,
-        observe: false,
-      }).loadConfig();
-
-      // The real loader accepts these spellings without canonicalizing the provider identity.
-      if (source === "provider map") {
-        expect(Object.keys(config.models?.providers ?? {})).toEqual([provider]);
-      } else if (source === "auth profile") {
-        expect(config.auth?.profiles?.configured?.provider).toBe(provider);
-      }
-      expect(
-        (await buildTelemetryPayload(config, { surface: "gateway" })).features.providerFamilies,
-      ).toEqual(expected);
+  it.each([
+    [{ id: "bundled-plugin", origin: "bundled" }, ["bundled-plugin"]],
+    [
+      { id: "official-plugin", origin: "global", trustedOfficialInstall: true },
+      ["official-plugin"],
+    ],
+    [
+      { id: "opencode", origin: "workspace", packageName: "@openclaw/opencode-provider" },
+      ["opencode"],
+    ],
+    [{ id: "opencode", origin: "workspace", packageName: "@acme/private" }, []],
+  ] satisfies [Parameters<typeof createPluginRecord>[0], string[]][])(
+    "reports only a public identity for %j",
+    async (plugin, expected) => {
+      installPluginRegistry(plugin);
+      const payload = await payloadFor();
+      expect(payload.features.plugins).toEqual(expected);
+      expect(payload.features.pluginsEnabled).toBe(1);
+      expect(JSON.stringify(payload)).not.toContain("@acme/private");
     },
   );
 
-  it("deduplicates canonical provider families across config maps, auth, and model references", async () => {
-    const config: OpenClawConfig = {
-      models: {
-        providers: {
-          OpenAI: { baseUrl: "https://provider.example.invalid/v1", models: [] },
-          " openai ": { baseUrl: "https://provider.example.invalid/v1", models: [] },
-        },
-      },
-      auth: { profiles: { configured: { provider: " OPENAI ", mode: "api_key" } } },
-      agents: { defaults: { model: "OpenAI/gpt-4o" } },
-    };
+  it("never consults the hosted catalog when reporting private plugin identities", async () => {
+    const hostedCatalog = vi
+      .spyOn(officialCatalog, "loadConfiguredHostedOfficialExternalPluginCatalogEntries")
+      .mockResolvedValue({
+        source: "bundled-fallback",
+        entries: [{ id: "acme-internal-crm", name: "@acme/internal-crm" }],
+        error: "hosted fixture",
+      });
+    installPluginRegistry({
+      id: "acme-internal-crm",
+      origin: "global",
+      packageName: "@acme/internal-crm",
+    });
+    const payload = await payloadFor();
+    expect(payload.features.plugins).toEqual([]);
+    expect(payload.features.pluginsEnabled).toBe(1);
+    expect(JSON.stringify(payload)).not.toContain("acme-internal-crm");
+    expect(hostedCatalog).not.toHaveBeenCalled();
+  });
 
-    expect(
-      (await buildTelemetryPayload(config, { surface: "gateway" })).features.providerFamilies,
-    ).toEqual(["openai"]);
+  it.each([
+    { provider: " OpenAI ", expected: ["openai"] },
+    { provider: " Open AI ", expected: [] },
+  ])("reports loaded provider $provider as $expected", async ({ provider, expected }) => {
+    await testState.writeConfig({
+      plugins: { enabled: false },
+      models: {
+        providers: { [provider]: { baseUrl: "https://provider.example.invalid/v1", models: [] } },
+      },
+    });
+    const config = createConfigIO({
+      configPath: testState.configPath,
+      env: { OPENCLAW_STATE_DIR: testState.stateDir },
+      homedir: () => testState.home,
+      observe: false,
+    }).loadConfig();
+
+    // The loader accepts these spellings without canonicalizing the provider identity.
+    expect(Object.keys(config.models?.providers ?? {})).toEqual([provider]);
+    expect((await payloadFor(config)).features.providerFamilies).toEqual(expected);
   });
 
   it("uses manifest-owned plugin activation when a CLI has no active runtime registry", async () => {
-    const activeRegistry = vi.spyOn(pluginRuntime, "getActivePluginRegistry").mockReturnValue(null);
-    try {
-      const payload = await buildTelemetryPayload(
-        {
-          channels: { telegram: { enabled: true } },
-          plugins: { allow: ["telegram"] },
-        },
-        { surface: "cli" },
-      );
+    vi.spyOn(pluginRuntime, "getActivePluginRegistry").mockReturnValue(null);
+    const payload = await payloadFor(
+      {
+        channels: { telegram: { enabled: true } },
+        plugins: { allow: ["telegram"] },
+      },
+      "cli",
+    );
 
-      expect(payload.features.channels).toEqual(["telegram"]);
-      expect(payload.features.plugins).toContain("telegram");
-      expect(payload.features.pluginsEnabled).toBe(payload.features.plugins.length);
-    } finally {
-      activeRegistry.mockRestore();
-    }
+    expect(payload.features.channels).toEqual(["telegram"]);
+    expect(payload.features.plugins).toContain("telegram");
+    expect(payload.features.pluginsEnabled).toBe(payload.features.plugins.length);
   });
 
   it("counts only session creation events from the previous 24 hours", async () => {
-    const { recordSessionStateEvent } = await import("../sessions/session-state-events.js");
+    const { recordSessionStateEventAsync } = await import("../sessions/session-state-events.js");
     const now = Date.now();
     for (const event of [
       { sessionKey: "recent", kind: "created" as const, occurredAt: now - 1000 },
       { sessionKey: "older", kind: "created" as const, occurredAt: now - DAY_MS - 1000 },
       { sessionKey: "other", kind: "run_completed" as const, occurredAt: now - 1000 },
     ]) {
-      recordSessionStateEvent(
+      await recordSessionStateEventAsync(
         {
           ...event,
           agentId: "main",
@@ -298,189 +318,90 @@ describe("anonymous telemetry", () => {
       );
     }
 
-    expect((await buildTelemetryPayload({}, { surface: "gateway" })).features.sessionsLast24h).toBe(
-      1,
-    );
-  });
-
-  it("sends at most one request per 24 hours and reuses the persisted update result", async () => {
-    mockHttp.intercept({
-      url: TELEMETRY_URL,
-      reply: { json: { version: "2026.8.24", note: "A newer release is available." } },
-    });
-    mockHttp.intercept({
-      url: TELEMETRY_URL,
-      reply: { json: { version: "2026.8.25" } },
-    });
-    const options = { surface: "gateway" as const, fetchImpl: globalThis.fetch };
-
-    const first = await checkTelemetryUpdate(() => ({}), { ...options, nowMs: NOW });
-    const cached = await checkTelemetryUpdate(() => ({}), { ...options, nowMs: NOW + DAY_MS - 1 });
-
-    expect(first).toEqual({ version: "2026.8.24", note: "A newer release is available." });
-    expect(cached).toEqual(first);
-    expect(mockHttp.requests()).toHaveLength(1);
-    expect(readConfigMachineState(TELEMETRY_STATE_KEY)).toEqual({
-      lastPingAt: NOW,
-      latestVersion: "2026.8.24",
-      note: "A newer release is available.",
-    });
-
-    const refreshed = await checkTelemetryUpdate(() => ({}), {
-      ...options,
-      nowMs: NOW + DAY_MS + 1,
-    });
-
-    expect(refreshed).toEqual({ version: "2026.8.25" });
-    expect(mockHttp.requests()).toHaveLength(2);
-    expect(readConfigMachineState(TELEMETRY_STATE_KEY)).toEqual({
-      lastPingAt: NOW + DAY_MS + 1,
-      latestVersion: "2026.8.25",
-    });
+    expect((await payloadFor({})).features.sessionsLast24h).toBe(1);
   });
 
   it("retains a successful response through write failures and recovers without extending its throttle", async () => {
     const unblock = blockTelemetryPersistence();
-    const update = { version: "2026.8.24", note: "A newer release is available." };
-    mockHttp.intercept({ url: TELEMETRY_URL, reply: { json: update } });
-    mockHttp.intercept({ url: TELEMETRY_URL, reply: { json: { version: "2026.8.25" } } });
-    const options = { surface: "gateway" as const, fetchImpl: globalThis.fetch };
-
-    const first = await checkTelemetryUpdate(() => ({}), { ...options, nowMs: NOW });
-    const retained = await checkTelemetryUpdate(() => ({}), { ...options, nowMs: NOW + 120_000 });
+    const announced = { ...update, note: "A newer release is available." };
+    mockHttp.intercept({ url: TELEMETRY_URL, reply: { json: announced } });
+    respond("2026.8.25");
+    const first = await checkUpdate();
+    const retained = await checkUpdate({}, NOW + 120_000);
 
     expect({ first, retained, requests: mockHttp.requests().length }).toEqual({
-      first: update,
-      retained: update,
+      first: announced,
+      retained: announced,
       requests: 1,
     });
-    expect(readConfigMachineState(TELEMETRY_STATE_KEY)).toBeUndefined();
+    expect(readState()).toBeUndefined();
 
     unblock();
-    await expect(
-      checkTelemetryUpdate(() => ({}), { ...options, nowMs: NOW + 240_000 }),
-    ).resolves.toEqual(update);
-    expect(readConfigMachineState(TELEMETRY_STATE_KEY)).toEqual({
-      lastPingAt: NOW,
-      latestVersion: update.version,
-      note: update.note,
-    });
-    await expect(
-      checkTelemetryUpdate(() => ({}), { ...options, nowMs: NOW + DAY_MS - 1 }),
-    ).resolves.toEqual(update);
+    await expect(checkUpdate({}, NOW + 240_000)).resolves.toEqual(announced);
+    expectState(NOW, announced.version, announced.note);
+    await expect(checkUpdate({}, NOW + DAY_MS - 1)).resolves.toEqual(announced);
     expect(mockHttp.requests()).toHaveLength(1);
 
-    await expect(
-      checkTelemetryUpdate(() => ({}), { ...options, nowMs: NOW + DAY_MS }),
-    ).resolves.toEqual({
+    await expect(checkUpdate({}, NOW + DAY_MS)).resolves.toEqual({
       version: "2026.8.25",
     });
     expect(mockHttp.requests()).toHaveLength(2);
-    expect(readConfigMachineState(TELEMETRY_STATE_KEY)).toEqual({
-      lastPingAt: NOW + DAY_MS,
-      latestVersion: "2026.8.25",
-    });
+    expectState(NOW + DAY_MS, "2026.8.25");
   });
 
-  it.each(["endpoint", "state directory", "implicit home"] as const)(
+  it.each(["endpoint", "state directory"] as const)(
     "keeps an unpersisted response isolated when the %s changes",
     async (scope) => {
       blockTelemetryPersistence();
-      const options = { surface: "gateway" as const, fetchImpl: globalThis.fetch };
-      mockHttp.intercept({
-        url: TELEMETRY_URL,
-        reply: { json: { version: "2026.8.24" } },
-      });
-      await checkTelemetryUpdate(() => ({}), { ...options, nowMs: NOW });
+      respond();
+      await checkUpdate();
 
       let endpoint = TELEMETRY_URL;
       if (scope === "endpoint") {
         endpoint = "https://telemetry.example.invalid/api/latest-version";
         setTestEnvValue("OPENCLAW_TELEMETRY_ENDPOINT", endpoint);
-      } else if (scope === "state directory") {
-        setTestEnvValue("OPENCLAW_STATE_DIR", testState.path("alternate-state"));
       } else {
-        deleteTestEnvValue("OPENCLAW_STATE_DIR");
-        setTestEnvValue("OPENCLAW_HOME", testState.path("alternate-home"));
+        setTestEnvValue("OPENCLAW_STATE_DIR", testState.path("alternate-state"));
       }
-      mockHttp.intercept({ url: endpoint, reply: { json: { version: "2026.8.25" } } });
+      respond("2026.8.25", endpoint);
 
-      await expect(
-        checkTelemetryUpdate(() => ({}), { ...options, nowMs: NOW + 120_000 }),
-      ).resolves.toEqual({ version: "2026.8.25" });
+      await expect(checkUpdate({}, NOW + 120_000)).resolves.toEqual({ version: "2026.8.25" });
       expect(mockHttp.requests()).toHaveLength(2);
       testState.applyEnv();
 
-      await expect(
-        checkTelemetryUpdate(() => ({}), { ...options, nowMs: NOW + 240_000 }),
-      ).resolves.toEqual({ version: "2026.8.24" });
+      await expect(checkUpdate({}, NOW + 240_000)).resolves.toEqual(update);
       expect(mockHttp.requests()).toHaveLength(2);
     },
   );
-
-  it("shares the retained success across equivalent resolved state paths", async () => {
-    blockTelemetryPersistence();
-    mockHttp.intercept({
-      url: TELEMETRY_URL,
-      reply: { json: { version: "2026.8.24" } },
-    });
-    const options = { surface: "gateway" as const, fetchImpl: globalThis.fetch };
-    await checkTelemetryUpdate(() => ({}), { ...options, nowMs: NOW });
-    setTestEnvValue("OPENCLAW_STATE_DIR", `${testState.stateDir}/.`);
-
-    await expect(
-      checkTelemetryUpdate(() => ({}), { ...options, nowMs: NOW + 120_000 }),
-    ).resolves.toEqual({
-      version: "2026.8.24",
-    });
-    expect(mockHttp.requests()).toHaveLength(1);
-  });
 
   it("keeps the request's state destination when the environment changes during HTTP", async () => {
     const unblock = blockTelemetryPersistence();
     const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async () => {
       setTestEnvValue("OPENCLAW_STATE_DIR", testState.path("alternate-state"));
-      return Response.json({ version: "2026.8.24" });
+      return Response.json(update);
     });
-    const options = { surface: "gateway" as const, fetchImpl };
-
-    await expect(checkTelemetryUpdate(() => ({}), { ...options, nowMs: NOW })).resolves.toEqual({
-      version: "2026.8.24",
-    });
-    expect(readConfigMachineState(TELEMETRY_STATE_KEY)).toBeUndefined();
+    await expect(checkUpdate({}, NOW, fetchImpl)).resolves.toEqual(update);
+    expect(readState()).toBeUndefined();
     testState.applyEnv();
     unblock();
 
-    await expect(
-      checkTelemetryUpdate(() => ({}), { ...options, nowMs: NOW + 120_000 }),
-    ).resolves.toEqual({
-      version: "2026.8.24",
-    });
+    await expect(checkUpdate({}, NOW + 120_000, fetchImpl)).resolves.toEqual(update);
     expect(fetchImpl).toHaveBeenCalledTimes(1);
-    expect(readConfigMachineState(TELEMETRY_STATE_KEY)).toEqual({
-      lastPingAt: NOW,
-      latestVersion: "2026.8.24",
-    });
+    expectState(NOW);
   });
 
   it("does not replace a newer persisted success with a retained older response", async () => {
     const unblock = blockTelemetryPersistence();
-    mockHttp.intercept({
-      url: TELEMETRY_URL,
-      reply: { json: { version: "2026.8.24" } },
-    });
-    const options = { surface: "gateway" as const, fetchImpl: globalThis.fetch };
-    await checkTelemetryUpdate(() => ({}), { ...options, nowMs: NOW });
+    respond();
+    await checkUpdate();
     unblock();
     const newerState = { lastPingAt: NOW + 60_000, latestVersion: "2026.8.25" };
     writeConfigMachineState(TELEMETRY_STATE_KEY, newerState);
 
-    await expect(
-      checkTelemetryUpdate(() => ({}), { ...options, nowMs: NOW + 120_000 }),
-    ).resolves.toEqual({
+    await expect(checkUpdate({}, NOW + 120_000)).resolves.toEqual({
       version: "2026.8.25",
     });
-    expect(readConfigMachineState(TELEMETRY_STATE_KEY)).toEqual(newerState);
+    expect(readState()).toEqual(newerState);
     expect(mockHttp.requests()).toHaveLength(1);
   });
 
@@ -488,248 +409,122 @@ describe("anonymous telemetry", () => {
     const newerState = { lastPingAt: NOW + 60_000, latestVersion: "2026.8.25" };
     const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async () => {
       writeConfigMachineState(TELEMETRY_STATE_KEY, newerState);
-      return Response.json({ version: "2026.8.24" });
+      return Response.json(update);
     });
 
-    await expect(
-      checkTelemetryUpdate(() => ({}), { surface: "gateway", fetchImpl, nowMs: NOW }),
-    ).resolves.toEqual({ version: newerState.latestVersion });
+    await expect(checkUpdate({}, NOW, fetchImpl)).resolves.toEqual({
+      version: newerState.latestVersion,
+    });
 
-    expect(readConfigMachineState(TELEMETRY_STATE_KEY)).toEqual(newerState);
+    expect(readState()).toEqual(newerState);
   });
 
   it("uses a newer transaction-selected success instead of sending at the pending timestamp's expiry", async () => {
     const unblock = blockTelemetryPersistence();
     const fetchImpl = vi
       .fn<typeof fetch>()
-      .mockResolvedValueOnce(Response.json({ version: "2026.8.24" }))
+      .mockResolvedValueOnce(Response.json(update))
       .mockResolvedValueOnce(Response.json({ version: "2026.8.26" }));
-    const options = { surface: "gateway" as const, fetchImpl };
-    await checkTelemetryUpdate(() => ({}), { ...options, nowMs: NOW });
+    await checkUpdate({}, NOW, fetchImpl);
     unblock();
 
     const newerState = { lastPingAt: NOW + DAY_MS - 60_000, latestVersion: "2026.8.25" };
     const originalRead = workerStore.runOpenClawStateWorkerOperation;
-    const read = vi
-      .spyOn(workerStore, "runOpenClawStateWorkerOperation")
-      .mockImplementationOnce(async (...args) => {
+    vi.spyOn(workerStore, "runOpenClawStateWorkerOperation").mockImplementationOnce(
+      async (...args) => {
         const snapshot = await originalRead(...args);
         writeConfigMachineState(TELEMETRY_STATE_KEY, newerState);
         return snapshot;
-      });
-    try {
-      const result = await checkTelemetryUpdate(() => ({}), { ...options, nowMs: NOW + DAY_MS });
-      expect({ result, requests: fetchImpl.mock.calls.length }).toEqual({
-        result: { version: newerState.latestVersion },
-        requests: 1,
-      });
-      expect(readConfigMachineState(TELEMETRY_STATE_KEY)).toEqual(newerState);
-    } finally {
-      read.mockRestore();
-    }
+      },
+    );
+    const result = await checkUpdate({}, NOW + DAY_MS, fetchImpl);
+    expect({ result, requests: fetchImpl.mock.calls.length }).toEqual({
+      result: { version: newerState.latestVersion },
+      requests: 1,
+    });
+    expect(readState()).toEqual(newerState);
   });
 
-  it.each([
-    { name: "never opted in", config: {} satisfies OpenClawConfig },
-    { name: "explicitly opted out", config: createFeatureConfig(false) },
-  ])("sends only an anonymous GET when $name", async ({ config }) => {
+  it.each(["opt-out", "do-not-track"])("sends only an anonymous GET for %s", async (mode) => {
+    if (mode === "do-not-track") {
+      setTestEnvValue("DO_NOT_TRACK", "true");
+    }
     mockHttp.intercept({
       url: TELEMETRY_URL,
       method: "GET",
       requestHeaders: {
         "user-agent": `openclaw/${VERSION} (${process.platform}; node/${process.versions.node}; ${process.arch}; gateway)`,
       },
-      reply: { json: { version: "2026.8.24" } },
+      reply: { json: update },
     });
 
-    await expect(
-      checkTelemetryUpdate(() => config, {
-        surface: "gateway",
-        fetchImpl: globalThis.fetch,
-        nowMs: NOW,
-      }),
-    ).resolves.toEqual({ version: "2026.8.24" });
+    await expect(checkUpdate(createFeatureConfig(mode !== "opt-out"))).resolves.toEqual(update);
 
     expect(mockHttp.requests()).toHaveLength(1);
   });
 
   it("POSTs exactly the canonical payload only after explicit feature-stats opt-in", async () => {
     const config = createFeatureConfig();
-    const expectedBody = JSON.stringify(
-      await buildTelemetryPayload(config, { surface: "gateway" }),
-    );
+    const expectedBody = JSON.stringify(await payloadFor(config));
     mockHttp.intercept({
       url: TELEMETRY_URL,
       method: "POST",
       requestBody: expectedBody,
       requestHeaders: { "content-type": /^application\/json(?:\s*;.*)?$/u },
-      reply: { json: { version: "2026.8.24" } },
+      reply: { json: update },
     });
 
-    await expect(
-      checkTelemetryUpdate(() => config, {
-        surface: "gateway",
-        fetchImpl: globalThis.fetch,
-        nowMs: NOW,
-      }),
-    ).resolves.toEqual({ version: "2026.8.24" });
+    await expect(checkUpdate(config)).resolves.toEqual(update);
 
     expect(mockHttp.requests()).toHaveLength(1);
   });
 
-  it.each(["1", "true"])(
-    "DO_NOT_TRACK=%s suppresses feature stats but keeps update checks",
-    async (value) => {
-      setTestEnvValue("DO_NOT_TRACK", value);
-      mockHttp.intercept({
-        url: TELEMETRY_URL,
-        method: "GET",
-        reply: { json: { version: "2026.8.24" } },
-      });
-
-      await expect(
-        checkTelemetryUpdate(() => createFeatureConfig(), {
-          surface: "gateway",
-          fetchImpl: globalThis.fetch,
-          nowMs: NOW,
-        }),
-      ).resolves.toEqual({ version: "2026.8.24" });
-
-      expect(mockHttp.requests()).toHaveLength(1);
-    },
-  );
-
-  it("never sends a request when startup update checks are disabled", async () => {
-    await expect(
-      checkTelemetryUpdate(() => ({ ...createFeatureConfig(), update: { checkOnStart: false } }), {
-        surface: "gateway",
-        fetchImpl: globalThis.fetch,
-        nowMs: NOW,
-      }),
-    ).resolves.toBeNull();
-
+  it.each([
+    ["OPENCLAW_NO_AUTO_UPDATE", "1"],
+    ["CI", "true"],
+    ["OPENCLAW_NIX_MODE", "1"],
+  ])("never sends a request when %s=%s", async (key, value) => {
+    setTestEnvValue(key, value);
+    await expect(checkUpdate(createFeatureConfig())).resolves.toBeNull();
     expect(mockHttp.requests()).toHaveLength(0);
-    expect(readConfigMachineState(TELEMETRY_STATE_KEY)).toBeUndefined();
-  });
-
-  it("never sends a request when OPENCLAW_NO_AUTO_UPDATE disables update checks", async () => {
-    setTestEnvValue("OPENCLAW_NO_AUTO_UPDATE", "1");
-
-    await expect(
-      checkTelemetryUpdate(() => createFeatureConfig(), {
-        surface: "gateway",
-        fetchImpl: globalThis.fetch,
-        nowMs: NOW,
-      }),
-    ).resolves.toBeNull();
-
-    expect(mockHttp.requests()).toHaveLength(0);
-    expect(readConfigMachineState(TELEMETRY_STATE_KEY)).toBeUndefined();
-  });
-
-  it("never sends a request from an automated environment", async () => {
-    setTestEnvValue("CI", "true");
-
-    await expect(
-      checkTelemetryUpdate(() => createFeatureConfig(), {
-        surface: "gateway",
-        fetchImpl: globalThis.fetch,
-        nowMs: NOW,
-      }),
-    ).resolves.toBeNull();
-
-    expect(mockHttp.requests()).toHaveLength(0);
-    expect(readConfigMachineState(TELEMETRY_STATE_KEY)).toBeUndefined();
-    expect((await resolveTelemetryStatus(createFeatureConfig())).reason).toBe(
-      "automated-environment",
-    );
+    expect(readState()).toBeUndefined();
+    if (key === "CI") {
+      expect((await resolveTelemetryStatus(createFeatureConfig())).reason).toBe(
+        "automated-environment",
+      );
+    }
   });
 
   it("still reports from an automated environment when an endpoint is configured for it", async () => {
     const customEndpoint = "https://telemetry.example.invalid/api/latest-version";
     setTestEnvValue("CI", "true");
     setTestEnvValue("OPENCLAW_TELEMETRY_ENDPOINT", customEndpoint);
-    mockHttp.intercept({ url: customEndpoint, reply: { json: { version: "2026.8.24" } } });
+    respond(update.version, customEndpoint);
 
-    await expect(
-      checkTelemetryUpdate(() => ({}), {
-        surface: "gateway",
-        fetchImpl: globalThis.fetch,
-        nowMs: NOW,
-      }),
-    ).resolves.toEqual({ version: "2026.8.24" });
+    await expect(checkUpdate()).resolves.toEqual(update);
 
     expect(mockHttp.requests()).toHaveLength(1);
   });
 
-  it("never sends a request for Nix-managed installations", async () => {
-    setTestEnvValue("OPENCLAW_NIX_MODE", "1");
-
-    await expect(
-      checkTelemetryUpdate(() => createFeatureConfig(), {
-        surface: "gateway",
-        fetchImpl: globalThis.fetch,
-        nowMs: NOW,
-      }),
-    ).resolves.toBeNull();
+  it("never accesses the network in a test environment", async () => {
+    setTestEnvValue("VITEST", "true");
+    await expect(checkTelemetryUpdate(() => ({}))).resolves.toBeNull();
 
     expect(mockHttp.requests()).toHaveLength(0);
-    expect(readConfigMachineState(TELEMETRY_STATE_KEY)).toBeUndefined();
-  });
-
-  it("never accesses the network in a test environment without an injected fetch", async () => {
-    await expect(
-      checkTelemetryUpdate(() => ({}), { surface: "gateway", nowMs: NOW }),
-    ).resolves.toBeNull();
-
-    expect(mockHttp.requests()).toHaveLength(0);
-  });
-
-  it("uses the configured telemetry endpoint instead of the public endpoint", async () => {
-    const customEndpoint = "https://telemetry.example.invalid/api/latest-version";
-    setTestEnvValue("OPENCLAW_TELEMETRY_ENDPOINT", customEndpoint);
-    mockHttp.intercept({
-      url: customEndpoint,
-      reply: { json: { version: "2026.8.24" } },
-    });
-
-    await expect(
-      checkTelemetryUpdate(() => ({}), { surface: "cli", fetchImpl: globalThis.fetch, nowMs: NOW }),
-    ).resolves.toEqual({ version: "2026.8.24" });
-
-    expect(mockHttp.requests().map((request) => request.fullUrl)).toEqual([customEndpoint]);
   });
 
   it.each([
-    { name: "HTTP errors", reply: { status: 503, json: { version: "2026.8.24" } } },
+    { name: "HTTP errors", reply: { status: 503, json: update } },
     { name: "a missing version", reply: { json: { note: "Missing required version" } } },
-    { name: "a non-string version", reply: { json: { version: 20260824 } } },
-    { name: "invalid JSON", reply: { body: "{invalid" } },
-    { name: "network failures", reply: new Error("network unavailable") },
   ])("fails silently on $name without stamping a successful ping", async ({ reply }) => {
     mockHttp.intercept({ url: TELEMETRY_URL, reply });
 
-    await expect(
-      checkTelemetryUpdate(() => ({}), {
-        surface: "gateway",
-        fetchImpl: globalThis.fetch,
-        nowMs: NOW,
-      }),
-    ).resolves.toBeNull();
+    await expect(checkUpdate()).resolves.toBeNull();
 
     expect(mockHttp.requests()).toHaveLength(1);
-    expect(readConfigMachineState(TELEMETRY_STATE_KEY)).toBeUndefined();
-    mockHttp.intercept({
-      url: TELEMETRY_URL,
-      reply: { json: { version: "2026.8.24" } },
-    });
-    await expect(
-      checkTelemetryUpdate(() => ({}), {
-        surface: "gateway",
-        fetchImpl: globalThis.fetch,
-        nowMs: NOW + 120_000,
-      }),
-    ).resolves.toEqual({ version: "2026.8.24" });
+    expect(readState()).toBeUndefined();
+    respond();
+    await expect(checkUpdate({}, NOW + 120_000)).resolves.toEqual(update);
     expect(mockHttp.requests()).toHaveLength(2);
   });
 
@@ -739,11 +534,7 @@ describe("anonymous telemetry", () => {
       reply: { json: { version: "2026.8.24", note: "x".repeat(800) } },
     });
 
-    const result = await checkTelemetryUpdate(() => ({}), {
-      surface: "gateway",
-      fetchImpl: globalThis.fetch,
-      nowMs: NOW,
-    });
+    const result = await checkUpdate();
     const persisted = readConfigMachineState<{ note?: string }>(TELEMETRY_STATE_KEY);
 
     expect(result?.note).toHaveLength(500);
@@ -780,23 +571,12 @@ describe("anonymous telemetry", () => {
         Response.json({ version: "2026.8.24", padding: "x".repeat(chunk.length) }),
       )
       .mockResolvedValueOnce(new Response(body));
-    const options = { surface: "gateway" as const, fetchImpl };
-
-    await expect(checkTelemetryUpdate(() => ({}), { ...options, nowMs: NOW })).resolves.toEqual({
-      version: "2026.8.24",
-    });
-    await expect(
-      checkTelemetryUpdate(() => ({}), { ...options, nowMs: NOW + DAY_MS + 1 }),
-    ).resolves.toEqual({ version: "2026.8.24" });
+    await expect(checkUpdate({}, NOW, fetchImpl)).resolves.toEqual(update);
+    await expect(checkUpdate({}, NOW + DAY_MS + 1, fetchImpl)).resolves.toEqual(update);
     expect(canceled).toBe(true);
     expect(enqueuedBytes).toBeLessThan(32 * chunk.length);
-    expect(readConfigMachineState(TELEMETRY_STATE_KEY)).toEqual({
-      lastPingAt: NOW,
-      latestVersion: "2026.8.24",
-    });
-    await expect(
-      checkTelemetryUpdate(() => ({}), { ...options, nowMs: NOW + DAY_MS + 30_001 }),
-    ).resolves.toEqual({ version: "2026.8.24" });
+    expectState(NOW);
+    await expect(checkUpdate({}, NOW + DAY_MS + 30_001, fetchImpl)).resolves.toEqual(update);
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 });

@@ -1,13 +1,13 @@
-/** Command for removing one saved model auth profile. */
 import { isDeepStrictEqual } from "node:util";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   type AuthProfileCredential,
-  type AuthProfileStore,
-  ensureAuthProfileStoreWithoutExternalProfiles,
+  ensureAuthProfileStoreWithoutExternalProfilesAsync,
   listProfilesForProvider,
-  loadAuthProfileStoreWithoutExternalProfiles,
+  loadAuthProfileStoreWithoutExternalProfilesAsync,
   removeAuthProfilesAcrossOwnerStores,
 } from "../../agents/auth-profiles.js";
+import type { AuthProfileRemovalScope } from "../../agents/auth-profiles/profiles.js";
 import {
   resolveProviderConfigSecretInput,
   resolveProviderEntryApiKeyProfileReference,
@@ -26,25 +26,18 @@ import {
 } from "../../plugins/provider-auth-helpers.js";
 import { captureGatewayRootWorkAdmissionContinuationScope } from "../../process/gateway-work-admission.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import { clearRemovedSessionAuthProfiles } from "../../sessions/auth-profile-removal.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
+import {
+  removeModelAuthProfileSelections,
+  resolveModelAuthProfileRemoval,
+  type ModelAuthProfileRemoval,
+} from "./auth-logout-selections.js";
 import { refreshRunningGatewayAuthState } from "./auth-refresh.js";
 import { loadModelsConfig } from "./load-config.js";
 import { resolveModelsTargetAgent, updateConfig } from "./shared.js";
 
 const MISSING_CONFIG_VALUE = Symbol("missing-config-value");
-
-function asConfigRecord(value: unknown): Record<string, unknown> | undefined {
-  if (
-    value === MISSING_CONFIG_VALUE ||
-    value === null ||
-    typeof value !== "object" ||
-    Array.isArray(value)
-  ) {
-    return undefined;
-  }
-  // SAFETY: The branch proves this is a non-null, non-array object.
-  return value as Record<string, unknown>;
-}
 
 function restoreConfigMutationValue(current: unknown, before: unknown, after: unknown): unknown {
   // Restore only cleanup-owned values that no later config writer changed.
@@ -54,9 +47,9 @@ function restoreConfigMutationValue(current: unknown, before: unknown, after: un
   if (isDeepStrictEqual(current, after)) {
     return before;
   }
-  const currentRecord = asConfigRecord(current);
-  const beforeRecord = asConfigRecord(before);
-  const afterRecord = asConfigRecord(after);
+  const currentRecord = asOptionalRecord(current);
+  const beforeRecord = asOptionalRecord(before);
+  const afterRecord = asOptionalRecord(after);
   if (!currentRecord || !beforeRecord || !afterRecord) {
     return current;
   }
@@ -84,73 +77,6 @@ function restoreCredentialConfigMutation(params: {
 }): OpenClawConfig {
   // SAFETY: Restoration selects or rebuilds fields from three validated OpenClawConfig values.
   return restoreConfigMutationValue(params.current, params.before, params.after) as OpenClawConfig;
-}
-
-function restoreSurvivingProfileOrder(params: {
-  desired: OpenClawConfig;
-  before: OpenClawConfig;
-  after: OpenClawConfig;
-  survivingProfileIds: ReadonlySet<string>;
-}): OpenClawConfig {
-  const order = { ...params.after.auth?.order };
-  for (const [provider, beforeOrder] of Object.entries(params.before.auth?.order ?? {})) {
-    const afterOrder = params.after.auth?.order?.[provider] ?? [];
-    const restored = beforeOrder.filter(
-      (profileId) => afterOrder.includes(profileId) || params.survivingProfileIds.has(profileId),
-    );
-    for (const profileId of afterOrder) {
-      if (!restored.includes(profileId)) {
-        restored.push(profileId);
-      }
-    }
-    if (restored.length > 0 || Object.hasOwn(order, provider)) {
-      order[provider] = restored;
-    }
-  }
-  if (Object.keys(order).length === 0 && !params.desired.auth) {
-    return params.desired;
-  }
-  const { order: _removedOrder, ...auth } = params.desired.auth ?? {};
-  return {
-    ...params.desired,
-    auth: {
-      ...auth,
-      ...(Object.keys(order).length > 0 ? { order } : {}),
-    },
-  };
-}
-
-function removeCredentialConfigReferences(params: {
-  current: OpenClawConfig;
-  runtimeConfig: OpenClawConfig;
-  profileIds: readonly string[];
-  store: AuthProfileStore;
-  apiKeyProvider?: string;
-}): OpenClawConfig {
-  let next = params.current;
-  for (const id of params.profileIds) {
-    next = removeAuthProfileConfig(next, id);
-  }
-  if (params.apiKeyProvider === undefined || !next.models?.providers) {
-    return next;
-  }
-  const owner = resolveProviderIdForAuth(params.apiKeyProvider, { config: next });
-  const providers = { ...next.models.providers };
-  for (const [provider, entry] of Object.entries(providers)) {
-    if (
-      resolveProviderIdForAuth(provider, { config: next }) === owner &&
-      resolveProviderEntryApiKeyProfileReference({
-        cfg: params.runtimeConfig,
-        sourceConfig: params.runtimeConfig,
-        provider,
-        store: params.store,
-      }).kind === "literal"
-    ) {
-      const { apiKey: _removed, ...connection } = entry;
-      providers[provider] = connection;
-    }
-  }
-  return { ...next, models: { ...next.models, providers } };
 }
 
 /** Clears selected config references before deleting the credentials they name. */
@@ -192,16 +118,21 @@ export async function removeModelAuthCredentials(params: {
     captureGatewayRootWorkAdmissionContinuationScope()?.run,
   );
   let configChanged = false;
+  let confirmedSelections: ModelAuthProfileRemoval | undefined;
   let cleanup:
     | {
         before: OpenClawConfig;
         after: OpenClawConfig;
         profileIds: readonly string[];
+        selections: ModelAuthProfileRemoval;
       }
     | undefined;
-  const beforeRemove = async (profileIds: readonly string[]) => {
+  const beforeRemove = async (
+    profileIds: readonly string[],
+    scopes: readonly AuthProfileRemovalScope[] = [],
+  ) => {
     await updateConfig(
-      (current, { runtimeConfig }) => {
+      async (current, { runtimeConfig }) => {
         if (
           expectedBindings &&
           !isDeepStrictEqual(keyBindings(runtimeConfig, runtimeConfig), expectedBindings)
@@ -210,7 +141,7 @@ export async function removeModelAuthCredentials(params: {
             "The key changed while removing it. Nothing was removed. Reload Models and retry removal.",
           );
         }
-        const store = loadAuthProfileStoreWithoutExternalProfiles(params.agentDir, {
+        const store = await loadAuthProfileStoreWithoutExternalProfilesAsync(params.agentDir, {
           allowKeychainPrompt: false,
         });
         if (
@@ -229,14 +160,35 @@ export async function removeModelAuthCredentials(params: {
         ) {
           throw new Error("The selected API key changed. Reload Models and retry removal.");
         }
-        const next = removeCredentialConfigReferences({
-          current,
-          runtimeConfig,
-          profileIds,
-          store,
-          ...(apiKeyProvider !== undefined ? { apiKeyProvider } : {}),
-        });
-        cleanup = { before: current, after: next, profileIds };
+        const selections = await resolveModelAuthProfileRemoval(runtimeConfig, scopes);
+        let referencesRemoved = current;
+        for (const id of profileIds) {
+          referencesRemoved = removeAuthProfileConfig(referencesRemoved, id);
+        }
+        if (apiKeyProvider !== undefined && referencesRemoved.models?.providers) {
+          const owner = resolveProviderIdForAuth(apiKeyProvider, { config: referencesRemoved });
+          const providers = { ...referencesRemoved.models.providers };
+          for (const [provider, entry] of Object.entries(providers)) {
+            if (
+              resolveProviderIdForAuth(provider, { config: referencesRemoved }) === owner &&
+              resolveProviderEntryApiKeyProfileReference({
+                cfg: runtimeConfig,
+                sourceConfig: runtimeConfig,
+                provider,
+                store,
+              }).kind === "literal"
+            ) {
+              const { apiKey: _removed, ...connection } = entry;
+              providers[provider] = connection;
+            }
+          }
+          referencesRemoved = {
+            ...referencesRemoved,
+            models: { ...referencesRemoved.models, providers },
+          };
+        }
+        const next = removeModelAuthProfileSelections(referencesRemoved, selections);
+        cleanup = { before: current, after: next, profileIds, selections };
         configChanged = !isDeepStrictEqual(current, next);
         return next;
       },
@@ -247,6 +199,7 @@ export async function removeModelAuthCredentials(params: {
   };
   const restoreIncompleteRemoval = async (
     survivingProfiles: ReadonlyMap<string, AuthProfileCredential>,
+    scopes: readonly AuthProfileRemovalScope[] = [],
   ) => {
     const cleanupState = cleanup;
     if (!cleanupState) {
@@ -259,15 +212,56 @@ export async function removeModelAuthCredentials(params: {
         withoutSurvivors = removeAuthProfileConfig(withoutSurvivors, profileId);
       }
     }
-    const desired = restoreSurvivingProfileOrder({
-      desired: restoreCredentialConfigMutation({
-        current: cleanupState.after,
-        before: cleanupState.before,
-        after: withoutSurvivors,
-      }),
+    let desired = restoreCredentialConfigMutation({
+      current: cleanupState.after,
       before: cleanupState.before,
-      after: cleanupState.after,
-      survivingProfileIds,
+      after: withoutSurvivors,
+    });
+    const order = { ...cleanupState.after.auth?.order };
+    for (const [provider, beforeOrder] of Object.entries(cleanupState.before.auth?.order ?? {})) {
+      const afterOrder = cleanupState.after.auth?.order?.[provider] ?? [];
+      const restored = beforeOrder.filter(
+        (profileId) => afterOrder.includes(profileId) || survivingProfileIds.has(profileId),
+      );
+      for (const profileId of afterOrder) {
+        if (!restored.includes(profileId)) {
+          restored.push(profileId);
+        }
+      }
+      if (restored.length > 0 || Object.hasOwn(order, provider)) {
+        order[provider] = restored;
+      }
+    }
+    if (Object.keys(order).length > 0 || desired.auth) {
+      const { order: _removedOrder, ...auth } = desired.auth ?? {};
+      desired = {
+        ...desired,
+        auth: { ...auth, ...(Object.keys(order).length > 0 ? { order } : {}) },
+      };
+    }
+    const plannedSelections = cleanupState.selections;
+    const survivingSelections = await resolveModelAuthProfileRemoval(cleanupState.before, scopes);
+    const removedSelections = {
+      shared: new Set(
+        [...plannedSelections.shared].filter((id) => !survivingSelections.shared.has(id)),
+      ),
+      agents: new Map(
+        [...plannedSelections.agents]
+          .map(
+            ([agentId, ids]) =>
+              [
+                agentId,
+                new Set([...ids].filter((id) => !survivingSelections.agents.get(agentId)?.has(id))),
+              ] as const,
+          )
+          .filter(([, ids]) => ids.size > 0),
+      ),
+    };
+    confirmedSelections = removedSelections;
+    desired = restoreCredentialConfigMutation({
+      current: desired,
+      before: removeModelAuthProfileSelections(cleanupState.before, removedSelections),
+      after: removeModelAuthProfileSelections(cleanupState.before, cleanupState.selections),
     });
     await updateConfig((current) =>
       restoreCredentialConfigMutation({
@@ -276,15 +270,33 @@ export async function removeModelAuthCredentials(params: {
         after: cleanupState.after,
       }),
     );
+    cleanupState.selections = removedSelections;
   };
-  const removed = await removeAuthProfilesAcrossOwnerStores({
-    cfg: params.cfg,
-    agentDir: params.agentDir,
-    profileIds: params.profileIds,
-    beforeRemove,
-    onIncomplete: restoreIncompleteRemoval,
-    ...(params.provider !== undefined ? { provider: params.provider } : {}),
-  });
+  let removed: boolean;
+  try {
+    removed = await removeAuthProfilesAcrossOwnerStores({
+      cfg: params.cfg,
+      agentDir: params.agentDir,
+      profileIds: params.profileIds,
+      beforeRemove,
+      onIncomplete: restoreIncompleteRemoval,
+      ...(params.provider !== undefined ? { provider: params.provider } : {}),
+    });
+    if (removed && cleanup) {
+      confirmedSelections = cleanup.selections;
+    }
+  } finally {
+    // The removal owner reconciles survivors before returning or throwing. Only
+    // confirmed deletions retire conversation selections, never expiry/read gaps.
+    if (cleanup && confirmedSelections) {
+      const selections = confirmedSelections;
+      await clearRemovedSessionAuthProfiles({
+        cfg: cleanup.after,
+        removedByAgent: selections.agents,
+        rewriteConfig: (cfg) => removeModelAuthProfileSelections(cfg, selections),
+      });
+    }
+  }
   if (!removed) {
     throw new Error("Saved credentials could not be removed. Wait a moment and retry.");
   }
@@ -294,7 +306,6 @@ export async function removeModelAuthCredentials(params: {
   return undefined;
 }
 
-/** Removes a saved auth profile from the agent auth store and from config. */
 export async function modelsAuthLogoutCommand(
   opts: { profileId: string; agent?: string; yes?: boolean },
   runtime: RuntimeEnv,
@@ -310,7 +321,7 @@ export async function modelsAuthLogoutCommand(
   const { agentId, agentDir } = resolveModelsTargetAgent(cfg, opts.agent, { kind: "mutation" });
   // External CLI overlays (Claude/Codex CLI) are not ours to delete, so the
   // removable set is exactly the persisted store.
-  const store = ensureAuthProfileStoreWithoutExternalProfiles(agentDir);
+  const store = await ensureAuthProfileStoreWithoutExternalProfilesAsync(agentDir);
   const credential = store.profiles[profileId];
   if (!credential) {
     throw new Error(

@@ -40,8 +40,12 @@ pull_live_image() {
     if docker_e2e_docker_cmd pull "$LIVE_IMAGE_NAME"; then
       return 0
     fi
-    if [[ "$attempt" -lt "$LIVE_IMAGE_PULL_ATTEMPTS" && "$LIVE_IMAGE_PULL_RETRY_DELAY_SECONDS" -gt 0 ]]; then
-      sleep "$LIVE_IMAGE_PULL_RETRY_DELAY_SECONDS"
+    if [[ "$attempt" -lt "$LIVE_IMAGE_PULL_ATTEMPTS" ]]; then
+      # Registry image acquisition happens before any live tests execute.
+      echo "::warning::Live-test image pull failed; retrying infrastructure acquisition (${attempt}/${LIVE_IMAGE_PULL_ATTEMPTS}): $LIVE_IMAGE_NAME" >&2
+      if [[ "$LIVE_IMAGE_PULL_RETRY_DELAY_SECONDS" -gt 0 ]]; then
+        sleep "$LIVE_IMAGE_PULL_RETRY_DELAY_SECONDS"
+      fi
     fi
   done
   return 1

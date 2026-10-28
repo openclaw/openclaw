@@ -1,7 +1,5 @@
-/** Windows cmd `set` assignment renderer/parser for managed service scripts. */
 type CmdSetAssignment = { key: string; value: string };
 
-/** Rejects line breaks before rendering values into Windows cmd scripts. */
 export function assertNoCmdLineBreak(value: string, field: string): void {
   if (/[\r\n]/.test(value)) {
     throw new Error(`${field} cannot contain CR or LF in Windows task scripts.`);
@@ -16,23 +14,7 @@ function escapeCmdSetAssignmentComponent(value: string, delayedExpansion: boolea
 }
 
 function unescapeCmdSetAssignmentComponent(value: string): string {
-  let out = "";
-  for (let i = 0; i < value.length; i += 1) {
-    const ch = value[i];
-    const next = value[i + 1];
-    if (ch === "^" && (next === "^" || next === '"' || next === "!")) {
-      out += next;
-      i += 1;
-      continue;
-    }
-    if (ch === "%" && next === "%") {
-      out += "%";
-      i += 1;
-      continue;
-    }
-    out += ch;
-  }
-  return out;
+  return value.replace(/\^([\^"!])|%%/g, (_match, escaped: string | undefined) => escaped ?? "%");
 }
 
 export function parseCmdSetAssignment(

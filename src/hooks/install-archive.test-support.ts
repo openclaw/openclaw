@@ -1,6 +1,6 @@
 import JSZip from "jszip";
 
-export async function createZipBuffer(entries: Array<{ path: string; contents: string }>) {
+async function createZipBuffer(entries: Array<{ path: string; contents: string }>) {
   const zip = new JSZip();
   for (const entry of entries) {
     zip.file(entry.path, entry.contents);

@@ -1,38 +1,27 @@
-// Imessage plugin module resolves and authorizes action message references.
 import type { IMessageChatContext } from "./chat-context.js";
+import type { authorizeIMessageResourceReference } from "./message-resource.js";
 
-type ResolveMessageId = (
-  messageId: string,
-  options: {
-    requireKnownShortId: boolean;
-    chatContext: IMessageChatContext;
-    requireFromMe?: boolean;
-  },
-) => string | Promise<string>;
-
-type AuthorizeMessageReference = (params: {
-  accountId: string;
-  chatContext: IMessageChatContext;
-  cliPath: string;
-  dbPath?: string;
-  hasExclusiveLocalDatabase: boolean;
-  remoteHost?: string;
-  messageId: string;
-  conversationReadOrigin?: string;
-}) => void | Promise<void>;
+type AuthorizeMessageReference = (
+  params: Parameters<typeof authorizeIMessageResourceReference>[0],
+) => void | Promise<void>;
 
 export async function resolveAuthorizedIMessageActionReference(params: {
   messageId?: string;
   inputChatContext: IMessageChatContext;
   requireFromMe?: boolean;
   resolveFallbackMessageId: (chatContext: IMessageChatContext) => string;
-  resolveMessageId: ResolveMessageId;
+  resolveMessageId: (
+    messageId: string,
+    options: {
+      chatContext: IMessageChatContext;
+      requireFromMe?: boolean;
+    },
+  ) => string | Promise<string>;
   authorize: AuthorizeMessageReference;
   authorization: Omit<Parameters<AuthorizeMessageReference>[0], "chatContext" | "messageId">;
   resolveChatGuid: () => Promise<string>;
 }): Promise<{ messageId: string; chatGuid: string }> {
   const options = {
-    requireKnownShortId: true,
     chatContext: params.inputChatContext,
     ...(params.requireFromMe ? { requireFromMe: true } : {}),
   };
@@ -50,7 +39,6 @@ export async function resolveAuthorizedIMessageActionReference(params: {
   // Sender ownership was proven against the original selector above. Repeating
   // it here would reject cache entries whose canonical GUID was learned later.
   const resolvedMessageId = await params.resolveMessageId(messageId, {
-    requireKnownShortId: true,
     chatContext,
   });
   await authorize(resolvedMessageId, chatContext);

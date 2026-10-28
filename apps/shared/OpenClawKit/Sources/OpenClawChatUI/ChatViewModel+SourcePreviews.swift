@@ -16,12 +16,18 @@ final class ChatSourcePreviewState {
         self.previews = self.projector.project(messages, context: self.context)
     }
 
+    func previews(for message: OpenClawChatMessage) -> [ChatSourcePreview] {
+        let previews = self.previews[message.id] ?? []
+        guard message.presentationBlockIndex != nil else { return previews }
+        let links = ChatSourcePreviewProjector.citations(in: message)
+        return previews.filter { preview in links.contains(where: preview.represents) }
+    }
+
     func refresh(transport: any OpenClawChatTransport) {
         self.invalidate()
-        let revision = self.revision
         self.task = Task { [weak self] in
             let context = await transport.loadSourceContext()
-            guard !Task.isCancelled, let self, self.revision == revision else { return }
+            guard !Task.isCancelled, let self else { return }
             self.context = context
             self.update(self.messages)
             self.task = nil
@@ -42,14 +48,10 @@ extension OpenClawChatViewModel {
         self.sourcePreviewState.refresh(transport: self.transport)
     }
 
-    func invalidateSourceContext() {
-        self.sourcePreviewState.invalidate()
-    }
-
     func sourcePreviews(for message: OpenClawChatMessage) -> [ChatSourcePreview] {
         guard let runID = message.transcriptRunID,
               !self.liveLocalRunIDs.contains(runID), !self.liveAdvertisedRunIDs.contains(runID)
         else { return [] }
-        return self.sourcePreviewState.previews[message.id] ?? []
+        return self.sourcePreviewState.previews(for: message)
     }
 }

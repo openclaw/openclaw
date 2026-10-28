@@ -77,18 +77,7 @@ type SetupOptions = {
 
 /** Filesystem setup has one owner; callers retain their documented output projections. */
 export async function observeBrowserExtensionSetup(
-  options: Pick<
-    SetupOptions,
-    | "action"
-    | "bundledDir"
-    | "pluginRoot"
-    | "waitMs"
-    | "requestStoreInstall"
-    | "signal"
-    | "onProgress"
-    | "profile"
-    | "nativeHostExecutable"
-  > & {
+  options: Omit<SetupOptions, "cfg"> & {
     requireCurrentLaunchContext?: boolean;
     expectedRegistrations?: BrowserExtensionStatus["registrations"];
   },
@@ -96,14 +85,7 @@ export async function observeBrowserExtensionSetup(
   options.signal?.throwIfAborted();
   return options.action === "install"
     ? installChromeExtensionBootstrap({ ...options, browserProfile: options.profile })
-    : browserExtensionStatus({
-        bundledDir: options.bundledDir,
-        pluginRoot: options.pluginRoot,
-        browserProfile: options.profile,
-        nativeHostExecutable: options.nativeHostExecutable,
-        signal: options.signal,
-        requireCurrentLaunchContext: options.requireCurrentLaunchContext,
-      });
+    : browserExtensionStatus({ ...options, browserProfile: options.profile });
 }
 
 async function resolveWindowsSetupSelection(
@@ -274,10 +256,6 @@ export async function runBrowserExtensionSetup(
   if (!profile || profile.driver !== "extension") {
     throw new Error("Chrome setup requires an existing extension browser profile");
   }
-  const relayPort =
-    profile.cdpPort ??
-    resolved.extensionRelayPorts[profileName] ??
-    resolved.extensionRelayDefaultPort;
   const status =
     options.action !== "install" && observed
       ? observed
@@ -317,7 +295,7 @@ export async function runBrowserExtensionSetup(
       platform: status.platform,
       hostname: os.hostname(),
       profile: profileName,
-      relayPort,
+      relayPort: profile.cdpPort,
     },
     phase: "waiting_for_connection",
     reason: "connection_unchecked",

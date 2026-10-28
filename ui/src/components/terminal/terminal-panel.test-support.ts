@@ -1,5 +1,49 @@
+import type { CreateGhosttyTerminalOptions } from "@openclaw/libterminal/browser";
 import { vi, type Mock } from "vitest";
-import { OpenClawTerminalPanel } from "./terminal-panel.ts";
+import { createTerminalController } from "./terminal-controller.test-support.ts";
+export { createTerminalController } from "./terminal-controller.test-support.ts";
+import type { TerminalGatewayClient } from "./terminal-connection.ts";
+import { TerminalPanelHost } from "./terminal-panel-registration.tsx";
+import type { OpenClawTerminalPanel } from "./terminal-panel.ts";
+
+const factories = new Map<string, CreateGhosttyTerminalMock>();
+const viewportFactories = new WeakMap<HTMLElement, CreateGhosttyTerminalMock>();
+
+// mock-isolation: Panel lifecycle tests replace WASM emulation at its module boundary.
+vi.mock("./terminal-runtime.ts", () => ({
+  async createIsolatedGhosttyTerminal(
+    options: CreateGhosttyTerminalOptions,
+    shouldFocusOnOpen?: () => boolean,
+  ) {
+    for (
+      let container = options.parent.parentElement;
+      container;
+      container = container.parentElement
+    ) {
+      const factory = viewportFactories.get(container) ?? factories.get(container.localName);
+      if (factory) {
+        return factory(options, shouldFocusOnOpen);
+      }
+    }
+    throw new Error("Terminal fixture has not been registered");
+  },
+}));
+
+/** Direct session-boot fixtures can own a viewport outside a mounted panel. */
+export function registerTestTerminalViewport(
+  viewport: HTMLElement,
+  factory: CreateGhosttyTerminalMock,
+): void {
+  viewportFactories.set(viewport, factory);
+}
+
+export function createTestTerminalPanel(tagName: string): OpenClawTerminalPanel {
+  if (!factories.has(tagName)) {
+    throw new Error(`Terminal fixture ${tagName} has not been registered`);
+  }
+  // SAFETY: defineTestTerminalPanelElement registers the real terminal bridge under this tag.
+  return document.createElement(tagName) as OpenClawTerminalPanel;
+}
 
 export type CreateOptions = {
   parent: HTMLElement;
@@ -14,37 +58,11 @@ export type CreateOptions = {
 };
 
 export type CreateGhosttyTerminalMock = Mock<
-  (options: CreateOptions) => Promise<ReturnType<typeof createTerminalController>>
+  (
+    options: CreateOptions,
+    shouldFocusOnOpen?: () => boolean,
+  ) => Promise<ReturnType<typeof createTerminalController>>
 >;
-
-export function createTerminalController(dispose: () => void = vi.fn()) {
-  const wasmTerm = {};
-  const renderer = {
-    setTheme: vi.fn(),
-    render: vi.fn(),
-  };
-  return {
-    readOnly: false,
-    terminal: {
-      cols: 100,
-      rows: 30,
-      viewportY: 0,
-      wasmTerm,
-      renderer,
-      write: vi.fn(),
-      focus: vi.fn(),
-      attachCustomKeyEventHandler: vi.fn(),
-      reset: vi.fn(),
-      paste: vi.fn(),
-    },
-    write: vi.fn(),
-    fit: vi.fn(),
-    resize: vi.fn(),
-    setReadOnly: vi.fn(),
-    attach: vi.fn(),
-    dispose,
-  };
-}
 
 export function terminalOpenResult(sessionId: string) {
   return {
@@ -58,16 +76,19 @@ export function terminalOpenResult(sessionId: string) {
 
 export function defineTestTerminalPanelElement(
   createGhosttyTerminalMock: CreateGhosttyTerminalMock,
-  tagName = `test-openclaw-terminal-panel-${crypto.randomUUID()}`,
+  tagName = "openclaw-terminal-panel",
 ): string {
-  type TerminalFactory = typeof import("./terminal-runtime.ts").createIsolatedGhosttyTerminal;
-
-  // The full non-isolated UI suite can import the production panel before this
-  // test. Override its factory instead of relying on a module mock import order.
-  class TestTerminalPanel extends OpenClawTerminalPanel {
-    override createTerminalController = createGhosttyTerminalMock as unknown as TerminalFactory;
+  factories.set(tagName, createGhosttyTerminalMock);
+  if (tagName !== "openclaw-terminal-panel") {
+    const Element: CustomElementConstructor = TerminalPanelHost.Element;
+    customElements.define(tagName, class extends Element {});
   }
-
-  customElements.define(tagName, TestTerminalPanel);
   return tagName;
+}
+
+export function createTerminalGatewayClient(
+  request: TerminalGatewayClient["request"],
+  addEventListener: TerminalGatewayClient["addEventListener"] = () => () => {},
+): TerminalGatewayClient {
+  return { forceReconnect: () => {}, request, addEventListener };
 }

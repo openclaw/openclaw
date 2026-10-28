@@ -1,6 +1,14 @@
+import type { SessionGitHubPullRequestBinding } from "../config/sessions/types.js";
 import type { DB } from "./openclaw-state-db.generated.js";
 
 export type GitHubPublicationRow = DB["github_publication_requests"];
+export type SharedGitHubPublicationFilter = {
+  pending?: boolean;
+  status?: "requested" | "publishing" | "published" | "failed";
+  claimNull?: boolean;
+  sessionId?: string;
+  unreported?: boolean;
+};
 export type GitHubPublicationExecutionRow = Omit<
   GitHubPublicationRow,
   "claim_id" | "run_id" | "environment_id" | "owner_epoch" | "placement_generation"
@@ -32,3 +40,40 @@ export type GitHubPublicationSessionLifecycle = Pick<
   DB["github_publication_session_lifecycles"],
   "lifecycle_revision" | "requester_authority_json"
 >;
+
+export type GitHubSessionReceiptGeneration = {
+  sessionKey: string;
+  sessionId: string;
+  lifecycleRevision: string | null;
+};
+
+export type GitHubSessionReceiptIdentities = Record<
+  "personal" | "repository",
+  {
+    request_id: string;
+    session_id: string;
+    session_key: string;
+    created_at_ms: number;
+  }[]
+>;
+
+export type SharedGitHubPublicationReadInput = {
+  session: {
+    agentId: string;
+    sessionKey: string;
+    sessionId: string;
+    lifecycleRevision?: string | null;
+  };
+  selector: { requestId: string } | { idempotencyKey?: string; status?: "published" };
+  entry: {
+    archivedAt?: number;
+    repositoryWorkspaceId?: string;
+    lifecycleRevision?: string;
+    worktree?: {
+      id: string;
+      branch: string;
+      repoRoot: string;
+      githubPullRequest?: SessionGitHubPullRequestBinding;
+    };
+  };
+};

@@ -1,29 +1,41 @@
 import { createHash, randomUUID } from "node:crypto";
+import { createWriteStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { pipeline } from "node:stream/promises";
+import { asRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { withUpdateCommandExecutor } from "../cli/update-cli/update-command-executor.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { cancelUnreadResponseBody } from "../infra/http-body.js";
 import {
+  normalizeNpmViewMetadata,
   packNpmSpecToArchive,
   resolveNpmSpecMetadata,
   withInstallWorkspace,
+  type NpmSpecResolution,
 } from "../infra/install-source-utils.js";
 import { resolveNpmIntegrityDriftWithDefaultMessage } from "../infra/npm-integrity.js";
 import { isExactSemverVersion } from "../infra/npm-registry-spec.js";
 import { collectPackageDistContentInventoryErrors } from "../infra/package-dist-inventory.js";
 import { runGlobalPackageUpdateSteps } from "../infra/package-update-steps.js";
+import { lstatIfExists } from "../infra/path-existence.js";
+import { fetchRegistryPackageDocument } from "../infra/update-check-package-target.js";
+import { resolveUpdateRegistryTarget } from "../infra/update-check.js";
 import {
   collectInstalledGlobalPackageErrors,
   createGlobalInstallEnv,
   resolveGlobalInstallTarget,
 } from "../infra/update-global.js";
+import { UPDATE_NETWORK_TIMEOUT_MS } from "../infra/update-network-budget.js";
 import { resolveNpmGlobalPrefixLayoutFromPrefix } from "../infra/update-npm-prefix.js";
 import { AUTO_UPDATE_STEP_TIMEOUT_MS } from "../infra/update-run-timeouts.js";
 import { runStep } from "../infra/update-runner-command.js";
 import type { CommandRunner } from "../infra/update-runner-types.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { parsePackageOpenClawSchemaVersions } from "../state/openclaw-schema-versions.js";
+import { buildTimeoutAbortSignal } from "../utils/fetch-timeout.js";
 import {
   assertNodeRuntimeSchemaVersions,
   assertNodeRuntimeUpdateCompatible,
@@ -50,11 +62,45 @@ export async function prepareNodeRuntimeUpdate(params: {
   }
   params.signal?.throwIfAborted();
   const spec = `openclaw@${version}`;
-  const resolved = await resolveNpmSpecMetadata({ spec, signal: params.signal });
-  if (!resolved.ok) {
-    throw new Error(resolved.error);
+  // Native Bun staging cannot relocate Windows binary launchers yet.
+  const manager = process.versions.bun && process.platform !== "win32" ? "bun" : "npm";
+  const registryTarget = resolveUpdateRegistryTarget();
+  const registryManifest =
+    manager === "bun"
+      ? await (async () => {
+          try {
+            const json = await fetchRegistryPackageDocument({
+              ...registryTarget,
+              signal: params.signal,
+              target: version,
+              label: "npm package manifest",
+              operation: "npm-registry-package-manifest",
+              bodyTimeoutMs: Math.max(1, UPDATE_NETWORK_TIMEOUT_MS),
+            });
+            const metadata = normalizeNpmViewMetadata(
+              json,
+              `${registryTarget.packageName}@${version}`,
+            );
+            const tarball = normalizeOptionalString(asRecord(asRecord(json).dist).tarball);
+            if (!metadata?.name || !metadata.version || !tarball) {
+              throw new Error(
+                "Registry returned incomplete package metadata (name, version, or tarball).",
+              );
+            }
+            return { ...metadata, tarball };
+          } catch (error) {
+            throw new Error(`Registry package manifest failed: ${String(error)}`, { cause: error });
+          }
+        })()
+      : undefined;
+  let metadata: NpmSpecResolution | undefined = registryManifest;
+  if (!metadata) {
+    const resolved = await resolveNpmSpecMetadata({ spec, signal: params.signal });
+    if (!resolved.ok) {
+      throw new Error(resolved.error);
+    }
+    metadata = resolved.metadata;
   }
-  const { metadata } = resolved;
   if (metadata.name !== "openclaw" || metadata.version !== version || !metadata.integrity) {
     throw new Error(
       "Node auto-update registry metadata does not identify the requested release and integrity.",
@@ -89,15 +135,7 @@ export async function prepareNodeRuntimeUpdate(params: {
         params.signal?.throwIfAborted();
       };
       assertCurrent();
-      let retained = false;
-      try {
-        await fs.lstat(packageRoot);
-        retained = true;
-      } catch (error) {
-        if (!hasErrnoCode(error, "ENOENT")) {
-          throw error;
-        }
-      }
+      const retained = (await lstatIfExists(packageRoot, "ENOENT")) !== undefined;
       if (retained) {
         // Never reinstall over a retained generation: the launcher may still be running it.
         try {
@@ -125,33 +163,97 @@ export async function prepareNodeRuntimeUpdate(params: {
 
       return await withInstallWorkspace("openclaw-node-update-", async (workspace) => {
         assertCurrent();
-        const packed = await packNpmSpecToArchive({
-          spec,
-          cwd: workspace,
-          timeoutMs: AUTO_UPDATE_STEP_TIMEOUT_MS,
-          signal: params.signal,
-        });
-        assertCurrent();
-        if (!packed.ok) {
-          throw new Error(packed.error);
+        let archivePath: string;
+        if (registryManifest) {
+          const { signal, cleanup, refresh } = buildTimeoutAbortSignal({
+            timeoutMs: Math.max(1, UPDATE_NETWORK_TIMEOUT_MS),
+            signal: params.signal,
+            operation: "npm-registry-package-download",
+          });
+          let response: Response | undefined;
+          let downloadPath: string | undefined;
+          try {
+            const url = new URL(registryManifest.tarball);
+            if (url.origin !== new URL(registryTarget.registryUrl).origin) {
+              throw new Error("Package tarball must share the registry origin.");
+            }
+            if (!/^sha512-[A-Za-z0-9+/]{86}==$/u.test(integrity)) {
+              throw new Error("Package archive requires supported sha512 integrity.");
+            }
+            // Reject redirects so a same-origin URL cannot send the download elsewhere.
+            response = await fetch(url.toString(), { signal, redirect: "error" });
+            if (!response.ok || !response.body) {
+              throw new Error(`Package archive download failed: HTTP ${response.status}`);
+            }
+            refresh();
+            const hash = createHash("sha512");
+            downloadPath = path.join(workspace, `${randomUUID()}.tgz`);
+            await pipeline(
+              response.body,
+              async function* (chunks) {
+                for await (const chunk of chunks) {
+                  hash.update(chunk);
+                  refresh();
+                  yield chunk;
+                }
+              },
+              createWriteStream(downloadPath, { flags: "wx", mode: 0o600 }),
+              { signal },
+            );
+            signal?.throwIfAborted();
+            if (`sha512-${hash.digest("base64")}` !== integrity) {
+              throw new Error("Package archive integrity mismatch.");
+            }
+            archivePath = downloadPath;
+          } catch (error) {
+            if (downloadPath) {
+              await fs.rm(downloadPath, { force: true });
+            }
+            throw new Error(`Registry package archive failed: ${String(error)}`, { cause: error });
+          } finally {
+            await cancelUnreadResponseBody(response);
+            cleanup();
+          }
+          assertCurrent();
+        } else {
+          const packed = await packNpmSpecToArchive({
+            spec,
+            cwd: workspace,
+            timeoutMs: AUTO_UPDATE_STEP_TIMEOUT_MS,
+            signal: params.signal,
+          });
+          assertCurrent();
+          if (!packed.ok) {
+            throw new Error(packed.error);
+          }
+          if (packed.metadata.name !== "openclaw" || packed.metadata.version !== version) {
+            throw new Error("Node auto-update archive does not match the requested release.");
+          }
+          const drift = await resolveNpmIntegrityDriftWithDefaultMessage({
+            spec,
+            expectedIntegrity: integrity,
+            resolution: packed.metadata,
+          });
+          if (drift.error) {
+            throw new Error(drift.error);
+          }
+          archivePath = packed.archivePath;
         }
-        if (packed.metadata.name !== "openclaw" || packed.metadata.version !== version) {
-          throw new Error("Node auto-update archive does not match the requested release.");
-        }
-        const drift = await resolveNpmIntegrityDriftWithDefaultMessage({
-          spec,
-          expectedIntegrity: integrity,
-          resolution: packed.metadata,
-        });
-        if (drift.error) {
-          throw new Error(drift.error);
-        }
-        const env = await createGlobalInstallEnv({
-          ...process.env,
-          // Lifecycle work must not select an operator's live state or config.
-          OPENCLAW_STATE_DIR: path.join(workspace, "state"),
-          OPENCLAW_CONFIG_PATH: path.join(workspace, "openclaw.json"),
-        });
+        const env = await createGlobalInstallEnv(
+          {
+            ...process.env,
+            // Lifecycle work must not select an operator's live state or config.
+            OPENCLAW_STATE_DIR: path.join(workspace, "state"),
+            OPENCLAW_CONFIG_PATH: path.join(workspace, "openclaw.json"),
+            ...(manager === "bun"
+              ? {
+                  BUN_INSTALL_GLOBAL_DIR: path.dirname(layout.globalRoot),
+                  BUN_INSTALL_BIN: layout.binDir,
+                }
+              : {}),
+          },
+          { manager },
+        );
         const runCommand: CommandRunner = async (argv, options) => {
           assertCurrent();
           const result = await runCommandWithTimeout(argv, {
@@ -164,24 +266,45 @@ export async function prepareNodeRuntimeUpdate(params: {
           return result;
         };
         const installTarget = await resolveGlobalInstallTarget({
-          manager: "npm",
+          manager,
           runCommand,
           timeoutMs: AUTO_UPDATE_STEP_TIMEOUT_MS,
           pkgRoot: packageRoot,
           honorPackageRoot: true,
           packageName: "openclaw",
+          ...(manager === "bun" ? { env } : {}),
         });
         if (
-          installTarget.manager !== "npm" ||
+          installTarget.manager !== manager ||
           installTarget.packageRoot !== packageRoot ||
           installTarget.globalRoot !== layout.globalRoot
         ) {
-          throw new Error("Node auto-update npm target escaped its private runtime prefix.");
+          throw new Error(`Node auto-update ${manager} target escaped its private runtime prefix.`);
         }
         assertCurrent();
+        if (manager === "bun") {
+          // Native staging copies an existing Bun global project (a manifest
+          // plus node_modules) and probes from it; this generation starts empty.
+          await fs.mkdir(layout.globalRoot, { recursive: true });
+          await fs.mkdir(layout.binDir, { recursive: true });
+          await fs
+            .writeFile(
+              path.join(path.dirname(layout.globalRoot), "package.json"),
+              '{"private":true}\n',
+              {
+                flag: "wx",
+              },
+            )
+            .catch((error: unknown) => {
+              if (!hasErrnoCode(error, "EEXIST")) {
+                throw error;
+              }
+            });
+          assertCurrent();
+        }
         const result = await runGlobalPackageUpdateSteps({
           installTarget,
-          installSpec: packed.archivePath,
+          installSpec: archivePath,
           packageName: "openclaw",
           runCommand,
           runStep: (step) =>

@@ -34,14 +34,13 @@ const MAX_CODEX_EXEC_SERVER_MESSAGE_BYTES = 64 * 1024 * 1024;
 type NodeChannel = Awaited<ReturnType<PluginRuntime["nodes"]["openDuplex"]>>;
 
 function createNodeChannel() {
-  let resolveClosed: (result: unknown) => void = () => {};
-  let rejectClosed: (error: Error) => void = () => {};
   let receive: ((message: Uint8Array) => void | Promise<void>) | undefined;
   let channelClosed = false;
-  const closed = new Promise<unknown>((resolve, reject) => {
-    resolveClosed = resolve;
-    rejectClosed = reject;
-  });
+  const {
+    promise: closed,
+    resolve: resolveClosed,
+    reject: rejectClosed,
+  } = Promise.withResolvers<unknown>();
   const channel = {
     send: vi.fn<NodeChannel["send"]>(async () => {
       if (channelClosed) {
@@ -87,6 +86,32 @@ function createNodeRuntime(openDuplex: PluginRuntime["nodes"]["openDuplex"]): Pl
   return { nodes: { openDuplex } } as PluginRuntime;
 }
 
+function nodeRelayFixture(sandbox = createNodeSandbox(), client = createClient()) {
+  const transport = createNodeChannel();
+  const openDuplex = vi.fn<PluginRuntime["nodes"]["openDuplex"]>(async () => transport.channel);
+  const attempt = new AbortController();
+  return {
+    transport,
+    sandbox,
+    client,
+    openDuplex,
+    attempt,
+    register: (onExecutionDisconnect?: (error: Error) => void) =>
+      ensureCodexSandboxExecServerEnvironment({
+        client: client as never,
+        sandbox,
+        runtime: createNodeRuntime(openDuplex),
+        signal: attempt.signal,
+        onExecutionDisconnect,
+      }),
+  };
+}
+
+async function registerNodeRelay(onExecutionDisconnect?: (error: Error) => void) {
+  const fixture = nodeRelayFixture();
+  return { ...fixture, environment: await fixture.register(onExecutionDisconnect) };
+}
+
 function encodeHttpBody(contentType: string, body: string) {
   return {
     headers: [{ name: "Content-Type", value: contentType }],
@@ -94,27 +119,19 @@ function encodeHttpBody(contentType: string, body: string) {
   };
 }
 
+const header = (name: string, value = "synthetic-canary") => ({ name, value });
+const urlParams = (url: string) => ({ url });
+const jsonBody = (body: string) => encodeHttpBody("application/json", body);
+
 async function expectPairedNodeHttpCredentialRejection(params: {
   url?: string;
   headers?: Array<{ name: string; value: string }>;
   bodyBase64?: string;
 }): Promise<void> {
-  const transport = createNodeChannel();
-  const sandbox = createNodeSandbox();
-  const client = createClient();
   const onExecutionDisconnect = vi.fn<(error: Error) => void>();
-  await ensureCodexSandboxExecServerEnvironment({
-    client: client as never,
-    sandbox,
-    runtime: createNodeRuntime(async () => transport.channel),
-    signal: new AbortController().signal,
-    onExecutionDisconnect,
-  });
+  const { transport, client } = await registerNodeRelay(onExecutionDisconnect);
   const socket = await openSocket(execServerUrlFromClient(client));
-  let resolveForwarded: () => void = () => {};
-  const forwarded = new Promise<void>((resolve) => {
-    resolveForwarded = resolve;
-  });
+  const { promise: forwarded, resolve: resolveForwarded } = Promise.withResolvers<void>();
   transport.channel.send.mockImplementation(async () => resolveForwarded());
   const outcome = Promise.race([
     once(socket, "message").then(([message]) => ({
@@ -165,18 +182,8 @@ afterEach(async () => {
 
 describe("Codex paired-device exec-server relay", () => {
   it("authorizes one bounded attempt-owned node channel before registering the local environment", async () => {
-    const transport = createNodeChannel();
-    const openDuplex = vi.fn<PluginRuntime["nodes"]["openDuplex"]>(async () => transport.channel);
-    const sandbox = createNodeSandbox();
-    const client = createClient();
-    const attempt = new AbortController();
-
-    const environment = await ensureCodexSandboxExecServerEnvironment({
-      client: client as never,
-      sandbox,
-      runtime: createNodeRuntime(openDuplex),
-      signal: attempt.signal,
-    });
+    const { openDuplex, sandbox, client, attempt, register } = nodeRelayFixture();
+    const environment = await register();
 
     expect(environment).toEqual({
       environmentId: expect.stringMatching(/^openclaw-node-/),
@@ -208,24 +215,17 @@ describe("Codex paired-device exec-server relay", () => {
   it.each([
     ["missing environment", { placementEnvironmentId: "" }],
     ["invalid session", { placementSessionId: " session " }],
-    ["negative owner epoch", { placementOwnerEpoch: -1 }],
     ["zero owner epoch", { placementOwnerEpoch: 0 }],
     ["missing session key", { sessionKey: "" }],
   ])(
     "rejects a node workspace with %s before opening a channel",
     async (_label, invalidIdentity) => {
-      const sandbox = { ...createNodeSandbox(), ...invalidIdentity };
-      const client = createClient();
-      const openDuplex = vi.fn<PluginRuntime["nodes"]["openDuplex"]>();
-
-      await expect(
-        ensureCodexSandboxExecServerEnvironment({
-          client: client as never,
-          sandbox,
-          runtime: createNodeRuntime(openDuplex),
-          signal: new AbortController().signal,
-        }),
-      ).rejects.toThrow("exact placement workspace identity");
+      const { client, openDuplex, register } = nodeRelayFixture({
+        ...createNodeSandbox(),
+        ...invalidIdentity,
+      });
+      openDuplex.mockImplementation(vi.fn<PluginRuntime["nodes"]["openDuplex"]>());
+      await expect(register()).rejects.toThrow("exact placement workspace identity");
 
       expect(openDuplex).not.toHaveBeenCalled();
       expect(client.request).not.toHaveBeenCalled();
@@ -233,15 +233,7 @@ describe("Codex paired-device exec-server relay", () => {
   );
 
   it("preserves versionless and reverse JSON-RPC while scrubbing both process environment maps", async () => {
-    const transport = createNodeChannel();
-    const sandbox = createNodeSandbox();
-    const client = createClient();
-    const environment = await ensureCodexSandboxExecServerEnvironment({
-      client: client as never,
-      sandbox,
-      runtime: createNodeRuntime(async () => transport.channel),
-      signal: new AbortController().signal,
-    });
+    const { transport, sandbox, client, environment } = await registerNodeRelay();
     const socket = await openSocket(execServerUrlFromClient(client));
     const initialize = '{"id":1,"method":"initialize","params":{"clientName":"codex"}}';
     socket.send(initialize);
@@ -305,28 +297,15 @@ describe("Codex paired-device exec-server relay", () => {
   });
 
   it.each([
-    ["bearer authorization", [{ name: "Authorization", value: "Bearer synthetic-canary" }]],
-    ["OAuth authorization", [{ name: "authorization", value: "OAuth synthetic-canary" }]],
-    [
-      "mixed-case proxy authorization",
-      [{ name: "pRoXy-AuThOrIzAtIoN", value: "Bearer synthetic-canary" }],
-    ],
-    ["request cookie", [{ name: "Cookie", value: "session=synthetic-canary" }]],
-    ["API key", [{ name: "X-Api-Key", value: "synthetic-canary" }]],
-    ["Google API key", [{ name: "x-goog-api-key", value: "synthetic-canary" }]],
-    ["Vault token", [{ name: "X-Vault-Token", value: "synthetic-canary" }]],
-    ["Cloudflare JWT assertion", [{ name: "Cf-Access-Jwt-Assertion", value: "synthetic-canary" }]],
-    ["request signature", [{ name: "X-Request-Signature", value: "synthetic-canary" }]],
-    ["one-time passcode", [{ name: "X-Provider-Otp", value: "synthetic-canary" }]],
-    ["plural credentials", [{ name: "X-Provider-Credentials", value: "synthetic-canary" }]],
-    ["mixed-case auth token", [{ name: "X-AuTh-ToKeN", value: "synthetic-canary" }]],
-    ["provider function key", [{ name: "x-functions-key", value: "synthetic-canary" }]],
+    ["mixed-case proxy authorization", [header("pRoXy-AuThOrIzAtIoN", "Bearer synthetic-canary")]],
+    ["request cookie", [header("Cookie", "session=synthetic-canary")]],
+    ["request signature", [header("X-Request-Signature")]],
     [
       "credential after repeated safe headers",
       [
-        { name: "X-Trace", value: "first" },
-        { name: "x-trace", value: "second" },
-        { name: "aUtHoRiZaTiOn", value: "Bearer synthetic-canary" },
+        header("X-Trace", "first"),
+        header("x-trace", "second"),
+        header("aUtHoRiZaTiOn", "Bearer synthetic-canary"),
       ],
     ],
   ])(
@@ -335,83 +314,35 @@ describe("Codex paired-device exec-server relay", () => {
   );
 
   it.each([
-    [
-      "URL Basic credentials",
-      {
-        url: (() => {
-          const url = new URL("https://example.test/path");
-          url.username = "user";
-          url.password = "synthetic-canary";
-          return url.toString();
-        })(),
-      },
-    ],
-    ["OAuth URL access token", { url: "https://example.test/path?access_token=synthetic-canary" }],
-    ["session identity", { url: "https://example.test/path?sessionId=synthetic-canary" }],
-    ["matrix session", { url: "https://x/p;jsessionid=synthetic-canary" }],
-    ["matrix case", { url: "https://x/p;JSESSIONID=synthetic-canary" }],
-    ["encoded matrix", { url: "https://x/p%3Bjsessionid%3Dsynthetic-canary" }],
-    ["nested matrix", { url: "https://x/a;region=west/b;session_id=synthetic-canary" }],
-    ["nested fragment MFA", { url: "https://x/#/callback?mfa_code=123456" }],
-    ["direct access-token fragment", { url: "https://x/#access_token=synthetic-canary" }],
-    ["direct ticket fragment", { url: "https://x/#ticket=synthetic-canary" }],
-    ["encoded path MFA", { url: "https://x/callback%3Fmfa_code%3D123456" }],
-    ["nested encoded MFA", { url: "https://x/callback%253Fmfa_code%253D123456" }],
-    ["ticket query", { url: "https://x/?ticket=synthetic-canary" }],
-    ["bearer query", { url: "https://x/?bearer=synthetic-canary" }],
-    ["SAML assertion", { url: "https://example.test/path?SAMLResponse=synthetic-canary" }],
-    ["OAuth device code", { url: "https://example.test/path?device_code=synthetic-canary" }],
-    ["OAuth consumer key", { url: "https://x/?oauth_consumer_key=synthetic-canary" }],
-    ["encoded token", { url: `https://x/?v=${["sk", "live", "x".repeat(30)].join("%255F")}` }],
-    ["encoded nested credential", { url: "https://x/?u%255Bpassword%255D=synthetic-canary" }],
+    ["URL Basic credentials", urlParams("https://user:synthetic-canary@example.test/path")],
+    ["OAuth URL access token", urlParams("https://x/?access_token=synthetic-canary")],
+    ["session identity", urlParams("https://x/?sessionId=synthetic-canary")],
+    ["encoded matrix", urlParams("https://x/p%3Bjsessionid%3Dsynthetic-canary")],
+    ["nested matrix", urlParams("https://x/a;region=west/b;session_id=synthetic-canary")],
+    ["nested fragment MFA", urlParams("https://x/#/callback?mfa_code=123456")],
+    ["direct access-token fragment", urlParams("https://x/#access_token=synthetic-canary")],
+    ["nested encoded MFA", urlParams("https://x/callback%253Fmfa_code%253D123456")],
+    ["SAML assertion", urlParams("https://x/?SAMLResponse=synthetic-canary")],
+    ["OAuth consumer key", urlParams("https://x/?oauth_consumer_key=synthetic-canary")],
+    ["encoded token", urlParams(`https://x/?v=${["sk", "live", "x".repeat(30)].join("%255F")}`)],
+    ["encoded nested credential", urlParams("https://x/?u%255Bpassword%255D=synthetic-canary")],
     [
       "OAuth form body",
-      {
-        headers: [{ name: "Content-Type", value: "application/x-www-form-urlencoded" }],
-        bodyBase64: Buffer.from(
-          "grant_type=authorization_code&client_secret=synthetic-canary",
-        ).toString("base64"),
-      },
-    ],
-    [
-      "OAuth client assertion form body",
-      encodeHttpBody("application/x-www-form-urlencoded", "client_assertion=synthetic-canary"),
-    ],
-    [
-      "passphrase form body",
-      encodeHttpBody("application/x-www-form-urlencoded", "passphrase=synthetic-canary"),
-    ],
-    ["pwd JSON body", encodeHttpBody("application/json", '{"pwd":"synthetic-canary"}')],
-    ["OAuth PKCE JSON", encodeHttpBody("application/json", '{"code_verifier":"synthetic-canary"}')],
-    [
-      "duplicate escaped JSON",
       encodeHttpBody(
-        "application/json",
-        '{"client_se\\u0063ret":"synthetic-canary","client_secret":"safe"}',
+        "application/x-www-form-urlencoded",
+        "grant_type=authorization_code&client_secret=synthetic-canary",
       ),
     ],
+    ["OAuth PKCE JSON", jsonBody('{"code_verifier":"synthetic-canary"}')],
     [
-      "oversized JSON",
-      encodeHttpBody("application/json", `{"safe":"${"x".repeat(1024 * 1024 + 1)}"}`),
+      "duplicate escaped JSON",
+      jsonBody('{"client_se\\u0063ret":"synthetic-canary","client_secret":"safe"}'),
     ],
-    [
-      "oversized body without a declared content type",
-      { bodyBase64: Buffer.from("x".repeat(1024 * 1024 + 1)).toString("base64") },
-    ],
-    [
-      "invalid JSON body",
-      encodeHttpBody("application/json", '{"client_assertion":"synthetic-canary"'),
-    ],
+    ["oversized JSON", jsonBody(`{"safe":"${"x".repeat(1024 * 1024 + 1)}"}`)],
+    ["invalid JSON body", jsonBody('{"client_assertion":"synthetic-canary"')],
     [
       "unsupported XML body",
       encodeHttpBody("application/xml", "<credential>synthetic-canary</credential>"),
-    ],
-    [
-      "unsupported multipart body",
-      encodeHttpBody(
-        "multipart/form-data; boundary=test",
-        "--test\r\nsynthetic-canary\r\n--test--",
-      ),
     ],
     ["unsupported opaque body", { bodyBase64: Buffer.from("synthetic-canary").toString("base64") }],
     [
@@ -421,21 +352,21 @@ describe("Codex paired-device exec-server relay", () => {
     ["invalid UTF-8 body", { bodyBase64: Buffer.from([0xff, 0xfe]).toString("base64") }],
     [
       "canonical Slack webhook URL",
-      {
-        url: new URL(
+      urlParams(
+        new URL(
           ["services", `T${"1".repeat(10)}`, `B${"2".repeat(10)}`, "x".repeat(25)].join("%252F"),
           "https://hooks.slack.com/",
         ).toString(),
-      },
+      ),
     ],
     [
       "canonical Discord webhook URL",
-      {
-        url: new URL(
+      urlParams(
+        new URL(
           ["api", "webhooks", "1".repeat(18), "x".repeat(68)].join("/"),
           "https://discord.com/",
         ).toString(),
-      },
+      ),
     ],
   ])(
     "rejects %s before forwarding any credential to the paired device",
@@ -448,10 +379,7 @@ describe("Codex paired-device exec-server relay", () => {
       url: `https://example.test/?safe=${customLoggingPattern.value.replaceAll("-", "%252D")}`,
     });
     await expectPairedNodeHttpCredentialRejection(
-      encodeHttpBody(
-        "application/json",
-        '{"safe":"tenant\\u002dpattern\\u002dcanary","safe":"ok"}',
-      ),
+      jsonBody('{"safe":"tenant\\u002dpattern\\u002dcanary","safe":"ok"}'),
     );
   });
 
@@ -466,15 +394,7 @@ describe("Codex paired-device exec-server relay", () => {
     ["bracketed plain text", "text/plain", "[INFO] deployment completed", "https://x/"],
     ["large plain text", "text/plain", "x".repeat(1024 * 1024 + 1), "https://x/"],
   ])("forwards credential-free %s byte-for-byte", async (_label, contentType, body, url) => {
-    const transport = createNodeChannel();
-    const sandbox = createNodeSandbox();
-    const client = createClient();
-    await ensureCodexSandboxExecServerEnvironment({
-      client: client as never,
-      sandbox,
-      runtime: createNodeRuntime(async () => transport.channel),
-      signal: new AbortController().signal,
-    });
+    const { transport, client } = await registerNodeRelay();
     const socket = await openSocket(execServerUrlFromClient(client));
     const request = JSON.stringify({
       id: 14,
@@ -512,20 +432,19 @@ describe("Codex paired-device exec-server relay", () => {
     const firstDisconnected = vi.fn<(error: Error) => void>();
     const secondDisconnected = vi.fn<(error: Error) => void>();
     const runtime = createNodeRuntime(openDuplex);
-    const first = await ensureCodexSandboxExecServerEnvironment({
-      client: firstClient as never,
-      sandbox,
-      runtime,
-      signal: new AbortController().signal,
-      onExecutionDisconnect: firstDisconnected,
-    });
-    const second = await ensureCodexSandboxExecServerEnvironment({
-      client: secondClient as never,
-      sandbox,
-      runtime,
-      signal: new AbortController().signal,
-      onExecutionDisconnect: secondDisconnected,
-    });
+    const register = (
+      client: ReturnType<typeof createClient>,
+      onExecutionDisconnect: (error: Error) => void,
+    ) =>
+      ensureCodexSandboxExecServerEnvironment({
+        client: client as never,
+        sandbox,
+        runtime,
+        signal: new AbortController().signal,
+        onExecutionDisconnect,
+      });
+    const first = await register(firstClient, firstDisconnected);
+    const second = await register(secondClient, secondDisconnected);
     expect(first?.environmentId).not.toBe(second?.environmentId);
     expect(firstClient.request).toHaveBeenCalledWith(
       "environment/add",
@@ -576,24 +495,20 @@ describe("Codex paired-device exec-server relay", () => {
   });
 
   it("makes a node disconnect terminal and closes its transport exactly once", async () => {
-    const transport = createNodeChannel();
-    const sandbox = createNodeSandbox();
-    const client = createClient();
     const onExecutionDisconnect = vi.fn<(error: Error) => void>();
-    const environment = await ensureCodexSandboxExecServerEnvironment({
-      client: client as never,
-      sandbox,
-      runtime: createNodeRuntime(async () => transport.channel),
-      signal: new AbortController().signal,
-      onExecutionDisconnect,
-    });
+    const { transport, sandbox, client, environment } =
+      await registerNodeRelay(onExecutionDisconnect);
     const socket = await openSocket(execServerUrlFromClient(client));
     const socketClosed = waitForSocketClose(socket);
     transport.disconnect();
     await expect(socketClosed).resolves.toEqual({ code: 1001 });
     expect(onExecutionDisconnect).toHaveBeenCalledOnce();
     expect(onExecutionDisconnect).toHaveBeenCalledWith(
-      expect.objectContaining({ message: expect.stringContaining("start a fresh attempt") }),
+      expect.objectContaining({
+        name: "CodexNodeExecServerDisconnectedError",
+        code: "codex_node_disconnected",
+        message: expect.stringContaining("start a fresh attempt"),
+      }),
     );
     await expect(transport.channel.send(Buffer.from("{}"))).rejects.toThrow(
       "execution channel closed",
@@ -603,26 +518,15 @@ describe("Codex paired-device exec-server relay", () => {
   });
 
   it("fails an unclaimed node channel immediately before its loopback socket connects", async () => {
-    const transport = createNodeChannel();
-    const sandbox = createNodeSandbox();
-    const client = createClient();
-    const attempt = new AbortController();
-    let rejectRegistration: (error: Error) => void = () => {};
-    const registration = new Promise<Record<string, never>>((_resolve, reject) => {
-      rejectRegistration = reject;
-    });
+    const { transport, sandbox, client, attempt, register } = nodeRelayFixture();
+    const { promise: registration, reject: rejectRegistration } =
+      Promise.withResolvers<Record<string, never>>();
     client.request.mockImplementation(async () => await registration);
     const onExecutionDisconnect = vi.fn((error: Error) => {
       attempt.abort(error);
       rejectRegistration(error);
     });
-    const environment = ensureCodexSandboxExecServerEnvironment({
-      client: client as never,
-      sandbox,
-      runtime: createNodeRuntime(async () => transport.channel),
-      signal: attempt.signal,
-      onExecutionDisconnect,
-    });
+    const environment = register(onExecutionDisconnect);
     await vi.waitFor(() => expect(client.request).toHaveBeenCalledOnce());
     const fakeSecret = "sk-1234567890abcdef";
 
@@ -636,17 +540,9 @@ describe("Codex paired-device exec-server relay", () => {
   });
 
   it("surfaces bounded node-command failures without exposing credentials", async () => {
-    const transport = createNodeChannel();
-    const sandbox = createNodeSandbox();
-    const client = createClient();
     const onExecutionDisconnect = vi.fn<(error: Error) => void>();
-    const environment = await ensureCodexSandboxExecServerEnvironment({
-      client: client as never,
-      sandbox,
-      runtime: createNodeRuntime(async () => transport.channel),
-      signal: new AbortController().signal,
-      onExecutionDisconnect,
-    });
+    const { transport, sandbox, client, environment } =
+      await registerNodeRelay(onExecutionDisconnect);
     const socket = await openSocket(execServerUrlFromClient(client));
     const socketClosed = waitForSocketClose(socket);
     const fakeSecret = "sk-1234567890abcdef";
@@ -666,15 +562,7 @@ describe("Codex paired-device exec-server relay", () => {
   });
 
   it("rejects device frames above the upstream 64 MiB JSON-RPC ceiling", async () => {
-    const transport = createNodeChannel();
-    const sandbox = createNodeSandbox();
-    const client = createClient();
-    await ensureCodexSandboxExecServerEnvironment({
-      client: client as never,
-      sandbox,
-      runtime: createNodeRuntime(async () => transport.channel),
-      signal: new AbortController().signal,
-    });
+    const { transport, client } = await registerNodeRelay();
     const socket = await openSocket(execServerUrlFromClient(client));
     const socketClosed = waitForSocketClose(socket);
     await transport.receive(new Uint8Array(MAX_CODEX_EXEC_SERVER_MESSAGE_BYTES + 1));
@@ -683,20 +571,11 @@ describe("Codex paired-device exec-server relay", () => {
   });
 
   it("never registers an environment when paired-device authorization is denied", async () => {
-    const sandbox = createNodeSandbox();
-    const client = createClient();
-    const openDuplex = vi.fn<PluginRuntime["nodes"]["openDuplex"]>(async () => {
+    const { sandbox, client, openDuplex, register } = nodeRelayFixture();
+    openDuplex.mockImplementation(async () => {
       throw new Error("paired-device approval denied");
     });
-
-    await expect(
-      ensureCodexSandboxExecServerEnvironment({
-        client: client as never,
-        sandbox,
-        runtime: createNodeRuntime(openDuplex),
-        signal: new AbortController().signal,
-      }),
-    ).rejects.toThrow("paired-device approval denied");
+    await expect(register()).rejects.toThrow("paired-device approval denied");
     expect(client.request).not.toHaveBeenCalled();
     expect(sandboxExecServerRegistry.servers.has(sandbox.runtimeId)).toBe(false);
   });

@@ -2,7 +2,10 @@ import {
   buildControlUiSessionPath,
   normalizeControlUiBasePath,
 } from "@openclaw/session-url-contract";
+import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
 import { resolveGatewayPublicOrigin } from "./gateway-public-origin.js";
+import { resolveSessionPublicShare } from "./sessions/session-public-share.js";
+import type { InternalSessionEntry } from "./sessions/types.js";
 import type { OpenClawConfig } from "./types.js";
 
 type ControlUiLinkConfig = Pick<OpenClawConfig, "gateway"> | null | undefined;
@@ -76,4 +79,30 @@ export function resolveControlUiSessionUrl(
   const url = new URL(location.origin);
   url.pathname = path;
   return url.toString();
+}
+
+/** Canonical chat routes are anonymous only for the current, explicitly published generation. */
+export function resolveControlUiPublicSessionUrl(
+  cfg: ControlUiLinkConfig,
+  params: {
+    sessionKey?: string;
+    sessionId?: string;
+    agentId?: string;
+    entry?: InternalSessionEntry;
+  },
+): string | undefined {
+  if (
+    !params.sessionKey ||
+    isIncognitoSessionKey(params.sessionKey) ||
+    !params.sessionId ||
+    resolveSessionPublicShare(params.entry)?.sessionId !== params.sessionId
+  ) {
+    return undefined;
+  }
+  const url = resolveControlUiSessionUrl(cfg, {
+    sessionKey: params.sessionKey,
+    fallbackAgentId: params.agentId,
+    exactKey: true,
+  });
+  return url?.startsWith("https://") && url.length <= 512 ? url : undefined;
 }

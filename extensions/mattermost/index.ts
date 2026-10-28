@@ -1,4 +1,3 @@
-// Mattermost plugin entrypoint registers its OpenClaw integration.
 import {
   defineBundledChannelEntry,
   loadBundledEntryExportSync,

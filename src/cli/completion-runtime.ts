@@ -1,14 +1,16 @@
-// Shell completion runtime: cache paths, profile installation, and shell detection.
 import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { readRegularFile, resolvePathPrefixSync } from "@openclaw/fs-safe/advanced";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { hasTerminalControl, terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { resolveStateDir } from "../config/paths.js";
 import { isErrno } from "../infra/errors.js";
+import { decodeUtf8Input, Utf8InputError } from "../infra/utf8-input.js";
 import { decodeWindowsTextFileBuffer } from "../infra/windows-encoding.js";
 import { pathExists } from "../utils.js";
 import { publishOutputFileAtomically } from "./output-file.runtime.js";
@@ -20,8 +22,37 @@ export const COMPLETION_SKIP_PLUGIN_COMMANDS_ENV = "OPENCLAW_COMPLETION_SKIP_PLU
 
 type CompletionProfileEncoding = "utf8" | "utf8bom" | "utf16le" | "utf16be";
 
-async function readCompletionProfile(profilePath: string, shell: CompletionShell) {
-  const buffer = await fs.readFile(profilePath);
+class CompletionProfileEncodingError extends Utf8InputError {
+  constructor(
+    readonly profilePath: string,
+    message: string,
+    cause: unknown,
+  ) {
+    super(message, { cause });
+    this.name = "CompletionProfileEncodingError";
+  }
+}
+
+function formatInvalidUtf8InstallMessage(params: {
+  profilePath: string;
+  shell: CompletionShell;
+  cachePath: string;
+}): string {
+  const reload = formatCompletionReloadCommand(params.shell, params.cachePath);
+  return [
+    `Shell profile must be valid UTF-8: ${params.profilePath}.`,
+    "The file was left untouched.",
+    `For this session, load the prepared cache with: ${reload}.`,
+    "Persistent installation requires backing up the profile and correcting its encoding first.",
+  ].join(" ");
+}
+
+async function readCompletionProfile(
+  profilePath: string,
+  shell: CompletionShell,
+  mode: "inspect" | "mutate" = "mutate",
+) {
+  const { buffer } = await readRegularFile({ filePath: await fs.realpath(profilePath) });
   let encoding: CompletionProfileEncoding = "utf8";
   if (shell === "powershell" && process.platform === "win32") {
     const [first, second, third] = buffer;
@@ -31,12 +62,14 @@ async function readCompletionProfile(profilePath: string, shell: CompletionShell
       encoding = "utf8bom";
     }
   }
-  // Removing an owned first line must not remove the profile's encoding declaration.
-  return {
-    content:
-      encoding === "utf8" ? buffer.toString("utf8") : decodeWindowsTextFileBuffer({ buffer }),
-    encoding,
-  };
+  // UTF-16 remains a supported PowerShell file encoding; UTF-8 rewrites are strict.
+  const utf8 = encoding === "utf8" || encoding === "utf8bom";
+  const content = utf8
+    ? mode === "mutate"
+      ? decodeUtf8Input(buffer, `Shell profile ${profilePath}`)
+      : buffer.toString("utf8")
+    : decodeWindowsTextFileBuffer({ buffer });
+  return { content: encoding === "utf8bom" ? content.slice(1) : content, encoding };
 }
 
 function encodeCompletionProfile(content: string, encoding: CompletionProfileEncoding): Buffer {
@@ -47,61 +80,41 @@ function encodeCompletionProfile(content: string, encoding: CompletionProfileEnc
   return encoding === "utf16be" ? buffer.swap16() : buffer;
 }
 
-/** Narrows an arbitrary shell label to a completion shell supported by installer logic. */
 export function isCompletionShell(value: string): value is CompletionShell {
   return COMPLETION_SHELLS.includes(value as CompletionShell);
 }
 
-function resolveShellBasename(
-  shellPath: string,
-  platform: NodeJS.Platform = process.platform,
-): string {
+function resolveShellBasename(shellPath: string): string {
   const platformBasename =
-    platform === "win32" ? path.win32.basename(shellPath) : path.basename(shellPath);
+    process.platform === "win32" ? path.win32.basename(shellPath) : path.basename(shellPath);
   const winBasename = path.win32.basename(shellPath);
   const basename = winBasename.length < platformBasename.length ? winBasename : platformBasename;
   return normalizeLowercaseStringOrEmpty(basename.replace(/\.(?:exe|cmd|bat)$/i, ""));
 }
 
 /** Resolves the active shell from environment paths, using the platform's native default. */
-export function resolveShellFromEnv(
-  env: NodeJS.ProcessEnv = process.env,
-  platform: NodeJS.Platform = process.platform,
-): CompletionShell {
-  const shellPath = normalizeOptionalString(env.SHELL) ?? "";
-  const shellName = shellPath ? resolveShellBasename(shellPath, platform) : "";
+export function resolveShellFromEnv(): CompletionShell {
+  const shellPath = normalizeOptionalString(process.env.SHELL) ?? "";
+  const shellName = shellPath ? resolveShellBasename(shellPath) : "";
   if (isCompletionShell(shellName)) {
     return shellName;
   }
   if (shellName === "pwsh") {
     return "powershell";
   }
-  return platform === "win32" ? "powershell" : "zsh";
-}
-
-function sanitizeCompletionBasename(value: string): string {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return "openclaw";
-  }
-  return trimmed.replace(/[^a-zA-Z0-9._-]/g, "-");
-}
-
-function resolveCompletionCacheDir(env: NodeJS.ProcessEnv = process.env): string {
-  const stateDir = resolveStateDir(env, os.homedir);
-  return path.join(stateDir, "completions");
+  return process.platform === "win32" ? "powershell" : "zsh";
 }
 
 /** Returns the per-shell cached completion script path for a sanitized CLI binary name. */
 export function resolveCompletionCachePath(shell: CompletionShell, binName: string): string {
-  const basename = sanitizeCompletionBasename(binName);
+  const basename = (binName.trim() || "openclaw").replace(/[^a-zA-Z0-9._-]/g, "-");
   return path.join(
-    resolveCompletionCacheDir(),
+    resolveStateDir(process.env, os.homedir),
+    "completions",
     `${basename}.${shell === "powershell" ? "ps1" : shell}`,
   );
 }
 
-/** Check if the completion cache file exists for the given shell. */
 export async function completionCacheExists(
   shell: CompletionShell,
   binName = "openclaw",
@@ -153,10 +166,6 @@ export function formatCompletionReloadCommand(shell: CompletionShell, scriptPath
   const homePrefix = scriptPath.startsWith("~/") ? "~/" : "";
   const value = scriptPath.slice(homePrefix.length);
   return `source ${homePrefix}${quoteCompletionPath(shell, value)}`;
-}
-
-function isCompletionProfileHeader(line: string): boolean {
-  return line.trim() === "# OpenClaw Completion";
 }
 
 function isCompletionProfileLine(line: string, binName: string, cachePath: string): boolean {
@@ -282,20 +291,14 @@ function isPortableCompletionSourceLine(
     return false;
   }
   const trimmed = line.replace(/^[ \t]+|[ \t]+$/gu, "");
-  let guardOperand: string | undefined;
-  let sourceOperand: string | undefined;
-  if (shell === "fish") {
-    const hook = /^test[ \t]+-f[ \t]+(.+?)[ \t]*;[ \t]*and[ \t]+source[ \t]+(.+)$/u.exec(trimmed);
-    guardOperand = hook?.[1];
-    sourceOperand = hook?.[2];
-  } else {
-    // Shell token separators are spaces and tabs, not JavaScript's Unicode whitespace.
-    const hook =
-      /^\[[ \t]+-f[ \t]+(.+?)[ \t]+\][ \t]*&&[ \t]+source[ \t]+(.+)$/u.exec(trimmed) ??
-      /^\[\[[ \t]+-f[ \t]+(.+?)[ \t]+\]\][ \t]*&&[ \t]+source[ \t]+(.+)$/u.exec(trimmed);
-    guardOperand = hook?.[1];
-    sourceOperand = hook?.[2];
-  }
+  // Shell token separators are spaces and tabs, not JavaScript's Unicode whitespace.
+  const hook =
+    shell === "fish"
+      ? /^test[ \t]+-f[ \t]+(.+?)[ \t]*;[ \t]*and[ \t]+source[ \t]+(.+)$/u.exec(trimmed)
+      : (/^\[[ \t]+-f[ \t]+(.+?)[ \t]+\][ \t]*&&[ \t]+source[ \t]+(.+)$/u.exec(trimmed) ??
+        /^\[\[[ \t]+-f[ \t]+(.+?)[ \t]+\]\][ \t]*&&[ \t]+source[ \t]+(.+)$/u.exec(trimmed));
+  const guardOperand = hook?.[1];
+  const sourceOperand = hook?.[2];
   return (
     guardOperand !== undefined &&
     sourceOperand !== undefined &&
@@ -361,108 +364,21 @@ function isSlowDynamicCompletionLine(line: string, binName: string): boolean {
   );
 }
 
-function updateCompletionProfile(
-  content: string,
-  binName: string,
-  cachePath: string,
-  shell: CompletionShell,
-  homeDir: string,
-): { next: string; changed: boolean; hadExisting: boolean } {
-  // Remove both cached and old dynamic blocks so installs converge to one fast source line,
-  // while preserving user-managed portable hooks byte-for-byte.
-  const lines = content.split("\n");
-  const filtered: string[] = [];
-  let hadExisting = false;
-  let portableCoversCurrent = false;
-
-  for (let i = 0; i < lines.length; i += 1) {
-    const line = lines[i] ?? "";
-    if (isCompletionProfileHeader(line)) {
-      const following = lines[i + 1] ?? "";
-      if (isPortableCompletionSourceLine(following, shell, cachePath, homeDir)) {
-        filtered.push(line);
-        continue;
-      }
-      hadExisting = true;
-      // An orphaned marker owns no following user line; remove only a recognized source line.
-      if (
-        isCompletionProfileLine(following, binName, cachePath) ||
-        isPreviousCompletionSourceLine(following, cachePath, shell)
-      ) {
-        i += 1;
-      }
-      continue;
-    }
-    if (isCompletionProfileLine(line, binName, cachePath)) {
-      hadExisting = true;
-      continue;
-    }
-    if (isPortableCompletionSourceLine(line, shell, cachePath, homeDir)) {
-      // A portable hook for the current cache counts as configured and stays untouched.
-      hadExisting = true;
-      portableCoversCurrent = true;
-      filtered.push(line);
-      continue;
-    }
-    filtered.push(line);
-  }
-
-  if (portableCoversCurrent) {
-    const next = filtered.join("\n");
-    return { next, changed: next !== content, hadExisting };
-  }
-  const trimmed = filtered.join("\n").trimEnd();
-  const block = `# OpenClaw Completion\n${formatCompletionSourceLine(shell, cachePath)}`;
-  const next = trimmed ? `${trimmed}\n\n${block}\n` : `${block}\n`;
-  return { next, changed: next !== content, hadExisting };
-}
-
 async function resolveCompletionProfileWritePath(profilePath: string): Promise<string> {
-  const profileDir = path.dirname(profilePath);
-  // Shell startup follows a symlink before `..`; create and canonicalize that lexical parent first.
-  await fs.mkdir(profileDir, { recursive: true });
-  const canonicalDir = await fs.realpath(profileDir);
-  try {
-    // Existing dotfile-manager symlinks must keep pointing at the atomically replaced referent.
-    return await fs.realpath(profilePath);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-      throw error;
-    }
-  }
-  const linkTarget = await fs.readlink(profilePath).catch((error: unknown) => {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === "ENOENT" || code === "EINVAL") {
-      return undefined;
-    }
-    throw error;
-  });
-  if (linkTarget === undefined) {
-    return path.join(canonicalDir, path.basename(profilePath));
-  }
-  // A dangling relative link is resolved from the directory that physically owns the link.
-  const targetPath = path.isAbsolute(linkTarget)
-    ? linkTarget
-    : `${canonicalDir}${path.sep}${linkTarget}`;
+  const { existingPath, unresolvedSegments } = resolvePathPrefixSync(profilePath);
+  // Keep unresolved `..` components until mkdir has created their physical parents.
+  const targetPath = [existingPath, ...unresolvedSegments].join(path.sep);
   const targetDir = path.dirname(targetPath);
   await fs.mkdir(targetDir, { recursive: true });
   return path.join(await fs.realpath(targetDir), path.basename(targetPath));
 }
 
 /** Resolves the shell startup profile path that should contain the OpenClaw completion block. */
-export function resolveCompletionProfilePath(
-  shell: CompletionShell,
-  options: {
-    env?: NodeJS.ProcessEnv;
-    homeDir?: () => string;
-    platform?: NodeJS.Platform;
-  } = {},
-): string {
-  const env = options.env ?? process.env;
-  const homeDir = options.homeDir ?? os.homedir;
-  const platform = options.platform ?? process.platform;
+export function resolveCompletionProfilePath(shell: CompletionShell): string {
+  const env = process.env;
+  const platform = process.platform;
   const pathApi = platform === "win32" ? path.win32 : path.posix;
-  const home = env.HOME || homeDir();
+  const home = env.HOME || os.homedir();
   if (shell === "zsh") {
     const profileDirectory = env.ZDOTDIR === undefined ? home : env.ZDOTDIR || pathApi.sep;
     return appendCompletionProfilePath(profileDirectory, pathApi, ".zshrc");
@@ -484,7 +400,7 @@ export function resolveCompletionProfilePath(
   }
   if (platform === "win32") {
     const shellPath = normalizeOptionalString(env.SHELL) ?? "";
-    const shellName = shellPath ? resolveShellBasename(shellPath, platform) : "";
+    const shellName = shellPath ? resolveShellBasename(shellPath) : "";
     const profileDirectory = shellName === "powershell" ? "WindowsPowerShell" : "PowerShell";
     return appendCompletionProfilePath(
       env.USERPROFILE || home,
@@ -533,7 +449,7 @@ export async function isCompletionInstalled(
   }
   const cachePath = resolveCompletionCachePath(shell, binName);
   const homeDir = process.env.HOME || os.homedir();
-  const { content } = await readCompletionProfile(profilePath, shell);
+  const { content } = await readCompletionProfile(profilePath, shell, "inspect");
   const lines = content.split("\n");
   // A marker does not install completion; retain missing-cache source lines for doctor repair.
   // Managed portable hooks for the same cache script count as installed but are never rewritten.
@@ -545,7 +461,6 @@ export async function isCompletionInstalled(
 }
 
 /**
- * Check if the profile uses the slow dynamic completion pattern.
  * Returns true if profile has `source <(openclaw completion ...)` instead of cached file.
  */
 export async function usesSlowDynamicCompletion(
@@ -559,7 +474,7 @@ export async function usesSlowDynamicCompletion(
   }
 
   const cachePath = resolveCompletionCachePath(shell, binName);
-  const { content } = await readCompletionProfile(profilePath, shell);
+  const { content } = await readCompletionProfile(profilePath, shell, "inspect");
   return content
     .split("\n")
     .some((line) => isSlowDynamicCompletionLine(line, binName) && !line.includes(cachePath));
@@ -567,11 +482,44 @@ export async function usesSlowDynamicCompletion(
 
 const PROFILE_WRITE_ERROR_CODES = new Set(["EACCES", "EPERM", "EROFS"]);
 
+class CompletionCacheMissingError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "CompletionCacheMissingError";
+  }
+}
+
 export function findCompletionProfileWriteError(err: unknown): NodeJS.ErrnoException | undefined {
   if (isErrno(err) && PROFILE_WRITE_ERROR_CODES.has(err.code ?? "")) {
     return err;
   }
   return err instanceof Error ? findCompletionProfileWriteError(err.cause) : undefined;
+}
+
+export type OptionalCompletionInstallFailure =
+  | { kind: "write"; error: NodeJS.ErrnoException }
+  | { kind: "encoding"; message: string; profilePath: string };
+
+/** Optional setup/Doctor paths may skip install on write or encoding failures. */
+export function findOptionalCompletionInstallFailure(
+  err: unknown,
+): OptionalCompletionInstallFailure | undefined {
+  const writeError = findCompletionProfileWriteError(err);
+  if (writeError) {
+    return { kind: "write", error: writeError };
+  }
+  let current = err;
+  while (current instanceof Error) {
+    if (
+      current instanceof Utf8InputError &&
+      "profilePath" in current &&
+      typeof current.profilePath === "string"
+    ) {
+      return { kind: "encoding", message: current.message, profilePath: current.profilePath };
+    }
+    current = current.cause;
+  }
+  return undefined;
 }
 
 export async function installCompletion(shell: string, yes: boolean, binName = "openclaw") {
@@ -582,7 +530,7 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
   const cachePath = resolveCompletionCachePath(shell, binName);
   const cacheExists = await pathExists(cachePath);
   if (!cacheExists) {
-    throw new Error(
+    throw new CompletionCacheMissingError(
       `Completion cache not found at ${cachePath}. Run \`${binName} completion --write-state\` first.`,
     );
   }
@@ -594,28 +542,79 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
     let content: string;
     let encoding: CompletionProfileEncoding = "utf8";
     try {
-      ({ content, encoding } = await readCompletionProfile(profilePath, shell));
+      ({ content, encoding } = await readCompletionProfile(profilePath, shell, "mutate"));
     } catch (error) {
+      if (error instanceof Utf8InputError) {
+        throw new CompletionProfileEncodingError(
+          profilePath,
+          formatInvalidUtf8InstallMessage({ profilePath, shell, cachePath }),
+          error,
+        );
+      }
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
         throw error;
       }
       if (!yes) {
-        console.warn(`Profile not found at ${profilePath}. Creating a new one.`);
+        console.warn(terminalText`Profile not found at ${profilePath}. Creating a new one.`);
       }
       content = "";
     }
 
-    const update = updateCompletionProfile(content, binName, cachePath, shell, homeDir);
-    if (!update.changed) {
+    // Remove both cached and old dynamic blocks so installs converge to one fast source line,
+    // while preserving user-managed portable hooks byte-for-byte.
+    const lines = content.split("\n");
+    const filtered: string[] = [];
+    let hadExisting = false;
+    let portableCoversCurrent = false;
+
+    for (let i = 0; i < lines.length; i += 1) {
+      const line = lines[i] ?? "";
+      if (line.trim() === "# OpenClaw Completion") {
+        const following = lines[i + 1] ?? "";
+        if (isPortableCompletionSourceLine(following, shell, cachePath, homeDir)) {
+          filtered.push(line);
+          continue;
+        }
+        hadExisting = true;
+        // An orphaned marker owns no following user line; remove only a recognized source line.
+        if (
+          isCompletionProfileLine(following, binName, cachePath) ||
+          isPreviousCompletionSourceLine(following, cachePath, shell)
+        ) {
+          i += 1;
+        }
+        continue;
+      }
+      if (isCompletionProfileLine(line, binName, cachePath)) {
+        hadExisting = true;
+        continue;
+      }
+      if (isPortableCompletionSourceLine(line, shell, cachePath, homeDir)) {
+        // A portable hook for the current cache counts as configured and stays untouched.
+        hadExisting = true;
+        portableCoversCurrent = true;
+      }
+      filtered.push(line);
+    }
+
+    let next: string;
+    if (portableCoversCurrent) {
+      next = filtered.join("\n");
+    } else {
+      const trimmed = filtered.join("\n").replace(/(?<!\n)\n+$/u, "");
+      const block = `# OpenClaw Completion\n${formatCompletionSourceLine(shell, cachePath)}`;
+      next = trimmed ? `${trimmed}\n\n${block}\n` : `${block}\n`;
+    }
+    if (next === content) {
       if (!yes) {
-        console.log(`Completion already installed in ${profilePath}`);
+        console.log(terminalText`Completion already installed in ${profilePath}`);
       }
       return;
     }
 
     if (!yes) {
-      const action = update.hadExisting ? "Updating" : "Installing";
-      console.log(`${action} completion in ${profilePath}...`);
+      const action = hadExisting ? "Updating" : "Installing";
+      console.log(terminalText`${action} completion in ${profilePath}...`);
     }
 
     await publishOutputFileAtomically({
@@ -623,17 +622,23 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
       tempPrefix: ".openclaw-completion-profile",
       durable: true,
       writeTemp: async (tempPath) => {
-        await fs.writeFile(tempPath, encodeCompletionProfile(update.next, encoding), {
+        await fs.writeFile(tempPath, encodeCompletionProfile(next, encoding), {
           flag: "wx",
         });
       },
     });
     if (!yes) {
+      const profileHint = resolveCompletionProfileHint(shell);
       console.log(
-        `Completion installed. Restart your shell or run: ${formatCompletionReloadCommand(shell, resolveCompletionProfileHint(shell))}`,
+        hasTerminalControl(profileHint)
+          ? "Completion installed. Restart your shell to load it."
+          : `Completion installed. Restart your shell or run: ${formatCompletionReloadCommand(shell, profileHint)}`,
       );
     }
   } catch (err) {
+    if (err instanceof CompletionProfileEncodingError) {
+      throw err;
+    }
     const message = err instanceof Error ? err.message : String(err);
     throw new Error(`Failed to install completion: ${message}`, { cause: err });
   }

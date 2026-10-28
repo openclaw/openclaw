@@ -5,12 +5,14 @@ import {
   AUDIT_ACTIVITY_KINDS,
   AUDIT_ACTIVITY_STATUSES,
 } from "../../../packages/gateway-protocol/src/schema/audit-activity.js";
-import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
-import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { auditListCommand, type AuditListCommandOptions } from "../../commands/audit.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatHumanList } from "../../shared/human-list.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
+import { formatDocsHelp } from "../help-format.js";
+
+type AuditCliOptions = AuditListCommandOptions &
+  Partial<Record<"agent" | "session" | "run" | "execution", string>>;
 
 /** Register the bounded operator audit query command. */
 export function registerAuditCommand(program: Command): void {
@@ -34,29 +36,16 @@ export function registerAuditCommand(program: Command): void {
     .option("--limit <count>", "Maximum records (1-500; decisions 1-100)")
     .option("--explain", "Inspect execution identity and run-admission reasoning", false)
     .option("--json", "Output a bounded JSON page", false)
-    .addHelpText(
-      "after",
-      () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/audit", "docs.openclaw.ai/cli/audit")}\n`,
-    )
-    .action(async (opts) => {
+    .addHelpText("after", () => formatDocsHelp("/cli/audit"))
+    .action(async ({ agent, session, run, execution, ...opts }: AuditCliOptions) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         await auditListCommand(
           {
-            agentId: opts.agent as string | undefined,
-            sessionKey: opts.session as string | undefined,
-            runId: opts.run as string | undefined,
-            executionId: opts.execution as string | undefined,
-            kind: opts.kind as AuditListCommandOptions["kind"],
-            status: opts.status as AuditListCommandOptions["status"],
-            direction: opts.direction as AuditListCommandOptions["direction"],
-            channel: opts.channel as string | undefined,
-            after: opts.after as string | undefined,
-            before: opts.before as string | undefined,
-            cursor: opts.cursor as string | undefined,
-            limit: opts.limit as string | undefined,
-            explain: Boolean(opts.explain),
-            json: Boolean(opts.json),
+            ...opts,
+            agentId: agent,
+            sessionKey: session,
+            runId: run,
+            executionId: execution,
           },
           defaultRuntime,
         );

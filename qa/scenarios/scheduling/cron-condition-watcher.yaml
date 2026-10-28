@@ -18,7 +18,7 @@ scenario:
     - docs/concepts/qa-e2e-automation.md
   codeRefs:
     - src/cron/trigger-script.ts
-    - src/cron/service/timer.ts
+    - src/cron/service/scheduler-actor.ts
     - src/agents/code-mode.ts
   gatewayConfigPatch:
     cron:

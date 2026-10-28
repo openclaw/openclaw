@@ -5,9 +5,13 @@ import * as systemdScope from "./systemd-scope.js";
 
 afterEach(() => vi.restoreAllMocks());
 
-it.each(["exit", "timeout", "signal"] as const)(
-  "accepts disabled output only after a completed is-enabled command (%s)",
-  async (termination) => {
+it.each(
+  ["disabled", "masked", "masked-runtime"].flatMap((state) =>
+    (["exit", "timeout", "signal"] as const).map((termination) => ({ state, termination })),
+  ),
+)(
+  "accepts $state output only after a completed is-enabled command ($termination)",
+  async ({ state, termination }) => {
     const env = { HOME: "/synthetic/systemd-enabled" };
     const unitName = "openclaw-gateway.service";
     vi.spyOn(systemdScope, "findInstalledSystemdGatewayScope").mockResolvedValue({
@@ -18,8 +22,8 @@ it.each(["exit", "timeout", "signal"] as const)(
     const execute = vi.spyOn(systemdExec, "execSystemctlUser").mockResolvedValue({
       code: 1,
       termination,
-      stdout: "disabled",
-      stderr: "disabled",
+      stdout: state,
+      stderr: state,
     });
 
     const result = isSystemdServiceEnabled({ env });

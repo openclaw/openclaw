@@ -1,6 +1,4 @@
 import { afterEach, beforeEach, vi } from "vitest";
-import { createQaBusState } from "./bus-state.js";
-import type { QaLabServerHandle } from "./lab-server.types.js";
 import { mocks } from "./suite-run-isolated.test-mocks.js";
 import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
 import type { QaSuiteResolvedRunContext } from "./suite-types.js";
@@ -8,21 +6,8 @@ import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
 export { mocks } from "./suite-run-isolated.test-mocks.js";
 
-export const tempDirs = createTempDirHarness();
+const tempDirs = createTempDirHarness();
 let testOutputDir: string;
-
-export function createCleanupTestLab(): QaLabServerHandle {
-  return {
-    baseUrl: "http://127.0.0.1:43123",
-    listenUrl: "http://127.0.0.1:43123",
-    state: createQaBusState(),
-    setControlUi: vi.fn(),
-    setScenarioRun: vi.fn(),
-    setLatestReport: vi.fn(),
-    runSelfCheck: vi.fn(),
-    stop: vi.fn(async () => {}),
-  };
-}
 
 export function createCleanupTestContext(): QaSuiteResolvedRunContext {
   return {

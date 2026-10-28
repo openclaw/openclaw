@@ -1,4 +1,3 @@
-// Assertions for browser CDP snapshot E2E fixtures.
 import fs from "node:fs";
 import { readPositiveIntEnvWithEmptyFallback } from "../env-limits.mjs";
 

@@ -1,26 +1,10 @@
 // TTS preference mutations stay off the agent prompt's read-only import path.
-import path from "node:path";
 import type { TtsAutoMode, TtsProvider } from "../config/types.js";
-import { privateFileStoreSync } from "../infra/private-file-store.js";
 import { canonicalizeSpeechProviderId } from "./provider-registry.js";
-import { normalizeTtsPersonaId, readTtsPrefs, type TtsUserPrefs } from "./tts-settings.js";
-
-function updateTtsPrefs(prefsPath: string, update: (prefs: TtsUserPrefs) => void): void {
-  const prefs = readTtsPrefs(prefsPath);
-  update(prefs);
-  privateFileStoreSync(path.dirname(prefsPath)).writeText(
-    path.basename(prefsPath),
-    JSON.stringify(prefs, null, 2),
-  );
-}
+import { updateTtsPrefsSync } from "./tts-settings-write-worker.js";
 
 export function setTtsAutoMode(prefsPath: string, mode: TtsAutoMode): void {
-  updateTtsPrefs(prefsPath, (prefs) => {
-    const next = { ...prefs.tts };
-    delete next.enabled;
-    next.auto = mode;
-    prefs.tts = next;
-  });
+  updateTtsPrefsSync(prefsPath, { auto: mode });
 }
 
 export function setTtsEnabled(prefsPath: string, enabled: boolean): void {
@@ -28,27 +12,17 @@ export function setTtsEnabled(prefsPath: string, enabled: boolean): void {
 }
 
 export function setTtsPersona(prefsPath: string, persona: string | null | undefined): void {
-  updateTtsPrefs(prefsPath, (prefs) => {
-    const next = { ...prefs.tts };
-    next.persona = normalizeTtsPersonaId(persona) ?? null;
-    prefs.tts = next;
-  });
+  updateTtsPrefsSync(prefsPath, { persona: persona ?? null });
 }
 
 export function setTtsProvider(prefsPath: string, provider: TtsProvider): void {
-  updateTtsPrefs(prefsPath, (prefs) => {
-    prefs.tts = { ...prefs.tts, provider: canonicalizeSpeechProviderId(provider) ?? provider };
-  });
+  updateTtsPrefsSync(prefsPath, { provider: canonicalizeSpeechProviderId(provider) ?? provider });
 }
 
 export function setTtsMaxLength(prefsPath: string, maxLength: number): void {
-  updateTtsPrefs(prefsPath, (prefs) => {
-    prefs.tts = { ...prefs.tts, maxLength };
-  });
+  updateTtsPrefsSync(prefsPath, { maxLength });
 }
 
 export function setSummarizationEnabled(prefsPath: string, enabled: boolean): void {
-  updateTtsPrefs(prefsPath, (prefs) => {
-    prefs.tts = { ...prefs.tts, summarize: enabled };
-  });
+  updateTtsPrefsSync(prefsPath, { summarize: enabled });
 }

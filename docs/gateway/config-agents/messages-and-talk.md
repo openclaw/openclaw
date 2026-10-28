@@ -19,6 +19,7 @@ title: "Configuration — messages and talk"
     ackReactionScope: "group-mentions", // group-mentions | group-all | direct | all | off | none
     queue: {
       mode: "steer", // steer (default) | followup | collect | interrupt
+      allowCollaborativeSteering: false,
       cap: 20,
       drop: "summarize", // old | new | summarize (default)
       byChannel: {
@@ -73,13 +74,17 @@ Variables are case-insensitive. `{think}` is an alias for `{thinkingLevel}`.
 - `mode`: queue strategy for inbound messages that arrive while a session run is active. Default: `"steer"`.
   - `steer`: inject the new prompt into the active run.
   - `followup`: run the new prompt after the active run finishes.
-  - `collect`: batch compatible messages and run them together later.
+  - `collect`: batch compatible messages and run them together later. Messages with separate durable ingress admission (including Discord and Telegram) stay in separate followup turns; compatible Gateway `chat.send` inputs can still combine. See [Queue modes](/concepts/queue#queue-modes).
   - `interrupt`: abort the active run before starting the newest prompt.
+- `collaborativeSteeringFallback`: `"queue"` (personal default) queues another person’s blocked steer as their own turn, without a status notice. `"reject"` (corporate default) preserves strict refusal and requires a fresh `/followup` request. Neither value grants access or enables collaborative steering.
+- `allowCollaborativeSteering`: defaults to `true` with the personal preset and `false` with corporate. An explicit `false` with quiet fallback queues another person’s input quietly for a new turn under the submitter’s identity and current policy. When set to `true`, admitted human input in the same conversation may steer under the active turn's original identity and prepared permissions, even when the message author has fewer permissions. Ordinary guidance from the same requester in the same conversation retains the running turn’s prepared permissions without replacing its capabilities or tool bindings. Queue modes, current access, live execution authority, execution-setting checks, and explicit cross-session `sessions_send(mode="steer")` authorization remain authoritative. See [Steering scope](/concepts/queue-steering#scope).
 - The queue uses a built-in 500ms debounce for steer, followup, and collect batching.
 - `cap`: maximum queued messages before the drop policy applies. Default: `20`.
 - `drop`: strategy when the cap is exceeded. `"summarize"` (default) drops oldest entries but keeps compact summaries; `"old"` drops oldest without summaries; `"new"` rejects the newest item.
 - `byChannel`: per-channel `mode` overrides keyed by provider id.
 - `debounceMsByChannel`: per-channel debounce overrides in milliseconds, keyed by provider id.
+
+Security presets supply runtime defaults without writing competing queue settings during configuration creation, reads, or Doctor repair. Existing explicit `true` and `false`, including included values and values persisted by earlier versions, are preserved. Unset an explicit override to use the selected preset. See [security presets](/gateway/security/presets) and [config repairs](/gateway/doctor/config-migrations).
 
 Use `messages.inbound.debounceMs` for the global pre-queue debounce window.
 
@@ -95,7 +100,7 @@ Batching is a bounded timing heuristic, not a guarantee that every part of a lon
 
 ### Other message keys
 
-- `channels.whatsapp.responsePrefix`: outbound WhatsApp reply prefix. Doctor moves the retired inbound `messagePrefix` value here only when this canonical value is unset.
+- `channels.whatsapp.responsePrefix`: outbound WhatsApp reply prefix. Doctor moves the retired inbound `messagePrefix` value here only when this current value is unset.
 - `messages.visibleReplies`: controls visible source replies across direct, group, and channel conversations (`"message_tool"` requires `message(action=send)` for visible output; `"automatic"` posts normal replies as before).
 - `messages.usageTemplate` / `messages.responseUsage`: custom `/usage` footer template and default per-reply usage mode (`off | tokens | full`, plus legacy `on` alias for `tokens`).
 - `messages.groupChat.mentionPatterns` / `historyLimit`: group-message mention triggers and history window sizing.

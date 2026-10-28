@@ -1,25 +1,19 @@
-// Slack plugin module adapts suggested prompts for Assistant View and Agent View.
 import type { App } from "@slack/bolt";
 import { WebAPIPlatformError } from "@slack/web-api";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import type { SlackSuggestedPrompt } from "../channel-meta.js";
 import { formatSlackError } from "../errors.js";
-
-type SlackSuggestedPrompt = { title: string; message: string };
+import { isTransientSlackApiError } from "./transient-api-error.js";
 
 export type SlackSuggestedPromptsOutcome = "accepted" | "rejected" | "internal_error" | "failed";
 
 export type SlackSuggestedPromptsInput = {
   channelId: string;
   threadTs?: string;
+  retryTransientErrors?: boolean;
   title?: string;
   prompts: SlackSuggestedPrompt[];
 };
-
-export const DEFAULT_SLACK_SUGGESTED_PROMPTS: SlackSuggestedPrompt[] = [
-  { title: "What can you do?", message: "What can you help me with?" },
-  { title: "Summarize this channel", message: "Summarize the recent activity in this channel." },
-  { title: "Draft a reply", message: "Help me draft a reply." },
-];
 
 export async function updateSlackSuggestedPrompts(
   params: SlackSuggestedPromptsInput & { botToken: string; client: App["client"] },
@@ -48,6 +42,13 @@ export async function updateSlackSuggestedPrompts(
     // Agent apps answer ok or internal_error (live-verified 2026-09-02).
     // Transport failures prove nothing about Agent View.
     const code = error instanceof WebAPIPlatformError ? error.data.error : undefined;
+    if (
+      params.retryTransientErrors &&
+      (params.threadTs || code !== "internal_error") &&
+      isTransientSlackApiError(error)
+    ) {
+      throw error;
+    }
     const outcome =
       code === "not_agent_app" || code === "missing_scope"
         ? "rejected"

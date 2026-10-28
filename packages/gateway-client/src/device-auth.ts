@@ -2,11 +2,7 @@ export function normalizeDeviceMetadataForAuth(value?: string | null): string {
   if (typeof value !== "string") {
     return "";
   }
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return "";
-  }
-  return trimmed.replace(/[A-Z]/g, (char) => String.fromCharCode(char.charCodeAt(0) + 32));
+  return value.trim().replace(/[A-Z]/g, (char) => String.fromCharCode(char.charCodeAt(0) + 32));
 }
 
 type DeviceAuthPayloadParams = {

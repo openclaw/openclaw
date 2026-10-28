@@ -1,21 +1,12 @@
-import type { RelayOperationReference } from "../extension-relay/owner-client.js";
 import type { BrowserRouteContext } from "../server-context.js";
 import { getProfileLifecycle } from "../server-context.lifecycle.js";
-
-export type BrowserOperationTargetResolver = (() =>
-  | string
-  | undefined
-  | Promise<string | undefined>) & {
-  reference?: RelayOperationReference;
-  release: () => Promise<void>;
-};
 
 /** Pin capture at the actual bridge; a failed capture must never enable generic recovery. */
 export async function captureBrowserOperationTarget(opts: {
   ctx: BrowserRouteContext;
   profileName: string;
   targetId: string;
-}): Promise<BrowserOperationTargetResolver | undefined> {
+}) {
   const state = opts.ctx.state();
   const relay = state.extensionRelays?.get(opts.profileName);
   if (!relay) {
@@ -26,14 +17,14 @@ export async function captureBrowserOperationTarget(opts: {
     throw new Error("Browser operation profile is unavailable");
   }
   const lifecycle = getProfileLifecycle(runtime);
-  const generation = lifecycle.generation;
+  const profileSignal = lifecycle.controller.signal;
   let released = false;
   const isCurrent = () =>
     !released &&
     opts.ctx.state() === state &&
     state.extensionRelays?.get(opts.profileName) === relay &&
     state.profiles.get(opts.profileName) === runtime &&
-    lifecycle.generation === generation;
+    !profileSignal.aborted;
   const reference =
     relay.ownership === "borrowed"
       ? await relay.client.capture(opts.targetId, () => {

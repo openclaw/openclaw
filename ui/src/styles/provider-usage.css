@@ -1,0 +1,227 @@
+/* Carapace data marks (sparkline, meter, usage rows) adapted from openclaw/carapace
+ * at 5463792; roles resolve through carapace-control-ui.css. */
+
+.oc-sparkline {
+  display: block;
+  width: 100%;
+  max-width: 8.5rem;
+  height: 1.5rem;
+}
+
+.oc-sparkline-line {
+  fill: none;
+  stroke: var(--oc-text-muted);
+  stroke-width: 1.5;
+  stroke-linecap: butt;
+  stroke-linejoin: miter;
+  /* preserveAspectRatio="none" stretches the viewBox; keep the stroke true. */
+  vector-effect: non-scaling-stroke;
+}
+
+.oc-inspector-meter {
+  height: 0.375rem;
+  overflow: hidden;
+  border-radius: var(--oc-radius-round);
+  background: var(--oc-surface-interactive);
+}
+
+.oc-inspector-meter span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--oc-accent-secondary);
+}
+
+.oc-menu-panel-usage {
+  display: grid;
+  padding: var(--oc-space-2) var(--oc-space-3);
+  border-bottom: 1px solid var(--oc-border-subtle);
+  gap: var(--oc-space-2);
+}
+
+.oc-menu-panel-usage-row {
+  display: grid;
+  align-items: center;
+  gap: var(--oc-space-2);
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+
+.oc-menu-panel-usage-row .oc-inspector-meter,
+.oc-menu-panel-usage-row meter {
+  min-width: 0;
+}
+
+.oc-menu-panel-usage-label {
+  color: var(--oc-text-secondary);
+}
+
+.oc-menu-panel-usage-value {
+  color: var(--oc-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Shared provider usage rows on Carapace data rows; each surface owns its padding. */
+.provider-usage {
+  display: grid;
+  gap: var(--oc-space-2);
+  min-width: 0;
+}
+
+/* One column track for every row, so meters line up whatever the label length. */
+.provider-usage__rows {
+  grid-template-columns: max-content minmax(0, 1fr) max-content;
+  padding: 0;
+  border-bottom: 0;
+}
+
+.provider-usage__rows > * {
+  grid-column: 1 / -1;
+}
+
+.provider-usage__row {
+  grid-template-columns: subgrid;
+}
+
+.provider-usage__row .oc-menu-panel-usage-value {
+  font-family: var(--oc-font-mono);
+  text-align: end;
+}
+
+/* Each plan window is a tile: what is left, the meter, then when it comes back. */
+.provider-usage__windows {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr));
+  gap: var(--oc-space-2);
+}
+
+.provider-usage__group {
+  display: grid;
+  gap: var(--oc-space-2);
+}
+
+.provider-usage__window {
+  display: grid;
+  gap: var(--oc-space-1);
+  min-width: 0;
+  padding: var(--oc-space-3);
+  border-radius: var(--oc-radius-control);
+  background: var(--oc-surface-interactive);
+}
+
+.provider-usage__window-label {
+  color: var(--oc-text-secondary);
+  font-size: var(--oc-font-size-xs);
+}
+
+.provider-usage__window-value {
+  color: var(--oc-text-primary);
+  font-family: var(--oc-font-mono);
+  font-size: var(--oc-font-size-lg);
+  font-weight: 500;
+}
+
+.provider-usage__window .oc-inspector-meter {
+  margin-block: var(--oc-space-1);
+  background: color-mix(in srgb, var(--oc-text-primary) 8%, transparent);
+}
+
+.provider-usage__window[data-tone="warning"],
+.provider-usage__chip[data-tone="warning"] {
+  --provider-usage-tone: var(--oc-status-warning-fg);
+}
+
+.provider-usage__window[data-tone="error"],
+.provider-usage__chip[data-tone="error"] {
+  --provider-usage-tone: var(--oc-status-error-fg);
+}
+
+.provider-usage__window[data-tone] .provider-usage__window-value,
+.provider-usage__chip[data-tone] .provider-usage__chip-value {
+  color: var(--provider-usage-tone);
+}
+
+.provider-usage__window[data-tone] .oc-inspector-meter span,
+.provider-usage__chip[data-tone] .oc-inspector-meter span {
+  background: var(--provider-usage-tone);
+}
+
+/* Summary chips: label, meter, headroom on one fixed track so rows line up. */
+.provider-usage__chips {
+  display: grid;
+  gap: 4px;
+  justify-items: start;
+}
+
+.provider-usage__chip {
+  display: inline-grid;
+  grid-template-columns: 4.5rem 3.5rem 4.5rem;
+  align-items: center;
+  gap: var(--oc-space-2);
+  color: var(--oc-text-muted);
+  font-size: var(--oc-font-size-xs);
+}
+
+.provider-usage__chip-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.provider-usage__chip-value {
+  color: var(--oc-text-secondary);
+  font-family: var(--oc-font-mono);
+  text-align: end;
+}
+
+.provider-usage__chip--failed {
+  display: inline-flex;
+  color: var(--oc-status-error-fg);
+}
+
+.provider-usage__alert {
+  display: flex;
+  align-items: center;
+  gap: var(--oc-space-2);
+  margin: 0;
+  padding: var(--oc-space-2) var(--oc-space-3);
+  border-radius: var(--oc-radius-control);
+  background: var(--oc-status-warning-bg);
+  color: var(--oc-status-warning-fg);
+  font-size: var(--oc-font-size-sm);
+}
+
+.provider-usage__alert svg {
+  flex: none;
+  width: 16px;
+  height: 16px;
+}
+
+.provider-usage__note,
+.provider-usage__error {
+  margin: 0;
+  color: var(--oc-text-muted);
+  font-size: var(--oc-font-size-xs);
+}
+
+.provider-usage__error {
+  color: var(--oc-status-error-fg);
+}
+
+.provider-usage__reset {
+  color: var(--oc-text-muted);
+  font-size: var(--oc-font-size-xs);
+}
+
+.provider-usage__trend {
+  display: flex;
+  align-items: center;
+  gap: var(--oc-space-3);
+  color: var(--oc-text-muted);
+  font-size: var(--oc-font-size-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.provider-usage__trend .oc-sparkline {
+  flex: none;
+  width: 7.5rem;
+}

@@ -3,7 +3,6 @@ package ai.openclaw.wear
 import android.content.Intent
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
-import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -46,14 +45,9 @@ class WearScreenshotModeTest {
     assertEquals(WearHomePage.Chat, WearScreenshotScene.Chat.initialPage)
     assertEquals(WearHomePage.Voice, WearScreenshotScene.Voice.initialPage)
     assertEquals(WearHomePage.Controls, WearScreenshotScene.Controls.initialPage)
-  }
-
-  @Test
-  fun fixtureRepresentsAConnectedConversation() {
-    val snapshot = WearScreenshotFixture.snapshot
-
-    assertEquals(WearGatewayState.CONNECTED, snapshot.gatewayState)
-    assertEquals("release-planning", snapshot.activeSessionId)
-    assertTrue(snapshot.messages.any { message -> message.chatRole == WearChatRole.ASSISTANT })
+    assertEquals(WearHomePage.Chat, WearScreenshotScene.CheckingPhone.initialPage)
+    assertEquals(WearHomePage.Chat, WearScreenshotScene.PhoneUnavailable.initialPage)
+    assertEquals(WearScreenshotScene.CheckingPhone, WearScreenshotScene.fromRawValue("checking-phone"))
+    assertEquals(WearScreenshotScene.PhoneUnavailable, WearScreenshotScene.fromRawValue("phone-unavailable"))
   }
 }

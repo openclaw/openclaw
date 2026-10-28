@@ -1,8 +1,7 @@
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { describe, expect, it, vi } from "vitest";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { createPluginToolsMcpServer } from "./plugin-tools-serve.js";
+import { createMcpConnection } from "./tools-mcp.test-support.js";
 
 describe("plugin tools MCP client bridge", () => {
   it("lists and calls a plugin tool through a real MCP client", async () => {
@@ -26,13 +25,8 @@ describe("plugin tools MCP client bridge", () => {
     const server = createPluginToolsMcpServer({
       tools: [tool],
     });
-    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-    const client = new Client(
-      { name: "plugin-tools-test-client", version: "0.0.0" },
-      { capabilities: {} },
-    );
-
-    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    const { client, connect } = createMcpConnection(server, "plugin-tools-test-client");
+    await connect();
 
     try {
       const listed = await client.listTools();
@@ -72,13 +66,8 @@ describe("plugin tools MCP client bridge", () => {
     const server = createPluginToolsMcpServer({
       tools: [tool],
     });
-    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-    const client = new Client(
-      { name: "plugin-tools-error-test-client", version: "0.0.0" },
-      { capabilities: {} },
-    );
-
-    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    const { client, connect } = createMcpConnection(server, "plugin-tools-error-test-client");
+    await connect();
     try {
       const result = await client.callTool({ name: "memory_search", arguments: {} });
 

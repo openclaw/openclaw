@@ -3,12 +3,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildChildEnv } from "./ci-run-node-test-shard.mts";
 import { createVitestCacheWarmGroups } from "./lib/ci-node-test-plan.mts";
-import { BUN_UI_TEST_ENV, resolveCiTestRuntimeSelections } from "./lib/ci-test-runtime.mts";
+import { BUN_UI_TEST_ENV, resolveCiTestRuntimePolicy } from "./lib/ci-test-runtime.mts";
 import { runManagedCommand } from "./lib/managed-child-process.mts";
 
 // Consumer entrypoints choose their own reusable cache leaves; the planner owns
-// membership for both backend-local protected seeds.
+// membership for both backend-local protected seeds. Ordinary warming follows
+// ordinary CI; explicit full validation also primes every Node collection.
 const hosted = process.env.CACHE_WARM_PLATFORM === "linux-hosted";
+const runtimePolicy = resolveCiTestRuntimePolicy({
+  OPENCLAW_CI_TEST_RUNTIME_POLICY: process.env.OPENCLAW_CI_TEST_RUNTIME_POLICY?.trim() || "bun-all",
+});
 const groups = createVitestCacheWarmGroups(hosted ? "hybrid-hosted" : "full");
 const ui = groups.find((group) => group.shard_name === "cache-warm:ui-package");
 if (!ui?.includePatterns) {
@@ -21,7 +25,6 @@ const baseEnv: NodeJS.ProcessEnv = {
   OPENCLAW_CI_TEST_RUNTIME_POLICY: "node",
   OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: JSON.stringify(collectionArgs),
   OPENCLAW_NODE_TEST_PLAN_CONCURRENCY: "1",
-  OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE: "1",
   // The final Node UI collection prunes both roots after all producers join.
   OPENCLAW_VITEST_FS_MODULE_CACHE_WRITER: "0",
   OPENCLAW_NODE_COMPILE_CACHE_WRITER: "0",
@@ -76,35 +79,17 @@ try {
         OPENCLAW_VITEST_INCLUDE_FILE: includeFile,
       });
     }
-    // Direct entrypoints retain the complete Node seed. Bun collects only
-    // compatible files already admitted to the bounded hosted inventory.
-    const bunGroups = tooling.configs.flatMap((config) =>
-      resolveCiTestRuntimeSelections(
-        { configs: [config], includePatterns: tooling.includePatterns, vitestArgs: collectionArgs },
-        "bun-compatible",
-      ).flatMap((selection) =>
-        selection.runtime === "bun"
-          ? [
-              {
-                configs: [config],
-                includePatterns: selection.includePatterns ?? tooling.includePatterns,
-                shard_name: `cache-warm:hosted-bun:${config}`,
-              },
-            ]
-          : [],
-      ),
-    );
-    if (bunGroups.length > 0) {
-      await collect(process.execPath, ["--import", "tsx", "scripts/ci-run-node-test-shard.mts"], {
-        ...baseEnv,
-        OPENCLAW_CI_TEST_RUNTIME_POLICY: "bun-compatible",
-        OPENCLAW_NODE_TEST_GROUPS_JSON: JSON.stringify(bunGroups),
-      });
-    }
+    // Direct entrypoints retain the Node tooling and contract seeds. Only the
+    // tooling inventory also has a Bun consumer; contract lanes remain on Node.
+    await collect(process.execPath, ["--import", "tsx", "scripts/ci-run-node-test-shard.mts"], {
+      ...baseEnv,
+      OPENCLAW_CI_TEST_RUNTIME_POLICY: "bun-all",
+      OPENCLAW_NODE_TEST_GROUPS_JSON: JSON.stringify([tooling]),
+    });
   } else {
     await collect(process.execPath, ["--import", "tsx", "scripts/ci-run-node-test-shard.mts"], {
       ...baseEnv,
-      OPENCLAW_CI_TEST_RUNTIME_POLICY: "dual",
+      OPENCLAW_CI_TEST_RUNTIME_POLICY: runtimePolicy,
       OPENCLAW_NODE_TEST_GROUPS_JSON: JSON.stringify(groups.filter((group) => group !== ui)),
     });
   }
@@ -118,6 +103,8 @@ try {
     0,
     { runtime: "bun", cacheSlot: 0 },
   );
+  // Keep the inherited Bun selection: the launcher verifies it, and CI resolves the
+  // pinned fork from PATH, which is not an OPENCLAW_BUN_PATH file.
   bunEnv.OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE = bunEnv.OPENCLAW_VITEST_INCLUDE_FILE;
   delete bunEnv.OPENCLAW_VITEST_INCLUDE_FILE;
   await collect(

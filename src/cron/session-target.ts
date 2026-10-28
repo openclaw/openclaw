@@ -1,4 +1,5 @@
 /** Resolves and validates session-target keys used by cron jobs and delivery. */
+
 const INVALID_CRON_SESSION_TARGET_ID_ERROR = "invalid cron sessionTarget session id";
 
 /** Returns whether an error came from cron session target id validation. */
@@ -28,9 +29,32 @@ export function resolveCronSessionTargetSessionKey(
   return assertSafeCronSessionTargetId(sessionTarget.slice(8));
 }
 
-/** Returns whether cron executes the job in a detached run session. */
+/**
+ * Returns whether cron executes the job under its own `cron:<jobId>` run key. A
+ * `current` job is still a child of its creating conversation; this decides only the key.
+ */
 export function isDetachedCronSessionTarget(sessionTarget?: string | null): boolean {
   return sessionTarget === "isolated" || sessionTarget === "current";
+}
+
+/**
+ * Whether a captured operator source's session is this job's parent: the session
+ * an in-session job runs in, or the conversation a detached child reports to.
+ */
+export function isCronOperatorSourceParent(
+  job: {
+    sessionTarget?: string | null;
+    sourceConversation?: { sessionKey: string };
+  },
+  sessionKey: string,
+): boolean {
+  if (job.sessionTarget === `session:${sessionKey}`) {
+    return true;
+  }
+  return (
+    isDetachedCronSessionTarget(job.sessionTarget) &&
+    job.sourceConversation?.sessionKey === sessionKey
+  );
 }
 
 /** Preserves `current` with a creation-time sessionKey so future active UI state is irrelevant. */
@@ -45,26 +69,22 @@ export function resolveCronCurrentSessionTarget(params: {
   return sessionKey ? "current" : "isolated";
 }
 
-/** Chooses the session key used for cron delivery, preferring explicit persistent targets. */
+/** Result conversation selection is independent from the execution session and channel target. */
 export function resolveCronDeliverySessionKey(job: {
   sessionTarget?: string | null;
   sessionKey?: string | null;
+  sourceConversation?: { sessionKey: string };
 }): string | undefined {
+  const conversationKey = job.sourceConversation?.sessionKey.trim();
+  if (conversationKey) {
+    return conversationKey;
+  }
   const sessionTargetKey = resolveCronSessionTargetSessionKey(job.sessionTarget);
   if (sessionTargetKey) {
     return sessionTargetKey;
   }
+
   return typeof job.sessionKey === "string" && job.sessionKey.trim()
     ? job.sessionKey.trim()
     : undefined;
-}
-
-/** Returns the notification session key, falling back to a stable per-job failure session. */
-export function resolveCronNotificationSessionKey(params: {
-  jobId: string;
-  sessionKey?: string | null;
-}): string {
-  return typeof params.sessionKey === "string" && params.sessionKey.trim()
-    ? params.sessionKey.trim()
-    : `cron:${params.jobId}:failure`;
 }

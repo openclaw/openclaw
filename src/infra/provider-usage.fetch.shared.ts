@@ -1,8 +1,4 @@
-// Shared fetch and parsing helpers for provider usage endpoints.
-import {
-  parseDateStringTimestampMs,
-  resolveTimerTimeoutMs,
-} from "@openclaw/normalization-core/number-coercion";
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
 import { cancelUnreadResponseBody } from "./http-body.js";
 import { providerUsageLabel } from "./provider-usage.shared.js";
@@ -23,29 +19,10 @@ export async function fetchJson(
   return await fetchFn(url, { ...init, signal });
 }
 
-export { parseFiniteNumber } from "@openclaw/normalization-core/number-coercion";
-
-/** Parses a provider reset-time string without leaking an invalid Date timestamp. */
-export function parseUsageResetAt(value: unknown): number | undefined {
-  return parseDateStringTimestampMs(value);
-}
-
-type BuildUsageHttpErrorSnapshotOptions = {
-  provider: UsageProviderId;
-  status: number;
-  message?: string;
-  tokenExpiredStatuses?: readonly number[];
-};
-
-type FetchUsageJsonOptions = {
-  provider: UsageProviderId;
-  url: string;
-  init: RequestInit;
-  timeoutMs: number;
-  fetchFn: typeof fetch;
-  tokenExpiredStatuses?: readonly number[];
-  malformedResponseError?: string;
-};
+export {
+  parseFiniteNumber,
+  parseDateStringTimestampMs as parseUsageResetAt,
+} from "@openclaw/normalization-core/number-coercion";
 
 /** Builds a provider usage snapshot for non-HTTP fetch or parse failures. */
 export function buildUsageErrorSnapshot(
@@ -60,9 +37,12 @@ export function buildUsageErrorSnapshot(
   };
 }
 
-export function buildUsageHttpErrorSnapshot(
-  options: BuildUsageHttpErrorSnapshotOptions,
-): ProviderUsageSnapshot {
+export function buildUsageHttpErrorSnapshot(options: {
+  provider: UsageProviderId;
+  status: number;
+  message?: string;
+  tokenExpiredStatuses?: readonly number[];
+}): ProviderUsageSnapshot {
   const tokenExpiredStatuses = options.tokenExpiredStatuses ?? [];
   if (tokenExpiredStatuses.includes(options.status)) {
     return buildUsageErrorSnapshot(options.provider, "Token expired");
@@ -87,9 +67,15 @@ export async function readUsageJson(
   }
 }
 
-export async function fetchUsageJson(
-  options: FetchUsageJsonOptions,
-): Promise<{ ok: true; data: unknown } | { ok: false; snapshot: ProviderUsageSnapshot }> {
+export async function fetchUsageJson(options: {
+  provider: UsageProviderId;
+  url: string;
+  init: RequestInit;
+  timeoutMs: number;
+  fetchFn: typeof fetch;
+  tokenExpiredStatuses?: readonly number[];
+  malformedResponseError?: string;
+}): ReturnType<typeof readUsageJson> {
   const response = await fetchJson(options.url, options.init, options.timeoutMs, options.fetchFn);
   if (!response.ok) {
     await cancelUnreadResponseBody(response);

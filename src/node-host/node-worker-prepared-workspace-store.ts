@@ -15,7 +15,7 @@ export type { NodeWorkerPreparedWorkspaceRow } from "./node-worker-prepared-work
 /** Prepared workspace persistence shares the node journal's admission and settlement owner. */
 export class NodeWorkerPreparedWorkspaceStore {
   private readonly worker: NodeWorkerJournalWorker;
-  private readonly mutations = new Map<string, { open: boolean }>();
+  private readonly mutations = new Set<string>();
   constructor(private readonly options: Pick<OpenClawStateDatabaseOptions, "env" | "path">) {
     this.worker = new NodeWorkerJournalWorker({
       env: options.env,
@@ -82,15 +82,9 @@ export class NodeWorkerPreparedWorkspaceStore {
     if (this.mutations.has(key)) {
       throw new Error("INVALID_REQUEST: prepared workspace mutation is in progress");
     }
-    const mutation = { open: true };
     // Legacy acquisition cannot wait for the async workspace serializer or tombstone.
-    this.mutations.set(key, mutation);
-    const close = () => {
-      mutation.open = false;
-      if (this.mutations.get(key) === mutation) {
-        this.mutations.delete(key);
-      }
-    };
+    this.mutations.add(key);
+    const close = () => this.mutations.delete(key);
     let retiring: NodeWorkerPreparedWorkspaceRow;
     try {
       retiring = await this.retire(expected, false, authority);
@@ -100,16 +94,9 @@ export class NodeWorkerPreparedWorkspaceStore {
     }
     return {
       complete: async () => {
-        const assertCurrent = () => {
-          if (!mutation.open) {
-            throw new Error("INVALID_REQUEST: prepared workspace mutation is closed");
-          }
-          authority?.assertCurrent();
-        };
-        assertCurrent();
         await this.worker.execute(
           { type: "nodeWorker.prepared.completeMutation", input: [retiring] },
-          { assertCurrent },
+          authority,
         );
         close();
       },

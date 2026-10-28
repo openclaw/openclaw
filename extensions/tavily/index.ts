@@ -1,16 +1,174 @@
-// Tavily plugin entrypoint registers its OpenClaw integration.
-import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import { createTavilyExtractTool } from "./src/tavily-extract-tool.js";
+import { optionalStringEnum } from "openclaw/plugin-sdk/channel-actions";
+import {
+  definePluginEntry,
+  type OpenClawPluginToolContext,
+} from "openclaw/plugin-sdk/plugin-entry";
+import {
+  jsonResult,
+  readPositiveIntegerParam,
+  readStringArrayParam,
+  readStringParam,
+} from "openclaw/plugin-sdk/provider-web-search";
+import { Type } from "typebox";
+import { runTavilyExtract, runTavilySearch } from "./src/tavily-client.js";
 import { createTavilyWebSearchProvider } from "./src/tavily-search-provider.js";
-import { createTavilySearchTool } from "./src/tavily-search-tool.js";
+
+const TavilySearchToolSchema = Type.Object(
+  {
+    query: Type.String({ description: "Search query string." }),
+    search_depth: optionalStringEnum(["basic", "advanced"] as const, {
+      description: 'Search depth: "basic" (default, faster) or "advanced" (more thorough).',
+    }),
+    topic: optionalStringEnum(["general", "news", "finance"] as const, {
+      description: 'Search topic: "general" (default), "news", or "finance".',
+    }),
+    max_results: Type.Optional(
+      Type.Integer({
+        description: "Number of results to return (1-20).",
+        minimum: 1,
+        maximum: 20,
+      }),
+    ),
+    include_answer: Type.Optional(
+      Type.Boolean({
+        description: "Include an AI-generated answer summary (default: false).",
+      }),
+    ),
+    time_range: optionalStringEnum(["day", "week", "month", "year"] as const, {
+      description: "Filter results by recency: 'day', 'week', 'month', or 'year'.",
+    }),
+    include_domains: Type.Optional(
+      Type.Array(Type.String(), {
+        description: "Only include results from these domains.",
+      }),
+    ),
+    exclude_domains: Type.Optional(
+      Type.Array(Type.String(), {
+        description: "Exclude results from these domains.",
+      }),
+    ),
+  },
+  { additionalProperties: false },
+);
+
+const TavilyExtractToolSchema = Type.Object(
+  {
+    urls: Type.Array(Type.String(), {
+      description: "One or more URLs to extract content from (max 20).",
+      minItems: 1,
+      maxItems: 20,
+    }),
+    query: Type.Optional(
+      Type.String({
+        description: "Rerank extracted chunks by relevance to this query.",
+      }),
+    ),
+    extract_depth: optionalStringEnum(["basic", "advanced"] as const, {
+      description: '"basic" (default) or "advanced" (for JS-heavy pages).',
+    }),
+    chunks_per_source: Type.Optional(
+      Type.Integer({
+        description: "Chunks per URL (1-5, requires query).",
+        minimum: 1,
+        maximum: 5,
+      }),
+    ),
+    include_images: Type.Optional(
+      Type.Boolean({
+        description: "Include image URLs in extraction results.",
+      }),
+    ),
+  },
+  { additionalProperties: false },
+);
 
 export default definePluginEntry({
   id: "tavily",
   name: "Tavily Plugin",
   description: "Bundled Tavily search and extract plugin",
   register(api) {
+    const resolveToolConfig = (ctx?: OpenClawPluginToolContext) =>
+      ctx?.getRuntimeConfig?.() ?? ctx?.runtimeConfig ?? ctx?.config ?? api.config;
+
     api.registerWebSearchProvider(createTavilyWebSearchProvider());
-    api.registerTool((ctx) => createTavilySearchTool(api, ctx), { name: "tavily_search" });
-    api.registerTool((ctx) => createTavilyExtractTool(api, ctx), { name: "tavily_extract" });
+    api.registerTool(
+      (ctx) => ({
+        name: "tavily_search",
+        label: "Tavily Search",
+        resultContentSource: "network" as const,
+        description:
+          "Search the web using Tavily Search API. Supports search depth, topic filtering, domain filters, time ranges, and AI answer summaries.",
+        parameters: TavilySearchToolSchema,
+        execute: async (
+          _toolCallId: string,
+          rawParams: Record<string, unknown>,
+          signal?: AbortSignal,
+        ) => {
+          signal?.throwIfAborted();
+          return jsonResult(
+            await runTavilySearch({
+              query: readStringParam(rawParams, "query", { required: true }),
+              searchDepth: readStringParam(rawParams, "search_depth") || undefined,
+              topic: readStringParam(rawParams, "topic") || undefined,
+              maxResults: readPositiveIntegerParam(rawParams, "max_results", {
+                max: 20,
+                message: "max_results must be an integer from 1 to 20.",
+              }),
+              includeAnswer: rawParams.include_answer === true,
+              timeRange: readStringParam(rawParams, "time_range") || undefined,
+              includeDomains: readStringArrayParam(rawParams, "include_domains"),
+              excludeDomains: readStringArrayParam(rawParams, "exclude_domains"),
+              cfg: resolveToolConfig(ctx),
+              ...(signal ? { signal } : {}),
+            }),
+          );
+        },
+      }),
+      { name: "tavily_search" },
+    );
+    api.registerTool(
+      (ctx) => ({
+        name: "tavily_extract",
+        label: "Tavily Extract",
+        resultContentSource: "network" as const,
+        description:
+          "Extract clean content from one or more URLs using Tavily. Handles JS-rendered pages. Supports query-focused chunking.",
+        parameters: TavilyExtractToolSchema,
+        execute: async (
+          _toolCallId: string,
+          rawParams: Record<string, unknown>,
+          signal?: AbortSignal,
+        ) => {
+          signal?.throwIfAborted();
+          const urls = readStringArrayParam(rawParams, "urls") ?? [];
+          if (urls.length === 0) {
+            throw new Error("tavily_extract requires at least one URL.");
+          }
+          const query = readStringParam(rawParams, "query") || undefined;
+          const extractDepth = readStringParam(rawParams, "extract_depth") || undefined;
+          const chunksPerSource = readPositiveIntegerParam(rawParams, "chunks_per_source", {
+            max: 5,
+            message: "chunks_per_source must be an integer from 1 to 5.",
+          });
+          if (chunksPerSource !== undefined && !query) {
+            throw new Error("tavily_extract requires query when chunks_per_source is set.");
+          }
+          const includeImages = rawParams.include_images === true;
+
+          return jsonResult(
+            await runTavilyExtract({
+              cfg: resolveToolConfig(ctx),
+              urls,
+              query,
+              extractDepth,
+              chunksPerSource,
+              includeImages,
+              ...(signal ? { signal } : {}),
+            }),
+          );
+        },
+      }),
+      { name: "tavily_extract" },
+    );
   },
 });

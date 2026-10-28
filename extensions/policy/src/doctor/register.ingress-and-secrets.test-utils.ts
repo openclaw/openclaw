@@ -5,31 +5,38 @@ import { collectPolicyEvidence } from "../policy-state.js";
 import { registerPolicyDoctorChecks } from "./register.js";
 import {
   cfgWithPolicy,
+  createSharedSandboxRequirements,
+  cfgWithPolicyAgents as configWithAgents,
+  createStandardIngressPolicy,
+  createOpenOpsGroups,
+  createDisabledOpenChannelInput,
+  createNamedAllowlistAccounts,
+  createInheritedAgentPolicyConfig,
+  cfgWithPolicyOverrides as configWithPolicy,
   ctx,
+  rawCfgWithPolicy,
   runPolicyChecks,
   runPolicyDoctorLint,
   setupPolicyDoctorTest,
   teardownPolicyDoctorTest,
   writePolicyFixture,
+  type RawLegacyDoctorConfig,
 } from "./register.test-harness.js";
 
-const scanPolicyIngress = (cfg: object) =>
-  collectPolicyEvidence(cfg as Record<string, unknown>).ingress ?? [];
+const scanPolicyIngress = (cfg: Record<string, unknown>) =>
+  collectPolicyEvidence(cfg).ingress ?? [];
 
 type PolicyScenarioMode = "doctor" | "global-doctor" | "checks";
 
 const INGRESS_POLICY = {
-  ingress: {
-    session: { requireDmScope: "per-channel-peer" },
-    channels: {
-      allowDmPolicies: ["pairing", "allowlist", "disabled"],
-      denyOpenGroups: true,
-      requireMentionInGroups: true,
-    },
-  },
+  ingress: createStandardIngressPolicy(),
 };
 
-async function runPolicyScenario(cfg: OpenClawConfig, policy: object, mode: PolicyScenarioMode) {
+async function runPolicyScenario(
+  cfg: Record<string, unknown>,
+  policy: object,
+  mode: PolicyScenarioMode,
+) {
   const configPath = await writePolicyFixture(policy);
   const checkContext = ctx(configPath, cfg);
   if (mode === "doctor") {
@@ -53,15 +60,9 @@ async function runIngressPolicyScenario(channels: Record<string, unknown>) {
   };
 }
 
-function configWithPolicy(overrides: object): OpenClawConfig {
-  return { ...cfgWithPolicy(), ...overrides } as unknown as OpenClawConfig;
-}
-
-function configWithAgents(agents: object): OpenClawConfig {
-  return configWithPolicy({ agents });
-}
-
-function configWithSandbox(sandbox: object): OpenClawConfig {
+function configWithSandbox(
+  sandbox: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["sandbox"],
+) {
   return configWithAgents({ defaults: { sandbox } });
 }
 
@@ -74,6 +75,10 @@ function workspacePolicy(allowedAccess: string[], denyTools?: string[]) {
       },
     },
   };
+}
+
+function readOnlyWorkspacePolicy() {
+  return workspacePolicy(["none", "ro"], ["exec", "process", "write", "edit", "apply_patch"]);
 }
 
 function managedSecretsPolicy(denySources?: string[], allowInsecureProviders?: boolean) {
@@ -104,12 +109,7 @@ describe("registerPolicyDoctorChecks", () => {
       telegram: {
         dmPolicy: "pairing",
         groupPolicy: "disabled",
-        groups: {
-          ops: {
-            groupPolicy: "open",
-            requireMention: false,
-          },
-        },
+        groups: createOpenOpsGroups(),
       },
     });
 
@@ -195,7 +195,7 @@ describe("registerPolicyDoctorChecks", () => {
         },
       },
     });
-    const evidence = scanPolicyIngress(cfg as unknown as Record<string, unknown>);
+    const evidence = scanPolicyIngress(cfg);
 
     expect(evidence).toEqual(
       expect.arrayContaining([
@@ -260,7 +260,7 @@ describe("registerPolicyDoctorChecks", () => {
     };
 
     const result = await runPolicyScenario(cfg, policy, "doctor");
-    const evidence = scanPolicyIngress(cfg as unknown as Record<string, unknown>);
+    const evidence = scanPolicyIngress(cfg);
 
     expect(evidence).toEqual(
       expect.arrayContaining([
@@ -299,13 +299,7 @@ describe("registerPolicyDoctorChecks", () => {
         dmPolicy: "open",
         groupPolicy: "allowlist",
         requireMention: true,
-        accounts: {
-          work: {
-            dmPolicy: "allowlist",
-            groupPolicy: "allowlist",
-            requireMention: true,
-          },
-        },
+        accounts: createNamedAllowlistAccounts(),
       },
     });
 
@@ -323,16 +317,11 @@ describe("registerPolicyDoctorChecks", () => {
     const { cfg, result } = await runIngressPolicyScenario({
       slack: {
         accounts: {
-          work: {
-            enabled: false,
-            dmPolicy: "open",
-            groupPolicy: "open",
-            requireMention: false,
-          },
+          work: createDisabledOpenChannelInput(),
         },
       },
     });
-    const evidence = scanPolicyIngress(cfg as unknown as Record<string, unknown>);
+    const evidence = scanPolicyIngress(cfg);
 
     expect(result.findings).toEqual([]);
     expect(evidence).not.toEqual(
@@ -348,16 +337,10 @@ describe("registerPolicyDoctorChecks", () => {
   it("does not evaluate channel root defaults as a named account", async () => {
     const { cfg, result } = await runIngressPolicyScenario({
       slack: {
-        accounts: {
-          work: {
-            dmPolicy: "allowlist",
-            groupPolicy: "allowlist",
-            requireMention: true,
-          },
-        },
+        accounts: createNamedAllowlistAccounts(),
       },
     });
-    const evidence = scanPolicyIngress(cfg as unknown as Record<string, unknown>);
+    const evidence = scanPolicyIngress(cfg);
 
     expect(result.findings).toEqual([]);
     expect(evidence).not.toEqual(
@@ -378,13 +361,7 @@ describe("registerPolicyDoctorChecks", () => {
         dmPolicy: "open",
         groupPolicy: "allowlist",
         requireMention: true,
-        accounts: {
-          work: {
-            dmPolicy: "allowlist",
-            groupPolicy: "allowlist",
-            requireMention: true,
-          },
-        },
+        accounts: createNamedAllowlistAccounts(),
       },
     });
 
@@ -403,12 +380,7 @@ describe("registerPolicyDoctorChecks", () => {
       telegram: {
         dmPolicy: "pairing",
         groupPolicy: "allowlist",
-        groups: {
-          ops: {
-            groupPolicy: "open",
-            requireMention: false,
-          },
-        },
+        groups: createOpenOpsGroups(),
         accounts: {
           work: {
             botToken: "work-token",
@@ -425,7 +397,7 @@ describe("registerPolicyDoctorChecks", () => {
         },
       },
     });
-    const evidence = scanPolicyIngress(cfg as unknown as Record<string, unknown>);
+    const evidence = scanPolicyIngress(cfg);
 
     expect(evidence).toEqual(
       expect.arrayContaining([
@@ -465,12 +437,7 @@ describe("registerPolicyDoctorChecks", () => {
     const cfg = {
       channels: {
         telegram: {
-          groups: {
-            ops: {
-              groupPolicy: "open",
-              requireMention: false,
-            },
-          },
+          groups: createOpenOpsGroups(),
           accounts: {
             work: {
               groups: {},
@@ -531,12 +498,7 @@ describe("registerPolicyDoctorChecks", () => {
         botToken: "root-token",
         dmPolicy: "pairing",
         groupPolicy: "disabled",
-        groups: {
-          ops: {
-            groupPolicy: "open",
-            requireMention: false,
-          },
-        },
+        groups: createOpenOpsGroups(),
         accounts: {
           work: {
             dmPolicy: "allowlist",
@@ -547,7 +509,7 @@ describe("registerPolicyDoctorChecks", () => {
         },
       },
     });
-    const evidence = scanPolicyIngress(cfg as unknown as Record<string, unknown>);
+    const evidence = scanPolicyIngress(cfg);
 
     expect(evidence).toEqual(
       expect.arrayContaining([
@@ -577,13 +539,7 @@ describe("registerPolicyDoctorChecks", () => {
         dmPolicy: "open",
         groupPolicy: "allowlist",
         requireMention: true,
-        accounts: {
-          work: {
-            dmPolicy: "allowlist",
-            groupPolicy: "allowlist",
-            requireMention: true,
-          },
-        },
+        accounts: createNamedAllowlistAccounts(),
       },
     });
 
@@ -608,7 +564,7 @@ describe("registerPolicyDoctorChecks", () => {
         },
       },
     });
-    const evidence = scanPolicyIngress(cfg as unknown as Record<string, unknown>);
+    const evidence = scanPolicyIngress(cfg);
 
     expect(result.findings).toEqual([]);
     expect(evidence).toEqual(
@@ -665,7 +621,7 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("reports secret provider conformance findings without leaking secret values", async () => {
-    const cfg = configWithPolicy({
+    const cfg = rawCfgWithPolicy({
       secrets: {
         providers: {
           vault: { source: "file", path: ".secrets.json", allowInsecurePath: true },
@@ -681,7 +637,7 @@ describe("registerPolicyDoctorChecks", () => {
     const policy = managedSecretsPolicy(["exec"], false);
 
     const result = await runPolicyScenario(cfg, policy, "global-doctor");
-    const evidence = collectPolicyEvidence(cfg as unknown as Record<string, unknown>);
+    const evidence = collectPolicyEvidence(cfg);
 
     expect(JSON.stringify(evidence)).not.toContain("ANTHROPIC_API_KEY");
     expect(JSON.stringify(result.findings)).not.toContain("ANTHROPIC_API_KEY");
@@ -706,7 +662,7 @@ describe("registerPolicyDoctorChecks", () => {
 
   it("checks managed providers for structured provider request SecretRefs", async () => {
     const baseCfg = cfgWithPolicy();
-    const cfg = {
+    const cfg: Record<string, unknown> = {
       ...baseCfg,
       models: {
         providers: {
@@ -779,122 +735,86 @@ describe("registerPolicyDoctorChecks", () => {
           },
         },
       },
-    } as unknown as OpenClawConfig;
+    };
     const policy = managedSecretsPolicy(["exec"]);
 
     const result = await runPolicyScenario(cfg, policy, "global-doctor");
-    const evidence = collectPolicyEvidence(cfg as unknown as Record<string, unknown>);
+    const evidence = collectPolicyEvidence(cfg);
 
+    const expectedSources = [
+      "oc://openclaw.config/models/providers/openai/request/auth/token",
+      "oc://openclaw.config/models/providers/openai/request/tls/passphrase",
+      'oc://openclaw.config/models/providers/"z.ai"/headers/Authorization',
+      "oc://openclaw.config/plugins/entries/acpx/config/mcpServers/github/env/GITHUB_TOKEN",
+      "oc://openclaw.config/tools/media/models/#0/request/auth/token",
+      "oc://openclaw.config/tools/media/models/#0/request/tls/key",
+      "oc://openclaw.config/tools/media/audio/request/auth/token",
+      "oc://openclaw.config/tools/media/models/#1/request/auth/token",
+    ];
     expect(evidence.secrets).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          kind: "input",
-          provenance: "secretRef",
-          refSource: "exec",
-          refProvider: "rogue",
-          source: "oc://openclaw.config/models/providers/openai/request/auth/token",
-        }),
-        expect.objectContaining({
-          kind: "input",
-          provenance: "secretRef",
-          refSource: "exec",
-          refProvider: "rogue",
-          source: "oc://openclaw.config/models/providers/openai/request/tls/passphrase",
-        }),
-        expect.objectContaining({
-          kind: "input",
-          provenance: "secretRef",
-          refSource: "exec",
-          refProvider: "rogue",
-          source: 'oc://openclaw.config/models/providers/"z.ai"/headers/Authorization',
-        }),
-        expect.objectContaining({
-          kind: "input",
-          provenance: "secretRef",
-          refSource: "exec",
-          refProvider: "rogue",
-          source:
-            "oc://openclaw.config/plugins/entries/acpx/config/mcpServers/github/env/GITHUB_TOKEN",
-        }),
-        expect.objectContaining({
-          kind: "input",
-          provenance: "secretRef",
-          refSource: "exec",
-          refProvider: "rogue",
-          source: "oc://openclaw.config/tools/media/models/#0/request/auth/token",
-        }),
-        expect.objectContaining({
-          kind: "input",
-          provenance: "secretRef",
-          refSource: "exec",
-          refProvider: "rogue",
-          source: "oc://openclaw.config/tools/media/models/#0/request/tls/key",
-        }),
-        expect.objectContaining({
-          kind: "input",
-          provenance: "secretRef",
-          refSource: "exec",
-          refProvider: "rogue",
-          source: "oc://openclaw.config/tools/media/audio/request/auth/token",
-        }),
-        expect.objectContaining({
-          kind: "input",
-          provenance: "secretRef",
-          refSource: "exec",
-          refProvider: "rogue",
-          source: "oc://openclaw.config/tools/media/models/#1/request/auth/token",
-        }),
-      ]),
+      expect.arrayContaining(
+        expectedSources.map((source) =>
+          expect.objectContaining({
+            kind: "input",
+            provenance: "secretRef",
+            refSource: "exec",
+            refProvider: "rogue",
+            source,
+          }),
+        ),
+      ),
     );
+    const expectedFindings: Array<[string, string]> = [
+      [
+        "policy/secrets-unmanaged-provider",
+        "oc://openclaw.config/models/providers/openai/request/auth/token",
+      ],
+      [
+        "policy/secrets-denied-provider-source",
+        "oc://openclaw.config/models/providers/openai/request/auth/token",
+      ],
+      [
+        "policy/secrets-unmanaged-provider",
+        "oc://openclaw.config/models/providers/openai/request/tls/passphrase",
+      ],
+      [
+        "policy/secrets-denied-provider-source",
+        "oc://openclaw.config/models/providers/openai/request/tls/passphrase",
+      ],
+      [
+        "policy/secrets-unmanaged-provider",
+        'oc://openclaw.config/models/providers/"z.ai"/headers/Authorization',
+      ],
+      [
+        "policy/secrets-denied-provider-source",
+        "oc://openclaw.config/plugins/entries/acpx/config/mcpServers/github/env/GITHUB_TOKEN",
+      ],
+      [
+        "policy/secrets-unmanaged-provider",
+        "oc://openclaw.config/tools/media/models/#0/request/auth/token",
+      ],
+      [
+        "policy/secrets-denied-provider-source",
+        "oc://openclaw.config/tools/media/audio/request/auth/token",
+      ],
+      [
+        "policy/secrets-unmanaged-provider",
+        "oc://openclaw.config/tools/media/models/#1/request/auth/token",
+      ],
+      [
+        "policy/secrets-unmanaged-provider",
+        "oc://openclaw.config/tools/media/models/#0/request/tls/key",
+      ],
+    ];
     expect(result.findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          checkId: "policy/secrets-unmanaged-provider",
-          ocPath: "oc://openclaw.config/models/providers/openai/request/auth/token",
-        }),
-        expect.objectContaining({
-          checkId: "policy/secrets-denied-provider-source",
-          ocPath: "oc://openclaw.config/models/providers/openai/request/auth/token",
-        }),
-        expect.objectContaining({
-          checkId: "policy/secrets-unmanaged-provider",
-          ocPath: "oc://openclaw.config/models/providers/openai/request/tls/passphrase",
-        }),
-        expect.objectContaining({
-          checkId: "policy/secrets-denied-provider-source",
-          ocPath: "oc://openclaw.config/models/providers/openai/request/tls/passphrase",
-        }),
-        expect.objectContaining({
-          checkId: "policy/secrets-unmanaged-provider",
-          ocPath: 'oc://openclaw.config/models/providers/"z.ai"/headers/Authorization',
-        }),
-        expect.objectContaining({
-          checkId: "policy/secrets-denied-provider-source",
-          ocPath:
-            "oc://openclaw.config/plugins/entries/acpx/config/mcpServers/github/env/GITHUB_TOKEN",
-        }),
-        expect.objectContaining({
-          checkId: "policy/secrets-unmanaged-provider",
-          ocPath: "oc://openclaw.config/tools/media/models/#0/request/auth/token",
-        }),
-        expect.objectContaining({
-          checkId: "policy/secrets-denied-provider-source",
-          ocPath: "oc://openclaw.config/tools/media/audio/request/auth/token",
-        }),
-        expect.objectContaining({
-          checkId: "policy/secrets-unmanaged-provider",
-          ocPath: "oc://openclaw.config/tools/media/models/#1/request/auth/token",
-        }),
-        expect.objectContaining({
-          checkId: "policy/secrets-unmanaged-provider",
-          ocPath: "oc://openclaw.config/tools/media/models/#0/request/tls/key",
-        }),
-      ]),
+      expect.arrayContaining(
+        expectedFindings.map(([checkId, ocPath]) => expect.objectContaining({ checkId, ocPath })),
+      ),
     );
   });
 
   it("honors configured secret default providers when checking managed providers", async () => {
-    const cfg = configWithPolicy({
+    const cfg = rawCfgWithPolicy({
       secrets: {
         defaults: {
           env: "vault",
@@ -912,7 +832,7 @@ describe("registerPolicyDoctorChecks", () => {
     const policy = managedSecretsPolicy();
 
     const result = await runPolicyScenario(cfg, policy, "global-doctor");
-    const evidence = collectPolicyEvidence(cfg as unknown as Record<string, unknown>);
+    const evidence = collectPolicyEvidence(cfg);
 
     expect(evidence.secrets).toEqual(
       expect.arrayContaining([
@@ -929,7 +849,7 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("reports SecretRefs that use a managed provider alias with the wrong source", async () => {
-    const cfg = configWithPolicy({
+    const cfg = rawCfgWithPolicy({
       secrets: {
         providers: {
           vault: { source: "file", path: ".secrets.json" },
@@ -973,7 +893,7 @@ describe("registerPolicyDoctorChecks", () => {
     const policy = managedSecretsPolicy(["env"]);
 
     const result = await runPolicyScenario(cfg, policy, "global-doctor");
-    const evidence = collectPolicyEvidence(cfg as unknown as Record<string, unknown>);
+    const evidence = collectPolicyEvidence(cfg);
 
     expect(evidence.secrets).toEqual([]);
     expect(result.findings).toEqual([]);
@@ -1014,22 +934,18 @@ describe("registerPolicyDoctorChecks", () => {
         defaults: {
           sandbox: { mode: "all", workspaceAccess: "rw" },
         },
-        list: [
-          {
-            id: "reviewer",
+        entries: {
+          reviewer: {
             sandbox: { workspaceAccess: "ro" },
             tools: { deny: ["group:fs", "group:runtime"] },
           },
-        ],
+        },
       },
     });
-    const policy = workspacePolicy(
-      ["none", "ro"],
-      ["exec", "process", "write", "edit", "apply_patch"],
-    );
+    const policy = readOnlyWorkspacePolicy();
 
     const result = await runPolicyScenario(cfg, policy, "global-doctor");
-    const evidence = collectPolicyEvidence(cfg as unknown as Record<string, unknown>);
+    const evidence = collectPolicyEvidence(cfg);
 
     expect(evidence.agentWorkspace).toEqual(
       expect.arrayContaining([
@@ -1069,7 +985,7 @@ describe("registerPolicyDoctorChecks", () => {
       expect.arrayContaining([
         expect.objectContaining({
           checkId: "policy/agents-tool-not-denied",
-          ocPath: "oc://openclaw.config/agents/list/#0/tools/deny",
+          ocPath: "oc://openclaw.config/agents/entries/reviewer/tools/deny",
         }),
       ]),
     );
@@ -1084,22 +1000,18 @@ describe("registerPolicyDoctorChecks", () => {
         defaults: {
           sandbox: { mode: "all", workspaceAccess: "ro" },
         },
-        list: [
-          {
-            id: "locked",
+        entries: {
+          locked: {
             sandbox: { workspaceAccess: "none" },
             tools: { sandbox: { tools: { deny: ["group:runtime", "group:fs"] } } },
           },
-        ],
+        },
       },
     });
-    const policy = workspacePolicy(
-      ["none", "ro"],
-      ["exec", "process", "write", "edit", "apply_patch"],
-    );
+    const policy = readOnlyWorkspacePolicy();
 
     const result = await runPolicyScenario(cfg, policy, "global-doctor");
-    const evidence = collectPolicyEvidence(cfg as unknown as Record<string, unknown>);
+    const evidence = collectPolicyEvidence(cfg);
 
     expect(evidence.agentWorkspace).toEqual(
       expect.arrayContaining([
@@ -1111,7 +1023,7 @@ describe("registerPolicyDoctorChecks", () => {
         expect.objectContaining({
           id: "locked-tool-apply_patch",
           denied: true,
-          source: "oc://openclaw.config/agents/list/#0/tools/sandbox/tools/deny",
+          source: "oc://openclaw.config/agents/entries/locked/tools/sandbox/tools/deny",
         }),
       ]),
     );
@@ -1145,13 +1057,12 @@ describe("registerPolicyDoctorChecks", () => {
         defaults: {
           sandbox: { mode: "all", workspaceAccess: "ro" },
         },
-        list: [
-          {
-            id: "locked",
+        entries: {
+          locked: {
             sandbox: { workspaceAccess: "none" },
             tools: { sandbox: { tools: { deny: ["group:fs"] } } },
           },
-        ],
+        },
       },
     });
     const policy = workspacePolicy(["none", "ro"], ["exec"]);
@@ -1162,7 +1073,7 @@ describe("registerPolicyDoctorChecks", () => {
       expect.objectContaining({
         checkId: "policy/agents-tool-not-denied",
         message: "agent 'locked' does not deny required tool 'exec'.",
-        ocPath: "oc://openclaw.config/agents/list/#0/tools/deny",
+        ocPath: "oc://openclaw.config/agents/entries/locked/tools/deny",
         requirement: "oc://policy.jsonc/agents/workspace/denyTools",
       }),
     ]);
@@ -1177,18 +1088,14 @@ describe("registerPolicyDoctorChecks", () => {
         defaults: {
           sandbox: { mode: "all", workspaceAccess: "ro" },
         },
-        list: [
-          {
-            id: "locked",
+        entries: {
+          locked: {
             sandbox: { workspaceAccess: "none" },
           },
-        ],
+        },
       },
     });
-    const policy = workspacePolicy(
-      ["none", "ro"],
-      ["exec", "process", "write", "edit", "apply_patch"],
-    );
+    const policy = readOnlyWorkspacePolicy();
 
     const result = await runPolicyScenario(cfg, policy, "global-doctor");
 
@@ -1239,10 +1146,7 @@ describe("registerPolicyDoctorChecks", () => {
         },
       },
     });
-    const policy = workspacePolicy(
-      ["none", "ro"],
-      ["exec", "process", "write", "edit", "apply_patch"],
-    );
+    const policy = readOnlyWorkspacePolicy();
 
     const result = await runPolicyScenario(cfg, policy, "global-doctor");
 
@@ -1261,10 +1165,10 @@ describe("registerPolicyDoctorChecks", () => {
       defaults: {
         sandbox: { mode: "all", workspaceAccess: "ro" },
       },
-      list: [
-        { id: "sebby", sandbox: { mode: "all", workspaceAccess: "rw" } },
-        { id: "buddy", sandbox: { mode: "all", workspaceAccess: "ro" } },
-      ],
+      entries: {
+        sebby: { sandbox: { mode: "all", workspaceAccess: "rw" } },
+        buddy: { sandbox: { mode: "all", workspaceAccess: "ro" } },
+      },
     });
     const policy = {
       agents: {
@@ -1283,12 +1187,12 @@ describe("registerPolicyDoctorChecks", () => {
       expect.arrayContaining([
         expect.objectContaining({
           checkId: "policy/agents-workspace-access-denied",
-          ocPath: "oc://openclaw.config/agents/list/#0/sandbox/workspaceAccess",
+          ocPath: "oc://openclaw.config/agents/entries/sebby/sandbox/workspaceAccess",
           requirement: "oc://policy.jsonc/agents/workspace/allowedAccess",
         }),
         expect.objectContaining({
           checkId: "policy/agents-workspace-access-denied",
-          ocPath: "oc://openclaw.config/agents/list/#0/sandbox/workspaceAccess",
+          ocPath: "oc://openclaw.config/agents/entries/sebby/sandbox/workspaceAccess",
           requirement: "oc://policy.jsonc/scopes/sebby/agents/workspace/allowedAccess",
         }),
       ]),
@@ -1296,7 +1200,7 @@ describe("registerPolicyDoctorChecks", () => {
     expect(result.findings).not.toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          ocPath: "oc://openclaw.config/agents/list/#1/sandbox/workspaceAccess",
+          ocPath: "oc://openclaw.config/agents/entries/buddy/sandbox/workspaceAccess",
         }),
       ]),
     );
@@ -1304,10 +1208,10 @@ describe("registerPolicyDoctorChecks", () => {
 
   it("allows purpose-named agent scopes to target multiple agents", async () => {
     const cfg = configWithAgents({
-      list: [
-        { id: "sebby", sandbox: { mode: "all", workspaceAccess: "rw" } },
-        { id: "buddy", sandbox: { mode: "all", workspaceAccess: "rw" } },
-      ],
+      entries: {
+        sebby: { sandbox: { mode: "all", workspaceAccess: "rw" } },
+        buddy: { sandbox: { mode: "all", workspaceAccess: "rw" } },
+      },
     });
     const policy = {
       scopes: {
@@ -1320,11 +1224,11 @@ describe("registerPolicyDoctorChecks", () => {
     expect(result.findings).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          ocPath: "oc://openclaw.config/agents/list/#0/sandbox/workspaceAccess",
+          ocPath: "oc://openclaw.config/agents/entries/sebby/sandbox/workspaceAccess",
           requirement: "oc://policy.jsonc/scopes/workspace-lockdown/agents/workspace/allowedAccess",
         }),
         expect.objectContaining({
-          ocPath: "oc://openclaw.config/agents/list/#1/sandbox/workspaceAccess",
+          ocPath: "oc://openclaw.config/agents/entries/buddy/sandbox/workspaceAccess",
           requirement: "oc://policy.jsonc/scopes/workspace-lockdown/agents/workspace/allowedAccess",
         }),
       ]),
@@ -1333,13 +1237,12 @@ describe("registerPolicyDoctorChecks", () => {
 
   it("allows overlapping agent scopes when they govern different fields", async () => {
     const cfg = configWithAgents({
-      list: [
-        {
-          id: "sebby",
+      entries: {
+        sebby: {
           sandbox: { mode: "all", workspaceAccess: "rw" },
           tools: { exec: { host: "node" } },
         },
-      ],
+      },
     });
     const policy = {
       scopes: {
@@ -1382,10 +1285,10 @@ describe("registerPolicyDoctorChecks", () => {
 
   it("does not apply agent-scoped workspace claims to other agents", async () => {
     const cfg = configWithAgents({
-      list: [
-        { id: "sebby", sandbox: { mode: "all", workspaceAccess: "ro" } },
-        { id: "buddy", sandbox: { mode: "all", workspaceAccess: "rw" } },
-      ],
+      entries: {
+        sebby: { sandbox: { mode: "all", workspaceAccess: "ro" } },
+        buddy: { sandbox: { mode: "all", workspaceAccess: "rw" } },
+      },
     });
     const policy = {
       scopes: {
@@ -1399,7 +1302,7 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("matches agent-scoped claims against normalized agent ids", async () => {
-    const cfg = configWithAgents({
+    const cfg: RawLegacyDoctorConfig = configWithAgents({
       list: [
         {
           id: "Sebby",
@@ -1433,21 +1336,7 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("applies main agent-scoped claims to implicit default agent posture", async () => {
-    const cfg = configWithPolicy({
-      tools: { exec: { host: "node" } },
-      agents: {
-        defaults: {
-          sandbox: { mode: "all", workspaceAccess: "rw" },
-        },
-        list: [
-          {
-            id: "support",
-            sandbox: { mode: "all", workspaceAccess: "ro" },
-            tools: { exec: { host: "sandbox" } },
-          },
-        ],
-      },
-    });
+    const cfg = createInheritedAgentPolicyConfig();
     const policy = {
       scopes: {
         main: policyAgentScope(["main"], ["ro"], ["sandbox"]),
@@ -1473,21 +1362,7 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("applies non-main agent-scoped claims to inherited default posture", async () => {
-    const cfg = configWithPolicy({
-      tools: { exec: { host: "node" } },
-      agents: {
-        defaults: {
-          sandbox: { mode: "all", workspaceAccess: "rw" },
-        },
-        list: [
-          {
-            id: "support",
-            sandbox: { mode: "all", workspaceAccess: "ro" },
-            tools: { exec: { host: "sandbox" } },
-          },
-        ],
-      },
-    });
+    const cfg = createInheritedAgentPolicyConfig();
     const policy = {
       scopes: {
         "release-lockdown": policyAgentScope(["release-agent"], ["ro"], ["sandbox"]),
@@ -1513,7 +1388,7 @@ describe("registerPolicyDoctorChecks", () => {
     expect(result.findings).not.toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          ocPath: "oc://openclaw.config/agents/list/#0/sandbox/workspaceAccess",
+          ocPath: "oc://openclaw.config/agents/entries/support/sandbox/workspaceAccess",
         }),
       ]),
     );
@@ -1535,20 +1410,7 @@ describe("registerPolicyDoctorChecks", () => {
       },
       browser: { enabled: true },
     });
-    const policy = {
-      sandbox: {
-        requireMode: ["all", "non-main"],
-        allowBackends: ["ssh"],
-        containers: {
-          denyHostNetwork: true,
-          denyContainerNamespaceJoin: true,
-          requireReadOnlyMounts: true,
-          denyContainerRuntimeSocketMounts: true,
-          denyUnconfinedProfiles: true,
-        },
-        browser: { requireCdpSourceRange: true },
-      },
-    };
+    const policy = createSharedSandboxRequirements(["ssh"]);
 
     const result = await runPolicyScenario(cfg, policy, "checks");
 
@@ -1647,7 +1509,7 @@ describe("registerPolicyDoctorChecks", () => {
     };
 
     const result = await runPolicyScenario(cfg, policy, "checks");
-    const evidence = collectPolicyEvidence(cfg as unknown as Record<string, unknown>);
+    const evidence = collectPolicyEvidence(cfg);
 
     expect(evidence.sandboxPosture).toEqual(
       expect.arrayContaining([

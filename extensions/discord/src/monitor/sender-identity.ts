@@ -9,12 +9,6 @@ export type DiscordSenderIdentity = {
   tag?: string;
   label: string;
   isPluralKit: boolean;
-  pluralkit?: {
-    memberId: string;
-    memberName?: string;
-    systemId?: string;
-    systemName?: string;
-  };
 };
 
 type DiscordWebhookMessageLike = {
@@ -22,19 +16,16 @@ type DiscordWebhookMessageLike = {
   webhook_id?: string | null;
 };
 
-type DiscordMemberLike = {
-  nickname?: string | null;
-  nick?: string | null;
-};
-
 export function resolveDiscordWebhookId(message: DiscordWebhookMessageLike): string | null {
-  const candidate = message.webhookId ?? message.webhook_id;
-  return typeof candidate === "string" && candidate.trim() ? candidate.trim() : null;
+  return normalizeOptionalString(message.webhookId ?? message.webhook_id) ?? null;
 }
 
 export function resolveDiscordSenderIdentity(params: {
   author: User;
-  member?: DiscordMemberLike | null;
+  member?: {
+    nickname?: string | null;
+    nick?: string | null;
+  } | null;
   pluralkitInfo?: PluralKitMessageInfo | null;
 }): DiscordSenderIdentity {
   const pkInfo = params.pluralkitInfo ?? null;
@@ -52,12 +43,6 @@ export function resolveDiscordSenderIdentity(params: {
       tag: normalizeOptionalString(pkMember?.name),
       label,
       isPluralKit: true,
-      pluralkit: {
-        memberId,
-        memberName,
-        systemId: normalizeOptionalString(pkSystem?.id),
-        systemName,
-      },
     };
   }
 
@@ -73,7 +58,7 @@ export function resolveDiscordSenderIdentity(params: {
       : (senderDisplay ?? senderTag ?? params.author.id);
   return {
     id: params.author.id,
-    name: params.author.username ?? undefined,
+    name: params.author.username,
     tag: senderTag,
     label: senderLabel,
     isPluralKit: false,

@@ -1,6 +1,7 @@
 /** Runtime-probe and systemctl mocks for daemon service-audit tests. */
 import { vi } from "vitest";
 import {
+  execSystemctlMock,
   execSystemctlUserMock,
   resolveBunRuntimeInfoMock,
   resolveNodeRuntimeInfoMock,
@@ -14,5 +15,6 @@ vi.mock("../runtime-paths.js", async (importOriginal) => ({
 
 vi.mock("../systemd-exec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../systemd-exec.js")>()),
+  execSystemctl: execSystemctlMock,
   execSystemctlUser: execSystemctlUserMock,
 }));

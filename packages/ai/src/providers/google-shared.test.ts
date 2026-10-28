@@ -1,179 +1,94 @@
-import { createServer } from "node:http";
-import {
-  ApiError,
-  BlockedReason,
-  FinishReason,
-  GoogleGenAI,
-  type GenerateContentResponse,
-  type Part,
-} from "@google/genai";
-import { describe, expect, it, vi } from "vitest";
-// Google shared provider tests cover response conversion and finish reasons.
+import { FinishReason, GenerateContentResponse, type Part } from "@google/genai";
+import { expect, it, vi } from "vitest";
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { createAssistantOutput } from "../transports/assistant-output.js";
 import { withProviderAcceptanceObserver } from "../transports/transport-stream-shared.js";
-import type { Model } from "../types.js";
-import { AssistantMessageEventStream } from "../utils/event-stream.js";
-import { onLlmRequestActivity } from "../utils/llm-request-activity.js";
+import type { AssistantMessage, AssistantMessageEvent, Context, UserMessage } from "../types.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
+import { normalizeToolParameterSchema } from "./agent-tools-parameter-schema.js";
+import { convertGoogleTools, projectGoogleMessages } from "./google-messages.js";
 import {
-  buildGoogleGenerateContentParams,
-  buildGoogleSimpleThinking,
-  runGoogleGenerateContentLifecycle,
+  buildGoogleGenerateContentParams as buildParams,
+  type GoogleGenerateContentClient,
 } from "./google-shared.js";
-import { convertMessages } from "./google-shared.test-helpers.js";
-import { consumeGoogleGenerateContentStream } from "./google-stream.js";
+import {
+  convertMessages,
+  getFirstToolParameters,
+  makeGeminiCliModel,
+  makeGoogleAssistantMessage,
+  makeModel,
+} from "./google-shared.test-helpers.js";
+import { streamGoogle } from "./google.js";
 
-const model: Model<"google-generative-ai"> = {
-  id: "gemini-test",
-  name: "Gemini Test",
-  api: "google-generative-ai",
-  provider: "google",
-  baseUrl: "",
-  reasoning: true,
-  input: ["text"],
-  cost: {
-    input: 1,
-    output: 2,
-    cacheRead: 0.25,
-    cacheWrite: 0,
+const googleSdk = vi.hoisted(() => ({
+  generateContentStream: vi.fn<GoogleGenerateContentClient["models"]["generateContentStream"]>(),
+}));
+vi.mock("@google/genai", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@google/genai")>()),
+  GoogleGenAI: class {
+    models = { generateContentStream: googleSdk.generateContentStream };
   },
-  contextWindow: 128_000,
-  maxTokens: 8_192,
+}));
+
+const user = (content: UserMessage["content"]): UserMessage => ({
+  role: "user",
+  content,
+  timestamp: 0,
+});
+const model = {
+  ...makeModel("gemini-test"),
+  reasoning: true,
+  cost: { input: 1, output: 2, cacheRead: 0.25, cacheWrite: 0 },
 };
+const textPart = (text: string, thoughtSignature?: string): Part => ({
+  text,
+  ...(thoughtSignature && { thoughtSignature }),
+});
+const thoughtPart = (text: string, thoughtSignature?: string): Part => ({
+  ...textPart(text, thoughtSignature),
+  thought: true,
+});
+const textOutput = (text: string, textSignature?: string) => ({
+  type: "text",
+  text,
+  textSignature,
+});
+const thoughtOutput = (thinking: string, thinkingSignature?: string) => ({
+  type: "thinking",
+  thinking,
+  thinkingSignature,
+});
+const signature1 = "c2lnXzE=";
+const signature2 = "c2lnXzI=";
+const imageData = { mimeType: "image/png", data: "AAAA" };
 
-const createOutput = () => createAssistantOutput(model);
-
-describe("buildGoogleSimpleThinking", () => {
-  it.each([
-    { id: "gemini-flash-latest", expectedLevel: "MINIMAL" },
-    { id: "gemini-3.6-flash", expectedLevel: "MINIMAL" },
-    { id: "gemini-3.7-flash", expectedLevel: "LOW" },
-  ])("uses the supported thinking floor for $id", ({ id, expectedLevel }) => {
-    const flashModel = { ...model, id };
-
-    expect(buildGoogleSimpleThinking(flashModel, { reasoning: "minimal" })).toEqual({
-      enabled: true,
-      level: expectedLevel,
-    });
-    expect(
-      buildGoogleGenerateContentParams(
-        flashModel,
-        { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
-        { thinking: { enabled: false } },
-      ).config?.thinkingConfig,
-    ).toEqual({ thinkingLevel: expectedLevel });
-  });
-
-  it.each([
-    { id: "gemini-pro-latest", expectedLevel: "LOW" },
-    { id: "gemini-flash-latest", expectedLevel: "LOW" },
-  ])("recognizes the supported $id Gemini 3 alias", ({ id, expectedLevel }) => {
-    const aliasModel = { ...model, id };
-
-    expect(buildGoogleSimpleThinking(aliasModel, { reasoning: "low" })).toEqual({
-      enabled: true,
-      level: expectedLevel,
-    });
-    expect(
-      buildGoogleGenerateContentParams(
-        aliasModel,
-        { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
-        { thinking: { enabled: false } },
-      ).config?.thinkingConfig,
-    ).not.toHaveProperty("thinkingBudget");
-  });
-
-  it.each([
-    { id: "gemini-2.5-pro", expected: { enabled: true, budgetTokens: -1 } },
-    { id: "gemini-2.5-flash", expected: { enabled: true, budgetTokens: -1 } },
-    { id: "gemini-3.1-pro-preview", expected: { enabled: true } },
-    { id: "gemini-3-flash-preview", expected: { enabled: true } },
-    { id: "gemma-4-26b-a4b-it", expected: { enabled: true, level: "HIGH" } },
-  ])("keeps Google's dynamic adaptive thinking for $id", ({ id, expected }) => {
-    expect(buildGoogleSimpleThinking({ ...model, id }, { reasoning: "adaptive" } as never)).toEqual(
-      expected,
-    );
-  });
-
-  it.each(["gemini-2.5-pro", "gemma-4-26b-a4b-it"])(
-    "omits unsupported disabled-thinking config for %s",
-    (id) => {
-      const params = buildGoogleGenerateContentParams(
-        { ...model, id },
-        { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
-        { thinking: { enabled: false } },
-      );
-
-      expect(params.config).not.toHaveProperty("thinkingConfig");
-    },
-  );
-
-  it("keeps thinking disabled when a non-reasoning model clamps low to off", () => {
-    const nonReasoningModel = { ...model, reasoning: false };
-
-    expect(buildGoogleSimpleThinking(nonReasoningModel, { reasoning: "low" })).toEqual({
-      enabled: false,
-    });
-  });
-
-  it.each(["xhigh", "max"] as const)(
-    "keeps thinking disabled when reasoning=%s clamps to off",
-    (reasoning) => {
-      const offOnlyThinkingModel = {
-        ...model,
-        id: "gemini-3-flash-preview",
-        thinkingLevelMap: {
-          minimal: null,
-          low: null,
-          medium: null,
-          high: null,
-          xhigh: null,
-          max: null,
-        },
-      } satisfies Model<"google-generative-ai">;
-
-      expect(buildGoogleSimpleThinking(offOnlyThinkingModel, { reasoning })).toEqual({
-        enabled: false,
-      });
-    },
-  );
+it("omits an empty disabled thinking config for Gemini 2.5 Pro without an output cap", () => {
+  expect(
+    buildParams(
+      { ...model, id: "gemini-2.5-pro" },
+      { messages: [] },
+      { thinking: { enabled: false } },
+    ).config?.thinkingConfig,
+  ).toBeUndefined();
 });
 
-async function* chunks(items: GenerateContentResponse[]) {
-  yield* items;
-}
-
-type GoogleResponseFixture = {
-  parts?: Part[];
-  finishReason?: FinishReason;
-  finishMessage?: string;
-  responseId?: string;
-  modelVersion?: string;
-  usageMetadata?: GenerateContentResponse["usageMetadata"];
-  promptFeedback?: GenerateContentResponse["promptFeedback"];
-};
-
-function googleResponse(fixture: GoogleResponseFixture): GenerateContentResponse {
-  const { parts, finishReason, finishMessage, ...response } = fixture;
-  const hasCandidate =
-    parts !== undefined || finishReason !== undefined || finishMessage !== undefined;
+const response = (fields: Partial<GenerateContentResponse>) =>
+  Object.assign(new GenerateContentResponse(), fields);
+function candidate(parts?: Part[], finishReason?: FinishReason, finishMessage?: string) {
   return {
-    ...response,
-    ...(hasCandidate && {
-      candidates: [
-        {
-          ...(parts !== undefined && { content: { parts } }),
-          ...(finishReason !== undefined && { finishReason }),
-          ...(finishMessage !== undefined && { finishMessage }),
-        },
-      ],
-    }),
-  } as GenerateContentResponse;
+    candidates: [
+      { content: parts === undefined ? undefined : { parts }, finishReason, finishMessage },
+    ],
+  };
 }
-
-function finishedGoogleParts(parts: Part[], finishReason = FinishReason.STOP) {
-  return googleResponse({ parts, finishReason });
-}
+const finished = (parts?: Part[], reason = FinishReason.STOP, message?: string) =>
+  candidate(parts, reason, message);
+const partialFinish = (reason: FinishReason, message?: string) =>
+  finished([textPart("partial output")], reason, message);
+const usageChunk = (usageMetadata: GenerateContentResponse["usageMetadata"], terminal = false) => ({
+  ...(terminal ? finished() : {}),
+  usageMetadata,
+});
 
 function lookupPart(args: Record<string, unknown> = {}, thoughtSignature?: string): Part {
   return {
@@ -182,859 +97,478 @@ function lookupPart(args: Record<string, unknown> = {}, thoughtSignature?: strin
   };
 }
 
-function lookupContent(
-  args: Record<string, unknown> = {},
-  thoughtSignature?: string,
-  id = "call_1",
-) {
+function toolCall(args: Record<string, unknown> = {}, signature?: string, id = "call_1") {
   return {
     type: "toolCall" as const,
     id,
     name: "lookup",
     arguments: args,
-    ...(thoughtSignature && { thoughtSignature }),
+    ...(signature && { thoughtSignature: signature }),
   };
 }
 
-type StreamEvent = { type: string; delta?: string; reason?: string };
-
-async function consumeGoogleFixture(responses: GenerateContentResponse[], collectEvents = false) {
-  const output = createOutput();
-  const stream = new AssistantMessageEventStream();
-  const events: StreamEvent[] = [];
-  const collect = collectEvents
-    ? (async () => {
-        for await (const event of stream) {
-          events.push(event);
-        }
-      })()
-    : undefined;
-
-  await consumeGoogleGenerateContentStream({
-    chunks: chunks(responses),
-    model,
-    output,
-    stream,
-    nextToolCallId: (name) => `generated-${name}`,
-  });
-  await collect;
-  return { output, stream, events };
-}
-
-type GoogleLifecycleParams = Parameters<typeof runGoogleGenerateContentLifecycle>[0];
-type GoogleGenerateContentStream = ReturnType<
-  GoogleLifecycleParams["createClient"]
->["models"]["generateContentStream"];
 type GoogleFixtureOptions = {
-  targetModel?: Model<"google-generative-ai" | "google-vertex">;
-  options?: GoogleLifecycleParams["options"];
-  createClient?: GoogleLifecycleParams["createClient"];
-  generateContentStream?: GoogleGenerateContentStream;
-  buildParams?: GoogleLifecycleParams["buildParams"];
-  collectEvents?: boolean;
+  options?: Parameters<typeof streamGoogle>[2];
+  generateContentStream?: GoogleGenerateContentClient["models"]["generateContentStream"];
 };
 
-async function runGoogleFixture(
-  responses: GenerateContentResponse[] = [],
+async function runFixture(
+  responses: Parameters<typeof response>[0][] = [],
   fixture: GoogleFixtureOptions = {},
 ) {
-  const targetModel = fixture.targetModel ?? model;
-  const output = createAssistantOutput(targetModel);
-  const stream = new AssistantMessageEventStream();
-  const events: StreamEvent[] = [];
-  const collect = fixture.collectEvents
-    ? (async () => {
-        for await (const event of stream) {
-          events.push(event);
-        }
-      })()
-    : undefined;
-
-  await runGoogleGenerateContentLifecycle({
-    stream,
-    model: targetModel,
-    output,
-    options: fixture.options,
-    createClient:
-      fixture.createClient ??
-      (() => ({
-        models: {
-          generateContentStream: fixture.generateContentStream ?? (async () => chunks(responses)),
-        },
-      })),
-    buildParams: fixture.buildParams ?? (() => ({ model: targetModel.id, contents: [] })),
-    nextToolCallId: () => "call_1",
-  });
-  await collect;
-  return { output, stream, events, result: await stream.result() };
+  googleSdk.generateContentStream.mockImplementation(
+    fixture.generateContentStream ??
+      async function* () {
+        yield* responses.map(response);
+      },
+  );
+  const clock = vi.spyOn(Date, "now").mockReturnValue(123);
+  try {
+    const stream = streamGoogle(
+      model,
+      { messages: [] },
+      { apiKey: "test-key", ...fixture.options },
+    );
+    const events: AssistantMessageEvent[] = [];
+    for await (const event of stream) {
+      events.push(event);
+    }
+    const result = await stream.result();
+    return { output: result, events, result };
+  } finally {
+    clock.mockRestore();
+  }
 }
 
-describe("consumeGoogleGenerateContentStream", () => {
-  it("reports every parsed Google response as request activity", async () => {
-    const controller = new AbortController();
-    const onActivity = vi.fn();
-    const unsubscribe = onLlmRequestActivity(controller.signal, onActivity);
-    const output = createOutput();
-    const stream = new AssistantMessageEventStream();
-    const responses = [
-      googleResponse({ usageMetadata: { totalTokenCount: 1 } }),
-      googleResponse({ finishReason: FinishReason.STOP }),
-    ];
-
-    try {
-      await consumeGoogleGenerateContentStream({
-        chunks: chunks(responses),
-        model,
-        output,
-        stream,
-        signal: controller.signal,
-        nextToolCallId: (name) => `generated-${name}`,
-      });
-    } finally {
-      unsubscribe();
-    }
-
-    expect(onActivity).toHaveBeenCalledTimes(responses.length);
-  });
-
-  it("projects text, thinking, tool calls, response id, and usage into one stream", async () => {
-    const { output, events } = await consumeGoogleFixture(
-      [
-        googleResponse({
-          responseId: "response-1",
-          parts: [
-            { text: "thinking", thought: true, thoughtSignature: "dGhpbms=" },
-            { text: "hello" },
-            { functionCall: { name: "lookup", args: { query: "cats" } } },
-          ],
-        }),
-        googleResponse({
-          finishReason: FinishReason.STOP,
-          usageMetadata: {
-            promptTokenCount: 10,
-            cachedContentTokenCount: 2,
-            candidatesTokenCount: 3,
-            thoughtsTokenCount: 4,
-            totalTokenCount: 17,
-          },
-        }),
-      ],
+it("projects text, thinking, tool calls, response id, and usage into one stream", async () => {
+  const { output, events } = await runFixture([
+    {
+      responseId: "response-1",
+      ...candidate([
+        thoughtPart("thinking", "dGhpbms="),
+        textPart("hello"),
+        { functionCall: { name: "lookup", args: { query: "cats" } } },
+      ]),
+    },
+    usageChunk(
+      {
+        promptTokenCount: 10,
+        cachedContentTokenCount: 2,
+        candidatesTokenCount: 3,
+        thoughtsTokenCount: 4,
+        totalTokenCount: 17,
+      },
       true,
-    );
-
-    expect(events.map((event) => event.type)).toEqual([
-      "start",
-      "thinking_start",
-      "thinking_delta",
-      "thinking_end",
-      "text_start",
-      "text_delta",
-      "text_end",
-      "toolcall_start",
-      "toolcall_delta",
-      "toolcall_end",
-      "done",
-    ]);
-    expect(output.responseId).toBe("response-1");
-    expect(output.stopReason).toBe("toolUse");
-    expect(output.content).toEqual([
-      { type: "thinking", thinking: "thinking", thinkingSignature: "dGhpbms=" },
-      { type: "text", text: "hello" },
-      lookupContent({ query: "cats" }, undefined, "generated-lookup"),
-    ]);
-    expect(output.usage).toMatchObject({
-      input: 8,
-      output: 7,
-      cacheRead: 2,
-      totalTokens: 17,
-    });
-    expect(output.usage.cost.total).toBeGreaterThan(0);
-  });
-
-  it.each([
-    {
-      api: "google-generative-ai",
-      requested: "gemini-test",
-      returned: ["gemini-test-002"],
-      expected: "gemini-test-002",
-    },
-    {
-      api: "google-vertex",
-      requested: "gemini-test",
-      returned: ["gemini-test-002"],
-      expected: "gemini-test-002",
-    },
-    { api: "google-generative-ai", requested: "gemini-test", returned: ["gemini-test"] },
-    { api: "google-generative-ai", requested: "google/gemini-test", returned: ["gemini-test"] },
-    { api: "google-generative-ai", requested: "models/gemini-test", returned: ["gemini-test"] },
-    { api: "google-generative-ai", requested: "gemini-test", returned: ["models/gemini-test"] },
-    {
-      api: "google-vertex",
-      requested: "publishers/google/models/gemini-test",
-      returned: ["gemini-test"],
-    },
-    {
-      api: "google-vertex",
-      requested: "projects/fixture-project/locations/global/publishers/google/models/gemini-test",
-      returned: ["gemini-test"],
-    },
-    {
-      api: "google-vertex",
-      requested: "gemini-test",
-      returned: ["publishers/google/models/gemini-test"],
-    },
-    {
-      api: "google-vertex",
-      requested: "publishers/meta/models/gemini-test",
-      returned: ["gemini-test"],
-      expected: "gemini-test",
-    },
-    {
-      api: "google-generative-ai",
-      requested: "tunedModels/fixture-gemini",
-      returned: ["tunedModels/fixture-gemini"],
-    },
-    {
-      api: "google-generative-ai",
-      requested: "gemini-test",
-      returned: ["", "gemini-test-002", "gemini-test-003"],
-      expected: "gemini-test-002",
-    },
-  ] as const)(
-    "retains an actually different $api SDK response model for $requested",
-    async ({ api, requested, returned, expected }) => {
-      const targetModel = {
-        ...model,
-        id: requested,
-        api,
-        provider: api === "google-vertex" ? "google-vertex" : "google",
-      } satisfies Model<"google-generative-ai" | "google-vertex">;
-      const { result } = await runGoogleFixture(
-        returned.map((modelVersion, index) =>
-          googleResponse({
-            modelVersion,
-            ...(index === returned.length - 1
-              ? { parts: [{ text: "actual response" }], finishReason: FinishReason.STOP }
-              : {}),
-          }),
-        ),
-        { targetModel },
-      );
-
-      expect(result.stopReason).toBe("stop");
-      if (expected) {
-        expect(result.responseModel).toBe(expected);
-      } else {
-        expect(result).not.toHaveProperty("responseModel");
-      }
-    },
+    ),
+  ]);
+  expect(events.map((event) => event.type)).toEqual(
+    "start thinking_start thinking_delta thinking_end text_start text_delta text_end toolcall_start toolcall_delta toolcall_end done".split(
+      " ",
+    ),
   );
-
-  it.each([
-    {
-      name: "includes billed tool-result prompt tokens in input accounting",
-      usageMetadata: {
-        promptTokenCount: 10,
-        cachedContentTokenCount: 2,
-        candidatesTokenCount: 3,
-        thoughtsTokenCount: 1,
-        toolUsePromptTokenCount: 5,
-        totalTokenCount: 19,
-      },
-      expectedInput: 13,
-      expectedTotal: 19,
-    },
-    {
-      name: "derives the total when Google omits its optional aggregate",
-      usageMetadata: {
-        promptTokenCount: 10,
-        cachedContentTokenCount: 2,
-        candidatesTokenCount: 3,
-        thoughtsTokenCount: 1,
-      },
-      expectedInput: 8,
-      expectedTotal: 14,
-    },
-  ])("$name", async ({ usageMetadata, expectedInput, expectedTotal }) => {
-    const { output } = await consumeGoogleFixture([
-      googleResponse({ finishReason: FinishReason.STOP, usageMetadata }),
-    ]);
-
-    expect(output.usage).toMatchObject({
-      input: expectedInput,
-      output: 4,
-      cacheRead: 2,
-      totalTokens: expectedTotal,
-      cost: { input: expectedInput / 1_000_000 },
-    });
+  const toolDelta = events.find((event) => event.type === "toolcall_delta");
+  expect(toolDelta?.partial?.content[toolDelta.contentIndex ?? -1]).toMatchObject({
+    partialJson: '{"query":"cats"}',
   });
-
-  it("retains prompt, cache, and tool-token facts across sparse Google usage chunks", async () => {
-    const { output } = await consumeGoogleFixture([
-      googleResponse({
-        usageMetadata: {
-          promptTokenCount: 100,
-          cachedContentTokenCount: 40,
-          toolUsePromptTokenCount: 6,
-          candidatesTokenCount: 1,
-          totalTokenCount: 107,
-        },
-      }),
-      googleResponse({
-        finishReason: FinishReason.STOP,
-        usageMetadata: { candidatesTokenCount: 12, thoughtsTokenCount: 3 },
-      }),
-    ]);
-
-    expect(output.usage).toMatchObject({ input: 66, output: 15, cacheRead: 40, totalTokens: 121 });
+  expect(output).toMatchObject({
+    responseId: "response-1",
+    stopReason: "toolUse",
+    usage: { input: 8, output: 7, cacheRead: 2, totalTokens: 17 },
   });
+  expect(output.content).toEqual([
+    thoughtOutput("thinking", "dGhpbms="),
+    textOutput("hello"),
+    toolCall({ query: "cats" }, undefined, "lookup_123_1"),
+  ]);
+  expect(output.usage.cost.total).toBeGreaterThan(0);
+});
 
-  it("never reports negative input when Google only provides sparse cached-token facts", async () => {
-    const { output } = await consumeGoogleFixture([
-      googleResponse({
-        finishReason: FinishReason.STOP,
-        usageMetadata: { cachedContentTokenCount: 40, toolUsePromptTokenCount: 6 },
+type UsageCase = [string, Partial<GenerateContentResponse>[], Partial<AssistantMessage["usage"]>];
+it.each([
+  [
+    "retains prompt/cache/tool usage across sparse chunks",
+    [
+      usageChunk({
+        promptTokenCount: 100,
+        cachedContentTokenCount: 40,
+        toolUsePromptTokenCount: 6,
+        candidatesTokenCount: 1,
+        totalTokenCount: 107,
       }),
+      usageChunk({ candidatesTokenCount: 12, thoughtsTokenCount: 3 }, true),
+    ],
+    { input: 66, output: 15, cacheRead: 40, totalTokens: 121 },
+  ],
+  [
+    "clamps negative input from sparse cache usage",
+    [usageChunk({ cachedContentTokenCount: 40, toolUsePromptTokenCount: 6 }, true)],
+    { input: 6, cacheRead: 40 },
+  ],
+] satisfies UsageCase[])("%s", async (_name, responses, usage) => {
+  expect((await runFixture(responses)).output.usage).toMatchObject(usage);
+});
+
+it.each([FinishReason.MAX_TOKENS, FinishReason.CONTINUATION])(
+  "preserves %s when the partial response contains a function call",
+  async (finishReason) => {
+    const { output, events } = await runFixture([
+      finished([{ functionCall: { name: "lookup", args: { query: "cats" } } }], finishReason),
     ]);
-
-    expect(output.usage).toMatchObject({ input: 6, cacheRead: 40 });
-  });
-
-  it("preserves MAX_TOKENS when the partial response contains a function call", async () => {
-    const { output, events } = await consumeGoogleFixture(
-      [
-        googleResponse({
-          parts: [{ functionCall: { name: "lookup", args: { query: "cats" } } }],
-          finishReason: FinishReason.MAX_TOKENS,
-        }),
-      ],
-      true,
-    );
-
     expect(events.find((event) => event.type === "done")?.reason).toBe("length");
     expect(output.stopReason).toBe("length");
     expect(output.content).toEqual([expect.objectContaining({ type: "toolCall", name: "lookup" })]);
-  });
+  },
+);
 
-  it("generates a new id when Google repeats a streamed tool-call id", async () => {
-    const { output, events } = await consumeGoogleFixture(
-      [googleResponse({ parts: [lookupPart()] }), finishedGoogleParts([lookupPart()])],
-      true,
-    );
-
-    expect(events.at(-1)?.type).toBe("done");
-    expect(output.content).toEqual([
-      lookupContent(),
-      lookupContent({}, undefined, "generated-lookup"),
-    ]);
-  });
-
-  it("attaches a standalone thought signature to the preceding canonical tool call", async () => {
-    const { output } = await consumeGoogleFixture([
-      googleResponse({ parts: [lookupPart({ query: "cats" })] }),
-      finishedGoogleParts([{ thoughtSignature: "Y2FsbF9zaWc=" }]),
-    ]);
-
-    expect(output.content).toEqual([lookupContent({ query: "cats" }, "Y2FsbF9zaWc=")]);
-  });
-
-  it.each([
-    {
-      label: "the first thinking delta",
-      parts: [
-        { thoughtSignature: "c2lnXzE=" },
-        { thought: true, text: "draft" },
-        { text: "answer" },
-      ],
-      content: [
-        { type: "text", text: "", textSignature: "c2lnXzE=" },
-        { type: "thinking", thinking: "draft", thinkingSignature: undefined },
-        { type: "text", text: "answer", textSignature: undefined },
-      ],
-    },
-    {
-      label: "a later thinking delta",
-      parts: [
-        { thought: true, text: "draft", thoughtSignature: "c2lnXzE=" },
-        { thoughtSignature: "c2lnXzI=" },
-        { text: "answer" },
-      ],
-      content: [
-        { type: "thinking", thinking: "draft", thinkingSignature: "c2lnXzE=" },
-        { type: "text", text: "", textSignature: "c2lnXzI=" },
-        { type: "text", text: "answer", textSignature: undefined },
-      ],
-    },
-  ])("retains a standalone thought signature beside $label", async ({ parts, content }) => {
-    const { output, events } = await consumeGoogleFixture([finishedGoogleParts(parts)], true);
-
-    expect(output.content).toEqual(content);
-    expect(events).toContainEqual(expect.objectContaining({ type: "text_delta", delta: "" }));
-    expect(convertMessages(model, { messages: [output] })).toEqual([
-      {
-        role: "model",
-        parts: parts.map((part) =>
-          "thoughtSignature" in part && !("text" in part) ? { ...part, text: "" } : part,
-        ),
-      },
-    ]);
-  });
-
-  it("keeps an explicit signature-only thought separate from the preceding tool call", async () => {
-    const { output } = await consumeGoogleFixture([
-      finishedGoogleParts([
-        lookupPart(),
-        { thought: true, thoughtSignature: "dGhvdWdodF9zaWc=" },
-        { thought: true, text: "draft" },
-      ]),
-    ]);
-
-    expect(output.content).toEqual([
-      lookupContent(),
-      { type: "thinking", thinking: "", thinkingSignature: "dGhvdWdodF9zaWc=" },
-      { type: "thinking", thinking: "draft", thinkingSignature: undefined },
-    ]);
-  });
-
-  it.each([
-    { label: "different", signature: "c2lnXzI=" },
-    { label: "identical", signature: "c2lnXzE=" },
-  ])(
-    "never overwrites a signed tool call with a separate $label provider signature part",
-    async ({ signature }) => {
-      const { output } = await consumeGoogleFixture([
-        finishedGoogleParts([lookupPart({}, "c2lnXzE="), { thoughtSignature: signature }]),
-      ]);
-
-      expect(output.content).toEqual([
-        lookupContent({}, "c2lnXzE="),
-        { type: "text", text: "", textSignature: signature },
-      ]);
-    },
+type SignatureCase = [string, Part[][], unknown[], boolean?];
+it.each<SignatureCase>([
+  [
+    "late standalone signature",
+    [[lookupPart({ query: "cats" })], [{ thoughtSignature: "Y2FsbF9zaWc=" }]],
+    [toolCall({ query: "cats" }, "Y2FsbF9zaWc=")],
+  ],
+  [
+    "separate signature-only thought",
+    [[lookupPart(), { thought: true, thoughtSignature: "dGhvdWdodF9zaWc=" }, thoughtPart("draft")]],
+    [toolCall(), thoughtOutput("", "dGhvdWdodF9zaWc="), thoughtOutput("draft")],
+  ],
+  [
+    "no signature overwrite",
+    [[lookupPart({}, signature1), { thoughtSignature: signature2 }]],
+    [toolCall({}, signature1), textOutput("", signature2)],
+  ],
+  [
+    "no media signature attachment",
+    [[lookupPart(), { inlineData: imageData, thoughtSignature: signature1 }]],
+    [toolCall()],
+  ],
+  [
+    "separate same-candidate signature",
+    [[lookupPart(), { thoughtSignature: signature1 }]],
+    [toolCall(), textOutput("", signature1)],
+  ],
+  [
+    "signed empty thinking and text",
+    [[thoughtPart("", signature1), textPart("", signature2), textPart("answer")]],
+    [thoughtOutput("", signature1), textOutput("", signature2), textOutput("answer")],
+    true,
+  ],
+  [
+    "signed then unsigned text",
+    [[textPart("signed", signature1), textPart("unsigned")]],
+    [textOutput("signed", signature1), textOutput("unsigned")],
+    true,
+  ],
+  [
+    "separate thoughts with the same signature",
+    [[thoughtPart("first", signature1), thoughtPart("second", signature1)]],
+    [thoughtOutput("first", signature1), thoughtOutput("second", signature1)],
+    true,
+  ],
+])("preserves %s", async (_name, chunks, content, roundTrip?: boolean) => {
+  const { output, events } = await runFixture(
+    chunks.map((parts, index) =>
+      candidate(parts, index === chunks.length - 1 ? FinishReason.STOP : undefined),
+    ),
   );
-
-  it("never attaches a signed media Part to the preceding unsigned tool call", async () => {
-    const { output } = await consumeGoogleFixture([
-      finishedGoogleParts([
-        lookupPart(),
-        {
-          inlineData: { mimeType: "image/png", data: "aW1hZ2U=" },
-          thoughtSignature: "c2lnXzE=",
-        },
-      ]),
-    ]);
-
-    expect(output.content).toEqual([lookupContent()]);
-  });
-
-  it("keeps a same-candidate standalone signature separate from an unsigned tool call", async () => {
-    const { output } = await consumeGoogleFixture([
-      finishedGoogleParts([lookupPart(), { thoughtSignature: "c2lnXzE=" }]),
-    ]);
-
-    expect(output.content).toEqual([
-      lookupContent(),
-      { type: "text", text: "", textSignature: "c2lnXzE=" },
-    ]);
-  });
-
-  it.each([
-    {
-      label: "signed text followed by unsigned text",
-      parts: [{ text: "signed", thoughtSignature: "c2lnXzE=" }, { text: "unsigned" }],
-      content: [
-        { type: "text", text: "signed", textSignature: "c2lnXzE=" },
-        { type: "text", text: "unsigned", textSignature: undefined },
-      ],
-    },
-    {
-      label: "signed thinking followed by unsigned thinking",
-      parts: [
-        { thought: true, text: "signed", thoughtSignature: "c2lnXzE=" },
-        { thought: true, text: "unsigned" },
-      ],
-      content: [
-        { type: "thinking", thinking: "signed", thinkingSignature: "c2lnXzE=" },
-        { type: "thinking", thinking: "unsigned", thinkingSignature: undefined },
-      ],
-    },
-    {
-      label: "separately signed text parts",
-      parts: [
-        { text: "first", thoughtSignature: "c2lnXzE=" },
-        { text: "second", thoughtSignature: "c2lnXzI=" },
-      ],
-      content: [
-        { type: "text", text: "first", textSignature: "c2lnXzE=" },
-        { type: "text", text: "second", textSignature: "c2lnXzI=" },
-      ],
-    },
-    {
-      label: "separately signed text parts with the same signature",
-      parts: [
-        { text: "first", thoughtSignature: "c2lnXzE=" },
-        { text: "second", thoughtSignature: "c2lnXzE=" },
-      ],
-      content: [
-        { type: "text", text: "first", textSignature: "c2lnXzE=" },
-        { type: "text", text: "second", textSignature: "c2lnXzE=" },
-      ],
-    },
-    {
-      label: "separately signed thought parts with the same signature",
-      parts: [
-        { thought: true, text: "first", thoughtSignature: "c2lnXzE=" },
-        { thought: true, text: "second", thoughtSignature: "c2lnXzE=" },
-      ],
-      content: [
-        { type: "thinking", thinking: "first", thinkingSignature: "c2lnXzE=" },
-        { type: "thinking", thinking: "second", thinkingSignature: "c2lnXzE=" },
-      ],
-    },
-  ])("keeps exact provider part ownership for $label", async ({ parts, content }) => {
-    const { output } = await consumeGoogleFixture([finishedGoogleParts(parts)]);
-
-    expect(output.content).toEqual(content);
+  expect(output.content).toEqual(content);
+  if (roundTrip) {
+    const parts = chunks.flat();
     expect(convertMessages(model, { messages: [output] })).toEqual([{ role: "model", parts }]);
+    expect(
+      events
+        .filter((event) => event.type === "text_delta" || event.type === "thinking_delta")
+        .map((event) => event.delta),
+    ).toEqual(parts.map((part) => part.text));
+  }
+});
+
+it("closes an unread SDK stream without waiting when acceptance fails", async () => {
+  const close = vi.fn(() => new Promise<IteratorResult<GenerateContentResponse>>(() => {}));
+  const googleStream = {
+    next: vi.fn(),
+    return: close,
+    throw: vi.fn(),
+    [Symbol.asyncIterator]() {
+      return this;
+    },
+  } as unknown as AsyncGenerator<GenerateContentResponse>;
+  const options = withProviderAcceptanceObserver({}, () => {
+    throw new Error("acceptance observer failed");
+  });
+  const { result } = await runFixture([], {
+    options,
+    generateContentStream: async () => googleStream,
+  });
+  expect(result).toMatchObject({ stopReason: "error", errorMessage: "acceptance observer failed" });
+  expect(close).toHaveBeenCalledOnce();
+});
+
+it("closes partial text before reporting a failed candidate", async () => {
+  const { events, result } = await runFixture([
+    partialFinish(FinishReason.SAFETY, "Provider rejected the generated response"),
+  ]);
+  expect(events.map((event) => event.type)).toEqual(
+    "start text_start text_delta text_end error".split(" "),
+  );
+  expect(result).toMatchObject({
+    stopReason: "error",
+    errorCode: "SAFETY",
+    errorType: "google_generation_failed",
+    errorMessage: "Google generation stopped (SAFETY): Provider rejected the generated response",
   });
 });
 
-describe("runGoogleGenerateContentLifecycle", () => {
-  it("retains the actual SDK response model across localhost HTTP SSE", async () => {
-    const observedRequests: Array<{ method?: string; url?: string }> = [];
-    const server = createServer((request, response) => {
-      observedRequests.push({ method: request.method, url: request.url });
-      response.writeHead(200, { "content-type": "text/event-stream" });
-      response.end(
-        `data: ${JSON.stringify({
-          responseId: "sdk-google-response",
-          modelVersion: "gemini-test-002",
-          candidates: [{ content: { parts: [{ text: "actual response" }] }, finishReason: "STOP" }],
-        })}\n\n`,
-      );
-    });
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", () => {
-        server.off("error", reject);
-        resolve();
-      });
-    });
-
-    try {
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("Missing Google SDK loopback server address");
-      }
-      const { result } = await runGoogleFixture([], {
-        createClient: () =>
-          new GoogleGenAI({
-            apiKey: "fixture-google-api-key",
-            httpOptions: { baseUrl: `http://127.0.0.1:${address.port}` },
-          }),
-        buildParams: () => ({
-          model: model.id,
-          contents: [{ role: "user", parts: [{ text: "hello" }] }],
-        }),
-      });
-
-      expect(observedRequests).toEqual([
-        { method: "POST", url: expect.stringContaining(":streamGenerateContent?alt=sse") },
-      ]);
-      expect(result).toMatchObject({
-        responseId: "sdk-google-response",
-        responseModel: "gemini-test-002",
-        stopReason: "stop",
-      });
-    } finally {
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-    }
-  });
-
-  it("reports SDK stream acceptance without fabricated HTTP metadata", async () => {
-    const acceptanceObserver = vi.fn();
-    const options = withProviderAcceptanceObserver({}, acceptanceObserver);
-
-    const { result } = await runGoogleFixture(
-      [googleResponse({ parts: [{ text: "ok" }], finishReason: FinishReason.STOP })],
-      { options },
-    );
-
-    expect(result.stopReason).toBe("stop");
-    expect(acceptanceObserver).toHaveBeenCalledWith({ kind: "provider_stream_opened" });
-  });
-
-  it("closes an unread SDK stream without waiting when acceptance fails", async () => {
-    const close = vi.fn(() => new Promise<IteratorResult<GenerateContentResponse>>(() => {}));
-    const googleStream = {
-      next: vi.fn(),
-      return: close,
-      throw: vi.fn(),
-      [Symbol.asyncIterator]() {
-        return this;
+it("preserves cancellation precedence over an observed candidate failure", async () => {
+  const controller = new AbortController();
+  const abortReason = Object.assign(new Error("Google run restarted"), { code: "GATEWAY_RESTART" });
+  const { result } = await runFixture([], {
+    options: { signal: controller.signal },
+    generateContentStream: async () => ({
+      async *[Symbol.asyncIterator]() {
+        yield response(partialFinish(FinishReason.SAFETY));
+        controller.abort(abortReason);
       },
-    } as unknown as AsyncGenerator<GenerateContentResponse>;
-
-    const options = withProviderAcceptanceObserver({}, () => {
-      throw new Error("acceptance observer failed");
-    });
-    const { result } = await runGoogleFixture([], {
-      options,
-      generateContentStream: async () => googleStream,
-    });
-
-    expect(result).toMatchObject({
-      stopReason: "error",
-      errorMessage: "acceptance observer failed",
-    });
-    expect(close).toHaveBeenCalledOnce();
+    }),
   });
+  expect(result).toMatchObject({
+    stopReason: "aborted",
+    errorCode: "GATEWAY_RESTART",
+    errorMessage: "Google run restarted",
+  });
+});
 
-  it.each(["google-generative-ai", "google-vertex"] as const)(
-    "rejects an unfinished %s stream instead of silently completing partial output",
-    async (api) => {
-      const targetModel = {
-        ...model,
-        api,
-        provider: api === "google-vertex" ? "google-vertex" : "google",
-      } satisfies Model<"google-generative-ai" | "google-vertex">;
-      const { result } = await runGoogleFixture(
-        [googleResponse({ parts: [{ text: "partial output" }] })],
-        { targetModel },
-      );
-
-      expect(result).toMatchObject({
-        stopReason: "error",
-        errorCode: "STREAM_INCOMPLETE",
-        errorType: "google_incomplete_stream",
-        errorMessage: "Google stream ended before a terminal finish reason",
-      });
+it("surfaces blocked Google prompts without a reason as typed stream errors", async () => {
+  const { result } = await runFixture([
+    {
+      promptFeedback: { blockReasonMessage: "Prompt violates provider safety policy" },
+      usageMetadata: { promptTokenCount: 12, cachedContentTokenCount: 2, totalTokenCount: 12 },
     },
-  );
+  ]);
+  expect(result).toMatchObject({
+    stopReason: "error",
+    errorCode: "PROMPT_BLOCKED",
+    errorType: "google_prompt_blocked",
+    errorMessage: "Google prompt blocked (PROMPT_BLOCKED): Prompt violates provider safety policy",
+    content: [],
+    usage: { input: 10, cacheRead: 2, totalTokens: 12 },
+  });
+  expect(result.usage.cost.total).toBeGreaterThan(0);
+});
 
-  it.each([FinishReason.SAFETY, FinishReason.MALFORMED_FUNCTION_CALL])(
-    "preserves the actionable %s candidate finish message",
-    async (finishReason) => {
-      const { result } = await runGoogleFixture([
-        googleResponse({
-          finishReason,
-          finishMessage: "Provider rejected the generated response",
-        }),
-      ]);
-
-      expect(result).toMatchObject({
-        stopReason: "error",
-        errorCode: finishReason,
-        errorType: "google_generation_failed",
-        errorMessage: `Google generation stopped (${finishReason}): Provider rejected the generated response`,
-      });
+it("redacts generated video bytes from Google terminal fields", async () => {
+  const media = "QUJDRA==";
+  const error = Object.assign(new Error("502 status code (no body)"), {
+    status: 502,
+    body: { generatedVideos: [{ video: { videoBytes: media, mimeType: "video/mp4" } }] },
+  });
+  const { output } = await runFixture([], {
+    generateContentStream: async () => {
+      throw error;
     },
+  });
+  expect(output.errorCode).toBe("502");
+  expect(JSON.stringify(output)).not.toContain(media);
+});
+
+it("forwards stop sequences to Google generation config", () => {
+  const params = buildParams(model, { messages: [user("hello")] }, { stop: ["STOP"] });
+  expect(params.config?.stopSequences).toEqual(["STOP"]);
+});
+
+it("strips the internal cache boundary marker from systemInstruction", () => {
+  const params = buildParams(model, {
+    systemPrompt: `Stable${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic`,
+    messages: [user("hello")],
+  });
+  expect(params.config?.systemInstruction).toBe("Stable\nDynamic");
+  expect(JSON.stringify(params)).not.toContain("OPENCLAW_CACHE_BOUNDARY");
+});
+
+type GoogleSharedTestModel = ReturnType<typeof makeModel> | ReturnType<typeof makeGeminiCliModel>;
+const convertMessagesForTest = convertMessages as unknown as (
+  model: GoogleSharedTestModel,
+  context: Context,
+) => ReturnType<typeof convertMessages>;
+const conversionModel = makeModel("gemini-3-flash");
+const call = { type: "toolCall" as const, id: "call_1", name: "lookup", arguments: {} };
+const result = makeTextToolResult("call_1", "lookup", "ok", false, 0);
+const convert = (messages: Context["messages"], target: GoogleSharedTestModel = conversionModel) =>
+  convertMessagesForTest(target, { messages });
+function assistant(
+  content: AssistantMessage["content"],
+  target: GoogleSharedTestModel = conversionModel,
+) {
+  return { ...createAssistantOutput(target), content, timestamp: 0 };
+}
+
+it("omits optional metadata from normalized Gemini function declarations", () => {
+  const parameters = normalizeToolParameterSchema(
+    {
+      type: "object",
+      properties: { message: { type: "string" }, timeout: { type: "number", "~optional": true } },
+      required: ["message"],
+    },
+    { modelProvider: "google", modelId: "gemini-2.5-flash" },
   );
-
-  it("keeps an unspecified Google finish reason nonterminal", async () => {
-    const { result } = await runGoogleFixture([
-      googleResponse({
-        parts: [{ text: "partial output" }],
-        finishReason: FinishReason.FINISH_REASON_UNSPECIFIED,
-      }),
-    ]);
-
-    expect(result).toMatchObject({ stopReason: "error", errorCode: "STREAM_INCOMPLETE" });
+  expect(
+    getFirstToolParameters(
+      convertGoogleTools([{ name: "demo", description: "Demo", parameters }]) ?? [],
+    ),
+  ).toStrictEqual({
+    type: "object",
+    properties: { message: { type: "string" }, timeout: { type: "number" } },
+    required: ["message"],
   });
+});
 
-  it("closes partial text before reporting a failed candidate", async () => {
-    const { events, result } = await runGoogleFixture(
-      [
-        googleResponse({
-          parts: [{ text: "partial output" }],
-          finishReason: FinishReason.SAFETY,
-          finishMessage: "Provider rejected the generated response",
-        }),
-      ],
-      { collectEvents: true },
-    );
-
-    expect(events.map((event) => event.type)).toEqual([
-      "start",
-      "text_start",
-      "text_delta",
-      "text_end",
-      "error",
-    ]);
-    expect(result.errorCode).toBe("SAFETY");
+it("preserves managed signature ownership with required signatures", () => {
+  const args = { first: 1, nested: { alpha: 2, beta: 3 } };
+  const reordered = { nested: { beta: 3, alpha: 2 }, first: 1 };
+  const originalBytes = JSON.stringify([args, reordered]);
+  const replayPair = (thoughtSignature: string) => [
+    assistant([
+      { ...call, arguments: args, thoughtSignature },
+      { ...call, arguments: reordered },
+    ]),
+    result,
+    result,
+  ];
+  const contents = projectGoogleMessages({
+    model: conversionModel,
+    replay: "managed",
+    requiresToolCallSignature: true,
+    messages: [
+      ...replayPair(signature1),
+      ...replayPair(signature2),
+      assistant([{ ...call, arguments: reordered }]),
+      result,
+    ],
   });
+  const parts = contents.flatMap((content) => content.parts).filter((part) => part.functionCall);
+  expect(parts.map((part) => part.thoughtSignature)).toEqual([
+    signature1,
+    "skip_thought_signature_validator",
+    signature2,
+    signature1,
+    signature2,
+  ]);
+  expect(parts.map((part) => part.functionCall?.args)).toEqual([
+    args,
+    reordered,
+    args,
+    reordered,
+    reordered,
+  ]);
+  expect(parts[1]?.functionCall?.args).toBe(reordered);
+  expect(JSON.stringify([args, reordered])).toBe(originalBytes);
+});
 
-  it("preserves cancellation precedence over an observed candidate failure", async () => {
-    const controller = new AbortController();
-    const abortReason = Object.assign(new Error("Google run restarted"), {
-      code: "GATEWAY_RESTART",
-    });
-    const { output, result } = await runGoogleFixture([], {
-      options: { signal: controller.signal },
-      generateContentStream: async () => ({
-        async *[Symbol.asyncIterator]() {
-          yield googleResponse({
-            parts: [{ text: "partial output" }],
-            finishReason: FinishReason.SAFETY,
-          });
-          controller.abort(abortReason);
-        },
-      }),
-    });
+it("coerces malformed serialized tool arguments to an SDK object", () => {
+  const context = {
+    messages: [
+      makeGoogleAssistantMessage(conversionModel.id, [{ ...call, arguments: "{not valid json" }]),
+    ],
+  } as Context;
+  expect(convert(context.messages)[0]?.parts?.[0]?.functionCall?.args).toEqual({});
+});
 
-    expect(result).toMatchObject({
-      stopReason: "aborted",
-      errorCode: "GATEWAY_RESTART",
-      errorMessage: "Google run restarted",
-    });
-    expect(output.errorCode).toBe("GATEWAY_RESTART");
+it.each([
+  ["empty user text", [user([{ type: "text", text: "" }])]],
+  ["empty user parts", [user([])]],
+  ["blank assistant", [assistant([{ type: "text", text: "   " }])]],
+] satisfies Array<[string, Context["messages"]]>)(
+  "keeps %s valid for the Google SDK",
+  (_label, messages) => {
+    expect(convert(messages)).toEqual([{ role: "user", parts: [{ text: " " }] }]);
+  },
+);
+
+it("does not replay an earlier signature across a foreign route", () => {
+  const contents = convert([
+    assistant([{ ...call, thoughtSignature: "c2lnbmVk" }]),
+    { ...assistant([call]), api: "google-vertex" },
+  ] as Context["messages"]);
+  expect(
+    contents
+      .flatMap((content) => content.parts ?? [])
+      .filter((part) => part.functionCall)
+      .map((part) => part.thoughtSignature),
+  ).toEqual(["c2lnbmVk", "skip_thought_signature_validator"]);
+});
+
+it("strips call and response IDs for google-gemini-cli", () => {
+  const target = makeGeminiCliModel(conversionModel.id);
+  const contents = convert(
+    [assistant([{ ...call, thoughtSignature: "dGVzdA==" }], target), result],
+    target,
+  );
+  const parts = contents.flatMap((content) => content.parts ?? []);
+  expect(parts.find((part) => part.functionCall)?.functionCall).toEqual({
+    name: "lookup",
+    args: {},
   });
-
-  it.each([429, 503])("preserves the official Google SDK's %s API error status", async (status) => {
-    const { result } = await runGoogleFixture([], {
-      generateContentStream: async () => {
-        throw new ApiError({ status, message: "Google quota exceeded" });
-      },
-    });
-
-    expect(result).toMatchObject({
-      stopReason: "error",
-      errorCode: String(status),
-      errorMessage: `${status}: Google quota exceeded`,
-    });
+  expect(parts.find((part) => part.functionResponse)?.functionResponse).toEqual({
+    name: "lookup",
+    response: { output: "ok" },
   });
+});
 
-  it("preserves the typed Gemini finish reason when the official SDK omits finishMessage", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
-      new Response(
-        `data: ${JSON.stringify({
-          candidates: [
-            {
-              finishReason: "SAFETY",
-              finishMessage: "Gemini Developer API strips this field",
-            },
-          ],
-        })}\n\n`,
-        { headers: { "content-type": "text/event-stream" } },
-      ),
-    );
-    try {
-      const { result } = await runGoogleFixture([], {
-        createClient: () => new GoogleGenAI({ apiKey: "test-gemini-api-key" }),
-        buildParams: () => ({
-          model: model.id,
-          contents: [{ role: "user", parts: [{ text: "hello" }] }],
-        }),
-      });
+it("omits payload-less tool images without media placeholders", () => {
+  const contents = convert([
+    { ...result, content: [{ type: "image", mimeType: "image/png", data: "" }] },
+  ]);
+  const serialized = JSON.stringify(contents);
+  expect(serialized).toContain('"output":""');
+  expect(serialized).not.toContain("inlineData");
+  expect(serialized).not.toContain("see attached image");
+});
 
-      expect(result).toMatchObject({
-        stopReason: "error",
-        errorCode: "SAFETY",
-        errorType: "google_generation_failed",
-        errorMessage: "Google generation stopped (SAFETY)",
-      });
-      expect(fetchMock).toHaveBeenCalledOnce();
-    } finally {
-      fetchMock.mockRestore();
-    }
-  });
-
-  it.each([
-    { api: "google-generative-ai", blockReason: BlockedReason.SAFETY },
-    { api: "google-generative-ai", blockReason: undefined },
-    { api: "google-vertex", blockReason: BlockedReason.SAFETY },
-    { api: "google-vertex", blockReason: undefined },
-  ] as const)(
-    "surfaces blocked $api prompts as typed stream errors when blockReason is $blockReason",
-    async ({ api, blockReason }) => {
-      const targetModel = {
-        ...model,
-        api,
-        provider: api === "google-vertex" ? "google-vertex" : "google",
-      } satisfies Model<"google-generative-ai" | "google-vertex">;
-      const { result } = await runGoogleFixture(
+it.each([
+  { id: "google/gemini-2.5-pro", deferred: true },
+  { id: "models/gemini-3.1-pro-preview", deferred: false },
+])("keeps parallel image results in the supported location for $id", ({ id, deferred }) => {
+  const target: ReturnType<typeof makeModel> = { ...makeModel(id), input: ["text", "image"] };
+  const image = { inlineData: imageData };
+  const contents = convert(
+    [
+      user("Screenshot the page and check the weather."),
+      assistant(
         [
-          googleResponse({
-            promptFeedback: {
-              ...(blockReason ? { blockReason } : {}),
-              blockReasonMessage: "Prompt violates provider safety policy",
-            },
-            usageMetadata: {
-              promptTokenCount: 12,
-              cachedContentTokenCount: 2,
-              totalTokenCount: 12,
-            },
-          }),
+          { ...call, name: "screenshot" },
+          { ...call, id: "call_2", name: "weather" },
         ],
-        { targetModel },
-      );
-
-      const expectedBlockReason = blockReason ?? "PROMPT_BLOCKED";
-      expect(result).toMatchObject({
-        stopReason: "error",
-        errorCode: expectedBlockReason,
-        errorType: "google_prompt_blocked",
-        errorMessage: `Google prompt blocked (${expectedBlockReason}): Prompt violates provider safety policy`,
-        content: [],
-        usage: { input: 10, cacheRead: 2, totalTokens: 12 },
-      });
-      expect(result.usage.cost.total).toBeGreaterThan(0);
-    },
+        target,
+      ),
+      { ...result, toolName: "screenshot", content: [{ type: "image", ...image.inlineData }] },
+      makeTextToolResult("call_2", "weather", "Sunny, 21C", false, 0),
+    ],
+    target,
   );
-
-  it("surfaces HTTP response body text from Google-compatible errors", async () => {
-    const error = Object.assign(new Error("502 status code (no body)"), {
-      status: 502,
-      body: "gateway maintenance",
-    });
-
-    const { output } = await runGoogleFixture([], {
-      generateContentStream: async () => {
-        throw error;
-      },
-    });
-
-    expect(output.errorMessage).toBe("502: gateway maintenance");
-  });
-
-  it("redacts generated video bytes from Google terminal fields", async () => {
-    const media = "QUJDRA==";
-    const error = Object.assign(new Error("502 status code (no body)"), {
-      status: 502,
-      body: { generatedVideos: [{ video: { videoBytes: media, mimeType: "video/mp4" } }] },
-    });
-
-    const { output } = await runGoogleFixture([], {
-      generateContentStream: async () => {
-        throw error;
-      },
-    });
-
-    expect(output.errorCode).toBe("502");
-    expect(JSON.stringify(output)).not.toContain(media);
-  });
-});
-
-describe("buildGoogleGenerateContentParams", () => {
-  it("forwards stop sequences to Google generation config", () => {
-    const params = buildGoogleGenerateContentParams(
-      model,
-      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
-      { stop: ["STOP"] },
-    );
-
-    expect(params.config?.stopSequences).toEqual(["STOP"]);
-  });
-
-  it("strips the internal cache boundary marker from systemInstruction", () => {
-    const params = buildGoogleGenerateContentParams(model, {
-      systemPrompt: `Stable${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic`,
-      messages: [{ role: "user", content: "hello", timestamp: 0 }],
-    });
-
-    expect(params.config?.systemInstruction).toBe("Stable\nDynamic");
-    expect(JSON.stringify(params)).not.toContain("OPENCLAW_CACHE_BOUNDARY");
-  });
+  expect(contents.map((entry) => entry.role)).toEqual(
+    deferred ? ["user", "model", "user", "user"] : ["user", "model", "user"],
+  );
+  expect(contents[2]?.parts?.map((part) => part.functionResponse?.name)).toEqual([
+    "screenshot",
+    "weather",
+  ]);
+  expect(contents[1]?.parts?.map((part) => part.functionCall?.id)).toEqual(["call_1", "call_2"]);
+  expect(contents[1]?.parts?.map((part) => part.thoughtSignature)).toEqual(
+    deferred ? [undefined, undefined] : ["skip_thought_signature_validator", undefined],
+  );
+  expect(contents[2]?.parts?.map((part) => part.functionResponse?.id)).toEqual([
+    "call_1",
+    "call_2",
+  ]);
+  if (deferred) {
+    expect(contents[3]).toEqual({ role: "user", parts: [{ text: "Tool result image:" }, image] });
+    expect(
+      contents
+        .slice(3)
+        .flatMap((content) => content.parts ?? [])
+        .some((part) => part.functionResponse),
+    ).toBe(false);
+  } else {
+    expect(contents[2]?.parts?.[0]?.functionResponse?.parts).toEqual([image]);
+  }
 });

@@ -1,69 +1,66 @@
-// Tracks queue state for active, pending, and recently deduped reply runs.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { QueueMode } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { ModelCatalogEntry } from "../../../agents/model-catalog.types.js";
 import type { ModelFallbackRouteResolution } from "../../../agents/model-fallback.types.js";
-import { resolveThinkingSelection } from "../../../agents/model-thinking-default.js";
-import { resolveGlobalMap } from "../../../shared/global-singleton.js";
-import { applyQueueRuntimeSettings } from "../../../utils/queue-helpers.js";
+import {
+  resolveConfiguredThinkingDefault,
+  resolveThinkingSelection,
+} from "../../../agents/model-thinking-default.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { normalizeAgentId } from "../../../routing/session-key.js";
+import {
+  getSessionControllerMailbox,
+  getExistingSessionControllerMailbox,
+  sessionControllerMailboxes,
+  clearSessionControllerMailbox,
+  retireSessionControllerInput,
+  type SessionControllerMailbox,
+} from "../../../sessions/session-controller.mailbox.js";
+import {
+  captureSessionTarget,
+  type SessionTarget,
+} from "../../../sessions/session-controller.target.js";
 import { normalizeThinkLevel } from "../../thinking.js";
 import { completeFollowupRunLifecycle } from "./lifecycle.js";
 import type { FollowupRun, QueueDropPolicy, QueueSettings } from "./types.js";
-
-type FollowupQueueState = {
-  abortController: AbortController;
-  items: FollowupRun[];
-  draining: boolean;
-  /** Exact operational drain generation; recovery may retire only this owner. */
-  drainOwner?: object;
-  /** Identities retained in `items` while delivery awaits; pending cap and depth must exclude them. */
-  inFlight: Set<FollowupRun>;
-  lastEnqueuedAt: number;
-  mode: QueueMode;
-  debounceMs: number;
-  cap: number;
-  dropPolicy: QueueDropPolicy;
-  droppedCount: number;
-  summaryLines: string[];
-  summarySources: FollowupRun[];
-  steerAcceptanceTail: Promise<boolean>;
-  /** Sources currently used by an async summary delivery cannot be evicted mid-run. */
-  activeSummarySources: WeakSet<FollowupRun>;
-  summaryElisions: Array<{
-    contextKey: string;
-    count: number;
-    /** Compact sources stay strong so cancellation follows summarized content until delivery. */
-    sources: FollowupRun[];
-    /** Summary lines stay index-aligned with sources across context isolation and eviction. */
-    summaryLines: string[];
-    /** Weak source mapping keeps concurrent summary consumption identity-safe. */
-    sourceRefs: WeakMap<FollowupRun, FollowupRun>;
-  }>;
-  evictedSummaryCount: number;
-  lastRun?: FollowupRun["run"];
-};
 
 export const DEFAULT_QUEUE_DEBOUNCE_MS = 500;
 export const DEFAULT_QUEUE_CAP = 20;
 export const DEFAULT_QUEUE_DROP: QueueDropPolicy = "summarize";
 
-/**
- * Share followup queues across bundled chunks so busy-session enqueue/drain
- * logic observes one queue registry per process.
- */
-const FOLLOWUP_QUEUES_KEY = Symbol.for("openclaw.followupQueues");
+// Retries and compacted sources retain their input and its original dispatch scope.
+export const followupSourceRunners = new WeakMap<
+  NonNullable<FollowupRun["controllerInput"]>,
+  (run: FollowupRun) => Promise<void>
+>();
 
-export const FOLLOWUP_QUEUES = resolveGlobalMap<string, FollowupQueueState>(FOLLOWUP_QUEUES_KEY);
+export function* followupQueueSources(
+  queue: Pick<SessionControllerMailbox, "items" | "summarySources" | "summaryElisions">,
+): Generator<FollowupRun> {
+  yield* queue.items;
+  yield* queue.summarySources;
+  for (const entry of queue.summaryElisions) {
+    yield* entry.sources;
+  }
+}
 
-export function getExistingFollowupQueue(key: string): FollowupQueueState | undefined {
+export function getExistingFollowupQueue(
+  key: string,
+  target?: SessionTarget,
+): SessionControllerMailbox | undefined {
   const cleaned = key.trim();
   if (!cleaned) {
     return undefined;
   }
-  return FOLLOWUP_QUEUES.get(cleaned);
+  const mailbox = getExistingSessionControllerMailbox(cleaned, target);
+  return mailbox && (mailbox.entries.length || mailbox.claim || mailbox.droppedCount)
+    ? mailbox
+    : undefined;
 }
 
-export function hasPendingFollowupQueueWork(keys: Iterable<string | undefined>): boolean {
+export function hasPendingFollowupQueueWork(
+  keys: Iterable<string | undefined>,
+  scope?: Pick<SessionTarget, "storeScope" | "agentId">,
+): boolean {
   const seen = new Set<string>();
   for (const key of keys) {
     const cleaned = normalizeOptionalString(key);
@@ -71,7 +68,17 @@ export function hasPendingFollowupQueueWork(keys: Iterable<string | undefined>):
       continue;
     }
     seen.add(cleaned);
-    const queue = getExistingFollowupQueue(cleaned);
+    // Keep candidates separate: an alias union can hide multiple queued owners.
+    const queue = getExistingFollowupQueue(
+      cleaned,
+      scope
+        ? captureSessionTarget({
+            storeScope: scope.storeScope,
+            sessionKey: cleaned,
+            agentId: scope.agentId,
+          })
+        : undefined,
+    );
     if (queue && (queue.items.length > 0 || queue.inFlight.size > 0 || queue.droppedCount > 0)) {
       return true;
     }
@@ -80,8 +87,8 @@ export function hasPendingFollowupQueueWork(keys: Iterable<string | undefined>):
 }
 
 type SummaryElisionCapState = Pick<
-  FollowupQueueState,
-  "activeSummarySources" | "cap" | "evictedSummaryCount" | "summaryElisions"
+  SessionControllerMailbox,
+  "activeSummarySources" | "cap" | "summaryElisions" | "droppedCount"
 >;
 
 export function trimSummaryElisionsToCap(queue: SummaryElisionCapState): void {
@@ -102,10 +109,19 @@ export function trimSummaryElisionsToCap(queue: SummaryElisionCapState): void {
       const [source] = entry.sources.splice(sourceIndex, 1);
       entry.summaryLines.splice(sourceIndex, 1);
       entry.count = entry.sources.length;
-      queue.evictedSummaryCount += 1;
+      queue.droppedCount = Math.max(0, queue.droppedCount - 1);
+      for (const [original, compact] of entry.sourceRefs) {
+        if (compact === source) {
+          entry.sourceRefs.delete(original);
+        }
+      }
       sourceCount -= 1;
       if (source) {
-        completeFollowupRunLifecycle(source);
+        source.onQueueDisposition?.("queue-cap-old");
+        // Eviction closes selection synchronously; callback completion is asynchronous.
+        if (source.controllerInput) {
+          retireSessionControllerInput(source.controllerInput);
+        }
       }
       if (entry.sources.length === 0) {
         queue.summaryElisions.splice(entryIndex, 1);
@@ -120,79 +136,58 @@ export function trimSummaryElisionsToCap(queue: SummaryElisionCapState): void {
   }
 }
 
-export function getFollowupQueue(key: string, settings: QueueSettings): FollowupQueueState {
-  const existing = FOLLOWUP_QUEUES.get(key);
-  if (existing) {
-    applyQueueRuntimeSettings({
-      target: existing,
-      settings,
-    });
-    trimSummaryElisionsToCap(existing);
-    return existing;
-  }
-
-  const created: FollowupQueueState = {
-    abortController: new AbortController(),
-    items: [],
-    draining: false,
-    inFlight: new Set(),
-    lastEnqueuedAt: 0,
-    mode: settings.mode,
-    debounceMs:
-      typeof settings.debounceMs === "number"
-        ? Math.max(0, settings.debounceMs)
-        : DEFAULT_QUEUE_DEBOUNCE_MS,
-    cap:
-      typeof settings.cap === "number" && settings.cap > 0
-        ? Math.floor(settings.cap)
-        : DEFAULT_QUEUE_CAP,
-    dropPolicy: settings.dropPolicy ?? DEFAULT_QUEUE_DROP,
-    droppedCount: 0,
-    summaryLines: [],
-    summarySources: [],
-    steerAcceptanceTail: Promise.resolve(true),
-    activeSummarySources: new WeakSet(),
-    summaryElisions: [],
-    evictedSummaryCount: 0,
-  };
-  applyQueueRuntimeSettings({
-    target: created,
-    settings,
-  });
-  FOLLOWUP_QUEUES.set(key, created);
-  return created;
+export function getFollowupQueue(
+  key: string,
+  settings: QueueSettings,
+  target?: SessionTarget,
+): SessionControllerMailbox {
+  const mailbox = getSessionControllerMailbox(key, target);
+  mailbox.mode = settings.mode;
+  mailbox.debounceMs =
+    typeof settings.debounceMs === "number" ? Math.max(0, settings.debounceMs) : mailbox.debounceMs;
+  mailbox.cap =
+    typeof settings.cap === "number" && settings.cap > 0 ? Math.floor(settings.cap) : mailbox.cap;
+  mailbox.dropPolicy = settings.dropPolicy ?? mailbox.dropPolicy;
+  trimSummaryElisionsToCap(mailbox);
+  return mailbox;
 }
 
-export function clearFollowupQueue(key: string): number {
-  const cleaned = key.trim();
-  const queue = getExistingFollowupQueue(cleaned);
-  if (!queue) {
-    return 0;
-  }
-  queue.abortController.abort();
-  const cleared = queue.items.length + queue.droppedCount;
-  for (const item of queue.items) {
-    completeFollowupRunLifecycle(item);
-  }
-  for (const item of queue.summarySources) {
-    completeFollowupRunLifecycle(item);
-  }
-  for (const entry of queue.summaryElisions) {
-    for (const source of entry.sources) {
-      completeFollowupRunLifecycle(source);
+/** @internal Exposed for unit tests only. */
+export function clearFollowupQueue(key: string, captured?: SessionControllerMailbox): number {
+  const queue = captured ?? getExistingSessionControllerMailbox(key.trim());
+  return queue ? clearSessionControllerMailbox(queue, completeFollowupRunLifecycle) : 0;
+}
+
+export function clearRemovedQueuedAuthProfiles(params: {
+  removedByAgent: ReadonlyMap<string, ReadonlySet<string>>;
+  rewriteConfig: (cfg: OpenClawConfig) => OpenClawConfig;
+}): void {
+  const clearRun = (run: FollowupRun["run"]) => {
+    const removed = params.removedByAgent.get(normalizeAgentId(run.agentId));
+    if (!removed?.size) {
+      return;
+    }
+    // Pending work retains config as well as a selected account. Clear both sources
+    // so a later model switch cannot restore the deleted account from its snapshot.
+    run.config = params.rewriteConfig(run.config);
+    if (run.authProfileId && removed.has(run.authProfileId)) {
+      delete run.authProfileId;
+      delete run.authProfileIdSource;
+    }
+    const probe = run.autoFallbackPrimaryProbe;
+    if (probe?.fallbackAuthProfileId && removed.has(probe.fallbackAuthProfileId)) {
+      delete probe.fallbackAuthProfileId;
+      delete probe.fallbackAuthProfileIdSource;
+    }
+  };
+  for (const queue of sessionControllerMailboxes()) {
+    if (queue.lastRun) {
+      clearRun(queue.lastRun);
+    }
+    for (const item of followupQueueSources(queue)) {
+      clearRun(item.run);
     }
   }
-  queue.items.length = 0;
-  queue.inFlight.clear();
-  queue.droppedCount = 0;
-  queue.summaryLines = [];
-  queue.summarySources = [];
-  queue.summaryElisions = [];
-  queue.evictedSummaryCount = 0;
-  queue.lastRun = undefined;
-  queue.lastEnqueuedAt = 0;
-  FOLLOWUP_QUEUES.delete(cleaned);
-  return cleared;
 }
 
 export function refreshQueuedFollowupSession(params: {
@@ -206,17 +201,14 @@ export function refreshQueuedFollowupSession(params: {
   nextModelOverrideSource?: "auto" | "user";
   nextAuthProfileId?: string;
   nextAuthProfileIdSource?: "auto" | "user";
+  nextCyberAccessProgram?: FollowupRun["run"]["cyberAccessProgram"] | null;
   nextThinking?: {
     level?: string;
     catalog?: ModelCatalogEntry[];
     agentRuntime?: string | null;
   };
 }): void {
-  const cleaned = params.key.trim();
-  if (!cleaned) {
-    return;
-  }
-  const queue = getExistingFollowupQueue(cleaned);
+  const queue = getExistingFollowupQueue(params.key);
   if (!queue) {
     return;
   }
@@ -224,23 +216,20 @@ export function refreshQueuedFollowupSession(params: {
     Boolean(params.previousSessionId) &&
     Boolean(params.nextSessionId) &&
     params.previousSessionId !== params.nextSessionId;
-  const hasNextModelRoute =
-    typeof params.nextProvider === "string" || typeof params.nextModel === "string";
+  const hasNextModelRoute = params.nextProvider !== undefined || params.nextModel !== undefined;
   const shouldRewriteModelSelection =
     hasNextModelRoute || Object.hasOwn(params, "nextModelOverrideSource");
   const shouldRewriteSelection =
     shouldRewriteModelSelection ||
     Object.hasOwn(params, "nextAuthProfileId") ||
     Object.hasOwn(params, "nextAuthProfileIdSource") ||
+    params.nextCyberAccessProgram !== undefined ||
     params.nextThinking !== undefined;
   if (!shouldRewriteSession && !shouldRewriteSelection) {
     return;
   }
 
-  const rewriteRun = (run?: FollowupRun["run"]) => {
-    if (!run) {
-      return;
-    }
+  const rewriteRun = (run: FollowupRun["run"]) => {
     if (shouldRewriteSession && run.sessionId === params.previousSessionId) {
       run.sessionId = params.nextSessionId!;
       const nextSessionFile = normalizeOptionalString(params.nextSessionFile);
@@ -249,10 +238,10 @@ export function refreshQueuedFollowupSession(params: {
       }
     }
     if (shouldRewriteSelection) {
-      if (typeof params.nextProvider === "string") {
+      if (params.nextProvider !== undefined) {
         run.provider = params.nextProvider;
       }
-      if (typeof params.nextModel === "string") {
+      if (params.nextModel !== undefined) {
         run.model = params.nextModel;
       }
       if (hasNextModelRoute) {
@@ -260,11 +249,25 @@ export function refreshQueuedFollowupSession(params: {
       }
       if (shouldRewriteModelSelection) {
         delete run.hasAutoFallbackProvenance;
+        delete run.autoFallbackPrimaryProbe;
       }
       if (Object.hasOwn(params, "nextModelOverrideSource")) {
         run.hasSessionModelOverride =
           params.nextModelOverrideSource !== undefined && Boolean(run.provider || run.model);
         run.modelOverrideSource = params.nextModelOverrideSource;
+        const scheduledAutomation = run.scheduledAutomation;
+        if (scheduledAutomation?.modelFallbackPolicy) {
+          // Queued scheduled work now runs the retargeted session selection, not the admitted one.
+          run.scheduledAutomation = {
+            ...scheduledAutomation,
+            modelFallbackPolicy: {
+              ...scheduledAutomation.modelFallbackPolicy,
+              sessionModelOverrideSource: run.hasSessionModelOverride
+                ? params.nextModelOverrideSource
+                : undefined,
+            },
+          };
+        }
       }
       if (Object.hasOwn(params, "nextAuthProfileId")) {
         run.authProfileId = normalizeOptionalString(params.nextAuthProfileId);
@@ -272,12 +275,23 @@ export function refreshQueuedFollowupSession(params: {
       if (Object.hasOwn(params, "nextAuthProfileIdSource")) {
         run.authProfileIdSource = run.authProfileId ? params.nextAuthProfileIdSource : undefined;
       }
+      if (params.nextCyberAccessProgram !== undefined) {
+        run.cyberAccessProgram = params.nextCyberAccessProgram ?? undefined;
+      }
       if (params.nextThinking) {
         run.thinkingCatalog = params.nextThinking.catalog;
         const explicitLevel =
           run.thinkLevelOverride === "default"
             ? undefined
             : (run.thinkLevelOverride ?? normalizeThinkLevel(params.nextThinking.level));
+        run.thinkingExplicit =
+          explicitLevel !== undefined ||
+          resolveConfiguredThinkingDefault({
+            cfg: run.config,
+            agentId: run.agentId,
+            provider: run.provider,
+            model: run.model,
+          }) !== undefined;
         run.thinkLevel = resolveThinkingSelection({
           cfg: run.config,
           agentId: run.agentId,
@@ -286,21 +300,15 @@ export function refreshQueuedFollowupSession(params: {
           catalog: params.nextThinking.catalog,
           agentRuntime: params.nextThinking.agentRuntime,
           level: explicitLevel,
-        }).level;
+        }).requestedLevel;
       }
     }
   };
 
-  rewriteRun(queue.lastRun);
-  for (const item of queue.items) {
-    rewriteRun(item.run);
+  if (queue.lastRun) {
+    rewriteRun(queue.lastRun);
   }
-  for (const item of queue.summarySources) {
+  for (const item of followupQueueSources(queue)) {
     rewriteRun(item.run);
-  }
-  for (const entry of queue.summaryElisions) {
-    for (const source of entry.sources) {
-      rewriteRun(source.run);
-    }
   }
 }

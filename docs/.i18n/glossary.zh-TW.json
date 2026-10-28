@@ -56,10 +56,6 @@
     "target": "Mattermost"
   },
   {
-    "source": "Mintlify",
-    "target": "Mintlify"
-  },
-  {
     "source": "Nextcloud Talk",
     "target": "Nextcloud Talk"
   },

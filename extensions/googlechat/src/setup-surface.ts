@@ -1,5 +1,4 @@
 import { createChannelDmPolicy } from "openclaw/plugin-sdk/channel-dm-policy";
-// Googlechat plugin module implements setup surface behavior.
 import {
   applySetupAccountConfigPatch,
   createPromptParsedAllowFromForAccount,
@@ -27,7 +26,6 @@ const USE_ENV_FLAG = "__googlechatUseEnv";
 const AUTH_METHOD_FLAG = "__googlechatAuthMethod";
 
 type GoogleChatTextInput = NonNullable<ChannelSetupWizard["textInputs"]>[number];
-type GoogleChatTextInputKey = GoogleChatTextInput["inputKey"];
 
 const promptAllowFrom = createPromptParsedAllowFromForAccount({
   defaultAccountId: resolveDefaultGoogleChatAccountId,
@@ -66,7 +64,7 @@ const googlechatDmPolicy = createChannelDmPolicy({
 });
 
 function createServiceAccountTextInput(params: {
-  inputKey: GoogleChatTextInputKey;
+  inputKey: GoogleChatTextInput["inputKey"];
   message: string;
   placeholder: string;
   authMethod: "file" | "inline";

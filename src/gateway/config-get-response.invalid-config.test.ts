@@ -3,12 +3,14 @@ import * as runtimeSnapshot from "../config/runtime-snapshot.js";
 import type { ConfigFileSnapshot } from "../config/types.openclaw.js";
 import { invalidateConfigGetResponseCache, readConfigGetResponse } from "./config-get-response.js";
 
-type DiagnosticSnapshot = Omit<ConfigFileSnapshot, "sourceConfig"> & {
-  sourceConfig?: null | string;
-};
+type DiagnosticSnapshot = Omit<ConfigFileSnapshot, "sourceConfig">;
 
 const readSnapshot = vi.hoisted(() => vi.fn<() => Promise<DiagnosticSnapshot>>());
 vi.mock("../config/config.js", () => ({ readConfigFileSnapshot: readSnapshot }));
+// mock-isolation: Invalid-snapshot tests have no prepared runtime config or plugin registry.
+vi.mock("../config/runtime-schema.js", () => ({
+  loadGatewayConfigRedactionHints: () => undefined,
+}));
 vi.mock("../plugins/runtime.js", () => ({ getActivePluginRegistryVersion: () => 1 }));
 
 beforeEach(() => {
@@ -23,17 +25,12 @@ afterEach(() => {
 });
 
 describe("config.get diagnostic revisions", () => {
-  it.each([
-    { name: "absent source", source: {}, exists: true, valid: false },
-    { name: "null source", source: { sourceConfig: null }, exists: true, valid: false },
-    { name: "non-object source", source: { sourceConfig: "invalid" }, exists: true, valid: false },
-    { name: "absent config", source: {}, exists: false, valid: false },
-  ])("returns $name without entering valid-config hashing", async ({ source, exists, valid }) => {
-    const issues = valid ? [] : [{ path: "<root>", message: "JSON parse failed" }];
+  it.each([true, false])("does not hash invalid config (exists: %s)", async (exists) => {
+    const issues = [{ path: "<root>", message: "JSON parse failed" }];
     readSnapshot.mockResolvedValue({
       path: "/synthetic/openclaw.json",
       exists,
-      valid,
+      valid: false,
       raw: exists ? "{ invalid config" : null,
       parsed: null,
       resolved: {},
@@ -43,21 +40,20 @@ describe("config.get diagnostic revisions", () => {
       issues,
       warnings: [],
       legacyIssues: [],
-      ...source,
     });
     const hash = vi.spyOn(runtimeSnapshot, "hashRuntimeConfigValue");
 
     const response = await readConfigGetResponse({
-      loadUiHints: () => undefined,
       revisionProjector: {
         projectRawHash: (value) => `raw:${value}`,
         projectResolvedHash: (value) => `resolved:${value}`,
+        hashResponseSessionBearer: () => "unused-test-scope",
       },
     });
 
     expect(response).toMatchObject({
       exists,
-      valid,
+      valid: false,
       raw: null,
       configRevisionHash: null,
       appliedConfigHash: "resolved:serving-revision",

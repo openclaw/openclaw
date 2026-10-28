@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { createDeferredCore } from "../shared/deferred.js";
 
 type NativeStopDisposition = "accepted" | "refused" | "uncertain";
 
@@ -38,17 +39,9 @@ export async function prepareHostedStopExecutor(params: {
   let committed = false;
   let disposed = false;
   let ready = false;
-  let resolveReady: (pid: number) => void;
-  let rejectReady: (error: Error) => void;
-  const readiness = new Promise<number>((resolve, reject) => {
-    resolveReady = resolve;
-    rejectReady = reject;
-  });
-  let resolveResult: (result: { disposition: NativeStopDisposition; detail: string }) => void;
-  const result = new Promise<{ disposition: NativeStopDisposition; detail: string }>((resolve) => {
-    resolveResult = resolve;
-  });
-  const closed = result.then(() => {});
+  const readiness = createDeferredCore<number>();
+  const result = createDeferredCore<{ disposition: NativeStopDisposition; detail: string }>();
+  const closed = result.promise.then(() => {});
   let timeout: ReturnType<typeof setTimeout>;
   const dispose = () => {
     if (disposed) {
@@ -81,31 +74,30 @@ export async function prepareHostedStopExecutor(params: {
       return;
     }
     output += data.toString();
-    if (output.length > 128) {
-      rejectReady(new Error("Native stop executor returned invalid readiness"));
+    if (
+      output.length > 128 ||
+      (output.endsWith("\n") &&
+        (!/^[1-9]\d*\n$/.test(output) || Number(output.trim()) !== child.pid))
+    ) {
+      readiness.reject(new Error("Native stop executor returned invalid readiness"));
       cancel();
       return;
     }
     if (output.endsWith("\n")) {
-      if (!/^[1-9]\d*\n$/.test(output) || Number(output.trim()) !== child.pid) {
-        rejectReady(new Error("Native stop executor returned invalid readiness"));
-        cancel();
-        return;
-      }
       ready = true;
       clearTimeout(timeout);
-      resolveReady(Number(output.trim()));
+      readiness.resolve(Number(output.trim()));
     }
   });
   child.once("error", (error) => {
     diagnostic = formatErrorMessage(error);
-    rejectReady(new Error(`Native stop executor unavailable: ${diagnostic}`));
+    readiness.reject(new Error(`Native stop executor unavailable: ${diagnostic}`));
   });
   child.once("close", (code, signal) => {
     clearTimeout(timeout);
     params.signal.removeEventListener("abort", cancel);
-    rejectReady(new Error(`Native stop executor unavailable: ${diagnostic || "closed"}`));
-    resolveResult({
+    readiness.reject(new Error(`Native stop executor unavailable: ${diagnostic || "closed"}`));
+    result.resolve({
       disposition:
         !disposed && committed && code === 0 && !signal
           ? "accepted"
@@ -116,12 +108,12 @@ export async function prepareHostedStopExecutor(params: {
     });
   });
   timeout = setTimeout(() => {
-    rejectReady(new Error("Native stop executor preparation timed out"));
+    readiness.reject(new Error("Native stop executor preparation timed out"));
     cancel();
   }, 5_000);
   try {
     child.stdin.write(script);
-    const pid = await readiness;
+    const pid = await readiness.promise;
     params.signal.throwIfAborted();
     params.assertCurrent();
     await params.verifyPlacement?.(pid);
@@ -144,7 +136,7 @@ export async function prepareHostedStopExecutor(params: {
         committed = true;
         child.stdin.write("stop\n");
         timeout = setTimeout(cancel, 5_000);
-        return result;
+        return result.promise;
       },
     };
   } catch (error) {

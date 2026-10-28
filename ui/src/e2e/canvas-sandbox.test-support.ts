@@ -1,10 +1,12 @@
 import { afterAll, beforeAll } from "vitest";
 import { buildSandboxHostPath } from "../../../src/agents/sandbox-host.js";
-import { createSandboxHostHttpServer } from "../../../src/gateway/mcp-app-sandbox-http.js";
+import { createControlUiSandboxFixtureServer } from "../test-helpers/control-ui-sandbox-fixture-server.ts";
 
 /** Supplies real sandbox metadata for mocked Canvas view responses in one suite. */
-export function useCanvasSandboxFixture() {
-  const server = createSandboxHostHttpServer();
+export function useCanvasSandboxFixture(
+  readResource?: Parameters<typeof createControlUiSandboxFixtureServer>[0],
+) {
+  const server = createControlUiSandboxFixtureServer(readResource);
   let sandboxPort: number;
   beforeAll(async () => {
     await new Promise<void>((resolve, reject) => {

@@ -2,8 +2,12 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import type { SessionParticipant } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
-import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
-import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
+import {
+  CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT,
+  SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+} from "../../../src/gateway/control-ui-contract.js";
+import { reconnectMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { sessionRow } from "./chat-flow-fixtures.test-support.ts";
 import {
   captureUiProof,
   chatSessionListResponse,
@@ -12,6 +16,9 @@ import {
   installMockGateway,
   pauseVirtualClock,
 } from "./chat-flow.test-support.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
+import { sessionPerson } from "./session-ownership-fixtures.test-support.ts";
+import { selectAllSidebarSessions } from "./sidebar-navigation.test-support.ts";
 
 async function captureProof(page: Page, fileName: string): Promise<void> {
   await captureUiProof(suite, page, "session-progress-hovercard", fileName);
@@ -110,24 +117,14 @@ suite.define(() => {
     const sessionKey = "agent:main:hovered-menu";
 
     await suite.withPage(
-      {
-        hasTouch: false,
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1280 },
-      },
+      { hasTouch: false, ...createControlUiE2eContextOptions() },
       async ({ page }) => {
         await installMockGateway(page, {
           featureMethods: ["chat.metadata", "chat.startup", "progressCard.get"],
           methodResponses: {
             "progressCard.get": { card: null },
             "sessions.list": chatSessionListResponse([
-              {
-                key: selectedSessionKey,
-                kind: "direct",
-                label: "Selected session",
-                updatedAt: 2,
-              },
+              sessionRow(selectedSessionKey, "Selected session", 2),
               {
                 key: sessionKey,
                 kind: "direct",
@@ -240,19 +237,9 @@ suite.define(() => {
               ],
             },
             "sessions.list": chatSessionListResponse([
+              sessionRow(selectedSessionKey, "Selected session", now - 5 * 60_000),
               {
-                key: selectedSessionKey,
-                kind: "direct",
-                label: "Selected session",
-                updatedAt: now - 5 * 60_000,
-              },
-              {
-                createdActor: {
-                  type: "human",
-                  id: "profile-ada",
-                  label: "Ada King",
-                  identity: { type: "profile", id: "profile-ada" },
-                },
+                createdActor: sessionPerson("profile-ada", "Ada King"),
                 createdAt: now - 89 * 24 * 60 * 60_000,
                 key: sessionKey,
                 kind: "direct",
@@ -276,6 +263,7 @@ suite.define(() => {
 
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, selectedSessionKey));
         expect(await page.evaluate(() => matchMedia("(hover: hover)").matches)).toBe(true);
+        await selectAllSidebarSessions(page);
 
         const row = page.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`);
         await row.waitFor({ state: "visible" });
@@ -293,7 +281,7 @@ suite.define(() => {
           .poll(() => card.locator(".session-hovercard__plan-step").textContent())
           .toBe("Package");
         expect(await card.locator(".session-hovercard__plan-count").textContent()).toBe("1/3");
-        await expect.poll(() => card.locator(".session-hovercard__pr-row").count()).toBe(1);
+        await expect.poll(() => card.locator(".session-hovercard__pr-row").count()).toBe(3);
         const prRow = card.locator(".session-hovercard__pr-row").first();
         const prTitle = prRow.locator(".session-hovercard__pr-title");
         const fullPrTitle =
@@ -301,13 +289,13 @@ suite.define(() => {
         await expect.poll(() => prTitle.textContent()).toBe(fullPrTitle);
         expect(await prTitle.getAttribute("title")).toBeNull();
         expect(await prRow.getAttribute("aria-label")).toContain(fullPrTitle);
-        expect(await card.locator(".session-hovercard__more").textContent()).toBe("+2 more");
+        expect(await card.locator(".session-hovercard__pr-count").textContent()).toBe("3");
         expect(
           await prTitle.evaluate((node) => ({
-            clipped: node.scrollWidth > node.clientWidth,
-            overflow: getComputedStyle(node).textOverflow,
+            clamp: getComputedStyle(node).webkitLineClamp,
+            whiteSpace: getComputedStyle(node).whiteSpace,
           })),
-        ).toEqual({ clipped: true, overflow: "ellipsis" });
+        ).toEqual({ clamp: "2", whiteSpace: "normal" });
         // The row is an anchor: a dropped text-decoration reset is invisible to jsdom.
         await expect
           .poll(() => prRow.evaluate((node) => getComputedStyle(node).textDecorationLine))
@@ -381,7 +369,9 @@ suite.define(() => {
         expect(
           await pullRequest.locator(".session-hovercard__pr-state-icon").getAttribute("title"),
         ).toBe("Open · CI checks passing");
-        expect(await pullRequest.locator(".session-hovercard__pr-number").count()).toBe(0);
+        expect(await pullRequest.locator(".session-hovercard__pr-number").textContent()).toBe(
+          "openclaw/openclaw#417",
+        );
         expect(await pullRequest.locator(".session-hovercard__pr-author").count()).toBe(0);
         expect(await pullRequest.locator(".session-hovercard__files").count()).toBe(0);
         expect(await pullRequest.locator(".session-hovercard__additions").textContent()).toBe(
@@ -394,7 +384,7 @@ suite.define(() => {
 
         const notepad = card.locator(".session-hovercard__notepad");
         expect(await notepad.locator(".session-hovercard__notepad-title").textContent()).toBe(
-          "Agent Notepad",
+          "Task progress",
         );
         const markdown = notepad.locator(".session-progress-card__markdown");
         expect(await markdown.locator(":scope > :first-child").getAttribute("class")).toContain(
@@ -536,12 +526,7 @@ suite.define(() => {
     const secondSessionKey = "agent:main:timing-second";
 
     await suite.withPage(
-      {
-        hasTouch: false,
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1280 },
-      },
+      { hasTouch: false, ...createControlUiE2eContextOptions() },
       async ({ page }) => {
         // Browser RPC time must not consume the hover-delay assertion windows.
         await page.clock.install();
@@ -677,12 +662,7 @@ suite.define(() => {
     const sessionKey = "agent:main:focusable-progress";
 
     await suite.withPage(
-      {
-        hasTouch: false,
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1280 },
-      },
+      { hasTouch: false, ...createControlUiE2eContextOptions() },
       async ({ page }) => {
         const gateway = await installMockGateway(page, {
           featureMethods: ["chat.metadata", "chat.startup", "progressCard.get"],
@@ -711,12 +691,7 @@ suite.define(() => {
               ],
             },
             "sessions.list": chatSessionListResponse([
-              {
-                key: selectedSessionKey,
-                kind: "direct",
-                label: "Selected session",
-                updatedAt: 2,
-              },
+              sessionRow(selectedSessionKey, "Selected session", 2),
               {
                 key: sessionKey,
                 kind: "direct",
@@ -815,6 +790,84 @@ suite.define(() => {
     );
   });
 
+  it("refreshes a held avatar after Gateway authentication reconnects", async () => {
+    const sessionKey = "agent:main:avatar-auth-reconnect";
+    const channelAvatarUrl = `/__openclaw__/channel-avatar/${encodeURIComponent(sessionKey)}`;
+
+    await suite.withPage(
+      { hasTouch: false, ...createControlUiE2eContextOptions() },
+      async ({ page }) => {
+        let avatarAvailable = false;
+        let rejectedAvatarRequests = 0;
+        await page.route(`**${channelAvatarUrl}`, async (route) => {
+          expect(await route.request().headerValue("authorization")).toBe(
+            "Bearer e2e-device-token",
+          );
+          if (!avatarAvailable) {
+            await route.fulfill({ status: 401 });
+            rejectedAvatarRequests += 1;
+            return;
+          }
+          await route.fulfill({
+            body: `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64"><rect width="64" height="64" rx="32" fill="#b84cff"/><circle cx="24" cy="27" r="5" fill="white"/><circle cx="43" cy="27" r="5" fill="white"/><path d="M19 43c8 6 19 6 27 0" fill="none" stroke="white" stroke-width="4" stroke-linecap="round"/></svg>`,
+            contentType: "image/svg+xml",
+            status: 200,
+          });
+        });
+        const gateway = await installMockGateway(page, {
+          featureMethods: ["chat.metadata", "chat.startup", "progressCard.get"],
+          methodResponses: {
+            "progressCard.get": { card: null },
+            "sessions.list": chatSessionListResponse([
+              {
+                channelAvatarUrl,
+                createdActor: sessionPerson("profile-ada", "Ada King"),
+                key: sessionKey,
+                kind: "direct",
+                label: "Avatar reconnect",
+                updatedAt: 1,
+              },
+            ]),
+          },
+          sessionKey,
+        });
+
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+        const row = page.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`);
+        await row.waitFor({ state: "visible" });
+        await row.hover();
+        const card = page.locator(".session-progress-hovercard");
+        await card.waitFor({ state: "visible" });
+        const cardId = await card.getAttribute("id");
+        const avatar = card.locator("openclaw-channel-avatar.session-hovercard__creator-avatar");
+        const fallback = avatar.locator(".session-hovercard__creator-avatar-fallback");
+        await expect.poll(() => fallback.textContent()).toBe("AK");
+        expect(await fallback.isVisible()).toBe(true);
+        expect(await avatar.locator("img.channel-avatar").count()).toBe(0);
+
+        await expect.poll(() => rejectedAvatarRequests).toBeGreaterThan(0);
+        avatarAvailable = true;
+        await reconnectMockGateway(page, gateway);
+
+        await expect.poll(() => avatar.locator("img.channel-avatar").count()).toBe(1);
+        await expect
+          .poll(() =>
+            avatar.locator("img.channel-avatar").evaluate((image: HTMLImageElement) => ({
+              complete: image.complete,
+              naturalWidth: image.naturalWidth,
+            })),
+          )
+          .toEqual({ complete: true, naturalWidth: 64 });
+        expect(await fallback.count()).toBe(1);
+        expect(await fallback.isVisible()).toBe(false);
+        expect(await card.getAttribute("id")).toBe(cardId);
+        expect(await card.evaluate((element) => element.outerHTML)).not.toContain(
+          "e2e-device-token",
+        );
+      },
+    );
+  });
+
   it("shows the latest turn and authenticates channel avatars", async () => {
     const now = Date.now();
     const sessionKey = "agent:main:no-progress-card";
@@ -825,12 +878,7 @@ suite.define(() => {
       "The final release notes are ready for review, including <strong>plain text</strong>, rollout details, verification notes, compatibility guidance, and a concise operator checklist.";
 
     await suite.withPage(
-      {
-        hasTouch: false,
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1280 },
-      },
+      { hasTouch: false, ...createControlUiE2eContextOptions() },
       async ({ page }) => {
         await page.route(`**${channelAvatarUrl}`, async (route) => {
           expect(await route.request().headerValue("authorization")).toBe(
@@ -862,12 +910,7 @@ suite.define(() => {
             "sessions.list": chatSessionListResponse([
               {
                 channelAvatarUrl,
-                createdActor: {
-                  type: "human",
-                  id: "profile-ada",
-                  label: "Ada King",
-                  identity: { type: "profile", id: "profile-ada" },
-                },
+                createdActor: sessionPerson("profile-ada", "Ada King"),
                 key: sessionKey,
                 kind: "direct",
                 label: "No progress card",
@@ -877,12 +920,7 @@ suite.define(() => {
               },
               {
                 channelAvatarUrl: successfulChannelAvatarUrl,
-                createdActor: {
-                  type: "human",
-                  id: "profile-ada",
-                  label: "Ada King",
-                  identity: { type: "profile", id: "profile-ada" },
-                },
+                createdActor: sessionPerson("profile-ada", "Ada King"),
                 key: avatarSessionKey,
                 kind: "direct",
                 label: "Channel avatar",

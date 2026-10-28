@@ -26,14 +26,6 @@ struct OnboardingActivationCanvas<Content: View>: View {
     }
 }
 
-private struct OnboardingHeroGlyph: View {
-    var mood: OpenClawMascotMood = .idle
-
-    var body: some View {
-        OpenClawActivationGlyph(size: 78, mood: self.mood, interactive: true)
-    }
-}
-
 struct OnboardingHeroHeader: View {
     let title: LocalizedStringKey
     let subtitle: LocalizedStringKey?
@@ -41,7 +33,7 @@ struct OnboardingHeroHeader: View {
 
     var body: some View {
         VStack(spacing: 18) {
-            OnboardingHeroGlyph(mood: self.mood)
+            OpenClawActivationGlyph(size: 78, mood: self.mood, interactive: true)
 
             VStack(spacing: 8) {
                 Text(self.title)
@@ -74,8 +66,6 @@ private struct OnboardingWelcomePrompt: View {
     }
 }
 
-private typealias OnboardingPrimaryButtonStyle = OpenClawPrimaryActionButtonStyle
-
 private enum OnboardingIntroPanelStyle {
     static let iconSize: CGFloat = 34
     static let contentSpacing: CGFloat = 12
@@ -92,7 +82,7 @@ struct OnboardingIntroPanel<Content: View>: View {
 
     var body: some View {
         self.content
-            .padding(Self.panelPadding)
+            .padding(OnboardingIntroPanelStyle.panelPadding)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background {
                 RoundedRectangle(cornerRadius: OnboardingIntroPanelStyle.panelCornerRadius, style: .continuous)
@@ -107,10 +97,6 @@ struct OnboardingIntroPanel<Content: View>: View {
                 RoundedRectangle(cornerRadius: OnboardingIntroPanelStyle.panelCornerRadius, style: .continuous)
                     .stroke(OnboardingIntroPanelStyle.stroke, lineWidth: 0.5)
             }
-    }
-
-    private static var panelPadding: CGFloat {
-        OnboardingIntroPanelStyle.panelPadding
     }
 }
 
@@ -242,11 +228,15 @@ struct OnboardingIntroStep: View {
     let onContinue: () -> Void
 
     var body: some View {
+        let isPad = UIDevice.current.userInterfaceIdiom == .pad
+
         OnboardingActivationCanvas {
             VStack(alignment: .leading, spacing: 0) {
                 OnboardingHeroHeader(
                     title: "OpenClaw",
-                    subtitle: "Your agent, in your pocket. Pair this iPhone with your gateway to get started.")
+                    subtitle: isPad
+                        ? "Your agent, in your pocket. Pair this iPad with your gateway to get started."
+                        : "Your agent, in your pocket. Pair this iPhone with your gateway to get started.")
                     .padding(.top, 18)
 
                 OnboardingIntroPanel {
@@ -256,7 +246,9 @@ struct OnboardingIntroStep: View {
                             title: "Your agent runs on your own computer")
                         OnboardingSafetyRow(
                             symbol: "qrcode.viewfinder",
-                            title: "Pair this iPhone by scanning a setup code")
+                            title: isPad
+                                ? "Pair this iPad by scanning a setup code"
+                                : "Pair this iPhone by scanning a setup code")
                         OnboardingSafetyRow(
                             symbol: "message.fill",
                             title: "Chat, talk, and approve actions from anywhere")
@@ -276,7 +268,7 @@ struct OnboardingIntroStep: View {
                         Text("Continue")
                             .font(OpenClawType.subheadSemiBold)
                     }
-                    .buttonStyle(OnboardingPrimaryButtonStyle())
+                    .buttonStyle(OpenClawPrimaryActionButtonStyle())
                 }
             }
         }
@@ -320,7 +312,7 @@ struct OnboardingWelcomeStep: View {
                                     .font(OpenClawType.subheadSemiBold)
                             }
                         }
-                        .buttonStyle(OnboardingPrimaryButtonStyle())
+                        .buttonStyle(OpenClawPrimaryActionButtonStyle())
                         .disabled(self.isConnecting)
                     }
 
@@ -331,7 +323,7 @@ struct OnboardingWelcomeStep: View {
                             Text("Connect Manually")
                                 .font(OpenClawType.subheadSemiBold)
                         }
-                        .buttonStyle(OpenClawSecondaryActionButtonStyle(height: 54, shadowOpacity: 0.018))
+                        .buttonStyle(OpenClawSecondaryActionButtonStyle(height: 54))
                         .disabled(self.isConnecting)
                     }
                 }
@@ -410,7 +402,7 @@ struct OnboardingSuccessStep: View {
                     Label("Go to Chat", systemImage: "bubble.left.and.bubble.right.fill")
                         .font(OpenClawType.subheadSemiBold)
                 }
-                .buttonStyle(OnboardingPrimaryButtonStyle())
+                .buttonStyle(OpenClawPrimaryActionButtonStyle())
             }
         }
     }
@@ -422,7 +414,7 @@ struct OnboardingModeIcon: View {
 
     var body: some View {
         Image(systemName: self.symbol)
-            .font(OpenClawType.subheadSemiBold)
+            .font(.system(size: 15, weight: .semibold))
             .foregroundStyle(self.selected ? OpenClawBrand.activationPrimaryActionText : .secondary)
             .frame(width: 34, height: 34)
             .background {

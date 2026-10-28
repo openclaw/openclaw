@@ -1,19 +1,66 @@
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  asOptionalObjectRecord,
+  asOptionalRecord,
+} from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
-import { isMainSessionRestartRecoveryInputProvenance } from "../../sessions/input-provenance.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
+import { isSubagentSessionKey } from "../../routing/session-key.js";
+import {
+  isMainSessionRestartRecoveryInputProvenance,
+  type InputProvenance,
+} from "../../sessions/input-provenance.js";
+import { readTerminalSourceReplyDeliveryMirror } from "../../shared/chat-message-content.js";
+import { readCodeModeCheckpointFact } from "../code-mode-checkpoint.js";
 import { CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME } from "../code-mode-control-tools.js";
 import {
   getTranscriptMessageRole as getMessageRole,
   isIntermediateAssistantTranscriptMessage,
   isMeaningfulTranscriptMessage,
-  readTerminalSourceReplyDeliveryMirror,
 } from "../embedded-agent-runner/message-visibility.js";
 import {
   AGENT_RUN_RESTART_ABORT_ERROR,
   AGENT_RUN_RESTART_ABORT_ERROR_CODE,
 } from "../run-termination.js";
 import { isAgentToolReplaySafe } from "../tool-replay-safety.js";
+
+export function requiresDelegatedRecoverySource(
+  entry: SessionEntry,
+  source: InputProvenance["kind"] | "completion" | "cron" | "harness_completion" | undefined,
+  sessionKey: string,
+): boolean {
+  // Cron owns retry admission through a fresh occurrence and current job policy.
+  // An earlier operator turn cannot authorize a generic recovery dispatch.
+  if (source === "cron") {
+    return true;
+  }
+  // Child lineage needs a retained requester or operator source; ingress alone
+  // cannot restore the parent that authorized the interrupted turn.
+  if (
+    !entry.restartRecoveryOperatorSource &&
+    (entry.spawnedBy ||
+      entry.subagentRole ||
+      (entry.spawnDepth ?? 0) > 0 ||
+      isSubagentSessionKey(sessionKey))
+  ) {
+    return true;
+  }
+  // Steering is context, not a new admission. A non-browser operator can have
+  // internal ingress too; its durable source goes through the Gateway's exact
+  // claim and current-policy restoration before any recovery turn executes.
+  if (
+    entry.restartRecoveryDeliverySourceRunId &&
+    (entry.restartRecoveryOperatorSource ||
+      entry.restartRecoverySourceIngress === "control-ui" ||
+      entry.restartRecoverySourceIngress === "channel")
+  ) {
+    return false;
+  }
+  return (
+    source === "inter_session" ||
+    (entry.restartRecoverySourceIngress === "internal" &&
+      (source === undefined || source === "internal_system" || source === "harness_completion"))
+  );
+}
 
 function readDeliveredTerminalSourceReplyToolCallId(
   messages: readonly unknown[],
@@ -37,15 +84,11 @@ function readDeliveredTerminalSourceReplyToolCallId(
 function readCodeModeWaitCall(
   message: unknown,
 ): { runId: string; toolCallId?: string } | undefined {
-  if (
-    !message ||
-    typeof message !== "object" ||
-    getMessageRole(message) !== "assistant" ||
-    (message as { stopReason?: unknown }).stopReason !== "toolUse"
-  ) {
+  const record = asOptionalObjectRecord(message);
+  if (getMessageRole(message) !== "assistant" || record?.stopReason !== "toolUse") {
     return undefined;
   }
-  const content = (message as { content?: unknown }).content;
+  const content = record.content;
   if (!Array.isArray(content)) {
     return undefined;
   }
@@ -70,14 +113,11 @@ function readCodeModeWaitCall(
     return undefined;
   }
   const block = toolCalls[0] as Record<string, unknown>;
-  if (normalizeOptionalString((block as { name?: unknown }).name) !== CODE_MODE_WAIT_TOOL_NAME) {
+  if (normalizeOptionalString(block.name) !== CODE_MODE_WAIT_TOOL_NAME) {
     return undefined;
   }
-  const args = (block as { arguments?: unknown }).arguments ?? (block as { input?: unknown }).input;
-  const runId =
-    args && typeof args === "object"
-      ? normalizeOptionalString((args as { runId?: unknown }).runId)
-      : undefined;
+  const args = asOptionalObjectRecord(block.arguments ?? block.input);
+  const runId = normalizeOptionalString(args?.runId);
   if (!runId) {
     return undefined;
   }
@@ -90,15 +130,18 @@ function isResumableTailMessage(message: unknown): boolean {
   return role === "user" || role === "tool" || role === "toolResult";
 }
 
+function readPendingAssistantContent(message: unknown): unknown[] | undefined {
+  const record = asOptionalObjectRecord(message);
+  return getMessageRole(message) === "assistant" &&
+    normalizeOptionalString(record?.stopReason) === "toolUse" &&
+    Array.isArray(record?.content)
+    ? record.content
+    : undefined;
+}
+
 function isPendingAssistantToolCall(message: unknown): boolean {
-  if (!message || typeof message !== "object" || getMessageRole(message) !== "assistant") {
-    return false;
-  }
-  if (normalizeOptionalString((message as { stopReason?: unknown }).stopReason) !== "toolUse") {
-    return false;
-  }
-  const content = (message as { content?: unknown }).content;
-  if (!Array.isArray(content)) {
+  const content = readPendingAssistantContent(message);
+  if (!content) {
     return false;
   }
   let hasToolCall = false;
@@ -160,39 +203,25 @@ function classifyDanglingToolCalls(content: unknown): DanglingToolCallClassifica
     : { kind: "none" };
 }
 
-// Unlike isPendingAssistantToolCall, visible text beside the call is fine —
-// the tail is not replayed, only continued past. Code Mode control calls are
-// excluded so their replay-safe checkpoint gating stays authoritative.
-function readResumablePendingToolCallTail(
-  message: unknown,
-): { forceRestartSafeTools: boolean } | undefined {
-  if (!message || typeof message !== "object" || getMessageRole(message) !== "assistant") {
-    return undefined;
-  }
-  if (normalizeOptionalString((message as { stopReason?: unknown }).stopReason) !== "toolUse") {
-    return undefined;
-  }
-  const classified = classifyDanglingToolCalls((message as { content?: unknown }).content);
-  return classified?.kind === "resumable"
-    ? { forceRestartSafeTools: classified.forceRestartSafeTools }
-    : undefined;
-}
-
 function readCodeModeCheckpoint(
   message: unknown,
 ): { replaySafe: boolean; runId?: string } | undefined {
-  if (!message || typeof message !== "object") {
-    return undefined;
-  }
+  const record = asOptionalObjectRecord(message);
   const role = getMessageRole(message);
-  if (role !== "tool" && role !== "toolResult") {
+  if (!record || (role !== "tool" && role !== "toolResult")) {
     return undefined;
   }
-  const toolName = normalizeOptionalString((message as { toolName?: unknown }).toolName);
+  const toolName = normalizeOptionalString(record.toolName);
   if (toolName !== CODE_MODE_EXEC_TOOL_NAME && toolName !== CODE_MODE_WAIT_TOOL_NAME) {
     return undefined;
   }
-  const content = (message as { content?: unknown }).content;
+  const metadata = asOptionalObjectRecord(Reflect.get(record, "__openclaw"));
+  if (metadata && Object.hasOwn(metadata, "codeModeCheckpoint")) {
+    return readCodeModeCheckpointFact(metadata.codeModeCheckpoint);
+  }
+  // v2026.10.4 stored only display text. Preserve its upgrade-window recovery,
+  // never a fallback for current results (including explicit unowned null facts).
+  const content = record.content;
   if (!Array.isArray(content)) {
     return undefined;
   }
@@ -253,10 +282,11 @@ const LEGACY_RESTART_ABORT_ERROR_MESSAGES = new Set([
 const CODE_MODE_RESTART_ABORT_ERROR = "code mode execution aborted";
 
 function isRestartAbortAssistantMessage(message: unknown): boolean {
-  if (!message || typeof message !== "object" || getMessageRole(message) !== "assistant") {
+  const record = asOptionalObjectRecord(message);
+  if (!record || getMessageRole(message) !== "assistant") {
     return false;
   }
-  const stopReason = normalizeOptionalString((message as { stopReason?: unknown }).stopReason);
+  const stopReason = normalizeOptionalString(record.stopReason);
   // Every row that reaches restart recovery was mid-run when the process went
   // down, so an "aborted" tail is that interruption whatever detail the
   // transport persisted with it ("Worker inference aborted.", a provider cancel
@@ -271,13 +301,11 @@ function isRestartAbortAssistantMessage(message: unknown): boolean {
   // gateway's own abort code through (transports copy the reason's `code` into
   // `errorCode`). A provider failure or a first-stream-event timeout carries a
   // different code and stays unresumable.
-  const errorCode = normalizeOptionalString((message as { errorCode?: unknown }).errorCode);
+  const errorCode = normalizeOptionalString(record.errorCode);
   if (errorCode !== undefined) {
     return errorCode === AGENT_RUN_RESTART_ABORT_ERROR_CODE;
   }
-  const errorMessage = normalizeOptionalString(
-    (message as { errorMessage?: unknown }).errorMessage,
-  );
+  const errorMessage = normalizeOptionalString(record.errorMessage);
   return errorMessage !== undefined && LEGACY_RESTART_ABORT_ERROR_MESSAGES.has(errorMessage);
 }
 
@@ -290,22 +318,18 @@ export function isRestartAbortTailArtifact(message: unknown): boolean {
 }
 
 function isRestartAbortedWaitFailure(message: unknown): boolean {
-  if (!message || typeof message !== "object" || getMessageRole(message) !== "toolResult") {
+  const record = asOptionalObjectRecord(message);
+  if (!record || getMessageRole(message) !== "toolResult") {
     return false;
   }
-  const record = message as Record<string, unknown>;
   if (
     normalizeOptionalString(record.toolName) !== CODE_MODE_WAIT_TOOL_NAME ||
     record.isError !== true
   ) {
     return false;
   }
-  const details = record.details;
-  if (
-    !details ||
-    typeof details !== "object" ||
-    (details as { status?: unknown }).status !== "failed"
-  ) {
+  const details = asOptionalObjectRecord(record.details);
+  if (details?.status !== "failed") {
     return false;
   }
   const content = record.content;
@@ -318,10 +342,8 @@ function isRestartAbortedWaitFailure(message: unknown): boolean {
         .map((block) => normalizeOptionalString((block as { text?: unknown }).text) ?? "")
         .join("\n")
     : "";
-  const errorText =
-    normalizeOptionalString((details as { error?: unknown }).error) ??
-    normalizeOptionalString(contentText);
-  const code = normalizeOptionalString((details as { code?: unknown }).code);
+  const errorText = normalizeOptionalString(details.error) ?? normalizeOptionalString(contentText);
+  const code = normalizeOptionalString(details.code);
   if (code === "aborted") {
     // Current Code Mode wait aborts use the runtime's explicit abort code and
     // message. Recovery already owns the restart boundary, so this exact pair
@@ -344,16 +366,12 @@ function isRestartAbortedWaitResultArtifact(message: unknown, waitMessage: unkno
 }
 
 function requiresRestartSafeToolResult(message: unknown): boolean {
-  if (!message || typeof message !== "object" || getMessageRole(message) !== "toolResult") {
+  const record = asOptionalObjectRecord(message);
+  if (!record || getMessageRole(message) !== "toolResult") {
     return false;
   }
-  const record = message as Record<string, unknown>;
-  const details = record.details;
-  if (!details || typeof details !== "object") {
-    return false;
-  }
-  const status = details as { reason?: unknown; status?: unknown };
-  return status.reason === "missing_tool_result" || status.status === "approval-pending";
+  const details = asOptionalObjectRecord(record.details);
+  return details?.reason === "missing_tool_result" || details?.status === "approval-pending";
 }
 
 type MainSessionResumePolicy =
@@ -400,13 +418,11 @@ export function resolveMainSessionResumePolicy(
   if (beforeAgentReplyState === "handled-silent") {
     return { action: "complete", reason: "handled-silent" };
   }
-  if (beforeAgentReplyState === "pending") {
-    return { action: "resume", forceRestartSafeTools: true };
-  }
-  if (beforeAgentReplyState === "handled-reply") {
-    return { action: "resume", forceRestartSafeTools: true };
-  }
-  if (beforeAgentReplyState === "handled-unrecoverable") {
+  if (
+    beforeAgentReplyState === "pending" ||
+    beforeAgentReplyState === "handled-reply" ||
+    beforeAgentReplyState === "handled-unrecoverable"
+  ) {
     return { action: "resume", forceRestartSafeTools: true };
   }
   // A fresh continuation must be able to inspect an interrupted side effect.
@@ -445,22 +461,16 @@ export function resolveMainSessionResumePolicy(
     meaningfulMessages.shift();
   }
   const lastMeaningful = meaningfulMessages[0];
-  if (forceRestartSafeTools && isPendingAssistantToolCall(lastMeaningful)) {
-    return { action: "resume", forceRestartSafeTools: true };
-  }
-  if (isRestartAbortedWaitFailure(lastMeaningful)) {
+  if (
+    (forceRestartSafeTools && isPendingAssistantToolCall(lastMeaningful)) ||
+    isRestartAbortedWaitFailure(lastMeaningful)
+  ) {
     return { action: "resume", forceRestartSafeTools: true };
   }
   const waitCall = readCodeModeWaitCall(lastMeaningful);
-  if (waitCall) {
-    const checkpoint = readCodeModeCheckpoint(meaningfulMessages[1]);
-    return checkpoint?.replaySafe === true && checkpoint.runId === waitCall.runId
-      ? { action: "resume", forceRestartSafeTools: true, forceCodeModeTools: true }
-      : { action: "resume", forceRestartSafeTools: true };
-  }
-  const tailCheckpoint = readCodeModeCheckpoint(lastMeaningful);
-  if (tailCheckpoint) {
-    return tailCheckpoint.replaySafe
+  const checkpoint = readCodeModeCheckpoint(meaningfulMessages[waitCall ? 1 : 0]);
+  if (waitCall || checkpoint) {
+    return checkpoint?.replaySafe === true && (!waitCall || checkpoint.runId === waitCall.runId)
       ? { action: "resume", forceRestartSafeTools: true, forceCodeModeTools: true }
       : { action: "resume", forceRestartSafeTools: true };
   }
@@ -468,8 +478,10 @@ export function resolveMainSessionResumePolicy(
   // failure notice used to demand: the dangling call is dropped from the next
   // provider payload and the continuation prompt lets the model re-decide.
   // Code Mode control calls keep the stricter checkpoint gating above.
-  const pendingToolCallTail = readResumablePendingToolCallTail(lastMeaningful);
-  if (pendingToolCallTail) {
+  const pendingToolCallTail = classifyDanglingToolCalls(
+    readPendingAssistantContent(lastMeaningful),
+  );
+  if (pendingToolCallTail?.kind === "resumable") {
     return { action: "resume", forceRestartSafeTools: pendingToolCallTail.forceRestartSafeTools };
   }
   const danglingControlCalls =

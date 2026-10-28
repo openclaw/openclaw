@@ -1,10 +1,53 @@
 import type { PluginRegistry } from "../plugins/registry-types.js";
+import { normalizeAgentId } from "../routing/session-key.js";
+import { normalizeAgentDirRegistryPath } from "./agent-dir-registry.js";
 import { retirePreparedModelRuntimeGeneration } from "./prepared-model-runtime.lifecycle.js";
 import {
   releasePreparedPluginPublication,
   retainPreparedPluginGeneration,
 } from "./prepared-model-runtime.plugin-lifetime.js";
 import type { PreparedModelRuntimeOwner } from "./prepared-model-runtime.types.js";
+import type { PreparedReplyDispatchPublicationOwner } from "./prepared-reply-dispatch-runtime.js";
+
+export type AgentRuntimeRetirement = { agentId: string; agentDirs: readonly string[] };
+
+export async function retirePreparedModelRuntimeAgentOwners(
+  target: AgentRuntimeRetirement,
+  context: {
+    owners: Map<string, PreparedModelRuntimeOwner>;
+    agentBuildCompletions: ReadonlyMap<string, Promise<void>>;
+    replyDispatchPublication: PreparedReplyDispatchPublicationOwner;
+  },
+): Promise<void> {
+  const targetId = normalizeAgentId(target.agentId);
+  const targetDirs = new Set(
+    target.agentDirs.map((agentDir) => normalizeAgentDirRegistryPath(agentDir)),
+  );
+  const retiredAgentDirs = new Set<string>();
+  const configuredAgentIds = new Set<string>();
+  for (const [key, owner] of context.owners) {
+    if (
+      !owner.input.agentId ||
+      normalizeAgentId(owner.input.agentId) !== targetId ||
+      !targetDirs.has(normalizeAgentDirRegistryPath(owner.input.agentDir, owner.input.env))
+    ) {
+      continue;
+    }
+    context.owners.delete(key);
+    owner.generation += 1;
+    retirePreparedModelRuntimeGeneration(owner);
+    releasePreparedPluginPublication(owner);
+    retiredAgentDirs.add(owner.input.agentDir);
+    if (owner.provenance === "configured") {
+      configuredAgentIds.add(targetId);
+    }
+  }
+  context.replyDispatchPublication.remove(configuredAgentIds);
+  const pendingBuilds = [...retiredAgentDirs]
+    .map((agentDir) => context.agentBuildCompletions.get(agentDir))
+    .filter((completion) => completion !== undefined);
+  await Promise.all(pendingBuilds);
+}
 
 export function retirePreparedModelRuntimeOwnerIfUnused(
   owners: Map<string, PreparedModelRuntimeOwner>,
@@ -52,12 +95,10 @@ export class PreparedModelRuntimeOwnerRetention {
     }
     this.#retained.delete(key);
     this.#retained.set(key, owner);
-    while (this.#retained.size > this.maxSize) {
-      const oldest = this.#retained.entries().next().value;
-      if (!oldest) {
-        return;
+    for (const [oldestKey, oldestOwner] of this.#retained) {
+      if (this.#retained.size <= this.maxSize) {
+        break;
       }
-      const [oldestKey, oldestOwner] = oldest;
       this.#retained.delete(oldestKey);
       retirePreparedModelRuntimeOwnerIfUnused(owners, oldestKey, oldestOwner);
     }

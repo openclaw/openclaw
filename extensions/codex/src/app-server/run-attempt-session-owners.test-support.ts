@@ -2,7 +2,7 @@ import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-
 import {
   deleteSessionEntry,
   resolveStorePath,
-  upsertSessionEntry,
+  patchSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -14,7 +14,11 @@ import {
 const seededSessionOwnersForTest: Array<Parameters<typeof deleteSessionEntry>[0]> = [];
 
 /** Models the core owner required for a reusable stable-key Codex binding. */
-export async function seedRunSessionOwnerForTest(sessionId: string, sessionKey: string) {
+export async function seedRunSessionOwnerForTest(
+  sessionId: string,
+  sessionKey: string,
+  options: { lifecycleRevision?: string } = {},
+) {
   const scope = {
     agentId: "main",
     sessionKey,
@@ -22,7 +26,15 @@ export async function seedRunSessionOwnerForTest(sessionId: string, sessionKey: 
     env: { ...process.env },
   };
   await withSessionHistoryBudgetSweepsForTest(async () => {
-    await upsertSessionEntry({ ...scope, entry: { sessionId, updatedAt: Date.now() } });
+    const entry = { sessionId, updatedAt: Date.now(), ...options };
+    // Seeding ownership must not start retention work in a later test's fake-clock window.
+    await patchSessionEntry({
+      ...scope,
+      fallbackEntry: entry,
+      replaceEntry: true,
+      skipMaintenance: true,
+      update: () => entry,
+    });
     seededSessionOwnersForTest.push({ ...scope, expectedSessionId: sessionId });
   });
 }

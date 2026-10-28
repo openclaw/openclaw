@@ -3,7 +3,7 @@ import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coer
 import { CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME } from "../code-mode-control-tools.js";
 import type { ToolErrorSummary } from "../tool-error-summary.js";
 import { normalizeToolPolicyName } from "../tool-policy.js";
-import type { EmbeddedRunTerminalToolFailure } from "./types.js";
+import type { EmbeddedRunTerminalToolFailure } from "./result.types.js";
 
 // Only persist the catalog-miss form emitted by the Code Mode bridge. Tool
 // error text otherwise can contain command output, private paths, or values
@@ -30,11 +30,7 @@ export function isEmbeddedRunTerminalToolFailure(
   );
 }
 
-/**
- * Preserves one strictly allowlisted Code Mode catalog-miss fact for cron
- * history. All other tool errors stay on the existing generic presentation
- * path.
- */
+/** Only the allowlisted catalog miss can enter cron history; other errors stay generic. */
 export function resolveEmbeddedRunTerminalToolFailure(params: {
   trigger?: string | undefined;
   codeModeEngaged?: boolean | undefined;
@@ -51,10 +47,8 @@ export function resolveEmbeddedRunTerminalToolFailure(params: {
   ) {
     return undefined;
   }
-  const failureFirstLine =
-    typeof failure.error === "string" ? failure.error.split(/\r?\n/, 1)[0] : undefined;
-  const match = failureFirstLine ? SAFE_MCP_CATALOG_MISS.exec(failureFirstLine) : null;
-  if (!match) {
+  const failureFirstLine = failure.error?.split(/\r?\n/, 1)[0];
+  if (!failureFirstLine || !SAFE_MCP_CATALOG_MISS.test(failureFirstLine)) {
     return undefined;
   }
   return {

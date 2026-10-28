@@ -1,6 +1,7 @@
-import http from "node:http";
+import type { RequestListener } from "node:http";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { withServer } from "openclaw/plugin-sdk/test-env";
 import { expect, it, vi } from "vitest";
 import { MatrixClient } from "../sdk.js";
 import { withResolvedMatrixSendClient } from "../send/client.js";
@@ -10,8 +11,8 @@ const dns = vi.hoisted(() => ({
   beforeResolve: undefined as (() => Promise<void>) | undefined,
 }));
 
-vi.mock("./transport-runtime-api.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./transport-runtime-api.js")>();
+vi.mock("openclaw/plugin-sdk/ssrf-dispatcher", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-dispatcher")>();
   return {
     ...actual,
     resolvePinnedHostnameWithPolicy: async (
@@ -59,104 +60,90 @@ it("keeps a shared transaction identity lookup alive when its first sender cance
   const timelineRequests: string[] = [];
   const unexpectedRequests: string[] = [];
   let whoamiRequests = 0;
-  const server = http.createServer((request, response) => {
+  const handler: RequestListener = (request, response) => {
     const path = decodeURIComponent(new URL(request.url ?? "/", "http://localhost").pathname);
-    response.setHeader("content-type", "application/json");
+    const respond = (body: object, statusCode = 200) => {
+      response.writeHead(statusCode, { "content-type": "application/json" });
+      response.end(JSON.stringify(body));
+    };
     request.resume();
     if (request.method === "GET" && path === "/_matrix/client/v3/account/whoami") {
       whoamiRequests += 1;
-      response.end(JSON.stringify({ user_id: "@bot:example.org", device_id: "fixture" }));
+      respond({ user_id: "@bot:example.org", device_id: "fixture" });
     } else if (request.method === "GET" && path.includes("/state/m.room.encryption")) {
-      response.statusCode = 404;
-      response.end(JSON.stringify({ errcode: "M_NOT_FOUND", error: "unencrypted room" }));
+      respond({ errcode: "M_NOT_FOUND" }, 404);
     } else if (request.method === "PUT" && path.includes("/send/m.room.message/")) {
       timelineRequests.push(path);
-      response.end(JSON.stringify({ event_id: "$current-accepted" }));
+      respond({ event_id: "$current-accepted" });
     } else {
       unexpectedRequests.push(`${request.method} ${path}`);
-      response.statusCode = 400;
-      response.end(
-        JSON.stringify({ errcode: "M_UNRECOGNIZED", error: "unexpected fixture request" }),
-      );
+      respond({ errcode: "M_UNRECOGNIZED" }, 400);
     }
-  });
-  let client: MatrixClient | undefined;
-  let first: Promise<Outcome> | undefined;
-  let second: Promise<Outcome> | undefined;
-  try {
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("missing loopback address");
-    }
-    const resolvedClient = new MatrixClient(`http://127.0.0.1:${address.port}`, "fixture-token", {
+  };
+  await withServer(handler, async (baseUrl) => {
+    const client = new MatrixClient(baseUrl, "fixture-token", {
       userId: "@bot:example.org",
       deviceId: "fixture",
       encryption: false,
       autoBootstrapCrypto: false,
       ssrfPolicy: { allowPrivateNetwork: true },
     });
-    client = resolvedClient;
-    const send = (
-      signal: AbortSignal,
-      roomId: string,
-      onScopeRequested?: () => void,
-    ): Promise<ScopeSendResult> =>
-      withResolvedMatrixSendClient({ client: resolvedClient, cfg: {}, signal }, async (sender) => {
-        const identity = sender.getTransactionScopeId();
-        onScopeRequested?.();
-        const scope = await identity;
-        const eventId = await sender.sendMessage(roomId, {
-          msgtype: "m.text",
-          body: "identity caller",
-        });
-        return { scope, eventId };
-      });
-
-    // Hold the transport's real await resolvePinnedHostnameWithPolicy before the first whoami fetch.
-    dns.calls = 0;
-    dns.beforeResolve = async () => {
-      dnsEntered.resolve();
-      await resumeDns.promise;
-    };
-    first = settle(send(firstCaller.signal, abandonedRoom));
-    await waitForBoundary(dnsEntered.promise, first, "identity DNS preparation");
-    second = settle(send(secondCaller.signal, currentRoom, () => secondJoined.resolve()));
-    await waitForBoundary(secondJoined.promise, second, "the second identity waiter");
-    expect(dns.calls).toBe(1);
-    expect(whoamiRequests).toBe(0);
-
-    firstCaller.abort(cancellation);
-    resumeDns.resolve();
-    const [firstResult, secondResult] = await Promise.all([first, second]);
-    expect(firstResult.error).toMatchObject({
-      message: expect.stringContaining(cancellation.message),
-    });
-    expect(secondResult.error).toBeUndefined();
-    expect(secondResult.value).toMatchObject({ eventId: "$current-accepted" });
-    expect(timelineRequests).toEqual([
-      expect.stringContaining(`/rooms/${currentRoom}/send/m.room.message/`),
-    ]);
-    expect(whoamiRequests).toBe(1);
-    expect(await resolvedClient.getTransactionScopeId()).toBe(secondResult.value?.scope);
-    expect(whoamiRequests).toBe(1);
-    expect(unexpectedRequests).toEqual([]);
-  } finally {
-    resumeDns.resolve();
-    dns.beforeResolve = undefined;
+    let first: Promise<Outcome> | undefined;
+    let second: Promise<Outcome> | undefined;
     try {
-      await Promise.all([first, second]);
-    } finally {
-      try {
-        await client?.stopWithoutPersist();
-      } finally {
-        await new Promise<void>((resolve, reject) => {
-          server.close((error) => (error ? reject(error) : resolve()));
-          server.closeAllConnections();
+      const send = (
+        signal: AbortSignal,
+        roomId: string,
+        onScopeRequested?: () => void,
+      ): Promise<ScopeSendResult> =>
+        withResolvedMatrixSendClient({ client, cfg: {}, signal }, async (sender) => {
+          const identity = sender.getTransactionScopeId();
+          onScopeRequested?.();
+          const scope = await identity;
+          const eventId = await sender.sendMessage(roomId, {
+            msgtype: "m.text",
+            body: "identity caller",
+          });
+          return { scope, eventId };
         });
+
+      // Hold the transport's real await resolvePinnedHostnameWithPolicy before the first whoami fetch.
+      dns.calls = 0;
+      dns.beforeResolve = async () => {
+        dnsEntered.resolve();
+        await resumeDns.promise;
+      };
+      first = settle(send(firstCaller.signal, abandonedRoom));
+      await waitForBoundary(dnsEntered.promise, first, "identity DNS preparation");
+      second = settle(send(secondCaller.signal, currentRoom, () => secondJoined.resolve()));
+      await waitForBoundary(secondJoined.promise, second, "the second identity waiter");
+      expect({ dns: dns.calls, whoami: whoamiRequests }).toEqual({ dns: 1, whoami: 0 });
+
+      firstCaller.abort(cancellation);
+      resumeDns.resolve();
+      const [firstResult, secondResult] = await Promise.all([first, second]);
+      expect(firstResult.error).toMatchObject({
+        message: expect.stringContaining(cancellation.message),
+      });
+      expect(secondResult).toMatchObject({
+        error: undefined,
+        value: { eventId: "$current-accepted" },
+      });
+      expect(timelineRequests).toEqual([
+        expect.stringContaining(`/rooms/${currentRoom}/send/m.room.message/`),
+      ]);
+      expect(whoamiRequests).toBe(1);
+      expect(await client.getTransactionScopeId()).toBe(secondResult.value?.scope);
+      expect(whoamiRequests).toBe(1);
+      expect(unexpectedRequests).toEqual([]);
+    } finally {
+      resumeDns.resolve();
+      dns.beforeResolve = undefined;
+      try {
+        await Promise.all([first, second]);
+      } finally {
+        await client.stopWithoutPersist();
       }
     }
-  }
+  });
 });

@@ -1,7 +1,7 @@
 import type { ExecutionIdentityAdmissionFacts } from "../audit/execution-identity-admission.js";
 
 type AgentCommandAdmissionFacts = Readonly<
-  Pick<ExecutionIdentityAdmissionFacts, "assurance" | "ingress" | "invoker">
+  Pick<ExecutionIdentityAdmissionFacts, "assurance" | "ingress" | "invoker" | "representedSubject">
 >;
 
 const factsByIngress = new WeakMap<object, AgentCommandAdmissionFacts>();

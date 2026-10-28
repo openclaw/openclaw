@@ -1,0 +1,272 @@
+import fs from "node:fs";
+import path from "node:path";
+import { afterEach, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { resolveSessionWorkStartError } from "../config/sessions/lifecycle.js";
+import {
+  appendTranscriptMessage,
+  loadSessionEntryReadOnly,
+  loadTranscriptEvents,
+  patchSessionEntryCore,
+  upsertSessionEntryCore,
+} from "../config/sessions/session-accessor.js";
+import { resetSessionEntryLifecycle } from "../config/sessions/session-accessor.sqlite-lifecycle.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
+import { isSessionRunActiveForKey } from "../sessions/session-controller.queries.js";
+import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
+import { attachInitialGatewayLifetimeSidecars } from "./server-lifetime-sidecars.js";
+import { handleChatSend } from "./server-methods/chat-send-handler.js";
+import { flushPendingSessionsChangedEvents } from "./server-methods/session-change-event.js";
+import * as deletion from "./server-methods/sessions-delete.js";
+import { createGatewaySidecarStopOwner } from "./server-sidecar-owners.js";
+import { claimRpcSourceForTest, createRpcSourceForTest } from "./test-helpers.rpc-source.js";
+
+const DAY_MS = 24 * 60 * 60_000;
+const config = { agents: { entries: { main: {} } } };
+const ordinary = { agentId: "main", sessionKey: "agent:main:dashboard:ordinary" };
+const originalDelete = deletion.deleteGatewaySession;
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  memorySessionActorOwners.reset();
+});
+
+function observeSessionDeletion() {
+  const settled = createDeferredCore<Awaited<ReturnType<typeof originalDelete>>>();
+  const deletes = vi.spyOn(deletion, "deleteGatewaySession").mockImplementation((params) => {
+    const operation = originalDelete(params);
+    void operation.then(settled.resolve, settled.reject);
+    return operation;
+  });
+  return { deletes, deleted: settled.promise };
+}
+
+async function startLifetime(
+  time: ReturnType<typeof createGatewaySchedulerClock>,
+  context = createDirectChatContext({
+    getRuntimeConfig: () => config,
+    getSessionEventSubscriberConnIds: () => new Set(["observer"]),
+  }),
+  logWarning = vi.fn<(message: string) => void>(),
+) {
+  const scheduler = createTestGatewayScheduler(time.clock);
+  const owner = createGatewaySidecarStopOwner();
+  await attachInitialGatewayLifetimeSidecars({
+    scheduler,
+    chatMetadataLifecycle: { attachContext: vi.fn(async () => {}) } as never,
+    gatewayRequestContext: context,
+    flushPendingSessionsChangedEvents,
+    minimalTestGateway: true,
+    logWarning,
+    publishSidecars: owner.publish,
+  });
+  return { owner, context, logWarning, time, scheduler };
+}
+
+async function withLifetime(
+  run: (
+    fixture: Awaited<ReturnType<typeof startLifetime>> & {
+      scope: { agentId: string; sessionKey: string; sessionId: string; storePath: string };
+      stateDir: string;
+    },
+  ) => Promise<void>,
+  creationStamp: "provided" | "omitted" = "provided",
+) {
+  await withOpenClawTestState({ label: "incognito-lifetime" }, async (state) => {
+    await state.writeConfig(config);
+    setRuntimeConfigSnapshot(config);
+    // Incognito deletion fences reuse the shared-state handle retained by Gateway startup.
+    openOpenClawStateDatabase();
+    const time = createGatewaySchedulerClock(Date.now());
+    vi.spyOn(Date, "now").mockImplementation(time.clock.now);
+    await upsertSessionEntryCore(ordinary, {
+      sessionId: "ordinary",
+      updatedAt: Date.now() - DAY_MS,
+    });
+    const lifetime = await startLifetime(time);
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:dashboard:incognito-lifetime",
+      sessionId: "incognito-lifetime",
+      storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
+    };
+    try {
+      await upsertSessionEntryCore(scope, {
+        sessionId: scope.sessionId,
+        ...(creationStamp === "omitted" ? {} : { createdAt: Date.now() }),
+        updatedAt: Date.now(),
+        incognito: true,
+      });
+      await run({ ...lifetime, scope, stateDir: state.stateDir });
+    } finally {
+      await lifetime.owner.stop();
+      await lifetime.scheduler.stop();
+    }
+  });
+}
+
+it("expires Incognito at creation plus 24 hours, cancels work, and deletes without an archive", async () => {
+  await withLifetime(async ({ context, logWarning, scope, time }) => {
+    const { deletes, deleted } = observeSessionDeletion();
+    await appendTranscriptMessage(scope, {
+      eventId: "private-input",
+      message: { role: "user", content: "Ephemeral conversation", timestamp: Date.now() },
+    });
+    await time.advanceBy(23 * 60 * 60_000);
+    await patchSessionEntryCore(scope, () => ({ label: "Recent activity", updatedAt: Date.now() }));
+    await resetSessionEntryLifecycle({
+      ...scope,
+      target: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] },
+      buildNextEntry: ({ currentEntry }) => ({ ...currentEntry!, lifecycleRevision: "rewound" }),
+    });
+    await time.advanceBy(60 * 60_000 - 1);
+    expect(loadSessionEntryReadOnly(scope)).toBeDefined();
+    const source = createRpcSourceForTest({}, { ...scope, storeScope: scope.storePath });
+    const release = await claimRpcSourceForTest(source);
+    const active = source.input.claim?.operation;
+    if (!active) {
+      throw new Error("Expected the controller to own the Incognito turn");
+    }
+    active.abortSignal.addEventListener("abort", release, { once: true });
+    try {
+      await time.advanceBy(1);
+      const result = await deleted;
+      expect(result, JSON.stringify(result)).toMatchObject({
+        ok: true,
+        result: { deleted: true, archived: [] },
+      });
+      expect(deletes).toHaveBeenCalledOnce();
+      expect(active.abortSignal.aborted).toBe(true);
+      expect(isSessionRunActiveForKey(scope.sessionKey)).toBe(false);
+      await flushPendingSessionsChangedEvents(context);
+      expect(logWarning).not.toHaveBeenCalled();
+      expect(loadSessionEntryReadOnly(scope)).toBeUndefined();
+      expect(await loadTranscriptEvents(scope)).toEqual([]);
+      expect(loadSessionEntryReadOnly(ordinary)?.sessionId).toBe("ordinary");
+      expect(fs.existsSync(scope.storePath)).toBe(false);
+      expect(context.broadcastToConnIds).toHaveBeenCalledWith(
+        "sessions.changed",
+        expect.objectContaining({ sessionKey: scope.sessionKey, reason: "delete" }),
+        expect.any(Set),
+        expect.any(Object),
+      );
+    } finally {
+      release();
+    }
+  });
+});
+
+it("does not replace its deadline or delete another Gateway's Incognito publication", async () => {
+  await withLifetime(async ({ scope, stateDir, logWarning, time }) => {
+    const foreign = {
+      agentId: scope.agentId,
+      sessionKey: scope.sessionKey,
+      env: { ...process.env, OPENCLAW_STATE_DIR: path.join(stateDir, "other-gateway") },
+    };
+    const foreignPath = resolveIncognitoOpenClawAgentSqlitePath(foreign);
+    expect(foreignPath).not.toBe(scope.storePath);
+    const { deletes, deleted } = observeSessionDeletion();
+    try {
+      await upsertSessionEntryCore(foreign, {
+        sessionId: "foreign-incognito",
+        createdAt: Date.now() - DAY_MS + 1,
+        updatedAt: Date.now(),
+        incognito: true,
+      });
+      expect(loadSessionEntryReadOnly(scope)?.sessionId).toBe(scope.sessionId);
+      await time.advanceBy(1);
+      expect(deletes).not.toHaveBeenCalled();
+      expect(logWarning).not.toHaveBeenCalled();
+      expect(loadSessionEntryReadOnly(foreign)?.sessionId).toBe("foreign-incognito");
+      await time.advanceBy(DAY_MS - 1);
+      await deleted;
+      expect(deletes).toHaveBeenCalledOnce();
+      expect(loadSessionEntryReadOnly(scope)).toBeUndefined();
+      expect(loadSessionEntryReadOnly(foreign)?.sessionId).toBe("foreign-incognito");
+    } finally {
+      memorySessionActorOwners.closeDatabase({ agentId: scope.agentId, path: foreignPath });
+    }
+  });
+});
+
+it("inherits the original deadline when a sibling outlives the creator", async () => {
+  await withLifetime(async ({ owner, scope, logWarning, time }) => {
+    const createdAt = Date.now();
+    expect(loadSessionEntryReadOnly(scope)?.createdAt).toBe(createdAt);
+    expect(loadSessionEntryReadOnly(ordinary)?.createdAt).toBeUndefined();
+    const context = createDirectChatContext({ getRuntimeConfig: () => config });
+    const { deletes, deleted } = observeSessionDeletion();
+    await time.advanceBy(DAY_MS - 1);
+    await patchSessionEntryCore(scope, () => ({ createdAt: Date.now(), updatedAt: Date.now() }));
+    expect(loadSessionEntryReadOnly(scope)?.createdAt).toBe(createdAt);
+    const siblingTime = createGatewaySchedulerClock(time.clock.now());
+    const sibling = await startLifetime(siblingTime, context, logWarning);
+    try {
+      await owner.stop();
+      expect(loadSessionEntryReadOnly(scope)?.sessionId).toBe(scope.sessionId);
+      await time.advanceBy(1);
+      await siblingTime.advanceBy(1);
+      await deleted;
+      expect(deletes).toHaveBeenCalledOnce();
+      expect(loadSessionEntryReadOnly(scope)).toBeUndefined();
+      expect(logWarning).not.toHaveBeenCalled();
+    } finally {
+      await sibling.owner.stop();
+      await sibling.scheduler.stop();
+    }
+  }, "omitted");
+});
+
+it("refuses work while session cleanup retries", async () => {
+  await withLifetime(async ({ scope, context, logWarning, time }) => {
+    const retrying = createDeferredCore();
+    logWarning.mockImplementation(() => retrying.resolve());
+    const { deletes, deleted } = observeSessionDeletion();
+    deletes.mockImplementationOnce(async () => {
+      return { ok: false, error: { code: "UNAVAILABLE", message: "Cleanup still draining" } };
+    });
+    await time.advanceBy(DAY_MS);
+    await retrying.promise;
+    expect(logWarning).toHaveBeenCalledOnce();
+    expect(loadSessionEntryReadOnly(scope)).toBeDefined();
+    expect(
+      resolveSessionWorkStartError(ordinary.sessionKey, loadSessionEntryReadOnly(ordinary)),
+    ).toBeUndefined();
+    const respond = vi.fn();
+    await handleChatSend({
+      params: {
+        sessionKey: scope.sessionKey,
+        message: "Must not start work while expiry cleanup retries",
+        idempotencyKey: "expired-incognito-send",
+      },
+      req: { type: "req", id: "expired-send", method: "chat.send" },
+      respond,
+      context,
+      client: null,
+      isWebchatConnect: () => false,
+    });
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: `Incognito session "${scope.sessionKey}" expired. Start a new Incognito session.`,
+      }),
+    );
+    expect(await loadTranscriptEvents(scope)).toEqual([]);
+    expect(rpcSourceTesting.size).toBe(0);
+    await time.advanceBy(60_000);
+    await expect(deleted).resolves.toMatchObject({ ok: true, result: { deleted: true } });
+    expect(deletes).toHaveBeenCalledTimes(2);
+    expect(loadSessionEntryReadOnly(scope)).toBeUndefined();
+  });
+});

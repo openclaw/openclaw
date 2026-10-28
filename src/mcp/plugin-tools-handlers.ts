@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { ContentBlockSchema, ToolSchema } from "@modelcontextprotocol/core";
+import type { CallToolResult, ContentBlock, Tool } from "@modelcontextprotocol/server";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 // Plugin MCP tool handlers route plugin tool calls through the active runtime.
 import {
@@ -19,16 +21,16 @@ type CallPluginToolParams = {
   arguments?: unknown;
 };
 
-function toMcpContentBlock(block: unknown): unknown {
+function toMcpContentBlock(block: unknown): ContentBlock {
   if (!isRecord(block)) {
     return { type: "text", text: coerceChatContentText(block) };
   }
   if (block.type !== "image") {
-    return block;
+    return ContentBlockSchema.parse(block);
   }
 
   if (typeof block.data === "string" && typeof block.mimeType === "string") {
-    return block;
+    return ContentBlockSchema.parse(block);
   }
 
   const source = block.source;
@@ -48,10 +50,10 @@ function toMcpContentBlock(block: unknown): unknown {
   return { type: "text", text: coerceChatContentText(block) };
 }
 
-function resolveJsonSchemaForTool(tool: AnyAgentTool): Record<string, unknown> {
+function resolveJsonSchemaForTool(tool: AnyAgentTool): Tool["inputSchema"] {
   const params = tool.parameters;
   if (params && typeof params === "object" && "type" in params) {
-    return params as Record<string, unknown>;
+    return ToolSchema.shape.inputSchema.parse(params);
   }
   return { type: "object", properties: {} };
 }
@@ -76,14 +78,19 @@ export function createPluginToolsMcpHandlers(tools: AnyAgentTool[]) {
   const automationsEntry = automationsName ? toolMap.get(automationsName) : undefined;
 
   return {
-    listTools: async () => ({
+    listTools: async (): Promise<{
+      tools: { name: string; description: string; inputSchema: Tool["inputSchema"] }[];
+    }> => ({
       tools: wrappedTools.map((tool) => ({
         name: tool.name,
         description: tool.description ?? "",
         inputSchema: resolveJsonSchemaForTool(tool),
       })),
     }),
-    callTool: async (params: CallPluginToolParams, signal?: AbortSignal) => {
+    callTool: async (
+      params: CallPluginToolParams,
+      signal?: AbortSignal,
+    ): Promise<CallToolResult> => {
       const entry =
         toolMap.get(params.name) ??
         (isAutomationsToolName(params.name) ? automationsEntry : undefined);

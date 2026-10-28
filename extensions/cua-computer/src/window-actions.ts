@@ -1,18 +1,21 @@
+import type { ComputerActParams } from "openclaw/plugin-sdk/computer-use";
 import {
-  COMPUTER_USE_V2_ACTION_NAMES,
-  type ComputerActParams,
-} from "openclaw/plugin-sdk/computer-use";
-import {
+  browserElement,
+  browserTarget,
   elementArgs,
   requireWindowTarget,
   windowPointArgs,
   type CuaComputerActParams,
 } from "./action-targets.js";
-import { normalizeModifiers, parseKeyChord } from "./actions.js";
-import { handleBrowserAct } from "./browser-actions.js";
-import { EscalationReason, type CuaDriverSession } from "./driver-client.js";
+import { CLICK_ACTIONS, normalizeModifiers, parseKeyChord } from "./actions.js";
+import type { CuaDriverSession, CuaToolResult } from "./driver-client.js";
 import {
   actionEnvelope,
+  browserBinding,
+  browserDialogEnvelope,
+  browserObservation,
+  browserToolEnvelope,
+  CUA_WIRE_ACTION_NAMES,
   callWindowTool,
   nativeWindows,
   projectApps,
@@ -24,7 +27,9 @@ import {
 import type { CuaExecutionState } from "./execution-state.js";
 import {
   adoptGeneration,
-  resolveAppRef,
+  invalidateBrowserObservation,
+  resolveBrowserObservation,
+  resolveDialogRef,
   resolveObservation,
   resolveWindowRef,
   verifyGeneration,
@@ -32,7 +37,6 @@ import {
 } from "./frame.js";
 import { handleRecordingAct } from "./recording-actions.js";
 
-const CUA_WIRE_ACTION_NAMES = COMPUTER_USE_V2_ACTION_NAMES.slice(1, 14);
 const CUA_TARGETED_ACTION_NAMES = new Set([
   "left_click",
   "right_click",
@@ -58,6 +62,11 @@ async function handleTargetedAct(
   const base = { pid: target.pid, window_id: target.windowId };
   const delivery = params.deliveryMode ? { delivery_mode: params.deliveryMode } : {};
   const element = elementArgs(state, params, windowRef);
+  const optionalTarget = (label: string) =>
+    element ??
+    (params.x !== undefined || params.y !== undefined
+      ? windowPointArgs(state, params, windowRef, params, label)
+      : {});
   let tool: string;
   let args: Record<string, unknown>;
 
@@ -68,13 +77,7 @@ async function handleTargetedAct(
     case "double_click":
     case "triple_click": {
       tool = "click";
-      const button =
-        params.action === "right_click"
-          ? "right"
-          : params.action === "middle_click"
-            ? "middle"
-            : "left";
-      const count = params.action === "double_click" ? 2 : params.action === "triple_click" ? 3 : 1;
+      const { button, count } = CLICK_ACTIONS[params.action];
       const modifiers = normalizeModifiers(params.modifiers, platform);
       args = {
         ...base,
@@ -113,38 +116,23 @@ async function handleTargetedAct(
       };
       break;
     }
-    case "left_mouse_down": {
-      if (platform !== "linux") {
-        throw new Error("COMPUTER_UNSUPPORTED_ACTION: left_mouse_down is Linux-only");
-      }
-      if (element || params.deliveryMode === "foreground") {
-        throw new Error(
-          "COMPUTER_UNSUPPORTED_ACTION: left_mouse_down supports only background window pixels",
-        );
-      }
-      tool = "mouse_button_down";
-      args = {
-        ...base,
-        ...windowPointArgs(state, params, windowRef, params, "mouse down"),
-        button: "left",
-      };
-      break;
-    }
+    case "left_mouse_down":
     case "left_mouse_up": {
+      const down = params.action === "left_mouse_down";
       if (platform !== "linux") {
-        throw new Error("COMPUTER_UNSUPPORTED_ACTION: left_mouse_up is Linux-only");
+        throw new Error(`COMPUTER_UNSUPPORTED_ACTION: ${params.action} is Linux-only`);
       }
       if (element || params.deliveryMode === "foreground") {
         throw new Error(
-          "COMPUTER_UNSUPPORTED_ACTION: left_mouse_up supports only background window pixels",
+          `COMPUTER_UNSUPPORTED_ACTION: ${params.action} supports only background window pixels`,
         );
       }
-      tool = "mouse_button_up";
+      tool = down ? "mouse_button_down" : "mouse_button_up";
       args = {
         ...base,
-        ...(params.x !== undefined || params.y !== undefined
-          ? windowPointArgs(state, params, windowRef, params, "mouse up")
-          : {}),
+        ...(down
+          ? { ...windowPointArgs(state, params, windowRef, params, "mouse down"), button: "left" }
+          : optionalTarget("mouse up")),
       };
       break;
     }
@@ -160,10 +148,7 @@ async function handleTargetedAct(
       tool = "scroll";
       args = {
         ...base,
-        ...(element ??
-          (params.x !== undefined || params.y !== undefined
-            ? windowPointArgs(state, params, windowRef, params, "scroll")
-            : {})),
+        ...optionalTarget("scroll"),
         direction: params.scrollDirection,
         by: "line",
         amount: Math.min(50, params.scrollAmount ?? 3),
@@ -178,10 +163,7 @@ async function handleTargetedAct(
       tool = "type_text";
       args = {
         ...base,
-        ...(element ??
-          (params.x !== undefined || params.y !== undefined
-            ? windowPointArgs(state, params, windowRef, params, "type")
-            : {})),
+        ...optionalTarget("type"),
         text: params.text,
         ...delivery,
       };
@@ -192,10 +174,7 @@ async function handleTargetedAct(
       tool = "press_key";
       args = {
         ...base,
-        ...(element ??
-          (params.x !== undefined || params.y !== undefined
-            ? windowPointArgs(state, params, windowRef, params, "key")
-            : {})),
+        ...optionalTarget("key"),
         ...chord,
         ...delivery,
       };
@@ -208,8 +187,6 @@ async function handleTargetedAct(
   const result = await callWindowTool(driver, state, tool, args, signal);
   return JSON.stringify(actionEnvelope(result));
 }
-
-export type { CuaComputerActParams } from "./action-targets.js";
 
 /// Entry point for `computer.act` on the CUA driver. Owns every window- and
 /// element-scoped action (targeted input, discovery, app/window lifecycle) and
@@ -249,12 +226,198 @@ export async function handleWindowAct(
   if (recordingResult !== undefined) {
     return recordingResult;
   }
-  const browserResult = await handleBrowserAct(driver, state, execution.resources, input, signal);
-  if (browserResult !== undefined) {
-    return browserResult;
-  }
+  const resources = execution.resources;
 
   switch (input.action) {
+    case "get_browser_state": {
+      verifyGeneration(state, driver.generation);
+      if (input.windowRef) {
+        const window = resolveWindowRef(state, input.windowRef);
+        const result = await callWindowTool(
+          driver,
+          state,
+          "get_browser_state",
+          { pid: window.pid, window_id: window.windowId },
+          signal,
+        );
+        return JSON.stringify(browserBinding(result, state, input.windowRef));
+      }
+      const target = browserTarget(driver, state, input);
+      const snapshotFormat = input.snapshotFormat ?? "dom_refs_v1";
+      if (
+        snapshotFormat === "dom_refs_v1" &&
+        (input.elementRef || input.query || input.continuation)
+      ) {
+        throw new Error(
+          "COMPUTER_INVALID_REQUEST: elementRef, query, and continuation require snapshotFormat=semantic_v2",
+        );
+      }
+      const scopeRef = browserElement(state, input, target);
+      const result = await callWindowTool(
+        driver,
+        state,
+        "get_browser_state",
+        {
+          target_id: target.targetId,
+          tab_id: target.tabId,
+          snapshot_format: snapshotFormat,
+          include_screenshot: input.includeScreenshot ?? true,
+          ...(scopeRef ? { scope_ref: scopeRef } : {}),
+          ...(input.query ? { query: input.query } : {}),
+          ...(input.continuation ? { continuation: input.continuation } : {}),
+        },
+        signal,
+      );
+      return JSON.stringify(browserObservation(result, state, target));
+    }
+    case "browser_prepare": {
+      const { target } = requireWindowTarget(driver, state, input);
+      const profile = input.profile ?? "isolated_new";
+      if (profile === "isolated_named" && !input.profileName) {
+        throw new Error(
+          "COMPUTER_INVALID_REQUEST: profileName is required for an isolated_named browser profile",
+        );
+      }
+      if (profile === "isolated_new" && input.profileName) {
+        throw new Error(
+          "COMPUTER_INVALID_REQUEST: profileName is valid only for an isolated_named browser profile",
+        );
+      }
+      const result = await callWindowTool(
+        driver,
+        state,
+        "browser_prepare",
+        {
+          pid: target.pid,
+          allow_launch: true,
+          profile: {
+            mode: profile,
+            ...(input.profileName ? { name: input.profileName } : {}),
+          },
+        },
+        signal,
+      );
+      return JSON.stringify(browserToolEnvelope(result, "browser_prepare"));
+    }
+    case "browser_navigate":
+    case "browser_click":
+    case "browser_type":
+    case "browser_pointer": {
+      const target = browserTarget(driver, state, input);
+      const args: Record<string, unknown> = {
+        target_id: target.targetId,
+        tab_id: target.tabId,
+      };
+      if (input.action === "browser_navigate") {
+        args.url = input.url;
+      } else if (input.action === "browser_type") {
+        Object.assign(args, {
+          ref: browserElement(state, input, target)!,
+          text: input.text,
+          ...(input.mode ? { mode: input.mode } : {}),
+          ...(input.replace !== undefined ? { replace: input.replace } : {}),
+        });
+      } else {
+        resolveBrowserObservation(state, input.observationId!, target.browserRef, target.pageRef);
+        const ref = browserElement(state, input, target);
+        if (input.action === "browser_pointer") {
+          const destinationRef = browserElement(state, input, target, input.destinationElementRef);
+          Object.assign(args, {
+            action: input.pointerAction,
+            ...(destinationRef ? { destination_ref: destinationRef } : {}),
+            ...(input.toX !== undefined ? { to_x: input.toX } : {}),
+            ...(input.toY !== undefined ? { to_y: input.toY } : {}),
+            ...(input.deltaX !== undefined ? { delta_x: input.deltaX } : {}),
+            ...(input.deltaY !== undefined ? { delta_y: input.deltaY } : {}),
+          });
+        }
+        Object.assign(args, {
+          ...(ref ? { ref } : {}),
+          ...(input.x !== undefined ? { x: input.x } : {}),
+          ...(input.y !== undefined ? { y: input.y } : {}),
+          ...(input.inputRoute ? { input_route: input.inputRoute } : {}),
+        });
+      }
+      const result = await callWindowTool(driver, state, input.action, args, signal);
+      if (input.action === "browser_navigate") {
+        invalidateBrowserObservation(state);
+      }
+      return JSON.stringify(browserToolEnvelope(result, input.action));
+    }
+    case "browser_dialog": {
+      const target = browserTarget(driver, state, input);
+      const dialogId =
+        input.dialogAction === "inspect"
+          ? undefined
+          : resolveDialogRef(state, input.dialogRef!, target.browserRef, target.pageRef);
+      const result = await callWindowTool(
+        driver,
+        state,
+        "browser_dialog",
+        {
+          target_id: target.targetId,
+          tab_id: target.tabId,
+          action: input.dialogAction,
+          ...(dialogId ? { dialog_id: dialogId } : {}),
+          ...(input.promptText !== undefined ? { prompt_text: input.promptText } : {}),
+          ...(input.deliveryMode ? { delivery_mode: input.deliveryMode } : {}),
+        },
+        signal,
+      );
+      if (input.dialogAction !== "inspect") {
+        state.dialog = undefined;
+      }
+      return JSON.stringify(browserDialogEnvelope(result, state, target));
+    }
+    case "browser_set_input_files":
+    case "browser_download": {
+      const target = browserTarget(driver, state, input);
+      const ref = browserElement(state, input, target)!;
+      const resource =
+        input.action === "browser_download"
+          ? await resources.createDirectory("browser-download")
+          : undefined;
+      const resourceArgs = resource
+        ? { destination_root: resource.path }
+        : { files: await resources.resolveFiles(input.resourceHandles ?? []) };
+      let result: CuaToolResult;
+      try {
+        result = await callWindowTool(
+          driver,
+          state,
+          input.action,
+          {
+            target_id: target.targetId,
+            tab_id: target.tabId,
+            ref,
+            ...resourceArgs,
+          },
+          signal,
+        );
+      } catch (error) {
+        if (resource) {
+          await resources.discard(resource.handle).catch(() => {});
+        }
+        signal?.throwIfAborted();
+        throw new Error(
+          `COMPUTER_DRIVER_ERROR: ${input.action} failed; inspect node logs and resource state before retrying`,
+          { cause: error },
+        );
+      }
+      const envelope = browserToolEnvelope(result, input.action);
+      if (!resource) {
+        return JSON.stringify(envelope);
+      }
+      const fileResourceHandles = await resources.captureFiles(resource.handle);
+      return JSON.stringify({
+        ...envelope,
+        details: {
+          ...envelope.details,
+          resourceHandle: resource.handle,
+          fileResourceHandles,
+        },
+      });
+    }
     case "list_apps": {
       const result = await callWindowTool(driver, state, "list_apps", {}, signal);
       state.apps = new Map();
@@ -314,7 +477,7 @@ export async function handleWindowAct(
     case "launch_app": {
       verifyGeneration(state, driver.generation);
       const appName = input.app!;
-      const app = resolveAppRef(state, appName);
+      const app = state.apps?.get(appName);
       if (!app) {
         throw new Error("COMPUTER_STALE_OBSERVATION: refresh list_apps and retry");
       }
@@ -341,7 +504,7 @@ export async function handleWindowAct(
     case "kill_app": {
       verifyGeneration(state, driver.generation);
       const appName = input.app!;
-      const app = resolveAppRef(state, appName);
+      const app = state.apps?.get(appName);
       if (!app?.pid) {
         throw new Error(
           "COMPUTER_INVALID_REQUEST: kill_app requires a running app reference from list_apps",
@@ -350,93 +513,41 @@ export async function handleWindowAct(
       const result = await callWindowTool(driver, state, "kill_app", { pid: app.pid }, signal);
       return JSON.stringify(actionEnvelope(result, { app: appName }));
     }
-    case "bring_to_front": {
-      const { target } = requireWindowTarget(driver, state, input);
-      const result = await callWindowTool(
-        driver,
-        state,
-        "bring_to_front",
-        {
-          pid: target.pid,
-          window_id: target.windowId,
-        },
-        signal,
-      );
-      return JSON.stringify(actionEnvelope(result));
-    }
-    case "set_value": {
-      const { ref, target } = requireWindowTarget(driver, state, input);
-      if (input.deliveryMode === "foreground") {
-        throw new Error(
-          "COMPUTER_UNSUPPORTED_ACTION: cua-driver set_value is background accessibility delivery",
-        );
-      }
-      const element = elementArgs(state, input, ref);
-      if (!element) {
-        throw new Error("COMPUTER_INVALID_REQUEST: elementRef is required for set_value");
-      }
-      const result = await callWindowTool(
-        driver,
-        state,
-        "set_value",
-        {
-          pid: target.pid,
-          window_id: target.windowId,
-          ...element,
-          value: input.value,
-        },
-        signal,
-      );
-      return JSON.stringify(actionEnvelope(result));
-    }
-    case "invoke_menu": {
-      const { target } = requireWindowTarget(driver, state, input);
-      if (input.deliveryMode === "foreground") {
-        throw new Error(
-          "COMPUTER_UNSUPPORTED_ACTION: cua-driver invoke_menu is background accessibility delivery",
-        );
-      }
-      const result = await callWindowTool(
-        driver,
-        state,
-        "invoke_menu",
-        {
-          pid: target.pid,
-          window_id: target.windowId,
-          path: input.path,
-        },
-        signal,
-      );
-      return JSON.stringify(actionEnvelope(result));
-    }
+    case "bring_to_front":
+    case "set_value":
+    case "invoke_menu":
     case "zoom": {
       const { ref, target } = requireWindowTarget(driver, state, input);
-      resolveObservation(state, input.observationId!, ref);
-      const result = await callWindowTool(
-        driver,
-        state,
-        "zoom",
-        {
-          pid: target.pid,
-          window_id: target.windowId,
-          x1: input.x1,
-          y1: input.y1,
-          x2: input.x2,
-          y2: input.y2,
-        },
-        signal,
+      const args: Record<string, unknown> = { pid: target.pid, window_id: target.windowId };
+      if (
+        (input.action === "set_value" || input.action === "invoke_menu") &&
+        input.deliveryMode === "foreground"
+      ) {
+        throw new Error(
+          `COMPUTER_UNSUPPORTED_ACTION: cua-driver ${input.action} is background accessibility delivery`,
+        );
+      }
+      if (input.action === "set_value") {
+        const element = elementArgs(state, input, ref);
+        if (!element) {
+          throw new Error("COMPUTER_INVALID_REQUEST: elementRef is required for set_value");
+        }
+        Object.assign(args, element, { value: input.value });
+      } else if (input.action === "invoke_menu") {
+        args.path = input.path;
+      } else if (input.action === "zoom") {
+        resolveObservation(state, input.observationId!, ref);
+        Object.assign(args, { x1: input.x1, y1: input.y1, x2: input.x2, y2: input.y2 });
+      }
+      const result = await callWindowTool(driver, state, input.action, args, signal);
+      return JSON.stringify(
+        input.action === "zoom"
+          ? windowObservation(result, state, ref, { fromZoom: true })
+          : actionEnvelope(result),
       );
-      return JSON.stringify(windowObservation(result, state, ref, { fromZoom: true }));
     }
     case "escalate_scope": {
-      const reason = {
-        ax_tree_pixel_mismatch: EscalationReason.AxTreePixelMismatch,
-        background_delivery_failed: EscalationReason.BackgroundDeliveryFailed,
-        foreground_ineffective: EscalationReason.ForegroundIneffective,
-        no_window_target: EscalationReason.NoWindowTarget,
-        other: EscalationReason.Other,
-      }[input.reason!];
-      const result = await driver.escalateScope(reason, signal);
+      const result = await driver.getSessionState(signal);
       adoptGeneration(state, driver.generation);
       return JSON.stringify({
         ok: true,

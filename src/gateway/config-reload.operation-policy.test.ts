@@ -15,9 +15,6 @@ afterEach(() => resetPluginRuntimeStateForTest());
 describe("Gateway operation policy reload", () => {
   it.each([
     "gateway.auth.rateLimit.maxAttempts",
-    "gateway.auth.rateLimit.windowMs",
-    "gateway.auth.rateLimit.lockoutMs",
-    "gateway.auth.rateLimit.exemptLoopback",
     "gateway.roles.definitions.operator.scopes",
     "gateway.trustedProxies",
     "gateway.allowRealIpFallback",
@@ -27,20 +24,17 @@ describe("Gateway operation policy reload", () => {
     "discovery.mdns.mode",
     "gateway.http.securityHeaders.strictTransportSecurity",
     "gateway.nodes.pairing.autoApproveLocal",
-    "gateway.nodes.pairing.autoApproveCidrs",
-    "gateway.nodes.pairing.sshVerify",
     "gateway.terminal.enabled",
-    "gateway.terminal.shell",
-    "gateway.terminal.detachedSessionTimeoutSeconds",
     "gateway.http.endpoints.chatCompletions.enabled",
-    "gateway.http.endpoints.responses.enabled",
-    "gateway.http.endpoints.responses.files.maxBytes",
     "gateway.tools.allow",
-    "gateway.tools.deny",
+    "tools.allow",
+    "tools.deny",
     "gateway.cliAgents.enabled",
+    "gateway.uploads.enabled",
     "gateway.controlUi.enabled",
     "gateway.controlUi.environment.label",
     "gateway.controlUi.communityInvite",
+    "gateway.controlUi.newSessionModelDefaults",
     "gateway.controlUi.github.token",
     "gateway.controlUi.sessionObserver",
     "gateway.controlUi.embedSandbox",
@@ -49,11 +43,9 @@ describe("Gateway operation policy reload", () => {
     "gateway.controlUi.allowedOrigins",
     "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback",
     "gateway.nodes.commands.allow",
-    "gateway.nodes.commands.deny",
     "gateway.nodes.pluginTools.enabled",
     "gateway.nodes.allowSkills",
     "gateway.nodes.browser.mode",
-    "gateway.nodes.browser.node",
     "gateway.push.apns.relay.baseUrl",
     "mcp.apps.sandboxOrigin",
     "approvals.exec.enabled",
@@ -63,24 +55,15 @@ describe("Gateway operation policy reload", () => {
     "broadcast.strategy",
     "memory.citations",
     "worktreeRoot",
+    "worktreeMaxCount",
     "worktreeAcceleration",
     "desktop.host.enabled",
-    "desktop.host.managed",
-    "desktop.host.port",
-    "desktop.host.passwordFile",
     "cloudWorkers.desktop",
-    "cloudWorkers.preparedPool.maxTotal",
-    "cloudWorkers.projectProfiles.project",
     "security.audit.suppressions",
     "security.installPolicy",
+    "security.preset",
     "diagnostics.cacheTrace.enabled",
     "acp.runtime.installCommand",
-    "acp.enabled",
-    "acp.dispatch.enabled",
-    "acp.backend",
-    "acp.fallbacks",
-    "acp.defaultAgent",
-    "acp.allowedAgents",
     "attachments.ttlHours",
     "update.checkOnStart",
     "update.channel",
@@ -95,7 +78,6 @@ describe("Gateway operation policy reload", () => {
       restartReasons: [],
       hotReasons: [path],
       noopPaths: [],
-      restartHeartbeat: false,
       restartCron: false,
       reloadHooks: false,
       reloadPlugins: false,
@@ -106,19 +88,65 @@ describe("Gateway operation policy reload", () => {
     expect(resolveConfigReloadMetadata(path).kind).toBe("hot");
   });
 
+  const policyConfig: OpenClawConfig = { tools: { gatewayPolicy: { allow: ["read"] } } };
   it.each([
-    "cloudWorkers.profiles",
-    "cloudWorkers.profiles.build.provider",
-    "cloudWorkers.profiles.build.settings.machineType",
-    "cloudWorkers.profiles.build.readyWorkers",
-    "cloudWorkers.profiles.build.suspendAfter",
-  ])("refreshes provider activation without restarting the Gateway: %s", (path) => {
-    expect(buildGatewayReloadPlan([path])).toMatchObject({
-      restartGateway: false,
-      reloadPlugins: true,
-      hotReasons: [path],
-    });
-  });
+    ["adding policy", { tools: {} }, policyConfig, "tools.gatewayPolicy"],
+    [
+      "changing policy",
+      policyConfig,
+      { tools: { gatewayPolicy: { allow: [] } } },
+      "tools.gatewayPolicy.allow",
+    ],
+    ["removing policy", policyConfig, { tools: {} }, "tools.gatewayPolicy"],
+    [
+      "adding automation restrictions",
+      policyConfig,
+      { tools: { gatewayPolicy: { allow: ["read"], automations: { scope: "caller" } } } },
+      "tools.gatewayPolicy.automations",
+    ],
+    [
+      "changing automation restrictions",
+      { tools: { gatewayPolicy: { allow: ["read"], automations: { allowCommandJobs: true } } } },
+      { tools: { gatewayPolicy: { allow: ["read"], automations: { allowCommandJobs: false } } } },
+      "tools.gatewayPolicy.automations.allowCommandJobs",
+    ],
+    [
+      "removing automation restrictions",
+      { tools: { gatewayPolicy: { allow: ["read"], automations: { scope: "caller" } } } },
+      policyConfig,
+      "tools.gatewayPolicy.automations",
+    ],
+    ["adding tools with policy", {}, policyConfig, "tools.gatewayPolicy"],
+    ["removing tools with policy", policyConfig, {}, "tools.gatewayPolicy"],
+  ] satisfies [string, OpenClawConfig, OpenClawConfig, string][])(
+    "requires a Gateway restart when %s",
+    (_name, previous, next, path) => {
+      const changedPaths = diffGatewayReloadPaths(
+        previous,
+        next,
+        listConfigReloadRefinementPrefixes(),
+      );
+      const plan = buildGatewayReloadPlan(changedPaths);
+
+      expect(plan).toMatchObject({
+        restartGateway: true,
+        restartReasons: [path],
+        hotReasons: [],
+      });
+      expect(resolveConfigReloadMetadata(path).kind).toBe("restart");
+    },
+  );
+
+  it.each(["cloudWorkers.profiles", "cloudWorkers.profiles.build.settings.machineType"])(
+    "refreshes provider activation without restarting the Gateway: %s",
+    (path) => {
+      expect(buildGatewayReloadPlan([path])).toMatchObject({
+        restartGateway: false,
+        reloadPlugins: true,
+        hotReasons: [path],
+      });
+    },
+  );
 
   it.each([
     {

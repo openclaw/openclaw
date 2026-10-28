@@ -1,8 +1,8 @@
-// Builds restart sentinel payloads for update handoff reporting.
+import { formatCliCommand } from "../cli/command-format.js";
 import { formatDoctorNonInteractiveHint, type RestartSentinelPayload } from "./restart-sentinel.js";
+import type { UpdateRunResult } from "./update-run-result.js";
 import { updateRunStepKey } from "./update-run-step-key.js";
 import { isUpdateGatewayReadinessPending } from "./update-run-step.js";
-import type { UpdateRunResult } from "./update-runner-types.js";
 
 export type ForegroundUpdateOrigin = {
   owner: string;
@@ -14,8 +14,6 @@ export type ForegroundUpdateOrigin = {
   configPath: string;
 };
 
-// Update restart sentinel payloads carry update result details across a process
-// restart so the next gateway can report completion or failure.
 /** Metadata needed to route update restart continuation messages. */
 export type UpdateRestartSentinelMeta = {
   runId?: string;
@@ -75,7 +73,6 @@ function resolvePersistedRecovery(result: UpdateRunResult): UpdateRunResult["rec
     : { serviceRestartSafe: false, reason: recovery.reason };
 }
 
-/** Build the restart sentinel payload written after update runs. */
 export function buildUpdateRestartSentinelPayload(params: {
   result: UpdateRunResult;
   meta: UpdateRestartSentinelMeta;
@@ -97,7 +94,10 @@ export function buildUpdateRestartSentinelPayload(params: {
     ...(meta.threadId ? { threadId: meta.threadId } : {}),
     message: meta.note ?? null,
     ...(continuation ? { continuation } : {}),
-    doctorHint: formatDoctorNonInteractiveHint(),
+    doctorHint:
+      result.status === "error"
+        ? `If repair requires stopping the Gateway, run \`${formatCliCommand("openclaw update repair")}\` from a terminal outside the Gateway process tree. Do not run this repair through the Gateway's exec tool.`
+        : formatDoctorNonInteractiveHint(),
     stats: {
       ...(meta.runId || result.runId ? { runId: meta.runId ?? result.runId } : {}),
       mode: result.mode,

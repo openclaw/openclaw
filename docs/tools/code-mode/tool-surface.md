@@ -10,9 +10,15 @@ read_when:
 
 ## Model-visible tools
 
-When code mode is active, the model sees `exec`, `wait`, and any required
-direct-only tool. Every other enabled tool is hidden from the model-facing
-tool list and registered in the code-mode catalog.
+When code mode is active, the model sees `exec`, `wait`, the enabled `message`
+tool, and any required direct-only tool. Keeping `message` visible across reply
+delivery modes preserves the conversation's tool prefix. Every other enabled
+tool is hidden from the model-facing tool list and registered in the code-mode
+catalog.
+
+Execution-restricted background runs retain the admitted catalog descriptions
+for prompt reuse. Their execution permissions still apply to every call;
+restricted Swarm globals are not installed in the guest.
 
 Use `exec` for tool orchestration, data joining, loops, parallel nested calls,
 and structured transforms. Use `wait` only when `exec` returns a resumable
@@ -20,31 +26,43 @@ and structured transforms. Use `wait` only when `exec` returns a resumable
 
 ## `exec`
 
-`exec` starts a code-mode cell and returns one result. Input code is model
-generated and must be treated as hostile.
+`exec` starts a code-mode cell in a fresh JavaScript context and returns one
+result. Variables, functions, and imports never carry over between cells.
+`await store(key, value)` and `await load(key)` keep small JSON values across
+cells and turns in the same session, including restarts. See the
+[session store](/tools/code-mode/guest-api#session-store) for limits and commit
+rules. Input code is model generated and must be treated as hostile.
 
-Input:
+Model-facing input:
 
 ```typescript
 type CodeModeExecInput = {
-  code?: string;
-  command?: string;
+  title?: string;
+  code: string;
   restartSafe?: boolean;
+  awaitResults?: boolean;
 };
 ```
 
 Rules:
 
-- One of `code` or `command` must be non-empty.
-- `code` is the documented model-facing field.
+- `title` is optional. When provided, it must be nonblank and at most 120
+  characters. Use a short purpose, usually 3–7 words, such as "Inspect the dependency graph".
+  Describe intended work without claiming success or including secrets. The
+  Control UI displays this title on the execution row, or "run JavaScript" when
+  omitted. Nested tools retain their own summaries; `wait` needs no title and
+  resumes activity under the original cell.
+- `code` is the required model-facing JavaScript field and must be non-empty.
 - `command` is accepted as an exec-compatible alias for hook policies and
   trusted rewrites (the normal OpenClaw shell exec tool also uses a `command`
   field). Blank caller aliases are treated as absent; a hook or trusted policy
   that invalidates one populated alias (blank or non-string) invalidates both so
-  execution fails closed. When both aliases are non-empty, their values must match.
+  execution is blocked. When both aliases are non-empty, their values must match.
 - Write plain JavaScript. TypeScript annotations, interfaces, and other
   TypeScript-only syntax are not accepted. Tool signatures and `API.read`
   declarations remain available as documentation for composing calls.
+- `API.read(path)` returns `{ path, description, content, bytes }`, not a string.
+  Use `(await API.read(path)).content` for the declaration text.
 - The retired `language` and `typecheck` fields are rejected with `invalid_input`.
   Tool arguments are validated when each call reaches its normal execution owner;
   Code Mode does not typecheck the whole program before execution.
@@ -59,7 +77,8 @@ Rules:
   [restart recovery](/gateway/restart-recovery) can reconstruct an interrupted
   turn from its transcript instead of restoring the process-local continuation.
   Recovery remains limited to audited read-only core tools and explicitly
-  replay-safe plugin tools. Leave the field omitted for ordinary calls.
+  replay-safe plugin tools. `store` and `load` are unavailable in `restartSafe`
+  cells. Leave the field omitted for ordinary calls.
 - `exec` rejects `import`, `require`, dynamic import, and module-loader
   patterns.
 - `exec` never exposes the normal shell `exec` implementation recursively.
@@ -76,6 +95,7 @@ type CodeModeResult = CodeModeCompletedResult | CodeModeWaitingResult | CodeMode
 type CodeModeCompletedResult = {
   status: "completed";
   value: unknown;
+  warnings?: string[];
   output?: CodeModeOutput[];
   telemetry: CodeModeTelemetry;
 };
@@ -116,6 +136,11 @@ and namespace calls including MCP — are auto-drained inside the same
 `exec`/`wait` call while they resolve within the deadline, so a compact code
 block that awaits several tools runs to completion in one model turn instead of
 forcing one model tool call per await.
+A bridged shell `exec` without `yieldMs` or `background: true` waits for the
+remaining call budget (`tools.codeMode.timeoutMs`, default 10 s) minus a resume
+margin before backgrounding, so commands that finish within that window return
+inline in the same turn. Late sequential calls background sooner and still
+return their process handle so the guest can resume inline.
 
 `exec` returns `completed` only when the guest VM has no pending work and the
 final value is JSON-compatible after OpenClaw's output adapter runs.
@@ -127,23 +152,41 @@ original whitespace. The TUI displays these results as literal text so Markdown
 syntax and long-token formatting cannot change their values. URLs remain visible
 as text rather than becoming Markdown links.
 
+### Required results
+
+Use `awaitResults: true` when this program’s results are required to finish the
+current task. The existing cell owner keeps the tool call open while the VM is
+parked, then resumes that exact continuation when pending tool results settle.
+It does not return a `waiting` handle or make model polling calls. Completed
+actions are not replayed. Failure, Stop, owner replacement, and existing run
+and tool deadlines still end the operation.
+
+`awaitResults` pauses only off-VM tool waiting. Preparation, guest execution,
+checkpointing, and restoration share the original execution allowance; each
+settlement does **not** grant a fresh allowance. Output, memory, pending-call,
+and active-cell limits are unchanged. `yield_control` cannot abandon an
+unfinished required program; finish the program or cancel the owning run.
+Ordinary cells retain their existing explicit-yield behavior.
+
+Required cells collect ordinary shell commands to completion. Explicit
+`background: true` remains the opt-out for intentionally detached servers.
+A shell `exec({awaitResults: true, ...})` or `agents_wait({awaitResults: true, ...})`
+inside an ordinary cell also makes that cell required. These declarations do
+not enable `tools.exec.notifyOnExit`.
+
+For required collector results, await `agents.run(...)` in a required cell,
+or call `agents_wait({ids, awaitResults: true})`. Ordinary announcing children
+still use their existing `sessions_yield` handoff. An accepted background
+handle is not a terminal result: this feature does not infer obligations from
+plan text or silently turn every asynchronous service into required work.
+
 ### Source in session history
 
-In the built-in OpenClaw runtime, the JSON Code Mode tool executes the original
-input. Session history preserves computations such as `const API_TOKEN = computeToken();`
-and boolean or null initializers in the outer call's JavaScript
-`code` and `command` fields, while masking credential literals, recognizable
-tokens, registered secrets, and configured redaction patterns. Credential
-assignments use full masks so repeated storage redaction stays stable.
-
-This treatment does not extend to shell commands, nested tool calls, unrelated
-argument strings, or assistant prose. Large or unrecognized source syntax
-remains subject to diagnostic masking. Stored source is a redacted record, not
-a place to recover credentials; no additional setting is required.
-This applies to new calls; already-redacted source cannot be reconstructed.
-The Copilot runtime's separate transcript journal does not yet preserve this
-source structure. Native Codex uses a separate freeform source path; this
-behavior does not describe its storage.
+Code Mode executes and persists the original tool input without secret masking.
+Source, credential literals, nested tool arguments, and returned text retain their
+contents in model context and session history, subject to size and media limits.
+`logging.redactPatterns` applies to logs and diagnostics, not stored source.
+Already-masked historical source cannot be reconstructed.
 
 ## `wait`
 
@@ -213,6 +256,16 @@ returns `waiting` again, parking starts a fresh snapshot TTL.
 - the selected executor cannot resume (for example, its worker exited or QuickJS restore fails).
 - a QuickJS checkpoint would exceed `maxSnapshotBytes`. Ordinary oversized successful output is truncated and remains successful.
 
+An unavailable or expired ID is not evidence that earlier actions had no effect.
+Review the earlier `exec` and `wait` results before continuing; do not replay the
+original operation just because its continuation is no longer resumable. If another
+`wait` is already resuming the same run, use that wait’s result instead of starting
+a concurrent wait.
+
+A background shell `sessionId` is not a Code Mode `runId`. When the native process
+tool is available, the diagnostic names its callable so you can poll that same
+shell session with `action: "poll"` in a new `exec`. Do not launch the command again.
+
 ## Tool catalog
 
 The hidden catalog includes tools after effective policy filtering, in this
@@ -220,7 +273,7 @@ order: OpenClaw core tools, bundled plugin tools, external plugin tools, MCP
 tools, then client-provided tools for the current run.
 
 Catalog ids remain opaque host-only routing identities. They are stable within
-one run and deterministic across equivalent tool sets when possible, but they
+one run and the same across equivalent tool sets when possible, but they
 are never included in the prompt, guest metadata, handle descriptions, or
 errors. Policy, approvals, telemetry, replay safety, and namespace dispatch
 continue to use them internally.
@@ -232,8 +285,8 @@ enforcement remains unchanged. The finalized projection is carried through
 bridge calls and continuation resume; consumers do not reconstruct it from the
 catalog.
 
-The catalog omits code-mode control tools (`exec`, `wait`, `tool_search_code`,
-`tool_search`, `tool_describe`, `tool_call`) and direct-only tools. Controls
+The catalog omits code-mode control tools (`exec`, `wait`, `tool_search`,
+`tool_describe`, `dispatch_action`) and direct-only tools. Controls
 must not recurse through the catalog; direct-only tools remain model-visible
 because their structured results cannot cross the JSON guest bridge.
 
@@ -252,8 +305,8 @@ is active.
 
 When Code Mode engages through forced `true` or `"auto"` activation:
 
-- OpenClaw does not expose `tool_search_code`, `tool_search`, `tool_describe`,
-  or `tool_call` as model-visible tools.
+- OpenClaw does not expose `tool_search`, `tool_describe`, or `dispatch_action` as
+  model-visible tools.
 - The same cataloging idea moves inside the guest runtime.
 - The guest runtime receives bare async globals plus callable search/describe
   handles for native tools, plus on-demand MCP search handles.
@@ -262,7 +315,7 @@ When Code Mode engages through forced `true` or `"auto"` activation:
 - Nested calls dispatch through the same OpenClaw executor path that Tool
   Search uses.
 
-See [Tool Search](/tools/tool-search) for the OpenClaw compact catalog bridge
+See [Tool Search](/tools/tool-search) for the OpenClaw structured catalog surface
 that code mode supersedes for active runs.
 
 ## Tool names and collisions
@@ -279,9 +332,10 @@ Inside the guest runtime:
   gets the `tool_` prefix. For example, `llm-task` becomes `llm_task` when that
   name is free.
 - JavaScript reserved words, specialized globals, and normalized collisions
-  receive a deterministic short suffix derived from the host-only identity.
+  receive a stable short suffix derived from the host-only identity.
 - Exact safe names win their unsuffixed spelling. A raw tool never overwrites
-  `catalog`, `MCP`, `API`, `nodes`, `skills`, `namespaces`, output/timer helpers,
+  `catalog`, `MCP`, `API`, `nodes`, `skills`, `namespaces`, `results`, `store`,
+  `load`, output/timer helpers,
   or optional Swarm globals.
 - The normal shell `exec` tool is callable as the `exec(...)` guest global when
   policy allows it. The code-mode control `exec` is not recursively available

@@ -1,11 +1,6 @@
-// Health check adapters preserve check metadata and structured finding identities.
 import type { SecurityAuditFinding } from "../security/audit.types.js";
 import type { DoctorHealthCheck } from "./health-check-runner-types.js";
 import type { HealthFinding } from "./health-checks.js";
-
-export function copyHealthCheck(check: DoctorHealthCheck): DoctorHealthCheck {
-  return { ...check };
-}
 
 // Snapshot metadata now; method lookup and receiver remain owned by the input check.
 export function normalizeHealthCheck(check: DoctorHealthCheck): DoctorHealthCheck {

@@ -1,4 +1,3 @@
-// Generate Prompt Snapshots script supports OpenClaw repository automation.
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
@@ -8,6 +7,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { applyPatch, createTwoFilesPatch, FILE_HEADERS_ONLY, parsePatch } from "diff";
 import { createHappyPathPromptSnapshotFiles } from "../test/helpers/agents/happy-path-prompt-snapshots.js";
+import { createLocalOllamaToolSurfaceSnapshotFiles } from "../test/helpers/agents/local-ollama-tool-surface-snapshots.js";
 import {
   CODEX_PROMPT_SNAPSHOT_BASE_SCENARIO,
   CODEX_PROMPT_SNAPSHOT_FILES,
@@ -234,7 +234,10 @@ async function formatPromptSnapshotFiles(
 }
 
 async function createFormattedPromptSnapshotFiles(): Promise<PromptSnapshotFile[]> {
-  const files = await createHappyPathPromptSnapshotFiles();
+  const files = [
+    ...(await createHappyPathPromptSnapshotFiles()),
+    ...createLocalOllamaToolSurfaceSnapshotFiles(),
+  ];
   const formatted = await formatPromptSnapshotFiles(factorCodexDynamicToolSnapshotFiles(files));
   return factorCodexPromptSnapshotFiles(formatted);
 }
@@ -347,28 +350,20 @@ async function checkSnapshots() {
 }
 
 async function runPromptSnapshotGenerator(argv = process.argv.slice(2)) {
-  if (argv[0] === "--materialize-prompt") {
+  if (argv[0] === "--materialize-prompt" || argv[0] === "--materialize") {
     const scenario = argv[1];
     if (!scenario || argv.length !== 2) {
       console.error(
-        "Usage: node --import tsx scripts/generate-prompt-snapshots.ts --materialize-prompt <scenario>",
+        `Usage: node --import tsx scripts/generate-prompt-snapshots.ts ${argv[0]} <scenario>`,
       );
       process.exitCode = 2;
       return;
     }
-    process.stdout.write(await materializeCodexPromptSnapshot(scenario));
-    return;
-  }
-  if (argv[0] === "--materialize") {
-    const scenario = argv[1];
-    if (!scenario || argv.length !== 2) {
-      console.error(
-        "Usage: node --import tsx scripts/generate-prompt-snapshots.ts --materialize <scenario>",
-      );
-      process.exitCode = 2;
-      return;
-    }
-    process.stdout.write(await materializeCodexDynamicToolSnapshot(scenario));
+    const materialize =
+      argv[0] === "--materialize-prompt"
+        ? materializeCodexPromptSnapshot
+        : materializeCodexDynamicToolSnapshot;
+    process.stdout.write(await materialize(scenario));
     return;
   }
   const mode = argv.includes("--write") ? "write" : argv.includes("--check") ? "check" : undefined;

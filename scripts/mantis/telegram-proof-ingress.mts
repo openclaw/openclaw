@@ -2,6 +2,7 @@ import { appendFile } from "node:fs/promises";
 import http from "node:http";
 import { z } from "zod";
 import { startTelegramTestApiProxy } from "../../.agents/skills/telegram-e2e-userbot/scripts/telegram-test-api-proxy.mjs";
+import { createDeferredCore } from "../../src/shared/deferred.ts";
 import type { TelegramFailureDiagnostic } from "./request-proof.ts";
 import type { TelegramProofPlan } from "./telegram-proof-plan.ts";
 
@@ -95,10 +96,7 @@ export async function startTelegramProofIngress(options: {
       diagnostics.push({ sequence: diagnostics.length + 1, category });
     }
   };
-  let stopForwarding!: (error: Error) => void;
-  const stopped = new Promise<Error>((resolve) => {
-    stopForwarding = resolve;
-  });
+  const { promise: stopped, resolve: stopForwarding } = createDeferredCore<Error>();
   const cancel = () => {
     stopForwarding(new Error("Telegram proof forwarding stopped"));
     for (const controller of readers) {

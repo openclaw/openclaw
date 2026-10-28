@@ -1,29 +1,35 @@
+import type { ConfiguredModelRef } from "@openclaw/model-catalog-core/configured-model-refs";
 import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { nativePluginBindings } from "../plugins/loader-runtime-load.js";
 import type { AgentCredentialMap } from "./agent-auth-credentials.js";
 import { discoverAuthStorageFacts } from "./agent-model-discovery.js";
-import { parseConfiguredModelVisibilityEntries } from "./model-selection-shared.js";
-import { loadPreparedModelRuntimeAuthStore } from "./prepared-model-runtime.auth-store.js";
 import type { PreparedModelRuntimeAgentBaseFacts } from "./prepared-model-runtime.catalog-contract.js";
-import {
-  collectPreparedModelRuntimeConfiguredRefs,
-  collectPreparedModelRuntimeProviderIds,
-} from "./prepared-model-runtime.configured.js";
-import type {
-  PreparedModelRuntimeInput,
-  PreparedModelRuntimeCatalogMode,
-} from "./prepared-model-runtime.types.js";
+import { collectPreparedModelRuntimeProviderIds } from "./prepared-model-runtime.configured.js";
+import type { PreparedModelRuntimeInput } from "./prepared-model-runtime.types.js";
 
-export function prepareAgentFacts(
+export async function prepareAgentFacts(
   input: PreparedModelRuntimeInput,
-  catalogMode: PreparedModelRuntimeCatalogMode,
   ambientCredentials: Readonly<AgentCredentialMap>,
-  additionalProviderIds: readonly string[] = [],
-  includeCredentialProviders = catalogMode === "live",
-): PreparedModelRuntimeAgentBaseFacts {
+  configuredScope: {
+    configuredModelRefs: readonly ConfiguredModelRef[];
+    providerIds: readonly string[];
+  },
+  assertCurrent: () => void,
+  includeCredentialProviders: boolean,
+): Promise<PreparedModelRuntimeAgentBaseFacts> {
   const env = input.env ?? process.env;
-  const preparedStore = loadPreparedModelRuntimeAuthStore(input);
-  const authFacts = discoverAuthStorageFacts(input.agentDir, {
+  const preparedStore = await nativePluginBindings.authStore.prepareAuthProfileStoreForModelRuntime(
+    input.agentDir,
+    {
+      config: input.config,
+      inheritedAuthDir: input.inheritedAuthDir,
+      skipCredentials: input.skipCredentials,
+    },
+    assertCurrent,
+    env,
+  );
+  assertCurrent();
+  const authFacts = await discoverAuthStorageFacts(input.agentDir, {
     config: input.config,
     // Prepared owners consume only the already-published runtime auth generation. External CLI
     // hydration belongs to startup/control-plane and turn-time producers, never rebuilds.
@@ -35,22 +41,15 @@ export function prepareAgentFacts(
     ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
     ...(input.env ? { env } : {}),
   });
-  const credentials = authFacts.credentials;
-  const templateAuthStorage = authFacts.authStorage;
-  const rawConfiguredModelRefs = collectPreparedModelRuntimeConfiguredRefs(
-    input.config,
-    input.agentId,
-    input.readOnly ? input.runtimePluginSelections : undefined,
-  );
   return {
     input,
     env,
     authStore: authFacts.store,
-    templateAuthStorage,
-    credentials,
+    templateAuthStorage: authFacts.authStorage,
+    credentials: authFacts.credentials,
     // Keep order and case-distinct refs: registry lookup remains exact-case even
     // where static/dynamic completion deduplicates case-insensitive merge keys.
-    configuredModelRefs: rawConfiguredModelRefs.flatMap(({ value }) => {
+    configuredModelRefs: configuredScope.configuredModelRefs.flatMap(({ value }) => {
       const ref = parseModelCatalogRef(value);
       return ref ? [ref] : [];
     }),
@@ -58,18 +57,10 @@ export function prepareAgentFacts(
     // stored credential must not pull that provider's complete catalog into the admission path.
     providerIds: [
       ...new Set([
-        ...collectPreparedModelRuntimeProviderIds(
-          input.config,
-          credentials,
-          includeCredentialProviders,
-          rawConfiguredModelRefs,
-          input.agentId,
-        ),
-        ...parseConfiguredModelVisibilityEntries({
-          cfg: input.config,
-          agentId: input.agentId,
-        }).providerWildcards,
-        ...additionalProviderIds.map(normalizeProviderId).filter(Boolean),
+        ...configuredScope.providerIds,
+        ...(includeCredentialProviders
+          ? collectPreparedModelRuntimeProviderIds(input.config, authFacts.credentials, true, [])
+          : []),
       ]),
     ].toSorted((left, right) => left.localeCompare(right)),
   };

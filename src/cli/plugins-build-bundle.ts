@@ -1,12 +1,13 @@
 import { createRequire, isBuiltin } from "node:module";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { parse } from "acorn";
 import type { BuildOptions, BuildResult, PluginBuild } from "esbuild";
+import { createSolidControlUiBuildPlugin } from "./plugins-build-solid.js";
 
 const moduleLocationImport = "openclaw-plugin-bundle:module-location";
 const runtimeFilesImport = "openclaw-plugin-bundle:runtime-files";
 const loadDiagnostics = {
-  "unsupported-dynamic-import": "error",
   "unsupported-require-call": "error",
   "indirect-require": "error",
 } satisfies BuildOptions["logOverride"];
@@ -57,11 +58,16 @@ export async function buildPluginBundle(options: PluginBundleOptions) {
       metafile: true,
       minifySyntax: true,
       logLevel: "silent",
-      logOverride: loadDiagnostics,
+      logOverride: {
+        ...loadDiagnostics,
+        // Dependencies can contain unused loaders. Check retained imports after tree shaking.
+        "unsupported-dynamic-import": "silent",
+      },
       // ESM output omits require.resolve from esbuild's import metadata. Inject
       // location bindings hygienically; syntax folding also handles ["resolve"].
       inject: [moduleLocationImport],
       plugins: [
+        ...(!backend ? [createSolidControlUiBuildPlugin(options.absWorkingDir)] : []),
         {
           name: "plugin-bundle",
           setup(build: PluginBuild) {
@@ -123,15 +129,23 @@ export async function buildPluginBundle(options: PluginBundleOptions) {
     }
     throw cause;
   }
-  const imports = Object.values(result.metafile.outputs).flatMap((output) => output.imports);
+  const outputs = result.metafile.outputs;
+  const imports = Object.values(outputs).flatMap((output) => output.imports);
   if (imports.some((item) => item.path === runtimeFilesImport)) {
     const reason = backend
       ? "Plugin artifacts cannot use module-relative runtime files or require.resolve."
       : "Control UI builds cannot use require.resolve.";
     throw new Error(`${reason} ${recovery}`);
   }
+  const outputPaths = new Set(
+    Object.keys(outputs).map((file) => resolve(options.absWorkingDir, file)),
+  );
   if (
-    imports.some((item) => item.external && (!backend || !isPluginBundleHostImport(item.path))) ||
+    imports.some((item) =>
+      item.external
+        ? !backend || !isPluginBundleHostImport(item.path)
+        : !outputPaths.has(resolve(options.absWorkingDir, item.path)),
+    ) ||
     (backend && result.outputFiles.some((file) => !file.path.endsWith(".js")))
   ) {
     throw new Error(
@@ -140,5 +154,49 @@ export async function buildPluginBundle(options: PluginBundleOptions) {
         : "Control UI builds must bundle their browser dependencies.",
     );
   }
+  for (const file of result.outputFiles) {
+    if (
+      file.path.endsWith(".js") &&
+      hasUnbundledDynamicImport(
+        parse(file.text, { ecmaVersion: "latest", sourceType: "module" }),
+        (specifier) =>
+          (backend && isPluginBundleHostImport(specifier)) ||
+          ((specifier.startsWith("./") || specifier.startsWith("../")) &&
+            outputPaths.has(resolve(dirname(file.path), specifier))),
+      )
+    ) {
+      throw new Error(
+        `Dynamic imports in plugin builds must use bundled literal paths; a retained import expression in ${file.path} will not be bundled. ${recovery}`,
+      );
+    }
+  }
   return result.outputFiles.toSorted((left, right) => left.path.localeCompare(right.path));
+}
+
+function hasUnbundledDynamicImport(
+  node: unknown,
+  isBundled: (specifier: string) => boolean,
+): boolean {
+  if (!isRecord(node)) {
+    return false;
+  }
+  if (node.type === "ImportExpression") {
+    const source = node.source;
+    if (
+      !isRecord(source) ||
+      source.type !== "Literal" ||
+      typeof source.value !== "string" ||
+      !isBundled(source.value)
+    ) {
+      return true;
+    }
+  }
+  for (const value of Object.values(node)) {
+    for (const child of Array.isArray(value) ? value : [value]) {
+      if (hasUnbundledDynamicImport(child, isBundled)) {
+        return true;
+      }
+    }
+  }
+  return false;
 }

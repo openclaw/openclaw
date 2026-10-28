@@ -8,35 +8,65 @@ import type {
   LegacyStateMigrationStepReceipt,
 } from "./state-migrations.types.js";
 
+export function createCallerModeExecutionFixture(root: string, copied = false) {
+  const homeDir = path.join(root, "home");
+  const stateDir = path.join(root, copied ? "copied-state" : "state");
+  const configPath = path.join(root, copied ? "copied-openclaw.json" : "openclaw.json");
+  fs.mkdirSync(homeDir, { recursive: true });
+  fs.mkdirSync(stateDir, { recursive: true });
+  fs.symlinkSync(
+    path.resolve("extensions"),
+    path.join(root, "extensions"),
+    process.platform === "win32" ? "junction" : "dir",
+  );
+  fs.writeFileSync(configPath, "{}\n");
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    HOME: homeDir,
+    OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve("extensions"),
+    OPENCLAW_CONFIG_PATH: configPath,
+    OPENCLAW_STATE_DIR: stateDir,
+    OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+  };
+  return { root, homeDir, stateDir, configPath, env };
+}
+
+export function writeLegacyDoctorSources(stateDir: string) {
+  const execPath = path.join(stateDir, "exec-approvals.json");
+  fs.writeFileSync(
+    execPath,
+    `${JSON.stringify({
+      version: 1,
+      defaults: { security: "allowlist", ask: "on-miss" },
+      agents: { main: { allowlist: [{ pattern: "/usr/bin/rg" }] } },
+    })}\n`,
+  );
+  return { execPath };
+}
+
+export function writeLegacyDoctorAndTuiSources(stateDir: string, tuiValue: unknown) {
+  const { execPath } = writeLegacyDoctorSources(stateDir);
+  const tuiPath = path.join(stateDir, "tui", "last-session.json");
+  fs.mkdirSync(path.dirname(tuiPath), { recursive: true });
+  fs.writeFileSync(tuiPath, `${JSON.stringify(tuiValue)}\n`);
+  return { execPath, tuiPath };
+}
+
 export function writeLegacyStateSchemaV1(stateDatabasePath: string): void {
   fs.mkdirSync(path.dirname(stateDatabasePath), { recursive: true });
-  const database = new DatabaseSync(stateDatabasePath);
-  try {
-    database.exec(`
+  using database = new DatabaseSync(stateDatabasePath);
+  database.exec(`
       PRAGMA user_version = 1;
       CREATE TABLE audit_events (
         sequence INTEGER PRIMARY KEY AUTOINCREMENT,
-        event_id TEXT NOT NULL UNIQUE,
-        source_id TEXT NOT NULL UNIQUE,
-        source_sequence INTEGER NOT NULL,
-        occurred_at INTEGER NOT NULL,
-        kind TEXT NOT NULL,
-        action TEXT NOT NULL,
-        status TEXT NOT NULL,
+        event_id TEXT NOT NULL UNIQUE, source_id TEXT NOT NULL UNIQUE,
+        source_sequence INTEGER NOT NULL, occurred_at INTEGER NOT NULL,
+        kind TEXT NOT NULL, action TEXT NOT NULL, status TEXT NOT NULL,
         error_code TEXT,
-        actor_type TEXT NOT NULL,
-        actor_id TEXT NOT NULL,
-        agent_id TEXT NOT NULL,
-        session_key TEXT,
-        session_id TEXT,
-        run_id TEXT NOT NULL,
-        tool_call_id TEXT,
-        tool_name TEXT
+        actor_type TEXT NOT NULL, actor_id TEXT NOT NULL, agent_id TEXT NOT NULL,
+        session_key TEXT, session_id TEXT, run_id TEXT NOT NULL, tool_call_id TEXT, tool_name TEXT
       );
     `);
-  } finally {
-    database.close();
-  }
 }
 
 export function snapshotFiles(root: string): Record<string, string> {
@@ -65,54 +95,32 @@ export function expectBlockedTailInPlanOrder(params: {
   receipts: readonly LegacyStateMigrationStepReceipt[];
   blockerId: string;
 }): void {
-  expect(params.receipts.map((receipt) => receipt.id)).toEqual(
-    params.plan.steps.map((step) => step.id),
-  );
-  const blockerIndex = params.plan.steps.findIndex((step) => step.id === params.blockerId);
+  const { plan, receipts, blockerId } = params;
+  expect(receipts.map((receipt) => receipt.id)).toEqual(plan.steps.map((step) => step.id));
+  const blockerIndex = plan.steps.findIndex((step) => step.id === blockerId);
   expect(blockerIndex).toBeGreaterThanOrEqual(0);
-  expect(
-    params.receipts.slice(blockerIndex + 1).map((receipt) => ({
-      id: receipt.id,
-      outcome: receipt.outcome,
-      refusalCode: receipt.refusal?.code,
-    })),
-  ).toEqual(
-    params.plan.steps.slice(blockerIndex + 1).map((step) => ({
-      id: step.id,
-      outcome: "refused",
-      refusalCode: "blocked-by-prior-refusal",
-    })),
-  );
+  for (const { outcome, refusal } of receipts.slice(blockerIndex + 1)) {
+    expect([outcome, refusal?.code]).toEqual(["refused", "blocked-by-prior-refusal"]);
+  }
 }
 
 function stableStepDescriptor(
   step: LegacyStateMigrationPlan["steps"][number] | LegacyStateMigrationStepReceipt,
 ) {
-  return {
-    id: step.id,
-    phase: step.phase,
-    source: step.source,
-    target: step.target,
-    requiredness: step.requiredness,
-    reversibility: step.reversibility,
-  };
+  return [step.id, step.phase, step.source, step.target, step.requiredness, step.reversibility];
 }
 
 export function expectPlanReceiptDescriptorsToMatch(params: {
   plan: LegacyStateMigrationPlan;
   receipts: readonly LegacyStateMigrationStepReceipt[];
 }): void {
-  expect(params.receipts.map(stableStepDescriptor)).toEqual(
-    params.plan.steps.map(stableStepDescriptor),
-  );
+  const { plan, receipts } = params;
+  expect(receipts.map(stableStepDescriptor)).toEqual(plan.steps.map(stableStepDescriptor));
 }
 
 export function createCallerModeSnapshot(
   fixture: Pick<LegacyStateMigrationPlan["snapshot"], "homeDir" | "configPath" | "stateDir">,
 ): LegacyStateMigrationPlan["snapshot"] {
-  return {
-    homeDir: fixture.homeDir,
-    configPath: fixture.configPath,
-    stateDir: fixture.stateDir,
-  };
+  const { homeDir, configPath, stateDir } = fixture;
+  return { homeDir, configPath, stateDir };
 }

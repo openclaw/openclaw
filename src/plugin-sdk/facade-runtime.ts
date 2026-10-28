@@ -1,4 +1,3 @@
-// Facade runtime helpers load plugin API facades from installed plugin packages.
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { areBundledPluginsDisabled, resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
@@ -17,7 +16,7 @@ import {
   type FacadeModuleLocation,
 } from "./facade-loader.js";
 import {
-  createFacadeResolutionKey as createFacadeResolutionKeyShared,
+  createFacadeResolutionKey,
   resolveBundledMetadataManifestRecord,
   resolveRuntimeFacadeModuleLocation,
   resolveRegistryPluginModuleLocationFromRecords,
@@ -36,13 +35,6 @@ const OPENCLAW_PACKAGE_ROOT =
   }) ?? fileURLToPath(new URL("../..", import.meta.url));
 const CURRENT_MODULE_PATH = fileURLToPath(import.meta.url);
 const OPENCLAW_SOURCE_EXTENSIONS_ROOT = path.resolve(OPENCLAW_PACKAGE_ROOT, "extensions");
-function createFacadeResolutionKey(params: BundledPluginPublicSurfaceParams): string {
-  return createFacadeResolutionKeyShared({
-    ...params,
-    bundledPluginsDir: resolveBundledPluginsDir(params.env ?? process.env),
-  });
-}
-
 function resolveFacadeModuleLocationUncached(
   params: BundledPluginPublicSurfaceParams,
 ): { modulePath: string; boundaryRoot: string } | null {
@@ -68,7 +60,10 @@ function resolveFacadeModuleLocation(
   if (params.env !== undefined && params.env !== process.env) {
     return resolveFacadeModuleLocationUncached(params);
   }
-  const resolutionKey = `facade-registry:${createFacadeResolutionKey(params)}`;
+  const resolutionKey = `facade-registry:${createFacadeResolutionKey({
+    ...params,
+    bundledPluginsDir: resolveBundledPluginsDir(params.env ?? process.env),
+  })}`;
   const artifacts = getPluginCacheRoot(OPENCLAW_PACKAGE_ROOT).artifacts;
   const cached = artifacts.get(resolutionKey);
   if (cached !== undefined) {

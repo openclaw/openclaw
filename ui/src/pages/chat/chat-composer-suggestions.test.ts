@@ -2,6 +2,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { i18n, t } from "../../i18n/index.ts";
 import {
   buildFallbackSlashCommands,
@@ -9,15 +10,16 @@ import {
   SLASH_COMMANDS,
 } from "../../lib/chat/commands.ts";
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
-import { resetChatViewState } from "./chat-view-state.ts";
+import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { resetChatViewState } from "./chat-view-state.test-support.ts";
 import {
   createReactiveDraftHarness,
-  createSlashRerenderHarness,
+  getComposerTextarea,
   inputDraft,
   inputDraftAtEnd,
   keydownComposer,
   replaceSkillCommands,
-  requireElement,
 } from "./chat-view.test-helpers.ts";
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
 import {
@@ -37,6 +39,30 @@ afterEach(() => {
   resetTranscriptTestDom();
 });
 
+function thinkingSession(levels = ["low", "high"]) {
+  const sessions = createSessionsListResult({
+    model: "gpt-5.6-sol",
+    modelProvider: "openai",
+    thinkingLevels: levels.map((id) => ({ id, label: id })),
+  });
+  return { sessions, selectedSession: expectDefined(sessions.sessions[0], "active session") };
+}
+
+function expectAbsent(element: Element | null, ...names: string[]) {
+  for (const name of names) {
+    expect(element?.hasAttribute(name), name).toBe(false);
+  }
+}
+const text = (element: Element | null, selector: string) =>
+  element?.querySelector(selector)?.textContent?.trim();
+const optionNames = (container: HTMLElement) =>
+  Array.from(container.querySelectorAll(".slash-menu [role='option']"), (option) =>
+    option.querySelector(".slash-menu-name")?.textContent?.trim(),
+  );
+const activeId = (container: HTMLElement) =>
+  getComposerTextarea(container).getAttribute("aria-activedescendant");
+const menu = (container: HTMLElement, suffix = "slash-menu-listbox") =>
+  container.querySelector(`#chat-single-${suffix}`);
 describe("chat composer suggestion accessibility", () => {
   it("opens a skill picker for $ references anywhere in a normal prompt", async () => {
     replaceSkillCommands({
@@ -48,177 +74,92 @@ describe("chat composer suggestion accessibility", () => {
     const { container } = createReactiveDraftHarness({ onSlashIntent });
 
     inputDraftAtEnd(container, "Polish this with $pro:");
-    await Promise.resolve();
-    await Promise.resolve();
-
-    const listbox = container.querySelector<HTMLElement>("#chat-single-skill-menu-listbox");
-    const renderedTextarea = container.querySelector<HTMLTextAreaElement>("textarea");
-    expect(listbox?.getAttribute("aria-label")).toBe("Skill references");
-    expect(listbox?.querySelector(".slash-menu-name")?.textContent).toBe("Prose Writer");
-    expect(renderedTextarea?.getAttribute("aria-controls")).toBe("chat-single-skill-menu-listbox");
-    expect(renderedTextarea?.hasAttribute("aria-expanded")).toBe(false);
-    expect(renderedTextarea?.getAttribute("aria-haspopup")).toBe("listbox");
-    expect(onSlashIntent).toHaveBeenCalledOnce();
-  });
-
-  it("wires command suggestions to the composer with stable active option ids", () => {
-    const harness = createSlashRerenderHarness();
-    const container = harness.inputAndRender(harness.container, "/");
-
-    const wrapper = container.querySelector<HTMLElement>(".agent-chat__composer-combobox");
-    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
-    const listbox = container.querySelector<HTMLElement>("#chat-single-slash-menu-listbox");
-    const activeId = textarea?.getAttribute("aria-activedescendant");
-
-    expect(wrapper?.hasAttribute("role")).toBe(false);
-    expect(wrapper?.hasAttribute("aria-expanded")).toBe(false);
-    expect(wrapper?.hasAttribute("aria-haspopup")).toBe(false);
-    expect(wrapper?.hasAttribute("aria-controls")).toBe(false);
-    expect(textarea?.hasAttribute("role")).toBe(false);
-    expect(textarea?.hasAttribute("aria-expanded")).toBe(false);
-    expect(textarea?.getAttribute("aria-haspopup")).toBe("listbox");
-    expect(textarea?.getAttribute("aria-controls")).toBe("chat-single-slash-menu-listbox");
-    expect(textarea?.getAttribute("aria-autocomplete")).toBe("list");
-    expect(listbox?.getAttribute("role")).toBe("listbox");
-    expect(activeId).toMatch(/^chat-single-slash-option-command-/u);
-    expect(listbox?.querySelector(`#${activeId}`)?.getAttribute("role")).toBe("option");
-  });
-
-  it("keeps filtered command DOM and keyboard order aligned with relevance", () => {
-    replaceSlashCommands([
-      {
-        key: "pair",
-        name: "pair",
-        description: "Pair a device.",
-        tier: "power",
-        category: "tools",
-      },
-      {
-        key: "pair-device",
-        name: "pair-device",
-        description: "Pair a specific device.",
-        tier: "standard",
-        category: "session",
-      },
-      {
-        key: "openclaw",
-        name: "openclaw",
-        description: "Run the setup and repair helper.",
-        tier: "essential",
-        category: "tools",
-      },
-    ]);
-    const harness = createSlashRerenderHarness();
-    let container = harness.inputAndRender(harness.container, "/pair");
-
-    expect(
-      Array.from(container.querySelectorAll<HTMLElement>(".slash-menu [role='option']")).map(
-        (option) => option.querySelector(".slash-menu-name")?.textContent?.trim(),
-      ),
-    ).toEqual(["/pair", "/pair-device", "/openclaw"]);
-    expect(
-      Array.from(container.querySelectorAll(".slash-menu-group__label")).map((label) =>
-        label.textContent?.trim(),
-      ),
-    ).toEqual(["Tools", "Session", "Tools"]);
-
-    keydownComposer(container, "ArrowDown");
-    container = harness.renderCurrent();
-    const options = container.querySelectorAll<HTMLElement>(".slash-menu [role='option']");
-    const activeId = container
-      .querySelector<HTMLTextAreaElement>("textarea")
-      ?.getAttribute("aria-activedescendant");
-    expect(options[1]?.id).toBe(activeId);
-    expect(options[1]?.getAttribute("aria-selected")).toBe("true");
-
-    keydownComposer(container, "Enter");
-    container = harness.renderCurrent();
-    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("/pair-device ");
-    expect(container.querySelector(".slash-menu")).toBeNull();
-  });
-
-  it("keeps a stable composer name when attachments change its placeholder", () => {
-    const harness = createReactiveDraftHarness();
-    const textarea = requireElement(
-      harness.container,
-      "textarea",
-      "chat composer",
-    ) as HTMLTextAreaElement;
-    const initialPlaceholder = textarea.placeholder;
-    expect(textarea.getAttribute("aria-label")).toBe("Chat composer");
-    expect(textarea.hasAttribute("role")).toBe(false);
-
-    harness.renderCurrent({
-      attachments: [
-        {
-          id: "image",
-          fileName: "sample.png",
-          mimeType: "image/png",
-          previewUrl: "blob:sample-image",
-          sizeBytes: 3,
-        },
-      ],
+    await waitForSolid(() => {
+      const listbox = menu(container, "skill-menu-listbox");
+      const renderedTextarea = getComposerTextarea(container);
+      expect(renderedTextarea.getAttribute("aria-label")).toBe("Chat composer");
+      expectAbsent(renderedTextarea, "role");
+      expect(listbox?.getAttribute("aria-label")).toBe("Skill references");
+      expect(listbox?.querySelector(".slash-menu-name")?.textContent).toBe("Prose Writer");
+      expect(renderedTextarea.getAttribute("aria-controls")).toBe("chat-single-skill-menu-listbox");
+      expectAbsent(renderedTextarea, "aria-expanded");
+      expect(renderedTextarea.getAttribute("aria-haspopup")).toBe("listbox");
+      expect(onSlashIntent).toHaveBeenCalledOnce();
     });
-    expect(harness.container.querySelector(".chat-attachment-thumb")).not.toBeNull();
-    expect(textarea.placeholder).not.toBe(initialPlaceholder);
-    expect(textarea.getAttribute("aria-label")).toBe("Chat composer");
-    expect(textarea.hasAttribute("role")).toBe(false);
-
-    harness.renderCurrent({ attachments: [] });
-    expect(textarea.placeholder).toBe(initialPlaceholder);
-    expect(textarea.getAttribute("aria-label")).toBe("Chat composer");
   });
 
-  it("updates the active descendant and live announcement during command navigation", () => {
-    const harness = createSlashRerenderHarness();
-    let container = harness.inputAndRender(harness.container, "/");
-    const initialActiveId = container
-      .querySelector<HTMLTextAreaElement>("textarea")
-      ?.getAttribute("aria-activedescendant");
+  it.each(["/", "/tools "])(
+    "keeps %s options accessible while navigating and closing",
+    async (draft) => {
+      const { container } = createReactiveDraftHarness();
+      inputDraft(container, draft);
 
-    keydownComposer(container, "ArrowDown");
-    container = harness.renderCurrent();
+      const wrapper = container.querySelector<HTMLElement>(".agent-chat__composer-combobox");
+      const textarea = getComposerTextarea(container);
+      const listbox = await waitForSolid(() =>
+        expectDefined(menu(container), "slash command listbox"),
+      );
+      const initialActiveId = activeId(container);
 
-    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
-    const nextActiveId = textarea?.getAttribute("aria-activedescendant");
-    const activeOption = nextActiveId
-      ? container.querySelector<HTMLElement>(`#${nextActiveId}`)
-      : null;
-    const status = container.querySelector<HTMLElement>("#chat-single-slash-active-announcement");
+      expectAbsent(wrapper, "role", "aria-expanded", "aria-haspopup", "aria-controls");
+      expectAbsent(textarea, "role", "aria-expanded");
+      expect(textarea.getAttribute("aria-haspopup")).toBe("listbox");
+      expect(textarea.getAttribute("aria-controls")).toBe("chat-single-slash-menu-listbox");
+      expect(textarea.getAttribute("aria-autocomplete")).toBe("list");
+      expect(listbox?.getAttribute("role")).toBe("listbox");
+      if (draft === "/") {
+        expect(initialActiveId).toMatch(/^chat-single-slash-option-command-/u);
+      } else {
+        expect(listbox?.getAttribute("aria-label")).toBe("Command arguments");
+        expect(initialActiveId).toBe("chat-single-slash-option-arg-tools-compact");
+        expect(listbox?.querySelector(`#${initialActiveId}`)?.getAttribute("aria-selected")).toBe(
+          "true",
+        );
+      }
+      expect(listbox?.querySelector(`#${initialActiveId}`)?.getAttribute("role")).toBe("option");
 
-    if (!nextActiveId) {
-      throw new Error("Expected command navigation to set aria-activedescendant");
-    }
-    expect(nextActiveId).not.toBe(initialActiveId);
-    expect(activeOption?.getAttribute("aria-selected")).toBe("true");
-    expect(status?.getAttribute("aria-live")).toBe("polite");
-    const announcementText = status?.textContent?.trim();
-    if (!announcementText) {
-      throw new Error("Expected command navigation to update the live announcement");
-    }
-    const expectedAnnouncement = [
-      activeOption?.querySelector(".slash-menu-name")?.textContent?.trim(),
-      activeOption?.querySelector(".slash-menu-args")?.textContent?.trim(),
-      activeOption?.querySelector(".slash-menu-desc")?.textContent?.trim(),
-    ]
-      .filter(Boolean)
-      .join(" ");
-    expect(announcementText).toBe(expectedAnnouncement);
-  });
+      keydownComposer(container, "ArrowDown");
+
+      const nextActiveId = expectDefined(activeId(container), "active descendant");
+      const activeOption = container.querySelector(`#${nextActiveId}`);
+      const status = menu(container, "slash-active-announcement");
+
+      expect(nextActiveId).not.toBe("");
+      expect(nextActiveId).not.toBe(initialActiveId);
+      expect(activeOption?.getAttribute("aria-selected")).toBe("true");
+      expect(status?.getAttribute("aria-live")).toBe("polite");
+      const announcementText = expectDefined(status?.textContent?.trim(), "announcement");
+      expect(announcementText).not.toBe("");
+      const expectedAnnouncement =
+        draft === "/tools "
+          ? `/tools ${text(activeOption, ".slash-menu-name")}`
+          : [".slash-menu-name", ".slash-menu-args", ".slash-menu-desc"]
+              .map((selector) => text(activeOption, selector))
+              .filter(Boolean)
+              .join(" ");
+      expect(announcementText).toBe(expectedAnnouncement);
+
+      inputDraft(container, "plain message");
+
+      expect(container.querySelector(".slash-menu")).toBeNull();
+      expectAbsent(getComposerTextarea(container), "aria-expanded", "aria-activedescendant");
+      expectAbsent(container.querySelector(".agent-chat__composer-combobox"), "aria-expanded");
+    },
+  );
 
   it("uses the localized command description in the live announcement", async () => {
-    const clearCommand = SLASH_COMMANDS.find((command) => command.name === "clear");
-    if (!clearCommand) {
-      throw new Error("Expected the clear slash command");
-    }
+    const clearCommand = expectDefined(
+      SLASH_COMMANDS.find((command) => command.name === "clear"),
+      "clear slash command",
+    );
     const originalDescriptionKey = clearCommand.descriptionKey;
     clearCommand.descriptionKey = "common.health";
     await i18n.setLocale("zh-CN");
     try {
-      const harness = createSlashRerenderHarness();
-      const container = harness.inputAndRender(harness.container, "/clear");
+      const { container } = createReactiveDraftHarness();
+      inputDraft(container, "/clear");
 
-      const status = container.querySelector<HTMLElement>("#chat-single-slash-active-announcement");
+      const status = menu(container, "slash-active-announcement");
       expect(status?.textContent?.trim()).toBe(`/clear ${t("common.health")}`);
     } finally {
       clearCommand.descriptionKey = originalDescriptionKey;
@@ -226,141 +167,102 @@ describe("chat composer suggestion accessibility", () => {
     }
   });
 
-  it("wires fixed argument suggestions with command-and-argument option ids", () => {
-    const harness = createSlashRerenderHarness();
-    const container = harness.inputAndRender(harness.container, "/tools ");
-
-    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
-    const listbox = container.querySelector<HTMLElement>("#chat-single-slash-menu-listbox");
-    const activeId = textarea?.getAttribute("aria-activedescendant");
-
-    expect(listbox?.getAttribute("aria-label")).toBe("Command arguments");
-    expect(activeId).toBe("chat-single-slash-option-arg-tools-compact");
-    expect(listbox?.querySelector(`#${activeId}`)?.getAttribute("aria-selected")).toBe("true");
+  it("refreshes the current thinking argument menu after its catalog settles", async () => {
+    const refresh = createDeferred();
+    const { container } = createReactiveDraftHarness({
+      ...thinkingSession(["low", "ultra"]),
+      onSlashIntent: () => refresh.promise,
+    });
+    inputDraft(container, "/think");
+    keydownComposer(container, "Tab");
+    expect(getComposerTextarea(container).value).toBe("/think ");
+    refresh.resolve();
+    await refresh.promise;
+    await waitForSolid(() => expect(optionNames(container)).toEqual(["default", "low", "ultra"]));
   });
 
-  it.each([
-    { name: "direct", sessionKey: "main", rowKey: "main" },
-    { name: "global alias", sessionKey: "agent:work:main", rowKey: "global" },
-  ])(
-    "opens model-supported thinking arguments after tab-completing /think ($name)",
-    ({ sessionKey, rowKey }) => {
-      const sessions = createSessionsListResult({
-        model: "gpt-5.6-sol",
-        modelProvider: "openai",
-      });
-      const session = expectDefined(sessions.sessions[0], "active session");
-      session.key = rowKey;
-      session.thinkingLevels = [
-        { id: "off", label: "off" },
-        { id: "minimal", label: "minimal" },
-        { id: "low", label: "low" },
-        { id: "medium", label: "medium" },
-        { id: "high", label: "high" },
-        { id: "xhigh", label: "xhigh" },
-        { id: "max", label: "max" },
-        { id: "ultra", label: "ultra" },
-      ];
-      const { container } = createReactiveDraftHarness({
-        sessions,
-        sessionKey,
-        selectedSession: session,
-      });
+  it("keeps the keyboard-selected command when a pending catalog refresh settles", async () => {
+    replaceSlashCommands([
+      { key: "pair", name: "pair", description: "Generate setup codes." },
+      { key: "pair-device", name: "pair-device", description: "Pair a specific device." },
+    ]);
+    const refresh = createDeferred();
+    const { container } = createReactiveDraftHarness({ onSlashIntent: () => refresh.promise });
+    inputDraftAtEnd(container, "/pair");
+    await waitForSolid(() => expect(optionNames(container)).toEqual(["/pair", "/pair-device"]));
+    keydownComposer(container, "ArrowDown");
+    const selectedId = activeId(container);
+    expect(selectedId).toBe("chat-single-slash-option-command-pair-device");
 
+    refresh.resolve();
+    await refresh.promise;
+    await Promise.resolve();
+    flush();
+    expect(activeId(container)).toBe(selectedId);
+    expect(container.querySelector(`#${selectedId}`)?.getAttribute("aria-selected")).toBe("true");
+    keydownComposer(container, "Enter");
+    expect(getComposerTextarea(container).value).toBe("/pair-device ");
+  });
+
+  it.each([false, true])(
+    "suppresses thinking arguments when switching starts after opening=%s",
+    (opened) => {
+      const { container, renderCurrent } = createReactiveDraftHarness({
+        ...thinkingSession(),
+        modelSwitching: !opened,
+      });
       inputDraft(container, "/think");
       keydownComposer(container, "Tab");
-
-      expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("/think ");
-      expect(
-        Array.from(container.querySelectorAll<HTMLElement>(".slash-menu [role='option']")).map(
-          (option) => option.querySelector(".slash-menu-name")?.textContent?.trim(),
-        ),
-      ).toEqual(["default", "off", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]);
+      expect(getComposerTextarea(container).value).toBe("/think ");
+      if (opened) {
+        expect(container.querySelector(".slash-menu")).not.toBeNull();
+        expect(activeId(container)).toBe("chat-single-slash-option-arg-think-default");
+        renderCurrent({ modelSwitching: true });
+      }
+      expect(container.querySelector(".slash-menu")).toBeNull();
+      expect(getComposerTextarea(container).hasAttribute("aria-activedescendant")).toBe(false);
     },
   );
 
-  it("suppresses thinking arguments while the active model is switching", () => {
-    const sessions = createSessionsListResult({
-      model: "gpt-5.6-sol",
-      modelProvider: "openai",
-    });
-    const session = expectDefined(sessions.sessions[0], "active session");
-    session.thinkingLevels = [
-      { id: "low", label: "low" },
-      { id: "high", label: "high" },
-    ];
-    const { container } = createReactiveDraftHarness({
-      modelSwitching: true,
-      sessions,
-      selectedSession: session,
-    });
-
-    inputDraft(container, "/think");
-    keydownComposer(container, "Tab");
-
-    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("/think ");
-    expect(container.querySelector(".slash-menu")).toBeNull();
+  it("does not revive a finished composer after a queued selection event", () => {
+    let verifyFinished: () => void = () => undefined;
+    // Finish hooks unwind in reverse registration order.
+    onTestFinished(() => verifyFinished());
+    const { container } = createReactiveDraftHarness();
+    onTestFinished(cleanupSolid);
+    const textarea = getComposerTextarea(container);
+    verifyFinished = () => {
+      try {
+        expect(container.querySelector("textarea")).toBeNull();
+        textarea.dispatchEvent(new Event("select", { bubbles: true }));
+        expect(container.querySelector("textarea")).toBeNull();
+      } finally {
+        cleanupSolid();
+        resetChatViewState();
+      }
+    };
+    textarea.value = "$queued";
   });
+});
 
-  it("closes open thinking arguments when the active model starts switching", () => {
-    const sessions = createSessionsListResult({
-      model: "gpt-5.6-sol",
-      modelProvider: "openai",
-    });
-    const session = expectDefined(sessions.sessions[0], "active session");
-    session.thinkingLevels = [
-      { id: "low", label: "low" },
-      { id: "high", label: "high" },
-    ];
-    const { container, renderCurrent } = createReactiveDraftHarness({
-      sessions,
-      selectedSession: session,
-    });
-
-    inputDraft(container, "/think");
-    keydownComposer(container, "Tab");
-    expect(container.querySelector(".slash-menu")).not.toBeNull();
-    expect(
-      container
-        .querySelector<HTMLTextAreaElement>("textarea")
-        ?.getAttribute("aria-activedescendant"),
-    ).toBe("chat-single-slash-option-arg-think-default");
-
-    renderCurrent({ modelSwitching: true });
-
-    expect(container.querySelector(".slash-menu")).toBeNull();
-    expect(
-      container
-        .querySelector<HTMLTextAreaElement>("textarea")
-        ?.hasAttribute("aria-activedescendant"),
-    ).toBe(false);
+it("leaves mobile Return for editing even with slash suggestions open", async () => {
+  const draft = "/res";
+  vi.spyOn(navigator, "userAgent", "get").mockReturnValue("Android");
+  onTestFinished(() => {
+    vi.restoreAllMocks();
   });
-
-  it("clears active descendant when suggestions close", () => {
-    const harness = createSlashRerenderHarness();
-    let container = harness.inputAndRender(harness.container, "/");
-    const activeDescendant = container
-      .querySelector<HTMLTextAreaElement>("textarea")
-      ?.getAttribute("aria-activedescendant");
-    if (!activeDescendant) {
-      throw new Error("Expected slash suggestions to set aria-activedescendant");
-    }
-
-    container = harness.inputAndRender(container, "plain message");
-
-    expect(container.querySelector(".slash-menu")).toBeNull();
-    expect(
-      container.querySelector<HTMLTextAreaElement>("textarea")?.hasAttribute("aria-expanded"),
-    ).toBe(false);
-    expect(
-      container
-        .querySelector<HTMLElement>(".agent-chat__composer-combobox")
-        ?.hasAttribute("aria-expanded"),
-    ).toBe(false);
-    expect(
-      container
-        .querySelector<HTMLTextAreaElement>("textarea")
-        ?.hasAttribute("aria-activedescendant"),
-    ).toBe(false);
-  });
+  replaceSlashCommands([
+    { key: "reset", name: "reset", description: "Reset the session.", executeLocal: true },
+  ]);
+  const onSend = vi.fn();
+  const { container } = createReactiveDraftHarness({ onSend });
+  inputDraftAtEnd(container, draft);
+  await waitForSolid(() => expect(container.querySelector(".slash-menu-item")).not.toBeNull());
+  const textarea = getComposerTextarea(container)!;
+  for (const modifiers of [{}, { ctrlKey: true }, { metaKey: true }]) {
+    const event = keydownComposer(container, "Enter", modifiers);
+    expect(event.defaultPrevented).toBe(false);
+    expect(textarea.value).toBe(draft);
+    expect(onSend).not.toHaveBeenCalled();
+  }
 });

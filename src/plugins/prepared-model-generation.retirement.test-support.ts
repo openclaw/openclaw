@@ -1,8 +1,8 @@
-// Real generation cleanup scenarios share the owning suite’s loader and scoped state.
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
+import { modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import {
   acquireAgentRunPreparedModelRuntime,
   loadPublishedGatewayReplyDispatchRuntime,
@@ -17,7 +17,21 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { getPluginInstance, type PluginInstanceHandle } from "./plugin-instance-scope.js";
+import { hasRetainedPluginRuntimeCloseError } from "./runtime-close-error.js";
 import { createColdPluginFixture } from "./test-helpers/cold-plugin-fixtures.js";
+
+export function generationModels(provider: string, apiKey?: string): OpenClawConfig["models"] {
+  return {
+    providers: {
+      [provider]: {
+        api: "openai-responses",
+        baseUrl: "http://127.0.0.1:1/v1",
+        ...(apiKey ? { apiKey } : {}),
+        models: [modelDefinition("local", { name: "Local", reasoning: false, maxTokens: 1024 })],
+      },
+    },
+  };
+}
 
 function hasCause(error: unknown, message: string): boolean {
   return collectErrorGraphCandidates(error, (candidate) => [
@@ -56,28 +70,10 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
   );
   const config: OpenClawConfig = {
     agents: {
-      list: [{ id, default: true, workspace: state.workspaceDir }],
+      entries: { [id]: { workspace: state.workspaceDir } },
       defaults: { model: `${id}/local` },
     },
-    models: {
-      providers: {
-        [id]: {
-          api: "openai-responses",
-          baseUrl: "http://127.0.0.1:1/v1",
-          apiKey: "synthetic-unused",
-          models: [
-            {
-              id: "local",
-              name: "Local",
-              reasoning: false,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              maxTokens: 1024,
-            },
-          ],
-        },
-      },
-    },
+    models: generationModels(id, "synthetic-unused"),
     plugins: {
       allow: [id],
       load: { paths: [root] },
@@ -116,7 +112,10 @@ async function acquire(state: OpenClawTestState, fixture: Fixture) {
   )?.service;
   assert.ok(service, JSON.stringify(lease.snapshot.pluginRegistry?.diagnostics));
   assert.equal(service.id, fixture.id);
-  return lease;
+  const record = lease.snapshot.pluginRegistry!.plugins.find((entry) => entry.id === fixture.id)!;
+  const instance = getPluginInstance(record);
+  assert.ok(instance);
+  return { lease, service, instance };
 }
 
 export async function verifyPreparedModelGenerationCleanup(scenario: "publication" | "arrivals") {
@@ -124,11 +123,10 @@ export async function verifyPreparedModelGenerationCleanup(scenario: "publicatio
     { label: "retirement-observation", env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" } },
     async (state) => {
       const failure = "synthetic generation disposal failure";
-      const fixtures: Fixture[] = [];
-      const completions: Promise<unknown>[] = [];
       const failed = createFixture(state, "failed-retirement", failure);
-      fixtures.push(failed);
-      let lease: Awaited<ReturnType<typeof acquire>> | undefined;
+      const fixtures = [failed];
+      const completions: Promise<unknown>[] = [];
+      let lease: Awaited<ReturnType<typeof acquire>>["lease"] | undefined;
       let instance: PluginInstanceHandle | undefined;
       const observeFailure = (promise: Promise<unknown>) => {
         const observed = promise.then(
@@ -138,26 +136,24 @@ export async function verifyPreparedModelGenerationCleanup(scenario: "publicatio
         completions.push(observed);
         return observed;
       };
+      const assertFailure = (cleanup: Awaited<ReturnType<typeof observeFailure>>) => {
+        assert.ok(!cleanup.ok, "The releasing caller receives its disposal failure");
+        assert.ok(hasCause(cleanup.error, failure));
+        assert.equal(hasRetainedPluginRuntimeCloseError(cleanup.error), false);
+      };
       try {
-        lease = await acquire(state, failed);
-        const service = lease.snapshot.pluginRegistry!.services.find(
-          (entry) => entry.pluginId === failed.id,
-        )!.service;
-        const record = lease.snapshot.pluginRegistry!.plugins.find(
-          (entry) => entry.id === failed.id,
-        )!;
-        instance = getPluginInstance(record);
-        assert.ok(instance);
+        const acquired = await acquire(state, failed);
+        ({ lease, instance } = acquired);
+        const { service } = acquired;
         if (scenario === "publication") {
           const disposed = observeFailure(lease[Symbol.asyncDispose]());
           await failed.entered.promise;
           failed.release.resolve();
-          const cleanup = await disposed;
-          assert.equal(cleanup.ok, true);
+          assertFailure(await disposed);
           assert.ok((await instance.dispose()).errors.some((error) => hasCause(error, failure)));
           assert.throws(() => service.id, /retir|reload|disabled/);
           const healthy: OpenClawConfig = {
-            agents: { list: [{ id: "healthy", default: true, workspace: state.workspaceDir }] },
+            agents: { entries: { healthy: { workspace: state.workspaceDir } } },
             plugins: { enabled: false, slots: { memory: "none" } },
           };
           await refreshPreparedModelRuntimeSnapshots(healthy, {
@@ -165,17 +161,11 @@ export async function verifyPreparedModelGenerationCleanup(scenario: "publicatio
             gatewayLifecycle: true,
           });
           const published = await loadPublishedGatewayReplyDispatchRuntime({ agentId: "healthy" });
-          assert.ok(published, "The healthy configured owner must be published");
-          assert.equal(
-            published.config,
-            healthy,
-            "An unrelated healthy batch must publish after observed cleanup failure",
-          );
+          assert.equal(published?.config, healthy);
         } else {
-          assert.equal(scenario, "arrivals");
           const first = createFixture(state, "first-retirement");
           fixtures.push(first);
-          const firstLease = await acquire(state, first);
+          const { lease: firstLease } = await acquire(state, first);
           const firstDisposal = observeFailure(firstLease[Symbol.asyncDispose]());
           await first.entered.promise;
           let terminalSettled = false;
@@ -195,25 +185,16 @@ export async function verifyPreparedModelGenerationCleanup(scenario: "publicatio
           );
           failed.release.resolve();
           assert.equal((await terminal).ok, true);
-          assert.equal((await laterDisposal).ok, true);
+          assertFailure(await laterDisposal);
         }
       } finally {
         fixtures.forEach((fixture) => fixture.release.resolve());
         await Promise.allSettled([...completions, lease?.[Symbol.asyncDispose]()]);
         try {
-          const terminal = await observeFailure(closePreparedModelRuntimeSnapshots());
-          assert.equal(
-            terminal.ok,
-            true,
-            "Reported plugin cleanup faults must not poison process close",
-          );
+          assert.equal((await observeFailure(closePreparedModelRuntimeSnapshots())).ok, true);
           if (instance) {
             assert.ok((await instance.dispose()).errors.some((error) => hasCause(error, failure)));
-            assert.equal(
-              fs.readFileSync(failed.disposed, "utf8"),
-              "disposed\n",
-              "Cleanup runs once across repeated observation and process close",
-            );
+            assert.equal(fs.readFileSync(failed.disposed, "utf8"), "disposed\n");
           }
         } finally {
           fixtures.forEach((fixture) => fixture.close());

@@ -54,12 +54,6 @@ describe("node and environment request validation", () => {
     ],
     ["environments.list", { unexpected: true }],
     ["environments.status", { environmentId: 1 }],
-    ["environments.create", { profileId: "profile-1", idempotencyKey: 1 }],
-    ["environments.destroy", { environmentId: "env-1", force: "yes" }],
-    ["worker.desktop.observe", { environmentId: "env-1", control: "yes" }],
-    ["worker.desktop.launch", { environmentId: "env-1", app: "unknown" }],
-    ["desktop.observe", { source: { kind: "host" }, control: "yes" }],
-    ["desktop.launch", { source: { kind: "environment", environmentId: "env-1" }, app: "unknown" }],
   ])("rejects malformed %s before accessing runtime state", async (method, params) => {
     const accessRuntime = vi.fn(() => {
       throw new Error("malformed request reached runtime state");

@@ -134,6 +134,13 @@ per-agent `tools.codeMode` options.
 
 ## What the model does
 
+Each `exec` starts a fresh JavaScript context. Variables and functions do not
+carry over between cells; `wait` resumes the same cell. Use `await store(key,
+value)` and `await load(key)` for small JSON values needed across turns in this
+session, including after a restart. See the
+[session store](/tools/code-mode/guest-api#session-store) for its commit rules
+and limits.
+
 For a tool with a declared output such as
 `Array<{ id: string; paid: boolean; tons: number }>`, one guest program can
 select, call, and transform it:
@@ -201,10 +208,11 @@ expired references reject with a catchable error. `API.read("results.d.ts")`
 provides TypeScript-style documentation; loaded data is declared as `unknown`,
 so inspect its shape before composing it.
 
-References last only for the current agent run and catalog. They survive cell
-completion and `wait`, but not run end, abort, catalog replacement, permission
+References expire when the current reply ends; never reuse ids from earlier
+turns. Use `store` for small JSON values needed later. References survive cell
+completion and `wait`, but not reply end, abort, catalog replacement, permission
 changes, or Gateway restart. They are snapshots: fetch again when current
-external state matters. The store holds at most 64 values with a total encoded
+external state matters. The results store holds at most 64 values with a total encoded
 JSON allowance of `min(memoryLimitBytes, maxSnapshotBytes)` (10 MiB by default),
 separate from the cell inbox. New saves fail when full; existing references are
 never evicted automatically. No functions, tool handles, or permissions are saved.
@@ -218,8 +226,9 @@ unchanged; no partially saved value is advertised.
 
 ## Recover from tool errors
 
-Nested tool failures are ordinary JavaScript errors. Guest code can catch them
-and inspect diagnostic fields: `code` identifies `input_contract`,
+Thrown tool errors are catchable. Returned values may instead report failure.
+Follow the tool's result contract, and inspect possible effects before retrying.
+Guest code can inspect diagnostic fields on thrown errors: `code` identifies `input_contract`,
 `output_contract`, `invalid_contract`, `invalid_input`, or `tool_error`;
 `location` contains the original guest call-site frames when available.
 `effectStatus` remains `"unknown"`: classification is not a dispatch-owner
@@ -254,6 +263,8 @@ failures become failed `exec` or `wait` results. The model can read the error,
 correct its code, inspect the current state, and continue with the normal tool
 surface. A failed cell does not impose a separate recovery mode or mutation budget.
 
+Source syntax errors are detected before guest execution. Their parser-message text is bounded to 240 UTF-16 units and clipped at a Unicode code-point boundary.
+
 OpenClaw does not automatically replay a failed program. Earlier calls may have
 changed state, and a failed call may have partially applied. Inspect authoritative
 state before deciding what remains, and do not repeat completed actions. This
@@ -278,8 +289,8 @@ openclaw gateway
 ```
 
 With code mode active, the logged model-facing tool names should be `exec` and
-`wait`. For the full redacted provider payload, add
-`OPENCLAW_DEBUG_MODEL_PAYLOAD=full-redacted` for a short debugging session.
+`wait`. `OPENCLAW_DEBUG_MODEL_PAYLOAD=full-redacted` also reports request shape
+and the complete tool-name list; it never logs prompt, message, or tool content.
 
 ## Use Swarm for agent fan-out
 

@@ -1,5 +1,6 @@
 {
   "id": "github",
+  "uiCapabilities": ["link-reader"],
   "name": "GitHub",
   "description": "Public GitHub link previews and document reader.",
   "categories": ["developer-tools"],
@@ -8,7 +9,12 @@
     "onStartup": true
   },
   "contracts": {
+    "tools": ["github_read", "github_search"],
     "gatewayMethodDispatch": ["authenticated-request"]
+  },
+  "toolMetadata": {
+    "github_read": { "profiles": ["coding"] },
+    "github_search": { "profiles": ["coding"] }
   },
   "configSchema": {
     "type": "object",

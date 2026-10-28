@@ -19,13 +19,6 @@ type QaSuiteProgressResult = {
   };
 };
 
-function cloneOutcome(outcome: QaLabScenarioOutcome): QaLabScenarioOutcome {
-  return {
-    ...outcome,
-    ...(outcome.steps ? { steps: outcome.steps.map((step) => ({ ...step })) } : {}),
-  };
-}
-
 export function createQaSuiteProgressController(params: {
   lab: QaLabServerHandle;
   scenarios: readonly QaSuiteProgressScenario[];
@@ -44,7 +37,7 @@ export function createQaSuiteProgressController(params: {
       status,
       startedAt: params.startedAt,
       ...(finishedAt ? { finishedAt } : {}),
-      scenarios: outcomes.map(cloneOutcome),
+      scenarios: outcomes.slice(),
     });
   };
 

@@ -3,7 +3,7 @@ import {
   registerVirtualTestPlugin,
 } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { Value } from "typebox/value";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { PluginsUiDescriptorsResultSchema } from "../../packages/gateway-protocol/src/schema/plugins.js";
 import type { PluginControlUiDescriptor } from "../plugins/host-hooks.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
@@ -12,88 +12,149 @@ import {
   listControlUiLinkReaders,
   listControlUiPluginDescriptors,
 } from "./control-ui-plugin-tabs.js";
-import {
-  createGatewayMethodRegistry,
-  createPluginGatewayMethodDescriptors,
-} from "./methods/registry.js";
+import { createGatewayMethodRegistry } from "./methods/registry.js";
+
+function descriptor(
+  id: string,
+  fields: Partial<PluginControlUiDescriptor & { surface: "link-reader" | "tab" }>,
+) {
+  return { id, label: id, surface: "link-reader" as const, ...fields };
+}
 
 function setup() {
   const { config, registry } = createPluginRegistryFixture();
   const register = (
     id: string,
-    methodScope: "operator.read" | "operator.write" = "operator.read",
-    claimedMethod = id + ".read",
-    imageMethod?: string,
+    options: {
+      write?: boolean;
+      detail?: string;
+      image?: boolean;
+      declarations?: PluginControlUiDescriptor[];
+    } = {},
   ) => {
+    const declarations = options.declarations ?? [
+      descriptor("document", {
+        requiredScopes: ["operator.read"],
+        linkReader: {
+          hosts: [id + ".example"],
+          pathPattern: "^/items/[0-9]+$",
+          detailMethod: options.detail ?? id + ".read",
+          ...(options.image ? { imageMethod: id + ".image" } : {}),
+        },
+      }),
+    ];
     registerVirtualTestPlugin({
       registry,
       config,
       id,
       name: id,
       register(api) {
-        api.session.controls.registerControlUiDescriptor({
-          id: "document",
-          label: id,
-          surface: "link-reader",
-          requiredScopes: ["operator.read"],
-          linkReader: {
-            hosts: [id + ".example"],
-            pathPattern: "^/items/[0-9]+$",
-            detailMethod: claimedMethod,
-            ...(imageMethod ? { imageMethod } : {}),
-          },
-        });
-        api.registerGatewayMethod(
-          id + ".read",
-          ({ respond }) => respond(true, { title: id }, undefined),
-          { scope: methodScope },
+        declarations.forEach((declaration) =>
+          api.session.controls.registerControlUiDescriptor(declaration),
         );
-        api.registerGatewayMethod(id + ".image", ({ respond }) => respond(true, {}, undefined), {
-          scope: "operator.read",
+        api.registerGatewayMethod(id + ".read", () => undefined, {
+          scope: options.write ? "operator.write" : "operator.read",
         });
+        api.registerGatewayMethod(id + ".image", () => undefined, { scope: "operator.read" });
       },
     });
   };
   setActivePluginRegistry(registry.registry);
   const methods = () =>
-    createGatewayMethodRegistry(
-      createPluginGatewayMethodDescriptors(registry.registry),
-      registry.registry,
-    );
+    createGatewayMethodRegistry(registry.registry.gatewayMethodDescriptors, registry.registry);
   const readers = (scopes: readonly string[]) => listControlUiLinkReaders(scopes, methods());
   return { registry, register, readers, methods };
 }
 
 describe("plugin link-reader discovery", () => {
   afterEach(() => resetPluginRuntimeStateForTest());
-  it("projects registered third-party readers without service-specific core dispatch", () => {
-    const { register, readers, methods } = setup();
-    register("notes");
-    register("forge", "operator.read", "forge.read", "forge.image");
-    expect(readers(["operator.read"]).map((reader) => reader.pluginId)).toEqual(["forge", "notes"]);
-    expect(readers(["operator.read"])[0]?.linkReader.imageMethod).toBe("forge.image");
-    expect(readers([])).toEqual([]);
-    expect(readers(["operator.admin"])).toHaveLength(2);
-    expect(
-      Value.Check(PluginsUiDescriptorsResultSchema, {
-        ok: true,
-        descriptors: listControlUiPluginDescriptors(["operator.read"]),
-        methods: methods().listAdvertisedMethods(),
-        controlUiLinkReaders: readers(["operator.read"]),
-      }),
-    ).toBe(true);
+  it.each([false, true])("does not enumerate methods for visible readers=%s", (visible) => {
+    const { register, methods } = setup();
+    register("panel", {
+      declarations: [descriptor("panel", { surface: "tab", path: "/panel" })],
+    });
+    register("private", {
+      declarations: [
+        descriptor("document", {
+          requiredScopes: ["operator.admin"],
+          linkReader: {
+            hosts: ["private.example"],
+            pathPattern: "^/items/[0-9]+$",
+            detailMethod: "private.read",
+          },
+        }),
+      ],
+    });
+    if (visible) {
+      register("notes", { image: true });
+    }
+    const registry = methods();
+    using descriptors = vi.spyOn(registry, "descriptors");
+
+    expect(listControlUiLinkReaders(["operator.read"], registry)).toEqual(
+      visible
+        ? [
+            {
+              pluginId: "notes",
+              id: "document",
+              label: "document",
+              icon: undefined,
+              linkReader: {
+                hosts: ["notes.example"],
+                pathPattern: "^/items/[0-9]+$",
+                detailMethod: "notes.read",
+                imageMethod: "notes.image",
+              },
+            },
+          ]
+        : [],
+    );
+    expect(descriptors).not.toHaveBeenCalled();
   });
-  it("requires a live same-plugin read method, not a different owner or stronger method", () => {
-    const { registry, register, readers } = setup();
-    register("notes");
-    register("forge", "operator.read", "notes.read");
-    register("writer", "operator.write");
-    expect(readers(["operator.admin"]).map((reader) => reader.pluginId)).toEqual(["notes"]);
-    const method = registry.registry.gatewayMethodDescriptors.find(
-      (entry) => entry.name === "notes.read",
-    )!;
-    method.advertise = false;
-    expect(readers(["operator.admin"])).toEqual([]);
+  it.each([
+    "valid",
+    "foreign or stronger detail method",
+    "missing image method",
+    "writing image method",
+  ])("advertises only live same-plugin read methods: %s", (kind) => {
+    const { registry, register, readers, methods } = setup();
+    const image = kind.endsWith("image method");
+    register("notes", { image });
+    if (kind === "valid") {
+      register("forge", { image: true });
+      expect(readers(["operator.read"])).toMatchObject([
+        { pluginId: "forge", linkReader: { imageMethod: "forge.image" } },
+        { pluginId: "notes" },
+      ]);
+      expect(readers([])).toEqual([]);
+      expect(readers(["operator.admin"])).toHaveLength(2);
+      expect(
+        Value.Check(PluginsUiDescriptorsResultSchema, {
+          ok: true,
+          descriptors: listControlUiPluginDescriptors(["operator.read"]),
+          methods: methods().listAdvertisedMethods(),
+          controlUiLinkReaders: readers(["operator.read"]),
+        }),
+      ).toBe(true);
+    } else {
+      if (!image) {
+        register("forge", { detail: "notes.read" });
+        register("writer", { write: true });
+        expect(readers(["operator.admin"]).map((reader) => reader.pluginId)).toEqual(["notes"]);
+      }
+      const descriptors = registry.registry.gatewayMethodDescriptors;
+      const method = descriptors.find(
+        (entry) => entry.name === (image ? "notes.image" : "notes.read"),
+      )!;
+      if (kind === "missing image method") {
+        descriptors.splice(descriptors.indexOf(method), 1);
+      } else if (image) {
+        method.controlPlaneWrite = true;
+      } else {
+        method.advertise = false;
+      }
+      expect(readers(["operator.admin"])).toEqual([]);
+    }
   });
   it("does not retain a reader across owner disablement, rollback, or registry replacement", () => {
     const { registry, register, readers } = setup();
@@ -108,39 +169,14 @@ describe("plugin link-reader discovery", () => {
     setActivePluginRegistry(replacement.registry.registry);
     expect(readers(["operator.read"])).toEqual([]);
   });
-  it.each(["missing", "other-owner", "write", "hidden", "control-plane-write"])(
-    "does not advertise a reader with a %s image method",
-    (kind) => {
-      const { registry, register, readers } = setup();
-      register("notes", "operator.read", "notes.read", "notes.image");
-      const method = registry.registry.gatewayMethodDescriptors.find(
-        (entry) => entry.name === "notes.image",
-      )!;
-      if (kind === "missing") {
-        registry.registry.gatewayMethodDescriptors.splice(
-          registry.registry.gatewayMethodDescriptors.indexOf(method),
-          1,
-        );
-      } else if (kind === "other-owner") {
-        method.owner = { kind: "plugin", pluginId: "other" };
-      } else if (kind === "write") {
-        method.scope = "operator.write";
-      } else if (kind === "hidden") {
-        method.advertise = false;
-      } else {
-        method.controlPlaneWrite = true;
-      }
-      expect(readers(["operator.admin"])).toEqual([]);
-    },
-  );
   it("copies valid declaration data and rejects malformed or misplaced routing metadata", () => {
-    const { config, registry } = createPluginRegistryFixture();
+    const { registry, register } = setup();
     const metadata = {
       hosts: ["forge.example"],
       pathPattern: "^/items/[0-9]+$",
       detailMethod: "forge.read",
     };
-    const invalid: Array<Partial<PluginControlUiDescriptor>> = [
+    const invalid: Parameters<typeof descriptor>[1][] = [
       { linkReader: { ...metadata, hosts: ["*.example"] } },
       { linkReader: { ...metadata, hosts: ["https://forge.example"] } },
       { linkReader: { ...metadata, pathPattern: "/items/" } },
@@ -150,32 +186,15 @@ describe("plugin link-reader discovery", () => {
       { linkReader: { ...metadata, imageMethod: "" } },
       { linkReader: { ...metadata, imageMethod: "notes image" } },
     ];
-    registerVirtualTestPlugin({
-      registry,
-      config,
-      id: "forge",
-      name: "Forge",
-      register(api) {
-        api.session.controls.registerControlUiDescriptor({
-          id: "valid",
-          label: "Valid",
-          surface: "link-reader",
-          linkReader: metadata,
-        });
-        invalid.forEach((value, index) =>
-          api.session.controls.registerControlUiDescriptor({
-            id: "invalid-" + index,
-            label: "Invalid",
-            surface: "link-reader",
-            ...value,
-          }),
-        );
-      },
+    register("forge", {
+      declarations: [
+        descriptor("valid", { linkReader: metadata }),
+        ...invalid.map((value, index) => descriptor("invalid-" + index, value)),
+      ],
     });
     metadata.hosts.push("other.example");
-    expect(registry.registry.controlUiDescriptors).toHaveLength(1);
-    expect(registry.registry.controlUiDescriptors[0]?.descriptor.linkReader?.hosts).toEqual([
-      "forge.example",
+    expect(registry.registry.controlUiDescriptors).toMatchObject([
+      { descriptor: { linkReader: { hosts: ["forge.example"] } } },
     ]);
     expect(registry.registry.diagnostics).toHaveLength(invalid.length);
   });

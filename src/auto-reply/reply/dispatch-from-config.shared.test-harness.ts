@@ -1,19 +1,15 @@
 // Shared harness for dispatch-from-config tests and mocked runtimes.
-import { afterEach, vi } from "vitest";
+import path from "node:path";
+import { afterAll, afterEach, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import type { withAcpSessionEntryRead } from "../../acp/runtime/session-meta-read.js";
+import type { readAcpSessionEntry } from "../../acp/runtime/session-meta.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { TtsAutoMode } from "../../config/types.tts.js";
 import type { WorkerSessionPlacementRecord } from "../../gateway/worker-environments/placement-record.js";
 import type { SessionWorkerPlacementContext } from "../../gateway/worker-environments/session-placement-lifecycle.js";
-import type {
-  ConversationRef,
-  SessionBindingRecord,
-} from "../../infra/outbound/session-binding-service.js";
+import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import { isPluginOwnedBindingMetadata } from "../../plugins/conversation-binding-metadata.js";
-import type {
-  PluginHookBeforeDispatchResult,
-  PluginHookReplyDispatchEvent,
-  PluginHookReplyDispatchResult,
-} from "../../plugins/hook-types.js";
+import type { PluginHookBeforeDispatchResult } from "../../plugins/hook-types.js";
 import type { createHookRunner } from "../../plugins/hooks.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
@@ -22,6 +18,10 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import type { ReplyPayload } from "../types.js";
 import { createPluginBindingRecord } from "./conversation-binding.test-fixtures.js";
+import {
+  completeAcpSessionFixture,
+  type AcpSessionFixture,
+} from "./dispatch-from-config.acp-fixture.test-support.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
 import type { StageSandboxMediaResult } from "./stage-sandbox-media.js";
@@ -97,12 +97,9 @@ const hookMocks = vi.hoisted(() => ({
     runBeforeDispatch: vi.fn<
       (eventValue: unknown, _ctx: unknown) => Promise<PluginHookBeforeDispatchResult | undefined>
     >(async () => undefined),
-    runReplyDispatch: vi.fn<
-      (
-        eventValue: PluginHookReplyDispatchEvent,
-        _ctx: unknown,
-      ) => Promise<PluginHookReplyDispatchResult | undefined>
-    >(async () => undefined),
+    runReplyDispatch: vi.fn<ReturnType<typeof createHookRunner>["runReplyDispatch"]>(
+      async () => undefined,
+    ),
     runReplyPayloadSending: vi.fn(async () => undefined),
   },
 }));
@@ -113,7 +110,7 @@ const internalHookMocks = vi.hoisted(() => ({
 const acpMocks = vi.hoisted(() => ({
   listAcpSessionEntries: vi.fn(async () => []),
   readAcpSessionEntry: vi.fn<
-    (params: { sessionKey: string; agentId?: string; cfg?: OpenClawConfig }) => unknown
+    (params: Parameters<typeof readAcpSessionEntry>[0]) => AcpSessionFixture | null
   >(() => null),
   readAcpSessionMeta: vi.fn<
     (params: { sessionKey: string; agentId?: string; cfg?: OpenClawConfig }) => unknown
@@ -131,23 +128,9 @@ const acpMocks = vi.hoisted(() => ({
   >(async () => null),
   requireAcpRuntimeBackend: vi.fn<() => unknown>(),
 }));
-const sessionBindingMocks = vi.hoisted(() => {
-  const resolveByConversation = vi.fn<
-    (ref: {
-      channel: string;
-      accountId: string;
-      conversationId: string;
-      parentConversationId?: string;
-    }) => SessionBindingRecord | null
-  >(() => null);
-  return {
-    listBySession: vi.fn<(targetSessionKey: string) => SessionBindingRecord[]>(() => []),
-    resolveByConversation,
-    resolveByConversationAsync: vi.fn(async (ref: Parameters<typeof resolveByConversation>[0]) =>
-      resolveByConversation(ref),
-    ),
-    touch: vi.fn(),
-  };
+const { mocks: sessionBindingMocks, module: sessionBindingModule } = await vi.hoisted(async () => {
+  const { createDispatchBindingMocks } = await import("./session-binding.test-mocks.js");
+  return createDispatchBindingMocks(vi);
 });
 
 export function mockPluginBindingClaim(
@@ -174,6 +157,11 @@ export function mockPluginBinding(params: Parameters<typeof createPluginBindingR
 const pluginConversationBindingMocks = vi.hoisted(() => ({
   shownFallbackNoticeBindingIds: new Set<string>(),
 }));
+// Unmocked capability reads open the sibling SQLite database, so each file owns its store.
+export const mockSessionStorePath = path.join(
+  useAutoCleanupTempDirTracker(afterAll).make("openclaw-dispatch-sessions-"),
+  "mock-sessions.json",
+);
 const sessionStoreMocks = vi.hoisted(() => ({
   databaseEntryLoader: undefined as
     | typeof import("../../config/sessions/session-accessor.sqlite-entry.js").loadSessionEntryForAdmission
@@ -182,20 +170,7 @@ const sessionStoreMocks = vi.hoisted(() => ({
   entriesBySessionKey: new Map<string, Record<string, unknown>>(),
   loadSessionEntry: vi.fn((..._args: unknown[]) => sessionStoreMocks.currentEntry),
   loadSessionStoreEntry: vi.fn((..._args: unknown[]) => sessionStoreMocks.currentEntry),
-  loadSessionStore: vi.fn(() => ({})),
-  readSessionEntry: vi.fn(() => sessionStoreMocks.currentEntry),
-  resolveSessionStorePathCore: vi.fn(() => "/tmp/mock-sessions.json"),
-  resolveSessionStoreEntry: vi.fn(
-    (params: {
-      store: Record<string, Record<string, unknown>>;
-      sessionKey: string;
-    }): { existing: Record<string, unknown> | undefined } => ({
-      existing:
-        params.store[params.sessionKey] ??
-        sessionStoreMocks.entriesBySessionKey.get(params.sessionKey) ??
-        sessionStoreMocks.currentEntry,
-    }),
-  ),
+  resolveSessionStorePathCore: vi.fn(() => mockSessionStorePath),
   updateSessionStoreEntry: vi.fn(
     async (params: {
       update: (entry: Record<string, unknown>) => Promise<Record<string, unknown> | null>;
@@ -251,62 +226,9 @@ const agentEventMocks = vi.hoisted(() => ({
   emitAgentEvent: vi.fn(),
   onAgentEvent: vi.fn<(listener: unknown) => () => void>(() => () => {}),
 }));
-const ttsMocks = vi.hoisted(() => {
-  const state = {
-    synthesizeFinalAudio: false,
-    synthesizeToolAudio: false,
-    statusSnapshot: {
-      autoMode: "always",
-      provider: "auto",
-      maxLength: 1500,
-      summarize: true,
-    } as {
-      autoMode: TtsAutoMode;
-      provider: string;
-      maxLength: number;
-      summarize: boolean;
-    },
-  };
-  return {
-    state,
-    maybeApplyTtsToPayload: vi.fn(async (paramsUnknown: unknown) => {
-      const params = paramsUnknown as {
-        payload: ReplyPayload;
-        kind: "tool" | "block" | "final";
-      };
-      if (
-        state.synthesizeFinalAudio &&
-        params.kind === "final" &&
-        typeof params.payload?.text === "string" &&
-        params.payload.text.trim()
-      ) {
-        return {
-          ...params.payload,
-          mediaUrl: "https://example.com/tts-synth.opus",
-          audioAsVoice: true,
-          trustedLocalMedia: true,
-        };
-      }
-      if (
-        state.synthesizeToolAudio &&
-        params.kind === "tool" &&
-        typeof params.payload?.text === "string" &&
-        params.payload.text.trim()
-      ) {
-        return {
-          ...params.payload,
-          mediaUrl: "https://example.com/tts-tool.opus",
-          audioAsVoice: true,
-          trustedLocalMedia: true,
-        };
-      }
-      return params.payload;
-    }),
-    normalizeTtsAutoMode: vi.fn((value: unknown) =>
-      typeof value === "string" ? value : undefined,
-    ),
-    resolveTtsConfig: vi.fn((_cfg: OpenClawConfig) => ({ mode: "final" })),
-  };
+const ttsMocks = await vi.hoisted(async () => {
+  const { createDispatchTtsMocks } = await import("./dispatch-from-config.tts.test-support.js");
+  return createDispatchTtsMocks(vi);
 });
 const transcriptMocks = vi.hoisted(() => ({
   persistAcpDispatchTranscript: vi.fn(async (_params: unknown) => undefined),
@@ -335,120 +257,13 @@ const runtimePluginMocks = vi.hoisted(() => ({
   pluginRegistry: { plugins: [], tools: [], diagnostics: [] },
   loadAgentRuntimePluginRegistryHandle: vi.fn(),
 }));
-const conversationBindingMocks = vi.hoisted(() => {
-  type BindingMsgContext = {
-    OriginatingChannel?: string | null;
-    Surface?: string | null;
-    Provider?: string | null;
-    AccountId?: string | null;
-    MessageThreadId?: string | number | null;
-    ThreadParentId?: string | null;
-    SenderId?: string | null;
-    SessionKey?: string | null;
-    ParentSessionKey?: string | null;
-    OriginatingTo?: string | null;
-    To?: string | null;
-    From?: string | null;
-    NativeChannelId?: string | null;
-  };
-  type BindingConfig = {
-    channels?: Record<string, { defaultAccount?: string | null } | undefined>;
-  };
-
-  const normalizeText = (value: string | number | null | undefined) =>
-    typeof value === "number" ? `${value}` : (value ?? "").trim();
-  const normalizeChannel = (value: string | null | undefined) => normalizeText(value).toLowerCase();
-  const resolveChannel = (ctx: BindingMsgContext, commandChannel?: string | null) =>
-    normalizeChannel(ctx.OriginatingChannel ?? commandChannel ?? ctx.Surface ?? ctx.Provider);
-  const resolveAccountId = (ctx: BindingMsgContext, cfg: BindingConfig, channel: string) =>
-    normalizeText(ctx.AccountId) ||
-    normalizeText(cfg.channels?.[channel]?.defaultAccount) ||
-    "default";
-  const resolveTarget = (channel: string, value: string | null | undefined) => {
-    const target = normalizeText(value);
-    if (!target) {
-      return undefined;
-    }
-    const channelPrefix = `${channel}:`;
-    return target.toLowerCase().startsWith(channelPrefix)
-      ? target.slice(channelPrefix.length)
-      : target;
-  };
-  const resolveThreadId = (ctx: BindingMsgContext) =>
-    normalizeText(ctx.MessageThreadId) || undefined;
-
-  const resolveConversationBindingContextFromMessage = vi.fn(
-    (params: { cfg: BindingConfig; ctx: BindingMsgContext }) => {
-      const channel = resolveChannel(params.ctx);
-      if (!channel) {
-        return null;
-      }
-      const threadId = resolveThreadId(params.ctx);
-      const baseConversationId =
-        resolveTarget(channel, params.ctx.OriginatingTo) ?? resolveTarget(channel, params.ctx.To);
-      const conversationId = threadId ?? baseConversationId;
-      if (!conversationId) {
-        return null;
-      }
-      const rawThreadParentId = resolveTarget(channel, params.ctx.ThreadParentId);
-      const explicitThreadParentId =
-        channel === "discord" && rawThreadParentId && !rawThreadParentId.includes(":")
-          ? `channel:${rawThreadParentId}`
-          : rawThreadParentId;
-      const parentConversationId =
-        explicitThreadParentId ??
-        (threadId && baseConversationId && baseConversationId !== threadId
-          ? baseConversationId
-          : undefined);
-      return {
-        channel,
-        accountId: resolveAccountId(params.ctx, params.cfg, channel),
-        conversationId,
-        ...(parentConversationId ? { parentConversationId } : {}),
-        ...(threadId ? { threadId } : {}),
-      };
-    },
-  );
-
-  return {
-    resolveConversationBindingAccountIdFromMessage: (params: {
-      ctx: BindingMsgContext;
-      cfg: BindingConfig;
-      commandChannel?: string | null;
-    }) =>
-      resolveAccountId(params.ctx, params.cfg, resolveChannel(params.ctx, params.commandChannel)),
-    resolveConversationBindingChannelFromMessage: (
-      ctx: BindingMsgContext,
-      commandChannel?: string | null,
-    ) => resolveChannel(ctx, commandChannel),
-    resolveConversationBindingContextFromAcpCommand: (params: {
-      cfg: BindingConfig;
-      ctx: BindingMsgContext;
-      command?: { to?: string | null; senderId?: string | null };
-      sessionKey?: string | null;
-      parentSessionKey?: string | null;
-    }) =>
-      resolveConversationBindingContextFromMessage({
-        cfg: params.cfg,
-        ctx: {
-          ...params.ctx,
-          SenderId: params.command?.senderId ?? params.ctx.SenderId,
-          SessionKey: params.sessionKey ?? params.ctx.SessionKey,
-          ParentSessionKey: params.parentSessionKey ?? params.ctx.ParentSessionKey,
-          To: params.command?.to ?? params.ctx.To,
-        },
-      }),
-    resolveConversationBindingContextFromMessage,
-    resolveConversationBindingThreadIdFromMessage: (ctx: BindingMsgContext) => resolveThreadId(ctx),
-  };
+const conversationBindingMocks = await vi.hoisted(async () => {
+  const { createDispatchConversationBindingMocks } =
+    await import("./dispatch-from-config.conversation-binding.test-support.js");
+  return createDispatchConversationBindingMocks(vi);
 });
 const threadInfoMocks = vi.hoisted(() => ({
-  parseSessionThreadInfo: vi.fn<
-    (sessionKey: string | undefined) => {
-      baseSessionKey: string | undefined;
-      threadId: string | undefined;
-    }
-  >(),
+  parseSessionThreadInfo: vi.fn<typeof parseGenericThreadSessionInfo>(),
 }));
 
 export {
@@ -497,11 +312,6 @@ export function parseGenericThreadSessionInfo(sessionKey: string | undefined) {
   return { baseSessionKey, threadId };
 }
 
-vi.mock("./route-reply.runtime.js", () => ({
-  isRoutableChannel: (channel: string | undefined) => mocks.isRoutableChannel(channel),
-  routeReply: mocks.routeReply,
-}));
-
 vi.mock("./route-reply.js", () => ({
   isRoutableChannel: (channel: string | undefined) => mocks.isRoutableChannel(channel),
   routeReply: mocks.routeReply,
@@ -537,8 +347,16 @@ vi.mock("../../agents/tools/ask-user-tool.js", () => ({
 vi.mock("../../logging/diagnostic.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../logging/diagnostic.js")>();
   return {
+    ...actual,
     diagnosticLogger: { debug: vi.fn(), error: vi.fn(), warn: vi.fn() },
-    logMessageDispatchCompleted: diagnosticMocks.logMessageDispatchCompleted,
+    logMessageDispatchCompleted: (
+      params: Parameters<typeof actual.logMessageDispatchCompleted>[0],
+    ) => {
+      diagnosticMocks.logMessageDispatchCompleted(params);
+      if (diagnosticMocks.forwardToRealPipeline) {
+        actual.logMessageDispatchCompleted(params);
+      }
+    },
     logMessageDispatchStarted: diagnosticMocks.logMessageDispatchStarted,
     logMessageQueued: diagnosticMocks.logMessageQueued,
     logMessageProcessed: (params: Parameters<typeof actual.logMessageProcessed>[0]) => {
@@ -556,42 +374,104 @@ vi.mock("../../audit/message-audit-events.js", () => ({
   emitTrustedMessageAuditEvent: messageAuditMocks.emitTrustedMessageAuditEvent,
   hasTrustedMessageAuditListeners: () => messageAuditMocks.enabled,
 }));
-vi.mock("../../config/sessions/thread-info.js", () => ({
-  parseSessionThreadInfo: (sessionKey: string | undefined) =>
-    threadInfoMocks.parseSessionThreadInfo(sessionKey),
-  parseSessionThreadInfoFast: (sessionKey: string | undefined) =>
-    threadInfoMocks.parseSessionThreadInfo(sessionKey),
+vi.mock("../../channels/plugins/session-conversation.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../channels/plugins/session-conversation.js")>()),
+  resolveSessionThreadInfo: (sessionKey: string | null | undefined) =>
+    threadInfoMocks.parseSessionThreadInfo(sessionKey ?? undefined),
 }));
-vi.mock("./dispatch-from-config.runtime.js", () => ({
+
+vi.mock("../../channels/plugins/session-thread-info-loaded.js", () => ({
+  resolveLoadedSessionThreadInfo: (sessionKey: string | null | undefined) =>
+    threadInfoMocks.parseSessionThreadInfo(sessionKey ?? undefined),
+}));
+vi.mock("../../hooks/internal-hooks.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../hooks/internal-hooks.js")>()),
   createInternalHookEvent: internalHookMocks.createInternalHookEvent,
-  loadSessionStoreEntry: sessionStoreMocks.loadSessionStoreEntry,
-  loadSessionStore: sessionStoreMocks.loadSessionStore,
-  readSessionEntry: sessionStoreMocks.readSessionEntry,
-  resolveSessionStoreEntry: sessionStoreMocks.resolveSessionStoreEntry,
-  resolveSessionStorePathCore: sessionStoreMocks.resolveSessionStorePathCore,
   triggerInternalHook: internalHookMocks.triggerInternalHook,
-  updateSessionStoreEntry: sessionStoreMocks.updateSessionStoreEntry,
 }));
-vi.mock("../../config/sessions/session-accessor.sqlite-entry.js", async (importOriginal) => ({
-  ...(await importOriginal<
-    typeof import("../../config/sessions/session-accessor.sqlite-entry.js")
-  >()),
-  loadSessionEntryForAdmission: (
-    ...args: Parameters<NonNullable<typeof sessionStoreMocks.databaseEntryLoader>>
-  ) =>
-    sessionStoreMocks.databaseEntryLoader
-      ? sessionStoreMocks.databaseEntryLoader(...args)
-      : {
-          entry: sessionStoreMocks.loadSessionEntry(...args),
-          databaseClaim: undefined,
-        },
+vi.mock("../../config/sessions/paths.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/sessions/paths.js")>()),
+  resolveSessionStorePathCore: sessionStoreMocks.resolveSessionStorePathCore,
 }));
+// mock-isolation: Durable fixtures use fake rows; explicitly bound memory actors run real commands.
+vi.mock("../../config/sessions/session-actor-scope.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../config/sessions/session-actor-scope.js")>();
+  const { getSessionActorStorageBinding } =
+    await import("../../config/sessions/session-actor-storage-binding.js");
+  return {
+    ...actual,
+    withSessionActor: async (...args: Parameters<typeof actual.withSessionActor>) =>
+      getSessionActorStorageBinding(args[0]) ? actual.withSessionActor(...args) : undefined,
+  };
+});
+vi.mock("../../config/sessions/session-entry-read-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/sessions/session-entry-read-runtime.js")>()),
+  readSessionEntryReadOnlyInWorker: async (
+    scope: Parameters<
+      typeof import("../../config/sessions/session-entry-read-runtime.js").readSessionEntryReadOnlyInWorker
+    >[0],
+    assertCurrent?: () => void,
+  ) => {
+    assertCurrent?.();
+    const entry = await Promise.resolve(sessionStoreMocks.loadSessionStoreEntry(scope));
+    assertCurrent?.();
+    return entry;
+  },
+}));
+vi.mock("../../config/sessions/session-accessor.sqlite-entry.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../config/sessions/session-accessor.sqlite-entry.js")>();
+  const { projectSessionEntryPatch } =
+    await import("../../config/sessions/session-entry-patch-operation.js");
+  const { getSessionActorStorageBinding } =
+    await import("../../config/sessions/session-actor-storage-binding.js");
+  return {
+    ...actual,
+    applySessionEntryOperation: async (
+      ...[scope, operation, options]: Parameters<typeof actual.applySessionEntryOperation>
+    ) => {
+      if (getSessionActorStorageBinding(scope)) {
+        return actual.applySessionEntryOperation(scope, operation, options);
+      }
+      let wrote = false;
+      const result = await sessionStoreMocks.updateSessionEntry(scope, (entry) => {
+        const currentEntry = { sessionId: "", updatedAt: 0, ...entry };
+        const next = projectSessionEntryPatch({
+          existing: currentEntry,
+          writeBase: currentEntry,
+          sessionKey: scope.sessionKey,
+          operation,
+          replaceEntry: options?.replaceEntry,
+          preserveActivity: options?.preserveActivity,
+        });
+        wrote = next !== undefined;
+        return next ? { ...next } : null;
+      });
+      const entry = result ? { sessionId: "", updatedAt: 0, ...result } : null;
+      if (wrote && entry) {
+        options?.onCommitted?.(entry);
+      }
+      return entry;
+    },
+    loadSessionEntryForAdmission: (
+      ...args: Parameters<NonNullable<typeof sessionStoreMocks.databaseEntryLoader>>
+    ) =>
+      sessionStoreMocks.databaseEntryLoader
+        ? sessionStoreMocks.databaseEntryLoader(...args)
+        : {
+            entry: sessionStoreMocks.loadSessionEntry(...args),
+            databaseClaim: undefined,
+          },
+  };
+});
 vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../config/sessions/session-accessor.js")>();
   return {
     ...actual,
     loadSessionEntry: (...args: unknown[]) => sessionStoreMocks.loadSessionEntry(...args),
-    loadSessionEntryReadOnly: (...args: unknown[]) => sessionStoreMocks.loadSessionEntry(...args),
+    loadSessionEntryReadOnly: (...args: unknown[]) =>
+      sessionStoreMocks.loadSessionStoreEntry(...args),
     patchSessionEntryCore: (...args: Parameters<typeof sessionStoreMocks.updateSessionEntry>) =>
       sessionStoreMocks.updateSessionEntry(...args),
     updateSessionEntry: (...args: Parameters<typeof sessionStoreMocks.updateSessionEntry>) =>
@@ -608,38 +488,45 @@ vi.mock("../../plugins/hook-runner-global.js", () => ({
   getGlobalPluginRegistry: () => hookMocks.registry,
   resetGlobalHookRunner: vi.fn(),
 }));
+// mock-isolation: Reply routing supplies ACP snapshots without initializing live control state.
+vi.mock("../../acp/runtime/session-meta-read.js", () => ({
+  withAcpSessionEntryRead: async (
+    params: Parameters<typeof withAcpSessionEntryRead>[0],
+    consume: Parameters<typeof withAcpSessionEntryRead>[1],
+  ) =>
+    consume(
+      completeAcpSessionFixture(acpMocks.readAcpSessionEntry(params), {
+        ...params,
+        storePath: sessionStoreMocks.resolveSessionStorePathCore(),
+      }),
+      undefined,
+    ),
+}));
+// mock-isolation: Reply routing supplies ACP snapshots without initializing live control state.
 vi.mock("../../acp/runtime/session-meta.js", () => ({
   listAcpSessionEntries: acpMocks.listAcpSessionEntries,
   readAcpSessionEntry: acpMocks.readAcpSessionEntry,
-  readAcpSessionMeta: acpMocks.readAcpSessionMeta,
+  readAcpSessionEntryAsync: async (params: {
+    sessionKey: string;
+    agentId?: string;
+    cfg?: OpenClawConfig;
+  }) => acpMocks.readAcpSessionEntry(params),
+  readAcpSessionMetaAsync: async (params: {
+    sessionKey: string;
+    agentId?: string;
+    cfg?: OpenClawConfig;
+  }) => acpMocks.readAcpSessionMeta(params),
+  prepareAcpSessionControlRead:
+    vi.fn<typeof import("../../acp/runtime/session-meta.js").prepareAcpSessionControlRead>(),
   upsertAcpSessionMeta: acpMocks.upsertAcpSessionMeta,
+  upsertAcpSessionMetaForControl:
+    vi.fn<typeof import("../../acp/runtime/session-meta.js").upsertAcpSessionMetaForControl>(),
 }));
 vi.mock("../../acp/runtime/registry.js", () => ({
   getAcpRuntimeBackend: acpMocks.getAcpRuntimeBackend,
   requireAcpRuntimeBackend: acpMocks.requireAcpRuntimeBackend,
 }));
-vi.mock("../../infra/outbound/session-binding-service.js", async () => ({
-  ...(await import("../../infra/outbound/session-binding-errors.js")),
-  readSessionBindingSelectionCurrent: (refs: readonly ConversationRef[]) =>
-    Promise.all(refs.map((ref) => sessionBindingMocks.resolveByConversationAsync(ref))),
-  getSessionBindingService: () => ({
-    bind: vi.fn(async () => {
-      throw new Error("bind not mocked");
-    }),
-    getCapabilities: vi.fn(() => ({
-      adapterAvailable: true,
-      bindSupported: true,
-      unbindSupported: true,
-      placements: ["current", "child"] as const,
-    })),
-    listBySession: (targetSessionKey: string) =>
-      sessionBindingMocks.listBySession(targetSessionKey),
-    resolveByConversation: sessionBindingMocks.resolveByConversation,
-    resolveByConversationAsync: sessionBindingMocks.resolveByConversationAsync,
-    touchAsync: sessionBindingMocks.touch,
-    unbind: vi.fn(async () => []),
-  }),
-}));
+vi.mock("../../infra/outbound/session-binding-service.js", () => sessionBindingModule);
 vi.mock("../../infra/agent-events.js", () => ({
   assertAgentRunLifecycleGenerationCurrent: vi.fn(),
   captureAgentRunLifecycleGeneration: () => "test-generation",
@@ -698,8 +585,11 @@ vi.mock("../../plugins/conversation-binding.js", () => ({
 vi.mock("./dispatch-acp-manager.runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./dispatch-acp-manager.runtime.js")>()),
   getAcpSessionManager: () => acpManagerRuntimeMocks.getAcpSessionManager(),
-  readAcpSessionEntry: (params: { sessionKey: string; agentId?: string; cfg?: OpenClawConfig }) =>
-    acpMocks.readAcpSessionEntry(params),
+  readAcpSessionEntryAsync: async (params: {
+    sessionKey: string;
+    agentId?: string;
+    cfg?: OpenClawConfig;
+  }) => acpMocks.readAcpSessionEntry(params),
 }));
 vi.mock("../../tts/tts.js", () => ({
   maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
@@ -709,20 +599,23 @@ vi.mock("../../tts/tts.js", () => ({
 vi.mock("../../tts/tts.runtime.js", () => ({
   maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
 }));
-vi.mock("./reply-media-paths.runtime.js", () => ({
+vi.mock("./reply-media-paths.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./reply-media-paths.js")>()),
   createReplyMediaContext: () => ({
     normalizePayload: (payload: unknown) => payload,
   }),
   createReplyMediaPathNormalizer: (params: unknown) =>
     replyMediaPathMocks.createReplyMediaPathNormalizer(params),
 }));
-vi.mock("./stage-sandbox-media.runtime.js", () => ({
+vi.mock("./stage-sandbox-media.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./stage-sandbox-media.js")>()),
   stageSandboxMedia: (params: unknown) => stageSandboxMediaMocks.stageSandboxMedia(params),
 }));
 vi.mock("../../agents/runtime-plugins.js", () => ({
   loadAgentRuntimePluginRegistryHandle: runtimePluginMocks.loadAgentRuntimePluginRegistryHandle,
 }));
-vi.mock("./conversation-binding-input.js", () => ({
+vi.mock("./conversation-binding-input.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./conversation-binding-input.js")>()),
   resolveConversationBindingAccountIdFromMessage:
     conversationBindingMocks.resolveConversationBindingAccountIdFromMessage,
   resolveConversationBindingChannelFromMessage:
@@ -731,8 +624,6 @@ vi.mock("./conversation-binding-input.js", () => ({
     conversationBindingMocks.resolveConversationBindingContextFromAcpCommand,
   resolveConversationBindingContextFromMessage:
     conversationBindingMocks.resolveConversationBindingContextFromMessage,
-  resolveConversationBindingThreadIdFromMessage:
-    conversationBindingMocks.resolveConversationBindingThreadIdFromMessage,
 }));
 vi.mock("../../tts/status-config.js", () => ({
   resolveStatusTtsSnapshot: () => ttsMocks.state.statusSnapshot,
@@ -745,12 +636,17 @@ vi.mock("../../config/sessions/transcript.js", () => ({
   appendAssistantMessageToSessionTranscript: (params: unknown) =>
     transcriptMocks.appendAssistantMessageToSessionTranscript(params),
 }));
-vi.mock("../../tts/tts-config.js", () => ({
+vi.mock("../../tts/tts-config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../tts/tts-config.js")>()),
   normalizeTtsAutoMode: (value: unknown) => ttsMocks.normalizeTtsAutoMode(value),
   resolveConfiguredTtsMode: (cfg: OpenClawConfig) => ttsMocks.resolveTtsConfig(cfg).mode,
   resolveEffectiveTtsConfig: (cfg: OpenClawConfig) => cfg.tts ?? {},
   shouldCleanTtsDirectiveText: () => true,
   shouldAttemptTtsPayload: () => true,
+}));
+// mock-isolation: Dispatch fixtures supply prepared preferences without opening the shared-state worker.
+vi.mock("../../tts/tts-preferences.js", () => ({
+  prepareTtsPreferences: async () => ({}),
 }));
 
 export const noAbortResult = { handled: false, aborted: false } as const;
@@ -794,39 +690,7 @@ export function resetPluginTtsAndThreadMocks() {
     maxLength: 1500,
     summarize: true,
   };
-  ttsMocks.maybeApplyTtsToPayload.mockReset().mockImplementation(async (paramsUnknown: unknown) => {
-    const params = paramsUnknown as {
-      payload: ReplyPayload;
-      kind: "tool" | "block" | "final";
-    };
-    if (
-      ttsMocks.state.synthesizeFinalAudio &&
-      params.kind === "final" &&
-      typeof params.payload?.text === "string" &&
-      params.payload.text.trim()
-    ) {
-      return {
-        ...params.payload,
-        mediaUrl: "https://example.com/tts-synth.opus",
-        audioAsVoice: true,
-        trustedLocalMedia: true,
-      };
-    }
-    if (
-      ttsMocks.state.synthesizeToolAudio &&
-      params.kind === "tool" &&
-      typeof params.payload?.text === "string" &&
-      params.payload.text.trim()
-    ) {
-      return {
-        ...params.payload,
-        mediaUrl: "https://example.com/tts-tool.opus",
-        audioAsVoice: true,
-        trustedLocalMedia: true,
-      };
-    }
-    return params.payload;
-  });
+  ttsMocks.maybeApplyTtsToPayload.mockReset().mockImplementation(ttsMocks.applyTtsToPayload);
   ttsMocks.normalizeTtsAutoMode
     .mockReset()
     .mockImplementation((value: unknown) => (typeof value === "string" ? value : undefined));
@@ -866,4 +730,3 @@ export function createHookCtx() {
     SessionKey: "agent:test:session",
   });
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,5 +1,3 @@
-// Minimal Gateway websocket test helpers.
-// Provides small fake-server frames plus an isolated real-Gateway boundary harness.
 import fs from "node:fs";
 import path from "node:path";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
@@ -23,35 +21,23 @@ type MinimalGatewayRequestFrame = {
   };
 };
 
-/** Parses a raw WebSocket frame into the small request shape used by tests. */
 export function parseMinimalGatewayRequestFrame(
   data: WebSocket.RawData,
 ): MinimalGatewayRequestFrame {
   return JSON.parse(rawDataToString(data)) as MinimalGatewayRequestFrame;
 }
 
-/** Sends the connect challenge event expected by minimal gateway clients. */
 export function sendMinimalGatewayConnectChallenge(ws: WebSocket, nonce = "test-nonce"): void {
-  ws.send(
-    JSON.stringify({
-      type: "event",
-      event: "connect.challenge",
-      payload: { nonce, ts: Date.now() },
-    }),
-  );
+  const payload = { nonce, ts: Date.now() };
+  ws.send(JSON.stringify({ type: "event", event: "connect.challenge", payload }));
 }
 
-/** Builds a minimal hello-ok payload for fake gateway servers. */
 export function buildMinimalGatewayHelloOkPayload(params?: {
   connId?: string;
   methods?: string[];
   snapshot?: Record<string, unknown>;
-  auth?: { role: string; scopes: string[]; deviceToken?: string };
-  policy?: {
-    maxPayload: number;
-    maxBufferedBytes: number;
-    tickIntervalMs: number;
-  };
+  auth?: { role: string; scopes: string[]; deviceToken?: string; recoveryScope?: string };
+  policy?: Record<"maxPayload" | "maxBufferedBytes" | "tickIntervalMs", number>;
 }) {
   return {
     type: "hello-ok",
@@ -68,12 +54,10 @@ export function buildMinimalGatewayHelloOkPayload(params?: {
   };
 }
 
-/** Sends a successful response frame from a fake gateway server. */
 export function sendMinimalGatewayResponse(ws: WebSocket, id: string, payload: unknown): void {
   ws.send(JSON.stringify({ type: "res", id, ok: true, payload }));
 }
 
-/** Terminates all clients and closes a fake WebSocket gateway server. */
 export async function closeMinimalGatewayServer(wss: WebSocketServer): Promise<void> {
   for (const client of wss.clients) {
     client.terminate();
@@ -87,11 +71,6 @@ type MinimalGatewaySession = {
   agentId: string;
   key: string;
   visibility?: import("../config/sessions.js").SessionEntry["visibility"];
-};
-
-type MinimalGatewayObservation = {
-  method: "sessions.list" | "sessions.resolve";
-  params: Record<string, unknown>;
 };
 
 export async function startMinimalRealGateway(options: {
@@ -116,21 +95,15 @@ export async function startMinimalRealGateway(options: {
       return closing;
     }
     cancellation.abort(new Error("Minimal Gateway fixture is closing"));
-    closing = (async () => {
-      const cleanup = lifetime.verifyCleanup(async () => {
-        await startupSettled;
-        dropConnections();
-        await instance?.cleanup();
-      });
-      try {
-        await runQaGatewayFixture(
-          () => cleanup,
-          () => lifetime.cleanup(),
-        );
-      } finally {
-        options.signal?.removeEventListener("abort", abort);
-      }
-    })();
+    const cleanup = lifetime.verifyCleanup(async () => {
+      await startupSettled;
+      dropConnections();
+      await instance?.cleanup();
+    });
+    closing = runQaGatewayFixture(
+      () => cleanup,
+      () => lifetime.cleanup(),
+    ).finally(() => options.signal?.removeEventListener("abort", abort));
     return closing;
   };
   // Cancellation can finish the test wrapper before acquisition returns a handle.
@@ -148,9 +121,7 @@ export async function startMinimalRealGateway(options: {
       signal: cancellation.signal,
       verifyCleanup: lifetime.verifyCleanup,
       config: { hooks: { enabled: false } },
-      env: {
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      },
+      env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
     });
     instance = gateway;
     gateway.state.applyEnv();
@@ -159,8 +130,8 @@ export async function startMinimalRealGateway(options: {
     gateway.env.OPENCLAW_GATEWAY_PORT = String(gateway.port);
     gateway.env.OPENCLAW_TEST_GATEWAY_TOKEN = gateway.gatewayToken;
     gateway.env.OPENCLAW_TEST_GATEWAY_REQUEST_LOG = requestLog;
-    const sessions = options.sessions ?? [];
-    if (sessions.length > 0) {
+    const sessions = options.sessions;
+    if (sessions?.length) {
       const { upsertSessionEntryCore } =
         await import("../config/sessions/session-accessor.sqlite-entry.js");
       for (const session of sessions) {
@@ -176,7 +147,7 @@ export async function startMinimalRealGateway(options: {
       }
     }
     await gateway.startGateway();
-    const readRequests = (method: MinimalGatewayObservation["method"]) =>
+    const readRequests = (method: "sessions.list" | "sessions.resolve") =>
       fs
         .readFileSync(requestLog, "utf8")
         .split("\n")
@@ -228,7 +199,7 @@ export async function startMinimalRealGateway(options: {
           const { loadOrCreateDeviceIdentity } = await import("../infra/device-identity.js");
           cancellation.signal.throwIfAborted();
           return loadOrCreateDeviceIdentity({
-            path: gateway.state.statePath(`device-${label}.sqlite`),
+            path: gateway.state.statePath(`device-${label}`, "client", "credentials.sqlite"),
           });
         }),
       connectBootstrap: (mismatched = false) =>
@@ -247,7 +218,9 @@ export async function startMinimalRealGateway(options: {
             scopes: [],
             client: { id: "node-host", version: "test", platform: "test", mode: "node" },
             deviceIdentityPath: gateway.state.statePath(
-              `device-${mismatched ? "bad" : "ok"}.sqlite`,
+              `device-${mismatched ? "bad" : "ok"}`,
+              "client",
+              "credentials.sqlite",
             ),
             timeoutMs: 2_000,
           });

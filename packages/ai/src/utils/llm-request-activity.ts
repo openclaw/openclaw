@@ -1,22 +1,26 @@
-const requestActivityListeners = new WeakMap<AbortSignal, Set<() => void>>();
+type ActivityListener = (progress: boolean, progressTimeoutMs?: number) => void;
+const requestActivityListeners = new WeakMap<AbortSignal, Set<ActivityListener>>();
 
-export function notifyLlmRequestActivity(signal: AbortSignal | undefined): void {
+export function notifyLlmRequestActivity(
+  signal: AbortSignal | undefined,
+  progress = true,
+  progressTimeoutMs?: number,
+): void {
   if (!signal) {
     return;
   }
   for (const listener of requestActivityListeners.get(signal) ?? []) {
-    listener();
+    listener(progress, progressTimeoutMs);
   }
 }
 
-export function onLlmRequestActivity(signal: AbortSignal, listener: () => void): () => void {
-  const listeners = requestActivityListeners.get(signal) ?? new Set<() => void>();
+export function onLlmRequestActivity(signal: AbortSignal, listener: ActivityListener): () => void {
+  const listeners = requestActivityListeners.get(signal) ?? new Set<ActivityListener>();
   listeners.add(listener);
   requestActivityListeners.set(signal, listeners);
 
   return () => {
-    listeners.delete(listener);
-    if (listeners.size === 0) {
+    if (listeners.delete(listener) && listeners.size === 0) {
       requestActivityListeners.delete(signal);
     }
   };

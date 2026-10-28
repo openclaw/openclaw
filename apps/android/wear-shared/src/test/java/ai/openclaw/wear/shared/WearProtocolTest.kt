@@ -258,6 +258,22 @@ class WearProtocolTest {
       WearProtocolCodec.decode(WearProtocolCodec.encode(bracketsInString)),
     )
 
+    for (depth in listOf(WearProtocol.MAX_JSON_DEPTH, WearProtocol.MAX_JSON_DEPTH + 1)) {
+      var payload: JsonElement = JsonPrimitive(0)
+      repeat(depth - 2) { payload = JsonArray(listOf(payload)) }
+      val message =
+        WearMessage.Request(
+          requestId = "depth-$depth",
+          method = WearRpcMethod.ChatSend,
+          params = buildJsonObject { put("payload", payload) },
+        )
+      if (depth == WearProtocol.MAX_JSON_DEPTH) {
+        assertEquals(WearDecodeResult.Success(message), WearProtocolCodec.decode(WearProtocolCodec.encode(message)))
+      } else {
+        assertThrows(IllegalArgumentException::class.java) { WearProtocolCodec.encode(message) }
+      }
+    }
+
     var nestedPayload: JsonElement = JsonPrimitive(0)
     repeat(4_096) {
       nestedPayload = JsonArray(listOf(nestedPayload))
