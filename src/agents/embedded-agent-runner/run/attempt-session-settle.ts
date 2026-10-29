@@ -106,7 +106,7 @@ type CleanupEmbeddedAttemptSessionInput = EmbeddedAttemptSessionResources & {
   emitDiagnosticRunCompleted?: EmitDiagnosticRunCompleted;
   state: Pick<
     EmbeddedAttemptExecutionState,
-    "terminal" | "beforeAgentRunBlockedBy" | "diagnosticFinalResponse"
+    "terminal" | "beforeAgentRunBlockedBy" | "diagnosticFinalResponse" | "diagnosticInterruption"
   >;
 };
 
@@ -211,11 +211,18 @@ export async function cleanupEmbeddedAttemptSessionPhase(
             ? "aborted"
             : "completed",
     cleanupError ?? finalState.promptError,
-    beforeAgentRunBlocked
-      ? { blockedBy: input.state.beforeAgentRunBlockedBy }
-      : input.state.diagnosticFinalResponse
-        ? { finalResponse: input.state.diagnosticFinalResponse }
-        : undefined,
+    beforeAgentRunBlocked ||
+      input.state.diagnosticFinalResponse ||
+      input.state.diagnosticInterruption
+      ? {
+          ...input.state.diagnosticInterruption,
+          ...(beforeAgentRunBlocked
+            ? { blockedBy: input.state.beforeAgentRunBlockedBy }
+            : input.state.diagnosticFinalResponse
+              ? { finalResponse: input.state.diagnosticFinalResponse }
+              : {}),
+        }
+      : undefined,
   );
 
   if (cleanupError) {

@@ -423,6 +423,13 @@ cleanup registration. This covers `onDiagnosticEvent` and
 `onInternalDiagnosticEvent` from `openclaw/plugin-sdk/diagnostic-runtime`, as well
 as host-owned diagnostic subscriptions created on the plugin's behalf.
 
+Before retaining or exporting run interruption fields, use
+`normalizeDiagnosticRunInterruption` from
+`openclaw/plugin-sdk/diagnostic-runtime`. It accepts optional `abortCause`,
+`timeoutPhase`, and `timeoutSource` values of unknown type and returns only
+recognized enum values, omitting unknown values. It does not infer causes from
+error messages or establish event provenance.
+
 ### Handle native client errors
 
 Attach an `error` listener before connecting any long-lived native client that

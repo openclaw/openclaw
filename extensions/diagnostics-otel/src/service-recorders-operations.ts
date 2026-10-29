@@ -2,6 +2,7 @@ import { ROOT_CONTEXT, SpanStatusCode } from "@opentelemetry/api";
 import {
   normalizeDiagnosticValue,
   normalizeDiagnosticLane,
+  normalizeDiagnosticRunInterruption,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import type { DiagnosticEventPayload } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
@@ -361,6 +362,16 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
       }
       if (evt.errorCategory) {
         spanAttrs["openclaw.errorCategory"] = normalizeDiagnosticValue(evt.errorCategory, "other");
+      }
+      const interruption = normalizeDiagnosticRunInterruption(evt);
+      if (interruption.abortCause) {
+        spanAttrs["openclaw.run.abort_cause"] = interruption.abortCause;
+      }
+      if (interruption.timeoutPhase) {
+        spanAttrs["openclaw.run.timeout_phase"] = interruption.timeoutPhase;
+      }
+      if (interruption.timeoutSource) {
+        spanAttrs["openclaw.run.timeout_source"] = interruption.timeoutSource;
       }
       // Redacted message goes on the span only, never the low-cardinality metric attrs.
       const redactedError = normalizeOtelErrorMessage(privateData.errorMessage);

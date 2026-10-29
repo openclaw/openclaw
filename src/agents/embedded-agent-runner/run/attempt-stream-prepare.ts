@@ -416,7 +416,7 @@ function prepareStream(
       return;
     }
     externalAbortAccepted = true;
-    input.markExternalAbort();
+    input.markExternalAbort(reason);
     attempt.onDeferredLifecycleAbort?.(reason);
     attempt.onAttemptAbort?.();
     const abortReason =

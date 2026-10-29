@@ -30,6 +30,11 @@ import { markActiveEmbeddedRunAbandoned, type EmbeddedAgentQueueHandle } from ".
 import { buildEmbeddedForegroundPromptContext } from "./agent-end-context.js";
 import { buildEmbeddedAgentHookContext } from "./agent-hook-context.js";
 import type { EmbeddedAttemptExecutionPhaseInput } from "./attempt-execution-types.js";
+import {
+  recordEmbeddedAttemptInterruption,
+  resolveEmbeddedAttemptAbortCause,
+  type AttemptInterruptionState,
+} from "./attempt-interruption.js";
 import { readAttemptNestedToolActivity } from "./attempt-nested-tool-activity.js";
 import { buildAfterTurnRuntimeContextFromUsage } from "./attempt-prompt-helpers.js";
 import { SESSIONS_YIELD_ABORT_REASON } from "./attempt-sessions-yield.js";
@@ -462,7 +467,7 @@ export function createEmbeddedAttemptExternalAbortController(input: {
   cleanupAfterEarlyAbort: () => Promise<void>;
   runAbortController: AbortController;
   runId: string;
-  state: Pick<EmbeddedAttemptExecutionState, "terminal">;
+  state: AttemptInterruptionState;
 }): EmbeddedAttemptExternalAbortController {
   let abortActiveSession: ActiveSessionAbort | undefined;
   let abortRun: RunAbort | undefined;
@@ -498,6 +503,21 @@ export function createEmbeddedAttemptExternalAbortController(input: {
         source: "observation",
       });
     }
+    recordEmbeddedAttemptInterruption(
+      input.state,
+      isTimeout ? "timeout" : resolveEmbeddedAttemptAbortCause(reason, "external_signal"),
+      isTimeout
+        ? {
+            timeoutSource: "external",
+            timeoutPhase: projectAgentRunAttemptTerminal(input.state.terminal)
+              .timedOutDuringCompaction
+              ? "compaction"
+              : countActiveToolExecutions(input.runId) > 0
+                ? "tool_execution"
+                : "prompt",
+          }
+        : undefined,
+    );
     if (abortRun) {
       abortRun(isTimeout, reason);
       return;
@@ -576,7 +596,7 @@ export function createEmbeddedAttemptExternalAbortController(input: {
 export function createEmbeddedAttemptIdleInterruption(input: {
   runAbortController: AbortController;
   activeSession: Pick<AgentSession, "isCompacting">;
-  state: Pick<EmbeddedAttemptExecutionState, "terminal">;
+  state: AttemptInterruptionState;
   abortRun: RunAbort;
 }): (error: Error) => boolean {
   return (error) => {
@@ -605,7 +625,7 @@ export function createEmbeddedAttemptRunAbort(input: {
   isProbeSession: boolean;
   log: AbortLog;
   runAbortController: AbortController;
-  state: Pick<EmbeddedAttemptExecutionState, "terminal">;
+  state: AttemptInterruptionState;
 }): RunAbort {
   let abortAccepted = false;
   return (isTimeout = false, reason?: unknown) => {
@@ -620,6 +640,18 @@ export function createEmbeddedAttemptRunAbort(input: {
       input.runAbortController.signal,
       input.attempt.runId,
       isTimeout,
+    );
+    recordEmbeddedAttemptInterruption(
+      input.state,
+      isTimeout
+        ? "timeout"
+        : resolveEmbeddedAttemptAbortCause(
+            reason,
+            reason === SESSIONS_YIELD_ABORT_REASON ||
+              input.runAbortController.signal.reason === SESSIONS_YIELD_ABORT_REASON
+              ? "yield_cleanup"
+              : "runtime_abort",
+          ),
     );
     if (isTimeout) {
       const timeoutReason = reason instanceof Error ? reason : createTimeoutAbortReason();

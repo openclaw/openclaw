@@ -1,6 +1,6 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterAll, describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import {
@@ -9,6 +9,11 @@ import {
   readSessionTranscriptWatermark,
   upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
+import {
+  onInternalDiagnosticEvent,
+  waitForDiagnosticEventsDrained,
+  type DiagnosticEventPayload,
+} from "../../../infra/diagnostic-events.js";
 import type { UserMessage } from "../../../llm/types.js";
 import type { ReplyOperation } from "../../../sessions/session-controller.js";
 import {
@@ -25,6 +30,7 @@ import {
 import { useSessionStoreTempDirs } from "../../../test-utils/session-state-cleanup.js";
 import { wrapToolWithAbortSignal } from "../../agent-tools.abort.js";
 import { createRequesterYieldCallback } from "../../openclaw-tools.requester-yield.js";
+import { createAgentRunRestartAbortError } from "../../run-termination.js";
 import { Agent, type AgentEvent, type AgentMessage } from "../../runtime/index.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
@@ -37,7 +43,10 @@ import {
   streamAttemptAssistant,
 } from "./attempt-agent.test-support.js";
 import { useContextEngineAttemptHarness } from "./attempt-context-engine.test-support.js";
-import { stripSessionsYieldArtifacts } from "./attempt-sessions-yield.js";
+import {
+  SESSIONS_YIELD_ABORT_REASON,
+  stripSessionsYieldArtifacts,
+} from "./attempt-sessions-yield.js";
 
 const interruptType = "openclaw.sessions_yield_interrupt";
 const tempDirs = useSessionStoreTempDirs(afterAll, "openclaw-sessions-yield-");
@@ -94,6 +103,39 @@ async function persistentSession(label: string) {
   };
   await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
   return { dir, scope, sessionManager: await SessionManager.openAsync(scope, dir) };
+}
+
+function createYieldSession(calls: ReturnType<typeof attemptToolCall>) {
+  const outcomes: Extract<AgentEvent, { type: "tool_execution_end" }>[] = [];
+  let requests = 0;
+  let agent: Agent;
+  const session = createAgentBackedAttemptSession((model, tools) => {
+    agent = new Agent({
+      initialState: { model, tools },
+      streamFn: () =>
+        streamAttemptAssistant(
+          model,
+          ++requests === 1 ? calls : [{ type: "text", text: "Unexpected continuation" }],
+        ),
+    });
+    agent.subscribe((event) => {
+      if (event.type === "tool_execution_end") {
+        outcomes.push(event);
+      }
+    });
+    return agent;
+  });
+  return {
+    session,
+    outcomes,
+    get requests() {
+      return requests;
+    },
+    abort: async (reason?: unknown) => {
+      agent.abort(reason);
+      await agent.waitForIdle();
+    },
+  };
 }
 
 describe("stripSessionsYieldArtifacts", () => {
@@ -239,57 +281,78 @@ describe("automation yield", () => {
   const sessionKey = "agent:main:cron:yield-job:run:turn";
   const { hoisted, runAttempt } = useContextEngineAttemptHarness(sessionKey);
 
-  it("ends the automation turn successfully without another model request", async () => {
-    const outcomes: Extract<AgentEvent, { type: "tool_execution_end" }>[] = [];
-    let requests = 0;
-    hoisted.createOpenClawCodingToolsMock.mockImplementation((options) => [
-      createSessionsYieldTool({
-        sessionId: "embedded-session",
-        claimYield: createRequesterYieldCallback({
-          requesterSessionKey: sessionKey,
-          requesterAgentId: "main",
-        }),
-        onYield: options?.onYield,
-      }),
-    ]);
-    const result = await runAttempt({
-      attemptOverrides: {
-        disableTools: false,
-        config: { tools: { codeMode: false, toolSearch: false } },
-        sessionManager: SessionManager.inMemory(),
-      },
-      createSession: () =>
-        createAgentBackedAttemptSession((model, tools) => {
-          const agent = new Agent({
-            initialState: { model, tools },
-            streamFn: () => {
-              requests++;
-              return streamAttemptAssistant(
-                model,
-                requests === 1
-                  ? attemptToolCall("yield-call", "sessions_yield")
-                  : [{ type: "text", text: "Unexpected continuation" }],
-              );
-            },
-          });
-          agent.subscribe((event) => {
-            if (event.type === "tool_execution_end") {
-              outcomes.push(event);
+  it.each([false, true])(
+    "ends the automation turn without another model request (late abort=%s)",
+    async (lateAbort) => {
+      const runId = "automation-yield-diagnostics";
+      const externalAbort = new AbortController();
+      const reason = createAgentRunRestartAbortError();
+      const events: DiagnosticEventPayload[] = [];
+      onTestFinished(
+        onInternalDiagnosticEvent(
+          (event) => {
+            if (event.type === "run.completed" && event.runId === runId) {
+              events.push(event);
             }
-          });
-          return agent;
+          },
+          { includeTrusted: ["run.completed"] },
+        ),
+      );
+      let execution: ReturnType<typeof createYieldSession> | undefined;
+      hoisted.createOpenClawCodingToolsMock.mockImplementation((options) => [
+        createSessionsYieldTool({
+          sessionId: "embedded-session",
+          claimYield: createRequesterYieldCallback({
+            requesterSessionKey: sessionKey,
+            requesterAgentId: "main",
+          }),
+          onYield: options?.onYield,
         }),
-    });
-    expect(outcomes).toMatchObject([
-      {
-        toolName: "sessions_yield",
-        isError: false,
-        result: { details: { status: "yielded", note: expect.stringContaining("scheduler") } },
-      },
-    ]);
-    expect(requests).toBe(1);
-    expect(result.yieldDetected).toBe(true);
-  });
+      ]);
+      const result = await runAttempt({
+        attemptOverrides: {
+          runId,
+          abortSignal: externalAbort.signal,
+          disableTools: false,
+          config: { tools: { codeMode: false, toolSearch: false } },
+          sessionManager: SessionManager.inMemory(),
+        },
+        createSession: () => {
+          execution = createYieldSession(attemptToolCall("yield-call", "sessions_yield"));
+          const { session } = execution;
+          const abort = session.abort.bind(session);
+          session.abort = async (abortReason?: unknown) => {
+            if (lateAbort && abortReason === SESSIONS_YIELD_ABORT_REASON) {
+              externalAbort.abort(reason);
+            }
+            await abort();
+          };
+          return session;
+        },
+      }).catch((error: unknown) => {
+        if (!lateAbort) {
+          throw error;
+        }
+        expect(error).toBe(reason);
+        return undefined;
+      });
+      const completed = expectDefined(execution, "yield execution");
+      expect(completed.outcomes).toMatchObject([
+        {
+          toolName: "sessions_yield",
+          isError: false,
+          result: { details: { status: "yielded", note: expect.stringContaining("scheduler") } },
+        },
+      ]);
+      expect(completed.requests).toBe(1);
+      expect(externalAbort.signal.aborted).toBe(lateAbort);
+      if (result) {
+        expect(result.yieldDetected).toBe(true);
+      }
+      await waitForDiagnosticEventsDrained();
+      expect(events).toEqual([expect.objectContaining({ abortCause: "yield_cleanup" })]);
+    },
+  );
 });
 
 describe("embedded yield tool batch", () => {
@@ -300,8 +363,7 @@ describe("embedded yield tool batch", () => {
     const stopError = new Error("operator stopped the turn");
     const yielded = createDeferred();
     const sideEffects: string[] = [];
-    const outcomes: Extract<AgentEvent, { type: "tool_execution_end" }>[] = [];
-    let requests = 0;
+    let execution: ReturnType<typeof createYieldSession> | undefined;
     hoisted.createOpenClawCodingToolsMock.mockImplementation((options) => {
       const params = expectDefined(options, "tool options");
       const sibling = (name: string) => ({
@@ -338,36 +400,13 @@ describe("embedded yield tool batch", () => {
         sessionManager: SessionManager.inMemory(),
       },
       createSession: () => {
-        let agent: Agent;
-        const session = createAgentBackedAttemptSession((model, tools) => {
-          agent = new Agent({
-            initialState: { model, tools },
-            streamFn: () => {
-              requests++;
-              return streamAttemptAssistant(
-                model,
-                requests === 1
-                  ? [
-                      ...attemptToolCall("before-call", "before"),
-                      ...attemptToolCall("yield-call", "sessions_yield"),
-                      ...attemptToolCall("after-call", "after"),
-                    ]
-                  : [{ type: "text", text: "Unexpected continuation" }],
-              );
-            },
-          });
-          agent.subscribe((event) => {
-            if (event.type === "tool_execution_end") {
-              outcomes.push(event);
-            }
-          });
-          return agent;
-        });
-        session.abort = async (reason?: unknown) => {
-          agent.abort(reason);
-          await agent.waitForIdle();
-        };
-        return session;
+        execution = createYieldSession([
+          ...attemptToolCall("before-call", "before"),
+          ...attemptToolCall("yield-call", "sessions_yield"),
+          ...attemptToolCall("after-call", "after"),
+        ]);
+        execution.session.abort = execution.abort;
+        return execution.session;
       },
     }).catch((error: unknown) => {
       if (!stop) {
@@ -377,8 +416,10 @@ describe("embedded yield tool batch", () => {
       return undefined;
     });
 
-    expect(requests).toBe(1);
+    const completed = expectDefined(execution, "yield execution");
+    expect(completed.requests).toBe(1);
     expect(sideEffects).toEqual(stop ? [] : ["before", "after"]);
+    const { outcomes } = completed;
     expect(outcomes).toHaveLength(3);
     const outcomesByCallId = Object.fromEntries(
       outcomes.map((outcome) => [outcome.toolCallId, outcome]),

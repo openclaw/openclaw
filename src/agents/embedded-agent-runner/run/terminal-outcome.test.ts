@@ -4,7 +4,7 @@ import {
   createAgentRunRestartAbortError,
   createAgentRunSupersededAbortError,
 } from "../../run-termination.js";
-import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
+import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import {
   isEmbeddedRunTerminalAbort,
   isEmbeddedRunTerminalInterrupted,
@@ -18,26 +18,13 @@ type EmbeddedRunAttemptTerminalInput = Parameters<
 >[0]["attempt"];
 
 function makeAttempt(
-  overrides: Partial<EmbeddedRunAttemptTerminalInput> = {},
+  terminal: EmbeddedRunAttemptTerminalInput["terminal"] = { kind: "ok" },
 ): EmbeddedRunAttemptTerminalInput {
-  return {
-    promptTimeoutOutcome: undefined,
-    terminal: { kind: "ok" },
-    ...overrides,
-  };
+  return { terminal };
 }
 
 function makeAssistant(stopReason: AssistantMessage["stopReason"]): AssistantMessage {
-  return {
-    api: "responses",
-    provider: "openai",
-    model: "gpt-5.4",
-    usage: createZeroUsageFixture(),
-    role: "assistant",
-    content: [],
-    timestamp: 0,
-    stopReason,
-  };
+  return makeAgentAssistantMessage({ stopReason, content: [], timestamp: 0 });
 }
 
 describe("embedded run attempt terminal outcome", () => {
@@ -84,91 +71,55 @@ describe("embedded run attempt terminal outcome", () => {
     expect(assistant).toEqual(original);
   });
 
-  it.each([
-    {
-      name: "run-budget prompt timeout",
-      terminal: { kind: "timeout", phase: "prompt", source: "run_budget" },
-      reason: "hard_timeout",
-      aborted: false,
-      timedOut: true,
+  it.each<
+    [string, EmbeddedRunAttemptTerminalInput["terminal"], string, boolean, boolean, AbortSignal?]
+  >([
+    [
+      "run-budget prompt timeout",
+      { kind: "timeout", phase: "prompt", source: "run_budget" },
+      "hard_timeout",
+      false,
+      true,
+    ],
+    [
+      "idle prompt timeout",
+      { kind: "timeout", phase: "prompt", source: "idle" },
+      "hard_timeout",
+      false,
+      true,
+    ],
+    ["yield-only cleanup", { kind: "aborted", source: "yield_cleanup" }, "completed", false, false],
+    ["external cancellation", { kind: "aborted", source: "external" }, "aborted", true, false],
+    ["user signal before completion", { kind: "ok" }, "aborted", true, false, AbortSignal.abort()],
+    [
+      "writer takeover",
+      {
+        kind: "aborted",
+        source: "external",
+        failure: { source: "prompt", error: createAgentRunSupersededAbortError() },
+      },
+      "superseded",
+      true,
+      false,
+      AbortSignal.abort(createAgentRunSupersededAbortError()),
+    ],
+  ])(
+    "carries %s through canonical interruption predicates",
+    (_name, terminal, reason, aborted, timedOut, abortSignal) => {
+      const outcome = resolveEmbeddedRunAttemptTerminalOutcome({
+        attempt: makeAttempt(terminal),
+        assistant: abortSignal ? undefined : makeAssistant("stop"),
+        abortSignal,
+      });
+      expect(outcome.reason).toBe(reason);
+      if (aborted) {
+        expect(outcome).toMatchObject({ status: "error", stopReason: reason });
+      }
+      expect(isEmbeddedRunTerminalAbort(outcome)).toBe(aborted);
+      expect(isEmbeddedRunTerminalTimeout(outcome)).toBe(timedOut);
+      expect(isEmbeddedRunTerminalInterrupted(outcome)).toBe(aborted || timedOut);
     },
-    {
-      name: "idle prompt timeout",
-      terminal: { kind: "timeout", phase: "prompt", source: "idle" },
-      reason: "hard_timeout",
-      aborted: false,
-      timedOut: true,
-    },
-    {
-      name: "yield-only cleanup",
-      terminal: { kind: "aborted", source: "yield_cleanup" },
-      reason: "completed",
-      aborted: false,
-      timedOut: false,
-    },
-    {
-      name: "external attempt cancellation",
-      terminal: { kind: "aborted", source: "external" },
-      reason: "aborted",
-      aborted: true,
-      timedOut: false,
-    },
-  ] as const)("carries $name through canonical interruption predicates", (testCase) => {
-    const outcome = resolveEmbeddedRunAttemptTerminalOutcome({
-      attempt: makeAttempt({ terminal: testCase.terminal }),
-      assistant: makeAssistant("stop"),
-    });
-
-    expect(outcome.reason).toBe(testCase.reason);
-    expect(isEmbeddedRunTerminalAbort(outcome)).toBe(testCase.aborted);
-    expect(isEmbeddedRunTerminalTimeout(outcome)).toBe(testCase.timedOut);
-    expect(isEmbeddedRunTerminalInterrupted(outcome)).toBe(testCase.aborted || testCase.timedOut);
-  });
-
-  it("keeps user-signal cancellation authoritative before assistant completion", () => {
-    const controller = new AbortController();
-    controller.abort();
-
-    const outcome = resolveEmbeddedRunAttemptTerminalOutcome({
-      attempt: makeAttempt(),
-      assistant: undefined,
-      abortSignal: controller.signal,
-    });
-
-    expect(outcome).toMatchObject({
-      reason: "aborted",
-      status: "error",
-      stopReason: "aborted",
-    });
-    expect(isEmbeddedRunTerminalAbort(outcome)).toBe(true);
-    expect(isEmbeddedRunTerminalTimeout(outcome)).toBe(false);
-    expect(isEmbeddedRunTerminalInterrupted(outcome)).toBe(true);
-  });
-
-  it("projects the typed writer takeover abort as superseded", () => {
-    const error = createAgentRunSupersededAbortError();
-    const controller = new AbortController();
-    controller.abort(error);
-
-    const outcome = resolveEmbeddedRunAttemptTerminalOutcome({
-      attempt: makeAttempt({
-        terminal: {
-          kind: "aborted",
-          source: "external",
-          failure: { source: "prompt", error },
-        },
-      }),
-      assistant: undefined,
-      abortSignal: controller.signal,
-    });
-
-    expect(outcome).toMatchObject({
-      reason: "superseded",
-      status: "error",
-      stopReason: "superseded",
-    });
-    expect(isEmbeddedRunTerminalAbort(outcome)).toBe(true);
-  });
+  );
 
   it("captures signal ownership before a later cancellation can reclassify completion", () => {
     const controller = new AbortController();
@@ -186,22 +137,6 @@ describe("embedded run attempt terminal outcome", () => {
     });
   });
 
-  it("captures user cancellation with the same terminal that owns the interruption", () => {
-    const controller = new AbortController();
-    controller.abort();
-
-    expect(
-      resolveEmbeddedRunAttemptTerminalState({
-        attempt: makeAttempt(),
-        assistant: undefined,
-        abortSignal: controller.signal,
-      }),
-    ).toMatchObject({
-      outcome: { reason: "aborted", status: "error", stopReason: "aborted" },
-      signalOwnedInterruption: true,
-    });
-  });
-
   it("starts successful settled finalization without inheriting the original abort signal", () => {
     const controller = new AbortController();
     controller.abort();
@@ -211,7 +146,10 @@ describe("embedded run attempt terminal outcome", () => {
       abortSignal: controller.signal,
     });
 
-    expect(originalTerminal.signalOwnedInterruption).toBe(true);
+    expect(originalTerminal).toMatchObject({
+      outcome: { reason: "aborted", status: "error", stopReason: "aborted" },
+      signalOwnedInterruption: true,
+    });
     expect(
       resolveEmbeddedRunAttemptTerminalState({
         attempt: makeAttempt(),
@@ -223,184 +161,137 @@ describe("embedded run attempt terminal outcome", () => {
     });
   });
 
-  it("keeps prompt timeout ownership ahead of generic abort metadata", () => {
-    const outcome = resolveEmbeddedRunAttemptTerminalOutcome({
-      attempt: makeAttempt({
-        terminal: { kind: "timeout", phase: "prompt", source: "runtime" },
-      }),
-      assistant: makeAssistant("aborted"),
-    });
-
-    expect(outcome).toMatchObject({
-      reason: "hard_timeout",
-      status: "timeout",
-      timeoutPhase: "provider",
-      providerStarted: true,
-    });
-    expect(outcome).not.toHaveProperty("stopReason");
-  });
-
-  it("keeps restart cancellation ahead of generic abort metadata", () => {
-    const restartError = createAgentRunRestartAbortError();
-    const wrappedRestartError = new Error(restartError.message, { cause: restartError });
-    wrappedRestartError.name = "AbortError";
-
-    expect(
-      resolveEmbeddedRunAttemptTerminalOutcome({
-        attempt: makeAttempt({
-          terminal: {
-            kind: "aborted",
-            source: "runtime",
-            failure: { error: wrappedRestartError, source: "prompt" },
-          },
-        }),
-        assistant: makeAssistant("aborted"),
-      }),
-    ).toMatchObject({
-      reason: "cancelled",
-      status: "error",
-      stopReason: "restart",
-    });
-  });
-
-  it("keeps generic abort metadata ahead of a non-abort assistant stop reason", () => {
-    expect(
-      resolveEmbeddedRunAttemptTerminalOutcome({
-        attempt: makeAttempt({
-          terminal: { kind: "aborted", source: "runtime" },
-        }),
-        assistant: makeAssistant("stop"),
-      }),
-    ).toMatchObject({
-      reason: "aborted",
-      status: "error",
-      stopReason: "aborted",
-    });
-  });
-
-  it("keeps an attributed prompt timeout ahead of restart cancellation", () => {
-    const controller = new AbortController();
-    controller.abort(createAgentRunRestartAbortError());
-
-    expect(
-      resolveEmbeddedRunAttemptTerminalOutcome({
-        attempt: makeAttempt({
-          terminal: { kind: "timeout", phase: "prompt", source: "runtime" },
-        }),
-        assistant: undefined,
-        abortSignal: controller.signal,
-      }),
-    ).toMatchObject({
-      reason: "hard_timeout",
-      status: "timeout",
-      stopReason: "restart",
-      timeoutPhase: "provider",
-    });
-  });
-
-  it("classifies caller timeout aborts before attempt timeout flags settle", () => {
-    const controller = new AbortController();
-    const timeoutError = new Error("request timed out");
-    timeoutError.name = "TimeoutError";
-    controller.abort(timeoutError);
-
-    const outcome = resolveEmbeddedRunAttemptTerminalOutcome({
-      attempt: makeAttempt(),
-      assistant: undefined,
-      abortSignal: controller.signal,
-    });
-
-    expect(outcome).toMatchObject({
-      reason: "timed_out",
-      status: "timeout",
-      stopReason: "timeout",
-    });
-    expect(outcome).not.toHaveProperty("timeoutPhase");
-    expect(outcome).not.toHaveProperty("providerStarted");
-  });
-
-  it("ignores stale successful stop metadata when the current prompt failed", () => {
-    expect(
-      resolveEmbeddedRunAttemptTerminalOutcome({
-        attempt: makeAttempt({
-          terminal: { kind: "failed", source: "prompt", error: new Error("database is locked") },
-        }),
-        assistant: makeAssistant("stop"),
-      }),
-    ).toMatchObject({
-      reason: "failed",
-      status: "error",
-      error: "database is locked",
-    });
-    const nullFailure = resolveEmbeddedRunAttemptTerminalOutcome({
-      attempt: makeAttempt({
-        terminal: { kind: "failed", source: "prompt", error: null },
-      }),
-      assistant: {
-        ...makeAssistant("error"),
-        errorMessage: "stale assistant error",
-        diagnostics: [{ type: "provider_refusal", timestamp: 0, details: { category: "cyber" } }],
-      },
-    });
-    expect(nullFailure).toMatchObject({ reason: "failed", status: "error" });
-    expect(nullFailure).not.toHaveProperty("error");
-  });
-
-  it.each(["compaction", "tool_execution"] as const)(
-    "keeps %s timeouts ahead of their mechanical abort flag",
-    (phase) => {
-      expect(
-        resolveEmbeddedRunAttemptTerminalOutcome({
-          attempt: makeAttempt({
-            terminal: { kind: "timeout", phase, source: "runtime" },
-          }),
-          assistant: undefined,
-        }),
-      ).toMatchObject({
-        reason: "timed_out",
+  const wrappedRestart = new Error("wrapped restart", { cause: createAgentRunRestartAbortError() });
+  wrappedRestart.name = "AbortError";
+  const staleAssistant = {
+    ...makeAssistant("error"),
+    errorMessage: "stale assistant error",
+    diagnostics: [
+      { type: "provider_refusal" as const, timestamp: 0, details: { category: "cyber" } },
+    ],
+  };
+  it.each<
+    [
+      string,
+      EmbeddedRunAttemptTerminalInput["terminal"],
+      AssistantMessage | undefined,
+      Partial<ReturnType<typeof resolveEmbeddedRunAttemptTerminalOutcome>>,
+      AbortSignal?,
+      string[]?,
+    ]
+  >([
+    [
+      "prompt timeout before generic assistant abort",
+      { kind: "timeout", phase: "prompt", source: "runtime" },
+      makeAssistant("aborted"),
+      {
+        reason: "hard_timeout",
         status: "timeout",
+        timeoutPhase: "provider",
+        providerStarted: true,
+      },
+      undefined,
+      ["stopReason"],
+    ],
+    [
+      "restart before generic assistant abort",
+      { kind: "aborted", source: "runtime", failure: { source: "prompt", error: wrappedRestart } },
+      makeAssistant("aborted"),
+      { reason: "cancelled", status: "error", stopReason: "restart" },
+    ],
+    [
+      "runtime abort before successful assistant",
+      { kind: "aborted", source: "runtime" },
+      makeAssistant("stop"),
+      { reason: "aborted", status: "error", stopReason: "aborted" },
+    ],
+    [
+      "attributed prompt timeout before restart",
+      { kind: "timeout", phase: "prompt", source: "runtime" },
+      undefined,
+      {
+        reason: "hard_timeout",
+        status: "timeout",
+        stopReason: "restart",
+        timeoutPhase: "provider",
+      },
+      AbortSignal.abort(createAgentRunRestartAbortError()),
+    ],
+    [
+      "caller timeout before attempt flags settle",
+      { kind: "ok" },
+      undefined,
+      { reason: "timed_out", status: "timeout", stopReason: "timeout" },
+      AbortSignal.abort(Object.assign(new Error("request timed out"), { name: "TimeoutError" })),
+      ["timeoutPhase", "providerStarted"],
+    ],
+    [
+      "current prompt failure before stale successful assistant",
+      { kind: "failed", source: "prompt", error: new Error("database is locked") },
+      makeAssistant("stop"),
+      { reason: "failed", status: "error", error: "database is locked" },
+    ],
+    [
+      "null current failure before stale assistant refusal",
+      { kind: "failed", source: "prompt", error: null },
+      staleAssistant,
+      { reason: "failed", status: "error" },
+      undefined,
+      ["error"],
+    ],
+    [
+      "compaction timeout before mechanical abort",
+      { kind: "timeout", phase: "compaction", source: "runtime" },
+      undefined,
+      { reason: "timed_out", status: "timeout" },
+    ],
+    [
+      "tool timeout before mechanical abort",
+      { kind: "timeout", phase: "tool_execution", source: "runtime" },
+      undefined,
+      { reason: "timed_out", status: "timeout" },
+    ],
+    [
+      "recovered compaction observation remains non-terminal",
+      { kind: "timeout", phase: "compaction", source: "observation" },
+      makeAssistant("stop"),
+      { reason: "completed", status: "ok", stopReason: "stop" },
+    ],
+    [
+      "failure detail remains terminal on compaction observation",
+      {
+        kind: "timeout",
+        phase: "compaction",
+        source: "observation",
+        failure: { source: "compaction", error: new Error("settlement failed") },
+      },
+      makeAssistant("stop"),
+      { reason: "failed", status: "error", error: "settlement failed" },
+    ],
+  ])(
+    "preserves terminal precedence: %s",
+    (_name, terminal, assistant, expected, abortSignal, absent = []) => {
+      const outcome = resolveEmbeddedRunAttemptTerminalOutcome({
+        attempt: makeAttempt(terminal),
+        assistant,
+        abortSignal,
       });
+      expect(outcome).toMatchObject(expected);
+      for (const field of absent) {
+        expect(outcome).not.toHaveProperty(field);
+      }
     },
   );
-
-  it("keeps a recovered compaction timeout observation non-terminal", () => {
-    expect(
-      resolveEmbeddedRunAttemptTerminalOutcome({
-        attempt: makeAttempt({
-          terminal: { kind: "timeout", phase: "compaction", source: "observation" },
-        }),
-        assistant: makeAssistant("stop"),
-      }),
-    ).toEqual({ reason: "completed", status: "ok", stopReason: "stop" });
-  });
-
-  it("keeps failure detail terminal on a non-terminal timeout observation", () => {
-    expect(
-      resolveEmbeddedRunAttemptTerminalOutcome({
-        attempt: makeAttempt({
-          terminal: {
-            kind: "timeout",
-            phase: "compaction",
-            source: "observation",
-            failure: { source: "compaction", error: new Error("settlement failed") },
-          },
-        }),
-        assistant: makeAssistant("stop"),
-      }),
-    ).toMatchObject({ reason: "failed", status: "error", error: "settlement failed" });
-  });
 
   it("preserves nested failure details without exposing credentials", () => {
     const credential = "sk-test-" + "x".repeat(32);
     const outcome = resolveEmbeddedRunAttemptTerminalOutcome({
       attempt: makeAttempt({
-        terminal: {
-          kind: "failed",
-          source: "prompt",
-          error: new Error("request failed", {
-            cause: new Error(`database is locked; api_key=${credential}`),
-          }),
-        },
+        kind: "failed",
+        source: "prompt",
+        error: new Error("request failed", {
+          cause: new Error(`database is locked; api_key=${credential}`),
+        }),
       }),
       assistant: undefined,
     });

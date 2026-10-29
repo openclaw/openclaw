@@ -32,6 +32,7 @@ export function normalizeDiagnosticLane(value: string | undefined, fallback = "u
 export { createSubsystemLogger } from "../logging/subsystem.js";
 
 export { isDiagnosticFlagEnabled } from "../infra/diagnostic-flags.js";
+export { normalizeDiagnosticRunInterruption } from "../infra/diagnostic-run-types.js";
 export type {
   DiagnosticEventMetadata,
   DiagnosticEventPayload,

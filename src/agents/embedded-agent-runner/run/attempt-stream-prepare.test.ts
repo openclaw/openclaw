@@ -959,7 +959,7 @@ describe("prepareEmbeddedAttemptStream", () => {
     prepared.queueHandle.abort("restart");
     prepared.queueHandle.cancel("user_abort");
 
-    expect(markExternalAbort).toHaveBeenCalledOnce();
+    expect(markExternalAbort).toHaveBeenCalledExactlyOnceWith("restart");
     expect(onAttemptAbort).toHaveBeenCalledOnce();
     expect(abortRun).toHaveBeenCalledOnce();
     expect(abortRun.mock.calls[0]?.[0]).toBe(false);

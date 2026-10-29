@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import { vi } from "vitest";
+import { vi, type Mock } from "vitest";
 import { createDiagnosticEmbeddedRunOwner } from "../../../logging/diagnostic-run-activity.js";
 import type { ReplyOperation } from "../../../sessions/session-controller.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
@@ -27,6 +27,9 @@ import {
 import { prepareEmbeddedAttemptStream } from "./attempt-stream-prepare.js";
 
 type StreamInput = Parameters<typeof prepareEmbeddedAttemptStream>[0];
+type StreamSubscription = ReturnType<
+  typeof import("../../embedded-agent-subscribe.js").subscribeEmbeddedAgentSession
+>;
 const idleRunState = {
   aborted: false,
   promptError: undefined,
@@ -185,10 +188,14 @@ export async function trackPreparedStreamSubscriptions(
   setSubscribe: (
     subscribe: typeof import("../../embedded-agent-subscribe.js").subscribeEmbeddedAgentSession,
   ) => void,
-) {
+): Promise<{
+  session: AgentSession;
+  listeners: Set<Parameters<AgentSession["subscribe"]>[0]>;
+  releases: Mock<ReturnType<AgentSession["subscribe"]>>[];
+}> {
   const { session } = await createTestSession();
   const listeners = new Set<Parameters<AgentSession["subscribe"]>[0]>();
-  const releases: Array<ReturnType<typeof vi.fn>> = [];
+  const releases: Mock<ReturnType<AgentSession["subscribe"]>>[] = [];
   const subscribe = session.subscribe.bind(session);
   vi.spyOn(session, "subscribe").mockImplementation((listener) => {
     listeners.add(listener);
@@ -207,7 +214,12 @@ export async function trackPreparedStreamSubscriptions(
   return { session, listeners, releases };
 }
 
-export function createCatalogSubscription() {
+export function createCatalogSubscription(): {
+  unsubscribe: Mock<StreamSubscription["unsubscribe"]>;
+  toolMetas: StreamSubscription["toolMetas"];
+  runToolLifecycle: Mock<StreamSubscription["runToolLifecycle"]>;
+  isCompacting: Mock<StreamSubscription["isCompacting"]>;
+} {
   return {
     unsubscribe: vi.fn(),
     toolMetas: [],

@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { emitAgentEvent } from "../../../infra/agent-events.js";
 import { createEmbeddedAttemptRunAbort } from "./attempt-finalize.js";
 import { prepareEmbeddedAttemptTimeout } from "./attempt-timeout-prepare.js";
-import type { EmbeddedRunAttemptParams } from "./types.js";
+import type { EmbeddedAttemptExecutionState, EmbeddedRunAttemptParams } from "./types.js";
 
 type DeadlineChanged = NonNullable<EmbeddedRunAttemptParams["onAttemptDeadlineChanged"]>;
 const timeoutCleanups: Array<() => void> = [];
@@ -26,6 +26,7 @@ function createTimeoutHarness(options?: {
   runAbortController?: AbortController;
   onDeadline?: DeadlineChanged;
   abortRun?: ReturnType<typeof createEmbeddedAttemptRunAbort>;
+  markTimedOutByRunBudget?: () => void;
 }) {
   const state = {
     pendingCompaction: options?.pendingCompaction ?? false,
@@ -35,7 +36,7 @@ function createTimeoutHarness(options?: {
   const runAbortController = options?.runAbortController ?? new AbortController();
   const abortRun = vi.fn(options?.abortRun);
   const markTimedOutDuringCompaction = vi.fn();
-  const markTimedOutByRunBudget = vi.fn();
+  const markTimedOutByRunBudget = vi.fn(options?.markTimedOutByRunBudget);
   const onAttemptTimeoutArmed = vi.fn();
   const onAttemptDeadlineChanged = vi.fn<DeadlineChanged>(options?.onDeadline);
   const input = {
@@ -126,8 +127,11 @@ describe("prepareEmbeddedAttemptTimeout", () => {
     );
   });
 
-  it("propagates the built-in deadline reason", async () => {
+  it("propagates the built-in deadline reason and run-budget attribution", async () => {
     const runAbortController = new AbortController();
+    const state: Pick<EmbeddedAttemptExecutionState, "terminal" | "diagnosticInterruption"> = {
+      terminal: { kind: "ok" },
+    };
     const abortRun = createEmbeddedAttemptRunAbort({
       abortActiveSession: vi.fn(async () => {}),
       activeSession: { abortCompaction: vi.fn(), isCompacting: false },
@@ -141,15 +145,26 @@ describe("prepareEmbeddedAttemptTimeout", () => {
       isProbeSession: true,
       log: { warn: vi.fn() },
       runAbortController,
-      state: { terminal: { kind: "ok" } },
+      state,
     });
-    createTimeoutHarness({ runAbortController, abortRun });
+    createTimeoutHarness({
+      runAbortController,
+      abortRun,
+      markTimedOutByRunBudget: () => {
+        state.terminal = { kind: "timeout", source: "run_budget", phase: "prompt" };
+      },
+    });
 
     await vi.advanceTimersByTimeAsync(100);
 
     expect(runAbortController.signal.reason).toEqual(
       expect.objectContaining({ name: "TimeoutError", message: "request timed out" }),
     );
+    expect(state.diagnosticInterruption).toEqual({
+      abortCause: "timeout",
+      timeoutSource: "run_budget",
+      timeoutPhase: "prompt",
+    });
   });
 
   it.each([0, 10_000_000])("pauses approvals across %i ms clock step", async (clockStep) => {

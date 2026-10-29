@@ -14,6 +14,7 @@ import {
 import {
   emitTrustedDiagnosticEvent,
   emitTrustedDiagnosticEventWithPrivateData,
+  type DiagnosticRunInterruption,
 } from "../../../infra/diagnostic-events.js";
 import { resolveDiagnosticModelContentCapturePolicy } from "../../../infra/diagnostic-llm-content.js";
 import {
@@ -417,10 +418,24 @@ export function installEmbeddedAttemptContextGuards(input: {
 export type EmitDiagnosticRunCompleted = (
   outcome: "completed" | "aborted" | "blocked" | "error",
   err?: unknown,
-  extra?: { blockedBy?: string; finalResponse?: string },
+  extra?: { blockedBy?: string; finalResponse?: string } & Partial<DiagnosticRunInterruption>,
 ) => void;
 
-export function startEmbeddedAttemptDiagnostics(params: EmbeddedRunAttemptParams) {
+export function startEmbeddedAttemptDiagnostics(
+  params: Pick<
+    EmbeddedRunAttemptParams,
+    | "runId"
+    | "agentId"
+    | "sessionKey"
+    | "sessionId"
+    | "provider"
+    | "modelId"
+    | "trigger"
+    | "messageChannel"
+    | "messageProvider"
+    | "prompt"
+  >,
+) {
   const diagnosticTrace = freezeDiagnosticTraceContext(
     getActiveDiagnosticTraceContext() ?? createDiagnosticTraceContext(),
   );
@@ -472,6 +487,9 @@ export function startEmbeddedAttemptDiagnostics(params: EmbeddedRunAttemptParams
         ...diagnosticRunBase,
         durationMs: Date.now() - startedAt,
         outcome,
+        ...(extra?.abortCause ? { abortCause: extra.abortCause } : {}),
+        ...(extra?.timeoutPhase ? { timeoutPhase: extra.timeoutPhase } : {}),
+        ...(extra?.timeoutSource ? { timeoutSource: extra.timeoutSource } : {}),
         ...(extra?.blockedBy ? { blockedBy: extra.blockedBy } : {}),
         ...(failed ? { errorCategory: diagnosticErrorCategory(err) } : {}),
       },

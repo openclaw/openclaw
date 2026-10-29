@@ -35,6 +35,7 @@ Omitting the option preserves prompt statistics for interested subscribers.
 
 - `openclaw.run`
   - `openclaw.outcome`, `openclaw.channel`, `openclaw.provider`, `openclaw.model`, `openclaw.errorCategory`, optional `openclaw.agent`
+  - Native embedded attempts report owner-recorded interruption facts when available: `openclaw.run.abort_cause` (`user_abort`, `restart`, `superseded`, `external_signal`, `runtime_abort`, `yield_cleanup`, or `timeout`), optional `openclaw.run.timeout_phase` (`prompt`, `compaction`, or `tool_execution`), and optional `openclaw.run.timeout_source` (`runtime`, `run_budget`, `idle`, or `external`). These describe the attempt's interruption, not a diagnosis inferred from provider error text. `external_signal` does not establish a user cancellation. They are span attributes only, never run-duration metric dimensions; older or other harness emitters may omit them.
 - `openclaw.model.call`
   - `gen_ai.system` by default, or `gen_ai.provider.name` when the latest GenAI semantic conventions are opted in
   - `gen_ai.request.model`, `gen_ai.operation.name`, `openclaw.provider`, `openclaw.model`, `openclaw.api`, `openclaw.transport`, `openclaw.model_call.observation_unit` (`request` or `turn`), optional `openclaw.agent`

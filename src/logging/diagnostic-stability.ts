@@ -3,14 +3,14 @@ import {
   type DiagnosticEventPayload,
   type DiagnosticMemoryUsage,
 } from "../infra/diagnostic-events.js";
-import {
-  DIAGNOSTIC_MEMORY_PRESSURE_METRICS,
-  type DiagnosticMemoryPressureMetrics,
-} from "../infra/diagnostic-process-types.js";
+import { DIAGNOSTIC_MEMORY_PRESSURE_METRICS } from "../infra/diagnostic-process-types.js";
 import {
   DEFAULT_DIAGNOSTIC_STABILITY_CAPACITY,
   normalizeDiagnosticStabilityQuery,
 } from "./diagnostic-stability-query.js";
+import { projectDiagnosticRunEvent } from "./diagnostic-stability-run.js";
+import type { DiagnosticStabilityEventRecord } from "./diagnostic-stability-types.js";
+export type { DiagnosticStabilityEventRecord } from "./diagnostic-stability-types.js";
 
 export {
   MAX_DIAGNOSTIC_STABILITY_LIMIT,
@@ -22,86 +22,6 @@ const LIVENESS_EVENT_LOOP_DELAY_WARN_MS = 1_000;
 
 const SAFE_REASON_CODE = /^[A-Za-z0-9_.:-]{1,120}$/u;
 const SAFE_EXPORTER_CODE = /^[A-Za-z0-9_-]{1,120}$/u;
-
-export type DiagnosticStabilityEventRecord = DiagnosticMemoryPressureMetrics & {
-  seq: number;
-  ts: number;
-  type: DiagnosticEventPayload["type"];
-  channel?: string;
-  pluginId?: string;
-  source?: string;
-  target?: string;
-  surface?: string;
-  action?: string;
-  reason?: string;
-  errorCategory?: string;
-  outcome?: string;
-  mode?: string;
-  level?: string;
-  phase?: string;
-  detector?: string;
-  deliveryKind?: string;
-  talkEventType?: string;
-  transport?: string;
-  brain?: string;
-  toolName?: string;
-  approvalId?: string;
-  activeWorkKind?: string;
-  pairedToolName?: string;
-  provider?: string;
-  model?: string;
-  durationMs?: number;
-  providerProcessingMs?: number;
-  providerWaitEstimateMs?: number;
-  requestBytes?: number;
-  responseBytes?: number;
-  timeToFirstByteMs?: number;
-  resultCount?: number;
-  commandLength?: number;
-  exitCode?: number;
-  timedOut?: boolean;
-  final?: boolean;
-  costUsd?: number;
-  count?: number;
-  bytes?: number;
-  eventLoopDelayP99Ms?: number;
-  eventLoopDelayMaxMs?: number;
-  eventLoopUtilization?: number;
-  cpuCoreRatio?: number;
-  ageMs?: number;
-  queueDepth?: number;
-  queueSize?: number;
-  queueLength?: number;
-  waitMs?: number;
-  failureKind?: string;
-  active?: number;
-  waiting?: number;
-  queued?: number;
-  droppedEvents?: number;
-  droppedTrustedEvents?: number;
-  droppedUntrustedEvents?: number;
-  droppedPriorityEvents?: number;
-  maxQueueLength?: number;
-  drainBatchSize?: number;
-  webhooks?: {
-    received: number;
-    processed: number;
-    errors: number;
-  };
-  memory?: DiagnosticMemoryUsage;
-  usage?: {
-    input?: number;
-    output?: number;
-    cacheRead?: number;
-    cacheWrite?: number;
-    promptTokens?: number;
-    total?: number;
-  };
-  context?: {
-    limit?: number;
-    used?: number;
-  };
-};
 
 export type DiagnosticStabilitySnapshot = {
   generatedAt: string;
@@ -439,11 +359,7 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       break;
     case "run.started":
     case "run.completed":
-      copy(event, "provider", "model", "channel");
-      if (event.type === "run.completed") {
-        copy(event, "durationMs", "outcome");
-        assignReasonCode(record, event.errorCategory);
-      }
+      Object.assign(record, projectDiagnosticRunEvent(event, copyReasonCode));
       break;
     case "harness.run.started":
     case "harness.run.completed":
@@ -714,7 +630,12 @@ export function startDiagnosticStabilityRecorder(): void {
     (event) => appendRecord(sanitizeDiagnosticEvent(event)),
     {
       includePromptStats: false, // Recovery consumes lifecycle facts, not prompt sizes.
-      includeTrusted: ["model.call.started", "model.call.completed", "model.call.error"],
+      includeTrusted: [
+        "model.call.started",
+        "model.call.completed",
+        "model.call.error",
+        "run.completed",
+      ],
       exclude: [
         "log.record",
         "telemetry.exporter",
@@ -791,4 +712,3 @@ export function resetDiagnosticStabilityRecorderForTest(): void {
   };
   globalStore["__openclawDiagnosticStabilityState"] = createState(state.capacity);
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

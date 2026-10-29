@@ -517,6 +517,12 @@ describe("diagnostic support export", () => {
 
   it("sanitizes imported stability bundles before adding them to support exports", async () => {
     const bundlePath = path.join(tempDir, "imported-stability.json");
+    const run = { type: "run.completed", outcome: "aborted", durationMs: 12 };
+    const interruption = {
+      abortCause: "timeout",
+      timeoutPhase: "prompt",
+      timeoutSource: "run_budget",
+    };
     const importedBundle = {
       version: 1,
       generatedAt: "2026-04-22T12:00:00.000Z",
@@ -527,12 +533,22 @@ describe("diagnostic support export", () => {
       snapshot: {
         generatedAt: "2026-04-22T12:00:00.000Z",
         capacity: 1000,
-        count: 1,
+        count: 4,
         dropped: 0,
         events: [
+          { seq: 1, ts: 1, ...run, ...interruption },
           {
-            seq: 1,
-            ts: 1,
+            seq: 2,
+            ts: 2,
+            ...run,
+            abortCause: "private-cause",
+            timeoutPhase: "private-phase",
+            timeoutSource: "private-source",
+          },
+          { seq: 3, ts: 3, ...run },
+          {
+            seq: 4,
+            ts: 4,
             type: "webhook.error",
             channel: "telegram",
             reason: "private event reason",
@@ -541,6 +557,7 @@ describe("diagnostic support export", () => {
         ],
         summary: {
           byType: {
+            "run.completed": 3,
             "webhook.error": 1,
             "private summary type": 1,
           },
@@ -555,16 +572,30 @@ describe("diagnostic support export", () => {
     expect(stability).toHaveProperty("reason", "unknown");
     expect(stability).toHaveProperty("host", { hostname: "<redacted-hostname>" });
     expect(stability).toHaveProperty("error", { code: "ERR_TEST" });
-    expect(stability).toHaveProperty("snapshot.events.0", {
-      seq: 1,
-      ts: 1,
+    for (const [index, expected] of [interruption, {}, {}].entries()) {
+      expect(stability).toHaveProperty(`snapshot.events.${index}`, {
+        seq: index + 1,
+        ts: index + 1,
+        ...run,
+        ...expected,
+      });
+    }
+    expect(stability).toHaveProperty("snapshot.events.3", {
+      seq: 4,
+      ts: 4,
       type: "webhook.error",
       channel: "telegram",
     });
-    expect(stability).toHaveProperty("snapshot.summary.byType", { "webhook.error": 1 });
+    expect(stability).toHaveProperty("snapshot.summary.byType", {
+      "run.completed": 3,
+      "webhook.error": 1,
+    });
 
     const combined = Object.values(entries).join("\n");
     for (const secret of [
+      "private-cause",
+      "private-phase",
+      "private-source",
       "private reason",
       "private-hostname",
       "private error name",

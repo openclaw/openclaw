@@ -138,6 +138,19 @@ describe("diagnostic stability recorder", () => {
 
   it.each<[DiagnosticEventInput, Record<string, unknown>, string[]?]>([
     [
+      {
+        type: "run.completed",
+        ...scope,
+        durationMs: 12,
+        outcome: "aborted",
+        abortCause: "private-cause",
+        timeoutPhase: "private-phase",
+        timeoutSource: "private-source",
+      } as unknown as DiagnosticEventInput,
+      { outcome: "aborted" },
+      ["abortCause", "timeoutPhase", "timeoutSource"],
+    ],
+    [
       makeEvent("message.processed", {
         channel: "telegram",
         outcome: "error",

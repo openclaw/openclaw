@@ -9,6 +9,7 @@ import {
   DIAGNOSTIC_MEMORY_PRESSURE_METRICS,
   type DiagnosticMemoryPressureFields,
 } from "../infra/diagnostic-process-types.js";
+import { normalizeDiagnosticRunInterruption } from "../infra/diagnostic-run-types.js";
 import {
   collectErrorGraphCandidates,
   formatErrorMessage,
@@ -17,6 +18,10 @@ import {
 import { setFatalErrorHook } from "../infra/fatal-error-hooks.js";
 import { resolveRuntimeServiceBuildId, resolveRuntimeServiceCommit, VERSION } from "../version.js";
 import { readMemoryUsage } from "./diagnostic-memory-bundle.js";
+import {
+  readProcessBuildIdentity,
+  type DiagnosticProcessBuildIdentity,
+} from "./diagnostic-stability-build-identity.js";
 import {
   assignOptionalFields,
   readObject,
@@ -100,15 +105,12 @@ export type DiagnosticStabilityBundle = {
   version: typeof DIAGNOSTIC_STABILITY_BUNDLE_VERSION;
   generatedAt: string;
   reason: string;
-  process: {
+  process: DiagnosticProcessBuildIdentity & {
     pid: number;
     platform: NodeJS.Platform;
     arch: string;
     node: string;
     uptimeMs: number;
-    openclawVersion?: string;
-    buildId?: string;
-    commit?: string;
   };
   host: {
     hostname: string;
@@ -263,26 +265,6 @@ function readOptionalCodeString(value: unknown, label: string): string | undefin
   }
   const code = readRequiredString(value, label);
   return SAFE_REASON_CODE.test(code) ? code : undefined;
-}
-
-function readProcessBuildIdentity(source: Record<string, unknown>) {
-  const identity: Pick<
-    DiagnosticStabilityBundle["process"],
-    "openclawVersion" | "buildId" | "commit"
-  > = {};
-  // Preserve SemVer metadata and generated build IDs without importing paths,
-  // terminal controls, or unbounded strings from externally supplied bundles.
-  for (const [field, pattern] of [
-    ["openclawVersion", /^[A-Za-z0-9.+_-]{1,256}$/u],
-    ["buildId", /^[A-Za-z0-9._-]{1,96}$/u],
-    ["commit", /^[0-9a-f]{7,40}$/iu],
-  ] as const) {
-    const value = source[field];
-    if (typeof value === "string" && pattern.test(value)) {
-      identity[field] = value;
-    }
-  }
-  return identity;
 }
 
 function readHeapStatistics(value: unknown): DiagnosticHeapStatisticsSummary | undefined {
@@ -605,6 +587,8 @@ function readStabilityEventRecord(
     ],
     readOptionalNumber,
   );
+
+  Object.assign(sanitized, normalizeDiagnosticRunInterruption(record));
 
   if (record.webhooks !== undefined) {
     const webhooks = readObject(record.webhooks, `${label}.webhooks`);

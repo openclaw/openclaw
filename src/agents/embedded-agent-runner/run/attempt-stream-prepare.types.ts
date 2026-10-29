@@ -41,7 +41,7 @@ export type PrepareEmbeddedAttemptStreamInput = {
   isReplaySafeTool: (tool: Parameters<ToolSearchCatalogToolExecutor>[0]["tool"]) => boolean;
   runAbortController: AbortController;
   abortRun: (isTimeout?: boolean, reason?: unknown) => void;
-  markExternalAbort: () => void;
+  markExternalAbort: (reason?: "user_abort" | "restart" | "superseded") => void;
   recoverStalledModelCall?: () => boolean;
   getRunState: () => StreamRunState;
   onBlockReply: EmbeddedRunAttemptParams["onBlockReply"];

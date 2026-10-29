@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { createAttemptNestedToolActivityState } from "./attempt-nested-tool-activity.js";
@@ -31,6 +32,7 @@ vi.mock("./attempt-stream-settle.js", () => ({
   settleEmbeddedAttemptStream: mocks.settleStream,
 }));
 
+import { withinTest } from "../../../../test/helpers/promise.js";
 import { makeUserMessage } from "../../../../test/helpers/user-message.js";
 import { createSubscribedSessionHarness } from "../../embedded-agent-subscribe.e2e-harness.js";
 import { SessionManager } from "../../sessions/index.js";
@@ -46,7 +48,7 @@ type SettleMockInput = {
   };
 };
 type FixtureOverrides = {
-  activeSession?: SettledInput["prepared"]["sessionRuntime"]["agentSession"]["activeSession"];
+  messages?: ReturnType<SessionManager["buildSessionContext"]>["messages"];
   flushPartialAssistantText?: () => void;
   getBeforeAgentFinalizeRevisionEntryId?: () => string | undefined;
   getBeforeAgentFinalizeRevisionReason?: () => string | undefined;
@@ -59,13 +61,11 @@ type FixtureOverrides = {
 function createFixture(overrides: FixtureOverrides = {}) {
   const order: string[] = [];
   const repairedMessages = [{ role: "user", content: "repaired" }];
-  const activeSession =
-    overrides.activeSession ??
-    ({
-      agent: { state: { messages: [] } },
-      getActiveToolNames: vi.fn(() => ["read"]),
-      sessionId: "active-session",
-    } as never);
+  const activeSession = {
+    agent: { state: { messages: overrides.messages ?? [] } },
+    getActiveToolNames: vi.fn(() => ["read"]),
+    sessionId: "active-session",
+  };
   const sessionManager =
     overrides.sessionManager ??
     ({
@@ -80,19 +80,13 @@ function createFixture(overrides: FixtureOverrides = {}) {
         options?.includePartialReplies === false ? "pending-event-chain" : "pending-events",
       );
     });
-  const getBeforeAgentFinalizeRevisionReason =
-    overrides.getBeforeAgentFinalizeRevisionReason ?? (() => "revision changed");
-  const getBeforeAgentFinalizeRevisionEntryId =
-    overrides.getBeforeAgentFinalizeRevisionEntryId ?? (() => undefined);
   const flushPartialAssistantText = overrides.flushPartialAssistantText ?? vi.fn();
-  const unsubscribe = vi.fn();
   const subscription = {
     flushPartialAssistantText,
     isCompacting: vi.fn(() => false),
-    unsubscribe,
+    unsubscribe: vi.fn(),
     waitForPendingEvents,
   };
-  const queueHandle = { kind: "embedded", runId: "run-1" };
   const sessionRuntimeState = {
     prePromptMessageCount: 3,
     promptCache: undefined,
@@ -133,10 +127,12 @@ function createFixture(overrides: FixtureOverrides = {}) {
       onBlockReplyFlush: undefined,
       stream: {
         subscription,
-        queueHandle,
+        queueHandle: { kind: "embedded", runId: "run-1" },
         stopAcceptingSteerMessages: vi.fn(),
-        getBeforeAgentFinalizeRevisionReason,
-        getBeforeAgentFinalizeRevisionEntryId,
+        getBeforeAgentFinalizeRevisionReason:
+          overrides.getBeforeAgentFinalizeRevisionReason ?? (() => "revision changed"),
+        getBeforeAgentFinalizeRevisionEntryId:
+          overrides.getBeforeAgentFinalizeRevisionEntryId ?? (() => undefined),
       },
       timeout: {
         getRunAbortDeadlineAtMs: () => 123,
@@ -175,9 +171,7 @@ function createFixture(overrides: FixtureOverrides = {}) {
   };
 }
 
-beforeEach(() => {
-  vi.clearAllMocks();
-});
+beforeEach(() => vi.clearAllMocks());
 
 const runBudgetTimeout = { kind: "timeout", phase: "prompt", source: "run_budget" } as const;
 const providerFailure = { source: "prompt", error: new Error("provider stream failed") } as const;
@@ -199,13 +193,8 @@ function createTimeoutFixture(waitForPendingEvents: FixtureOverrides["waitForPen
 
 describe("runEmbeddedAttemptSettledPhase stream finalization", () => {
   it("does not settle a provider failure before partial presentation finishes", async () => {
-    let resolvePartial: (() => void) | undefined;
-    const onPartialReply = vi.fn(
-      () =>
-        new Promise<void>((resolve) => {
-          resolvePartial = resolve;
-        }),
-    );
+    const partial = createDeferredCore();
+    const onPartialReply = vi.fn(() => partial.promise);
     const { emit, subscription } = createSubscribedSessionHarness({
       runId: "run-partial-provider-failure",
       onBeforeTerminalDelivery: async () => undefined,
@@ -246,57 +235,79 @@ describe("runEmbeddedAttemptSettledPhase stream finalization", () => {
     await Promise.resolve();
     expect(mocks.settleStream).not.toHaveBeenCalled();
 
-    resolvePartial?.();
+    partial.resolve();
     await finalize;
     expect(mocks.settleStream).toHaveBeenCalledOnce();
   });
 
-  it("rewinds the exact rejected branch before the hidden retry can choose NO_REPLY", async () => {
-    const sessionManager = SessionManager.inMemory();
-    const promptId = sessionManager.appendMessage(makeUserMessage("Original request", 1));
-    const rejectedId = sessionManager.appendMessage({
-      role: "assistant",
-      content: [{ type: "text", text: "Rejected first answer" }],
-      stopReason: "stop",
-      timestamp: 2,
-    } as never);
-    sessionManager.appendCustomEntry("trailing-metadata", { source: "hook" });
-    sessionManager.appendCompaction("Summary including rejected answer", promptId, 100);
-    const originalMessages = sessionManager.buildSessionContext().messages;
-    const activeSession = {
-      agent: { state: { messages: originalMessages } },
-      getActiveToolNames: vi.fn(() => ["read"]),
-      sessionId: "active-session",
-    };
-    const fixture = createFixture({
-      activeSession: activeSession as never,
-      sessionManager: sessionManager as never,
-      repairedRejectedProviderReplay: false,
-      getBeforeAgentFinalizeRevisionEntryId: () => rejectedId,
-    });
-    const settledStream = settledResult({
-      messagesSnapshot: originalMessages,
-    });
-    mocks.settleStream.mockImplementation(async () => {
-      expect(activeSession.agent.state.messages).toBe(originalMessages);
+  it.each([false, true])(
+    "rewinds rejected history through settlement (failure=%s)",
+    async (fails) => {
+      const sessionManager = SessionManager.inMemory();
+      const promptId = expectDefined(
+        await sessionManager.appendMessageAsync(makeUserMessage("Original request", 1)),
+        "persisted prompt entry",
+      );
+      const rejectedId = await sessionManager.appendMessageAsync(
+        makeAgentAssistantMessage({
+          content: [{ type: "text", text: "Rejected first answer" }],
+          timestamp: 2,
+        }),
+      );
+      await sessionManager.appendCustomEntryAsync("trailing-metadata", { source: "hook" });
+      await sessionManager.appendCompactionAsync(
+        "Summary including rejected answer",
+        promptId,
+        100,
+      );
+      const originalMessages = sessionManager.buildSessionContext().messages;
+      const fixture = createFixture({
+        messages: originalMessages,
+        sessionManager: sessionManager as never,
+        repairedRejectedProviderReplay: false,
+        getBeforeAgentFinalizeRevisionEntryId: () => rejectedId,
+      });
+      const { activeSession } = fixture;
+      const settlementError = new Error("settlement failed");
+      const promptError = new Error("prompt failed");
+      mocks.settleStream.mockImplementation(async (settleInput: SettleMockInput) => {
+        expect(activeSession.agent.state.messages).toBe(originalMessages);
+        expect(sessionManager.getLeafId()).toBe(promptId);
+        if (fails) {
+          settleInput.state.promptError = promptError;
+          settleInput.state.promptErrorSource = "compaction";
+          throw settlementError;
+        }
+        return settledResult({ messagesSnapshot: originalMessages });
+      });
+      const result = runEmbeddedAttemptSettledPhase(fixture.input);
+      if (fails) {
+        await expect(result).rejects.toBe(settlementError);
+        expect(mocks.completeAfterTurn).not.toHaveBeenCalled();
+        expect(fixture.state.terminal).toEqual({
+          kind: "failed",
+          error: promptError,
+          source: "compaction",
+        });
+      } else {
+        await result;
+      }
+      expect(mocks.settleStream).toHaveBeenCalledOnce();
       expect(sessionManager.getLeafId()).toBe(promptId);
-      return settledStream;
-    });
-
-    await runEmbeddedAttemptSettledPhase(fixture.input);
-
-    const retryMessages = sessionManager.buildSessionContext().messages;
-    const retryTranscript = JSON.stringify(retryMessages);
-    expect(retryTranscript).not.toContain("Rejected first answer");
-    expect(retryTranscript).not.toContain("Summary including rejected answer");
-    expect(sessionManager.getEntries()).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ id: rejectedId }),
-        expect.objectContaining({ type: "custom", customType: "trailing-metadata" }),
-        expect.objectContaining({ type: "compaction" }),
-      ]),
-    );
-  });
+      const retryMessages = sessionManager.buildSessionContext().messages;
+      expect(activeSession.agent.state.messages).toEqual(retryMessages);
+      expect(JSON.stringify(retryMessages)).not.toMatch(
+        /Rejected first answer|Summary including rejected answer/,
+      );
+      expect(sessionManager.getEntries()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: rejectedId }),
+          expect.objectContaining({ type: "custom", customType: "trailing-metadata" }),
+          expect.objectContaining({ type: "compaction" }),
+        ]),
+      );
+    },
+  );
 
   it("settles the stream before publishing state and running after-turn work", async () => {
     const pendingError = new Error("pending event failed");
@@ -374,50 +385,6 @@ describe("runEmbeddedAttemptSettledPhase stream finalization", () => {
     }
   });
 
-  it("restores the rewound in-memory branch when settlement fails", async () => {
-    const sessionManager = SessionManager.inMemory();
-    const promptId = sessionManager.appendMessage(makeUserMessage("Original request", 1));
-    const rejectedId = sessionManager.appendMessage({
-      role: "assistant",
-      content: [{ type: "text", text: "Rejected first answer" }],
-      stopReason: "stop",
-      timestamp: 2,
-    } as never);
-    const originalMessages = sessionManager.buildSessionContext().messages;
-    const activeSession = {
-      agent: { state: { messages: originalMessages } },
-      getActiveToolNames: vi.fn(() => ["read"]),
-      sessionId: "active-session",
-    };
-    const fixture = createFixture({
-      activeSession: activeSession as never,
-      sessionManager: sessionManager as never,
-      repairedRejectedProviderReplay: false,
-      getBeforeAgentFinalizeRevisionEntryId: () => rejectedId,
-    });
-    const settlementError = new Error("settlement failed");
-    const promptError = new Error("prompt failed");
-    mocks.settleStream.mockImplementation(async (settleInput: SettleMockInput) => {
-      settleInput.state.promptError = promptError;
-      settleInput.state.promptErrorSource = "compaction";
-      throw settlementError;
-    });
-
-    await expect(runEmbeddedAttemptSettledPhase(fixture.input)).rejects.toBe(settlementError);
-
-    expect(sessionManager.getLeafId()).toBe(promptId);
-    expect(JSON.stringify(activeSession.agent.state.messages)).not.toContain(
-      "Rejected first answer",
-    );
-    expect(mocks.settleStream).toHaveBeenCalledOnce();
-    expect(mocks.completeAfterTurn).not.toHaveBeenCalled();
-    expect(fixture.state.terminal).toEqual({
-      kind: "failed",
-      error: promptError,
-      source: "compaction",
-    });
-  });
-
   it.each([
     { kind: "aborted", source: "external" },
     { ...runBudgetTimeout, failure: providerFailure },
@@ -439,7 +406,9 @@ describe("runEmbeddedAttemptSettledPhase stream finalization", () => {
     },
   );
 
-  it("skips the bounded drain when a provider failure is already attached before settlement", async () => {
+  it("skips the bounded drain when a provider failure is already attached before settlement", async ({
+    signal,
+  }) => {
     // A failed terminal must bypass even a wedged serialized handler.
     const chainGate = new Promise<void>(() => {});
     const waitForPendingEvents = vi.fn(async () => {
@@ -456,15 +425,7 @@ describe("runEmbeddedAttemptSettledPhase stream finalization", () => {
     );
 
     await expect(
-      Promise.race([
-        runEmbeddedAttemptSettledPhase(fixture.input),
-        new Promise<never>((_, reject) => {
-          setTimeout(
-            () => reject(new Error("settlement stalled on the bounded drain")),
-            5_000,
-          ).unref?.();
-        }),
-      ]),
+      withinTest(runEmbeddedAttemptSettledPhase(fixture.input), signal),
     ).resolves.toEqual(completedAttempt);
 
     expect(waitForPendingEvents).not.toHaveBeenCalled();

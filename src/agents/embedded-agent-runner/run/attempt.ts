@@ -34,6 +34,7 @@ import { prepareEmbeddedAttemptBootstrap } from "./attempt-bootstrap-prepare.js"
 import { prepareEmbeddedAttemptBundleTools } from "./attempt-bundle-tools.js";
 import { runEmbeddedAttemptExecutionPhase } from "./attempt-execution-phase.js";
 import { createEmbeddedAttemptExternalAbortController } from "./attempt-finalize.js";
+import { recordEmbeddedAttemptInterruption } from "./attempt-interruption.js";
 import { createEmbeddedAttemptPreparation } from "./attempt-preparation.js";
 import { createPromptBuildToolPolicy } from "./attempt-prompt-support.js";
 import { prepareEmbeddedAttemptSessionRuntime } from "./attempt-session-runtime-prepare.js";
@@ -376,6 +377,7 @@ async function runEmbeddedAttemptOwned(
                 return;
               }
               // Keep sibling execution and authority live until their results settle.
+              recordEmbeddedAttemptInterruption(executionState, "yield_cleanup");
               params.replyOperation?.yield();
               queueSessionsYieldInterruptMessage(activeSession);
               runAbortController.abort(SESSIONS_YIELD_ABORT_REASON);
@@ -587,6 +589,7 @@ async function runEmbeddedAttemptOwned(
     emitDiagnosticRunCompleted?.(
       terminal.aborted ? "aborted" : "error",
       terminal.promptError ?? new Error("run exited before diagnostic completion"),
+      executionState.diagnosticInterruption,
     );
     restoreSkillEnv?.();
   }

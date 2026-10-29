@@ -53,6 +53,7 @@ import type {
 import type { DiagnosticGatewayFields } from "./diagnostic-rpc-types.js";
 import type {
   DiagnosticAgentCommentaryFields,
+  DiagnosticRunCompletedFields,
   DiagnosticRunScopeFields,
 } from "./diagnostic-run-types.js";
 import {
@@ -82,6 +83,7 @@ export { isInternalDiagnosticEventMetadata } from "./diagnostic-event-snapshot.j
 export type { DiagnosticEventMetadata } from "./diagnostic-event-snapshot.js";
 
 export type { DiagnosticMemoryUsage } from "./diagnostic-process-types.js";
+export type { DiagnosticRunInterruption } from "./diagnostic-run-types.js";
 
 export type DiagnosticSessionState = "idle" | "processing" | "waiting";
 
@@ -553,13 +555,7 @@ type DiagnosticRunStartedEvent = DiagnosticRunBaseEvent & {
   type: "run.started";
 };
 
-type DiagnosticRunCompletedEvent = DiagnosticRunBaseEvent & {
-  type: "run.completed";
-  durationMs: number;
-  outcome: "completed" | "aborted" | "blocked" | "error";
-  errorCategory?: string;
-  blockedBy?: string;
-};
+type DiagnosticRunCompletedEvent = DiagnosticRunBaseEvent & DiagnosticRunCompletedFields;
 
 type DiagnosticHarnessRunPhase = "prepare" | "start" | "send" | "resolve" | "cleanup";
 export type DiagnosticHarnessRunOutcome = "completed" | "aborted" | "timed_out" | "error";

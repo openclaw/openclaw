@@ -6,6 +6,7 @@ import type {
   SessionSystemPromptReport,
 } from "../../../config/sessions/types.js";
 import type { ContextEngine, ContextEnginePromptCacheInfo } from "../../../context-engine/types.js";
+import type { DiagnosticRunInterruption } from "../../../infra/diagnostic-events.js";
 import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import type { AssistantMessage, Model } from "../../../llm/types.js";
 import type { CommandQueueTaskDeadline } from "../../../process/command-queue.types.js";
@@ -58,6 +59,8 @@ export type EmbeddedAttemptExecutionState = {
   trajectoryEndRecorded: boolean;
   /** Final assistant text captured for the run-completed diagnostic event; gated before export. */
   diagnosticFinalResponse?: string;
+  /** First accepted interruption, retained independently of later terminal-state refinement. */
+  diagnosticInterruption?: DiagnosticRunInterruption;
 };
 
 export type EmbeddedAttemptExternalAbortController = {

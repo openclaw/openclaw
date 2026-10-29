@@ -24,6 +24,7 @@ import {
   createEmbeddedAttemptRunAbort,
 } from "./attempt-finalize.js";
 import { prepareEmbeddedAttemptHistory } from "./attempt-history-prepare.js";
+import { recordEmbeddedAttemptInterruption } from "./attempt-interruption.js";
 import { runEmbeddedAttemptSettledPhase } from "./attempt-settle.js";
 import { prepareEmbeddedAttemptStream } from "./attempt-stream-prepare.js";
 import { installEmbeddedAttemptStreamGuards } from "./attempt-stream.js";
@@ -171,7 +172,10 @@ export async function runEmbeddedAttemptExecutionPhase(
     applyPermissionMode: input.lifecycle.applyPermissionMode,
     runAbortController: input.runAbortController,
     abortRun,
-    markExternalAbort: () => mergeTerminal({ kind: "aborted", source: "external" }),
+    markExternalAbort: (reason) => {
+      recordEmbeddedAttemptInterruption(state, reason ?? "external_signal");
+      mergeTerminal({ kind: "aborted", source: "external" });
+    },
     recoverStalledModelCall: () =>
       isModelCallActive() &&
       interruptIdleRequest(
