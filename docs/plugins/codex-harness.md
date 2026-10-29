@@ -436,7 +436,11 @@ repaired by `openclaw doctor --fix`.
 
 When an ordinary managed turn ends with the exact `Codex parent-local inference
 transport failed` error, OpenClaw settles its recorded output before retiring
-that connection from future acquisitions. Existing sibling turns drain normally.
+that connection from future acquisitions. Retirement is skipped while sibling
+work or idle Incognito history still owns the process: Incognito history cannot
+be resumed from disk. Existing sibling turns
+continue normally; preserving their ownership takes priority over this optional
+connection refresh.
 The next eligible attempt can resume the saved thread on a fresh connection.
 The relay does not replay tools or add a retry loop; existing retry limits and
 side-effect checks still apply. Unrelated upstream 502s, supervised sessions,

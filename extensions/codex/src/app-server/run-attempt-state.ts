@@ -3,6 +3,7 @@ import {
   formatErrorMessage,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { hasCodexAppServerSiblingThreadWork } from "./client-runtime.js";
 import { CodexAppServerRpcError, type CodexAppServerClient } from "./client.js";
 import { neutralizeCodexExplicitMentionSigils } from "./context-engine-projection.js";
 import { isCodexInferenceTransportFailure } from "./inference-transport.js";
@@ -33,7 +34,12 @@ export function retireCodexTransportAfterFailure(
   ) {
     return;
   }
-  // Detach future acquisitions without aborting sibling leases or replaying tools.
+  // Optional recovery must preserve process-only Incognito history and sibling
+  // ownership, even when no shared-client lease keeps that history alive.
+  if (hasCodexAppServerSiblingThreadWork(client, thread.threadId)) {
+    return;
+  }
+  // Detach future acquisitions without replaying completed tools.
   const retired = retireSharedCodexAppServerClientIfCurrent(client);
   if (retired) {
     embeddedAgentLog.warn("codex inference transport retired after settled failure", {

@@ -3,6 +3,7 @@ import { awaitGateBeforeSettlement } from "openclaw/plugin-sdk/test-fixtures";
 import { expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { itemNotification, turnCompleted } from "./protocol.test-helpers.js";
+import { seedRunSessionOwnerForTest } from "./run-attempt-session-owners.test-support.js";
 import {
   createParams,
   createStartedThreadHarness,
@@ -57,6 +58,71 @@ function commandEvents(cwd: string, output: string) {
 
 /** Keep finalization evidence cases under the parent suite's original hooks and ordering. */
 export function registerSettledFinalizationTests(_fixtures: SettledFinalizationFixtures) {
+  it("preserves idle Incognito history after a settled sibling transport failure", async () => {
+    const workspaceDir = path.join(tempDir, "incognito-transport");
+    const sessionKey = "agent:main:dashboard:incognito-transport";
+    await seedRunSessionOwnerForTest("incognito-session", sessionKey);
+    const incognito = (runId: string) =>
+      createParams(path.join(tempDir, "incognito-transport.jsonl"), workspaceDir, {
+        sessionKey,
+        sessionId: "incognito-session",
+        runId,
+      });
+    const harness = createStartedThreadHarness(
+      async (method, params) => {
+        if (method === "thread/start") {
+          return threadStartResult(
+            (params as { ephemeral?: boolean }).ephemeral ? "incognito" : "ordinary",
+          );
+        }
+        return undefined;
+      },
+      { persistedThreads: ["ordinary"] },
+    );
+    const first = runCodexAppServerAttempt(incognito("incognito-first"));
+    await first.waitForTurnAccepted();
+    await harness.completeTurn({ threadId: "incognito", turnId: "turn-1" });
+    expect((await first).terminal).toEqual({ kind: "ok" });
+    expect(getCurrentSharedClientEntry(harness.client)?.activeLeases).toBe(0);
+
+    const { params: failedParams } = await settledParams(
+      "ordinary-transport",
+      "Complete the recorded task.",
+    );
+    const failed = runCodexAppServerAttempt(failedParams);
+    await failed.waitForTurnAccepted();
+    const error = {
+      message: "Codex parent-local inference transport failed; retry on a fresh connection.",
+      codexErrorInfo: "other",
+    };
+    await harness.notify({
+      method: "turn/completed",
+      params: {
+        threadId: "ordinary",
+        turn: { id: "turn-1", status: "failed", items: [], error },
+      },
+    });
+    expect(readAttemptTerminal(await failed).promptError).toBeTruthy();
+    // All active leases have drained; only the retained native history pins this process.
+    expect(harness.client.getCloseError()).toBeUndefined();
+    expect(getCurrentSharedClientEntry(harness.client)?.activeLeases).toBe(0);
+    const before = harness.requests.length;
+    const continued = runCodexAppServerAttempt(incognito("incognito-continue"));
+    await continued.waitForTurnAccepted();
+    expect(harness.requests.slice(before)).toContainEqual(
+      expect.objectContaining({
+        method: "turn/start",
+        params: expect.objectContaining({ threadId: "incognito" }),
+      }),
+    );
+    expect(
+      harness.requests
+        .slice(before)
+        .filter(({ method }) => method === "thread/start" || method === "thread/resume"),
+    ).toHaveLength(0);
+    await harness.completeTurn({ threadId: "incognito", turnId: "turn-1" });
+    expect((await continued).terminal).toEqual({ kind: "ok" });
+  });
   it.each([
     {
       message:
