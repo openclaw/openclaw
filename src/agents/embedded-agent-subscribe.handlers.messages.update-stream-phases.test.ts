@@ -304,39 +304,56 @@ describe("handleMessageUpdate text signatures", () => {
     await Promise.all([startPending, deltaPending]);
   });
 
-  it("preserves phase-aware voice and reply directives while deferring final media delivery", async () => {
-    const ctx = createMessageUpdateContext({
-      state: {
-        blockReplyBreak: "message_end",
-      },
-    });
-    const replyText = "Done.\n\n[[reply_to_current]]\n[[audio_as_voice]]\nMEDIA:/tmp/reply.ogg";
+  it.each([true, false])(
+    "preserves phase-aware directives with a block consumer=%s while deferring final media delivery",
+    async (hasBlockConsumer) => {
+      const ctx = createMessageUpdateContext({
+        state: {
+          blockReplyBreak: "message_end",
+        },
+      });
+      const onBlockReply = vi.fn();
+      if (hasBlockConsumer) {
+        ctx.params.onBlockReply = onBlockReply;
+      }
+      const replyText = "Done.\n\n[[reply_to_current]]\n[[audio_as_voice]]\nMEDIA:/tmp/reply.ogg";
 
-    for (const type of ["text_delta", "text_end"] as const) {
-      await updateMessage(
-        ctx,
-        createTextUpdateEvent({
-          type,
-          text: replyText,
-          id: "item-final",
-          signaturePhase: "final_answer",
-          partialPhase: "final_answer",
-        }),
+      for (const type of ["text_delta", "text_end"] as const) {
+        await updateMessage(
+          ctx,
+          createTextUpdateEvent({
+            type,
+            text: replyText,
+            id: "item-final",
+            signaturePhase: "final_answer",
+            partialPhase: "final_answer",
+          }),
+        );
+      }
+
+      expect(ctx.blockChunker.bufferedText).toBe(hasBlockConsumer ? "Done.\n\n" : "");
+      expect(onBlockReply).not.toHaveBeenCalled();
+      expect(ctx.emitAssistantStreamData).toHaveBeenCalledWith(
+        expect.objectContaining({ text: "Done." }),
+        expect.anything(),
       );
-    }
-
-    expect(ctx.blockChunker.bufferedText).toBe("Done.\n\n");
-    expect(
-      consumePendingAssistantReplyDirectivesIntoReply(ctx.state, {
+      expect(
+        consumePendingAssistantReplyDirectivesIntoReply(ctx.state, {
+          text: "Done.",
+        }),
+      ).toEqual({
         text: "Done.",
-      }),
-    ).toEqual({
-      text: "Done.",
-      audioAsVoice: true,
-      replyToId: undefined,
-      replyToTag: true,
-      replyToCurrent: true,
-    });
-    expect(ctx.state.pendingAssistantReplyDirectives).toBeUndefined();
-  });
+        audioAsVoice: true,
+        replyToId: undefined,
+        replyToTag: true,
+        replyToCurrent: true,
+      });
+      expect(ctx.state.pendingAssistantReplyDirectives).toBeUndefined();
+      expect(consumePendingAssistantReplyDirectivesIntoReply(ctx.state, { text: "Next." })).toEqual(
+        {
+          text: "Next.",
+        },
+      );
+    },
+  );
 });

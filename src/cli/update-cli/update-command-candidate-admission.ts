@@ -75,6 +75,7 @@ export async function inspectStagedUpdateCandidateAdmission(
     if (!installTarget) {
       throw new Error("Candidate admission requires the resolved package installation.");
     }
+    await target.assertPackageRuntimeCurrent?.();
     // The child cannot attest the installed supervisor's ancestry or handoff exception.
     await inspectUpdateManagedServices({
       ...target,
@@ -241,6 +242,7 @@ export async function withUpdateCandidateAdmission<T>(
   const run = opts.run!;
   try {
     const inspect = async (stage: StagedPackageInstallUpdate): Promise<T> => {
+      await target.assertPackageRuntimeCurrent?.();
       const result = await inspectStagedUpdateCandidateAdmission({
         ...params,
         candidateRoot: stage.root,
@@ -273,6 +275,7 @@ export async function withUpdateCandidateAdmission<T>(
     if (params.stagedPackage) {
       return await inspect(params.stagedPackage);
     }
+    await target.assertPackageRuntimeCurrent?.();
     return await withPrivateStagedPackageInstall(
       {
         root: target.root,
