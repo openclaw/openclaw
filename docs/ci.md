@@ -609,6 +609,10 @@ reject the verified incident OV G3C intermediate in both trust modes. The report
 reducer requires all twelve TLS class/method identities exactly once, separately
 from the existing Access case and packaged-library checks.
 
+Platform-root incident cases require either exact Conscrypt key rejection or
+OkHttp's specific blocklist rejection after verifying the raw peer chain and
+hostname. They do not depend on Android downloading a platform blocklist update.
+
 These secretless, disposable emulators temporarily import a synthetic localhost
 root and the verified incident root into copied APEX CA stores in the zygote
 mount namespaces before launching the test app. Stock roots and SELinux remain

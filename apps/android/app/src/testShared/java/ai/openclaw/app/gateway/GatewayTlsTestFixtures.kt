@@ -207,12 +207,16 @@ internal class GatewayTlsTestObservation {
       }
     }
 
-  // The native platform rejects this key during TLS, before OkHttp sees a peer chain.
-  // Keep this independent from the pinned-path assertion of OkHttp's own gate below.
+  // Android's dynamic blocklist may reject during TLS; otherwise OkHttp must reject
+  // the verified raw chain after successful platform trust and hostname validation.
   fun assertPlatformBlocklisted(
     error: Throwable,
     fixture: GatewayTlsTestFixture,
   ) {
+    if (hostnameAccepted.get()) {
+      assertBlocklisted(error, fixture)
+      return
+    }
     val intermediate = checkNotNull(fixture.blockedIntermediate)
     val expectedMessage = "Certificate blocklisted by public key: $intermediate"
     assertTrue(
