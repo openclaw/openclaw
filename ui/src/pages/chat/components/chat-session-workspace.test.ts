@@ -16,6 +16,8 @@ import {
 import {
   loadedSidebarContent,
   createSidebarContentRecorder,
+  textFile,
+  workspaceFile,
 } from "./chat-session-workspace.test-support.ts";
 import {
   createSessionWorkspaceProps as workspaceProps,
@@ -26,26 +28,6 @@ import {
   type SessionWorkspaceHost,
 } from "./chat-session-workspace.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
-
-function workspaceFile(
-  path: string,
-  overrides: Partial<SessionWorkspaceGetResult["file"]> = {},
-): SessionWorkspaceGetResult["file"] {
-  return { path, name: path.split(/[\\/]/).at(-1)!, kind: "read", missing: false, ...overrides };
-}
-
-function textFile(
-  path: string,
-  content: string,
-  overrides: Partial<SessionWorkspaceGetResult["file"]> = {},
-) {
-  return workspaceFile(path, {
-    previewKind: "text",
-    contentEncoding: "utf8",
-    content,
-    ...overrides,
-  });
-}
 
 function imageFile(mimeType: string) {
   return workspaceFile("screenshots/result.png", {
@@ -464,11 +446,15 @@ describe("openSessionWorkspaceFile", () => {
     const workspace = state.sessionWorkspaceState;
     expect(getFile).toHaveBeenCalledExactlyOnceWith(owner, path, { agentId: "research" });
     expect(workspace?.sessionKey).toBe(state.sessionKey);
-    expect(file.sessionFileSource).toEqual({ sessionKey: owner, agentId: "research", path });
+    expect(file.sessionFileSource).toEqual({
+      sessionKey: owner,
+      agentId: "research",
+      path: "/shared/index.html",
+    });
     await file.edit.fetchLatest();
-    expect(getFile).toHaveBeenLastCalledWith(owner, path, { agentId: "research" });
+    expect(getFile).toHaveBeenLastCalledWith(owner, "/shared/index.html", { agentId: "research" });
     await file.edit.save({ content: "changed", expectedHash: "old" });
-    expect(setFile).toHaveBeenCalledExactlyOnceWith(owner, path, "changed", {
+    expect(setFile).toHaveBeenCalledExactlyOnceWith(owner, "/shared/index.html", "changed", {
       agentId: "research",
       expectedHash: "old",
     });

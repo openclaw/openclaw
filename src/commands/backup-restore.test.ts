@@ -115,8 +115,8 @@ describe("backupRestoreCommand", () => {
     "escapes terminal controls in restore output while preserving the restored payload",
     async () => {
       await withState(async (state) => {
-        const text = "café\u001b[31m\nforged\tend\rrow\u0007";
-        const archive = state.path(`${text}.tar.gz`);
+        const text = "café\u001b[31m\nforged\tend\rrow\u0007 ";
+        const archive = state.path(`${text}.tar.gz `);
         const target = state.path(`restored-${text}`);
         await writeArchive({ archivePath: archive });
         const runtime = createTestRuntime();

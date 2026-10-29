@@ -136,11 +136,11 @@ it.each(["rollup", "prune"] as const)(
       const before = readRows(agentId, databasePath);
       const { entered, release, reservation } = holdWriter({ agentId, path: databasePath });
       await entered.promise;
+      const rows = [rollupRow("session.jsonl", '{"totalTokens":2}', 2)];
+      const clone = vi.spyOn(globalThis, "structuredClone");
       let settled = false;
       const writing = (
-        operation === "rollup"
-          ? owner.writeRollup([rollupRow("session.jsonl", '{"totalTokens":2}', 2)])
-          : owner.pruneRows(before)
+        operation === "rollup" ? owner.writeRollup(rows) : owner.pruneRows(before)
       ).finally(() => {
         settled = true;
       });
@@ -149,6 +149,10 @@ it.each(["rollup", "prune"] as const)(
         await setImmediate();
         expect(readRows(agentId, databasePath)).toEqual(before);
         expect(settled).toBe(false);
+        // Worker-delivered rows stay owned until the awaited write completes.
+        expect(
+          clone.mock.calls.filter(([value]) => value === (operation === "rollup" ? rows : before)),
+        ).toHaveLength(0);
       } finally {
         release.resolve();
         await reservation;

@@ -2,10 +2,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { readMigrationConfigPath } from "openclaw/plugin-sdk/migration";
 import { describe, expect, it } from "vitest";
 import { legacyConfigRules, normalizeCompatibilityConfig } from "./doctor-contract-api.js";
-
-function pluginConfig(config: Record<string, unknown>): OpenClawConfig {
-  return { plugins: { entries: { xai: { config } } } };
-}
+import { xaiPluginConfig as pluginConfig } from "./plugin-config.test-support.js";
 
 function mediaConfig(models: unknown[]): OpenClawConfig {
   return { tools: { media: { models } } } as OpenClawConfig;
@@ -35,25 +32,18 @@ function migrate(config: OpenClawConfig, count: number) {
 
 describe("xAI doctor contract", () => {
   it("detects and migrates retired server-tool defaults without changing other settings", () => {
+    const builtin = {
+      id: "grok-4-1-fast",
+      name: "Grok 4.1 Fast",
+      reasoning: true,
+      input: ["text", "image"],
+      cost: { input: 0.2, output: 0.5, cacheRead: 0.05, cacheWrite: 0 },
+      contextWindow: 2_000_000,
+      maxTokens: 30_000,
+    };
     const models = [
-      {
-        id: "grok-4-1-fast",
-        name: "Grok 4.1 Fast",
-        reasoning: true,
-        input: ["text", "image"],
-        cost: { input: 0.2, output: 0.5, cacheRead: 0.05, cacheWrite: 0 },
-        contextWindow: 2_000_000,
-        maxTokens: 30_000,
-      },
-      {
-        id: "grok-3-mini",
-        name: "Custom Grok 3 Mini",
-        reasoning: true,
-        input: ["text"],
-        cost: { input: 0.3, output: 0.5, cacheRead: 0.075, cacheWrite: 0 },
-        contextWindow: 131_072,
-        maxTokens: 8_192,
-      },
+      builtin,
+      { ...builtin, name: "Custom Grok 4.1 Fast" },
       { id: "grok-4.20-beta-latest-reasoning", name: "moving alias" },
       { id: "custom-model", name: "custom" },
     ];
@@ -70,13 +60,7 @@ describe("xAI doctor contract", () => {
         },
       },
       models: {
-        providers: {
-          xai: {
-            baseUrl: "https://api.x.ai/v1",
-            api: "openai-responses",
-            models,
-          },
-        },
+        providers: { xai: { baseUrl: "https://api.x.ai/v1", api: "openai-responses", models } },
       },
     } as OpenClawConfig;
 

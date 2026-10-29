@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import * as tar from "tar";
-import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import {
   recordArchiveSymbolicLink,
   resolvePortableArchivePathKey,
@@ -24,10 +24,13 @@ import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { assertOpenClawAgentDatabaseOwner } from "../state/openclaw-agent-db-maintenance.js";
 import { readOpenClawAgentDatabaseRegistryRows } from "../state/openclaw-agent-db-registry.read.js";
-import { resolveUserPath } from "../utils.js";
 import { resolveBackupRecoveryConfig } from "./backup-recovery-config.js";
 import type { BackupSqliteSnapshotFact } from "./backup-resource-inventory.js";
-import { BACKUP_MAX_DECOMPRESSION_RATIO, buildBackupArchivePath } from "./backup-shared.js";
+import {
+  BACKUP_MAX_DECOMPRESSION_RATIO,
+  buildBackupArchivePath,
+  resolveBackupArchivePath,
+} from "./backup-shared.js";
 import {
   type BackupManifest,
   type NormalizedArchiveEntry,
@@ -51,20 +54,18 @@ type SqliteSnapshotEntry = NormalizedArchiveEntry & SqliteSnapshotOwner;
 
 function formatResult(result: BackupVerifyResult): string {
   return [
-    `Backup archive OK: ${result.archivePath}`,
-    `Archive root: ${result.archiveRoot}`,
-    `Created at: ${result.createdAt}`,
-    `Runtime version: ${result.runtimeVersion}`,
-    `Assets verified: ${result.assetCount}`,
-    `Archive entries scanned: ${result.entryCount}`,
-    `Symbolic links checked: ${result.symlinkCount}`,
+    terminalText`Backup archive OK: ${result.archivePath}`,
+    terminalText`Archive root: ${result.archiveRoot}`,
+    terminalText`Created at: ${result.createdAt}`,
+    terminalText`Runtime version: ${result.runtimeVersion}`,
+    terminalText`Assets verified: ${result.assetCount}`,
+    terminalText`Archive entries scanned: ${result.entryCount}`,
+    terminalText`Symbolic links checked: ${result.symlinkCount}`,
     result.sqliteInventoryVerified
       ? "SQLite database inventory verified."
       : "SQLite database coverage unknown: this legacy archive has no database inventory.",
-    ...(result.warnings ?? []),
-  ]
-    .map(sanitizeTerminalText)
-    .join("\n");
+    ...(result.warnings ?? []).map((warning) => terminalText`${warning}`),
+  ].join("\n");
 }
 
 function resolveExtractionBytes(
@@ -699,7 +700,7 @@ export async function prepareBackupArchive(
   archive: string,
   requiredSnapshots: readonly BackupSqliteSnapshotFact[] = [],
 ) {
-  const archivePath = resolveUserPath(archive);
+  const archivePath = resolveBackupArchivePath(archive, "<archive>");
   return await verifyResolvedBackupArchive(archivePath, requiredSnapshots).catch(
     (error: unknown) => {
       const detail = error instanceof Error ? error.message : formatErrorMessage(error);

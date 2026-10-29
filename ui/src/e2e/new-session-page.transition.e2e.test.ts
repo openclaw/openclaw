@@ -271,7 +271,17 @@ async function assertCreateRecovery(
   expect(await followUpComposer.inputValue()).toBe("");
   await captureUiProof(suite, page, `${proofName}-submitted.png`);
   const presentation = await expectPendingNewSessionPresentation(page);
+  expect(presentation.reducedMotion).toBe(motion === "reduce");
   await captureJson(`${proofName}.json`, () => presentation, suite.artifactDir);
+  // Motion changes the pending indicator's CSS, not create/retry ownership.
+  const alternateMotion = motion === "reduce" ? "no-preference" : "reduce";
+  await page.emulateMedia({ reducedMotion: alternateMotion });
+  const alternatePresentation = await expectPendingNewSessionPresentation(page);
+  expect(alternatePresentation.reducedMotion).toBe(alternateMotion === "reduce");
+  const alternateProofName = `pending-${width}-${mode}-${alternateMotion}-${content}`;
+  await captureUiProof(suite, page, `${alternateProofName}-submitted.png`);
+  await captureJson(`${alternateProofName}.json`, () => alternatePresentation, suite.artifactDir);
+  await page.emulateMedia({ reducedMotion: motion });
   await followUpComposer.press("Enter");
   await followUpComposer.press("Control+Enter");
   expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
@@ -433,7 +443,7 @@ suite.define(() => {
       if (captureProofEnabled) {
         await page.waitForTimeout(800);
       }
-      await button(toast, "Open").click();
+      await toast.getByRole("link", { name: "Open session", exact: true }).click();
       await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionKey));
       await waitForCommittedChatRoute(page);
       await page.locator("openclaw-chat-page").waitFor();
@@ -761,19 +771,13 @@ suite.define(() => {
       releaseChatModule();
     }
   });
-  it.each(
-    (["no-preference", "reduce"] as const).flatMap((motion) =>
-      [1280, 390].flatMap((width) =>
-        // Theme does not change submission recovery; keep both across content variants.
-        (["markdown", "json"] as const).map((content) => ({
-          mode: content === "markdown" ? ("dark" as const) : ("light" as const),
-          motion,
-          width,
-          content,
-        })),
-      ),
-    ),
-  )(
+  // Each width/content pair owns one recovery; the pending view checks both motion modes.
+  it.each([
+    { mode: "dark", motion: "no-preference", width: 1280, content: "markdown" },
+    { mode: "light", motion: "reduce", width: 1280, content: "json" },
+    { mode: "dark", motion: "reduce", width: 390, content: "markdown" },
+    { mode: "light", motion: "no-preference", width: 390, content: "json" },
+  ] satisfies CreateRecoveryCase[])(
     "shows the submitted prompt before creation responds and restores it after failure ($width, $mode, $motion, $content)",
     async (scenario) => {
       await suite.withPage(

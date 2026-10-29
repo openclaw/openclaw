@@ -206,8 +206,9 @@ function SettingsAgentSelector(props: SettingsSidebarProps) {
       void source.ensure([agentId]);
     },
   );
+  const roster = createMemo(() => props.agents);
   const agents = createMemo(() =>
-    listSelectableAgents(props.agents).map((agent) =>
+    listSelectableAgents(roster()).map((agent) =>
       Object.assign({}, agent, {
         id: normalizeAgentId(agent.id),
         creatorAgentId: agent.creatorAgentId

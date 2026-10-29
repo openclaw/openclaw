@@ -308,6 +308,10 @@ it.each(["unresolved import", "blocked output"])(
 
 it("finalizes raw browser-fixture assets when precompression is omitted", async () => {
   const config = createConfig();
+  await writeRoot(
+    "main.js",
+    'import catalog from "virtual:openclaw-control-ui-locale/fr"; globalThis.catalog = catalog;',
+  );
   config.plugins = config.plugins?.filter(
     (plugin) => !(plugin && "name" in plugin && plugin.name === "control-ui-precompressed-assets"),
   );
@@ -321,7 +325,13 @@ it("finalizes raw browser-fixture assets when precompression is omitted", async 
   const identity = readBuiltIdentity(html);
   expect(worker).toContain(`const EMBEDDED_CACHE_VERSION = "${identity.buildId}";`);
   expect(offlineAssets(worker)).toContain(`assets/${entry}`);
-  expect(JSON.parse(await readOutput(".build-inputs.json"))).toBeInstanceOf(Array);
+  expect(JSON.parse(await readOutput(".build-inputs.json"))).toEqual(
+    expect.arrayContaining([
+      "src/config/schema.hints.ts",
+      "src/gateway/control-ui-csp.ts",
+      "ui/src/app-route-paths.ts",
+    ]),
+  );
 });
 
 it("reports completed compression work before build completion at a bounded cadence", async () => {

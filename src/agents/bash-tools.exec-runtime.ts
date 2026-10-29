@@ -43,12 +43,12 @@ import {
   captureAgentToolSourceExecutionGuard,
   runWithAgentToolSourceExecutionScope,
 } from "./agent-tool-source-execution-guard.js";
+import { createProcessSessionId } from "./bash-process-id.js";
 import type { ProcessSession } from "./bash-process-registry.js";
 import {
   addSession,
   appendOutput,
   createProcessSession,
-  isProcessSessionIdTaken,
   markCancellationRequested,
   resolveProcessCleanupMs,
   waitForExecSession,
@@ -71,7 +71,6 @@ import { chunkString, clampWithDefault, readEnvInt } from "./bash-tools.shared.j
 import type { ExecApprovalTransport } from "./exec-approval-transport.js";
 import { recordAgentCleanupFailure } from "./run-cleanup-timeout.js";
 import type { AgentToolResult } from "./runtime/index.js";
-import { createSessionSlug } from "./session-slug.js";
 import { createStreamingBinaryOutputSanitizer } from "./shell-utils.js";
 import {
   getGatewayToolCallerIdentity,
@@ -261,7 +260,7 @@ export async function runExecProcess({
   const operatorSignal = operatorAuthority?.signal;
   let releaseOperatorAuthority: (() => void) | undefined;
   const startedAt = Date.now();
-  const sessionId = createSessionSlug(isProcessSessionIdTaken);
+  const sessionId = createProcessSessionId();
   const execCommand = opts.execCommand ?? opts.command;
   const diagnosticTarget = opts.sandbox ? "sandbox" : "host";
   const supervisor = getProcessSupervisor();
@@ -457,7 +456,11 @@ export async function runExecProcess({
       if (outcome.status === "completed") {
         finalOutcome = runtimeErrorOutcome(detail);
       } else {
-        finalOutcome = { ...outcome, reason: joinExecFailureOutput(outcome.reason, detail) };
+        finalOutcome = {
+          ...outcome,
+          message: joinExecFailureOutput(outcome.message, detail),
+          reason: joinExecFailureOutput(outcome.reason, detail),
+        };
         logWarn(`exec: finalization after process failure failed (${detail}).`);
       }
       // Failed commands retain cleanup failures in the same bounded tool output.

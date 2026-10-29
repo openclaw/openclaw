@@ -15,8 +15,6 @@ function requestAudio(baseUrl: string, budget?: "bytes" | "time") {
       providerConfig: {
         apiKey: "local-test-key",
         baseUrl: `${baseUrl}/v1`,
-        model: "tts-1",
-        voice: "alloy",
       },
       target: "audio-file",
       timeoutMs: budget === "time" ? 300 : 5_000,
@@ -24,41 +22,35 @@ function requestAudio(baseUrl: string, budget?: "bytes" | "time") {
     .then(({ audioBuffer }) => audioBuffer);
 }
 
-it("rejects invalid audio over TCP and preserves valid codec parameters", async () => {
-  const type = "audio/ogg";
-  const cases = [
-    { header: "image/png", body: "wrong family", valid: false },
-    { header: "", body: "empty header", valid: false },
-    { header: `${type}; charset=utf-8, text/html`, body: "hidden error", valid: false },
-    { header: [type, "application/json"], body: "repeated header", valid: false },
-    { header: type, body: "", valid: false },
-    { header: "application/ogg", body: "Ogg container bytes", valid: true },
-    { header: "application/octet-stream", body: "opaque bytes", valid: true },
-    { header: "binary/octet-stream", body: "opaque alias bytes", valid: true },
-    { header: undefined, body: "missing header bytes", valid: true },
-    { header: `${type}; codecs="one, two"`, body: "codec bytes", valid: true },
-    { header: `${type};; codecs="one, two";`, body: "empty parameter slots", valid: true },
-  ];
-  for (const fixture of cases) {
-    await withServer(
-      (request, response) => {
-        request.resume();
-        if (fixture.header !== undefined) {
-          response.setHeader("Content-Type", fixture.header);
-        }
-        response.end(fixture.body);
-      },
-      async (baseUrl) => {
-        const result = requestAudio(baseUrl);
-        if (fixture.valid) {
-          await expect(result).resolves.toEqual(Buffer.from(fixture.body));
-        } else {
-          await expect(result).rejects.toThrow("malformed audio response");
-        }
-      },
-    );
-  }
-});
+it.each<[string | string[] | undefined, boolean, string?]>([
+  ["image/png", false],
+  ["", false],
+  ["audio/ogg; charset=utf-8, text/html", false],
+  [["audio/ogg", "application/json"], false],
+  ["audio/ogg", false, ""],
+  ["application/ogg", true],
+  ["application/octet-stream", true],
+  ["binary/octet-stream", true],
+  [undefined, true],
+  ['audio/ogg; codecs="one, two"', true],
+  ['audio/ogg;; codecs="one, two";', true],
+])("validates TCP audio header %j (accepted=%s)", (header, valid, body = "audio") =>
+  withServer(
+    (request, response) => {
+      request.resume();
+      if (header !== undefined) {
+        response.setHeader("Content-Type", header);
+      }
+      response.end(body);
+    },
+    async (baseUrl) => {
+      const result = requestAudio(baseUrl);
+      await (valid
+        ? expect(result).resolves.toEqual(Buffer.from(body))
+        : expect(result).rejects.toThrow("malformed audio response"));
+    },
+  ),
+);
 
 it("preserves audio byte limits and transport timeouts over TCP", async () => {
   for (const stalled of [false, true]) {

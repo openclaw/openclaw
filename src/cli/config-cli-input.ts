@@ -1,3 +1,4 @@
+import { addAbortSignal } from "node:stream";
 import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-with-limit";
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
@@ -19,6 +20,7 @@ import {
   isValidSecretProviderAlias,
 } from "../secrets/ref-contract.js";
 import { resolveConfigSecretTargetByPath } from "../secrets/target-registry.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import {
   parseConcreteConfigPathWithProvenance,
   toDotPath,
@@ -422,13 +424,17 @@ async function readStdinText(): Promise<string> {
       "--stdin refuses to read from an interactive terminal; pipe input or use --file <path>.",
     );
   }
-  const bytes = await readByteStreamWithLimit(process.stdin, {
+  const signal = getAsyncWorkSignal();
+  signal?.throwIfAborted();
+  const stdin = signal ? addAbortSignal(signal, process.stdin) : process.stdin;
+  const bytes = await readByteStreamWithLimit(stdin, {
     maxBytes: CONFIG_PATCH_STDIN_MAX_BYTES,
     onOverflow: ({ maxBytes }) =>
       configPatchModeError(
         `--stdin input exceeds ${maxBytes} bytes; use --file <path> for larger patches.`,
       ),
   });
+  signal?.throwIfAborted();
   return decodeUtf8Input(bytes, "--stdin");
 }
 

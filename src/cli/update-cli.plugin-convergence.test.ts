@@ -21,6 +21,7 @@ import {
 import {
   mockUnbuiltRecoveryFixture,
   recoveryObservationStep,
+  recoveryCleanupStep,
 } from "./update-cli/update-cli-failure-recovery.test-support.js";
 import {
   writeJsonFixture,
@@ -443,6 +444,7 @@ describe("update-cli", () => {
       steps: [
         expect.objectContaining({ exitCode: 1, stderrTail: message }),
         recoveryObservationStep(),
+        recoveryCleanupStep(),
       ],
     });
   });

@@ -39,7 +39,6 @@ import {
   forkSessionActorStoredState,
   withSessionActorTransactionState,
 } from "./session-actor-transaction.js";
-import { readHarnessCompletionSourceInDatabase } from "./session-harness-completion-source.kernel.js";
 import { applySessionTranscriptEvent } from "./session-message-rewrite.worker.js";
 import { mutatePendingInput } from "./session-pending-input-operations.kernel.js";
 import { readSessionSourceValidation } from "./session-source-predicate.worker.js";
@@ -109,8 +108,6 @@ export function applySessionActorPhase(
       );
     },
     validateSources: (sources) => readSessionSourceValidation(database, sources, incarnation),
-    validateRecoveryInput: (claim) =>
-      readHarnessCompletionSourceInDatabase(database, claim).validInput,
     mutatePendingInput: (input) => mutatePendingInput(input, context, () => {}),
     admit: (stage, publication) => context.admit(stage, publication),
   });

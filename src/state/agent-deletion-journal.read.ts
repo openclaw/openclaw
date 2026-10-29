@@ -14,7 +14,7 @@ import { isSqliteCorruptionError } from "../infra/sqlite-error-diagnostics.js";
 import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { isSessionStoreTopologyChange, sessionChanges } from "../sessions/session-row-changes.js";
-import { hasClawDeletionOwnership } from "./agent-deletion-journal-authority.worker.js";
+import { hasTemplateDeletionOwnership } from "./agent-deletion-journal-authority.worker.js";
 import { hasPreJournalStateSchema } from "./agent-deletion-journal-history.js";
 import { readAgentDeletionRecoveryHolds } from "./agent-deletion-journal-recovery.kernel.js";
 import {
@@ -199,9 +199,9 @@ export function readRetainedAgentDeletionsFromDatabase(
         if (
           row.cleanup_completed === 0 &&
           row.phase == null &&
-          hasClawDeletionOwnership({ db: database }, row.agent_id)
+          hasTemplateDeletionOwnership({ db: database }, row.agent_id)
         ) {
-          entry.manualClawRemoval = true;
+          entry.manualTemplateRemoval = true;
         }
         return entry;
       });

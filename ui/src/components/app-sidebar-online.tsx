@@ -1,20 +1,24 @@
 import { Dynamic } from "@solidjs/web";
-import { createMemo, For, Show } from "solid-js";
+import { createMemo, createUniqueId, For, Show } from "solid-js";
 import { presenceUserKey } from "../../../src/shared/presence-user.ts";
 import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
 import { beginNativeWindowDrag } from "../app/native-window-drag.ts";
+import { copyToClipboard } from "../lib/clipboard.ts";
+import { handleContextMenuEvent } from "../lib/keyboard-shortcuts.ts";
 import {
   presenceViewerActivity,
   presenceActivityLabel,
   presenceViewerLabel,
 } from "../lib/presence-users.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { showToast } from "../lib/toast.ts";
 import type { AppSidebarRenderHost } from "./app-sidebar-render.tsx";
 import { personActivityLink, personActivityRouting } from "./person-activity-link.ts";
 import { SidebarCollapseToggle } from "./sidebar-collapse-toggle.tsx";
 import { sidebarOnlineCountFor } from "./sidebar-online-order.ts";
 import { resolveSidebarOnline } from "./sidebar-online-state.ts";
 import { Icon } from "./solid/icon.tsx";
+import { Menu, type MenuEntry, type MenuHandle } from "./solid/menu.tsx";
 import { Picker } from "./solid/select-picker.tsx";
 import { ViewerAvatar } from "./solid/viewer-facepile.tsx";
 
@@ -112,11 +116,54 @@ export function AppSidebarOnline(props: { host: AppSidebarRenderHost }) {
             const activity = createMemo(() =>
               personActivityLink(user().identity?.id, routing(), presenceViewerLabel(user())),
             );
-            let row: HTMLElement;
+            const menuId = `sidebar-person-${createUniqueId()}`;
+            let person: HTMLElement;
+            let menu: MenuHandle | undefined;
+            const entry = () => `person:${user().identity?.id}`;
+            const pinned = () => host.sidebarEntries.includes(entry());
+            const openContextMenu = (event: MouseEvent | KeyboardEvent) => {
+              const currentMenu = menu;
+              if (currentMenu) {
+                handleContextMenuEvent(event, person, () => {
+                  currentMenu.overlay.setReturnTarget(person);
+                  currentMenu.open();
+                });
+              }
+            };
+            const items = createMemo((): MenuEntry[] => [
+              {
+                id: "pin",
+                label: t(pinned() ? "presence.menu.unpin" : "presence.menu.pin"),
+                icon: <Icon name={pinned() ? "pinOff" : "pin"} />,
+                disabled: Boolean(snapshot()),
+              },
+              {
+                kind: "content",
+                id: "separator",
+                content: <hr class="sidebar-online__menu-separator" />,
+              },
+              {
+                id: "activity",
+                label: t("presence.card.viewActivity"),
+                icon: <Icon name="activity" />,
+                href: activity()?.href,
+              },
+              {
+                id: "new-tab",
+                label: t("presence.menu.openNewTab"),
+                icon: <Icon name="externalLink" />,
+                href: activity()?.href,
+                attributes: { target: "_blank", rel: "noopener noreferrer" },
+              },
+              {
+                id: "copy",
+                label: t("presence.menu.copyLink"),
+                icon: <Icon name="copy" />,
+              },
+            ]);
 
             return (
               <div
-                ref={(element) => (row = element)}
                 class="sidebar-online__row"
                 draggable={!snapshot() && user().identity?.type === "profile" ? "true" : "false"}
                 onDragStart={(event: DragEvent) => {
@@ -129,15 +176,17 @@ export function AppSidebarOnline(props: { host: AppSidebarRenderHost }) {
                   }
                 }}
                 onDragEnd={() => host.sessionOrganizer.finishSidebarEntryDrag()}
-                data-person-card
               >
                 <Dynamic
-                  ref={(element: HTMLElement) => host.personCardTriggers.set(row, element)}
+                  ref={(element: HTMLElement) => (person = element)}
                   component={activity() ? "a" : "button"}
                   class="sidebar-online__person"
                   type={activity() ? undefined : "button"}
                   href={activity()?.href ?? undefined}
                   onClick={activity()?.open ?? undefined}
+                  onContextMenu={openContextMenu}
+                  onKeyDown={openContextMenu}
+                  data-person-card
                   data-online-user-id={user().id}
                   data-presence-activity={activityState()}
                   aria-description={`${activityState() === "offline" ? t("presence.offline") : presenceActivityLabel(presenceViewerActivity(user()))} · ${workloadLabel()}`}
@@ -184,24 +233,36 @@ export function AppSidebarOnline(props: { host: AppSidebarRenderHost }) {
                   ) : undefined}
                 </Dynamic>
                 {user().identity?.type === "profile" && (
-                  <button
-                    type="button"
-                    class="sidebar-pages__pin"
-                    disabled={Boolean(snapshot())}
-                    aria-label={t("nav.pin")}
-                    onClick={() => {
-                      const identity = user().identity;
-                      if (identity?.type === "profile") {
-                        host.sessionOrganizer.writeSidebarEntryAt(
-                          `person:${identity.id}`,
-                          undefined,
-                          undefined,
+                  <Menu
+                    id={menuId}
+                    class="sidebar-online__menu"
+                    triggerClass="sidebar-online__menu-trigger"
+                    label={t("presence.menu.label", { name: presenceViewerLabel(user()) })}
+                    trigger={<Icon name="moreHorizontal" />}
+                    placement="bottom-end"
+                    lazy
+                    items={items()}
+                    ref={(handle) => (menu = handle)}
+                    onBeforeShow={() => host.dismissTransientMenus()}
+                    onNavigate={() =>
+                      routing().navigate(user().identity!.id, presenceViewerLabel(user()))
+                    }
+                    onSelect={(item) => {
+                      if (item.id === "pin") {
+                        if (pinned()) {
+                          host.sessionOrganizer.removeSidebarEntry(entry());
+                        } else {
+                          host.sessionOrganizer.writeSidebarEntryAt(entry(), undefined, undefined);
+                        }
+                      } else if (item.id === "copy") {
+                        void copyToClipboard(
+                          new URL(activity()!.href, window.location.href).href,
+                        ).then((copied) =>
+                          showToast({ message: t(copied ? "common.copied" : "common.copyFailed") }),
                         );
                       }
                     }}
-                  >
-                    <Icon name="pin" />
-                  </button>
+                  />
                 )}
               </div>
             );

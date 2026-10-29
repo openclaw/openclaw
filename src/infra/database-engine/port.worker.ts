@@ -417,6 +417,8 @@ async function catalogEvidence(
       (fact) =>
         fact.kind === "viewDefinition" ||
         (fact.kind === "triggerDefinition" &&
+          // Derived search tables carry only their generated maintenance triggers.
+          !descriptor.postgresDerivedTables?.includes(fact.table) &&
           !descriptor.triggers?.some(
             (trigger) =>
               fact.value !== null &&

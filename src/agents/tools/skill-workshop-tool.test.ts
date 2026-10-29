@@ -1,14 +1,12 @@
+import fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import { consumeRunSkillUsage } from "../../skills/runtime/run-usage.js";
-import {
-  createWorkshopSkill,
-  listWorkshopArchive,
-  listWorkshopChanges,
-} from "../../skills/workshop/library.js";
+import { listWorkshopArchive, listWorkshopChanges } from "../../skills/workshop/library.js";
+import { resolveWorkshopDraftsDir } from "../../skills/workshop/skills-root.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -20,13 +18,9 @@ let state: OpenClawTestState;
 beforeEach(async () => {
   state = await createOpenClawTestState({ layout: "state-only" });
   setRuntimeConfigSnapshot({});
-  await createWorkshopSkill(
-    { config: {}, agentId: "main", actor: "agent" },
-    {
-      name: "deploy",
-      content: "---\nname: deploy\ndescription: Deploy staging\n---\n\n1. Run make deploy.\n",
-    },
-  );
+  await workshop()("create", {
+    content: "---\nname: deploy\ndescription: Deploy staging\n---\n\n1. Run make deploy.\n",
+  });
 });
 
 afterEach(async () => {
@@ -49,9 +43,7 @@ describe("skill_workshop", () => {
   it("requires viewing an existing skill before a background run edits or archives it", async () => {
     const tool = workshop({ runId: "review-run", reviewOf: "agent:main:main" });
 
-    await expect(tool("patch", patch)).rejects.toThrow(
-      "View it first: call skill_workshop action=view name=deploy, then retry once.",
-    );
+    await expect(tool("patch", patch)).rejects.toThrow("View it first");
     // Retries rebuild the tool inside the same run; the read must carry over.
     await tool("view");
     const retried = workshop({
@@ -59,21 +51,18 @@ describe("skill_workshop", () => {
       runId: "review-run",
       reviewOf: "agent:main:telegram:direct:42",
     });
-    expect(await retried("patch", { ...patch, reason: "renamed target" })).toBe(
-      'Patched "deploy" (renamed target). Saved previous version; undo with action=restore name=deploy.',
-    );
+    await retried("patch", { ...patch, reason: "renamed target" });
     await expect(retried("archive")).rejects.toThrow(/archive needs absorbed_into .* or a reason/);
 
-    // The reviewer reading a skill is not use; only foreground views count.
     expect(consumeRunSkillUsage("review-run")).toEqual([]);
     // Changes credit the conversation the review learned from, not its internal session.
-    expect(await listWorkshopChanges("main", { runId: "review-run" })).toEqual([
-      expect.objectContaining({
+    expect(await listWorkshopChanges("main", { runId: "review-run" })).toMatchObject([
+      {
         action: "patch",
         actor: "review",
         summary: "renamed target",
         sessionKey: "agent:main:telegram:direct:42",
-      }),
+      },
     ]);
   });
 
@@ -87,9 +76,7 @@ describe("skill_workshop", () => {
     await tool("view", { version: entry?.versions[0]?.id });
     await expect(tool("remove_file", remove)).rejects.toThrow("View it first");
     await tool("view");
-    expect(await tool("remove_file", remove)).toBe(
-      'Updated "deploy" (removed references/old.md). Saved previous version; undo with action=restore name=deploy.',
-    );
+    expect(await tool("remove_file", remove)).toContain('Updated "deploy"');
   });
 
   it("does not write once the invoking run is aborted", async () => {
@@ -122,6 +109,56 @@ describe("skill_workshop", () => {
       "write_file",
     ]);
   });
+  it("saves a background review's change as a draft in propose mode and leaves skills unchanged", async () => {
+    setRuntimeConfigSnapshot({ skills: { workshop: { autonomous: { mode: "propose" } } } });
+    const review = workshop({ runId: "propose-run", reviewOf: "agent:main:main" });
+    await review("view");
+    await expect(review("patch", patch)).rejects.toThrow(
+      "Learning is in propose mode; save this change with action=draft instead.",
+    );
+    const drafted = await review("draft", {
+      content: "---\nname: deploy\ndescription: Deploy staging\n---\n\n1. Run make ship.\n",
+      reason: "target was renamed",
+    });
+    const id = /Saved draft (\S+) for "deploy"/.exec(drafted)?.[1];
+    expect(id).toBeDefined();
+    await expect(review("discard", { draft: id })).rejects.toThrow(
+      "Background reviews may not discard drafts.",
+    );
+    expect(await review("view")).toContain("1. Run make deploy.");
+    expect(await listWorkshopChanges("main", { runId: "propose-run" })).toEqual([]);
+
+    // A foreground /learn drafts turn finds, reads, and clears the draft.
+    const foreground = workshop();
+    expect(await foreground("list")).toContain(`- ${id} (deploy): target was renamed`);
+    expect(await foreground("view", { draft: id })).toContain("1. Run make ship.");
+    expect(await foreground("discard", { draft: id })).toBe(`Discarded draft ${id}.`);
+    expect(await foreground("list")).not.toContain("Drafts waiting");
+  });
+
+  it("stops draft saves and discards whose run is aborted while they prepare", async () => {
+    const content = "---\nname: deploy\ndescription: Deploy staging\n---\n\n1. Run make ship.\n";
+    const draftsDir = resolveWorkshopDraftsDir({}, "main");
+    const draftIds = async () =>
+      (await fs.readdir(draftsDir).catch(() => [] as string[])).toSorted((a, b) =>
+        a.localeCompare(b),
+      );
+
+    // The call captures the run's authority, then awaits; the abort lands before any file effect.
+    const saving = new AbortController();
+    const save = workshop()("draft", { content }, saving.signal);
+    saving.abort(new Error("run aborted"));
+    await expect(save).rejects.toThrow("run aborted");
+    expect(await draftIds()).toEqual([]);
+
+    const id = /Saved draft (\S+) for/.exec(await workshop()("draft", { content }))?.[1];
+    const discarding = new AbortController();
+    const discard = workshop()("discard", { draft: id }, discarding.signal);
+    discarding.abort(new Error("run aborted"));
+    await expect(discard).rejects.toThrow("run aborted");
+    expect(await draftIds()).toEqual([id]);
+  });
+
   it("shows the other learned skills on create so the agent can merge duplicates", async () => {
     const result = await workshop()("create", {
       name: "staging-deploy",

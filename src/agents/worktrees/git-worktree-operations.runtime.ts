@@ -26,14 +26,10 @@ import {
   normalizeProvisionedRelativePath,
   resolveGitPath,
 } from "./provisioned-file-inspection.js";
-import {
-  inspectNestedRepository,
-  snapshotWorktree,
-  verifyExactStateSnapshot,
-} from "./snapshot-inventory.js";
 
 async function inspectProvisioning(
   sourceRoot: string,
+  estimateBytes = true,
 ): Promise<GitWorktreeOperations["worktree.provisioning-inspection"]["output"]> {
   const includePath = path.join(sourceRoot, ".worktreeinclude");
   if (!(await worktreePathExists(includePath))) {
@@ -68,7 +64,7 @@ async function inspectProvisioning(
     paths.push(...splitNullBuffer(candidates).map((entry) => entry.toString("utf8")));
   }
   let estimatedBytes = 0;
-  for (const relativePath of paths) {
+  for (const relativePath of estimateBytes ? paths : []) {
     const normalized = normalizeProvisionedRelativePath(relativePath);
     if (!normalized || !(await hasSafeParentDirectories(sourceRoot, normalized))) {
       continue;
@@ -84,6 +80,7 @@ async function inspectProvisioning(
 async function inspectCleanup(
   input: GitWorktreeOperations["worktree.cleanup-inspection"]["input"],
 ): Promise<GitWorktreeOperations["worktree.cleanup-inspection"]["output"]> {
+  const { inspectNestedRepository } = await import("./snapshot-inventory.js");
   if (input.kind === "nested-repository") {
     return {
       retainedReason: (await inspectNestedRepository(input.checkoutPath))
@@ -137,12 +134,16 @@ export async function executeGitWorktreeOperation(
       return await purgeWorktreeCheckout(operation.input.record, operation.input.live);
     case "worktree.cleanup-fingerprint":
       return await readWorktreeCleanupFingerprint(operation.input.checkoutPath);
-    case "worktree.snapshot-verify-exact":
+    case "worktree.snapshot-verify-exact": {
+      const { verifyExactStateSnapshot } = await import("./snapshot-inventory.js");
       return await verifyExactStateSnapshot(operation.input);
-    case "worktree.snapshot":
+    }
+    case "worktree.snapshot": {
+      const { snapshotWorktree } = await import("./snapshot-inventory.js");
       return await snapshotWorktree(operation.input);
+    }
     case "worktree.provisioning-inspection":
-      return await inspectProvisioning(operation.input.sourceRoot);
+      return await inspectProvisioning(operation.input.sourceRoot, operation.input.estimateBytes);
     case "worktree.cleanup-inspection":
       return await inspectCleanup(operation.input);
     case "worktree.git-size":

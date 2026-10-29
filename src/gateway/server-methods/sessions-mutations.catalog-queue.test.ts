@@ -317,11 +317,13 @@ test(
     expect(timing.records).toHaveLength(2);
     expect(
       timing.records.find((record) => record.traceId === catalogTrace.traceId)?.message,
-    ).toMatch(/^slow session patch 1500ms method=sessions\.patch .* catalog=1500ms(?: |$)/);
+    ).toMatch(
+      /^slow session patch 1500ms method=sessions\.patch targets=1 fields=contextWindow .* catalog=1500ms(?: |$)/,
+    );
     expect(
       timing.records.find((record) => record.traceId === successorTrace.traceId)?.message,
     ).toMatch(
-      /^slow session patch 1500ms method=sessions\.patch .* lifecycleAdmission=1500ms(?: |$)/,
+      /^slow session patch 1500ms method=sessions\.patch targets=1 fields=pinned .* lifecycleAdmission=1500ms(?: |$)/,
     );
   }),
 );
@@ -481,7 +483,7 @@ test(
     expect(readEntry(metadataKey)?.pinnedAt).toEqual(expect.any(Number));
     expect(timing.records.map(({ message }) => message)).toEqual([
       expect.stringMatching(
-        /^slow session patch 1500ms method=sessions\.patchMany .* catalog=3000ms(?: |$)/,
+        /^slow session patch 1500ms method=sessions\.patchMany targets=2 fields=contextWindow .* catalog=3000ms(?: |$)/,
       ),
     ]);
   }),

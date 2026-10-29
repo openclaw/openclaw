@@ -25,7 +25,7 @@ Setup commands by intent:
 | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Setup and onboarding         | [`openclaw`](/cli/openclaw) · [`setup`](/cli/setup) · [`onboard`](/cli/onboard) · [`configure`](/cli/configure) · [`config`](/cli/config) · [`completion`](/cli/completion) · [`doctor`](/cli/doctor) · [`dashboard`](/cli/dashboard) |
 | Reset, backup, and migration | [`backup`](/cli/backup) · [`database`](/cli#database) · [`migrate`](/cli/migrate) · [`reset`](/cli/reset) · [`uninstall`](/cli/uninstall) · [`update`](/cli/update)                                                                   |
-| Messaging and agents         | [`message`](/cli/message) · [`agent`](/cli/agent) · [`agents`](/cli/agents) · [`claws`](/cli/claws) · [`attach`](/cli/attach) · [`acp`](/cli/acp) · [`mcp`](/cli/mcp)                                                                 |
+| Messaging and agents         | [`message`](/cli/message) · [`agent`](/cli/agent) · [`agents`](/cli/agents) · [`templates`](/cli/templates) · [`attach`](/cli/attach) · [`acp`](/cli/acp) · [`mcp`](/cli/mcp)                                                         |
 | Health and sessions          | [`status`](/cli/status) · [`health`](/cli/health) · [`triage`](/cli/triage) · [`sessions`](/cli/sessions) · [`resume`](/cli/resume) · [`audit`](/cli/audit)                                                                           |
 | Gateway and logs             | [`gateway`](/cli/gateway) · [`logs`](/cli/logs) · [`system`](/cli/system)                                                                                                                                                             |
 | Models and inference         | [`models`](/cli/models) · [`promos`](/cli/promos) · [`infer`](/cli/infer) · `capability` (alias for [`infer`](/cli/infer)) · [`memory`](/cli/memory) · [`wiki`](/cli/wiki)                                                            |
@@ -68,6 +68,12 @@ Use `--` to stop option parsing. Command words still dispatch after it: for exam
 - ANSI colors and progress indicators render only in TTY sessions.
 - OSC-8 hyperlinks render as clickable links where supported. Otherwise the
   CLI prints plain URLs.
+- Human-readable report values neutralize terminal escape sequences before styling.
+  Embedded newlines, carriage returns, and tabs appear as `\n`, `\r`, and `\t`
+  instead of changing the report layout. This display formatting does not change
+  the underlying paths, configuration values, or JSON fields.
+  Bidirectional formatting controls are removed from displayed values; ordinary
+  right-to-left letters and emoji are preserved.
 - On bounded reporting commands, `--json` reserves stdout for one JSON document.
   The CLI suppresses styling and progress output. Warnings and diagnostics stay on
   stderr.

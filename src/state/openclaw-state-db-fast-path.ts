@@ -10,9 +10,10 @@ import {
   readSqliteSchemaCookie,
   type SqliteTableContractReader,
 } from "../infra/sqlite-schema-contract.js";
+import { throwSqliteSchemaMismatches } from "../infra/sqlite-schema-issues.js";
 import { prepareSqliteReadOnlyLocationSync } from "../infra/sqlite-snapshot-source.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
-import { hasLegacyCronRunLogs } from "../infra/state-migrations.cron-run-logs.js";
+import { hasLegacyCronRunLogs } from "../infra/state-legacy-cron-presence.js";
 import { hasUpdateDoctorMigrationCapture } from "../infra/update-doctor-migration-attribution.js";
 import { readAgentDatabaseLeaseProvenance } from "./openclaw-agent-db-lease-provenance.js";
 import {
@@ -30,7 +31,10 @@ import {
   assertSupportedStateSchemaVersion,
   readStateSchemaContentVersion,
 } from "./openclaw-state-db-schema-version.js";
-import { STATE_RUNTIME_SCHEMA_COMPATIBILITY } from "./openclaw-state-schema-compatibility.js";
+import {
+  findMissingLazyStateStartupColumn,
+  STATE_RUNTIME_SCHEMA_COMPATIBILITY,
+} from "./openclaw-state-schema-compatibility.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 export function needsOpenClawStateDatabaseSchemaRepair(
@@ -76,6 +80,12 @@ export function assertCurrentStateRuntimeSchema(
   pathname: string,
   readTable: SqliteTableContractReader = createSqliteTableContractReader(database),
 ): void {
+  const missing = findMissingLazyStateStartupColumn(readTable);
+  if (missing) {
+    throwSqliteSchemaMismatches(pathname, [
+      "missing column " + missing.tableName + "." + missing.columnName,
+    ]);
+  }
   assertCanonicalStateSchemaShape(database, pathname);
   assertOpenClawStateDatabaseForMaintenance(database, { pathname }, readTable);
   assertSqliteSchemaContains(

@@ -99,25 +99,48 @@ export async function createDiscordMonitorClient(params: {
     voicePlugin.registerClient(client);
     client.plugins.push(voicePlugin);
   }
-  await waitForDiscordGatewayPluginRegistration(gateway);
-  const gatewaySupervisor = createDiscordGatewaySupervisor({
-    ...params,
-    gateway,
-  });
+  let gatewaySupervisor: ReturnType<typeof createDiscordGatewaySupervisor> | undefined;
+  try {
+    await waitForDiscordGatewayPluginRegistration(gateway);
+    gatewaySupervisor = createDiscordGatewaySupervisor({
+      ...params,
+      gateway,
+    });
 
-  autoPresenceController = createDiscordAutoPresenceController({
-    ...params,
-    gateway,
-    log: (message) => params.runtime.log?.(message),
-  });
-  void autoPresenceController.start();
+    autoPresenceController = createDiscordAutoPresenceController({
+      ...params,
+      gateway,
+      log: (message) => params.runtime.log?.(message),
+    });
+    void autoPresenceController.start();
 
-  return {
-    client,
-    gateway,
-    gatewaySupervisor,
-    autoPresenceController,
-  };
+    return {
+      client,
+      gateway,
+      gatewaySupervisor,
+      autoPresenceController,
+    };
+  } catch (err) {
+    try {
+      gateway.disconnect();
+    } catch (cleanupErr) {
+      params.runtime.error?.(
+        danger(
+          `discord: failed to disconnect gateway during startup cleanup: ${String(cleanupErr)}`,
+        ),
+      );
+    }
+    try {
+      gatewaySupervisor?.dispose();
+    } catch (cleanupErr) {
+      params.runtime.error?.(
+        danger(
+          `discord: failed to dispose supervisor during startup cleanup: ${String(cleanupErr)}`,
+        ),
+      );
+    }
+    throw err;
+  }
 }
 
 export async function fetchDiscordBotIdentity(params: {

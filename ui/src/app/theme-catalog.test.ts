@@ -21,7 +21,7 @@ import { AgentIdentityAvatar } from "../components/solid/identity-avatar.tsx";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
 import { createApplicationTheme } from "./bootstrap-theme.ts";
-import { bindControlUiDocumentHead } from "./control-ui-document-head.ts";
+import { initializeControlUiDocumentHead } from "./control-ui-document-head.ts";
 import {
   createGatewayEvent,
   createGatewayStoreTestStore,
@@ -102,26 +102,45 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-it("resolves built-in branding before the palette and catalog load", () => {
-  const id = "knot";
-  patchSettings({ theme: id });
-  setCurrentThemeBranding(resolveThemeBranding({ mascot: "none", critters: [] }));
-  const { gateway } = createGatewayStoreTestStore();
-  const theme = createApplicationTheme(loadSettings(), gateway);
-  try {
-    expect(theme.branding).toEqual({
-      ...resolveThemeBranding(undefined),
-      mascot: "claw",
-      workingPhrases: undefined,
-      critters: [],
-      avatarHat: undefined,
-    });
-    expect(currentThemeBranding()).toEqual(theme.branding);
-  } finally {
-    theme.dispose();
-    document.getElementById(`openclaw-theme-palette-${id}`)?.remove();
-  }
-});
+it.each([
+  ["knot", "dark", "claw", "claw", "claw", true],
+  ["knot", "light", "claw", "claw", "claw", true],
+  ["crt", "dark", "none", "mark", "dots", false],
+  ["crt", "light", "none", "mark", "dots", false],
+  ["phosphor", "dark", "none", "mark", "dots", false],
+  ["phosphor", "light", "none", "mark", "dots", false],
+] as const)(
+  "resolves %s branding before loading its %s palette",
+  (id, themeMode, mascot, brandIcon, workingIndicator, lobsterdex) => {
+    patchSettings({ theme: id, themeMode });
+    setCurrentThemeBranding(resolveThemeBranding({ mascot: "none", critters: [] }));
+    const { gateway } = createGatewayStoreTestStore();
+    const theme = createApplicationTheme(loadSettings(), gateway);
+    try {
+      expect(theme.branding).toEqual({
+        mascot,
+        brandName: "OpenClaw",
+        brandIcon,
+        workingIndicator,
+        lobsterdex,
+        communityLinks: true,
+        workingPhrases: undefined,
+        critters: [],
+        avatarHat: undefined,
+      });
+      expect(currentThemeBranding()).toEqual(theme.branding);
+      const palette = expectDefined(
+        document.getElementById(`openclaw-theme-palette-${id}`),
+        "built-in theme palette",
+      );
+      palette.dispatchEvent(new Event("load"));
+      expect(document.documentElement.dataset).toMatchObject({ themeId: id, themeMode });
+    } finally {
+      theme.dispose();
+      document.getElementById(`openclaw-theme-palette-${id}`)?.remove();
+    }
+  },
+);
 
 it("notifies leaf branding consumers when a newly selected built-in palette loads", async () => {
   const { gateway, current } = createGatewayStoreTestStore();
@@ -166,11 +185,12 @@ it("notifies leaf branding consumers when a newly selected built-in palette load
 it("applies routed profile updates and plugin hot reloads, restoring an unavailable selection", async () => {
   const { gateway, current, clients } = createGatewayStoreTestStore();
   const favicon = document.createElement("link");
+  favicon.id = "openclaw-favicon-svg";
   favicon.rel = "icon";
   favicon.type = "image/svg+xml";
   favicon.setAttribute("href", "/favicon.svg");
   document.head.append(favicon);
-  bindControlUiDocumentHead({ themeColors: [], favicons: [favicon] });
+  initializeControlUiDocumentHead();
   const applicationTheme = createApplicationTheme(loadSettings(), gateway);
   gateway.start();
   let response = catalog();
@@ -298,8 +318,8 @@ it("applies routed profile updates and plugin hot reloads, restoring an unavaila
   } finally {
     applicationTheme.dispose();
     gateway.stop();
-    bindControlUiDocumentHead({ themeColors: [], favicons: [] });
     favicon.remove();
+    initializeControlUiDocumentHead();
   }
 });
 

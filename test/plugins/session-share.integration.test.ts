@@ -277,7 +277,9 @@ describe("session-share node commands", () => {
 
         const pendingRead = fixture.read(scope.sessionKey);
         fixture.config.session = { store: defaultStorePath };
-        await expect(pendingRead).rejects.toThrow("no longer shared");
+        await expect(pendingRead).rejects.toThrow(
+          "Session sharing configuration changed. Refresh the session catalog.",
+        );
 
         fixture.config.session = { store };
         await upsertSessionEntryCore(

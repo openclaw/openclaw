@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveCommandAuthorizationAsync } from "../../auto-reply/command-auth.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -12,6 +13,9 @@ import { cleanupSessionStateForTest } from "../../test-utils/session-state-clean
 import { createOAuthRefreshCredential } from "../auth-profiles/credential-fixtures.test-support.js";
 import { closeAuthProfileReadPool } from "../auth-profiles/sqlite.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent.js";
+import { resolveOwnerPromptNumbers } from "../owner-display.js";
+import { buildAgentSystemPrompt } from "../system-prompt.js";
+import { createCompletionHandoff } from "./attempt-execution.announce.test-support.js";
 import {
   cliRuntimeConfig,
   makeRunAgentAttemptParams,
@@ -97,13 +101,51 @@ describe("embedded attempt harness pinning", () => {
     });
   }
 
+  it("renders the user turn's configured owners on a subagent completion turn", async () => {
+    const cfg: OpenClawConfig = {
+      commands: { ownerAllowFrom: ["telegram:111", "discord:222", "333"] },
+    };
+    const userTurn = await resolveCommandAuthorizationAsync({
+      ctx: { Provider: "telegram", Surface: "telegram", From: "telegram:111", SenderId: "111" },
+      cfg,
+      commandAuthorized: true,
+    });
+    const sessionKey = "agent:main:telegram:direct:111";
+    const sessionEntry = makeSessionEntry("owner-session");
+    await runHarnessAttempt(
+      {
+        cfg,
+        sessionEntry,
+        messageChannel: "telegram",
+        opts: createCompletionHandoff({
+          targetSessionKey: sessionKey,
+          targetSessionId: sessionEntry.sessionId,
+          sourceSessionKey: "agent:main:subagent:owner-child",
+          sourceSessionId: "owner-child-session",
+          provider: "openai",
+          model: "gpt-5.4",
+        }),
+      },
+      sessionKey,
+    );
+    const completion = runEmbeddedAgentMock.mock.calls[0]?.[0];
+    const prompt = (ownerNumbers?: string[]) =>
+      buildAgentSystemPrompt({ workspaceDir: "/workspace", ownerNumbers });
+
+    expect(prompt(completion?.ownerNumbers)).toBe(
+      prompt(resolveOwnerPromptNumbers({ ownerNumbers: userTurn.ownerList, ...userTurn })),
+    );
+    expect(prompt(completion?.ownerNumbers)).toContain("Allowlisted senders: 111, 333.");
+    expect(completion?.senderIsOwner).not.toBe(true);
+  });
+
   it.each(["saved", "run-scoped"] as const)(
     "rejects a %s Access override before starting an unsupported CLI runtime",
     async (source) => {
       const sessionKey = "agent:main:access-cli";
       const sessionEntry = makeSessionEntry(
         "access-cli",
-        source === "saved" ? { cyberAccessProgram: "standard" } : {},
+        source === "saved" ? { cyberAccessProgram: "daybreak_blue" } : {},
       );
       const storePath = path.join(tmpDir, "sessions.json");
       await replaceSessionEntry({ sessionKey, storePath }, sessionEntry);
@@ -118,10 +160,22 @@ describe("embedded attempt harness pinning", () => {
           },
           sessionKey,
         ),
-      ).rejects.toThrow("Explicit access programs are unsupported by this CLI runtime");
+      ).rejects.toThrow("Daybreak access is unsupported by this CLI runtime");
       expect(runCliAgentMock).not.toHaveBeenCalled();
     },
   );
+
+  it("allows explicit Standard Access on a CLI runtime", async () => {
+    runCliAgentMock.mockResolvedValueOnce({
+      meta: { durationMs: 1 },
+    } satisfies EmbeddedAgentRunResult);
+    await runHarnessAttempt({
+      providerOverride: "claude-cli",
+      modelOverride: "opus",
+      sessionEntry: makeSessionEntry("standard-cli", { cyberAccessProgram: "standard" }),
+    });
+    expect(runCliAgentMock).toHaveBeenCalledOnce();
+  });
 
   it.each(["openclaw", "codex"] as const)(
     "forwards persisted Access choices to %s command turns",
@@ -156,6 +210,9 @@ describe("embedded attempt harness pinning", () => {
     const sessionEntry = makeSessionEntry("mixed-provider-session", {
       agentHarnessId: "codex",
       modelSelectionLocked: true,
+      permissionMode: "guarded",
+      sessionRoot: tmpDir,
+      blindPrompt: true,
       pluginExtensions: {
         codex: {
           supervision: {
@@ -183,6 +240,9 @@ describe("embedded attempt harness pinning", () => {
       agentHarnessId: "codex",
       agentHarnessRuntimeOverride: "codex",
       modelSelectionLocked: true,
+      permissionMode: "guarded",
+      sessionRoot: tmpDir,
+      blindPrompt: true,
       toolsAllow: ["read", "web_search"],
       codeModeOverride: false,
     });

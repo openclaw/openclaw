@@ -1,4 +1,4 @@
-/** Fixed owner workload; run serially on base/head with node --import ./scripts/tsx.mjs. */
+/** Fixed owner workload; run serially on base/head with `node --import ./scripts/tsx.mjs scripts/perf/plain-tool-brace-measure.ts`. */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { loadavg } from "node:os";

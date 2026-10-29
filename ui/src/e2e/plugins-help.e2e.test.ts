@@ -8,6 +8,7 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 import { config, configMocks, pluginResponses } from "./plugins-settings-admin.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Plugin Ask OpenClaw integration" });
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const featureMethods = [
   "config.get",
   "config.schema",
@@ -78,9 +79,11 @@ suite.define(() => {
         const composer = panel.locator("textarea");
         await expect.poll(() => composer.inputValue()).toContain("Explain Base URL");
         const draft = await composer.inputValue();
-        await page.screenshot({
-          path: path.join(suite.artifactDir, `url-help-draft-${width}.png`),
-        });
+        if (captureUiProof) {
+          await page.screenshot({
+            path: path.join(suite.artifactDir, `url-help-draft-${width}.png`),
+          });
+        }
         const userRequests = async () =>
           (await gateway.getRequests("openclaw.chat")).filter(
             (request) => asRecord(request.params).message,
@@ -158,7 +161,9 @@ suite.define(() => {
             bottom: rect.bottom,
           };
         });
-        await page.screenshot({ path: path.join(suite.artifactDir, `transcript-${phase}.png`) });
+        if (captureUiProof) {
+          await page.screenshot({ path: path.join(suite.artifactDir, `transcript-${phase}.png`) });
+        }
         expect(bounds.messages, phase).toBeGreaterThan(bounds.height * 0.4);
         expect(bounds.composerBottom, phase).toBeLessThanOrEqual(bounds.bottom + 1);
         expect(await surface.locator(".custodian__plugin-reference").count()).toBe(0);

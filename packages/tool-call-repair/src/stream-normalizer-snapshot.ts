@@ -1,3 +1,4 @@
+import { asNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   isOffsetInProtectedRanges,
@@ -396,6 +397,13 @@ export function findPotentialCallStart(
       continue;
     }
     const start = skipLineIndentation(text, index);
+    const first = text[start];
+    // Brackets, XML and Harmony channels are the only openings. An empty tail
+    // still needs the scanner: indentation may precede a split marker.
+    if (first !== undefined && !"[<caf".includes(first)) {
+      index = start + 1;
+      continue;
+    }
     if (isProtected?.(start)) {
       index += 1;
       continue;
@@ -410,6 +418,18 @@ export function findPotentialCallStart(
     index = Math.max(index + 1, scan.next);
   }
   return null;
+}
+
+export function orderByContentIndex(
+  events: readonly unknown[],
+  message: Record<string, unknown>,
+): unknown[] {
+  const contentLength = Array.isArray(message.content) ? message.content.length : 0;
+  const order = (event: unknown) => {
+    const index = asNonNegativeInteger(asOptionalObjectRecord(event)?.contentIndex);
+    return index !== undefined && index < contentLength ? index : contentLength;
+  };
+  return events.toSorted((left, right) => order(left) - order(right));
 }
 
 export function nextAtLineStart(previous: boolean, text: string): boolean {

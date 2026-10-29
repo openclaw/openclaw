@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { writeFixtureJson } from "../../../cli/cli-fixtures.test-support.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
 import { seedInstalledPluginIndex } from "../../../plugins/test-helpers/installed-plugin-index.js";
@@ -15,25 +16,19 @@ export async function seedRecoveryOwner(
   const version = options.version ?? "2.0.3";
   await fs.mkdir(root, { recursive: true });
   await fs.writeFile(path.join(root, "index.js"), "module.exports = {};\n");
-  await fs.writeFile(
-    path.join(root, "openclaw.plugin.json"),
-    JSON.stringify({
-      id: "openclaw-qqbot",
-      legacyPluginIds: ["qqbot"],
-      configSchema: { type: "object" },
-    }),
-  );
-  await fs.writeFile(
-    path.join(root, "package.json"),
-    JSON.stringify({
-      name: "@tencent-connect/openclaw-qqbot",
-      version,
-      openclaw: {
-        extensions: ["./index.js"],
-        ...(options.minHostVersion ? { install: { minHostVersion: options.minHostVersion } } : {}),
-      },
-    }),
-  );
+  await writeFixtureJson(path.join(root, "openclaw.plugin.json"), {
+    id: "openclaw-qqbot",
+    legacyPluginIds: ["qqbot"],
+    configSchema: { type: "object" },
+  });
+  await writeFixtureJson(path.join(root, "package.json"), {
+    name: "@tencent-connect/openclaw-qqbot",
+    version,
+    openclaw: {
+      extensions: ["./index.js"],
+      ...(options.minHostVersion ? { install: { minHostVersion: options.minHostVersion } } : {}),
+    },
+  });
   const records: Record<string, PluginInstallRecord> = {
     "openclaw-qqbot": {
       source: "npm",

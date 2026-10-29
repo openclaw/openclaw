@@ -19,8 +19,8 @@ scenario:
   codeRefs:
     - src/channels/plugins/bundled-ids.ts
     - src/plugins/channel-catalog-registry.ts
-    - src/channels/bundled-channel-catalog-read.test.ts
+    - src/channels/plugins/bundled-root-caches.test.ts
   execution:
     kind: vitest
-    path: src/channels/bundled-channel-catalog-read.test.ts
-    summary: Run bundled package catalog loading through the sorted channel id projection.
+    path: src/channels/plugins/bundled-root-caches.test.ts
+    summary: Verify channel ids follow the active bundled root without substituting plugin ids.

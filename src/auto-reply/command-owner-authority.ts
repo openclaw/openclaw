@@ -6,6 +6,8 @@ type CommandOwnerAuthority = Readonly<{
   isCurrent: () => boolean;
   recoveryReference?: CommandOwnerReference;
   operatorAuthority?: AdmittedRunOperatorAuthority;
+  /** The requester's own live check for work that outlives this source occurrence. */
+  successor?: CommandOwnerAuthority;
 }>;
 export type CommandOwnerAssertion = (() => void) & {
   readonly recoveryReference?: CommandOwnerReference | null;
@@ -24,6 +26,7 @@ export function bindCommandOwnerAuthority(context: object, authority: CommandOwn
   const capability = {
     recoveryReference,
     operatorAuthority,
+    successor: authority.successor,
     isCurrent: checkCurrent,
   };
   Object.setPrototypeOf(capability, null);
@@ -35,6 +38,25 @@ export function bindCommandOwnerAuthority(context: object, authority: CommandOwn
 export function getCommandOwnerAuthority(context: object): CommandOwnerAuthority | undefined {
   const value: unknown = Reflect.get(context, COMMAND_OWNER_AUTHORITY);
   return typeof value === "object" && value !== null ? capabilities.get(value) : undefined;
+}
+
+/**
+ * Moves inherited owner authority into a successor that outlives its source occurrence.
+ * Only a source-provided requester check transfers; otherwise the successor holds none.
+ */
+export function transferCommandOwnerAuthorityToSuccessor(
+  context: object,
+): "transferred" | "removed" | "none" {
+  const authority = getCommandOwnerAuthority(context);
+  if (!authority) {
+    return "none";
+  }
+  Reflect.deleteProperty(context, COMMAND_OWNER_AUTHORITY);
+  if (!authority.successor) {
+    return "removed";
+  }
+  bindCommandOwnerAuthority(context, authority.successor);
+  return "transferred";
 }
 
 /** Fence a turn that admitted owner tools against later identity or role revocation. */

@@ -4,12 +4,15 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveIMessageChatDbLookupPath } from "../cli-path.js";
 import { getCachedIMessageRemoteHost, resolveIMessageRemoteHost } from "../remote-host.js";
 
 const execFileAsync = promisify(execFile);
 const cliPathModuleUrl = new URL("../cli-path.ts", import.meta.url).href;
+const remoteHost = (cliPath: string) => resolveIMessageRemoteHost({ cliPath });
+const sshWrapper = (host: string) => `#!/bin/sh\nexec ssh ${host} imsg "$@"\n`;
 async function runUserPathProbe(cliPath: string, cwd: string) {
   const source = [
     'import fs from "node:fs/promises";',
@@ -28,44 +31,31 @@ async function runUserPathProbe(cliPath: string, cwd: string) {
 }
 
 describe("detectRemoteHostFromCliPath", () => {
-  const tempDirs: string[] = [];
-  async function tempDir() {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-imessage-"));
-    tempDirs.push(dir);
-    return dir;
-  }
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  const tempDir = () => tempDirs.make("openclaw-imessage-");
   async function wrapper(content: string, dir?: string, basename = "imsg-remote") {
-    const wrapperDir = dir ?? (await tempDir());
+    const wrapperDir = dir ?? tempDir();
     await fs.mkdir(wrapperDir, { recursive: true });
     const wrapperPath = path.join(wrapperDir, basename);
     await fs.writeFile(wrapperPath, content);
     return wrapperPath;
   }
 
-  afterEach(async () => {
+  afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
-    await Promise.all(
-      tempDirs.splice(0).map((dir) => fs.rm(dir, { force: true, recursive: true })),
-    );
   });
 
   it("uses the system home when HOME is blank", async () => {
-    const home = await tempDir();
+    const home = tempDir();
     vi.stubEnv("HOME", "");
     vi.spyOn(os, "userInfo").mockReturnValue({ ...os.userInfo(), homedir: home });
-    await wrapper(
-      '#!/bin/sh\nexec ssh user@example.test imsg "$@"\n',
-      path.join(home, ".openclaw"),
-    );
-
-    await expect(resolveIMessageRemoteHost({ cliPath: "~/.openclaw/imsg-remote" })).resolves.toBe(
-      "user@example.test",
-    );
+    await wrapper(sshWrapper("user@example.test"), path.join(home, ".openclaw"));
+    await expect(remoteHost("~/.openclaw/imsg-remote")).resolves.toBe("user@example.test");
   });
 
   it("never selects a working-directory tilde shadow when HOME is blank", async () => {
-    const cwd = await tempDir();
+    const cwd = tempDir();
     const basename = `imsg-${randomUUID()}`;
     await wrapper(
       "#!/bin/sh\nexec ssh rogue@example.test imsg\n",
@@ -90,12 +80,8 @@ describe("detectRemoteHostFromCliPath", () => {
     const wrapperPath = await wrapper(content);
     const readFile = vi.spyOn(fs, "readFile");
 
-    await expect(resolveIMessageRemoteHost({ cliPath: wrapperPath })).rejects.toThrow(
-      "configure channels.imessage.remoteHost explicitly",
-    );
-    await expect(resolveIMessageRemoteHost({ cliPath: wrapperPath })).rejects.toThrow(
-      "configure channels.imessage.remoteHost explicitly",
-    );
+    await expect(remoteHost(wrapperPath)).rejects.toThrow("channels.imessage.remoteHost");
+    await expect(remoteHost(wrapperPath)).rejects.toThrow("channels.imessage.remoteHost");
     expect(readFile).toHaveBeenCalledOnce();
     expect(getCachedIMessageRemoteHost({ cliPath: wrapperPath })).toBeUndefined();
   });
@@ -115,46 +101,30 @@ describe("detectRemoteHostFromCliPath", () => {
   it("returns undefined when the wrapper does not exist", async () => {
     const missingWrapper = path.join(os.tmpdir(), `openclaw-imessage-missing-${randomUUID()}`);
 
-    await expect(resolveIMessageRemoteHost({ cliPath: missingWrapper })).resolves.toBeUndefined();
+    await expect(remoteHost(missingWrapper)).resolves.toBeUndefined();
   });
 
-  it("coalesces concurrent wrapper reads and keys the cache by expanded cliPath", async () => {
-    const home = await tempDir();
-    vi.stubEnv("HOME", home);
-    const wrapperPath = await wrapper(
-      '#!/bin/sh\nexec ssh bot@messages-mac imsg "$@"\n',
-      path.join(home, ".openclaw"),
-    );
-    const readFile = vi.spyOn(fs, "readFile");
+  it.each([
+    ["SSH", sshWrapper("bot@messages-mac"), "bot@messages-mac"],
+    ["local", '#!/bin/sh\nexec /opt/homebrew/bin/imsg "$@"\n', undefined],
+  ] as const)(
+    "coalesces and caches %s wrapper reads by expanded cliPath",
+    async (_, content, expected) => {
+      const home = tempDir();
+      vi.stubEnv("HOME", home);
+      const wrapperPath = await wrapper(content, path.join(home, ".openclaw"));
+      const readFile = vi.spyOn(fs, "readFile");
 
-    await expect(
-      Promise.all([
-        resolveIMessageRemoteHost({ cliPath: "~/.openclaw/imsg-remote" }),
-        resolveIMessageRemoteHost({ cliPath: wrapperPath }),
-      ]),
-    ).resolves.toEqual(["bot@messages-mac", "bot@messages-mac"]);
-    expect(readFile).toHaveBeenCalledOnce();
-    expect(getCachedIMessageRemoteHost({ cliPath: wrapperPath })).toBe("bot@messages-mac");
+      await expect(
+        Promise.all([remoteHost("~/.openclaw/imsg-remote"), remoteHost(wrapperPath)]),
+      ).resolves.toEqual([expected, expected]);
+      expect(readFile).toHaveBeenCalledOnce();
+      expect(getCachedIMessageRemoteHost({ cliPath: wrapperPath })).toBe(expected);
 
-    await fs.writeFile(wrapperPath, '#!/bin/sh\nexec ssh changed@other-mac imsg "$@"\n');
-    await expect(resolveIMessageRemoteHost({ cliPath: wrapperPath })).resolves.toBe(
-      "bot@messages-mac",
-    );
-    expect(readFile).toHaveBeenCalledOnce();
-  });
-
-  it("caches a non-SSH wrapper as local across concurrent callers", async () => {
-    const wrapperPath = await wrapper('#!/bin/sh\nexec /opt/homebrew/bin/imsg "$@"\n');
-    const readFile = vi.spyOn(fs, "readFile");
-
-    await expect(
-      Promise.all([
-        resolveIMessageRemoteHost({ cliPath: wrapperPath }),
-        resolveIMessageRemoteHost({ cliPath: wrapperPath }),
-      ]),
-    ).resolves.toEqual([undefined, undefined]);
-    expect(readFile).toHaveBeenCalledOnce();
-  });
+      await fs.writeFile(wrapperPath, sshWrapper("changed@other-mac"));
+      await expect(remoteHost(wrapperPath)).resolves.toBe(expected);
+    },
+  );
 
   it("never resolves a remote dbPath against the Gateway home", () => {
     vi.stubEnv("HOME", "/Users/gateway");

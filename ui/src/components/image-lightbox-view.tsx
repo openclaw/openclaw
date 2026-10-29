@@ -166,8 +166,8 @@ export function lightboxImageStyle(image: ImageLightboxItem | undefined) {
     typeof height === "number" &&
     Number.isFinite(height) &&
     height > 0
-    ? `width: min(${width}px, 100cqw, calc(100cqh * ${width / height}))`
-    : undefined;
+    ? { width: `min(${width}px, 100cqw, calc(100cqh * ${width / height}))` }
+    : { width: undefined };
 }
 
 function LightboxImageDownload(props: {

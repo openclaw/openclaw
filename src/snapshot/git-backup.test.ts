@@ -690,12 +690,12 @@ it("redacts secret machine-state keys while retaining ordinary machine state", a
 
   expect(manifest).toMatchObject({
     excludedConfigStateKeyPrefixes: ["authProfiles.", "nodeHost.", "webPush.vapidKeys"],
-    tables: { config_machine_state: { rows: 1 } },
+    tables: { config_machine_state: { rows: 2 } },
   });
   const secrets = [nodeSecret, pushSecret, authSecret];
   expectText(
     rows,
-    ["sidebar.sectionOrder", "first"],
+    ["sidebar.sectionOrder", "first", "cron.defaultStoreKey"],
     ["nodeHost.", "webPush.vapidKeys", "authProfiles.", ...secrets],
   );
   expectText(manifestJson, [], secrets);
@@ -706,6 +706,15 @@ it("redacts secret machine-state keys while retaining ordinary machine state", a
     "nodeHost.",
     "webPush.vapidKeys",
   ]);
+  expectDatabaseRows(restored.targetPath, {
+    "SELECT state_key, value_json FROM config_machine_state ORDER BY state_key": [
+      {
+        state_key: "cron.defaultStoreKey",
+        value_json: JSON.stringify(path.join(stateDir, "cron", "jobs.json")),
+      },
+      { state_key: "sidebar.sectionOrder", value_json: JSON.stringify(["first", "second"]) },
+    ],
+  });
 });
 
 it("rejects a restored global database without canonical ownership metadata", async () => {

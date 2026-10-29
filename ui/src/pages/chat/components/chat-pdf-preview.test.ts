@@ -81,6 +81,7 @@ it.each(["metadata", "timeout"] as const)("declines a PDF after %s rejection", a
 
 it("aborts an interrupted PDF load and reloads it after reconnect", async () => {
   const objectUrls = stubObjectUrls();
+  const download = vi.fn();
   const fetchMock = vi
     .fn<typeof fetch>()
     .mockImplementationOnce(
@@ -93,7 +94,10 @@ it("aborts an interrupted PDF load and reloads it after reconnect", async () => 
     )
     .mockResolvedValueOnce(new Response("%PDF-1.7"));
   vi.stubGlobal("fetch", fetchMock);
-  const panel = await mountAttachment({ sizeBytes: 8_231 });
+  const panel = await mountAttachment({
+    sizeBytes: 8_231,
+    file: { path: "brief.pdf", download },
+  });
 
   await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
   panel.remove();
@@ -101,6 +105,7 @@ it("aborts an interrupted PDF load and reloads it after reconnect", async () => 
   document.body.append(panel);
   await vi.waitFor(() => expect(panel.querySelector("iframe")).not.toBeNull());
   expect(fetchMock).toHaveBeenCalledTimes(2);
+  expect(download).not.toHaveBeenCalled();
   expect(objectUrls.createObjectURL).toHaveBeenCalledOnce();
   expect(objectUrls.revokeObjectURL).not.toHaveBeenCalled();
   expect(panel.querySelector("iframe")?.getAttribute("src")).toBe("blob:pdf-preview");
@@ -109,6 +114,68 @@ it("aborts an interrupted PDF load and reloads it after reconnect", async () => 
     source,
     expect.objectContaining({ credentials: "same-origin", redirect: "error" }),
   );
+});
+
+it.each(["oversized", "read failure", "grant failure"] as const)(
+  "retains a fresh file download after PDF %s",
+  async (failure) => {
+    const download = vi.fn(async () => ({ url: source, filename: "brief.pdf" }));
+    if (failure === "grant failure") {
+      download.mockRejectedValueOnce(new Error("File unavailable"));
+    }
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 403 }));
+    vi.stubGlobal("fetch", fetcher);
+    const panel = await mountAttachment({
+      src: undefined,
+      sourceIdentity: "session-file:brief",
+      sizeBytes: failure === "oversized" ? PDF_PREVIEW_MAX_BYTES + 1 : 100,
+      file: { path: "brief.pdf", download },
+    });
+    await waitForSolid(() => expect(panel.querySelector("[role=alert]")).not.toBeNull());
+    expect(panel.querySelector("iframe")).toBeNull();
+    expect(fetcher).toHaveBeenCalledTimes(failure === "read failure" ? 1 : 0);
+    expect(download).toHaveBeenCalledTimes(failure === "oversized" ? 0 : 1);
+    // Explicit download reauthorizes instead of reusing the failed/expired preview grant.
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    const button = panel.querySelector<HTMLButtonElement>("[role=alert] button");
+    expect(button).not.toBeNull();
+    button!.click();
+    await waitForSolid(() =>
+      expect(download).toHaveBeenCalledTimes(failure === "oversized" ? 1 : 2),
+    );
+  },
+);
+
+it("retires file PDF bytes and pending grants on replacement and closure", async () => {
+  const urls = stubObjectUrls();
+  const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response("%PDF-1.7 original"));
+  vi.stubGlobal("fetch", fetcher);
+  const pending = Promise.withResolvers<{ url: string; filename: string }>();
+  const download = vi.fn(async (_signal: AbortSignal) => ({ url: source, filename: "brief.pdf" }));
+  const panel = await mountAttachment({
+    src: undefined,
+    sourceIdentity: "session-file:original",
+    file: { path: "brief.pdf", download },
+  });
+  await waitForSolid(() => expect(panel.querySelector("iframe")).not.toBeNull());
+  const original = panel.querySelector("iframe")!;
+  download.mockReturnValueOnce(pending.promise);
+  panel.content = {
+    ...panel.content,
+    sourceIdentity: "session-file:replacement",
+    file: { path: "replacement.pdf", download },
+  };
+  await waitForSolid(() => {
+    expect(download).toHaveBeenCalledTimes(2);
+    expect(original.isConnected).toBe(false);
+    expect(urls.revokeObjectURL).toHaveBeenCalledExactlyOnceWith("blob:pdf-preview");
+  });
+  panel.remove();
+  await waitForSolid(() => expect(download.mock.calls[1]?.[0].aborted).toBe(true));
+  pending.resolve({ url: source, filename: "replacement.pdf" });
+  await waitForSolid(() => expect(panel.querySelector("iframe")).toBeNull());
+  expect(fetcher).toHaveBeenCalledOnce();
+  expect(urls.createObjectURL).toHaveBeenCalledOnce();
 });
 
 it.each(["unchanged", "changed", "failed", "identity", "oversized"] as const)(

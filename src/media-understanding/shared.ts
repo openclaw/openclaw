@@ -32,6 +32,8 @@ import {
   type ProviderOperationRetryStage,
   type TransientProviderRetryConfig,
 } from "../provider-runtime/operation-retry.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { monotonicDeadlineAfter, remainingMonotonicMs } from "../shared/monotonic-time.js";
 import { truncateOptionalText } from "../shared/text-truncate.js";
 import { fetchWithTimeout } from "../utils/fetch-timeout.js";
 import type { AudioTranscriptionRequest } from "./types.js";
@@ -95,12 +97,23 @@ export function buildAudioTranscriptionFormData(params: {
   return form;
 }
 
-/** Shared absolute deadline state for long-running provider operations and polling loops. */
+/** Serializable epoch deadline; the owner anchors local enforcement to monotonic time. */
 export type ProviderOperationDeadline = {
   deadlineAtMs?: number;
   label: string;
   timeoutMs?: number;
 };
+
+type ProviderOperationClock = { epochAtMs: number; monotonicAtMs: number };
+const providerOperationClocksKey = Symbol.for("openclaw.providerOperationDeadlineClocks");
+let providerOperationClocks: WeakMap<ProviderOperationDeadline, ProviderOperationClock> | undefined;
+
+function resolveProviderOperationClocks() {
+  return (providerOperationClocks ??= resolveGlobalSingleton(
+    providerOperationClocksKey,
+    () => new WeakMap<ProviderOperationDeadline, ProviderOperationClock>(),
+  ));
+}
 
 /** Static or per-call timeout resolver used by provider HTTP helpers. */
 export type ProviderOperationTimeoutMs = number | (() => number);
@@ -131,11 +144,16 @@ export function createProviderOperationDeadline(params: {
   const resolvedTimeoutMs = resolveTimerTimeoutMs(timeoutMs, 1);
   const deadlineAtMs =
     resolveExpiresAtMsFromDurationMs(resolvedTimeoutMs) ?? resolveDateTimestampMs(Date.now());
-  return {
+  const deadline = {
     deadlineAtMs,
     label: params.label,
     timeoutMs: resolvedTimeoutMs,
   };
+  resolveProviderOperationClocks().set(deadline, {
+    epochAtMs: deadlineAtMs,
+    monotonicAtMs: monotonicDeadlineAfter(resolvedTimeoutMs),
+  });
+  return deadline;
 }
 
 /** Resolves a per-request timeout without exceeding the remaining operation deadline. */
@@ -148,7 +166,15 @@ export function resolveProviderOperationTimeoutMs(params: {
   if (typeof deadlineAtMs !== "number") {
     return defaultTimeoutMs;
   }
-  const remainingMs = deadlineAtMs - Date.now();
+  let clock = resolveProviderOperationClocks().get(params.deadline);
+  if (!clock || clock.epochAtMs !== deadlineAtMs) {
+    clock = {
+      epochAtMs: deadlineAtMs,
+      monotonicAtMs: monotonicDeadlineAfter(deadlineAtMs - Date.now()),
+    };
+    resolveProviderOperationClocks().set(params.deadline, clock);
+  }
+  const remainingMs = remainingMonotonicMs(clock.monotonicAtMs);
   if (remainingMs <= 0) {
     throw createProviderOperationTimeoutError(params.deadline);
   }
@@ -185,13 +211,12 @@ export async function waitProviderOperationPollInterval(params: {
   deadline: ProviderOperationDeadline;
   pollIntervalMs: number;
 }): Promise<void> {
-  const pollIntervalMs = resolveTimerTimeoutMs(params.pollIntervalMs, 1);
-  const deadlineAtMs = params.deadline.deadlineAtMs;
-  const remainingMs = typeof deadlineAtMs === "number" ? deadlineAtMs - Date.now() : pollIntervalMs;
-  if (remainingMs <= 0) {
-    throw createProviderOperationTimeoutError(params.deadline);
-  }
-  await sleepWithAbort(Math.min(pollIntervalMs, remainingMs));
+  await sleepWithAbort(
+    resolveProviderOperationTimeoutMs({
+      deadline: params.deadline,
+      defaultTimeoutMs: resolveTimerTimeoutMs(params.pollIntervalMs, 1),
+    }),
+  );
 }
 
 /** Poll a provider-owned request without changing its transport or response contract. */

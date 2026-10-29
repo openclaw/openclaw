@@ -35,9 +35,12 @@ it("opts into string normalization without changing the lossless default", () =>
   expect(serialize(value)).toBe(
     '{"high":"left\\ud83dright","key\\ud83d":"name","low":"left\\udc00right","valid":"emoji 🙈 ok"}',
   );
-  expect(serialize(value, sanitizeSurrogates)).toBe(
-    '{"high":"leftright","key":"name","low":"leftright","valid":"emoji 🙈 ok"}',
-  );
+  const normalized = '{"high":"leftright","key":"name","low":"leftright","valid":"emoji 🙈 ok"}';
+  expect(serialize(value, sanitizeSurrogates)).toBe(normalized);
+  expect(sha256StableValue(value, sanitizeSurrogates)).toEqual({
+    digest: sha256Hex(normalized),
+    byteWeight: Buffer.byteLength(normalized),
+  });
 });
 
 const error = Object.assign(new Error("boom"), { stack: "Error: boom\n    at test" });

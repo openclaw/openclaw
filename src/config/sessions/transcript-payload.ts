@@ -41,7 +41,6 @@ export {
 
 const MAX_NAVIGATION_BYTES = 16 * 1024;
 const MIN_COMPRESS_BYTES = 1024;
-const utf8Decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
 export type TranscriptPayloadRecord = TranscriptPredicateFields & {
   event_json: string | null;
@@ -398,9 +397,9 @@ function navigationProjection(
       'report', json(${report}),
       'navigation', json(${projectTranscriptPayloadNavigationSql(database, event)}),
       'reset', json(${projectResetBoundaryNavigationSql(database, originalEvent)}),
-      'model', json(${projectModelContextNavigationSql(database, event)}),
-      'modelBytes', octet_length(${projectModelContextEventSql(database, event, sql.lit(0))}),
-      'modelWithoutCheckpointBytes', octet_length(${projectModelContextEventSql(database, event, sql.lit(1))}),
+      'model', json(${projectModelContextNavigationSql(database, event, undefined, sql.lit(1))}),
+      'modelBytes', octet_length(${projectModelContextEventSql(database, event, sql.lit(0), undefined, undefined, sql.lit(1))}),
+      'modelWithoutCheckpointBytes', octet_length(${projectModelContextEventSql(database, event, sql.lit(1), undefined, undefined, sql.lit(1))}),
       'withoutCustomDataBytes', octet_length(json_remove(${event}, '$.data')))
     END ELSE NULL END`;
 }
@@ -499,11 +498,11 @@ export function prepareTranscriptPayload(
   if (rawBytes < MIN_COMPRESS_BYTES) {
     return identity;
   }
-  const bytes = Buffer.from(eventJson, "utf8");
   // A literal unpaired surrogate cannot round-trip through a UTF-8 frame.
-  if (utf8Decoder.decode(bytes) !== eventJson) {
+  if (!eventJson.isWellFormed()) {
     return identity;
   }
+  const bytes = Buffer.from(eventJson, "utf8");
   const compressed = codec.compress(bytes, 1, true);
   const maximumStoredBytes = rawBytes - Math.max(64, Math.ceil(rawBytes / 10));
   if (compressed.byteLength > maximumStoredBytes) {

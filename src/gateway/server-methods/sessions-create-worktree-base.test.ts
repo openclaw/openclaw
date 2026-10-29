@@ -305,11 +305,6 @@ test("sessions.create recovers a failed worktree in the same session with an exp
     await sessionTitleRequests.get({ ...target, sessionId: beforeTitle.sessionId });
     const failed = loadSessionEntry(target)!;
     expect(failed.displayName).toMatch(/^[a-z]+-[a-z]+$/);
-    expect(failed.titleRefinement).toEqual({
-      sessionId: beforeTitle.sessionId,
-      generatedName: failed.displayName,
-      remainingMessages: 6,
-    });
     expect(failed.updatedAt).toBeGreaterThanOrEqual(beforeTitle.updatedAt);
     expect(failed).toMatchObject({
       status: "failed",
@@ -334,7 +329,6 @@ test("sessions.create recovers a failed worktree in the same session with an exp
     expect(bound).toMatchObject({
       sessionId: failed.sessionId,
       displayName: failed.displayName,
-      titleRefinement: failed.titleRefinement,
       projectId: project.id,
       lastRunError: failed.lastRunError,
       worktree: { repoRoot: repository },

@@ -40,8 +40,8 @@ installGatewayTestHooks({ scope: "suite" });
 
 const { callGateway } = await import("./call.js");
 const { probeGateway } = await import("./probe.js");
-const { seedDeviceAuthToken, seedOriginDeviceToken } =
-  await import("../infra/device-auth-store.test-support.js");
+const { storeDeviceAuthToken: seedDeviceAuthToken, storeOriginDeviceToken: seedOriginDeviceToken } =
+  await import("../infra/device-auth-store.js");
 const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem } =
   await import("../infra/device-identity.js");
 const { approveDevicePairing } = await import("../infra/device-pairing-approval.js");
@@ -78,8 +78,8 @@ function expectStatus(result: ProbeResult, label: string) {
   expectRecord(result?.status, label);
 }
 type OriginAuth = Omit<Parameters<typeof seedOriginDeviceToken>[0], "gatewayScope">;
-function seedOrigin(auth: OriginAuth, token = auth.token) {
-  seedOriginDeviceToken({ ...auth, gatewayScope: gatewayUrl(), token });
+async function seedOrigin(auth: OriginAuth, token = auth.token) {
+  await seedOriginDeviceToken({ ...auth, gatewayScope: gatewayUrl(), token });
 }
 async function snapshot(cfg: OpenClawConfig) {
   const { gatewayProbe } = await resolveGatewayProbeSnapshot({
@@ -115,7 +115,7 @@ async function seedCachedOperatorToken() {
     "approved operator token",
   );
   const auth = { deviceId: identity.deviceId, role: "operator", token, scopes };
-  seedOrigin(auth);
+  await seedOrigin(auth);
   return auth;
 }
 
@@ -208,7 +208,7 @@ describe("probeGateway auth integration", () => {
     expectRead(await snapshot({ gateway: { mode: "remote", remote: { url, token } } }));
 
     // A retired SSH tunnel can leave another Gateway's token at the local URL.
-    seedOrigin(localAuth, "retired-tunnel-device-token");
+    await seedOrigin(localAuth, "retired-tunnel-device-token");
     const unbound = await probe();
     expect(unbound.ok).toBe(false);
     expect(unbound.connectErrorDetails).toMatchObject({
@@ -217,7 +217,7 @@ describe("probeGateway auth integration", () => {
 
     expectStatus(await probe({ token }), "explicit local auth with stale origin cache");
 
-    seedDeviceAuthToken(localAuth);
+    await seedDeviceAuthToken(localAuth);
     expectRead(await probe());
   });
 
@@ -229,7 +229,7 @@ describe("probeGateway auth integration", () => {
       .spyOn(deviceAuthStore, "loadOriginDeviceTokenReadOnly")
       .mockImplementationOnce(async (...args) => {
         const entry = await load(...args);
-        seedOrigin(localAuth, "replacement-tunnel-device-token");
+        await seedOrigin(localAuth, "replacement-tunnel-device-token");
         return entry;
       });
     try {

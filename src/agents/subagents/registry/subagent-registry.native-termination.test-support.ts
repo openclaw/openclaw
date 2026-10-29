@@ -1,11 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
-import {
-  waitForFast,
-  type SubagentRegistryHarness,
-} from "../../subagent-test-fixtures.test-helpers.js";
+import type { SubagentRegistryHarness } from "../../subagent-test-fixtures.test-helpers.js";
 import type { createSubagentRegistryMockState } from "./subagent-registry.mock-state.test-support.js";
 
 type Fixture = {
@@ -56,7 +52,6 @@ export function registerSupersededNativeTimingTest({
     });
     try {
       await entered.promise;
-      expect(getActiveGatewayRootWorkCount()).toBeGreaterThan(0);
       await mod.registerSubagentRun({
         runId: "run-released-timing-new",
         childSessionKey,
@@ -67,7 +62,6 @@ export function registerSupersededNativeTimingTest({
       release.resolve();
       expect(await termination).toBe(1);
     }
-    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
     const oldRun = mod
       .listSubagentRunsForRequester("agent:main:main")
       .find((entry) => entry.runId === "run-released-timing-old");

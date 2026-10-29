@@ -57,6 +57,9 @@ export const page = defineSolidPage<"agents", ApplicationContext, AgentsRouteDat
   "agents",
   () => import("./agents-page.tsx").then((module) => module.AgentsPage),
   {
+    // Intent-keyed receipts are not reused; roster and module caches stay warm.
+    gcTime: 0,
+    preloadGcTime: 0,
     loaderDeps: (context: ApplicationContext, location: RouteLocation) => {
       const route = resolveAgentsRouteLocation(location, context.basePath).location;
       return `${route.pathname}\u0000${route.search}\u0000${route.hash}\u0000${context.settingsAgentSelection.intentRevision}`;

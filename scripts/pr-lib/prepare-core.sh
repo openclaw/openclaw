@@ -79,6 +79,54 @@ retire_prep_evidence() {
   echo "Prior preparation evidence retained at $archive."
 }
 
+prepare_workflow_successor() (
+  local pr="$1" request="${PR_WORKFLOW_SUCCESSOR:-}" head tree review hosted snapshot next
+  [ -n "$request" ] || return 1
+  enter_worktree "$pr" false true || return 1
+  require_artifact .local/prep-context.env || return 1
+  local PR_NUMBER="" PR_HEAD="" PR_HEAD_SHA_BEFORE="" PREP_REVIEW_MODE=""
+  source .local/prep-context.env || return 1
+  [ "$PR_NUMBER" = "$pr" ] && [ "$PREP_REVIEW_MODE" = correction ] || {
+    echo "Workflow succession requires an existing correction preparation." >&2; return 1;
+  }
+  IFS=$'\t' read -r head tree review hosted < <(printf '%s\n' "$request" | jq -r '[.head,.tree,.review,.hostedHead] | @tsv')
+  [ "$(pr_git rev-parse HEAD)" = "$head" ] && [ "$(pr_git rev-parse 'HEAD^{tree}')" = "$tree" ] &&
+    [ -z "$(pr_git status --porcelain --untracked-files=no)" ] &&
+    [ "$(pr_git branch --show-current)" = "$(resolve_prep_branch_name "$pr")" ] || {
+    echo "Workflow succession requires the unchanged retained preparation branch and tree." >&2; return 1;
+  }
+  if has_worktree_merge_output . ||
+    { [ -f .local/gates.env ] && grep -q '^PENDING_CRABBOX_' .local/gates.env; }; then
+    echo "Retained merge or pending dispatch evidence requires its existing reconciliation owner." >&2; return 1
+  fi
+  snapshot=$(correction_review_snapshot "$pr") || return 1
+  [ -n "$snapshot" ] && [ "$(pr_git hash-object --no-filters -- .local/correction-review.json)" = "$review" ] || return 1
+  resolve_prep_publication_target "$pr" "$head" || return 1
+  [ "$PREP_PUBLICATION_LEASE_SHA" = "$hosted" ] || {
+    echo "Workflow succession hosted authority changed; retain the publication receipts." >&2; return 1;
+  }
+  # Compare one fresh observation with retained review identity. A successor
+  # changes tooling, never the hosted lease or a GraphQL local/hosted alias.
+  local observation
+  observation=$(cat .local/pr-meta.json) || return 1
+  revalidate_pr_publication "$pr" "$observation" "$PR_HEAD" "$hosted" "$hosted" || return 1
+  verify_correction_review_snapshot "$pr" "$snapshot" || return 1
+  retire_prep_evidence retain || return 1
+  verify_correction_review_snapshot "$pr" "$snapshot" || return 1
+  # prep.env can be the only surviving authority for a completed publication.
+  # Retire only qualification, before CAS: either binding then fails closed.
+  if [ -e .local/gates.env ] || [ -L .local/gates.env ]; then
+    [ -f .local/gates.env ] && [ ! -L .local/gates.env ] &&
+      cmp -s .local/gates.env "$PREP_RETIRED_EVIDENCE/gates.env" || return 1
+    rm .local/gates.env || return 1
+  fi
+  verify_correction_review_snapshot "$pr" "$snapshot" || return 1
+  next=$(pr_batch_wrapper_git workflow-successor-commit "$canonical_repo_root" "$pr" \
+    "$PR_WORKFLOW_SOURCE_REVISION" "$request" "$PR_WORKFLOW_TRUST_ANCHOR" "$snapshot" \
+    "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID" "$PWD") || return 1
+  printf 'Correction workflow successor admitted: %s\nSource and review retained; run scripts/pr prepare-gates %s before publication.\n' "$next" "$pr"
+)
+
 prepare_baseline_successor() (
   # Explicit admission, never inferred by refresh or recovery from a present binding.
   prepare_baseline_materialize successor "$@"

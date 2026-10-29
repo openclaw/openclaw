@@ -361,7 +361,7 @@ export abstract class MemoryManagerSyncBase {
         2 ** Math.min(this.fullReindexRetryBackoff.attempts - 1, 30),
       FULL_REINDEX_RETRY_MAX_DELAY_MS,
     );
-    this.fullReindexRetryBackoff.retryAt = Date.now() + delay;
+    this.fullReindexRetryBackoff.retryAt = performance.now() + delay;
   }
 
   protected clearFullReindexRetryBackoff(): void {
@@ -542,6 +542,7 @@ export abstract class MemoryManagerSyncBase {
           provider: configuredIndexIdentity.provider,
           cacheKeyData: configuredIndexIdentity.cacheKeyData,
           aliases: configuredIndexIdentity.aliases,
+          documentPrefix: this.settings.inputFormat?.document,
         })
       : [];
     const providerIdentities =

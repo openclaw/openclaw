@@ -71,6 +71,27 @@ export class GitHubPublicationBranchChangedError extends GitHubPublicationKnownF
   }
 }
 
+/**
+ * Classify a push whose head did not land. Git exiting on its own with a failure while the
+ * remote still holds its pre-push head is a definitive rejection. Anything else (exit 0, a
+ * killed or signalled push, or a moved remote) stays unconfirmed for recovery to settle.
+ */
+export function gitHubPublicationPushFailure(
+  pushed: { code: number | null; signal: unknown; killed: boolean },
+  remoteUnchanged: boolean,
+  { login, pushRepository }: { login: string; pushRepository: string },
+): Error {
+  if (!remoteUnchanged || pushed.code === 0 || pushed.signal !== null || pushed.killed) {
+    return new Error(
+      pushed.code === 0 ? "GitHub push verification failed." : "GitHub push was rejected.",
+    );
+  }
+  return new GitHubPublicationKnownFailure(`GitHub rejected the push to ${pushRepository}.`, {
+    code: "push_rejected",
+    nextAction: `GitHub rejected @${login}'s push to ${pushRepository}; nothing was pushed. Give @${login} write access (or point the worktree's origin at a fork it owns) and check the repository's branch rules, then request publication again.`,
+  });
+}
+
 export class GitHubPublicationSessionChangedError extends GitHubPublicationKnownFailure {
   constructor() {
     super("GitHub publication session lifecycle changed.", {

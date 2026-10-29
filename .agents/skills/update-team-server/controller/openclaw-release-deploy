@@ -970,16 +970,15 @@ check_suspension() {
 arm_suspension_handoff() {
 	local params response
 	((suspension_cleanup_only == 0)) || { fail 'suspension offer is cleanup-only, not continued authority'; return 1; }
-	((interrupt_after_drain && drain_budget_elapsed)) && [[ "$suspension_state" == DRAINING ]] || return 0
+	assert_protected_identity && assert_policy || return 1
 	params="$(proof suspension-handoff-params "$held_suspension" "$suspension_pid" "$suspension_instance")" || return 1
-	# An uncertain RPC may already have armed natively; never renew after sending it.
+	# An uncertain RPC may already have committed shutdown; never renew after sending it.
 	suspension_handoff_started=1
 	response="$(run_gateway "$suspension_release" gateway call gateway.suspend.handoff \
 		--params "$params" --json --timeout 30000)" || return 1
 	proof_json suspension-handoff "$response" "$held_suspension" "$suspension_expiry" >/dev/null || return 1
-	# Arming does not renew the lease. A refused or uncertain arm is resumed by the existing exit owner.
-	assert_protected_identity && assert_policy && check_suspension || return 1
-	printf 'HANDOFF_ARMED lease=%s expiresAtMs=%s pid=%s\n' "$held_suspension" "$suspension_expiry" "$suspension_pid"
+	# The host now owns one-way shutdown; its retired lease cannot reopen admission.
+	printf 'HANDOFF_COMMITTED lease=%s expiresAtMs=%s pid=%s\n' "$held_suspension" "$suspension_expiry" "$suspension_pid"
 }
 
 resume_suspension() {
@@ -2780,10 +2779,10 @@ process.stdout.write(JSON.stringify({source:JSON.parse(e.SOURCE),process:{pid:Nu
 			assert_protected_identity
 			assert_policy
 			check_suspension
-			arm_suspension_handoff
 			proof host-handoff source-revoke "$serving_root" >/dev/null
 			check_suspension
 			[[ "$(realpath "$proc_root/$operator_expected_pid/cwd")" == "$previous_release" ]] || fail 'handoff source cwd changed before stop'
+			arm_suspension_handoff
 			bounded 180 "$systemctl_bin" stop openclaw-gateway.service
 			held_suspension=""; predecessor_stopped=1
 			predecessor_is_stopped "$operator_expected_pid"
@@ -3058,8 +3057,42 @@ cleanup_releases() {
 			printf 'RETAIN replacement-safe quarantine refused release=%s\n' "$sha" >&2
 		fi
 	done
+	retire_settled_native_updates
 	# A release removed in this pass must not leave a stale verification claim.
 	verified_markers list >/dev/null
+}
+
+# Without a journal, an earlier transaction's pre-migration snapshot can only undo state that
+# was since accepted. Its receipt shows whether Doctor's work settled: no receipt means Doctor
+# never ran. The runtime account owns these trees, so it removes their contents; root removes
+# only the emptied directory. This invocation's own root stays so `update finish` can be retried.
+retire_settled_native_updates() {
+	local updates="$runtime_home/.openclaw-update" root name status
+	[[ -d "$updates" && ! -L "$updates" && ! -e "$journal_file" ]] || return 0
+	for root in "$updates"/update-*; do
+		name="$(basename "$root")"
+		[[ "$name" =~ ^update-[a-f0-9]{40}-[0-9a-f-]{36}$ && -d "$root" && ! -L "$root" ]] || continue
+		[[ -z "$native_update_root" || "$root" != "$(dirname "$native_update_root")" ]] || continue
+		status="$(bounded 60 "$runuser_bin" -u openclaw -- env -i PATH=/usr/bin:/bin "$node_bin" -e '
+const fs = require("node:fs");
+let status;
+try { status = JSON.parse(fs.readFileSync(process.argv[1], "utf8")).status; }
+catch (error) { status = error.code === "ENOENT" ? "absent" : "unreadable"; }
+process.stdout.write(/^[a-z-]{1,32}$/.test(String(status)) ? status : "unreadable");
+' "$root/native.receipt.json")" || status=unreadable
+		case "$status" in
+		absent | migrated | restored | finished)
+			# GNU find refuses to run from a working directory the runtime account cannot enter.
+			if (cd / && bounded 1800 "$runuser_bin" -u openclaw -- env -i PATH=/usr/bin:/bin \
+				find "$root" -mindepth 1 -maxdepth 1 -exec rm -rf --one-file-system -- {} +) && rmdir -- "$root"; then
+				printf 'RETIRED_NATIVE_UPDATE=%s status=%s\n' "$name" "$status"
+			else
+				printf 'RETAIN native update removal failed root=%s\n' "$name" >&2
+			fi
+			;;
+		*) printf 'RETAIN unsettled native update root=%s status=%s\n' "$name" "$status" >&2 ;;
+		esac
+	done
 }
 
 activate_release() {

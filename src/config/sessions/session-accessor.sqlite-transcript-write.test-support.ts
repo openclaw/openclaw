@@ -15,7 +15,7 @@ import {
   transcriptWriteScopeIsCurrent,
 } from "./session-accessor.sqlite-scope.js";
 import { replaceSqliteTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
-import { appendTranscriptEventSnapshotSync } from "./session-accessor.sqlite-transcript-write.js";
+import { appendTranscriptEventSnapshotSync } from "./session-accessor.sqlite-transcript-write.kernel.js";
 import {
   assertOwnedTranscriptWriteCommit,
   SessionTranscriptWriterClaimReboundError,

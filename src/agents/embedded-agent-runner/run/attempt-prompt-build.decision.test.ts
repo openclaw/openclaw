@@ -187,9 +187,10 @@ describe("prompt assembly with registered Decision runtime", () => {
       });
       if (!clientOnly) {
         await f.assemble();
-        expect(f.session.getActiveToolNames()).toEqual([]);
+        expect(f.policy.current.callableToolNames).toEqual([]);
       }
-      expect(f.policy.current.effectiveTools).toEqual([]);
+      expect(f.session.getActiveToolNames()).toEqual(names);
+      expect(f.policy.current.effectiveTools).toEqual(clientOnly ? [] : f.tools);
       call.mockResolvedValue(result(0.9));
       await f.assemble();
       expect(call).toHaveBeenCalledTimes(clientOnly ? 1 : 2);
@@ -212,8 +213,10 @@ describe("prompt assembly with registered Decision runtime", () => {
       const cfg = config();
       setRuntimeConfigSnapshot(cfg);
       const f = await fixture(cfg, mode);
+      const offeredToolNames = f.session.getActiveToolNames();
       const assembly = await f.assemble();
-      expect(f.session.getActiveToolNames()).toEqual(["message"]);
+      expect(f.session.getActiveToolNames()).toEqual(offeredToolNames);
+      expect(f.policy.current.callableToolNames).toEqual(["message"]);
       const entered = createDeferredCore();
       const barrier = createDeferredCore();
       const captured = captureRequests();
@@ -230,7 +233,7 @@ describe("prompt assembly with registered Decision runtime", () => {
       setRuntimeConfigSnapshot(next);
       barrier.resolve();
       await pending;
-      expect(captured).toEqual([["message"]]);
+      expect(captured).toEqual([offeredToolNames]);
       expect(f.policy.current.callableToolNames).not.toContain("denied");
       if (f.catalogRef) {
         expect(f.catalogRef.current?.entries).toEqual([]);
@@ -329,7 +332,8 @@ describe("prompt assembly with registered Decision runtime", () => {
         { user: "Help me understand this example.", assistant: "Would you like an explanation?" },
       ],
     });
-    expect(captures[1]).toEqual(["message"]);
+    expect(captures[1]).toEqual(captures[0]);
+    expect(f.policy.current.callableToolNames).toEqual(["message"]);
     call.mockResolvedValue(result(0.9));
     await submit("Read package.json now.");
     expect(captures[2]).toEqual(captures[0]);

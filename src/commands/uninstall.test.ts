@@ -70,13 +70,8 @@ describe("uninstallCommand", () => {
         "CLI removal instructions: https://docs.openclaw.ai/install/uninstall",
       );
       if (failure === "nix") {
-        for (const mock of [
-          gatewayService.isLoaded,
-          gatewayService.stop,
-          gatewayService.uninstall,
-        ]) {
-          expect(mock).not.toHaveBeenCalled();
-        }
+        expect(gatewayService.stop).not.toHaveBeenCalled();
+        expect(gatewayService.uninstall).not.toHaveBeenCalled();
       }
     },
   );

@@ -8,6 +8,7 @@ import {
 } from "../plugins/registry-lifecycle.js";
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { setPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
+import { createToolLoadContext } from "../plugins/tools.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createDecisionRegistry, unavailable, waitForAbort } from "./contract.test-support.js";
 import { DecisionProviderHost } from "./provider-host.js";
@@ -17,31 +18,17 @@ import {
   inspectDecisionProviders as inspect,
   prepareDecisionProviderReload,
 } from "./runtime.js";
-import { options } from "./runtime.test-support.js";
-import type { DecisionProviderV1, ProviderDecisionOutcome } from "./types.js";
+import { answer, batch, config as baseConfig, options } from "./runtime.test-support.js";
+import type { DecisionProviderV1 } from "./types.js";
 
 const config = {
-  agents: { defaults: { decisionModel: "fixture/synthetic" } },
+  ...baseConfig,
   plugins: { entries: { owner: { enabled: true, config: { model: "synthetic" } } } },
 };
-const batch = { state: "synthetic", questions: { check: { type: "boolean" as const } } };
-const answer: ProviderDecisionOutcome = {
-  status: "ok",
-  result: { model: "synthetic", answers: { check: { type: "boolean", probabilityTrue: 1 } } },
-};
-
 function fixture(evaluate: DecisionProviderV1["evaluate"] = async () => answer) {
-  const builder = createDecisionRegistry(config, { id: "fixture", contractVersion: 1, evaluate });
-  const { record } = builder;
-  setPluginRuntimeLoadContext(builder.registry, {
-    rawConfig: config,
-    config,
-    activationSourceConfig: config,
-    autoEnabledReasons: {},
-    workspaceDir: "/synthetic",
-    env: process.env,
-    logger: { info() {}, warn() {}, error() {} },
-  });
+  const provider = { id: "fixture", contractVersion: 1 as const, evaluate };
+  const { registry: root, record } = createDecisionRegistry(config, provider);
+  setPluginRuntimeLoadContext(root, createToolLoadContext(config, "/synthetic"));
   onTestFinished(async () => {
     await getPluginInstance(record)?.dispose();
   });
@@ -50,18 +37,14 @@ function fixture(evaluate: DecisionProviderV1["evaluate"] = async () => answer) 
   target.plugins.push(localRecord);
   target.decisionProviders.push({
     pluginId: record.id,
-    host: new DecisionProviderHost(
-      { id: "fixture", contractVersion: 1, evaluate: async () => answer },
-      localRecord,
-    ),
+    host: new DecisionProviderHost(provider, localRecord),
   });
   const view = bindPluginRegistryResourceOwner(
-    adoptRuntimeDecisionProviders(target, builder.registry, config),
+    adoptRuntimeDecisionProviders(target, root, config),
     target,
   );
-  const run = () => evaluateDecisionInRegistry(batch, options(), view, config);
-  const runRoot = () => evaluateDecisionInRegistry(batch, options(), builder.registry, config);
-  return { root: builder.registry, target, record, run, runRoot };
+  const run = (registry = view) => evaluateDecisionInRegistry(batch, options(), registry, config);
+  return { root, target, record, run };
 }
 
 afterEach(() => resetPluginRuntimeStateForTest());
@@ -89,29 +72,23 @@ it("releases a prepared consumer without retiring the shared Gateway provider", 
 });
 
 it("shares the concurrency bound and joins provider retirement before fallback", async () => {
-  const { root, record, run, runRoot } = fixture(async (_batch, { signal }) => {
+  const { root, record, run } = fixture(async (_batch, { signal }) => {
     await waitForAbort(signal);
     signal.throwIfAborted();
     return answer;
   });
-  const pending = [run(), run(), runRoot(), run()];
-  expect(await runRoot()).toEqual(unavailable("overloaded"));
+  const pending = [run(), run(), run(root), run()];
+  expect(await run(root)).toEqual(unavailable("overloaded"));
   const pause = prepareDecisionProviderReload(root, new Set([record.id]));
-  expect(await Promise.all(pending)).toEqual(
-    Array.from({ length: 4 }, () => unavailable("retiring")),
-  );
+  expect(await Promise.all(pending)).toEqual(Array(4).fill(unavailable("retiring")));
   await pause.rollback(new AbortController().signal);
   expectRootReady(root);
 });
 
 it("never adopts across a shadowed source, changed config, or retired owner", () => {
   const { root, target } = fixture();
-  expect(
-    adoptRuntimeDecisionProviders(target, root, {
-      ...config,
-      plugins: { entries: { owner: { config: { model: "other" } } } },
-    }),
-  ).toBe(target);
+  const changed = { ...config, plugins: { entries: { owner: { config: { model: "other" } } } } };
+  expect(adoptRuntimeDecisionProviders(target, root, changed)).toBe(target);
   target.plugins[0]!.source = "/workspace/shadow.ts";
   expect(adoptRuntimeDecisionProviders(target, root, config)).toBe(target);
   target.plugins[0]!.source = root.plugins[0]!.source;

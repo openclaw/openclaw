@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { setImmediate } from "node:timers/promises";
@@ -150,6 +151,50 @@ function observeCheckpoints(pathname: string) {
   };
 }
 
+// Hold accepted work after inspection; the real lifecycle owner still performs cancellation.
+function holdPeriodicMaintenance() {
+  const entered = createDeferred();
+  const released = createDeferred();
+  const cancelled = createDeferred();
+  let running: Promise<walAdmission.SqliteWalPeriodicResult | undefined> | undefined;
+  let settled = false;
+  const register = walAdmission.registerSqliteWalWorkerMaintenance;
+  const registration = vi
+    .spyOn(walAdmission, "registerSqliteWalWorkerMaintenance")
+    .mockImplementation((database, execute, cancel) =>
+      register(
+        database,
+        (request) => {
+          running = released.promise
+            .then(() => execute(request))
+            .then((result) => {
+              settled = true;
+              return result;
+            });
+          entered.resolve();
+          return running;
+        },
+        () => {
+          const closing = cancel?.();
+          cancelled.resolve();
+          return closing;
+        },
+      ),
+    );
+  return {
+    entered: entered.promise,
+    cancelled: cancelled.promise,
+    release: released.resolve,
+    restore: () => registration.mockRestore(),
+    get running() {
+      return running;
+    },
+    get settled() {
+      return settled;
+    },
+  };
+}
+
 async function expectPeriodicCheckpoint(
   database: ReturnType<typeof openOpenClawStateDatabase>,
   periodic: () => unknown,
@@ -271,6 +316,15 @@ it("keeps periodic WAL off-host across native contention", async ({ signal }) =>
   const writer = new DatabaseSync(database.path);
   const { observations, wait, stop } = observeCheckpoints(database.path);
   const sql = observeHostSql(database.db);
+  const stat = fs.statSync;
+  const hostIdentityReads: string[] = [];
+  const inspection = vi.spyOn(fs, "statSync").mockImplementation((pathname, options) => {
+    if (String(pathname) === database.path) {
+      hostIdentityReads.push(String(pathname));
+    }
+    return stat(pathname, options);
+  });
+  syncBuiltinESMExports();
   let periodicWork: Promise<unknown> | undefined;
   try {
     writer.exec("BEGIN IMMEDIATE");
@@ -283,8 +337,11 @@ it("keeps periodic WAL off-host across native contention", async ({ signal }) =>
     expect(writer.isTransaction).toBe(true);
     expect(observations.every((state) => state === "complete" || state === "blocked")).toBe(true);
     sql.assertIdle();
+    expect(hostIdentityReads).toEqual([]);
     expect(readRow(writer, statsTableQuery)).toBeUndefined();
   } finally {
+    inspection.mockRestore();
+    syncBuiltinESMExports();
     stop();
     if (writer.isTransaction) {
       writer.exec("ROLLBACK");
@@ -421,28 +478,13 @@ it("refreshes planner stats without changing snapshots or indexes", async () => 
 it("joins private timer cancellation after publisher failure", async () => {
   const pathname = makeDatabasePath("private-owner");
   const { maintenance, close } = ownedMaintenance(pathname);
-  let periodicMaintenance: Promise<walAdmission.SqliteWalPeriodicResult | undefined> | undefined;
   let scheduledWork: Promise<unknown> | undefined;
-  let periodicSettled = false;
-  const register = walAdmission.registerSqliteWalWorkerMaintenance;
-  const registration = vi
-    .spyOn(walAdmission, "registerSqliteWalWorkerMaintenance")
-    .mockImplementation((database, execute, cancel) =>
-      register(
-        database,
-        (request) =>
-          (periodicMaintenance = execute(request).then((result) => {
-            periodicSettled = true;
-            return result;
-          })),
-        cancel,
-      ),
-    );
+  const held = holdPeriodicMaintenance();
   let database: ReturnType<typeof openOpenClawStateDatabase> | undefined;
   const failure = new Error("publisher failed after durable bind");
   try {
     const publish = () =>
-      maintenance.run(() => {
+      maintenance.run(async () => {
         const opened = openWithPeriodicMaintenance(pathname);
         database = opened.database;
         runOpenClawStateWriteTransaction(
@@ -455,21 +497,26 @@ it("joins private timer cancellation after publisher failure", async () => {
         );
         const sql = observeHostSql(database.db);
         scheduledWork = Promise.resolve(opened.periodic());
+        await held.entered;
         sql.assertIdle();
 
         throw failure;
       });
 
-    expect(publish).toThrow(failure);
+    await expect(publish()).rejects.toBe(failure);
 
-    await maintenance.close();
+    const closing = maintenance.close();
+    await held.cancelled;
+    held.release();
+    await closing;
+    expect(held.settled).toBe(true);
     await scheduledWork;
-    expect(periodicMaintenance).toBeDefined();
-    expect(periodicSettled).toBe(true);
-    await expect(periodicMaintenance).resolves.toBeUndefined();
+    expect(held.running).toBeDefined();
+    await expect(held.running).resolves.toBeUndefined();
     expect(database?.db.isOpen).toBe(false);
   } finally {
-    registration.mockRestore();
+    held.release();
+    held.restore();
     await close(scheduledWork);
   }
   const reopened = openOpenClawStateDatabase({ path: pathname });
@@ -638,6 +685,7 @@ it.runIf(process.platform !== "win32")(
 );
 
 it("cancels queued WAL work without replay on synchronous close", async () => {
+  const held = holdPeriodicMaintenance();
   const { database, periodic } = openWithPeriodicMaintenance(makeDatabasePath("close"));
   seedEvent(database.db, "maintenance-close");
   const { observations, stop } = observeCheckpoints(database.path);
@@ -645,14 +693,16 @@ it("cancels queued WAL work without replay on synchronous close", async () => {
   const periodicWork: Promise<unknown>[] = [];
   try {
     periodicWork.push(Promise.resolve(periodic()));
-    periodicWork.push(Promise.resolve(periodic()));
+    await held.entered;
     expect(observations).toEqual([]);
     const closed = closeOpenClawStateDatabaseByPath(database.path);
     expect(closed).toBe(true);
     expect(database.db.isOpen).toBe(false);
     expect(observations).toEqual([]);
     periodicWork.push(Promise.resolve(periodic()));
+    held.release();
     await Promise.all(periodicWork);
+    await expect(held.running).resolves.toBeUndefined();
     expect(observations).toEqual([]);
     sql.assertIdle();
     const reopened = openOpenClawStateDatabase({ path: database.path });
@@ -662,6 +712,8 @@ it("cancels queued WAL work without replay on synchronous close", async () => {
         .all("maintenance-close"),
     ).toEqual([{ event_key: "preserved" }]);
   } finally {
+    held.release();
+    held.restore();
     stop();
     try {
       await closeOpenClawStateDatabaseByPathAsync(database.path);

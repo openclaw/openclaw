@@ -67,13 +67,10 @@ it("preserves a newest tool turn using headroom when its final reply arrives", (
   const requests = [
     user(0, "older history"),
     user(1, "current request"),
-    request(
-      2,
-      makeAgentAssistantMessage({
-        content: [{ type: "toolCall", id: "call", name: "read", arguments: {} }],
-        stopReason: "toolUse",
-      }),
-    ),
+    assistant(2, "", {
+      content: [{ type: "toolCall", id: "call", name: "read", arguments: {} }],
+      stopReason: "toolUse",
+    }),
     request(3, {
       role: "toolResult",
       toolCallId: "call",

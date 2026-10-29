@@ -7,7 +7,7 @@ import {
 import { convertResponsesMessages } from "../../../../packages/ai/src/transports/openai-responses-replay-internal.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
-import { sanitizeOpenAIResponsesReplayForStream } from "./attempt-tool-call-replay-sanitization.js";
+import { wrapStreamFnSanitizeMalformedToolCalls } from "./attempt-tool-call-replay-sanitization.js";
 
 const model = makeProviderModelFixture<"openai-responses">({
   id: "gpt-5.2",
@@ -63,7 +63,12 @@ it.each([
         timestamp: 2,
       });
     }
-    const sanitized = sanitizeOpenAIResponsesReplayForStream(messages);
+    let sanitized = messages;
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls((_model, context) => {
+      sanitized = context.messages as Context["messages"];
+      return undefined as never;
+    });
+    void wrapped(model, { messages });
     const replay = sanitized.filter(
       (message) =>
         message.role === "user" || message.role === "assistant" || message.role === "toolResult",

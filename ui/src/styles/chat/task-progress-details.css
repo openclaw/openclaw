@@ -259,6 +259,12 @@
 }
 
 .task-progress-details--desktop[data-desktop-details] .task-progress-details__body {
+  margin-top: 2px;
+  padding: 0;
+}
+
+.task-progress-details--desktop[data-desktop-details] .task-progress-details__content {
+  display: flow-root;
   padding-block-start: 6px;
 }
 
@@ -553,4 +559,12 @@
     padding-block-start: 0;
     padding-inline: 0;
   }
+}
+
+.task-progress-details__summary > .session-progress-card__runtime {
+  flex-basis: 100%;
+}
+
+.task-progress-details__plan > .session-progress-card__runtime {
+  margin-bottom: var(--space-2);
 }

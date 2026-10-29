@@ -204,7 +204,12 @@ export function createChatPageState(
         stillOwnsCanonicalLocation(data.canonicalLocationSource, state.consumedDraftData === data)
       ) {
         // Move a route matched under the wrong namespace to its resolved board face.
-        context().replace(data.face ?? "chat", data.canonicalLocation);
+        context().replace(
+          data.face ?? "chat",
+          state.consumedDraftData === data
+            ? locationWithoutDraft(data.canonicalLocation)
+            : data.canonicalLocation,
+        );
         return;
       }
       void data?.canonicalLocationReady?.then((location) => {
@@ -216,10 +221,9 @@ export function createChatPageState(
           stillOwnsCanonicalLocation(data.canonicalLocationSource, state.consumedDraftData === data)
         ) {
           // A lazy canonicalization must never replace a newer route.
-          context().replace(
-            data.face ?? "chat",
-            state.consumedDraftData === data ? locationWithoutDraft(location) : location,
-          );
+          const canonical =
+            state.consumedDraftData === data ? locationWithoutDraft(location) : location;
+          context().replace(data.face ?? "chat", canonical);
         }
       });
       if (routeChanged || !singleBoundPane()) {

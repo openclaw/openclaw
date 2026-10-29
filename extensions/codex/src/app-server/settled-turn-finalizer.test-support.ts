@@ -73,6 +73,7 @@ export async function createCodexSettledFinalizerTestFixture(
   const { durationMs, ...command } = createNativeCommandItem({
     id: "command-settled",
     command: "printf 'settled'",
+    aggregatedOutput: "settled",
     durationMs: 1,
   });
   await emit("item/started", {

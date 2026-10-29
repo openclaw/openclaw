@@ -77,7 +77,7 @@ function toolsHarness(request: Parameters<typeof capabilityHarness>[0], snapshot
   return {
     ...harness,
     open: () => harness.props().onOpenToolAccess?.("github"),
-    load: () => harness.props().onLoadView?.("tools:github"),
+    load: () => harness.props().onLoadView?.("connectors"),
     result: (profile: string) =>
       vi.waitFor(() => expect(harness.props().toolsEffectiveResult?.profile).toBe(profile)),
   };
@@ -345,7 +345,7 @@ describe("ChatComposerCapabilityHost", () => {
     };
     expect(props().toolsEffectiveLoading).toBe(false);
     expect(request).toHaveBeenCalledTimes(1);
-    props().onLoadView?.("tools:github");
+    props().onLoadView?.("connectors");
     expect(props().toolsEffectiveLoading).toBe(true);
 
     await vi.waitFor(() => expect(props().toolsEffectiveResult).toBe(secondResult));

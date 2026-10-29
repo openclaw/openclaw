@@ -16,6 +16,7 @@ let cachedTextAliases: Map<string, TextAliasSpec> | undefined;
 
 // Commands whose free-text argument becomes agent input keep every line and its spacing.
 const ARGUMENT_PRESERVING_COMMAND_KEYS = new Set([
+  "acp",
   "btw",
   "dashboard",
   "followup",

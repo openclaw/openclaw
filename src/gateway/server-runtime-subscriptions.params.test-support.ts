@@ -25,7 +25,6 @@ export function createSubscriptionTestParams(
     toolEventRecipients: chatRunState.toolEventRecipients,
     sessionEventSubscribers: createSessionEventSubscriberRegistry(),
     sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
-    restartRecoveryCandidates: new Map(),
     refreshConnectedUserProfiles: vi.fn(),
   };
 }

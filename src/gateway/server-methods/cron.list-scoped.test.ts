@@ -385,7 +385,10 @@ describe("cron.list scoped SQLite snapshots", () => {
         limit: 1,
         hasMore: true,
         nextOffset: 1,
-        snapshotRevision: listRevision.resolveCronListSnapshotRevision(visible),
+        snapshotRevision: listRevision.resolveCronListSnapshotRevision(
+          visible,
+          listRevision.resolveCronListSnapshotRows(visible),
+        ),
       });
       expect(await loadCronStore(storePath)).toEqual(store);
       expect(sort.mock.calls.reduce((total, [jobs]) => total + jobs.length, 0)).toBeLessThanOrEqual(

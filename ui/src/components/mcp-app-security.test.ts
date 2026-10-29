@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, onTestFinished } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { t } from "../i18n/index.ts";
 import {
@@ -8,6 +8,13 @@ import {
   WIDGET_PROMPT_EVENT,
 } from "./mcp-app-security.ts";
 import { resolveSandboxHostUrl } from "./sandbox-host.ts";
+
+function mountFrame() {
+  const frame = document.body.appendChild(document.createElement("iframe"));
+  frame.checkVisibility = () => true;
+  onTestFinished(() => frame.remove());
+  return frame;
+}
 
 describe("MCP App sandbox security", () => {
   it("negotiates resource hints before initialization and App capabilities afterward", () => {
@@ -81,48 +88,39 @@ describe("MCP App sandbox security", () => {
   });
 
   it("keeps the per-view prompt budget across iframe remounts", async () => {
-    const mountFrame = () => {
-      const frame = document.body.appendChild(document.createElement("iframe"));
-      frame.checkVisibility = () => true;
-      Object.defineProperty(document, "activeElement", { get: () => frame, configurable: true });
-      return frame;
-    };
+    let active: HTMLIFrameElement;
+    vi.spyOn(document, "activeElement", "get").mockImplementation(() => active);
+    onTestFinished(() => {
+      vi.restoreAllMocks();
+    });
     const key = `agent:main:main\0view-${crypto.randomUUID()}`;
-    const first = mountFrame();
+    const first = (active = mountFrame());
     for (let index = 0; index < 10; index += 1) {
       expect(await dispatchWidgetPrompt(first, `Prompt ${index}`, key)).toBe(true);
     }
 
     first.remove();
-    const replacement = mountFrame();
+    const replacement = (active = mountFrame());
     expect(await dispatchWidgetPrompt(replacement, "Prompt after remount", key)).toBe(false);
-    replacement.remove();
-    delete (document as unknown as Record<string, unknown>).activeElement;
   });
 
   it("waits for widget confirmation and rejects a frame retired while it was pending", async () => {
-    const frame = document.createElement("iframe");
-    document.body.append(frame);
-    frame.checkVisibility = () => true;
+    const frame = mountFrame();
     frame.focus();
     const received = vi.fn();
     frame.addEventListener(WIDGET_PROMPT_EVENT, received);
     const decision = createDeferred<boolean>();
-    try {
-      const pending = dispatchWidgetPrompt(
-        frame,
-        "Compare parts",
-        crypto.randomUUID(),
-        () => decision.promise,
-      );
-      expect(received).not.toHaveBeenCalled();
-      frame.remove();
-      decision.resolve(true);
-      expect(await pending).toBe(false);
-      expect(received).not.toHaveBeenCalled();
-    } finally {
-      decision.resolve(false);
-      frame.remove();
-    }
+    onTestFinished(() => decision.resolve(false));
+    const pending = dispatchWidgetPrompt(
+      frame,
+      "Compare parts",
+      crypto.randomUUID(),
+      () => decision.promise,
+    );
+    expect(received).not.toHaveBeenCalled();
+    frame.remove();
+    decision.resolve(true);
+    expect(await pending).toBe(false);
+    expect(received).not.toHaveBeenCalled();
   });
 });

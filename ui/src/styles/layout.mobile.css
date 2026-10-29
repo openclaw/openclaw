@@ -19,9 +19,10 @@
   --shell-topbar-height: 58px;
   --sidebar-nav-row-height: 40px;
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: var(--shell-topbar-height) minmax(0, 1fr);
+  grid-template-rows: var(--shell-topbar-height) auto minmax(0, 1fr);
   grid-template-areas:
     "topbar"
+    "notice"
     "content";
   /* The nav collapses to an overlay drawer here, so it no longer reserves a
      column. Zero the width the docked terminal reads or it would leave a

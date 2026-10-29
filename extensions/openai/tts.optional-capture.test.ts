@@ -13,9 +13,9 @@ vi.mock("openclaw/plugin-sdk/proxy-capture", async (importOriginal) => ({
   isDebugProxyGlobalFetchPatchInstalled: () => false,
 }));
 
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>()),
   fetchWithSsrFGuard: mocks.fetch,
-  ssrfPolicyFromHttpBaseUrlAllowedHostname: () => undefined,
 }));
 
 beforeEach(() => {

@@ -7,13 +7,12 @@ import { truncateUtf16Safe } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { fetchPullChecks } from "./detail-checks.js";
 import {
   ControlUiGitHubError,
-  fetchGitHubApi,
+  fetchGitHubJsonPage,
   GITHUB_API_ORIGIN,
   githubRestApiPath,
   githubApiCredentialCacheScope,
   isRecord,
   optionalNumber,
-  readGitHubJsonResponse,
   readOptionalGitHubString,
   requiredString,
   withOptionalGitHubAuth,
@@ -93,21 +92,13 @@ async function readPublicRepository(
   identity: ControlUiGitHubPreviewIdentity | undefined,
   expectedId?: number,
 ): Promise<number> {
-  const repository = await readGitHubJsonResponse(
-    await fetchGitHubApi(
-      url,
-      fetchImpl,
-      identity?.token,
-      async (redirect) => {
-        redirectedRepositoryUrl(redirect, "");
-      },
-      identity,
-      undefined,
-      undefined,
-      undefined,
-      GITHUB_API_ORIGIN,
-    ),
-  );
+  const { value: repository } = await fetchGitHubJsonPage(url, fetchImpl, identity?.token, {
+    beforeRedirect: async (redirect) => {
+      redirectedRepositoryUrl(redirect, "");
+    },
+    identity,
+    apiBaseUrl: GITHUB_API_ORIGIN,
+  });
   const id = isRecord(repository) ? optionalNumber(repository, "id") : undefined;
   if (
     !isPublicGitHubRepository(repository) ||
@@ -340,11 +331,8 @@ async function loadGitHubDetailWithIdentity(
     }
     const readPage: ReadDetailPage = async (url) => {
       const suffix = new URL(url).pathname.slice(new URL(repositoryUrl).pathname.length);
-      const response = await fetchGitHubApi(
-        url,
-        fetchImpl,
-        identity?.token,
-        session
+      const page = await fetchGitHubJsonPage(url, fetchImpl, identity?.token, {
+        beforeRedirect: session
           ? rejectSessionGitHubRedirect
           : identity?.token
             ? async (redirect) => {
@@ -354,14 +342,12 @@ async function loadGitHubDetailWithIdentity(
               }
             : undefined,
         identity,
-        undefined,
-        undefined,
-        undefined,
         apiBaseUrl,
-      );
+        maxBytes: DETAIL_JSON_MAX_BYTES,
+      });
       return {
-        hasNextPage: /;\s*rel="next"/u.test(response.headers.get("link") ?? ""),
-        value: await readGitHubJsonResponse(response, DETAIL_JSON_MAX_BYTES),
+        hasNextPage: /;\s*rel="next"/u.test(page.link ?? ""),
+        value: page.value,
       };
     };
     const collection =

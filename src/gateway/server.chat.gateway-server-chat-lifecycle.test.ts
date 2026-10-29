@@ -107,28 +107,25 @@ const emitLifecycle = (runId: string, data: Record<string, unknown>) =>
   emitAgentEvent({ runId, stream: "lifecycle", data });
 
 describe("gateway server chat lifecycle", () => {
-  test("sessions.abort terminalizes a restart-safe chat before agent adoption", async () => {
+  test("sessions.abort stops a chat before agent adoption", async () => {
     await withMainSessionStore(async (dir) => {
       const browser = await openBrowser();
       await expectRpc(browser, "sessions.subscribe", {}, { subscribed: true });
 
-      const stoppedRunId = "restart-safe-pre-adoption-stop";
-      const successorRunId = "restart-safe-after-pre-adoption-stop";
+      const stoppedRunId = "pre-adoption-stop";
+      const successorRunId = "after-pre-adoption-stop";
       const preparationEntered = createDeferred();
       const releasePreparation = createDeferred();
       const abortObserved = createDeferred();
       const embeddedEntered = createDeferred();
       const actualRead = entryReads.readSessionEntryInWorker;
       let heldPreparation = false;
+      let replyPreparationStarted = false;
       using readSpy = vi
         .spyOn(entryReads, "readSessionEntryInWorker")
         .mockImplementation(async (...args) => {
           const entry = await actualRead(...args);
-          if (
-            !heldPreparation &&
-            entry?.restartRecoveryDeliveryRunId === stoppedRunId &&
-            entry.restartRecoveryDeliverySourceRunId === stoppedRunId
-          ) {
+          if (!heldPreparation && replyPreparationStarted && getRpcSource(stoppedRunId) && entry) {
             heldPreparation = true;
             preparationEntered.resolve();
             await releasePreparation.promise;
@@ -147,6 +144,7 @@ describe("gateway server chat lifecycle", () => {
         } else {
           signal?.addEventListener("abort", () => abortObserved.resolve(), { once: true });
         }
+        replyPreparationStarted = true;
         return await getReplyFromConfig(...args);
       });
 
@@ -157,7 +155,7 @@ describe("gateway server chat lifecycle", () => {
           "chat.send",
           {
             sessionKey: "main",
-            message: "hold this restart-safe turn before adoption",
+            message: "hold this turn before adoption",
             idempotencyKey: stoppedRunId,
           },
           { runId: stoppedRunId, status: "started" },
@@ -209,9 +207,7 @@ describe("gateway server chat lifecycle", () => {
           status: "killed",
           abortedLastRun: true,
           lastRunId: stoppedRunId,
-          restartRecoveryTerminalRunIds: expect.arrayContaining([stoppedRunId]),
         });
-        expect(stoppedEntry?.restartRecoveryDeliveryRunId).toBeUndefined();
       } finally {
         releasePreparation.resolve();
         gatewayReplyMock.mockReset();

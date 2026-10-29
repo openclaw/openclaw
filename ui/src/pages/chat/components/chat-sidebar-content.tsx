@@ -40,6 +40,7 @@ import type { FileViewControls } from "./chat-file-reader-controls.ts";
 import { FileSessionMenu } from "./chat-file-session-menu.tsx";
 import { openInlineChatImage } from "./chat-image-lightbox.ts";
 import { openResolvedImage } from "./chat-image-presentation.ts";
+import { isPdfAttachment } from "./chat-pdf-preview.tsx";
 import { SidebarAttachment } from "./chat-sidebar-attachment.tsx";
 import type {
   AttachmentSidebarRuntime,
@@ -321,6 +322,7 @@ export function SidebarPanel(props: SidebarPanelProps) {
                     }
                     active={props.active ?? content().presentation?.active ?? true}
                     openFileView={content().presentation?.openFileView ?? null}
+                    canEditFile={content().canEditFile ?? null}
                     onOpenMobilePage={content().presentation?.onOpenMobilePage ?? null}
                     scopeRequest={content().presentation?.scopeRequest ?? null}
                     onResult={content().onResult ?? null}
@@ -359,7 +361,9 @@ export function SidebarPanel(props: SidebarPanelProps) {
                   (props.content?.kind === "markdown" ||
                     (props.content?.kind === "attachment" &&
                       !props.content.src &&
-                      !props.content.resolveSource)) &&
+                      !props.content.resolveSource &&
+                      (props.content.download ||
+                        !isPdfAttachment(props.content.mimeType ?? "", props.content.title)))) &&
                   props.content.file
                     ? props.content.file
                     : undefined

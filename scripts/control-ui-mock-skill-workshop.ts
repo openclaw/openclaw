@@ -1,5 +1,6 @@
 import type {
   SkillWorkshopChange,
+  SkillWorkshopDraft,
   SkillWorkshopSkillSummary,
   SkillsWorkshopChangesResult,
   SkillsWorkshopListResult,
@@ -19,10 +20,13 @@ type MockWorkshopVersion = {
   skill: MockWorkshopSkill;
 };
 
+type MockWorkshopDraft = { draft: SkillWorkshopDraft; skill: MockWorkshopSkill };
+
 type SkillWorkshopMockSeed = {
   skills: MockWorkshopSkill[];
   versions: Record<string, MockWorkshopVersion[]>;
   changes: SkillWorkshopChange[];
+  drafts: MockWorkshopDraft[];
 };
 
 function buildSkillWorkshopMocks(baseTime: number): SkillWorkshopMockSeed {
@@ -329,7 +333,71 @@ function buildSkillWorkshopMocks(baseTime: number): SkillWorkshopMockSeed {
       },
     ],
   };
-  return { skills, versions, changes };
+  // Drafts a background review proposed in Propose mode, oldest first like the Gateway.
+  const draft = (id: string, reason: string, proposed: MockWorkshopSkill): MockWorkshopDraft => ({
+    draft: {
+      id,
+      skillName: proposed.summary.name,
+      summary: reason,
+      createdAtMs: proposed.summary.updatedAtMs,
+    },
+    skill: proposed,
+  });
+  const drafts = [
+    draft(
+      "trip-packing-5b21c0de",
+      "Add a plug adapter check; the last trip abroad needed one",
+      skill(
+        "trip-packing",
+        "Use when packing for a trip; build the list from destination weather and trip length.",
+        [
+          "1. Check the forecast for each day of the trip.",
+          "2. Pack one outfit per day plus one spare; layers for anything under 15 °C.",
+          "3. Chargers, a plug adapter for the destination, and the passport go in the carry-on.",
+        ].join("\n"),
+        baseTime - 26 * hour,
+      ),
+    ),
+    draft(
+      "invoice-follow-up-9a4e7f12",
+      "The same three-step reminder came up in two sessions this week",
+      skill(
+        "invoice-follow-up",
+        "Use when a client invoice is overdue; send a polite reminder, then escalate on a schedule.",
+        [
+          "1. Day 1 overdue: send the friendly reminder from templates/reminder.md with the invoice attached.",
+          "2. Day 7: reply on the same thread and ask for a payment date.",
+          "3. Day 14: copy the account owner and stop new work until it is paid.",
+        ].join("\n"),
+        baseTime - 5 * hour,
+        {
+          files: {
+            "templates/reminder.md":
+              "Hi {name},\n\nA quick reminder that invoice {number} was due on {date}. It's attached again here.\n\nThanks!\n",
+          },
+        },
+      ),
+    ),
+    draft(
+      "release-notes-c3f08b41",
+      "Breaking changes go first; readers missed them at the bottom",
+      skill(
+        "release-notes",
+        "Use when drafting release notes from merged PRs; group by user impact.",
+        releaseNotesBody
+          .replace(
+            "Group entries by **user-visible impact**, not by package: Features, Fixes, Breaking.",
+            "Group entries by **user-visible impact**, not by package: Breaking first, then Features and Fixes.",
+          )
+          .replace(
+            "- Keep each entry to one sentence.",
+            "- Keep each entry to one sentence.\n- Give every breaking change a one-line migration step.",
+          ),
+        baseTime - 40 * 60 * 1000,
+      ),
+    ),
+  ];
+  return { skills, versions, changes, drafts };
 }
 
 /** Each agent's Workshop owns its skills, versions, and change feed. */
@@ -343,6 +411,7 @@ function installSkillWorkshopMock(seed: SkillWorkshopMockSeed): void {
     skills: Map<string, MockWorkshopSkill>;
     versions: Map<string, MockWorkshopVersion[]>;
     changes: SkillWorkshopChange[];
+    drafts: MockWorkshopDraft[];
   };
   const scopes = new Map<string, Scope>();
   const scopeFor = (agentId: string): Scope => {
@@ -352,6 +421,7 @@ function installSkillWorkshopMock(seed: SkillWorkshopMockSeed): void {
         skills: new Map(seed.skills.map((entry) => [entry.summary.name, structuredClone(entry)])),
         versions: new Map(Object.entries(structuredClone(seed.versions))),
         changes: structuredClone(seed.changes).map((change) => Object.assign(change, { agentId })),
+        drafts: structuredClone(seed.drafts),
       };
       scopes.set(agentId, scope);
     }
@@ -405,6 +475,7 @@ function installSkillWorkshopMock(seed: SkillWorkshopMockSeed): void {
           live: scope.skills.has(name),
           versions: versions.map(({ id, action, createdAtMs }) => ({ id, action, createdAtMs })),
         })),
+        drafts: scope.drafts.map((entry) => entry.draft),
       };
       respond(result);
     },
@@ -424,9 +495,11 @@ function installSkillWorkshopMock(seed: SkillWorkshopMockSeed): void {
       const scope = scopeFor(agentId);
       const name = typeof params.name === "string" ? params.name : "";
       const skill =
-        typeof params.versionId === "string"
-          ? scope.versions.get(name)?.find((version) => version.id === params.versionId)?.skill
-          : scope.skills.get(name);
+        typeof params.draftId === "string"
+          ? scope.drafts.find((entry) => entry.draft.id === params.draftId)?.skill
+          : typeof params.versionId === "string"
+            ? scope.versions.get(name)?.find((version) => version.id === params.versionId)?.skill
+            : scope.skills.get(name);
       if (!skill) {
         reject(respond, `Mock Workshop skill not found: ${name}`);
         return;
@@ -450,6 +523,46 @@ function installSkillWorkshopMock(seed: SkillWorkshopMockSeed): void {
       const change = record(scope, agentId, name, "archive", reason);
       scope.skills.delete(name);
       respond({ change });
+    },
+    "skills.workshop.applyDraft": (params, agentId, respond) => {
+      const scope = scopeFor(agentId);
+      const entry = scope.drafts.find((item) => item.draft.id === params.draftId);
+      if (!entry) {
+        reject(respond, `No draft ${String(params.draftId)}.`);
+        return;
+      }
+      const name = entry.draft.skillName;
+      const live = scope.skills.get(name);
+      const change = record(
+        scope,
+        agentId,
+        name,
+        live ? "write_file" : "create",
+        entry.draft.summary,
+      );
+      scope.skills.set(name, {
+        ...structuredClone(entry.skill),
+        summary: {
+          ...entry.skill.summary,
+          updatedAtMs: Date.now(),
+          ...(live?.summary.useCount !== undefined ? { useCount: live.summary.useCount } : {}),
+          ...(live?.summary.lastUsedAtMs !== undefined
+            ? { lastUsedAtMs: live.summary.lastUsedAtMs }
+            : {}),
+        },
+      });
+      scope.drafts = scope.drafts.filter((item) => item !== entry);
+      respond({ changes: [change] });
+    },
+    "skills.workshop.discardDraft": (params, agentId, respond) => {
+      const scope = scopeFor(agentId);
+      const draftId = String(params.draftId);
+      if (!scope.drafts.some((item) => item.draft.id === draftId)) {
+        reject(respond, `No draft ${draftId}.`);
+        return;
+      }
+      scope.drafts = scope.drafts.filter((item) => item.draft.id !== draftId);
+      respond({ changes: [] });
     },
     "skills.workshop.restore": (params, agentId, respond) => {
       const scope = scopeFor(agentId);

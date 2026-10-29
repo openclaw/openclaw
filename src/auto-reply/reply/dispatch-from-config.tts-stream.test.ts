@@ -13,6 +13,7 @@ import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-paylo
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { buildReplyPayloads } from "./agent-runner-payloads.js";
 import { createBlockReplyPipeline } from "./block-reply-pipeline.js";
+import { pendingFinalSessionEntry } from "./dispatch-from-config.session-fixtures.test-support.js";
 import {
   describe0BeforeEach0,
   dispatchReplyFromConfig,
@@ -335,17 +336,17 @@ describe("source completion", () => {
                   deliveryId: "source-delivery",
                 },
               });
-              await actualSessions.replaceSessionEntry(preparedScope, {
-                sessionId: "source-session",
-                updatedAt: Date.now(),
-                pendingFinalDelivery: {
-                  kind: "replayable",
-                  text: "See [",
-                  createdAt: Date.now(),
-                  intentId: "source-intent",
-                  deliveries: [{ id: "source-delivery", state: "prepared" }],
-                },
-              });
+              await actualSessions.replaceSessionEntry(
+                preparedScope,
+                pendingFinalSessionEntry(
+                  {
+                    sessionId: "source-session",
+                    intentId: "source-intent",
+                    deliveryId: "source-delivery",
+                  },
+                  "See [",
+                ),
+              );
               expect(
                 actualSessions.loadSessionEntry(preparedScope)?.pendingFinalDelivery?.deliveries,
               ).toEqual([{ id: "source-delivery", state: "prepared" }]);

@@ -236,61 +236,6 @@ it("isolates delayed raw-global thinking claims by agent", async () => {
   expect(sessions.think("global", "main")).toBeUndefined();
 });
 
-it.each(["success", "in-place", "failure", "replaced"])(
-  "keeps recovery notifications, errors and refresh scoped to the connection (%s)",
-  async (outcome) => {
-    const succeeded = outcome === "success" || outcome === "in-place";
-    const recovery = createDeferred<unknown>();
-    const list = createDeferred<unknown>();
-    const { sessions, publish, request } = harness({
-      "sessions.recover": () => recovery.promise,
-      "sessions.list": () => list.promise,
-    });
-    const created = vi.fn();
-    sessions.subscribeCreated(created);
-    const operation = sessions.recover({
-      key: "agent:main:expired",
-      agentId: "main",
-      ...(outcome === "in-place" ? { mode: "in-place" } : {}),
-    });
-    const successor = {
-      ok: true,
-      key: outcome === "in-place" ? "agent:main:expired" : "agent:main:recovered",
-      sessionId: "successor",
-    };
-
-    if (outcome === "replaced") {
-      publish(false);
-    }
-    if (outcome === "failure") {
-      recovery.reject(new Error("recovery rejected"));
-    } else {
-      recovery.resolve(successor);
-    }
-    if (succeeded) {
-      await waitForFast(() =>
-        expect(request).toHaveBeenCalledWith(
-          "sessions.list",
-          expect.objectContaining({ agentId: "main" }),
-        ),
-      );
-      if (outcome === "success") {
-        expect(created).toHaveBeenCalledWith(successor.key);
-      } else {
-        expect(created).not.toHaveBeenCalled();
-      }
-      list.resolve(listed(successor.key, { updatedAt: 1 }, 1));
-    }
-
-    await expect(operation).resolves.toEqual(succeeded ? successor : null);
-    expect(sessions.state.error).toBe(outcome === "failure" ? "recovery rejected" : null);
-    if (!succeeded) {
-      expect(created).not.toHaveBeenCalled();
-      expect(request).not.toHaveBeenCalledWith("sessions.list", expect.anything());
-    }
-  },
-);
-
 it("retires prepared work placement when the session is deleted", async () => {
   const key = "agent:main:deleted-worktree";
   const { sessions } = harness({

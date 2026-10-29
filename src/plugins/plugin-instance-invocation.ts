@@ -14,11 +14,7 @@ export class InvocationFrame implements PluginExecutionFrame {
   readonly cacheScope: PluginExecutionScopes["cacheScope"];
   readonly sourceCaptureStorage: PluginExecutionScopes["sourceCaptureStorage"];
 
-  constructor(
-    scopes: PluginExecutionScopes,
-    invocation = scopes.invocation,
-    readonly inputRecoveryContext = scopes.inputRecoveryContext,
-  ) {
+  constructor(scopes: PluginExecutionScopes, invocation = scopes.invocation) {
     this.retentionOwner = scopes.retentionOwner;
     this.invocation = invocation;
     this.metadataScope = scopes.metadataScope;

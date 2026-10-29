@@ -94,7 +94,7 @@ export function isAcknowledgeableHiddenRun(
 }
 
 /** Walk the same ancestry used by sidebar folding, preserving each source row. */
-export function collectSessionDescendantRows(
+function collectSessionDescendantRows(
   rows: readonly GatewaySessionRow[],
   parentKey: string,
   subagentsOnly = false,

@@ -162,6 +162,7 @@ openclaw gateway diagnostics export --json
 
 <ParamField path="--output <path>" type="string">
   Output zip path. Defaults to a support export under the state directory.
+  Existing directories receive an automatically named archive. Quoted non-home paths preserve surrounding whitespace; blank values use the default.
 </ParamField>
 <a id="param-log-lines"></a>
 
@@ -323,6 +324,8 @@ openclaw gateway probe --port 18789
 connections, and read checks. Known targets are checked while discovery runs.
 When the budget expires, unfinished checks report a timeout; connection and SSH
 process cleanup can briefly extend the elapsed command time.
+Accepted budgets above the native timer limit retain their full duration rather
+than timing out immediately.
 
 <a id="param-port-2"></a>
 
@@ -495,6 +498,9 @@ Prepare an idle Gateway for a cooperative host freeze or snapshot. Without
 `--wait`, the CLI retries until the bounded deadline using one stable request
 ID. The value must be a non-negative number of seconds; an empty value is rejected.
 Use `--wait 0` for a single attempt without polling.
+
+Ctrl-C or SIGTERM stops further prepare attempts. An already dispatched prepare
+still settles and reports any acquired lease so you can resume it explicitly.
 
 ```bash
 openclaw gateway suspend

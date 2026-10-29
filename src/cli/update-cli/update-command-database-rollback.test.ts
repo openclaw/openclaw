@@ -529,6 +529,10 @@ it.each([
     vi.spyOn(schemas, "readUpdateStateSchemaVersions").mockImplementation((params) =>
       readSchemas({ ...params, root: undefined }),
     );
+    const readGenerations = schemas.readUpdateDatabaseGenerationsIsolated;
+    vi.spyOn(schemas, "readUpdateDatabaseGenerationsIsolated").mockImplementation(
+      (paths, options) => readGenerations(paths, { ...options, root: undefined }),
+    );
     mocks.runPackageUpdate.mockImplementation(
       async (
         params: Parameters<typeof import("./update-command-package.js").runPackageInstallUpdate>[0],

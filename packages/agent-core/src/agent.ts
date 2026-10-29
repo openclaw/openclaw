@@ -1,7 +1,9 @@
+import { prepareSystemPrompt } from "@openclaw/ai/internal/shared";
 import type {
   ImageContent,
   Message,
   Model,
+  PreparedSystemPrompt,
   SimpleStreamOptions,
   TextContent,
   ThinkingBudgets,
@@ -130,6 +132,7 @@ export interface AgentOptions {
  */
 export class Agent {
   private mutableState: MutableAgentState;
+  private preparedSystemPrompt?: PreparedSystemPrompt;
   private readonly listeners = new Set<
     (event: AgentEvent, signal: AbortSignal) => Promise<void> | void
   >();
@@ -344,7 +347,6 @@ export class Agent {
         "Agent is already processing a prompt. Use steer() or followUp() to queue messages, or wait for completion.",
       );
     }
-    this.toolLoopRecoveryState.criticalToolLoopSeen = false;
     let messages: AgentMessage[];
     if (Array.isArray(input)) {
       messages = input;
@@ -417,10 +419,15 @@ export class Agent {
 
     try {
       const signal = abortController.signal;
+      this.preparedSystemPrompt = prepareSystemPrompt(
+        this.mutableState.systemPrompt,
+        this.preparedSystemPrompt,
+      );
       await runAgentLoop(
         messages,
         {
           systemPrompt: this.mutableState.systemPrompt,
+          preparedSystemPrompt: this.preparedSystemPrompt,
           // The loop copies messages synchronously before emitting its first event.
           messages: this.mutableState.messages,
           tools: this.mutableState.tools.slice(),
@@ -566,9 +573,6 @@ export class Agent {
           this.mutableState.streamingMessage = undefined;
         }
         this.mutableState.messages.push(event.message);
-        if (event.message.role === "user") {
-          delete this.toolLoopRecoveryState.repeatedToolError;
-        }
         this.steeringQueue.commit(event.message);
         this.followUpQueue.commit(event.message);
         break;

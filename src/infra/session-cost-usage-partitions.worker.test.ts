@@ -11,14 +11,19 @@ import {
   createUsagePartitionWrites as partitions,
 } from "./session-cost-usage-cache.fixtures.test-support.js";
 import { readSessionCostUsageRollupRows as readRows } from "./session-cost-usage-cache.test-support.js";
-import { createUsageTranscriptEntry } from "./session-cost-usage-fixtures.test-support.js";
+import {
+  createUsageTranscriptEntry,
+  overviewRows,
+} from "./session-cost-usage-fixtures.test-support.js";
 import {
   LEGACY_USAGE_COST_PARTITION_SCOPE,
   USAGE_COST_PARTITION_SCOPE,
   usageCostPartitionKey,
 } from "./session-cost-usage-partitions.js";
+import { USAGE_COST_QUARTER_SCOPE } from "./session-cost-usage-quarters.js";
 import { USAGE_COST_ROLLUP_SCOPE } from "./session-cost-usage-rollup-codec.js";
 import { withUsageWorkerPreload } from "./session-cost-usage-worker-io.test-support.js";
+import { loadSessionUsageOverviewFromCache } from "./session-cost-usage.js";
 
 it("rebuilds retired usage partitions even when the transcript is unchanged", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -210,5 +215,79 @@ if (!isMainThread) {
       expect(rows).toHaveLength(103);
       expect(rows).toEqual(expect.arrayContaining(expected));
     });
+  });
+});
+
+it("pairs quarter rows with their partitions through refresh, rollback writes, and pruning", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const agentId = "usage-quarter-lifecycle";
+    const sessionsDir = state.sessionsDir(agentId);
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const entry = (timestamp: string, tokens: number) =>
+      JSON.stringify(createUsageTranscriptEntry(tokens, { timestamp, cost: tokens }));
+    const first = path.join(sessionsDir, "first.jsonl");
+    const second = path.join(sessionsDir, "second.jsonl");
+    await fs.writeFile(
+      first,
+      `${entry("2026-08-31T23:50:00Z", 2)}\n${entry("2026-09-01T00:05:00Z", 3)}\n`,
+    );
+    await fs.writeFile(second, `${entry("2026-09-02T10:00:00Z", 5)}\n`);
+    const { db } = openOpenClawAgentDatabase({ agentId });
+    const count = (sql: string) =>
+      (
+        db.prepare(sql).get(USAGE_COST_PARTITION_SCOPE, USAGE_COST_QUARTER_SCOPE) as {
+          count: number;
+        }
+      ).count;
+    const coverage = () => ({
+      partitions: count("SELECT count(*) AS count FROM cache_entries WHERE scope = ? OR ? IS NULL"),
+      quarters: count(
+        "SELECT count(*) AS count FROM cache_entries WHERE ? IS NOT NULL AND scope = ?",
+      ),
+      paired: count(`SELECT count(*) AS count FROM cache_entries p JOIN cache_entries q
+        ON q.key = p.key AND q.updated_at = p.updated_at AND q.scope = ?2 WHERE p.scope = ?1`),
+    });
+    const overview = async () =>
+      overviewRows(
+        await loadSessionUsageOverviewFromCache({
+          config: {},
+          agentId,
+          families: [[{ sessionFile: first }], [{ sessionFile: second }]],
+          startMs: Date.UTC(2026, 7, 31),
+          endMs: Date.UTC(2026, 8, 3) - 1,
+          dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
+        }),
+      );
+    await refreshUsage({ config: {}, agentId, sessionFiles: [first, second] });
+    // The partition producer commits each month's quarter row with it.
+    expect(coverage()).toEqual({ partitions: 3, quarters: 3, paired: 3 });
+    expect(await overview()).toMatchObject({
+      rows: [{ totalTokens: 5 }, { totalTokens: 5 }],
+      summarizing: 0,
+    });
+
+    // A build without quarter rows rewrites a partition; the stale quarter row no longer pairs.
+    db.prepare(
+      "UPDATE cache_entries SET updated_at = updated_at + 1 WHERE scope = ? AND key = ?",
+    ).run(USAGE_COST_PARTITION_SCOPE, usageCostPartitionKey(first, "2026-09-01"));
+    // The read asks the refresh owner to derive the row from the partition, waits, and is exact.
+    expect(await overview()).toMatchObject({
+      rows: [{ totalTokens: 5 }, { totalTokens: 5 }],
+      computing: [false, false],
+      summarizing: 0,
+      cacheStatus: { status: "fresh" },
+    });
+    expect(coverage()).toEqual({ partitions: 3, quarters: 3, paired: 3 });
+    const derived = db.prepare("SELECT * FROM cache_entries ORDER BY scope, key").all();
+    await refreshUsage({ config: {}, agentId, sessionFiles: [first] });
+    expect(db.prepare("SELECT * FROM cache_entries ORDER BY scope, key").all()).toEqual(derived);
+
+    // Removed months and pruned sessions delete their quarter rows with the partitions.
+    await fs.writeFile(first, `${entry("2026-09-01T00:05:00Z", 3)}\n`);
+    await refreshUsage({ config: {}, agentId, sessionFiles: [first] });
+    expect(coverage()).toEqual({ partitions: 2, quarters: 2, paired: 2 });
+    await fs.unlink(second);
+    await refreshUsage({ config: {}, agentId });
+    expect(coverage()).toEqual({ partitions: 1, quarters: 1, paired: 1 });
   });
 });

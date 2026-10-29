@@ -37,6 +37,7 @@ import { projectTranscriptNavigationSql } from "./session-model-context-projecti
 import { projectSessionTranscriptFacts } from "./session-transcript-projection-facts.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 import { collectSessionEntryLookupKeys } from "./store-entry.js";
+import { projectTranscriptNavigationFields } from "./transcript-navigation-fields.js";
 import { transcriptEventNavigationSql, transcriptPredicateSql } from "./transcript-payload.js";
 
 // SQL JSON projections retain their declared shape but cross the driver as TEXT.
@@ -312,9 +313,13 @@ export function hydrateSessionActorState(
   const entryRows: SessionActorStoredState["entryRows"] = new Map(
     keys.map((key) => [key, undefined]),
   );
+  let participants: SessionActorHotState["participants"] = [];
   for (const row of rows) {
     const entry = parseReadableSessionEntryData(database, row, "full");
-    const participants = decodeJsonProjection(row.actor_participants).map(readParticipantRecord);
+    const records = decodeJsonProjection(row.actor_participants).map(readParticipantRecord);
+    if (row === selected) {
+      participants = records;
+    }
     // Snapshot comparisons use decoded entries; only node columns need exact persisted bytes.
     const {
       skills_snapshot_json: _skills,
@@ -340,15 +345,12 @@ export function hydrateSessionActorState(
       entry
         ? {
             row: entryRow,
-            entry: withProjectedParticipants(entry, participants),
+            entry: withProjectedParticipants(entry, records),
           }
         : undefined,
     );
   }
   const entry = entryRows.get(target.sessionKey)?.entry;
-  const participants = selected
-    ? decodeJsonProjection(selected.actor_participants).map(readParticipantRecord)
-    : [];
   const members = selected
     ? decodeJsonProjection(selected.actor_members).map((member) => ({
         identityId: member.identity_id,
@@ -389,13 +391,10 @@ export function hydrateSessionActorState(
   const storedNavigation = selected
     ? decodeJsonProjection(selected.actor_navigation).toSorted((a, b) => a.seq - b.seq)
     : [];
-  const navigation = storedNavigation.map((row) =>
-    Object.assign(
-      // SAFETY: SQL selects only tree fields; the tree reader owns their interpretation.
-      JSON.parse(row.navigation_json) as Record<string, unknown>,
-      { seq: row.seq },
-    ),
-  );
+  const navigation = storedNavigation.map((row) => ({
+    ...projectTranscriptNavigationFields(JSON.parse(row.navigation_json)),
+    seq: row.seq,
+  }));
   const contextVersion = {
     generation: rewrite?.generation ?? null,
     rawSeq: coldArchive?.last_seq ?? navigation.at(-1)?.seq ?? null,

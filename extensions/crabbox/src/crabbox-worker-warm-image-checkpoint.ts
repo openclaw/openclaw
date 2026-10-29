@@ -10,7 +10,7 @@ import {
   runCrabboxCommand,
 } from "./crabbox-worker-command.js";
 import { WARM_IMAGE_COMMAND_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
-import type { WarmImageRecord } from "./crabbox-worker-warm-image-store.js";
+import type { WarmImageRecord } from "./crabbox-worker-warm-image-records.js";
 
 export const CHECKPOINT_ID_PATTERN = /^chk_[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u;
 

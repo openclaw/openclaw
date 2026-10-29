@@ -1,5 +1,5 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import type { SessionControllerWatchdogAttempt } from "../sessions/session-controller.watchdog.js";
+import { AsyncContext } from "../shared/async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 export type DiagnosticToolExecutionLiveness = Readonly<{ deadlineAtMs?: number }>;
@@ -10,10 +10,25 @@ type ToolExecutionDeadlineOwner = ((deadlineAtMs: number | undefined) => void) &
   register?: (deadlineAtMs: number) => () => void;
 };
 
+const noop = () => {};
+
+// Socket frames retain this carrier, never the closed invocation's lexical scope.
+function createDeadlineCarrier(record: ToolExecutionDeadlineOwner) {
+  let current: ToolExecutionDeadlineOwner | undefined = record;
+  const carrier: ToolExecutionDeadlineOwner = (deadline) => current?.(deadline);
+  carrier.register = (deadline) => current?.register?.(deadline) ?? noop;
+  return {
+    carrier,
+    close() {
+      current = undefined;
+    },
+  };
+}
+
 const state = resolveGlobalSingleton(
   Symbol.for("openclaw.diagnosticToolExecutionLiveness"),
   () => ({
-    context: new AsyncLocalStorage<ToolExecutionDeadlineOwner>(),
+    context: new AsyncContext<ToolExecutionDeadlineOwner>(Symbol("toolExecutionDeadline")),
     events: new WeakMap<object, DiagnosticToolExecutionLiveness>(),
   }),
 );
@@ -59,14 +74,16 @@ export function createDiagnosticToolExecutionLiveness(
       waits.delete(wait);
     };
   };
+  const carrier = createDeadlineCarrier(record);
   return {
     view,
     run<T>(execute: () => T): T {
-      return state.context.run(record, execute);
+      return state.context.run(carrier.carrier, execute);
     },
     close(completed = false) {
       finishOwnedTool?.(completed && !signal?.aborted);
       active = false;
+      carrier.close();
       waits.clear();
       // The queued terminal retires the marker. Preserve exec's fixed allowance
       // until then, without letting a retained callback extend it.

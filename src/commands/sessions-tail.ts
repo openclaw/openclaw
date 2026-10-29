@@ -1,6 +1,6 @@
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString as toOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { sanitizeTerminalText, terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import {
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
   classifyAgentRunTerminalOutcome,
@@ -225,7 +225,7 @@ function followSelections(
           renderEvents(readNewSqliteFollowEvents(state), runtime);
         } catch (error) {
           runtime.error(
-            `Failed to read trajectory progress for ${state.selection.key}: ${formatErrorMessage(
+            terminalText`Failed to read trajectory progress for ${state.selection.key}: ${formatErrorMessage(
               error,
             )}`,
           );
@@ -311,7 +311,7 @@ export async function sessionsTailCommand(
   if (selected.length === 0) {
     if (requestedKey) {
       runtime.error(
-        `Session not found: ${requestedKey}. Run ${formatCliCommand("openclaw sessions list --all-agents --json")} to choose a valid key.`,
+        `Session not found: ${terminalText`${requestedKey}`}. Run ${formatCliCommand("openclaw sessions list --all-agents --json")} to choose a valid key.`,
       );
       runtime.exit(1);
     } else {

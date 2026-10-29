@@ -53,6 +53,7 @@ import {
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
+import { nodeCommand as currentNodeEvalCommand } from "./bash-tools.lifecycle.test-support.js";
 import { createWriteTool } from "./sessions/index.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -60,13 +61,6 @@ import { callGatewayTool } from "./tools/gateway.js";
 const CRITICAL_THRESHOLD = 20;
 const GLOBAL_CIRCUIT_BREAKER_THRESHOLD = 30;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-function currentNodeEvalCommand(source: string): string {
-  const shellQuote = (value: string) =>
-    `'${value.replaceAll("'", process.platform === "win32" ? "''" : "'\\''")}'`;
-  const command = `${shellQuote(process.execPath)} -e ${shellQuote(source)}`;
-  return process.platform === "win32" ? `& ${command}` : command;
-}
 
 vi.mock("../plugins/hook-runner-global.js", async () => {
   const actual = await vi.importActual<typeof import("../plugins/hook-runner-global.js")>(

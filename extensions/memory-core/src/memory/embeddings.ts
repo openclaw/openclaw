@@ -104,7 +104,9 @@ export function resolveEmbeddingProviderAdapterTransport(
 
 export function resolveEmbeddingProviderIndexIdentity(options: CreateEmbeddingProviderOptions) {
   const provider =
-    options.provider === "auto" ? DEFAULT_MEMORY_EMBEDDING_PROVIDER : options.provider;
+    options.provider.toLowerCase() === "auto"
+      ? DEFAULT_MEMORY_EMBEDDING_PROVIDER
+      : options.provider;
   try {
     const adapter = getAdapter(provider, options.config);
     const createOptions = resolveAdapterCreateOptions(adapter, { ...options, provider });
@@ -139,7 +141,9 @@ export async function createEmbeddingProvider(
   options: CreateEmbeddingProviderOptions,
 ): Promise<EmbeddingProviderResult> {
   const provider =
-    options.provider === "auto" ? DEFAULT_MEMORY_EMBEDDING_PROVIDER : options.provider;
+    options.provider.toLowerCase() === "auto"
+      ? DEFAULT_MEMORY_EMBEDDING_PROVIDER
+      : options.provider;
   const primaryAdapter = getAdapter(provider, options.config);
   try {
     return await createWithAdapter(primaryAdapter, {
@@ -151,7 +155,11 @@ export async function createEmbeddingProvider(
       throw primaryErr;
     }
     let reason = formatProviderError(primaryAdapter, primaryErr);
-    if (options.fallback && options.fallback !== "none" && options.fallback !== provider) {
+    if (
+      options.fallback &&
+      options.fallback.toLowerCase() !== "none" &&
+      options.fallback !== provider
+    ) {
       const fallbackAdapter = getAdapter(options.fallback, options.config);
       try {
         const fallbackResult = await createWithAdapter(fallbackAdapter, {

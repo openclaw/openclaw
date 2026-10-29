@@ -60,6 +60,16 @@ function getAssistantToolCallBlocks(
 }
 
 describe("sanitizeToolUseResultPairing", () => {
+  it("does not inspect lower-priority result aliases when the canonical id is present", () => {
+    const legacyId = vi.fn(() => "stale_call");
+    const result = textToolResult("call_1", "read", "ok", { isError: false });
+    Object.defineProperty(result, "toolUseId", { get: legacyId });
+    const input = castAgentMessages([sparseAssistant([toolCall("call_1")]), result]);
+
+    expect(repairToolUseResultPairing(input).messages).toBe(input);
+    expect(legacyId).not.toHaveBeenCalled();
+  });
+
   it("keeps matched parallel tool results and synthesizes only missing siblings", () => {
     vi.spyOn(Date, "now").mockReturnValue(5_000);
     const input = castAgentMessages([

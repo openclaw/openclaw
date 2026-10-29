@@ -2,6 +2,7 @@ import { constants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { resolveGatewayLaunchAgentLabel, isNodeLaunchAgentLabel } from "./constants.js";
 import {
   execLaunchctl,
@@ -342,11 +343,11 @@ export function formatForeignLaunchdJobs(jobs: ForeignLaunchdJob[]): string {
   return jobs
     .map((job) =>
       [
-        `${job.label}: program=${job.program}, keepalive=${job.keepAlive}, Gateway lifecycle=${job.gatewayActions.join("|") || "not verified"}`,
+        terminalText`${job.label}: program=${job.program}, keepalive=${job.keepAlive}, Gateway lifecycle=${job.gatewayActions.join("|") || "not verified"}`,
         job.safeToRemove
           ? "  Removable with openclaw doctor --fix."
           : "  Report only; left unchanged.",
-        ...(job.diagnostic ? [`  ${job.diagnostic}`] : []),
+        ...(job.diagnostic ? [terminalText`  ${job.diagnostic}`] : []),
       ].join("\n"),
     )
     .join("\n");

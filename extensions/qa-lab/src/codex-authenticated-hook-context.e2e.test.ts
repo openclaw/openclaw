@@ -65,6 +65,7 @@ it("preserves admitted qa-channel identity through prompt and native compaction 
   const gateway = await gatewayOwner.start({
     repoRoot: REPO_ROOT,
     useRepoCli: true,
+    initializeCurrentRuntimeState: true,
     providerBaseUrl: `${mock.baseUrl}/v1`,
     providerMode: "mock-openai",
     primaryModel: "mock-openai/gpt-5.6-luna",

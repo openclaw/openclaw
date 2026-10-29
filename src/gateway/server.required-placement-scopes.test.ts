@@ -213,7 +213,8 @@ test("required placement survives disconnect but stops setup when committed call
       void created.catch(() => {});
       try {
         if (afterAck) {
-          expect(await created).toMatchObject({ ok: true });
+          const response = await created;
+          expect(response, JSON.stringify(response.error)).toMatchObject({ ok: true });
           await committed.promise;
         } else {
           await Promise.race([
