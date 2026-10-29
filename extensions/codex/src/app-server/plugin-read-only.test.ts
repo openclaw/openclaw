@@ -12,6 +12,7 @@ import {
 } from "./plugin-inventory.test-helpers.js";
 import {
   buildCodexPluginThreadConfig,
+  buildCodexPluginThreadConfigInputFingerprint,
   buildCodexPluginAppsConfigPatchFromPolicyContext,
   refreshCodexPluginAppApprovalPolicy,
   mergeCodexThreadConfigs,
@@ -32,6 +33,17 @@ const tool = (name: string, isReadOnly: boolean, extra: Partial<Tool> = {}): Too
   ...extra,
 });
 
+function runtimeTool(action: string, readOnly: boolean, title: string) {
+  return {
+    title,
+    annotations: { readOnlyHint: readOnly },
+    _meta: {
+      connector_id: "sample-app",
+      _codex_apps: { resource_uri: `/sample-app/link/${action}` },
+    },
+  };
+}
+
 function fixture(
   readOnly: boolean | undefined,
   destructive: CodexPluginDestructivePolicy = true,
@@ -45,6 +57,7 @@ function fixture(
     tool("read_alias", true, { title: "shared" }),
     tool("write_alias", false, { title: "shared" }),
   ];
+  let runtime: Record<string, ReturnType<typeof runtimeTool>> | Error | undefined;
   const nativeConfig = {
     apps: {
       "sample-app": {
@@ -58,6 +71,27 @@ function fixture(
     },
   };
   const request = async (method: string, params?: unknown) => {
+    if (method === "mcpServerStatus/list") {
+      if (runtime instanceof Error) {
+        throw runtime;
+      }
+      return {
+        data: [
+          {
+            name: "codex_apps",
+            tools:
+              runtime ??
+              Object.fromEntries(
+                (tools ?? []).map((t) => [
+                  `sample_${t.name}`.toLowerCase(),
+                  runtimeTool(t.name, t.isReadOnly, t.title ?? `sample_${t.name}`),
+                ]),
+              ),
+          },
+        ],
+        nextCursor: null,
+      };
+    }
     if (method === "config/read") {
       return { config: nativeConfig, layers: [] };
     }
@@ -87,6 +121,9 @@ function fixture(
     nativeConfig,
     setNativeTools(value: Record<string, { enabled?: boolean; approval_mode?: string }>) {
       Object.assign(nativeConfig.apps["sample-app"].tools, value);
+    },
+    setRuntime(value: Record<string, ReturnType<typeof runtimeTool>> | Error) {
+      runtime = value;
     },
     setTools(value: Tool[] | undefined) {
       tools = value;
@@ -124,6 +161,54 @@ function fixture(
 }
 
 describe("plugin read_only policy", () => {
+  it("invalidates a retained config when the read-only restriction moves between plugins", () => {
+    const fingerprint = (restricted: string) =>
+      buildCodexPluginThreadConfigInputFingerprint({
+        pluginConfig: {
+          codexPlugins: {
+            enabled: true,
+            plugins: Object.fromEntries(
+              ["sample", "shared"].map((name) => [
+                name,
+                {
+                  pluginName: name,
+                  marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+                  read_only: name === restricted,
+                },
+              ]),
+            ),
+          },
+        },
+      });
+    expect(fingerprint("sample")).not.toBe(fingerprint("shared"));
+  });
+
+  it("grants only the exact hosted MCP action, even with name collisions and a misleading title", async () => {
+    const f = fixture(true);
+    f.setTools([tool("search", true), tool("trash", false)]);
+    f.setNativeTools({ search: { approval_mode: "prompt" } });
+    f.setRuntime({
+      "documents_01234567.search": runtimeTool("search", true, "search"),
+      // Codex falls back to title when the raw name has no entry.
+      "documents.trash": runtimeTool("trash", false, "documents_01234567.search"),
+      "documents.new_tool": runtimeTool("new_tool", true, "search"),
+    });
+    const { configPatch } = await f.build();
+    const effective = mergeCodexThreadConfigs(f.nativeConfig, configPatch);
+    for (const [name, title, enabled] of [
+      ["documents_01234567.search", "search", true],
+      ["documents.trash", "documents_01234567.search", false],
+      ["documents.new_tool", "search", false],
+    ] as const) {
+      expect(readCurrentToolPolicy(effective!, "sample-app", name, { title })).toMatchObject({
+        enabled,
+        ...(enabled ? { approvalMode: "prompt" } : {}),
+      });
+    }
+    expect(configPatch?.apps).toMatchObject({
+      "sample-app": { tools: { search: { enabled: false } } },
+    });
+  });
   it("does not grant an unknown callable resource through a read summary's bare name", async () => {
     const f = fixture(true);
     f.setTools([tool("sample_manage", true)]);
@@ -298,6 +383,26 @@ describe("plugin read_only policy", () => {
       expect(result.policyContext.apps["sample-app"]).not.toHaveProperty("readOnlyTools");
     },
   );
+
+  it("revokes previous grants when hosted tool inventory is unavailable", async () => {
+    const f = fixture(true);
+    const initial = await f.build();
+    f.setRuntime(new Error("hosted MCP inventory unavailable"));
+    const replay = await refreshCodexPluginAppApprovalPolicy({
+      policyContext: initial.policyContext,
+      request: f.request,
+    });
+    expect(replay.configPatch.apps).toMatchObject({
+      "sample-app": {
+        default_tools_enabled: false,
+        tools: {
+          sample_browse: { enabled: false },
+          sample_manage: { enabled: false },
+          stale: { enabled: false },
+        },
+      },
+    });
+  });
 
   it("refreshes classifications and fails closed when current metadata is missing", async () => {
     const f = fixture(true);

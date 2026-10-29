@@ -46,7 +46,7 @@ describe("scheduled read-only authority", () => {
               apps: {
                 calendar: {
                   default_tools_enabled: false,
-                  tools: { calendar_native_disabled: { enabled: false } },
+                  tools: { "calendar.native_disabled": { enabled: false } },
                 },
               },
             },
@@ -79,8 +79,15 @@ describe("scheduled read-only authority", () => {
                 name: "codex_apps",
                 tools: Object.fromEntries(
                   tools.map((t) => [
-                    `calendar_${t.name}`,
-                    { title: `Calendar_${t.name}`, _meta: { connector_id: "calendar" } },
+                    `calendar.${t.name}`,
+                    {
+                      title: `Calendar_${t.name}`,
+                      annotations: { readOnlyHint: t.isReadOnly },
+                      _meta: {
+                        connector_id: "calendar",
+                        _codex_apps: { resource_uri: `/calendar/link/${t.name}` },
+                      },
+                    },
                   ]),
                 ),
               },
@@ -151,15 +158,18 @@ describe("scheduled read-only authority", () => {
           calendar: {
             default_tools_enabled: false,
             tools: {
-              calendar_list: { enabled: false },
-              calendar_edit: { enabled: false },
-              calendar_new_read: {
+              "calendar.list": { enabled: false },
+              "calendar.edit": { enabled: false },
+              "calendar.new_read": {
                 enabled: !missingMetadata,
+                approval_mode: "auto",
+              },
+              "calendar.new_write": {
+                enabled: false,
                 approval_mode: ownerDefaults ? "auto" : "prompt",
               },
-              calendar_new_write: { enabled: false },
-              calendar_disabled_read: { enabled: false },
-              calendar_native_disabled: { enabled: false },
+              "calendar.disabled_read": { enabled: false },
+              "calendar.native_disabled": { enabled: false },
             },
           },
         },

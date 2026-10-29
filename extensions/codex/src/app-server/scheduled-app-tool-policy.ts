@@ -1,4 +1,5 @@
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { CodexAppRuntimeTool } from "./app-runtime-tools.js";
 import {
   normalizeAppToolApprovalMode,
   type CodexAppToolApprovalMode,
@@ -10,20 +11,11 @@ export {
   type CodexAppToolApprovalMode,
 } from "./app-tool-approval-mode.js";
 
-export type CodexScheduledAppTool = {
-  title?: string;
-  linkId?: string;
-  requiresExplicitLinkId?: boolean;
-  readOnlyHint?: boolean;
-  destructiveHint?: boolean;
-  openWorldHint?: boolean;
-};
-
 export function readCurrentToolPolicy(
   config: Record<string, unknown>,
   appId: string,
   toolName: string,
-  metadata: CodexScheduledAppTool | undefined,
+  metadata: CodexAppRuntimeTool | undefined,
   fallbackApprovalMode: CodexAppToolApprovalMode = "auto",
   admittedPolicy?: Pick<CodexAppPolicyContextEntry, "allowDestructiveActions" | "allowOpenWorld">,
 ): { enabled: boolean; approvalMode: CodexAppToolApprovalMode } {
@@ -88,7 +80,7 @@ export function readCurrentToolPolicy(
 }
 
 export function appToolHintsAllowed(
-  tool: CodexScheduledAppTool | undefined,
+  tool: CodexAppRuntimeTool | undefined,
   policy: Pick<CodexAppPolicyContextEntry, "allowDestructiveActions" | "allowOpenWorld">,
 ): boolean {
   // Codex treats missing annotations as destructive/open-world. Explicit tool

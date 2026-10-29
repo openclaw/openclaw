@@ -1,5 +1,6 @@
 import { codexAppIdentityKey } from "./app-identity.js";
 import { defaultCodexAppInventoryCache, CodexAppInventoryCache } from "./app-inventory-cache.js";
+import { readCodexAppRuntimeTools } from "./app-runtime-tools.js";
 import { fingerprintCodexPolicy } from "./config-policy-json.js";
 import {
   resolveCodexPluginsPolicy,
@@ -34,6 +35,7 @@ import {
   type CodexPluginThreadAppAdmissionConfig,
   type CodexPluginThreadAppAdmissionDiagnostic,
 } from "./plugin-thread-app-admission.js";
+import { buildCodexPluginThreadConfigInputFingerprint } from "./plugin-thread-config-input.js";
 import { isJsonObject, type JsonObject, type JsonValue } from "./protocol.js";
 import { CodexAppServerRpcError } from "./rpc-error.js";
 
@@ -108,25 +110,10 @@ type BuildCodexPluginThreadConfigParams = {
 
 // Admission changes must rebuild existing bindings too, or older bindings can
 // bypass updated app approval checks after the gateway has been upgraded.
-const CODEX_PLUGIN_THREAD_CONFIG_INPUT_FINGERPRINT_VERSION = 16;
+export { buildCodexPluginThreadConfigInputFingerprint };
+export { shouldBuildCodexPluginThreadConfig } from "./plugin-thread-config-input.js";
+
 const CODEX_PLUGIN_THREAD_CONFIG_FINGERPRINT_VERSION = 2;
-
-export function shouldBuildCodexPluginThreadConfig(pluginConfig?: unknown): boolean {
-  return resolveCodexPluginsPolicy(pluginConfig).configured;
-}
-
-/** Fingerprints policy and app-cache identity before runtime inventory is read. */
-export function buildCodexPluginThreadConfigInputFingerprint(params: {
-  pluginConfig?: unknown;
-  appCacheKey?: string;
-}): string {
-  const policy = resolveCodexPluginsPolicy(params.pluginConfig);
-  return fingerprintCodexPolicy({
-    version: CODEX_PLUGIN_THREAD_CONFIG_INPUT_FINGERPRINT_VERSION,
-    policy: policyFingerprint(policy),
-    appCacheKey: params.appCacheKey ?? null,
-  });
-}
 
 /** Builds the deny-all app patch used when plugin discovery exceeds its turn budget. */
 export function buildCodexPluginThreadConfigTimeoutFallback(params: {
@@ -322,6 +309,8 @@ export async function buildCodexPluginThreadConfig(
     ...activationDiagnostics,
     ...(accountAppsResult.diagnostic ? [accountAppsResult.diagnostic] : []),
   ];
+  let runtimeTools: ReturnType<typeof readCodexAppRuntimeTools> | undefined;
+  const getRuntimeTools = () => (runtimeTools ??= readReadOnlyRuntimeTools(params, diagnostics));
   const provisionalAppIds = new Set<string>();
   const { apps } = buildDisabledAppsConfigPatch();
   const policyApps: Record<string, CodexAppPolicyContextEntry> = {};
@@ -397,7 +386,13 @@ export async function buildCodexPluginThreadConfig(
       // enabled owner must not remove a read-only cap through iteration order.
       const readOnlyPolicy =
         record.policy.readOnly || policyApps[app.id]?.readOnlyTools !== undefined
-          ? { readOnlyTools: buildCodexAppReadOnlyTools(admissionConfig.config, app) }
+          ? {
+              readOnlyTools: buildCodexAppReadOnlyTools(
+                admissionConfig.config,
+                app,
+                (await getRuntimeTools()).get(app.id),
+              ),
+            }
           : {};
       apps[app.id] = buildEnabledAppConfig(
         { ...record.policy, ...readOnlyPolicy },
@@ -616,6 +611,21 @@ export function buildCodexPluginAppsConfigPatchFromPolicyContext(
   return Object.keys(policyContext.apps).length > 0 ? { apps } : disabledConfigPatch;
 }
 
+async function readReadOnlyRuntimeTools(
+  params: Parameters<typeof readCodexAppRuntimeTools>[0],
+  diagnostics: CodexPluginThreadConfigDiagnostic[],
+): ReturnType<typeof readCodexAppRuntimeTools> {
+  try {
+    return await readCodexAppRuntimeTools(params);
+  } catch {
+    diagnostics.push({
+      code: "app_not_ready",
+      message: "Could not verify hosted tool identities. Read-only apps have no enabled tools.",
+    });
+    return new Map();
+  }
+}
+
 /** Projects current ask overrides before a side thread replays its bound app policy. */
 export async function refreshCodexPluginAppApprovalPolicy(params: {
   policyContext: PluginAppPolicyContext;
@@ -639,11 +649,14 @@ export async function refreshCodexPluginAppApprovalPolicy(params: {
   // A persisted binding can be replayed before any normal turn after restart.
   // Fresh targeted inventory retains the current non-read-only tool scope.
   const readParams = { ...params, appCacheKey: "approval-policy-replay" };
-  const [inventory, admissionConfig] = await Promise.all([
+  const [inventory, admissionConfig, runtimeTools] = await Promise.all([
     targetAppIds.length > 0
       ? refreshCodexPluginAppInventory(readParams, new CodexAppInventoryCache(), { targetAppIds })
       : undefined,
     readCodexConfigForAppAdmission(readParams),
+    targetApps.some(([, policy]) => policy.readOnlyTools !== undefined)
+      ? readReadOnlyRuntimeTools(params, diagnostics)
+      : undefined,
   ]);
   const configPatch = disableUnlistedCodexApps(
     buildCodexPluginAppsConfigPatchFromPolicyContext(params.policyContext),
@@ -672,6 +685,7 @@ export async function refreshCodexPluginAppApprovalPolicy(params: {
         currentPolicy.readOnlyTools = buildCodexAppReadOnlyTools(
           admissionConfig.config,
           app,
+          runtimeTools?.get(id),
           policy.readOnlyTools,
         );
       }
@@ -724,23 +738,6 @@ function shouldRefreshMissingAppInventory(
     policy.pluginPolicies.some((plugin) => plugin.enabled) &&
     inventory.appInventory?.state === "missing",
   );
-}
-
-function policyFingerprint(policy: ResolvedCodexPluginsPolicy): JsonValue {
-  return {
-    enabled: policy.enabled,
-    allowAllPlugins: policy.allowAllPlugins,
-    allowDestructiveActions: policy.allowDestructiveActions,
-    destructiveApprovalMode: policy.destructiveApprovalMode,
-    plugins: policy.pluginPolicies.map((plugin) => ({
-      configKey: plugin.configKey,
-      marketplaceName: plugin.marketplaceName,
-      pluginName: plugin.pluginName,
-      enabled: plugin.enabled,
-      allowDestructiveActions: plugin.allowDestructiveActions,
-      destructiveApprovalMode: plugin.destructiveApprovalMode,
-    })),
-  };
 }
 
 // Native request keys may be dotted. Normalize each policy patch before merging

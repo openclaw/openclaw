@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
+import type { CodexAppRuntimeTool } from "./app-runtime-tools.js";
 import { buildPluginAppPolicyContext } from "./plugin-thread-config.js";
 import { intersectCodexPluginThreadConfigWithScheduledAuthority } from "./scheduled-app-authority.js";
 import {
   createScheduledAppAuthority,
   createScheduledAppThreadConfig,
 } from "./scheduled-app-authority.test-support.js";
-import type { CodexScheduledAppTool } from "./scheduled-app-tool-policy.js";
 
 describe("scheduled admitted apps under native deny defaults", () => {
   it.each([false, true])(
@@ -32,7 +32,7 @@ describe("scheduled admitted apps under native deny defaults", () => {
       const toolsByApp = new Map([
         [
           "calendar",
-          new Map<string, CodexScheduledAppTool>([
+          new Map<string, CodexAppRuntimeTool>([
             ["list", { readOnlyHint: true, destructiveHint: false, openWorldHint: false }],
             ["edit", { destructiveHint: true, openWorldHint: true }],
           ]),
