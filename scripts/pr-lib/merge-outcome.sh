@@ -194,6 +194,9 @@ merge_outcome_load_local() {
         (.prId | type == "string" and length > 0) and (.head | oid) and (.main | oid) and
         (if has("localHead") then (.localHead | oid) else true end) and
         (.attempt | attempt) and recovery and
+        (if has("workflowAdmission") then
+          (.workflowAdmission | keys == ["binding","from","to"] and all(.[]; oid))
+         else true end) and
         (if has("workflowRecovery") then has("recovery") and
           (.workflowRecovery | keys == ["binding","from","to"] and all(.[]; oid))
          else true end) and
@@ -249,6 +252,24 @@ merge_outcome_load_local() {
       case " $parents " in *" $retained "*) ;; *) merge_outcome_stop "record does not retain required commit $retained"; return 1 ;; esac
       GIT_NO_LAZY_FETCH=1 pr_git cat-file -e "$retained^{commit}" || { merge_outcome_stop "required historical commit $retained is unavailable"; return 1; }
     done
+    if printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e 'has("workflowAdmission")' >/dev/null; then
+      # Older bound writers preserve the record and predecessor, but do not add
+      # these new fields as direct parents. Their ancestry still retains the proof.
+      local admission_binding admission_from admission_to admission_record
+      IFS=$'\t' read -r admission_binding admission_from admission_to < <(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r '.workflowAdmission | [.binding,.from,.to] | @tsv')
+      for retained in "$admission_binding" "$admission_from" "$admission_to"; do
+        GIT_NO_LAZY_FETCH=1 pr_git merge-base --is-ancestor "$retained" "$MERGE_OUTCOME_OID" || {
+          merge_outcome_stop "unretained workflow admission provenance"; return 1;
+        }
+      done
+      admission_record=$(GIT_NO_LAZY_FETCH=1 pr_git show "$admission_binding:binding.json") || return 1
+      printf '%s\n' "$admission_record" | jq -e --arg from "$admission_from" --arg pr "$pr" \
+        '.version == 1 and .source == $from and .pr == $pr' >/dev/null &&
+        [ "$(GIT_NO_LAZY_FETCH=1 pr_git rev-parse "$admission_binding^@")" = "$admission_from" ] &&
+        GIT_NO_LAZY_FETCH=1 pr_git merge-base --is-ancestor "$admission_from" "$admission_to" || {
+        merge_outcome_stop "invalid retained workflow admission provenance"; return 1;
+      }
+    fi
     if printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e 'has("workflowRecovery")' >/dev/null; then
       local workflow_binding workflow_from workflow_to workflow_record
       IFS=$'\t' read -r workflow_binding workflow_from workflow_to < <(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r '.workflowRecovery | [.binding,.from,.to] | @tsv')
@@ -383,7 +404,7 @@ merge_outcome_write() {
   shift
   mark_pr_operation_side_effects_started || return 1
   local parents=()
-  for parent in $(printf '%s\n' "$record" | jq -r '[.head,.main,.landed,.localHead,.legacyRefusal.head,.legacyRefusal.preparedBase,.priorCiAdmin.priorHead,.priorCiAdmin.testedMerge,.headDrift.mergedHead,.cancellation.observedHead,.workflowRecovery.binding,.workflowRecovery.from,.workflowRecovery.to] | unique | .[] | select(. != null)'); do
+  for parent in $(printf '%s\n' "$record" | jq -r '[.head,.main,.landed,.localHead,.legacyRefusal.head,.legacyRefusal.preparedBase,.priorCiAdmin.priorHead,.priorCiAdmin.testedMerge,.headDrift.mergedHead,.cancellation.observedHead,.workflowRecovery.binding,.workflowRecovery.from,.workflowRecovery.to,.workflowAdmission.binding,.workflowAdmission.from,.workflowAdmission.to] | unique | .[] | select(. != null)'); do
     parents+=(-p "$parent")
   done
   [ -z "$MERGE_OUTCOME_OID" ] || parents+=(-p "$MERGE_OUTCOME_OID")
@@ -1409,7 +1430,16 @@ merge_outcome_comment_body() {
         .ciUrl == ($record.repo.url + "/actions/runs/" + (.runId|tostring) + "/attempts/" + (.runAttempt|tostring))) |
       .ciUrl
     ') || { merge_outcome_stop "incomplete retained prior-CI completion evidence"; return 1; }
-    if [ "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .priorCiAdmin.changeKind)" = pre-existing-failure ]; then
+    if printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e '.priorCiAdmin | has("primaryCi")' >/dev/null; then
+      local primary_ci_url
+      primary_ci_url=$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -er '
+        def positive: type == "number" and . > 0 and floor == .;
+        . as $record | .priorCiAdmin.primaryCi |
+        select((.runId | positive) and (.runAttempt | positive)) |
+        $record.repo.url + "/actions/runs/" + (.runId|tostring) + "/attempts/" + (.runAttempt|tostring)
+      ') || { merge_outcome_stop "incomplete retained primary-CI completion evidence"; return 1; }
+      printf '\n- Artifact-build failure with successful primary CI: failed artifact run %s; successful primary run %s.\n- Exact prepared head: `%s`; unchanged failure inputs and optional check attribution retained as operator evidence.' "$ci_url" "$primary_ci_url" "$head"
+    elif [ "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .priorCiAdmin.changeKind)" = pre-existing-failure ]; then
       printf '\n- CI with explicitly attributed pre-existing failures: %s\n- Exact prepared head: `%s`; source attribution and independent qualification retained as operator evidence. Cancelled jobs remain unrun coverage. No current-head CI success is claimed.' "$ci_url" "$head"
     else
       printf '\n- Prior successful CI: %s\n- Subsequent conflict changes: reviewed at `%s`; scoped validation retained as operator evidence. No current-head CI success is claimed.' "$ci_url" "$head"

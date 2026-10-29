@@ -228,6 +228,7 @@ scripts/lib/plain-gh.mjs
 scripts/lib/plain-gh.sh
 scripts/lib/record-shared.mjs
 scripts/lib/release-changelog.mjs
+scripts/lib/release-version.mjs
 scripts/lib/repo-root.mjs
 scripts/lib/test-runtime.mts
 scripts/lib/test-selector-source-facts.mts
@@ -1030,6 +1031,7 @@ src/infra/gateway-owner-lease.read.ts
 src/infra/gateway-owner-lease.worker.ts
 src/infra/gateway-owner-lease.ts
 src/infra/gateway-lock-payload.ts
+src/infra/gateway-service-installation-context.ts
 src/infra/gateway-state-owner-directory.ts
 src/infra/gateway-state-owner-errors.ts
 src/infra/gateway-state-owner-heartbeat.runtime.ts
@@ -2072,6 +2074,7 @@ src/state/openclaw-state-postgres-snapshot-context.ts
 src/state/openclaw-state-postgres-snapshot.ts
 src/state/openclaw-state-schema-retired.ts
 src/state/openclaw-state-schema-runtime.ts
+src/state/openclaw-state-service-installation.ts
 src/state/postgres-schema.generated/agent-runtime.ts
 src/state/postgres-schema.generated/agent-search-runtime.ts
 src/state/postgres-schema.generated/runtime.ts

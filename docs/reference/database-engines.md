@@ -836,6 +836,9 @@ current version. Homogeneous PostgreSQL installations include agent stores in
 preflight, exact capture, and custody-backed rollback, including retained registry
 paths. Family overrides also require successful candidate admission of the
 complete selection; global PostgreSQL support alone does not prove this.
+If PostgreSQL family lookup fails, preflight reports the database error and its
+remedy, such as the administrator SQL for missing `unaccent`. Connection details
+remain redacted; lookup failure does not imply a missing backup provider.
 
 Shared-state preflight reads registry, plugin installation, schema-version and
 retained-agent facts using the effective state engine. PostgreSQL inspection uses

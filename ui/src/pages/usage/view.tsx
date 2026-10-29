@@ -128,14 +128,7 @@ function UsageView(props: UsageProps & { loading: boolean; read: UsageRead }) {
     const loadingOverview = pending || (awaitingUsage && data.cacheRefresh === "retrying");
     return { hasOverviewData, loadingOverview };
   });
-  const lowerBound = () =>
-    displayTotals()?.usageReport?.state === "unavailable" ||
-    props.data.overview?.usageReport?.state === "unavailable";
-  // One quiet explanation for incomplete data: lower-bound totals and partial gateway answers.
-  const incompleteNote = () =>
-    [lowerBound() ? t("usage.lowerBound") : "", props.data.partialNotice ?? ""]
-      .filter(Boolean)
-      .join(" ");
+  const partialNotice = () => props.data.partialNotice ?? "";
   const providerSeries = createMemo(() =>
     buildProviderSeries(props.data.aggregates?.modelDaily ?? []),
   );
@@ -194,14 +187,8 @@ function UsageView(props: UsageProps & { loading: boolean; read: UsageRead }) {
     const empty = t("usage.common.emptyValue");
     const sessions = displaySessionCount();
     return [
-      [
-        totals ? formatUsageTokens(totals.totalTokens, totals.usageReport) : empty,
-        t("usage.metrics.tokens"),
-      ],
-      [
-        totals ? formatUsageCost(totals.totalCost, 2, totals.usageReport) : empty,
-        t("usage.metrics.cost"),
-      ],
+      [totals ? formatUsageTokens(totals.totalTokens) : empty, t("usage.metrics.tokens")],
+      [totals ? formatUsageCost(totals.totalCost) : empty, t("usage.metrics.cost")],
       [totals ? sessions.toLocaleString() : empty, t("usage.overview.sessions")],
     ];
   });
@@ -386,18 +373,21 @@ function UsageView(props: UsageProps & { loading: boolean; read: UsageRead }) {
                 <span class="usage-summary-strip__status">
                   <openclaw-tooltip
                     open-on-click
-                    class={["usage-lower-bound", { "usage-lower-bound--off": !incompleteNote() }]}
+                    class={[
+                      "usage-partial-notice",
+                      { "usage-partial-notice--off": !partialNotice() },
+                    ]}
                     role="note"
-                    aria-hidden={incompleteNote() ? undefined : "true"}
+                    aria-hidden={partialNotice() ? undefined : "true"}
                   >
                     <button
                       type="button"
-                      class="usage-lower-bound__chip"
-                      tabindex={incompleteNote() ? undefined : -1}
+                      class="usage-partial-notice__chip"
+                      tabindex={partialNotice() ? undefined : -1}
                     >
-                      {lowerBound() ? t("usage.lowerBoundShort") : t("usage.partialShort")}
+                      {t("usage.partialShort")}
                     </button>
-                    <span slot="content">{incompleteNote()}</span>
+                    <span slot="content">{partialNotice()}</span>
                   </openclaw-tooltip>
                 </span>
                 <button

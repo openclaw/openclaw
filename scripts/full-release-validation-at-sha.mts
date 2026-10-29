@@ -52,6 +52,10 @@ import { parseReleaseContextRef, resolveReleaseContextIdentity } from "./lib/rel
 import { resolveQualificationBaselines } from "./lib/release-upgrade-baseline.mjs";
 import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
 import { validatePackageSourceRef } from "./package-source-preflight.mjs";
+import {
+  validateCandidateActorPermissionWithGithub,
+  verifyCandidateProvenanceWithGithub,
+} from "./release-candidate-provenance.mjs";
 import { buildQualificationAdmissionRequest } from "./release-qualification-admission.mjs";
 
 export { dispatchInputsDigest } from "./lib/full-release-dispatch-request.mts";
@@ -725,6 +729,87 @@ function preflightTargetShaFetch(targetSha: string) {
   } finally {
     rmSync(directory, { force: true, recursive: true });
   }
+}
+
+type CandidateTrustReason = "main-ancestor" | "release-branch" | "release-tag";
+
+function candidateTrustReason(
+  targetSha: string,
+  targetContextRef: string,
+): CandidateTrustReason | undefined {
+  const canonicalBranch = (value: string) =>
+    /^release\/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*$/u.test(value) ||
+    /^extended-stable\/[0-9]{4}\.[1-9][0-9]*\.33$/u.test(value);
+  if (targetContextRef !== targetSha) {
+    const context = parseReleaseContextRef(targetContextRef);
+    return context?.kind === "release tag"
+      ? "release-tag"
+      : context && canonicalBranch(context.ref)
+        ? "release-branch"
+        : undefined;
+  }
+  const comparison: unknown = JSON.parse(
+    runGh(["api", "-H", GH_NO_CACHE_HEADER, `repos/${REPOSITORY}/compare/${targetSha}...main`]),
+  );
+  if (
+    isJsonRecord(comparison) &&
+    (comparison.status === "ahead" || comparison.status === "identical")
+  ) {
+    return "main-ancestor";
+  }
+  const branchPages: unknown = JSON.parse(
+    runGh([
+      "api",
+      "--paginate",
+      "--slurp",
+      "-H",
+      GH_NO_CACHE_HEADER,
+      `repos/${REPOSITORY}/commits/${targetSha}/branches-where-head`,
+    ]),
+  );
+  const branches = Array.isArray(branchPages)
+    ? branchPages
+        .flatMap((page) => (Array.isArray(page) ? page : [page]))
+        .filter(isJsonRecord)
+        .map((branch) => stringValue(branch.name))
+        .filter(canonicalBranch)
+    : [];
+  if (branches.length === 1) {
+    return "release-branch";
+  }
+  const matchingTags = run("git", ["ls-remote", "--tags", "origin", "refs/tags/v*"])
+    .split("\n")
+    .flatMap((line) => {
+      const match = /^([a-f0-9]{40})\s+refs\/tags\/(v[^\s]+?)(?:\^\{\})?$/u.exec(line);
+      const contextRef = match?.[2];
+      if (!match || match[1] !== targetSha || !contextRef) {
+        return [];
+      }
+      const context = parseReleaseContextRef(contextRef);
+      return context?.kind === "release tag" ? [context.ref] : [];
+    });
+  if (matchingTags.length > 0) {
+    return "release-tag";
+  }
+  return undefined;
+}
+
+function preflightCandidateSigningProvenance(
+  targetSha: string,
+  targetContextRef: string,
+): string | undefined {
+  const trustReason = candidateTrustReason(targetSha, targetContextRef);
+  requireDispatch(trustReason, `Release candidate ${targetSha} is not trusted release provenance`);
+  const actor = verifyCandidateProvenanceWithGithub({
+    repository: REPOSITORY,
+    targetSha,
+    provenanceKind: trustReason,
+    request: (args: string[]) => JSON.parse(runGh(args)),
+  });
+  console.log(
+    `Release candidate provenance verified for ${targetSha}${actor ? ` (${actor})` : " (main-ancestor)"}`,
+  );
+  return actor;
 }
 
 // pnpm release:candidate applies these gates after validation finishes; check
@@ -1947,6 +2032,24 @@ async function main() {
     );
     args.trustedWorkflowRef = "candidate";
     args.admissionWorkflowRef = retained.admission!.workflowRef;
+    if (retained.request.targetContextRef !== retained.request.targetSha) {
+      fetchTargetRef(retained.request.targetContextRef);
+      verifyTargetRef(
+        retained.request.targetContextRef,
+        retained.request.targetSha,
+        retained.request.targetVersion,
+      );
+    }
+    const retainedIntent = decodePublicationDispatchEnvelope(
+      retained.request.inputs.trusted_workflow_json,
+    );
+    const candidateAuthorityActor =
+      retainedIntent.validationPurpose === "publish"
+        ? preflightCandidateSigningProvenance(
+            retained.request.targetSha,
+            retained.request.targetContextRef,
+          )
+        : undefined;
     await executeFrozenDispatch({
       args,
       record: retained,
@@ -1959,6 +2062,7 @@ async function main() {
         effectiveSoak: retained.request.effectiveSoak,
       },
       admissionWorkflowSha: retained.admission!.workflowSha,
+      candidateAuthorityActor,
     });
     return;
   }
@@ -2031,6 +2135,10 @@ async function main() {
       }),
     );
   }
+  const candidateAuthorityActor =
+    args.inputs.validation_purpose === "publish"
+      ? preflightCandidateSigningProvenance(targetSha, targetContextRef)
+      : undefined;
   // Read target blobs with trusted tooling before creating the workflow ref.
   validatePackageSourceRef(targetSha, {
     allowUnreleasedChangelog: args.inputs.allow_unreleased_changelog === "true",
@@ -2160,6 +2268,7 @@ async function main() {
     workflowSha,
     branch,
     selection,
+    candidateAuthorityActor,
     admissionWorkflowSha,
   });
 }
@@ -2171,9 +2280,11 @@ async function executeFrozenDispatch(options: {
   workflowSha: string;
   branch: string;
   selection: ReturnType<typeof resolveDispatchSelection>;
+  candidateAuthorityActor?: string;
   admissionWorkflowSha?: string;
 }) {
-  const { args, requestPath, workflowSha, branch, admissionWorkflowSha } = options;
+  const { args, requestPath, workflowSha, branch, admissionWorkflowSha, candidateAuthorityActor } =
+    options;
   let { record, selection } = options;
   console.log(
     formatDispatchSelection(
@@ -2223,6 +2334,18 @@ async function executeFrozenDispatch(options: {
         payloadDirectory = mkdtempSync(join(tmpdir(), "openclaw-release-dispatch-payload-"));
         payloadPath = join(payloadDirectory, "dispatch.json");
         writeFileSync(payloadPath, payload, { flag: "wx", mode: 0o600 });
+      }
+      if (
+        !args.dryRun &&
+        candidateOwned &&
+        candidateAuthorityActor &&
+        candidateAuthorityActor !== "web-flow"
+      ) {
+        validateCandidateActorPermissionWithGithub({
+          repository: REPOSITORY,
+          actor: candidateAuthorityActor,
+          request: (requestArgs: string[]) => JSON.parse(runGh(requestArgs)),
+        });
       }
       if (record) {
         retain({ ...record, refs: { workflow: "uncertain" } });
